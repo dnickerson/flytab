@@ -1,0 +1,19 @@
+# Build outputs
+/build/
+/app/build/
+*.apk
+
+# QNN SDK (vendor, 3.6GB)
+/qairt/
+*.zip
+
+# Native vendor libraries (bundled from QNN SDK at build time)
+/app/src/main/jniLibs/
+
+# Gradle
+.gradle/
+local.properties
+
+# IDE
+.idea/
+*.iml

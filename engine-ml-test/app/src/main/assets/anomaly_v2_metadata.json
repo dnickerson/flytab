@@ -1,0 +1,96 @@
+{
+  "version": 2,
+  "window_size": 60,
+  "n_features": 13,
+  "feature_cols": [
+    "RPM",
+    "EGT 1",
+    "EGT 2",
+    "EGT 3",
+    "EGT 4",
+    "CHT 1",
+    "CHT 2",
+    "CHT 3",
+    "CHT 4",
+    "Oil Temp",
+    "Oil Pressure",
+    "Fuel Flow",
+    "altitude_ft"
+  ],
+  "normalization": {
+    "mean": [
+      1931.86376953125,
+      1255.1177978515625,
+      1206.027587890625,
+      1229.11083984375,
+      1218.2498779296875,
+      331.4813232421875,
+      313.0337829589844,
+      330.7369384765625,
+      323.46893310546875,
+      176.60972595214844,
+      70.49665832519531,
+      6.2537665367126465,
+      1500.771240234375
+    ],
+    "std": [
+      656.6741943359375,
+      166.9662322998047,
+      160.18617248535156,
+      167.77503967285156,
+      166.18582153320312,
+      47.80736541748047,
+      44.13473129272461,
+      45.58889389038086,
+      43.63006591796875,
+      37.00752258300781,
+      8.723389625549316,
+      4.142702102661133,
+      12975.1025390625
+    ]
+  },
+  "threshold": 0.8814698681235313,
+  "phase_thresholds": {
+    "startup": 3.714808851480484,
+    "warmup": 1.1655597873032093,
+    "runup": 0.13571804203093052,
+    "takeoff": 0.04699776880443096,
+    "climb": 0.02508246898651123,
+    "cruise": 0.035627387929707766,
+    "descent": 0.06475657597184181,
+    "landing": 0.09244346991181374
+  },
+  "phases": [
+    "startup",
+    "warmup",
+    "runup",
+    "takeoff",
+    "climb",
+    "cruise",
+    "descent",
+    "landing"
+  ],
+  "phase_detection": {
+    "startup": "RPM 0\u2192800+, first 60s after engine start",
+    "warmup": "RPM < 1300, speed < 30 kts",
+    "runup": "RPM 1700-1950, speed < 10 kts",
+    "takeoff": "RPM > 2400, alt rate > 300 fpm or speed > 50 kts",
+    "climb": "RPM > 2100, alt rate > 200 fpm",
+    "cruise": "RPM 2100-2500, alt rate \u00b1200 fpm",
+    "descent": "alt rate < -200 fpm",
+    "landing": "RPM < 2200, alt < 1500, descending/slow"
+  },
+  "training_phase_counts": {
+    "startup": 3232,
+    "warmup": 47131,
+    "runup": 2630,
+    "takeoff": 28911,
+    "climb": 4558,
+    "cruise": 51113,
+    "descent": 23576,
+    "landing": 5875
+  },
+  "model_file": "anomaly_v2.tflite",
+  "architecture": "Conv1D(64,5)x3 \u2192 Dense(8) \u2192 Decoder",
+  "quantization": "INT8"
+}
