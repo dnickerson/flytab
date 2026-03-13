@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v2.2';
+const FLYTAB_VERSION = 'v2.3';
 
 // ========== Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -130,16 +130,6 @@ class FlyTabApp {
         // Update NASR age badge after data is loaded
         this._updateNasrBadge();
 
-        // GPS source toggle — tap GPS badge to switch between internal and Stratux
-        if (this.dom.statusGps && this.gpsSource) {
-            this.dom.statusGps.style.cursor = 'pointer';
-            this.dom.statusGps.addEventListener('touchstart', (e) => {
-                e.preventDefault();
-                this._toggleGpsSource();
-            }, { passive: false });
-            this.dom.statusGps.addEventListener('click', () => this._toggleGpsSource());
-        }
-
         // Long-press version badge to show diagnostic log
         const verBadge = document.getElementById('statusVersion');
         if (verBadge) {
@@ -244,21 +234,6 @@ class FlyTabApp {
             // Left flight mode — disconnect live telemetry
             if (this.stratuxClient) this.stratuxClient.disconnect();
             if (this.engineClient) this.engineClient.disconnect();
-        }
-    }
-
-    /** Toggle GPS source between internal (Android) and Stratux (Pi) */
-    _toggleGpsSource() {
-        if (!this.gpsSource) return;
-        const next = this.gpsSource.source === 'internal' ? 'stratux' : 'internal';
-        this.gpsSource.setSource(next);
-        const label = next === 'internal' ? 'Internal GPS' : 'Stratux GPS';
-        console.log(`[FlyTab] GPS source → ${label}`);
-        // Flash the badge briefly to confirm the change
-        if (this.dom.statusGps) {
-            this.dom.statusGps.style.transition = 'background 0.3s';
-            this.dom.statusGps.style.background = 'var(--accent)';
-            setTimeout(() => { this.dom.statusGps.style.background = ''; }, 500);
         }
     }
 

@@ -155,8 +155,11 @@
     --overlay-medium:    rgba(255,255,255,0.10);
     --overlay-strong:    rgba(255,255,255,0.20);
 
-    /* ── Tab bar offset — overlays stop above the fixed tab bar ── */
-    --tab-bar-offset:    calc(64px + 8px + env(safe-area-inset-bottom, 0px));
+    /* ── Android system nav bar height — injected by MainActivity.java ── */
+    --android-nav-height: 48px;  /* fallback; Java sets exact value */
+
+    /* ── Tab bar height — total reserved space at bottom (tab bar + nav bar) ── */
+    --tab-bar-height:    calc(72px + var(--android-nav-height));
 
     /* ── Touch targets — Apple HIG + sunlight glove tolerance ── */
     --touch-compact:     36px;      /* compact toolbar/table buttons (fixed, no cockpit override) */
@@ -462,7 +465,7 @@ body {
 .modal-overlay {
     position: fixed;
     top: 0; left: 0; right: 0;
-    bottom: var(--tab-bar-offset);
+    bottom: var(--tab-bar-height);
     z-index: 900;
     background: rgba(0, 0, 0, 0.6);
     display: flex;
@@ -1865,7 +1868,7 @@ body {
 .direct-to-modal {
     position: fixed;
     top: 0; left: 0; right: 0;
-    bottom: var(--tab-bar-offset);
+    bottom: var(--tab-bar-height);
     z-index: 950;
     background: rgba(0, 0, 0, 0.6);
     display: flex;
@@ -2142,7 +2145,7 @@ body {
 
 /* Plan picker overlay */
 .plan-picker-overlay {
-    position: fixed; top: 0; left: 0; right: 0; bottom: var(--tab-bar-offset); background: #000a; z-index: 9000;
+    position: fixed; top: 0; left: 0; right: 0; bottom: var(--tab-bar-height); background: #000a; z-index: 9000;
     display: flex; align-items: center; justify-content: center;
 }
 .plan-picker {
@@ -2189,7 +2192,7 @@ body {
 
 /* Config Editor Overlay */
 .config-editor-page {
-    position: fixed; top: 0; left: 0; right: 0; bottom: var(--tab-bar-offset); z-index: 800;
+    position: fixed; top: 0; left: 0; right: 0; bottom: var(--tab-bar-height); z-index: 800;
     background: var(--bg-primary); color: var(--text-primary);
     display: none; overflow-y: auto; -webkit-overflow-scrolling: touch;
 }
@@ -2475,7 +2478,7 @@ body {
 .engine-page {
     position: fixed;
     top: 0; left: 0; right: 0;
-    bottom: var(--tab-bar-offset);
+    bottom: var(--tab-bar-height);
     z-index: 800;
     background: var(--bg-primary);
     overflow-y: auto;
@@ -2509,7 +2512,7 @@ body {
 .data-status-page {
     position: fixed;
     top: 0; left: 0; right: 0;
-    bottom: var(--tab-bar-offset);
+    bottom: var(--tab-bar-height);
     z-index: 800;
     background: var(--bg-primary);
     overflow-y: auto;
@@ -2956,7 +2959,7 @@ body {
 .approach-viewer {
     position: fixed;
     top: 0; left: 0; right: 0;
-    bottom: var(--tab-bar-offset);
+    bottom: var(--tab-bar-height);
     z-index: 810;
     background: var(--bg-primary);
     display: flex;
@@ -3275,7 +3278,7 @@ body {
 .craft-overlay {
     position: fixed;
     top: 0; left: 0; right: 0;
-    bottom: var(--tab-bar-offset);
+    bottom: var(--tab-bar-height);
     z-index: 850;
     background: var(--bg-primary);
     display: flex;
@@ -3430,7 +3433,7 @@ body {
 .stx-overlay {
     position: fixed;
     top: 0; left: 0; right: 0;
-    bottom: var(--tab-bar-offset);
+    bottom: var(--tab-bar-height);
     z-index: 2000;
     display: flex;
     flex-direction: column;
@@ -3472,7 +3475,7 @@ body {
 /* ========== Logbook Page ========== */
 
 .logbook-page {
-    position: fixed; top: 0; left: 0; right: 0; bottom: var(--tab-bar-offset); z-index: 800;
+    position: fixed; top: 0; left: 0; right: 0; bottom: var(--tab-bar-height); z-index: 800;
     background: var(--bg-primary); color: var(--text-primary);
     display: none; overflow-y: auto; -webkit-overflow-scrolling: touch;
 }
@@ -3647,7 +3650,7 @@ body {
 .checklist-page {
     position: fixed;
     top: 0; left: 0; right: 0;
-    bottom: var(--tab-bar-offset);
+    bottom: var(--tab-bar-height);
     z-index: 800;
     background: var(--bg-primary);
     color: var(--text-primary);
@@ -3935,7 +3938,7 @@ body {
 .fuel-overlay {
     position: fixed;
     top: 0; left: 0; right: 0;
-    bottom: var(--tab-bar-offset);
+    bottom: var(--tab-bar-height);
     z-index: 9000;
     background: var(--bg-primary);
     display: flex;
@@ -4275,13 +4278,13 @@ body {
 
 /* ========== v5 Layout: Left Rail + Map Area + Instrument Strip + Tab Bar ========== */
 
-/* Outer wrapper: flex column fills remaining space after status bar */
+/* Outer wrapper: flex column fills remaining space after status bar.
+   padding-bottom leaves room for the fixed-position tab bar + nav bar. */
 #cockpitView {
     display: flex !important;
     flex-direction: column;
-    height: 100%;
     overflow: hidden;
-    padding-bottom: var(--tab-bar-offset);
+    padding-bottom: var(--tab-bar-height) !important;
 }
 
 /* Route strip (compact nav-strip at top) */
@@ -4476,20 +4479,21 @@ body {
     color: var(--status-ok);
 }
 
-/* Tab bar: iOS-style bottom nav */
+/* Tab bar: fixed bottom nav, positioned above Android system nav bar */
 #tabBar {
-    display: flex;
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    height: 64px;
-    background: var(--bg-surface);
-    border-top: 2px solid var(--border);
-    flex-shrink: 0;
+    display: flex !important;
+    position: fixed !important;
+    bottom: var(--android-nav-height, 48px) !important;
+    left: 0 !important;
+    right: 0 !important;
+    height: 72px !important;
+    background: var(--bg-surface) !important;
+    border-top: 2px solid var(--border-strong) !important;
     padding-top: 4px;
-    padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
-    z-index: 100000;
+    padding-bottom: 8px;
+    z-index: 99999 !important;
+    visibility: visible !important;
+    opacity: 1 !important;
 }
 
 .tab-btn {
@@ -5124,7 +5128,7 @@ body {
 
 .apt-route-panel {
     position: fixed;
-    bottom: calc(var(--tab-bar-height, 56px) + env(safe-area-inset-bottom));
+    bottom: var(--tab-bar-height);
     left: 50%;
     transform: translateX(-50%) translateY(calc(100% + 16px));
     width: min(340px, calc(100vw - 32px));
@@ -5641,7 +5645,7 @@ body {
 .clr-overlay {
     position: fixed;
     top: 0; left: 0; right: 0;
-    bottom: var(--tab-bar-offset);
+    bottom: var(--tab-bar-height);
     z-index: 9000;
     background: var(--bg-primary);
     display: flex;

@@ -3,8 +3,11 @@ package app.flywhere.flytab;
 import android.Manifest;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
+import android.webkit.WebView;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowInsetsCompat;
 import com.getcapacitor.BridgeActivity;
 import app.flywhere.flytab.tileserver.TileServerPlugin;
 
@@ -26,5 +29,22 @@ public class MainActivity extends BridgeActivity {
                 },
                 LOCATION_PERMISSION_REQUEST);
         }
+
+        // Measure the system navigation bar height and inject it as a CSS variable
+        // so the tab bar can position itself above the nav bar.
+        // Do NOT call setWebViewClient — that overrides Capacitor's client and breaks page loading.
+        WebView wv = getBridge().getWebView();
+        ViewCompat.setOnApplyWindowInsetsListener(wv, (v, insets) -> {
+            int navBottom = insets.getInsets(WindowInsetsCompat.Type.navigationBars()).bottom;
+            float density = getResources().getDisplayMetrics().density;
+            int navDp = Math.round(navBottom / density);
+            if (navDp > 0) {
+                wv.post(() -> wv.evaluateJavascript(
+                    "document.documentElement.style.setProperty('--android-nav-height', '" + navDp + "px')",
+                    null
+                ));
+            }
+            return ViewCompat.onApplyWindowInsets(v, insets);
+        });
     }
 }

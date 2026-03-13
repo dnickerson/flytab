@@ -155,6 +155,23 @@ class ConfigEditor {
             </div>
         </div>`);
 
+        const currentGps = typeof Settings !== 'undefined' ? (Settings.get('gps_source') || 'internal') : 'internal';
+        sections.push(`<div class="ds-card">
+            <div class="ds-card-title">GPS Source</div>
+            <div class="ce-fields">
+                <div class="ce-field-row">
+                    <label class="ce-label" for="ce-gps-source">Position Source</label>
+                    <select id="ce-gps-source" class="ce-select">
+                        <option value="internal" ${currentGps === 'internal' ? 'selected' : ''}>Internal (Tablet GPS)</option>
+                        <option value="stratux" ${currentGps === 'stratux' ? 'selected' : ''}>Stratux (Pi GPS)</option>
+                    </select>
+                </div>
+                <div class="ce-field-row" style="font-size:14px;color:var(--text-secondary)">
+                    Internal uses the tablet's built-in GPS. Stratux uses the Pi's GPS receiver.
+                </div>
+            </div>
+        </div>`);
+
         // Aircraft config
         sections.push(this._sectionHeader('Aircraft Configuration'));
         const perf = this._aircraftConfig.performance || {};
@@ -277,6 +294,12 @@ class ConfigEditor {
                         app.stratuxClient.connect();
                     }
                 }
+            }
+
+            // Save GPS source
+            const gpsEl = body.querySelector('#ce-gps-source');
+            if (gpsEl && typeof app !== 'undefined' && app.gpsSource) {
+                app.gpsSource.setSource(gpsEl.value);
             }
 
             // Collect home server URLs

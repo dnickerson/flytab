@@ -44,8 +44,9 @@ class InstrumentStrip {
             this._onSituation = (e) => this._update(e.detail);
             this._stratux.addEventListener('stratux:situation', this._onSituation);
 
-            // Blank values when Stratux disconnects
+            // Blank values when Stratux disconnects — but not if internal GPS is active
             this._onDisconnect = () => {
+                if (this._stratux._suppressGpsSituation) return;
                 this._set('gs', '—');
                 this._set('alt', '—');
                 this._set('vs', '—');

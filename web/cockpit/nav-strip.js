@@ -96,8 +96,9 @@ class NavStrip {
         this._onSituation = (e) => this._update(e.detail);
         this.stratux.addEventListener('stratux:situation', this._onSituation);
 
-        // Blank values when Stratux disconnects
+        // Blank values when Stratux disconnects — but not if internal GPS is active
         this._onDisconnect = () => {
+            if (this.stratux._suppressGpsSituation) return;
             this._dom.gs.textContent = '—';
             this._dom.alt.textContent = '—';
             this._dom.vs.textContent = '—';
