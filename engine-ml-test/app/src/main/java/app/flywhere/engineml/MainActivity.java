@@ -35,6 +35,7 @@ public class MainActivity extends AppCompatActivity {
     private RollingBuffer buffer;
     private PhaseDetector phaseDetector;
     private EngineAdvisor advisor;
+    private ThresholdAdapter thresholdAdapter;
     private CsvReplayService csvReplay;
     private EngineWebSocket liveWs;
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
@@ -54,6 +55,7 @@ public class MainActivity extends AppCompatActivity {
     private float[] lastRawFeatures;
     private float[] lastExtras = new float[3]; // MP, CarbTemp, GalRemaining
     private String currentPhase = "warmup";
+    private boolean useAnomalyFile = false; // toggle between normal and anomaly CSV
 
     // Feature views
     private TextView[] featureErrorViews;
@@ -78,6 +80,8 @@ public class MainActivity extends AppCompatActivity {
                 buffer = new RollingBuffer(engine.getWindowSize(), engine.getNFeatures());
                 phaseDetector = new PhaseDetector();
                 advisor = new EngineAdvisor();
+                thresholdAdapter = new ThresholdAdapter(
+                        MainActivity.this, engine.getPhaseThresholds());
                 long elapsed = System.currentTimeMillis() - t0;
 
                 Log.i(TAG, "Model loaded in " + elapsed + "ms, delegate=" + engine.getActiveDelegate());
@@ -130,6 +134,12 @@ public class MainActivity extends AppCompatActivity {
         btn10x = findViewById(R.id.btn10x);
 
         btnCsv.setOnClickListener(v -> { if (modelReady) setupCsvMode(); });
+        btnCsv.setOnLongClickListener(v -> {
+            if (!modelReady) return true;
+            useAnomalyFile = !useAnomalyFile;
+            setupCsvMode();
+            return true;
+        });
         btnLive.setOnClickListener(v -> { if (modelReady) setupLiveMode(); });
 
         btnPlay.setOnClickListener(v -> {
@@ -230,10 +240,14 @@ public class MainActivity extends AppCompatActivity {
         speedControls.setVisibility(View.VISIBLE);
         resetState();
 
+        String csvFile = useAnomalyFile ? "test_flight_anomalies.csv" : "test_flight.csv";
+        btnCsv.setText(useAnomalyFile ? "CSV (Faults)" : "CSV Replay");
+
         csvReplay = new CsvReplayService();
-        int loaded = csvReplay.loadFromAssets(this, "test_flight.csv");
-        Log.i(TAG, "CSV loaded: " + loaded + " samples (all phases)");
-        tvStatus.setText("CSV loaded: " + loaded + " samples. Press ▶ Play.");
+        int loaded = csvReplay.loadFromAssets(this, csvFile);
+        Log.i(TAG, "CSV loaded: " + loaded + " samples from " + csvFile);
+        tvStatus.setText(String.format(Locale.US, "%s: %d samples. Press \u25B6 Play. (long-press CSV to toggle)",
+                useAnomalyFile ? "FAULT TEST" : "CSV", loaded));
 
         if (loaded == 0) {
             tvStatus.setText("ERROR: CSV loaded 0 samples");
@@ -313,8 +327,15 @@ public class MainActivity extends AppCompatActivity {
         if (window != null) {
             try {
                 float score = engine.runInference(window);
-                boolean anomaly = engine.isAnomaly(score, currentPhase);
-                float phaseThreshold = engine.getThresholdForPhase(currentPhase);
+
+                // Use adapted threshold if available, otherwise trained
+                float phaseThreshold = thresholdAdapter.getThreshold(currentPhase);
+                boolean anomaly = score > phaseThreshold;
+
+                // Feed normal scores to adapter (don't learn from anomalies)
+                if (!anomaly) {
+                    thresholdAdapter.recordNormalScore(currentPhase, score);
+                }
 
                 // Get advisories
                 List<EngineAdvisor.Advisory> advisories = advisor.advise(
@@ -322,16 +343,20 @@ public class MainActivity extends AppCompatActivity {
                         0f, speedKts); // distRemaining=0 for test app
 
                 if (totalSamplesProcessed % 60 == 0) {
+                    boolean adapted = thresholdAdapter.isAdapted(currentPhase);
                     Log.i(TAG, String.format(Locale.US,
-                            "Sample %d: score=%.4f threshold=%.4f phase=%s anomaly=%b latency=%.1fms RPM=%.0f MP=%.1f",
-                            totalSamplesProcessed, score, phaseThreshold, currentPhase,
-                            anomaly, engine.getLastLatencyMs(), features[0], extras[0]));
+                            "Sample %d: score=%.4f threshold=%.4f%s phase=%s anomaly=%b latency=%.1fms RPM=%.0f MP=%.1f",
+                            totalSamplesProcessed, score, phaseThreshold,
+                            adapted ? " (adapted)" : "",
+                            currentPhase, anomaly, engine.getLastLatencyMs(),
+                            features[0], extras[0]));
                 }
 
                 final String phase = currentPhase;
                 final float thr = phaseThreshold;
+                final boolean isAdapted = thresholdAdapter.isAdapted(currentPhase);
                 final List<EngineAdvisor.Advisory> advs = advisories;
-                uiHandler.post(() -> updateUI(score, phase, thr, anomaly, advs));
+                uiHandler.post(() -> updateUI(score, phase, thr, anomaly, advs, isAdapted));
             } catch (Exception e) {
                 Log.e(TAG, "Inference error at sample " + totalSamplesProcessed, e);
             }
@@ -350,7 +375,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void updateUI(float score, String phase, float threshold, boolean anomaly,
-                          List<EngineAdvisor.Advisory> advisories) {
+                          List<EngineAdvisor.Advisory> advisories, boolean isAdapted) {
         // Score display
         tvAnomalyScore.setText(String.format(Locale.US, "%.4f", score));
 
@@ -370,7 +395,8 @@ public class MainActivity extends AppCompatActivity {
 
         // Phase + threshold
         tvPhase.setText(phase.toUpperCase());
-        tvThreshold.setText(String.format(Locale.US, "%s threshold: %.4f", phase, threshold));
+        tvThreshold.setText(String.format(Locale.US, "%s threshold: %.4f%s",
+                phase, threshold, isAdapted ? " \u2713" : ""));
 
         // Phase badge color
         switch (phase) {
