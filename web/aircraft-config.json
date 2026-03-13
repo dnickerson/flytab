@@ -1,0 +1,52 @@
+{
+  "id": "097ac863-a102-4ea5-b4d0-d5527286f3f7",
+  "tail": "N194JT",
+  "type": "RV-9A",
+  "tic_polynomial": {
+    "max_tic": 11,
+    "coefficients": {
+      "a5": 0.00073877,
+      "a4": -0.021782,
+      "a3": 0.22914,
+      "a2": -1.0819,
+      "a1": 3.7826,
+      "a0": 2.2368
+    }
+  },
+  "performance": {
+    "cruise_speed_kt": 140,
+    "cruise_gph": 9,
+    "climb_speed_kt": 120,
+    "climb_fpm": 1500,
+    "descent_speed_kt": 170,
+    "descent_fpm": 700,
+    "pattern_speed_kt": 120,
+    "approach_speed_kt": 65,
+    "vso_kt": 48,
+    "vs1_kt": 48,
+    "dmms_factor": 1.401,
+    "fuel_capacity_gal": 36,
+    "min_runway_ft": 1500,
+    "max_hp": 180,
+    "cruise_pwr_pct": 65,
+    "cruise_rpm": 2400,
+    "cruise_mp": 23.4,
+    "climb_gph": 15,
+    "climb_pwr_pct": 100,
+    "climb_rpm": 2700,
+    "climb_mp": 28,
+    "descent_gph": 4,
+    "descent_pwr_pct": 50,
+    "descent_rpm": 2400,
+    "descent_mp": 14,
+    "lop_sfc": 0.067,
+    "max_rpm": 2700,
+    "vs0_kt": 42,
+    "vfe_kt": 78,
+    "vno_kt": 156,
+    "vne_kt": 182
+  },
+  "engine_type": "Lycoming",
+  "engine_model": "O-360-A1A",
+  "synced_from_supabase_at": "2026-03-10T18:03:11.030Z"
+}

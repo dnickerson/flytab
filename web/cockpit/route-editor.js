@@ -1,0 +1,704 @@
+/**
+ * FlyPi — Cockpit Route Editor
+ * Slide-up panel for in-flight route editing, Direct-To, and divert.
+ * Touch-friendly: 44px min targets, no drag-and-drop, tap-based reorder.
+ */
+
+class RouteEditor {
+    constructor(container, nasrDb, stratuxClient, cockpitMap) {
+        this.container = container;
+        this.nasrDb = nasrDb;
+        this.stratux = stratuxClient;
+        this.cockpitMap = cockpitMap;
+
+        this._el = null;
+        this._directToEl = null;
+        this._visible = false;
+        this._waypoints = [];
+        this._altitude = 3500;
+        this._undoStack = [];
+        this._insertIndex = -1; // -1 = append
+        this._expandedIndex = -1;
+        this._searchDebounce = null;
+        this._mapTapMode = false;
+        this._mapTapHandler = null;
+        this._plan = null; // reference to loaded plan for metadata
+    }
+
+    init() {
+        this._buildPanel();
+        this._buildDirectToModal();
+    }
+
+    destroy() {
+        this.hide();
+        this._disableMapTapMode();
+        if (this._el && this._el.parentNode) this._el.remove();
+        if (this._directToEl && this._directToEl.parentNode) this._directToEl.remove();
+    }
+
+    show() {
+        if (this._visible) return;
+        this._visible = true;
+        this._el.classList.add('route-editor-visible');
+        this._renderWaypoints();
+    }
+
+    hide() {
+        this._visible = false;
+        this._el.classList.remove('route-editor-visible');
+        this._disableMapTapMode();
+        this._clearSearch();
+    }
+
+    isVisible() { return this._visible; }
+
+    // ========== Load / State ==========
+
+    loadRoute(plan) {
+        this._plan = plan;
+        const wps = plan.waypoints || plan.legs?.map(l => ({
+            name: l.to || l.waypoint,
+            icao: l.to || l.waypoint,
+            lat: l.lat,
+            lon: l.lon,
+            alt: l.altitude || plan.cruise_altitude,
+            gs: l.gs,
+            gph: l.gph,
+        })) || [];
+
+        this._waypoints = wps.map(wp => ({ ...wp }));
+        this._altitude = plan.cruise_altitude || plan.flight_plan?.cruise_altitude || 3500;
+        this._undoStack = [];
+        this._insertIndex = -1;
+        this._expandedIndex = -1;
+
+        if (this._altInput) this._altInput.value = this._altitude;
+        if (this._visible) this._renderWaypoints();
+    }
+
+    // ========== Undo ==========
+
+    _pushUndo() {
+        this._undoStack.push(JSON.parse(JSON.stringify(this._waypoints)));
+        if (this._undoStack.length > 5) this._undoStack.shift();
+        if (this._undoBtn) this._undoBtn.disabled = false;
+    }
+
+    _popUndo() {
+        if (this._undoStack.length === 0) return;
+        this._waypoints = this._undoStack.pop();
+        this._expandedIndex = -1;
+        this._renderWaypoints();
+        if (this._undoBtn) this._undoBtn.disabled = this._undoStack.length === 0;
+    }
+
+    // ========== Waypoint Operations ==========
+
+    _addWaypoint(wp, index) {
+        this._pushUndo();
+        if (index < 0 || index > this._waypoints.length) {
+            this._waypoints.push(wp);
+        } else {
+            this._waypoints.splice(index, 0, wp);
+        }
+        this._insertIndex = -1;
+        this._renderWaypoints();
+    }
+
+    _removeWaypoint(index) {
+        if (index < 0 || index >= this._waypoints.length) return;
+        this._pushUndo();
+        this._waypoints.splice(index, 1);
+        this._expandedIndex = -1;
+        this._renderWaypoints();
+    }
+
+    _moveWaypoint(fromIdx, toIdx) {
+        if (fromIdx === toIdx) return;
+        if (toIdx < 0 || toIdx >= this._waypoints.length) return;
+        this._pushUndo();
+        const [wp] = this._waypoints.splice(fromIdx, 1);
+        this._waypoints.splice(toIdx, 0, wp);
+        this._expandedIndex = toIdx;
+        this._renderWaypoints();
+    }
+
+    // ========== Build DOM ==========
+
+    _buildPanel() {
+        this._el = document.createElement('div');
+        this._el.className = 'route-editor';
+        this._el.innerHTML = `
+            <div class="route-editor-header">
+                <span class="route-editor-title">ROUTE EDITOR</span>
+                <button class="btn-close route-editor-close" title="Close">✕</button>
+            </div>
+            <div class="route-editor-search-row">
+                <input type="text" class="input route-editor-search" placeholder="Search ICAO or name..." autocomplete="off" autocorrect="off" spellcheck="false">
+                <button class="btn btn-secondary route-editor-nearby-btn" title="Nearby airports">NEARBY</button>
+                <button class="btn btn-secondary route-editor-maptap-btn" title="Tap map to add">MAP+</button>
+            </div>
+            <div class="route-editor-results" hidden></div>
+            <div class="route-editor-controls">
+                <div class="route-editor-alt-row">
+                    <label class="input-label">ALT</label>
+                    <input type="number" class="input route-editor-alt" value="3500" step="500" min="0" max="45000">
+                    <span class="route-editor-alt-unit">ft</span>
+                </div>
+                <div class="route-editor-actions">
+                    <button class="btn btn-primary route-editor-save">SAVE &amp; APPLY</button>
+                    <button class="btn btn-secondary route-editor-undo" disabled>UNDO</button>
+                </div>
+            </div>
+            <div class="route-editor-waypoints"></div>
+        `;
+        this.container.appendChild(this._el);
+
+        // Cache refs
+        this._searchInput = this._el.querySelector('.route-editor-search');
+        this._resultsDiv = this._el.querySelector('.route-editor-results');
+        this._waypointsDiv = this._el.querySelector('.route-editor-waypoints');
+        this._altInput = this._el.querySelector('.route-editor-alt');
+        this._undoBtn = this._el.querySelector('.route-editor-undo');
+
+        // Events — use _wireTap for iPad touch reliability
+        this._wireTap(this._el.querySelector('.route-editor-close'), () => this.hide());
+        this._searchInput.addEventListener('input', () => this._onSearchInput());
+        this._wireTap(this._el.querySelector('.route-editor-nearby-btn'), () => this._showNearby());
+        this._wireTap(this._el.querySelector('.route-editor-maptap-btn'), () => this._toggleMapTapMode());
+        this._wireTap(this._el.querySelector('.route-editor-save'), () => this._applyRoute());
+        this._wireTap(this._undoBtn, () => this._popUndo());
+        this._altInput.addEventListener('change', () => {
+            this._altitude = parseInt(this._altInput.value) || 3500;
+        });
+    }
+
+    _buildDirectToModal() {
+        this._directToEl = document.createElement('div');
+        this._directToEl.className = 'direct-to-modal';
+        this._directToEl.hidden = true;
+        this._directToEl.innerHTML = `
+            <div class="direct-to-card">
+                <div class="direct-to-header">
+                    <span class="direct-to-title">DIRECT TO</span>
+                    <button class="btn-close direct-to-close">✕</button>
+                </div>
+                <input type="text" class="input direct-to-search" placeholder="Search ICAO or name..." autocomplete="off" autocorrect="off" spellcheck="false">
+                <div class="direct-to-results"></div>
+            </div>
+        `;
+        document.body.appendChild(this._directToEl);
+
+        this._directToSearch = this._directToEl.querySelector('.direct-to-search');
+        this._directToResults = this._directToEl.querySelector('.direct-to-results');
+
+        this._wireTap(this._directToEl.querySelector('.direct-to-close'), () => this.hideDirectTo());
+        this._wireTap(this._directToEl, (e) => {
+            if (e.target === this._directToEl) this.hideDirectTo();
+        });
+        this._directToSearch.addEventListener('input', () => this._onDirectToSearch());
+    }
+
+    // ========== Direct-To ==========
+
+    showDirectTo() {
+        this._directToEl.hidden = false;
+        this._directToSearch.value = '';
+        this._directToSearch.focus();
+        this._loadDirectToNearby();
+    }
+
+    hideDirectTo() {
+        this._directToEl.hidden = true;
+        this._directToResults.innerHTML = '';
+    }
+
+    async _loadDirectToNearby() {
+        const sit = this.stratux.situation;
+        if (!sit || !sit.lat) {
+            this._directToResults.innerHTML = '<div class="route-search-empty">No GPS position</div>';
+            return;
+        }
+        try {
+            const airports = await this.nasrDb.getAirportsNear(sit.lat, sit.lon, 30);
+            airports.sort((a, b) => {
+                const dA = CockpitMap._distNm(sit.lat, sit.lon, a.lat, a.lon);
+                const dB = CockpitMap._distNm(sit.lat, sit.lon, b.lat, b.lon);
+                return dA - dB;
+            });
+            this._renderDirectToResults(airports.slice(0, 5));
+        } catch (err) {
+            console.warn('Direct-To nearby error:', err);
+        }
+    }
+
+    _onDirectToSearch() {
+        clearTimeout(this._directToDebounce);
+        const q = this._directToSearch.value.trim();
+        if (q.length < 2) {
+            this._loadDirectToNearby();
+            return;
+        }
+        this._directToDebounce = setTimeout(async () => {
+            try {
+                const results = await this.nasrDb.searchAll(q);
+                this._renderDirectToResults(results.airports || [], results.navaids || [], results.fixes || [], q);
+            } catch {}
+        }, 200);
+    }
+
+    _renderDirectToResults(airports, navaids, fixes, query = '') {
+        const q = (query || '').toUpperCase();
+        const sit = this.stratux.situation;
+        const results = [];
+
+        for (const a of airports) {
+            const dist = sit?.lat ? CockpitMap._distNm(sit.lat, sit.lon, a.lat, a.lon) : null;
+            const brg = sit?.lat ? Math.round(CockpitMap._bearing(sit.lat, sit.lon, a.lat, a.lon)) : null;
+            results.push({ type: 'APT', id: a.icao, name: a.name, lat: a.lat, lon: a.lon, dist, brg });
+        }
+        for (const n of navaids) {
+            const dist = sit?.lat ? CockpitMap._distNm(sit.lat, sit.lon, n.lat, n.lon) : null;
+            const brg = sit?.lat ? Math.round(CockpitMap._bearing(sit.lat, sit.lon, n.lat, n.lon)) : null;
+            results.push({ type: n.type || 'NAV', id: n.id, name: n.name, lat: n.lat, lon: n.lon, dist, brg });
+        }
+        for (const f of fixes) {
+            const dist = sit?.lat ? CockpitMap._distNm(sit.lat, sit.lon, f.lat, f.lon) : null;
+            const brg = sit?.lat ? Math.round(CockpitMap._bearing(sit.lat, sit.lon, f.lat, f.lon)) : null;
+            results.push({ type: 'FIX', id: f.id, name: '', lat: f.lat, lon: f.lon, dist, brg });
+        }
+
+        // Sort: ID matches first (airports → navaids → fixes), then name matches
+        const isIdMatch = r => r.id.startsWith(q) || r.id === 'K' + q || r.id.startsWith('K' + q);
+        const typeRank = r => r.type === 'APT' ? 0 : r.type === 'FIX' ? 2 : 1;
+        results.sort((a, b) => {
+            const aId = isIdMatch(a) ? 0 : 1;
+            const bId = isIdMatch(b) ? 0 : 1;
+            if (aId !== bId) return aId - bId;
+            const aExact = (a.id === q || a.id === 'K' + q) ? 0 : 1;
+            const bExact = (b.id === q || b.id === 'K' + q) ? 0 : 1;
+            if (aExact !== bExact) return aExact - bExact;
+            const tDiff = typeRank(a) - typeRank(b);
+            if (tDiff !== 0) return tDiff;
+            if (a.dist != null && b.dist != null) return a.dist - b.dist;
+            return 0;
+        });
+
+        const limited = results.slice(0, 10);
+        this._directToResults.innerHTML = limited.map(r => {
+            const distStr = r.dist != null ? r.dist.toFixed(0) + 'nm ' + r.brg + '\u00b0' : '—';
+            return `<button class="route-search-result" data-icao="${r.id}" data-name="${r.name || r.id}" data-lat="${r.lat}" data-lon="${r.lon}" data-type="${r.type}">
+                <span class="result-type">${r.type}</span>
+                <span class="result-id">${r.id}</span>
+                <span class="result-dist">${distStr}</span>
+                <span class="result-name">${r.name || ''}</span>
+            </button>`;
+        }).join('');
+
+        this._directToResults.querySelectorAll('.route-search-result').forEach(btn => {
+            this._wireTap(btn, () => {
+                this._executeDirectTo({
+                    icao: btn.dataset.icao,
+                    name: btn.dataset.name || btn.dataset.icao,
+                    lat: parseFloat(btn.dataset.lat),
+                    lon: parseFloat(btn.dataset.lon),
+                    type: btn.dataset.type,
+                });
+            });
+        });
+    }
+
+    _executeDirectTo(apt) {
+        this._pushUndo();
+        const sit = this.stratux.situation;
+
+        const directWp = {
+            icao: apt.icao,
+            name: apt.name || apt.icao,
+            lat: apt.lat,
+            lon: apt.lon,
+            alt: this._altitude,
+            type: apt.type || 'APT',
+        };
+
+        if (this._waypoints.length === 0) {
+            // No existing route — create a simple PPOS → target route
+            if (sit && sit.lat) {
+                this._waypoints.push({
+                    icao: 'PPOS',
+                    name: 'Present Pos',
+                    lat: sit.lat,
+                    lon: sit.lon,
+                    alt: sit.alt_msl || this._altitude,
+                });
+            }
+            this._waypoints.push(directWp);
+        } else {
+            // Existing route — find the best insertion point.
+            // Insert before the next waypoint we are heading toward.
+            let insertIdx = this._findDirectToInsertIndex(sit, apt);
+
+            // Remove any previous PPOS marker
+            this._waypoints = this._waypoints.filter(w => w.icao !== 'PPOS');
+
+            // Don't duplicate if the target is already at the insert position
+            if (this._waypoints[insertIdx]?.icao === apt.icao) {
+                // Already in route at correct spot — just add PPOS before it
+            } else {
+                this._waypoints.splice(insertIdx, 0, directWp);
+            }
+
+            // Insert PPOS at the Direct-To point so the leg draws correctly
+            if (sit && sit.lat) {
+                const pposIdx = this._waypoints.findIndex(w => w.icao === apt.icao);
+                this._waypoints.splice(pposIdx < 0 ? insertIdx : pposIdx, 0, {
+                    icao: 'PPOS',
+                    name: 'Present Pos',
+                    lat: sit.lat,
+                    lon: sit.lon,
+                    alt: sit.alt_msl || this._altitude,
+                });
+            }
+        }
+
+        this.hideDirectTo();
+        this._applyRoute();
+
+        if (typeof app !== 'undefined') {
+            const toast = app.showToast(`Direct \u2192 ${apt.icao}`, [
+                { id: 'undo', label: 'UNDO', callback: () => this._popUndo() }
+            ]);
+            setTimeout(() => toast.remove(), 8000);
+        }
+    }
+
+    /**
+     * Find the best index to insert a Direct-To waypoint.
+     * Returns the index in _waypoints where the Direct-To target should go.
+     *
+     * Strategy: determine which leg we're currently on (closest leg midpoint
+     * to our GPS position), then insert the D→ target after the "from" end
+     * of that leg so the route becomes: ...→ currentLegFrom → D→target → nextWp → ...
+     * Falls back to inserting before the destination.
+     */
+    _findDirectToInsertIndex(sit, apt) {
+        const wps = this._waypoints.filter(w => w.icao !== 'PPOS');
+        if (wps.length === 0) return 0;
+
+        // If the target is already in the route, return its index
+        const existingIdx = this._waypoints.findIndex(w => w.icao === apt.icao && w.icao !== 'PPOS');
+        if (existingIdx >= 0) return existingIdx;
+
+        if (sit && sit.lat && wps.length >= 2) {
+            // Find which leg we're closest to (perpendicular distance to leg segment)
+            let bestLegIdx = 0;
+            let bestDist = Infinity;
+            for (let i = 0; i < this._waypoints.length - 1; i++) {
+                const a = this._waypoints[i];
+                const b = this._waypoints[i + 1];
+                if (a.icao === 'PPOS' || b.icao === 'PPOS') continue;
+                if (!a.lat || !b.lat) continue;
+                const d = this._distToSegment(sit.lat, sit.lon, a.lat, a.lon, b.lat, b.lon);
+                if (d < bestDist) {
+                    bestDist = d;
+                    bestLegIdx = i;
+                }
+            }
+            // Insert after the "from" waypoint of the current leg
+            return bestLegIdx + 1;
+        }
+
+        // Fallback: insert before the last waypoint (destination)
+        const lastReal = this._waypoints.length - 1;
+        return lastReal >= 0 ? lastReal : 0;
+    }
+
+    /**
+     * Approximate distance (nm) from point P to line segment AB.
+     */
+    _distToSegment(pLat, pLon, aLat, aLon, bLat, bLon) {
+        const dx = bLon - aLon, dy = bLat - aLat;
+        if (dx === 0 && dy === 0) {
+            return CockpitMap._distNm(pLat, pLon, aLat, aLon);
+        }
+        let t = ((pLon - aLon) * dx + (pLat - aLat) * dy) / (dx * dx + dy * dy);
+        t = Math.max(0, Math.min(1, t));
+        const projLat = aLat + t * dy;
+        const projLon = aLon + t * dx;
+        return CockpitMap._distNm(pLat, pLon, projLat, projLon);
+    }
+
+    // ========== Map Tap Mode ==========
+
+    _toggleMapTapMode() {
+        if (this._mapTapMode) {
+            this._disableMapTapMode();
+        } else {
+            this._enableMapTapMode();
+        }
+    }
+
+    _enableMapTapMode() {
+        if (!this.cockpitMap || !this.cockpitMap.map) return;
+        this._mapTapMode = true;
+        const btn = this._el.querySelector('.route-editor-maptap-btn');
+        if (btn) btn.classList.add('active');
+        this.cockpitMap.map.getContainer().style.cursor = 'crosshair';
+
+        this._mapTapHandler = async (e) => {
+            const { lat, lng } = e.latlng;
+            // Find nearest airport within 5nm
+            try {
+                const nearby = await this.nasrDb.getAirportsNear(lat, lng, 5);
+                if (nearby.length > 0) {
+                    nearby.sort((a, b) =>
+                        CockpitMap._distNm(lat, lng, a.lat, a.lon) -
+                        CockpitMap._distNm(lat, lng, b.lat, b.lon)
+                    );
+                    const apt = nearby[0];
+                    const idx = this._insertIndex >= 0 ? this._insertIndex : this._waypoints.length;
+                    this._addWaypoint({
+                        icao: apt.icao, name: apt.name || apt.icao,
+                        lat: apt.lat, lon: apt.lon, alt: this._altitude,
+                        type: 'APT',
+                    }, idx);
+                } else {
+                    // Add as lat/lon waypoint
+                    const idx = this._insertIndex >= 0 ? this._insertIndex : this._waypoints.length;
+                    this._addWaypoint({
+                        icao: `${lat.toFixed(2)}/${lng.toFixed(2)}`,
+                        name: `${lat.toFixed(2)}/${lng.toFixed(2)}`,
+                        lat, lon: lng, alt: this._altitude,
+                    }, idx);
+                }
+            } catch {
+                // Fallback: add as lat/lon
+                const idx = this._insertIndex >= 0 ? this._insertIndex : this._waypoints.length;
+                this._addWaypoint({
+                    icao: `${lat.toFixed(2)}/${lng.toFixed(2)}`,
+                    name: `${lat.toFixed(2)}/${lng.toFixed(2)}`,
+                    lat, lon: lng, alt: this._altitude,
+                }, idx);
+            }
+            this._disableMapTapMode();
+        };
+
+        this.cockpitMap.map.once('click', this._mapTapHandler);
+    }
+
+    _disableMapTapMode() {
+        this._mapTapMode = false;
+        const btn = this._el?.querySelector('.route-editor-maptap-btn');
+        if (btn) btn.classList.remove('active');
+        if (this.cockpitMap?.map) {
+            this.cockpitMap.map.getContainer().style.cursor = '';
+            if (this._mapTapHandler) {
+                this.cockpitMap.map.off('click', this._mapTapHandler);
+                this._mapTapHandler = null;
+            }
+        }
+    }
+
+    // ========== Render Waypoints ==========
+
+    _renderWaypoints() {
+        if (!this._waypointsDiv) return;
+        const sit = this.stratux.situation;
+        const plan = this._plan || {};
+        const startFuel = this._getStartFuel();
+        const cruiseGph = plan.cruise_gph || 7;
+        const cruiseGs = plan.cruise_gs || 120;
+
+        let fuelRemaining = startFuel;
+
+        if (this._waypoints.length === 0) {
+            this._waypointsDiv.innerHTML = '<div class="route-wp-empty">No waypoints. Search or tap NEARBY.</div>';
+            return;
+        }
+
+        let html = '';
+        for (let i = 0; i < this._waypoints.length; i++) {
+            const wp = this._waypoints[i];
+            const prev = i > 0 ? this._waypoints[i - 1] : null;
+
+            let legInfo = '';
+            let legDist = 0;
+            if (prev) {
+                legDist = CockpitMap._distNm(prev.lat, prev.lon, wp.lat, wp.lon);
+                const brg = Math.round(CockpitMap._bearing(prev.lat, prev.lon, wp.lat, wp.lon));
+                legInfo = `${legDist.toFixed(0)}nm ${brg}\u00b0`;
+
+                // Fuel burn for this leg
+                const gph = wp.gph || cruiseGph;
+                const gs = wp.gs || cruiseGs;
+                fuelRemaining -= (legDist / gs) * gph;
+            }
+
+            const roleLabel = i === 0 ? 'DEP' : (i === this._waypoints.length - 1 ? 'DEST' : '');
+            const fuelClass = this._fuelColorClass(fuelRemaining, cruiseGph);
+            const isExpanded = (i === this._expandedIndex);
+
+            html += `
+                <div class="route-wp-row${isExpanded ? ' expanded' : ''}" data-idx="${i}">
+                    <div class="route-wp-main">
+                        <span class="route-wp-num">${i + 1}.</span>
+                        <span class="route-wp-id">${wp.icao || wp.name || '?'}</span>
+                        <span class="route-wp-name">${wp.name && wp.name !== wp.icao ? wp.name : ''}</span>
+                        <span class="route-wp-leg">${roleLabel || legInfo}</span>
+                        <span class="route-wp-fuel ${fuelClass}">${i > 0 ? fuelRemaining.toFixed(1) + ' gal' : startFuel.toFixed(1) + ' gal'}</span>
+                        <button class="route-wp-remove" data-idx="${i}" title="Remove">&times;</button>
+                    </div>
+                    ${isExpanded ? `
+                    <div class="route-wp-actions">
+                        <button class="btn btn-secondary route-wp-up" data-idx="${i}" ${i === 0 ? 'disabled' : ''}>&#9650; Up</button>
+                        <button class="btn btn-secondary route-wp-down" data-idx="${i}" ${i === this._waypoints.length - 1 ? 'disabled' : ''}>&#9660; Down</button>
+                    </div>` : ''}
+                    <button class="route-wp-insert" data-idx="${i + 1}">+ insert waypoint</button>
+                </div>
+            `;
+        }
+
+        // Reserve time at destination
+        if (this._waypoints.length > 1 && fuelRemaining > 0) {
+            const reserveHours = fuelRemaining / cruiseGph;
+            const reserveH = Math.floor(reserveHours);
+            const reserveM = Math.round((reserveHours - reserveH) * 60);
+            const fuelClass = this._fuelColorClass(fuelRemaining, cruiseGph);
+            html += `<div class="route-wp-reserve ${fuelClass}">Reserve: ${reserveH}:${String(reserveM).padStart(2, '0')}</div>`;
+        }
+
+        this._waypointsDiv.innerHTML = html;
+
+        // Attach events — use _wireTap for iPad touch reliability
+        this._waypointsDiv.querySelectorAll('.route-wp-main').forEach(row => {
+            this._wireTap(row, (e) => {
+                if (e.target?.classList?.contains('route-wp-remove')) return;
+                const idx = parseInt(row.parentElement.dataset.idx);
+                this._expandedIndex = (this._expandedIndex === idx) ? -1 : idx;
+                this._renderWaypoints();
+            });
+        });
+
+        this._waypointsDiv.querySelectorAll('.route-wp-remove').forEach(btn => {
+            this._wireTap(btn, () => {
+                this._removeWaypoint(parseInt(btn.dataset.idx));
+            });
+        });
+
+        this._waypointsDiv.querySelectorAll('.route-wp-up').forEach(btn => {
+            this._wireTap(btn, () => {
+                const idx = parseInt(btn.dataset.idx);
+                this._moveWaypoint(idx, idx - 1);
+            });
+        });
+
+        this._waypointsDiv.querySelectorAll('.route-wp-down').forEach(btn => {
+            this._wireTap(btn, () => {
+                const idx = parseInt(btn.dataset.idx);
+                this._moveWaypoint(idx, idx + 1);
+            });
+        });
+
+        this._waypointsDiv.querySelectorAll('.route-wp-insert').forEach(btn => {
+            this._wireTap(btn, () => {
+                this._insertIndex = parseInt(btn.dataset.idx);
+                this._searchInput.focus();
+                this._searchInput.placeholder = `Insert at position ${this._insertIndex + 1}...`;
+            });
+        });
+    }
+
+    _getStartFuel() {
+        // Try live engine data first (only if fresh)
+        const _engFuel = app?.enginePanel?.lastData;
+        const _fuelVal = _engFuel?.fuel_remaining_gal ?? _engFuel?.Gallons_Rem;
+        if (_fuelVal && _fuelVal > 0) {
+            const age = Date.now() - (app.enginePanel.lastPollTime || 0);
+            if (age < 10000) return _fuelVal;
+        }
+        // Fall back to FuelState (tic marks, manual override, etc.)
+        if (typeof FuelState !== 'undefined') {
+            const fs = FuelState.getStartFuel();
+            if (fs && fs.gallons > 0) return fs.gallons;
+        }
+        // Fall back to plan
+        return this._plan?.fuel_gal || 36;
+    }
+
+    _fuelColorClass(fuelRemaining, gph) {
+        if (!gph || gph <= 0) return 'fuel-green'; // no burn rate data — don't alarm
+        const hoursRemaining = fuelRemaining / gph;
+        if (hoursRemaining < 0.5) return 'fuel-red';
+        if (hoursRemaining < 1.0) return 'fuel-yellow';
+        return 'fuel-green';
+    }
+
+    /** Wire touchstart + click with debounce for iPad reliability */
+    _wireTap(el, handler) {
+        if (!el) return;
+        let touchFired = false;
+        el.addEventListener('touchstart', (e) => {
+            e.stopPropagation();
+            touchFired = true;
+            handler(e);
+            setTimeout(() => { touchFired = false; }, 400);
+        });
+        el.addEventListener('click', (e) => {
+            if (!touchFired) handler(e);
+        });
+    }
+
+    // ========== Apply / Persist ==========
+
+    async _applyRoute() {
+        if (this._waypoints.length === 0) return;
+
+        // Build legs with course/distance
+        const wps = this._waypoints.map((wp, i) => {
+            const result = { ...wp, alt: wp.alt || this._altitude };
+            if (i > 0) {
+                const prev = this._waypoints[i - 1];
+                result._legDist = CockpitMap._distNm(prev.lat, prev.lon, wp.lat, wp.lon);
+                result._legCourse = Math.round(CockpitMap._bearing(prev.lat, prev.lon, wp.lat, wp.lon));
+            }
+            return result;
+        });
+
+        // Determine destination airport: last waypoint with type='APT'.
+        // type is set authoritatively by _applyPlan via NASR lookup, so all airport
+        // waypoints carry it regardless of their ICAO format (KLKR, 28A, 7A5, etc.).
+        let destIcao = '';
+        for (let i = wps.length - 1; i >= 0; i--) {
+            if (wps[i].type === 'APT') { destIcao = wps[i].icao; break; }
+        }
+        if (!destIcao) destIcao = wps[wps.length - 1]?.icao || '';
+
+        // Build updated plan
+        const plan = {
+            ...(this._plan || {}),
+            destination: destIcao,
+            waypoints: wps,
+            cruise_altitude: this._altitude,
+            flight_plan: {
+                ...(this._plan?.flight_plan || {}),
+                departure: wps[0]?.icao || '',
+                destination: destIcao,
+                cruise_altitude: this._altitude,
+            },
+        };
+
+        // Apply to app
+        if (typeof app !== 'undefined') {
+            app.applyRouteEdit(plan);
+        }
+
+        // Toast
+        const routeStr = wps.map(w => w.icao || w.name).join(' \u2192 ');
+        if (typeof app !== 'undefined') {
+            app.showToast(`Route updated: ${routeStr}`);
+        }
+
+        this.hide();
+    }
+}

@@ -1,0 +1,133 @@
+{
+  "version": 5,
+
+  "simMode": false,
+  "simBridgeIp": "10.0.2.2",
+  "simBridgePort": 5678,
+
+  "homeServer": {
+    "tileBase": "http://192.168.1.77:8090/tiles",
+    "plateBase": "http://192.168.1.77:8090/plates",
+    "nasrBase": "http://192.168.1.77:8090/nasr"
+  },
+
+  "enginePolling": {
+    "enabled": true
+  },
+  "map": {
+    "defaultBaseLayer": "vector",
+    "defaultCenter": [35.0, -80.0],
+    "defaultZoom": 8,
+    "overlays": {
+      "airspace": { "enabled": true, "minZoom": 6 },
+      "airports": { "enabled": true, "minZoom": 7, "labelsMinZoom": 8 },
+      "navaids": { "enabled": true, "minZoom": 7, "labelsMinZoom": 9 },
+      "fixes": { "enabled": false, "minZoom": 8, "labelsMinZoom": 8 },
+      "airways": { "enabled": true, "minZoom": 8 }
+    }
+  },
+  "routeTable": {
+    "defaultHeight": "30vh",
+    "columns": [
+      { "key": "wpt", "label": "WPT", "width": "auto" },
+      { "key": "phase", "label": "PHASE", "width": "40px" },
+      { "key": "alt", "label": "ALT", "width": "50px" },
+      { "key": "hdg", "label": "HDG", "width": "42px" },
+      { "key": "dist", "label": "DIST", "width": "42px" },
+      { "key": "ete", "label": "TIME", "width": "45px" },
+      { "key": "fuel", "label": "FUEL", "width": "42px" },
+      { "key": "fuel_rem", "label": "REM", "width": "42px" },
+      { "key": "tas", "label": "TAS", "width": "38px" },
+      { "key": "gs", "label": "GS", "width": "38px" },
+      { "key": "wind", "label": "WIND", "width": "55px" },
+      { "key": "pwr", "label": "%PWR", "width": "40px" },
+      { "key": "rpm", "label": "RPM", "width": "42px" },
+      { "key": "mp", "label": "MP", "width": "38px" }
+    ]
+  },
+  "navStrip": {
+    "fields": ["next", "dest"]
+  },
+  "instrumentStrip": {
+    "fields": ["gs", "alt", "vs", "fuel", "dist", "ete"]
+  },
+  "engineOverlay": {
+    "enabled": true,
+    "position": "top-right",
+    "fields": [
+      { "key": "carb_temp", "label": "CARB", "unit": "°F", "warnBelow": 40, "dangerBelow": 32 }
+    ]
+  },
+  "enginePage": {
+    "trendChartMinutes": 30,
+    "fuelCautionGal": 8,
+    "fuelWarningGal": 4,
+    "stickyValveThresholdPct": 50,
+    "stickyValveWindowMinutes": 10,
+    "egtChartEnabled": true,
+    "showBsfc": true,
+    "showPeakDelta": true
+  },
+  "flightRecording": {
+    "autoRecord": true,
+    "rpmStartThreshold": 500,
+    "rpmStopThreshold": 100,
+    "stopDelaySeconds": 60,
+    "maxFlightsIdb": 5,
+    "autoSyncWhenOnline": true
+  },
+  "logbook": {
+    "autoCreate": true,
+    "defaultConditions": "VFR",
+    "trackHobbs": true,
+    "hobbsSource": "engine_hours"
+  },
+  "radar": {
+    "loopDurationHours": 2,
+    "frameIntervalMinutes": 10,
+    "playbackSpeedMs": 500,
+    "opacity": 0.5,
+    "autoLoop": true,
+    "cacheHours": 3
+  },
+  "approachCharts": {
+    "georefEnabled": true,
+    "ownshipIconSize": 24,
+    "autoRotateTrackUp": false,
+    "preloadRoutePlates": true
+  },
+  "takeoffAlerts": {
+    "showDmms": true,
+    "dmmsDisplayUntilAglFt": 1000,
+    "dmmsFlashWhenBelow": true,
+    "lowAltitudeMessages": [
+      {
+        "belowAglFt": 1000,
+        "message": "PUSH DOWN  FLY STRAIGHT AHEAD",
+        "color": "#ffcc00",
+        "background": "#000000",
+        "fontSize": "24pt",
+        "phase": "departure"
+      }
+    ]
+  },
+  "ifr": {
+    "showCdPhone": true,
+    "defaultCdPhone": "1-888-766-8267",
+    "showCraft": true,
+    "cdPhones": {
+      "KLKR": { "phone": "1-888-766-8267", "facility": "Raleigh ARTCC" }
+    }
+  },
+  "airspaceStyles": {
+    "B": { "color": "#0088ff", "weight": 2, "fillOpacity": 0.08 },
+    "C": { "color": "#ff44ff", "weight": 1.5, "fillOpacity": 0.06 },
+    "D": { "color": "#0088ff", "weight": 1, "dashArray": "6,4", "fillOpacity": 0.04 },
+    "E": { "color": "#ff44ff", "weight": 1, "dashArray": "4,4", "fillOpacity": 0.02 }
+  },
+  "geoStyles": {
+    "stateBoundaries": { "color": "#334466", "weight": 1, "opacity": 0.5 },
+    "coastlines": { "color": "#446688", "weight": 1.5 },
+    "water": { "fillColor": "#1a2a44", "fillOpacity": 0.6 }
+  }
+}

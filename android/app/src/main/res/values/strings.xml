@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">FlyTab</string>
+    <string name="title_activity_main">FlyTab</string>
+    <string name="package_name">app.flywhere.flytab</string>
+    <string name="custom_url_scheme">app.flywhere.flytab</string>
+</resources>

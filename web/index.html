@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#0066cc">
+    <title>FlyTab</title>
+    <link rel="stylesheet" href="./style.css">
+    <link rel="stylesheet" href="./lib/leaflet/leaflet.css">
+</head>
+<body>
+    <!-- Sim mode warning banner -->
+    <div id="simBanner" class="sim-banner" hidden>⚠ SIM MODE — not connected to Stratux</div>
+
+    <!-- Status bar -->
+    <header id="statusBar" class="status-bar">
+        <span id="statusGps" class="status-item status-gps">GPS</span>
+        <span id="statusFisb" class="status-item status-fisb">FIS-B</span>
+        <span id="statusRec" class="status-item rec-indicator" hidden></span>
+        <span id="statusSync" class="status-item status-sync">OFFL</span>
+        <span id="statusNasr" class="status-item status-nasr"></span>
+        <span id="statusWeather" class="status-item"></span>
+        <span id="statusTime" class="status-item"></span>
+        <span id="statusTimeLocal" class="status-item status-time-local"></span>
+        <span id="statusVersion" class="status-item status-version">v2.2</span>
+    </header>
+
+    <!-- Main content — always cockpit -->
+    <main id="mainContent" class="main-content">
+        <div id="cockpitView" class="view-container" style="display:flex;">
+            <!-- Main area: left rail + map -->
+            <div class="cockpit-main">
+                <!-- Left rail: icon-only, 44px, NOT overlaying map -->
+                <div id="leftRail"></div>
+                <!-- Map area: fills remaining space -->
+                <div class="map-area">
+                    <div id="primaryView" class="primary-view"></div>
+                    <!-- 3 corner buttons (auto-pan, D→, ⋮) -->
+                    <div id="mapCornerBtns"></div>
+                </div>
+            </div>
+            <!-- Instrument strip: GS/ALT/VS/FUEL/Dist/ETE -->
+            <div id="instrumentStrip"></div>
+            <!-- Tab bar: Map|ENG|CHK|LOG|More -->
+            <nav id="tabBar"></nav>
+        </div>
+    </main>
+
+    <!-- Global status for package loading -->
+    <div id="globalLoadStatus" class="global-load-status" hidden></div>
+
+    <!-- Libraries -->
+    <script src="./lib/pdfjs/pdf.js"></script>
+    <script>pdfjsLib.GlobalWorkerOptions.workerSrc = './lib/pdfjs/pdf.worker.js';</script>
+    <script src="./lib/leaflet/leaflet.js"></script>
+    <script src="./lib/chart.min.js"></script>
+    <script src="./lib/jszip.min.js"></script>
+
+    <!-- Shared modules -->
+    <script src="./shared/settings.js"></script>
+    <script src="./shared/stratux-client.js"></script>
+    <script src="./shared/engine-client.js"></script>
+    <script src="./shared/gps-source.js"></script>
+    <script src="./shared/nasr-db.js"></script>
+    <script src="./shared/flight-plan-model.js"></script>
+    <script src="./shared/weather-client.js"></script>
+    <script src="./shared/wb-calculator.js"></script>
+    <script src="./shared/fuel-engine.js"></script>
+    <script src="./shared/fuel-state.js"></script>
+    <script src="./shared/sync-shim.js"></script>
+    <script src="./shared/network-mode.js"></script>
+
+    <!-- Config (must load before cockpit modules) -->
+    <script src="./shared/cockpit-config.js"></script>
+    <script src="./shared/fisb-client.js"></script>
+
+    <!-- Cockpit modules -->
+    <script src="./cockpit/map.js"></script>
+    <script src="./cockpit/nav-strip.js"></script>
+    <script src="./cockpit/engine-panel.js"></script>
+    <script src="./cockpit/track-log.js"></script>
+    <script src="./cockpit/device-status.js"></script>
+    <script src="./cockpit/range-calc.js"></script>
+    <script src="./cockpit/route-editor.js"></script>
+    <script src="./cockpit/vector-map-layers.js"></script>
+    <script src="./cockpit/airport-popup.js"></script>
+    <script src="./cockpit/route-table.js"></script>
+    <script src="./cockpit/engine-overlay.js"></script>
+    <script src="./cockpit/engine-page.js"></script>
+    <script src="./cockpit/fuel-overlay.js"></script>
+    <script src="./cockpit/approach-charts.js"></script>
+    <script src="./cockpit/fisb-nexrad.js"></script>
+    <script src="./cockpit/fisb-weather.js"></script>
+    <script src="./cockpit/radar-loop.js"></script>
+    <script src="./cockpit/lightning.js"></script>
+    <script src="./cockpit/takeoff-alerts.js"></script>
+    <script src="./cockpit/ifr-clearance.js"></script>
+    <script src="./cockpit/flight-sync.js"></script>
+    <script src="./cockpit/logbook.js"></script>
+    <script src="./cockpit/data-status.js"></script>
+    <script src="./cockpit/wx-briefing.js"></script>
+    <script src="./cockpit/preflight-check.js"></script>
+    <script src="./cockpit/checklist.js"></script>
+    <script src="./cockpit/config-editor.js"></script>
+    <script src="./cockpit/flight-recorder.js"></script>
+
+    <!-- v5 UI components -->
+    <script src="./cockpit/layer-panel.js"></script>
+    <script src="./cockpit/instrument-strip.js"></script>
+    <script src="./cockpit/tab-bar.js"></script>
+
+    <!-- Core -->
+    <script src="./app.js"></script>
+
+    <!-- No service worker — Capacitor native app uses filesystem storage -->
+</body>
+</html>

@@ -1,0 +1,237 @@
+{
+  "metadata": {
+    "name": "Rv-9a",
+    "detail": "Vans",
+    "tailNumber": "N194JT"
+  },
+  "groups": [
+    {
+      "type": "normal",
+      "sections": [
+        {
+          "name": "VFR",
+          "checklists": [
+            {
+              "name": "Before Start",
+              "items": [
+                { "title": "Final walk around", "response": "DONE" },
+                { "title": "Fuel Tanks", "response": "SUMPED" },
+                { "title": "Engine oil", "response": "6 QUARTS MINIMUM" },
+                { "title": "Tow bar and chocks", "response": "REMOVED" },
+                { "title": "Pitot Cover", "response": "REMOVED" },
+                { "title": "Seatbelts", "response": "FASTENED" },
+                { "title": "Headsets", "response": "ON", "note": "Press and hold power button for 3 seconds\nGreen light flashes" },
+                { "title": "Headset Bluetooth", "response": "CONNECTED", "note": "Press Bluetooth button for 2 secs\nBlue light flashes when connected" },
+                { "title": "Switches", "response": "OFF" },
+                { "title": "Breakers", "response": "IN" },
+                { "title": "Master", "response": "ON" },
+                { "title": "Fuel Computer", "response": "SET" },
+                { "title": "Tablet WIFI", "response": "CONNECTED", "statusSource": "connectivity", "note": "Connect to Stratux hotspot" },
+                { "title": "Engine Data", "response": "RECORDING", "note": "Auto-starts when RPM > 500" },
+                { "title": "Fuel Selector", "response": "FULLEST TANK" }
+              ]
+            },
+            {
+              "name": "Start",
+              "items": [
+                { "title": "Strobes", "response": "ON" },
+                { "title": "Boost Pump", "response": "ON" },
+                { "title": "Throttle", "response": "CLOSED" },
+                { "title": "Propeller", "response": "FULL IN" },
+                { "title": "Mixture", "response": "IN" },
+                { "title": "Propeller area", "response": "CLEAR" },
+                { "title": "Engine Start", "response": "START" },
+                { "title": "Mixture", "response": "LEAN" },
+                { "title": "Oil Pressure", "response": "CHECK +25 PSI" }
+              ]
+            },
+            {
+              "name": "Before Taxi",
+              "items": [
+                { "title": "Avionics Master", "response": "ON" },
+                { "title": "Portable Radio", "response": "ON" },
+                { "title": "Bluetooth", "response": "SET ON", "note": "Connect to GPS175" },
+                { "title": "ATIS", "response": "RECEIVED", "note": "KLKR 120.825" },
+                { "title": "Transponder", "response": "ENTERED" },
+                { "title": "Altimeter Setting", "response": "ENTERED", "note": "EFIS and Autopilot" },
+                { "title": "EFIS Altitude", "response": "CONFIRMED", "note": "Field elevation" },
+                { "title": "EFIS Heading", "response": "CONFIRMED", "note": "Cross check with compass" },
+                { "title": "Brakes", "response": "BOTH FIRM" },
+                { "title": "Flaps", "response": "AS REQUIRED", "note": "For soft field set to left aileron" },
+                { "title": "Trim", "response": "SET" },
+                { "title": "Flight Plan", "response": "ENTERED" }
+              ]
+            },
+            {
+              "name": "Runup",
+              "items": [
+                { "title": "Controls", "response": "FREE AND CORRECT" },
+                { "title": "Trim", "response": "TAKEOFF", "note": "Green bars" },
+                { "title": "Canopy", "response": "CLOSED" },
+                { "title": "Fuel", "response": "FULLEST TANK" },
+                { "title": "50% Power", "response": "SET", "note": "2000-2200 RPM, 24-26\" MP" },
+                { "title": "Lean", "response": "MAX RPM" },
+                { "title": "Magneto", "response": "CHECK", "note": "Maximum mag drop 175 RPM (<1875)\nAll EGTs increase 50-100 degrees\nOdd cylinders rise more than even\nCHT decrease" },
+                { "title": "Prop", "response": "CYCLE", "note": "300 RPM decrease" },
+                { "title": "Engine Idle", "response": "CHECK" }
+              ]
+            },
+            {
+              "name": "Before Takeoff",
+              "items": [
+                { "title": "Engine Failure Plan", "response": "REVIEWED" },
+                { "title": "DMMS", "response": "60 KIAS" },
+                { "title": "Canopy", "response": "CLOSED AND LATCHED" },
+                { "title": "Fuel", "response": "FULLEST TANK" },
+                { "title": "Magnetos", "response": "BOTH" },
+                { "title": "Landing Light", "response": "ON" },
+                { "title": "Boost Pump", "response": "ON" },
+                { "title": "Mixture", "response": "FULL RICH" }
+              ]
+            },
+            {
+              "name": "After Landing",
+              "items": [
+                { "title": "Boost Pump", "response": "OFF" },
+                { "title": "Landing Light", "response": "OFF" },
+                { "title": "Flaps", "response": "UP" },
+                { "title": "Transponder", "response": "STBY" },
+                { "title": "Engine Data Recording", "response": "STOP", "action": { "url": "/api/engine/capture/stop", "method": "POST" }, "note": "Stops recording and saves flight CSV with departure/destination airports" }
+              ]
+            },
+            {
+              "name": "Oxygen",
+              "items": [
+                { "title": "Regulator to cylinder valve", "response": "ATTACHED" },
+                { "title": "Cannula lines", "response": "DISCONNECTED" },
+                { "title": "Cylinder valve", "response": "ON 1/2 TURN" },
+                { "title": "Leaks", "response": "CHECK" },
+                { "title": "Inlet side of flowmeter", "response": "INSERT IN SUPPLY TUBE", "note": "Assemble cannula by attaching the flowmeter, inserting the INLET side of the flowmeter into the preformed end of the supply tube opposite the needle valve / quick connect fitting." },
+                { "title": "Outlet side of flowmeter", "response": "INSERT IN CANNULA", "note": "Attach the OUTLET side of the flowmeter to the preformed end of the cannula. The flowmeter measures flow for cannulas and masks on separate scales expressed in thousands of feet of altitude." },
+                { "title": "Cylinder On/Off Valve", "response": "FULLY COUNTER CLOCKWISE" },
+                { "title": "Quick disconnect", "response": "INSERT IN REGULATOR", "note": "Oxygen will not flow until the breathing device is connected" },
+                { "title": "Flow rate", "response": "SLOWLY TURN NEEDLE VALVE TO SET ALTITUDE", "note": "For cannula, use LOWER LEFT scale" }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "IFR",
+          "checklists": [
+            {
+              "name": "Approach",
+              "items": [
+                { "title": "FlyPi approach", "response": "LOADED", "note": "Go to flight plan, procedure" },
+                { "title": "ATIS", "response": "RECEIVED" },
+                { "title": "Altimeter", "response": "ENTERED", "note": "EFIS and Autopilot" },
+                { "title": "Tower Frequency", "response": "STANDBY" },
+                { "title": "GPS Approach", "response": "SELECTED", "note": "Verify GPS fixes to plate" },
+                { "title": "Approach clearance", "response": "RECEIVED" },
+                { "title": "Trim", "response": "SET", "note": "Trim must be set for approach airspeed" },
+                { "title": "Autopilot", "response": "GPSS ALT HOLD", "note": "Right once to select ALT HOLD\nAutopilot will display GPSS GPSV" },
+                { "title": "Autopilot", "response": "VERIFY", "note": "The autopilot will transition from\nGPSS GPSV → GS ARM → GS CPLD" }
+              ]
+            },
+            {
+              "name": "Before Start",
+              "items": [
+                { "title": "Headset bluetooth", "response": "ON" },
+                { "title": "Phone", "response": "CONNECTED" },
+                { "title": "Clearance", "response": "RECEIVED", "note": "Cleared to, Route, Initial and final Altitude, Departure, Frequency, Transponder, Clearance Time" }
+              ]
+            },
+            {
+              "name": "Before Takeoff",
+              "items": [
+                { "title": "Clearance Time", "response": "BEFORE" },
+                { "title": "Heading", "response": "CONFIRM" },
+                { "title": "Altitude", "response": "CONFIRMED" },
+                { "title": "Departure Frequency", "response": "STANDBY" },
+                { "title": "Departure Plate", "response": "ACTIVE", "note": "FlyPi, airport detail, procedure, departure runway" }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "abnormal",
+      "sections": [
+        {
+          "name": "Engine",
+          "checklists": [
+            {
+              "name": "Rough Engine",
+              "items": [
+                { "title": "Fuel Pump", "response": "ON" },
+                { "title": "Fuel", "response": "SWITCH TANKS" },
+                { "title": "Left Magneto", "response": "SELECT", "note": "Left mag is the Slick Mag\nDoes the engine run smoother" },
+                { "title": "Right Mag", "response": "SELECT", "note": "The right mag is the SureFly and it requires power\nDoes the engine run smoother" }
+              ]
+            },
+            {
+              "name": "In Flight Mag Check",
+              "items": [
+                { "title": "Power", "response": "CRUISE" },
+                { "title": "Mixture", "response": "LEAN", "note": "The leaner the better" },
+                { "title": "Engine Monitor", "response": "NORMALIZE MODE" },
+                { "title": "Mags", "response": "LEFT AND RIGHT FOR 20 SECS" },
+                { "title": "EGTs", "response": "ALL RISE AND STABLE", "note": "Note falling or unstable EGTs" },
+                { "title": "Engine", "response": "RUNS SMOOTH" }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "emergency",
+      "sections": [
+        {
+          "name": "Communications",
+          "checklists": [
+            {
+              "name": "Radio Failure",
+              "items": [
+                { "title": "Voltage", "response": "VERIFY" },
+                { "title": "Radio Breaker", "response": "IN" },
+                { "title": "Portable Radio", "response": "CONNECT HEADSET" },
+                { "title": "Squawk", "response": "7600" },
+                { "title": "Navigation", "response": "FLY TO LAST CLEARANCE", "note": "Start approach at the time in the flight plan" }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Engine",
+          "checklists": [
+            {
+              "name": "Engine Failure",
+              "items": [
+                { "title": "Find suitable field", "response": "", "type": "info", "note": "Turn left, 74 KIAS 10:1 glide\nAlt    Dist   Time\n2K     3.5 nm  3 min\n4K     7.5 nm  6 min\n6K     11 nm   9 min\n8K     15 nm   12 min\n10K    18 nm   15 min" },
+                { "title": "Mixture", "response": "FULL RICH" },
+                { "title": "Best Glide", "response": "TRIM FOR 75 KIAS" },
+                { "title": "Airport or Field", "response": "SELECT", "note": "GPS 175 TWIST OUTER KNOB - NEAREST - DIRECT TO - ACTIVATE" },
+                { "title": "Fuel Selector", "response": "TURN TO OTHER TANK" },
+                { "title": "Boost Pump", "response": "ON" },
+                { "title": "Carb Heat", "response": "PULL ON" },
+                { "title": "Prop", "response": "PULL OUT" },
+                { "title": "Magnetos", "response": "LEFT - RIGHT" },
+                { "title": "Starter", "response": "ON" },
+                { "title": "Autopilot", "response": "OFF" }
+              ]
+            },
+            {
+              "name": "Before Landing",
+              "items": [
+                { "title": "Fuel Selector", "response": "OFF" },
+                { "title": "Squawk", "response": "7700" },
+                { "title": "ELT", "response": "ACTIVE" }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
