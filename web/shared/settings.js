@@ -7,7 +7,7 @@ class Settings {
     static DEFAULTS = {
         stratux_ip: '192.168.10.1',
         pi_ip: '192.168.10.1',
-        worker_base: 'https://flywhere.app/api',
+        worker_base: 'https://www.flywhere.app/api',
         night_mode: false,
         units: 'imperial',
         ownship_mode_s: 'A177E1',

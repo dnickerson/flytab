@@ -100,7 +100,7 @@ class WxBriefing {
 
         try {
             const ids = stations.join(',');
-            const base = Settings.workerBase || 'https://flywhere.app/api';
+            const base = Settings.workerBase || 'https://www.flywhere.app/api';
             const resp = await fetch(`${base}/mos?ids=${ids}`, { signal: AbortSignal.timeout(5000) });
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
             const data = await resp.json();

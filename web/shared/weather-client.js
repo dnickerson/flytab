@@ -162,7 +162,7 @@ class WeatherClient {
      * Returns structured 8-day forecast per station via /api/mos Vercel route.
      */
     async fetchMos(ids) {
-        const base = Settings.workerBase || 'https://flywhere.app/api';
+        const base = Settings.workerBase || 'https://www.flywhere.app/api';
         const resp = await fetch(`${base}/mos?ids=${ids}`, { signal: AbortSignal.timeout(5000) });
         if (!resp.ok) throw new Error(`MOS fetch failed: ${resp.status}`);
         return await resp.json();
