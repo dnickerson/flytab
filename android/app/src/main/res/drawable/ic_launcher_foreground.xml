@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Aircraft silhouette (top-down, heading up) -->
+    <!-- Fuselage -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,24 Q56,24 56,28 L56,48 L56,68 L56,76 Q56,78 54,78 Q52,78 52,76 L52,68 L52,48 L52,28 Q52,24 54,24 Z" />
+
+    <!-- Main wings (swept) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M52,48 L30,58 Q28,59 29,61 L32,62 L52,56 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M56,48 L78,58 Q80,59 79,61 L76,62 L56,56 Z" />
+
+    <!-- Horizontal stabilizer -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M52,72 L40,77 Q39,78 40,79 L42,79 L52,76 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M56,72 L68,77 Q69,78 68,79 L66,79 L56,76 Z" />
+
+    <!-- Vertical stabilizer -->
+    <path
+        android:fillColor="#E0F2F1"
+        android:pathData="M54,72 L54,68 L56,68 L56,72 L55,74 Z" />
+
+    <!-- Compass ring -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M54,54 m-32,0 a32,32 0 1,1 64,0 a32,32 0 1,1 -64,0"
+        android:strokeColor="#80CBC4"
+        android:strokeWidth="1"
+        android:strokeAlpha="0.5" />
+
+    <!-- Cardinal tick marks -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M54,22 L54,19"
+        android:strokeColor="#80CBC4"
+        android:strokeWidth="1.5" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M54,89 L54,86"
+        android:strokeColor="#80CBC4"
+        android:strokeWidth="1.5" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M22,54 L19,54"
+        android:strokeColor="#80CBC4"
+        android:strokeWidth="1.5" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M89,54 L86,54"
+        android:strokeColor="#80CBC4"
+        android:strokeWidth="1.5" />
+</vector>

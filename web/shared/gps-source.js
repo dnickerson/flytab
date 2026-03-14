@@ -86,7 +86,7 @@ class GpsSource {
             },
             {
                 enableHighAccuracy: true,
-                maximumAge: 0,
+                maximumAge: 2000,
                 timeout: 10000,
             }
         );

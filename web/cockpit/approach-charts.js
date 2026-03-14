@@ -8,6 +8,7 @@
  */
 
 const PLATES_BASE = 'http://localhost:9090/plates';
+const CIFP_BUNDLE_URL = 'http://localhost:9090/cifp/cifp_bundle.json';
 const PLATES_FETCH_TIMEOUT = 3000; // 3s timeout for NanoHTTPD requests
 
 /** Fetch with a timeout (AbortController). Rejects on timeout. */
@@ -22,6 +23,7 @@ class ApproachCharts {
         this._container = container;
         this._plateIndex = null;
         this._geoIndex = null;
+        this._cifpBundle = null; // All CIFP approach procedures in memory
         this._routeAirports = [];
         this._currentPlate = null;
         this._ownshipPos = null;
@@ -68,6 +70,17 @@ class ApproachCharts {
             } catch { /* IDB not ready */ }
         }
 
+        // Try CIFP bundle from IndexedDB cache
+        if (this._nasrDb) {
+            try {
+                const cachedCifp = await this._nasrDb.getAppCache('cifp_bundle');
+                if (cachedCifp) {
+                    this._cifpBundle = cachedCifp;
+                    console.log('[ApproachCharts] CIFP bundle from cache:', Object.keys(cachedCifp).length, 'airports');
+                }
+            } catch { /* IDB not ready */ }
+        }
+
         // Background refresh from network (or foreground if no cache)
         const hadCache = !!this._plateIndex;
         await this._refreshIndex();
@@ -77,10 +90,21 @@ class ApproachCharts {
     }
 
     async _refreshIndex() {
-        // FlyTab: No master plates/index.json — plates are stored per-airport at
-        // localhost:9090/plates/{ICAO}/index.json. Plate lookups use _fetchSingleAirportIndex()
-        // on demand. If we have route airports, pre-load their indices.
-        if (this._routeAirports.length > 0) {
+        // Try master plate_index.json first (has proper chart names + types)
+        try {
+            const resp = await _fetchWithTimeout(`${PLATES_BASE}/plate_index.json`);
+            if (resp.ok) {
+                const data = await resp.json();
+                if (data && typeof data === 'object' && !Array.isArray(data)) {
+                    this._plateIndex = data;
+                    if (this._nasrDb) this._nasrDb.putAppCache('plate_index', data).catch(() => {});
+                    console.log('[ApproachCharts] Master plate index loaded:', Object.keys(data).length, 'airports');
+                }
+            }
+        } catch { /* master index optional */ }
+
+        // Fall back to per-airport index.json if no master index
+        if (!this._plateIndex && this._routeAirports.length > 0) {
             if (!this._plateIndex) this._plateIndex = {};
             await Promise.all(this._routeAirports.map(icao => this._fetchSingleAirportIndex(icao)));
         }
@@ -94,6 +118,21 @@ class ApproachCharts {
                 if (this._nasrDb) this._nasrDb.putAppCache('plate_geo_index', data).catch(() => {});
             }
         } catch { /* georef optional */ }
+
+        // Load CIFP approach procedure bundle (14MB, all airports in one file)
+        if (!this._cifpBundle) {
+            try {
+                const resp = await _fetchWithTimeout(CIFP_BUNDLE_URL, {}, 30000); // 30s for large file
+                if (resp.ok) {
+                    const data = await resp.json();
+                    this._cifpBundle = data;
+                    console.log('[ApproachCharts] CIFP bundle loaded:', Object.keys(data).length, 'airports');
+                    if (this._nasrDb) this._nasrDb.putAppCache('cifp_bundle', data).catch(() => {});
+                }
+            } catch (err) {
+                console.warn('[ApproachCharts] CIFP bundle not available:', err.message);
+            }
+        }
     }
 
     async ensureLoaded() {
@@ -175,7 +214,14 @@ class ApproachCharts {
                 return;
             }
             if (!resp.ok) return;
-            const data = await resp.json();
+            let data = await resp.json();
+            // index.json may be { plates: [...] } or a flat array of filenames.
+            // Normalize flat array to { plates: [{filename, name}, ...] }
+            if (Array.isArray(data)) {
+                data = { plates: data.map(f => typeof f === 'string'
+                    ? { filename: f, name: f.replace(/\.[^.]+$/, '').replace(/_/g, ' ') }
+                    : f) };
+            }
             if (data.plates?.length) {
                 if (!this._plateIndex) this._plateIndex = {};
                 this._plateIndex[icao] = data;
@@ -344,7 +390,7 @@ class ApproachCharts {
         });
         this._wireTap(this._mapBtn, () => this.showOnMap());
         this._wireTap(this._viewerEl.querySelector('[data-action="load-proc"]'), () => {
-            if (this._currentPlate) this._showProcedurePicker(this._currentPlate.icao);
+            if (this._currentPlate) this._loadCurrentPlateProc(this._currentPlate);
         });
 
         // Touch swipe for plate navigation (only when not zoomed in)
@@ -775,19 +821,89 @@ class ApproachCharts {
 
     // ========== CIFP Procedure Loading ==========
 
+    async _loadCurrentPlateProc(plate) {
+        const icao = plate.icao;
+        try {
+            // Ensure CIFP bundle is loaded before checking
+            if (!this._cifpBundle) {
+                this._showToast('Loading CIFP data…');
+                try {
+                    const resp = await _fetchWithTimeout(CIFP_BUNDLE_URL, {}, 30000);
+                    if (resp.ok) {
+                        this._cifpBundle = await resp.json();
+                        if (this._nasrDb) this._nasrDb.putAppCache('cifp_bundle', this._cifpBundle).catch(() => {});
+                    }
+                } catch { /* will fall through to error below */ }
+            }
+            const airportCifp = this._cifpBundle?.[icao];
+            if (!airportCifp) {
+                this._showToast('No procedures for ' + icao);
+                return;
+            }
+            const rawProcs = airportCifp.procedures || [];
+            // Bundle uses {name, transitions}; normalize to {proc_name, proc_type, transitions}
+            const procs = rawProcs.map(p => ({
+                proc_name: p.name || p.proc_name,
+                proc_type: p.proc_type || 'APPROACH',
+                transitions: p.transitions || [],
+            }));
+            if (procs.length === 0) {
+                this._showToast('No procedures for ' + icao);
+                return;
+            }
+
+            // Try to match the current plate to a specific procedure.
+            // pdf_name like "05853R6.PDF" → proc_name "R06" or "R6"
+            // chart_name like "RNAV (GPS) RWY 06" → extract "R06"
+            const pdfName = (plate.pdf_name || plate.filename || '').replace(/\.\w+$/, '').toUpperCase();
+            const chartName = (plate.name || plate.chart_name || '').toUpperCase();
+
+            let matched = null;
+            for (const p of procs) {
+                const pn = p.proc_name.toUpperCase();
+                // Direct match: pdf stem ends with proc name (e.g. "05853R6" contains "R6")
+                if (pdfName.endsWith(pn)) { matched = p; break; }
+                // Runway match: chart "RNAV (GPS) RWY 06" → "R06", proc "R06"
+                const rwyMatch = chartName.match(/RWY\s*(\d+[LRCG]?)/);
+                if (rwyMatch) {
+                    const rwy = 'R' + rwyMatch[1];
+                    if (pn === rwy) { matched = p; break; }
+                }
+                // ILS match: "ILS OR LOC RWY 06" → "I06" or "IL6"
+                if (/^I/.test(pn) && rwyMatch) {
+                    const rwyNum = rwyMatch[1];
+                    if (pn.endsWith(rwyNum)) { matched = p; break; }
+                }
+            }
+
+            if (matched && matched.transitions.length > 1) {
+                // Jump straight to IAF/transition picker
+                this._renderIafPicker(icao, matched);
+            } else if (matched) {
+                // Single or no transition — load directly
+                this._loadProcedure(icao, matched.proc_name, matched.transitions[0] || '');
+            } else {
+                // Couldn't match plate to procedure — show full picker
+                this._renderProcPicker(icao, procs);
+            }
+        } catch (err) {
+            this._showToast('Failed to load procedures');
+        }
+    }
+
     async _showProcedurePicker(icao) {
         try {
-            const resp = await _fetchWithTimeout(`http://localhost:9090/cifp/${icao}.json`);
-            if (resp.status === 404) {
-                this._showToast('No procedures — download CIFP data via Pre-Flight Refresh');
+            const airportCifp = this._cifpBundle?.[icao];
+            if (!airportCifp) {
+                this._showToast('No procedures — CIFP data not loaded');
                 return;
             }
-            if (!resp.ok) {
-                this._showToast('No procedures available');
-                return;
-            }
-            const data = await resp.json();
-            const procs = data.procedures || [];
+            const rawProcs = airportCifp.procedures || [];
+            const procs = rawProcs.map(p => ({
+                proc_name: p.name || p.proc_name,
+                proc_type: p.proc_type || 'APPROACH',
+                transitions: p.transitions || [],
+            }));
             if (procs.length === 0) {
                 this._showToast('No procedures for ' + icao);
                 return;
@@ -851,6 +967,30 @@ class ApproachCharts {
         this._container.appendChild(el);
     }
 
+    _renderIafPicker(icao, proc) {
+        if (this._procPickerEl) this._procPickerEl.remove();
+        const el = document.createElement('div');
+        el.className = 'cifp-proc-picker';
+        let html = `<div class="cifp-proc-header">
+            <span>${proc.proc_name} — SELECT IAF</span>
+            <button class="btn-close cifp-proc-close">\u2715</button>
+        </div><div class="cifp-proc-list">`;
+        for (const t of proc.transitions) {
+            html += `<div class="cifp-proc-item" data-trans="${t}">${t}</div>`;
+        }
+        html += '</div>';
+        el.innerHTML = html;
+        this._wireTap(el.querySelector('.cifp-proc-close'), () => el.remove());
+        el.querySelectorAll('.cifp-proc-item').forEach(item => {
+            this._wireTap(item, () => {
+                this._loadProcedure(icao, proc.proc_name, item.dataset.trans);
+                el.remove();
+            });
+        });
+        this._procPickerEl = el;
+        this._container.appendChild(el);
+    }
+
     _renderTransitionPicker(icao, proc, parentEl) {
         const listEl = parentEl.querySelector('.cifp-proc-list');
         listEl.innerHTML = `<div class="cifp-proc-group-label">${proc.proc_name} — SELECT TRANSITION</div>`;
@@ -869,13 +1009,12 @@ class ApproachCharts {
 
     async _loadProcedure(icao, procName, transition) {
         try {
-            const resp = await _fetchWithTimeout(`http://localhost:9090/cifp/${icao}/${procName}.json`);
-            if (!resp.ok) {
-                this._showToast('Failed to load procedure');
+            const airportCifp = this._cifpBundle?.[icao];
+            const rawSteps = airportCifp?.details?.[procName];
+            if (!rawSteps || rawSteps.length === 0) {
+                this._showToast('No procedure detail for ' + procName);
                 return;
             }
-            const data = await resp.json();
-            const rawSteps = data.steps || [];
 
             // Build ordered sequence: transition steps first, then common segment
             const transSteps = rawSteps.filter(s => s.transition === transition);

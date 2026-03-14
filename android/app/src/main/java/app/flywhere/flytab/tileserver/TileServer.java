@@ -159,15 +159,14 @@ public class TileServer extends NanoHTTPD {
             if (tempFilePath != null) {
                 File tempFile = new File(tempFilePath);
                 if (tempFile.exists()) {
-                    FileInputStream fis = new FileInputStream(tempFile);
-                    FileOutputStream fos = new FileOutputStream(file, appendMode);
-                    byte[] buf = new byte[8192];
-                    int n;
-                    while ((n = fis.read(buf)) > 0) {
-                        fos.write(buf, 0, n);
+                    try (FileInputStream fis = new FileInputStream(tempFile);
+                         FileOutputStream fos = new FileOutputStream(file, appendMode)) {
+                        byte[] buf = new byte[8192];
+                        int n;
+                        while ((n = fis.read(buf)) > 0) {
+                            fos.write(buf, 0, n);
+                        }
                     }
-                    fos.close();
-                    fis.close();
                     tempFile.delete();
                 }
             }

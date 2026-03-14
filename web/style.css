@@ -3179,7 +3179,7 @@ body {
     position: fixed;
     left: 10px;
     right: 10px;
-    bottom: 10px;
+    bottom: var(--tab-bar-height);
     max-height: 50vh;
     z-index: 900;
     display: flex;

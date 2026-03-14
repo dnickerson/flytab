@@ -15,17 +15,21 @@ import java.io.File;
  * Capacitor plugin that starts a local NanoHTTPD server to serve
  * map tiles, plates, and NASR data from the Android filesystem to
  * the Leaflet WebView via http://localhost:9090/
+ *
+ * Lifecycle: server runs continuously (even when screen is off) —
+ * the foreground service keeps the process alive.
  */
 @CapacitorPlugin(name = "TileServer")
 public class TileServerPlugin extends Plugin {
     private static final String TAG = "TileServer";
     private static final int PORT = 9090;
     private TileServer server;
+    private File baseDir;
 
     @Override
     public void load() {
         try {
-            File baseDir = new File(
+            baseDir = new File(
                 Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS),
                 "FlyTab"
             );
@@ -56,6 +60,10 @@ public class TileServerPlugin extends Plugin {
         }
         call.resolve();
     }
+
+    // No handleOnPause/handleOnResume — tile server must stay running
+    // when screen is off. Flight recording, GPS, and data access continue
+    // in the background via the foreground service.
 
     @Override
     protected void handleOnDestroy() {
