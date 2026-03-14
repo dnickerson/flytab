@@ -48,26 +48,28 @@ class TabBar {
 
         const c = this._comps;
 
+        // Always close all full-screen overlays first, then open the requested one
+        if (tabId !== 'more') this._closeMoreDrawer();
+        if (c.enginePage?.visible) c.enginePage.hide();
+        if (c.checklist?.hide) c.checklist.hide();
+        if (c.logbook?.hide) c.logbook.hide();
+        if (c.wxBriefing?.hide) c.wxBriefing.hide();
+        if (c.ifrClearance?.hide) c.ifrClearance.hide();
+        if (c.dataStatus?.hide) c.dataStatus.hide();
+        if (c.configEditor?.hide) c.configEditor.hide();
+        if (c.approachCharts?.closeViewer) c.approachCharts.closeViewer();
+        if (c.fuelOverlay?.hide) c.fuelOverlay.hide();
+        if (c.airportPopup?.close) c.airportPopup.close();
+
         if (tabId === 'map') {
-            // Close any open overlays, return to map
-            if (c.enginePage?.visible) c.enginePage.hide();
-            if (c.checklist?.hide) c.checklist.hide();
-            if (c.logbook?.hide) c.logbook.hide();
-            this._closeMoreDrawer();
+            // Already closed everything above — just return to map
         } else if (tabId === 'eng') {
-            this._closeMoreDrawer();
-            if (c.enginePage) {
-                if (c.enginePage.visible) c.enginePage.hide();
-                else c.enginePage.show();
-            }
+            if (c.enginePage) c.enginePage.show();
         } else if (tabId === 'chk') {
-            this._closeMoreDrawer();
             if (c.checklist?.show) c.checklist.show();
         } else if (tabId === 'clr') {
-            this._closeMoreDrawer();
             if (c.ifrClearance) c.ifrClearance.show();
         } else if (tabId === 'apt') {
-            this._closeMoreDrawer();
             if (c.airportPopup?.showRouteAirports) c.airportPopup.showRouteAirports();
         } else if (tabId === 'more') {
             this._openMoreDrawer();

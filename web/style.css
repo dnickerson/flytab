@@ -327,7 +327,8 @@ body {
 
 .view-container {
     position: absolute;
-    inset: 0;
+    top: 0; left: 0; right: 0;
+    bottom: var(--tab-bar-height);
     overflow-y: auto;
     overflow-x: hidden;
     -webkit-overflow-scrolling: touch;
@@ -4903,7 +4904,7 @@ body {
     position: fixed;
     top: 0;
     right: 0;
-    bottom: 0;
+    bottom: var(--tab-bar-height);
     width: 260px;
     z-index: 700;
     background: var(--bg-surface);
@@ -5337,7 +5338,8 @@ body {
 
 .wx-briefing-page {
     position: absolute;
-    inset: 0;
+    top: 0; left: 0; right: 0;
+    bottom: var(--tab-bar-height);
     z-index: 800;
     background: var(--bg-primary);
     display: none;
