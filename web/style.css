@@ -1952,7 +1952,7 @@ body {
 /* ========== Route Table (Bottom Sheet) ========== */
 
 .route-table-sheet {
-    position: absolute;
+    position: fixed;
     bottom: var(--tab-bar-height);
     left: 0;
     right: 0;
