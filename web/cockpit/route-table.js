@@ -150,9 +150,9 @@ class RouteTable {
                 const clbSeg = depSegs.find(s => s.phase === 'CLB');
                 wpAlt = wp.elev_ft ?? clbSeg?.altFrom ?? null;
             } else if (i === plan.waypoints.length - 1) {
-                // Destination: prefer elev_ft, then inbound DES segment altTo
+                // Destination: show user-set cruise altitude, not field elevation
                 const desSeg = segments.find(s => s.phase === 'DES');
-                wpAlt = wp.elev_ft ?? desSeg?.altTo ?? wp.alt;
+                wpAlt = wp.alt || desSeg?.altFrom || wp.elev_ft || null;
             }
 
             const isApt = wp.type === 'APT' || wp.icao === planDep || wp.icao === planDest;
@@ -614,10 +614,11 @@ class RouteTable {
 
             const isLast = i === this._waypoints.length - 1;
             const legDist = wp._legDist || 0;
-            // Destination uses field elevation (descend from cruise); others use cruise altitude.
-            // elev_ft comes from NASR lookup in app.js _applyPlan.
-            const wpAlt = isLast && wp.elev_ft != null
-                ? wp.elev_ft
+            // For the last waypoint (destination): cruise altitude is wp.alt or cruiseAlt,
+            // field elevation (elev_ft) is the descent target — handled by deferred descent below.
+            // For intermediate waypoints: use wp.alt (user-set) or cruiseAlt.
+            const wpAlt = isLast
+                ? (wp.alt || cruiseAlt || wp.elev_ft || prevAlt)
                 : (wp.alt || cruiseAlt || prevAlt);
             const segments = [];
             let remainingDist = legDist;
@@ -653,7 +654,7 @@ class RouteTable {
                 const dFuel = (descentGph / 60) * actualTime;
                 const desSeg = {
                     phase: 'DES',
-                    altFrom: isLast ? Math.max(prevAlt, wpAlt + drop) : prevAlt,
+                    altFrom: prevAlt,
                     altTo: wpAlt,
                     dist: parseFloat(dDist.toFixed(1)),
                     tas: Math.round(descentSpeed), gs: Math.round(descentSpeed),
@@ -663,12 +664,31 @@ class RouteTable {
                     percent_power: descentPwr, rpm: descentRpm, mp: descentMp,
                 };
                 if (isLast) {
-                    // Last leg: defer descent after cruise (CRZ then DES)
                     deferredDescent = desSeg;
                 } else {
-                    // Non-last: descend first, then cruise
                     segments.push(desSeg);
                 }
+                remainingDist -= dDist;
+            }
+
+            // Last leg: always descend from cruise to field elevation
+            if (isLast && wp.elev_ft != null && wpAlt > wp.elev_ft) {
+                const drop = wpAlt - wp.elev_ft;
+                const dMin = drop / descentRate;
+                const dDist = Math.min((descentSpeed / 60) * dMin, remainingDist);
+                const actualTime = dDist > 0 ? dMin * (dDist / ((descentSpeed / 60) * dMin)) : 0;
+                const dFuel = (descentGph / 60) * actualTime;
+                deferredDescent = {
+                    phase: 'DES',
+                    altFrom: wpAlt,
+                    altTo: wp.elev_ft,
+                    dist: parseFloat(dDist.toFixed(1)),
+                    tas: Math.round(descentSpeed), gs: Math.round(descentSpeed),
+                    ete_min: actualTime, gph: parseFloat(descentGph.toFixed(1)),
+                    fuel: parseFloat(dFuel.toFixed(1)),
+                    fuelRemaining: 0,
+                    percent_power: descentPwr, rpm: descentRpm, mp: descentMp,
+                };
                 remainingDist -= dDist;
             }
 
