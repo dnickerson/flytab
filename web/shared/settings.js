@@ -21,7 +21,7 @@ class Settings {
         show_airways: false,
         fuel_measurement: 'gallons',
         fuel_manual_override: false,
-        gps_source: 'internal',  // 'internal' (Android device GPS) or 'stratux' (Pi GPS)
+        gps_source: 'stratux',  // 'stratux' (Pi/Stratux GPS — primary) or 'internal' (device GPS if available)
     };
 
     static _key(name) { return `flypi_${name}`; }

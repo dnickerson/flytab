@@ -61,9 +61,10 @@ class GpsSource {
     _startInternal() {
         if (this._watchId !== null) return;
         if (!('geolocation' in navigator)) {
-            const msg = 'Geolocation API not available in this WebView';
+            const msg = 'Geolocation API not available — falling back to Stratux GPS';
             console.warn('[GpsSource]', msg);
             if (typeof DiagLog !== 'undefined') DiagLog.log('gps', msg);
+            this._fallbackToStratux();
             return;
         }
 
@@ -83,6 +84,11 @@ class GpsSource {
                 const msg = `Internal GPS error: code=${err.code} ${err.message}`;
                 console.warn('[GpsSource]', msg);
                 if (typeof DiagLog !== 'undefined') DiagLog.log('gps', msg);
+                // POSITION_UNAVAILABLE (2) = no GPS hardware — fall back to Stratux
+                if (err.code === 2) {
+                    this._stopInternal();
+                    this._fallbackToStratux();
+                }
             },
             {
                 enableHighAccuracy: true,
@@ -93,6 +99,14 @@ class GpsSource {
         this._resetStaleTimer();
         console.log('[GpsSource] Internal GPS watchPosition started');
         if (typeof DiagLog !== 'undefined') DiagLog.log('gps', 'watchPosition registered, waiting for fix…');
+    }
+
+    /** Auto-switch to Stratux when internal GPS is unavailable */
+    _fallbackToStratux() {
+        if (typeof DiagLog !== 'undefined') DiagLog.log('gps', 'Falling back to Stratux GPS');
+        this._source = 'stratux';
+        this._stratux._suppressGpsSituation = false;
+        Settings.set('gps_source', 'stratux');
     }
 
     _stopInternal() {
