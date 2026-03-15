@@ -604,8 +604,17 @@ class FlyTabApp {
             this.instrumentStrip = new InstrumentStrip(this.stratuxClient);
             if (this.fuelOverlay) this.instrumentStrip.setFuelOverlay(this.fuelOverlay);
             const stripEl = this.instrumentStrip.init();
-            const stripContainer = document.getElementById('instrumentStrip');
-            if (stripContainer && stripEl) stripContainer.appendChild(stripEl);
+            // Place instrument strip inside route-table-sheet (after handle) so they stack together
+            const rtSheet = document.querySelector('.route-table-sheet');
+            const stripContainer = rtSheet || document.getElementById('instrumentStrip');
+            if (stripContainer && stripEl) {
+                const wrapper = document.getElementById('instrumentStrip');
+                if (rtSheet && wrapper) {
+                    // Move the instrumentStrip div inside the route-table-sheet
+                    rtSheet.appendChild(wrapper);
+                }
+                wrapper.appendChild(stripEl);
+            }
         }
 
         // ── v5 UI: Left Rail ─────────────────────────────────────────────────

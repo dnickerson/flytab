@@ -160,6 +160,7 @@
 
     /* ── Tab bar height — total reserved space at bottom (tab bar + nav bar) ── */
     --tab-bar-height:    calc(72px + var(--android-nav-height));
+    --bottom-chrome:     calc(var(--tab-bar-height) + 64px);  /* tab bar + instrument strip */
 
     /* ── Touch targets — Apple HIG + sunlight glove tolerance ── */
     --touch-compact:     36px;      /* compact toolbar/table buttons (fixed, no cockpit override) */
