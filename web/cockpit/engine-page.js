@@ -44,9 +44,10 @@ class EnginePage {
             chtDanger: 435,
             oilTempCaution: 220,
             oilTempDanger: 245,
-            oilPressLow: 25,
-            oilPressCaution: 60,
-            oilPressDanger: 100,
+            oilPressLow: 25,         // red below — Lycoming minimum
+            oilPressCautionLow: 55,  // yellow below — approaching minimum
+            oilPressCautionHigh: 95, // yellow above — approaching redline
+            oilPressDanger: 100,     // red above — Lycoming redline
             carbTempCaution: 40,    // icing range upper (degrees F)
             carbTempDanger: -15,    // icing range lower (degrees F)
             fuelCapacity: 34,
@@ -452,7 +453,8 @@ class EnginePage {
         this._setTextColored('ep-oilp', Math.round(oilPress),
             oilPress <= this._cfg.oilPressLow ? 'danger' :
             oilPress >= this._cfg.oilPressDanger ? 'danger' :
-            oilPress >= this._cfg.oilPressCaution ? 'caution' : 'normal');
+            oilPress <= this._cfg.oilPressCautionLow ? 'caution' :
+            oilPress >= this._cfg.oilPressCautionHigh ? 'caution' : 'normal');
 
         this._setText('ep-volts', volts > 0 ? volts.toFixed(1) : '--.-');
 

@@ -3372,6 +3372,11 @@ body {
     50% { opacity: 0.3; }
 }
 
+@keyframes thermal-flash {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.2; }
+}
+
 /* ========== Airspace / Vector Map Labels ========== */
 
 .apt-label {
@@ -3486,14 +3491,20 @@ body {
     padding: 12px 16px; background: var(--bg-surface);
     border-bottom: 1px solid var(--border); flex-shrink: 0;
 }
+.logbook-header-actions { display: flex; gap: 8px; align-items: center; }
 .logbook-title { font-size: 1.1rem; font-weight: 600; }
-.logbook-close {
-    /* sizing via .btn-close */
-}
+.logbook-close { /* sizing via .btn-close */ }
 .logbook-body { flex: 1; overflow-y: auto; padding: 12px 16px; }
 .logbook-empty {
     text-align: center; padding: 40px 20px; color: var(--text-secondary);
+    line-height: 1.6;
 }
+.logbook-summary {
+    display: flex; gap: 16px; padding: 8px 12px; margin-bottom: 12px;
+    font-size: 14px; color: var(--text-secondary);
+    border-bottom: 1px solid var(--border);
+}
+.logbook-unsynced { color: var(--status-caution); }
 .logbook-entry {
     background: var(--bg-surface); border: 1px solid var(--border);
     border-radius: 8px; padding: 12px 14px; margin-bottom: 10px;
@@ -3503,6 +3514,10 @@ body {
     margin-bottom: 6px;
 }
 .logbook-date { font-weight: 700; font-size: 16px; }
+.logbook-unsync-dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--status-caution); margin-left: 6px; vertical-align: middle;
+}
 .logbook-route {
     font-family: var(--font-instrument); font-weight: 700;
     color: var(--accent); font-size: 16px;
@@ -3511,6 +3526,11 @@ body {
     display: flex; gap: 12px; font-size: 14px;
     color: var(--text-secondary); margin-bottom: 8px;
 }
+.logbook-source {
+    font-size: 11px; padding: 1px 5px; border-radius: 3px;
+    background: var(--bg-dark-well); color: var(--text-muted);
+    letter-spacing: 0.5px;
+}
 .logbook-entry-actions { display: flex; gap: 8px; }
 .logbook-btn {
     padding: 8px 16px; border-radius: 6px; font-weight: 700;
@@ -3518,16 +3538,142 @@ body {
     touch-action: manipulation; -webkit-tap-highlight-color: transparent;
     letter-spacing: 0.5px;
 }
+.logbook-add-btn {
+    background: var(--accent); border: none; color: var(--text-on-dark);
+}
+.logbook-add-btn:active { opacity: 0.8; }
+.logbook-sync-btn {
+    background: transparent; border: 1px solid var(--text-secondary);
+    color: var(--text-secondary);
+}
+.logbook-edit-btn {
+    background: transparent; border: 1px solid var(--accent);
+    color: var(--accent);
+}
+.logbook-edit-btn:active { background: var(--accent); color: var(--text-on-dark); }
+.logbook-delete-btn {
+    background: transparent; border: 1px solid var(--status-danger);
+    color: var(--status-danger); padding: 8px 10px;
+}
+.logbook-delete-btn:active { background: var(--status-danger); color: var(--text-on-dark); }
 .logbook-download-btn {
     background: transparent; border: 1px solid var(--accent);
     color: var(--accent);
 }
-.logbook-download-btn:active { background: var(--accent); color: var(--text-on-accent); }
+.logbook-download-btn:active { background: var(--accent); color: var(--text-on-dark); }
 .logbook-export-btn {
-    background: var(--color-success, #22c55e); border: none;
+    background: var(--status-ok); border: none;
     color: var(--bg-primary);
 }
 .logbook-export-btn:active { opacity: 0.8; }
+
+/* Logbook Form Overlay */
+.logbook-form-overlay {
+    position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+    z-index: 810; background: var(--bg-primary);
+    display: flex; flex-direction: column;
+}
+.logbook-form-header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 12px 16px; background: var(--bg-surface);
+    border-bottom: 1px solid var(--border); flex-shrink: 0;
+    font-size: 1.1rem; font-weight: 600;
+}
+.logbook-form-body {
+    flex: 1; overflow-y: auto; padding: 12px 16px;
+    -webkit-overflow-scrolling: touch;
+}
+.lb-form-section {
+    font-size: 13px; font-weight: 700; color: var(--text-label);
+    text-transform: uppercase; letter-spacing: 1px;
+    margin: 16px 0 8px; padding-bottom: 4px;
+    border-bottom: 1px solid var(--border-light);
+}
+.lb-form-section:first-child { margin-top: 0; }
+.lb-form-row {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+    margin-bottom: 10px;
+}
+.lb-form-row label {
+    display: flex; flex-direction: column; gap: 3px;
+    font-size: 13px; color: var(--text-label); font-weight: 600;
+}
+.lb-form-row input, .lb-form-row select, .lb-form-row textarea {
+    background: var(--bg-surface); color: var(--text-primary);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px; font-size: 16px; font-family: inherit;
+    min-height: var(--touch-min, 48px);
+}
+.lb-form-row textarea {
+    min-height: 60px; resize: vertical;
+}
+.lb-form-row input:focus, .lb-form-row select:focus, .lb-form-row textarea:focus {
+    border-color: var(--accent); outline: none;
+}
+.lb-form-3col { grid-template-columns: 1fr 1fr 1fr; }
+.lb-form-4col { grid-template-columns: 1fr 1fr 1fr 1fr; }
+.lb-form-actions {
+    display: flex; gap: 10px; margin: 20px 0; padding-bottom: 40px;
+}
+.logbook-form-save {
+    flex: 1; background: var(--accent); border: none;
+    color: var(--text-on-dark); font-size: 16px; min-height: var(--touch-preferred, 56px);
+}
+.logbook-form-cancel-btn {
+    background: transparent; border: 1px solid var(--text-secondary);
+    color: var(--text-secondary); min-height: var(--touch-preferred, 56px);
+}
+
+/* Logbook Tabs */
+.logbook-tabs {
+    display: flex; gap: 0; background: var(--bg-surface);
+    border-bottom: 2px solid var(--border); flex-shrink: 0;
+}
+.logbook-tab {
+    flex: 1; padding: 10px; text-align: center;
+    font-weight: 700; font-size: 14px; letter-spacing: 0.5px;
+    background: transparent; border: none; color: var(--text-secondary);
+    cursor: pointer; touch-action: manipulation;
+    border-bottom: 3px solid transparent; margin-bottom: -2px;
+}
+.logbook-tab.active {
+    color: var(--accent); border-bottom-color: var(--accent);
+}
+
+/* Currency Tab */
+.lb-currency-section {
+    background: var(--bg-surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px 14px; margin-bottom: 12px;
+}
+.lb-section-title {
+    font-size: 13px; font-weight: 700; color: var(--text-label);
+    text-transform: uppercase; letter-spacing: 1px;
+    margin: 0 0 10px; padding-bottom: 6px;
+    border-bottom: 1px solid var(--border-light);
+}
+.lb-currency-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 6px 0; font-size: 15px;
+}
+.lb-currency-ok {
+    font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 4px;
+    background: var(--status-ok); color: var(--bg-primary);
+}
+.lb-currency-expired {
+    font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 4px;
+    background: var(--status-danger); color: var(--text-on-dark);
+}
+
+/* Oil Tab */
+.lb-oil-summary {
+    background: var(--bg-surface); border: 1px solid var(--accent);
+    border-radius: 8px; padding: 12px 14px; margin-bottom: 12px;
+}
+.lb-oil-summary-title {
+    font-size: 13px; font-weight: 700; color: var(--accent);
+    text-transform: uppercase; letter-spacing: 1px;
+    margin-bottom: 8px;
+}
 
 /* ========== FIS-B Alerts ========== */
 .fisb-alert-container {

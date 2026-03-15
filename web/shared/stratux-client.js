@@ -110,8 +110,8 @@ class StratuxClient extends EventTarget {
         };
 
         this._trafficWs.onclose = () => {
-            if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', 'Traffic WS closed, reconnecting…');
-            this._scheduleReconnect();
+            if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', 'Traffic WS closed, reconnecting traffic only…');
+            this._scheduleTrafficReconnect();
         };
         this._trafficWs.onerror = () => { /* onclose will fire */ };
     }
@@ -165,7 +165,12 @@ class StratuxClient extends EventTarget {
 
         this._situationWs.onclose = () => {
             if (this._trafficWs?.readyState === WebSocket.OPEN) {
-                setTimeout(() => this._connectSituation(), 2000);
+                setTimeout(() => {
+                    // Guard: don't create a duplicate if already reconnected
+                    if (!this._situationWs || this._situationWs.readyState !== WebSocket.OPEN) {
+                        this._connectSituation();
+                    }
+                }, 2000);
             }
         };
     }
@@ -245,7 +250,14 @@ class StratuxClient extends EventTarget {
             } catch { /* ignore malformed */ }
         };
 
-        this._weatherWs.onclose = () => {};
+        this._weatherWs.onclose = () => {
+            // Reconnect after 5s if traffic is still alive
+            setTimeout(() => {
+                if (this._trafficWs?.readyState === WebSocket.OPEN) {
+                    this._connectWeather();
+                }
+            }, 5000);
+        };
     }
 
     // ========== FIS-B JSON I/O WebSocket (/jsonio) ==========
@@ -269,10 +281,41 @@ class StratuxClient extends EventTarget {
             } catch { /* ignore malformed */ }
         };
 
-        this._jsonioWs.onclose = () => {};
+        this._jsonioWs.onclose = () => {
+            setTimeout(() => {
+                if (this._trafficWs?.readyState === WebSocket.OPEN) {
+                    this._connectJsonio();
+                }
+            }, 5000);
+        };
     }
 
     // ========== Reconnect ==========
+
+    /** Reconnect only the traffic WS — don't tear down situation/weather/jsonio */
+    _scheduleTrafficReconnect() {
+        // Only mark disconnected if situation WS is also down
+        if (!this._situationWs || this._situationWs.readyState !== WebSocket.OPEN) {
+            this._setConnected(false);
+        }
+        if (this._reconnectTimer) return;
+        this._reconnectTimer = setTimeout(() => {
+            this._reconnectTimer = null;
+            this._reconnectDelay = 2000;
+            this._connectTraffic();
+            // Reconnect other sockets only if they're also closed
+            if (!this._situationWs || this._situationWs.readyState !== WebSocket.OPEN) {
+                this._connectSituation();
+            }
+            if (!this._weatherWs || this._weatherWs.readyState !== WebSocket.OPEN) {
+                this._connectWeather();
+            }
+            if (!this._jsonioWs || this._jsonioWs.readyState !== WebSocket.OPEN) {
+                this._connectJsonio();
+            }
+        }, this._reconnectDelay);
+        this._reconnectDelay = Math.min(this._reconnectDelay * 2, this._maxDelay);
+    }
 
     _scheduleReconnect() {
         this._setConnected(false);
@@ -290,8 +333,13 @@ class StratuxClient extends EventTarget {
     _setConnected(state) {
         if (this._connected === state) return;
         this._connected = state;
-        if (!state && !this._suppressGpsSituation) {
-            this.situation = null;
+        // Don't null situation on disconnect — the situation WS may still be
+        // delivering data, and even if it isn't, the last known position is
+        // more useful than nothing. The stale-data purge timer handles aging.
+        if (state) {
+            this._startPurge();
+        } else {
+            if (this._purgeInterval) { clearInterval(this._purgeInterval); this._purgeInterval = null; }
         }
         const event = state ? 'stratux:connect' : 'stratux:disconnect';
         this.dispatchEvent(new CustomEvent(event));
@@ -302,6 +350,7 @@ class StratuxClient extends EventTarget {
     // ========== Traffic Purge ==========
 
     _startPurge() {
+        if (this._purgeInterval) return;
         this._purgeInterval = setInterval(() => {
             const now = Date.now();
             for (const [icao, target] of this.traffic) {

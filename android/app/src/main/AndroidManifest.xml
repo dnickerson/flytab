@@ -16,7 +16,7 @@
              even if the user revokes location permission after initial grant. -->
         <service
             android:name=".FlightService"
-            android:foregroundServiceType="location|specialUse"
+            android:foregroundServiceType="specialUse"
             android:exported="false">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"

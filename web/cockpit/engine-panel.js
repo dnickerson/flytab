@@ -158,26 +158,20 @@ class EnginePanel {
 
         this._engineClient.addEventListener('engine:disconnect', () => {
             this._connected = false;
-            this._lastData = null;
             this._lastPollTime = 0;
+            // Keep lastData so pilot still sees last known values (not flashing dashes).
+            // Show DISCONNECTED status but don't blank gauges on transient WiFi glitch.
             if (this._dom.status) {
                 this._dom.status.textContent = 'DISCONNECTED';
                 this._dom.status.className = 'engine-status disconnected';
             }
-            // Blank gauges so pilot doesn't see stale data
-            if (this._dom.rpm) this._dom.rpm.textContent = '—';
-            if (this._dom.pwr) this._dom.pwr.textContent = '—';
-            if (this._dom.fuel) this._dom.fuel.textContent = '—';
-            if (this._dom.gph) this._dom.gph.textContent = '—';
-            if (this._dom.oilTemp) this._dom.oilTemp.textContent = '—';
-            if (this._dom.oilPress) this._dom.oilPress.textContent = '—';
-            if (this._dom.fuelEndurance) this._dom.fuelEndurance.textContent = '';
-            if (this._dom.ropLop) this._dom.ropLop.textContent = '';
-            this._setBar(this._dom.rpmBar, 0);
-            this._setBar(this._dom.pwrBar, 0);
-            for (let i = 1; i <= 4; i++) {
-                if (this._dom[`egt${i}`]) { this._dom[`egt${i}`].style.height = '0%'; this._dom[`egt${i}`].title = ''; }
-                if (this._dom[`cht${i}`]) { this._dom[`cht${i}`].style.height = '0%'; this._dom[`cht${i}`].title = ''; }
+        });
+
+        this._engineClient.addEventListener('engine:stale', (e) => {
+            // Pi serial hang — WS open but no data for 5+ seconds
+            if (e.detail.stale && this._dom.status) {
+                this._dom.status.textContent = 'STALE';
+                this._dom.status.className = 'engine-status disconnected';
             }
         });
     }
@@ -188,25 +182,28 @@ class EnginePanel {
             this._dom.status.className = 'engine-status connected';
         }
 
+        // Numeric sanitizer — Pi can send strings ("---") during init/error states
+        const num = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
+
         // RPM
-        const rpm = d.rpm ?? d.RPM ?? 0;
+        const rpm = num(d.rpm ?? d.RPM ?? 0);
         if (this._dom.rpm) this._dom.rpm.textContent = Math.round(rpm);
         this._setBar(this._dom.rpmBar, rpm / this._maxRpm * 100);
 
         // Power
-        const pwr = d.percent_power ?? d.pwr ?? 0;
+        const pwr = num(d.percent_power ?? d.pwr ?? 0);
         if (this._dom.pwr) this._dom.pwr.textContent = Math.round(pwr) + '%';
         this._setBar(this._dom.pwrBar, pwr);
 
         // Fuel (EDM field names: Gallons_Rem, Fuel_Flow)
-        const fuel = d.fuel_remaining_gal ?? d.fuel_gal ?? d.Gallons_Rem ?? 0;
+        const fuel = num(d.fuel_remaining_gal ?? d.fuel_gal ?? d.Gallons_Rem ?? 0);
         if (this._dom.fuel) this._dom.fuel.textContent = fuel.toFixed(1) + ' gal';
-        const gph = d.fuel_flow_gph ?? d.gph ?? d.Fuel_Flow ?? 0;
+        const gph = num(d.fuel_flow_gph ?? d.gph ?? d.Fuel_Flow ?? 0);
         if (this._dom.gph) this._dom.gph.textContent = gph.toFixed(1);
         if (gph > 0 && fuel > 0) {
-            const endurance = fuel / gph;
-            const h = Math.floor(endurance);
-            const m = Math.round((endurance - h) * 60);
+            const totalMin = Math.round((fuel / gph) * 60);
+            const h = Math.floor(totalMin / 60);
+            const m = totalMin % 60;
             if (this._dom.fuelEndurance) this._dom.fuelEndurance.textContent = `${h}:${String(m).padStart(2, '0')} endur`;
         }
 
@@ -216,31 +213,31 @@ class EnginePanel {
 
         // EGT bars (range ~1200-1700°F)
         for (let i = 1; i <= 4; i++) {
-            const egt = d[`egt${i}`] ?? d[`EGT${i}`] ?? 0;
+            const egt = num(d[`egt${i}`] ?? d[`EGT${i}`] ?? 0);
             const pct = Math.min(100, Math.max(0, (egt - 1000) / 700 * 100));
             const bar = this._dom[`egt${i}`];
             if (bar) {
                 bar.style.height = pct + '%';
                 bar.className = 'cyl-bar-fill' + (egt > this._egtDanger ? ' danger' : '');
-                bar.title = Math.round(egt) + '°F';
+                bar.title = Math.round(egt) + '\u00B0F';
             }
         }
 
         // CHT bars (range ~200-500°F)
         for (let i = 1; i <= 4; i++) {
-            const cht = d[`cht${i}`] ?? d[`CHT${i}`] ?? 0;
+            const cht = num(d[`cht${i}`] ?? d[`CHT${i}`] ?? 0);
             const pct = Math.min(100, Math.max(0, (cht - 100) / 400 * 100));
             const bar = this._dom[`cht${i}`];
             if (bar) {
                 bar.style.height = pct + '%';
                 bar.className = 'cyl-bar-fill' + (cht > this._chtDanger ? ' danger' : '');
-                bar.title = Math.round(cht) + '°F';
+                bar.title = Math.round(cht) + '\u00B0F';
             }
         }
 
         // Oil (EDM field names: Oil_Temp, Oil_Press)
-        const oilT = d.oil_temp ?? d.oil_temp_f ?? d.Oil_Temp ?? 0;
-        const oilP = d.oil_pressure ?? d.oil_press_psi ?? d.Oil_Press ?? 0;
+        const oilT = num(d.oil_temp ?? d.oil_temp_f ?? d.Oil_Temp ?? 0);
+        const oilP = num(d.oil_pressure ?? d.oil_press_psi ?? d.Oil_Press ?? 0);
         if (this._dom.oilTemp) this._dom.oilTemp.textContent = Math.round(oilT) + '°F';
         if (this._dom.oilPress) this._dom.oilPress.textContent = Math.round(oilP) + ' psi';
     }

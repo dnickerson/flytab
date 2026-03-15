@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v2.4';
+const FLYTAB_VERSION = 'v2.6';
 
 // ========== Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -71,6 +71,7 @@ class FlyTabApp {
         this.layerPanel = null;
         this.tabBar = null;
 
+        this.thermalMonitor = null;
         this._cockpitInitialized = false;
         this._currentPlan = null;
 
@@ -123,6 +124,9 @@ class FlyTabApp {
         this._startClock();
         this._startDeviceStatusMonitor();
         this._startConnectivityMonitor();
+
+        // Start thermal monitor
+        this._initThermalMonitor();
 
         // Initialize cockpit
         await this._initCockpit();
@@ -1015,6 +1019,39 @@ class FlyTabApp {
         try {
             this._wakeLock = await navigator.wakeLock.request('screen');
         } catch { /* denied or not supported — silently ignore */ }
+    }
+
+    _releaseWakeLock() {
+        if (this._wakeLock) {
+            this._wakeLock.release().catch(() => {});
+            this._wakeLock = null;
+        }
+    }
+
+    // ========== Thermal Monitor ==========
+
+    _initThermalMonitor() {
+        if (typeof ThermalMonitor === 'undefined') return;
+        this.thermalMonitor = new ThermalMonitor();
+        const badge = document.getElementById('statusThermal');
+        if (badge) this.thermalMonitor.start(badge);
+
+        // When thermal warning fires, release wake lock so pilot can turn screen off
+        this._thermalWakeLockReleased = false;
+        const origUpdate = this.thermalMonitor._updateWarning.bind(this.thermalMonitor);
+        this.thermalMonitor._updateWarning = (data) => {
+            origUpdate(data);
+            const hot = data.surfaceTemp >= 50;
+            if (hot && !this._thermalWakeLockReleased) {
+                this._releaseWakeLock();
+                this._thermalWakeLockReleased = true;
+                DiagLog.log('thermal', 'Wake lock released — tablet hot, screen can turn off');
+            } else if (!hot && this._thermalWakeLockReleased) {
+                this._acquireWakeLock();
+                this._thermalWakeLockReleased = false;
+                DiagLog.log('thermal', 'Wake lock re-acquired — tablet cooled');
+            }
+        };
     }
 
     // ========== Clock ==========
