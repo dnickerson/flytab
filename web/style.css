@@ -327,8 +327,7 @@ body {
 
 .view-container {
     position: absolute;
-    top: 0; left: 0; right: 0;
-    bottom: var(--tab-bar-height);
+    inset: 0;
     overflow-y: auto;
     overflow-x: hidden;
     -webkit-overflow-scrolling: touch;
@@ -1953,7 +1952,7 @@ body {
 
 .route-table-sheet {
     position: absolute;
-    bottom: 0;
+    bottom: var(--tab-bar-height);
     left: 0;
     right: 0;
     z-index: 500;
