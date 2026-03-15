@@ -40,6 +40,7 @@ class Logbook {
     // ========== Overlay UI ==========
 
     show() {
+        console.warn('[Logbook] show() called');
         this._el.classList.add('visible');
         this._visible = true;
         this._setMapControlsVisible(false);
@@ -618,7 +619,7 @@ class Logbook {
             const workerBase = Settings.workerBase;
             const resp = await fetch(`${workerBase}/flights/logbook`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: Settings.apiHeaders,
                 body: JSON.stringify({ entries: unsynced }),
                 signal: AbortSignal.timeout(10000),
             });
@@ -676,13 +677,17 @@ class Logbook {
     // ========== Server Fetch ==========
 
     async _fetchFromServer() {
+        console.warn('[Logbook] _fetchFromServer: online=' + navigator.onLine);
         if (!navigator.onLine) return;
         const workerBase = Settings.workerBase;
+        const url = `${workerBase}/flights/logbook?limit=200`;
+        console.warn('[Logbook] Fetching: ' + url);
         try {
-            const resp = await fetch(`${workerBase}/flights/logbook?limit=200`, {
-                headers: { 'Content-Type': 'application/json' },
+            const resp = await fetch(url, {
+                headers: Settings.apiHeaders,
                 signal: AbortSignal.timeout(8000),
             });
+            console.warn('[Logbook] Response: ' + resp.status);
             if (!resp.ok) return;
             const { entries } = await resp.json();
             if (!Array.isArray(entries) || entries.length === 0) return;
@@ -729,6 +734,7 @@ class Logbook {
         try {
             if (navigator.onLine) {
                 const resp = await fetch(`${workerBase}/flights/currency`, {
+                    headers: Settings.apiHeaders,
                     signal: AbortSignal.timeout(5000),
                 });
                 if (resp.ok) {
@@ -831,6 +837,7 @@ class Logbook {
             if (navigator.onLine) {
                 const workerBase = Settings.workerBase;
                 const resp = await fetch(`${workerBase}/flights/oil?aircraft_id=${tail}`, {
+                    headers: Settings.apiHeaders,
                     signal: AbortSignal.timeout(5000),
                 });
                 if (resp.ok) {
@@ -1007,7 +1014,7 @@ class Logbook {
                         const workerBase = Settings.workerBase;
                         await fetch(`${workerBase}/flights/oil`, {
                             method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
+                            headers: Settings.apiHeaders,
                             body: JSON.stringify(event),
                             signal: AbortSignal.timeout(5000),
                         });
@@ -1035,6 +1042,7 @@ class Logbook {
                 const workerBase = Settings.workerBase;
                 await fetch(`${workerBase}/flights/oil?id=${id}`, {
                     method: 'DELETE',
+                    headers: Settings.apiHeaders,
                     signal: AbortSignal.timeout(5000),
                 });
             } catch { /* best effort */ }

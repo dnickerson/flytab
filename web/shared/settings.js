@@ -45,6 +45,17 @@ class Settings {
     static get workerBase() { return Settings.get('worker_base'); }
     static set workerBase(v) { Settings.set('worker_base', v); }
 
+    static get apiKey() { return Settings.get('flytab_api_key'); }
+    static set apiKey(v) { Settings.set('flytab_api_key', v); }
+
+    /** Standard headers for authenticated API calls to flywhere.app */
+    static get apiHeaders() {
+        const h = { 'Content-Type': 'application/json' };
+        const key = Settings.apiKey;
+        if (key) h['x-api-key'] = key;
+        return h;
+    }
+
     static get nightMode() { return Settings.get('night_mode'); }
     static set nightMode(v) { Settings.set('night_mode', v); }
 
