@@ -6154,6 +6154,19 @@ body {
 }
 .ft-btn:active { opacity: 0.6; }
 
+/* ── Engine ML Advisory ──────────────────────────────────── */
+.eml-advisory {
+    position: fixed; bottom: calc(var(--tab-bar-height, 56px) + 50px);
+    left: 16px; right: 16px; z-index: 750;
+    padding: 8px 14px; border-radius: 6px;
+    font-size: 14px; font-weight: 600; text-align: center;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}
+.eml-sev-0 { background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border); }
+.eml-sev-1 { background: var(--status-caution); color: var(--bg-primary); }
+.eml-sev-2 { background: var(--status-danger); color: var(--text-on-dark); animation: thermal-flash 1.5s infinite; }
+.status-ml { font-size: 11px; letter-spacing: 0.5px; }
+
 /* ── Numpad bottom sheet ─────────────────────────────────── */
 .clr-numpad-sheet {
     position: absolute;

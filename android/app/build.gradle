@@ -41,6 +41,11 @@ dependencies {
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')
+
+    // EngineML — LiteRT (TFLite successor) for on-device inference
+    implementation 'com.google.ai.edge.litert:litert:1.2.0'
+    implementation 'com.google.ai.edge.litert:litert-gpu:1.2.0'
+    implementation 'com.google.code.gson:gson:2.11.0'
 }
 
 apply from: 'capacitor.build.gradle'

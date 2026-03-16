@@ -11,6 +11,7 @@ import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 import com.getcapacitor.BridgeActivity;
 import app.flywhere.flytab.tileserver.TileServerPlugin;
+import app.flywhere.flytab.engineml.EngineMLPlugin;
 
 public class MainActivity extends BridgeActivity {
     private static final String TAG = "FlyTab";
@@ -19,6 +20,7 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(TileServerPlugin.class);
         registerPlugin(ThermalMonitorPlugin.class);
+        registerPlugin(EngineMLPlugin.class);
         super.onCreate(savedInstanceState);
 
         // Start flight service (keeps CPU awake for Stratux WebSocket when screen is off)

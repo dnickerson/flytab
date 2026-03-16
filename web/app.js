@@ -72,6 +72,7 @@ class FlyTabApp {
         this.tabBar = null;
 
         this.thermalMonitor = null;
+        this.engineML = null;
         this._cockpitInitialized = false;
         this._currentPlan = null;
 
@@ -342,6 +343,18 @@ class FlyTabApp {
         this.enginePanel = new EnginePanel(document.createElement('div'), this.engineClient);
         this.enginePanel.init();
         window.enginePanel = this.enginePanel;
+
+        // Engine ML (anomaly detection + advisories)
+        if (typeof EngineMLBridge !== 'undefined') {
+            this.engineML = new EngineMLBridge();
+            this.engineML.init().then(() => {
+                this.engineML.setDisplayElements(
+                    document.getElementById('statusML'),
+                    document.getElementById('eml-advisory')
+                );
+                this.engineML.start(this.engineClient, this.stratuxClient);
+            });
+        }
 
         // Engine overlay (reads from EnginePanel, floats on map)
         if (typeof EngineOverlay !== 'undefined') {
