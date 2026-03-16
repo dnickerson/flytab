@@ -105,6 +105,10 @@ class TabBar {
 
         const c = this._comps;
         const rows = [
+            { icon: '🧠', label: 'Engine ML', action: () => {
+                this._closeMoreDrawer();
+                this._showMLMonitor();
+            }},
             { icon: '📋', label: 'Logbook', action: () => {
                 if (c.logbook?.show) c.logbook.show();
                 this._closeMoreDrawer();
@@ -205,6 +209,112 @@ class TabBar {
             this._tabBar.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
             this._tabBar.querySelector('[data-tab="map"]')?.classList.add('active');
         }
+    }
+
+    // ========== ML Monitor ==========
+
+    _showMLMonitor() {
+        document.getElementById('mlMonitor')?.remove();
+
+        const ml = window.app?.engineML;
+        const result = ml?.lastResult;
+
+        const overlay = document.createElement('div');
+        overlay.id = 'mlMonitor';
+        overlay.className = 'ml-monitor';
+
+        const closeBtn = '<button class="ep-close" id="mlMonClose">MAP</button>';
+        overlay.innerHTML = `${closeBtn}<h2 class="ml-mon-title">Engine ML Monitor</h2><div class="ml-mon-body" id="mlMonBody"></div>`;
+
+        document.body.appendChild(overlay);
+        this._fastTap(overlay.querySelector('#mlMonClose'), () => overlay.remove());
+
+        this._mlMonitorEl = overlay.querySelector('#mlMonBody');
+        this._renderMLMonitor();
+
+        // Live update every second
+        this._mlMonInterval = setInterval(() => this._renderMLMonitor(), 1000);
+        overlay.addEventListener('remove', () => clearInterval(this._mlMonInterval));
+        // Also clear on close
+        const origRemove = overlay.remove.bind(overlay);
+        overlay.remove = () => { clearInterval(this._mlMonInterval); origRemove(); };
+    }
+
+    _renderMLMonitor() {
+        const body = this._mlMonitorEl;
+        if (!body) return;
+
+        const ml = window.app?.engineML;
+        const r = ml?.lastResult;
+
+        if (!ml || !ml._initialized) {
+            body.innerHTML = '<div class="ml-mon-section"><p>EngineML not initialized. Plugin unavailable in browser mode.</p></div>';
+            return;
+        }
+
+        if (!r) {
+            body.innerHTML = `<div class="ml-mon-section">
+                <div class="ml-mon-row"><span>Status</span><span>Waiting for engine data...</span></div>
+                <div class="ml-mon-row"><span>Delegate</span><span>${ml.delegate || '?'}</span></div>
+            </div>`;
+            return;
+        }
+
+        let html = '';
+
+        // Status section
+        const phaseColor = r.anomaly ? 'var(--status-danger)' : 'var(--status-ok)';
+        html += '<div class="ml-mon-section">';
+        html += '<h3 class="ml-mon-section-title">Status</h3>';
+        html += `<div class="ml-mon-row"><span>Phase</span><span style="color:${phaseColor};font-weight:700">${r.phase || '—'}</span></div>`;
+        html += `<div class="ml-mon-row"><span>Window</span><span>${r.windowReady ? 'Full (60 samples)' : 'Filling...'}</span></div>`;
+        html += `<div class="ml-mon-row"><span>Delegate</span><span>${ml.delegate || '?'}</span></div>`;
+
+        if (r.windowReady) {
+            html += `<div class="ml-mon-row"><span>Anomaly Score</span><span>${r.score?.toFixed(4) ?? '—'}</span></div>`;
+            html += `<div class="ml-mon-row"><span>Threshold</span><span>${r.threshold?.toFixed(4) ?? '—'}${r.thresholdAdapted ? ' (adapted)' : ''}</span></div>`;
+            html += `<div class="ml-mon-row"><span>Anomaly</span><span style="color:${r.anomaly ? 'var(--status-danger)' : 'var(--status-ok)'}; font-weight:700">${r.anomaly ? 'YES' : 'No'}</span></div>`;
+            html += `<div class="ml-mon-row"><span>Latency</span><span>${r.latencyMs?.toFixed(1) ?? '?'} ms</span></div>`;
+        }
+        html += '</div>';
+
+        // Feature errors (when inference is running)
+        if (r.featureErrors?.length) {
+            html += '<div class="ml-mon-section">';
+            html += '<h3 class="ml-mon-section-title">Feature Errors</h3>';
+            // Sort by error descending
+            const sorted = [...r.featureErrors].sort((a, b) => (b.error || 0) - (a.error || 0));
+            const maxErr = sorted[0]?.error || 1;
+            for (const fe of sorted) {
+                const pct = Math.min(100, (fe.error / maxErr) * 100);
+                const color = fe.error > r.threshold * 0.5 ? 'var(--status-danger)' :
+                    fe.error > r.threshold * 0.1 ? 'var(--status-caution)' : 'var(--status-ok)';
+                html += `<div class="ml-mon-row">
+                    <span>${fe.name}</span>
+                    <span style="display:flex;align-items:center;gap:6px">
+                        <span class="ml-mon-bar" style="width:${pct}%;background:${color}"></span>
+                        <span>${fe.error?.toFixed(4) ?? '—'}</span>
+                    </span>
+                </div>`;
+            }
+            html += '</div>';
+        }
+
+        // Advisories
+        if (r.advisories?.length) {
+            html += '<div class="ml-mon-section">';
+            html += '<h3 class="ml-mon-section-title">Advisories</h3>';
+            for (const adv of r.advisories) {
+                const sevClass = adv.severity === 2 ? 'ml-adv-warn' : adv.severity === 1 ? 'ml-adv-caut' : 'ml-adv-info';
+                html += `<div class="ml-mon-advisory ${sevClass}">
+                    <span class="ml-adv-cat">${adv.category || ''}</span>
+                    ${adv.message}
+                </div>`;
+            }
+            html += '</div>';
+        }
+
+        body.innerHTML = html;
     }
 
     // ========== Floating Timer ==========

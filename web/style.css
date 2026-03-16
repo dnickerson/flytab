@@ -6167,6 +6167,47 @@ body {
 .eml-sev-2 { background: var(--status-danger); color: var(--text-on-dark); animation: thermal-flash 1.5s infinite; }
 .status-ml { font-size: 11px; letter-spacing: 0.5px; }
 
+/* ── ML Monitor page ─────────────────────────────────────── */
+.ml-monitor {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    z-index: 850; background: var(--bg-primary); color: var(--text-primary);
+    display: flex; flex-direction: column; padding: 16px;
+    overflow-y: auto; -webkit-overflow-scrolling: touch;
+}
+.ml-mon-title {
+    margin: 0 0 12px; font-size: 20px; font-weight: 700;
+}
+.ml-mon-body { flex: 1; overflow-y: auto; }
+.ml-mon-section {
+    background: var(--bg-surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px 14px; margin-bottom: 12px;
+}
+.ml-mon-section-title {
+    font-size: 13px; font-weight: 700; color: var(--text-label);
+    text-transform: uppercase; letter-spacing: 1px;
+    margin: 0 0 8px; padding-bottom: 4px;
+    border-bottom: 1px solid var(--border-light);
+}
+.ml-mon-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 4px 0; font-size: 14px;
+}
+.ml-mon-bar {
+    display: inline-block; height: 8px; border-radius: 4px; min-width: 2px;
+    max-width: 120px;
+}
+.ml-mon-advisory {
+    padding: 6px 10px; border-radius: 6px; margin-bottom: 6px;
+    font-size: 14px;
+}
+.ml-adv-info { background: var(--bg-surface-raised); color: var(--text-primary); }
+.ml-adv-caut { background: var(--status-caution); color: var(--bg-primary); font-weight: 600; }
+.ml-adv-warn { background: var(--status-danger); color: var(--text-on-dark); font-weight: 700; }
+.ml-adv-cat {
+    font-size: 10px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 1px; color: var(--text-muted); margin-right: 8px;
+}
+
 /* ── Numpad bottom sheet ─────────────────────────────────── */
 .clr-numpad-sheet {
     position: absolute;
