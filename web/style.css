@@ -5962,10 +5962,10 @@ body {
 }
 .clr-input::placeholder { color: var(--text-muted); }
 
-.clr-input-sm  { width: 80px;  }
-.clr-input-xs  { width: 50px;  }
-.clr-input-freq{ width: 90px;  }
-.clr-input-sqk { width: 80px; letter-spacing: 0.15em; font-size: var(--text-lg); font-weight: 700; }
+.clr-input-sm  { width: 120px; }
+.clr-input-xs  { width: 80px;  }
+.clr-input-freq{ width: 130px; }
+.clr-input-sqk { width: 120px; letter-spacing: 0.15em; font-size: var(--text-lg); font-weight: 700; }
 
 .clr-textarea {
     width: 100%;
@@ -6110,6 +6110,49 @@ body {
 .clr-action-clear { color: var(--status-danger); border-color: var(--status-danger); }
 .clr-action-copy  { color: #00d4ff; border-color: rgba(0,212,255,0.4); background: rgba(0,212,255,0.08); }
 .clr-action-btn:active { opacity: 0.6; }
+
+/* ── Floating Timer ───────────────────────────────────────── */
+.floating-timer {
+    position: fixed; right: 16px; top: 80px; z-index: 900;
+    background: var(--bg-dark-well); border: 2px solid var(--accent);
+    border-radius: 12px; padding: 8px 14px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.5);
+    display: flex; align-items: center; gap: 10px;
+    touch-action: none; user-select: none;
+}
+.floating-timer.hidden { display: none; }
+.ft-drag-handle {
+    width: 6px; height: 32px; border-radius: 3px;
+    background: var(--text-muted); cursor: grab; flex-shrink: 0;
+}
+.ft-display {
+    font-family: var(--font-instrument); font-size: 32px; font-weight: 700;
+    color: var(--text-primary); min-width: 80px; text-align: center;
+    letter-spacing: 2px;
+}
+.ft-btns { display: flex; gap: 6px; }
+.ft-btn {
+    padding: 8px 14px; border-radius: 6px; font-weight: 700;
+    font-size: 13px; cursor: pointer; min-height: 40px;
+    touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+    letter-spacing: 0.5px; border: 1.5px solid;
+}
+.ft-start {
+    color: var(--status-ok); border-color: var(--status-ok);
+    background: transparent;
+}
+.ft-start.ft-running {
+    color: var(--status-danger); border-color: var(--status-danger);
+}
+.ft-reset {
+    color: var(--text-secondary); border-color: var(--border);
+    background: transparent;
+}
+.ft-close {
+    color: var(--text-muted); border-color: var(--border);
+    background: transparent; padding: 8px 10px;
+}
+.ft-btn:active { opacity: 0.6; }
 
 /* ── Numpad bottom sheet ─────────────────────────────────── */
 .clr-numpad-sheet {

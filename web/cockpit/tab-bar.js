@@ -28,6 +28,7 @@ class TabBar {
             { id: 'eng',  icon: '⚙️',  label: 'ENG'  },
             { id: 'chk',  icon: '✅', label: 'CHK'  },
             { id: 'clr',  icon: '📻', label: 'CLR'  },
+            { id: 'tmr',  icon: '⏱', label: 'TMR'  },
             { id: 'more', icon: '⋯',  label: 'MORE' },
         ];
 
@@ -60,6 +61,16 @@ class TabBar {
         if (c.approachCharts?.closeViewer) c.approachCharts.closeViewer();
         if (c.fuelOverlay?.hide) c.fuelOverlay.hide();
         if (c.airportPopup?.close) c.airportPopup.close();
+
+        if (tabId === 'tmr') {
+            // Timer is a floating popup — toggle without closing other views
+            this._toggleTimer();
+            // Restore previous tab highlight
+            this._tabBar.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            const prev = this._tabBar.querySelector('.tab-btn[data-tab="map"]');
+            if (prev) prev.classList.add('active');
+            return;
+        }
 
         if (tabId === 'map') {
             // Already closed everything above — just return to map
@@ -194,6 +205,119 @@ class TabBar {
             this._tabBar.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
             this._tabBar.querySelector('[data-tab="map"]')?.classList.add('active');
         }
+    }
+
+    // ========== Floating Timer ==========
+
+    _toggleTimer() {
+        if (this._timerEl) {
+            // Toggle visibility
+            this._timerEl.classList.toggle('hidden');
+            return;
+        }
+        this._buildTimer();
+    }
+
+    _buildTimer() {
+        this._timerRunning = false;
+        this._timerStartMs = 0;
+        this._timerElapsed = 0;
+        this._timerInterval = null;
+
+        const el = document.createElement('div');
+        el.className = 'floating-timer';
+        el.innerHTML = `
+            <div class="ft-drag-handle"></div>
+            <div class="ft-display">0:00</div>
+            <div class="ft-btns">
+                <button class="ft-btn ft-start">START</button>
+                <button class="ft-btn ft-reset">RESET</button>
+                <button class="ft-btn ft-close">\u2715</button>
+            </div>
+        `;
+
+        this._timerEl = el;
+        this._timerDisplayEl = el.querySelector('.ft-display');
+        const startBtn = el.querySelector('.ft-start');
+        const resetBtn = el.querySelector('.ft-reset');
+        const closeBtn = el.querySelector('.ft-close');
+
+        this._fastTap(startBtn, () => {
+            if (this._timerRunning) {
+                this._timerElapsed += Date.now() - this._timerStartMs;
+                this._timerRunning = false;
+                clearInterval(this._timerInterval);
+                startBtn.textContent = 'START';
+                startBtn.classList.remove('ft-running');
+            } else {
+                this._timerStartMs = Date.now();
+                this._timerRunning = true;
+                startBtn.textContent = 'STOP';
+                startBtn.classList.add('ft-running');
+                this._timerInterval = setInterval(() => this._renderTimer(), 100);
+            }
+        });
+
+        this._fastTap(resetBtn, () => {
+            this._timerRunning = false;
+            this._timerElapsed = 0;
+            this._timerStartMs = 0;
+            clearInterval(this._timerInterval);
+            this._timerDisplayEl.textContent = '0:00';
+            startBtn.textContent = 'START';
+            startBtn.classList.remove('ft-running');
+        });
+
+        this._fastTap(closeBtn, () => {
+            el.classList.add('hidden');
+        });
+
+        // Draggable
+        this._makeDraggable(el, el.querySelector('.ft-drag-handle'));
+
+        document.body.appendChild(el);
+    }
+
+    _renderTimer() {
+        const total = this._timerElapsed + (this._timerRunning ? Date.now() - this._timerStartMs : 0);
+        const sec = Math.floor(total / 1000);
+        const min = Math.floor(sec / 60);
+        const s = sec % 60;
+        this._timerDisplayEl.textContent = `${min}:${String(s).padStart(2, '0')}`;
+    }
+
+    _makeDraggable(el, handle) {
+        let startX, startY, origX, origY;
+        const onStart = (x, y) => {
+            startX = x; startY = y;
+            const r = el.getBoundingClientRect();
+            origX = r.left; origY = r.top;
+            el.style.transition = 'none';
+        };
+        const onMove = (x, y) => {
+            el.style.left = (origX + x - startX) + 'px';
+            el.style.top = (origY + y - startY) + 'px';
+            el.style.right = 'auto';
+            el.style.bottom = 'auto';
+        };
+
+        handle.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            const t = e.touches[0];
+            onStart(t.clientX, t.clientY);
+            const move = (ev) => onMove(ev.touches[0].clientX, ev.touches[0].clientY);
+            const end = () => { document.removeEventListener('touchmove', move); };
+            document.addEventListener('touchmove', move, { passive: false });
+            document.addEventListener('touchend', end, { once: true });
+        }, { passive: false });
+
+        handle.addEventListener('mousedown', (e) => {
+            onStart(e.clientX, e.clientY);
+            const move = (ev) => onMove(ev.clientX, ev.clientY);
+            const up = () => { document.removeEventListener('mousemove', move); };
+            document.addEventListener('mousemove', move);
+            document.addEventListener('mouseup', up, { once: true });
+        });
     }
 
     /** Reliable tap handler for both touch and mouse */

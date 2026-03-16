@@ -400,6 +400,7 @@ class IfrClearance {
         // Copy readback buttons
         this._tap(el.querySelector('#clr-dep-copy'), () => this._copyReadback('dep'));
         this._tap(el.querySelector('#clr-apch-copy'), () => this._copyReadback('apch'));
+
     }
 
     // ========== Mode switching ==========
@@ -542,8 +543,10 @@ class IfrClearance {
 
     _updateDepReadback() {
         const v = (id) => (this._el.querySelector(`#${id}`)?.value || '').trim();
+        const acType = (typeof CockpitConfig !== 'undefined' && CockpitConfig.aircraft?.('type')) || '';
         const tail = (typeof CockpitConfig !== 'undefined' && CockpitConfig.aircraft?.('tail')) ||
                      (typeof Settings !== 'undefined' && Settings.get?.('tail_number')) || 'N____';
+        const callsign = acType ? `${acType} ${tail}` : tail;
 
         const c = v('clr-c');
         const r = v('clr-r');
@@ -555,7 +558,7 @@ class IfrClearance {
         const voidT = v('clr-void');
 
         const parts = [];
-        parts.push(`${tail}, cleared to ${c || '____'}`);
+        parts.push(`${callsign}, cleared to ${c || '____'}`);
         if (r) parts.push(`${r.toUpperCase() === 'AS FILED' ? 'as filed' : r}`);
 
         if (a) {
