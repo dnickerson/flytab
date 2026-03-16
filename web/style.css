@@ -3506,37 +3506,43 @@ body {
 }
 .logbook-unsynced { color: var(--status-caution); }
 .logbook-entry {
+    display: flex; align-items: center; gap: 10px;
     background: var(--bg-surface); border: 1px solid var(--border);
-    border-radius: 8px; padding: 12px 14px; margin-bottom: 10px;
+    border-radius: 6px; padding: 8px 10px; margin-bottom: 6px;
 }
-.logbook-entry-header {
-    display: flex; justify-content: space-between; align-items: baseline;
-    margin-bottom: 6px;
-}
-.logbook-date { font-weight: 700; font-size: 16px; }
+.logbook-date { font-weight: 700; font-size: 14px; white-space: nowrap; }
 .logbook-unsync-dot {
-    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
-    background: var(--status-caution); margin-left: 6px; vertical-align: middle;
+    display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--status-caution); margin-right: 4px; vertical-align: middle;
 }
 .logbook-route {
     font-family: var(--font-instrument); font-weight: 700;
-    color: var(--accent); font-size: 16px;
+    color: var(--accent); font-size: 14px; white-space: nowrap;
 }
-.logbook-entry-details {
-    display: flex; gap: 12px; font-size: 14px;
-    color: var(--text-secondary); margin-bottom: 8px;
+.logbook-detail {
+    font-size: 13px; color: var(--text-secondary); white-space: nowrap;
 }
+.logbook-entry-spacer { flex: 1; }
 .logbook-source {
     font-size: 11px; padding: 1px 5px; border-radius: 3px;
     background: var(--bg-dark-well); color: var(--text-muted);
     letter-spacing: 0.5px;
 }
-.logbook-entry-actions { display: flex; gap: 8px; }
+.logbook-source-draft {
+    background: var(--status-caution); color: var(--bg-primary);
+    font-weight: 700;
+}
+.logbook-draft {
+    border-color: var(--status-caution);
+}
+.logbook-draft-count {
+    color: var(--status-caution); font-weight: 700;
+}
 .logbook-btn {
-    padding: 8px 16px; border-radius: 6px; font-weight: 700;
-    font-size: 14px; cursor: pointer; min-height: 36px;
+    padding: 6px 10px; border-radius: 4px; font-weight: 700;
+    font-size: 12px; cursor: pointer; min-height: 32px;
     touch-action: manipulation; -webkit-tap-highlight-color: transparent;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.5px; white-space: nowrap; flex-shrink: 0;
 }
 .logbook-add-btn {
     background: var(--accent); border: none; color: var(--text-on-dark);
@@ -3662,6 +3668,10 @@ body {
 .lb-currency-expired {
     font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 4px;
     background: var(--status-danger); color: var(--text-on-dark);
+}
+.lb-currency-grace {
+    font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 4px;
+    background: var(--status-caution); color: var(--bg-primary);
 }
 
 /* Oil Tab */

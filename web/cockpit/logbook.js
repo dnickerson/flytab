@@ -147,12 +147,14 @@ class Logbook {
         // Summary row
         const totalHrs = entries.reduce((s, e) => s + (e.flight_time_hours || e.total_time || 0), 0);
         const totalLdg = entries.reduce((s, e) => s + (e.day_landings_full_stop || 0) + (e.night_landings_full_stop || 0), 0);
-        const unsyncedCount = entries.filter(e => !e.synced).length;
+        const unsyncedCount = entries.filter(e => !e.synced && !e.draft).length;
+        const draftCount = entries.filter(e => e.draft).length;
 
         let html = `<div class="logbook-summary">
             <span>${entries.length} flights</span>
             <span>${totalHrs.toFixed(1)} hrs</span>
             <span>${totalLdg} landings</span>
+            ${draftCount > 0 ? `<span class="logbook-draft-count">${draftCount} draft</span>` : ''}
             ${unsyncedCount > 0 ? `<span class="logbook-unsynced">${unsyncedCount} unsynced</span>` : ''}
         </div>`;
 
@@ -163,25 +165,20 @@ class Logbook {
             const tail = e.aircraft_tail || e.aircraft_id || '';
             const cond = e.conditions || '';
             const ldg = (e.day_landings_full_stop || 0) + (e.night_landings_full_stop || 0);
-            const source = e.source === 'flypi' ? 'AUTO' : (e.source === 'manual' ? '' : '');
+            const isDraft = !!e.draft;
+            const sourceLabel = isDraft ? 'DRAFT' : (e.source === 'flypi' ? 'AUTO' : '');
             const syncDot = e.synced ? '' : '<span class="logbook-unsync-dot"></span>';
 
-            return `<div class="logbook-entry" data-id="${e.id}">
-                <div class="logbook-entry-header">
-                    <span class="logbook-date">${e.date}${syncDot}</span>
-                    <span class="logbook-route">${dep} \u2192 ${dest}</span>
-                </div>
-                <div class="logbook-entry-details">
-                    <span>${hrs}h</span>
-                    ${ldg > 0 ? `<span>${ldg} ldg</span>` : ''}
-                    <span>${tail}</span>
-                    ${cond ? `<span>${cond}</span>` : ''}
-                    ${source ? `<span class="logbook-source">${source}</span>` : ''}
-                </div>
-                <div class="logbook-entry-actions">
-                    <button class="logbook-btn logbook-edit-btn" data-id="${e.id}">EDIT</button>
-                    <button class="logbook-btn logbook-delete-btn" data-id="${e.id}">DEL</button>
-                </div>
+            return `<div class="logbook-entry ${isDraft ? 'logbook-draft' : ''}" data-id="${e.id}">
+                <span class="logbook-date">${e.date}</span>${syncDot}
+                <span class="logbook-route">${dep}\u2192${dest}</span>
+                <span class="logbook-detail">${hrs}h</span>
+                ${ldg > 0 ? `<span class="logbook-detail">${ldg}ldg</span>` : ''}
+                ${cond ? `<span class="logbook-detail">${cond}</span>` : ''}
+                ${sourceLabel ? `<span class="logbook-source ${isDraft ? 'logbook-source-draft' : ''}">${sourceLabel}</span>` : ''}
+                <span class="logbook-entry-spacer"></span>
+                <button class="logbook-btn logbook-edit-btn" data-id="${e.id}">${isDraft ? 'REVIEW' : 'EDIT'}</button>
+                <button class="logbook-btn logbook-delete-btn" data-id="${e.id}">DEL</button>
             </div>`;
         }).join('');
 
@@ -195,17 +192,33 @@ class Logbook {
             });
         });
 
-        // Wire delete buttons
+        // Wire delete buttons — two-tap confirm
         this._body.querySelectorAll('.logbook-delete-btn').forEach(btn => {
+            let confirmPending = false;
+            let confirmTimer = null;
             this._wireButton(btn, async () => {
-                const entry = entries.find(e => e.id === btn.dataset.id);
-                if (!entry) return;
-                btn.textContent = '?';
-                // Second tap confirms
-                this._wireButton(btn, async () => {
-                    await this._deleteEntry(entry.id);
-                    this._renderList();
-                });
+                if (confirmPending) {
+                    // Second tap — delete
+                    clearTimeout(confirmTimer);
+                    const entry = entries.find(e => e.id === btn.dataset.id);
+                    if (entry) {
+                        await this._deleteEntry(entry.id);
+                        this._renderList();
+                    }
+                } else {
+                    // First tap — show confirm
+                    confirmPending = true;
+                    btn.textContent = '?';
+                    btn.style.background = 'var(--status-danger)';
+                    btn.style.color = 'var(--text-on-dark)';
+                    // Reset after 3 seconds if not confirmed
+                    confirmTimer = setTimeout(() => {
+                        confirmPending = false;
+                        btn.textContent = 'DEL';
+                        btn.style.background = '';
+                        btn.style.color = '';
+                    }, 3000);
+                }
             });
         });
     }
@@ -412,7 +425,8 @@ class Logbook {
         }
 
         if (existingEntry) {
-            // Edit existing
+            // Edit existing — clear draft flag (pilot has reviewed)
+            fields.draft = false;
             await this.updateEntry(existingEntry.id, fields);
             console.log(`[Logbook] Entry updated: ${existingEntry.id}`);
         } else {
@@ -503,6 +517,7 @@ class Logbook {
             aircraft_type: CockpitConfig.aircraft('type') || 'Unknown',
             point_count: engData?.csv_points || 0,
             source: 'flypi',
+            draft: true,    // Draft until pilot reviews and edits
             created_at: new Date().toISOString(),
             synced: false,
             csvFilename: csvFilename,
@@ -516,13 +531,9 @@ class Logbook {
         }
 
         await this._saveEntry(entry);
-        console.log(`[Logbook] Auto entry: ${depIcao} -> ${destIcao}, ${flightTimeHours}h`);
+        console.log(`[Logbook] Auto entry (draft): ${depIcao} -> ${destIcao}, ${flightTimeHours}h`);
 
-        if (this._autoSync()) {
-            this._syncQueue.push(entry.id);
-            this.syncWhenOnline();
-        }
-
+        // Don't auto-sync drafts — pilot must review first
         return entry;
     }
 
@@ -565,10 +576,10 @@ class Logbook {
                         return;
                     }
 
-                    Object.assign(entry, fields, {
+                    Object.assign(entry, {
                         updated_at: new Date().toISOString(),
                         synced: false,
-                    });
+                    }, fields);
 
                     const putReq = store.put(entry);
                     putReq.onsuccess = () => { db.close(); resolve(entry); };
@@ -625,8 +636,19 @@ class Logbook {
             });
 
             if (resp.ok) {
-                for (const entry of unsynced) {
-                    await this.updateEntry(entry.id, { synced: true });
+                const result = await resp.json();
+                const serverIds = result.ids || [];
+                // Replace client IDs with server UUIDs to prevent duplicates
+                for (let i = 0; i < unsynced.length; i++) {
+                    const entry = unsynced[i];
+                    const serverId = serverIds[i];
+                    if (serverId && serverId !== entry.id) {
+                        // Delete old client-ID entry, save with server UUID
+                        await this._deleteEntry(entry.id);
+                        entry.id = serverId;
+                    }
+                    entry.synced = true;
+                    await this._saveEntry(entry);
                 }
                 console.log(`[Logbook] Synced ${unsynced.length} entries`);
             } else {
@@ -680,7 +702,7 @@ class Logbook {
         console.warn('[Logbook] _fetchFromServer: online=' + navigator.onLine);
         if (!navigator.onLine) return;
         const workerBase = Settings.workerBase;
-        const url = `${workerBase}/flights/logbook?limit=200`;
+        const url = `${workerBase}/flights/logbook?limit=1000`;
         console.warn('[Logbook] Fetching: ' + url);
         try {
             const resp = await fetch(url, {
@@ -692,8 +714,14 @@ class Logbook {
             const { entries } = await resp.json();
             if (!Array.isArray(entries) || entries.length === 0) return;
 
-            // Merge server entries into local IDB (server wins on conflict by id)
+            // Get existing local IDs to avoid overwriting local edits
+            const localEntries = await this.getEntries();
+            const localIds = new Set(localEntries.map(e => e.id));
+
+            let merged = 0;
             for (const serverEntry of entries) {
+                // Skip if already exists locally with same ID
+                if (localIds.has(serverEntry.id)) continue;
                 // Map server column names to local names
                 serverEntry.departure_icao = serverEntry.departure_icao || serverEntry.from_airport;
                 serverEntry.destination_icao = serverEntry.destination_icao || serverEntry.to_airport;
@@ -702,8 +730,9 @@ class Logbook {
                 serverEntry.synced = true;
                 serverEntry.created_at = serverEntry.created_at || new Date().toISOString();
                 await this._saveEntry(serverEntry);
+                merged++;
             }
-            console.log(`[Logbook] Merged ${entries.length} entries from server`);
+            console.log(`[Logbook] Merged ${merged} new entries from server (${entries.length} total)`);
         } catch (err) {
             console.warn('[Logbook] Server fetch failed:', err.message);
         }
@@ -728,6 +757,57 @@ class Logbook {
         // Find last BFR/IPC from local entries
         const lastBfr = entries.find(e => e.flight_review)?.date || null;
         const lastIpc = entries.find(e => e.ipc)?.date || null;
+
+        // IFR currency: FAR 61.57(c) — 6 approaches + holding in preceding 6 calendar months
+        // Grace period: if not current, 6 more months to get an IPC before instrument privileges expire entirely
+        const d6m = new Date(now - 6 * 30.44 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+        const d12m = new Date(now - 12 * 30.44 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+        const recent6m = entries.filter(e => (e.date || '') >= d6m);
+        // Count approaches from approach_1 through approach_6 fields
+        // ForeFlight format: "count;type;runway;airport;comment;"
+        let approaches6m = 0;
+        let holds6m = 0;
+        for (const e of recent6m) {
+            for (let i = 1; i <= 6; i++) {
+                const val = e[`approach_${i}`];
+                if (val) {
+                    const parts = String(val).split(';');
+                    const count = parseInt(parts[0], 10);
+                    approaches6m += (isFinite(count) && count > 0) ? count : 1;
+                }
+            }
+            holds6m += (e.holds || 0);
+        }
+        const actInst6m = recent6m.reduce((s, e) => s + (parseFloat(e.actual_instrument) || 0), 0);
+        const simInst6m = recent6m.reduce((s, e) => s + (parseFloat(e.simulated_instrument) || 0), 0);
+
+        // IFR currency expiry: find the date of the 6th-most-recent approach (counting back)
+        // Then add 6 calendar months (end of that month) per FAR 61.57(c)
+        let ifrExpiryDate = null;
+        if (approaches6m >= 6 && holds6m >= 1) {
+            let apprCount = 0;
+            for (const e of entries) {  // entries already sorted newest-first
+                for (let i = 1; i <= 6; i++) {
+                    const val = e[`approach_${i}`];
+                    if (val) {
+                        const parts = String(val).split(';');
+                        const count = parseInt(parts[0], 10);
+                        apprCount += (isFinite(count) && count > 0) ? count : 1;
+                        if (apprCount >= 6 && !ifrExpiryDate) {
+                            ifrExpiryDate = this._endOfMonth6(e.date);
+                        }
+                    }
+                }
+                if (ifrExpiryDate) break;
+            }
+        }
+
+        // IPC resets currency — check if most recent IPC is within 6 months
+        const ipcResets = lastIpc && lastIpc >= d6m;
+        const ifrCurrent = ipcResets || (approaches6m >= 6 && holds6m >= 1);
+        // Grace period: not current but within 12 months — can still get IPC to regain
+        const ifrGrace = !ifrCurrent && (lastIpc ? lastIpc >= d12m : approaches6m > 0 || holds6m > 0);
+        const ifrGraceExpiry = ifrExpiryDate ? this._addMonths(ifrExpiryDate, 6) : null;
 
         let currency = null;
         // Try server for certificate/medical data
@@ -764,6 +844,49 @@ class Logbook {
         html += '</div>';
 
         html += '<div class="lb-currency-section">';
+        html += '<h3 class="lb-section-title">IFR Currency (6 months)</h3>';
+        html += `<div class="lb-currency-row">
+            <span>Approaches (6mo)</span>
+            <span>${approaches6m} of 6 ${statusBadge(approaches6m >= 6 || ipcResets)}</span>
+        </div>`;
+        html += `<div class="lb-currency-row">
+            <span>Holds (6mo)</span>
+            <span>${holds6m} of 1 ${statusBadge(holds6m >= 1 || ipcResets)}</span>
+        </div>`;
+        html += `<div class="lb-currency-row">
+            <span>Actual Instrument (6mo)</span>
+            <span>${actInst6m.toFixed(1)}h</span>
+        </div>`;
+        html += `<div class="lb-currency-row">
+            <span>Sim Instrument (6mo)</span>
+            <span>${simInst6m.toFixed(1)}h</span>
+        </div>`;
+        if (ifrCurrent && ifrExpiryDate) {
+            const daysLeft = Math.round((new Date(ifrExpiryDate) - new Date()) / (24*60*60*1000));
+            html += `<div class="lb-currency-row">
+                <span>IFR Expires</span>
+                <span>${ifrExpiryDate} (${daysLeft}d) ${statusBadge(true)}</span>
+            </div>`;
+        } else {
+            html += `<div class="lb-currency-row">
+                <span>IFR Status</span>
+                <span>${ifrGrace ? '<span class="lb-currency-grace">GRACE PERIOD</span>' : statusBadge(false)}</span>
+            </div>`;
+        }
+        if (lastIpc) {
+            html += `<div class="lb-currency-row">
+                <span>Last IPC</span><span>${lastIpc}</span>
+            </div>`;
+        }
+        if (!ifrCurrent && ifrGrace && ifrGraceExpiry) {
+            html += `<div class="lb-currency-row">
+                <span>IPC Required By</span>
+                <span>${ifrGraceExpiry}</span>
+            </div>`;
+        }
+        html += '</div>';
+
+        html += '<div class="lb-currency-section">';
         html += '<h3 class="lb-section-title">Flight Review</h3>';
         html += `<div class="lb-currency-row">
             <span>Last BFR</span>
@@ -772,11 +895,6 @@ class Logbook {
         if (bfrExpiry) {
             html += `<div class="lb-currency-row">
                 <span>BFR Expires</span><span>${bfrExpiry}</span>
-            </div>`;
-        }
-        if (lastIpc) {
-            html += `<div class="lb-currency-row">
-                <span>Last IPC</span><span>${lastIpc}</span>
             </div>`;
         }
         html += '</div>';
@@ -805,13 +923,33 @@ class Logbook {
             html += '</div>';
         }
 
+        const d12mTotals = new Date(now - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+        const last12m = entries.filter(e => (e.date || '') >= d12mTotals);
+        const hrs12m = last12m.reduce((s, e) => s + (parseFloat(e.flight_time_hours || e.total_time) || 0), 0);
+        const ldg12m = last12m.reduce((s, e) => s + (e.day_landings_full_stop || 0) + (e.night_landings_full_stop || 0), 0);
+        const nightHrs12m = last12m.reduce((s, e) => s + (parseFloat(e.night) || 0), 0);
+        const xcHrs12m = last12m.reduce((s, e) => s + (parseFloat(e.cross_country) || 0), 0);
+        const instHrs12m = last12m.reduce((s, e) => s + (parseFloat(e.actual_instrument) || 0) + (parseFloat(e.simulated_instrument) || 0), 0);
+
         html += '<div class="lb-currency-section">';
-        html += '<h3 class="lb-section-title">Totals</h3>';
+        html += '<h3 class="lb-section-title">Last 12 Months</h3>';
         html += `<div class="lb-currency-row">
-            <span>Total Time</span><span>${totalHrs.toFixed(1)} hrs</span>
+            <span>Flights</span><span>${last12m.length}</span>
         </div>`;
         html += `<div class="lb-currency-row">
-            <span>Flights</span><span>${entries.length}</span>
+            <span>Total Time</span><span>${hrs12m.toFixed(1)} hrs</span>
+        </div>`;
+        html += `<div class="lb-currency-row">
+            <span>Landings</span><span>${ldg12m}</span>
+        </div>`;
+        html += `<div class="lb-currency-row">
+            <span>Night</span><span>${nightHrs12m.toFixed(1)} hrs</span>
+        </div>`;
+        html += `<div class="lb-currency-row">
+            <span>Cross Country</span><span>${xcHrs12m.toFixed(1)} hrs</span>
+        </div>`;
+        html += `<div class="lb-currency-row">
+            <span>Instrument</span><span>${instHrs12m.toFixed(1)} hrs</span>
         </div>`;
         html += '</div>';
 
@@ -821,7 +959,13 @@ class Logbook {
     _addMonths(dateStr, months) {
         const d = new Date(dateStr + 'T00:00:00');
         d.setMonth(d.getMonth() + months);
-        // Last day of the month rule (FAR 61.56)
+        return d.toISOString().slice(0, 10);
+    }
+
+    /** Add 6 calendar months and return end of that month (FAR 61.57 IFR currency rule) */
+    _endOfMonth6(dateStr) {
+        const d = new Date(dateStr + 'T00:00:00');
+        d.setMonth(d.getMonth() + 7, 0); // day 0 of month+7 = last day of month+6
         return d.toISOString().slice(0, 10);
     }
 
@@ -914,14 +1058,27 @@ class Logbook {
 
         this._body.innerHTML = html;
 
-        // Wire delete buttons
+        // Wire delete buttons — two-tap confirm
         this._body.querySelectorAll('.logbook-delete-btn').forEach(btn => {
-            this._wireButton(btn, () => {
-                btn.textContent = '?';
-                this._wireButton(btn, async () => {
+            let confirmPending = false;
+            let confirmTimer = null;
+            this._wireButton(btn, async () => {
+                if (confirmPending) {
+                    clearTimeout(confirmTimer);
                     await this._deleteOilEvent(btn.dataset.id);
                     this._renderOil();
-                });
+                } else {
+                    confirmPending = true;
+                    btn.textContent = '?';
+                    btn.style.background = 'var(--status-danger)';
+                    btn.style.color = 'var(--text-on-dark)';
+                    confirmTimer = setTimeout(() => {
+                        confirmPending = false;
+                        btn.textContent = 'DEL';
+                        btn.style.background = '';
+                        btn.style.color = '';
+                    }, 3000);
+                }
             });
         });
     }
