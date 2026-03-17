@@ -1691,6 +1691,58 @@ body {
     font-size: 16px;
 }
 
+.route-parse-preview {
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.route-parse-chips {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+}
+
+.route-token-ok {
+    background: var(--status-ok);
+    color: var(--bg-primary);
+    font-weight: 700;
+    font-size: 14px;
+    padding: 3px 8px;
+    border-radius: 4px;
+}
+
+.route-token-arrow {
+    color: var(--text-muted);
+    font-size: 14px;
+    padding: 0 2px;
+}
+
+.route-token-warn {
+    font-size: 14px;
+    color: var(--status-caution);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+}
+
+.route-token-bad {
+    background: var(--status-caution);
+    color: var(--bg-primary);
+    font-weight: 700;
+    font-size: 13px;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+.route-parse-apply {
+    width: 100%;
+    margin-top: 4px;
+}
+
 .route-editor-controls {
     display: flex;
     justify-content: space-between;
@@ -2649,6 +2701,22 @@ body {
     margin-top: 10px;
     flex-wrap: wrap;
 }
+.ds-sync-btn {
+    display: block;
+    width: 100%;
+    padding: 14px;
+    margin-bottom: 12px;
+    border-radius: 10px;
+    border: 2px solid var(--accent);
+    background: var(--accent);
+    color: #fff;
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+    letter-spacing: 0.5px;
+    -webkit-tap-highlight-color: transparent;
+}
+.ds-sync-btn:disabled { opacity: 0.5; }
 .ds-action-btn {
     padding: 8px 14px;
     border-radius: 8px;

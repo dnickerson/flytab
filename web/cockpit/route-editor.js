@@ -634,6 +634,208 @@ class RouteEditor {
         return 'fuel-green';
     }
 
+    // ========== Search ==========
+
+    _onSearchInput() {
+        clearTimeout(this._searchDebounce);
+        const q = this._searchInput.value.trim();
+        if (q.length < 2) {
+            this._resultsDiv.hidden = true;
+            this._resultsDiv.innerHTML = '';
+            return;
+        }
+        // Route string mode: space-separated tokens (e.g. "KLKR V54 GSP KMEB")
+        if (q.includes(' ')) {
+            this._searchDebounce = setTimeout(() => this._parseRouteString(q), 300);
+            return;
+        }
+        this._searchDebounce = setTimeout(() => this._doSearch(q), 200);
+    }
+
+    _isAirwayToken(token) {
+        // Victor, Jet, RNAV T/Q airways: V54, J80, T295, Q900, V23A, etc.
+        return /^[VJTQ]\d+[A-Z]?$/i.test(token);
+    }
+
+    async _resolveToken(token) {
+        const t = token.toUpperCase();
+        try {
+            // 1. Exact airport lookup
+            const apt = await this.nasrDb.getAirport(t);
+            if (apt) return { icao: apt.icao, name: apt.name, lat: apt.lat, lon: apt.lon, type: 'APT' };
+        } catch {}
+        try {
+            // 2. Try K-prefixed for 3-char US identifiers (LKR → KLKR)
+            if (t.length === 3 && !t.startsWith('K')) {
+                const apt = await this.nasrDb.getAirport('K' + t);
+                if (apt) return { icao: apt.icao, name: apt.name, lat: apt.lat, lon: apt.lon, type: 'APT' };
+            }
+        } catch {}
+        try {
+            // 3. Exact navaid lookup
+            const nav = await this.nasrDb.getNavaid(t);
+            if (nav) return { icao: nav.id, name: nav.name, lat: nav.lat, lon: nav.lon, type: nav.type || 'VOR' };
+        } catch {}
+        try {
+            // 4. Exact fix lookup
+            const fix = await this.nasrDb.getFix(t);
+            if (fix) return { icao: fix.id, name: fix.id, lat: fix.lat, lon: fix.lon, type: 'FIX' };
+        } catch {}
+        return null;
+    }
+
+    async _parseRouteString(str) {
+        const tokens = str.trim().split(/\s+/);
+        const resolved = [];
+        const skipped = []; // airways
+        const unresolved = [];
+
+        for (const token of tokens) {
+            if (this._isAirwayToken(token)) {
+                skipped.push(token.toUpperCase());
+                continue;
+            }
+            const wp = await this._resolveToken(token);
+            if (wp) {
+                resolved.push(wp);
+            } else {
+                unresolved.push(token.toUpperCase());
+            }
+        }
+
+        this._showRoutePreview(resolved, unresolved, skipped);
+    }
+
+    _showRoutePreview(resolved, unresolved, skipped) {
+        this._resultsDiv.hidden = false;
+
+        const chips = resolved.map(wp =>
+            `<span class="route-token-ok">${wp.icao}</span>`
+        ).join('<span class="route-token-arrow">→</span>');
+
+        const warnHtml = unresolved.length > 0
+            ? `<div class="route-token-warn">Not found: ${unresolved.map(t => `<span class="route-token-bad">${t}</span>`).join(' ')}</div>`
+            : '';
+
+        this._resultsDiv.innerHTML = `
+            <div class="route-parse-preview">
+                <div class="route-parse-chips">${chips || '<span class="route-search-empty">Nothing resolved</span>'}</div>
+                ${warnHtml}
+                ${resolved.length > 0 ? `<button class="btn btn-primary route-parse-apply">LOAD ${resolved.length} WAYPOINTS</button>` : ''}
+            </div>
+        `;
+
+        const applyBtn = this._resultsDiv.querySelector('.route-parse-apply');
+        if (applyBtn) {
+            this._wireTap(applyBtn, () => {
+                this._pushUndo();
+                this._waypoints = resolved.map(wp => ({ ...wp, alt: this._altitude }));
+                this._insertIndex = -1;
+                this._expandedIndex = -1;
+                this._renderWaypoints();
+                this._clearSearch();
+            });
+        }
+    }
+
+    async _doSearch(query) {
+        if (!this.nasrDb) return;
+        try {
+            const results = await this.nasrDb.searchAll(query);
+            this._renderSearchResults(results.airports || [], results.navaids || [], results.fixes || [], query);
+        } catch (err) {
+            console.warn('[RouteEditor] Search error:', err);
+        }
+    }
+
+    _renderSearchResults(airports, navaids, fixes, query = '') {
+        const q = query.toUpperCase();
+        const sit = this.stratux?.situation;
+        const results = [];
+
+        for (const a of airports) {
+            const dist = sit?.lat ? CockpitMap._distNm(sit.lat, sit.lon, a.lat, a.lon) : null;
+            results.push({ type: 'APT', id: a.icao, name: a.name, lat: a.lat, lon: a.lon, dist });
+        }
+        for (const n of navaids) {
+            const dist = sit?.lat ? CockpitMap._distNm(sit.lat, sit.lon, n.lat, n.lon) : null;
+            results.push({ type: n.type || 'NAV', id: n.id, name: n.name, lat: n.lat, lon: n.lon, dist });
+        }
+        for (const f of fixes) {
+            const dist = sit?.lat ? CockpitMap._distNm(sit.lat, sit.lon, f.lat, f.lon) : null;
+            results.push({ type: 'FIX', id: f.id, name: '', lat: f.lat, lon: f.lon, dist });
+        }
+
+        const isIdMatch = r => r.id.startsWith(q) || r.id === 'K' + q || r.id.startsWith('K' + q);
+        const typeRank = r => r.type === 'APT' ? 0 : r.type === 'FIX' ? 2 : 1;
+        results.sort((a, b) => {
+            const aId = isIdMatch(a) ? 0 : 1;
+            const bId = isIdMatch(b) ? 0 : 1;
+            if (aId !== bId) return aId - bId;
+            const aExact = (a.id === q || a.id === 'K' + q) ? 0 : 1;
+            const bExact = (b.id === q || b.id === 'K' + q) ? 0 : 1;
+            if (aExact !== bExact) return aExact - bExact;
+            const tDiff = typeRank(a) - typeRank(b);
+            if (tDiff !== 0) return tDiff;
+            if (a.dist != null && b.dist != null) return a.dist - b.dist;
+            return 0;
+        });
+
+        const limited = results.slice(0, 10);
+        this._resultsDiv.hidden = limited.length === 0;
+        this._resultsDiv.innerHTML = limited.map(r => `
+            <button class="route-search-result" data-lat="${r.lat}" data-lon="${r.lon}" data-id="${r.id}" data-name="${r.name || r.id}" data-type="${r.type}">
+                <span class="result-type">${r.type}</span>
+                <span class="result-id">${r.id}</span>
+                <span class="result-name">${r.name || ''}</span>
+                <span class="result-dist">${r.dist != null ? r.dist.toFixed(0) + 'nm' : ''}</span>
+            </button>
+        `).join('');
+
+        this._resultsDiv.querySelectorAll('.route-search-result').forEach(btn => {
+            this._wireTap(btn, () => {
+                const idx = this._insertIndex >= 0 ? this._insertIndex : this._waypoints.length;
+                this._addWaypoint({
+                    icao: btn.dataset.id,
+                    name: btn.dataset.name || btn.dataset.id,
+                    lat: parseFloat(btn.dataset.lat),
+                    lon: parseFloat(btn.dataset.lon),
+                    type: btn.dataset.type || undefined,
+                }, idx);
+                this._clearSearch();
+            });
+        });
+    }
+
+    _clearSearch() {
+        if (this._searchInput) this._searchInput.value = '';
+        if (this._resultsDiv) {
+            this._resultsDiv.hidden = true;
+            this._resultsDiv.innerHTML = '';
+        }
+        this._insertIndex = -1;
+        if (this._searchInput) this._searchInput.placeholder = 'Search ICAO or name...';
+    }
+
+    async _showNearby() {
+        const sit = this.stratux?.situation;
+        if (!sit?.lat) {
+            this._resultsDiv.hidden = false;
+            this._resultsDiv.innerHTML = '<div class="route-search-empty">No GPS position</div>';
+            return;
+        }
+        try {
+            const airports = await this.nasrDb.getAirportsNear(sit.lat, sit.lon, 30);
+            airports.sort((a, b) =>
+                CockpitMap._distNm(sit.lat, sit.lon, a.lat, a.lon) -
+                CockpitMap._distNm(sit.lat, sit.lon, b.lat, b.lon)
+            );
+            this._renderSearchResults(airports.slice(0, 10), [], [], '');
+        } catch (err) {
+            console.warn('[RouteEditor] Nearby error:', err);
+        }
+    }
+
     /** Wire touchstart + click with debounce for iPad reliability */
     _wireTap(el, handler) {
         if (!el) return;
