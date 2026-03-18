@@ -1,10 +1,12 @@
 /**
- * FlyTab — Data & Maps Overlay
- * Shows NASR/CIFP/plates/tiles cycle status + tile cache management.
+ * FlyTab — Data & Maps Overlay  v4.3
+ * ForeFlight-style inventory: shows server vs. tablet for each data category,
+ * with per-section sync and Tailscale fallback discovery.
  *
  * Architecture: Capacitor WebView — no Service Worker, no SW cache API.
  * Tiles/NASR/plates are served from NanoHTTPD at localhost:9090 (on-device).
  * Pre-flight sync fetches from the home server (configured in cockpit-config.json).
+ * Tailscale fallback: if local IP unreachable, tries homeServer.fallbackBase.
  */
 
 class DataStatus {
@@ -33,6 +35,8 @@ class DataStatus {
         this._visible = false;
         this._cacheRunning = false;
         this._cacheCancelled = false;
+        this._resolvedBase = null;  // cached from _resolveHomeBase()
+        this._resolvedVia  = null;
         this._buildDOM();
     }
 
@@ -53,212 +57,409 @@ class DataStatus {
         this._visible ? this.hide() : this.show();
     }
 
-    /** Derive home server URLs from CockpitConfig */
+    // ── Server Discovery ─────────────────────────────────────────────────────
+
+    /**
+     * Try primary address first (local network), then Tailscale fallback.
+     * Returns { base, via } where via is 'local' | 'tailscale' | null.
+     */
+    async _resolveHomeBase() {
+        const cfg = (typeof CockpitConfig !== 'undefined' && CockpitConfig.raw?.homeServer) || {};
+        const primary  = cfg.nasrBase   ? cfg.nasrBase.replace(/\/nasr\/?$/, '')   : null;
+        const fallback = cfg.fallbackBase || null;
+
+        for (const [via, base] of [['local', primary], ['tailscale', fallback]]) {
+            if (!base) continue;
+            try {
+                const r = await fetch(`${base}/api/nasr/cycle-info`,
+                    { cache: 'no-store', signal: AbortSignal.timeout(4000) });
+                if (r.ok) return { base, via };
+            } catch { /* try next */ }
+        }
+        return { base: null, via: null };
+    }
+
+    /** Returns the resolved or configured primary base URL. */
+    _homeBase() {
+        if (this._resolvedBase) return this._resolvedBase;
+        const cfg = (typeof CockpitConfig !== 'undefined' && CockpitConfig.raw?.homeServer) || {};
+        return cfg.nasrBase ? cfg.nasrBase.replace(/\/nasr\/?$/, '') : 'http://192.168.1.77:8081';
+    }
+
+    /** Legacy helper for _wireCacheSection() — returns tileBase/plateBase/nasrBase URLs. */
     _homeServerUrls() {
-        const hs = (typeof CockpitConfig !== 'undefined' && CockpitConfig.raw?.homeServer) || {};
+        const hs  = (typeof CockpitConfig !== 'undefined' && CockpitConfig.raw?.homeServer) || {};
+        const base = this._homeBase();
         return {
-            tileBase: hs.tileBase || 'http://192.168.1.77:8090/tiles',
-            plateBase: hs.plateBase || 'http://192.168.1.77:8090/plates',
-            nasrBase: hs.nasrBase || 'http://192.168.1.77:8090/nasr',
+            tileBase:  hs.tileBase  || `${base}/tiles`,
+            plateBase: hs.plateBase || `${base}/plates`,
+            nasrBase:  hs.nasrBase  || `${base}/nasr`,
         };
     }
 
+    // ── Refresh ──────────────────────────────────────────────────────────────
+
     async _refresh() {
         const body = this._el.querySelector('.data-status-body');
-        body.innerHTML = '<div class="ds-loading">Loading...</div>';
+        body.innerHTML = '<div class="ds-loading">Checking data…</div>';
 
-        const urls = this._homeServerUrls();
-        const manifest = {};
+        const { base, via } = await this._resolveHomeBase();
+        this._resolvedBase = base;
+        this._resolvedVia  = via;
 
-        // Probe all data sources in parallel — local NanoHTTPD first, home server fallback
-        const probes = await Promise.allSettled([
-            this._probeNasr(urls),
-            this._probeCifp(urls),
-            this._probePlates(urls),
-            this._probeTiles(urls),
+        const [sNasr, dNasr, sCifp, dCifp, sPlates, dPlates, mbtiles] = await Promise.all([
+            base ? this._probeServerNasr(base)   : Promise.resolve(null),
+            this._probeDeviceNasr(),
+            base ? this._probeServerCifp(base)   : Promise.resolve(null),
+            this._probeDeviceCifp(),
+            base ? this._probeServerPlates(base) : Promise.resolve({ cycle: null, states: [] }),
+            this._probeDevicePlates(),
+            this._probeMbtiles(),
         ]);
 
-        if (probes[0].status === 'fulfilled') manifest.nasr_cycle = probes[0].value;
-        if (probes[1].status === 'fulfilled') manifest.cifp_cycle = probes[1].value;
-        if (probes[2].status === 'fulfilled') manifest.plates = probes[2].value;
-        if (probes[3].status === 'fulfilled') manifest.tiles = probes[3].value;
-
-        // If we got nothing at all, show error
-        if (!manifest.nasr_cycle && !manifest.cifp_cycle && !manifest.plates && !manifest.tiles) {
-            body.innerHTML = `<div class="ds-error">No data found<br><small>Ensure home server is running (start-home-server.sh) and tablet is on home WiFi</small></div>`;
-            return;
-        }
-
-        this._render(manifest, null);
+        this._render({ via, base, sNasr, dNasr, sCifp, dCifp, sPlates, dPlates, mbtiles });
     }
 
-    /** Probe NASR data — try local, then home server */
-    async _probeNasr(urls) {
-        // Try local NanoHTTPD
+    // ── Probe Methods ─────────────────────────────────────────────────────────
+
+    async _probeServerNasr(base) {
         try {
-            const r = await fetch(`${DataStatus.LOCAL_BASE}/nasr/cycle_info.json`, { cache: 'no-store', signal: AbortSignal.timeout(2000) });
-            if (r.ok) return await r.json();
-        } catch { /* not local */ }
-        // Try home server
-        try {
-            const r = await fetch(`${urls.nasrBase}/cycle_info.json`, { cache: 'no-store', signal: AbortSignal.timeout(5000) });
-            if (r.ok) { const d = await r.json(); d._source = 'server'; return d; }
-        } catch { /* not available */ }
-        // Try bundle.json cycle_info (larger file but has the data)
-        try {
-            const r = await fetch(`${urls.nasrBase}/bundle.json`, { cache: 'no-store', signal: AbortSignal.timeout(5000) });
-            if (r.ok) { const b = await r.json(); if (b.cycle_info) { b.cycle_info._source = 'server'; return b.cycle_info; } }
-        } catch { /* not available */ }
-        return null;
+            const r = await fetch(`${base}/api/nasr/cycle-info`,
+                { cache: 'no-store', signal: AbortSignal.timeout(5000) });
+            return r.ok ? r.json() : null;
+        } catch { return null; }
     }
 
-    /** Probe CIFP data */
-    async _probeCifp(urls) {
-        const nasrBase = urls.nasrBase.replace(/\/nasr\/?$/, '');
-        // Try local NanoHTTPD
+    async _probeDeviceNasr() {
         try {
-            const r = await fetch(`${DataStatus.LOCAL_BASE}/cifp/cifp_cycle_info.json`, { cache: 'no-store', signal: AbortSignal.timeout(2000) });
-            if (r.ok) return await r.json();
-        } catch { /* not local */ }
-        // Try home server — CIFP data is in flypi/data/cifp/
-        try {
-            const r = await fetch(`${nasrBase}/cifp/cifp_cycle_info.json`, { cache: 'no-store', signal: AbortSignal.timeout(5000) });
-            if (r.ok) { const d = await r.json(); d._source = 'server'; return d; }
-        } catch { /* not available */ }
-        return null;
+            const r = await fetch(`${DataStatus.LOCAL_BASE}/nasr/cycle_info.json`,
+                { cache: 'no-store', signal: AbortSignal.timeout(2000) });
+            return r.ok ? r.json() : null;
+        } catch { return null; }
     }
 
-    /** Probe plates data */
-    async _probePlates(urls) {
-        // Try local NanoHTTPD — check for plate_geo_index.json as indicator
+    async _probeServerCifp(base) {
         try {
-            const r = await fetch(`${DataStatus.LOCAL_BASE}/plates/plate_geo_index.json`, { cache: 'no-store', signal: AbortSignal.timeout(2000) });
-            if (r.ok) {
-                const geo = await r.json();
-                const count = typeof geo === 'object' ? Object.keys(geo).length : 0;
-                return { airports: count, georef_count: count, _source: 'local' };
-            }
-        } catch { /* not local */ }
-        // Try home server
-        try {
-            const r = await fetch(`${urls.plateBase}/plate_geo_index.json`, { cache: 'no-store', signal: AbortSignal.timeout(5000) });
-            if (r.ok) {
-                const geo = await r.json();
-                const count = typeof geo === 'object' ? Object.keys(geo).length : 0;
-                return { airports: count, georef_count: count, _source: 'server' };
-            }
-        } catch { /* not available */ }
-        return null;
+            const r = await fetch(`${base}/api/cifp/cycle-info`,
+                { cache: 'no-store', signal: AbortSignal.timeout(5000) });
+            return r.ok ? r.json() : null;
+        } catch { return null; }
     }
 
-    /** Probe tile availability */
-    async _probeTiles(urls) {
-        // Check local NanoHTTPD for cached tiles
-        let localOk = false;
+    async _probeDeviceCifp() {
         try {
-            const r = await fetch(`${DataStatus.LOCAL_BASE}/tiles/sectional/7/34/52.webp`, { method: 'HEAD', signal: AbortSignal.timeout(2000) });
-            if (r.ok) localOk = true;
-        } catch { /* no local tiles */ }
-
-        // Check home server for tile availability
-        let serverOk = false;
-        try {
-            const r = await fetch(`${urls.tileBase}/sectional/7/34/52.webp`, { method: 'HEAD', signal: AbortSignal.timeout(3000) });
-            if (r.ok) serverOk = true;
-        } catch { /* not available */ }
-
-        // Check for available ZIPs
-        let zips = [];
-        try {
-            const homeBase = urls.tileBase.replace(/\/tiles\/?$/, '');
-            const r = await fetch(`${homeBase}/offline-maps/index.json`, { cache: 'no-store', signal: AbortSignal.timeout(3000) });
-            if (r.ok) zips = await r.json();
-        } catch { /* no zips */ }
-
-        if (!localOk && !serverOk && !zips.length) return null;
-        return { localCached: localOk, serverAvailable: serverOk, zips };
+            const r = await fetch(`${DataStatus.LOCAL_BASE}/cifp/cifp_cycle_info.json`,
+                { cache: 'no-store', signal: AbortSignal.timeout(2000) });
+            return r.ok ? r.json() : null;
+        } catch { return null; }
     }
 
+    async _probeServerPlates(base) {
+        try {
+            const [cycleR, statesR] = await Promise.all([
+                fetch(`${base}/api/plates/cycle-info`, { cache: 'no-store', signal: AbortSignal.timeout(5000) }),
+                fetch(`${base}/api/plates/states`,     { cache: 'no-store', signal: AbortSignal.timeout(5000) }),
+            ]);
+            return {
+                cycle:  cycleR.ok  ? await cycleR.json()  : null,
+                states: statesR.ok ? await statesR.json() : [],
+            };
+        } catch { return { cycle: null, states: [] }; }
+    }
 
-    _render(m, tileCount) {
+    async _probeDevicePlates() {
+        try {
+            const r = await fetch(`${DataStatus.LOCAL_BASE}/plates/plates_cycle_info.json`,
+                { cache: 'no-store', signal: AbortSignal.timeout(2000) });
+            return r.ok ? r.json() : null;
+        } catch { return null; }
+    }
+
+    async _probeMbtiles() {
+        try {
+            const r = await fetch(`${DataStatus.LOCAL_BASE}/mbtiles/status`,
+                { cache: 'no-store', signal: AbortSignal.timeout(2000) });
+            return r.ok ? r.json() : [];
+        } catch { return []; }
+    }
+
+    // ── Render ────────────────────────────────────────────────────────────────
+
+    _render({ via, base, sNasr, dNasr, sCifp, dCifp, sPlates, dPlates, mbtiles }) {
         const body = this._el.querySelector('.data-status-body');
-        const now = new Date();
-        const cards = [];
+        const now  = new Date();
+        const mbt  = mbtiles || [];
 
-        // NASR Aeronautical Data
-        const nasr = m.nasr_cycle;
-        if (nasr) {
-            const exp = nasr.expiration_date ? new Date(nasr.expiration_date) : null;
-            const status = this._cycleStatus(exp, now);
-            const src = nasr._source === 'server' ? ' (on server)' : ' (on device)';
-            cards.push(this._card('NASR Aeronautical Data',
-                `Cycle: ${nasr.effective_date || '?'} &rarr; ${nasr.expiration_date || '?'}${src}`,
-                status));
+        // ── Connection banner ────────────────────────────────────────────────
+        let bannerColor, bannerText;
+        if (via === 'local') {
+            bannerColor = 'var(--status-ok)';
+            bannerText  = '&#9679; Home server reachable (local network)';
+        } else if (via === 'tailscale') {
+            bannerColor = 'var(--status-ok)';
+            bannerText  = '&#9679; Home server reachable (Tailscale)';
         } else {
-            cards.push(this._card('NASR Aeronautical Data', 'Not found', this._badge('MISSING', 'gray')));
+            bannerColor = 'var(--status-danger)';
+            bannerText  = '&#9675; Home server not reachable &mdash; connect to home Wi-Fi or Tailscale';
         }
 
-        // CIFP Procedures
-        const cifp = m.cifp_cycle;
-        if (cifp) {
-            const code = cifp.cycle_code || '?';
-            const src = cifp._source === 'server' ? ' (on server)' : ' (on device)';
-            let cifpDetail = `Cycle: ${code}${src}`;
-            let status;
-            if (nasr?.effective_date && cifp.effective_date) {
-                if (cifp.effective_date === nasr.effective_date) {
-                    const nasrExp = new Date(nasr.expiration_date);
-                    status = this._cycleStatus(nasrExp, now);
-                } else {
-                    status = this._badge('MISMATCHED', 'yellow');
-                    cifpDetail += `<br><span style="font-size:14px;color:var(--status-caution)">CIFP: ${cifp.effective_date} &ne; NASR: ${nasr.effective_date}</span>`;
-                }
+        // ── NASR section ─────────────────────────────────────────────────────
+        const nasrServerDate = sNasr?.effective_date || null;
+        const nasrDevDate    = dNasr?.effective_date || null;
+        let nasrServerLine, nasrDevLine, nasrBadge, nasrAction = '';
+
+        if (!base) {
+            nasrServerLine = '<span class="ds-muted">Server not reachable</span>';
+        } else if (nasrServerDate) {
+            const expStr = sNasr?.expiration_date ? ` &rarr; exp ${sNasr.expiration_date}` : '';
+            nasrServerLine = `Cycle ${nasrServerDate}${expStr}`;
+        } else {
+            nasrServerLine = '<span class="ds-muted">Unavailable</span>';
+        }
+
+        if (nasrDevDate) {
+            nasrDevLine = `Cycle ${nasrDevDate}`;
+        } else {
+            nasrDevLine = '<span class="ds-muted">Not on tablet</span>';
+        }
+
+        if (!nasrDevDate) {
+            nasrBadge = this._badge('NOT DOWNLOADED', 'gray');
+            if (base && nasrServerDate) nasrAction = `<button class="ds-action-btn" id="dsNasrBtn">DOWNLOAD</button>`;
+        } else if (base && nasrServerDate && nasrDevDate !== nasrServerDate) {
+            nasrBadge = this._badge('UPDATE AVAILABLE', 'yellow');
+            nasrAction = `<button class="ds-action-btn" id="dsNasrBtn">SYNC</button>`;
+        } else {
+            const expDate = sNasr?.expiration_date ? new Date(sNasr.expiration_date)
+                          : dNasr?.expiration_date ? new Date(dNasr.expiration_date)
+                          : null;
+            nasrBadge = expDate ? this._cycleStatus(expDate, now) : this._badge('ON DEVICE', 'green');
+        }
+
+        // ── CIFP section ─────────────────────────────────────────────────────
+        const cifpSCode = sCifp?.cycle_code || sCifp?.effective_date || null;
+        const cifpDCode = dCifp?.cycle_code || dCifp?.effective_date || null;
+        let cifpServerLine, cifpDevLine, cifpBadge, cifpAction = '';
+
+        if (!base) {
+            cifpServerLine = '<span class="ds-muted">Server not reachable</span>';
+        } else if (cifpSCode) {
+            cifpServerLine = `Cycle ${cifpSCode}`;
+        } else {
+            cifpServerLine = '<span class="ds-muted">Unavailable</span>';
+        }
+
+        if (cifpDCode) {
+            cifpDevLine = `Cycle ${cifpDCode}`;
+        } else {
+            cifpDevLine = '<span class="ds-muted">Not on tablet</span>';
+        }
+
+        if (!cifpDCode) {
+            cifpBadge = this._badge('NOT DOWNLOADED', 'gray');
+            if (base && cifpSCode) cifpAction = `<button class="ds-action-btn" id="dsCifpBtn">DOWNLOAD</button>`;
+        } else if (base && cifpSCode && cifpDCode !== cifpSCode) {
+            cifpBadge = this._badge('UPDATE AVAILABLE', 'yellow');
+            cifpAction = `<button class="ds-action-btn" id="dsCifpBtn">SYNC</button>`;
+        } else {
+            const expDate = sNasr?.expiration_date ? new Date(sNasr.expiration_date) : null;
+            cifpBadge = expDate ? this._cycleStatus(expDate, now) : this._badge('CURRENT', 'green');
+        }
+
+        // ── Plates section ───────────────────────────────────────────────────
+        const configuredStates = (typeof CockpitConfig !== 'undefined' && CockpitConfig.raw?.plateStates)
+            || ['NC', 'SC', 'VA', 'GA', 'TN'];
+        const syncedStates = JSON.parse(localStorage.getItem('flypi_plates_synced_states') || '[]');
+        const plateSCode   = sPlates?.cycle?.effective_date || null;
+        const plateDCode   = dPlates?.effective_date || null;
+        let platesServerLine, platesDevLine, platesBadge, platesAction = '';
+
+        if (!base) {
+            platesServerLine = '<span class="ds-muted">Server not reachable</span>';
+        } else if (plateSCode) {
+            const serverStateSet = new Set((sPlates?.states || []).map(s => s.state));
+            const avail = configuredStates.filter(s => serverStateSet.has(s)).length;
+            platesServerLine = `Cycle ${plateSCode} &mdash; ${avail}/${configuredStates.length} configured states available`;
+        } else {
+            platesServerLine = '<span class="ds-muted">Unavailable</span>';
+        }
+
+        // Per-state chips
+        const serverStateSet = new Set((sPlates?.states || []).map(s => s.state));
+        const serverStateSizes = Object.fromEntries((sPlates?.states || []).map(s => [s.state, s.size_mb]));
+        const cycleOkForStates = !plateSCode || plateDCode === plateSCode;
+        const stateChips = configuredStates.map(st => {
+            const onDevice = syncedStates.includes(st);
+            const onServer = serverStateSet.has(st);
+            const ok = onDevice && cycleOkForStates;
+            const sizeTxt = serverStateSizes[st] ? ` ${serverStateSizes[st]}MB` : '';
+            const cls = ok ? 'ds-state-ok' : 'ds-state-missing';
+            const icon = ok ? '&#10003;' : '&#9675;';
+            const notOnServer = !onServer && base ? ' <span class="ds-muted">(server n/a)</span>' : '';
+            return `<span class="ds-state-chip ${cls}">${icon} ${st}${sizeTxt}${notOnServer}</span>`;
+        }).join('');
+
+        if (!plateDCode && syncedStates.length === 0) {
+            platesDevLine = stateChips || '<span class="ds-muted">Not on tablet</span>';
+            platesBadge   = this._badge('NOT DOWNLOADED', 'gray');
+            if (base && plateSCode) platesAction = `<button class="ds-action-btn" id="dsPlatesBtn">DOWNLOAD</button>`;
+        } else {
+            platesDevLine = stateChips;
+            const allSynced = configuredStates.every(s => syncedStates.includes(s));
+            if (!allSynced || !cycleOkForStates) {
+                platesBadge = this._badge('UPDATE AVAILABLE', 'yellow');
+                if (base) platesAction = `<button class="ds-action-btn" id="dsPlatesBtn">SYNC</button>`;
             } else {
-                status = this._badge('AVAILABLE', 'gray');
+                const expDate = sNasr?.expiration_date ? new Date(sNasr.expiration_date) : null;
+                platesBadge = expDate ? this._cycleStatus(expDate, now) : this._badge('CURRENT', 'green');
             }
-            cards.push(this._card('CIFP Procedures', cifpDetail, status));
-        } else {
-            cards.push(this._card('CIFP Procedures', 'Not found', this._badge('MISSING', 'gray')));
         }
 
-        // Approach Plates
-        const plates = m.plates;
-        if (plates) {
-            const count = plates.airports || 0;
-            const src = plates._source === 'local' ? 'on device' : 'on server';
-            let detail = `${count.toLocaleString()} airports georeferenced (${src})`;
-            if (plates.georef_count) detail = `${plates.georef_count.toLocaleString()} plates georeferenced (${src})`;
-            cards.push(this._card('Approach Plates', detail, this._badge('AVAILABLE', 'green')));
-        } else {
-            cards.push(this._card('Approach Plates', 'Not found — download via section below', this._badge('MISSING', 'gray')));
-        }
+        // ── MBTiles sections ──────────────────────────────────────────────────
+        const mbtilesHtml = [
+            { layer: 'sectional', label: 'Sectional Charts (z5–11)', approxMb: 1800 },
+            { layer: 'ifr-low',   label: 'IFR Low Enroute (z7–11)',  approxMb: 600  },
+        ].map(({ layer, label, approxMb }) => {
+            const entry = mbt.find(l => l.layer === layer);
+            let serverLine, devLine, badge, action = '';
 
-        // Sectional / IFR Tiles
-        const tiles = m.tiles;
-        if (tiles) {
-            const parts = [];
-            if (tiles.localCached) parts.push('Cached on device');
-            if (tiles.serverAvailable) parts.push('Available on server');
-            if (tiles.zips?.length) parts.push(`${tiles.zips.length} ZIP package${tiles.zips.length > 1 ? 's' : ''} ready`);
-            cards.push(this._card('Sectional / IFR Tiles', parts.join(' &middot; ') || 'Available',
-                tiles.localCached ? this._badge('CACHED', 'green') : this._badge('NOT CACHED', 'yellow')));
-        } else {
-            cards.push(this._card('Sectional / IFR Tiles', 'Not found on server or device', this._badge('MISSING', 'red')));
-        }
+            serverLine = base
+                ? `~${approxMb.toLocaleString()} MB available`
+                : '<span class="ds-muted">Server not reachable</span>';
+
+            if (entry?.exists) {
+                devLine = `${(entry.size_mb || 0).toLocaleString()} MB on tablet`;
+                badge   = this._badge('ON DEVICE', 'green');
+                if (base) action = `<button class="ds-action-btn ds-mbt-dl-btn" data-layer="${layer}">RE-DOWNLOAD</button>`;
+            } else {
+                devLine = '<span class="ds-muted">Not downloaded</span>';
+                badge   = this._badge('NOT DOWNLOADED', 'gray');
+                if (base) action = `<button class="ds-action-btn ds-mbt-dl-btn" data-layer="${layer}">DOWNLOAD (~${approxMb.toLocaleString()} MB)</button>`;
+            }
+
+            return this._section(label, serverLine, devLine, badge, action);
+        }).join('');
+
+        // ── Need Sync? ────────────────────────────────────────────────────────
+        const needsSync = !!base && (
+            (nasrServerDate  && nasrDevDate  !== nasrServerDate)  ||
+            (cifpSCode       && cifpDCode    !== cifpSCode)       ||
+            (plateSCode      && (!cycleOkForStates || !configuredStates.every(s => syncedStates.includes(s)))) ||
+            !mbt.find(l => l.layer === 'sectional')?.exists       ||
+            !mbt.find(l => l.layer === 'ifr-low')?.exists
+        );
 
         const ts = new Date().toISOString().slice(0, 16).replace('T', ' ') + 'Z';
-        body.innerHTML = cards.join('') +
-            `<div class="ds-footer">Checked: ${ts}</div>` +
-            this._buildCacheSectionHtml(tileCount);
+
+        body.innerHTML = `
+            <div class="ds-banner" style="color:${bannerColor}">${bannerText}</div>
+            <div class="ds-section-title">Aviation Data</div>
+            ${this._section('NASR Aeronautical Data',  nasrServerLine,   nasrDevLine,   nasrBadge,   nasrAction)}
+            ${this._section('CIFP Procedures',          cifpServerLine,   cifpDevLine,   cifpBadge,   cifpAction)}
+            ${this._section('Approach Plates',          platesServerLine, platesDevLine, platesBadge, platesAction, true)}
+            <div class="ds-section-title">Offline Maps</div>
+            ${mbtilesHtml}
+            <div class="ds-sync-footer">
+                <button class="ds-sync-btn" id="dsSyncAllBtn" ${!needsSync ? 'disabled' : ''}>
+                    &#8645; ${needsSync ? 'Sync All Outdated' : 'All Data Current'}
+                </button>
+            </div>
+            <div class="ds-footer">Checked: ${ts}</div>
+            <div class="ds-section-title" style="cursor:pointer;user-select:none" id="dsSuppToggle">
+                Supplemental &amp; Advanced
+                <span style="font-size:11px;font-weight:400;color:var(--text-muted)">&#9660;</span>
+            </div>
+            <div id="dsSuppContent" style="display:none">
+                ${this._buildCacheSectionHtml(null, mbtiles)}
+            </div>
+        `;
+
+        this._wireDataSections();
         this._wireCacheSection();
     }
+
+    /** Build a ForeFlight-style inventory section card. */
+    _section(title, serverVal, deviceVal, badge, actionBtn, multilineDevice = false) {
+        const devClass = multilineDevice ? 'ds-row-value ds-row-multiline' : 'ds-row-value';
+        return `<div class="ds-section-card">
+            <div class="ds-section-head">
+                <span class="ds-section-name">${title}</span>
+                <span class="ds-section-badge">${badge}</span>
+            </div>
+            <div class="ds-inv-row">
+                <span class="ds-inv-label">Server</span>
+                <span class="ds-row-value">${serverVal}</span>
+            </div>
+            <div class="ds-inv-row">
+                <span class="ds-inv-label">Tablet</span>
+                <span class="${devClass}">${deviceVal}</span>
+                ${actionBtn ? `<span class="ds-inv-action">${actionBtn}</span>` : ''}
+            </div>
+        </div>`;
+    }
+
+    // ── Section Action Wiring ─────────────────────────────────────────────────
+
+    _wireDataSections() {
+        const body = this._el.querySelector('.data-status-body');
+
+        const progRow  = this._el.querySelector('.ds-progress-row');
+        const progFill = this._el.querySelector('.ds-progress-fill');
+        const progText = this._el.querySelector('.ds-progress-text');
+        const cancelEl = this._el.querySelector('#dsCancelBtn');
+
+        const showProg = (msg) => {
+            progRow.classList.add('active');
+            progFill.style.width = '0%';
+            progText.textContent = msg;
+            if (cancelEl) cancelEl.style.display = '';
+        };
+        const updateProg = (done, total) => {
+            progFill.style.width = Math.round(done / total * 100) + '%';
+            progText.textContent = `${done} / ${total}`;
+        };
+        const doneProg = (msg, color) => {
+            progFill.style.width = '100%';
+            progText.textContent = msg;
+            if (progText) progText.style.color = color || '';
+            if (cancelEl) cancelEl.style.display = 'none';
+        };
+
+        // Sync All button
+        const syncAllBtn = body.querySelector('#dsSyncAllBtn');
+        if (syncAllBtn && !syncAllBtn.disabled) {
+            this._wireTap(syncAllBtn, () => this._syncAll(syncAllBtn, showProg, updateProg, doneProg));
+        }
+
+        // Per-section buttons all trigger _syncAll (which skips already-current items)
+        for (const id of ['dsNasrBtn', 'dsCifpBtn', 'dsPlatesBtn']) {
+            const btn = body.querySelector(`#${id}`);
+            if (btn) this._wireTap(btn, () => this._syncAll(null, showProg, updateProg, doneProg));
+        }
+
+        // MBTiles per-layer download buttons
+        body.querySelectorAll('.ds-mbt-dl-btn').forEach(btn => {
+            this._wireTap(btn, () => this._downloadMbtiles(btn.dataset.layer, btn, showProg, doneProg));
+        });
+
+        // Supplemental toggle
+        const suppToggle = body.querySelector('#dsSuppToggle');
+        const suppContent = body.querySelector('#dsSuppContent');
+        if (suppToggle && suppContent) {
+            this._wireTap(suppToggle, () => {
+                const hidden = suppContent.style.display === 'none';
+                suppContent.style.display = hidden ? '' : 'none';
+            });
+        }
+    }
+
+    // ── Cycle Status Helpers ──────────────────────────────────────────────────
 
     _cycleStatus(expDate, now) {
         if (!expDate) return this._badge('UNKNOWN', 'gray');
         const daysLeft = (expDate - now) / 86400000;
         if (daysLeft < 0) {
-            const daysAgo = Math.abs(Math.round(daysLeft));
-            return this._badge(`EXPIRED (${daysAgo}d ago)`, 'red');
+            return this._badge(`EXPIRED (${Math.abs(Math.round(daysLeft))}d ago)`, 'red');
         } else if (daysLeft <= 3) {
             return this._badge(`EXPIRING (${Math.round(daysLeft)}d)`, 'yellow');
         }
@@ -284,10 +485,15 @@ class DataStatus {
             </div>`;
     }
 
-    // ── Tile Cache Section ──────────────────────────────────────────────────
+    // ── Supplemental Tile Cache Section ───────────────────────────────────────
 
-    _buildCacheSectionHtml(tileCount) {
-        const countStr = tileCount != null ? `${tileCount.toLocaleString()} tiles cached` : 'Checking tile server…';
+    _buildCacheSectionHtml(tileCount, mbtiles) {
+        const mbt = mbtiles || [];
+        const mbtSec = mbt.find(l => l.layer === 'sectional');
+        const mbtIfr = mbt.find(l => l.layer === 'ifr-low');
+        const bothPresent = mbtSec?.exists && mbtIfr?.exists;
+
+        // Legacy supplemental tile cache — route area
         const bbox = (() => { try { return JSON.parse(localStorage.getItem('flypi_route_bbox') || 'null'); } catch { return null; } })();
         const routeRow = bbox
             ? `<div class="ds-cache-row">
@@ -309,14 +515,18 @@ class DataStatus {
             </div>`
         ).join('');
 
+        const suppNote = bothPresent
+            ? `<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">MBTiles provides full coverage. Individual tile caching only needed for areas outside the packed region.</div>`
+            : `<div style="font-size:12px;color:var(--status-caution);margin-bottom:8px">No MBTiles on device. Cache tiles by region to use maps offline.</div>`;
+
         return `
-        <div class="ds-section-title">Tile Cache</div>
         <div class="ds-card">
-            <div class="ds-card-title">Local Tile Server</div>
-            <div class="ds-card-detail" id="dsTileCountText">${countStr}</div>
+            <div class="ds-card-title">Individual Tile Cache</div>
+            <div class="ds-card-detail" style="margin-bottom:8px">Load tiles from home server or import a ZIP package.</div>
+            ${suppNote}
             <div class="ds-cache-actions">
-                <button class="ds-action-btn" id="dsLoadServerBtn">Load from Home Server</button>
-                <button class="ds-action-btn" id="dsImportZipBtn">Import ZIP</button>
+                <button class="ds-action-btn" id="dsLoadServerBtn">Browse ZIPs on Server</button>
+                <button class="ds-action-btn" id="dsImportZipBtn">Import ZIP from Files</button>
                 <input type="file" id="dsZipInput" accept=".zip" style="display:none">
             </div>
             <div id="dsServerZips"></div>
@@ -326,13 +536,13 @@ class DataStatus {
             ${routeRow}
         </div>
         <div class="ds-card">
-            <div class="ds-card-title">CONUS Regions <span style="font-weight:400;font-size:13px;color:var(--text-muted)">(SEC + IFR tiles only)</span></div>
+            <div class="ds-card-title">CONUS Regions <span style="font-weight:400;font-size:13px;color:var(--text-muted)">(SEC + IFR tiles)</span></div>
             ${regionRows}
         </div>
-        <div class="ds-section-title">Approach Plates</div>
+        <div class="ds-section-title">Approach Plates — Manual</div>
         ${this._platesAgeCard()}
         <div class="ds-card">
-            <div class="ds-card-title">Download Plates</div>
+            <div class="ds-card-title">Download by Airport</div>
             <div class="ds-card-detail" style="margin-bottom:10px">Enter airport ICAOs to download plates from the home server.</div>
             <input class="ds-icao-input" id="dsPlateIcaoInput" type="text" placeholder="KMBT, KLKR, KSPA…" autocapitalize="characters" autocorrect="off" spellcheck="false">
             <div class="ds-cache-actions" style="margin-top:8px">
@@ -347,7 +557,6 @@ class DataStatus {
     _wireCacheSection() {
         const body = this._el.querySelector('.data-status-body');
 
-        // Progress helpers
         const progRow  = this._el.querySelector('.ds-progress-row');
         const progFill = this._el.querySelector('.ds-progress-fill');
         const progText = this._el.querySelector('.ds-progress-text');
@@ -372,7 +581,7 @@ class DataStatus {
 
         if (cancelEl) cancelEl.addEventListener('click', () => { this._cacheCancelled = true; });
 
-        // Load from Home Server (pre-flight sync operation)
+        // Load from Home Server
         const loadBtn = body.querySelector('#dsLoadServerBtn');
         const serverZips = body.querySelector('#dsServerZips');
         if (loadBtn) {
@@ -412,7 +621,7 @@ class DataStatus {
                 } catch (err) {
                     serverZips.innerHTML = `<div style="padding:6px 0;color:var(--status-danger);font-size:13px">Not reachable: ${err.message}</div>`;
                 }
-                loadBtn.disabled = false; loadBtn.textContent = 'Load from Home Server';
+                loadBtn.disabled = false; loadBtn.textContent = 'Browse ZIPs on Server';
             });
         }
 
@@ -440,7 +649,7 @@ class DataStatus {
             this._wireTap(btn, () => this._cacheRegion(region, btn, showProg, updateProg, doneProg));
         });
 
-        // Approach Plates — Download from home server (pre-flight sync)
+        // Approach Plates — Download from home server
         const platesStatus = body.querySelector('#dsPlatesStatus');
         const platesInput  = body.querySelector('#dsPlateIcaoInput');
         const dlPlatesBtn  = body.querySelector('#dsDownloadPlatesBtn');
@@ -457,11 +666,9 @@ class DataStatus {
                     const airports = icaos.split(',');
                     let downloaded = 0;
                     for (const icao of airports) {
-                        // Fetch plate index for this airport from home server
                         const idxResp = await fetch(`${urls.plateBase}/${icao}/index.json`, { signal: AbortSignal.timeout(5000) });
                         if (!idxResp.ok) { platesStatus.textContent = `No plates for ${icao}`; continue; }
                         const plateList = await idxResp.json();
-                        // Save the index.json to NanoHTTPD so approach-charts can find it
                         try {
                             await fetch(`${DataStatus.LOCAL_BASE}/plates/${icao}/index.json`, {
                                 method: 'PUT',
@@ -480,16 +687,14 @@ class DataStatus {
                                     await fetch(`${DataStatus.LOCAL_BASE}/plates/${icao}/${fname}`, { method: 'PUT', body: blob });
                                     downloaded++;
                                 }
-                            } catch { /* skip failed plate */ }
+                            } catch { /* skip */ }
                         }
                         updateProg(airports.indexOf(icao) + 1, airports.length);
                     }
-                    // Also download the georef index for plate overlay support
                     try {
                         const geoResp = await fetch(`${urls.plateBase}/plate_geo_index.json`, { signal: AbortSignal.timeout(5000) });
                         if (geoResp.ok) {
-                            const geoBlob = await geoResp.blob();
-                            await fetch(`${DataStatus.LOCAL_BASE}/plates/plate_geo_index.json`, { method: 'PUT', body: geoBlob });
+                            await fetch(`${DataStatus.LOCAL_BASE}/plates/plate_geo_index.json`, { method: 'PUT', body: await geoResp.blob() });
                         }
                     } catch { /* georef optional */ }
                     doneProg(`${downloaded} plates saved for ${airports.length} airports`);
@@ -502,7 +707,7 @@ class DataStatus {
             });
         }
 
-        // Approach Plates — Import ZIP from Files
+        // Import plates ZIP
         const platesZipInput = body.querySelector('#dsPlatesZipInput');
         const importPlatesBtn = body.querySelector('#dsImportPlatesBtn');
         if (importPlatesBtn && platesZipInput) {
@@ -516,14 +721,13 @@ class DataStatus {
         }
     }
 
-    // ── Tile math ───────────────────────────────────────────────────────────
+    // ── Tile Math ─────────────────────────────────────────────────────────────
     _lon2tile(lon, z) { return Math.floor((lon + 180) / 360 * Math.pow(2, z)); }
     _lat2tile(lat, z) {
         const r = lat * Math.PI / 180;
         return Math.floor((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * Math.pow(2, z));
     }
     _buildTileUrls(region) {
-        // Returns sub-paths relative to tile base (e.g. /sectional/7/34/26.webp)
         const urls = [];
         const add = (prefix, zooms) => {
             for (const z of zooms) {
@@ -544,34 +748,23 @@ class DataStatus {
         this._cacheRunning = true; this._cacheCancelled = false;
         if (btn) { btn.disabled = true; btn.textContent = 'Downloading…'; }
 
-        // ZIP strategy: download pre-built region ZIP from home server,
-        // POST to NanoHTTPD /unzip for fast server-side extraction
         const urls = this._homeServerUrls();
         const homeBase = urls.tileBase.replace(/\/tiles\/?$/, '');
         const zipUrl = `${homeBase}/offline-maps/${region.id}.zip`;
 
         try {
             showProg(`Downloading ${region.id}.zip (${region.mb} MB)…`);
-
             const resp = await fetch(zipUrl, { signal: AbortSignal.timeout(300000) });
             if (!resp.ok) throw new Error(`ZIP not found (HTTP ${resp.status}) — run build_offline_zip.py ${region.id}`);
-
             const blob = await resp.blob();
             showProg(`Extracting ${(blob.size / 1024 / 1024).toFixed(0)} MB to device…`);
-
-            // POST ZIP to NanoHTTPD /unzip — Java extracts directly to filesystem
             const unzipResp = await fetch(`${DataStatus.LOCAL_BASE}/unzip`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/zip' },
                 body: blob,
                 signal: AbortSignal.timeout(300000),
             });
-
-            if (!unzipResp.ok) {
-                const errText = await unzipResp.text();
-                throw new Error(`Extraction failed: ${errText}`);
-            }
-
+            if (!unzipResp.ok) throw new Error(`Extraction failed: ${await unzipResp.text()}`);
             const result = await unzipResp.json();
             this._cacheRunning = false;
             doneProg(`\u2713 ${result.extracted.toLocaleString()} tiles extracted`, 'var(--status-ok)');
@@ -594,9 +787,6 @@ class DataStatus {
                     entries.push({ path, entry });
             });
             if (!entries.length) { doneProg('No tiles found in ZIP', 'var(--status-danger)'); this._cacheRunning = false; return; }
-
-            // In Capacitor WebView, we write extracted tiles to local storage via NanoHTTPD PUT
-            // For now, count extracted entries as a success metric
             const total = entries.length;
             updateProg(0, total);
             let done = 0, stored = 0;
@@ -605,7 +795,6 @@ class DataStatus {
                 try {
                     const blob = await entry.async('blob');
                     const type = path.endsWith('.png') ? 'image/png' : 'image/webp';
-                    // PUT tile to local NanoHTTPD for on-device storage
                     const putResp = await fetch(`${DataStatus.LOCAL_BASE}/tiles/${path}`, {
                         method: 'PUT',
                         headers: { 'Content-Type': type },
@@ -668,11 +857,9 @@ class DataStatus {
                     entries.push({ path, entry });
             });
             if (!entries.length) { doneProg('No plate files found in ZIP', 'var(--status-danger)'); this._cacheRunning = false; return; }
-
             const total = entries.length;
             updateProg(0, total);
             let done = 0, stored = 0;
-
             for (const { path, entry } of entries) {
                 if (this._cacheCancelled) break;
                 try {
@@ -680,14 +867,13 @@ class DataStatus {
                     const ext = path.split('.').pop().toLowerCase();
                     const types = { pdf: 'application/pdf', webp: 'image/webp', png: 'image/png' };
                     const type = types[ext] || 'application/octet-stream';
-                    // PUT plate file to local NanoHTTPD for on-device storage
                     const putResp = await fetch(`${DataStatus.LOCAL_BASE}/plates/${path}`, {
                         method: 'PUT',
                         headers: { 'Content-Type': type },
                         body: blob
                     });
                     if (putResp.ok) stored++;
-                } catch { /* skip bad entry */ }
+                } catch { /* skip */ }
                 done++;
                 if (done % 20 === 0 || done === total) updateProg(done, total);
             }
@@ -704,7 +890,265 @@ class DataStatus {
         }
     }
 
-    /** Wire touchstart + click with debounce for tablet reliability */
+    // ── Sync All ─────────────────────────────────────────────────────────────
+
+    /**
+     * Step-by-step sync: NASR → CIFP → Sectional → IFR Low → Plates.
+     * Skips items that are already current. Replaces body with a step checklist
+     * while running. No auto-dismiss — pilot sees results and closes manually.
+     */
+    async _syncAll(btn, showProg, updateProg, doneProg) {
+        if (this._cacheRunning) return;
+        this._cacheRunning = true;
+        if (btn) { btn.disabled = true; btn.textContent = 'Syncing…'; }
+
+        const homeBase = this._homeBase();
+        const LOCAL    = DataStatus.LOCAL_BASE;
+
+        const body = this._el.querySelector('.data-status-body');
+        const stepIds    = ['nasr', 'cifp', 'sec', 'ifr', 'plates'];
+        const stepLabels = {
+            nasr:   'NASR Aeronautical Data',
+            cifp:   'CIFP Procedures',
+            sec:    'Sectional MBTiles',
+            ifr:    'IFR Low MBTiles',
+            plates: 'Approach Plates',
+        };
+
+        const renderSteps = (states) => {
+            const icons  = { pending: '&#9675;', running: '&#8987;', ok: '&#10003;', skip: '&#8594;', fail: '&#10007;' };
+            const colors = { pending: 'var(--text-muted)', running: 'var(--status-caution)', ok: 'var(--status-ok)', skip: 'var(--text-muted)', fail: 'var(--status-danger)' };
+            return `<div style="padding:8px 0">` +
+                stepIds.map(id => {
+                    const s = states[id] || { status: 'pending', msg: '' };
+                    return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border-light)">
+                        <span style="font-size:18px;color:${colors[s.status]};width:20px;text-align:center">${icons[s.status]}</span>
+                        <span style="flex:1">
+                            <span style="font-weight:600">${stepLabels[id]}</span>
+                            ${s.msg ? `<span style="color:var(--text-muted);font-size:13px;display:block">${s.msg}</span>` : ''}
+                        </span>
+                    </div>`;
+                }).join('') +
+                `</div><button class="ds-sync-btn" id="dsSyncDoneBtn" style="margin-top:12px">Done — Refresh</button>`;
+        };
+
+        const states = { nasr: { status: 'pending' }, cifp: { status: 'pending' }, sec: { status: 'pending' }, ifr: { status: 'pending' }, plates: { status: 'pending' } };
+        const setStep   = (id, status, msg) => { states[id] = { status, msg }; body.innerHTML = renderSteps(states); this._wireDoneBtn(); };
+        const failStep  = (id, err)         => setStep(id, 'fail', err?.message || String(err));
+
+        body.innerHTML = renderSteps(states);
+        this._wireDoneBtn();
+
+        const fetchAndPut = async (serverPath, localPath, mime) => {
+            const r = await fetch(`${homeBase}${serverPath}`, { signal: AbortSignal.timeout(30000) });
+            if (!r.ok) throw new Error(`Server ${r.status}`);
+            const blob = await r.blob();
+            const put = await fetch(`${LOCAL}/${localPath}`, { method: 'PUT', headers: { 'Content-Type': mime }, body: blob, signal: AbortSignal.timeout(30000) });
+            if (!put.ok) throw new Error(`PUT failed ${put.status}`);
+            return blob.size;
+        };
+
+        // ── NASR ─────────────────────────────────────────────────────────────
+        setStep('nasr', 'running', 'Checking cycle…');
+        try {
+            const [serverResp, localResp] = await Promise.all([
+                fetch(`${homeBase}/api/nasr/cycle-info`, { signal: AbortSignal.timeout(8000) }).then(r => r.ok ? r.json() : null),
+                fetch(`${LOCAL}/nasr/cycle_info.json`, { cache: 'no-store', signal: AbortSignal.timeout(2000) }).then(r => r.ok ? r.json() : null).catch(() => null),
+            ]);
+            if (!serverResp) throw new Error('Home server not reachable');
+            const serverDate = serverResp.effective_date;
+            const localDate  = localResp?.effective_date;
+            if (localDate === serverDate) {
+                setStep('nasr', 'skip', `Current — cycle ${serverDate}`);
+            } else {
+                setStep('nasr', 'running', `Downloading NASR bundle${localDate ? ' (' + localDate + ' \u2192 ' + serverDate + ')' : ''}…`);
+                await fetchAndPut('/api/nasr/bundle',      'nasr/bundle.json',      'application/json');
+                await fetchAndPut('/api/nasr/cycle-info',  'nasr/cycle_info.json',  'application/json');
+                await fetchAndPut('/api/nasr/geo_context', 'nasr/geo_context.json', 'application/json');
+                setStep('nasr', 'ok', `Updated to cycle ${serverDate}`);
+            }
+        } catch (e) { failStep('nasr', e); }
+
+        // ── CIFP ─────────────────────────────────────────────────────────────
+        setStep('cifp', 'running', 'Checking cycle…');
+        try {
+            const [serverResp, localResp] = await Promise.all([
+                fetch(`${homeBase}/api/cifp/cycle-info`, { signal: AbortSignal.timeout(8000) }).then(r => r.ok ? r.json() : null),
+                fetch(`${LOCAL}/cifp/cifp_cycle_info.json`, { cache: 'no-store', signal: AbortSignal.timeout(2000) }).then(r => r.ok ? r.json() : null).catch(() => null),
+            ]);
+            if (!serverResp) throw new Error('CIFP cycle info not available');
+            const serverCode = serverResp.cycle_code || serverResp.effective_date;
+            const localCode  = localResp?.cycle_code  || localResp?.effective_date;
+            if (localCode && localCode === serverCode) {
+                setStep('cifp', 'skip', `Current — cycle ${serverCode}`);
+            } else {
+                setStep('cifp', 'running', 'Downloading CIFP bundle…');
+                await fetchAndPut('/api/cifp/bundle',     'cifp/cifp_bundle.json',     'application/json');
+                await fetchAndPut('/api/cifp/cycle-info', 'cifp/cifp_cycle_info.json', 'application/json');
+                setStep('cifp', 'ok', `Updated to cycle ${serverCode}`);
+            }
+        } catch (e) { failStep('cifp', e); }
+
+        // ── MBTiles ───────────────────────────────────────────────────────────
+        let mbStatus = [];
+        try {
+            const r = await fetch(`${LOCAL}/mbtiles/status`, { cache: 'no-store', signal: AbortSignal.timeout(3000) });
+            if (r.ok) mbStatus = await r.json();
+        } catch { /* NanoHTTPD offline */ }
+
+        for (const [stepId, layer, label] of [['sec', 'sectional', 'Sectional (~1.8 GB)'], ['ifr', 'ifr-low', 'IFR Low (~600 MB)']]) {
+            const entry = mbStatus.find(s => s.layer === layer);
+            if (entry?.exists) {
+                setStep(stepId, 'skip', `On device — ${entry.size_mb.toLocaleString()} MB`);
+                continue;
+            }
+            setStep(stepId, 'running', `Downloading ${label} — this may take 10–20 min…`);
+            try {
+                const mbUrl  = `${homeBase}/mbtiles/${layer}.mbtiles`;
+                const resp   = await fetch(
+                    `${LOCAL}/fetch-mbtiles?layer=${encodeURIComponent(layer)}&url=${encodeURIComponent(mbUrl)}`,
+                    { method: 'POST', signal: AbortSignal.timeout(1800000) }
+                );
+                if (!resp.ok) throw new Error(await resp.text());
+                const result = await resp.json();
+                setStep(stepId, 'ok', `Downloaded — ${Math.round(result.bytes / (1024 * 1024)).toLocaleString()} MB`);
+            } catch (e) { failStep(stepId, e); }
+        }
+
+        // ── Plates ───────────────────────────────────────────────────────────
+        setStep('plates', 'running', 'Checking plate cycle…');
+        try {
+            const [serverCycle, localCycle, statesResp] = await Promise.all([
+                fetch(`${homeBase}/api/plates/cycle-info`, { signal: AbortSignal.timeout(8000) }).then(r => r.ok ? r.json() : null),
+                fetch(`${LOCAL}/plates/plates_cycle_info.json`, { cache: 'no-store', signal: AbortSignal.timeout(2000) }).then(r => r.ok ? r.json() : null).catch(() => null),
+                fetch(`${homeBase}/api/plates/states`, { signal: AbortSignal.timeout(8000) }).then(r => r.ok ? r.json() : []),
+            ]);
+
+            const serverDate = serverCycle?.effective_date;
+            const localDate  = localCycle?.effective_date;
+            const cycleMatch = localDate && localDate === serverDate;
+            const syncedStates = JSON.parse(localStorage.getItem('flypi_plates_synced_states') || '[]');
+            const configuredStates = (typeof CockpitConfig !== 'undefined' && CockpitConfig.raw?.plateStates)
+                || ['NC', 'SC', 'VA', 'GA', 'TN'];
+            const allStatesSynced = configuredStates.every(s => syncedStates.includes(s));
+            const needsUpdate = !cycleMatch || !allStatesSynced;
+
+            if (!needsUpdate) {
+                setStep('plates', 'skip', `Current — cycle ${serverDate}`);
+            } else if (!statesResp.length) {
+                setStep('plates', 'skip', 'No plate states available on server');
+            } else {
+                const statesToSync = statesResp.filter(s => configuredStates.includes(s.state));
+                if (!statesToSync.length) {
+                    setStep('plates', 'skip', 'No configured states on server (set plateStates in config)');
+                } else {
+                    const totalMb = statesToSync.reduce((s, r) => s + r.size_mb, 0);
+                    const stateList = statesToSync.map(s => s.state).join(', ');
+                    setStep('plates', 'running', `Downloading ${statesToSync.length} states (${stateList}) — ~${totalMb.toLocaleString()} MB…`);
+
+                    let done = 0;
+                    const newlySynced = [...syncedStates];
+                    for (const stateInfo of statesToSync) {
+                        const st = stateInfo.state;
+                        setStep('plates', 'running', `${st} plates (${stateInfo.size_mb} MB) — ${done}/${statesToSync.length} done…`);
+                        try {
+                            const zipUrl = `${homeBase}/api/plates/state/${st}/zip`;
+                            const resp = await fetch(
+                                `${LOCAL}/fetch-zip?url=${encodeURIComponent(zipUrl)}`,
+                                { method: 'POST', signal: AbortSignal.timeout(600000) }
+                            );
+                            if (!resp.ok) throw new Error(`${st}: ${await resp.text()}`);
+                            const result = await resp.json();
+                            done++;
+                            if (!newlySynced.includes(st)) newlySynced.push(st);
+                            setStep('plates', 'running', `${done}/${statesToSync.length} done (${result.extracted.toLocaleString()} files in ${st})…`);
+                        } catch (e) {
+                            setStep('plates', 'running', `${st} failed: ${e.message} — continuing…`);
+                            done++;
+                        }
+                    }
+                    if (serverCycle) {
+                        await fetch(`${LOCAL}/plates/plates_cycle_info.json`, {
+                            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(serverCycle),
+                        }).catch(() => {});
+                    }
+                    localStorage.setItem('flypi_plates_synced_states', JSON.stringify(newlySynced));
+                    localStorage.setItem('flypi_plates_cached_at', Date.now().toString());
+                    setStep('plates', 'ok', `${done} states downloaded — cycle ${serverDate}`);
+                }
+            }
+        } catch (e) { failStep('plates', e); }
+
+        // ── Done ──────────────────────────────────────────────────────────────
+        this._cacheRunning = false;
+        if (btn) { btn.disabled = false; btn.textContent = '&#8645; Sync All Outdated'; }
+        if (doneProg) doneProg('Sync complete', 'var(--status-ok)');
+        this._wireDoneBtn();
+    }
+
+    /** Wire the "Done — Refresh" button that appears after _syncAll completes. */
+    _wireDoneBtn() {
+        const btn = this._el.querySelector('#dsSyncDoneBtn');
+        if (btn) this._wireTap(btn, () => this._refresh());
+    }
+
+    /**
+     * Download an MBTiles file from the home server.
+     * Java (NanoHTTPD) streams directly to disk. Polls /mbtiles/status for progress.
+     */
+    async _downloadMbtiles(layer, btn, showProg, doneProg) {
+        if (this._cacheRunning) return;
+        this._cacheRunning = true;
+        btn.disabled = true;
+        btn.textContent = 'Downloading…';
+
+        const homeBase    = this._homeBase();
+        const mbtilesUrl  = `${homeBase}/mbtiles/${layer}.mbtiles`;
+
+        showProg(`Connecting to home server for ${layer}.mbtiles…`);
+
+        let pollInterval = null;
+        const startPoll = () => {
+            pollInterval = setInterval(async () => {
+                try {
+                    const r = await fetch(`${DataStatus.LOCAL_BASE}/mbtiles/status`,
+                        { cache: 'no-store', signal: AbortSignal.timeout(1000) });
+                    if (!r.ok) return;
+                    const status = await r.json();
+                    const entry = status.find(s => s.layer === layer);
+                    if (entry?.size_mb > 0) {
+                        const el = document.querySelector('.ds-progress-text');
+                        if (el) el.textContent = `Downloading ${layer}.mbtiles… ${entry.size_mb.toLocaleString()} MB received`;
+                    }
+                } catch { /* ignore poll errors */ }
+            }, 3000);
+        };
+        startPoll();
+
+        try {
+            const resp = await fetch(
+                `${DataStatus.LOCAL_BASE}/fetch-mbtiles?layer=${encodeURIComponent(layer)}&url=${encodeURIComponent(mbtilesUrl)}`,
+                { method: 'POST', signal: AbortSignal.timeout(1800000) }
+            );
+            clearInterval(pollInterval);
+            if (!resp.ok) throw new Error(await resp.text());
+            const result = await resp.json();
+            const mb = Math.round(result.bytes / (1024 * 1024));
+            doneProg(`\u2713 ${layer}.mbtiles downloaded (${mb.toLocaleString()} MB)`, 'var(--status-ok)');
+            setTimeout(() => this._refresh(), 1500);
+        } catch (err) {
+            clearInterval(pollInterval);
+            doneProg(`Failed: ${err.message}`, 'var(--status-danger)');
+        }
+
+        this._cacheRunning = false;
+        btn.disabled = false;
+        btn.textContent = 'Re-download';
+    }
+
+    // ── Utilities ─────────────────────────────────────────────────────────────
+
     _wireTap(el, handler) {
         if (!el) return;
         let touchFired = false;

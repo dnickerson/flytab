@@ -2749,6 +2749,83 @@ body {
 }
 .ds-error { color: var(--status-danger); }
 
+/* Data & Maps — ForeFlight-style inventory sections */
+.ds-banner {
+    font-size: 14px;
+    font-weight: 600;
+    padding: 8px 4px 12px;
+}
+.ds-section-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 10px;
+}
+.ds-section-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+.ds-section-name {
+    font-weight: 600;
+    font-size: 15px;
+}
+.ds-section-badge {
+    font-size: 13px;
+    font-weight: 600;
+    flex-shrink: 0;
+    margin-left: 8px;
+    text-align: right;
+}
+.ds-inv-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 4px 0;
+    font-size: 13px;
+    border-top: 1px solid var(--border-light);
+}
+.ds-inv-label {
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    width: 44px;
+    flex-shrink: 0;
+    padding-top: 2px;
+}
+.ds-row-value {
+    flex: 1;
+    color: var(--text-secondary);
+    line-height: 1.4;
+}
+.ds-row-multiline {
+    flex-wrap: wrap;
+}
+.ds-inv-action {
+    flex-shrink: 0;
+}
+.ds-muted {
+    color: var(--text-muted);
+}
+.ds-state-chip {
+    display: inline-block;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin: 2px 2px 2px 0;
+    background: var(--bg-surface-raised);
+}
+.ds-state-ok     { color: var(--status-ok); }
+.ds-state-missing { color: var(--status-caution); }
+.ds-sync-footer {
+    margin: 8px 0 4px;
+}
+
 /* ========== Airport Popup ========== */
 
 .airport-popup-container .leaflet-popup-content-wrapper {
