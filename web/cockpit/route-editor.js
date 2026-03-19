@@ -135,7 +135,8 @@ class RouteEditor {
                 <button class="btn-close route-editor-close" title="Close">✕</button>
             </div>
             <div class="route-editor-search-row">
-                <input type="text" class="input route-editor-search" placeholder="Search ICAO or name..." autocomplete="off" autocorrect="off" spellcheck="false">
+                <input type="text" class="input route-editor-search" placeholder="Search or paste route..." autocomplete="off" autocorrect="off" spellcheck="false">
+                <button class="btn btn-primary route-editor-go-btn" title="Parse route or search">GO</button>
                 <button class="btn btn-secondary route-editor-nearby-btn" title="Nearby airports">NEARBY</button>
                 <button class="btn btn-secondary route-editor-maptap-btn" title="Tap map to add">MAP+</button>
             </div>
@@ -165,6 +166,10 @@ class RouteEditor {
         // Events — use _wireTap for iPad touch reliability
         this._wireTap(this._el.querySelector('.route-editor-close'), () => this.hide());
         this._searchInput.addEventListener('input', () => this._onSearchInput());
+        this._searchInput.addEventListener('keyup', () => this._onSearchInput());
+        this._searchInput.addEventListener('paste', () => setTimeout(() => this._onSearchInput(), 50));
+        // GO button: explicit trigger for Android paste (events unreliable)
+        this._wireTap(this._el.querySelector('.route-editor-go-btn'), () => this._onSearchInput());
         this._wireTap(this._el.querySelector('.route-editor-nearby-btn'), () => this._showNearby());
         this._wireTap(this._el.querySelector('.route-editor-maptap-btn'), () => this._toggleMapTapMode());
         this._wireTap(this._el.querySelector('.route-editor-save'), () => this._applyRoute());
@@ -654,59 +659,92 @@ class RouteEditor {
 
     _isAirwayToken(token) {
         // Victor, Jet, RNAV T/Q airways: V54, J80, T295, Q900, V23A, etc.
-        return /^[VJTQ]\d+[A-Z]?$/i.test(token);
+        if (/^[VJTQ]\d+[A-Z]?$/i.test(token)) return true;
+        // Routing keywords used in filed plans (not waypoints)
+        const SKIP = new Set(['DCT', 'DIRECT', 'IFR', 'VFR', 'SID', 'STAR']);
+        return SKIP.has(token.toUpperCase());
+    }
+
+    _dbLookup(promise) {
+        // Wrap a nasrDb call with a 2s timeout so a blocked IDB transaction
+        // fails fast rather than hanging the entire route parse.
+        return Promise.race([
+            promise,
+            new Promise((_, reject) => setTimeout(() => reject(new Error('idb timeout')), 2000)),
+        ]);
     }
 
     async _resolveToken(token) {
         const t = token.toUpperCase();
         try {
-            // 1. Exact airport lookup
-            const apt = await this.nasrDb.getAirport(t);
-            if (apt) return { icao: apt.icao, name: apt.name, lat: apt.lat, lon: apt.lon, type: 'APT' };
-        } catch {}
-        try {
-            // 2. Try K-prefixed for 3-char US identifiers (LKR → KLKR)
-            if (t.length === 3 && !t.startsWith('K')) {
-                const apt = await this.nasrDb.getAirport('K' + t);
+            // 1. Exact 4-char ICAO airport (KLKR, KMEB, KSAV — user typed full ICAO)
+            if (t.length === 4 || t.length > 4) {
+                const apt = await this._dbLookup(this.nasrDb.getAirport(t));
                 if (apt) return { icao: apt.icao, name: apt.name, lat: apt.lat, lon: apt.lon, type: 'APT' };
             }
         } catch {}
         try {
-            // 3. Exact navaid lookup
-            const nav = await this.nasrDb.getNavaid(t);
+            // 2. Navaid before K-prefix airport — 3-char tokens like SAV/ORF/SGJ are
+            //    almost always VORTACs in a route string, not airports
+            const nav = await this._dbLookup(this.nasrDb.getNavaid(t));
             if (nav) return { icao: nav.id, name: nav.name, lat: nav.lat, lon: nav.lon, type: nav.type || 'VOR' };
         } catch {}
         try {
-            // 4. Exact fix lookup
-            const fix = await this.nasrDb.getFix(t);
+            // 3. Fix
+            const fix = await this._dbLookup(this.nasrDb.getFix(t));
             if (fix) return { icao: fix.id, name: fix.id, lat: fix.lat, lon: fix.lon, type: 'FIX' };
+        } catch {}
+        try {
+            // 4. K-prefixed airport fallback (LKR → KLKR, MMT → KMMT)
+            if (t.length <= 3 && !t.startsWith('K')) {
+                const apt = await this._dbLookup(this.nasrDb.getAirport('K' + t));
+                if (apt) return { icao: apt.icao, name: apt.name, lat: apt.lat, lon: apt.lon, type: 'APT' };
+            }
+        } catch {}
+        try {
+            // 5. Exact airport (any length, last resort)
+            const apt = await this._dbLookup(this.nasrDb.getAirport(t));
+            if (apt) return { icao: apt.icao, name: apt.name, lat: apt.lat, lon: apt.lon, type: 'APT' };
         } catch {}
         return null;
     }
 
     async _parseRouteString(str) {
         const tokens = str.trim().split(/\s+/);
-        const resolved = [];
-        const skipped = []; // airways
-        const unresolved = [];
 
-        for (const token of tokens) {
-            if (this._isAirwayToken(token)) {
-                skipped.push(token.toUpperCase());
-                continue;
+        // Show "Parsing..." immediately so user knows something is happening
+        this._resultsDiv.hidden = false;
+        this._resultsDiv.innerHTML = '<div class="route-search-empty">Parsing route...</div>';
+
+        // Separate airway tokens from waypoint tokens (preserve order)
+        const wayTokens = tokens.map(t => this._isAirwayToken(t) ? null : t.toUpperCase());
+
+        const doResolve = async () => {
+            const results = await Promise.all(
+                wayTokens.map(t => t ? this._resolveToken(t) : Promise.resolve(null))
+            );
+            const resolved = [], unresolved = [];
+            for (let i = 0; i < tokens.length; i++) {
+                if (wayTokens[i] === null) continue;
+                if (results[i]) resolved.push(results[i]);
+                else unresolved.push(tokens[i].toUpperCase());
             }
-            const wp = await this._resolveToken(token);
-            if (wp) {
-                resolved.push(wp);
-            } else {
-                unresolved.push(token.toUpperCase());
-            }
+            return { resolved, unresolved };
+        };
+
+        let { resolved, unresolved } = await doResolve();
+
+        // If nothing resolved (DB was likely blocked), wait and retry once
+        if (resolved.length === 0 && unresolved.length > 0) {
+            this._resultsDiv.innerHTML = '<div class="route-search-empty">Retrying...</div>';
+            await new Promise(r => setTimeout(r, 1500));
+            ({ resolved, unresolved } = await doResolve());
         }
 
-        this._showRoutePreview(resolved, unresolved, skipped);
+        this._showRoutePreview(resolved, unresolved);
     }
 
-    _showRoutePreview(resolved, unresolved, skipped) {
+    _showRoutePreview(resolved, unresolved) {
         this._resultsDiv.hidden = false;
 
         const chips = resolved.map(wp =>
