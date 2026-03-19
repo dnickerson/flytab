@@ -59,9 +59,8 @@ class EngineMLBridge {
     get delegate() { return this._delegate; }
 
     /** Set DOM elements for advisory display */
-    setDisplayElements(badgeEl, advisoryEl) {
+    setDisplayElements(badgeEl) {
         this._badgeEl = badgeEl;
-        this._advisoryEl = advisoryEl;
     }
 
     async _onEngineData(raw) {
@@ -193,17 +192,5 @@ class EngineMLBridge {
             }
         }
 
-        // Update advisory panel
-        if (this._advisoryEl && result.advisories?.length) {
-            const maxSeverity = Math.max(...result.advisories.map(a => a.severity));
-            const topAdvisory = result.advisories.find(a => a.severity === maxSeverity)
-                || result.advisories[0];
-
-            this._advisoryEl.textContent = topAdvisory.message;
-            this._advisoryEl.className = 'eml-advisory eml-sev-' + topAdvisory.severity;
-            this._advisoryEl.style.display = '';
-        } else if (this._advisoryEl) {
-            this._advisoryEl.style.display = 'none';
-        }
     }
 }

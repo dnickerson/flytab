@@ -89,10 +89,11 @@ class FlightRecorder {
 
         // Record at 1Hz
         this._recordInterval = setInterval(() => this._recordRow(), 1000);
-        // Flush to disk every 30 seconds
-        this._flushInterval = setInterval(() => this._flush(), 30000);
+        // Flush to disk every 5 seconds (reduces worst-case data loss on crash)
+        this._flushInterval = setInterval(() => this._flush(), 5000);
 
         this._emitStatus();
+        window.dispatchEvent(new CustomEvent('flightsync:started'));
         if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Started: ${this._fileName}`);
     }
 
@@ -104,15 +105,22 @@ class FlightRecorder {
         if (this._recordInterval) { clearInterval(this._recordInterval); this._recordInterval = null; }
         if (this._flushInterval) { clearInterval(this._flushInterval); this._flushInterval = null; }
 
-        // Final flush
-        await this._flush();
+        // Final flush — track success so downstream listeners know if data was saved
+        let flushOk = true;
+        try {
+            await this._flush();
+        } catch (err) {
+            flushOk = false;
+            if (typeof DiagLog !== 'undefined') DiagLog.log('error', `FlightRecorder final flush failed: ${err.message}`);
+        }
 
         // Try to rename with dep/dest from NASR
         await this._renameWithRoute();
 
         const finalName = this._fileName;
         this._emitStatus();
-        if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Stopped: ${finalName} (${this._rowCount} rows)`);
+        window.dispatchEvent(new CustomEvent('flightsync:stopped', { detail: { csvFilename: finalName, rowCount: this._rowCount, flushOk } }));
+        if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Stopped: ${finalName} (${this._rowCount} rows, flushOk=${flushOk})`);
         return finalName;
     }
 
@@ -267,6 +275,12 @@ class FlightRecorder {
     /** Auto-start/stop based on RPM */
     _autoMonitor() {
         const eng = this._engine?.lastData;
+
+        // If engine data is unavailable (WebSocket disconnected / app backgrounded),
+        // do not count as RPM=0 — otherwise a brief disconnect mid-flight triggers
+        // a spurious auto-stop and splits the recording into two files.
+        if (!eng) return;
+
         const rpm = eng?.data?.RPM || 0;
 
         if (!this._recording) {

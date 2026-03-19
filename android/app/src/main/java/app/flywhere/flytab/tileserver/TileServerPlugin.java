@@ -68,6 +68,7 @@ public class TileServerPlugin extends Plugin {
     @Override
     protected void handleOnDestroy() {
         if (server != null) {
+            server.closeDatabases();
             server.stop();
             server = null;
         }

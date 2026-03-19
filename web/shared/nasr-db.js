@@ -10,12 +10,14 @@ class NasrDB {
 
     constructor() {
         this._db = null;
+        this._opening = null; // pending open Promise (prevents concurrent indexedDB.open calls)
     }
 
     async open() {
         if (this._db) return this._db;
+        if (this._opening) return this._opening;
 
-        return new Promise((resolve, reject) => {
+        this._opening = new Promise((resolve, reject) => {
             const request = indexedDB.open(NasrDB.DB_NAME, NasrDB.DB_VERSION);
 
             request.onupgradeneeded = (event) => {
@@ -123,6 +125,7 @@ class NasrDB {
 
             request.onsuccess = (event) => {
                 this._db = event.target.result;
+                this._opening = null;
                 // Reset cached connection if it closes unexpectedly
                 this._db.onclose = () => { this._db = null; };
                 this._db.onversionchange = () => { this._db.close(); this._db = null; };
@@ -130,9 +133,11 @@ class NasrDB {
             };
 
             request.onerror = (event) => {
+                this._opening = null;
                 reject(new Error('IndexedDB open failed: ' + event.target.error));
             };
         });
+        return this._opening;
     }
 
     // ========== Generic CRUD Helpers ==========
@@ -141,6 +146,7 @@ class NasrDB {
         const db = await this.open();
         return new Promise((resolve, reject) => {
             const tx = db.transaction(storeName, 'readonly');
+            tx.onabort = () => reject(tx.error || new Error('Transaction aborted'));
             const req = tx.objectStore(storeName).get(key);
             req.onsuccess = () => resolve(req.result || null);
             req.onerror = () => reject(req.error);

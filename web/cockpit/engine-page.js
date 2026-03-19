@@ -436,10 +436,10 @@ class EnginePage {
         const oat       = d.oat ?? 0;
         const gs        = d.speed_kts ?? d.ground_speed ?? 0;
 
-        const gallonsRem = d.gallons_rem ?? d.fuel_remaining_gal ?? d.Gallons_Rem ?? d.fuel_remaining ?? 0;
+        const gallonsRem = d.gallons_rem ?? d.fuel_remaining_gal ?? d.Gallons_Rem ?? d.Fuel_Remaining ?? d.fuel_remaining ?? 0;
         const fuelUsed   = d.flight_fuel_used ?? 0;
-        const fuelL      = d.fuel_l1 ?? d.Fuel_L1 ?? d.edm_fuel_left ?? 0;
-        const fuelR      = d.fuel_l2 ?? d.Fuel_L2 ?? d.edm_fuel_right ?? 0;
+        const fuelL      = d.fuel_l1 ?? d.Fuel_L1 ?? d.Fuel_Left ?? d.edm_fuel_left ?? 0;
+        const fuelR      = d.fuel_l2 ?? d.Fuel_L2 ?? d.Fuel_Right ?? d.edm_fuel_right ?? 0;
 
         /* ---- Section 1: Primary gauges ---- */
         this._setText('ep-rpm', Math.round(rpm));

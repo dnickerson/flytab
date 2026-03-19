@@ -86,7 +86,7 @@ class FuelEngine {
      */
     static extractEdmFuel(data) {
         if (!data) return 0;
-        return data.fuel_remaining_gal ?? data.fuel_gal ?? data.gallons_rem ?? data.Gallons_Rem ?? 0;
+        return data.fuel_remaining_gal ?? data.fuel_gal ?? data.gallons_rem ?? data.Gallons_Rem ?? data.Fuel_Remaining ?? 0;
     }
 
     /**
