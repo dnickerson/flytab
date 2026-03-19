@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v4.3';
+const FLYTAB_VERSION = 'v4.4';
 
 // ========== Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -355,6 +355,14 @@ class FlyTabApp {
                 this.engineML.start(this.engineClient, this.stratuxClient);
             });
         }
+
+        // Wire flight recording events to ML logging
+        window.addEventListener('flightsync:started', () => {
+            window.engineML?.startLogging();
+        });
+        window.addEventListener('flightsync:stopped', () => {
+            window.engineML?.stopLogging();
+        });
 
         // Engine overlay (reads from EnginePanel, floats on map)
         if (typeof EngineOverlay !== 'undefined') {

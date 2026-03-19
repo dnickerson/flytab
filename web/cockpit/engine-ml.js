@@ -12,6 +12,14 @@ class EngineMLBridge {
         this._lastResult = null;
         this._advisoryEl = null;
         this._badgeEl = null;
+
+        // Post-flight logging
+        this._log = [];           // 1Hz ring buffer, max 10800 entries (3 hours)
+        this._logMaxLen = 10800;
+        this._logStartTime = null;
+        this._logActive = false;
+
+        window.engineML = this;   // expose globally for logbook.js
     }
 
     /** Initialize the ML engine. Call once after app init. */
@@ -90,9 +98,80 @@ class EngineMLBridge {
 
             this._lastResult = result;
             this._updateDisplay(result);
+
+            // Append to ring buffer
+            if (this._logActive && result) {
+                this._log.push({
+                    t: Math.round((Date.now() - this._logStartTime) / 1000),
+                    ph: result.phase,
+                    sc: result.score != null ? Math.round(result.score * 1000) / 1000 : null,
+                    an: result.anomaly ? 1 : 0,
+                    lt: result.latencyMs,
+                });
+                if (this._log.length > this._logMaxLen) this._log.shift();
+            }
         } catch (err) {
             // Don't spam console — plugin may not be ready
         }
+    }
+
+    // ========== Flight Logging ==========
+
+    startLogging() {
+        this._log = [];
+        this._logStartTime = Date.now();
+        this._logActive = true;
+        console.log('[EngineML] Logging started');
+    }
+
+    stopLogging() {
+        this._logActive = false;
+        console.log(`[EngineML] Logging stopped — ${this._log.length} samples`);
+    }
+
+    /** Returns compact summary for logbook custom_fields. Returns null if no data. */
+    getFlightSummary() {
+        if (!this._log.length) return null;
+        const phases = {};
+        let anomalyCount = 0;
+        let latSum = 0;
+        let latCount = 0;
+        for (const s of this._log) {
+            phases[s.ph] = (phases[s.ph] || 0) + 1;
+            if (s.an) anomalyCount++;
+            if (s.lt != null) { latSum += s.lt; latCount++; }
+        }
+        const total = this._log.length;
+        return {
+            samples: total,
+            duration_s: this._log[this._log.length - 1].t,
+            anomaly_count: anomalyCount,
+            anomaly_pct: Math.round(anomalyCount / total * 100),
+            avg_latency_ms: latCount ? Math.round(latSum / latCount) : null,
+            phase_dist: Object.fromEntries(
+                Object.entries(phases).map(([k, v]) => [k, Math.round(v / total * 100)])
+            ),
+        };
+    }
+
+    /** Returns a shallow copy of the ring buffer for IDB storage. */
+    getFullLog() {
+        return [...this._log];
+    }
+
+    /** Triggers a CSV download of the current ring buffer. */
+    exportLogCSV(filename = 'engineml_log.csv') {
+        if (!this._log.length) return;
+        const rows = ['t_s,phase,score,anomaly,latency_ms'];
+        for (const s of this._log) {
+            rows.push(`${s.t},${s.ph ?? ''},${s.sc ?? ''},${s.an},${s.lt ?? ''}`);
+        }
+        const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(a.href);
     }
 
     _updateDisplay(result) {
