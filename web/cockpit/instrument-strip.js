@@ -156,7 +156,7 @@ class InstrumentStrip {
     _updateFuel() {
         // 1. Live EDM data from engine monitor (most current — during flight)
         const engData = window.enginePanel?.lastData;
-        const remaining = engData?.fuel_remaining_gal ?? engData?.fuel_gal ?? engData?.Gallons_Rem ?? null;
+        const remaining = engData?.fuel_remaining_gal ?? engData?.fuel_gal ?? engData?.Gallons_Rem ?? engData?.Fuel_Remaining ?? null;
         if (remaining != null && remaining > 0) {
             this._set('fuel', remaining.toFixed(1));
             return;

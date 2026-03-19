@@ -22,8 +22,9 @@
         <span id="statusWeather" class="status-item"></span>
         <span id="statusTime" class="status-item"></span>
         <span id="statusTimeLocal" class="status-item status-time-local"></span>
+        <span id="statusML" class="status-item status-ml"></span>
         <span id="statusThermal" class="status-item status-thermal">--°</span>
-        <span id="statusVersion" class="status-item status-version">v2.6</span>
+        <span id="statusVersion" class="status-item status-version">v4.7</span>
     </header>
 
     <!-- Main content — always cockpit -->
@@ -46,6 +47,7 @@
             <nav id="tabBar"></nav>
         </div>
     </main>
+
 
     <!-- Global status for package loading -->
     <div id="globalLoadStatus" class="global-load-status" hidden></div>
@@ -105,6 +107,7 @@
     <script src="./cockpit/config-editor.js"></script>
     <script src="./cockpit/flight-recorder.js"></script>
     <script src="./cockpit/thermal-monitor.js"></script>
+    <script src="./cockpit/engine-ml.js"></script>
 
     <!-- v5 UI components -->
     <script src="./cockpit/layer-panel.js"></script>

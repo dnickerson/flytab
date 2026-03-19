@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v2.6';
+const FLYTAB_VERSION = 'v4.7';
 
 // ========== Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -35,6 +35,15 @@ const DiagLog = (() => {
         clear() { localStorage.removeItem(KEY); },
     };
 })();
+
+// Global error handlers — write all uncaught exceptions and unhandled rejections to DiagLog.
+// The 'error' category renders red in the DiagLog overlay (long-press version badge).
+window.onerror = (msg, src, line, col, err) => {
+    DiagLog.log('error', `Uncaught: ${msg}`, { src, line, col, stack: err?.stack?.slice(0, 200) });
+};
+window.addEventListener('unhandledrejection', (e) => {
+    DiagLog.log('error', `UnhandledRejection: ${e.reason?.message || e.reason}`, { stack: e.reason?.stack?.slice(0, 200) });
+});
 
 const GPS_SOLUTION_LABELS = { 1: 'GPS', 2: 'DGPS', 3: 'PPS', 4: 'RTK', 5: 'FRTK', 6: 'EST', 8: 'SIM' };
 
@@ -72,8 +81,11 @@ class FlyTabApp {
         this.tabBar = null;
 
         this.thermalMonitor = null;
+        this.engineML = null;
         this._cockpitInitialized = false;
         this._currentPlan = null;
+        this._applyingPlan = false;   // re-entrancy guard for applyRouteEdit
+        this._pendingPlanEdit = null; // latest-wins queuing for rapid calls
 
         // DOM references
         this.dom = {
@@ -147,6 +159,37 @@ class FlyTabApp {
 
         DiagLog.log('init', `FlyTab ${FLYTAB_VERSION} initialized`);
         console.log(`FlyTab ${FLYTAB_VERSION} initialized`);
+
+        this._startWatchdog();
+    }
+
+    /**
+     * requestAnimationFrame-based hang watchdog.
+     * If the JS event loop stalls while the app is visible (e.g., blocking IDB operation),
+     * rAF stops firing. The setInterval checker detects this and:
+     *   >3s stall  → logs to DiagLog (silent, pilot unaware)
+     *   >10s stall → turns version badge red so the pilot sees something is wrong
+     * Suppressed when document is hidden (backgrounded) — rAF naturally stops then.
+     */
+    _startWatchdog() {
+        let lastFrame = Date.now();
+        const tick = () => {
+            lastFrame = Date.now();
+            requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+
+        setInterval(() => {
+            if (document.visibilityState !== 'visible') return;
+            const age = Date.now() - lastFrame;
+            if (age > 3000) {
+                DiagLog.log('error', `JS hang: rAF stalled ${age}ms`);
+            }
+            if (age > 10000) {
+                const verEl = document.getElementById('statusVersion');
+                if (verEl) verEl.style.background = 'var(--status-danger)';
+            }
+        }, 3000);
     }
 
     /** Show diagnostic log overlay */
@@ -342,6 +385,25 @@ class FlyTabApp {
         this.enginePanel = new EnginePanel(document.createElement('div'), this.engineClient);
         this.enginePanel.init();
         window.enginePanel = this.enginePanel;
+
+        // Engine ML (anomaly detection + advisories)
+        if (typeof EngineMLBridge !== 'undefined') {
+            this.engineML = new EngineMLBridge();
+            this.engineML.init().then(() => {
+                this.engineML.setDisplayElements(
+                    document.getElementById('statusML')
+                );
+                this.engineML.start(this.engineClient, this.stratuxClient);
+            });
+        }
+
+        // Wire flight recording events to ML logging
+        window.addEventListener('flightsync:started', () => {
+            window.engineML?.startLogging();
+        });
+        window.addEventListener('flightsync:stopped', () => {
+            window.engineML?.stopLogging();
+        });
 
         // Engine overlay (reads from EnginePanel, floats on map)
         if (typeof EngineOverlay !== 'undefined') {
@@ -824,14 +886,23 @@ class FlyTabApp {
     async applyRouteEdit(plan, { fromRouteTable = false } = {}) {
         if (!plan) return;
         plan.edited_at = new Date().toISOString();
-        await this._applyPlan(plan, { skipRouteTable: fromRouteTable });
 
+        // Latest-wins guard: if a plan apply is already in progress, store the latest
+        // request and return — the running loop will pick it up when done.
+        this._pendingPlanEdit = { plan, opts: { fromRouteTable } };
+        if (this._applyingPlan) return;
+
+        this._applyingPlan = true;
         try {
-            localStorage.setItem('flypi_active_plan', JSON.stringify(plan));
-        } catch {}
-
-        // FlyTab: plans stored locally only — no Pi upload
-        // Phase 2 will add sync to flywhere.app
+            while (this._pendingPlanEdit) {
+                const { plan: p, opts: o } = this._pendingPlanEdit;
+                this._pendingPlanEdit = null;
+                await this._applyPlan(p, { skipRouteTable: o.fromRouteTable });
+                try { localStorage.setItem('flypi_active_plan', JSON.stringify(p)); } catch {}
+            }
+        } finally {
+            this._applyingPlan = false;
+        }
     }
 
     async _applyPlan(plan, { skipRouteTable = false } = {}) {
@@ -881,13 +952,17 @@ class FlyTabApp {
         // Resolve lat/lon and elev_ft from NASR database (airports → navaids → fixes).
         // Always look up elev_ft even when lat/lon already exist — cockpit-edited plans
         // may have coordinates but no field elevation, which is needed for CLB/DES segments.
+        // Parallelized with Promise.all + 5-second timeout guard. On timeout the app
+        // continues with existing waypoint coords — route is still rendered, just without
+        // freshly-resolved elevations or type stamps.
         if (this._nasrDb) {
-            for (const wp of wps) {
-                if (!wp.icao) continue;
+            const nasr = this._nasrDb;
+            const resolveAll = Promise.all(wps.map(async (wp) => {
+                if (!wp.icao) return;
                 try {
                     // Always check airport first to set type='APT' — even if coords are
                     // already resolved, the type may be missing on pre-existing waypoints.
-                    const apt = await this._nasrDb.getAirport(wp.icao);
+                    const apt = await nasr.getAirport(wp.icao);
                     if (apt) {
                         wp.lat = wp.lat ?? apt.lat;
                         wp.lon = wp.lon ?? apt.lon;
@@ -896,8 +971,8 @@ class FlyTabApp {
                         wp.type = 'APT'; // authoritative — NASR confirmed this is an airport
                     } else if (wp.lat == null || wp.lon == null) {
                         // Coords missing — try navaid then fix
-                        let found = await this._nasrDb.getNavaid(wp.icao);
-                        if (!found) found = await this._nasrDb.getFix(wp.icao);
+                        let found = await nasr.getNavaid(wp.icao);
+                        if (!found) found = await nasr.getFix(wp.icao);
                         if (found) {
                             wp.lat = wp.lat ?? found.lat;
                             wp.lon = wp.lon ?? found.lon;
@@ -908,6 +983,15 @@ class FlyTabApp {
                         }
                     }
                 } catch { /* NASR not ready yet */ }
+            }));
+            const timeout = new Promise((_, reject) =>
+                setTimeout(() => reject(new Error('NASR lookup timeout after 5s')), 5000)
+            );
+            try {
+                await Promise.race([resolveAll, timeout]);
+            } catch (err) {
+                DiagLog.log('error', `_applyPlan: ${err.message}`);
+                // Continue with whatever coords are already on the waypoints
             }
         }
 
@@ -1184,7 +1268,7 @@ class FlyTabApp {
             // FIS-B: green when UAT radio is connected (radio present + initialized).
             // Show message counts when actively receiving data.
             if (this.dom.statusFisb) {
-                const uatConnected = status?.UAT_connected === true || status?.UATRadio_connected === true;
+                const uatConnected = !!(status?.UAT_connected || status?.UATRadio_connected);
                 const receiving = uatConnected && (status?.UAT_messages_last_minute > 0);
                 this.dom.statusFisb.classList.toggle('active', uatConnected);
                 if (receiving && this.fisbClient) {

@@ -31,6 +31,7 @@ class RouteTable {
         this._cruisePower = null; // user-selected cruise power override (%)
         this._powerPresets = [55, 65, 75]; // cycle through these
         this._flightRules = Settings.get('flight_rules') ?? 'VFR'; // VFR or IFR
+        this._emitting = false; // re-entrancy guard for _emitRouteChange
 
         this._buildDOM();
     }
@@ -454,6 +455,8 @@ class RouteTable {
 
     _emitRouteChange() {
         if (!this._onRouteChanged) return;
+        if (this._emitting) return;
+        this._emitting = true;
         const plan = {
             ...(this._plan || {}),
             waypoints: this._waypoints.map(wp => ({
@@ -472,7 +475,11 @@ class RouteTable {
                 route: this._waypoints.map(wp => wp.icao).filter(Boolean),
             },
         };
-        this._onRouteChanged(plan);
+        try {
+            this._onRouteChanged(plan);
+        } finally {
+            this._emitting = false;
+        }
     }
 
     // ========== Search ==========
@@ -485,7 +492,116 @@ class RouteTable {
             this._resultsEl.innerHTML = '';
             return;
         }
+        // Route string mode: space-separated tokens (e.g. "KLKR V54 GSP KMEB")
+        if (q.includes(' ')) {
+            clearTimeout(this._searchDebounce);
+            this._parseRouteString(q);
+            return;
+        }
         this._searchDebounce = setTimeout(() => this._doSearch(q), 200);
+    }
+
+    _isAirwayToken(token) {
+        if (/^[VJTQ]\d+[A-Z]?$/i.test(token)) return true;
+        const SKIP = new Set(['DCT', 'DIRECT', 'IFR', 'VFR', 'SID', 'STAR']);
+        return SKIP.has(token.toUpperCase());
+    }
+
+    _dbLookup(promise) {
+        return Promise.race([
+            promise,
+            new Promise((_, reject) => setTimeout(() => reject(new Error('idb timeout')), 2000)),
+        ]);
+    }
+
+    async _resolveToken(token) {
+        const t = token.toUpperCase();
+        try {
+            // 1. Exact 4-char ICAO airport (KLKR, KMEB — user typed full ICAO)
+            if (t.length >= 4) {
+                const apt = await this._dbLookup(this._nasrDb.getAirport(t));
+                if (apt) return { icao: apt.icao, name: apt.name, lat: apt.lat, lon: apt.lon, type: 'APT' };
+            }
+        } catch {}
+        try {
+            // 2. Navaid before K-prefix — 3-char tokens like SAV/ORF are VORTACs in route strings
+            const nav = await this._dbLookup(this._nasrDb.getNavaid(t));
+            if (nav) return { icao: nav.id, name: nav.name, lat: nav.lat, lon: nav.lon, type: nav.type || 'VOR' };
+        } catch {}
+        try {
+            // 3. Fix
+            const fix = await this._dbLookup(this._nasrDb.getFix(t));
+            if (fix) return { icao: fix.id, name: fix.id, lat: fix.lat, lon: fix.lon, type: 'FIX' };
+        } catch {}
+        try {
+            // 4. K-prefixed airport fallback (LKR → KLKR, MMT → KMMT)
+            if (t.length <= 3 && !t.startsWith('K')) {
+                const apt = await this._dbLookup(this._nasrDb.getAirport('K' + t));
+                if (apt) return { icao: apt.icao, name: apt.name, lat: apt.lat, lon: apt.lon, type: 'APT' };
+            }
+        } catch {}
+        try {
+            // 5. Exact airport last resort
+            const apt = await this._dbLookup(this._nasrDb.getAirport(t));
+            if (apt) return { icao: apt.icao, name: apt.name, lat: apt.lat, lon: apt.lon, type: 'APT' };
+        } catch {}
+        return null;
+    }
+
+    async _parseRouteString(str) {
+        const tokens = str.trim().split(/\s+/);
+        this._resultsEl.hidden = false;
+        this._resultsEl.innerHTML = '<div class="route-search-empty">Parsing route...</div>';
+
+        const wayTokens = tokens.map(t => this._isAirwayToken(t) ? null : t.toUpperCase());
+
+        const doResolve = async () => {
+            const results = await Promise.all(
+                wayTokens.map(t => t ? this._resolveToken(t) : Promise.resolve(null))
+            );
+            const resolved = [], unresolved = [];
+            for (let i = 0; i < tokens.length; i++) {
+                if (wayTokens[i] === null) continue;
+                if (results[i]) resolved.push(results[i]);
+                else unresolved.push(tokens[i].toUpperCase());
+            }
+            return { resolved, unresolved };
+        };
+
+        let { resolved, unresolved } = await doResolve();
+
+        if (resolved.length === 0 && unresolved.length > 0) {
+            this._resultsEl.innerHTML = '<div class="route-search-empty">Retrying...</div>';
+            await new Promise(r => setTimeout(r, 1500));
+            ({ resolved, unresolved } = await doResolve());
+        }
+
+        const chips = resolved.map(wp =>
+            `<span class="route-token-ok">${wp.icao}</span>`
+        ).join('<span class="route-token-arrow">→</span>');
+
+        const warnHtml = unresolved.length > 0
+            ? `<div class="route-token-warn">Not found: ${unresolved.map(t => `<span class="route-token-bad">${t}</span>`).join(' ')}</div>`
+            : '';
+
+        this._resultsEl.innerHTML = `
+            <div class="route-parse-preview">
+                <div class="route-parse-chips">${chips || '<span class="route-search-empty">Nothing resolved</span>'}</div>
+                ${warnHtml}
+                ${resolved.length > 0 ? `<button class="btn btn-primary route-parse-apply">LOAD ${resolved.length} WAYPOINTS</button>` : ''}
+            </div>
+        `;
+
+        const applyBtn = this._resultsEl.querySelector('.route-parse-apply');
+        if (applyBtn) {
+            applyBtn.addEventListener('click', () => {
+                this._pushUndo();
+                this._waypoints = resolved.map(wp => ({ ...wp, alt: wp.alt || 3500 }));
+                this._reindex();
+                this._onEdited();
+                this._clearSearch();
+            });
+        }
     }
 
     async _doSearch(query) {
@@ -1211,11 +1327,15 @@ class RouteTable {
         this._searchRowEl.className = 'rt-search-row';
         this._searchRowEl.hidden = true;
         this._searchRowEl.innerHTML = `
-            <input type="text" class="input rt-search-input" placeholder="Add waypoint: ICAO, navaid, or fix..." autocomplete="off" autocorrect="off" spellcheck="false">
+            <input type="text" class="input rt-search-input" placeholder="Search or paste route..." autocomplete="off" autocorrect="off" spellcheck="false">
+            <button class="btn btn-primary rt-go-btn">GO</button>
             <button class="rt-undo-btn" title="Undo">UNDO</button>
         `;
         this._searchInput = this._searchRowEl.querySelector('.rt-search-input');
         this._searchInput.addEventListener('input', () => this._onSearchInput());
+        this._searchInput.addEventListener('keyup', () => this._onSearchInput());
+        this._searchInput.addEventListener('paste', () => setTimeout(() => this._onSearchInput(), 50));
+        this._searchRowEl.querySelector('.rt-go-btn').addEventListener('click', () => this._onSearchInput());
 
         this._searchRowEl.querySelector('.rt-undo-btn').addEventListener('click', (e) => {
             e.stopPropagation();

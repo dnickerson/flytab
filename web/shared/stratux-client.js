@@ -33,6 +33,11 @@ class StratuxClient extends EventTarget {
         // Set by GpsSource when internal (Android device) GPS is active.
         this._suppressGpsSituation = false;
         this._lastStratuxAhrs = null;
+
+        // Stale-data detection: mirrors EngineClient pattern.
+        // If no situation message arrives within 5s, mark GPS/AHRS data as stale.
+        this._stale = false;
+        this._staleTimer = null;
     }
 
     connect() {
@@ -55,6 +60,9 @@ class StratuxClient extends EventTarget {
         if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
         if (this._purgeInterval) { clearInterval(this._purgeInterval); this._purgeInterval = null; }
         if (this._statusTimer) { clearInterval(this._statusTimer); this._statusTimer = null; }
+        clearTimeout(this._staleTimer);
+        this._staleTimer = null;
+        this._stale = false;
         this._setConnected(false);
     }
 
@@ -218,6 +226,14 @@ class StratuxClient extends EventTarget {
             }
         }
         this.dispatchEvent(new CustomEvent('stratux:situation', { detail: this.situation }));
+
+        // Reset stale timer — data is fresh
+        this._stale = false;
+        clearTimeout(this._staleTimer);
+        this._staleTimer = setTimeout(() => {
+            this._stale = true;
+            this.dispatchEvent(new CustomEvent('stratux:stale', { detail: { ageMs: 5000 } }));
+        }, 5000);
     }
 
     // ========== Device Status Polling ==========
@@ -346,6 +362,7 @@ class StratuxClient extends EventTarget {
     }
 
     get connected() { return this._connected; }
+    get stale() { return this._stale; }
 
     // ========== Traffic Purge ==========
 

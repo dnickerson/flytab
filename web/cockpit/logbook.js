@@ -8,7 +8,8 @@
 class Logbook {
     static IDB_STORE = 'flypi_logbook';
     static IDB_NAME = 'flypi-flights';
-    static IDB_VERSION = 3;
+    static IDB_VERSION = 4;
+    static IDB_ML_STORE = 'flypi_ml_logs';
 
     /**
      * @param {NasrDB} nasrDb - NasrDB instance for airport lookups
@@ -79,6 +80,7 @@ class Logbook {
                 <button class="logbook-tab active" data-tab="flights">Flights</button>
                 <button class="logbook-tab" data-tab="currency">Currency</button>
                 <button class="logbook-tab" data-tab="oil">Oil</button>
+                <button class="logbook-tab" data-tab="ml">ML</button>
             </div>
             <div class="logbook-body"></div>
         `;
@@ -92,13 +94,13 @@ class Logbook {
         const addBtn = this._el.querySelector('.logbook-add-btn');
         this._wireButton(addBtn, () => {
             if (this._activeTab === 'oil') this._showOilForm(null);
-            else this._showForm(null);
+            else if (this._activeTab !== 'ml') this._showForm(null);
         });
 
         const syncBtn = this._el.querySelector('.logbook-sync-btn');
         this._wireButton(syncBtn, () => {
             syncBtn.textContent = '...';
-            this._fetchFromServer().then(() => this.syncWhenOnline()).finally(() => {
+            this.syncWhenOnline().finally(() => {
                 syncBtn.textContent = 'SYNC';
                 this._showActiveTab();
             });
@@ -113,9 +115,9 @@ class Logbook {
                 // Update + NEW button label
                 const addBtn = this._el.querySelector('.logbook-add-btn');
                 if (this._activeTab === 'oil') addBtn.textContent = '+ OIL';
-                else if (this._activeTab === 'currency') addBtn.style.display = 'none';
+                else if (this._activeTab === 'currency' || this._activeTab === 'ml') addBtn.style.display = 'none';
                 else { addBtn.textContent = '+ NEW'; addBtn.style.display = ''; }
-                if (this._activeTab !== 'currency') addBtn.style.display = '';
+                if (this._activeTab !== 'currency' && this._activeTab !== 'ml') addBtn.style.display = '';
                 this._showActiveTab();
             });
         });
@@ -127,12 +129,13 @@ class Logbook {
         if (this._activeTab === 'flights') this._renderList();
         else if (this._activeTab === 'currency') this._renderCurrency();
         else if (this._activeTab === 'oil') this._renderOil();
+        else if (this._activeTab === 'ml') this._renderML();
     }
 
     // ========== Entry List ==========
 
     async _renderList() {
-        const entries = await this.getEntries(50);
+        const entries = await this.getEntries({ limit: 50 });
 
         if (entries.length === 0) {
             this._body.innerHTML = `
@@ -202,7 +205,7 @@ class Logbook {
                     clearTimeout(confirmTimer);
                     const entry = entries.find(e => e.id === btn.dataset.id);
                     if (entry) {
-                        await this._deleteEntry(entry.id);
+                        await this.deleteEntry(entry.id);
                         this._renderList();
                     }
                 } else {
@@ -431,8 +434,10 @@ class Logbook {
             console.log(`[Logbook] Entry updated: ${existingEntry.id}`);
         } else {
             // New manual entry
+            const manualId = crypto.randomUUID ? crypto.randomUUID() : `lb-${Date.now()}`;
             const entry = {
-                id: crypto.randomUUID ? crypto.randomUUID() : `lb-${Date.now()}`,
+                id: manualId,
+                session_id: manualId,  // dedup key
                 ...fields,
                 source: 'manual',
                 created_at: new Date().toISOString(),
@@ -499,8 +504,12 @@ class Logbook {
             }
         }
 
+        const mlSummary = window.engineML?.getFlightSummary() || null;
+
+        const entryId = crypto.randomUUID ? crypto.randomUUID() : `lb-${Date.now()}`;
         const entry = {
-            id: crypto.randomUUID ? crypto.randomUUID() : `lb-${Date.now()}`,
+            id: entryId,
+            session_id: entryId,  // stable dedup key — server uses this to prevent re-inserts on retry
             date: dateStr,
             departure_icao: depIcao,
             departure_name: depName,
@@ -522,6 +531,7 @@ class Logbook {
             synced: false,
             csvFilename: csvFilename,
             notes: '',
+            custom_fields: mlSummary ? { engineml_summary: mlSummary } : {},
         };
 
         if (this._trackHobbs) {
@@ -533,13 +543,37 @@ class Logbook {
         await this._saveEntry(entry);
         console.log(`[Logbook] Auto entry (draft): ${depIcao} -> ${destIcao}, ${flightTimeHours}h`);
 
+        // Save full ML ring buffer linked to this entry
+        this._saveMLLog(entry.id).catch(() => {});
+
         // Don't auto-sync drafts — pilot must review first
         return entry;
     }
 
+    async _saveMLLog(entryId) {
+        const log = window.engineML?.getFullLog();
+        if (!log?.length) return;
+        try {
+            const db = await this._openIdb();
+            await new Promise((resolve, reject) => {
+                const tx = db.transaction(Logbook.IDB_ML_STORE, 'readwrite');
+                tx.objectStore(Logbook.IDB_ML_STORE).put({
+                    id: entryId,
+                    captured_at: new Date().toISOString(),
+                    samples: log,
+                });
+                tx.oncomplete = () => { db.close(); resolve(); };
+                tx.onerror = () => { db.close(); reject(tx.error); };
+            });
+            console.log(`[Logbook] ML log saved — ${log.length} samples for entry ${entryId}`);
+        } catch (err) {
+            console.warn('[Logbook] ML log save failed:', err);
+        }
+    }
+
     // ========== Data Access ==========
 
-    async getEntries(limit = 0) {
+    async getEntries({ limit = 0, includeTombstones = false } = {}) {
         try {
             const db = await this._openIdb();
             return new Promise((resolve, reject) => {
@@ -547,6 +581,7 @@ class Logbook {
                 const req = tx.objectStore(Logbook.IDB_STORE).getAll();
                 req.onsuccess = () => {
                     let entries = (req.result || [])
+                        .filter(e => includeTombstones || !e.deleted_at)
                         .sort((a, b) => (b.date || b.created_at || '').localeCompare(a.date || a.created_at || ''));
                     if (limit > 0) entries = entries.slice(0, limit);
                     db.close();
@@ -593,17 +628,41 @@ class Logbook {
         }
     }
 
+    // Hard-delete from IDB only — used internally during sync and reconcile.
     async _deleteEntry(id) {
         try {
             const db = await this._openIdb();
-            return new Promise((resolve, reject) => {
+            await new Promise((resolve, reject) => {
                 const tx = db.transaction(Logbook.IDB_STORE, 'readwrite');
                 tx.objectStore(Logbook.IDB_STORE).delete(id);
                 tx.oncomplete = () => { db.close(); resolve(); };
                 tx.onerror = () => { db.close(); reject(tx.error); };
             });
         } catch (err) {
-            console.error('[Logbook] Failed to delete entry:', err);
+            console.error('[Logbook] Failed to delete entry from IDB:', err);
+        }
+    }
+
+    // User-initiated delete: tombstone locally then push tombstone to server.
+    async deleteEntry(id) {
+        // Mark tombstone in IDB so it syncs as a deletion
+        const db = await this._openIdb();
+        const entry = await new Promise((resolve, reject) => {
+            const tx = db.transaction(Logbook.IDB_STORE, 'readonly');
+            const req = tx.objectStore(Logbook.IDB_STORE).get(id);
+            req.onsuccess = () => { db.close(); resolve(req.result); };
+            req.onerror = () => { db.close(); reject(req.error); };
+        });
+
+        if (!entry) return;
+
+        entry.deleted_at = new Date().toISOString();
+        entry.synced = false;
+        await this._saveEntry(entry);
+
+        // Push tombstone immediately if online; syncWhenOnline handles it if not
+        if (navigator.onLine) {
+            await this.syncWhenOnline();
         }
     }
 
@@ -619,40 +678,49 @@ class Logbook {
         this._syncInProgress = true;
 
         try {
-            const entries = await this.getEntries();
+            // Pull first — get latest server state before pushing
+            await this._fetchFromServer();
+
+            // Push: upsert all unsynced entries (creates, edits, tombstones all treated the same)
+            const entries = await this.getEntries({ includeTombstones: true });
             const unsynced = entries.filter(e => !e.synced);
 
-            if (unsynced.length === 0) {
-                this._syncInProgress = false;
-                return;
-            }
+            if (unsynced.length === 0) return;
 
             const workerBase = Settings.workerBase;
             const resp = await fetch(`${workerBase}/flights/logbook`, {
                 method: 'POST',
                 headers: Settings.apiHeaders,
                 body: JSON.stringify({ entries: unsynced }),
-                signal: AbortSignal.timeout(10000),
+                signal: AbortSignal.timeout(15000),
             });
 
             if (resp.ok) {
                 const result = await resp.json();
-                const serverIds = result.ids || [];
-                // Replace client IDs with server UUIDs to prevent duplicates
-                for (let i = 0; i < unsynced.length; i++) {
-                    const entry = unsynced[i];
-                    const serverId = serverIds[i];
-                    if (serverId && serverId !== entry.id) {
-                        // Delete old client-ID entry, save with server UUID
+                const seqMap = result.seq_map || {};
+
+                for (const entry of unsynced) {
+                    if (entry.deleted_at) {
+                        // Tombstone confirmed on server — hard-delete from IDB
                         await this._deleteEntry(entry.id);
-                        entry.id = serverId;
+                    } else {
+                        // Update seq from server response, mark synced
+                        if (seqMap[entry.id]) entry.seq = seqMap[entry.id];
+                        entry.synced = true;
+                        await this._saveEntry(entry);
                     }
-                    entry.synced = true;
-                    await this._saveEntry(entry);
                 }
-                console.log(`[Logbook] Synced ${unsynced.length} entries`);
+
+                // Advance cursor to highest seq from push response
+                const maxSeq = Math.max(0, ...Object.values(seqMap).map(Number));
+                if (maxSeq > 0) {
+                    const stored = Number(localStorage.getItem('flypi_logbook_seq') || 0);
+                    if (maxSeq > stored) localStorage.setItem('flypi_logbook_seq', String(maxSeq));
+                }
+
+                console.log(`[Logbook] Pushed ${unsynced.length} entries`);
             } else {
-                console.warn(`[Logbook] Sync failed (${resp.status})`);
+                console.warn(`[Logbook] Push failed (${resp.status})`);
             }
         } catch (err) {
             console.warn('[Logbook] Sync error:', err.message);
@@ -699,40 +767,79 @@ class Logbook {
     // ========== Server Fetch ==========
 
     async _fetchFromServer() {
-        console.warn('[Logbook] _fetchFromServer: online=' + navigator.onLine);
         if (!navigator.onLine) return;
         const workerBase = Settings.workerBase;
-        const url = `${workerBase}/flights/logbook?limit=1000`;
-        console.warn('[Logbook] Fetching: ' + url);
+        const since = Number(localStorage.getItem('flypi_logbook_seq') || 0);
+        const isFullPull = since === 0;
+        const url = `${workerBase}/flights/logbook?since=${since}&limit=1000`;
         try {
             const resp = await fetch(url, {
                 headers: Settings.apiHeaders,
                 signal: AbortSignal.timeout(8000),
             });
-            console.warn('[Logbook] Response: ' + resp.status);
             if (!resp.ok) return;
-            const { entries } = await resp.json();
-            if (!Array.isArray(entries) || entries.length === 0) return;
+            const { entries, max_seq } = await resp.json();
+            if (!Array.isArray(entries)) return;
 
-            // Get existing local IDs to avoid overwriting local edits
-            const localEntries = await this.getEntries();
-            const localIds = new Set(localEntries.map(e => e.id));
+            // Load all local entries once for the reconciliation pass
+            const localAll = await this.getEntries({ includeTombstones: true });
+            const localById = new Map(localAll.map(e => [e.id, e]));
 
-            let merged = 0;
+            let merged = 0, updated = 0, removed = 0;
+            const serverIdsSeen = new Set();
+
             for (const serverEntry of entries) {
-                // Skip if already exists locally with same ID
-                if (localIds.has(serverEntry.id)) continue;
-                // Map server column names to local names
+                serverIdsSeen.add(serverEntry.id);
+
+                if (serverEntry.deleted_at) {
+                    // Tombstone — remove from local IDB
+                    if (localById.has(serverEntry.id)) {
+                        await this._deleteEntry(serverEntry.id);
+                        removed++;
+                    }
+                    continue;
+                }
+
+                // Augment field aliases for FlyTab compatibility
                 serverEntry.departure_icao = serverEntry.departure_icao || serverEntry.from_airport;
                 serverEntry.destination_icao = serverEntry.destination_icao || serverEntry.to_airport;
                 serverEntry.aircraft_tail = serverEntry.aircraft_tail || serverEntry.aircraft_id;
                 serverEntry.flight_time_hours = serverEntry.flight_time_hours || serverEntry.total_time;
                 serverEntry.synced = true;
                 serverEntry.created_at = serverEntry.created_at || new Date().toISOString();
-                await this._saveEntry(serverEntry);
-                merged++;
+
+                const local = localById.get(serverEntry.id);
+                if (local && !local.synced) {
+                    // Local has pending edits — push will handle conflict
+                    continue;
+                }
+                if (local) {
+                    await this._saveEntry({ ...local, ...serverEntry });
+                    updated++;
+                } else {
+                    await this._saveEntry(serverEntry);
+                    merged++;
+                }
             }
-            console.log(`[Logbook] Merged ${merged} new entries from server (${entries.length} total)`);
+
+            // Full-pull reconciliation: remove synced local entries the server no longer has.
+            // This catches hard-deleted rows (no tombstone) that would otherwise stay in IDB forever.
+            // Only safe on a full pull (since=0) — incremental pulls only see recent changes.
+            if (isFullPull) {
+                for (const local of localAll) {
+                    if (local.synced && !local.deleted_at && !serverIdsSeen.has(local.id)) {
+                        await this._deleteEntry(local.id);
+                        removed++;
+                    }
+                }
+            }
+
+            // Advance cursor
+            if (max_seq && max_seq > since) {
+                localStorage.setItem('flypi_logbook_seq', String(max_seq));
+            }
+
+            console.log(`[Logbook] Pull (since=${since}): +${merged} new, ${updated} updated, ${removed} removed`);
         } catch (err) {
             console.warn('[Logbook] Server fetch failed:', err.message);
         }
@@ -1083,6 +1190,133 @@ class Logbook {
         });
     }
 
+    async _renderML() {
+        this._body.innerHTML = '<div class="logbook-empty">Loading ML logs...</div>';
+
+        // Get all logbook entries that have an ML summary
+        const entries = await this.getEntries();
+        const withML = entries.filter(e => e.custom_fields?.engineml_summary);
+
+        // Also check if there is a live (in-memory) log not yet attached to an entry
+        const liveLog = window.engineML?.getFullLog() || [];
+        const liveSummary = window.engineML?.getFlightSummary() || null;
+
+        if (!withML.length && !liveSummary) {
+            this._body.innerHTML = `<div class="logbook-empty">
+                No Engine ML data recorded yet.<br>
+                ML summaries are captured automatically when a flight recording stops.
+            </div>`;
+            return;
+        }
+
+        const phasePct = (dist, phase) => (dist?.[phase] ?? 0) + '%';
+        const phaseBar = (dist) => {
+            if (!dist) return '';
+            const phases = [
+                { key: 'startup',  color: 'var(--text-muted)',     label: 'SU' },
+                { key: 'taxi',     color: 'var(--status-caution)', label: 'TX' },
+                { key: 'runup',    color: 'var(--accent)',         label: 'RU' },
+                { key: 'takeoff',  color: 'var(--status-ok)',      label: 'TO' },
+                { key: 'climb',    color: 'var(--status-ok)',      label: 'CL' },
+                { key: 'cruise',   color: 'var(--status-ok)',      label: 'CR' },
+                { key: 'descent',  color: 'var(--status-caution)', label: 'DS' },
+                { key: 'landing',  color: 'var(--accent)',         label: 'LN' },
+            ];
+            const segments = phases.filter(p => dist[p.key] > 0).map(p =>
+                `<div style="flex:${dist[p.key]};background:${p.color};min-width:2px;height:100%" title="${p.label} ${dist[p.key]}%"></div>`
+            ).join('');
+            const labels = phases.filter(p => dist[p.key] > 0).map(p =>
+                `<span style="color:${p.color}">${p.label}${dist[p.key]}%</span>`
+            ).join(' ');
+            return `<div style="display:flex;height:8px;border-radius:4px;overflow:hidden;margin:6px 0">${segments}</div>
+                    <div style="font-size:11px;display:flex;gap:6px;flex-wrap:wrap">${labels}</div>`;
+        };
+
+        const renderCard = (summary, label, entryId) => {
+            const anomalyColor = summary.anomaly_pct > 10 ? 'var(--status-danger)' : 'var(--status-ok)';
+            return `<div class="logbook-entry lb-ml-card" data-entry-id="${entryId || ''}">
+                <div class="logbook-entry-header">
+                    <span class="logbook-date">${label}</span>
+                    <span class="logbook-route">${summary.samples.toLocaleString()} samples · ${Math.round(summary.duration_s / 60)} min</span>
+                </div>
+                <div class="logbook-entry-details">
+                    <span style="color:${anomalyColor}">Anomaly: ${summary.anomaly_count} (${summary.anomaly_pct}%)</span>
+                    ${summary.avg_latency_ms != null ? `<span>Avg latency: ${summary.avg_latency_ms}ms</span>` : ''}
+                </div>
+                ${phaseBar(summary.phase_dist)}
+                ${entryId ? `<div class="logbook-entry-actions">
+                    <button class="logbook-btn lb-ml-export-btn" data-entry-id="${entryId}">EXPORT CSV</button>
+                </div>` : ''}
+            </div>`;
+        };
+
+        let html = '';
+
+        // Live session (in memory, not yet on an entry)
+        if (liveSummary) {
+            html += `<div class="lb-oil-summary" style="margin-bottom:8px">
+                <div class="lb-oil-summary-title">Current Session (Live)</div>
+            </div>`;
+            html += renderCard(liveSummary, 'In Progress', null);
+            if (liveLog.length) {
+                html += `<div style="padding:8px 12px">
+                    <button class="logbook-btn lb-ml-live-export">EXPORT LIVE LOG CSV</button>
+                </div>`;
+            }
+        }
+
+        // Historical entries with ML data
+        if (withML.length) {
+            html += `<div class="lb-oil-summary" style="margin-bottom:8px">
+                <div class="lb-oil-summary-title">${withML.length} Flight${withML.length > 1 ? 's' : ''} with ML Data</div>
+            </div>`;
+            html += withML.map(e => {
+                const dep = e.departure_icao || e.from_airport || '?';
+                const dest = e.destination_icao || e.to_airport || '?';
+                return renderCard(e.custom_fields.engineml_summary, `${e.date} ${dep}→${dest}`, e.id);
+            }).join('');
+        }
+
+        this._body.innerHTML = html;
+
+        // Wire live export
+        this._body.querySelector('.lb-ml-live-export')?.addEventListener('click', () => {
+            window.engineML?.exportLogCSV('engineml_live.csv');
+        });
+
+        // Wire per-entry export (loads from IDB)
+        this._body.querySelectorAll('.lb-ml-export-btn').forEach(btn => {
+            this._wireButton(btn, async () => {
+                const entryId = btn.dataset.entryId;
+                try {
+                    const db = await this._openIdb();
+                    const record = await new Promise((resolve, reject) => {
+                        const tx = db.transaction(Logbook.IDB_ML_STORE, 'readonly');
+                        const req = tx.objectStore(Logbook.IDB_ML_STORE).get(entryId);
+                        req.onsuccess = () => { db.close(); resolve(req.result); };
+                        req.onerror = () => { db.close(); reject(req.error); };
+                    });
+                    if (!record?.samples?.length) {
+                        btn.textContent = 'NO DATA';
+                        return;
+                    }
+                    const rows = ['t_s,phase,score,anomaly,latency_ms'];
+                    for (const s of record.samples) {
+                        rows.push(`${s.t},${s.ph ?? ''},${s.sc ?? ''},${s.an},${s.lt ?? ''}`);
+                    }
+                    const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+                    const a = document.createElement('a');
+                    a.href = URL.createObjectURL(blob);
+                    a.download = `engineml_${entryId.slice(0, 8)}.csv`;
+                    a.click();
+                    URL.revokeObjectURL(a.href);
+                } catch {
+                    btn.textContent = 'ERROR';
+                }
+            });
+        });
+    }
+
     _showOilForm(existing) {
         document.getElementById('logbookForm')?.remove();
         const e = existing || {};
@@ -1264,7 +1498,7 @@ class Logbook {
 
     async _getLastHobbs() {
         try {
-            const entries = await this.getEntries(1);
+            const entries = await this.getEntries({ limit: 1 });
             if (entries.length > 0 && entries[0].hobbs_end) return entries[0].hobbs_end;
         } catch { /* ignore */ }
         return 0;
@@ -1287,11 +1521,15 @@ class Logbook {
 
             req.onupgradeneeded = (event) => {
                 const db = event.target.result;
+                const oldVersion = event.oldVersion;
                 if (!db.objectStoreNames.contains(Logbook.IDB_STORE)) {
                     const store = db.createObjectStore(Logbook.IDB_STORE, { keyPath: 'id' });
                     store.createIndex('date', 'date', { unique: false });
                     store.createIndex('created_at', 'created_at', { unique: false });
                     store.createIndex('synced', 'synced', { unique: false });
+                }
+                if (oldVersion < 4 && !db.objectStoreNames.contains(Logbook.IDB_ML_STORE)) {
+                    db.createObjectStore(Logbook.IDB_ML_STORE, { keyPath: 'id' });
                 }
                 for (const name of db.objectStoreNames) {
                     if (name === 'flight_recordings' || name === 'flight_csvs') {

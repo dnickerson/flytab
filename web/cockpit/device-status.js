@@ -73,9 +73,9 @@ class DeviceStatus {
             this._setText('ds-stratux-detail', this.stratux.connected ? 'Connected' : 'Disconnected');
         }
 
-        // GPS
+        // GPS — healthy only if fix quality > 0 AND situation data is not stale
         const sit = this.stratux.situation;
-        const gpsFix = sit && sit.gps_fix_quality > 0;
+        const gpsFix = sit && sit.gps_fix_quality > 0 && !this.stratux.stale;
         this._setDot('ds-gps-dot', gpsFix);
         if (sit) {
             this._setText('ds-gps-detail',

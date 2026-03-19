@@ -88,16 +88,7 @@ class CockpitConfig {
             showDmms: true,
             dmmsDisplayUntilAglFt: 1000,
             dmmsFlashWhenBelow: true,
-            lowAltitudeMessages: [
-                {
-                    belowAglFt: 1000,
-                    message: 'PUSH DOWN  FLY STRAIGHT AHEAD',
-                    color: '#ffcc00',
-                    background: '#000000',
-                    fontSize: '24pt',
-                    phase: 'departure',
-                },
-            ],
+            lowAltitudeMessages: [],
         },
         ifr: {
             showCdPhone: true,
