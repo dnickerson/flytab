@@ -1100,10 +1100,22 @@ class Logbook {
 
         // Also check local storage
         const localOil = JSON.parse(localStorage.getItem('flypi_oil_events') || '[]');
-        // Merge: server wins by id
-        const serverIds = new Set(events.map(e => e.id));
-        for (const le of localOil) {
-            if (!serverIds.has(le.id)) events.push(le);
+        if (events.length > 0) {
+            // Server data is authoritative — remove local entries that match server entries
+            // by id OR by content signature (date+type+tach), then append remaining offline-only entries
+            const serverIds = new Set(events.map(e => e.id));
+            const serverSigs = new Set(events.map(e => `${e.date}|${e.event_type}|${e.tach_time ?? ''}`));
+            const offlineOnly = localOil.filter(le =>
+                !serverIds.has(le.id) && !serverSigs.has(`${le.date}|${le.event_type}|${le.tach_time ?? ''}`)
+            );
+            // Reconcile: keep local store in sync with server (remove entries now on server)
+            if (offlineOnly.length !== localOil.length) {
+                localStorage.setItem('flypi_oil_events', JSON.stringify(offlineOnly));
+            }
+            events.push(...offlineOnly);
+        } else {
+            // Offline — show local only
+            events.push(...localOil);
         }
         events.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
 
@@ -1403,12 +1415,29 @@ class Logbook {
                 if (navigator.onLine) {
                     try {
                         const workerBase = Settings.workerBase;
-                        await fetch(`${workerBase}/flights/oil`, {
+                        const syncResp = await fetch(`${workerBase}/flights/oil`, {
                             method: 'POST',
                             headers: Settings.apiHeaders,
                             body: JSON.stringify(event),
                             signal: AbortSignal.timeout(5000),
                         });
+                        if (syncResp.ok) {
+                            // Replace local entry with server's authoritative record (may have server-assigned id)
+                            const syncData = await syncResp.json();
+                            if (syncData.event) {
+                                const fresh = JSON.parse(localStorage.getItem('flypi_oil_events') || '[]');
+                                const replaced = fresh.map(e => e.id === event.id ? syncData.event : e);
+                                // Remove old local-id entry if server used a different id
+                                const dedupedIds = new Set();
+                                const deduped = replaced.filter(e => {
+                                    const key = e.date + '|' + e.event_type + '|' + (e.tach_time || '');
+                                    if (dedupedIds.has(key)) return false;
+                                    dedupedIds.add(key);
+                                    return true;
+                                });
+                                localStorage.setItem('flypi_oil_events', JSON.stringify(deduped));
+                            }
+                        }
                     } catch { /* will retry later */ }
                 }
 
