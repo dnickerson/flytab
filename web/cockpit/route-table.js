@@ -1059,6 +1059,19 @@ class RouteTable {
             this._waypoints[i]._hdg = null;
             this._waypoints[i]._phase = '\u2014';
         }
+
+        // Compute cumulative dist/ete from the aircraft's current position forward.
+        // Each row shows total remaining distance/time to reach that waypoint, so all
+        // rows shrink as the aircraft moves — not just the active leg.
+        // Totals footer continues to sum per-leg _dist/_ete (unchanged).
+        let cumDist = 0, cumEte = 0;
+        for (let i = this._activeIndex; i < this._waypoints.length; i++) {
+            const wp = this._waypoints[i];
+            cumDist += wp._dist || 0;
+            cumEte  += wp._ete  || 0;
+            wp._cumDist = cumDist > 0 ? Math.round(cumDist) : null;
+            wp._cumEte  = cumEte  > 0 ? cumEte : null;
+        }
     }
 
     /** Toggle flight rules between VFR and IFR */
@@ -1714,9 +1727,9 @@ class RouteTable {
             case 'hdg':
                 return wp._hdg != null ? Math.round(wp._hdg) + '\u00b0' : '\u2014';
             case 'dist':
-                return wp._dist != null ? wp._dist : '\u2014';
+                return wp._cumDist != null ? wp._cumDist : '\u2014';
             case 'ete':
-                return wp._ete != null ? this._formatTime(wp._ete) : '\u2014';
+                return wp._cumEte != null ? this._formatTime(wp._cumEte) : '\u2014';
             case 'fuel':
                 return wp._fuel != null ? wp._fuel.toFixed(1) : '\u2014';
             case 'fuel_rem': {
