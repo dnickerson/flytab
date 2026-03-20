@@ -5,8 +5,9 @@
  */
 
 class InstrumentStrip {
-    constructor(stratuxClient) {
+    constructor(stratuxClient, engineClient) {
         this._stratux = stratuxClient;
+        this._engine = engineClient || null;
         this._el = null;
         this._activePlan = null;
         this._activeWpIndex = 0;
@@ -56,7 +57,11 @@ class InstrumentStrip {
             this._stratux.addEventListener('stratux:disconnect', this._onDisconnect);
         }
 
-        // Fuel updates — store handler so destroy() can remove it
+        // Fuel updates from engine data stream — update FUEL field whenever the Pi sends new data
+        this._onEngineData = () => this._updateFuel();
+        if (this._engine) this._engine.addEventListener('engine:data', this._onEngineData);
+
+        // Fuel updates from manual fuel overlay changes
         this._onFuelChanged = () => this._updateFuel();
         window.addEventListener('fuelstate:changed', this._onFuelChanged);
 
@@ -69,6 +74,9 @@ class InstrumentStrip {
         }
         if (this._stratux && this._onDisconnect) {
             this._stratux.removeEventListener('stratux:disconnect', this._onDisconnect);
+        }
+        if (this._engine && this._onEngineData) {
+            this._engine.removeEventListener('engine:data', this._onEngineData);
         }
         if (this._onFuelChanged) {
             window.removeEventListener('fuelstate:changed', this._onFuelChanged);

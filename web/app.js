@@ -667,7 +667,7 @@ class FlyTabApp {
 
         // ── v5 UI: Instrument Strip ──────────────────────────────────────────
         if (typeof InstrumentStrip !== 'undefined') {
-            this.instrumentStrip = new InstrumentStrip(this.stratuxClient);
+            this.instrumentStrip = new InstrumentStrip(this.stratuxClient, this.engineClient);
             if (this.fuelOverlay) this.instrumentStrip.setFuelOverlay(this.fuelOverlay);
             const stripEl = this.instrumentStrip.init();
             // Place instrument strip inside route-table-sheet (after handle) so they stack together
