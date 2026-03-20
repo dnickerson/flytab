@@ -180,6 +180,15 @@ class ApproachCharts {
             await this._fetchSingleAirportIndex(icao);
         }
         if (!this._plateIndex?.[icao]) {
+            // Last resort: build plate list from georef index (always present on device)
+            const geoPlates = this._buildPlatesFromGeoIndex(icao);
+            if (geoPlates) {
+                if (!this._plateIndex) this._plateIndex = {};
+                this._plateIndex[icao] = geoPlates;
+                console.log(`[ApproachCharts] Built ${geoPlates.plates.length} plates for ${icao} from geo index`);
+            }
+        }
+        if (!this._plateIndex?.[icao]) {
             this._showMessage(`No plates for ${icao} — download plates via Pre-Flight Refresh`);
             this._pickerEl.style.display = 'flex';
             return;
@@ -210,7 +219,8 @@ class ApproachCharts {
         try {
             const resp = await _fetchWithTimeout(`${PLATES_BASE}/${encodeURIComponent(icao)}/index.json`);
             if (resp.status === 404) {
-                console.warn(`[ApproachCharts] No plates for ${icao} — download plates via Pre-Flight Refresh`);
+                // No index.json — try NanoHTTPD directory listing (always works if plates are on device)
+                await this._fetchPlateList(icao);
                 return;
             }
             if (!resp.ok) return;
@@ -218,9 +228,24 @@ class ApproachCharts {
             // index.json may be { plates: [...] } or a flat array of filenames.
             // Normalize flat array to { plates: [{filename, name}, ...] }
             if (Array.isArray(data)) {
-                data = { plates: data.map(f => typeof f === 'string'
-                    ? { filename: f, name: f.replace(/\.[^.]+$/, '').replace(/_/g, ' ') }
-                    : f) };
+                // The pipeline creates two copies of each plate:
+                //   - Raw FAA code: "05853BARMY.PDF"  (uppercase .PDF — meaningless name)
+                //   - Readable name: "BARMY_FIVE_(RNAV).pdf"  (lowercase .pdf — human readable)
+                // Only show lowercase .pdf files so names are meaningful.
+                const readable = data.filter(f => typeof f === 'string' && f.endsWith('.pdf'));
+                // Fall back to all PDFs if no readable files found (edge case)
+                const pdfs = readable.length > 0
+                    ? readable
+                    : data.filter(f => typeof f === 'string' && /\.pdf$/i.test(f));
+                data = { plates: pdfs.map(f => {
+                    if (typeof f !== 'string') return f;
+                    const name = f.replace(/\.pdf$/, '').replace(/_/g, ' ');
+                    const type = /rnav|ils|vor|ndb|lda|loc|gls|rwy/i.test(name) ? 'IAP'
+                               : /sid|departure/i.test(name) ? 'SID'
+                               : /star|arrival/i.test(name) ? 'STAR'
+                               : /odp|obstacle/i.test(name) ? 'ODP' : 'IAP';
+                    return { filename: f, name, type };
+                }) };
             }
             if (data.plates?.length) {
                 if (!this._plateIndex) this._plateIndex = {};
@@ -231,6 +256,59 @@ class ApproachCharts {
                 console.warn(`[ApproachCharts] Fetch timed out for ${icao} plates`);
             }
         }
+    }
+
+    /** Fetch plate list from NanoHTTPD directory listing when index.json is absent. */
+    async _fetchPlateList(icao) {
+        try {
+            const resp = await _fetchWithTimeout(`${PLATES_BASE}/${encodeURIComponent(icao)}/list`);
+            if (!resp.ok) return;
+            const files = await resp.json();
+            if (!Array.isArray(files) || files.length === 0) return;
+            const plates = files.map(f => {
+                const name = f.replace(/\.pdf$/, '').replace(/_/g, ' ');
+                const type = /rnav|ils|vor|ndb|lda|loc|gls|rwy/i.test(name) ? 'IAP'
+                           : /sid|departure/i.test(name) ? 'SID'
+                           : /star|arrival/i.test(name) ? 'STAR'
+                           : /odp|obstacle/i.test(name) ? 'ODP' : 'IAP';
+                return { filename: f, name, type };
+            });
+            if (!this._plateIndex) this._plateIndex = {};
+            this._plateIndex[icao] = { plates };
+            console.log(`[ApproachCharts] Listed ${plates.length} plates for ${icao} from NanoHTTPD`);
+        } catch (err) {
+            if (err.name === 'AbortError') {
+                console.warn(`[ApproachCharts] List timed out for ${icao}`);
+            }
+        }
+    }
+
+    /** Build a synthetic plate list from _geoIndex when no index.json is available.
+     *  Prefers human-readable keys (e.g. RNAV_(GPS)_RWY_06) over raw FAA codes (05853R6). */
+    _buildPlatesFromGeoIndex(icao) {
+        if (!this._geoIndex) return null;
+        const prefix = icao + '/';
+        const plates = [];
+        const seen = new Set(); // deduplicate by webp stem
+        for (const key of Object.keys(this._geoIndex)) {
+            if (!key.startsWith(prefix)) continue;
+            const stem = key.slice(prefix.length);
+            // Skip raw FAA code entries (start with digits e.g. "05853R6")
+            // The georef index has duplicate entries — readable name preferred
+            if (/^\d/.test(stem)) continue;
+            const name = stem.replace(/_/g, ' ');
+            const entry = this._geoIndex[key];
+            const webpFile = entry?.webp ? entry.webp.split('/').pop() : null;
+            if (webpFile && seen.has(webpFile)) continue;
+            if (webpFile) seen.add(webpFile);
+            const type = /rnav|ils|vor|ndb|lda|loc|gls|rwy/i.test(name) ? 'IAP'
+                       : /sid|departure/i.test(name) ? 'SID'
+                       : /star|arrival/i.test(name) ? 'STAR' : 'IAP';
+            // Use readable stem as PDF filename (e.g. RNAV_(GPS)_RWY_06.pdf)
+            plates.push({ filename: stem + '.pdf', name, type });
+        }
+        if (plates.length === 0) return null;
+        return { plates };
     }
 
     updateOwnship(lat, lon, heading) {
@@ -254,8 +332,7 @@ class ApproachCharts {
         if (idx < 0 || idx >= this._plates.length) return;
 
         const plate = this._plates[idx];
-        const geoKey = this._geoKey(plate);
-        const georef = this._geoIndex?.[geoKey];
+        const georef = this._findGeoref(plate);
 
         if (!georef || !georef.bounds || !georef.webp) {
             if (typeof app !== 'undefined') {
@@ -270,7 +347,7 @@ class ApproachCharts {
         // Remove existing overlay
         this.removeMapOverlay();
 
-        const webpUrl = `${PLATES_BASE}/${georef.webp}`;
+        const webpUrl = `${PLATES_BASE}/${georef.webp.split('/').map(encodeURIComponent).join('/')}`;
         const bounds = L.latLngBounds(georef.bounds);
 
         this._mapOverlay = L.imageOverlay(webpUrl, bounds, {
@@ -316,7 +393,7 @@ class ApproachCharts {
         if (!this._lastOverlayPlate) return;
         const { idx, plate, georef } = this._lastOverlayPlate;
         // Re-add the overlay without re-fitting the map
-        const webpUrl = `${PLATES_BASE}/${georef.webp}`;
+        const webpUrl = `${PLATES_BASE}/${georef.webp.split('/').map(encodeURIComponent).join('/')}`;
         const bounds = L.latLngBounds(georef.bounds);
 
         this._mapOverlay = L.imageOverlay(webpUrl, bounds, {
@@ -504,13 +581,16 @@ class ApproachCharts {
         const listEl = this._pickerEl.querySelector('.approach-picker-list');
         this._plates = [];
 
+        const seen = new Set();
         const airports = [];
-        if (focusIcao && this._plateIndex[focusIcao]) {
+        if (focusIcao && this._plateIndex?.[focusIcao]) {
             airports.push(focusIcao);
+            seen.add(focusIcao);
         }
         for (const icao of this._routeAirports) {
-            if (icao !== focusIcao && this._plateIndex[icao]) {
+            if (!seen.has(icao) && this._plateIndex?.[icao]) {
                 airports.push(icao);
+                seen.add(icao);
             }
         }
 
@@ -529,7 +609,12 @@ class ApproachCharts {
                 const order = { IAP: 1, SID: 2, STAR: 3, DP: 4, ODP: 5, MIN: 6 };
                 const ka = a.type || a.chart_code || '';
                 const kb = b.type || b.chart_code || '';
-                return (order[ka] || 8) - (order[kb] || 8);
+                const typeOrder = (order[ka] || 8) - (order[kb] || 8);
+                if (typeOrder !== 0) return typeOrder;
+                // Within same type: MAP (georef) plates first
+                const aGeo = !!this._findGeoref({ ...a, icao });
+                const bGeo = !!this._findGeoref({ ...b, icao });
+                return (aGeo ? 0 : 1) - (bGeo ? 0 : 1);
             });
 
             const aptName = entry?.name || '';
@@ -539,7 +624,7 @@ class ApproachCharts {
             for (const plate of sorted) {
                 const idx = this._plates.length;
                 this._plates.push({ ...plate, icao });
-                const hasGeo = this._geoIndex?.[this._geoKey({ ...plate, icao })];
+                const hasGeo = !!this._findGeoref({ ...plate, icao });
                 const geoIcon = hasGeo ? ' <span class="approach-geo-badge">MAP</span>' : '';
                 html += `<button class="approach-plate-item" data-idx="${idx}">${plate.name || plate.chart_name || plate.filename || '?'}${geoIcon}</button>`;
             }
@@ -612,18 +697,26 @@ class ApproachCharts {
         this._imgEl.style.display = 'none';
 
         // Check for WebP raster (georef plates) — enables pinch zoom
-        const geoKey = this._geoKey(plate);
-        const georef = this._geoIndex?.[geoKey];
+        const georef = this._findGeoref(plate);
 
         // All plates served from local NanoHTTPD at Documents/FlyTab/plates/
         const plateUrl = (f) => `${PLATES_BASE}/${plate.icao}/${encodeURIComponent(f)}`;
 
         if (georef?.webp) {
             // Use WebP raster — pinch zoom works via _setupPinchZoom
-            const webpUrl = `${PLATES_BASE}/${georef.webp}`;
+            // webp path in geoIndex is relative to plates dir (e.g. "KLKR/05853R6.webp")
+            const webpUrl = `${PLATES_BASE}/${georef.webp.split('/').map(encodeURIComponent).join('/')}`;
             this._imgEl.style.display = '';
             this._imgEl.src = webpUrl;
             this._imgEl.style.transform = '';
+            // If the webp file doesn't exist on device, fall back to PDF rendering
+            this._imgEl.onerror = () => {
+                this._imgEl.onerror = null;
+                this._imgEl.style.display = 'none';
+                if (file && file.toLowerCase().endsWith('.pdf')) {
+                    this._renderPdf(plateUrl(file), body);
+                }
+            };
         } else if (file && file.toLowerCase().endsWith('.pdf')) {
             // Render PDF with PDF.js (works on iOS Safari; iframes don't)
             this._renderPdf(plateUrl(file), body);
@@ -708,6 +801,47 @@ class ApproachCharts {
         // Last resort: filename stem even if not in georef index
         const stem = file.replace(/\.pdf$/i, '');
         return `${plate.icao}/${stem}`;
+    }
+
+    /**
+     * Find the best georef entry for a plate — prefers entries whose webp file
+     * actually exists on device. The pipeline sometimes creates two geoIndex entries
+     * for the same plate (raw FAA code "05853R6" and readable name "RNAV_(GPS)_RWY_06")
+     * but only writes one webp file (the raw-code one). This method finds the
+     * raw-code sibling so WebP overlay works.
+     */
+    _findGeoref(plate) {
+        if (!this._geoIndex) return null;
+        const preferredKey = this._geoKey(plate);
+        const georef = this._geoIndex[preferredKey];
+        if (!georef) return null;
+
+        // If this entry's webp uses a readable name (not a raw FAA code), the webp
+        // file may not exist. Look for a sibling entry with the same bounds whose
+        // webp name starts with digits (raw FAA code — those always have real files).
+        const webpFile = georef.webp ? georef.webp.split('/').pop().replace(/\.webp$/i, '') : '';
+        if (webpFile && /^\d/.test(webpFile)) return georef; // already a raw-code webp — good
+
+        // webp is readable-name or missing. Scan for raw-code sibling with same bounds.
+        const prefix = plate.icao + '/';
+        for (const [key, entry] of Object.entries(this._geoIndex)) {
+            if (!key.startsWith(prefix)) continue;
+            const stem = key.slice(prefix.length);
+            if (!/^\d/.test(stem)) continue; // only raw-code keys
+            if (!entry.webp || !entry.bounds) continue;
+            if (this._boundsApproxMatch(georef.bounds, entry.bounds)) {
+                return entry; // raw-code entry with same bounds — its webp exists
+            }
+        }
+        return georef; // fall back to original (onerror in _showPlate handles missing webp)
+    }
+
+    _boundsApproxMatch(b1, b2, tol = 0.02) {
+        if (!b1 || !b2 || b1.length < 2 || b2.length < 2) return false;
+        return Math.abs(b1[0][0] - b2[0][0]) < tol
+            && Math.abs(b1[0][1] - b2[0][1]) < tol
+            && Math.abs(b1[1][0] - b2[1][0]) < tol
+            && Math.abs(b1[1][1] - b2[1][1]) < tol;
     }
 
     // ========== Map Overlay Bar ==========

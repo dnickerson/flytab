@@ -60,6 +60,9 @@ public class MainActivity extends AppCompatActivity {
     // Feature views
     private TextView[] featureErrorViews;
     private TextView[] rawValueViews;
+    private static final String[] EXTRA_LABELS = {"MP", "Carb Temp", "Gal Remaining"};
+    private static final String[] EXTRA_UNITS = {"\"", "\u00B0F", " gal"};
+    private TextView[] extraValueViews;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -172,6 +175,16 @@ public class MainActivity extends AppCompatActivity {
             rawRow.addView(makeLabel(cols[i]));
             rawValueViews[i] = makeValue("—");
             rawRow.addView(rawValueViews[i]);
+            rawValueContainer.addView(rawRow);
+        }
+
+        // Add extra values (MP, Carb Temp, Gal Remaining) to raw values
+        extraValueViews = new TextView[EXTRA_LABELS.length];
+        for (int i = 0; i < EXTRA_LABELS.length; i++) {
+            LinearLayout rawRow = makeRow();
+            rawRow.addView(makeLabel(EXTRA_LABELS[i]));
+            extraValueViews[i] = makeValue("—");
+            rawRow.addView(extraValueViews[i]);
             rawValueContainer.addView(rawRow);
         }
     }
@@ -501,6 +514,14 @@ public class MainActivity extends AppCompatActivity {
                 formatted = String.format(Locale.US, "%.0f", lastRawFeatures[i]);
             }
             rawValueViews[i].setText(formatted);
+        }
+
+        // Extra values: MP, Carb Temp, Gal Remaining
+        if (extraValueViews != null && lastExtras != null) {
+            for (int i = 0; i < lastExtras.length && i < extraValueViews.length; i++) {
+                String formatted = String.format(Locale.US, "%.1f%s", lastExtras[i], EXTRA_UNITS[i]);
+                extraValueViews[i].setText(formatted);
+            }
         }
     }
 

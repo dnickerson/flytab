@@ -54,11 +54,15 @@ class NetworkMode extends EventTarget {
 
         // Try home server — if reachable, we're on home network
         // Uses configurable homeServer from cockpit-config.json (mDNS .local unreliable on Android)
+        // Probe /api/nasr/cycle-info — a real JSON endpoint that returns 200, not a tile directory
         try {
             const hs = (typeof CockpitConfig !== 'undefined' && CockpitConfig.raw?.homeServer) || {};
-            const homeUrl = hs.tileBase || SyncManager.PI_BASE;
-            if (homeUrl) {
-                const r = await fetch(homeUrl, {
+            const base = hs.nasrBase
+                ? hs.nasrBase.replace(/\/nasr\/?$/, '')
+                : (SyncManager?.PI_BASE || null);
+            if (base) {
+                const r = await fetch(`${base}/api/nasr/cycle-info`, {
+                    cache: 'no-store',
                     signal: AbortSignal.timeout(2000),
                 });
                 if (r.ok) return 'home';

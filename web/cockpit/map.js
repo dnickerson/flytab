@@ -135,22 +135,29 @@ class CockpitMap {
         const tileBase = 'http://localhost:9090/tiles';
         console.log('[FlyTab] Tile base:', tileBase);
 
-        // FAA Sectional (default)
+        // FAA Sectional — 256px tiles, z5-11
         this._sectionalLayer = L.tileLayer(`${tileBase}/sectional/{z}/{x}/{y}.webp`, {
             minZoom: 5,
+            minNativeZoom: 5,
             maxNativeZoom: 11,
             maxZoom: 14,
             tms: false,
+            updateWhenZooming: false,
             attribution: 'FAA Sectional Charts',
             errorTileUrl: '',
         });
 
-        // IFR Low Enroute (tiles only exist z7-11)
+        // IFR Low Enroute — 512px retina tiles (stored at standard z/x/y coords, 2× pixel density)
+        // tileSize stays 256 — Leaflet positions tiles by z/x/y grid, 512px images scale crisper on retina.
+        // updateWhenZooming: false — prevents zoom-transition seam where CSS-scaled old tiles and
+        // newly-loading tiles appear at different scales. Leaflet waits until zoom ends to load.
         this._ifrLayer = L.tileLayer(`${tileBase}/ifr-low/{z}/{x}/{y}.webp`, {
             minZoom: 7,
             minNativeZoom: 7,
             maxNativeZoom: 11,
             maxZoom: 14,
+            tms: false,
+            updateWhenZooming: false,
             attribution: 'FAA IFR Low Enroute',
             errorTileUrl: '',
         });

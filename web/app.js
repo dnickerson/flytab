@@ -825,11 +825,13 @@ class FlyTabApp {
             if (!bundle) {
                 // Fall back to home server (pre-flight sync)
                 const hs = (typeof CockpitConfig !== 'undefined' && CockpitConfig.raw?.homeServer) || {};
-                const nasrBase = hs.nasrBase || 'http://192.168.1.77:8090/nasr';
-                const nasrUrl = `${nasrBase}/bundle.json`;
+                const base = hs.nasrBase
+                    ? hs.nasrBase.replace(/\/nasr\/?$/, '')
+                    : 'http://192.168.1.77:8081';
+                const nasrUrl = `${base}/api/nasr/bundle`;
                 const resp = await fetch(nasrUrl, {
                     cache: 'no-store',
-                    signal: AbortSignal.timeout(5000),
+                    signal: AbortSignal.timeout(30000),
                 });
                 if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                 bundle = await resp.json();
