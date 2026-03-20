@@ -2001,6 +2001,47 @@ body {
     letter-spacing: -0.5px;
 }
 
+/* ========== Engine Status Card (above route sheet handle) ========== */
+
+.engine-status-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 16px;
+    font-family: var(--font-instrument);
+    font-size: var(--text-sm);
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--border);
+    transition: background 0.3s;
+}
+
+.engine-status-card--waiting {
+    background: var(--bg-surface-raised);
+    color: var(--text-muted);
+}
+
+.engine-status-card--ok {
+    background: var(--bg-surface-raised);
+    color: var(--status-ok);
+}
+
+.engine-status-card--alert {
+    background: var(--status-danger);
+    color: var(--text-on-dark);
+    animation: thermal-flash 1s infinite;
+}
+
+.esc-phase {
+    flex: 1;
+}
+
+.esc-score {
+    font-size: var(--text-xs);
+    color: inherit;
+    opacity: 0.8;
+}
+
 /* ========== Route Table (Bottom Sheet) ========== */
 
 .route-table-sheet {

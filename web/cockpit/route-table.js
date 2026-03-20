@@ -41,6 +41,14 @@ class RouteTable {
         this._routeEditor = editor;
     }
 
+    /** Wire EngineMLBridge so the status card stays in sync */
+    setEngineML(engineML) {
+        this._engineML = engineML;
+        if (!engineML) return;
+        this._onEngineMLResult = (e) => this._updateEngineStatusCard(e.detail);
+        document.addEventListener('engineml:result', this._onEngineMLResult);
+    }
+
     /** Set NasrDB reference for search */
     setNasrDb(db) {
         this._nasrDb = db;
@@ -1446,6 +1454,8 @@ class RouteTable {
         this._container.appendChild(this._el);
         // Append altitude picker to container (needs to float above table)
         this._container.appendChild(this._altPicker);
+
+        this._buildEngineStatusCard();
     }
 
     /**
@@ -1804,5 +1814,40 @@ class RouteTable {
         const y = Math.sin(dLon) * Math.cos(rLat2);
         const x = Math.cos(rLat1) * Math.sin(rLat2) - Math.sin(rLat1) * Math.cos(rLat2) * Math.cos(dLon);
         return ((Math.atan2(y, x) * 180 / Math.PI) + 360) % 360;
+    }
+
+    _buildEngineStatusCard() {
+        const card = document.createElement('div');
+        card.id = 'engineStatusCard';
+        card.className = 'engine-status-card engine-status-card--waiting';
+        card.innerHTML = `
+            <span class="esc-phase">ML: warming up</span>
+            <span class="esc-score"></span>
+        `;
+        this._engineCardEl = card;
+        this._engineCardPhaseEl = card.querySelector('.esc-phase');
+        this._engineCardScoreEl = card.querySelector('.esc-score');
+        // Insert as first child of the sheet so it sits above the handle bar
+        this._el.insertBefore(card, this._el.firstChild);
+    }
+
+    _updateEngineStatusCard(result) {
+        if (!this._engineCardEl || !result) return;
+        const { phase, score, anomaly, windowReady } = result;
+
+        this._engineCardEl.className = 'engine-status-card';
+        if (!windowReady) {
+            this._engineCardEl.classList.add('engine-status-card--waiting');
+            this._engineCardPhaseEl.textContent = `ML: warming up`;
+            this._engineCardScoreEl.textContent = '';
+        } else if (anomaly) {
+            this._engineCardEl.classList.add('engine-status-card--alert');
+            this._engineCardPhaseEl.textContent = `\u26a0 ${(phase || 'ALERT').toUpperCase()}`;
+            this._engineCardScoreEl.textContent = score != null ? `${Math.round(score * 100)}%` : '';
+        } else {
+            this._engineCardEl.classList.add('engine-status-card--ok');
+            this._engineCardPhaseEl.textContent = (phase || 'OK').toUpperCase();
+            this._engineCardScoreEl.textContent = score != null ? `${Math.round(score * 100)}%` : '';
+        }
     }
 }

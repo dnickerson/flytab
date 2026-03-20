@@ -192,5 +192,6 @@ class EngineMLBridge {
             }
         }
 
+        document.dispatchEvent(new CustomEvent('engineml:result', { detail: result }));
     }
 }

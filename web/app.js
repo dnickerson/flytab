@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v4.7';
+const FLYTAB_VERSION = 'v4.8';
 
 // ========== Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -503,6 +503,11 @@ class FlyTabApp {
             // Wire FIS-B winds to route table
             if (this.routeTable) {
                 this.routeTable.setFisbClient(this.fisbClient);
+            }
+
+            // Wire Engine ML to route table status card
+            if (this.routeTable && this.engineML) {
+                this.routeTable.setEngineML(this.engineML);
             }
 
             // Wire FIS-B METARs to airport weather colors on map
