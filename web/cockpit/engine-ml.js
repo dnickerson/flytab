@@ -169,19 +169,19 @@ class EngineMLBridge {
         }
     }
 
-    /** Triggers a CSV download of the current ring buffer. */
-    exportLogCSV(filename = 'engineml_log.csv') {
+    /** Saves ML log CSV to NanoHTTPD filesystem (Documents/FlyTab/flights/). */
+    async exportLogCSV(filename = 'engineml_log.csv') {
         if (!this._log.length) return;
         const rows = ['t_s,phase,score,anomaly,latency_ms'];
         for (const s of this._log) {
             rows.push(`${s.t},${s.ph ?? ''},${s.sc ?? ''},${s.an},${s.lt ?? ''}`);
         }
-        const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = filename;
-        a.click();
-        URL.revokeObjectURL(a.href);
+        const content = rows.join('\n') + '\n';
+        await fetch(`http://localhost:9090/flights/${filename}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'text/csv' },
+            body: content,
+        });
     }
 
     _updateDisplay(result) {

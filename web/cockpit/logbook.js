@@ -1317,12 +1317,15 @@ class Logbook {
                     for (const s of record.samples) {
                         rows.push(`${s.t},${s.ph ?? ''},${s.sc ?? ''},${s.an},${s.lt ?? ''}`);
                     }
-                    const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
-                    const a = document.createElement('a');
-                    a.href = URL.createObjectURL(blob);
-                    a.download = `engineml_${entryId.slice(0, 8)}.csv`;
-                    a.click();
-                    URL.revokeObjectURL(a.href);
+                    const content = rows.join('\n') + '\n';
+                    const filename = `engineml_${entryId.slice(0, 8)}.csv`;
+                    const resp = await fetch(`http://localhost:9090/flights/${filename}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'text/csv' },
+                        body: content,
+                    });
+                    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                    btn.textContent = 'SAVED';
                 } catch {
                     btn.textContent = 'ERROR';
                 }
