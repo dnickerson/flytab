@@ -17,7 +17,7 @@
 class FlightRecorder {
     static LOCAL_BASE = 'http://localhost:9090';
     static FLIGHTS_PATH = 'flights';
-    static CSV_HEADER = 'Zulu_Time,MP,Oil Temp,Oil Pressure,Fuel Pressure,Volts,Amps,RPM,Fuel Flow,Gallons Remaining,Fuel Level 1,Fuel Level 2,Carb Temp,GP 2,GP 3,Thermalcouple,EGT 1,EGT 2,EGT 3,EGT 4,CHT 1,CHT 2,CHT 3,CHT 4,date,time_z,longitude,latitude,altitude_ft,speed_kts,bank,pitch,acc_vert,course,EGT Spread,CHT Spread,Max EGT,Final_Percent_Power,Operating_Condition,Percent,SFC';
+    static CSV_HEADER = 'Zulu_Time,MP,Oil Temp,Oil Pressure,Fuel Pressure,Volts,Amps,RPM,Fuel Flow,Gallons Remaining,Fuel Level 1,Fuel Level 2,Carb Temp,GP 2,GP 3,Thermalcouple,EGT 1,EGT 2,EGT 3,EGT 4,CHT 1,CHT 2,CHT 3,CHT 4,date,time_z,longitude,latitude,altitude_ft,speed_kts,bank,pitch,acc_vert,course,EGT Spread,CHT Spread,Max EGT,Final_Percent_Power,Operating_Condition,Percent,SFC,ml_phase,ml_score,ml_anomaly,ml_latency_ms';
 
     // Auto-start/stop thresholds
     static RPM_START_THRESHOLD = 500;
@@ -105,6 +105,13 @@ class FlightRecorder {
         if (this._recordInterval) { clearInterval(this._recordInterval); this._recordInterval = null; }
         if (this._flushInterval) { clearInterval(this._flushInterval); this._flushInterval = null; }
 
+        const startTime = this._startTime ? new Date(this._startTime).toISOString() : null;
+        const endMs = Date.now();
+        const endTime = new Date(endMs).toISOString();
+        const durationHours = this._startTime
+            ? Math.round((endMs - this._startTime) / 36000) / 100
+            : 0;
+
         // Final flush — track success so downstream listeners know if data was saved
         let flushOk = true;
         try {
@@ -114,12 +121,23 @@ class FlightRecorder {
             if (typeof DiagLog !== 'undefined') DiagLog.log('error', `FlightRecorder final flush failed: ${err.message}`);
         }
 
-        // Try to rename with dep/dest from NASR
-        await this._renameWithRoute();
+        // Try to rename with dep/dest from NASR — returns { depIcao, destIcao } or null
+        const route = await this._renameWithRoute();
 
         const finalName = this._fileName;
         this._emitStatus();
-        window.dispatchEvent(new CustomEvent('flightsync:stopped', { detail: { csvFilename: finalName, rowCount: this._rowCount, flushOk } }));
+        window.dispatchEvent(new CustomEvent('flightsync:stopped', {
+            detail: {
+                csvFilename: finalName,
+                rowCount: this._rowCount,
+                flushOk,
+                depIcao: route?.depIcao || null,
+                destIcao: route?.destIcao || null,
+                startTime,
+                endTime,
+                durationHours,
+            }
+        }));
         if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Stopped: ${finalName} (${this._rowCount} rows, flushOk=${flushOk})`);
         return finalName;
     }
@@ -181,6 +199,13 @@ class FlightRecorder {
         const pct = rpm > 0 ? (eng.rop_lop_percent || '') : '';
         const sfc = rpm > 0 ? (eng.sfc || '') : '';
 
+        // Engine ML — grab latest result if inference is running
+        const ml = window.engineML?.lastResult;
+        const mlPhase = ml?.phase || '';
+        const mlScore = ml?.score != null ? ml.score.toFixed(4) : '';
+        const mlAnomaly = ml?.anomaly != null ? (ml.anomaly ? 1 : 0) : '';
+        const mlLatency = ml?.latencyMs != null ? Math.round(ml.latencyMs) : '';
+
         const row = [
             time12, d.MP||0, d.Oil_Temp||0, d.Oil_Press||0,
             d.Fuel_Press||0, d.Volts||0, d.Amps||0,
@@ -193,7 +218,8 @@ class FlightRecorder {
             lon, lat, alt, gs,
             bank, pitch, accVert, course,
             egtSpread, chtSpread, maxEgt,
-            pctPower, opCond, pct, sfc
+            pctPower, opCond, pct, sfc,
+            mlPhase, mlScore, mlAnomaly, mlLatency
         ].join(',');
 
         this._csvBuffer.push(row);
@@ -222,14 +248,17 @@ class FlightRecorder {
         }
     }
 
-    /** Rename file with departure/destination airports using NASR lookup */
+    /**
+     * Rename file with departure/destination airports using NASR lookup.
+     * Returns { depIcao, destIcao } if successful, null otherwise.
+     */
     async _renameWithRoute() {
-        if (!this._nasrDb || !this._firstGps || !this._lastGps) return;
+        if (!this._nasrDb || !this._firstGps || !this._lastGps) return null;
 
         try {
             const dep = await this._nearestAirport(this._firstGps.lat, this._firstGps.lon);
             const dest = await this._nearestAirport(this._lastGps.lat, this._lastGps.lon);
-            if (!dep || !dest) return;
+            if (!dep || !dest) return null;
 
             const ymd = this._fileName.split('_')[0];
             const newName = `${ymd}_${dep}-${dest}.csv`;
@@ -239,7 +268,7 @@ class FlightRecorder {
             const newPath = `${FlightRecorder.FLIGHTS_PATH}/${newName}`;
 
             const readResp = await fetch(`${FlightRecorder.LOCAL_BASE}/${oldPath}`);
-            if (!readResp.ok) return;
+            if (!readResp.ok) return null;
             const data = await readResp.text();
 
             await fetch(`${FlightRecorder.LOCAL_BASE}/${newPath}`, {
@@ -253,21 +282,23 @@ class FlightRecorder {
 
             this._fileName = newName;
             if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Renamed to ${newName}`);
+            return { depIcao: dep, destIcao: dest };
         } catch (err) {
             if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Rename failed: ${err.message}`);
+            return null;
         }
     }
 
     async _nearestAirport(lat, lon) {
         if (!this._nasrDb) return null;
         try {
-            const results = this._nasrDb.search(`${lat.toFixed(2)},${lon.toFixed(2)}`);
-            // Find nearest airport within 10nm
-            if (results && results.length > 0) {
-                for (const r of results) {
-                    if (r.type === 'APT' && r.dist_nm < 10) return r.id;
-                }
-            }
+            const nearby = await this._nasrDb.getAirportsNear(lat, lon, 10);
+            if (!nearby || nearby.length === 0) return null;
+            nearby.sort((a, b) =>
+                NasrDB.haversineNm(lat, lon, a.lat, a.lon) -
+                NasrDB.haversineNm(lat, lon, b.lat, b.lon)
+            );
+            return nearby[0].icao || nearby[0].id || null;
         } catch { /* NASR not available */ }
         return null;
     }

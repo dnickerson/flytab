@@ -158,6 +158,17 @@ class EngineMLBridge {
         return [...this._log];
     }
 
+    /** Reset all adapted thresholds (call after maintenance or phase bug fix). */
+    async resetThresholds() {
+        if (!this._plugin) return;
+        try {
+            await this._plugin.resetThresholds({});
+            console.log('[EngineML] Adapted thresholds reset');
+        } catch (err) {
+            console.error('[EngineML] resetThresholds failed:', err);
+        }
+    }
+
     /** Triggers a CSV download of the current ring buffer. */
     exportLogCSV(filename = 'engineml_log.csv') {
         if (!this._log.length) return;

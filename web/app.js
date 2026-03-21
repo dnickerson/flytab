@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v4.8';
+const FLYTAB_VERSION = 'v4.9';
 
 // ========== Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -804,14 +804,27 @@ class FlyTabApp {
     }
 
     async _ensureNasrData(nasrDb) {
+        // Compare NanoHTTPD cycle_info against IndexedDB — re-import if cycle changed
         try {
-            // Quick check: do we have airports?
-            const testApt = await nasrDb.getAirport('KJFK');
-            if (testApt) return; // Already populated
-        } catch { /* DB not ready, try import */ }
+            const [localFile, dbCycle, testApt] = await Promise.all([
+                fetch('http://localhost:9090/nasr/cycle_info.json', { signal: AbortSignal.timeout(2000) })
+                    .then(r => r.ok ? r.json() : null).catch(() => null),
+                nasrDb.getCycleInfo().catch(() => null),
+                nasrDb.getAirport('KJFK').catch(() => null),
+            ]);
+            const fileDate    = localFile?.effective_date;
+            const dbDate      = dbCycle?.effective_date;
+            const fileSuaCnt  = localFile?.sua_count ?? null;
+            const dbSuaCnt    = dbCycle?.sua_count    ?? null;
+            const dateMatch   = fileDate && fileDate === dbDate;
+            // suaMatch: if file advertises sua_count, DB must have same value
+            const suaMatch    = fileSuaCnt === null || (dbSuaCnt !== null && fileSuaCnt === dbSuaCnt);
+            if (testApt && dateMatch && suaMatch) return; // DB is current
+            if (testApt && !fileDate) return; // NanoHTTPD not ready; DB exists, keep it
+        } catch { /* fall through to import */ }
 
-        DiagLog.log('nasr', 'NASR DB empty — trying to import');
-        console.log('[FlyTab] NASR DB empty — trying to import...');
+        DiagLog.log('nasr', 'NASR DB empty or stale — importing from NanoHTTPD');
+        console.log('[FlyTab] NASR DB empty or stale — trying to import...');
 
         try {
             // FlyTab: try local NanoHTTPD first (pre-downloaded), then home server
@@ -1311,7 +1324,7 @@ class FlyTabApp {
         let wasConnected = null;
         const check = async () => {
             // Check if we have any network via NetworkMode (already running)
-            const mode = (typeof NetworkMode !== 'undefined') ? NetworkMode.current : 'offline';
+            const mode = this.networkMode?.mode ?? 'offline';
             this._piConnected = (mode === 'flight' || mode === 'home');
             const hasNetwork = mode !== 'offline';
 

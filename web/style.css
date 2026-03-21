@@ -2115,16 +2115,21 @@ body {
 }
 
 .route-table-content .rt-row.active {
-    background: rgba(0, 212, 255, 0.1);
+    background: rgba(0, 212, 255, 0.18);
     font-weight: 700;
+    box-shadow: inset 3px 0 0 var(--status-ok);
+}
+
+.route-table-content .rt-row.active td {
+    color: var(--text-primary);
 }
 
 .route-table-content .rt-row.active td:first-child {
-    color: var(--color-success);
+    color: var(--status-ok);
 }
 
 .route-table-content .rt-row.passed {
-    opacity: 0.4;
+    opacity: 0.35;
 }
 
 .route-table-content .rt-seg-row td {
@@ -3610,6 +3615,74 @@ body {
 .as-alt-b { color: #0055aa; }
 .as-alt-c { color: #8B008B; }
 .as-alt-d { color: #0066aa; }
+
+/* SUA label type colors */
+.sua-lbl-r   { color: #ff2222; }
+.sua-lbl-p   { color: #cc00cc; }
+.sua-lbl-w   { color: #cc8800; }
+.sua-lbl-a   { color: #888888; }
+.sua-lbl-moa { color: #2288ff; }
+
+/* NOTAM-active label: brighter + bold ring */
+.sua-lbl-active {
+    text-shadow: 0 0 4px rgba(0,0,0,0.6);
+    font-weight: 900;
+}
+
+/* "ACT" badge on active SUA labels */
+.sua-act-badge {
+    display: block;
+    font: 700 10px var(--font-ui);
+    letter-spacing: 0.05em;
+    background: var(--status-warning);
+    color: var(--bg-primary);
+    border-radius: 2px;
+    padding: 0 3px;
+    margin-top: 2px;
+    text-align: center;
+}
+
+/* SUA popup styles */
+.sua-popup-container .leaflet-popup-content-wrapper {
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+}
+.sua-popup-container .leaflet-popup-tip {
+    background: var(--bg-surface);
+}
+.sua-popup { font-size: 13px; line-height: 1.4; min-width: 180px; }
+.sua-popup b { font-size: 14px; }
+.sua-popup-type {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    opacity: 0.7;
+    text-transform: uppercase;
+}
+.sua-popup-alt {
+    display: block;
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin: 2px 0 6px;
+}
+.sua-popup-notam {
+    font-size: 12px;
+    padding: 4px 6px;
+    border-radius: 4px;
+    margin-top: 4px;
+}
+.sua-popup-active {
+    background: rgba(255, 160, 0, 0.15);
+    border-left: 3px solid var(--status-warning);
+    color: var(--text-primary);
+}
+.sua-popup-inactive {
+    color: var(--text-muted);
+    font-style: italic;
+}
 
 .airway-label {
     font: 700 9px var(--font-instrument);
@@ -6393,6 +6466,13 @@ body {
     font-size: 10px; font-weight: 700; text-transform: uppercase;
     letter-spacing: 1px; color: var(--text-muted); margin-right: 8px;
 }
+.ml-mon-reset-btn {
+    margin-top: 10px; width: 100%; padding: 12px;
+    background: var(--bg-surface-raised); color: var(--status-warning);
+    border: 1px solid var(--status-warning); border-radius: 6px;
+    font-size: var(--text-sm); font-weight: 700; min-height: var(--touch-min);
+}
+.ml-mon-reset-btn:disabled { opacity: 0.5; }
 
 /* ── Numpad bottom sheet ─────────────────────────────────── */
 .clr-numpad-sheet {

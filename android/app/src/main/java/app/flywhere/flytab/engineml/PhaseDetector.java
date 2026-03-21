@@ -25,15 +25,19 @@ public class PhaseDetector {
     private int samplesSinceStart = 0;
     private float lastRpm = 0f;
 
+    // Departure altitude — set from ground samples (speed < 5 kts, rpm < 1500).
+    // Used to compute AGL-relative threshold for landing detection.
+    private float departureAltFt = Float.NaN;
+
     // Ground speed (set externally, 0 if unavailable)
     private float groundSpeed = 0f;
 
     /**
      * Detect the current flight phase.
      *
-     * @param rpm       Engine RPM (feature index 0)
-     * @param altFt     Altitude in feet (feature index 12)
-     * @param speedKts  Ground speed in knots (from GPS or CSV)
+     * @param rpm       Engine RPM
+     * @param altFt     GPS altitude in feet (ellipsoidal, not MSL)
+     * @param speedKts  Ground speed in knots
      * @return Phase name string
      */
     public String detect(float rpm, float altFt, float speedKts) {
@@ -56,9 +60,14 @@ public class PhaseDetector {
         }
         lastRpm = rpm;
 
+        // Track departure altitude from ground samples (on the ground = slow + low RPM)
+        if (speedKts < 5 && rpm < 1500 && rpm > 100) {
+            departureAltFt = altFt;
+        }
+
         // Engine off
         if (rpm < 100) {
-            return WARMUP; // treat as warmup for display purposes
+            return WARMUP;
         }
 
         // Startup: first 60s after engine start, low RPM
@@ -66,7 +75,7 @@ public class PhaseDetector {
             return STARTUP;
         }
 
-        // Run-up: RPM 1700-1950, nearly stationary
+        // Run-up: RPM 1700–1950, nearly stationary
         if (rpm >= 1700 && rpm <= 1950 && speedKts < 10) {
             return RUNUP;
         }
@@ -76,8 +85,9 @@ public class PhaseDetector {
             return WARMUP;
         }
 
-        // Takeoff: high power, accelerating or climbing fast
-        if (rpm > 2400 && (altRate > 300 || speedKts > 50)) {
+        // Takeoff: full power AND climbing fast (ground roll → initial climb).
+        // No altitude cap — altRate > 300 is the reliable signal; cruise altRate ≈ 0.
+        if (rpm > 2400 && altRate > 300) {
             return TAKEOFF;
         }
 
@@ -86,18 +96,21 @@ public class PhaseDetector {
             return CLIMB;
         }
 
-        // Cruise: moderate RPM, level flight
-        if (rpm >= 2100 && rpm <= 2500 && Math.abs(altRate) <= 200) {
+        // Cruise: moderate-high RPM, level flight.
+        // Upper bound is redline (2700) — O-320 can cruise above 2500 RPM.
+        if (rpm >= 2100 && rpm <= 2700 && Math.abs(altRate) <= 200) {
             return CRUISE;
         }
 
-        // Descent: negative altitude rate
+        // Descent: negative altitude rate (any power setting)
         if (altRate < -200) {
             return DESCENT;
         }
 
-        // Landing: low altitude, slow, moderate power
-        if (rpm < 2200 && altFt < 1500 && (altRate < -100 || speedKts < 80)) {
+        // Landing/pattern: reduced power, within 1500 ft of departure altitude.
+        // Uses departure altitude (GPS-relative) so the threshold works at any airport elevation.
+        float agl = Float.isNaN(departureAltFt) ? altFt : (altFt - departureAltFt);
+        if (rpm < 2200 && agl < 1500 && (altRate < -100 || speedKts < 80)) {
             return LANDING;
         }
 
@@ -131,6 +144,7 @@ public class PhaseDetector {
         engineStartDetected = false;
         samplesSinceStart = 0;
         lastRpm = 0f;
+        departureAltFt = Float.NaN;
         groundSpeed = 0f;
     }
 }

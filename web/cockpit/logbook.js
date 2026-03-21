@@ -468,18 +468,23 @@ class Logbook {
 
     // ========== Auto-create from Flight Recording ==========
 
-    async createEntry(csvFilename) {
-        let depIcao = 'UNKN', destIcao = 'UNKN';
-        let dateStr = new Date().toISOString().slice(0, 10);
+    async createEntry(csvFilename, flightDetail = {}) {
+        // Prefer dep/dest from the recorder event (already resolved via NASR spatial lookup).
+        // Fall back to filename parsing for manually-created entries.
+        let depIcao = flightDetail.depIcao || 'UNKN';
+        let destIcao = flightDetail.destIcao || 'UNKN';
+        let dateStr = flightDetail.startTime
+            ? flightDetail.startTime.slice(0, 10)
+            : new Date().toISOString().slice(0, 10);
 
-        if (csvFilename) {
+        if ((depIcao === 'UNKN' || destIcao === 'UNKN') && csvFilename) {
             const stem = csvFilename.replace(/\.csv$/i, '');
             const match = stem.match(/^(\d{8})_(\w+)-(\w+)/);
             if (match) {
                 const d = match[1];
                 dateStr = `${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}`;
-                depIcao = match[2];
-                destIcao = match[3];
+                if (depIcao === 'UNKN') depIcao = match[2];
+                if (destIcao === 'UNKN') destIcao = match[3];
             }
         }
 
@@ -494,15 +499,9 @@ class Logbook {
         } catch { /* */ }
 
         const route = await this._getRouteString();
-        const engData = window.enginePanel?.lastData;
-        const durationStr = engData?.duration || '';
-        let flightTimeHours = 0;
-        if (durationStr) {
-            const parts = durationStr.split(':');
-            if (parts.length === 2) {
-                flightTimeHours = Math.round((parseInt(parts[0]) / 60 + parseInt(parts[1]) / 3600) * 100) / 100;
-            }
-        }
+
+        // Duration from recorder event (authoritative). No fallback to enginePanel.
+        const flightTimeHours = flightDetail.durationHours || 0;
 
         const mlSummary = window.engineML?.getFlightSummary() || null;
 
@@ -517,6 +516,8 @@ class Logbook {
             destination_name: destName,
             from_airport: depIcao,
             to_airport: destIcao,
+            time_out: flightDetail.startTime ? flightDetail.startTime.slice(11, 16) + 'Z' : '',
+            time_in: flightDetail.endTime ? flightDetail.endTime.slice(11, 16) + 'Z' : '',
             route: route,
             flight_time_hours: flightTimeHours,
             total_time: flightTimeHours,
@@ -1485,7 +1486,7 @@ class Logbook {
                 console.warn('[Logbook] No CSV filename from FlightSync, skipping entry');
                 return;
             }
-            this.createEntry(csvFilename).catch(err => {
+            this.createEntry(csvFilename, detail).catch(err => {
                 console.error('[Logbook] Auto-create failed:', err);
             });
         }, 2000);

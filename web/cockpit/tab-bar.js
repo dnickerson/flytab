@@ -256,7 +256,17 @@ class TabBar {
             body.innerHTML = `<div class="ml-mon-section">
                 <div class="ml-mon-row"><span>Status</span><span>Waiting for engine data...</span></div>
                 <div class="ml-mon-row"><span>Delegate</span><span>${ml.delegate || '?'}</span></div>
+            </div>
+            <div class="ml-mon-section">
+                <h3 class="ml-mon-section-title">Maintenance</h3>
+                <button class="ml-mon-reset-btn" id="mlResetThresholds">Reset Adapted Thresholds</button>
             </div>`;
+            this._fastTap(body.querySelector('#mlResetThresholds'), async () => {
+                if (!confirm('Reset all adapted thresholds? The model will revert to trained defaults and re-learn from scratch. Do this after engine maintenance or a phase detection bug fix.')) return;
+                await window.app?.engineML?.resetThresholds();
+                const btn = body.querySelector('#mlResetThresholds');
+                if (btn) { btn.textContent = 'Reset done'; btn.disabled = true; }
+            });
             return;
         }
 
@@ -314,7 +324,21 @@ class TabBar {
             html += '</div>';
         }
 
+        // Maintenance section
+        html += '<div class="ml-mon-section">';
+        html += '<h3 class="ml-mon-section-title">Maintenance</h3>';
+        html += '<div class="ml-mon-row"><span>Adapted thresholds</span><span>' + (r.thresholdAdapted ? 'Active' : 'Learning / not yet adapted') + '</span></div>';
+        html += '<button class="ml-mon-reset-btn" id="mlResetThresholds">Reset Adapted Thresholds</button>';
+        html += '</div>';
+
         body.innerHTML = html;
+
+        this._fastTap(body.querySelector('#mlResetThresholds'), async () => {
+            if (!confirm('Reset all adapted thresholds? The model will revert to trained defaults and re-learn from scratch. Do this after engine maintenance or a phase detection bug fix.')) return;
+            await window.app?.engineML?.resetThresholds();
+            const btn = body.querySelector('#mlResetThresholds');
+            if (btn) { btn.textContent = 'Reset done'; btn.disabled = true; }
+        });
     }
 
     // ========== Floating Timer ==========

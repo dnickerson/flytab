@@ -216,12 +216,21 @@ class RouteTable {
         const lon = situation.lon;
         const gs = situation.ground_speed || 0;
 
-        // Check waypoint proximity — advance if within 1nm
+        // Check waypoint passage — advance on proximity OR if waypoint is behind us
         if (this._activeIndex >= 0 && this._activeIndex < this._waypoints.length) {
             const wp = this._waypoints[this._activeIndex];
             if (wp.lat && wp.lon && lat && lon) {
                 const dist = NasrDB.haversineNm(lat, lon, wp.lat, wp.lon);
-                if (dist < 1.0 && this._activeIndex < this._waypoints.length - 1) {
+                const track = situation.true_course ?? situation.gps_track ?? null;
+                const bearingToWpt = this._bearing(lat, lon, wp.lat, wp.lon);
+
+                // Passed if within 1nm, OR if waypoint is >90° behind our track
+                // (handles flying past without getting within 1nm of it)
+                const isPast = dist < 1.0 ||
+                    (track !== null && gs > 30 &&
+                     Math.abs(((bearingToWpt - track + 540) % 360) - 180) > 90);
+
+                if (isPast && this._activeIndex < this._waypoints.length - 1) {
                     this._advanceWaypoint();
                 }
             }
@@ -1675,6 +1684,12 @@ class RouteTable {
         }
 
         this._tableEl.innerHTML = html;
+
+        // Scroll active row into view within the table body
+        const activeRow = this._tableEl.querySelector('.rt-row.active');
+        if (activeRow) {
+            activeRow.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        }
 
         // All interactive events (edit buttons, power header, row clicks) handled
         // by delegated listeners on _tableEl set up in _buildDOM().
