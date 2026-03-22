@@ -707,9 +707,12 @@ class RouteTable {
      * This allows plans without pre-computed legs (e.g. saved from cockpit) to show multi-segment rows.
      */
     _buildMissingSegments() {
-        // Skip if all waypoints with index > 0 already have segments
         const needsSegments = this._waypoints.some((wp, i) => i > 0 && (!wp._segments || wp._segments.length === 0));
-        if (!needsSegments) return;
+        // Also run if the destination has segments but is missing a DES-to-field segment
+        const dest = this._waypoints[this._waypoints.length - 1];
+        const needsDestDescent = dest && dest.elev_ft != null && dest._segments?.length > 0 &&
+            !dest._segments.some(s => s.phase === 'DES' && s.altTo != null && Math.abs(s.altTo - dest.elev_ft) < 100);
+        if (!needsSegments && !needsDestDescent) return;
 
         const cruiseAlt = this._plan?.cruise_altitude
             || this._plan?.flight_plan?.altitude
@@ -739,13 +742,42 @@ class RouteTable {
 
         for (let i = 1; i < this._waypoints.length; i++) {
             const wp = this._waypoints[i];
+            const isLast = i === this._waypoints.length - 1;
             if (wp._segments && wp._segments.length > 0) {
-                // Already has segments from plan data
+                // Already has segments from plan data.
+                // For the destination, check if a DES-to-field elevation segment is missing
+                // and append one if needed (e.g. plans from flywhere.app don't include this).
+                if (isLast && wp.elev_ft != null) {
+                    const hasDesToField = wp._segments.some(
+                        s => s.phase === 'DES' && s.altTo != null && Math.abs(s.altTo - wp.elev_ft) < 100
+                    );
+                    if (!hasDesToField) {
+                        const lastSeg = wp._segments[wp._segments.length - 1];
+                        const topAlt = lastSeg.altTo ?? lastSeg.altFrom;
+                        if (topAlt != null && topAlt > wp.elev_ft + 50) {
+                            const drop = topAlt - wp.elev_ft;
+                            const dMin = drop / descentRate;
+                            const dDist = (descentSpeed / 60) * dMin;
+                            const dFuel = (descentGph / 60) * dMin;
+                            wp._segments.push({
+                                phase: 'DES',
+                                altFrom: topAlt,
+                                altTo: wp.elev_ft,
+                                dist: parseFloat(dDist.toFixed(1)),
+                                tas: Math.round(descentSpeed), gs: Math.round(descentSpeed),
+                                ete_min: parseFloat(dMin.toFixed(2)),
+                                gph: parseFloat(descentGph.toFixed(1)),
+                                fuel: parseFloat(dFuel.toFixed(2)),
+                                fuelRemaining: 0,
+                                percent_power: descentPwr, rpm: descentRpm, mp: descentMp,
+                            });
+                        }
+                    }
+                }
                 prevAlt = wp._segments[wp._segments.length - 1].altTo ?? prevAlt;
                 continue;
             }
 
-            const isLast = i === this._waypoints.length - 1;
             const legDist = wp._legDist || 0;
             // For the last waypoint (destination): cruise altitude is wp.alt or cruiseAlt,
             // field elevation (elev_ft) is the descent target — handled by deferred descent below.

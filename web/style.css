@@ -4217,6 +4217,21 @@ body {
     font-size: 19px;
     font-weight: 700;
 }
+.checklist-reset-all-btn {
+    display: block;
+    width: 100%;
+    padding: 12px;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-align: center;
+    background: none;
+    border: none;
+    border-bottom: 2px solid var(--border);
+    color: var(--status-danger);
+    cursor: pointer;
+    touch-action: manipulation;
+}
 .checklist-reset-btn {
     background: var(--bg-secondary);
     color: var(--text-secondary);
@@ -5538,6 +5553,32 @@ body {
 
 .apt-tab-pane.active {
     display: block;
+}
+
+/* Airport facts row (elev / TPA / fuel) in INFO tab */
+.apt-facts-row {
+    display: flex;
+    gap: 8px;
+    padding: 10px 12px 6px;
+    border-bottom: 1px solid var(--border);
+}
+.apt-fact {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+.apt-fact-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+.apt-fact-value {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-top: 2px;
 }
 
 /* ========== APT Route Panel (departure + destination quick-access) ========== */

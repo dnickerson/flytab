@@ -325,6 +325,7 @@ class AirportPopup {
 
         <div class="apt-tab-content">
             <div class="apt-tab-pane active" data-pane="info">
+                ${this._aptFactsHtml(apt)}
                 ${this._frequenciesHtml(apt.frequencies || [], apt.tower)}
                 ${(CockpitConfig.get('ifr.showCdPhone') || CockpitConfig.get('ifr.showCraft')) ? this._ifrHtml(apt) : ''}
             </div>
@@ -638,6 +639,18 @@ class AirportPopup {
                 ${rows}
             </table>
         </div>`;
+    }
+
+    _aptFactsHtml(apt) {
+        const facts = [];
+        if (apt.elev_ft != null) facts.push({ label: 'ELEV', value: `${apt.elev_ft} ft` });
+        if (apt.tpa_ft)          facts.push({ label: 'TPA',  value: `${apt.tpa_ft} ft MSL` });
+        if (apt.fuel)            facts.push({ label: 'FUEL', value: apt.fuel });
+        if (!facts.length) return '';
+        const cells = facts.map(f =>
+            `<div class="apt-fact"><div class="apt-fact-label">${f.label}</div><div class="apt-fact-value">${f.value}</div></div>`
+        ).join('');
+        return `<div class="popup-section apt-facts-row">${cells}</div>`;
     }
 
     _frequenciesHtml(frequencies, isTowered) {
