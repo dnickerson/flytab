@@ -670,9 +670,12 @@ class AirportPopup {
 
             if (!plate) {
                 const typeLabel = plateType === 'APD' ? 'Airport Diagram' : 'Airport Information';
+                const hint = plateType === 'APD'
+                    ? 'Not all airports have FAA-published diagrams. Diagrams are typically published for towered and busier airports.'
+                    : 'Download plates via Pre-Flight Refresh to enable this tab.';
                 containerEl.innerHTML = `<div style="padding:16px;color:var(--text-muted);font-size:13px">
                     No ${typeLabel} available for ${icao}.<br>
-                    <span style="font-size:11px;color:var(--text-dim)">Download plates via Pre-Flight Refresh to enable this tab.</span>
+                    <span style="font-size:11px;color:var(--text-dim)">${hint}</span>
                 </div>`;
                 return;
             }
