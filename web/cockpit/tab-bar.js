@@ -504,7 +504,9 @@ class TabBar {
         const overlay = document.createElement('div');
         overlay.id = 'flytabHelpOverlay';
         overlay.style.cssText = `
-            position: fixed; inset: 0; z-index: 100000;
+            position: fixed; top: 0; left: 0; right: 0;
+            bottom: var(--tab-bar-height, 72px);
+            z-index: 100000;
             background: #0a1628; color: #e8ecf0;
             display: flex; flex-direction: column;
             font-family: -apple-system, 'SF Pro Display', system-ui, sans-serif;
