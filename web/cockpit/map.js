@@ -168,8 +168,21 @@ class CockpitMap {
                 if (typeof DiagLog !== 'undefined') DiagLog.log('tiles', `404: ${layer._url?.replace('{z}',z).replace('{x}',x).replace('{y}',y) || '?'}`);
             });
         };
+        // TAC (Terminal Area Charts) — higher detail around Class B airspace, VFR flyways
+        this._tacLayer = L.tileLayer(`${tileBase}/tac/{z}/{x}/{y}.webp`, {
+            minZoom: 8,
+            minNativeZoom: 8,
+            maxNativeZoom: 12,
+            maxZoom: 14,
+            tms: false,
+            updateWhenZooming: false,
+            attribution: 'FAA Terminal Area Charts',
+            errorTileUrl: '',
+        });
+
         logTileError(this._sectionalLayer);
         logTileError(this._ifrLayer);
+        logTileError(this._tacLayer);
 
         // Start with sectional
         this._sectionalLayer.addTo(this.map);
@@ -255,6 +268,7 @@ class CockpitMap {
     switchBaseLayer(name) {
         if (this.map.hasLayer(this._sectionalLayer)) this.map.removeLayer(this._sectionalLayer);
         if (this._ifrLayer && this.map.hasLayer(this._ifrLayer)) this.map.removeLayer(this._ifrLayer);
+        if (this._tacLayer && this.map.hasLayer(this._tacLayer)) this.map.removeLayer(this._tacLayer);
 
         if (name === 'vector') {
             // Dark background + NASR vectors
@@ -266,6 +280,8 @@ class CockpitMap {
             if (this._vectorLayers) this._vectorLayers.disableDarkBackground();
             if (name === 'ifr') {
                 this._ifrLayer.addTo(this.map);
+            } else if (name === 'tac') {
+                this._tacLayer.addTo(this.map);
             } else {
                 this._sectionalLayer.addTo(this.map);
             }

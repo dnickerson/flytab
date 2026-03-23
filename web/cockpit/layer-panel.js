@@ -298,6 +298,7 @@ class LayerPanel {
                 <button class="lp-radio-btn" data-layer="vector">VEC</button>
                 <button class="lp-radio-btn" data-layer="sectional">SEC</button>
                 <button class="lp-radio-btn" data-layer="ifr">IFR</button>
+                <button class="lp-radio-btn" data-layer="tac">TAC</button>
             </div>
 
             <div class="lp-accordion open" id="lp-acc-overlays">

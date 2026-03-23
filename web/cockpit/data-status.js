@@ -322,6 +322,7 @@ class DataStatus {
         const mbtilesHtml = [
             { layer: 'sectional', label: 'Sectional Charts (z5–11)', approxMb: 1800 },
             { layer: 'ifr-low',   label: 'IFR Low Enroute (z7–11)',  approxMb: 600  },
+            { layer: 'tac',       label: 'Terminal Area Charts (z8–12) — VFR Flyways', approxMb: 250 },
         ].map(({ layer, label, approxMb }) => {
             const entry = mbt.find(l => l.layer === layer);
             let serverLine, devLine, badge, action = '';
