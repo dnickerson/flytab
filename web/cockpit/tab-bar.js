@@ -484,10 +484,9 @@ class TabBar {
         overlay.style.cssText = `
             position: fixed; inset: 0; z-index: 9999;
             background: #0a1628; color: #e8ecf0;
-            overflow-y: auto; -webkit-overflow-scrolling: touch;
+            display: flex; flex-direction: column;
             font-family: -apple-system, 'SF Pro Display', system-ui, sans-serif;
             font-size: 14px; line-height: 1.6;
-            padding: env(safe-area-inset-top, 0) 0 env(safe-area-inset-bottom, 0);
         `;
 
         const closeBtn = `<button onclick="document.getElementById('flytabHelpOverlay').remove()" style="
@@ -495,7 +494,11 @@ class TabBar {
             padding:6px 14px; font-size:14px; font-weight:600; cursor:pointer;
             touch-action:manipulation;">✕ Back to Map</button>`;
 
-        overlay.innerHTML = `<div style="padding:12px 16px 40px">
+        overlay.innerHTML = `<div style="
+            flex:1; overflow-y:scroll; -webkit-overflow-scrolling:touch;
+            touch-action:pan-y; overscroll-behavior:contain;
+            padding:12px 16px 40px;
+        ">
 <div style="position:sticky;top:0;background:#0a1628;border-bottom:1px solid #1a3055;padding:10px 0 10px;display:flex;align-items:center;gap:12px;z-index:1">
   ${closeBtn}
   <span style="font-size:18px;font-weight:700;flex:1">FlyTab Help</span>
