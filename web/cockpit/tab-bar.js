@@ -482,7 +482,7 @@ class TabBar {
         const overlay = document.createElement('div');
         overlay.id = 'flytabHelpOverlay';
         overlay.style.cssText = `
-            position: fixed; inset: 0; z-index: 9999;
+            position: fixed; inset: 0; z-index: 100000;
             background: #0a1628; color: #e8ecf0;
             display: flex; flex-direction: column;
             font-family: -apple-system, 'SF Pro Display', system-ui, sans-serif;
@@ -646,6 +646,12 @@ class TabBar {
 </div>`;
 
         document.body.appendChild(overlay);
+
+        // Block all touch/pointer events from reaching elements underneath
+        overlay.addEventListener('touchstart', (e) => e.stopPropagation(), { passive: true });
+        overlay.addEventListener('touchmove', (e) => e.stopPropagation(), { passive: true });
+        overlay.addEventListener('touchend', (e) => e.stopPropagation(), { passive: true });
+        overlay.addEventListener('pointerdown', (e) => e.stopPropagation());
 
         // Smooth scroll for anchor links
         overlay.querySelectorAll('a[href^="#"]').forEach(a => {
