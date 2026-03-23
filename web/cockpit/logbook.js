@@ -1483,15 +1483,22 @@ class Logbook {
     // ========== Internal: Event Handler ==========
 
     _onCaptureStopped(detail = {}) {
+        if (typeof DiagLog !== 'undefined') DiagLog.log('logbook', `flightsync:stopped received — csvFilename=${detail.csvFilename}, rows=${detail.rowCount}`);
         setTimeout(() => {
             const csvFilename = detail.csvFilename || null;
             if (!csvFilename) {
                 console.warn('[Logbook] No CSV filename from FlightSync, skipping entry');
+                if (typeof DiagLog !== 'undefined') DiagLog.log('logbook', 'No csvFilename in event detail — skipping auto-entry');
                 return;
             }
-            this.createEntry(csvFilename, detail).catch(err => {
-                console.error('[Logbook] Auto-create failed:', err);
-            });
+            this.createEntry(csvFilename, detail)
+                .then(entry => {
+                    if (typeof DiagLog !== 'undefined') DiagLog.log('logbook', `Draft entry created: ${entry.departure_icao}→${entry.destination_icao} id=${entry.id}`);
+                })
+                .catch(err => {
+                    console.error('[Logbook] Auto-create failed:', err);
+                    if (typeof DiagLog !== 'undefined') DiagLog.log('logbook', `Auto-create FAILED: ${err.message}`);
+                });
         }, 2000);
     }
 

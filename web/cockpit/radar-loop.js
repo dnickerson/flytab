@@ -41,19 +41,22 @@ class RadarLoop {
             this._nexrad.addTo(map);
         }
 
-        // Suppress live NEXRAD draws while loop is playing
-        if (this._nexrad) this._nexrad.enterLoopMode();
-
         const frames = this._nexrad ? this._nexrad.frameHistory : [];
-        if (frames.length === 0) {
-            this._showNoData();
-        }
-
-        this._showControls();
-        this._updateFrameCount();
         if (frames.length > 0) {
+            // Suppress live draws while playing historical frames
+            if (this._nexrad) this._nexrad.enterLoopMode();
+            this._showControls();
+            this._updateFrameCount();
             this._goToFrame(frames.length - 1);
             this.play();
+        } else {
+            // No snapshots yet — show live NEXRAD blocks if any, "NO FIS-B RADAR" if none
+            this._showControls();
+            this._showNoData();
+            if (this._nexrad?.hasData) {
+                // Live blocks are available — draw them immediately
+                this._nexrad._draw();
+            }
         }
     }
 
@@ -62,7 +65,7 @@ class RadarLoop {
         this._hideControls();
         // Resume live NEXRAD draws and restore current data
         if (this._nexrad) {
-            this._nexrad.exitLoopMode();
+            this._nexrad.exitLoopMode(); // safe to call even if never entered
             if (this._nexrad._active) this._nexrad._draw();
         }
         this._frameIndex = 0;

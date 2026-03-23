@@ -956,9 +956,12 @@ class DataStatus {
                 fetch(`${LOCAL}/nasr/cycle_info.json`, { cache: 'no-store', signal: AbortSignal.timeout(2000) }).then(r => r.ok ? r.json() : null).catch(() => null),
             ]);
             if (!serverResp) throw new Error('Home server not reachable');
-            const serverDate = serverResp.effective_date;
-            const localDate  = localResp?.effective_date;
-            if (localDate === serverDate) {
+            const serverDate    = serverResp.effective_date;
+            const localDate     = localResp?.effective_date;
+            const serverSuaCnt  = serverResp.sua_count ?? null;
+            const localSuaCnt   = localResp?.sua_count  ?? null;
+            const suaUpToDate   = serverSuaCnt === null || (localSuaCnt !== null && serverSuaCnt === localSuaCnt);
+            if (localDate === serverDate && suaUpToDate) {
                 setStep('nasr', 'skip', `Current — cycle ${serverDate}`);
             } else {
                 setStep('nasr', 'running', `Downloading NASR bundle${localDate ? ' (' + localDate + ' \u2192 ' + serverDate + ')' : ''}…`);

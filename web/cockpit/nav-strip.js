@@ -5,12 +5,23 @@
  */
 
 class NavStrip {
+    static ALL_FIELDS = [
+        { key: 'next',  label: 'NEXT wpt' },
+        { key: 'dest',  label: 'DEST wpt' },
+        { key: 'gs',    label: 'GS' },
+        { key: 'alt',   label: 'ALT' },
+        { key: 'vs',    label: 'VS' },
+        { key: 'range', label: 'RANGE' },
+        { key: 'fuel',  label: 'FUEL' },
+    ];
+
     constructor(container, stratuxClient) {
         this.container = container;
         this.stratux = stratuxClient;
         this.activePlan = null;
         this.activeWpIndex = 0;
         this._el = null;
+        this._pickerEl = null;
     }
 
     init() {
@@ -77,21 +88,15 @@ class NavStrip {
         };
 
         // Apply config-driven field visibility
-        if (typeof CockpitConfig !== 'undefined') {
-            const cfg = CockpitConfig.get('navStrip');
-            if (cfg && Array.isArray(cfg.fields)) {
-                const enabled = new Set(cfg.fields);
-                for (const item of this._el.querySelectorAll('.nav-strip-item[data-field]')) {
-                    const field = item.getAttribute('data-field');
-                    if (!enabled.has(field)) {
-                        item.style.display = 'none';
-                        // Also hide the separator that follows this item
-                        const sep = this._el.querySelector(`.nav-strip-sep[data-after="${field}"]`);
-                        if (sep) sep.style.display = 'none';
-                    }
-                }
-            }
-        }
+        this._applyFieldVisibility();
+
+        // Long-press (500ms) on the nav strip opens the field picker
+        let pressTimer = null;
+        this._el.addEventListener('touchstart', (e) => {
+            pressTimer = setTimeout(() => { pressTimer = null; this._showPicker(); }, 500);
+        }, { passive: true });
+        this._el.addEventListener('touchend', () => { if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; } });
+        this._el.addEventListener('touchmove', () => { if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; } });
 
         this._onSituation = (e) => this._update(e.detail);
         this.stratux.addEventListener('stratux:situation', this._onSituation);
@@ -106,6 +111,56 @@ class NavStrip {
         this.stratux.addEventListener('stratux:disconnect', this._onDisconnect);
     }
 
+    _applyFieldVisibility() {
+        if (typeof CockpitConfig === 'undefined') return;
+        const cfg = CockpitConfig.get('navStrip');
+        if (!cfg || !Array.isArray(cfg.fields)) return;
+        const enabled = new Set(cfg.fields);
+        for (const item of this._el.querySelectorAll('.nav-strip-item[data-field]')) {
+            const field = item.getAttribute('data-field');
+            const show = enabled.has(field);
+            item.style.display = show ? '' : 'none';
+            const sep = this._el.querySelector(`.nav-strip-sep[data-after="${field}"]`);
+            if (sep) sep.style.display = show ? '' : 'none';
+        }
+    }
+
+    _showPicker() {
+        if (this._pickerEl) return;
+        const cfg = CockpitConfig.get('navStrip');
+        const active = new Set(Array.isArray(cfg?.fields) ? cfg.fields : NavStrip.ALL_FIELDS.map(f => f.key));
+
+        this._pickerEl = document.createElement('div');
+        this._pickerEl.className = 'ns-picker';
+        this._pickerEl.innerHTML = `
+            <div class="ns-picker-title">Nav Strip Fields</div>
+            <div class="ns-picker-btns">${NavStrip.ALL_FIELDS.map(f =>
+                `<button class="ns-picker-btn${active.has(f.key) ? ' active' : ''}" data-key="${f.key}">${f.label}</button>`
+            ).join('')}</div>
+            <button class="ns-picker-done">DONE</button>`;
+        document.body.appendChild(this._pickerEl);
+
+        this._pickerEl.querySelectorAll('.ns-picker-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                btn.classList.toggle('active');
+            });
+        });
+        this._pickerEl.querySelector('.ns-picker-done').addEventListener('click', () => {
+            const fields = [...this._pickerEl.querySelectorAll('.ns-picker-btn.active')]
+                .map(b => b.dataset.key);
+            CockpitConfig.patch('navStrip.fields', fields);
+            this._applyFieldVisibility();
+            this._closePicker();
+        });
+    }
+
+    _closePicker() {
+        if (this._pickerEl) {
+            this._pickerEl.remove();
+            this._pickerEl = null;
+        }
+    }
+
     destroy() {
         if (this._onSituation) {
             this.stratux.removeEventListener('stratux:situation', this._onSituation);
@@ -113,6 +168,7 @@ class NavStrip {
         if (this._onDisconnect) {
             this.stratux.removeEventListener('stratux:disconnect', this._onDisconnect);
         }
+        this._closePicker();
         if (this._el && this._el.parentNode) this._el.parentNode.removeChild(this._el);
     }
 

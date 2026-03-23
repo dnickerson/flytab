@@ -326,8 +326,10 @@ class FlightRecorder {
                 this._rpmAboveCount = 0;
             }
         } else {
-            // Check for auto-stop
-            if (rpm === 0) {
+            // Check for auto-stop — use configurable threshold (default 0 = exact zero)
+            const cfg = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.get('flightRecording') : {};
+            const stopThreshold = cfg.rpmStopThreshold ?? 0;
+            if (rpm <= stopThreshold) {
                 this._rpmZeroCount++;
                 if (this._rpmZeroCount >= FlightRecorder.RPM_STOP_SECONDS) {
                     this.stop();

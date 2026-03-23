@@ -65,9 +65,9 @@ public class PhaseDetector {
             departureAltFt = altFt;
         }
 
-        // Engine off
+        // Engine off / shutdown
         if (rpm < 100) {
-            return WARMUP;
+            return STARTUP;
         }
 
         // Startup: first 60s after engine start, low RPM
@@ -114,8 +114,12 @@ public class PhaseDetector {
             return LANDING;
         }
 
-        // Default
+        // Default — distinguish in-flight from ground ops.
+        // WARMUP is only valid on the ground (low speed). If the aircraft is moving at
+        // approach/pattern speed but no other phase matched (e.g. gentle -150 fpm descent
+        // at 1800 RPM), LANDING is far more accurate than WARMUP.
         if (rpm >= 2100) return CRUISE;
+        if (speedKts > 30) return LANDING;
         return WARMUP;
     }
 

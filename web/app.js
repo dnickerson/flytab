@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v4.9';
+const FLYTAB_VERSION = 'v4.10';
 
 // ========== Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -68,7 +68,6 @@ class FlyTabApp {
         this.logbook = null;
         this.radarLoop = null;
         this.approachCharts = null;
-        this.takeoffAlerts = null;
         this.ifrClearance = null;
         this.wxBriefing = null;
         this.fisbClient = null;
@@ -421,6 +420,11 @@ class FlyTabApp {
             this.cockpitMap.setEnginePage(this.enginePage);
         }
 
+        // PlanSync — fetches flight plans from flywhere.app
+        if (typeof PlanSync !== 'undefined') {
+            this.planSync = new PlanSync();
+        }
+
         // Fuel overlay (tic mark entry + EDM comparison + priority chain)
         if (typeof FuelOverlay !== 'undefined') {
             this.fuelOverlay = new FuelOverlay(document.body);
@@ -586,22 +590,6 @@ class FlyTabApp {
             });
         }
 
-        // Takeoff safety alerts (DMMS + low-alt messages)
-        if (typeof TakeoffAlerts !== 'undefined') {
-            this.takeoffAlerts = new TakeoffAlerts(primaryView);
-            this.cockpitMap.setTakeoffAlerts(this.takeoffAlerts);
-            // Feed GPS data to takeoff alerts on every situation update
-            this.stratuxClient.addEventListener('stratux:situation', (e) => {
-                const sit = e.detail;
-                if (!sit || !this.takeoffAlerts) return;
-                this.takeoffAlerts.update(
-                    sit.alt_msl,
-                    sit.ground_speed,
-                    this.takeoffAlerts._departureElevFt,
-                    null // flightPhase — not tracked yet
-                );
-            });
-        }
 
         // IFR clearance (CD phone + CRAFT readback)
         if (typeof IfrClearance !== 'undefined') {
@@ -717,6 +705,7 @@ class FlyTabApp {
                 trackLog: this.trackLog,
                 airportPopup: this.airportPopup,
                 stratuxIp: Settings.stratuxIp || '192.168.10.1',
+                planSync: this.planSync,
             });
             this.tabBar.init();
         }
@@ -1057,9 +1046,6 @@ class FlyTabApp {
             this.fisbWeather.setRouteAirports(icaoList);
         }
 
-        if (this.takeoffAlerts && wps.length > 0) {
-            this.takeoffAlerts.setDepartureElevation(wps[0].elev_ft);
-        }
 
         if (this.ifrClearance) {
             this.ifrClearance._flightPlan = normalized;
@@ -1266,14 +1252,18 @@ class FlyTabApp {
 
     _startDeviceStatusMonitor() {
         const update = () => {
-            const sit = this.stratuxClient?.situation;
-            const status = this.stratuxClient?.deviceStatus;
+            const connected = this.stratuxClient?.connected;
+            const stale = this.stratuxClient?.stale;
+            // Only use situation/deviceStatus when Stratux is live — never show
+            // stale last-session values as if they were current data.
+            const sit = (connected && !stale) ? this.stratuxClient?.situation : null;
+            const status = connected ? this.stratuxClient?.deviceStatus : null;
 
             // GPS: green if fix (quality >= 1), show solution type + source
             if (this.dom.statusGps) {
+                const src = this.gpsSource?.source === 'internal' ? 'INT' : 'STX';
                 const q = sit?.gps_fix_quality ?? 0;
                 const gpsOk = q >= 1;
-                const src = this.gpsSource?.source === 'internal' ? 'INT' : 'STX';
                 this.dom.statusGps.classList.toggle('active', gpsOk);
                 if (gpsOk) {
                     const sats = sit.gps_sats != null ? `${sit.gps_sats}sv` : '';
@@ -1289,6 +1279,7 @@ class FlyTabApp {
             // UAT_connected is a hardware-presence flag and may be false on some Stratux
             // firmware versions even when towers are in range and data is being received.
             // Fall back to message count as the authoritative signal.
+            // Guard: only show counts when Stratux is connected — never bleed prior session data.
             if (this.dom.statusFisb) {
                 const uatConnected = !!(status?.UAT_connected || status?.UATRadio_connected);
                 const receiving = (status?.UAT_messages_last_minute > 0) || (status?.UAT_messages_max > 0);
@@ -1336,7 +1327,9 @@ class FlyTabApp {
             el.textContent = mode === 'flight' ? 'FLT' :
                              mode === 'home' ? 'HOME' :
                              mode === 'internet' ? 'NET' : 'OFFL';
-            el.classList.toggle('active', hasNetwork);
+            // Only show active (green) when Pi/Stratux is reachable — not for generic internet
+            el.classList.toggle('active', mode === 'flight' || mode === 'home');
+            el.classList.toggle('status-sync-internet', mode === 'internet');
         };
 
         // Instant check on online/offline events

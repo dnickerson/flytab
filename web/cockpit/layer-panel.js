@@ -326,6 +326,10 @@ class LayerPanel {
                         <label class="lp-toggle"><input type="checkbox" data-overlay="airspace"><span class="lp-toggle-track"></span></label>
                     </div>
                     <div class="lp-row">
+                        <span class="lp-row-label">Restricted/MOA</span>
+                        <label class="lp-toggle"><input type="checkbox" data-overlay="sua"><span class="lp-toggle-track"></span></label>
+                    </div>
+                    <div class="lp-row">
                         <span class="lp-row-label">Rwy Extensions</span>
                         <label class="lp-toggle"><input type="checkbox" data-action="rwy-ext"><span class="lp-toggle-track"></span></label>
                     </div>
@@ -387,6 +391,7 @@ class LayerPanel {
             fixes: false,
             airways: true,
             airspace: true,
+            sua: false,
         };
 
         this._panel.querySelectorAll('.lp-toggle input[data-overlay]').forEach(input => {

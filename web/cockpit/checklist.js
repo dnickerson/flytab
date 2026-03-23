@@ -166,6 +166,14 @@ class Checklist {
         if (!section) return;
 
         this._sidebarEl.innerHTML = '';
+
+        // RESET ALL button — clears every checkmark in the current group
+        const resetAllBtn = document.createElement('button');
+        resetAllBtn.className = 'checklist-reset-all-btn';
+        resetAllBtn.textContent = 'RESET ALL';
+        this._wire(resetAllBtn, () => this._resetAll());
+        this._sidebarEl.appendChild(resetAllBtn);
+
         section.checklists.forEach((cl, i) => {
             const btn = document.createElement('button');
             btn.className = 'checklist-sidebar-item';
@@ -358,6 +366,16 @@ class Checklist {
 
     _persistChecked() {
         try { localStorage.setItem('flypi_checklist_state', JSON.stringify(this._checked)); } catch {}
+    }
+
+    _resetAll() {
+        Object.keys(this._checked).forEach(key => {
+            if (key.startsWith(this._activeGroup + '-')) delete this._checked[key];
+        });
+        this._openNotes.clear();
+        this._persistChecked();
+        this._renderItems();
+        this._updateSidebarStatus();
     }
 
     _resetChecklist() {

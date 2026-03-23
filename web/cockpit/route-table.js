@@ -200,6 +200,30 @@ class RouteTable {
         this._activeIndex = 0;
         if (this._waypoints.length > 0) this._waypoints[0].active = true;
 
+        // Register plan with ActiveRoute so InstrumentStrip stays in sync.
+        // ActiveRoute.setPlan() resets the index to 1 (first en-route WP);
+        // mirror that here so both start on the same waypoint.
+        if (typeof ActiveRoute !== 'undefined') {
+            ActiveRoute.setPlan({ waypoints: this._waypoints });
+            this._activeIndex = ActiveRoute.getIndex();
+            if (this._activeIndex < this._waypoints.length) {
+                this._waypoints.forEach((wp, i) => { wp.active = i === this._activeIndex; });
+            }
+            // Listen for advances triggered by InstrumentStrip (proximity-only path)
+            if (!this._onActiveRouteAdvance) {
+                this._onActiveRouteAdvance = (e) => {
+                    const newIdx = e.detail.index;
+                    if (newIdx !== this._activeIndex && newIdx < this._waypoints.length) {
+                        this._waypoints[this._activeIndex].active = false;
+                        this._waypoints[this._activeIndex].passed = true;
+                        this._activeIndex = newIdx;
+                        this._waypoints[this._activeIndex].active = true;
+                    }
+                };
+                window.addEventListener('activeroute:advance', this._onActiveRouteAdvance);
+            }
+        }
+
         this._computeEnroute();
         this._updateSummary();
         this._renderTable();
@@ -1048,7 +1072,14 @@ class RouteTable {
                 }
 
                 wp._dist = Math.round(legDist);
-                wp._ete = segTime;
+                // For the active leg, override segment-plan ETE with live time (liveDist / actual GS).
+                // Segment ETE is the original planned duration for the full leg — it doesn't shrink
+                // as the aircraft approaches the waypoint, making the total ETE appear frozen.
+                if (i === this._activeIndex && gs > 30 && wp._liveDist != null) {
+                    wp._ete = (wp._liveDist / gs) * 60;
+                } else {
+                    wp._ete = segTime;
+                }
                 wp._fuel = segFuel;
                 wp._fuelRem = startFuel - fuelBurned;
             } else if (i === 0) {
@@ -1695,7 +1726,11 @@ class RouteTable {
         // Totals footer — dist, ete, fuel
         if (this._waypoints.length >= 2) {
             let totDist = 0, totEte = 0, totFuel = 0;
-            for (const wp of this._waypoints) {
+            // Cap at destination airport — exclude MAP/missed-approach waypoints beyond it
+            const destIdx = typeof ActiveRoute !== 'undefined' ? ActiveRoute.getDestIndex() : -1;
+            const limitIdx = destIdx >= 0 ? destIdx : this._waypoints.length - 1;
+            for (let i = 0; i <= limitIdx; i++) {
+                const wp = this._waypoints[i];
                 totDist += wp._dist || 0;
                 totEte  += wp._ete  || 0;
                 totFuel += wp._fuel || 0;
@@ -1737,9 +1772,16 @@ class RouteTable {
                 case 'hdg':
                     return segIndex === 0 ? (wp._hdg != null ? Math.round(wp._hdg) + '\u00b0' : '\u2014') : '';
                 case 'dist':
-                    return seg.dist != null ? Math.round(seg.dist) : '\u2014';
+                    // Show cumulative remaining distance on the first segment row only;
+                    // subsequent sub-rows of the same waypoint leave it blank to avoid
+                    // repeating the same number across CLB/CRZ/DES rows.
+                    return segIndex === 0
+                        ? (wp._cumDist != null ? wp._cumDist : '\u2014')
+                        : '';
                 case 'ete':
-                    return seg._ete != null ? this._formatTime(seg._ete) : '\u2014';
+                    return segIndex === 0
+                        ? (wp._cumEte != null ? this._formatTime(wp._cumEte) : '\u2014')
+                        : '';
                 case 'fuel':
                     return seg._fuel != null ? seg._fuel.toFixed(1) : '\u2014';
                 case 'fuel_rem': {
@@ -1832,6 +1874,8 @@ class RouteTable {
         if (this._activeIndex < this._waypoints.length) {
             this._waypoints[this._activeIndex].active = true;
         }
+        // Notify ActiveRoute so InstrumentStrip (and any other subscriber) stays in sync
+        if (typeof ActiveRoute !== 'undefined') ActiveRoute.setIndex(this._activeIndex);
     }
 
     _formatTime(minutes) {

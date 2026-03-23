@@ -30,7 +30,6 @@ class CockpitMap {
         this._airportPopup = null;
         this._radarLoop = null;
         this._lightning = null;
-        this._takeoffAlerts = null;
         this._enginePage = null;
         this._fuelOverlay = null;
         this._logbook = null;
@@ -222,11 +221,6 @@ class CockpitMap {
         this._lightning = lightning;
     }
 
-    /** Wire up TakeoffAlerts */
-    setTakeoffAlerts(alerts) {
-        this._takeoffAlerts = alerts;
-    }
-
     /** Wire up EnginePage */
     setEnginePage(enginePage) {
         this._enginePage = enginePage;
@@ -416,9 +410,21 @@ class CockpitMap {
         const now = Date.now();
         const seen = new Set();
 
+        const trafficCfg = (typeof CockpitConfig !== 'undefined') ? (CockpitConfig.raw?.traffic || {}) : {};
+        const maxAboveAlt = trafficCfg.maxAboveAlt ?? 5000;
+        const showCallsign = trafficCfg.showCallsign !== false;
+
         for (const [icao, target] of this.stratux.traffic) {
+            // Skip targets not seen in the last 60s — defence against stale entries
+            // that survive a brief WS drop before the purge timer can evict them.
+            if (now - target.last_seen > 60000) continue;
             seen.add(icao);
             if (!target.lat || !target.lon) continue;
+
+            // Altitude filter — hide traffic more than maxAboveAlt ft above ownship
+            if (this.stratux.situation?.alt_msl != null && target.alt != null) {
+                if ((target.alt - this.stratux.situation.alt_msl) > maxAboveAlt) continue;
+            }
 
             const color = this._trafficColor(target);
             let altLabel = '';
@@ -426,14 +432,16 @@ class CockpitMap {
                 const dAlt = Math.round((target.alt || 0) - (this.stratux.situation.alt_msl || 0));
                 altLabel = (dAlt >= 0 ? '+' : '') + dAlt;
             }
+            const callsign = showCallsign ? (target.callsign || '').trim() : '';
             const svgHtml = CockpitMap._trafficSvg(target.track || 0, color, target.extrapolated);
-            const iconHtml = altLabel
-                ? `<div class="traffic-icon-wrap">${svgHtml}<div class="traffic-alt" style="color:${color};">${altLabel}</div></div>`
+            const hasLabel = altLabel || callsign;
+            const iconHtml = hasLabel
+                ? `<div class="traffic-icon-wrap">${svgHtml}${altLabel ? `<div class="traffic-alt" style="color:${color};">${altLabel}</div>` : ''}${callsign ? `<div class="traffic-cs" style="color:${color};">${callsign}</div>` : ''}</div>`
                 : svgHtml;
             const icon = L.divIcon({
                 className: 'traffic-icon',
                 html: iconHtml,
-                iconSize: altLabel ? [44, 38] : [24, 24],
+                iconSize: hasLabel ? [56, 44] : [24, 24],
                 iconAnchor: [12, 12],
             });
 

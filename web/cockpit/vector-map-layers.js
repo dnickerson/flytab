@@ -14,6 +14,7 @@ class VectorMapLayers {
         // Layer groups
         this._geoLayer = L.layerGroup();           // static geographic context
         this._airspaceLayer = L.layerGroup();
+        this._suaLayer = L.layerGroup();           // special use airspace (R/P/W/A/MOA)
         this._airportLayer = L.layerGroup();
         this._navaidLayer = L.layerGroup();
         this._fixLayer = L.layerGroup();
@@ -26,6 +27,7 @@ class VectorMapLayers {
 
         // Track current markers for diffing
         this._airspacePolygons = new Map();
+        this._suaPolygons = new Map();
         this._wxDotMarkers = new Map();    // icao → wx dot marker
         this._wxLabelMarkers = new Map();  // icao → wx label marker
         this._airportMarkers = new Map();
@@ -126,6 +128,9 @@ class VectorMapLayers {
         // Airways: use persisted setting if user has toggled, otherwise cockpit-config default
         const awyUserSet = localStorage.getItem('flypi_show_airways');
         if (awyUserSet !== null ? JSON.parse(awyUserSet) : overlays.airways?.enabled) this._airwayLayer.addTo(this._map);
+        // SUA (Restricted/MOA): default off — pilot opts in
+        const suaUserSet = localStorage.getItem('flypi_show_sua');
+        if (suaUserSet !== null ? JSON.parse(suaUserSet) : overlays.sua?.enabled) this._suaLayer.addTo(this._map);
         this._geoLayer.addTo(this._map);
 
         // Load data in background — does NOT block cockpit render
@@ -413,6 +418,7 @@ class VectorMapLayers {
     _getLayerMap() {
         return {
             airspace: this._airspaceLayer,
+            sua: this._suaLayer,
             airports: this._airportLayer,
             navaids: this._navaidLayer,
             fixes: this._fixLayer,
@@ -606,6 +612,7 @@ class VectorMapLayers {
             // Run updates in parallel
             await Promise.all([
                 this._updateAirspace(south, west, north, east, zoom, overlays),
+                this._updateSua(south, west, north, east, zoom),
                 this._updateAirports(south, west, north, east, zoom, overlays),
                 this._updateNavaids(south, west, north, east, zoom, overlays),
                 this._updateFixes(south, west, north, east, zoom, overlays),
@@ -722,6 +729,143 @@ class VectorMapLayers {
             }
         } catch (err) {
             console.warn('VectorMapLayers: airspace query failed', err);
+        }
+    }
+
+    // SUA type → base (inactive) style
+    static SUA_STYLES = {
+        R:   { color: '#ff2222', fillColor: '#ff2222', fillOpacity: 0.07, weight: 1.5, dashArray: '6 3' },
+        P:   { color: '#cc00cc', fillColor: '#cc00cc', fillOpacity: 0.10, weight: 2 },
+        W:   { color: '#ffaa00', fillColor: '#ffaa00', fillOpacity: 0.07, weight: 1.5, dashArray: '6 3' },
+        A:   { color: '#aaaaaa', fillColor: '#aaaaaa', fillOpacity: 0.06, weight: 1, dashArray: '4 4' },
+        MOA: { color: '#2288ff', fillColor: '#2288ff', fillOpacity: 0.06, weight: 1.5, dashArray: '8 4' },
+    };
+
+    // Active (NOTAM-confirmed) style overrides — solid fill, no dash, heavier border
+    static SUA_ACTIVE_OVERRIDES = {
+        fillOpacity: 0.25,
+        weight:      2.5,
+        dashArray:   null,
+    };
+
+    async _updateSua(south, west, north, east, zoom) {
+        if (!this._map.hasLayer(this._suaLayer)) return;
+        // Only show SUA from z6 up — below that, polygons are too small to be useful
+        if (zoom < 6) {
+            this._clearLayer(this._suaLayer, this._suaPolygons);
+            return;
+        }
+
+        // Fetch NOTAM status (cached, silent on error)
+        const suaNotams = window.SuaNotams;
+        if (suaNotams) {
+            suaNotams.fetchForBounds(south, west, north, east).catch(() => {});
+        }
+
+        try {
+            const areas = await this._nasr.getSuaInBounds(south, west, north, east);
+            const currentIds = new Set();
+
+            for (const sua of areas) {
+                currentIds.add(sua.id);
+                const isActive = suaNotams ? suaNotams.hasActiveNotam(sua) : false;
+                const existingPoly = this._suaPolygons.get(sua.id);
+
+                if (existingPoly) {
+                    // Update style in-place if activation state changed
+                    const wasActive = existingPoly._suaActive === true;
+                    if (isActive !== wasActive) {
+                        const base = VectorMapLayers.SUA_STYLES[sua.type] || VectorMapLayers.SUA_STYLES.MOA;
+                        existingPoly.setStyle(isActive
+                            ? { ...base, ...VectorMapLayers.SUA_ACTIVE_OVERRIDES }
+                            : base);
+                        existingPoly._suaActive = isActive;
+                        // Redraw "ACT" badge label
+                        this._updateSuaActLabel(sua, isActive, center => center);
+                    }
+                    continue;
+                }
+
+                const boundary = sua.boundary || [];
+                if (boundary.length < 3) continue;
+
+                const base = VectorMapLayers.SUA_STYLES[sua.type] || VectorMapLayers.SUA_STYLES.MOA;
+                const style = isActive ? { ...base, ...VectorMapLayers.SUA_ACTIVE_OVERRIDES } : base;
+                const latlngs = boundary.map(pt => [pt[0], pt[1]]);
+
+                const polygon = L.polygon(latlngs, { ...style, interactive: true });
+                polygon._suaActive = isActive;
+
+                // Tap popup: name, type, altitudes, NOTAM status
+                const notam = suaNotams ? suaNotams.getNotam(sua) : null;
+                const lowerStr = sua.lower_ft === 0 ? 'SFC' : (sua.lower_ft >= 1000 ? `${Math.round(sua.lower_ft / 100) * 100} ft` : `${sua.lower_ft} ft`);
+                const upperStr = sua.upper_ft != null ? (sua.upper_ft >= 1000 ? `${Math.round(sua.upper_ft / 100) * 100} ft` : `${sua.upper_ft} ft`) : '?';
+                const notamHtml = notam
+                    ? `<div class="sua-popup-notam sua-popup-active">⚠ ACTIVE per NOTAM<br><small>${notam.text?.slice(0, 120) ?? ''}</small></div>`
+                    : `<div class="sua-popup-notam sua-popup-inactive">No active NOTAM found</div>`;
+                const popupHtml = `<div class="sua-popup">
+                    <b>${sua.name ?? sua.id}</b> <span class="sua-popup-type">${sua.type}</span><br>
+                    <span class="sua-popup-alt">${lowerStr} – ${upperStr}</span>
+                    ${notamHtml}
+                </div>`;
+                polygon.bindPopup(popupHtml, { maxWidth: 280, className: 'sua-popup-container' });
+
+                polygon.addTo(this._suaLayer);
+                this._suaPolygons.set(sua.id, polygon);
+
+                // Altitude label at centroid
+                const center = VectorMapLayers._polygonCentroid(latlngs);
+                const altLower = sua.lower_ft === 0 ? 'SFC' : (sua.lower_ft >= 1000 ? `${Math.round(sua.lower_ft / 100)}` : sua.lower_ft);
+                const altUpper = sua.upper_ft != null ? (sua.upper_ft >= 1000 ? `${Math.round(sua.upper_ft / 100)}` : sua.upper_ft) : '?';
+                const actBadge = isActive ? '<span class="sua-act-badge">ACT</span>' : '';
+                const altHtml  = `${altUpper}<br><span class="as-alt-floor">${altLower}</span>${actBadge}`;
+                const typeClass = `sua-lbl-${(sua.type || 'moa').toLowerCase()}`;
+                const label = L.marker(center, {
+                    icon: L.divIcon({
+                        className: `as-alt-label ${typeClass}${isActive ? ' sua-lbl-active' : ''}`,
+                        html: altHtml,
+                        iconSize: [44, 34],
+                        iconAnchor: [22, 17],
+                    }),
+                    interactive: false,
+                    zIndexOffset: -150,
+                });
+                label.addTo(this._suaLayer);
+                this._suaPolygons.set(sua.id + '_lbl', label);
+            }
+
+            // Remove out-of-view
+            for (const [id, poly] of this._suaPolygons) {
+                const baseId = id.endsWith('_lbl') ? id.slice(0, -4) : id;
+                if (!currentIds.has(baseId)) {
+                    this._suaLayer.removeLayer(poly);
+                    this._suaPolygons.delete(id);
+                }
+            }
+        } catch (err) {
+            console.warn('VectorMapLayers: SUA query failed', err);
+        }
+    }
+
+    _updateSuaActLabel(sua, isActive, _getCenterFn) {
+        // Re-render the label marker when activation state flips mid-session
+        const lblKey = sua.id + '_lbl';
+        const existing = this._suaPolygons.get(lblKey);
+        if (!existing) return;
+        const el = existing.getElement?.();
+        if (!el) return;
+        if (isActive) {
+            el.classList.add('sua-lbl-active');
+            // Add ACT badge if not present
+            if (!el.querySelector('.sua-act-badge')) {
+                const badge = document.createElement('span');
+                badge.className = 'sua-act-badge';
+                badge.textContent = 'ACT';
+                el.appendChild(badge);
+            }
+        } else {
+            el.classList.remove('sua-lbl-active');
+            el.querySelector('.sua-act-badge')?.remove();
         }
     }
 

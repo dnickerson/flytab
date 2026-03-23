@@ -9,9 +9,9 @@ class InstrumentStrip {
         this._stratux = stratuxClient;
         this._engine = engineClient || null;
         this._el = null;
-        this._activePlan = null;
-        this._activeWpIndex = 0;
+        this._activePlan = null;  // local ref for quick existence check in _update()
         this._onSituation = null;
+        this._onRouteAdvance = null;
 
         // Default fields if no config
         this._fields = ['gs', 'alt', 'vs', 'fuel', 'dist', 'ete'];
@@ -84,8 +84,15 @@ class InstrumentStrip {
     }
 
     setActivePlan(plan) {
+        // ActiveRoute is the single source of truth — keep local reference only
+        // for the _updateRoute hot path (avoids a getter call every GPS tick).
         this._activePlan = plan;
-        this._activeWpIndex = 0;
+        // Index is owned by ActiveRoute; listen for advances so we stay in sync.
+        if (!this._onRouteAdvance) {
+            this._onRouteAdvance = () => { /* index read from ActiveRoute on next tick */ };
+            window.addEventListener('activeroute:advance', this._onRouteAdvance);
+            window.addEventListener('activeroute:plan', this._onRouteAdvance);
+        }
     }
 
     _makeField(field) {
@@ -191,45 +198,46 @@ class InstrumentStrip {
     }
 
     _updateRoute(sit) {
-        const wps = this._activePlan?.waypoints;
-        if (!wps || wps.length === 0) return;
+        const wps = ActiveRoute.getWaypoints();
+        if (!wps.length) return;
 
         const gs = sit.ground_speed || 0;
+        const idx = ActiveRoute.getIndex();
 
-        // Auto-advance waypoint
-        const next = wps[this._activeWpIndex];
+        // Auto-advance: delegate to ActiveRoute so RouteTable stays in sync
+        const next = wps[idx];
         if (next && next.lat != null) {
             const distToNext = CockpitMap._distNm(sit.lat, sit.lon, next.lat, next.lon);
-            if (distToNext < 1.0 && this._activeWpIndex < wps.length - 1) {
-                this._activeWpIndex++;
-            }
+            if (distToNext < 1.0) ActiveRoute.advance();
         }
 
-        // Total remaining distance (ownship → next → ... → dest)
+        // Total remaining distance: ownship → active WP → ... → dest
+        // Only count up to the destination airport, not MAP fixes beyond it.
+        const destIdx = ActiveRoute.getDestIndex();
+        const limitIdx = destIdx >= 0 ? destIdx : wps.length - 1;
         let totalDist = 0;
-        if (this._activeWpIndex < wps.length && wps[this._activeWpIndex].lat != null) {
-            totalDist += CockpitMap._distNm(
-                sit.lat, sit.lon,
-                wps[this._activeWpIndex].lat, wps[this._activeWpIndex].lon
-            );
-            for (let i = this._activeWpIndex; i < wps.length - 1; i++) {
-                if (wps[i].lat != null && wps[i + 1].lat != null) {
-                    totalDist += CockpitMap._distNm(
-                        wps[i].lat, wps[i].lon,
-                        wps[i + 1].lat, wps[i + 1].lon
-                    );
+        const activeIdx = ActiveRoute.getIndex(); // re-read in case advance() fired
+        if (activeIdx <= limitIdx && wps[activeIdx]?.lat != null) {
+            totalDist += CockpitMap._distNm(sit.lat, sit.lon, wps[activeIdx].lat, wps[activeIdx].lon);
+            for (let i = activeIdx; i < limitIdx; i++) {
+                if (wps[i].lat != null && wps[i + 1]?.lat != null) {
+                    totalDist += CockpitMap._distNm(wps[i].lat, wps[i].lon, wps[i + 1].lat, wps[i + 1].lon);
                 }
             }
         }
 
         this._set('dist', totalDist.toFixed(0));
-
         if (gs > 10 && totalDist > 0) {
-            const eteMin = totalDist / gs * 60;
-            this._set('ete', NavStrip._formatEte(eteMin));
+            this._set('ete', InstrumentStrip._formatEte(totalDist / gs * 60));
         } else {
             this._set('ete', '—');
         }
+    }
+
+    static _formatEte(minutes) {
+        const h = Math.floor(minutes / 60);
+        const m = Math.round(minutes % 60);
+        return h > 0 ? `${h}:${String(m).padStart(2, '0')}` : `${m}m`;
     }
 
     _set(field, value) {

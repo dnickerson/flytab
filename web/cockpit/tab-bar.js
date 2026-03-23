@@ -60,6 +60,7 @@ class TabBar {
         if (c.configEditor?.hide) c.configEditor.hide();
         if (c.approachCharts?.closeViewer) c.approachCharts.closeViewer();
         if (c.fuelOverlay?.hide) c.fuelOverlay.hide();
+        if (c.planSync?.hide) c.planSync.hide();
         if (c.airportPopup?.close) c.airportPopup.close();
 
         if (tabId === 'tmr') {
@@ -105,6 +106,10 @@ class TabBar {
 
         const c = this._comps;
         const rows = [
+            { icon: '✈', label: 'Load Flight Plan', action: () => {
+                if (c.planSync?.show) c.planSync.show();
+                this._closeMoreDrawer();
+            }},
             { icon: '🧠', label: 'Engine ML', action: () => {
                 this._closeMoreDrawer();
                 this._showMLMonitor();

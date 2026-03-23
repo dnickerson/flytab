@@ -352,11 +352,8 @@ class StratuxClient extends EventTarget {
         // Don't null situation on disconnect — the situation WS may still be
         // delivering data, and even if it isn't, the last known position is
         // more useful than nothing. The stale-data purge timer handles aging.
-        if (state) {
-            this._startPurge();
-        } else {
-            if (this._purgeInterval) { clearInterval(this._purgeInterval); this._purgeInterval = null; }
-        }
+        // Keep the traffic purge running regardless of connected state — stopping it
+        // on a WS drop causes phantom aircraft to persist until reconnect.
         const event = state ? 'stratux:connect' : 'stratux:disconnect';
         this.dispatchEvent(new CustomEvent(event));
     }

@@ -218,6 +218,25 @@ class CockpitConfig {
     }
 
     /**
+     * Patch a dot-path in the live config and persist to localStorage.
+     * Used for in-app edits that should survive a reload without re-editing the JSON.
+     * e.g. CockpitConfig.patch('navStrip.fields', ['next','dest','gs'])
+     */
+    static patch(path, value) {
+        if (!CockpitConfig._config) CockpitConfig._config = {};
+        const keys = path.split('.');
+        let obj = CockpitConfig._config;
+        for (let i = 0; i < keys.length - 1; i++) {
+            if (obj[keys[i]] == null || typeof obj[keys[i]] !== 'object') obj[keys[i]] = {};
+            obj = obj[keys[i]];
+        }
+        obj[keys[keys.length - 1]] = value;
+        try {
+            localStorage.setItem('flypi_cfg_cockpit_config_json', JSON.stringify(CockpitConfig._config));
+        } catch { /* quota */ }
+    }
+
+    /**
      * Get the full cockpit config object (for iteration).
      */
     static get raw() {

@@ -98,21 +98,6 @@
     "autoRotateTrackUp": false,
     "preloadRoutePlates": true
   },
-  "takeoffAlerts": {
-    "showDmms": true,
-    "dmmsDisplayUntilAglFt": 1000,
-    "dmmsFlashWhenBelow": true,
-    "lowAltitudeMessages": [
-      {
-        "belowAglFt": 1000,
-        "message": "PUSH DOWN  FLY STRAIGHT AHEAD",
-        "color": "#ffcc00",
-        "background": "#000000",
-        "fontSize": "24pt",
-        "phase": "departure"
-      }
-    ]
-  },
   "ifr": {
     "showCdPhone": true,
     "defaultCdPhone": "1-888-766-8267",
@@ -126,6 +111,14 @@
     "C": { "color": "#ff44ff", "weight": 1.5, "fillOpacity": 0.06 },
     "D": { "color": "#0088ff", "weight": 1, "dashArray": "6,4", "fillOpacity": 0.04 },
     "E": { "color": "#ff44ff", "weight": 1, "dashArray": "4,4", "fillOpacity": 0.02 }
+  },
+  "traffic": {
+    "maxAboveAlt": 5000,
+    "showCallsign": true
+  },
+  "flywhere": {
+    "apiUrl": "https://flywhere.app",
+    "apiKey": ""
   },
   "geoStyles": {
     "stateBoundaries": { "color": "#334466", "weight": 1, "opacity": 0.5 },
