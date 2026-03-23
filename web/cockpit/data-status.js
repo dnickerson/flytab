@@ -314,6 +314,7 @@ class DataStatus {
             } else {
                 const expDate = sNasr?.expiration_date ? new Date(sNasr.expiration_date) : null;
                 platesBadge = expDate ? this._cycleStatus(expDate, now) : this._badge('CURRENT', 'green');
+                if (base) platesAction = `<button class="ds-action-btn ds-secondary" id="dsPlatesForceBtn">FORCE RESYNC</button>`;
             }
         }
 
@@ -437,6 +438,16 @@ class DataStatus {
         for (const id of ['dsNasrBtn', 'dsCifpBtn', 'dsPlatesBtn']) {
             const btn = body.querySelector(`#${id}`);
             if (btn) this._wireTap(btn, () => this._syncAll(null, showProg, updateProg, doneProg));
+        }
+
+        // Force resync — clears plate sync state then runs full sync
+        const forceBtn = body.querySelector('#dsPlatesForceBtn');
+        if (forceBtn) {
+            this._wireTap(forceBtn, () => {
+                localStorage.removeItem('flypi_plates_synced_states');
+                localStorage.removeItem('flypi_plates_cached_at');
+                this._syncAll(null, showProg, updateProg, doneProg);
+            });
         }
 
         // MBTiles per-layer download buttons

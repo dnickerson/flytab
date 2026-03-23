@@ -2850,6 +2850,13 @@ body {
     -webkit-tap-highlight-color: transparent;
 }
 .ds-action-btn:disabled { opacity: 0.4; }
+.ds-action-btn.ds-secondary {
+    background: transparent;
+    color: var(--accent);
+    font-weight: 600;
+    font-size: 12px;
+    padding: 6px 10px;
+}
 .ds-icao-input {
     display: block;
     width: 100%;
