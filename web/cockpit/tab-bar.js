@@ -170,8 +170,8 @@ class TabBar {
                 ]);
             }},
             { icon: '❓', label: 'Help', action: () => {
-                window.open('./help.html', '_blank');
                 this._closeMoreDrawer();
+                this._showHelp();
             }},
         ];
 
@@ -472,6 +472,185 @@ class TabBar {
             e.stopPropagation();
             if (touchFired) { touchFired = false; return; }
             handler(e);
+        });
+    }
+
+    /** Show help overlay in-app (no external browser) */
+    _showHelp() {
+        document.getElementById('flytabHelpOverlay')?.remove();
+
+        const overlay = document.createElement('div');
+        overlay.id = 'flytabHelpOverlay';
+        overlay.style.cssText = `
+            position: fixed; inset: 0; z-index: 9999;
+            background: #0a1628; color: #e8ecf0;
+            overflow-y: auto; -webkit-overflow-scrolling: touch;
+            font-family: -apple-system, 'SF Pro Display', system-ui, sans-serif;
+            font-size: 14px; line-height: 1.6;
+            padding: env(safe-area-inset-top, 0) 0 env(safe-area-inset-bottom, 0);
+        `;
+
+        const closeBtn = `<button onclick="document.getElementById('flytabHelpOverlay').remove()" style="
+            background:#0055cc; color:#fff; border:none; border-radius:6px;
+            padding:6px 14px; font-size:14px; font-weight:600; cursor:pointer;
+            touch-action:manipulation;">✕ Back to Map</button>`;
+
+        overlay.innerHTML = `<div style="padding:12px 16px 40px">
+<div style="position:sticky;top:0;background:#0a1628;border-bottom:1px solid #1a3055;padding:10px 0 10px;display:flex;align-items:center;gap:12px;z-index:1">
+  ${closeBtn}
+  <span style="font-size:18px;font-weight:700;flex:1">FlyTab Help</span>
+  <span style="font-size:12px;color:#8899aa;background:#0f1f3a;padding:2px 8px;border-radius:10px">v${typeof FLYTAB_VERSION !== 'undefined' ? FLYTAB_VERSION : '4.10'}</span>
+</div>
+
+<div style="background:#0f1f3a;border-radius:8px;padding:12px;margin:14px 0">
+  <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:#8899aa;margin-bottom:8px">Contents</div>
+  <div style="display:flex;flex-wrap:wrap;gap:6px">
+    ${['#tabs','#map','#engine','#instruments','#checklist','#logbook','#charts','#weather','#routing','#recording','#fuel','#offline','#config'].map((id,i)=>
+      `<a href="${id}" style="color:#0088ff;text-decoration:none;font-size:13px;padding:3px 10px;border-radius:4px;background:#152847">${['Tabs','Map','Engine','Instruments','Checklists','Logbook','Approach Charts','Weather','Routing','Flight Recording','Fuel','Offline','Configuration'][i]}</a>`
+    ).join('')}
+  </div>
+</div>
+
+<h2 id="tabs" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Bottom Tab Bar</h2>
+<p>The tab bar is always visible at the bottom of the screen. Tap any tab to switch views.</p>
+<table style="width:100%;border-collapse:collapse;margin:10px 0;font-size:13px">
+  <tr style="background:#152847"><th style="padding:6px 8px;text-align:left;color:#8899aa">Tab</th><th style="padding:6px 8px;text-align:left;color:#8899aa">Function</th></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">🗺 MAP</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Moving map with ownship, route, traffic, and airspace</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">✈ APT</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Airport info — frequencies, runways, weather for any airport</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">⚙️ ENG</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Engine instruments — RPM, EGT/CHT, oil, fuel flow, trend charts</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">✅ CHK</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Interactive checklists — Normal, Abnormal, Emergency</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">📻 CLR</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">IFR clearance helper — CRAFT format, CD phone, squawk</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">⏱ TMR</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Flight timer — Zulu time, leg timer, Hobbs timer</td></tr>
+  <tr><td style="padding:6px 8px">⋯ MORE</td><td style="padding:6px 8px">Additional tools — logbook, weather, approach charts, fuel, settings</td></tr>
+</table>
+
+<h2 id="map" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Moving Map</h2>
+<p>The map tab shows your position, route, traffic, and aviation data layers.</p>
+<ul style="padding-left:20px;margin:8px 0">
+  <li style="margin:4px 0"><strong>Ownship</strong> — blue triangle at your GPS position, rotated to heading</li>
+  <li style="margin:4px 0"><strong>Traffic</strong> — ADS-B targets from Stratux, color-coded by proximity. Tap for callsign and altitude.</li>
+  <li style="margin:4px 0"><strong>Route line</strong> — active leg highlighted. Tap a waypoint to see leg details.</li>
+  <li style="margin:4px 0"><strong>Track log</strong> — breadcrumb trail of your flight path</li>
+  <li style="margin:4px 0"><strong>Airspace</strong> — Class B/C/D/E polygons with altitude labels</li>
+</ul>
+<p><strong>Left-side layer buttons:</strong> Toggle base map (Vector/Sectional/IFR), NEXRAD radar, airports, navaids, fixes, airways.</p>
+<p><strong>Top-right buttons:</strong> Auto-pan toggle (📍), Direct-To (D→).</p>
+
+<h2 id="engine" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Engine Page (⚙️ ENG)</h2>
+<p>Full-screen engine instruments sourced from your engine monitor via the Pi.</p>
+<table style="width:100%;border-collapse:collapse;margin:10px 0;font-size:13px">
+  <tr style="background:#152847"><th style="padding:6px 8px;text-align:left;color:#8899aa">Gauge</th><th style="padding:6px 8px;text-align:left;color:#8899aa">Warning</th></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">RPM</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Red above 2700</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">MAP (manifold pressure)</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">—</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Fuel Flow (GPH)</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">—</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Oil Temp (°F)</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Yellow &gt;220, Red &gt;245</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Oil Pressure (PSI)</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Red &lt;25 or &gt;95</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Volts</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Yellow &lt;13.0</td></tr>
+  <tr><td style="padding:6px 8px">Carb Temp (°F)</td><td style="padding:6px 8px">Yellow &lt;40°F, Red &lt;32°F</td></tr>
+</table>
+<p><strong>Cylinder bars</strong> — EGT and CHT per cylinder, color-coded green/yellow/red.</p>
+<p><strong>Trend charts</strong> — 30-minute scrolling history of EGT, CHT, oil temp, and fuel flow.</p>
+<p><strong>Engine ML</strong> — On-device machine learning monitors for anomalies (sticky valve, phase detection). Access via MORE → Engine ML.</p>
+
+<h2 id="instruments" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Instrument Strip</h2>
+<p>The instrument strip at the top of the map shows live flight data from Stratux:</p>
+<table style="width:100%;border-collapse:collapse;margin:10px 0;font-size:13px">
+  <tr style="background:#152847"><th style="padding:6px 8px;text-align:left;color:#8899aa">Field</th><th style="padding:6px 8px;text-align:left;color:#8899aa">Description</th></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">GS</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">GPS ground speed (knots)</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">ALT</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Barometric altitude (feet)</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">VS</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Vertical speed (feet/min)</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">HDG</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">GPS track / magnetic heading</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">NEXT / DEST</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Next waypoint and destination — distance (nm) and ETE</td></tr>
+  <tr><td style="padding:6px 8px">FUEL / RANGE</td><td style="padding:6px 8px">Fuel remaining (gallons) and fuel-based range (nm)</td></tr>
+</table>
+<p>Status badges (GPS, FIS-B, REC, NET, NASR, WX) are color-coded: green = good, amber = caution, red = problem. Long-press the version badge to see the diagnostic log.</p>
+
+<h2 id="checklist" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Checklists (✅ CHK)</h2>
+<p>Three tabs: <strong>Normal</strong>, <strong>Abnormal</strong>, and <strong>Emergency</strong>. Tap each item to check it off. Items are customized for N194JT.</p>
+<div style="background:rgba(255,68,68,0.1);border-left:3px solid #ff4444;padding:8px 12px;border-radius:0 6px 6px 0;margin:10px 0;font-size:13px">
+  Emergency checklists are a reference only. Always follow your aircraft's POH/AFM as primary authority.
+</div>
+
+<h2 id="logbook" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Logbook (MORE → Logbook)</h2>
+<p>The logbook auto-creates a draft entry when flight recording stops. Entries include date, departure, destination, flight time, and Hobbs.</p>
+<ul style="padding-left:20px;margin:8px 0">
+  <li style="margin:4px 0"><strong>Flights tab</strong> — all entries, tap to edit or review</li>
+  <li style="margin:4px 0"><strong>Currency tab</strong> — recent landings and flight time for currency tracking</li>
+  <li style="margin:4px 0"><strong>Oil tab</strong> — oil service log</li>
+  <li style="margin:4px 0"><strong>ML tab</strong> — engine ML logs linked to each flight</li>
+  <li style="margin:4px 0"><strong>SYNC</strong> — manually push entries to flywhere.app</li>
+  <li style="margin:4px 0"><strong>+ NEW</strong> — create a manual entry</li>
+</ul>
+<p>Entries are stored locally in IndexedDB and sync to flywhere.app when online.</p>
+
+<h2 id="charts" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Approach Charts (MORE → Approach Charts)</h2>
+<p>Route-aware plate viewer for FAA approach charts.</p>
+<ul style="padding-left:20px;margin:8px 0">
+  <li style="margin:4px 0">Auto-populates plates for airports on your flight plan</li>
+  <li style="margin:4px 0">Search any airport by ICAO to browse its plates</li>
+  <li style="margin:4px 0">Plates cached for offline use once viewed</li>
+  <li style="margin:4px 0">Georeferenced overlay available — shows ownship on the plate</li>
+</ul>
+
+<h2 id="weather" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Weather</h2>
+<p><strong>In flight (primary):</strong> FIS-B via Stratux — live METARs, TAFs, PIREPs, SIGMETs, NEXRAD radar.</p>
+<p><strong>Pre-flight:</strong> MORE → Weather Briefing for online weather from flywhere.app.</p>
+<p><strong>NEXRAD radar:</strong> Tap the WX layer button on the map. Radar loop controls appear at the bottom.</p>
+<p><strong>Airport weather:</strong> Tap any airport on the map for its METAR and TAF.</p>
+
+<h2 id="routing" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Routing</h2>
+<p><strong>Load a flight plan:</strong> MORE → Load Flight Plan to sync from flywhere.app.</p>
+<p><strong>Direct-To:</strong> Tap D→ on the map to fly direct to any airport, navaid, or fix.</p>
+<p><strong>Route table:</strong> Drag up the bottom handle to expand. Shows waypoints with leg distance, time, and fuel burn. Tap Edit to modify the route.</p>
+<p><strong>Airport popup:</strong> Tap any airport on the map for frequencies, runways, weather, and a Direct-To button.</p>
+
+<h2 id="recording" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Flight Recording</h2>
+<p>Auto-starts when RPM exceeds 500, auto-stops 60 seconds after RPM drops below 100. The red ● REC badge shows it's active.</p>
+<p>Records GPS position, altitude, ground speed, all engine parameters (RPM, EGT 1–4, CHT 1–4, oil, fuel flow, carb temp), fuel state, and G-load at ~1 Hz. Compatible with Savvy Aviation CSV format.</p>
+<p>Recordings are saved to <code>Documents/FlyTab/flights/</code> on the device and can be uploaded via MORE → Save Flight CSV.</p>
+
+<h2 id="fuel" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Fuel Entry (MORE → Fuel Entry)</h2>
+<p>Set fuel state by tic mark reading. Use the sliders or fine +/− buttons for left and right tanks. FlyTab converts tic marks to gallons using your aircraft's calibration curve.</p>
+<p>Tap <strong>Apply</strong> to update the nav strip FUEL and RANGE displays immediately.</p>
+
+<h2 id="offline" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Offline Use</h2>
+<p>FlyTab is offline-first. The NET/OFFL badge shows Pi connectivity. Everything except live weather and plan sync works offline.</p>
+<ul style="padding-left:20px;margin:8px 0">
+  <li style="margin:4px 0">Map, instruments, engine data — all load from cache instantly</li>
+  <li style="margin:4px 0">NASR database (airports, navaids, airspace) — stored in IndexedDB</li>
+  <li style="margin:4px 0">Previously viewed approach plates — cached</li>
+  <li style="margin:4px 0">Flight plan — persists across restarts</li>
+  <li style="margin:4px 0">Checklists, logbook, configuration — all local</li>
+</ul>
+<p>Engine data is real-time only — stale engine data is never shown.</p>
+
+<h2 id="config" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Configuration (MORE → Configuration)</h2>
+<p>Runtime editor for all cockpit settings. Changes apply immediately without restarting.</p>
+<ul style="padding-left:20px;margin:8px 0">
+  <li style="margin:4px 0">Engine polling and thresholds</li>
+  <li style="margin:4px 0">Map defaults and layer visibility</li>
+  <li style="margin:4px 0">Flight recording auto-start RPM</li>
+  <li style="margin:4px 0">Radar loop playback speed</li>
+  <li style="margin:4px 0">Approach chart georef and orientation</li>
+  <li style="margin:4px 0">Takeoff alert altitudes</li>
+</ul>
+<p>Aircraft-specific settings (V-speeds, fuel calibration, performance profiles) are in <code>aircraft-config.json</code>.</p>
+
+<div style="margin:40px 0 20px;padding-top:16px;border-top:1px solid #1a3055;text-align:center;font-size:12px;color:#8899aa">
+  FlyTab v${typeof FLYTAB_VERSION !== 'undefined' ? FLYTAB_VERSION : '4.10'} — N194JT RV-9A
+</div>
+
+</div>`;
+
+        document.body.appendChild(overlay);
+
+        // Smooth scroll for anchor links
+        overlay.querySelectorAll('a[href^="#"]').forEach(a => {
+            a.addEventListener('click', (e) => {
+                e.preventDefault();
+                const target = overlay.querySelector(a.getAttribute('href'));
+                if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            });
         });
     }
 }
