@@ -5411,7 +5411,7 @@ body {
     right: 0;
     bottom: var(--tab-bar-height);
     width: 260px;
-    z-index: 700;
+    z-index: 9500;
     background: var(--bg-surface);
     border-left: 1px solid var(--border-strong);
     transform: translateX(100%);
@@ -5460,6 +5460,8 @@ body {
     flex: 1;
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
+    overscroll-behavior: contain;
 }
 
 .md-row {

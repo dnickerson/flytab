@@ -193,7 +193,8 @@ class TabBar {
             const el = document.createElement('div');
             el.className = 'md-row';
             el.innerHTML = `<span class="md-icon">${row.icon}</span><span class="md-label">${row.label}</span><span class="md-chevron">›</span>`;
-            this._fastTap(el, row.action);
+            // Use scroll-safe tap: don't preventDefault on touchstart so scroll still works
+            this._scrollSafeTap(el, row.action);
             body.appendChild(el);
         }
 
@@ -456,6 +457,27 @@ class TabBar {
             const up = () => { document.removeEventListener('mousemove', move); };
             document.addEventListener('mousemove', move);
             document.addEventListener('mouseup', up, { once: true });
+        });
+    }
+
+    /**
+     * Scroll-safe tap handler for list items inside scrollable containers.
+     * Does NOT preventDefault on touchstart, so the parent can still scroll.
+     * Detects tap vs scroll by tracking movement — if finger moves >8px it's a scroll, not a tap.
+     */
+    _scrollSafeTap(el, handler) {
+        let startY = null;
+        el.addEventListener('touchstart', (e) => {
+            startY = e.touches[0].clientY;
+        }, { passive: true });
+        el.addEventListener('touchend', (e) => {
+            if (startY === null) return;
+            const dy = Math.abs(e.changedTouches[0].clientY - startY);
+            startY = null;
+            if (dy < 8) handler(e);
+        }, { passive: true });
+        el.addEventListener('click', (e) => {
+            handler(e);
         });
     }
 
