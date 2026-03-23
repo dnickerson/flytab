@@ -279,7 +279,7 @@ class DataStatus {
         } else if (plateSCode) {
             const serverStateSet = new Set((sPlates?.states || []).map(s => s.state));
             const avail = configuredStates.filter(s => serverStateSet.has(s)).length;
-            platesServerLine = `Cycle ${plateSCode} &mdash; ${avail}/${configuredStates.length} configured states available`;
+            platesServerLine = `Cycle ${plateSCode} &mdash; ${avail}/${configuredStates.length} states &mdash; IAP, DP, STAR, DIAG, A/FD`;
         } else {
             platesServerLine = '<span class="ds-muted">Unavailable</span>';
         }
@@ -299,12 +299,14 @@ class DataStatus {
             return `<span class="ds-state-chip ${cls}">${icon} ${st}${sizeTxt}${notOnServer}</span>`;
         }).join('');
 
+        const platesIncludesNote = '<span class="ds-muted" style="font-size:10px">Includes: IAP &middot; DP &middot; STAR &middot; Airport Diagrams (DIAG) &middot; Airport Info (A/FD)</span>';
+
         if (!plateDCode && syncedStates.length === 0) {
             platesDevLine = stateChips || '<span class="ds-muted">Not on tablet</span>';
             platesBadge   = this._badge('NOT DOWNLOADED', 'gray');
             if (base && plateSCode) platesAction = `<button class="ds-action-btn" id="dsPlatesBtn">DOWNLOAD</button>`;
         } else {
-            platesDevLine = stateChips;
+            platesDevLine = stateChips + '<br>' + platesIncludesNote;
             const allSynced = configuredStates.every(s => syncedStates.includes(s));
             if (!allSynced || !cycleOkForStates) {
                 platesBadge = this._badge('UPDATE AVAILABLE', 'yellow');
