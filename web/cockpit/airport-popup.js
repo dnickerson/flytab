@@ -195,6 +195,15 @@ class AirportPopup {
                 tab.classList.add('active');
                 const pane = this._panel.querySelector(`.apt-tab-pane[data-pane="${tab.dataset.tab}"]`);
                 if (pane) pane.classList.add('active');
+
+                // Lazy-load plate panes on first activation
+                if (tab.dataset.tab === 'diag' || tab.dataset.tab === 'aptinfo') {
+                    const platePaneEl = pane?.querySelector('.apt-plate-pane');
+                    if (platePaneEl && !platePaneEl.dataset.loaded) {
+                        platePaneEl.dataset.loaded = '1';
+                        this._loadPlatePaneForType(platePaneEl, airport.icao, platePaneEl.dataset.plateType);
+                    }
+                }
             });
         });
     }
@@ -321,6 +330,8 @@ class AirportPopup {
             <button class="apt-tab" data-tab="wx">WX</button>
             <button class="apt-tab" data-tab="rwy">RWY</button>
             <button class="apt-tab" data-tab="appr">APPR</button>
+            <button class="apt-tab" data-tab="diag">DIAG</button>
+            <button class="apt-tab" data-tab="aptinfo">A/FD</button>
         </div>
 
         <div class="apt-tab-content">
@@ -337,6 +348,12 @@ class AirportPopup {
                 ${apt.runways?.length ? this._runwaysHtml(apt.runways) : '<div style="padding:16px;color:var(--text-muted)">No runway data</div>'}
             </div>
             <div class="apt-tab-pane" data-pane="appr"></div>
+            <div class="apt-tab-pane" data-pane="diag">
+                <div class="apt-plate-pane" data-plate-type="APD"></div>
+            </div>
+            <div class="apt-tab-pane" data-pane="aptinfo">
+                <div class="apt-plate-pane" data-plate-type="MIN"></div>
+            </div>
         </div>`;
     }
 
@@ -622,6 +639,128 @@ class AirportPopup {
                 ${phoneStr}
             </div>
         </div>`;
+    }
+
+    /**
+     * Load a plate (APD = airport diagram, MIN = airport info page) into a pane.
+     * Shows the plate inline as an <img> (WebP converted) or <iframe> (PDF fallback).
+     * Uses the approach charts module's plate index if available.
+     */
+    async _loadPlatePaneForType(containerEl, icao, plateType) {
+        containerEl.innerHTML = '<div style="padding:16px;color:var(--text-muted);font-size:13px">Loading…</div>';
+
+        try {
+            // Try to get plates from approach charts module index
+            let plate = null;
+            if (this._approachCharts?._plateIndex) {
+                const entry = this._approachCharts._plateIndex[icao];
+                const plates = entry?.plates || (Array.isArray(entry) ? entry : []);
+                // APD = airport diagram, MIN = minimums/airport info page
+                plate = plates.find(p => {
+                    const t = (p.type || p.chart_code || '').toUpperCase();
+                    return t === plateType || t.includes(plateType);
+                });
+                // Fallback: match by name
+                if (!plate) {
+                    const nameMap = { APD: 'airport diagram', MIN: 'takeoff minimums' };
+                    const needle = nameMap[plateType] || plateType.toLowerCase();
+                    plate = plates.find(p => (p.name || p.chart_name || '').toLowerCase().includes(needle));
+                }
+            }
+
+            if (!plate) {
+                const typeLabel = plateType === 'APD' ? 'Airport Diagram' : 'Airport Information';
+                containerEl.innerHTML = `<div style="padding:16px;color:var(--text-muted);font-size:13px">
+                    No ${typeLabel} available for ${icao}.<br>
+                    <span style="font-size:11px;color:var(--text-dim)">Download plates via Pre-Flight Refresh to enable this tab.</span>
+                </div>`;
+                return;
+            }
+
+            const PLATES_BASE = 'http://localhost:9090/plates';
+            const file = plate.filename || plate.pdf_name;
+            const icaoDir = icao.toUpperCase();
+
+            // Try WebP first (converted by plate pipeline), fallback to PDF in iframe
+            const webpUrl = `${PLATES_BASE}/${icaoDir}/${file.replace(/\.pdf$/i, '.webp')}`;
+            const pdfUrl  = `${PLATES_BASE}/${icaoDir}/${file}`;
+
+            const name = plate.name || plate.chart_name || plateType;
+
+            // Build viewer: image with pinch-zoom wrapper
+            containerEl.innerHTML = `
+                <div class="apt-plate-viewer">
+                    <div class="apt-plate-title">${name}</div>
+                    <div class="apt-plate-img-wrap">
+                        <img class="apt-plate-img" src="${webpUrl}" alt="${name}"
+                             onerror="this.onerror=null;this.src='${pdfUrl}';this.style.display='none';
+                                      this.nextElementSibling.style.display='block'">
+                        <iframe class="apt-plate-iframe" src="${pdfUrl}" style="display:none"
+                                title="${name}"></iframe>
+                    </div>
+                </div>`;
+
+            // Enable pinch-zoom on the image
+            const img = containerEl.querySelector('.apt-plate-img');
+            if (img) this._enablePinchZoom(img);
+
+        } catch (err) {
+            containerEl.innerHTML = `<div style="padding:16px;color:var(--text-muted);font-size:13px">Error loading plate: ${err.message}</div>`;
+        }
+    }
+
+    /** Basic pinch-to-zoom and pan for a plate image */
+    _enablePinchZoom(el) {
+        let scale = 1, lastScale = 1;
+        let tx = 0, ty = 0, lastTx = 0, lastTy = 0;
+        let initDist = null, initMid = null;
+        let lastTap = 0;
+
+        const applyTransform = () => {
+            el.style.transform = `translate(${tx}px,${ty}px) scale(${scale})`;
+            el.style.transformOrigin = '0 0';
+        };
+
+        el.parentElement.style.cssText = 'overflow:hidden;position:relative;touch-action:none;cursor:grab';
+
+        el.addEventListener('touchstart', (e) => {
+            if (e.touches.length === 2) {
+                const dx = e.touches[0].clientX - e.touches[1].clientX;
+                const dy = e.touches[0].clientY - e.touches[1].clientY;
+                initDist = Math.hypot(dx, dy);
+                initMid = { x: (e.touches[0].clientX + e.touches[1].clientX) / 2, y: (e.touches[0].clientY + e.touches[1].clientY) / 2 };
+                lastScale = scale;
+                lastTx = tx; lastTy = ty;
+            } else if (e.touches.length === 1) {
+                // Double-tap to reset
+                const now = Date.now();
+                if (now - lastTap < 300) { scale = 1; tx = 0; ty = 0; applyTransform(); }
+                lastTap = now;
+                initMid = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+                lastTx = tx; lastTy = ty;
+            }
+        }, { passive: true });
+
+        el.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            if (e.touches.length === 2 && initDist) {
+                const dx = e.touches[0].clientX - e.touches[1].clientX;
+                const dy = e.touches[0].clientY - e.touches[1].clientY;
+                const dist = Math.hypot(dx, dy);
+                scale = Math.max(0.5, Math.min(8, lastScale * dist / initDist));
+                const mx = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+                const my = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+                tx = lastTx + (mx - initMid.x);
+                ty = lastTy + (my - initMid.y);
+                applyTransform();
+            } else if (e.touches.length === 1 && scale > 1 && initMid) {
+                tx = lastTx + (e.touches[0].clientX - initMid.x);
+                ty = lastTy + (e.touches[0].clientY - initMid.y);
+                applyTransform();
+            }
+        }, { passive: false });
+
+        el.addEventListener('touchend', () => { initDist = null; initMid = null; }, { passive: true });
     }
 
     _runwaysHtml(runways) {

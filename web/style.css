@@ -5632,6 +5632,52 @@ body {
     display: block;
 }
 
+/* DIAG and A/FD plate panes — no padding, full bleed */
+.apt-tab-pane[data-pane="diag"],
+.apt-tab-pane[data-pane="aptinfo"] {
+    padding: 0;
+}
+
+.apt-plate-viewer {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.apt-plate-title {
+    padding: 6px 12px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.apt-plate-img-wrap {
+    flex: 1;
+    overflow: hidden;
+    position: relative;
+    background: #111;
+    min-height: 300px;
+}
+
+.apt-plate-img {
+    width: 100%;
+    height: auto;
+    display: block;
+    touch-action: none;
+    user-select: none;
+}
+
+.apt-plate-iframe {
+    width: 100%;
+    height: 100%;
+    border: none;
+    min-height: 400px;
+}
+
 /* Airport facts row (elev / TPA / fuel) in INFO tab */
 .apt-facts-row {
     display: flex;
