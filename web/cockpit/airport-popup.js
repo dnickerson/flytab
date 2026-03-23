@@ -649,11 +649,28 @@ class AirportPopup {
     async _loadPlatePaneForType(containerEl, icao, plateType) {
         containerEl.innerHTML = '<div style="padding:16px;color:var(--text-muted);font-size:13px">Loading…</div>';
 
+        const PLATES_BASE = 'http://localhost:9090/plates';
+
         try {
-            // Try to get plates from approach charts module index
+            // Ensure plate index is loaded — fetch directly if approach charts module hasn't loaded it yet
+            let plateIndex = this._approachCharts?._plateIndex || null;
+            if (!plateIndex) {
+                try {
+                    const r = await fetch(`${PLATES_BASE}/plate_index.json`, { cache: 'no-store', signal: AbortSignal.timeout(5000) });
+                    if (r.ok) {
+                        plateIndex = await r.json();
+                        // Cache it in approach charts module for future use
+                        if (this._approachCharts && !this._approachCharts._plateIndex) {
+                            this._approachCharts._plateIndex = plateIndex;
+                        }
+                    }
+                } catch { /* plate_index.json optional */ }
+            }
+
+            // Try to get plates from index
             let plate = null;
-            if (this._approachCharts?._plateIndex) {
-                const entry = this._approachCharts._plateIndex[icao];
+            if (plateIndex) {
+                const entry = plateIndex[icao];
                 const plates = entry?.plates || (Array.isArray(entry) ? entry : []);
                 // APD = airport diagram, MIN = minimums/airport info page
                 plate = plates.find(p => {
@@ -680,7 +697,6 @@ class AirportPopup {
                 return;
             }
 
-            const PLATES_BASE = 'http://localhost:9090/plates';
             const file = plate.filename || plate.pdf_name;
             const icaoDir = icao.toUpperCase();
 
