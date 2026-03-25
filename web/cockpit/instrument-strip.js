@@ -14,7 +14,7 @@ class InstrumentStrip {
         this._onRouteAdvance = null;
 
         // Default fields if no config
-        this._fields = ['gs', 'alt', 'vs', 'fuel', 'dist', 'ete'];
+        this._fields = ['gs', 'alt', 'vs', 'dist', 'ete'];
         this._fuelOverlay = null;
     }
 

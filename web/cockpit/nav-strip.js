@@ -10,7 +10,6 @@ class NavStrip {
         { key: 'dest',  label: 'DEST wpt' },
         { key: 'gs',    label: 'GS' },
         { key: 'alt',   label: 'ALT' },
-        { key: 'vs',    label: 'VS' },
         { key: 'range', label: 'RANGE' },
         { key: 'fuel',  label: 'FUEL' },
     ];
@@ -54,12 +53,6 @@ class NavStrip {
                 <span class="nav-strip-sub">ft</span>
             </div>
             <div class="nav-strip-sep" data-after="alt"></div>
-            <div class="nav-strip-item" data-field="vs">
-                <span class="nav-strip-label">VS</span>
-                <span class="nav-strip-value" id="ns-vs">—</span>
-                <span class="nav-strip-sub">fpm</span>
-            </div>
-            <div class="nav-strip-sep" data-after="vs"></div>
             <div class="nav-strip-item" data-field="range">
                 <span class="nav-strip-label">RANGE</span>
                 <span class="nav-strip-value" id="ns-range">—</span>
@@ -78,7 +71,6 @@ class NavStrip {
         this._dom = {
             gs: this._el.querySelector('#ns-gs'),
             alt: this._el.querySelector('#ns-alt'),
-            vs: this._el.querySelector('#ns-vs'),
             next: this._el.querySelector('#ns-next'),
             nextDist: this._el.querySelector('#ns-next-dist'),
             nextEte: this._el.querySelector('#ns-next-ete'),
@@ -106,7 +98,6 @@ class NavStrip {
             if (this.stratux._suppressGpsSituation) return;
             this._dom.gs.textContent = '—';
             this._dom.alt.textContent = '—';
-            this._dom.vs.textContent = '—';
         };
         this.stratux.addEventListener('stratux:disconnect', this._onDisconnect);
     }
@@ -193,11 +184,9 @@ class NavStrip {
         const gpsOk = sit.gps_fix_quality > 0;
         const gs = gpsOk ? sit.ground_speed : null;
         const alt = gpsOk ? (sit.alt_msl || sit.alt_baro) : null;
-        const vs = gpsOk ? sit.vertical_speed : null;
 
         this._dom.gs.textContent = gs != null ? Math.round(gs) : '—';
         this._dom.alt.textContent = alt != null ? Math.round(alt).toLocaleString() : '—';
-        this._dom.vs.textContent = vs != null ? (vs > 0 ? '+' : '') + Math.round(vs) : '—';
 
         // Update distances to waypoints (use != null so lat=0 is valid)
         if (this.activePlan && sit.lat != null && sit.lon != null) {
