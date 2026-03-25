@@ -30,6 +30,7 @@ class VectorMapLayers {
         this._suaPolygons = new Map();
         this._wxDotMarkers = new Map();    // icao → wx dot marker
         this._wxLabelMarkers = new Map();  // icao → wx label marker
+        this._aptPositions = new Map();    // icao → {lat, lon, tower} — drives wx dots, independent of airport layer
         this._airportMarkers = new Map();
         this._navaidMarkers = new Map();
         this._fixMarkers = new Map();
@@ -217,7 +218,7 @@ class VectorMapLayers {
      * @param {Object} [wxCache] — optional {[icao]: {decoded: {flight_category}}}
      */
     refreshWeatherColors(wxCache) {
-        for (const [icao] of this._airportMarkers) {
+        for (const [icao] of this._aptPositions) {
             const cat = this._getMetarEntry(icao)?.decoded?.flight_category
                      || wxCache?.[icao]?.decoded?.flight_category;
             this._upsertWxDot(icao, cat);
@@ -287,8 +288,8 @@ class VectorMapLayers {
                     received_at: now,
                     source: 'internet',
                 });
-                // Update dot if this airport is currently visible
-                if (this._airportMarkers.has(icao)) {
+                // Update dot if position is known for this airport
+                if (this._aptPositions.has(icao)) {
                     const cat = this._fisbClient?.metars.get(icao)?.decoded?.flight_category
                              || flight_category;
                     this._upsertWxDot(icao, cat);
@@ -306,17 +307,15 @@ class VectorMapLayers {
     /** Add or update a solid flight category dot on top of the airport circle. */
     _upsertWxDot(icao, cat) {
         const color = this._catColor(cat);
-        const aptMarker = this._airportMarkers.get(icao);
+        const pos = this._aptPositions.get(icao);
 
         const existing = this._wxDotMarkers.get(icao);
         if (existing) { this._wxDotsLayer.removeLayer(existing); this._wxDotMarkers.delete(icao); }
 
-        if (!color || !aptMarker) return;
+        if (!color || !pos) return;
 
-        const latlng = aptMarker.getLatLng();
-        const towered = aptMarker._aptData?.tower;
-        const dot = L.circleMarker(latlng, {
-            radius: towered ? 7 : 5,
+        const dot = L.circleMarker([pos.lat, pos.lon], {
+            radius: pos.tower ? 7 : 5,
             color: '#000',
             weight: 1,
             fillColor: color,
@@ -353,7 +352,7 @@ class VectorMapLayers {
 
     /** Re-render all wx label markers (called when a label layer is toggled). */
     _refreshWxLabels() {
-        for (const [icao] of this._airportMarkers) {
+        for (const [icao] of this._aptPositions) {
             this._upsertWxLabel(icao);
         }
     }
@@ -369,8 +368,8 @@ class VectorMapLayers {
 
         if (!this._showCeil && !this._showVis && !this._showWind) return;
 
-        const aptMarker = this._airportMarkers.get(icao);
-        if (!aptMarker) return;
+        const pos = this._aptPositions.get(icao);
+        if (!pos) return;
 
         const entry = this._getMetarEntry(icao);
         if (!entry) return;
@@ -408,7 +407,7 @@ class VectorMapLayers {
             iconAnchor: [0, 8],   // left edge at airport, vertically centered
         });
 
-        const marker = L.marker(aptMarker.getLatLng(), { icon, interactive: false, zIndexOffset: 50 });
+        const marker = L.marker([pos.lat, pos.lon], { icon, interactive: false, zIndexOffset: 50 });
         marker.addTo(this._wxLabelLayer);
         this._wxLabelMarkers.set(icao, marker);
     }
@@ -632,6 +631,7 @@ class VectorMapLayers {
                 this._updateAirspace(south, west, north, east, zoom, overlays),
                 this._updateSua(south, west, north, east, zoom),
                 this._updateAirports(south, west, north, east, zoom, overlays),
+                this._updateWxDots(south, west, north, east, zoom, overlays),
                 this._updateNavaids(south, west, north, east, zoom, overlays),
                 this._updateFixes(south, west, north, east, zoom, overlays),
                 this._updateAirways(south, west, north, east, zoom, overlays),
@@ -893,8 +893,6 @@ class VectorMapLayers {
         const labelsMinZoom = overlays.airports?.labelsMinZoom || 8;
         if (zoom < minZoom) {
             this._clearLayer(this._airportLayer, this._airportMarkers);
-            this._clearLayer(this._wxDotsLayer, this._wxDotMarkers);
-            this._clearLayer(this._wxLabelLayer, this._wxLabelMarkers);
             return;
         }
 
@@ -984,22 +982,12 @@ class VectorMapLayers {
                 marker._aptData = apt;
                 marker.addTo(this._airportLayer);
                 this._airportMarkers.set(apt.icao, marker);
-
-                // Draw flight category dot and weather labels if data already arrived
-                const cat = this._getMetarEntry(apt.icao)?.decoded?.flight_category;
-                if (cat) this._upsertWxDot(apt.icao, cat);
-                this._upsertWxLabel(apt.icao);
             }
 
             for (const [id, marker] of this._airportMarkers) {
                 if (!currentIds.has(id)) {
                     this._airportLayer.removeLayer(marker);
                     this._airportMarkers.delete(id);
-                    // Also remove stale wx dot and label for this airport
-                    const dot = this._wxDotMarkers.get(id);
-                    if (dot) { this._wxDotsLayer.removeLayer(dot); this._wxDotMarkers.delete(id); }
-                    const lbl = this._wxLabelMarkers.get(id);
-                    if (lbl) { this._wxLabelLayer.removeLayer(lbl); this._wxLabelMarkers.delete(id); }
                 }
             }
         } catch (err) {
@@ -1008,6 +996,45 @@ class VectorMapLayers {
 
         // Opportunistically fetch internet METARs when online (15-min TTL, silent on failure)
         this.fetchInternetMetars(south, west, north, east);
+    }
+
+    /**
+     * Update wx dot positions independently of the airport layer.
+     * Runs unconditionally so flight category dots appear even when the airport
+     * circle layer is toggled off. Populates _aptPositions and draws wx dots.
+     */
+    async _updateWxDots(south, west, north, east, zoom, overlays) {
+        const minZoom = overlays.airports?.minZoom || 7;
+        if (zoom < minZoom) {
+            this._clearLayer(this._wxDotsLayer, this._wxDotMarkers);
+            this._clearLayer(this._wxLabelLayer, this._wxLabelMarkers);
+            this._aptPositions.clear();
+            return;
+        }
+        try {
+            const airports = await this._nasr.getAirportsInBounds(south, west, north, east);
+            const currentIds = new Set();
+            for (const apt of airports) {
+                if (apt.lat == null || apt.lon == null) continue;
+                currentIds.add(apt.icao);
+                this._aptPositions.set(apt.icao, { lat: apt.lat, lon: apt.lon, tower: apt.tower });
+                const cat = this._getMetarEntry(apt.icao)?.decoded?.flight_category;
+                if (cat) this._upsertWxDot(apt.icao, cat);
+                this._upsertWxLabel(apt.icao);
+            }
+            // Remove stale positions and dots for airports that scrolled out of view
+            for (const [id] of this._aptPositions) {
+                if (!currentIds.has(id)) {
+                    this._aptPositions.delete(id);
+                    const dot = this._wxDotMarkers.get(id);
+                    if (dot) { this._wxDotsLayer.removeLayer(dot); this._wxDotMarkers.delete(id); }
+                    const lbl = this._wxLabelMarkers.get(id);
+                    if (lbl) { this._wxLabelLayer.removeLayer(lbl); this._wxLabelMarkers.delete(id); }
+                }
+            }
+        } catch (err) {
+            console.warn('VectorMapLayers: wx dots query failed', err);
+        }
     }
 
     async _updateNavaids(south, west, north, east, zoom, overlays) {
