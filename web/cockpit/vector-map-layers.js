@@ -155,6 +155,21 @@ class VectorMapLayers {
     }
 
     /**
+     * Force-clear airport markers so the next map move re-renders with current filters.
+     * Called by LayerPanel when airportFilter config changes.
+     */
+    _forceAirportRefresh() {
+        this._clearLayer(this._airportLayer, this._airportMarkers);
+        this._clearLayer(this._wxDotsLayer, this._wxDotMarkers);
+        this._clearLayer(this._wxLabelLayer, this._wxLabelMarkers);
+        // Trigger a re-render by firing the existing update pipeline
+        if (this._lastBounds) {
+            const { south, west, north, east, zoom, overlays } = this._lastBounds;
+            this._updateAirports(south, west, north, east, zoom, overlays);
+        }
+    }
+
+    /**
      * Set callback for airport marker clicks.
      */
     onAirportClick(callback) {
@@ -609,6 +624,9 @@ class VectorMapLayers {
 
             const overlays = CockpitConfig.get('map.overlays');
 
+            // Cache bounds for _forceAirportRefresh
+            this._lastBounds = { south, west, north, east, zoom, overlays };
+
             // Run updates in parallel
             await Promise.all([
                 this._updateAirspace(south, west, north, east, zoom, overlays),
@@ -885,8 +903,33 @@ class VectorMapLayers {
             const currentIds = new Set();
             const showLabels = zoom >= labelsMinZoom;
 
+            // Airport display filter — read from CockpitConfig (user-adjustable)
+            const aptFilter = (typeof CockpitConfig !== 'undefined')
+                ? (CockpitConfig.get('airportFilter') || {})
+                : {};
+            const showHeliports    = aptFilter.showHeliports    ?? false;
+            const showSeaplaneBases = aptFilter.showSeaplaneBases ?? false;
+            const showUltralight   = aptFilter.showUltralight   ?? false;
+            const showGliderports  = aptFilter.showGliderports  ?? false;
+            const minRunwayFt      = aptFilter.minRunwayFt      ?? 0;
+            const pavedOnly        = aptFilter.pavedOnly        ?? false;
+
             for (const apt of airports) {
                 if (apt.lat == null || apt.lon == null) continue;
+
+                // Apply facility type filter
+                const fac = (apt.fac_type || 'AIRPORT').toUpperCase();
+                if (fac === 'HELIPORT'     && !showHeliports)     continue;
+                if (fac === 'SEAPLANE BASE' && !showSeaplaneBases) continue;
+                if (fac === 'ULTRALIGHT'   && !showUltralight)    continue;
+                if (fac === 'GLIDERPORT'   && !showGliderports)   continue;
+                if (fac === 'BALLOONPORT'                         ) continue; // never show
+
+                // Apply runway length filter (0 = unknown/grass strip, still shown unless minRunwayFt set)
+                if (minRunwayFt > 0 && apt.longest_rwy_ft > 0 && apt.longest_rwy_ft < minRunwayFt) continue;
+
+                // Paved-only filter
+                if (pavedOnly && apt.longest_rwy_ft > 0 && !apt.has_paved_rwy) continue;
                 currentIds.add(apt.icao);
 
                 // Suppress permanent label for route waypoints (route layer draws its own)

@@ -175,6 +175,28 @@ class LayerPanel {
             windInput.addEventListener('change', () => { this._vectorLayers?.toggleWind(); });
         }
 
+        // Wire airport filter controls
+        this._panel.querySelectorAll('[data-aptfilter]').forEach(el => {
+            const key = el.dataset.aptfilter;
+            const cfg = (typeof CockpitConfig !== 'undefined') ? (CockpitConfig.get('airportFilter') || {}) : {};
+            // Initialize control state from config
+            if (el.type === 'checkbox') {
+                el.checked = cfg[key] ?? false;
+            } else if (el.tagName === 'SELECT') {
+                el.value = String(cfg[key] ?? 0);
+            }
+            el.addEventListener('change', () => {
+                const patch = {};
+                if (el.type === 'checkbox') patch[key] = el.checked;
+                else patch[key] = parseInt(el.value, 10);
+                if (typeof CockpitConfig !== 'undefined') {
+                    CockpitConfig.patch(`airportFilter.${key}`, patch[key]);
+                }
+                // Force map to re-render airports with new filter
+                this._vectorLayers?._forceAirportRefresh?.();
+            });
+        });
+
         // Wire cancel button
         const cancelBtn = this._panel.querySelector('#lpCancelDownload');
         if (cancelBtn) {
@@ -309,6 +331,29 @@ class LayerPanel {
                     <div class="lp-row">
                         <span class="lp-row-label">Airports</span>
                         <label class="lp-toggle"><input type="checkbox" data-overlay="airports"><span class="lp-toggle-track"></span></label>
+                    </div>
+                    <div class="lp-row lp-row-sub">
+                        <span class="lp-row-label lp-sub-label">Min runway (ft)</span>
+                        <select class="lp-select" data-aptfilter="minRunwayFt">
+                            <option value="0">Any</option>
+                            <option value="1500">1,500</option>
+                            <option value="2000">2,000</option>
+                            <option value="2500">2,500</option>
+                            <option value="3000">3,000</option>
+                            <option value="4000">4,000</option>
+                        </select>
+                    </div>
+                    <div class="lp-row lp-row-sub">
+                        <span class="lp-row-label lp-sub-label">Paved only</span>
+                        <label class="lp-toggle"><input type="checkbox" data-aptfilter="pavedOnly"><span class="lp-toggle-track"></span></label>
+                    </div>
+                    <div class="lp-row lp-row-sub">
+                        <span class="lp-row-label lp-sub-label">Show heliports</span>
+                        <label class="lp-toggle"><input type="checkbox" data-aptfilter="showHeliports"><span class="lp-toggle-track"></span></label>
+                    </div>
+                    <div class="lp-row lp-row-sub">
+                        <span class="lp-row-label lp-sub-label">Show seaplane bases</span>
+                        <label class="lp-toggle"><input type="checkbox" data-aptfilter="showSeaplaneBases"><span class="lp-toggle-track"></span></label>
                     </div>
                     <div class="lp-row">
                         <span class="lp-row-label">Navaids</span>

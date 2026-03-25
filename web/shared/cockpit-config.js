@@ -27,6 +27,15 @@ class CockpitConfig {
                 airways: { enabled: false, minZoom: 8 },
             },
         },
+        // Airport display filter — persisted per-device, user-adjustable via layer panel
+        airportFilter: {
+            showHeliports:     false,
+            showSeaplaneBases: false,
+            showUltralight:    false,
+            showGliderports:   false,
+            minRunwayFt:       0,      // 0 = no minimum
+            pavedOnly:         false,
+        },
         routeTable: {
             defaultHeight: '30vh',
             columns: [

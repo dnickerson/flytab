@@ -5134,6 +5134,27 @@ body {
     font-weight: 600;
 }
 
+/* Indented sub-rows for airport filter options */
+.lp-row-sub {
+    padding-left: 28px;
+    min-height: 40px;
+    background: rgba(255,255,255,0.03);
+}
+.lp-sub-label {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-dim, #888);
+}
+.lp-select {
+    background: var(--bg-surface, #1e1e1e);
+    color: var(--text-primary, #fff);
+    border: 1px solid var(--border, #444);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 14px;
+    min-width: 80px;
+}
+
 .lp-radio-group {
     display: flex;
     gap: 0;
