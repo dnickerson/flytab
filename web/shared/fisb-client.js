@@ -19,12 +19,14 @@ class FisbClient extends EventTarget {
         this.airmets = [];          // [{ raw, type, points, received_at, expires_at }]
         this.winds = new Map();     // "station:alt" → { dir, spd, temp, received_at }
         this.cwas = [];             // [{ raw, received_at }]
+        this.notams = [];           // [{ raw, plain, icao, lat, lon, product_id, received_at, expires_at }]
 
         // Counts for status display
         this.metarCount = 0;
         this.tafCount = 0;
         this.pirepCount = 0;
         this.sigmetCount = 0;
+        this.notamCount = 0;
 
         // NEXRAD blocks forwarded to FisbNexrad
         this._nexradBlocks = new Map(); // "lat,lon" → { ...block, received_at }
@@ -282,18 +284,26 @@ class FisbClient extends EventTarget {
     // ========== FIS-B Frame Handling ==========
 
     _handleFisbFrame(msg) {
-        // Graphical SIGMETs from /jsonio may include Points arrays
+        const pid = msg.Product_id;
+        const now = Date.now();
+
+        // NOTAM product IDs: 8 = NOTAM-TFR, 11 = NOTAM-D, 12 = NOTAM-FDC
+        if (pid === 8 || pid === 11 || pid === 12) {
+            this._handleNotam(msg, now);
+            return;
+        }
+
+        // Graphical SIGMETs/AIRMETs from /jsonio may include Points arrays
         if (msg.Points && msg.Points.length > 0) {
             const points = msg.Points.map(p => [p.Lat, p.Lon]);
-            const pid = msg.Product_id;
-            // Product IDs 8-13 are graphical AIRMETs/SIGMETs
-            if (pid >= 8 && pid <= 13) {
+            // Product IDs 9-13 are graphical AIRMETs (9-10) and SIGMETs (13)
+            if (pid >= 9 && pid <= 13) {
                 const entry = {
                     raw: msg.Text || JSON.stringify(msg),
                     type: pid <= 10 ? 'airmet' : 'sigmet',
                     points,
-                    received_at: Date.now(),
-                    expires_at: Date.now() + 3600000,
+                    received_at: now,
+                    expires_at: now + 3600000,
                 };
                 if (entry.type === 'sigmet') {
                     this.sigmets.push(entry);
@@ -305,6 +315,45 @@ class FisbClient extends EventTarget {
                 }
             }
         }
+    }
+
+    _handleNotam(msg, now) {
+        const raw = msg.Text || JSON.stringify(msg);
+        const plain = msg.Text || '';
+
+        // Extract ICAO: look for 4-letter airport identifier
+        let icao = null;
+        const icaoMatch = plain.match(/\b([A-Z]{4})\b/);
+        if (icaoMatch) icao = icaoMatch[1];
+
+        // Extract coordinates from Points array if present
+        let lat = null, lon = null;
+        if (msg.Points && msg.Points.length > 0) {
+            lat = msg.Points[0].Lat;
+            lon = msg.Points[0].Lon;
+        }
+
+        const entry = {
+            raw,
+            plain,
+            icao,
+            lat,
+            lon,
+            product_id: msg.Product_id,
+            received_at: now,
+            expires_at: this._extractExpiry(raw, now),
+        };
+
+        // Deduplicate by raw text
+        const idx = this.notams.findIndex(n => n.raw === raw);
+        if (idx >= 0) {
+            this.notams[idx] = entry;
+        } else {
+            this.notams.push(entry);
+        }
+        this.notamCount = this.notams.length;
+
+        this.dispatchEvent(new CustomEvent('fisb:notam', { detail: entry }));
     }
 
     // ========== Purge Stale Data ==========
@@ -346,6 +395,12 @@ class FisbClient extends EventTarget {
 
         // CWAs older than 2 hours
         this.cwas = this.cwas.filter(c => now - c.received_at < 2 * 3600000);
+
+        // NOTAMs: remove expired
+        this.notams = this.notams.filter(n =>
+            (n.expires_at && n.expires_at > now) || (now - n.received_at < 4 * 3600000)
+        );
+        this.notamCount = this.notams.length;
     }
 
     // ========== METAR Decoding ==========

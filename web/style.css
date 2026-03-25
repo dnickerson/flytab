@@ -4090,6 +4090,17 @@ body {
 .pirep-text { color: #ccc; word-break: break-word; white-space: pre-wrap; }
 .pirep-age { color: #888; font-size: 14px; margin-top: 4px; }
 
+/* ========== NOTAM Markers ========== */
+.notam-marker {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.notam-popup { font-size: 14px; font-family: var(--font-mono, monospace); }
+.notam-header { font-weight: 700; color: #cc88ff; margin-bottom: 4px; }
+.notam-text { color: #ccc; word-break: break-word; white-space: pre-wrap; }
+.notam-age { color: #888; font-size: 12px; margin-top: 4px; }
+
 /* ========== SIGMET/AIRMET Popups ========== */
 .sigmet-popup, .airmet-popup {
     font-size: 14px;

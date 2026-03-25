@@ -26,13 +26,17 @@ class FisbWeatherDisplay {
         this._pirepLayer = L.layerGroup();
         this._sigmetLayer = L.layerGroup();
         this._windsLayer = L.layerGroup();
+        this._notamLayer = L.layerGroup();
         this._pirepMarkers = [];   // { marker, received_at }
         this._sigmetPolygons = []; // { polygon, received_at }
         this._windMarkers = new Map(); // "station:alt" → marker
+        this._notamMarkers = [];   // { marker, received_at, expires_at }
 
         // Alert state
         this._activeAlerts = new Map(); // key → DOM element
         this._alertContainer = null;
+        // 30-min de-dup for toast notifications: key → expiry timestamp
+        this._toastSeen = new Map();
 
         // Route airports for weather strip
         this._routeAirports = [];
@@ -43,6 +47,7 @@ class FisbWeatherDisplay {
         this._onAirmet = (e) => this._addAirmet(e.detail);
         this._onCwa    = (e) => this._showCwaAlert(e.detail);
         this._onWinds  = ()  => this._refreshWindBarbs();
+        this._onNotam  = (e) => this._addNotam(e.detail);
         this._maxAlerts = 8;
 
         // Purge timer
@@ -62,11 +67,14 @@ class FisbWeatherDisplay {
         this._alertContainer.className = 'fisb-alert-container';
         document.body.appendChild(this._alertContainer);
 
+        this._notamLayer.addTo(this._map);
+
         this._fisb.addEventListener('fisb:pirep',  this._onPirep);
         this._fisb.addEventListener('fisb:sigmet', this._onSigmet);
         this._fisb.addEventListener('fisb:airmet', this._onAirmet);
         this._fisb.addEventListener('fisb:cwa',    this._onCwa);
         this._fisb.addEventListener('fisb:winds',  this._onWinds);
+        this._fisb.addEventListener('fisb:notam',  this._onNotam);
 
         // Purge stale markers every 30 seconds
         this._purgeTimer = setInterval(() => this._purgeMarkers(), 30000);
@@ -84,17 +92,22 @@ class FisbWeatherDisplay {
         this._fisb.removeEventListener('fisb:airmet', this._onAirmet);
         this._fisb.removeEventListener('fisb:cwa',    this._onCwa);
         this._fisb.removeEventListener('fisb:winds',  this._onWinds);
+        this._fisb.removeEventListener('fisb:notam',  this._onNotam);
         if (this._purgeTimer) { clearInterval(this._purgeTimer); this._purgeTimer = null; }
         this._pirepLayer.clearLayers();
         this._sigmetLayer.clearLayers();
         this._windsLayer.clearLayers();
+        this._notamLayer.clearLayers();
         if (this._map.hasLayer(this._pirepLayer)) this._map.removeLayer(this._pirepLayer);
         if (this._map.hasLayer(this._sigmetLayer)) this._map.removeLayer(this._sigmetLayer);
         if (this._map.hasLayer(this._windsLayer)) this._map.removeLayer(this._windsLayer);
+        if (this._map.hasLayer(this._notamLayer)) this._map.removeLayer(this._notamLayer);
         this._pirepMarkers = [];
         this._sigmetPolygons = [];
         this._windMarkers.clear();
+        this._notamMarkers = [];
         this._activeAlerts.clear();
+        this._toastSeen.clear();
         if (this._alertContainer?.parentNode) this._alertContainer.parentNode.removeChild(this._alertContainer);
     }
 
@@ -243,7 +256,7 @@ class FisbWeatherDisplay {
     _addSigmet(sigmet) {
         if (!sigmet.points || sigmet.points.length < 3) {
             // Text-only SIGMET — show as alert
-            this._showAlert(`SIGMET: ${sigmet.raw.slice(0, 100)}...`, 'red', 30000);
+            this._toastAlert(`\u26a0\ufe0f SIGMET: ${sigmet.raw.slice(0, 80)}`, 'red', 30000, sigmet.raw);
             return;
         }
 
@@ -268,9 +281,11 @@ class FisbWeatherDisplay {
             expires_at: sigmet.expires_at, type: 'sigmet',
         });
 
-        // Alert for convective SIGMETs
+        // Toast for all SIGMETs
         if (isConvective) {
-            this._showAlert(`CONVECTIVE SIGMET: ${sigmet.raw.slice(0, 80)}`, 'red', 30000);
+            this._toastAlert(`\u26a0\ufe0f CONVECTIVE SIGMET: ${sigmet.raw.slice(0, 80)}`, 'red', 30000, sigmet.raw);
+        } else {
+            this._toastAlert(`\u26a0\ufe0f SIGMET: ${sigmet.raw.slice(0, 80)}`, 'red', 30000, sigmet.raw);
         }
     }
 
@@ -283,11 +298,20 @@ class FisbWeatherDisplay {
         const isTango  = /\b(TURB|LLW|LLWS|TURBC)\b/i.test(raw);
         const isSierra = /\b(IFR|MTN\s*OBS|CIG|VIS)\b/i.test(raw);
 
-        let color, label;
-        if (isZulu)        { color = '#00ccff'; label = 'AIRMET ZULU (Icing)'; }
-        else if (isTango)  { color = '#ffcc00'; label = 'AIRMET TANGO (Turbulence)'; }
-        else if (isSierra) { color = '#ff44cc'; label = 'AIRMET SIERRA (IFR/Mtn)'; }
-        else               { color = '#ffaa00'; label = 'AIRMET'; }
+        let color, label, toastMsg, toastSeverity;
+        if (isZulu) {
+            color = '#00ccff'; label = 'AIRMET ZULU (Icing)';
+            toastMsg = `\ud83e\uddca AIRMET ZULU (Icing): ${raw.slice(0, 80)}`; toastSeverity = 'blue';
+        } else if (isTango) {
+            color = '#ffcc00'; label = 'AIRMET TANGO (Turbulence)';
+            toastMsg = `\u26a1 AIRMET TANGO: ${raw.slice(0, 80)}`; toastSeverity = 'amber';
+        } else if (isSierra) {
+            color = '#ff44cc'; label = 'AIRMET SIERRA (IFR/Mtn)';
+            toastMsg = `\ud83c\udf2b\ufe0f AIRMET SIERRA (IFR): ${raw.slice(0, 80)}`; toastSeverity = 'amber';
+        } else {
+            color = '#ffaa00'; label = 'AIRMET';
+            toastMsg = `\u26a1 AIRMET: ${raw.slice(0, 80)}`; toastSeverity = 'amber';
+        }
 
         const polygon = L.polygon(airmet.points, {
             color,
@@ -306,6 +330,8 @@ class FisbWeatherDisplay {
             polygon, received_at: airmet.received_at,
             expires_at: airmet.expires_at, type: 'airmet',
         });
+
+        this._toastAlert(toastMsg, toastSeverity, 30000, raw);
     }
 
     // ========== Alerts ==========
@@ -346,6 +372,53 @@ class FisbWeatherDisplay {
         this._showAlert(`CWA: ${cwa.raw.slice(0, 100)}`, 'amber', 30000);
     }
 
+    /** Toast with 30-minute de-duplication. rawKey is the raw text used for dedup (key = first 40 chars). */
+    _toastAlert(message, severity, duration, rawKey) {
+        const key = (rawKey || message).slice(0, 40);
+        const now = Date.now();
+        const seenUntil = this._toastSeen.get(key);
+        if (seenUntil && seenUntil > now) return;
+        this._toastSeen.set(key, now + 30 * 60000);
+        this._showAlert(message, severity, duration);
+    }
+
+    // ========== NOTAM Markers ==========
+
+    _addNotam(notam) {
+        const raw = notam.raw || '';
+        const icaoStr = notam.icao ? `${notam.icao} ` : '';
+        this._toastAlert(`\ud83d\udccb NOTAM: ${icaoStr}${raw.slice(0, 80)}`, 'amber', 20000, raw);
+
+        if (notam.lat == null || notam.lon == null) return;
+
+        const icon = L.divIcon({
+            className: 'notam-marker',
+            html: `<span style="font-size:16px;text-shadow:0 0 3px #000;">\ud83d\udccb</span>`,
+            iconSize: [22, 22],
+            iconAnchor: [11, 11],
+        });
+
+        const marker = L.marker([notam.lat, notam.lon], { icon, zIndexOffset: 150 });
+        const icaoHeader = notam.icao ? `<b>${FisbWeatherDisplay._esc(notam.icao)}</b> — ` : '';
+        marker.bindPopup(`<div class="notam-popup">
+            <div class="notam-header">${icaoHeader}NOTAM</div>
+            <div class="notam-text">${FisbWeatherDisplay._esc(raw)}</div>
+            <div class="notam-age">Received ${new Date(notam.received_at).toISOString().slice(11, 16)}Z</div>
+        </div>`, { maxWidth: 340 });
+
+        marker.addTo(this._notamLayer);
+        this._notamMarkers.push({ marker, received_at: notam.received_at, expires_at: notam.expires_at });
+    }
+
+    /** Show/hide NOTAM layer. */
+    showNotams() { if (!this._map.hasLayer(this._notamLayer)) this._notamLayer.addTo(this._map); }
+    hideNotams() { if (this._map.hasLayer(this._notamLayer)) this._map.removeLayer(this._notamLayer); }
+    toggleNotams() {
+        if (this._map.hasLayer(this._notamLayer)) { this._map.removeLayer(this._notamLayer); return false; }
+        this._notamLayer.addTo(this._map); return true;
+    }
+    get notamsVisible() { return this._map.hasLayer(this._notamLayer); }
+
     // ========== Purge ==========
 
     _purgeMarkers() {
@@ -370,5 +443,21 @@ class FisbWeatherDisplay {
             }
             return true;
         });
+
+        // Expired NOTAM markers
+        this._notamMarkers = this._notamMarkers.filter(entry => {
+            const expired = entry.expires_at && entry.expires_at < now;
+            const tooOld = now - entry.received_at > 4 * 3600000;
+            if (expired || tooOld) {
+                this._notamLayer.removeLayer(entry.marker);
+                return false;
+            }
+            return true;
+        });
+
+        // Purge stale toast-seen keys
+        for (const [key, expiry] of this._toastSeen) {
+            if (expiry < now) this._toastSeen.delete(key);
+        }
     }
 }
