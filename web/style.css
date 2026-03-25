@@ -259,7 +259,7 @@ body {
     align-items: center;
     gap: 10px;
     padding: 6px 12px;
-    padding-top: calc(6px + env(safe-area-inset-top, 0px));
+    padding-top: max(24px, env(safe-area-inset-top, 24px));
     padding-left: calc(12px + env(safe-area-inset-left, 0px));
     padding-right: calc(12px + env(safe-area-inset-right, 0px));
     background: var(--bg-surface);
