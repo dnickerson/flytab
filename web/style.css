@@ -5090,19 +5090,7 @@ body {
     text-transform: uppercase;
 }
 
-.layer-panel-close {
-    width: 32px;
-    height: 32px;
-    border: none;
-    background: transparent;
-    color: var(--text-label);
-    font-size: 20px;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 6px;
-}
+/* .layer-panel-close sizing handled by .btn-close */
 
 .layer-panel-body {
     flex: 1;
@@ -5556,19 +5544,7 @@ body {
     margin-top: 2px;
 }
 
-.apt-panel-close {
-    width: 36px;
-    height: 36px;
-    border: none;
-    background: transparent;
-    color: var(--text-label);
-    font-size: 22px;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-}
+/* .apt-panel-close sizing handled by .btn-close */
 
 .apt-action-chips {
     display: flex;

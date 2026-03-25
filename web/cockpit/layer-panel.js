@@ -289,7 +289,7 @@ class LayerPanel {
         return `
         <div class="layer-panel-header">
             <span class="layer-panel-title">Layers</span>
-            <button class="layer-panel-close" aria-label="Close">&#x2715;</button>
+            <button class="layer-panel-close btn-close" aria-label="Close">✕</button>
         </div>
         <div class="layer-panel-body">
 

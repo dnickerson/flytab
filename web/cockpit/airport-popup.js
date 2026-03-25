@@ -316,7 +316,7 @@ class AirportPopup {
                 <div class="apt-panel-name">${apt.name || ''}</div>
                 <div class="apt-panel-meta">${apt.city || ''}${apt.state ? ', ' + apt.state : ''} · ${towerStr} · ${elevStr}${tpaStr}</div>
             </div>
-            <button class="apt-panel-close" aria-label="Close">✕</button>
+            <button class="apt-panel-close btn-close" aria-label="Close">✕</button>
         </div>
 
         <div class="apt-action-chips">
@@ -488,7 +488,7 @@ class AirportPopup {
         this._panel.innerHTML = `
             <div class="apt-top-nav">
                 <span class="apt-topnav-spacer"></span>
-                <button class="apt-panel-close">&#x2715;</button>
+                <button class="apt-panel-close btn-close">✕</button>
             </div>
             <div style="padding:20px;color:var(--text-primary)">
                 <div style="font-size:var(--text-xl);font-weight:700;margin-bottom:4px">${icao}</div>
