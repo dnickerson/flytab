@@ -16,7 +16,7 @@
 set -e
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-ENGINE_SRC="$REPO_ROOT/flypi/engine-monitor"
+ENGINE_SRC="$REPO_ROOT/engine-monitor"
 
 PI_HOST="${PI_HOST:-192.168.1.212}"
 PI_USER="pi"
