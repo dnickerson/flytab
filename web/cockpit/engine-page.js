@@ -79,7 +79,7 @@ class EnginePage {
             <span class="ep-capture-status" id="ep-capture-status">● CHECKING…</span>
             <span class="ep-data-age ep-data-age--offline" id="ep-data-age">ENGINE MON. OFFLINE</span>
             <button class="ep-capture-stop" id="ep-capture-stop" disabled>STOP &amp; SAVE</button>
-            <button class="btn-close ep-close" id="ep-close">MAP</button>
+            <button class="btn-close ep-close" id="ep-close">✕</button>
         </div>
 
         <div class="ep-container">

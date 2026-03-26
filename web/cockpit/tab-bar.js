@@ -229,7 +229,7 @@ class TabBar {
         overlay.id = 'mlMonitor';
         overlay.className = 'ml-monitor';
 
-        const closeBtn = '<button class="ep-close" id="mlMonClose">MAP</button>';
+        const closeBtn = '<button class="ep-close" id="mlMonClose">✕</button>';
         overlay.innerHTML = `${closeBtn}<h2 class="ml-mon-title">Engine ML Monitor</h2><div class="ml-mon-body" id="mlMonBody"></div>`;
 
         document.body.appendChild(overlay);

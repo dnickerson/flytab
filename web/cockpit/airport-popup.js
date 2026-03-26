@@ -535,7 +535,7 @@ class AirportPopup {
             </div>
             <div class="popup-actions">
                 <button class="popup-btn" data-action="direct-to">D→</button>
-                <button class="btn-close popup-btn popup-close-btn" data-action="close">CLOSE</button>
+                <button class="btn-close popup-btn popup-close-btn" data-action="close">✕</button>
             </div>`;
 
         this._popup = L.popup({
@@ -997,7 +997,7 @@ class AirportPopup {
         return `<div class="popup-actions">
             <button class="popup-btn" data-action="plates">PLATES</button>
             <button class="popup-btn" data-action="direct-to">D→</button>
-            <button class="popup-btn popup-close-btn" data-action="close">CLOSE</button>
+            <button class="btn-close popup-btn popup-close-btn" data-action="close">✕</button>
         </div>`;
     }
 

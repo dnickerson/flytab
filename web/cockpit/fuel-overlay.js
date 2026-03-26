@@ -42,7 +42,7 @@ class FuelOverlay {
         <div class="fo-container">
             <div class="fo-header">
                 <div class="fo-title">FUEL MEASUREMENT</div>
-                <button class="ep-close fo-close" id="fo-close">MAP</button>
+                <button class="ep-close fo-close" id="fo-close">✕</button>
             </div>
 
             <!-- A) TIC MARK INPUT -->

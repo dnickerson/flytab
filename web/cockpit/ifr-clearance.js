@@ -95,7 +95,7 @@ class IfrClearance {
                 <button class="clr-mode-tab active" data-mode="dep">DEP</button>
                 <button class="clr-mode-tab" data-mode="apch">APCH</button>
             </div>
-            <button class="ep-close clr-close">MAP</button>
+            <button class="ep-close clr-close">✕</button>
         </div>
         <div class="clr-body">
             <!-- DEP panel -->
