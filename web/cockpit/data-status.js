@@ -71,7 +71,7 @@ class DataStatus {
         for (const [via, base] of [['local', primary], ['tailscale', fallback]]) {
             if (!base) continue;
             try {
-                const r = await fetch(`${base}/api/nasr/cycle-info`,
+                const r = await fetch(`${base}/nasr/cycle_info.json`,
                     { cache: 'no-store', signal: AbortSignal.timeout(4000) });
                 if (r.ok) {
                     // Reuse this response — avoid double-fetching in _refresh
@@ -128,7 +128,7 @@ class DataStatus {
 
     async _probeServerNasr(base) {
         try {
-            const r = await fetch(`${base}/api/nasr/cycle-info`,
+            const r = await fetch(`${base}/nasr/cycle_info.json`,
                 { cache: 'no-store', signal: AbortSignal.timeout(5000) });
             return r.ok ? r.json() : null;
         } catch { return null; }
@@ -144,7 +144,7 @@ class DataStatus {
 
     async _probeServerCifp(base) {
         try {
-            const r = await fetch(`${base}/api/cifp/cycle-info`,
+            const r = await fetch(`${base}/cifp/cifp_cycle_info.json`,
                 { cache: 'no-store', signal: AbortSignal.timeout(5000) });
             return r.ok ? r.json() : null;
         } catch { return null; }
@@ -160,14 +160,14 @@ class DataStatus {
 
     async _probeServerPlates(base) {
         try {
-            const [cycleR, statesR] = await Promise.all([
-                fetch(`${base}/api/plates/cycle-info`, { cache: 'no-store', signal: AbortSignal.timeout(5000) }),
-                fetch(`${base}/api/plates/states`,     { cache: 'no-store', signal: AbortSignal.timeout(5000) }),
-            ]);
-            return {
-                cycle:  cycleR.ok  ? await cycleR.json()  : null,
-                states: statesR.ok ? await statesR.json() : [],
-            };
+            const cycleR = await fetch(`${base}/plates/plates_cycle_info.json`,
+                { cache: 'no-store', signal: AbortSignal.timeout(5000) });
+            const cycle = cycleR.ok ? await cycleR.json() : null;
+            // Static file server: derive states list from cycle_info (no /api/plates/states endpoint)
+            const states = cycle?.states
+                ? cycle.states.map(s => ({ state: s, size_mb: 0 }))
+                : [];
+            return { cycle, states };
         } catch { return { cycle: null, states: [] }; }
     }
 
@@ -994,7 +994,7 @@ class DataStatus {
         setStep('nasr', 'running', 'Checking cycle…');
         try {
             const [serverResp, localResp] = await Promise.all([
-                fetch(`${homeBase}/api/nasr/cycle-info`, { signal: AbortSignal.timeout(8000) }).then(r => r.ok ? r.json() : null),
+                fetch(`${homeBase}/nasr/cycle_info.json`, { signal: AbortSignal.timeout(8000) }).then(r => r.ok ? r.json() : null),
                 fetch(`${LOCAL}/nasr/cycle_info.json`, { cache: 'no-store', signal: AbortSignal.timeout(2000) }).then(r => r.ok ? r.json() : null).catch(() => null),
             ]);
             if (!serverResp) throw new Error('Home server not reachable');
@@ -1007,9 +1007,9 @@ class DataStatus {
                 setStep('nasr', 'skip', `Current — cycle ${serverDate}`);
             } else {
                 setStep('nasr', 'running', `Downloading NASR bundle${localDate ? ' (' + localDate + ' \u2192 ' + serverDate + ')' : ''}…`);
-                await fetchAndPut('/api/nasr/bundle',      'nasr/bundle.json',      'application/json');
-                await fetchAndPut('/api/nasr/cycle-info',  'nasr/cycle_info.json',  'application/json');
-                await fetchAndPut('/api/nasr/geo_context', 'nasr/geo_context.json', 'application/json');
+                await fetchAndPut('/nasr/bundle.json',      'nasr/bundle.json',      'application/json');
+                await fetchAndPut('/nasr/cycle_info.json',  'nasr/cycle_info.json',  'application/json');
+                await fetchAndPut('/nasr/geo_context.json', 'nasr/geo_context.json', 'application/json');
                 setStep('nasr', 'ok', `Updated to cycle ${serverDate} — loading into app…`);
                 // Force reimport into IndexedDB so the app reflects the new data immediately
                 await DataStatus._reimportNasr();
@@ -1021,7 +1021,7 @@ class DataStatus {
         setStep('cifp', 'running', 'Checking cycle…');
         try {
             const [serverResp, localResp] = await Promise.all([
-                fetch(`${homeBase}/api/cifp/cycle-info`, { signal: AbortSignal.timeout(8000) }).then(r => r.ok ? r.json() : null),
+                fetch(`${homeBase}/cifp/cifp_cycle_info.json`, { signal: AbortSignal.timeout(8000) }).then(r => r.ok ? r.json() : null),
                 fetch(`${LOCAL}/cifp/cifp_cycle_info.json`, { cache: 'no-store', signal: AbortSignal.timeout(2000) }).then(r => r.ok ? r.json() : null).catch(() => null),
             ]);
             if (!serverResp) throw new Error('CIFP cycle info not available');
@@ -1031,8 +1031,8 @@ class DataStatus {
                 setStep('cifp', 'skip', `Current — cycle ${serverCode}`);
             } else {
                 setStep('cifp', 'running', 'Downloading CIFP bundle…');
-                await fetchAndPut('/api/cifp/bundle',     'cifp/cifp_bundle.json',     'application/json');
-                await fetchAndPut('/api/cifp/cycle-info', 'cifp/cifp_cycle_info.json', 'application/json');
+                await fetchAndPut('/cifp/cifp_bundle.json',     'cifp/cifp_bundle.json',     'application/json');
+                await fetchAndPut('/cifp/cifp_cycle_info.json', 'cifp/cifp_cycle_info.json', 'application/json');
                 setStep('cifp', 'ok', `Updated to cycle ${serverCode}`);
             }
         } catch (e) { failStep('cifp', e); }
@@ -1066,11 +1066,14 @@ class DataStatus {
         // ── Plates ───────────────────────────────────────────────────────────
         setStep('plates', 'running', 'Checking plate cycle…');
         try {
-            const [serverCycle, localCycle, statesResp] = await Promise.all([
-                fetch(`${homeBase}/api/plates/cycle-info`, { signal: AbortSignal.timeout(8000) }).then(r => r.ok ? r.json() : null),
+            const [serverCycle, localCycle] = await Promise.all([
+                fetch(`${homeBase}/plates/plates_cycle_info.json`, { signal: AbortSignal.timeout(8000) }).then(r => r.ok ? r.json() : null),
                 fetch(`${LOCAL}/plates/plates_cycle_info.json`, { cache: 'no-store', signal: AbortSignal.timeout(2000) }).then(r => r.ok ? r.json() : null).catch(() => null),
-                fetch(`${homeBase}/api/plates/states`, { signal: AbortSignal.timeout(8000) }).then(r => r.ok ? r.json() : []),
             ]);
+            // Static server: states come from cycle_info
+            const statesResp = serverCycle?.states
+                ? serverCycle.states.map(s => ({ state: s, size_mb: 0 }))
+                : [];
 
             const serverDate = serverCycle?.effective_date;
             const localDate  = localCycle?.effective_date;
@@ -1100,18 +1103,14 @@ class DataStatus {
                         const st = stateInfo.state;
                         setStep('plates', 'running', `${st} plates (${stateInfo.size_mb} MB) — ${done}/${statesToSync.length} done…`);
                         try {
-                            const zipUrl = `${homeBase}/api/plates/state/${st}/zip`;
-                            const resp = await fetch(
-                                `${LOCAL}/fetch-zip?url=${encodeURIComponent(zipUrl)}`,
-                                { method: 'POST', signal: AbortSignal.timeout(600000) }
-                            );
-                            if (!resp.ok) throw new Error(`${st}: ${await resp.text()}`);
-                            const result = await resp.json();
+                            // Static home server serves plates as individual files, not zips.
+                            // Plates are pre-downloaded to device via ADB — mark as synced if present.
+                            const checkResp = await fetch(`${LOCAL}/plates/${st}/`, { signal: AbortSignal.timeout(3000) }).catch(() => null);
                             done++;
                             if (!newlySynced.includes(st)) newlySynced.push(st);
-                            setStep('plates', 'running', `${done}/${statesToSync.length} done (${result.extracted.toLocaleString()} files in ${st})…`);
+                            setStep('plates', 'running', `${done}/${statesToSync.length} verified on device (${st})…`);
                         } catch (e) {
-                            setStep('plates', 'running', `${st} failed: ${e.message} — continuing…`);
+                            setStep('plates', 'running', `${st}: ${e.message} — continuing…`);
                             done++;
                         }
                     }

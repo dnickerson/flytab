@@ -10,7 +10,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DATA_DIR="$(cd "$SCRIPT_DIR/../flypi/data" && pwd)"
+DATA_DIR="$(cd "$SCRIPT_DIR/../data" && pwd)"
 PORT=8090
 HOST_IP="192.168.1.77"
 
