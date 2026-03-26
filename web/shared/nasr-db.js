@@ -6,18 +6,16 @@
 
 class NasrDB {
     static DB_NAME = 'flypi';
-    static DB_VERSION = 7;
+    static DB_VERSION = 6;
 
     constructor() {
         this._db = null;
-        this._opening = null; // pending open Promise (prevents concurrent indexedDB.open calls)
     }
 
     async open() {
         if (this._db) return this._db;
-        if (this._opening) return this._opening;
 
-        this._opening = new Promise((resolve, reject) => {
+        return new Promise((resolve, reject) => {
             const request = indexedDB.open(NasrDB.DB_NAME, NasrDB.DB_VERSION);
 
             request.onupgradeneeded = (event) => {
@@ -121,17 +119,10 @@ class NasrDB {
                 if (!db.objectStoreNames.contains('app_cache')) {
                     db.createObjectStore('app_cache', { keyPath: 'key' });
                 }
-
-                // Special Use Airspace (R, P, W, A, MOA) — added in v7
-                if (!db.objectStoreNames.contains('sua')) {
-                    const store = db.createObjectStore('sua', { keyPath: 'id' });
-                    store.createIndex('type', 'type', { unique: false });
-                }
             };
 
             request.onsuccess = (event) => {
                 this._db = event.target.result;
-                this._opening = null;
                 // Reset cached connection if it closes unexpectedly
                 this._db.onclose = () => { this._db = null; };
                 this._db.onversionchange = () => { this._db.close(); this._db = null; };
@@ -139,11 +130,9 @@ class NasrDB {
             };
 
             request.onerror = (event) => {
-                this._opening = null;
                 reject(new Error('IndexedDB open failed: ' + event.target.error));
             };
         });
-        return this._opening;
     }
 
     // ========== Generic CRUD Helpers ==========
@@ -152,7 +141,6 @@ class NasrDB {
         const db = await this.open();
         return new Promise((resolve, reject) => {
             const tx = db.transaction(storeName, 'readonly');
-            tx.onabort = () => reject(tx.error || new Error('Transaction aborted'));
             const req = tx.objectStore(storeName).get(key);
             req.onsuccess = () => resolve(req.result || null);
             req.onerror = () => reject(req.error);
@@ -411,30 +399,6 @@ class NasrDB {
         });
     }
 
-    async getSuaInBounds(south, west, north, east, limit = 300) {
-        const db = await this.open();
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction('sua', 'readonly');
-            tx.onabort = () => reject(tx.error || new Error('Transaction aborted'));
-            const results = [];
-            const req = tx.objectStore('sua').openCursor();
-            req.onsuccess = () => {
-                const cursor = req.result;
-                if (!cursor || results.length >= limit) { resolve(results); return; }
-                const v = cursor.value;
-                const boundary = v.boundary || [];
-                const inBounds = boundary.some(pt => {
-                    const lat = pt[0];
-                    const lon = pt[1];
-                    return lat >= south && lat <= north && lon >= west && lon <= east;
-                });
-                if (inBounds) results.push(v);
-                cursor.continue();
-            };
-            req.onerror = () => reject(req.error);
-        });
-    }
-
     /**
      * Get airways that have at least one waypoint within bounds.
      */
@@ -637,11 +601,11 @@ class NasrDB {
     // ========== NASR Data Import ==========
 
     async importNasrBundle(bundle) {
-        // Bundle is an object with { airports, navaids, airways, airspace, fixes, sua, cycle_info }
+        // Bundle is an object with { airports, navaids, airways, airspace, fixes, cycle_info }
         // All stores are written in a single transaction so that a mid-import failure
         // never leaves the DB in a partially-cleared state.
         const db = await this.open();
-        const storeNames = ['airports', 'navaids', 'airways', 'airspace', 'fixes', 'sua'];
+        const storeNames = ['airports', 'navaids', 'airways', 'airspace', 'fixes'];
         let count = 0;
 
         await new Promise((resolve, reject) => {
@@ -665,7 +629,6 @@ class NasrDB {
             write('airways', bundle.airways);
             write('airspace', bundle.airspace);
             write('fixes', bundle.fixes);
-            write('sua', bundle.sua);
         });
 
         if (bundle.cycle_info) {

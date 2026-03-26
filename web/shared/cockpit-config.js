@@ -33,7 +33,7 @@ class CockpitConfig {
             showSeaplaneBases: false,
             showUltralight:    false,
             showGliderports:   false,
-            minRunwayFt:       0,      // 0 = no minimum
+            minRunwayFt:       2500,   // default: hide short grass strips
             pavedOnly:         false,
         },
         routeTable: {
