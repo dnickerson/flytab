@@ -163,10 +163,10 @@ class DataStatus {
             const cycleR = await fetch(`${base}/plates/plates_cycle_info.json`,
                 { cache: 'no-store', signal: AbortSignal.timeout(5000) });
             const cycle = cycleR.ok ? await cycleR.json() : null;
-            // Static file server: derive states list from cycle_info (no /api/plates/states endpoint)
-            const states = cycle?.states
-                ? cycle.states.map(s => ({ state: s, size_mb: 0 }))
-                : [];
+            // Derive states list from cycle_info — use state_sizes if available for accurate MB display
+            const states = cycle?.state_sizes
+                ? cycle.state_sizes
+                : (cycle?.states ? cycle.states.map(s => ({ state: s, size_mb: 0 })) : []);
             return { cycle, states };
         } catch { return { cycle: null, states: [] }; }
     }
@@ -1108,14 +1108,20 @@ class DataStatus {
                         const st = stateInfo.state;
                         setStep('plates', 'running', `${st} plates (${stateInfo.size_mb} MB) — ${done}/${statesToSync.length} done…`);
                         try {
-                            // Static home server serves plates as individual files, not zips.
-                            // Plates are pre-downloaded to device via ADB — mark as synced if present.
-                            const checkResp = await fetch(`${LOCAL}/plates/${st}/`, { signal: AbortSignal.timeout(3000) }).catch(() => null);
+                            // NanoHTTPD fetch-zip: download state zip from home server
+                            // and extract directly into the tablet's local storage
+                            const zipUrl = `${homeBase}/plates/state_zips/${st}.zip`;
+                            const resp = await fetch(
+                                `${LOCAL}/fetch-zip?url=${encodeURIComponent(zipUrl)}`,
+                                { method: 'POST', signal: AbortSignal.timeout(600000) }
+                            );
+                            if (!resp.ok) throw new Error(`${st}: ${await resp.text()}`);
+                            const result = await resp.json();
                             done++;
                             if (!newlySynced.includes(st)) newlySynced.push(st);
-                            setStep('plates', 'running', `${done}/${statesToSync.length} verified on device (${st})…`);
+                            setStep('plates', 'running', `${done}/${statesToSync.length} done (${result.extracted?.toLocaleString() ?? '?'} files in ${st})…`);
                         } catch (e) {
-                            setStep('plates', 'running', `${st}: ${e.message} — continuing…`);
+                            setStep('plates', 'running', `${st} failed: ${e.message} — continuing…`);
                             done++;
                         }
                     }
