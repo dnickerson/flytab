@@ -73,10 +73,14 @@ class DataStatus {
             try {
                 const r = await fetch(`${base}/api/nasr/cycle-info`,
                     { cache: 'no-store', signal: AbortSignal.timeout(4000) });
-                if (r.ok) return { base, via };
+                if (r.ok) {
+                    // Reuse this response — avoid double-fetching in _refresh
+                    const nasrCycleInfo = await r.json();
+                    return { base, via, nasrCycleInfo };
+                }
             } catch { /* try next */ }
         }
-        return { base: null, via: null };
+        return { base: null, via: null, nasrCycleInfo: null };
     }
 
     /** Returns the resolved or configured primary base URL. */
@@ -103,12 +107,12 @@ class DataStatus {
         const body = this._el.querySelector('.data-status-body');
         body.innerHTML = '<div class="ds-loading">Checking data…</div>';
 
-        const { base, via } = await this._resolveHomeBase();
+        const { base, via, nasrCycleInfo } = await this._resolveHomeBase();
         this._resolvedBase = base;
         this._resolvedVia  = via;
 
         const [sNasr, dNasr, sCifp, dCifp, sPlates, dPlates, mbtiles] = await Promise.all([
-            base ? this._probeServerNasr(base)   : Promise.resolve(null),
+            nasrCycleInfo ? Promise.resolve(nasrCycleInfo) : (base ? this._probeServerNasr(base) : Promise.resolve(null)),
             this._probeDeviceNasr(),
             base ? this._probeServerCifp(base)   : Promise.resolve(null),
             this._probeDeviceCifp(),
@@ -363,14 +367,6 @@ class DataStatus {
             ${this._section('Approach Plates',          platesServerLine, platesDevLine, platesBadge, platesAction, true)}
             <div class="ds-section-title">Offline Maps</div>
             ${mbtilesHtml}
-            <div class="ds-sync-footer">
-                <button class="ds-sync-btn" id="dsSyncAllBtn" ${!needsSync ? 'disabled' : ''}>
-                    &#8645; ${needsSync ? 'Sync All Outdated' : 'All Data Current'}
-                </button>
-                <button class="ds-sync-btn ds-reload-btn" id="dsReloadAppBtn" title="Force reload all data into the app (fixes NASR ?? and stale map data)">
-                    &#8635; Reload App Data
-                </button>
-            </div>
             <div class="ds-footer">Checked: ${ts}</div>
             <div class="ds-section-title" style="cursor:pointer;user-select:none" id="dsSuppToggle">
                 Supplemental &amp; Advanced
@@ -381,6 +377,7 @@ class DataStatus {
             </div>
         `;
 
+        this._needsSync = needsSync;
         this._wireDataSections();
         this._wireCacheSection();
     }
@@ -410,6 +407,20 @@ class DataStatus {
     _wireDataSections() {
         const body = this._el.querySelector('.data-status-body');
 
+        // Render sticky footer buttons (outside scroll area, always visible)
+        const stickyFooter = this._el.querySelector('#dsStickyFooter');
+        if (stickyFooter) {
+            const needsSync = this._needsSync;
+            stickyFooter.innerHTML = `
+                <button class="ds-sync-btn" id="dsSyncAllBtn" ${!needsSync ? 'disabled' : ''}>
+                    &#8645; ${needsSync ? 'Sync All Outdated' : 'All Data Current'}
+                </button>
+                <button class="ds-sync-btn ds-reload-btn" id="dsReloadAppBtn" title="Force reload all data into the app (fixes NASR ??)">
+                    &#8635; Reload App Data
+                </button>
+            `;
+        }
+
         const progRow  = this._el.querySelector('.ds-progress-row');
         const progFill = this._el.querySelector('.ds-progress-fill');
         const progText = this._el.querySelector('.ds-progress-text');
@@ -432,14 +443,14 @@ class DataStatus {
             if (cancelEl) cancelEl.style.display = 'none';
         };
 
-        // Sync All button
-        const syncAllBtn = body.querySelector('#dsSyncAllBtn');
+        // Sync All button (in sticky footer)
+        const syncAllBtn = stickyFooter ? stickyFooter.querySelector('#dsSyncAllBtn') : body.querySelector('#dsSyncAllBtn');
         if (syncAllBtn && !syncAllBtn.disabled) {
             this._wireTap(syncAllBtn, () => this._syncAll(syncAllBtn, showProg, updateProg, doneProg));
         }
 
-        // Reload App Data button — force reimport from NanoHTTPD into IndexedDB
-        const reloadBtn = body.querySelector('#dsReloadAppBtn');
+        // Reload App Data button (in sticky footer)
+        const reloadBtn = stickyFooter ? stickyFooter.querySelector('#dsReloadAppBtn') : body.querySelector('#dsReloadAppBtn');
         if (reloadBtn) {
             this._wireTap(reloadBtn, async () => {
                 reloadBtn.disabled = true;
@@ -1119,7 +1130,7 @@ class DataStatus {
 
         // ── Done ──────────────────────────────────────────────────────────────
         this._cacheRunning = false;
-        if (btn) { btn.disabled = false; btn.textContent = '&#8645; Sync All Outdated'; }
+        if (btn) { btn.disabled = false; btn.innerHTML = '&#8645; Sync All Outdated'; }
         if (doneProg) doneProg('Sync complete', 'var(--status-ok)');
         this._wireDoneBtn();
     }
@@ -1245,6 +1256,7 @@ class DataStatus {
                 </div>
             </div>
             <div class="data-status-body"></div>
+            <div class="ds-sticky-footer" id="dsStickyFooter"></div>
         `;
         this._wireTap(this._el.querySelector('.data-status-close'), () => this.hide());
         this._parentEl.appendChild(this._el);
