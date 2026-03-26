@@ -367,6 +367,9 @@ class DataStatus {
                 <button class="ds-sync-btn" id="dsSyncAllBtn" ${!needsSync ? 'disabled' : ''}>
                     &#8645; ${needsSync ? 'Sync All Outdated' : 'All Data Current'}
                 </button>
+                <button class="ds-sync-btn ds-reload-btn" id="dsReloadAppBtn" title="Force reload all data into the app (fixes NASR ?? and stale map data)">
+                    &#8635; Reload App Data
+                </button>
             </div>
             <div class="ds-footer">Checked: ${ts}</div>
             <div class="ds-section-title" style="cursor:pointer;user-select:none" id="dsSuppToggle">
@@ -433,6 +436,20 @@ class DataStatus {
         const syncAllBtn = body.querySelector('#dsSyncAllBtn');
         if (syncAllBtn && !syncAllBtn.disabled) {
             this._wireTap(syncAllBtn, () => this._syncAll(syncAllBtn, showProg, updateProg, doneProg));
+        }
+
+        // Reload App Data button — force reimport from NanoHTTPD into IndexedDB
+        const reloadBtn = body.querySelector('#dsReloadAppBtn');
+        if (reloadBtn) {
+            this._wireTap(reloadBtn, async () => {
+                reloadBtn.disabled = true;
+                reloadBtn.textContent = 'Reloading…';
+                showProg('Reloading app data…', '');
+                await DataStatus._reimportNasr();
+                reloadBtn.disabled = false;
+                reloadBtn.innerHTML = '&#8635; Reload App Data';
+                doneProg('App data reloaded', 'var(--status-ok)');
+            });
         }
 
         // Per-section buttons all trigger _syncAll (which skips already-current items)
@@ -982,6 +999,9 @@ class DataStatus {
                 await fetchAndPut('/api/nasr/bundle',      'nasr/bundle.json',      'application/json');
                 await fetchAndPut('/api/nasr/cycle-info',  'nasr/cycle_info.json',  'application/json');
                 await fetchAndPut('/api/nasr/geo_context', 'nasr/geo_context.json', 'application/json');
+                setStep('nasr', 'ok', `Updated to cycle ${serverDate} — loading into app…`);
+                // Force reimport into IndexedDB so the app reflects the new data immediately
+                await DataStatus._reimportNasr();
                 setStep('nasr', 'ok', `Updated to cycle ${serverDate}`);
             }
         } catch (e) { failStep('nasr', e); }
@@ -1107,7 +1127,31 @@ class DataStatus {
     /** Wire the "Done — Refresh" button that appears after _syncAll completes. */
     _wireDoneBtn() {
         const btn = this._el.querySelector('#dsSyncDoneBtn');
-        if (btn) this._wireTap(btn, () => this._refresh());
+        if (btn) this._wireTap(btn, async () => {
+            await window.app?._updateNasrBadge?.();
+            this._refresh();
+        });
+    }
+
+    /**
+     * Force-reimport NASR bundle from NanoHTTPD into IndexedDB.
+     * Used after a sync to make the app reflect updated data without a restart.
+     */
+    static async _reimportNasr() {
+        const app = window.app;
+        if (!app?._nasrDb) return;
+        try {
+            const resp = await fetch('http://localhost:9090/nasr/bundle.json', {
+                signal: AbortSignal.timeout(15000),
+            });
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const bundle = await resp.json();
+            await app._nasrDb.importNasrBundle(bundle);
+            await app._updateNasrBadge?.();
+            app.vectorLayers?._updateDynamicLayers?.();
+        } catch (e) {
+            console.warn('[DataStatus] NASR reimport failed:', e?.message);
+        }
     }
 
     /**

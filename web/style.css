@@ -2838,6 +2838,14 @@ body {
     -webkit-tap-highlight-color: transparent;
 }
 .ds-sync-btn:disabled { opacity: 0.5; }
+.ds-reload-btn {
+    background: transparent;
+    color: var(--accent);
+    font-weight: 600;
+    font-size: 14px;
+    padding: 10px;
+    margin-bottom: 6px;
+}
 .ds-action-btn {
     padding: 8px 14px;
     border-radius: 8px;
