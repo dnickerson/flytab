@@ -512,7 +512,8 @@ class LayerPanel {
      */
     _getHomeServerTileBase() {
         const hs = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.raw?.homeServer : null;
-        return hs?.tileBase || 'http://192.168.1.77:8090/tiles';
+        const base = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.homeBase : null;
+        return hs?.tileBase || (base ? `${base}/tiles` : null);
     }
 
     /**

@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v4.20';
+const FLYTAB_VERSION = 'v4.21';
 
 // ========== Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -826,12 +826,11 @@ class FlyTabApp {
             } catch { /* local not available */ }
             if (!bundle) {
                 // Fall back to home server — try primary, then Tailscale fallback
-                const hs = (typeof CockpitConfig !== 'undefined' && CockpitConfig.raw?.homeServer) || {};
-                const primary  = hs.nasrBase ? hs.nasrBase.replace(/\/nasr\/?$/, '') : 'http://192.168.1.77:8090';
-                const fallback = hs.fallbackBase || null;
+                const bases = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.homeBases : [];
+                if (!bases.length) throw new Error('No home server configured');
 
                 let resp = null;
-                for (const base of [primary, fallback].filter(Boolean)) {
+                for (const base of bases) {
                     try {
                         resp = await fetch(`${base}/nasr/bundle.json`, {
                             cache: 'no-store',

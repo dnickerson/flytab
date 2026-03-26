@@ -64,12 +64,12 @@ class DataStatus {
      * Returns { base, via } where via is 'local' | 'tailscale' | null.
      */
     async _resolveHomeBase() {
-        const cfg = (typeof CockpitConfig !== 'undefined' && CockpitConfig.raw?.homeServer) || {};
-        const primary  = cfg.nasrBase   ? cfg.nasrBase.replace(/\/nasr\/?$/, '')   : null;
-        const fallback = cfg.fallbackBase || null;
+        const bases = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.homeBases : [];
+        const labels = ['local', 'tailscale'];
 
-        for (const [via, base] of [['local', primary], ['tailscale', fallback]]) {
-            if (!base) continue;
+        for (let i = 0; i < bases.length; i++) {
+            const base = bases[i];
+            const via  = labels[i] || 'tailscale';
             try {
                 const r = await fetch(`${base}/nasr/cycle_info.json`,
                     { cache: 'no-store', signal: AbortSignal.timeout(4000) });
@@ -86,8 +86,7 @@ class DataStatus {
     /** Returns the resolved or configured primary base URL. */
     _homeBase() {
         if (this._resolvedBase) return this._resolvedBase;
-        const cfg = (typeof CockpitConfig !== 'undefined' && CockpitConfig.raw?.homeServer) || {};
-        return cfg.nasrBase ? cfg.nasrBase.replace(/\/nasr\/?$/, '') : 'http://192.168.1.77:8090';
+        return (typeof CockpitConfig !== 'undefined' && CockpitConfig.homeBase) || null;
     }
 
     /** Legacy helper for _wireCacheSection() — returns tileBase/plateBase/nasrBase URLs. */

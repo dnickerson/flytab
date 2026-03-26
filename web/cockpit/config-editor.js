@@ -124,20 +124,28 @@ class ConfigEditor {
                 <div class="ce-field-row">
                     <label class="ce-label" for="ce-home-tile">Tile Server</label>
                     <input type="text" id="ce-home-tile" class="ce-input" style="width:250px"
-                        value="${hs.tileBase || 'http://192.168.1.77:8090/tiles'}">
+                        placeholder="http://192.168.1.x:8090/tiles"
+                        value="${hs.tileBase || ''}">
                 </div>
                 <div class="ce-field-row">
                     <label class="ce-label" for="ce-home-plate">Plate Server</label>
                     <input type="text" id="ce-home-plate" class="ce-input" style="width:250px"
-                        value="${hs.plateBase || 'http://192.168.1.77:8090/plates'}">
+                        placeholder="http://192.168.1.x:8090/plates"
+                        value="${hs.plateBase || ''}">
                 </div>
                 <div class="ce-field-row">
                     <label class="ce-label" for="ce-home-nasr">NASR Server</label>
                     <input type="text" id="ce-home-nasr" class="ce-input" style="width:250px"
-                        value="${hs.nasrBase || 'http://192.168.1.77:8090/nasr'}">
+                        value="${hs.nasrBase || ''}">
+                </div>
+                <div class="ce-field-row">
+                    <label class="ce-label" for="ce-home-fallback">Tailscale Fallback</label>
+                    <input type="text" id="ce-home-fallback" class="ce-input" style="width:250px"
+                        placeholder="http://100.x.x.x:8090"
+                        value="${hs.fallbackBase || ''}">
                 </div>
                 <div class="ce-field-row" style="font-size:14px;color:var(--text-secondary)">
-                    Home server URLs for downloading tiles, plates, and NASR data
+                    Home server URLs. Change these when your IP address changes.
                 </div>
             </div>
         </div>`);
@@ -303,13 +311,19 @@ class ConfigEditor {
             }
 
             // Collect home server URLs
-            const tileEl = body.querySelector('#ce-home-tile');
-            const plateEl = body.querySelector('#ce-home-plate');
-            const nasrEl = body.querySelector('#ce-home-nasr');
+            const tileEl     = body.querySelector('#ce-home-tile');
+            const plateEl    = body.querySelector('#ce-home-plate');
+            const nasrEl     = body.querySelector('#ce-home-nasr');
+            const fallbackEl = body.querySelector('#ce-home-fallback');
             if (!this._cockpitConfig.homeServer) this._cockpitConfig.homeServer = {};
-            if (tileEl) this._cockpitConfig.homeServer.tileBase = tileEl.value.trim();
-            if (plateEl) this._cockpitConfig.homeServer.plateBase = plateEl.value.trim();
-            if (nasrEl) this._cockpitConfig.homeServer.nasrBase = nasrEl.value.trim();
+            if (tileEl)     this._cockpitConfig.homeServer.tileBase    = tileEl.value.trim();
+            if (plateEl)    this._cockpitConfig.homeServer.plateBase   = plateEl.value.trim();
+            if (nasrEl)     this._cockpitConfig.homeServer.nasrBase    = nasrEl.value.trim();
+            if (fallbackEl) {
+                const fb = fallbackEl.value.trim();
+                if (fb) this._cockpitConfig.homeServer.fallbackBase = fb;
+                else    delete this._cockpitConfig.homeServer.fallbackBase;
+            }
 
             // Collect cockpit config values
             this._collectValues('cockpit');

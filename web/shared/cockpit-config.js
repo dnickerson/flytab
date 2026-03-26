@@ -253,6 +253,36 @@ class CockpitConfig {
     }
 
     /**
+     * Returns the home server base URL (no trailing slash, no path segment).
+     * Reads from homeServer.nasrBase (strips /nasr suffix) as the canonical source.
+     * Never falls back to a hardcoded IP — returns null if unconfigured so
+     * callers can decide whether to skip the request.
+     */
+    static get homeBase() {
+        const hs = CockpitConfig.raw?.homeServer || {};
+        if (hs.nasrBase) return hs.nasrBase.replace(/\/nasr\/?$/, '').replace(/\/$/, '');
+        if (hs.tileBase) return hs.tileBase.replace(/\/tiles\/?$/, '').replace(/\/$/, '');
+        return null;
+    }
+
+    /**
+     * Returns the Tailscale fallback base URL (no trailing slash).
+     * Returns null if not configured.
+     */
+    static get fallbackBase() {
+        const fb = CockpitConfig.raw?.homeServer?.fallbackBase;
+        return fb ? fb.replace(/\/$/, '') : null;
+    }
+
+    /**
+     * Returns [primaryBase, fallbackBase] as an array, filtering out nulls.
+     * Use to try home server then Tailscale in order.
+     */
+    static get homeBases() {
+        return [CockpitConfig.homeBase, CockpitConfig.fallbackBase].filter(Boolean);
+    }
+
+    /**
      * Get the full aircraft config object.
      */
     static get aircraftRaw() {

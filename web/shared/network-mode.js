@@ -53,14 +53,9 @@ class NetworkMode extends EventTarget {
         } catch { /* not on Stratux network */ }
 
         // Try home server — if reachable, we're on home network
-        // Uses configurable homeServer from cockpit-config.json (mDNS .local unreliable on Android)
-        // Probe /nasr/cycle_info.json — static file served by the home data server
+        // Uses CockpitConfig.homeBases (primary + Tailscale fallback from cockpit-config.json)
         try {
-            const hs = (typeof CockpitConfig !== 'undefined' && CockpitConfig.raw?.homeServer) || {};
-            const bases = [
-                hs.nasrBase ? hs.nasrBase.replace(/\/nasr\/?$/, '') : null,
-                hs.fallbackBase || null,
-            ].filter(Boolean);
+            const bases = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.homeBases : [];
             for (const base of bases) {
                 const r = await fetch(`${base}/nasr/cycle_info.json`, {
                     cache: 'no-store',

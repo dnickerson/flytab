@@ -544,9 +544,9 @@ class VectorMapLayers {
             } catch { /* NanoHTTPD unavailable, try fallback */ }
             if (!data) {
                 // Fall back to home server
-                const hs = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.raw?.homeServer : null;
-                const nasrBase = hs?.nasrBase || 'http://192.168.1.77:8090/nasr';
-                const resp2 = await fetch(`${nasrBase}/geo_context.json`, { signal: AbortSignal.timeout(3000) });
+                const homeBase = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.homeBase : null;
+                if (!homeBase) return;
+                const resp2 = await fetch(`${homeBase}/nasr/geo_context.json`, { signal: AbortSignal.timeout(3000) });
                 if (resp2.ok) data = await resp2.json();
             }
             if (data) {

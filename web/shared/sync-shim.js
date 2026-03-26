@@ -9,6 +9,6 @@ const SyncManager = {
         const hs = (typeof CockpitConfig !== 'undefined' && CockpitConfig.raw?.homeServer) || {};
         // Derive base URL from tileBase (strip /tiles suffix)
         if (hs.tileBase) return hs.tileBase.replace(/\/tiles\/?$/, '');
-        return 'http://192.168.1.77:8090';
+        return CockpitConfig?.homeBase || null;
     }
 };
