@@ -1010,10 +1010,18 @@ class DataStatus {
             if (localDate === serverDate && suaUpToDate) {
                 setStep('nasr', 'skip', `Current — cycle ${serverDate}`);
             } else {
-                setStep('nasr', 'running', `Downloading NASR bundle${localDate ? ' (' + localDate + ' \u2192 ' + serverDate + ')' : ''}…`);
-                await fetchAndPut('/nasr/bundle.json',      'nasr/bundle.json',      'application/json');
-                await fetchAndPut('/nasr/cycle_info.json',  'nasr/cycle_info.json',  'application/json');
-                await fetchAndPut('/nasr/geo_context.json', 'nasr/geo_context.json', 'application/json');
+                setStep('nasr', 'running', `Downloading NASR bundle${localDate ? ' (' + localDate + ' → ' + serverDate + ')' : ''}…`);
+                // Use fetch-zip (Java download) — avoids loading 18MB blob into WebView memory
+                // nasr.zip extracts to nasr/bundle.json + nasr/cycle_info.json + nasr/geo_context.json
+                const nasrZipUrl = encodeURIComponent(`${homeBase}/nasr/nasr.zip`);
+                const zipResp = await fetch(`${LOCAL}/fetch-zip?url=${nasrZipUrl}`, {
+                    method: 'POST',
+                    signal: AbortSignal.timeout(120000), // 2 min for zip download + extract
+                });
+                if (!zipResp.ok) {
+                    const msg = await zipResp.text().catch(() => `HTTP ${zipResp.status}`);
+                    throw new Error(`fetch-zip failed: ${msg}`);
+                }
                 setStep('nasr', 'ok', `Updated to cycle ${serverDate} — loading into app…`);
                 // Force reimport into IndexedDB so the app reflects the new data immediately
                 await DataStatus._reimportNasr();
@@ -1162,7 +1170,7 @@ class DataStatus {
         if (!app?._nasrDb) return;
         try {
             const resp = await fetch('http://localhost:9090/nasr/bundle.json', {
-                signal: AbortSignal.timeout(15000),
+                signal: AbortSignal.timeout(60000), // 18MB JSON parse can be slow on tablet
             });
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
             const bundle = await resp.json();

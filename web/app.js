@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v4.21';
+const FLYTAB_VERSION = 'v4.22';
 
 // ========== Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -820,7 +820,7 @@ class FlyTabApp {
             let bundle;
             try {
                 const localResp = await fetch('http://localhost:9090/nasr/bundle.json', {
-                    signal: AbortSignal.timeout(15000),
+                    signal: AbortSignal.timeout(60000), // 18MB JSON; give tablet time to parse
                 });
                 if (localResp.ok) bundle = await localResp.json();
             } catch { /* local not available */ }
