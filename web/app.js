@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v4.18';
+const FLYTAB_VERSION = 'v4.19';
 
 // ========== Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -825,17 +825,22 @@ class FlyTabApp {
                 if (localResp.ok) bundle = await localResp.json();
             } catch { /* local not available */ }
             if (!bundle) {
-                // Fall back to home server (pre-flight sync)
+                // Fall back to home server — try primary, then Tailscale fallback
                 const hs = (typeof CockpitConfig !== 'undefined' && CockpitConfig.raw?.homeServer) || {};
-                const base = hs.nasrBase
-                    ? hs.nasrBase.replace(/\/nasr\/?$/, '')
-                    : 'http://192.168.1.77:8090';
-                const nasrUrl = `${base}/nasr/bundle.json`;
-                const resp = await fetch(nasrUrl, {
-                    cache: 'no-store',
-                    signal: AbortSignal.timeout(60000),
-                });
-                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                const primary  = hs.nasrBase ? hs.nasrBase.replace(/\/nasr\/?$/, '') : 'http://192.168.1.77:8090';
+                const fallback = hs.fallbackBase || null;
+
+                let resp = null;
+                for (const base of [primary, fallback].filter(Boolean)) {
+                    try {
+                        resp = await fetch(`${base}/nasr/bundle.json`, {
+                            cache: 'no-store',
+                            signal: AbortSignal.timeout(60000),
+                        });
+                        if (resp.ok) break;
+                    } catch { resp = null; }
+                }
+                if (!resp?.ok) throw new Error('Home server not reachable');
                 bundle = await resp.json();
             }
 
