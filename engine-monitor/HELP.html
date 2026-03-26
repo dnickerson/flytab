@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Engine Monitor Help</title>
+    <style>
+        /* SUNLIGHT-READABLE THEME - High contrast for iPad cockpit use */
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background: #FFFFF0;
+            color: #000;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            padding: 15px;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        h1 {
+            color: #00008B;
+            font-size: 1.5em;
+            font-weight: 900;
+            margin-bottom: 10px;
+            text-align: center;
+        }
+        .version {
+            text-align: center;
+            color: #333;
+            font-weight: 600;
+            margin-bottom: 20px;
+        }
+        .section {
+            background: #FFF;
+            border: 2px solid #333;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            overflow: hidden;
+        }
+        .section-header {
+            background: #E8E8E8;
+            color: #000;
+            padding: 12px 15px;
+            font-weight: 800;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 2px solid #333;
+        }
+        .section-header:after {
+            content: '▼';
+            font-size: 12px;
+            transition: transform 0.3s;
+        }
+        .section.collapsed .section-header:after {
+            transform: rotate(-90deg);
+        }
+        .section.collapsed .section-content {
+            display: none;
+        }
+        .section-content {
+            padding: 15px;
+        }
+        h3 {
+            color: #00008B;
+            font-weight: 800;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 10px 0;
+        }
+        th, td {
+            padding: 8px;
+            text-align: left;
+            border-bottom: 2px solid #CCC;
+        }
+        th {
+            color: #000;
+            background: #E8E8E8;
+            font-weight: 800;
+        }
+        td {
+            font-weight: 600;
+        }
+        .value { color: #006400; font-weight: 800; }
+        .warning { color: #CC6600; font-weight: 800; }
+        .danger { color: #CC0000; font-weight: 800; }
+        .good { color: #006400; font-weight: 800; }
+        .info { color: #00008B; font-weight: 800; }
+
+        .gauge-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 10px;
+            margin: 10px 0;
+        }
+        .gauge-item {
+            background: #F8F8F8;
+            border: 2px solid #333;
+            padding: 10px;
+            border-radius: 5px;
+            text-align: center;
+        }
+        .gauge-label {
+            color: #333;
+            font-size: 12px;
+            font-weight: 700;
+        }
+        .gauge-value {
+            color: #006400;
+            font-size: 18px;
+            font-weight: 900;
+        }
+        .gauge-unit {
+            color: #666;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .alert-box {
+            padding: 12px;
+            border-radius: 5px;
+            margin: 10px 0;
+            font-weight: 600;
+        }
+        .alert-warning {
+            background: #FFF3CD;
+            border: 2px solid #CC6600;
+            color: #664400;
+        }
+        .alert-danger {
+            background: #FFE0E0;
+            border: 2px solid #CC0000;
+            color: #660000;
+        }
+        .alert-info {
+            background: #E0F0FF;
+            border: 2px solid #00008B;
+            color: #003366;
+        }
+
+        ul, ol {
+            margin: 10px 0;
+            padding-left: 25px;
+        }
+        li {
+            margin: 5px 0;
+            font-weight: 600;
+        }
+
+        code {
+            background: #E8E8E8;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+            font-weight: 700;
+            color: #333;
+        }
+
+        .formula {
+            background: #F0F8FF;
+            border: 2px solid #00008B;
+            border-radius: 5px;
+            padding: 10px;
+            margin: 10px 0;
+            font-family: 'Courier New', monospace;
+            font-weight: 700;
+            text-align: center;
+        }
+
+        .back-btn {
+            display: block;
+            text-align: center;
+            background: #00008B;
+            color: #FFF;
+            padding: 12px;
+            border-radius: 5px;
+            text-decoration: none;
+            margin-top: 20px;
+            font-weight: 800;
+            border: 2px solid #000;
+        }
+
+        a {
+            color: #00008B;
+            font-weight: 700;
+        }
+
+        @media (max-width: 400px) {
+            body { font-size: 13px; padding: 10px; }
+            .section-header { padding: 10px 12px; }
+            .section-content { padding: 12px; }
+            th, td { padding: 6px; font-size: 12px; }
+        }
+    </style>
+</head>
+<body>
+    <h1>Engine Monitor Help</h1>
+    <div class="version">Version 3.2.0 • Lycoming O-360-A1A</div>
+
+    <div class="section">
+        <div class="section-header" onclick="toggleSection(this)">Normal Operating Ranges</div>
+        <div class="section-content">
+            <div class="gauge-row">
+                <div class="gauge-item">
+                    <div class="gauge-label">RPM</div>
+                    <div class="gauge-value">2400-2500</div>
+                    <div class="gauge-unit">cruise</div>
+                </div>
+                <div class="gauge-item">
+                    <div class="gauge-label">MAP</div>
+                    <div class="gauge-value">21-24"</div>
+                    <div class="gauge-unit">cruise</div>
+                </div>
+                <div class="gauge-item">
+                    <div class="gauge-label">Oil Temp</div>
+                    <div class="gauge-value">180-220°F</div>
+                    <div class="gauge-unit">normal</div>
+                </div>
+                <div class="gauge-item">
+                    <div class="gauge-label">Oil Press</div>
+                    <div class="gauge-value">60-90</div>
+                    <div class="gauge-unit">PSI</div>
+                </div>
+                <div class="gauge-item">
+                    <div class="gauge-label">Fuel Flow</div>
+                    <div class="gauge-value">8-10</div>
+                    <div class="gauge-unit">GPH cruise</div>
+                </div>
+                <div class="gauge-item">
+                    <div class="gauge-label">Volts</div>
+                    <div class="gauge-value">13.5-14.5</div>
+                    <div class="gauge-unit">charging</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="section">
+        <div class="section-header" onclick="toggleSection(this)">Cylinder Temperatures</div>
+        <div class="section-content">
+            <h3 style="margin-bottom:10px;">EGT (Exhaust Gas Temp)</h3>
+            <table>
+                <tr><td>Normal range</td><td class="value">1100-1500°F</td></tr>
+                <tr><td>Peak EGT</td><td class="value">~1450°F</td></tr>
+                <tr><td>Rich of Peak</td><td class="good">100-150°F below peak</td></tr>
+                <tr><td>Lean of Peak</td><td class="info">50-100°F below peak</td></tr>
+            </table>
+
+            <h3 style="margin: 15px 0 10px;">CHT (Cylinder Head Temp)</h3>
+            <table>
+                <tr><td>Normal</td><td class="good">300-400°F</td></tr>
+                <tr><td>Caution</td><td class="warning">380-400°F</td></tr>
+                <tr><td>Warning</td><td class="danger">Above 400°F - REDUCE POWER</td></tr>
+            </table>
+        </div>
+    </div>
+
+    <div class="section">
+        <div class="section-header" onclick="toggleSection(this)">Trend Arrows</div>
+        <div class="section-content">
+            <table>
+                <tr>
+                    <td><span style="color:#f44; font-size:20px;">▲</span> Up Arrow</td>
+                    <td>Rising >20°F (EGT) or >3°F (CHT) vs 3 sec ago</td>
+                </tr>
+                <tr>
+                    <td><span style="color:#f44; font-size:20px;">▼</span> Down Arrow</td>
+                    <td>Falling >20°F (EGT) or >3°F (CHT) vs 3 sec ago</td>
+                </tr>
+                <tr>
+                    <td><span style="color:#fff; font-size:20px;">●</span> Dot</td>
+                    <td>Stable (within threshold)</td>
+                </tr>
+            </table>
+
+            <div class="alert-box alert-info" style="margin-top:15px;">
+                <strong>MAG CHECK PROCEDURE:</strong>
+                <ol>
+                    <li>Increase RPM to 1700-1900</li>
+                    <li>Switch to MAG 1 - watch for ▼ arrows</li>
+                    <li>Return to BOTH</li>
+                    <li>Switch to MAG 2 - watch for ▼ arrows</li>
+                </ol>
+                <p style="margin-top:10px;">Normal: 25-75°F drop per mag</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="section">
+        <div class="section-header" onclick="toggleSection(this)">Mixture Indicator (ROP/LOP)</div>
+        <div class="section-content">
+            <table>
+                <tr>
+                    <td><span class="warning">RICH</span></td>
+                    <td>Running rich of peak EGT. Normal for takeoff/climb: 100-150°F ROP</td>
+                </tr>
+                <tr>
+                    <td><span style="color:#ff0;">PEAK</span></td>
+                    <td>At peak EGT. <span class="danger">AVOID continuous operation</span></td>
+                </tr>
+                <tr>
+                    <td><span class="info">LEAN</span></td>
+                    <td>Running lean of peak. Cruise economy: 50-100°F LOP</td>
+                </tr>
+            </table>
+        </div>
+    </div>
+
+    <div class="section">
+        <div class="section-header" onclick="toggleSection(this)">Percent Power Settings</div>
+        <div class="section-content">
+            <table>
+                <tr><th>Power</th><th>RPM</th><th>MAP</th><th>~GPH</th></tr>
+                <tr><td>75%</td><td class="value">2500</td><td class="value">24"</td><td>11</td></tr>
+                <tr><td>65%</td><td class="value">2400</td><td class="value">22"</td><td>9.5</td></tr>
+                <tr><td>55%</td><td class="value">2300</td><td class="value">20"</td><td>8</td></tr>
+            </table>
+            <p style="color:#888; margin-top:10px; font-size:12px;">
+                Note: Actual power decreases ~3% per 1000ft density altitude
+            </p>
+        </div>
+    </div>
+
+    <div class="section">
+        <div class="section-header" onclick="toggleSection(this)">BSFC (Engine Efficiency)</div>
+        <div class="section-content">
+            <p>Brake Specific Fuel Consumption in lb/HP/hr</p>
+            <table>
+                <tr><td class="good">0.40-0.45</td><td>Good (lean of peak)</td></tr>
+                <tr><td class="value">0.45-0.50</td><td>Acceptable (best power)</td></tr>
+                <tr><td class="warning">>0.55</td><td>Poor (too rich)</td></tr>
+            </table>
+        </div>
+    </div>
+
+    <div class="section">
+        <div class="section-header" onclick="toggleSection(this)">Sticky Valve Warning</div>
+        <div class="section-content">
+            <div class="alert-box alert-warning">
+                <strong>WHAT IT MEANS:</strong><br>
+                One cylinder's EGT is significantly lower than others during warmup.
+                May indicate a sticky exhaust valve ("morning sickness").
+            </div>
+
+            <p><strong>Detection:</strong></p>
+            <ul>
+                <li>Monitored first 10 minutes after start</li>
+                <li>Triggers if one EGT &lt; 50% of others for 30+ seconds</li>
+                <li>Auto-clears if cylinder recovers</li>
+            </ul>
+
+            <p style="margin-top:15px;"><strong>What to do:</strong></p>
+            <ol>
+                <li>Note the affected cylinder</li>
+                <li>Monitor if it clears as engine warms</li>
+                <li>If persists: Land and have mechanic inspect</li>
+                <li>Reference: Lycoming SB 388C</li>
+            </ol>
+
+            <div class="alert-box alert-danger" style="margin-top:15px;">
+                <strong>WARNING:</strong> Sticky valves get worse, not better. If this warning
+                appears repeatedly, have valve-to-guide clearance checked before next flight.
+            </div>
+        </div>
+    </div>
+
+    <div class="section">
+        <div class="section-header" onclick="toggleSection(this)">Emergency Quick Reference</div>
+        <div class="section-content">
+            <div class="alert-box alert-danger">
+                <strong>HIGH CHT (>400°F):</strong><br>
+                Enrich → Reduce Power → Increase Speed → Open Cowl Flaps
+            </div>
+
+            <div class="alert-box alert-warning">
+                <strong>ENGINE ROUGHNESS:</strong><br>
+                Check mags → Check mixture → Check carb heat → Check fuel
+            </div>
+
+            <div class="alert-box alert-warning">
+                <strong>STICKY VALVE ALERT:</strong><br>
+                Note cylinder → Monitor temps → Land when practical → Get inspection
+            </div>
+
+            <div class="alert-box alert-danger">
+                <strong>LOW OIL PRESSURE:</strong><br>
+                Reduce power → Prepare for precautionary landing → Monitor temps
+            </div>
+        </div>
+    </div>
+
+    <div class="section collapsed">
+        <div class="section-header" onclick="toggleSection(this)">Leaning Procedure</div>
+        <div class="section-content">
+            <ol>
+                <li>Set cruise power (65% or less)</li>
+                <li>Slowly lean mixture</li>
+                <li>Watch EGTs rise toward peak</li>
+                <li>For LOP: Continue past peak until 50°F below</li>
+                <li>For ROP: Stop 100°F before peak</li>
+                <li>Monitor: All EGTs should be within 50°F of each other</li>
+            </ol>
+        </div>
+    </div>
+
+    <div class="section collapsed">
+        <div class="section-header" onclick="toggleSection(this)">Carb Icing Risk</div>
+        <div class="section-content">
+            <p>Watch Carb Temp when:</p>
+            <ul>
+                <li>OAT between 20-70°F</li>
+                <li>High humidity or visible moisture</li>
+                <li>Reduced power settings</li>
+            </ul>
+            <p style="margin-top:10px;">If Carb Temp dropping toward 32°F:</p>
+            <ul>
+                <li>Apply carb heat</li>
+                <li>Expect RPM drop then rise as ice clears</li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="section collapsed">
+        <div class="section-header" onclick="toggleSection(this)">Flight Data (Stratux)</div>
+        <div class="section-content">
+            <table>
+                <tr><td>GPS Alt</td><td>GPS altitude MSL</td></tr>
+                <tr><td>Press Alt</td><td>Barometric pressure altitude</td></tr>
+                <tr><td>Density Alt</td><td>Calculated from pressure alt + temp</td></tr>
+                <tr><td>GS</td><td>Ground speed in knots</td></tr>
+                <tr><td>TAS</td><td>Estimated true airspeed</td></tr>
+            </table>
+        </div>
+    </div>
+
+    <div class="section">
+        <div class="section-header" onclick="toggleSection(this)">Fuel Tracking</div>
+        <div class="section-content">
+            <p>The fuel tracker integrates fuel flow over time to track remaining fuel.</p>
+
+            <h3 style="margin: 15px 0 10px;">Fuel Display</h3>
+            <table>
+                <tr><td>REMAINING</td><td>Current fuel in tanks (gallons)</td></tr>
+                <tr><td>USED (FLIGHT)</td><td>Fuel consumed this flight (resets on engine start)</td></tr>
+                <tr><td>ENDURANCE</td><td>Estimated flight time remaining (H:MM)</td></tr>
+                <tr><td>RANGE</td><td>Estimated range in nautical miles</td></tr>
+            </table>
+
+            <h3 style="margin: 15px 0 10px;">How Calculations Work</h3>
+
+            <p><strong>Fuel Remaining:</strong></p>
+            <div class="formula">Remaining = Previous Remaining − (Fuel Flow × Time Elapsed)</div>
+            <p>Fuel flow (GPH) is integrated over time using EDM timestamps (1/64 second precision).
+               Each data sample (~4 Hz) calculates fuel consumed since last sample.</p>
+
+            <p style="margin-top:15px;"><strong>Flight Fuel Used:</strong></p>
+            <div class="formula">Used = Σ (Fuel Flow × dt) since engine start</div>
+            <p>Resets to zero when engine starts (RPM &gt; 500). Accumulates all fuel consumed during the flight.</p>
+
+            <p style="margin-top:15px;"><strong>Endurance:</strong></p>
+            <div class="formula">Endurance (hours) = Fuel Remaining ÷ Avg Fuel Flow</div>
+            <p>Uses rolling 5-minute average of fuel flow during cruise. If not in cruise, defaults to 8.0 GPH estimate.</p>
+
+            <p style="margin-top:15px;"><strong>Range:</strong></p>
+            <div class="formula">Range (nm) = Fuel Remaining × (Ground Speed ÷ Fuel Flow)</div>
+            <p>Uses actual ground speed from Stratux GPS and average cruise fuel flow.
+               Simplified: <code>Range = Fuel Remaining × nm/gal</code></p>
+
+            <p style="margin-top:15px;"><strong>Cruise Efficiency (nm/gal):</strong></p>
+            <div class="formula">nm/gal = Ground Speed (kts) ÷ Fuel Flow (GPH)</div>
+            <p>Calculated from 5-minute rolling average during cruise conditions
+               (RPM 2000-2600, MP 18-26", GS &gt; 80 kts).</p>
+
+            <h3 style="margin: 15px 0 10px;">Adding/Editing Fuel</h3>
+            <ol>
+                <li>Click <strong>"+ ADD FUEL"</strong> button</li>
+                <li>Enter gallons amount</li>
+                <li>Choose mode:
+                    <ul>
+                        <li><strong>Add gallons to current</strong> - Adds to existing fuel (use negative to subtract)</li>
+                        <li><strong>Set total fuel to this amount</strong> - Sets exact fuel quantity</li>
+                    </ul>
+                </li>
+                <li>Optionally enter airport, price, and notes</li>
+                <li>Click <strong>SAVE</strong></li>
+            </ol>
+
+            <h3 style="margin: 15px 0 10px;">Fuel Bar Colors</h3>
+            <table>
+                <tr><td class="good">Green</td><td>Above 8 gallons (&gt;24%)</td></tr>
+                <tr><td class="warning">Yellow</td><td>4-8 gallons (12-24%)</td></tr>
+                <tr><td class="danger">Red</td><td>Below 4 gallons (&lt;12%) - CRITICAL</td></tr>
+            </table>
+
+            <div class="alert-box alert-danger" style="margin-top:15px;">
+                <strong>IMPORTANT:</strong> Fuel tracking is an ESTIMATE based on fuel flow sensor data.
+                Always verify fuel quantity visually before flight. Do not rely solely on electronic fuel tracking.
+            </div>
+
+            <div class="alert-box alert-info" style="margin-top:10px;">
+                <strong>TIP:</strong> Fuel state is automatically saved every 60 seconds and persists across restarts.
+            </div>
+        </div>
+    </div>
+
+    <div class="section">
+        <div class="section-header" onclick="toggleSection(this)">CSV Flight Recording</div>
+        <div class="section-content">
+            <p>Record flight data directly to your iPad for later analysis in spreadsheets.</p>
+
+            <h3 style="margin: 15px 0 10px;">Recording Controls</h3>
+            <table>
+                <tr><td class="good">REC</td><td>Start/Stop recording manually</td></tr>
+                <tr><td class="info">CSV</td><td>Download recorded data as CSV file</td></tr>
+                <tr><td class="warning">CLR</td><td>Clear recorded data</td></tr>
+            </table>
+
+            <h3 style="margin: 15px 0 10px;">Recording Behavior</h3>
+            <ul>
+                <li><strong>Auto-start:</strong> Recording begins automatically when RPM &gt; 500</li>
+                <li><strong>Persistence:</strong> Data saved to browser localStorage (survives refresh/close)</li>
+                <li><strong>Capacity:</strong> 7200 points (~2 hours at 1 point/second)</li>
+                <li><strong>Auto-export:</strong> CSV downloads automatically when capacity reached</li>
+            </ul>
+
+            <h3 style="margin: 15px 0 10px;">CSV Data (41 columns)</h3>
+            <p>Includes all engine parameters plus GPS/attitude data:</p>
+            <ul>
+                <li><strong>Engine:</strong> RPM, MAP, Oil Temp/Press, Fuel Flow, Volts, Amps, Carb Temp</li>
+                <li><strong>Cylinders:</strong> EGT 1-4, CHT 1-4, spreads, max EGT</li>
+                <li><strong>Fuel:</strong> Fuel Pressure, Gallons Remaining, Tank Levels</li>
+                <li><strong>GPS:</strong> Latitude, Longitude, Altitude, Ground Speed, Course</li>
+                <li><strong>Attitude:</strong> Bank, Pitch, Vertical G-load</li>
+                <li><strong>Calculated:</strong> Percent Power, ROP/LOP Mode, BSFC</li>
+            </ul>
+
+            <h3 style="margin: 15px 0 10px;">Status Indicators</h3>
+            <table>
+                <tr><td><span style="color:#CC0000;">●</span> Pulsing red dot</td><td>Recording in progress</td></tr>
+                <tr><td><span style="color:#999;">●</span> Gray dot</td><td>Not recording</td></tr>
+                <tr><td class="warning">(Auto)</td><td>Recording was auto-started by RPM</td></tr>
+            </table>
+
+            <div class="alert-box alert-info" style="margin-top:15px;">
+                <strong>TIP:</strong> Recording persists in browser storage even if you lose connection
+                to the Stratux. Download CSV after flight to preserve data.
+            </div>
+
+            <div class="alert-box alert-warning" style="margin-top:10px;">
+                <strong>SAFARI RECOMMENDED:</strong> For reliable offline storage, use Safari and
+                add the app to your home screen as a PWA.
+            </div>
+        </div>
+    </div>
+
+    <div class="section collapsed">
+        <div class="section-header" onclick="toggleSection(this)">Fuel Warnings</div>
+        <div class="section-content">
+            <div class="alert-box alert-warning">
+                <strong>LOW FUEL WARNING (8 gal)</strong><br>
+                Yellow alert appears when fuel remaining drops to 8 gallons or less.
+            </div>
+
+            <div class="alert-box alert-danger" style="margin-top:10px;">
+                <strong>CRITICAL FUEL WARNING (4 gal)</strong><br>
+                Red alert appears when fuel remaining drops to 4 gallons or less.
+                Land immediately at nearest suitable airport.
+            </div>
+
+            <div class="alert-box alert-warning" style="margin-top:10px;">
+                <strong>LOW ENDURANCE WARNING (45 min)</strong><br>
+                Appears when calculated endurance drops below 45 minutes based on
+                current fuel consumption rate.
+            </div>
+
+            <p style="margin-top:15px;">Click <strong>Dismiss</strong> to hide warnings for this flight.</p>
+        </div>
+    </div>
+
+    <div class="section collapsed">
+        <div class="section-header" onclick="toggleSection(this)">K-Factor Calibration</div>
+        <div class="section-content">
+            <p>The K-factor calibrates the EI FT-60 Red Cube fuel flow sensor for accuracy.</p>
+
+            <h3 style="margin: 15px 0 10px;">How It Works</h3>
+            <ol>
+                <li>System tracks actual fuel added (from pump)</li>
+                <li>Compares to computed fuel used (from flow sensor)</li>
+                <li>After 30+ gallons, calculates suggested K-factor adjustment</li>
+            </ol>
+
+            <div class="formula" style="margin: 15px 0;">
+                K-factor Ratio = Computed Used ÷ Actual Added<br>
+                Suggested K = Current K × Ratio
+            </div>
+
+            <h3 style="margin: 15px 0 10px;">Calibration API</h3>
+            <table>
+                <tr><td><code>/api/fuel/calibration</code></td><td>View calibration status</td></tr>
+                <tr><td><code>/api/fuel/calibration/reset</code></td><td>Start new calibration period</td></tr>
+                <tr><td><code>/api/fuel/calibration/applied</code></td><td>Record K-factor applied to Dynon</td></tr>
+            </table>
+
+            <div class="alert-box alert-info" style="margin-top:15px;">
+                <strong>DEFAULT K-FACTOR:</strong> 68000<br>
+                Adjust in Dynon EMS settings based on calibration recommendations.
+            </div>
+        </div>
+    </div>
+
+    <div class="section collapsed">
+        <div class="section-header" onclick="toggleSection(this)">Standalone Fuel Planner (PWA)</div>
+        <div class="section-content">
+            <p>A separate offline-capable fuel planner (v2.0) is available at:</p>
+            <p style="text-align:center; margin: 15px 0;">
+                <a href="/fuel-planner.html" style="font-size:16px;">
+                    http://stratux.local:8080/fuel-planner.html
+                </a>
+            </p>
+
+            <h3 style="margin: 15px 0 10px;">Features</h3>
+            <ul>
+                <li><strong>Offline operation</strong> - Works without Stratux connection</li>
+                <li><strong>Flight calculator</strong> - Multiple burn rate profiles</li>
+                <li><strong>Pre-flight fuel check</strong> - Tic mark to gallons conversion</li>
+                <li><strong>Measurement history</strong> - Track and export fuel measurements</li>
+                <li><strong>Auto-sync</strong> - Syncs with main app when connected</li>
+                <li><strong>Add to home screen</strong> - Install as app on iPad</li>
+            </ul>
+
+            <h3 style="margin: 15px 0 10px;">Pre-Flight Fuel Check</h3>
+            <ol>
+                <li>Enter left and right tank tic mark readings</li>
+                <li>App converts to gallons using calibration curve</li>
+                <li>Compare measured fuel to EDM reading when connected</li>
+                <li>Save measurements for tracking accuracy over time</li>
+                <li>Export measurement history to CSV</li>
+            </ol>
+
+            <h3 style="margin: 15px 0 10px;">Burn Rate Profiles</h3>
+            <table>
+                <tr><th>Profile</th><th>GPH</th><th>KTAS</th></tr>
+                <tr><td>65% Cruise LOP</td><td class="value">8.0</td><td>135</td></tr>
+                <tr><td>75% Cruise</td><td class="value">9.5</td><td>145</td></tr>
+                <tr><td>65% Cruise ROP</td><td class="value">9.8</td><td>140</td></tr>
+                <tr><td>Pattern Work</td><td class="value">10.0</td><td>90</td></tr>
+            </table>
+
+            <div class="alert-box alert-info" style="margin-top:15px;">
+                <strong>TO INSTALL ON iPAD:</strong><br>
+                Open the fuel planner in Safari → Share → Add to Home Screen
+            </div>
+        </div>
+    </div>
+
+    <a href="/" class="back-btn">← Back to Engine Monitor</a>
+
+    <script>
+        function toggleSection(header) {
+            header.parentElement.classList.toggle('collapsed');
+        }
+    </script>
+</body>
+</html>

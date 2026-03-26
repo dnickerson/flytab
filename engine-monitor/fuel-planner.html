@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#006400">
+    <title>Fuel Planner</title>
+    <link rel="manifest" href="./manifest.json">
+    <link rel="stylesheet" href="./fuel-planner.css">
+</head>
+<body>
+    <!-- Header -->
+    <div class="header">
+        <div class="app-title">FUEL PLANNER</div>
+        <div>
+            <span id="syncStatus" class="sync-status">Offline</span>
+            <span id="pendingBadge" class="pending-badge" style="display:none;">0 pending</span>
+        </div>
+        <button class="btn-sync" onclick="syncNow()">Sync</button>
+    </div>
+
+    <!-- Main Fuel Display -->
+    <div class="fuel-display">
+        <div class="fuel-value" id="fuelValue">0.0</div>
+        <div class="fuel-label">GALLONS REMAINING</div>
+        <div class="fuel-bar">
+            <div class="fuel-bar-fill" id="fuelBarFill" style="width:0%"></div>
+            <span class="fuel-bar-text" id="fuelBarText">0% (0/34 gal)</span>
+        </div>
+        <div class="last-updated" id="lastUpdated">No data yet</div>
+    </div>
+
+    <!-- Quick Adjust Buttons -->
+    <div class="quick-adjust">
+        <button class="btn-adjust" onclick="adjustFuel(-1)">- 1 GAL</button>
+        <button class="btn-adjust btn-set-fuel" onclick="openSetFuelModal()">SET FUEL</button>
+        <button class="btn-adjust" onclick="adjustFuel(1)">+ 1 GAL</button>
+        <button class="btn-adjust btn-add-fuel" onclick="openAddFuelModal()">ADD FUEL</button>
+    </div>
+
+    <!-- Pre-Flight Fuel Check -->
+    <div class="section-title">PRE-FLIGHT FUEL CHECK</div>
+    <div class="fuel-check">
+        <div class="tic-inputs">
+            <div class="tic-input-group">
+                <label>Left Tank Tic</label>
+                <input type="number" id="leftTicInput" step="0.5" min="0" max="17"
+                       placeholder="0-17" oninput="updateTicConversion()">
+            </div>
+            <div class="tic-input-group">
+                <label>Right Tank Tic</label>
+                <input type="number" id="rightTicInput" step="0.5" min="0" max="17"
+                       placeholder="0-17" oninput="updateTicConversion()">
+            </div>
+        </div>
+
+        <!-- Tic Results (hidden until input) -->
+        <div id="ticResults" class="tic-results" style="display:none;">
+            <div class="result-row">
+                <span class="result-label">Left Tank</span>
+                <span class="result-value" id="leftGallonsResult">-- gal</span>
+            </div>
+            <div class="result-row">
+                <span class="result-label">Right Tank</span>
+                <span class="result-value" id="rightGallonsResult">-- gal</span>
+            </div>
+            <div class="result-row">
+                <span class="result-label">Total Measured</span>
+                <span class="result-value highlight" id="totalMeasuredResult">-- gal</span>
+            </div>
+        </div>
+
+        <!-- Notes input -->
+        <div class="form-row">
+            <label>Notes (optional)</label>
+            <input type="text" id="measurementNotes" placeholder="e.g., Pre-flight KXXX">
+        </div>
+
+        <!-- Save button -->
+        <button class="btn-save-measurement" onclick="saveFuelMeasurement()">SAVE MEASUREMENT</button>
+
+        <!-- Pending measurement indicator -->
+        <div id="pendingMeasurement" class="pending-measurement" style="display:none;"></div>
+
+        <!-- EDM Comparison (shown when connected) -->
+        <div id="edmComparison" class="edm-comparison" style="display:none;"></div>
+
+        <!-- Action buttons (shown when comparison available) -->
+        <div id="comparisonActions" class="comparison-actions">
+            <button class="btn-update-edm" onclick="updateEdmToMatch()">UPDATE EDM TO MATCH</button>
+            <button class="btn-dismiss" onclick="dismissComparison()">DISMISS</button>
+        </div>
+
+        <!-- Export and count -->
+        <div class="measurement-footer">
+            <span id="measurementCount"></span>
+            <button class="btn-export" onclick="exportFuelCSV()">DOWNLOAD CSV</button>
+        </div>
+    </div>
+
+    <!-- Flight Duration Calculator -->
+    <div class="section-title">FLIGHT DURATION CALCULATOR</div>
+    <div class="calculator">
+        <div class="form-row">
+            <label>Burn Rate Profile</label>
+            <select id="profileSelect" onchange="updateCalculation()">
+                <option value="cruise_65_lop">65% Cruise LOP (8.0 GPH)</option>
+                <option value="cruise_75">75% Cruise (9.5 GPH)</option>
+                <option value="cruise_65_rop">65% Cruise ROP (9.8 GPH)</option>
+                <option value="pattern">Pattern Work (10.0 GPH)</option>
+                <option value="custom">Custom</option>
+            </select>
+        </div>
+        <div class="form-row" id="customGphRow" style="display:none;">
+            <label>Custom GPH</label>
+            <input type="number" id="customGph" value="8.5" step="0.1" min="1" max="20" onchange="updateCalculation()">
+        </div>
+        <div class="form-row">
+            <label>Reserve</label>
+            <select id="reserveSelect" onchange="updateCalculation()">
+                <option value="30">30 minutes</option>
+                <option value="45" selected>45 minutes (day VFR)</option>
+                <option value="60">60 minutes (night/IFR)</option>
+            </select>
+        </div>
+    </div>
+
+    <!-- Results -->
+    <div class="results">
+        <div class="result-row">
+            <span class="result-label">Usable Fuel</span>
+            <span class="result-value" id="resultUsable">-- gal</span>
+        </div>
+        <div class="result-row">
+            <span class="result-label">Reserve</span>
+            <span class="result-value" id="resultReserve">-- gal</span>
+        </div>
+        <div class="result-row">
+            <span class="result-label">Flight Time</span>
+            <span class="result-value highlight" id="resultTime">-- hr -- min</span>
+        </div>
+        <div class="result-row">
+            <span class="result-label">Est. Range</span>
+            <span class="result-value highlight" id="resultRange">-- nm</span>
+        </div>
+        <div class="result-row">
+            <span class="result-label">Burn Rate</span>
+            <span class="result-value" id="resultGph">-- GPH</span>
+        </div>
+    </div>
+
+    <!-- Set Fuel Modal -->
+    <div id="setFuelModal" class="modal" style="display:none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span>SET FUEL</span>
+                <button class="modal-close" onclick="closeSetFuelModal()">X</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-row">
+                    <label>Fuel Remaining (gallons)</label>
+                    <input type="number" id="setFuelInput" step="0.1" min="0" max="36">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-cancel" onclick="closeSetFuelModal()">CANCEL</button>
+                <button class="btn-save" onclick="submitSetFuel()">SAVE</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Fuel Modal -->
+    <div id="addFuelModal" class="modal" style="display:none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span>ADD FUEL</span>
+                <button class="modal-close" onclick="closeAddFuelModal()">X</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-row">
+                    <label>Date</label>
+                    <input type="date" id="addFuelDate">
+                </div>
+                <div class="form-row">
+                    <label>Airport</label>
+                    <input type="text" id="addFuelAirport" maxlength="4" placeholder="KXXX" style="text-transform:uppercase;">
+                </div>
+                <div class="form-row">
+                    <label>Gallons</label>
+                    <input type="number" id="addFuelGallons" step="0.1" min="0" max="50" oninput="updateAddFuelPreview()">
+                </div>
+                <div class="radio-group">
+                    <label class="radio-label">
+                        <input type="radio" name="addFuelMode" value="add" checked onchange="updateAddFuelPreview()">
+                        Add gallons to current
+                    </label>
+                    <label class="radio-label">
+                        <input type="radio" name="addFuelMode" value="set" onchange="updateAddFuelPreview()">
+                        Set total fuel to this amount
+                    </label>
+                </div>
+                <label class="radio-label">
+                    <input type="checkbox" id="addFuelCalibration" checked>
+                    Include in K-factor calibration
+                </label>
+                <div class="fuel-preview" id="addFuelPreview">Current: -- gal -> After: -- gal</div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-cancel" onclick="closeAddFuelModal()">CANCEL</button>
+                <button class="btn-save" onclick="submitAddFuel()">SAVE</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <div class="footer">
+        Fuel Planner v3.3.0 | Works offline | Pre-flight fuel check
+    </div>
+
+    <script src="./fuel-planner.js"></script>
+
+    <script>
+        // Register service worker for offline functionality
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./service-worker.js')
+                    .then(registration => {
+                        console.log('Service Worker registered successfully:', registration.scope);
+                    })
+                    .catch(error => {
+                        console.error('Service Worker registration failed:', error);
+                    });
+            });
+        } else {
+            console.log('Service Workers not supported in this browser');
+        }
+    </script>
+</body>
+</html>

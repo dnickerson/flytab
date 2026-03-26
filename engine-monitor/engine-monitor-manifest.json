@@ -1,0 +1,11 @@
+{
+  "name": "Engine Monitor",
+  "short_name": "EngMon",
+  "description": "Offline engine monitor for general aviation",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#FFFFF0",
+  "theme_color": "#006400",
+  "orientation": "portrait"
+}

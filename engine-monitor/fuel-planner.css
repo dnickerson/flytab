@@ -1,0 +1,551 @@
+/**
+ * Fuel Planner PWA Styles
+ * Sunlight-optimized theme for iPad cockpit use
+ */
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif;
+    background: #FFFFF0;
+    color: #000;
+    padding: 10px;
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+}
+
+/* Header */
+.header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+    margin-bottom: 12px;
+    border-bottom: 3px solid #333;
+}
+
+.app-title {
+    font-size: 18px;
+    font-weight: 900;
+    color: #006400;
+}
+
+.sync-status {
+    font-size: 12px;
+    font-weight: 700;
+    padding: 4px 10px;
+    border-radius: 4px;
+    background: #DDD;
+    color: #666;
+}
+
+.sync-status.connected {
+    background: #90EE90;
+    color: #006400;
+}
+
+.sync-status.syncing {
+    background: #FFD700;
+    color: #CC6600;
+}
+
+.btn-sync {
+    background: #87CEEB;
+    color: #000;
+    border: 2px solid #00008B;
+    padding: 6px 12px;
+    border-radius: 5px;
+    font-weight: 700;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.btn-sync:active { opacity: 0.7; }
+
+/* Main fuel display */
+.fuel-display {
+    background: #FFF;
+    border: 3px solid #333;
+    border-radius: 8px;
+    padding: 15px;
+    margin-bottom: 12px;
+    text-align: center;
+}
+
+.fuel-value {
+    font-size: 48px;
+    font-weight: 900;
+    font-family: 'Courier New', monospace;
+    color: #000;
+    line-height: 1;
+}
+
+.fuel-label {
+    font-size: 14px;
+    font-weight: 700;
+    color: #333;
+    margin-top: 4px;
+}
+
+.fuel-bar {
+    background: #DDD;
+    height: 30px;
+    border-radius: 5px;
+    margin-top: 10px;
+    position: relative;
+    overflow: hidden;
+}
+
+.fuel-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #006400 0%, #90EE90 100%);
+    transition: width 0.3s;
+}
+
+.fuel-bar-fill.low {
+    background: linear-gradient(90deg, #CC6600 0%, #FFD700 100%);
+}
+
+.fuel-bar-fill.critical {
+    background: linear-gradient(90deg, #CC0000 0%, #FF6666 100%);
+}
+
+.fuel-bar-text {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    font-weight: 800;
+    font-size: 12px;
+    color: #000;
+    text-shadow: 0 0 3px #FFF;
+}
+
+.last-updated {
+    font-size: 11px;
+    color: #666;
+    margin-top: 8px;
+}
+
+/* Quick adjust buttons */
+.quick-adjust {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+
+.btn-adjust {
+    background: #FFF;
+    color: #000;
+    border: 2px solid #333;
+    padding: 10px 20px;
+    border-radius: 5px;
+    font-weight: 800;
+    font-size: 14px;
+    cursor: pointer;
+}
+
+.btn-adjust:active { background: #EEE; }
+
+.btn-set-fuel {
+    background: #90EE90;
+    border-color: #006400;
+}
+
+.btn-add-fuel {
+    background: #87CEEB;
+    border-color: #00008B;
+}
+
+/* Section titles */
+.section-title {
+    font-size: 12px;
+    font-weight: 900;
+    color: #333;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+    padding-bottom: 4px;
+    border-bottom: 2px solid #333;
+}
+
+/* Calculator section */
+.calculator {
+    background: #FFF;
+    border: 2px solid #333;
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 12px;
+}
+
+.form-row {
+    margin-bottom: 12px;
+}
+
+.form-row label {
+    display: block;
+    font-size: 11px;
+    font-weight: 700;
+    color: #333;
+    margin-bottom: 4px;
+}
+
+.form-row select,
+.form-row input {
+    width: 100%;
+    padding: 10px;
+    font-size: 16px;
+    border: 2px solid #333;
+    border-radius: 5px;
+    background: #FFF;
+}
+
+/* Results display */
+.results {
+    background: #E8FFE8;
+    border: 2px solid #006400;
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 12px;
+}
+
+.result-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 6px 0;
+    border-bottom: 1px solid #CCC;
+}
+
+.result-row:last-child {
+    border-bottom: none;
+}
+
+.result-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #333;
+}
+
+.result-value {
+    font-size: 14px;
+    font-weight: 800;
+    color: #006400;
+    font-family: 'Courier New', monospace;
+}
+
+.result-value.highlight {
+    font-size: 18px;
+    color: #000;
+}
+
+/* Modal styles */
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.7);
+    z-index: 1000;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    padding-top: 30px;
+}
+
+.modal-content {
+    background: #FFFFF0;
+    border: 3px solid #333;
+    border-radius: 8px;
+    width: 90%;
+    max-width: 400px;
+    max-height: 85vh;
+    overflow-y: auto;
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 15px;
+    background: #333;
+    color: #FFF;
+    font-size: 16px;
+    font-weight: 800;
+}
+
+.modal-close {
+    background: #CC0000;
+    color: #FFF;
+    border: none;
+    padding: 6px 12px;
+    border-radius: 4px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.modal-body {
+    padding: 15px;
+}
+
+.modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    padding: 15px;
+    border-top: 2px solid #CCC;
+}
+
+.btn-cancel {
+    background: #FFB6C1;
+    color: #000;
+    border: 2px solid #CC0000;
+    padding: 10px 20px;
+    border-radius: 5px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.btn-save {
+    background: #90EE90;
+    color: #000;
+    border: 2px solid #006400;
+    padding: 10px 20px;
+    border-radius: 5px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.radio-group {
+    margin: 10px 0;
+}
+
+.radio-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 0;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.radio-label input {
+    width: 20px;
+    height: 20px;
+}
+
+.fuel-preview {
+    background: #E8E8E8;
+    padding: 10px;
+    border-radius: 5px;
+    text-align: center;
+    font-size: 13px;
+    font-weight: 700;
+    color: #333;
+    margin-top: 10px;
+}
+
+/* Pending sync indicator */
+.pending-badge {
+    background: #FFD700;
+    color: #000;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 700;
+    margin-left: 6px;
+}
+
+/* Pre-Flight Fuel Check */
+.fuel-check {
+    background: #FFF;
+    border: 2px solid #333;
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 12px;
+}
+
+.tic-inputs {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.tic-input-group {
+    flex: 1;
+}
+
+.tic-input-group label {
+    display: block;
+    font-size: 11px;
+    font-weight: 700;
+    color: #333;
+    margin-bottom: 4px;
+}
+
+.tic-input-group input {
+    width: 100%;
+    padding: 12px;
+    font-size: 18px;
+    font-weight: 700;
+    text-align: center;
+    border: 2px solid #333;
+    border-radius: 5px;
+    background: #FFF;
+}
+
+.tic-results {
+    background: #E8FFE8;
+    border: 2px solid #006400;
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 12px;
+}
+
+.btn-save-measurement {
+    width: 100%;
+    background: #90EE90;
+    color: #000;
+    border: 2px solid #006400;
+    padding: 14px;
+    border-radius: 5px;
+    font-weight: 800;
+    font-size: 14px;
+    cursor: pointer;
+    margin-bottom: 12px;
+}
+
+.btn-save-measurement:active {
+    opacity: 0.7;
+}
+
+.pending-measurement {
+    background: #FFD700;
+    border: 2px solid #CC6600;
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 12px;
+    text-align: center;
+    font-size: 13px;
+}
+
+.edm-comparison {
+    background: #E8E8FF;
+    border: 2px solid #00008B;
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 12px;
+}
+
+.comparison-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 6px 0;
+    border-bottom: 1px solid #CCC;
+}
+
+.comparison-row:last-of-type {
+    border-bottom: none;
+}
+
+.comparison-value {
+    font-weight: 800;
+    font-family: 'Courier New', monospace;
+}
+
+.accuracy-badge {
+    display: inline-block;
+    padding: 8px 16px;
+    border-radius: 5px;
+    font-size: 14px;
+    font-weight: 800;
+    text-align: center;
+    margin-top: 10px;
+    width: 100%;
+}
+
+.comparison-actions {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+
+.btn-update-edm {
+    flex: 2;
+    background: #87CEEB;
+    color: #000;
+    border: 2px solid #00008B;
+    padding: 12px;
+    border-radius: 5px;
+    font-weight: 700;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.btn-dismiss {
+    flex: 1;
+    background: #DDD;
+    color: #333;
+    border: 2px solid #666;
+    padding: 12px;
+    border-radius: 5px;
+    font-weight: 700;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.measurement-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-top: 8px;
+    border-top: 1px solid #CCC;
+}
+
+.measurement-footer span {
+    font-size: 11px;
+    color: #666;
+}
+
+.btn-export {
+    background: #FFF;
+    color: #006400;
+    border: 2px solid #006400;
+    padding: 8px 12px;
+    border-radius: 5px;
+    font-weight: 700;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.btn-export:active {
+    background: #E8FFE8;
+}
+
+/* Footer */
+.footer {
+    text-align: center;
+    padding: 10px;
+    color: #666;
+    font-size: 11px;
+}
+
+/* Responsive adjustments */
+@media (max-width: 400px) {
+    .fuel-value {
+        font-size: 36px;
+    }
+
+    .quick-adjust {
+        flex-wrap: wrap;
+    }
+
+    .btn-adjust {
+        flex: 1;
+        min-width: 80px;
+    }
+}

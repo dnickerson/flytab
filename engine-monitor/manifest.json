@@ -1,0 +1,11 @@
+{
+  "name": "Fuel Planner",
+  "short_name": "Fuel",
+  "description": "Offline fuel planning for general aviation",
+  "start_url": "./fuel-planner.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#FFFFF0",
+  "theme_color": "#006400",
+  "orientation": "portrait"
+}

@@ -1,0 +1,12 @@
+3.3.0
+
+Merged release combining capture_v5 and capture_v6 features.
+
+Changes in 3.3.0:
+- Added service worker registration for offline PWA support
+- Includes full diagnostic counters (bytes, lines, parse errors, buffer overflows)
+- /api/diagnostics endpoint for troubleshooting
+- Robust serial configuration (8N1, no flow control, 0.5s timeout)
+- Port existence validation before opening
+
+Date: 2026-02-02
