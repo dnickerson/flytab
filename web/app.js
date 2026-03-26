@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v4.17';
+const FLYTAB_VERSION = 'v4.18';
 
 // ========== Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -820,7 +820,7 @@ class FlyTabApp {
             let bundle;
             try {
                 const localResp = await fetch('http://localhost:9090/nasr/bundle.json', {
-                    signal: AbortSignal.timeout(3000),
+                    signal: AbortSignal.timeout(15000),
                 });
                 if (localResp.ok) bundle = await localResp.json();
             } catch { /* local not available */ }
@@ -829,11 +829,11 @@ class FlyTabApp {
                 const hs = (typeof CockpitConfig !== 'undefined' && CockpitConfig.raw?.homeServer) || {};
                 const base = hs.nasrBase
                     ? hs.nasrBase.replace(/\/nasr\/?$/, '')
-                    : 'http://192.168.1.77:8081';
-                const nasrUrl = `${base}/api/nasr/bundle`;
+                    : 'http://192.168.1.77:8090';
+                const nasrUrl = `${base}/nasr/bundle.json`;
                 const resp = await fetch(nasrUrl, {
                     cache: 'no-store',
-                    signal: AbortSignal.timeout(30000),
+                    signal: AbortSignal.timeout(60000),
                 });
                 if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                 bundle = await resp.json();
