@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FlyTab — Plate States</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #0f1923;
+    color: #e8eaf0;
+    min-height: 100vh;
+    padding: 24px 16px;
+  }
+  h1 { font-size: 1.3rem; font-weight: 700; margin-bottom: 4px; color: #fff; }
+  .subtitle { font-size: 0.85rem; color: #8892a4; margin-bottom: 24px; }
+  .section { margin-bottom: 28px; }
+  .section-title {
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #5a6475;
+    margin-bottom: 12px;
+  }
+  .state-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+    gap: 8px;
+  }
+  .state-btn {
+    padding: 10px 8px;
+    border-radius: 8px;
+    border: 1.5px solid #2a3545;
+    background: #161f2c;
+    color: #8892a4;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    text-align: center;
+    transition: all 0.15s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .state-btn.selected {
+    background: #0d47a1;
+    border-color: #1565c0;
+    color: #fff;
+  }
+  .state-btn:active { opacity: 0.7; }
+  .actions {
+    position: sticky;
+    bottom: 0;
+    background: #0f1923;
+    padding: 16px 0 8px;
+    border-top: 1px solid #1e2a38;
+    margin-top: 16px;
+  }
+  .save-btn {
+    display: block;
+    width: 100%;
+    padding: 14px;
+    border-radius: 10px;
+    border: none;
+    background: #1565c0;
+    color: #fff;
+    font-size: 1rem;
+    font-weight: 700;
+    cursor: pointer;
+    letter-spacing: 0.03em;
+  }
+  .save-btn:disabled { opacity: 0.5; }
+  .save-btn:active { opacity: 0.7; }
+  .status {
+    margin-top: 12px;
+    font-size: 0.85rem;
+    text-align: center;
+    min-height: 20px;
+    color: #4caf50;
+  }
+  .status.error { color: #f44336; }
+  .current {
+    font-size: 0.8rem;
+    color: #5a6475;
+    margin-bottom: 16px;
+  }
+  .current span { color: #8892a4; }
+</style>
+</head>
+<body>
+<h1>✈ Plate States</h1>
+<p class="subtitle">Select which states the pipeline downloads approach plates for.</p>
+
+<div class="current" id="current-info">Loading…</div>
+
+<div class="section">
+  <div class="section-title">Southeast</div>
+  <div class="state-grid" id="grid-southeast"></div>
+</div>
+<div class="section">
+  <div class="section-title">Northeast</div>
+  <div class="state-grid" id="grid-northeast"></div>
+</div>
+<div class="section">
+  <div class="section-title">Midwest</div>
+  <div class="state-grid" id="grid-midwest"></div>
+</div>
+<div class="section">
+  <div class="section-title">South Central</div>
+  <div class="state-grid" id="grid-southcentral"></div>
+</div>
+<div class="section">
+  <div class="section-title">West</div>
+  <div class="state-grid" id="grid-west"></div>
+</div>
+
+<div class="actions">
+  <button class="save-btn" id="save-btn" onclick="save()">Save &amp; Apply</button>
+  <div class="status" id="status"></div>
+</div>
+
+<script>
+const REGIONS = {
+  southeast:    ['FL','GA','SC','NC','VA','WV','TN','AL','MS','KY'],
+  northeast:    ['ME','NH','VT','MA','RI','CT','NY','NJ','PA','DE','MD','DC'],
+  midwest:      ['OH','MI','IN','IL','WI','MN','IA','MO','ND','SD','NE','KS'],
+  southcentral: ['TX','OK','AR','LA'],
+  west:         ['MT','ID','WY','CO','NM','AZ','UT','NV','CA','OR','WA','AK','HI'],
+};
+
+let selected = new Set();
+
+function render() {
+  for (const [region, states] of Object.entries(REGIONS)) {
+    const grid = document.getElementById('grid-' + region);
+    grid.innerHTML = '';
+    for (const st of states) {
+      const btn = document.createElement('button');
+      btn.className = 'state-btn' + (selected.has(st) ? ' selected' : '');
+      btn.textContent = st;
+      btn.onclick = () => toggle(st, btn);
+      grid.appendChild(btn);
+    }
+  }
+  updateCurrent();
+}
+
+function toggle(st, btn) {
+  if (selected.has(st)) {
+    selected.delete(st);
+    btn.classList.remove('selected');
+  } else {
+    selected.add(st);
+    btn.classList.add('selected');
+  }
+  updateCurrent();
+}
+
+function updateCurrent() {
+  const sorted = [...selected].sort();
+  const el = document.getElementById('current-info');
+  if (sorted.length === 0) {
+    el.innerHTML = '<span>No states selected</span>';
+  } else {
+    el.innerHTML = `${sorted.length} state${sorted.length !== 1 ? 's' : ''} selected: <span>${sorted.join(', ')}</span>`;
+  }
+}
+
+async function load() {
+  try {
+    const r = await fetch('/plate_states_config.json', { cache: 'no-store' });
+    if (r.ok) {
+      const data = await r.json();
+      selected = new Set(data.states || []);
+    }
+  } catch {}
+  render();
+}
+
+async function save() {
+  const btn = document.getElementById('save-btn');
+  const status = document.getElementById('status');
+  btn.disabled = true;
+  status.textContent = '';
+  status.className = 'status';
+
+  const sorted = [...selected].sort();
+  const payload = JSON.stringify({ states: sorted }, null, 2);
+
+  try {
+    const r = await fetch('/plate_states_config.json', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: payload,
+    });
+    if (r.ok) {
+      status.textContent = `✓ Saved — ${sorted.length} state${sorted.length !== 1 ? 's' : ''}: ${sorted.join(', ')}`;
+    } else {
+      throw new Error(`HTTP ${r.status}`);
+    }
+  } catch (e) {
+    status.className = 'status error';
+    status.textContent = `✗ Save failed: ${e.message}`;
+  }
+  btn.disabled = false;
+}
+
+load();
+</script>
+</body>
+</html>

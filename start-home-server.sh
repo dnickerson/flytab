@@ -1,91 +1,142 @@
 #!/bin/bash
-# FlyTab — Home Server Startup Script
+# FlyTab — Home Data Server
 #
-# Serves tiles, plates, and NASR data over HTTP for the FlyTab Android tablet.
-# The tablet connects to http://<this-computer>:8090 to download map data.
-# No HTTPS needed — Android doesn't require secure context for HTTP fetches.
+# Serves tiles, plates, NASR, and CIFP over HTTP for the FlyTab Android tablet.
+# Also hosts admin-states.html for managing which states the pipeline builds plates for.
 #
-# Data is served from the shared flypi/data directory.
+# Tablet connects to http://<this-computer>:8090
+# Admin UI: http://<this-computer>:8090/admin-states.html
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DATA_DIR="$(cd "$SCRIPT_DIR/../data" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+DATA_DIR="$REPO_ROOT/data"
 PORT=8090
-HOST_IP="192.168.1.77"
+HOST_IP="$(hostname -I | awk '{print $1}')"
 
-# Verify data directory exists
 if [ ! -d "$DATA_DIR" ]; then
     echo "ERROR: Data directory not found at $DATA_DIR"
-    echo "       Expected flypi/data/ with tiles/, plates/, nasr/ subdirectories"
     exit 1
 fi
 
-# Check for required subdirectories
-for sub in tiles plates nasr; do
+for sub in tiles plates nasr cifp; do
     if [ ! -d "$DATA_DIR/$sub" ]; then
         echo "WARNING: $DATA_DIR/$sub not found — $sub requests will 404"
     fi
 done
 
-# Kill any existing server on this port
 if lsof -ti:$PORT &>/dev/null; then
     echo "Stopping existing server on port $PORT..."
     kill $(lsof -ti:$PORT) 2>/dev/null || true
     sleep 1
 fi
 
-# Clean up on exit
 trap "echo ''; echo 'Server stopped.'; exit 0" INT TERM EXIT
 
 echo ""
 echo "FlyTab Home Data Server"
 echo "======================="
-echo "  Serving: $DATA_DIR"
+echo "  Data:    $DATA_DIR"
 echo "  URL:     http://$HOST_IP:$PORT"
 echo ""
-echo "  Tiles:   http://$HOST_IP:$PORT/tiles/sectional/{z}/{x}/{y}.webp"
-echo "  Plates:  http://$HOST_IP:$PORT/plates/{airport}/"
 echo "  NASR:    http://$HOST_IP:$PORT/nasr/bundle.json"
+echo "  Tiles:   http://$HOST_IP:$PORT/tiles/sectional/{z}/{x}/{y}.webp"
+echo "  Plates:  http://$HOST_IP:$PORT/plates/{icao}/"
+echo "  CIFP:    http://$HOST_IP:$PORT/cifp/cifp_bundle.json"
 echo ""
-echo "  Configure in FlyTab: Settings → Home Network"
-echo "  Press Ctrl+C to stop."
+echo "  Admin:   http://$HOST_IP:$PORT/admin-states.html"
+echo ""
+echo "Press Ctrl+C to stop."
 echo ""
 
-# Python HTTP server with CORS headers
-cd "$DATA_DIR"
-exec python3 -c "
-import http.server
-import os
+exec python3 - "$DATA_DIR" "$SCRIPT_DIR/admin-states.html" "$PORT" << 'PYEOF'
+import sys, http.server, os, json
 
-class CORSHandler(http.server.SimpleHTTPRequestHandler):
+DATA_DIR   = sys.argv[1]
+ADMIN_HTML = sys.argv[2]
+PORT       = int(sys.argv[3])
+
+WRITABLE_FILES = {
+    'plate_states_config.json',
+}
+
+class FlyTabHandler(http.server.SimpleHTTPRequestHandler):
     extensions_map = {
         **http.server.SimpleHTTPRequestHandler.extensions_map,
         '.webp': 'image/webp',
         '.json': 'application/json',
-        '.gz': 'application/gzip',
-        '.pdf': 'application/pdf',
-        '.png': 'image/png',
+        '.gz':   'application/gzip',
+        '.pdf':  'application/pdf',
+        '.png':  'image/png',
+        '.html': 'text/html',
+        '.mbtiles': 'application/x-sqlite3',
     }
 
     def end_headers(self):
         self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
-        self.send_header('Cache-Control', 'public, max-age=86400')
+        self.send_header('Access-Control-Allow-Methods', 'GET, PUT, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        self.send_header('Cache-Control', 'public, max-age=3600')
         super().end_headers()
 
     def do_OPTIONS(self):
         self.send_response(204)
         self.end_headers()
 
-    def log_message(self, format, *args):
-        # Compact logging: method + path + status
-        msg = format % args
-        if '200' in msg or '304' in msg:
-            return  # Suppress successful tile fetches to reduce noise
+    def do_GET(self):
+        # Serve admin-states.html from the flytab/ directory
+        if self.path == '/admin-states.html':
+            try:
+                with open(ADMIN_HTML, 'rb') as f:
+                    data = f.read()
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/html; charset=utf-8')
+                self.send_header('Content-Length', len(data))
+                self.send_header('Cache-Control', 'no-cache')
+                self.end_headers()
+                self.wfile.write(data)
+            except Exception as e:
+                self.send_error(404, str(e))
+            return
+        # Everything else served from data/
+        super().do_GET()
+
+    def do_PUT(self):
+        # Allow writing specific config files back to data/
+        filename = self.path.lstrip('/')
+        if filename not in WRITABLE_FILES:
+            self.send_error(403, f'PUT not allowed for {filename}')
+            return
+        length = int(self.headers.get('Content-Length', 0))
+        body = self.rfile.read(length)
+        # Validate JSON
+        try:
+            json.loads(body)
+        except Exception as e:
+            self.send_error(400, f'Invalid JSON: {e}')
+            return
+        dest = os.path.join(DATA_DIR, filename)
+        try:
+            with open(dest, 'wb') as f:
+                f.write(body)
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(b'{"ok":true}')
+            print(f'[PUT] {filename} saved ({len(body)} bytes)')
+        except Exception as e:
+            self.send_error(500, str(e))
+
+    def log_message(self, fmt, *args):
+        msg = fmt % args
+        # Suppress noisy tile 200s
+        if '/tiles/' in self.path and '200' in msg:
+            return
         print(msg)
 
-print(f'Listening on 0.0.0.0:$PORT ...')
-server = http.server.ThreadingHTTPServer(('0.0.0.0', $PORT), CORSHandler)
+os.chdir(DATA_DIR)
+print(f'Listening on 0.0.0.0:{PORT} ...')
+server = http.server.ThreadingHTTPServer(('0.0.0.0', PORT), FlyTabHandler)
 server.serve_forever()
-"
+PYEOF

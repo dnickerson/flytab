@@ -6,10 +6,10 @@
   "simBridgePort": 5678,
 
   "homeServer": {
-    "tileBase": "http://192.168.1.77:8081/tiles",
-    "plateBase": "http://192.168.1.77:8081/plates",
-    "nasrBase": "http://192.168.1.77:8081/nasr",
-    "fallbackBase": "http://100.124.184.126:8081"
+    "tileBase": "http://192.168.1.77:8090/tiles",
+    "plateBase": "http://192.168.1.77:8090/plates",
+    "nasrBase": "http://192.168.1.77:8090/nasr",
+    "fallbackBase": "http://100.124.184.126:8090"
   },
   "plateStates": ["NC", "SC", "VA", "GA", "TN"],
 

@@ -87,7 +87,7 @@ class DataStatus {
     _homeBase() {
         if (this._resolvedBase) return this._resolvedBase;
         const cfg = (typeof CockpitConfig !== 'undefined' && CockpitConfig.raw?.homeServer) || {};
-        return cfg.nasrBase ? cfg.nasrBase.replace(/\/nasr\/?$/, '') : 'http://192.168.1.77:8081';
+        return cfg.nasrBase ? cfg.nasrBase.replace(/\/nasr\/?$/, '') : 'http://192.168.1.77:8090';
     }
 
     /** Legacy helper for _wireCacheSection() — returns tileBase/plateBase/nasrBase URLs. */
@@ -278,14 +278,19 @@ class DataStatus {
         const plateDCode   = dPlates?.effective_date || null;
         let platesServerLine, platesDevLine, platesBadge, platesAction = '';
 
+        const adminUrl = base ? `${base}/admin-states.html` : null;
+        const configureLink = adminUrl
+            ? `<a href="${adminUrl}" target="_blank" style="font-size:11px;color:var(--accent);text-decoration:none;margin-left:8px">&#9881; Configure states</a>`
+            : '';
+
         if (!base) {
             platesServerLine = '<span class="ds-muted">Server not reachable</span>';
         } else if (plateSCode) {
             const serverStateSet = new Set((sPlates?.states || []).map(s => s.state));
             const avail = configuredStates.filter(s => serverStateSet.has(s)).length;
-            platesServerLine = `Cycle ${plateSCode} &mdash; ${avail}/${configuredStates.length} states &mdash; IAP, DP, STAR, DIAG, A/FD`;
+            platesServerLine = `Cycle ${plateSCode} &mdash; ${avail}/${configuredStates.length} states &mdash; IAP, DP, STAR, DIAG, A/FD${configureLink}`;
         } else {
-            platesServerLine = '<span class="ds-muted">Unavailable</span>';
+            platesServerLine = `<span class="ds-muted">Unavailable</span>${configureLink}`;
         }
 
         // Per-state chips
