@@ -14,6 +14,13 @@ echo " FlyTab Build"
 echo " Version: $VERSION"
 echo "=============================="
 
+# Sync versionCode/versionName in build.gradle from app.js version
+VERSION_NUMERIC="${VERSION#v}"                          # e.g. "4.22"
+VERSION_CODE=$(echo "$VERSION_NUMERIC" | tr -d '.')    # e.g. "422"
+sed -i "s/versionCode [0-9]*/versionCode $VERSION_CODE/" "$REPO_ROOT/flytab/android/app/build.gradle"
+sed -i "s/versionName \"[^\"]*\"/versionName \"$VERSION_NUMERIC\"/" "$REPO_ROOT/flytab/android/app/build.gradle"
+echo "[0] Version: $VERSION (code $VERSION_CODE) → build.gradle updated"
+
 # Sync web assets into Android
 echo ""
 echo "[1] Syncing web assets..."
