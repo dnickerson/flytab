@@ -141,6 +141,7 @@ class NasrDB {
         const db = await this.open();
         return new Promise((resolve, reject) => {
             const tx = db.transaction(storeName, 'readonly');
+            tx.onabort = () => reject(tx.error || new Error(`Transaction aborted on ${storeName}`));
             const req = tx.objectStore(storeName).get(key);
             req.onsuccess = () => resolve(req.result || null);
             req.onerror = () => reject(req.error);

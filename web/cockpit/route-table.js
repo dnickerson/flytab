@@ -118,6 +118,13 @@ class RouteTable {
             this._activeIndex = -1;
             this._updateSummary();
             this._renderTable();
+            // Auto-enter edit mode when plan is empty so user can type a route immediately
+            if (!this._editMode) {
+                this._editMode = true;
+                this._el?.classList.add('route-table-editing');
+                if (this._searchRowEl) this._searchRowEl.hidden = false;
+                if (!this._expanded) this.toggle?.();
+            }
             return;
         }
 
@@ -534,9 +541,9 @@ class RouteTable {
             return;
         }
         // Route string mode: space-separated tokens (e.g. "KLKR V54 GSP KMEB")
+        // Debounce heavily — each parse fires multiple IDB lookups
         if (q.includes(' ')) {
-            clearTimeout(this._searchDebounce);
-            this._parseRouteString(q);
+            this._searchDebounce = setTimeout(() => this._parseRouteString(q), 600);
             return;
         }
         this._searchDebounce = setTimeout(() => this._doSearch(q), 200);
