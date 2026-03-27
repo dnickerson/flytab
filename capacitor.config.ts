@@ -5,8 +5,8 @@ const config: CapacitorConfig = {
   appName: 'FlyTab',
   webDir: 'web',
   server: {
-    androidScheme: 'https',
-    cleartext: true,  // Allow HTTP to localhost NanoHTTPD tile server
+    androidScheme: 'http',  // Use http://localhost — avoids mixed content blocking HTTP to home server/NanoHTTPD
+    cleartext: true,
   },
   plugins: {
     CapacitorHttp: {
