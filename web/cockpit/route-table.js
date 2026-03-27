@@ -597,9 +597,14 @@ class RouteTable {
     }
 
     async _parseRouteString(str) {
+        // Serial guard — cancel any in-progress parse so IDB transactions don't pile up
+        const seq = (this._parseSeq = (this._parseSeq || 0) + 1);
+        const cancelled = () => this._parseSeq !== seq;
+
         const tokens = str.trim().split(/\s+/);
         this._resultsEl.hidden = false;
         this._resultsEl.innerHTML = '<div class="route-search-empty">Parsing route...</div>';
+        if (cancelled()) return;
 
         const wayTokens = tokens.map(t => this._isAirwayToken(t) ? null : t.toUpperCase());
 
@@ -617,11 +622,14 @@ class RouteTable {
         };
 
         let { resolved, unresolved } = await doResolve();
+        if (cancelled()) return;
 
         if (resolved.length === 0 && unresolved.length > 0) {
             this._resultsEl.innerHTML = '<div class="route-search-empty">Retrying...</div>';
             await new Promise(r => setTimeout(r, 1500));
+            if (cancelled()) return;
             ({ resolved, unresolved } = await doResolve());
+            if (cancelled()) return;
         }
 
         const chips = resolved.map(wp =>
