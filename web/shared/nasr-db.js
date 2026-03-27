@@ -6,7 +6,7 @@
 
 class NasrDB {
     static DB_NAME = 'flypi';
-    static DB_VERSION = 6;
+    static DB_VERSION = 7;
 
     constructor() {
         this._db = null;

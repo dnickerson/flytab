@@ -5,6 +5,7 @@ import android.content.Intent;
 import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
+import android.webkit.WebSettings;
 import android.webkit.WebView;
 import androidx.activity.OnBackPressedCallback;
 import androidx.core.view.ViewCompat;
@@ -44,8 +45,11 @@ public class MainActivity extends BridgeActivity {
             }
         });
 
-        // Inject Android nav bar height as CSS variable
+        // Allow HTTP requests from the HTTPS localhost origin (home server, NanoHTTPD on 9090)
         WebView wv = getBridge().getWebView();
+        wv.getSettings().setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+
+        // Inject Android nav bar height as CSS variable
         ViewCompat.setOnApplyWindowInsetsListener(wv, (v, insets) -> {
             int navBottom = insets.getInsets(WindowInsetsCompat.Type.navigationBars()).bottom;
             float density = getResources().getDisplayMetrics().density;
