@@ -923,6 +923,7 @@ class RouteTable {
     }
 
     _computeEnroute(gs) {
+        if (this._activeIndex < 0 || this._waypoints.length === 0) return;
         const cfgCruiseSpeed = CockpitConfig.aircraft('performance.cruise_speed_kt') ?? 120;
         const cfgGph = CockpitConfig.aircraft('performance.cruise_gph') ?? 9.0;
         const fuelCap = CockpitConfig.aircraft('performance.fuel_capacity_gal') ?? 50;
