@@ -1362,6 +1362,72 @@ class RouteTable {
         document.body.appendChild(overlay);
     }
 
+    _showUploadModal() {
+        const overlay = document.createElement('div');
+        overlay.className = 'plan-picker-overlay';
+        overlay.innerHTML = `
+            <div class="plan-picker-modal" style="max-width:340px">
+                <div class="plan-picker-header">
+                    <span>Load Route File</span>
+                    <button class="plan-picker-close">✕</button>
+                </div>
+                <div style="padding:16px;color:var(--text-secondary);font-size:14px">
+                    Select a flight plan file (.json, .fpl, .gpx)
+                </div>
+                <div style="padding:0 16px 16px">
+                    <input type="file" id="rt-upload-input" accept=".json,.fpl,.gpx,application/json,application/gpx+xml,text/xml"
+                        style="width:100%;padding:8px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border-color);border-radius:6px;font-size:14px">
+                </div>
+                <div id="rt-upload-status" style="padding:0 16px 16px;font-size:13px;color:var(--text-secondary);min-height:20px"></div>
+            </div>`;
+
+        const dismiss = () => overlay.remove();
+        overlay.querySelector('.plan-picker-close').addEventListener('click', dismiss);
+        overlay.addEventListener('click', e => { if (e.target === overlay) dismiss(); });
+
+        overlay.querySelector('#rt-upload-input').addEventListener('change', async (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            const status = overlay.querySelector('#rt-upload-status');
+            status.textContent = `Reading ${file.name}…`;
+            try {
+                const text = await file.text();
+                let plan = null;
+
+                if (file.name.endsWith('.gpx') || text.trimStart().startsWith('<')) {
+                    // GPX — extract route points as waypoints
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(text, 'application/xml');
+                    const rtepts = [...doc.querySelectorAll('rtept')];
+                    const wptEls = rtepts.length ? rtepts : [...doc.querySelectorAll('wpt')];
+                    const waypoints = wptEls.map(el => ({
+                        icao: (el.querySelector('name')?.textContent || '').trim().toUpperCase() || 'WPT',
+                        lat: parseFloat(el.getAttribute('lat')),
+                        lon: parseFloat(el.getAttribute('lon')),
+                    })).filter(w => !isNaN(w.lat) && !isNaN(w.lon));
+                    if (!waypoints.length) throw new Error('No route points found in GPX');
+                    plan = { waypoints };
+                } else {
+                    // JSON / .fpl
+                    plan = JSON.parse(text);
+                }
+
+                if (!plan?.waypoints?.length) throw new Error('No waypoints in file');
+
+                dismiss();
+                if (typeof app !== 'undefined' && app._applyPlan) {
+                    await app._applyPlan(plan);
+                    app.showToast?.(`Loaded ${file.name}`);
+                }
+            } catch (err) {
+                status.style.color = 'var(--color-warning, #f97316)';
+                status.textContent = `Error: ${err.message}`;
+            }
+        });
+
+        document.body.appendChild(overlay);
+    }
+
     // ========== DOM ==========
 
     _buildDOM() {
@@ -1412,7 +1478,7 @@ class RouteTable {
         this._wireButton(this._loadBtn2, () => this._showPlanPicker());
 
         this._uploadBtn = this._handleEl.querySelector('.rt-upload-btn');
-        this._wireButton(this._uploadBtn, () => { location.href = './upload.html'; });
+        this._wireButton(this._uploadBtn, () => this._showUploadModal());
 
         this._setupDrag();
 
