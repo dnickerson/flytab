@@ -52,6 +52,8 @@ class RouteTable {
         this._powerPresets = [55, 65, 75]; // cycle through these
         this._flightRules = Settings.get('flight_rules') ?? 'VFR'; // VFR or IFR
         this._emitting = false; // re-entrancy guard for _emitRouteChange
+        this._lastAirspaceBands = [];   // cached from last _buildProfileData for alt picker hints
+        this._lastWaypointDists = [];   // cumulative distances per waypoint for picker hints
 
         this._buildDOM();
     }
@@ -395,11 +397,18 @@ class RouteTable {
         this._onEdited();
     }
 
-    _setWaypointAlt(index, alt) {
+    _setWaypointAlt(index, alt, altUpper = null) {
         if (index < 0 || index >= this._waypoints.length) return;
         this._pushUndo();
         this._waypoints[index].alt = alt;
         this._waypoints[index].altitude = alt;
+        if (altUpper !== null) this._waypoints[index].alt_constraint_upper = altUpper;
+        this._onEdited();
+    }
+
+    _setWaypointConstraint(index, constraint) {
+        if (index < 0 || index >= this._waypoints.length) return;
+        this._waypoints[index].alt_constraint = constraint;
         this._onEdited();
     }
 
@@ -411,6 +420,8 @@ class RouteTable {
         const wp = this._waypoints[wpIndex];
         if (!wp) return;
         const currentAlt = wp.alt ?? wp.altitude ?? 0;
+        const currentConstraint = wp.alt_constraint || 'AT';
+        const currentAltUpper = wp.alt_constraint_upper || '';
 
         // Determine heading to pick E/W hemisphere altitude rules
         // 0-179° = eastbound (odd thousands), 180-359° = westbound (even)
@@ -426,7 +437,45 @@ class RouteTable {
         }
 
         const dir = isEast ? 'E odd' : 'W even';
-        let html = `<div class="rt-alt-picker-header">${this._flightRules} · ${dir} · ${Math.round(hdg)}\u00b0</div>`;
+        const constraints = [
+            { key: 'AT',           label: 'AT' },
+            { key: 'AT_OR_ABOVE',  label: 'AT OR\u00a0ABOVE' },
+            { key: 'AT_OR_BELOW',  label: 'AT OR\u00a0BELOW' },
+            { key: 'BETWEEN',      label: 'BETWEEN' },
+        ];
+        let html = `<div class="rt-alt-picker-header">${this._flightRules} \u00b7 ${dir} \u00b7 ${Math.round(hdg)}\u00b0</div>`;
+
+        // Constraint selector row
+        html += '<div class="rt-alt-constraint-row">';
+        for (const c of constraints) {
+            const active = c.key === currentConstraint ? ' rt-alt-constraint-active' : '';
+            html += `<button class="rt-alt-constraint-btn${active}" data-constraint="${c.key}">${c.label}</button>`;
+        }
+        html += '</div>';
+
+        // Airspace context hint (if data available)
+        const wpDist = this._lastWaypointDists[wpIndex] ?? null;
+        if (wpDist !== null && this._lastAirspaceBands.length > 0) {
+            const activeBands = this._lastAirspaceBands.filter(
+                b => wpDist >= b.distFrom && wpDist <= b.distTo
+            );
+            for (const band of activeBands) {
+                if (band.lowerFt > 0) {
+                    const floorK = band.lowerFt >= 1000 ? band.lowerFt.toLocaleString() + 'ft' : band.lowerFt + 'ft';
+                    html += `<button class="rt-alt-hint-btn" data-constraint="AT_OR_BELOW" data-alt="${band.lowerFt}">`;
+                    html += `\u26A0 Class ${band.class} floor: ${floorK} \u2014 set AT OR BELOW?`;
+                    html += '</button>';
+                }
+                if (band.upperFt > 0 && band.upperFt < 99999) {
+                    const ceilK = band.upperFt >= 1000 ? band.upperFt.toLocaleString() + 'ft' : band.upperFt + 'ft';
+                    html += `<button class="rt-alt-hint-btn" data-constraint="AT_OR_ABOVE" data-alt="${band.upperFt}">`;
+                    html += `\u26A0 Class ${band.class} ceiling: ${ceilK} \u2014 set AT OR ABOVE?`;
+                    html += '</button>';
+                }
+            }
+        }
+
+        // Altitude presets row
         html += '<div class="rt-alt-picker-row">';
         for (const alt of alts) {
             const sel = alt === currentAlt ? ' rt-alt-selected' : '';
@@ -434,19 +483,30 @@ class RouteTable {
             html += `<button class="rt-alt-option${sel}" data-alt="${alt}">${label}</button>`;
         }
         html += '</div>';
-        html += `<div class="rt-alt-custom">
-            <input type="number" class="rt-alt-input" value="${currentAlt || ''}" placeholder="Custom" step="500" min="0" max="45000">
-            <button class="rt-alt-set-btn">SET</button>
-        </div>`;
+
+        // Custom input (one or two for BETWEEN)
+        if (currentConstraint === 'BETWEEN') {
+            html += `<div class="rt-alt-custom">
+                <input type="number" class="rt-alt-input" value="${currentAlt || ''}" placeholder="Floor" step="500" min="0" max="45000">
+                <input type="number" class="rt-alt-input-upper" value="${currentAltUpper || ''}" placeholder="Ceiling" step="500" min="0" max="45000">
+                <button class="rt-alt-set-btn">SET</button>
+            </div>`;
+        } else {
+            html += `<div class="rt-alt-custom">
+                <input type="number" class="rt-alt-input" value="${currentAlt || ''}" placeholder="Custom" step="500" min="0" max="45000">
+                <button class="rt-alt-set-btn">SET</button>
+            </div>`;
+        }
 
         this._altPicker.innerHTML = html;
         this._altPicker.hidden = false;
         this._altPickerIndex = wpIndex;
+        this._altPickerAnchorEl = anchorEl;
 
         // Position: prefer below anchor, flip above if it would go off screen
         const rect = anchorEl.getBoundingClientRect();
         const containerRect = this._container.getBoundingClientRect();
-        const pickerH = 120; // compact height
+        const pickerH = 160; // increased for constraint row
         const spaceBelow = containerRect.bottom - rect.bottom;
         if (spaceBelow < pickerH) {
             this._altPicker.style.top = '';
@@ -457,7 +517,7 @@ class RouteTable {
         }
         this._altPicker.style.left = Math.max(0, rect.left - containerRect.left - 40) + 'px';
 
-        // Wire Enter key on custom input (delegation handles click on SET/presets)
+        // Wire Enter key on custom input (delegation handles click on SET/presets/constraints)
         const input = this._altPicker.querySelector('.rt-alt-input');
         if (input) {
             input.addEventListener('keydown', (e) => {
@@ -465,7 +525,9 @@ class RouteTable {
                     e.preventDefault();
                     const val = parseInt(input.value);
                     if (!isNaN(val) && val > 0) {
-                        this._setWaypointAlt(this._altPickerIndex, val);
+                        const upper = this._altPicker.querySelector('.rt-alt-input-upper');
+                        const upperVal = upper ? parseInt(upper.value) : null;
+                        this._setWaypointAlt(this._altPickerIndex, val, upperVal > 0 ? upperVal : null);
                         this._hideAltPicker();
                     }
                 }
@@ -1600,8 +1662,31 @@ class RouteTable {
         this._altPicker.className = 'rt-alt-picker';
         this._altPicker.hidden = true;
         this._altPickerIndex = -1;
+        this._altPickerAnchorEl = null;
         // Delegated click handler for picker buttons (survives innerHTML rebuilds)
         this._altPicker.addEventListener('click', (e) => {
+            // Constraint type selector
+            const constraintBtn = e.target.closest('.rt-alt-constraint-btn');
+            if (constraintBtn) {
+                e.stopPropagation();
+                const newConstraint = constraintBtn.dataset.constraint;
+                this._setWaypointConstraint(this._altPickerIndex, newConstraint);
+                if (this._altPickerAnchorEl) this._showAltPicker(this._altPickerIndex, this._altPickerAnchorEl);
+                return;
+            }
+            // Airspace context hint button
+            const hintBtn = e.target.closest('.rt-alt-hint-btn');
+            if (hintBtn) {
+                e.stopPropagation();
+                const hintConstraint = hintBtn.dataset.constraint;
+                const hintAlt = parseInt(hintBtn.dataset.alt);
+                if (!isNaN(hintAlt) && hintAlt > 0) {
+                    this._setWaypointConstraint(this._altPickerIndex, hintConstraint);
+                    this._setWaypointAlt(this._altPickerIndex, hintAlt);
+                    this._hideAltPicker();
+                }
+                return;
+            }
             const optBtn = e.target.closest('.rt-alt-option');
             if (optBtn) {
                 e.stopPropagation();
@@ -1613,9 +1698,11 @@ class RouteTable {
             if (setBtn) {
                 e.stopPropagation();
                 const input = this._altPicker.querySelector('.rt-alt-input');
+                const upper = this._altPicker.querySelector('.rt-alt-input-upper');
                 const val = parseInt(input?.value);
+                const upperVal = upper ? parseInt(upper.value) : NaN;
                 if (!isNaN(val) && val > 0) {
-                    this._setWaypointAlt(this._altPickerIndex, val);
+                    this._setWaypointAlt(this._altPickerIndex, val, (!isNaN(upperVal) && upperVal > 0) ? upperVal : null);
                     this._hideAltPicker();
                 }
                 return;
@@ -1691,6 +1778,33 @@ class RouteTable {
             console.warn('[RouteTable] airspace bands failed:', e?.message);
         }
 
+        // Cache airspace bands and waypoint distances for alt picker hints
+        this._lastAirspaceBands = airspaceBands;
+        const wpDists = [];
+        let cumD = 0;
+        for (let i = 0; i < wps.length; i++) {
+            if (i > 0) cumD += wps[i]._legDist || 0;
+            wpDists.push(cumD);
+        }
+        this._lastWaypointDists = wpDists;
+
+        // Build waypoint constraints array for profile chart
+        const waypointConstraints = [];
+        cumD = 0;
+        for (let i = 0; i < wps.length; i++) {
+            if (i > 0) cumD += wps[i]._legDist || 0;
+            const wp = wps[i];
+            if (wp.alt_constraint && wp.alt) {
+                waypointConstraints.push({
+                    id:        wp.icao || wp.name || `WP${i}`,
+                    dist:      cumD,
+                    alt:       wp.alt,
+                    constraint: wp.alt_constraint,
+                    altUpper:  wp.alt_constraint_upper || null,
+                });
+            }
+        }
+
         return {
             legs,
             totalDistNm:  totalDist,
@@ -1700,6 +1814,7 @@ class RouteTable {
             terrainProfile,
             coords,
             airspaceBands,
+            waypointConstraints,
         };
     }
 

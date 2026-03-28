@@ -13,7 +13,9 @@ class RouteProfileView {
         this._routeData  = null;
         this._expanded   = false;
         this._visible    = false;
-        this._scrubX     = null;
+        this._scrubX          = null;
+        this._scrubTouchY     = null;
+        this._scrubAutoExpanded = false;
 
         this._buildDOM();
     }
@@ -100,11 +102,19 @@ class RouteProfileView {
             width:     '100%',
             minHeight: '0',   // critical: allows flex child to shrink inside fixed-height panel
             display:   'block',
+            position:  'relative',
+            zIndex:    '1',
         });
 
         // Touch scrubber
         this._canvas.addEventListener('touchstart', (e) => {
             e.preventDefault();
+            // Auto-expand to full height when scrubbing starts
+            if (!this._expanded) {
+                this._scrubAutoExpanded = true;
+                this._el.style.height = '280px';
+                this._chevronBtn.textContent = '\u25BC';
+            }
             this._updateScrub(e);
         }, { passive: false });
         this._canvas.addEventListener('touchmove', (e) => {
@@ -112,24 +122,38 @@ class RouteProfileView {
             this._updateScrub(e);
         }, { passive: false });
         this._canvas.addEventListener('touchend', () => {
-            this._scrubX = null;
+            // Collapse back if we auto-expanded
+            if (this._scrubAutoExpanded) {
+                this._scrubAutoExpanded = false;
+                this._el.style.height = '180px';
+                this._chevronBtn.textContent = '\u25B2';
+            }
+            this._scrubX      = null;
+            this._scrubTouchY = null;
             if (this._routeData) this._render(this._routeData);
         });
 
         // Tooltip
+        // Fixed right-side scrubber info panel
         this._tooltip = document.createElement('div');
         Object.assign(this._tooltip.style, {
-            position:    'absolute',
-            background:  'var(--bg-surface-raised, #2a2a2a)',
-            border:      '1px solid var(--border-strong, #444)',
-            borderRadius:'4px',
-            padding:     '3px 7px',
-            fontSize:    '11px',
-            color:       'var(--text-primary)',
-            pointerEvents:'none',
-            display:     'none',
-            whiteSpace:  'nowrap',
-            zIndex:      '1',
+            position:      'absolute',
+            top:           '0',
+            right:         '0',
+            width:         '130px',
+            height:        '100%',
+            background:    '#0d0f1e',
+            borderLeft:    '2px solid #00aaff',
+            borderRadius:  '0 0 10px 0',
+            padding:       '10px 10px',
+            fontSize:      '13px',
+            lineHeight:    '1.6',
+            color:         'var(--text-primary)',
+            pointerEvents: 'none',
+            display:       'none',
+            zIndex:        '2',
+            overflowY:     'auto',
+            boxSizing:     'border-box',
         });
 
         this._el.appendChild(header);
@@ -165,7 +189,8 @@ class RouteProfileView {
 
     _updateScrub(e) {
         const rect = this._canvas.getBoundingClientRect();
-        this._scrubX = e.touches[0].clientX - rect.left;
+        this._scrubX      = e.touches[0].clientX - rect.left;
+        this._scrubTouchY = e.touches[0].clientY - rect.top;
         if (this._routeData) this._render(this._routeData);
     }
 
@@ -185,7 +210,8 @@ class RouteProfileView {
         const ctx = canvas.getContext('2d');
         ctx.scale(dpr, dpr);
 
-        const pad = { top: 10, right: 10, bottom: 28, left: 44 };
+        const panelOpen = this._scrubX !== null;
+        const pad = { top: 14, right: panelOpen ? 144 : 12, bottom: 52, left: 52 };
         const cw  = w - pad.left - pad.right;
         const ch  = h - pad.top  - pad.bottom;
         if (cw <= 0 || ch <= 0) return;
@@ -280,9 +306,9 @@ class RouteProfileView {
                 ctx.stroke();
                 ctx.setLineDash([]);
                 ctx.fillStyle = '#818cf8';
-                ctx.font = '10px sans-serif';
+                ctx.font = 'bold 12px sans-serif';
                 ctx.textAlign = 'left';
-                ctx.fillText('FZL', pad.left + 2, fy - 3);
+                ctx.fillText('FZL', pad.left + 4, fy - 4);
                 ctx.restore();
             }
         }
@@ -348,54 +374,78 @@ class RouteProfileView {
         if (dangerSegs.length > 0) {
             const hasCritical = dangerSegs.some(s => s.severity === 'critical');
             ctx.save();
-            ctx.font      = 'bold 11px sans-serif';
+            ctx.font      = 'bold 13px sans-serif';
             ctx.fillStyle = '#ef4444';
             ctx.textAlign = 'right';
             ctx.fillText(hasCritical ? '\u26A0 TERRAIN CONFLICT' : '\u26A0 TERRAIN',
-                         pad.left + cw, pad.top + 13);
+                         pad.left + cw, pad.top + 16);
             ctx.restore();
         }
 
         // 8. Y-axis altitude labels ──────────────────────────────────────────
-        ctx.fillStyle  = 'rgba(156,163,175,0.85)';
-        ctx.font       = '9px sans-serif';
+        ctx.fillStyle  = 'rgba(200,210,220,0.95)';
+        ctx.font       = 'bold 12px sans-serif';
         ctx.textAlign  = 'right';
         const altStep  = yMax > 20000 ? 4000 : 2000;
+        let lastAltLabelY = Infinity;
         for (let alt = 0; alt <= yMax; alt += altStep) {
             const y = yOf(alt);
             if (y < pad.top - 2 || y > h - pad.bottom + 6) continue;
-            ctx.fillText(alt === 0 ? '0' : (alt / 1000).toFixed(0) + 'k', pad.left - 3, y + 3);
+            if (Math.abs(y - lastAltLabelY) < 16) continue; // skip if too close to previous
+            lastAltLabelY = y;
+            ctx.fillText(alt === 0 ? '0' : (alt / 1000).toFixed(0) + 'k', pad.left - 4, y + 4);
         }
 
         // 9. Waypoint tick marks and labels ──────────────────────────────────
         if (routeData.legs?.length) {
-            ctx.strokeStyle = 'rgba(100,116,139,0.35)';
+            ctx.strokeStyle = 'rgba(100,116,139,0.45)';
             ctx.lineWidth   = 1;
-            ctx.fillStyle   = 'rgba(156,163,175,0.85)';
-            ctx.font        = '9px sans-serif';
+            ctx.font        = 'bold 12px sans-serif';
             ctx.textAlign   = 'center';
             let cumDist = 0;
+            const wpPositions = [];
             for (const leg of routeData.legs) {
-                const x = xOf(cumDist);
-                ctx.beginPath();
-                ctx.moveTo(x, pad.top);
-                ctx.lineTo(x, h - pad.bottom + 3);
-                ctx.stroke();
-                if (leg.from) ctx.fillText(leg.from, x, h - pad.bottom + 11);
+                wpPositions.push({ x: xOf(cumDist), label: leg.from });
                 cumDist += (leg.dist || 0);
             }
-            // Final destination label
             const last = routeData.legs[routeData.legs.length - 1];
-            if (last?.to) ctx.fillText(last.to, xOf(totalDist), h - pad.bottom + 11);
+            if (last?.to) wpPositions.push({ x: xOf(totalDist), label: last.to });
+
+            // Draw tick lines
+            for (const wp of wpPositions) {
+                ctx.beginPath();
+                ctx.moveTo(wp.x, pad.top);
+                ctx.lineTo(wp.x, h - pad.bottom + 4);
+                ctx.stroke();
+            }
+
+            // Draw labels — stagger alternating up/down to avoid overlap
+            for (let i = 0; i < wpPositions.length; i++) {
+                const wp = wpPositions[i];
+                if (!wp.label) continue;
+                const stagger = (i % 2 === 0) ? 0 : 14; // alternate row offset
+                const yBase = h - pad.bottom + 14 + stagger;
+                // Background pill for readability
+                const tw = ctx.measureText(wp.label).width;
+                ctx.fillStyle = 'rgba(15,15,30,0.65)';
+                ctx.fillRect(wp.x - tw / 2 - 2, yBase - 11, tw + 4, 13);
+                ctx.fillStyle = 'rgba(220,230,245,0.95)';
+                ctx.fillText(wp.label, wp.x, yBase);
+            }
+        }
+
+        // 9b. Altitude crossing constraint symbols ───────────────────────────
+        if (routeData.waypointConstraints?.length) {
+            this._drawAltConstraints(ctx, routeData.waypointConstraints, xOf, yOf, pad, ch);
         }
 
         // 10. Distance labels along x-axis ───────────────────────────────────
-        ctx.fillStyle = 'rgba(100,116,139,0.6)';
-        ctx.font      = '9px sans-serif';
+        ctx.fillStyle = 'rgba(150,165,180,0.85)';
+        ctx.font      = '11px sans-serif';
         ctx.textAlign = 'center';
         const distStep = Math.max(10, Math.ceil(totalDist / 5 / 10) * 10);
         for (let d = distStep; d < totalDist - distStep * 0.4; d += distStep) {
-            ctx.fillText(d.toFixed(0), xOf(d), h - 5);
+            ctx.fillText(d.toFixed(0) + 'nm', xOf(d), h - 4);
         }
 
         // 11. Touch scrubber ─────────────────────────────────────────────────
@@ -421,33 +471,58 @@ class RouteProfileView {
                     ? (this._interpValue(flightPath, dist, 'dist', 'alt') ?? cruiseAlt)
                     : cruiseAlt;
                 const clearance  = flightAlt - terrainElev;
-                let tip;
-                if (clearance < 0) {
-                    tip = `\u26F0 CONFLICT: terrain ${terrainElev.toFixed(0)}ft > flight ${flightAlt.toFixed(0)}ft`;
-                } else if (clearance < 1000) {
-                    tip = `\u26A0 ${clearance.toFixed(0)}ft clearance (terrain ${terrainElev.toFixed(0)}ft, flight ${flightAlt.toFixed(0)}ft)`;
-                } else {
-                    tip = `${dist.toFixed(0)}nm \u2502 Terrain: ${terrainElev.toFixed(0)}ft \u2502 Flight: ${flightAlt.toFixed(0)}ft \u2502 Clear: ${clearance.toFixed(0)}ft`;
-                }
 
-                // Check if scrub position is inside any airspace band
-                const activeBands = (routeData.airspaceBands || []).filter(
-                    b => dist >= b.distFrom && dist <= b.distTo &&
-                         flightAlt >= b.lowerFt && flightAlt <= b.upperFt
+                // All airspace bands that span this x position (regardless of flight alt)
+                const allBandsHere = (routeData.airspaceBands || []).filter(
+                    b => dist >= b.distFrom && dist <= b.distTo
                 );
-                if (activeBands.length > 0) {
-                    const bandStr = activeBands.map(b =>
-                        `Class ${b.class} ${b.lowerFt === 0 ? 'SFC' : b.lowerFt + 'ft'}-${b.upperFt + 'ft'}`
-                    ).join(', ');
-                    tip += ` | ${bandStr}`;
+                if (routeData.airspaceBands?.length) {
+                    console.log('[Profile] scrub dist:', dist.toFixed(1), 'bands:', routeData.airspaceBands.map(b => `${b.class} ${b.distFrom.toFixed(1)}-${b.distTo.toFixed(1)}`), 'hits:', allBandsHere.length);
                 }
 
-                this._tooltip.textContent = tip;
+                // Build vertical info panel HTML
+                const fmtAlt = (ft) => ft >= 1000 ? (ft / 1000).toFixed(1) + 'k' : ft + 'ft';
+                const fmtFloor = (ft) => ft === 0 ? 'SFC' : fmtAlt(ft);
+                const bandColors = { B: '#4499ff', C: '#cc44cc', D: '#4477cc' };
+
+                let clearColor = '#4caf50';
+                let clearIcon  = '✓';
+                if (clearance < 0)    { clearColor = '#ef4444'; clearIcon = '⛰ CONFLICT'; }
+                else if (clearance < 500)  { clearColor = '#ff5722'; clearIcon = '⚠'; }
+                else if (clearance < 1000) { clearColor = '#ff9800'; clearIcon = '⚠'; }
+
+                let html = `
+                    <div style="color:#aab;font-size:11px;margin-bottom:4px">${dist.toFixed(0)} nm</div>
+                    <div style="margin-bottom:6px">
+                        <div style="color:#9ca3af;font-size:11px">FLIGHT</div>
+                        <div style="font-size:15px;font-weight:700;color:#e0e8ff">${fmtAlt(Math.round(flightAlt))}</div>
+                    </div>
+                    <div style="margin-bottom:6px">
+                        <div style="color:#9ca3af;font-size:11px">TERRAIN</div>
+                        <div style="font-size:15px;font-weight:700;color:#c8a87a">${fmtAlt(Math.round(terrainElev))}</div>
+                    </div>
+                    <div style="margin-bottom:8px">
+                        <div style="color:#9ca3af;font-size:11px">CLEAR</div>
+                        <div style="font-size:15px;font-weight:700;color:${clearColor}">${clearIcon} ${fmtAlt(Math.round(Math.abs(clearance)))}</div>
+                    </div>`;
+
+                if (allBandsHere.length > 0) {
+                    html += `<div style="border-top:1px solid #333;padding-top:6px;margin-top:2px">`;
+                    html += `<div style="color:#9ca3af;font-size:11px;margin-bottom:4px">AIRSPACE</div>`;
+                    for (const b of allBandsHere) {
+                        const bc = bandColors[b.class] || '#8888cc';
+                        html += `<div style="margin-bottom:5px">
+                            <span style="font-size:13px;font-weight:700;color:${bc}">Class ${b.class}</span><br>
+                            <span style="font-size:12px;color:#ccd">▲ ${b.upperFt >= 18000 ? 'FL180' : fmtAlt(b.upperFt)}</span><br>
+                            <span style="font-size:12px;color:#ccd">▼ ${fmtFloor(b.lowerFt)}</span>
+                        </div>`;
+                    }
+                    html += `</div>`;
+                }
+
+                this._tooltip.innerHTML = html;
                 this._tooltip.style.display = 'block';
-                const tipW   = this._tooltip.offsetWidth || 260;
-                const tipLeft = Math.max(pad.left, Math.min(sx, w - tipW - 4));
-                this._tooltip.style.left = tipLeft + 'px';
-                this._tooltip.style.top  = '30px';
+                console.log('[Profile] panel visible, offsetWidth:', this._tooltip.offsetWidth, 'offsetHeight:', this._tooltip.offsetHeight, 'zIndex:', this._tooltip.style.zIndex);
             }
         } else {
             this._tooltip.style.display = 'none';
@@ -497,16 +572,7 @@ class RouteProfileView {
             ctx.moveTo(x2, yTop); ctx.lineTo(x2, yBot);
             ctx.stroke();
 
-            // Label: class letter + floor/ceiling (e.g. "B SFC-10k")
-            const labelX = x1 + (w / 2);
-            const labelY = yTop + 11;
-            const ceilStr  = band.upperFt >= 18000 ? 'FL180' : (band.upperFt / 1000).toFixed(0) + 'k';
-            const floorStr = band.lowerFt === 0    ? 'SFC'   : (band.lowerFt / 1000).toFixed(0) + 'k';
-            ctx.fillStyle = c.label;
-            ctx.font = 'bold 9px sans-serif';
-            ctx.textAlign = 'center';
-            ctx.fillText(`${band.class} ${floorStr}-${ceilStr}`, labelX, labelY);
-            ctx.textAlign = 'left';
+            // No inline labels — airspace details shown in scrubber panel on touch
         }
     }
 
@@ -632,5 +698,93 @@ class RouteProfileView {
         }
         // Fall back to empty (grid not synced)
         return [];
+    }
+
+    // ── Altitude crossing constraint symbols ──────────────────────────────────
+
+    _drawAltConstraints(ctx, constraints, xOf, yOf, pad, ch) {
+        const CYAN = '#00aaff';
+        const barHW  = 16;   // half-width of horizontal bar in px
+        const tickH  = 8;    // tick mark height for AT constraint
+        const arrowSz = 6;   // arrow triangle size
+
+        for (const wc of constraints) {
+            if (!wc.alt) continue;
+            const x = xOf(wc.dist);
+            const y = yOf(wc.alt);
+
+            // Vertical dashed guide line at waypoint x position
+            ctx.save();
+            ctx.strokeStyle = 'rgba(0,170,255,0.3)';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([3, 4]);
+            ctx.beginPath();
+            ctx.moveTo(x, pad.top);
+            ctx.lineTo(x, pad.top + ch);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.restore();
+
+            if (wc.constraint === 'BETWEEN' && wc.altUpper) {
+                const yUpper = yOf(wc.altUpper);
+                // Shaded zone between floor and ceiling
+                ctx.save();
+                ctx.fillStyle = 'rgba(0,170,255,0.12)';
+                ctx.fillRect(x - barHW, yUpper, barHW * 2, y - yUpper);
+                ctx.restore();
+                // Floor bar (AT OR ABOVE style)
+                this._drawAltBar(ctx, x, y,      barHW, tickH, CYAN, 'none');
+                // Ceiling bar (AT OR BELOW style)
+                this._drawAltBar(ctx, x, yUpper, barHW, tickH, CYAN, 'none');
+            } else {
+                const arrowDir = wc.constraint === 'AT_OR_ABOVE' ? 'up'
+                               : wc.constraint === 'AT_OR_BELOW' ? 'down'
+                               : 'none';
+                this._drawAltBar(ctx, x, y, barHW, tickH, CYAN, arrowDir, arrowSz);
+            }
+        }
+    }
+
+    _drawAltBar(ctx, cx, cy, barHW, tickH, color, arrowDir, arrowSz = 6) {
+        ctx.save();
+        ctx.strokeStyle = color;
+        ctx.fillStyle   = color;
+        ctx.lineWidth   = 2;
+        ctx.lineCap     = 'round';
+
+        // Horizontal bar
+        ctx.beginPath();
+        ctx.moveTo(cx - barHW, cy);
+        ctx.lineTo(cx + barHW, cy);
+        ctx.stroke();
+
+        if (arrowDir === 'none') {
+            // Tick marks at ends (AT / BETWEEN boundary)
+            ctx.beginPath();
+            ctx.moveTo(cx - barHW, cy - tickH / 2);
+            ctx.lineTo(cx - barHW, cy + tickH / 2);
+            ctx.moveTo(cx + barHW, cy - tickH / 2);
+            ctx.lineTo(cx + barHW, cy + tickH / 2);
+            ctx.stroke();
+        } else {
+            // Filled arrow triangles at ends (AT OR ABOVE / AT OR BELOW)
+            const dir = arrowDir === 'up' ? -1 : 1;
+            // Left arrow
+            ctx.beginPath();
+            ctx.moveTo(cx - barHW,               cy);
+            ctx.lineTo(cx - barHW - arrowSz / 2, cy + dir * arrowSz);
+            ctx.lineTo(cx - barHW + arrowSz / 2, cy + dir * arrowSz);
+            ctx.closePath();
+            ctx.fill();
+            // Right arrow
+            ctx.beginPath();
+            ctx.moveTo(cx + barHW,               cy);
+            ctx.lineTo(cx + barHW - arrowSz / 2, cy + dir * arrowSz);
+            ctx.lineTo(cx + barHW + arrowSz / 2, cy + dir * arrowSz);
+            ctx.closePath();
+            ctx.fill();
+        }
+
+        ctx.restore();
     }
 }
