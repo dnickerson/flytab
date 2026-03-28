@@ -113,6 +113,7 @@ class PlanSync {
                 <div class="ps-row" data-id="${p.id}">
                     <span class="ps-row-route">${label}</span>
                     <span class="ps-row-date">${dateStr}</span>
+                    <button class="ps-brief-btn" data-id="${p.id}" title="Download preflight brief">⬇ Brief</button>
                 </div>`;
         }
         html += '</div>';
@@ -124,7 +125,19 @@ class PlanSync {
 
         body.querySelectorAll('.ps-row').forEach(row => {
             row.addEventListener('touchstart', (e) => { e.stopPropagation(); }, { passive: true });
-            row.addEventListener('click', () => this._loadPlan(row.dataset.id));
+            // Click on the row itself (not the brief button) loads the plan
+            row.addEventListener('click', (e) => {
+                if (e.target.closest('.ps-brief-btn')) return;
+                this._loadPlan(row.dataset.id);
+            });
+        });
+
+        body.querySelectorAll('.ps-brief-btn').forEach(btn => {
+            btn.addEventListener('touchstart', (e) => { e.stopPropagation(); }, { passive: true });
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this._downloadBrief(btn.dataset.id, btn);
+            });
         });
     }
 
@@ -217,6 +230,97 @@ class PlanSync {
             window.app?.showToast(`Plan loaded: ${normalized.name || ''}`);
         } catch (err) {
             this._renderError(body, `Failed to load: ${err.message}`);
+        }
+    }
+
+    // ── Preflight Brief ───────────────────────────────────────────────────────
+
+    /**
+     * Download the preflight brief for a plan from the server and cache it
+     * in localStorage (preflight_brief_<id>). Updates the button state inline.
+     */
+    async _downloadBrief(id, btn) {
+        if (!this._apiKey) {
+            window.app?.showToast('API key required to download brief.');
+            return;
+        }
+
+        const originalText = btn.textContent;
+        btn.textContent = '…';
+        btn.disabled = true;
+
+        try {
+            // First try to get existing brief-package from server
+            let bundle = null;
+            let stale = false;
+
+            const pkgResp = await fetch(`${this._apiUrl}/api/plans/${id}/brief-package`, {
+                headers: { 'x-api-key': this._apiKey },
+                signal: AbortSignal.timeout(8000),
+            });
+
+            if (pkgResp.ok) {
+                const pkg = await pkgResp.json();
+                if (pkg.bundle) {
+                    bundle = pkg.bundle;
+                    stale = pkg.stale === true;
+                }
+            }
+
+            // If no bundle or stale, generate a fresh one via POST
+            if (!bundle || stale) {
+                btn.textContent = '⏳';
+                const genResp = await fetch(`${this._apiUrl}/api/plans/${id}/brief`, {
+                    method: 'POST',
+                    headers: { 'x-api-key': this._apiKey, 'Content-Type': 'application/json' },
+                    signal: AbortSignal.timeout(60000), // Claude call can take up to ~30s
+                });
+                if (!genResp.ok) {
+                    throw new Error(`Server ${genResp.status}`);
+                }
+                const { bundle: freshBundle } = await genResp.json();
+                bundle = freshBundle;
+            }
+
+            // Cache locally for offline use
+            try { localStorage.setItem(`preflight_brief_${id}`, JSON.stringify(bundle)); } catch {}
+
+            btn.textContent = '✓ Brief';
+            btn.disabled = false;
+            window.app?.showToast('Brief downloaded — tap ✓ Brief to view.');
+
+            // Re-wire the button to open the brief
+            btn.onclick = (e) => {
+                e.stopPropagation();
+                this.openBrief(id);
+            };
+
+        } catch (err) {
+            console.error('[PlanSync] brief download error:', err.message);
+            btn.textContent = originalText;
+            btn.disabled = false;
+            window.app?.showToast(`Brief failed: ${err.message}`);
+        }
+    }
+
+    /**
+     * Open the preflight brief overlay for a plan.
+     * Loads bundle from localStorage (cached by _downloadBrief).
+     */
+    openBrief(id) {
+        let bundle = null;
+        try { bundle = JSON.parse(localStorage.getItem(`preflight_brief_${id}`) || 'null'); } catch {}
+
+        if (!bundle) {
+            window.app?.showToast('No brief downloaded for this plan.');
+            return;
+        }
+
+        if (window.preflightBrief) {
+            this.hide();
+            window.preflightBrief.show(bundle);
+        } else {
+            window.app?.showToast('Preflight brief viewer not available.');
         }
     }
 

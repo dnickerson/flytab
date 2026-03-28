@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v4.33';
+const FLYTAB_VERSION = 'v4.34';
 
 // ========== Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -426,6 +426,12 @@ class FlyTabApp {
         // PlanSync — fetches flight plans from flywhere.app
         if (typeof PlanSync !== 'undefined') {
             this.planSync = new PlanSync();
+        }
+
+        // PreflightBrief — full-screen preflight brief overlay
+        if (typeof PreflightBrief !== 'undefined') {
+            this.preflightBrief = new PreflightBrief();
+            window.preflightBrief = this.preflightBrief;
         }
 
         // Fuel overlay (tic mark entry + EDM comparison + priority chain)

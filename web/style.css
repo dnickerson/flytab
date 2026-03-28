@@ -6856,6 +6856,24 @@ body {
     white-space: nowrap;
     margin-left: 12px;
 }
+.ps-brief-btn {
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--accent);
+    background: transparent;
+    border: 1px solid var(--accent);
+    border-radius: 5px;
+    padding: 6px 12px;
+    cursor: pointer;
+    white-space: nowrap;
+    margin-left: 10px;
+    min-height: var(--touch-min);
+    min-width: 80px;
+    flex-shrink: 0;
+}
+.ps-brief-btn:disabled {
+    opacity: 0.5;
+}
 .ps-offline-notice {
     font-size: var(--text-sm);
     color: var(--status-caution);
