@@ -117,7 +117,7 @@
     "showCallsign": true
   },
   "flywhere": {
-    "apiUrl": "https://flywhere.app",
+    "apiUrl": "https://www.flywhere.app",
     "apiKey": "flytab2025"
   },
   "geoStyles": {
