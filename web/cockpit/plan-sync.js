@@ -341,18 +341,47 @@ class PlanSync {
         const routeStep = wd.route || {};
         const aircraft = wd.aircraft?.aircraft || null;
 
+        const dep  = routeStep.departure   || dbPlan.departure_icao   || null;
+        const dest = routeStep.destination || dbPlan.destination_icao || null;
+
         const fp = {
-            departure:   routeStep.departure   || dbPlan.departure_icao   || null,
-            destination: routeStep.destination || dbPlan.destination_icao || null,
+            departure:   dep,
+            destination: dest,
             route:       routeStep.route       || [],
             legs:        routeStep.legs        || [],
             altitude:    routeStep.altitude    || null,
         };
 
+        // Build waypoints from resolvedWaypoints (has lat/lon) if available,
+        // otherwise fall back to ICAO-only route array for NASR resolution.
+        let waypoints = null;
+        if (routeStep.resolvedWaypoints?.length >= 2) {
+            waypoints = routeStep.resolvedWaypoints.map((rw, i) => {
+                const leg = i > 0 ? (fp.legs[i - 1] || {}) : {};
+                return {
+                    icao:   rw.id,
+                    name:   rw.name || rw.id,
+                    lat:    rw.lat,
+                    lon:    rw.lon,
+                    elev_ft: rw.elev_ft ?? null,
+                    type:   rw.id === dep || rw.id === dest ? 'APT'
+                          : rw.type === 'airport' ? 'APT' : (rw.type?.toUpperCase() || undefined),
+                    alt:    leg.altitude || fp.altitude || null,
+                    gs:     leg.gs  || null,
+                    tas:    leg.tas || null,
+                    gph:    leg.gph || null,
+                    wind:   (leg.windDir != null && leg.windSpd != null)
+                            ? { dir: leg.windDir, spd: leg.windSpd } : null,
+                    _segments: leg.segments || [],
+                };
+            });
+        }
+
         return {
-            id:         dbPlan.id,
-            name:       dbPlan.name || `${fp.departure} → ${fp.destination}`,
-            created_at: dbPlan.created_at || new Date().toISOString(),
+            id:          dbPlan.id,
+            name:        dbPlan.name || `${dep} → ${dest}`,
+            created_at:  dbPlan.created_at || new Date().toISOString(),
+            waypoints:   waypoints,   // pre-resolved, or null → applyRouteEdit will use flight_plan.route
             flight_plan: fp,
             aircraft:    aircraft,
         };
