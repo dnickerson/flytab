@@ -1458,6 +1458,7 @@ class RouteTable {
             <button class="rt-save-btn" style="display:none">SAVE</button>
             <button class="rt-load-btn">LOAD</button>
             <button class="rt-upload-btn">UPLOAD</button>
+            <button class="rt-profile-btn" title="Terrain profile" style="min-width:44px;min-height:44px;font-size:18px;background:none;border:none;color:inherit;cursor:pointer;padding:0 8px">\u26F0</button>
             <button class="route-table-edit-btn">EDIT</button>
         `;
         // Toggle on tap — use both click and touchend for iPad.
@@ -1494,6 +1495,14 @@ class RouteTable {
 
         this._uploadBtn = this._handleEl.querySelector('.rt-upload-btn');
         this._wireButton(this._uploadBtn, () => this._showUploadModal());
+
+        this._profileBtn = this._handleEl.querySelector('.rt-profile-btn');
+        this._wireButton(this._profileBtn, () => this._openProfileView());
+
+        // Terrain profile panel (created once, floats above the sheet)
+        this._profileView = (typeof RouteProfileView !== 'undefined')
+            ? new RouteProfileView()
+            : null;
 
         this._setupDrag();
 
@@ -1610,6 +1619,68 @@ class RouteTable {
         this._container.appendChild(this._altPicker);
 
         this._buildEngineStatusCard();
+    }
+
+    // ── Terrain Profile View ──────────────────────────────────────────────────
+
+    async _openProfileView() {
+        if (!this._profileView) {
+            if (typeof app !== 'undefined') app.showToast('Profile view unavailable');
+            return;
+        }
+        const profileData = await this._buildProfileData();
+        this._profileView.show(profileData);
+    }
+
+    _buildProfileData() {
+        const wps     = this._waypoints;
+        const totalDist = wps.reduce((s, wp) => s + (wp._legDist || 0), 0);
+        const cruiseAlt = wps.length > 1
+            ? Math.max(...wps.map(wp => wp.alt || 0))
+            : 10000;
+        // Use field elevation for dep/dest, not cruise alt
+        const depAlt  = wps.length > 0 ? (wps[0].elev_ft || 0) : 0;
+        const destAlt = wps.length > 1 ? (wps[wps.length - 1].elev_ft || 0) : 0;
+
+        // Build legs array for the profile chart
+        const legs = [];
+        for (let i = 1; i < wps.length; i++) {
+            const prev = wps[i - 1];
+            const wp   = wps[i];
+            legs.push({
+                from:     prev.icao || prev.name || `WP${i - 1}`,
+                to:       wp.icao   || wp.name   || `WP${i}`,
+                dist:     wp._legDist || 0,
+                altitude: wp.alt || cruiseAlt,
+                phase:    wp._segments?.find(s => s.phase === 'CRZ')?.phase || 'CRZ',
+                segments: wp._segments || [],
+            });
+        }
+
+        // Build terrain profile from in-memory grid (synchronous, works offline)
+        const coords = wps
+            .filter(wp => wp.lat != null && wp.lon != null)
+            .map(wp => ({ lat: wp.lat, lon: wp.lon }));
+        const terrainProfile = this._fetchTerrainProfile(coords);
+
+        return {
+            legs,
+            totalDistNm:  totalDist,
+            cruiseAltFt:  cruiseAlt,
+            depElevFt:    depAlt,
+            destElevFt:   destAlt,
+            terrainProfile,
+            coords,
+        };
+    }
+
+    _fetchTerrainProfile(coords) {
+        if (!coords || coords.length < 2) return [];
+        // Use in-memory terrain grid (synchronous, works offline)
+        if (window.terrainGrid?.isLoaded) {
+            return window.terrainGrid.buildProfile(coords, 1.0);
+        }
+        return [];
     }
 
     /**

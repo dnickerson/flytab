@@ -2865,6 +2865,15 @@ body {
     font-size: 12px;
     padding: 6px 10px;
 }
+.ds-action-btn.ds-update {
+    background: var(--status-caution);
+    border-color: var(--status-caution);
+    color: var(--bg-primary);
+}
+.ds-sec-btn {
+    display: inline-block;
+    margin-left: 4px;
+}
 .ds-icao-input {
     display: block;
     width: 100%;

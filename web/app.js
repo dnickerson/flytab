@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v4.27';
+const FLYTAB_VERSION = 'v4.31';
 
 // ========== Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -141,6 +141,9 @@ class FlyTabApp {
 
         // Initialize cockpit
         await this._initCockpit();
+
+        // Load terrain grid in background — non-blocking, works offline
+        window.terrainGrid?.load();
 
         // Update NASR age badge after data is loaded
         this._updateNasrBadge();

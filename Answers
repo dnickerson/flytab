@@ -1,0 +1,47 @@
+Great idea — this moves the advisor from "something's wrong" to "here's how to
+ fly better." A few questions to get the optimization right:
+
+The optimizer does not replace "somethings wrong" it complements.
+
+Engine & data:
+1. What engine? Lycoming O-360 Carbureted
+
+2. Yes manifold pressure (MP) available is available in the data stream. You may need to redo the training.
+
+3. Do you have OAT (outside air temp) but not in the data stream yet. This will be coming as well as airspeed. We can use carb temp for the time being.
+
+4. The D-180 does not output a computed %power
+
+Operating philosophy:
+5. I typically fly LOP cruise to avoid lead plug fouling. There is research that shows lead fouling is avoided in a specific EGT range 
+
+6. You can get normal cruise power setting from the data but generally 65%
+
+7. No MP/RPM combinations to avoid 
+
+Route integration:
+8. Route, winds, and ground speed come from the flight plan already in flytab
+9. For the "minimum time vs minimum fuel" optimization — I want the pilot to advisor to show both and let you decide? (e.g., "LOP 65% saves 1.8 gph, adds 7 min to destination") or 50% power is takes more time but avoids a fuel stop.
+
+----------------------------
+Power calculation:
+1. 180 HP for the O-360
+2. Use the standard published tables? (MP + RPM + altitude → %power) but the for my engine is more accurate
+3. Carb temp is avaialbe but I don't know if it is currently in the 13-feature data stream
+
+EGT/LOP specifics:
+4. I've seen the same references to keeping EGTs between roughly 1100-1350°F LOP
+5. I do the "big pull" and lean I feel the engine reduce power then look at the fuel flow? I'm not sureu which cylinder the D-180 use as reference (hottest? leanest?)
+
+Data stream changes:
+6. For MP — what field name does it come through as in the engine monitor
+JSON? (e.g., manifold_pressure, MAP, etc.) I'll need to add it to the feature
+set and the advisor input.
+7. Same question for carb temp — field name from the D-180 stream?
+
+Fuel planning integration:
+8. What are the tank capacities and typical fuel reserve you plan? (e.g., 40
+gal total, land with 1 hour reserve) — needed for the "avoids a fuel stop"
+calculation.
+9. Does the flight plan in FlyTab already have distance remaining, or would
+the advisor compute it from GPS position + route waypoints?

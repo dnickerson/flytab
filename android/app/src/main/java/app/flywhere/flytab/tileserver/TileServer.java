@@ -10,8 +10,11 @@ import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.io.RandomAccessFile;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -139,7 +142,19 @@ public class TileServer extends NanoHTTPD {
         }
 
         Response response;
-        if ("GET".equals(method) && "/mbtiles/status".equals(uri)) {
+        if ("GET".equals(method) && "/terrain/grid/status".equals(uri)) {
+            response = handleTerrainGridStatus();
+        } else if ("GET".equals(method) && "/terrain/grid/terrain.json".equals(uri)) {
+            response = serveFile("/terrain/terrain.json");
+        } else if ("GET".equals(method) && "/terrain/grid/terrain.bin".equals(uri)) {
+            response = serveFile("/terrain/terrain.bin");
+        } else if ("GET".equals(method) && "/terrain/status".equals(uri)) {
+            response = handleTerrainStatus();
+        } else if ("GET".equals(method) && uri.startsWith("/terrain/profile")) {
+            response = handleTerrainProfile(session);
+        } else if ("GET".equals(method) && uri.matches("^/terrain/[A-Za-z0-9_+-]+\\.hgt$")) {
+            response = serveFile(uri);
+        } else if ("GET".equals(method) && "/mbtiles/status".equals(uri)) {
             response = handleMbtilesStatus();
         } else if ("POST".equals(method) && "/fetch-mbtiles".equals(uri)) {
             response = handleFetchMbtiles(session);
@@ -580,6 +595,222 @@ public class TileServer extends NanoHTTPD {
             return newFixedLengthResponse(Response.Status.OK, mime, fis, file.length());
         } catch (FileNotFoundException e) {
             return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Not found");
+        }
+    }
+
+    /**
+     * GET /terrain/grid/status
+     * Returns { exists, sizeMb, builtAt } for the terrain grid binary.
+     */
+    private Response handleTerrainGridStatus() {
+        File binFile  = new File(new File(baseDir, "terrain"), "terrain.bin");
+        File jsonFile = new File(new File(baseDir, "terrain"), "terrain.json");
+        boolean exists = binFile.exists() && binFile.isFile()
+                      && jsonFile.exists() && jsonFile.isFile();
+        double sizeMb = exists ? binFile.length() / (1024.0 * 1024.0) : 0.0;
+        String builtAt = null;
+        if (exists) {
+            try {
+                // Parse builtAt from terrain.json — simple string search to avoid a full JSON lib
+                java.io.FileInputStream fis = new java.io.FileInputStream(jsonFile);
+                byte[] bytes = new byte[(int) jsonFile.length()];
+                fis.read(bytes);
+                fis.close();
+                String content = new String(bytes, "UTF-8");
+                // Extract "builtAt": "value"
+                int idx = content.indexOf("\"builtAt\"");
+                if (idx >= 0) {
+                    int q1 = content.indexOf('"', idx + 9);
+                    if (q1 >= 0) {
+                        int q2 = content.indexOf('"', q1 + 1);
+                        if (q2 > q1) {
+                            builtAt = content.substring(q1 + 1, q2);
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "handleTerrainGridStatus: could not read terrain.json: " + e.getMessage());
+            }
+        }
+        String json = String.format("{\"exists\":%b,\"sizeMb\":%.1f,\"builtAt\":%s}",
+            exists, sizeMb, builtAt != null ? "\"" + builtAt + "\"" : "null");
+        return newFixedLengthResponse(Response.Status.OK, "application/json", json);
+    }
+
+    /**
+     * GET /terrain/status
+     * Returns { tileCount, totalSizeMb, hasTerrain } for the terrain/srtm/ directory.
+     */
+    private Response handleTerrainStatus() {
+        File terrainDir = new File(new File(baseDir, "terrain"), "srtm");
+        int count = 0;
+        long totalBytes = 0;
+        if (terrainDir.isDirectory()) {
+            File[] files = terrainDir.listFiles();
+            if (files != null) {
+                for (File f : files) {
+                    if (f.isFile() && f.getName().toUpperCase().endsWith(".HGT")) {
+                        count++;
+                        totalBytes += f.length();
+                    }
+                }
+            }
+        }
+        // Also check terrain/ root (flat layout)
+        File terrainRoot = new File(baseDir, "terrain");
+        if (terrainRoot.isDirectory()) {
+            File[] files = terrainRoot.listFiles();
+            if (files != null) {
+                for (File f : files) {
+                    if (f.isFile() && f.getName().toUpperCase().endsWith(".HGT")) {
+                        count++;
+                        totalBytes += f.length();
+                    }
+                }
+            }
+        }
+        double sizeMb = totalBytes / (1024.0 * 1024.0);
+        String json = String.format("{\"tileCount\":%d,\"totalSizeMb\":%.1f,\"hasTerrain\":%b}",
+            count, sizeMb, count > 0);
+        return newFixedLengthResponse(Response.Status.OK, "application/json", json);
+    }
+
+    /**
+     * GET /terrain/profile?points=lat1,lon1|lat2,lon2|...
+     * Returns { profile: [{dist_nm, elev_ft}] } sampled every ~2 NM.
+     */
+    private Response handleTerrainProfile(IHTTPSession session) {
+        Map<String, List<String>> params = session.getParameters();
+        List<String> ptsList = params.get("points");
+        String pointsStr = (ptsList != null && !ptsList.isEmpty()) ? ptsList.get(0) : "";
+
+        if (pointsStr.isEmpty()) {
+            return newFixedLengthResponse(Response.Status.OK, "application/json", "{\"profile\":[]}");
+        }
+
+        // Parse lat,lon pairs
+        List<double[]> points = new ArrayList<>();
+        for (String pair : pointsStr.split("\\|")) {
+            String[] parts = pair.split(",");
+            if (parts.length == 2) {
+                try {
+                    double lat = Double.parseDouble(parts[0].trim());
+                    double lon = Double.parseDouble(parts[1].trim());
+                    points.add(new double[]{lat, lon});
+                } catch (NumberFormatException ignored) {}
+            }
+        }
+
+        if (points.size() < 2) {
+            return newFixedLengthResponse(Response.Status.OK, "application/json", "{\"profile\":[]}");
+        }
+
+        final double STEP_NM = 2.0;
+        StringBuilder sb = new StringBuilder("{\"profile\":[");
+        Map<String, RandomAccessFile> rafCache = new HashMap<>();
+        double cumDist = 0.0;
+        boolean first = true;
+
+        try {
+            for (int i = 0; i < points.size() - 1; i++) {
+                double lat1 = points.get(i)[0],    lon1 = points.get(i)[1];
+                double lat2 = points.get(i + 1)[0], lon2 = points.get(i + 1)[1];
+                double segDist = haversineNm(lat1, lon1, lat2, lon2);
+                if (segDist < 0.001) continue;
+
+                int steps = Math.max(1, (int) Math.ceil(segDist / STEP_NM));
+                for (int s = 0; s < steps; s++) {
+                    double frac = (double) s / steps;
+                    double lat  = lat1 + frac * (lat2 - lat1);
+                    double lon  = lon1 + frac * (lon2 - lon1);
+                    double dist = cumDist + frac * segDist;
+                    double elev = srtmElev(lat, lon, rafCache);
+                    if (!first) sb.append(",");
+                    sb.append(String.format("{\"dist_nm\":%.2f,\"elev_ft\":%.0f}", dist, elev));
+                    first = false;
+                }
+                cumDist += segDist;
+            }
+            // Final point
+            double[] last = points.get(points.size() - 1);
+            double elev = srtmElev(last[0], last[1], rafCache);
+            if (!first) sb.append(",");
+            sb.append(String.format("{\"dist_nm\":%.2f,\"elev_ft\":%.0f}", cumDist, elev));
+        } finally {
+            for (RandomAccessFile raf : rafCache.values()) {
+                if (raf != null) try { raf.close(); } catch (Exception ignored) {}
+            }
+        }
+
+        sb.append("]}");
+        return newFixedLengthResponse(Response.Status.OK, "application/json", sb.toString());
+    }
+
+    private double haversineNm(double lat1, double lon1, double lat2, double lon2) {
+        final double R = 3440.065;
+        double dlat = Math.toRadians(lat2 - lat1);
+        double dlon = Math.toRadians(lon2 - lon1);
+        double a = Math.sin(dlat / 2) * Math.sin(dlat / 2)
+                 + Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2))
+                 * Math.sin(dlon / 2) * Math.sin(dlon / 2);
+        return 2 * R * Math.asin(Math.sqrt(Math.max(0, Math.min(1, a))));
+    }
+
+    /**
+     * Sample elevation from a local SRTM .hgt file using RandomAccessFile (no full-file load).
+     * Files are looked up in terrain/srtm/ and terrain/ (flat fallback).
+     * rafCache maps filename → open RAF (null = tile absent).
+     */
+    private double srtmElev(double lat, double lon, Map<String, RandomAccessFile> rafCache) {
+        int tileLat = (int) Math.floor(lat);
+        int tileLon = (int) Math.floor(lon);
+        String ns   = tileLat >= 0 ? "N" : "S";
+        String ew   = tileLon <  0 ? "W" : "E";
+        String fname = String.format("%s%02d%s%03d.hgt", ns, Math.abs(tileLat), ew, Math.abs(tileLon));
+
+        RandomAccessFile raf;
+        if (rafCache.containsKey(fname)) {
+            raf = rafCache.get(fname);
+        } else {
+            raf = null;
+            // Search terrain/srtm/ then terrain/
+            File[] searchDirs = {
+                new File(new File(baseDir, "terrain"), "srtm"),
+                new File(baseDir, "terrain"),
+            };
+            outer:
+            for (File dir : searchDirs) {
+                if (!dir.isDirectory()) continue;
+                File[] files = dir.listFiles();
+                if (files == null) continue;
+                for (File f : files) {
+                    if (f.getName().equalsIgnoreCase(fname)) {
+                        try { raf = new RandomAccessFile(f, "r"); } catch (Exception ignored) {}
+                        break outer;
+                    }
+                }
+            }
+            rafCache.put(fname, raf);
+        }
+
+        if (raf == null) return 0.0;
+
+        int row = (int) Math.round((tileLat + 1 - lat) * 3600);
+        int col = (int) Math.round((lon - tileLon) * 3600);
+        row = Math.max(0, Math.min(3600, row));
+        col = Math.max(0, Math.min(3600, col));
+        long offset = ((long) row * 3601 + col) * 2;
+
+        try {
+            raf.seek(offset);
+            int b0 = raf.read();
+            int b1 = raf.read();
+            if (b0 < 0 || b1 < 0) return 0.0;
+            short elevM = (short) ((b0 << 8) | b1);
+            if (elevM == -32768) return 0.0;
+            return elevM * 3.28084;
+        } catch (Exception e) {
+            return 0.0;
         }
     }
 

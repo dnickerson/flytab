@@ -1,5 +1,5 @@
 /**
- * FlyTab — Data & Maps Overlay  v4.3
+ * FlyTab — Data & Maps Overlay  v4.5
  * ForeFlight-style inventory: shows server vs. tablet for each data category,
  * with per-section sync and Tailscale fallback discovery.
  *
@@ -27,6 +27,19 @@ class DataStatus {
         { id: 'southwest',    label: 'Southwest',     sub: 'CA south AZ NM',         latMin: 31.0, latMax: 37.5, lonMin: -121.0, lonMax: -108.0, mb: 117 },
         { id: 'pacificnw',    label: 'Pacific NW',    sub: 'WA OR CA north',         latMin: 37.0, latMax: 49.5, lonMin: -125.5, lonMax: -116.0, mb: 150 },
         { id: 'alaska',       label: 'Alaska',        sub: 'AK',                     latMin: 54.0, latMax: 72.0, lonMin: -169.0, lonMax: -130.0, mb: 407 },
+    ];
+    static TERRAIN_REGIONS = [
+        { id: 'southeast',    states: ['FL','GA','SC','NC','TN','VA'] },
+        { id: 'midatlantic',  states: ['VA','MD','DC','DE','NJ','NY'] },
+        { id: 'northeast',    states: ['NY','CT','RI','MA','VT','NH','ME'] },
+        { id: 'gulfcoast',    states: ['LA','MS','AL','TX'] },
+        { id: 'southcentral', states: ['TX','OK','AR','LA','TN','KY'] },
+        { id: 'midwest',      states: ['OH','IN','IL','MI','WI','MN','IA','MO','KY'] },
+        { id: 'greatplains',  states: ['ND','SD','NE','KS','CO'] },
+        { id: 'mountain',     states: ['MT','ID','WY','UT','CO','NV'] },
+        { id: 'southwest',    states: ['CA','AZ','NM'] },
+        { id: 'pacificnw',    states: ['WA','OR','CA'] },
+        { id: 'alaska',       states: ['AK'] },
     ];
 
     constructor(parentEl) {
@@ -110,7 +123,7 @@ class DataStatus {
         this._resolvedBase = base;
         this._resolvedVia  = via;
 
-        const [sNasr, dNasr, sCifp, dCifp, sPlates, dPlates, mbtiles] = await Promise.all([
+        const [sNasr, dNasr, sCifp, dCifp, sPlates, dPlates, mbtiles, sTerrain, dTerrain] = await Promise.all([
             nasrCycleInfo ? Promise.resolve(nasrCycleInfo) : (base ? this._probeServerNasr(base) : Promise.resolve(null)),
             this._probeDeviceNasr(),
             base ? this._probeServerCifp(base)   : Promise.resolve(null),
@@ -118,9 +131,11 @@ class DataStatus {
             base ? this._probeServerPlates(base) : Promise.resolve({ cycle: null, states: [] }),
             this._probeDevicePlates(),
             this._probeMbtiles(),
+            base ? this._probeServerTerrain(base) : Promise.resolve(null),
+            this._probeDeviceTerrain(),
         ]);
 
-        this._render({ via, base, sNasr, dNasr, sCifp, dCifp, sPlates, dPlates, mbtiles });
+        this._render({ via, base, sNasr, dNasr, sCifp, dCifp, sPlates, dPlates, mbtiles, sTerrain, dTerrain });
     }
 
     // ── Probe Methods ─────────────────────────────────────────────────────────
@@ -186,9 +201,25 @@ class DataStatus {
         } catch { return []; }
     }
 
+    async _probeServerTerrain(base) {
+        try {
+            const r = await fetch(`${base}/terrain/grid/status`,
+                { cache: 'no-store', signal: AbortSignal.timeout(5000) });
+            return r.ok ? r.json() : null;
+        } catch { return null; }
+    }
+
+    async _probeDeviceTerrain() {
+        try {
+            const r = await fetch(`${DataStatus.LOCAL_BASE}/terrain/grid/status`,
+                { cache: 'no-store', signal: AbortSignal.timeout(2000) });
+            return r.ok ? r.json() : null;
+        } catch { return null; }
+    }
+
     // ── Render ────────────────────────────────────────────────────────────────
 
-    _render({ via, base, sNasr, dNasr, sCifp, dCifp, sPlates, dPlates, mbtiles }) {
+    _render({ via, base, sNasr, dNasr, sCifp, dCifp, sPlates, dPlates, mbtiles, sTerrain, dTerrain }) {
         const body = this._el.querySelector('.data-status-body');
         const now  = new Date();
         const mbt  = mbtiles || [];
@@ -209,7 +240,7 @@ class DataStatus {
         // ── NASR section ─────────────────────────────────────────────────────
         const nasrServerDate = sNasr?.effective_date || null;
         const nasrDevDate    = dNasr?.effective_date || null;
-        let nasrServerLine, nasrDevLine, nasrBadge, nasrAction = '';
+        let nasrServerLine, nasrDevLine, nasrBadge, nasrPrimary = '', nasrSecondary = '';
 
         if (!base) {
             nasrServerLine = '<span class="ds-muted">Server not reachable</span>';
@@ -228,21 +259,24 @@ class DataStatus {
 
         if (!nasrDevDate) {
             nasrBadge = this._badge('NOT DOWNLOADED', 'gray');
-            if (base && nasrServerDate) nasrAction = `<button class="ds-action-btn" id="dsNasrBtn">DOWNLOAD</button>`;
+            if (base && nasrServerDate) nasrPrimary = `<button class="ds-action-btn" id="dsNasrBtn">DOWNLOAD</button>`;
         } else if (base && nasrServerDate && nasrDevDate !== nasrServerDate) {
             nasrBadge = this._badge('UPDATE AVAILABLE', 'yellow');
-            nasrAction = `<button class="ds-action-btn" id="dsNasrBtn">SYNC</button>`;
+            nasrPrimary   = `<button class="ds-action-btn ds-update" id="dsNasrBtn">SYNC</button>`;
+            nasrSecondary = `<button class="ds-action-btn ds-secondary" id="dsNasrRedownloadBtn">RE-DOWNLOAD</button>`;
         } else {
             const expDate = sNasr?.expiration_date ? new Date(sNasr.expiration_date)
                           : dNasr?.expiration_date ? new Date(dNasr.expiration_date)
                           : null;
-            nasrBadge = expDate ? this._cycleStatus(expDate, now) : this._badge('ON DEVICE', 'green');
+            nasrBadge     = expDate ? this._cycleStatus(expDate, now) : this._badge('ON DEVICE', 'green');
+            nasrPrimary   = `<button class="ds-action-btn ds-secondary" id="dsNasrBtn">SYNC</button>`;
+            nasrSecondary = `<button class="ds-action-btn ds-secondary" id="dsNasrRedownloadBtn">RE-DOWNLOAD</button>`;
         }
 
         // ── CIFP section ─────────────────────────────────────────────────────
         const cifpSCode = sCifp?.cycle_code || sCifp?.effective_date || null;
         const cifpDCode = dCifp?.cycle_code || dCifp?.effective_date || null;
-        let cifpServerLine, cifpDevLine, cifpBadge, cifpAction = '';
+        let cifpServerLine, cifpDevLine, cifpBadge, cifpPrimary = '', cifpSecondary = '';
 
         if (!base) {
             cifpServerLine = '<span class="ds-muted">Server not reachable</span>';
@@ -260,13 +294,16 @@ class DataStatus {
 
         if (!cifpDCode) {
             cifpBadge = this._badge('NOT DOWNLOADED', 'gray');
-            if (base && cifpSCode) cifpAction = `<button class="ds-action-btn" id="dsCifpBtn">DOWNLOAD</button>`;
+            if (base && cifpSCode) cifpPrimary = `<button class="ds-action-btn" id="dsCifpBtn">DOWNLOAD</button>`;
         } else if (base && cifpSCode && cifpDCode !== cifpSCode) {
-            cifpBadge = this._badge('UPDATE AVAILABLE', 'yellow');
-            cifpAction = `<button class="ds-action-btn" id="dsCifpBtn">SYNC</button>`;
+            cifpBadge     = this._badge('UPDATE AVAILABLE', 'yellow');
+            cifpPrimary   = `<button class="ds-action-btn ds-update" id="dsCifpBtn">SYNC</button>`;
+            cifpSecondary = `<button class="ds-action-btn ds-secondary" id="dsCifpRedownloadBtn">RE-DOWNLOAD</button>`;
         } else {
             const expDate = sNasr?.expiration_date ? new Date(sNasr.expiration_date) : null;
-            cifpBadge = expDate ? this._cycleStatus(expDate, now) : this._badge('CURRENT', 'green');
+            cifpBadge     = expDate ? this._cycleStatus(expDate, now) : this._badge('CURRENT', 'green');
+            cifpPrimary   = `<button class="ds-action-btn ds-secondary" id="dsCifpBtn">SYNC</button>`;
+            cifpSecondary = `<button class="ds-action-btn ds-secondary" id="dsCifpRedownloadBtn">RE-DOWNLOAD</button>`;
         }
 
         // ── Plates section ───────────────────────────────────────────────────
@@ -275,7 +312,7 @@ class DataStatus {
         const syncedStates = JSON.parse(localStorage.getItem('flypi_plates_synced_states') || '[]');
         const plateSCode   = sPlates?.cycle?.effective_date || null;
         const plateDCode   = dPlates?.effective_date || null;
-        let platesServerLine, platesDevLine, platesBadge, platesAction = '';
+        let platesServerLine, platesDevLine, platesBadge, platesPrimary = '', platesSecondary = '';
 
         const adminUrl = base ? `${base}/admin-states.html` : null;
         const configureLink = adminUrl
@@ -312,18 +349,19 @@ class DataStatus {
         if (!plateDCode && syncedStates.length === 0) {
             platesDevLine = stateChips || '<span class="ds-muted">Not on tablet</span>';
             platesBadge   = this._badge('NOT DOWNLOADED', 'gray');
-            if (base && plateSCode) platesAction = `<button class="ds-action-btn" id="dsPlatesBtn">DOWNLOAD</button>`;
+            if (base && plateSCode) platesPrimary = `<button class="ds-action-btn" id="dsPlatesBtn">DOWNLOAD</button>`;
         } else {
             platesDevLine = stateChips + '<br>' + platesIncludesNote;
             const allSynced = configuredStates.every(s => syncedStates.includes(s));
             if (!allSynced || !cycleOkForStates) {
-                platesBadge = this._badge('UPDATE AVAILABLE', 'yellow');
-                if (base) platesAction = `<button class="ds-action-btn" id="dsPlatesBtn">SYNC</button>`;
+                platesBadge   = this._badge('UPDATE AVAILABLE', 'yellow');
+                if (base) platesPrimary = `<button class="ds-action-btn ds-update" id="dsPlatesBtn">SYNC</button>`;
             } else {
                 const expDate = sNasr?.expiration_date ? new Date(sNasr.expiration_date) : null;
-                platesBadge = expDate ? this._cycleStatus(expDate, now) : this._badge('CURRENT', 'green');
-                if (base) platesAction = `<button class="ds-action-btn ds-secondary" id="dsPlatesForceBtn">FORCE RESYNC</button>`;
+                platesBadge   = expDate ? this._cycleStatus(expDate, now) : this._badge('CURRENT', 'green');
+                if (base) platesPrimary = `<button class="ds-action-btn ds-secondary" id="dsPlatesBtn">SYNC</button>`;
             }
+            if (base) platesSecondary = `<button class="ds-action-btn ds-secondary" id="dsPlatesRedownloadBtn">RE-DOWNLOAD</button>`;
         }
 
         // ── MBTiles sections ──────────────────────────────────────────────────
@@ -363,12 +401,35 @@ class DataStatus {
 
         const ts = new Date().toISOString().slice(0, 16).replace('T', ' ') + 'Z';
 
+        // ── Terrain section ───────────────────────────────────────────────────
+        const terrainServerLine = sTerrain
+            ? (sTerrain.exists
+                ? `terrain.bin available (${sTerrain.sizeMb?.toFixed(0) ?? '?'} MB)`
+                : 'Not built on server')
+            : base ? 'Not available' : 'Server not reachable';
+        const terrainDevLine = (dTerrain?.exists)
+            ? `terrain.bin on device (${dTerrain.sizeMb?.toFixed(0) ?? '?'} MB, built ${dTerrain.builtAt?.slice(0, 10) ?? '?'})`
+            : 'Not synced';
+        const terrainBadge = (dTerrain?.exists)
+            ? this._badge('ON DEVICE', 'green')
+            : this._badge('NEEDED', 'gray');
+        let terrainPrimary = '', terrainSecondary = '';
+        if (base && sTerrain?.exists) {
+            if (!dTerrain?.exists) {
+                terrainPrimary = `<button class="ds-action-btn ds-terrain-sync-btn">DOWNLOAD</button>`;
+            } else {
+                terrainPrimary   = `<button class="ds-action-btn ds-secondary ds-terrain-sync-btn">SYNC</button>`;
+                terrainSecondary = `<button class="ds-action-btn ds-secondary ds-terrain-redownload-btn">RE-DOWNLOAD</button>`;
+            }
+        }
+
         body.innerHTML = `
             <div class="ds-banner" style="color:${bannerColor}">${bannerText}</div>
             <div class="ds-section-title">Aviation Data</div>
-            ${this._section('NASR Aeronautical Data',  nasrServerLine,   nasrDevLine,   nasrBadge,   nasrAction)}
-            ${this._section('CIFP Procedures',          cifpServerLine,   cifpDevLine,   cifpBadge,   cifpAction)}
-            ${this._section('Approach Plates',          platesServerLine, platesDevLine, platesBadge, platesAction, true)}
+            ${this._section('NASR Aeronautical Data',  nasrServerLine,   nasrDevLine,   nasrBadge,   nasrPrimary,    nasrSecondary)}
+            ${this._section('CIFP Procedures',          cifpServerLine,   cifpDevLine,   cifpBadge,   cifpPrimary,    cifpSecondary)}
+            ${this._section('Terrain Elevation (SRTM)', terrainServerLine, terrainDevLine, terrainBadge, terrainPrimary, terrainSecondary)}
+            ${this._section('Approach Plates',          platesServerLine, platesDevLine, platesBadge, platesPrimary,  platesSecondary, true)}
             <div class="ds-section-title">Offline Maps</div>
             ${mbtilesHtml}
             <div class="ds-footer">Checked: ${ts}</div>
@@ -387,7 +448,7 @@ class DataStatus {
     }
 
     /** Build a ForeFlight-style inventory section card. */
-    _section(title, serverVal, deviceVal, badge, actionBtn, multilineDevice = false) {
+    _section(title, serverVal, deviceVal, badge, primaryBtn, secondaryBtn = '', multilineDevice = false) {
         const devClass = multilineDevice ? 'ds-row-value ds-row-multiline' : 'ds-row-value';
         return `<div class="ds-section-card">
             <div class="ds-section-head">
@@ -401,7 +462,7 @@ class DataStatus {
             <div class="ds-inv-row">
                 <span class="ds-inv-label">Tablet</span>
                 <span class="${devClass}">${deviceVal}</span>
-                ${actionBtn ? `<span class="ds-inv-action">${actionBtn}</span>` : ''}
+                ${(primaryBtn || secondaryBtn) ? `<span class="ds-inv-action">${primaryBtn}${secondaryBtn ? ` <span class="ds-sec-btn">${secondaryBtn}</span>` : ''}</span>` : ''}
             </div>
         </div>`;
     }
@@ -467,16 +528,40 @@ class DataStatus {
             });
         }
 
-        // Per-section buttons all trigger _syncAll (which skips already-current items)
+        // Per-section SYNC/DOWNLOAD buttons all trigger _syncAll (skips already-current items)
         for (const id of ['dsNasrBtn', 'dsCifpBtn', 'dsPlatesBtn']) {
             const btn = body.querySelector(`#${id}`);
             if (btn) this._wireTap(btn, () => this._syncAll(null, showProg, updateProg, doneProg));
         }
 
-        // Force resync — clears plate sync state then runs full sync
-        const forceBtn = body.querySelector('#dsPlatesForceBtn');
-        if (forceBtn) {
-            this._wireTap(forceBtn, () => {
+        // NASR RE-DOWNLOAD — force re-download by clearing local cycle stamp
+        const nasrRedlBtn = body.querySelector('#dsNasrRedownloadBtn');
+        if (nasrRedlBtn) {
+            this._wireTap(nasrRedlBtn, async () => {
+                await fetch(`${DataStatus.LOCAL_BASE}/nasr/cycle_info.json`, {
+                    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ _force: true }),
+                }).catch(() => {});
+                this._syncAll(null, showProg, updateProg, doneProg);
+            });
+        }
+
+        // CIFP RE-DOWNLOAD — force re-download by clearing local cycle stamp
+        const cifpRedlBtn = body.querySelector('#dsCifpRedownloadBtn');
+        if (cifpRedlBtn) {
+            this._wireTap(cifpRedlBtn, async () => {
+                await fetch(`${DataStatus.LOCAL_BASE}/cifp/cifp_cycle_info.json`, {
+                    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ _force: true }),
+                }).catch(() => {});
+                this._syncAll(null, showProg, updateProg, doneProg);
+            });
+        }
+
+        // Plates RE-DOWNLOAD — clear sync state then run full sync
+        const platesRedlBtn = body.querySelector('#dsPlatesRedownloadBtn');
+        if (platesRedlBtn) {
+            this._wireTap(platesRedlBtn, () => {
                 localStorage.removeItem('flypi_plates_synced_states');
                 localStorage.removeItem('flypi_plates_cached_at');
                 this._syncAll(null, showProg, updateProg, doneProg);
@@ -487,6 +572,42 @@ class DataStatus {
         body.querySelectorAll('.ds-mbt-dl-btn').forEach(btn => {
             this._wireTap(btn, () => this._downloadMbtiles(btn.dataset.layer, btn, showProg, doneProg));
         });
+
+        // Terrain SYNC button
+        const terrainSyncBtn = body.querySelector('.ds-terrain-sync-btn');
+        if (terrainSyncBtn) {
+            this._wireTap(terrainSyncBtn, async () => {
+                const homeBase = this._resolvedBase;
+                if (!homeBase) return;
+                const prevDone = body.querySelector('#dsSyncDoneBtn');
+                if (prevDone) prevDone.remove();
+                terrainSyncBtn.disabled = true;
+                terrainSyncBtn.textContent = 'Syncing…';
+                showProg('Starting terrain sync…');
+                await this._syncTerrain(homeBase, showProg, updateProg, doneProg);
+                terrainSyncBtn.disabled = false;
+                terrainSyncBtn.textContent = 'SYNC';
+                await this._refresh();
+            });
+        }
+
+        // Terrain RE-DOWNLOAD — just re-runs full sync (PUT overwrites existing tiles)
+        const terrainRedlBtn = body.querySelector('.ds-terrain-redownload-btn');
+        if (terrainRedlBtn) {
+            this._wireTap(terrainRedlBtn, async () => {
+                const homeBase = this._resolvedBase;
+                if (!homeBase) return;
+                const prevDone = body.querySelector('#dsSyncDoneBtn');
+                if (prevDone) prevDone.remove();
+                terrainRedlBtn.disabled = true;
+                terrainRedlBtn.textContent = 'Syncing…';
+                showProg('Starting terrain re-download…');
+                await this._syncTerrain(homeBase, showProg, updateProg, doneProg);
+                terrainRedlBtn.disabled = false;
+                terrainRedlBtn.textContent = 'RE-DOWNLOAD';
+                await this._refresh();
+            });
+        }
 
         // Supplemental toggle
         const suppToggle = body.querySelector('#dsSuppToggle');
@@ -1183,9 +1304,68 @@ class DataStatus {
     }
 
     /**
-     * Download an MBTiles file from the home server.
-     * Java (NanoHTTPD) streams directly to disk. Polls /mbtiles/status for progress.
+     * Download terrain.bin and terrain.json from the home server to NanoHTTPD.
+     * Streams terrain.bin (~31 MB) with progress, then PUTs both files to device.
      */
+    async _syncTerrain(homeBase, showProg, updateProg, doneProg) {
+        const _download = async (url, label) => {
+            const resp = await fetch(url, { signal: AbortSignal.timeout(10 * 60 * 1000) });
+            if (!resp.ok) throw new Error(`HTTP ${resp.status} for ${label}`);
+            const total = parseInt(resp.headers.get('Content-Length') || '0');
+            const reader = resp.body.getReader();
+            const chunks = [];
+            let received = 0;
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                chunks.push(value);
+                received += value.length;
+                if (total) updateProg(received, total);
+            }
+            const buf = new Uint8Array(chunks.reduce((a, c) => a + c.length, 0));
+            let offset = 0;
+            for (const c of chunks) { buf.set(c, offset); offset += c.length; }
+            return buf;
+        };
+
+        try {
+            // Download terrain.bin (~31 MB) with progress
+            showProg('Downloading terrain grid (~31 MB)…');
+            const binData = await _download(`${homeBase}/terrain/grid/terrain.bin`, 'terrain.bin');
+
+            showProg('Saving terrain.bin to device…');
+            const putBin = await fetch(`${DataStatus.LOCAL_BASE}/terrain/terrain.bin`, {
+                method: 'PUT',
+                body: binData,
+                headers: { 'Content-Type': 'application/octet-stream' },
+                signal: AbortSignal.timeout(60000),
+            });
+            if (!putBin.ok) throw new Error(`PUT terrain.bin failed: HTTP ${putBin.status}`);
+
+            // Download and save terrain.json (tiny)
+            showProg('Downloading terrain.json…');
+            const jsonData = await _download(`${homeBase}/terrain/grid/terrain.json`, 'terrain.json');
+            const putJson = await fetch(`${DataStatus.LOCAL_BASE}/terrain/terrain.json`, {
+                method: 'PUT',
+                body: jsonData,
+                headers: { 'Content-Type': 'application/json' },
+                signal: AbortSignal.timeout(10000),
+            });
+            if (!putJson.ok) throw new Error(`PUT terrain.json failed: HTTP ${putJson.status}`);
+
+            // Reload the in-memory grid
+            if (window.terrainGrid) {
+                window.terrainGrid._loaded = false;
+                window.terrainGrid._loading = false;
+                window.terrainGrid.load();
+            }
+
+            doneProg('Terrain grid synced — reload app to activate', 'var(--status-ok)');
+        } catch (err) {
+            doneProg('Terrain sync failed: ' + err.message, 'var(--status-danger)');
+        }
+    }
+
     async _downloadMbtiles(layer, btn, showProg, doneProg) {
         if (this._cacheRunning) return;
         this._cacheRunning = true;

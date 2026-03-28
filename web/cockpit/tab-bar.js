@@ -106,6 +106,10 @@ class TabBar {
 
         const c = this._comps;
         const rows = [
+            { icon: '✈️', label: 'Flight Planning (flywhere.app)', action: () => {
+                window.open('https://flywhere.app/plan', '_blank');
+                this._closeMoreDrawer();
+            }},
             { icon: '✈', label: 'Load Flight Plan', action: () => {
                 if (c.planSync?.show) c.planSync.show();
                 this._closeMoreDrawer();
