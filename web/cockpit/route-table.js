@@ -4,6 +4,26 @@
  * Includes inline edit mode: delete, reorder, and smart waypoint insertion.
  */
 
+/**
+ * Ray-casting point-in-polygon test.
+ * boundary is [[lat, lon], ...] or [{lat, lon}, ...]
+ */
+function _pointInPolygon(lat, lon, boundary) {
+    let inside = false;
+    const n = boundary.length;
+    for (let i = 0, j = n - 1; i < n; j = i++) {
+        const pi = boundary[i], pj = boundary[j];
+        const yi = Array.isArray(pi) ? pi[0] : pi.lat;
+        const xi = Array.isArray(pi) ? pi[1] : pi.lon;
+        const yj = Array.isArray(pj) ? pj[0] : pj.lat;
+        const xj = Array.isArray(pj) ? pj[1] : pj.lon;
+        if (((yi > lat) !== (yj > lat)) && (lon < (xj - xi) * (lat - yi) / (yj - yi) + xi)) {
+            inside = !inside;
+        }
+    }
+    return inside;
+}
+
 class RouteTable {
     constructor(container, map) {
         this._container = container;
@@ -1632,7 +1652,7 @@ class RouteTable {
         this._profileView.show(profileData);
     }
 
-    _buildProfileData() {
+    async _buildProfileData() {
         const wps     = this._waypoints;
         const totalDist = wps.reduce((s, wp) => s + (wp._legDist || 0), 0);
         const cruiseAlt = wps.length > 1
@@ -1663,6 +1683,14 @@ class RouteTable {
             .map(wp => ({ lat: wp.lat, lon: wp.lon }));
         const terrainProfile = this._fetchTerrainProfile(coords);
 
+        // Fetch airspace intersections along route
+        let airspaceBands = [];
+        try {
+            airspaceBands = await this._buildAirspaceBands(coords);
+        } catch (e) {
+            console.warn('[RouteTable] airspace bands failed:', e?.message);
+        }
+
         return {
             legs,
             totalDistNm:  totalDist,
@@ -1671,7 +1699,95 @@ class RouteTable {
             destElevFt:   destAlt,
             terrainProfile,
             coords,
+            airspaceBands,
         };
+    }
+
+    async _buildAirspaceBands(coords) {
+        if (!this._nasrDb || coords.length < 2) return [];
+
+        // Get bounding box of entire route with buffer
+        const lats = coords.map(c => c.lat);
+        const lons = coords.map(c => c.lon);
+        const south = Math.min(...lats) - 0.5;
+        const north = Math.max(...lats) + 0.5;
+        const west  = Math.min(...lons) - 0.5;
+        const east  = Math.max(...lons) + 0.5;
+
+        // Fetch airspace in bounds
+        let allAirspace = [];
+        try {
+            allAirspace = await this._nasrDb.getAirspaceInBounds(south, west, north, east);
+        } catch (e) {
+            console.warn('[RouteTable] airspace fetch failed:', e.message);
+            return [];
+        }
+
+        // Filter to only B, C, D
+        const relevant = allAirspace.filter(a => ['B','C','D'].includes(a.class));
+        if (!relevant.length) return [];
+
+        const bands = [];
+
+        for (const asp of relevant) {
+            const boundary = asp.boundary || asp.points || [];
+            if (boundary.length < 3) continue;
+
+            // Sample points along route, check against polygon
+            const STEP_NM = 2.0;
+            const samplePts = [];
+            let d = 0;
+            samplePts.push({ lat: coords[0].lat, lon: coords[0].lon, dist: 0 });
+            for (let i = 0; i < coords.length - 1; i++) {
+                const from = coords[i], to = coords[i + 1];
+                const segDist = NasrDB.haversineNm(from.lat, from.lon, to.lat, to.lon);
+                const steps = Math.max(1, Math.ceil(segDist / STEP_NM));
+                for (let s = 1; s <= steps; s++) {
+                    const t = s / steps;
+                    d += segDist / steps;
+                    samplePts.push({
+                        lat: from.lat + (to.lat - from.lat) * t,
+                        lon: from.lon + (to.lon - from.lon) * t,
+                        dist: d
+                    });
+                }
+            }
+
+            // Find intervals where route is inside this airspace polygon
+            const intervals = [];
+            let currentInterval = null;
+            for (const pt of samplePts) {
+                const inside = _pointInPolygon(pt.lat, pt.lon, boundary);
+                if (inside && !currentInterval) {
+                    currentInterval = { distFrom: pt.dist };
+                } else if (!inside && currentInterval) {
+                    currentInterval.distTo = pt.dist;
+                    intervals.push({ ...currentInterval });
+                    currentInterval = null;
+                }
+            }
+            if (currentInterval) {
+                currentInterval.distTo = samplePts[samplePts.length - 1].dist;
+                intervals.push(currentInterval);
+            }
+
+            for (const interval of intervals) {
+                bands.push({
+                    class:    asp.class,
+                    name:     asp.name || '',
+                    lowerFt:  asp.lower_ft ?? asp.lower ?? 0,
+                    upperFt:  (asp.upper_ft ?? asp.upper ?? 0) > 0 ? (asp.upper_ft ?? asp.upper) : 18000,
+                    distFrom: interval.distFrom,
+                    distTo:   interval.distTo,
+                });
+            }
+        }
+
+        // Sort by class priority: B first, then C, then D
+        const priority = { B: 0, C: 1, D: 2 };
+        bands.sort((a, b) => (priority[a.class] ?? 9) - (priority[b.class] ?? 9));
+
+        return bands;
     }
 
     _fetchTerrainProfile(coords) {

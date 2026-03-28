@@ -43,7 +43,7 @@ class RouteProfileView {
         this._el.className = 'route-profile-panel';
         Object.assign(this._el.style, {
             position:        'fixed',
-            bottom:          '0',
+            bottom:          'var(--tab-bar-height, 72px)',
             left:            '0',
             right:           '0',
             height:          '180px',
@@ -211,26 +211,59 @@ class RouteProfileView {
             this._drawMockTerrain(ctx, totalDist, xOf, yOf, yMax);
         }
 
+        // 1b. Airspace bands (after terrain, before flight path)
+        if (routeData.airspaceBands?.length > 0) {
+            this._drawAirspaceBands(ctx, routeData.airspaceBands, xOf, yOf);
+        }
+
         // 2. Build flight altitude profile (needed for danger zone calc)
         const flightPath = this._buildFlightPath(routeData, totalDist);
 
         // 3. Danger zones ────────────────────────────────────────────────────
+        const dangerSegs = [];
         if (terrain.length > 0 && flightPath.length > 0) {
-            for (let i = 0; i < terrain.length - 1; i++) {
+            for (let i = 0; i < terrain.length; i++) {
                 const pt = terrain[i];
                 const flightAlt = this._interpValue(flightPath, pt.dist_nm, 'dist', 'alt');
-                if (flightAlt !== null && flightAlt < pt.elev_ft + 1000) {
-                    const nx = terrain[i + 1];
-                    ctx.beginPath();
-                    ctx.moveTo(xOf(pt.dist_nm), yOf(pt.elev_ft));
-                    ctx.lineTo(xOf(nx.dist_nm),  yOf(nx.elev_ft));
-                    ctx.lineTo(xOf(nx.dist_nm),  yOf(0));
-                    ctx.lineTo(xOf(pt.dist_nm), yOf(0));
-                    ctx.closePath();
-                    ctx.fillStyle = 'rgba(239,68,68,0.6)';
-                    ctx.fill();
+                if (flightAlt === null) continue;
+                const clearance = flightAlt - pt.elev_ft;
+                if (clearance < 1000) {
+                    const next = terrain[i + 1] || pt;
+                    dangerSegs.push({
+                        distFrom:    pt.dist_nm,
+                        distTo:      next.dist_nm,
+                        terrainFrom: pt.elev_ft,
+                        terrainTo:   next.elev_ft,
+                        severity:    clearance < 0 ? 'critical' : 'warning',
+                    });
                 }
             }
+        }
+        if (dangerSegs.length > 0) {
+            ctx.save();
+            // Warning zones (< 1000ft clearance)
+            ctx.beginPath();
+            for (const seg of dangerSegs.filter(s => s.severity === 'warning')) {
+                ctx.moveTo(xOf(seg.distFrom), yOf(seg.terrainFrom));
+                ctx.lineTo(xOf(seg.distTo),   yOf(seg.terrainTo));
+                ctx.lineTo(xOf(seg.distTo),   yOf(0));
+                ctx.lineTo(xOf(seg.distFrom), yOf(0));
+                ctx.closePath();
+            }
+            ctx.fillStyle = 'rgba(239,68,68,0.75)';
+            ctx.fill();
+            // Critical zones (below terrain — actual collision)
+            ctx.beginPath();
+            for (const seg of dangerSegs.filter(s => s.severity === 'critical')) {
+                ctx.moveTo(xOf(seg.distFrom), yOf(seg.terrainFrom));
+                ctx.lineTo(xOf(seg.distTo),   yOf(seg.terrainTo));
+                ctx.lineTo(xOf(seg.distTo),   yOf(0));
+                ctx.lineTo(xOf(seg.distFrom), yOf(0));
+                ctx.closePath();
+            }
+            ctx.fillStyle = 'rgba(180,0,0,1.0)';
+            ctx.fill();
+            ctx.restore();
         }
 
         // 4. Freezing level line ─────────────────────────────────────────────
@@ -292,6 +325,35 @@ class RouteProfileView {
                 ctx.lineTo(xOf(b.dist), yOf(b.alt));
                 ctx.stroke();
             }
+        }
+
+        // 7b. Danger band on flight path ─────────────────────────────────────
+        if (dangerSegs.length > 0 && flightPath.length > 1) {
+            ctx.save();
+            ctx.lineCap = 'round';
+            for (const seg of dangerSegs) {
+                const fa1 = this._interpValue(flightPath, seg.distFrom, 'dist', 'alt') ?? cruiseAlt;
+                const fa2 = this._interpValue(flightPath, seg.distTo,   'dist', 'alt') ?? cruiseAlt;
+                ctx.strokeStyle = seg.severity === 'critical' ? '#7f1d1d' : '#ef4444';
+                ctx.lineWidth   = seg.severity === 'critical' ? 6 : 4;
+                ctx.beginPath();
+                ctx.moveTo(xOf(seg.distFrom), yOf(fa1));
+                ctx.lineTo(xOf(seg.distTo),   yOf(fa2));
+                ctx.stroke();
+            }
+            ctx.restore();
+        }
+
+        // 7c. Warning label ───────────────────────────────────────────────────
+        if (dangerSegs.length > 0) {
+            const hasCritical = dangerSegs.some(s => s.severity === 'critical');
+            ctx.save();
+            ctx.font      = 'bold 11px sans-serif';
+            ctx.fillStyle = '#ef4444';
+            ctx.textAlign = 'right';
+            ctx.fillText(hasCritical ? '\u26A0 TERRAIN CONFLICT' : '\u26A0 TERRAIN',
+                         pad.left + cw, pad.top + 13);
+            ctx.restore();
         }
 
         // 8. Y-axis altitude labels ──────────────────────────────────────────
@@ -358,8 +420,27 @@ class RouteProfileView {
                 const flightAlt  = flightPath.length > 0
                     ? (this._interpValue(flightPath, dist, 'dist', 'alt') ?? cruiseAlt)
                     : cruiseAlt;
-                const clearance  = Math.max(0, flightAlt - terrainElev);
-                const tip = `${dist.toFixed(0)} nm \u2502 Terrain: ${terrainElev.toFixed(0)} ft \u2502 Flight: ${flightAlt.toFixed(0)} ft \u2502 Clear: ${clearance.toFixed(0)} ft`;
+                const clearance  = flightAlt - terrainElev;
+                let tip;
+                if (clearance < 0) {
+                    tip = `\u26F0 CONFLICT: terrain ${terrainElev.toFixed(0)}ft > flight ${flightAlt.toFixed(0)}ft`;
+                } else if (clearance < 1000) {
+                    tip = `\u26A0 ${clearance.toFixed(0)}ft clearance (terrain ${terrainElev.toFixed(0)}ft, flight ${flightAlt.toFixed(0)}ft)`;
+                } else {
+                    tip = `${dist.toFixed(0)}nm \u2502 Terrain: ${terrainElev.toFixed(0)}ft \u2502 Flight: ${flightAlt.toFixed(0)}ft \u2502 Clear: ${clearance.toFixed(0)}ft`;
+                }
+
+                // Check if scrub position is inside any airspace band
+                const activeBands = (routeData.airspaceBands || []).filter(
+                    b => dist >= b.distFrom && dist <= b.distTo &&
+                         flightAlt >= b.lowerFt && flightAlt <= b.upperFt
+                );
+                if (activeBands.length > 0) {
+                    const bandStr = activeBands.map(b =>
+                        `Class ${b.class} ${b.lowerFt === 0 ? 'SFC' : b.lowerFt + 'ft'}-${b.upperFt + 'ft'}`
+                    ).join(', ');
+                    tip += ` | ${bandStr}`;
+                }
 
                 this._tooltip.textContent = tip;
                 this._tooltip.style.display = 'block';
@@ -374,6 +455,60 @@ class RouteProfileView {
     }
 
     // ── Drawing helpers ───────────────────────────────────────────────────────
+
+    _drawAirspaceBands(ctx, airspaceBands, xOf, yOf) {
+        if (!airspaceBands?.length) return;
+
+        const colors = {
+            B: { fill: 'rgba(0,102,204,0.15)', stroke: 'rgba(0,80,180,0.7)',  label: '#0066cc' },
+            C: { fill: 'rgba(170,0,170,0.12)', stroke: 'rgba(140,0,140,0.7)', label: '#aa00aa' },
+            D: { fill: 'rgba(0,80,200,0.08)',  stroke: 'rgba(0,60,160,0.6)',  label: '#0050c8' },
+        };
+
+        for (const band of airspaceBands) {
+            const c = colors[band.class] || colors.D;
+            const x1 = xOf(band.distFrom);
+            const x2 = xOf(band.distTo);
+            const yTop = yOf(band.upperFt);
+            const yBot = yOf(band.lowerFt);
+            const w = Math.max(2, x2 - x1);
+            const h = yBot - yTop;
+
+            if (h <= 0 || w <= 0) continue;
+
+            // Fill
+            ctx.fillStyle = c.fill;
+            ctx.fillRect(x1, yTop, w, h);
+
+            // Top and bottom borders
+            ctx.strokeStyle = c.stroke;
+            ctx.lineWidth = band.class === 'B' ? 1.5 : 1;
+            ctx.setLineDash(band.class === 'D' ? [4, 3] : []);
+            ctx.beginPath();
+            ctx.moveTo(x1, yTop); ctx.lineTo(x2, yTop);  // ceiling
+            ctx.moveTo(x1, yBot); ctx.lineTo(x2, yBot);  // floor
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // Side borders
+            ctx.lineWidth = 0.75;
+            ctx.beginPath();
+            ctx.moveTo(x1, yTop); ctx.lineTo(x1, yBot);
+            ctx.moveTo(x2, yTop); ctx.lineTo(x2, yBot);
+            ctx.stroke();
+
+            // Label: class letter + floor/ceiling (e.g. "B SFC-10k")
+            const labelX = x1 + (w / 2);
+            const labelY = yTop + 11;
+            const ceilStr  = band.upperFt >= 18000 ? 'FL180' : (band.upperFt / 1000).toFixed(0) + 'k';
+            const floorStr = band.lowerFt === 0    ? 'SFC'   : (band.lowerFt / 1000).toFixed(0) + 'k';
+            ctx.fillStyle = c.label;
+            ctx.font = 'bold 9px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(`${band.class} ${floorStr}-${ceilStr}`, labelX, labelY);
+            ctx.textAlign = 'left';
+        }
+    }
 
     _drawTerrainFill(ctx, terrain, xOf, yOf) {
         ctx.beginPath();
