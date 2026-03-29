@@ -33,9 +33,17 @@ class TerrainGrid {
                 .catch(() => null);
 
             if (!status?.exists) {
-                console.log('[TerrainGrid] Not available on device');
-                this._loading = false;
-                return;
+                // NanoHTTPD may not be ready yet — retry once after 3s
+                await new Promise(r => setTimeout(r, 3000));
+                const retry = await fetch('http://localhost:9090/terrain/grid/status',
+                    { signal: AbortSignal.timeout(3000) })
+                    .then(r => r.ok ? r.json() : null)
+                    .catch(() => null);
+                if (!retry?.exists) {
+                    console.log('[TerrainGrid] Not available on device');
+                    this._loading = false;
+                    return;
+                }
             }
 
             // Load metadata

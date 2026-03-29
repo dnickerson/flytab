@@ -439,6 +439,29 @@ class RouteProfileView {
             this._drawAltConstraints(ctx, routeData.waypointConstraints, xOf, yOf, pad, ch);
         }
 
+        // 9c. Fuel stop markers — vertical lines at each inter-Flight boundary
+        if (routeData.fuelStops?.length) {
+            ctx.save();
+            ctx.strokeStyle = 'rgba(251,191,36,0.75)'; // amber
+            ctx.lineWidth   = 1.5;
+            ctx.setLineDash([4, 3]);
+            ctx.font        = 'bold 11px sans-serif';
+            ctx.textAlign   = 'center';
+            for (const fs of routeData.fuelStops) {
+                const fx = xOf(fs.dist);
+                ctx.beginPath();
+                ctx.moveTo(fx, pad.top);
+                ctx.lineTo(fx, h - pad.bottom + 4);
+                ctx.stroke();
+                // Label: ⛽ ICAO just below the x-axis
+                ctx.setLineDash([]);
+                ctx.fillStyle = 'rgba(251,191,36,0.9)';
+                ctx.fillText('\u26FD\u2009' + fs.icao, fx, h - pad.bottom + 18);
+                ctx.setLineDash([4, 3]);
+            }
+            ctx.restore();
+        }
+
         // 10. Distance labels along x-axis ───────────────────────────────────
         ctx.fillStyle = 'rgba(150,165,180,0.85)';
         ctx.font      = '11px sans-serif';

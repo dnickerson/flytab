@@ -24,11 +24,34 @@ function _pointInPolygon(lat, lon, boundary) {
     return inside;
 }
 
+// ── Terminology hierarchy ───────────────────────────────────────────────────
+//  Trip   — the full plan from departure to final destination
+//   └── Flight  — one airport-to-airport segment (there may be 1 or more)
+//        └── Leg — the path from one waypoint to the next within a Flight
+//             └── Segment — a phase subdivision within a Leg: CLB / CRZ / DES
+
+/**
+ * A waypoint is a fuel stop if it is an APT-type point that is neither the
+ * overall trip departure (index 0) nor the final destination (last index).
+ * Fuel stops divide the Trip into discrete Flights; the pilot refuels there.
+ */
+function isFuelStop(wp, index, waypoints) {
+    if (index === 0 || index >= waypoints.length - 1) return false;
+    // Primary check: type flag set on the waypoint object
+    if (wp.type === 'APT') return true;
+    // Fallback: plans loaded from legs-only (waypoints:null) don't have type set.
+    // Treat any intermediate airport-looking waypoint (4-char K-prefix ICAO) as a
+    // potential fuel stop. This handles the common US airport case.
+    const icao = wp.icao || wp.name || '';
+    return icao.length === 4 && icao.startsWith('K');
+}
+
 class RouteTable {
     constructor(container, map) {
         this._container = container;
         this._map = map;
-        this._waypoints = [];
+        this._waypoints = [];   // trip.waypoints[] — all waypoints across all flights
+        this._flights = [];     // trip.flights[]   — computed by _buildFlights()
         this._activeIndex = -1;
         this._expanded = false;
         this._dragging = false;
@@ -135,7 +158,38 @@ class RouteTable {
      * Load waypoints from a flight plan.
      */
     loadPlan(plan) {
-        if (!plan || !plan.waypoints) {
+        // Plans saved before waypoints were populated (waypoints:null) are rebuilt
+        // from the legs array so the route table still functions correctly.
+        if (plan && !plan.waypoints?.length) {
+            const legs = plan.flight_plan?.legs || [];
+            if (legs.length > 0) {
+                // Reconstruct a flat waypoint list from legs: dep, then each leg.to
+                const dep = plan.flight_plan?.departure;
+                const dest = plan.flight_plan?.destination;
+                const wps = [];
+                if (dep) {
+                    wps.push({ icao: dep, name: dep, lat: null, lon: null,
+                        type: 'APT' });
+                }
+                for (const leg of legs) {
+                    const isApt = leg.to === dest
+                        || (leg.to?.length === 4 && leg.to.startsWith('K'));
+                    wps.push({
+                        icao: leg.to, name: leg.to, lat: null, lon: null,
+                        type: isApt ? 'APT' : undefined,
+                        alt: plan.flight_plan?.altitude || null,
+                        wind: (leg.windDir != null && leg.windSpd != null)
+                            ? { dir: leg.windDir, spd: leg.windSpd } : null,
+                        _segments: leg.segments || [],
+                        tas: leg.tas || null, gs: leg.gs || null,
+                        gph: leg.gph || null,
+                    });
+                }
+                plan = { ...plan, waypoints: wps };
+            }
+        }
+
+        if (!plan || !plan.waypoints?.length) {
             this._waypoints = [];
             this._activeIndex = -1;
             this._updateSummary();
@@ -150,7 +204,7 @@ class RouteTable {
             return;
         }
 
-        this._plan = plan;
+        this._trip = plan;  // trip — top-level plan object (renamed from _plan)
         const rawLegs = plan.flight_plan?.legs || plan.legs || [];
         // Only use legs if they align with waypoints (legs.length === wps.length - 1).
         // After in-cockpit edits, the plan may have updated waypoints but stale legs
@@ -218,6 +272,10 @@ class RouteTable {
             const wp = this._waypoints[i];
             if (prev.lat != null && prev.lon != null && wp.lat != null && wp.lon != null) {
                 wp._legDist = NasrDB.haversineNm(prev.lat, prev.lon, wp.lat, wp.lon);
+            } else if (wp._segments?.length > 0) {
+                // Fallback for plans reconstructed from legs (no lat/lon on waypoints):
+                // sum segment distances which are already computed by the planner.
+                wp._legDist = wp._segments.reduce((s, seg) => s + (seg.dist || 0), 0);
             } else {
                 wp._legDist = 0;
             }
@@ -560,6 +618,8 @@ class RouteTable {
             const wp = this._waypoints[i];
             if (prev.lat != null && prev.lon != null && wp.lat != null && wp.lon != null) {
                 wp._legDist = NasrDB.haversineNm(prev.lat, prev.lon, wp.lat, wp.lon);
+            } else if (wp._segments?.length > 0) {
+                wp._legDist = wp._segments.reduce((s, seg) => s + (seg.dist || 0), 0);
             } else {
                 wp._legDist = 0;
             }
@@ -588,7 +648,8 @@ class RouteTable {
         if (this._emitting) return;
         this._emitting = true;
         const plan = {
-            ...(this._plan || {}),
+            ...(this._trip || {}),
+            // trip.waypoints[] — all waypoints across all flights
             waypoints: this._waypoints.map(wp => ({
                 icao: wp.icao,
                 name: wp.name,
@@ -596,8 +657,13 @@ class RouteTable {
                 lon: wp.lon,
                 alt: wp.alt ?? wp.altitude,
             })),
+            // trip.flights[] — airport-to-airport Flight segments
+            flights: (this._flights || []).map(f => ({
+                dep:  f.dep,
+                dest: f.dest,
+            })),
             flight_plan: {
-                ...(this._plan?.flight_plan || {}),
+                ...(this._trip?.flight_plan || {}),
                 departure: this._waypoints[0]?.icao || '',
                 destination: this._waypoints[this._waypoints.length - 1]?.icao || '',
                 // Clear stale legs — they were for the original route, not the edited one
@@ -835,9 +901,9 @@ class RouteTable {
             !dest._segments.some(s => s.phase === 'DES' && s.altTo != null && Math.abs(s.altTo - dest.elev_ft) < 100);
         if (!needsSegments && !needsDestDescent) return;
 
-        const cruiseAlt = this._plan?.cruise_altitude
-            || this._plan?.flight_plan?.altitude
-            || this._plan?.flight_plan?.cruise_altitude
+        const cruiseAlt = this._trip?.cruise_altitude
+            || this._trip?.flight_plan?.altitude
+            || this._trip?.flight_plan?.cruise_altitude
             || null;
 
         const cfgCruiseSpeed = CockpitConfig.aircraft('performance.cruise_speed_kt') ?? 120;
@@ -1007,6 +1073,56 @@ class RouteTable {
         }
     }
 
+    // ========== Trip / Flight Structure ==========
+
+    /**
+     * Build trip.flights[] by splitting this._waypoints at fuel stop airports.
+     * Each Flight spans from one APT to the next (inclusive). Fuel stops are
+     * shared: they appear as the destination of one Flight and the departure of
+     * the next. Annotates each waypoint with _flightIndex.
+     *
+     * @returns {Array<{index, dep, dest, depWpIndex, destWpIndex}>}
+     */
+    _buildFlights() {
+        const wps = this._waypoints;
+        if (wps.length <= 1) return [];
+
+        const flights = [];
+        let depIdx = 0;
+
+        for (let i = 1; i < wps.length; i++) {
+            // Close a flight when we hit a fuel stop or the final destination
+            if (isFuelStop(wps[i], i, wps) || i === wps.length - 1) {
+                flights.push({
+                    index:       flights.length,
+                    dep:         wps[depIdx].icao || wps[depIdx].name || '?',
+                    dest:        wps[i].icao      || wps[i].name      || '?',
+                    depWpIndex:  depIdx,
+                    destWpIndex: i,
+                    // Per-flight computed totals filled by _computeEnroute()
+                    _totDist: 0,
+                    _totEte:  0,
+                    _totFuel: 0,
+                });
+                // Next flight departs from this fuel stop (shared boundary)
+                depIdx = i;
+            }
+        }
+
+        // Annotate waypoints with their flight index.
+        // A fuel stop waypoint is the shared boundary between two flights — it is the
+        // destination of Flight N and the departure of Flight N+1. We assign it the
+        // departing flight's index (N+1) so the overlay can use _flightIndex as
+        // nextFlight and derive prevFlight via flights[_flightIndex - 1].
+        for (const flight of flights) {
+            for (let j = flight.depWpIndex; j <= flight.destWpIndex; j++) {
+                wps[j]._flightIndex = flight.index; // last (later) flight wins at shared boundary
+            }
+        }
+
+        return flights;
+    }
+
     // ========== Enroute Computation ==========
 
     /**
@@ -1021,11 +1137,33 @@ class RouteTable {
 
     _computeEnroute(gs) {
         if (this._activeIndex < 0 || this._waypoints.length === 0) return;
+        // Build trip.flights[] — splits waypoints at fuel stop airports.
+        // Must run before the computation loop so we know fuel-reset boundaries.
+        this._flights = this._buildFlights();
+
+        // Set of waypoint indices where a new Flight begins (fuel stop departures).
+        // The fuel counter resets and tanks are considered full at each of these.
+        const fuelResetIndices = new Set(
+            this._flights.slice(1).map(f => f.depWpIndex)
+        );
+
         const cfgCruiseSpeed = CockpitConfig.aircraft('performance.cruise_speed_kt') ?? 120;
         const cfgGph = CockpitConfig.aircraft('performance.cruise_gph') ?? 9.0;
         const fuelCap = CockpitConfig.aircraft('performance.fuel_capacity_gal') ?? 50;
-        const startFuel = (typeof FuelState !== 'undefined')
-            ? FuelState.getStartFuel().gallons : fuelCap;
+
+        // Determine which Flight contains the active waypoint so we can set the
+        // right starting fuel (actual FuelState for flight 0, full tanks for later flights).
+        const activeFlightNum = this._waypoints[this._activeIndex]?._flightIndex ?? 0;
+        // Starting fuel for the active flight.
+        // For Flight 0: read from FuelState (actual fuel on board).
+        // For Flight N>0: computed after the main loop using per-flight totals,
+        //   then applied via fuelResetIndices during a second pass if needed.
+        // On first entry we don't have _totFuel yet, so start with FuelState/capacity
+        // and let the fuelResetIndices path correct it mid-loop at each fuel stop.
+        // `let` — reassigned at each fuel stop boundary during the computation loop below
+        let startFuel = (activeFlightNum === 0)
+            ? ((typeof FuelState !== 'undefined') ? FuelState.getStartFuel().gallons : fuelCap)
+            : (this._flights[activeFlightNum]?._plannedStartFuel ?? fuelCap);
         const cfgCruiseRpm = CockpitConfig.aircraft('performance.cruise_rpm') ?? null;
         const cfgCruiseMp = CockpitConfig.aircraft('performance.cruise_mp') ?? null;
         const cfgCruisePwr = CockpitConfig.aircraft('performance.cruise_pwr_pct') ?? null;
@@ -1055,7 +1193,8 @@ class RouteTable {
         for (let i = this._activeIndex; i < this._waypoints.length; i++) {
             const wp = this._waypoints[i];
             if (i === this._activeIndex) {
-                cumulativeDistRemaining += wp._liveDist || 0;
+                cumulativeDistRemaining += (wp._liveDist != null && wp._liveDist > 0)
+                    ? wp._liveDist : (wp._legDist || 0);
             } else {
                 cumulativeDistRemaining += wp._legDist || 0;
             }
@@ -1069,7 +1208,12 @@ class RouteTable {
 
             let legDist;
             if (i === this._activeIndex) {
-                legDist = wp._liveDist || 0;
+                // Use live distance when GPS is active (ground speed > 0 and liveDist set).
+                // On the ground / pre-departure, fall back to _legDist so DIST column
+                // shows the planned leg distance rather than blank.
+                legDist = (wp._liveDist != null && wp._liveDist > 0)
+                    ? wp._liveDist
+                    : (wp._legDist || 0);
             } else {
                 legDist = wp._legDist || 0;
             }
@@ -1081,10 +1225,30 @@ class RouteTable {
                     wp._hdg = this._bearing(prev.lat, prev.lon, wp.lat, wp.lon);
                 }
             } else if (i === this._activeIndex) {
-                wp._hdg = wp._liveHdg;
+                // Live heading from GPS when airborne; fall back to planned bearing on ground
+                if (wp._liveHdg != null) {
+                    wp._hdg = wp._liveHdg;
+                } else if (i > 0) {
+                    const prev = this._waypoints[i - 1];
+                    if (prev.lat != null && prev.lon != null && wp.lat != null && wp.lon != null) {
+                        wp._hdg = this._bearing(prev.lat, prev.lon, wp.lat, wp.lon);
+                    }
+                }
             }
 
             wp._wind = wp.wind || null;
+
+            // Multi-flight: reset fuel counter when a new Flight departs from a fuel stop.
+            // This waypoint is the departure of the next Flight — pilot refuelled here.
+            if (fuelResetIndices.has(i) && i > this._activeIndex) {
+                const fuelRemAtStop = startFuel - fuelBurned;
+                const fuelAdded = wp.fuel_add_gal != null
+                    ? Math.min(wp.fuel_add_gal, fuelCap - fuelRemAtStop)  // explicit: add only what was pumped
+                    : (fuelCap - fuelRemAtStop);                           // default: fill to capacity
+                wp._fuelAdded = fuelAdded;   // stash for "Fuel added" row in _renderTable
+                fuelBurned = 0;
+                startFuel  = fuelRemAtStop + fuelAdded;
+            }
 
             // If we have segment data, use it for phase, fuel, and time
             if (segs.length > 0 && i > 0) {
@@ -1247,8 +1411,42 @@ class RouteTable {
             const wp = this._waypoints[i];
             cumDist += wp._dist || 0;
             cumEte  += wp._ete  || 0;
-            wp._cumDist = cumDist > 0 ? Math.round(cumDist) : null;
-            wp._cumEte  = cumEte  > 0 ? cumEte : null;
+            // Use i > _activeIndex check rather than cumDist > 0 so the first
+            // non-departure leg shows its distance even when the active waypoint
+            // is at index 0 (pre-departure, cumDist accumulates from the first leg).
+            wp._cumDist = (i > this._activeIndex || cumDist > 0) ? Math.round(cumDist) : null;
+            wp._cumEte  = (i > this._activeIndex || cumEte  > 0) ? cumEte : null;
+        }
+
+        // Compute per-Flight totals for the multi-flight footer rows.
+        // Each Flight sums its Legs (waypoints depWpIndex+1 … destWpIndex).
+        for (const flight of this._flights) {
+            let flightDist = 0, flightEte = 0, flightFuel = 0;
+            for (let j = flight.depWpIndex + 1; j <= flight.destWpIndex; j++) {
+                const wp = this._waypoints[j];
+                flightDist += wp._dist || 0;
+                flightEte  += wp._ete  || 0;
+                flightFuel += wp._fuel || 0;
+            }
+            flight._totDist = Math.round(flightDist);
+            flight._totEte  = flightEte;
+            flight._totFuel = flightFuel;
+        }
+
+        // Back-fill _plannedStartFuel for Flight N+1 now that _totFuel is known.
+        // Used by the next _computeEnroute call so Flight 2+ show correct pre-stop fuel numbers.
+        const depFuel0 = (typeof FuelState !== 'undefined') ? FuelState.getStartFuel().gallons : fuelCap;
+        let rollingFuel = depFuel0;
+        for (let fi = 0; fi < this._flights.length; fi++) {
+            this._flights[fi]._plannedStartFuel = rollingFuel;
+            if (fi + 1 < this._flights.length) {
+                const stopWp  = this._waypoints[this._flights[fi + 1].depWpIndex];
+                const fuelRem = Math.max(0, rollingFuel - (this._flights[fi]._totFuel || 0));
+                const added   = stopWp?.fuel_add_gal != null
+                    ? Math.min(stopWp.fuel_add_gal, fuelCap - fuelRem)
+                    : (fuelCap - fuelRem);
+                rollingFuel = fuelRem + added;
+            }
         }
     }
 
@@ -1805,6 +2003,17 @@ class RouteTable {
             }
         }
 
+        // Build fuelStops for the profile chart — cumulative dist at each fuel stop
+        // so the chart can draw a vertical marker at each inter-flight boundary.
+        const fuelStops = [];
+        let fsCumDist = 0;
+        for (let i = 0; i < wps.length; i++) {
+            if (i > 0) fsCumDist += wps[i]._legDist || 0;
+            if (isFuelStop(wps[i], i, wps)) {
+                fuelStops.push({ icao: wps[i].icao || wps[i].name || '?', dist: fsCumDist });
+            }
+        }
+
         return {
             legs,
             totalDistNm:  totalDist,
@@ -1815,6 +2024,7 @@ class RouteTable {
             coords,
             airspaceBands,
             waypointConstraints,
+            fuelStops,   // trip.flights[] boundary markers for the profile chart
         };
     }
 
@@ -2017,97 +2227,137 @@ class RouteTable {
             `<span style="color:var(--accent)">${dep.icao || '?'}\u2192${dest.icao || '?'}</span>`;
     }
 
+    /**
+     * Render the route table.
+     *
+     * Terminology used in this method:
+     *   LegRow     — one table row per waypoint (the standard case)
+     *   SegmentRow — one row per CLB/CRZ/DES segment within a multi-segment Leg
+     *
+     * For multi-flight Trips (trips with fuel stops) the table is structured as:
+     *   ┌─ Flight N header row ─────────────────────────────────┐
+     *   │  LegRow (dep waypoint — no inbound leg data)          │
+     *   │  LegRow / SegmentRows … (intermediate + dest legs)    │
+     *   │  Per-Flight totals row                                 │
+     *   └───────────────────────────────────────────────────────┘
+     *   ⛽ Fuel stop row  (between flights)
+     *   ┌─ Flight N+1 header row ─── … ─────────────────────────┐
+     *   …
+     *   TRIP TOTAL footer row
+     */
     _renderTable() {
-        const columns = CockpitConfig.get('routeTable.columns') || [];
+        const columns  = CockpitConfig.get('routeTable.columns') || [];
+        const numCols  = columns.length + (this._editMode ? 2 : 0);
+        const hasMultipleFlights = this._flights.length > 1;
 
+        // ── Column headers ────────────────────────────────────────────────────
         let html = '<thead><tr>';
-        if (this._editMode) {
-            html += '<th style="width:32px"></th>'; // reorder
-        }
+        if (this._editMode) html += '<th style="width:32px"></th>'; // reorder
         for (const col of columns) {
             if (col.key === 'pwr') {
-                // Make %PWR header tappable to cycle cruise power
                 const pwrLabel = this._cruisePower
                     ? `${col.label} <span class="rt-pwr-badge">${this._cruisePower}%</span>`
                     : col.label;
                 html += `<th style="width:${col.width || 'auto'};cursor:pointer" class="rt-pwr-header">${pwrLabel}</th>`;
             } else if (col.key === 'alt') {
-                // Make ALT header tappable to toggle IFR/VFR
                 const rulesLabel = `${col.label} <span class="rt-rules-badge">${this._flightRules}</span>`;
                 html += `<th style="width:${col.width || 'auto'};cursor:pointer" class="rt-rules-header">${rulesLabel}</th>`;
             } else {
                 html += `<th style="width:${col.width || 'auto'}">${col.label}</th>`;
             }
         }
-        if (this._editMode) {
-            html += '<th style="width:32px"></th>'; // delete
-        }
+        if (this._editMode) html += '<th style="width:32px"></th>'; // delete
         html += '</tr></thead><tbody>';
 
-        // Build flat display rows: one per segment for multi-segment legs
-        const displayRows = [];
-        for (const wp of this._waypoints) {
-            const segs = wp._segments || [];
-            if (segs.length > 1 && wp.index > 0) {
-                for (let si = 0; si < segs.length; si++) {
-                    displayRows.push({ wp, seg: segs[si], segIndex: si, segCount: segs.length });
-                }
-            } else {
-                displayRows.push({ wp, seg: null, segIndex: 0, segCount: 1 });
-            }
-        }
+        // ── Per-Flight sections ───────────────────────────────────────────────
+        // Fall back to a virtual single-flight covering all waypoints when the
+        // trip has no fuel stops (the common case — behaviour identical to before).
+        const flightsToRender = hasMultipleFlights
+            ? this._flights
+            : [{ index: 0, dep: null, dest: null, depWpIndex: 0, destWpIndex: this._waypoints.length - 1, _totDist: 0, _totEte: 0, _totFuel: 0 }];
 
-        for (const row of displayRows) {
-            const { wp, seg, segIndex, segCount } = row;
-            const cls = wp.active ? 'active' : (wp.passed ? 'passed' : '');
-            const segCls = segIndex > 0 ? ' rt-seg-row' : '';
-            html += `<tr class="rt-row${segCls} ${cls}" data-idx="${wp.index}">`;
+        for (let fi = 0; fi < flightsToRender.length; fi++) {
+            const flight = flightsToRender[fi];
 
-            if (this._editMode) {
-                if (segIndex === 0) {
-                    const rs = segCount > 1 ? ` rowspan="${segCount}"` : '';
-                    html += `<td class="rt-reorder-cell"${rs}>
-                        <button class="rt-up-btn" data-idx="${wp.index}" ${wp.index === 0 ? 'disabled' : ''}>\u25B2</button>
-                        <button class="rt-down-btn" data-idx="${wp.index}" ${wp.index === this._waypoints.length - 1 ? 'disabled' : ''}>\u25BC</button>
-                    </td>`;
-                }
-                // segIndex > 0: skip reorder cell (covered by rowspan)
+            // Flight header (only shown for multi-flight trips)
+            if (hasMultipleFlights) {
+                html += `<tr class="rt-flight-header"><td colspan="${numCols}" class="rt-flight-header-cell">`;
+                html += `Flight ${fi + 1}\u2002\u00b7\u2002${flight.dep}\u2009\u2192\u2009${flight.dest}`;
+                html += `</td></tr>`;
             }
 
-            for (const col of columns) {
-                // For multi-segment rows, use rowspan on wpt/hdg/wind cells
-                if (seg && segCount > 1 && (col.key === 'wpt' || col.key === 'hdg' || col.key === 'wind')) {
-                    if (segIndex === 0) {
-                        const val = this._getCellValue(wp, col.key, seg, 0);
-                        html += `<td rowspan="${segCount}">${val}</td>`;
+            // Build LegRows / SegmentRows for this flight's waypoints.
+            //
+            // Fuel stop boundary: a fuel stop waypoint is the destWpIndex of Flight N
+            // and the depWpIndex of Flight N+1. Its _segments describe the INBOUND leg
+            // (arriving into the stop) so they belong visually inside Flight N, rendered
+            // just before the fuel stop divider.
+            //
+            // Render strategy:
+            //   Flight N  : depWpIndex → destWpIndex  (inclusive, WITH segments on dest)
+            //   Flight N+1: depWpIndex+1 → destWpIndex (skip the shared fuel stop; it was
+            //               already rendered as the last row of Flight N with its segments)
+            const wpStart = fi > 0 ? flight.depWpIndex + 1 : flight.depWpIndex;
+            const wpEnd   = flight.destWpIndex;
+
+            for (let wpIdx = wpStart; wpIdx <= wpEnd; wpIdx++) {
+                const wp = this._waypoints[wpIdx];
+                const isDepRow = wpIdx === 0; // trip departure — never has inbound segments
+                const segs = (!isDepRow && (wp._segments?.length ?? 0) > 1 && wp.index > 0)
+                    ? wp._segments
+                    : [];
+
+                if (segs.length > 1) {
+                    // Multi-segment Leg: emit one SegmentRow per CLB/CRZ/DES phase
+                    for (let si = 0; si < segs.length; si++) {
+                        html += this._renderLegRow(wp, columns, segs[si], si, segs.length);
                     }
-                    // segIndex > 0: skip (covered by rowspan)
-                } else if (col.key === 'alt' && this._editMode && segIndex === 0) {
-                    // Tappable altitude cell in edit mode (issue #31)
-                    const altVal = wp.alt ?? wp.altitude ?? '\u2014';
-                    const display = typeof altVal === 'number' ? (altVal >= 1000 ? altVal.toLocaleString() : altVal) : altVal;
-                    const rs = segCount > 1 ? ` rowspan="${segCount}"` : '';
-                    html += `<td class="rt-alt-cell" data-idx="${wp.index}"${rs}>${display} <span class="rt-alt-edit-icon">\u25BE</span></td>`;
-                } else if (col.key === 'alt' && this._editMode && segIndex > 0) {
-                    // skip — covered by rowspan from segIndex===0
                 } else {
-                    const val = seg ? this._getCellValue(wp, col.key, seg, segIndex) : this._getCellValue(wp, col.key);
-                    html += `<td>${val}</td>`;
+                    // Single-segment or departure waypoint: one LegRow
+                    html += this._renderLegRow(wp, columns, null, 0, 1);
                 }
             }
 
-            if (this._editMode) {
-                if (segIndex === 0) {
-                    const rs = segCount > 1 ? ` rowspan="${segCount}"` : '';
-                    html += `<td${rs}><button class="rt-delete-btn" data-idx="${wp.index}">\u00d7</button></td>`;
+            // Per-flight totals (multi-flight trips only)
+            if (hasMultipleFlights) {
+                html += `<tr class="rt-flight-totals">`;
+                if (this._editMode) html += '<td></td>';
+                for (const col of columns) {
+                    switch (col.key) {
+                        case 'wpt':  html += `<td class="rt-totals-label">FL${fi + 1}</td>`; break;
+                        case 'dist': html += `<td>${flight._totDist || 0}nm</td>`; break;
+                        case 'ete':  html += `<td>${this._formatTime(flight._totEte)}</td>`; break;
+                        case 'fuel': html += `<td>${(flight._totFuel || 0).toFixed(1)}</td>`; break;
+                        default:     html += `<td></td>`; break;
+                    }
                 }
+                if (this._editMode) html += '<td></td>';
+                html += '</tr>';
             }
 
-            html += '</tr>';
+            // Fuel stop row between flights (not after the last flight)
+            if (fi < flightsToRender.length - 1) {
+                const nextFlight = flightsToRender[fi + 1];
+                // Label: "⛽ Arrived KFGX — Refuel · Flight 2 continues to KLWA"
+                // This makes clear the DES rows above were the ARRIVAL, and CLB rows
+                // below are the DEPARTURE — the fuel stop is the boundary between them.
+                html += `<tr class="rt-fuel-stop-row"><td colspan="${numCols}" class="rt-fuel-stop-cell">`;
+                html += `\u26FD\u2002Arrived ${flight.dest} \u2014 Refuel \u00b7 Flight ${fi + 2} continues to ${nextFlight.dest}`;
+                html += `</td></tr>`;
+                // Fuel added row — only shown if pilot explicitly set fuel_add_gal on this waypoint
+                const stopWp = this._waypoints[nextFlight.depWpIndex];
+                if (stopWp?.fuel_add_gal != null) {
+                    const added = stopWp._fuelAdded ?? stopWp.fuel_add_gal;
+                    html += `<tr class="rt-fuel-added-row"><td colspan="${numCols}" class="rt-fuel-added-cell">`;
+                    html += `+\u2009${added.toFixed(1)}\u2009gal added`;
+                    html += `</td></tr>`;
+                }
+            }
         }
+
         html += '</tbody>';
 
-        // Totals footer — dist, ete, fuel
+        // ── Trip total footer ─────────────────────────────────────────────────
         if (this._waypoints.length >= 2) {
             let totDist = 0, totEte = 0, totFuel = 0;
             // Cap at destination airport — exclude MAP/missed-approach waypoints beyond it
@@ -2119,11 +2369,12 @@ class RouteTable {
                 totEte  += wp._ete  || 0;
                 totFuel += wp._fuel || 0;
             }
+            const totalLabel = hasMultipleFlights ? 'TRIP' : 'TOTAL';
             html += '<tfoot><tr class="rt-totals-row">';
             if (this._editMode) html += '<td></td>';
             for (const col of columns) {
                 switch (col.key) {
-                    case 'wpt':  html += `<td class="rt-totals-label">TOTAL</td>`; break;
+                    case 'wpt':  html += `<td class="rt-totals-label">${totalLabel}</td>`; break;
                     case 'dist': html += `<td>${Math.round(totDist)}nm</td>`; break;
                     case 'ete':  html += `<td>${this._formatTime(totEte)}</td>`; break;
                     case 'fuel': html += `<td>${totFuel.toFixed(1)}</td>`; break;
@@ -2138,12 +2389,67 @@ class RouteTable {
 
         // Scroll active row into view within the table body
         const activeRow = this._tableEl.querySelector('.rt-row.active');
-        if (activeRow) {
-            activeRow.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-        }
+        if (activeRow) activeRow.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 
         // All interactive events (edit buttons, power header, row clicks) handled
         // by delegated listeners on _tableEl set up in _buildDOM().
+    }
+
+    /**
+     * Render a single LegRow or SegmentRow as an HTML <tr> string.
+     * @param {object} wp        — waypoint object
+     * @param {Array}  columns   — column config array
+     * @param {object|null} seg  — segment object (SegmentRow) or null (LegRow)
+     * @param {number} segIndex  — index within the segment array (0 for a LegRow)
+     * @param {number} segCount  — total segments for this leg (1 for a LegRow)
+     */
+    _renderLegRow(wp, columns, seg, segIndex, segCount) {
+        const cls     = wp.active ? 'active' : (wp.passed ? 'passed' : '');
+        const segCls  = segIndex > 0 ? ' rt-seg-row' : '';
+        let row = `<tr class="rt-row${segCls} ${cls}" data-idx="${wp.index}">`;
+
+        if (this._editMode) {
+            if (segIndex === 0) {
+                const rs = segCount > 1 ? ` rowspan="${segCount}"` : '';
+                row += `<td class="rt-reorder-cell"${rs}>
+                    <button class="rt-up-btn" data-idx="${wp.index}" ${wp.index === 0 ? 'disabled' : ''}>\u25B2</button>
+                    <button class="rt-down-btn" data-idx="${wp.index}" ${wp.index === this._waypoints.length - 1 ? 'disabled' : ''}>\u25BC</button>
+                </td>`;
+            }
+            // segIndex > 0: skip reorder cell (covered by rowspan)
+        }
+
+        for (const col of columns) {
+            // Multi-segment: rowspan wpt/hdg/wind across all SegmentRows for the same Leg
+            if (seg && segCount > 1 && (col.key === 'wpt' || col.key === 'hdg' || col.key === 'wind')) {
+                if (segIndex === 0) {
+                    const val = this._getCellValue(wp, col.key, seg, 0);
+                    row += `<td rowspan="${segCount}">${val}</td>`;
+                }
+                // segIndex > 0: omit — covered by rowspan
+            } else if (col.key === 'alt' && this._editMode && segIndex === 0) {
+                // Tappable altitude cell in edit mode (issue #31)
+                const altVal  = wp.alt ?? wp.altitude ?? '\u2014';
+                const display = typeof altVal === 'number' ? (altVal >= 1000 ? altVal.toLocaleString() : altVal) : altVal;
+                const rs      = segCount > 1 ? ` rowspan="${segCount}"` : '';
+                row += `<td class="rt-alt-cell" data-idx="${wp.index}"${rs}>${display} <span class="rt-alt-edit-icon">\u25BE</span></td>`;
+            } else if (col.key === 'alt' && this._editMode && segIndex > 0) {
+                // omit — covered by rowspan from segIndex===0
+            } else {
+                const val = seg ? this._getCellValue(wp, col.key, seg, segIndex) : this._getCellValue(wp, col.key);
+                row += `<td>${val}</td>`;
+            }
+        }
+
+        if (this._editMode) {
+            if (segIndex === 0) {
+                const rs = segCount > 1 ? ` rowspan="${segCount}"` : '';
+                row += `<td${rs}><button class="rt-delete-btn" data-idx="${wp.index}">\u00d7</button></td>`;
+            }
+        }
+
+        row += '</tr>';
+        return row;
     }
 
     _getCellValue(wp, key, seg = null, segIndex = 0) {
@@ -2163,9 +2469,11 @@ class RouteTable {
                         ? (wp._cumDist != null ? wp._cumDist : '\u2014')
                         : '';
                 case 'ete':
+                    // First segment row: show cumulative ETE to this waypoint
+                    // Sub-rows: show per-segment ETE so pilot can see e.g. CLB=5m, CRZ=15m
                     return segIndex === 0
                         ? (wp._cumEte != null ? this._formatTime(wp._cumEte) : '\u2014')
-                        : '';
+                        : (seg._ete != null ? this._formatTime(seg._ete) : '');
                 case 'fuel':
                     return seg._fuel != null ? seg._fuel.toFixed(1) : '\u2014';
                 case 'fuel_rem': {
@@ -2277,7 +2585,15 @@ class RouteTable {
             return v >= 1000 ? v.toLocaleString() : String(v);
         };
         if (seg.altFrom != null && seg.altTo != null && seg.altFrom !== seg.altTo) {
-            return `${fmtAlt(seg.altFrom)}\u2192${fmtAlt(seg.altTo)}`;
+            const base = `${fmtAlt(seg.altFrom)}\u2192${fmtAlt(seg.altTo)}`;
+            // Append planned VS for CLB/DES so pilot knows the rate, not just the delta
+            if (seg._ete > 0 && (seg.phase === 'CLB' || seg.phase === 'DES')) {
+                const altDelta = Math.abs(seg.altTo - seg.altFrom);
+                const vs = Math.round(altDelta / seg._ete);  // fpm
+                const arrow = seg.phase === 'CLB' ? '\u2191' : '\u2193';
+                return `${base} <span class="rt-vs">${arrow}${vs.toLocaleString()}</span>`;
+            }
+            return base;
         }
         return fmtAlt(seg.altTo ?? seg.altFrom ?? seg.alt);
     }

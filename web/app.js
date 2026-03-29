@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v4.34';
+const FLYTAB_VERSION = 'v4.40';
 
 // ========== Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -82,9 +82,10 @@ class FlyTabApp {
         this.thermalMonitor = null;
         this.engineML = null;
         this._cockpitInitialized = false;
-        this._currentPlan = null;
+        this._currentTrip = null;     // trip — top-level plan object (was _currentPlan)
         this._applyingPlan = false;   // re-entrancy guard for applyRouteEdit
         this._pendingPlanEdit = null; // latest-wins queuing for rapid calls
+        this._shownFuelStopOverlays = new Set(); // tracks shown overlays by "ICAO_index" key
 
         // DOM references
         this.dom = {
@@ -333,14 +334,14 @@ class FlyTabApp {
             }
             this.cockpitMap.setAirportPopup(this.airportPopup);
             this.airportPopup.setGetRouteAirports(() => {
-                const wps = this._currentPlan?.waypoints;
+                const wps = this._currentTrip?.waypoints;
                 if (!wps?.length) return {};
                 return { departure: wps[0], destination: wps[wps.length - 1] };
             });
 
             if (this.vectorLayers) {
                 this.airportPopup.setVectorLayers(this.vectorLayers);
-                this.vectorLayers._onInternetMetarsFetched = () => this._updateWeatherAge(this._currentPlan);
+                this.vectorLayers._onInternetMetarsFetched = () => this._updateWeatherAge(this._currentTrip);
                 this.vectorLayers.onAirportClick((apt) => {
                     if (this.routeTable?.isEditing()) {
                         this.routeTable.addWaypointSmart({
@@ -499,6 +500,7 @@ class FlyTabApp {
             this.stratuxClient.addEventListener('stratux:situation', (e) => {
                 if (this.routeTable) {
                     this.routeTable.updateLive(e.detail);
+                    this._checkFuelStopProximity(e.detail);
                 }
             });
         }
@@ -869,7 +871,7 @@ class FlyTabApp {
 
     /** Returns bounding box for the current route + ~1° buffer, or null if no plan loaded. */
     _getRouteBbox() {
-        const wps = this._currentPlan?.waypoints;
+        const wps = this._currentTrip?.waypoints;
         if (!wps?.length) return null;
         const lats = wps.map(w => w.lat).filter(v => v != null);
         const lons = wps.map(w => w.lon).filter(v => v != null);
@@ -1041,8 +1043,10 @@ class FlyTabApp {
         // Filter out unresolved waypoints so the route polyline doesn't break
         wps = wps.filter(w => w.lat != null && w.lon != null);
 
+        // trip — normalized top-level plan object with resolved waypoints
         const normalized = { ...plan, waypoints: wps };
-        this._currentPlan = normalized;
+        this._currentTrip = normalized;
+        this._shownFuelStopOverlays = new Set(); // reset on new plan — stops may differ
 
         // Sync embedded aircraft profile to Pi config (merge, don't overwrite Pi-only fields)
         if (plan.aircraft && plan.aircraft.id) {
@@ -1465,6 +1469,144 @@ class FlyTabApp {
         if (duration || severity === 'blue') {
             setTimeout(() => banner.remove(), duration || 10000);
         }
+    }
+
+    // ========== Fuel Stop Proximity ==========
+
+    /** Check if the aircraft is within 10nm of any fuel stop waypoint. */
+    _checkFuelStopProximity(situation) {
+        if (!situation || !this._currentTrip?.waypoints) return;
+        const lat = situation.lat;
+        const lon = situation.lon;
+        if (!lat || !lon) return;
+
+        const wps = this._currentTrip.waypoints;
+        for (let i = 1; i < wps.length - 1; i++) {
+            const wp = wps[i];
+            if (wp.type !== 'APT') continue;
+            if (!wp.lat || !wp.lon) continue;
+            const key = `${wp.icao || wp.name}_${i}`;
+            if (this._shownFuelStopOverlays.has(key)) continue;
+            const dist = NasrDB.haversineNm(lat, lon, wp.lat, wp.lon);
+            if (dist <= 10) {
+                this._shownFuelStopOverlays.add(key);
+                this._showFuelStopOverlay(wp, i);
+                break; // one overlay at a time
+            }
+        }
+    }
+
+    /**
+     * Show the full-screen fuel stop overlay.
+     * @param {object} wp        - The fuel stop waypoint (from this._currentTrip.waypoints)
+     * @param {number} wpIndex   - Index of wp in the waypoints array
+     */
+    _showFuelStopOverlay(wp, wpIndex) {
+        document.getElementById('fuelStopOverlay')?.remove();
+
+        // Route table computes _flights and per-waypoint fuel data during updateLive().
+        // _flightIndex on a fuel stop waypoint = index of the Flight departing from it.
+        const flights    = this.routeTable?._flights || [];
+        const nextFlight = flights[wp._flightIndex ?? 1];
+        const prevFlight = nextFlight ? flights[nextFlight.index - 1] : null;
+
+        const fuelCap  = CockpitConfig.aircraft('performance.fuel_capacity_gal') ?? 50;
+        const fuelAtStop = (wp._fuelRem != null && wp._fuelRem > 0) ? wp._fuelRem : null;
+
+        const icao    = wp.icao || wp.name || '?';
+        const aptName = (wp.name && wp.name !== icao) ? wp.name : null;
+
+        const hasPreset = wp.fuel_add_gal != null;
+        const presetGal = hasPreset ? (wp._fuelAdded ?? wp.fuel_add_gal) : null;
+
+        const fmtEte = (min) => {
+            if (min == null) return '\u2014';
+            const h = Math.floor(min / 60);
+            const m = Math.round(min % 60);
+            return h > 0 ? `${h}h\u2009${m}m` : `${m}m`;
+        };
+        const fmtDist = (nm) => (nm != null ? `${nm}` : '\u2014');
+
+        const nextDest  = nextFlight?.dest  ?? '\u2014';
+        const nextDistS = fmtDist(nextFlight?._totDist);
+        const nextEteS  = fmtEte(nextFlight?._totEte);
+        const nextFuelS = nextFlight?._totFuel != null ? nextFlight._totFuel.toFixed(1) : '\u2014';
+        const nextNum   = nextFlight ? nextFlight.index + 1 : 2;
+
+        const fillToGal = (fuelAtStop != null && hasPreset)
+            ? (fuelAtStop + presetGal).toFixed(1)
+            : fuelCap.toFixed(1);
+
+        const cellStyle = 'text-align:center;';
+        const valStyle  = 'font-size:22px;font-weight:700;color:var(--instrument-value);';
+        const lblStyle  = 'font-size:11px;color:var(--text-label);margin-top:2px;';
+
+        const flightCard = (f, label) => `
+            <div style="background:var(--bg-surface);border-radius:8px;padding:12px;margin-bottom:12px;">
+                <div style="font-size:12px;color:var(--text-label);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;">${label}</div>
+                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
+                    <div style="${cellStyle}"><div style="${valStyle}">${fmtDist(f._totDist)}</div><div style="${lblStyle}">nm</div></div>
+                    <div style="${cellStyle}"><div style="${valStyle}">${fmtEte(f._totEte)}</div><div style="${lblStyle}">ETE</div></div>
+                    <div style="${cellStyle}"><div style="${valStyle}">${f._totFuel.toFixed(1)}</div><div style="${lblStyle}">gal est</div></div>
+                </div>
+            </div>`;
+
+        const overlay = document.createElement('div');
+        overlay.id = 'fuelStopOverlay';
+        overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:9998;background:var(--bg-primary);display:flex;flex-direction:column;overflow-y:auto;';
+
+        overlay.innerHTML = `
+            <div style="padding:16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;background:var(--bg-surface);flex-shrink:0;">
+                <span style="font-size:28px;">\u26fd</span>
+                <div>
+                    <div style="font-size:20px;font-weight:700;color:var(--text-primary);">Fuel Stop \u2014 ${icao}</div>
+                    ${aptName ? `<div style="font-size:14px;color:var(--text-secondary);">${aptName}</div>` : ''}
+                </div>
+            </div>
+            <div style="padding:16px;flex:1;">
+                ${prevFlight ? flightCard(prevFlight, `Flight ${prevFlight.index + 1} \u2014 ${prevFlight.dep} \u2192 ${prevFlight.dest}`) : ''}
+                <div style="background:var(--bg-surface);border-radius:8px;padding:12px;margin-bottom:12px;">
+                    <div style="font-size:12px;color:var(--text-label);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;">Fuel</div>
+                    ${hasPreset
+                        ? `<div style="font-size:16px;color:var(--text-primary);">Add <strong>${presetGal.toFixed(1)}\u2009gal</strong> \u2014 fill to <strong>${fillToGal}\u2009gal</strong></div>`
+                        : `<div style="display:flex;align-items:center;gap:8px;">
+                               <label for="fso-fuel-input" style="font-size:14px;color:var(--text-secondary);">Gallons added:</label>
+                               <input id="fso-fuel-input" type="number" min="0" max="${fuelCap}" step="0.5"
+                                   style="width:80px;padding:6px 8px;background:var(--bg-surface-raised);color:var(--text-primary);border:1px solid var(--border);border-radius:4px;font-size:16px;text-align:right;">
+                           </div>`
+                    }
+                </div>
+                ${nextFlight ? flightCard(nextFlight, `Flight ${nextNum} \u2014 ${icao} \u2192 ${nextDest}`) : ''}
+                <button id="fso-continue-btn"
+                    style="width:100%;padding:16px;background:var(--accent);color:var(--text-on-dark);border:none;border-radius:8px;font-size:18px;font-weight:700;cursor:pointer;margin-top:4px;">
+                    Start Flight ${nextNum} \u2014 Continue to ${nextDest}
+                </button>
+            </div>
+        `;
+
+        document.body.appendChild(overlay);
+
+        overlay.querySelector('#fso-continue-btn').addEventListener('click', () => {
+            let gallonsAdded = 0;
+            if (hasPreset) {
+                gallonsAdded = presetGal;
+            } else {
+                const input = overlay.querySelector('#fso-fuel-input');
+                gallonsAdded = parseFloat(input?.value) || 0;
+            }
+
+            if (typeof FuelState !== 'undefined') {
+                const currentFuel = (fuelAtStop != null && fuelAtStop > 0)
+                    ? fuelAtStop
+                    : FuelState.getStartFuel().gallons;
+                const newTotal = Math.min(currentFuel + gallonsAdded, fuelCap);
+                FuelState.saveMeasurement({ total_gal: newTotal, source: 'tic' });
+                window.dispatchEvent(new CustomEvent('fuelstate:changed'));
+            }
+
+            overlay.remove();
+            this.showToast(`Flight ${nextNum} active \u2014 ${nextDest} ${nextDistS}nm`);
+        });
     }
 
     // ========== Toast Notifications ==========

@@ -2297,6 +2297,15 @@ body {
     vertical-align: middle;
 }
 
+/* Planned vertical speed annotation in ALT cell (CLB/DES rows) */
+.rt-vs {
+    display: inline-block;
+    font-size: 11px;
+    color: var(--text-secondary, #aaa);
+    margin-left: 3px;
+    white-space: nowrap;
+}
+
 /* Flight rules badge on ALT column header */
 .rt-rules-header {
     cursor: pointer;
