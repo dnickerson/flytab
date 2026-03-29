@@ -942,12 +942,16 @@ class FlyTabApp {
                 const ids = [fp.legs[0].from, ...fp.legs.map(l => l.to)].filter(Boolean);
                 wps = ids.map(icao => ({ icao, name: icao }));
             }
-            // Map leg performance data onto waypoints (leg[i] → wp[i+1])
+            // Map leg performance data onto waypoints by matching leg.to → wp.icao
+            // (positional mapping breaks if any waypoint fails to resolve and gets filtered out)
             if (fp.legs?.length && wps.length > 0) {
-                for (let i = 0; i < fp.legs.length; i++) {
-                    const leg = fp.legs[i];
-                    const wp = wps[i + 1];
-                    if (!wp) continue;
+                const legByDest = {};
+                for (const leg of fp.legs) {
+                    if (leg.to) legByDest[leg.to.toUpperCase()] = leg;
+                }
+                for (const wp of wps) {
+                    const leg = legByDest[wp.icao?.toUpperCase()];
+                    if (!leg) continue;
                     wp.alt = leg.altitude || fp.altitude;
                     wp.gs = leg.gs;
                     wp.tas = leg.tas;
