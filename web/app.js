@@ -992,7 +992,7 @@ class FlyTabApp {
                         wp.name = wp.name || apt.name;
                         wp.type = 'APT'; // authoritative — NASR confirmed this is an airport
                     } else if (wp.lat == null || wp.lon == null) {
-                        // Coords missing — try navaid then fix
+                        // Coords missing — try navaid then fix in local NASR
                         let found = await nasr.getNavaid(wp.icao);
                         if (!found) found = await nasr.getFix(wp.icao);
                         if (found) {
@@ -1001,7 +1001,24 @@ class FlyTabApp {
                             wp.elev_ft = wp.elev_ft ?? found.elev_ft ?? null;
                             wp.name = wp.name || found.name;
                         } else {
-                            console.warn(`_applyPlan: could not resolve waypoint "${wp.icao}"`);
+                            // Last resort: try AWC navaid API (handles navaids/fixes not in local NASR bundle)
+                            try {
+                                const awcResp = await fetch(`https://aviationweather.gov/api/data/navaid?ids=${encodeURIComponent(wp.icao)}&format=json`,
+                                    { signal: AbortSignal.timeout(5000) });
+                                if (awcResp.ok) {
+                                    const awcData = await awcResp.json();
+                                    const awcNav = Array.isArray(awcData) ? awcData[0] : awcData;
+                                    if (awcNav?.lat != null) {
+                                        wp.lat = awcNav.lat;
+                                        wp.lon = awcNav.lon;
+                                        wp.elev_ft = awcNav.elev ?? null;
+                                        wp.name = wp.name || awcNav.name || wp.icao;
+                                        console.log(`_applyPlan: resolved "${wp.icao}" via AWC navaid API`);
+                                    } else {
+                                        console.warn(`_applyPlan: could not resolve waypoint "${wp.icao}" (not in NASR or AWC)`);
+                                    }
+                                }
+                            } catch { /* offline or timeout — waypoint will be filtered */ }
                         }
                     }
                 } catch { /* NASR not ready yet */ }
