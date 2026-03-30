@@ -481,9 +481,9 @@ class RouteTable {
         const currentConstraint = wp.alt_constraint || 'AT';
         const currentAltUpper = wp.alt_constraint_upper || '';
 
-        // Determine heading to pick E/W hemisphere altitude rules
+        // Determine bearing to pick E/W hemisphere altitude rules
         // 0-179° = eastbound (odd thousands), 180-359° = westbound (even)
-        const hdg = wp._hdg ?? 0;
+        const hdg = wp._brg ?? wp._hdg ?? 0;
         const isEast = hdg >= 0 && hdg < 180;
         const isVfr = this._flightRules === 'VFR';
         const vfrOffset = isVfr ? 500 : 0;
@@ -1218,25 +1218,28 @@ class RouteTable {
                 legDist = wp._legDist || 0;
             }
 
-            // Heading
+            // Bearing (true, geometric) and wind-corrected magnetic heading
             if (i > this._activeIndex && i > 0) {
                 const prev = this._waypoints[i - 1];
                 if (prev.lat != null && prev.lon != null && wp.lat != null && wp.lon != null) {
-                    wp._hdg = this._bearing(prev.lat, prev.lon, wp.lat, wp.lon);
+                    wp._brg = this._bearing(prev.lat, prev.lon, wp.lat, wp.lon);
                 }
             } else if (i === this._activeIndex) {
-                // Live heading from GPS when airborne; fall back to planned bearing on ground
+                // Live bearing from GPS when airborne; fall back to planned bearing on ground
                 if (wp._liveHdg != null) {
-                    wp._hdg = wp._liveHdg;
+                    wp._brg = wp._liveHdg;
                 } else if (i > 0) {
                     const prev = this._waypoints[i - 1];
                     if (prev.lat != null && prev.lon != null && wp.lat != null && wp.lon != null) {
-                        wp._hdg = this._bearing(prev.lat, prev.lon, wp.lat, wp.lon);
+                        wp._brg = this._bearing(prev.lat, prev.lon, wp.lat, wp.lon);
                     }
                 }
             }
 
             wp._wind = wp.wind || null;
+
+            // Compute wind-corrected magnetic heading from bearing + wind + TAS
+            wp._hdg = this._computeMagHdg(wp._brg, wp._wind, wp._tas, wp.lat, wp.lon);
 
             // Multi-flight: reset fuel counter when a new Flight departs from a fuel stop.
             // This waypoint is the departure of the next Flight — pilot refuelled here.
@@ -1398,6 +1401,7 @@ class RouteTable {
             this._waypoints[i]._ete = null;
             this._waypoints[i]._fuel = null;
             this._waypoints[i]._fuelRem = null;
+            this._waypoints[i]._brg = null;
             this._waypoints[i]._hdg = null;
             this._waypoints[i]._phase = '\u2014';
         }
@@ -2421,7 +2425,7 @@ class RouteTable {
 
         for (const col of columns) {
             // Multi-segment: rowspan wpt/hdg/wind across all SegmentRows for the same Leg
-            if (seg && segCount > 1 && (col.key === 'wpt' || col.key === 'hdg' || col.key === 'wind')) {
+            if (seg && segCount > 1 && (col.key === 'wpt' || col.key === 'hdg' || col.key === 'brg' || col.key === 'wind')) {
                 if (segIndex === 0) {
                     const val = this._getCellValue(wp, col.key, seg, 0);
                     row += `<td rowspan="${segCount}">${val}</td>`;
@@ -2461,6 +2465,8 @@ class RouteTable {
                 case 'alt': return this._formatSegAlt(seg);
                 case 'hdg':
                     return segIndex === 0 ? (wp._hdg != null ? Math.round(wp._hdg) + '\u00b0' : '\u2014') : '';
+                case 'brg':
+                    return segIndex === 0 ? (wp._brg != null ? Math.round(wp._brg) + '\u00b0' : '\u2014') : '';
                 case 'dist':
                     // Show cumulative remaining distance on the first segment row only;
                     // subsequent sub-rows of the same waypoint leave it blank to avoid
@@ -2517,6 +2523,8 @@ class RouteTable {
             case 'alt': return wp.alt ?? wp.altitude ?? '\u2014';
             case 'hdg':
                 return wp._hdg != null ? Math.round(wp._hdg) + '\u00b0' : '\u2014';
+            case 'brg':
+                return wp._brg != null ? Math.round(wp._brg) + '\u00b0' : '\u2014';
             case 'dist':
                 return wp._cumDist != null ? wp._cumDist : '\u2014';
             case 'ete':
@@ -2605,6 +2613,30 @@ class RouteTable {
         const y = Math.sin(dLon) * Math.cos(rLat2);
         const x = Math.cos(rLat1) * Math.sin(rLat2) - Math.sin(rLat1) * Math.cos(rLat2) * Math.cos(dLon);
         return ((Math.atan2(y, x) * 180 / Math.PI) + 360) % 360;
+    }
+
+    /**
+     * Compute wind-corrected magnetic heading.
+     * Returns null if bearing, TAS, or position are unavailable.
+     * Falls back to magnetic bearing (no wind correction) when wind is missing.
+     * Formula: WCA = asin(windSpd * sin(windDir - bearing) / TAS)
+     * magHdg = trueBearing + WCA + magVar
+     *
+     * Simplified mag var model (CONUS, ~2° accuracy):
+     *   magVar = -6.0 + (lon + 90) * -0.12 + (lat - 35) * 0.05
+     */
+    _computeMagHdg(brg, wind, tas, lat, lon) {
+        if (brg == null || lat == null || lon == null) return null;
+        const magVar = -6.0 + (lon + 90) * -0.12 + (lat - 35) * 0.05;
+        let trueHdg = brg;
+        if (wind && wind.spd > 0 && tas > 0) {
+            const windRad = (wind.dir - brg) * Math.PI / 180;
+            const sinWca = (wind.spd * Math.sin(windRad)) / tas;
+            // Clamp to [-1, 1] to guard against edge cases (very high winds)
+            const wca = Math.asin(Math.max(-1, Math.min(1, sinWca))) * 180 / Math.PI;
+            trueHdg = brg + wca;
+        }
+        return ((trueHdg + magVar) + 360) % 360;
     }
 
     _buildEngineStatusCard() {

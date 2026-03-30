@@ -113,6 +113,15 @@ class FlyTabApp {
             await CockpitConfig.load();
         }
 
+        // Android status bar — keep it visible so pilot can see WiFi/battery/time.
+        // @capacitor/status-bar must be installed; overlaysWebView:false reserves space.
+        const StatusBar = window.Capacitor?.Plugins?.StatusBar;
+        if (StatusBar) {
+            StatusBar.setOverlaysWebView({ overlay: false }).catch(() => {});
+            StatusBar.setBackgroundColor({ color: '#1a1a1a' }).catch(() => {});
+            StatusBar.setStyle({ style: 'DARK' }).catch(() => {});
+        }
+
         // Warn loudly if sim mode is active
         if (typeof CockpitConfig !== 'undefined' && CockpitConfig.raw?.simMode) {
             document.getElementById('simBanner').hidden = false;
