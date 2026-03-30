@@ -522,159 +522,274 @@ class TabBar {
             font-family: -apple-system, 'SF Pro Display', system-ui, sans-serif;
             font-size: 14px; line-height: 1.6;
         `;
+        // note: content set below
 
-        const closeBtn = `<button onclick="document.getElementById('flytabHelpOverlay').remove()" style="
-            background:#0055cc; color:#fff; border:none; border-radius:6px;
-            padding:6px 14px; font-size:14px; font-weight:600; cursor:pointer;
-            touch-action:manipulation;">✕ Back to Map</button>`;
+        const ver = typeof FLYTAB_VERSION !== 'undefined' ? FLYTAB_VERSION : '4.42';
+        const closeBtn = `<button onclick="document.getElementById('flytabHelpOverlay').remove()" style="background:#0055cc;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:14px;font-weight:600;cursor:pointer;touch-action:manipulation;">✕ Back to Map</button>`;
 
-        overlay.innerHTML = `<div style="
-            flex:1; overflow-y:scroll; -webkit-overflow-scrolling:touch;
-            touch-action:pan-y; overscroll-behavior:contain;
-            padding:12px 16px 40px;
-        ">
-<div style="position:sticky;top:0;background:#0a1628;border-bottom:1px solid #1a3055;padding:10px 0 10px;display:flex;align-items:center;gap:12px;z-index:1">
+        const sections = [
+            ['#tabs','Tabs'],['#status','Status Bar'],['#map','Map'],
+            ['#instruments','Instruments'],['#power','Power Tradeoff'],
+            ['#route','Route Table'],['#profile','Terrain Profile'],
+            ['#engine','Engine'],['#engineml','Engine ML'],
+            ['#checklist','Checklists'],['#logbook','Logbook'],
+            ['#charts','Approach Charts'],['#weather','Weather'],
+            ['#recording','Recording'],['#fuel','Fuel'],
+            ['#offline','Offline'],['#config','Config'],
+        ];
+
+        overlay.innerHTML = `<div style="flex:1;overflow-y:scroll;-webkit-overflow-scrolling:touch;touch-action:pan-y;overscroll-behavior:contain;padding:12px 16px 40px;">
+
+<div style="position:sticky;top:0;background:#0a1628;border-bottom:1px solid #1a3055;padding:10px 0;display:flex;align-items:center;gap:12px;z-index:1">
   ${closeBtn}
   <span style="font-size:18px;font-weight:700;flex:1">FlyTab Help</span>
-  <span style="font-size:12px;color:#8899aa;background:#0f1f3a;padding:2px 8px;border-radius:10px">v${typeof FLYTAB_VERSION !== 'undefined' ? FLYTAB_VERSION : '4.10'}</span>
+  <span style="font-size:12px;color:#8899aa;background:#0f1f3a;padding:2px 8px;border-radius:10px">${ver}</span>
 </div>
 
 <div style="background:#0f1f3a;border-radius:8px;padding:12px;margin:14px 0">
   <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:#8899aa;margin-bottom:8px">Contents</div>
   <div style="display:flex;flex-wrap:wrap;gap:6px">
-    ${['#tabs','#map','#engine','#instruments','#checklist','#logbook','#charts','#weather','#routing','#recording','#fuel','#offline','#config'].map((id,i)=>
-      `<a href="${id}" style="color:#0088ff;text-decoration:none;font-size:13px;padding:3px 10px;border-radius:4px;background:#152847">${['Tabs','Map','Engine','Instruments','Checklists','Logbook','Approach Charts','Weather','Routing','Flight Recording','Fuel','Offline','Configuration'][i]}</a>`
-    ).join('')}
+    ${sections.map(([id,label])=>`<a href="${id}" style="color:#0088ff;text-decoration:none;font-size:13px;padding:3px 10px;border-radius:4px;background:#152847">${label}</a>`).join('')}
   </div>
 </div>
 
+<!-- ═══ TABS ═══ -->
 <h2 id="tabs" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Bottom Tab Bar</h2>
-<p>The tab bar is always visible at the bottom of the screen. Tap any tab to switch views.</p>
+<p>Always visible at the bottom. Tap any tab to switch views. Tapping the active tab returns to the map.</p>
 <table style="width:100%;border-collapse:collapse;margin:10px 0;font-size:13px">
   <tr style="background:#152847"><th style="padding:6px 8px;text-align:left;color:#8899aa">Tab</th><th style="padding:6px 8px;text-align:left;color:#8899aa">Function</th></tr>
-  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">🗺 MAP</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Moving map with ownship, route, traffic, and airspace</td></tr>
-  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">✈ APT</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Airport info — frequencies, runways, weather for any airport</td></tr>
-  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">⚙️ ENG</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Engine instruments — RPM, EGT/CHT, oil, fuel flow, trend charts</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">🗺 MAP</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Moving map — ownship, route, traffic, airspace, NEXRAD</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">✈ APT</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Airport info — frequencies, runways, METAR/TAF for any airport</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">⚙️ ENG</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Full-screen engine instruments — RPM, EGT/CHT, oil, fuel, trend charts</td></tr>
   <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">✅ CHK</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Interactive checklists — Normal, Abnormal, Emergency</td></tr>
-  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">📻 CLR</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">IFR clearance helper — CRAFT format, CD phone, squawk</td></tr>
-  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">⏱ TMR</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Flight timer — Zulu time, leg timer, Hobbs timer</td></tr>
-  <tr><td style="padding:6px 8px">⋯ MORE</td><td style="padding:6px 8px">Additional tools — logbook, weather, approach charts, fuel, settings</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">📻 CLR</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">IFR clearance helper — CRAFT format, CD phone number, squawk</td></tr>
+  <tr><td style="padding:6px 8px">⋯ MORE</td><td style="padding:6px 8px">Logbook, weather briefing, approach charts, fuel, data status, config</td></tr>
 </table>
 
-<h2 id="map" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Moving Map</h2>
-<p>The map tab shows your position, route, traffic, and aviation data layers.</p>
-<ul style="padding-left:20px;margin:8px 0">
-  <li style="margin:4px 0"><strong>Ownship</strong> — blue triangle at your GPS position, rotated to heading</li>
-  <li style="margin:4px 0"><strong>Traffic</strong> — ADS-B targets from Stratux, color-coded by proximity. Tap for callsign and altitude.</li>
-  <li style="margin:4px 0"><strong>Route line</strong> — active leg highlighted. Tap a waypoint to see leg details.</li>
-  <li style="margin:4px 0"><strong>Track log</strong> — breadcrumb trail of your flight path</li>
-  <li style="margin:4px 0"><strong>Airspace</strong> — Class B/C/D/E polygons with altitude labels</li>
-</ul>
-<p><strong>Left-side layer buttons:</strong> Toggle base map (Vector/Sectional/IFR), NEXRAD radar, airports, navaids, fixes, airways.</p>
-<p><strong>Top-right buttons:</strong> Auto-pan toggle (📍), Direct-To (D→).</p>
-
-<h2 id="engine" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Engine Page (⚙️ ENG)</h2>
-<p>Full-screen engine instruments sourced from your engine monitor via the Pi.</p>
+<!-- ═══ STATUS BAR ═══ -->
+<h2 id="status" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Status Bar Badges</h2>
+<p>Color-coded badges across the top. Green = good, amber = caution, red = problem.</p>
 <table style="width:100%;border-collapse:collapse;margin:10px 0;font-size:13px">
-  <tr style="background:#152847"><th style="padding:6px 8px;text-align:left;color:#8899aa">Gauge</th><th style="padding:6px 8px;text-align:left;color:#8899aa">Warning</th></tr>
-  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">RPM</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Red above 2700</td></tr>
-  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">MAP (manifold pressure)</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">—</td></tr>
-  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Fuel Flow (GPH)</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">—</td></tr>
-  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Oil Temp (°F)</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Yellow &gt;220, Red &gt;245</td></tr>
-  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Oil Pressure (PSI)</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Red &lt;25 or &gt;95</td></tr>
-  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Volts</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Yellow &lt;13.0</td></tr>
-  <tr><td style="padding:6px 8px">Carb Temp (°F)</td><td style="padding:6px 8px">Yellow &lt;40°F, Red &lt;32°F</td></tr>
+  <tr style="background:#152847"><th style="padding:6px 8px;text-align:left;color:#8899aa">Badge</th><th style="padding:6px 8px;text-align:left;color:#8899aa">Meaning</th></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">GPS</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Green = position fix active (shows source: STX=Stratux, INT=device GPS). Red = no fix.</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">FIS-B</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Green = receiving weather data from ground towers. Red = no towers in range (aircraft UAT traffic alone does not trigger green).</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">● REC</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Red dot = flight recording active. Auto-starts at RPM &gt;500, auto-stops 60s after RPM &lt;100.</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">NET / OFFL</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Pi connectivity status. OFFL = no Pi connection (offline mode).</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">NASR</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Aviation database currency. Shows cycle date when current.</td></tr>
+  <tr><td style="padding:6px 8px">v4.xx</td><td style="padding:6px 8px">Version badge — long-press to view the diagnostic log.</td></tr>
 </table>
-<p><strong>Cylinder bars</strong> — EGT and CHT per cylinder, color-coded green/yellow/red.</p>
-<p><strong>Trend charts</strong> — 30-minute scrolling history of EGT, CHT, oil temp, and fuel flow.</p>
-<p><strong>Engine ML</strong> — On-device machine learning monitors for anomalies (sticky valve, phase detection). Access via MORE → Engine ML.</p>
 
+<!-- ═══ MAP ═══ -->
+<h2 id="map" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Moving Map</h2>
+<ul style="padding-left:20px;margin:8px 0">
+  <li style="margin:4px 0"><strong>Ownship (red airplane)</strong> — your GPS position, rotated to track. Dims when no fix, hides when Stratux disconnects.</li>
+  <li style="margin:4px 0"><strong>Traffic</strong> — ADS-B targets from Stratux. Color = proximity. Altitude offset shown next to each chevron. Tap for callsign and altitude.</li>
+  <li style="margin:4px 0"><strong>Route line</strong> — magenta. Active leg solid, future dashed, past dimmed.</li>
+  <li style="margin:4px 0"><strong>Airspace</strong> — Class B (blue), C (magenta), D (blue dashed). Altitude labels shown.</li>
+  <li style="margin:4px 0"><strong>Track log</strong> — breadcrumb trail of your flight path.</li>
+</ul>
+<p><strong>Map orientation:</strong> North-up by default. Heading-up mode available via the compass button.</p>
+<p><strong>Left rail layer buttons:</strong> Base map cycle (Vector/Sectional/IFR Low), NEXRAD, airports, navaids, fixes, airways.</p>
+<p><strong>Map corner buttons (top-right):</strong></p>
+<ul style="padding-left:20px;margin:8px 0">
+  <li style="margin:4px 0"><strong>📍 Auto-pan</strong> — keeps ownship centered. Tap to toggle.</li>
+  <li style="margin:4px 0"><strong>D→ Direct-To</strong> — fly direct to any airport, navaid, or fix.</li>
+  <li style="margin:4px 0"><strong>⋮ Menu</strong> — access route editor, terrain profile, range rings.</li>
+</ul>
+<p>Tap any airport on the map to see its frequencies, runways, METAR, and a Direct-To button.</p>
+
+<!-- ═══ INSTRUMENTS ═══ -->
 <h2 id="instruments" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Instrument Strip</h2>
-<p>The instrument strip at the top of the map shows live flight data from Stratux:</p>
+<p>Live flight data bar between the map and the tab bar. Updates every GPS tick (~1 Hz). When a flight plan is loaded, switches to destination-aware mode.</p>
 <table style="width:100%;border-collapse:collapse;margin:10px 0;font-size:13px">
   <tr style="background:#152847"><th style="padding:6px 8px;text-align:left;color:#8899aa">Field</th><th style="padding:6px 8px;text-align:left;color:#8899aa">Description</th></tr>
   <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">GS</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">GPS ground speed (knots)</td></tr>
-  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">ALT</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Barometric altitude (feet)</td></tr>
-  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">VS</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Vertical speed (feet/min)</td></tr>
-  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">HDG</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">GPS track / magnetic heading</td></tr>
-  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">NEXT / DEST</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Next waypoint and destination — distance (nm) and ETE</td></tr>
-  <tr><td style="padding:6px 8px">FUEL / RANGE</td><td style="padding:6px 8px">Fuel remaining (gallons) and fuel-based range (nm)</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">ALT</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">GPS/barometric altitude (feet MSL)</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">HDG</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Wind-corrected magnetic heading — set this on your heading bug</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">FUEL</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Fuel remaining (gal). Small delta below shows actual vs planned burn rate (±GPH). Tap to enter fuel.</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">DEST</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Nautical miles to destination. Tap to open Power Tradeoff panel.</td></tr>
+  <tr><td style="padding:6px 8px">ETE</td><td style="padding:6px 8px">Estimated time en route to destination (recalculated from live GS). Delta below shows ahead/behind plan. Tap to open Power Tradeoff panel.</td></tr>
 </table>
-<p>Status badges (GPS, FIS-B, REC, NET, NASR, WX) are color-coded: green = good, amber = caution, red = problem. Long-press the version badge to see the diagnostic log.</p>
+<p>Delta sub-labels: <span style="color:#44ff44">green</span> = on/ahead of plan, <span style="color:#ffaa00">amber</span> = slightly behind, <span style="color:#ff4444">red</span> = significantly behind.</p>
 
-<h2 id="checklist" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Checklists (✅ CHK)</h2>
-<p>Three tabs: <strong>Normal</strong>, <strong>Abnormal</strong>, and <strong>Emergency</strong>. Tap each item to check it off. Items are customized for N194JT.</p>
-<div style="background:rgba(255,68,68,0.1);border-left:3px solid #ff4444;padding:8px 12px;border-radius:0 6px 6px 0;margin:10px 0;font-size:13px">
-  Emergency checklists are a reference only. Always follow your aircraft's POH/AFM as primary authority.
+<!-- ═══ POWER TRADEOFF ═══ -->
+<h2 id="power" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Power Tradeoff Panel</h2>
+<p>Tap the <strong>ETE</strong> or <strong>DEST</strong> field on the instrument strip to open a live comparison of fuel and time at different power settings.</p>
+<table style="width:100%;border-collapse:collapse;margin:10px 0;font-size:13px">
+  <tr style="background:#152847"><th style="padding:6px 8px;text-align:left;color:#8899aa">Column</th><th style="padding:6px 8px;text-align:left;color:#8899aa">Meaning</th></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">PWR</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Power setting (%). ▶ marks your current setting.</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">GS</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Projected ground speed at that power (wind-corrected)</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">GPH</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Fuel flow. Current row uses live EDM value; others use data-derived table.</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">ETE</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Time to destination at that power setting</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">FUEL@DEST</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Estimated fuel remaining on arrival. Red &lt;4 gal, amber &lt;8 gal.</td></tr>
+  <tr><td style="padding:6px 8px">△TIME</td><td style="padding:6px 8px">Time cost/savings vs current setting</td></tr>
+</table>
+<p>Power table is derived from <strong>2,004 actual cruise data points</strong> from N194JT flight logs — not generic Lycoming charts.</p>
+
+<!-- ═══ ROUTE TABLE ═══ -->
+<h2 id="route" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Route Table</h2>
+<p>Drag the handle above the instrument strip upward to expand the route table. Shows all waypoints with live nav data.</p>
+<table style="width:100%;border-collapse:collapse;margin:10px 0;font-size:13px">
+  <tr style="background:#152847"><th style="padding:6px 8px;text-align:left;color:#8899aa">Column</th><th style="padding:6px 8px;text-align:left;color:#8899aa">Meaning</th></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">WPT</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Waypoint ICAO identifier</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">PHASE</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Flight phase: CLB / CRZ / DES</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">ALT</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Planned altitude for this leg. Tap to set.</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">HDG</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Wind-corrected magnetic heading — what you set on the heading bug</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">BRG</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">True geometric bearing (no wind correction — situational awareness)</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">DIST</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Cumulative remaining distance to this waypoint</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">TIME</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Cumulative ETE to this waypoint</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">FUEL / REM</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Fuel burned on leg / remaining at waypoint</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">TAS / GS</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">True airspeed / ground speed for leg</td></tr>
+  <tr><td style="padding:6px 8px">WIND</td><td style="padding:6px 8px">Forecast wind at this waypoint (dir/spd)</td></tr>
+</table>
+<p>The active leg is highlighted. Tap any waypoint row to see its details. Drag the handle down to collapse.</p>
+
+<!-- ═══ TERRAIN PROFILE ═══ -->
+<h2 id="profile" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Terrain Profile (⛰ Profile)</h2>
+<p>Accessible via the ⋮ map menu. Shows a cross-section of terrain and your planned flight path along the route.</p>
+<ul style="padding-left:20px;margin:8px 0">
+  <li style="margin:4px 0"><strong>Brown fill</strong> — terrain elevation from SRTM 30m data</li>
+  <li style="margin:4px 0"><strong>Red fill</strong> — terrain within 1,000 ft of your flight path</li>
+  <li style="margin:4px 0"><strong>Blue line</strong> — planned flight path (amber = climb, cyan = cruise, steel = descent)</li>
+  <li style="margin:4px 0"><strong>Dashed gray</strong> — planned cruise altitude</li>
+  <li style="margin:4px 0"><strong>Indigo dashed</strong> — freezing level (FZL) when available</li>
+  <li style="margin:4px 0"><strong>Gray bands</strong> — cloud layers when available</li>
+</ul>
+<p>Pinch to zoom in on a section. Tap the ⊕ button to expand to full height. Tap Reset to restore full route view.</p>
+
+<!-- ═══ ENGINE ═══ -->
+<h2 id="engine" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Engine Page (⚙️ ENG)</h2>
+<p>Full-screen engine instruments from your engine monitor. Tap ✕ to close and return to the map.</p>
+<table style="width:100%;border-collapse:collapse;margin:10px 0;font-size:13px">
+  <tr style="background:#152847"><th style="padding:6px 8px;text-align:left;color:#8899aa">Gauge</th><th style="padding:6px 8px;text-align:left;color:#8899aa">Limits (O-360-A1A)</th></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">RPM</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Max 2700 RPM</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">MAP (inHg)</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Max 28" (full throttle)</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">% Power</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Typical cruise 55–75%</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Fuel Flow (GPH)</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">~6.5–9.0 GPH at cruise</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Oil Temp (°F)</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Amber &gt;220°F, Red &gt;245°F</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Oil Pressure (PSI)</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Red &lt;25 or &gt;95 PSI</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Volts</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Amber &lt;13.0V (charging issue)</td></tr>
+  <tr><td style="padding:6px 8px">Carb Temp (°F)</td><td style="padding:6px 8px">Amber &lt;40°F (ice risk), Red &lt;32°F (ice forming)</td></tr>
+</table>
+<p><strong>EGT/CHT bars</strong> — per-cylinder, color-coded. Spread values shown for mixture diagnostics.</p>
+<p><strong>Trend charts</strong> — 30-minute scrolling history. Sticky valve detection banner appears when a valve anomaly is detected.</p>
+<p><strong>Fuel endurance</strong> — shows time remaining at current fuel flow.</p>
+
+<!-- ═══ ENGINE ML ═══ -->
+<h2 id="engineml" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Engine ML (MORE → Engine ML)</h2>
+<p>On-device machine learning running on the Snapdragon NPU. Monitors engine data in real time.</p>
+<ul style="padding-left:20px;margin:8px 0">
+  <li style="margin:4px 0"><strong>Anomaly detection</strong> — flags deviations from your engine's normal patterns. Trained on N194JT flight data.</li>
+  <li style="margin:4px 0"><strong>Phase detection</strong> — automatically classifies taxi, climb, cruise, descent, approach.</li>
+  <li style="margin:4px 0"><strong>Sticky valve detection</strong> — monitors EGT spread per cylinder during run-up and cruise.</li>
+  <li style="margin:4px 0"><strong>Anomaly score</strong> — 0–100, shown in the ML status card. &gt;70 = advisory.</li>
+</ul>
+<p>ML logs are saved with each flight and viewable in the Logbook → ML tab.</p>
+<div style="background:rgba(255,170,0,0.1);border-left:3px solid #ffaa00;padding:8px 12px;border-radius:0 6px 6px 0;margin:10px 0;font-size:13px">
+  Engine ML is advisory only. Always cross-check with your primary gauges. Never substitute ML output for direct instrument monitoring.
 </div>
 
-<h2 id="logbook" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Logbook (MORE → Logbook)</h2>
-<p>The logbook auto-creates a draft entry when flight recording stops. Entries include date, departure, destination, flight time, and Hobbs.</p>
+<!-- ═══ CHECKLISTS ═══ -->
+<h2 id="checklist" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Checklists (✅ CHK)</h2>
+<p>Three tabs: <strong>Normal</strong>, <strong>Abnormal</strong>, and <strong>Emergency</strong>. Customized for N194JT.</p>
 <ul style="padding-left:20px;margin:8px 0">
-  <li style="margin:4px 0"><strong>Flights tab</strong> — all entries, tap to edit or review</li>
-  <li style="margin:4px 0"><strong>Currency tab</strong> — recent landings and flight time for currency tracking</li>
-  <li style="margin:4px 0"><strong>Oil tab</strong> — oil service log</li>
-  <li style="margin:4px 0"><strong>ML tab</strong> — engine ML logs linked to each flight</li>
-  <li style="margin:4px 0"><strong>SYNC</strong> — manually push entries to flywhere.app</li>
+  <li style="margin:4px 0">Tap each item to check it off (item turns green)</li>
+  <li style="margin:4px 0">Tap the section header to expand/collapse</li>
+  <li style="margin:4px 0">Tap Reset to clear all items for the next flight</li>
+</ul>
+<div style="background:rgba(255,68,68,0.1);border-left:3px solid #ff4444;padding:8px 12px;border-radius:0 6px 6px 0;margin:10px 0;font-size:13px">
+  Emergency checklists are a reference only. Always follow the aircraft's POH/AFM as primary authority.
+</div>
+
+<!-- ═══ LOGBOOK ═══ -->
+<h2 id="logbook" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Logbook (MORE → Logbook)</h2>
+<p>Auto-creates a draft entry when flight recording stops. Includes date, route, flight time, and Hobbs.</p>
+<ul style="padding-left:20px;margin:8px 0">
+  <li style="margin:4px 0"><strong>Flights</strong> — all entries. Tap to edit or review.</li>
+  <li style="margin:4px 0"><strong>Currency</strong> — recent landings and flight time for IFR/currency tracking</li>
+  <li style="margin:4px 0"><strong>Oil</strong> — oil service log</li>
+  <li style="margin:4px 0"><strong>ML</strong> — engine ML summaries linked to each flight</li>
+  <li style="margin:4px 0"><strong>SYNC</strong> — push entries to flywhere.app</li>
   <li style="margin:4px 0"><strong>+ NEW</strong> — create a manual entry</li>
 </ul>
-<p>Entries are stored locally in IndexedDB and sync to flywhere.app when online.</p>
+<p>Stored locally in IndexedDB. Syncs to flywhere.app when online and authenticated.</p>
 
+<!-- ═══ APPROACH CHARTS ═══ -->
 <h2 id="charts" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Approach Charts (MORE → Approach Charts)</h2>
-<p>Route-aware plate viewer for FAA approach charts.</p>
 <ul style="padding-left:20px;margin:8px 0">
-  <li style="margin:4px 0">Auto-populates plates for airports on your flight plan</li>
-  <li style="margin:4px 0">Search any airport by ICAO to browse its plates</li>
-  <li style="margin:4px 0">Plates cached for offline use once viewed</li>
-  <li style="margin:4px 0">Georeferenced overlay available — shows ownship on the plate</li>
+  <li style="margin:4px 0">Auto-populates plates for airports on your active flight plan</li>
+  <li style="margin:4px 0">Search any airport by ICAO to browse all its plates</li>
+  <li style="margin:4px 0">Plates cached offline once viewed</li>
+  <li style="margin:4px 0"><strong>Georef mode</strong> — shows ownship position overlaid on the plate (GPS-position-aware)</li>
+  <li style="margin:4px 0">Pinch to zoom, drag to pan</li>
 </ul>
+<p>Plate states preloaded: NC, SC, VA, GA, TN. Others available via search when online.</p>
 
+<!-- ═══ WEATHER ═══ -->
 <h2 id="weather" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Weather</h2>
-<p><strong>In flight (primary):</strong> FIS-B via Stratux — live METARs, TAFs, PIREPs, SIGMETs, NEXRAD radar.</p>
-<p><strong>Pre-flight:</strong> MORE → Weather Briefing for online weather from flywhere.app.</p>
-<p><strong>NEXRAD radar:</strong> Tap the WX layer button on the map. Radar loop controls appear at the bottom.</p>
-<p><strong>Airport weather:</strong> Tap any airport on the map for its METAR and TAF.</p>
+<p><strong>In flight — FIS-B (primary):</strong> Stratux receives live METARs, TAFs, PIREPs, SIGMETs, NEXRAD via UAT ground stations. FIS-B badge turns green when towers are in range.</p>
+<p><strong>Pre-flight briefing:</strong> MORE → Weather Briefing opens the flywhere.app weather brief (requires connectivity).</p>
+<p><strong>NEXRAD radar:</strong> Tap the WX layer button on the left rail. A 2-hour radar loop plays automatically.</p>
+<p><strong>Airport weather popup:</strong> Tap any airport marker on the map for its METAR and TAF.</p>
+<p><strong>SIGMETs/AIRMETs:</strong> Shown as colored overlays on the map when FIS-B data is available in flight, or from the weather brief pre-flight.</p>
 
-<h2 id="routing" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Routing</h2>
-<p><strong>Load a flight plan:</strong> MORE → Load Flight Plan to sync from flywhere.app.</p>
-<p><strong>Direct-To:</strong> Tap D→ on the map to fly direct to any airport, navaid, or fix.</p>
-<p><strong>Route table:</strong> Drag up the bottom handle to expand. Shows waypoints with leg distance, time, and fuel burn. Tap Edit to modify the route.</p>
-<p><strong>Airport popup:</strong> Tap any airport on the map for frequencies, runways, weather, and a Direct-To button.</p>
-
+<!-- ═══ FLIGHT RECORDING ═══ -->
 <h2 id="recording" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Flight Recording</h2>
-<p>Auto-starts when RPM exceeds 500, auto-stops 60 seconds after RPM drops below 100. The red ● REC badge shows it's active.</p>
-<p>Records GPS position, altitude, ground speed, all engine parameters (RPM, EGT 1–4, CHT 1–4, oil, fuel flow, carb temp), fuel state, and G-load at ~1 Hz. Compatible with Savvy Aviation CSV format.</p>
-<p>Recordings are saved to <code>Documents/FlyTab/flights/</code> on the device and can be uploaded via MORE → Save Flight CSV.</p>
+<p>Auto-starts when RPM &gt;500. Auto-stops 60 seconds after RPM &lt;100. The red <strong>● REC</strong> badge shows it's active.</p>
+<p>Records at ~1 Hz:</p>
+<ul style="padding-left:20px;margin:8px 0">
+  <li style="margin:4px 0">GPS: position, altitude, ground speed, track, vertical speed</li>
+  <li style="margin:4px 0">Engine: RPM, EGT 1–4, CHT 1–4, oil temp/pressure, fuel flow, carb temp, % power</li>
+  <li style="margin:4px 0">Fuel state, G-load</li>
+</ul>
+<p>Output format is compatible with <strong>Savvy Aviation CSV</strong> for upload to SavvyAnalysis.</p>
+<p>Files saved to device storage. Access via MORE → Save Flight CSV or via the Android Files app.</p>
 
-<h2 id="fuel" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Fuel Entry (MORE → Fuel Entry)</h2>
-<p>Set fuel state by tic mark reading. Use the sliders or fine +/− buttons for left and right tanks. FlyTab converts tic marks to gallons using your aircraft's calibration curve.</p>
-<p>Tap <strong>Apply</strong> to update the nav strip FUEL and RANGE displays immediately.</p>
+<!-- ═══ FUEL ═══ -->
+<h2 id="fuel" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Fuel Entry</h2>
+<p>Tap the <strong>FUEL</strong> field on the instrument strip, or use MORE → Fuel Entry.</p>
+<ul style="padding-left:20px;margin:8px 0">
+  <li style="margin:4px 0">Set left and right tank tic mark readings using sliders or +/− buttons</li>
+  <li style="margin:4px 0">FlyTab converts tic marks to gallons using N194JT's calibration polynomial</li>
+  <li style="margin:4px 0">Tap <strong>Apply</strong> to update FUEL and RANGE in the instrument strip immediately</li>
+  <li style="margin:4px 0">If the engine monitor reports live fuel remaining, that overrides the manual entry during flight</li>
+</ul>
+<p>Fuel capacity: 36 gallons total (18 per tank).</p>
 
+<!-- ═══ OFFLINE ═══ -->
 <h2 id="offline" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Offline Use</h2>
-<p>FlyTab is offline-first. The NET/OFFL badge shows Pi connectivity. Everything except live weather and plan sync works offline.</p>
-<ul style="padding-left:20px;margin:8px 0">
-  <li style="margin:4px 0">Map, instruments, engine data — all load from cache instantly</li>
-  <li style="margin:4px 0">NASR database (airports, navaids, airspace) — stored in IndexedDB</li>
-  <li style="margin:4px 0">Previously viewed approach plates — cached</li>
-  <li style="margin:4px 0">Flight plan — persists across restarts</li>
-  <li style="margin:4px 0">Checklists, logbook, configuration — all local</li>
-</ul>
-<p>Engine data is real-time only — stale engine data is never shown.</p>
+<p>FlyTab is offline-first. The <strong>NET/OFFL</strong> badge shows Pi connectivity. Everything except live weather and plan sync works without internet.</p>
+<table style="width:100%;border-collapse:collapse;margin:10px 0;font-size:13px">
+  <tr style="background:#152847"><th style="padding:6px 8px;text-align:left;color:#8899aa">Feature</th><th style="padding:6px 8px;text-align:left;color:#8899aa">Offline?</th></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Moving map (vector)</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">✅ Always available</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Engine instruments</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">✅ Real-time from Stratux/Pi</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">NASR database (airports, navaids)</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">✅ Stored in IndexedDB</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Approach plates (cached)</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">✅ Previously viewed plates</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Flight plan</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">✅ Persists across restarts</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Checklists, logbook, config</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">✅ All local</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">FIS-B weather</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">✅ Via Stratux (no internet needed)</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Pre-flight weather brief</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">❌ Requires internet</td></tr>
+  <tr><td style="padding:6px 8px">Plan sync from flywhere.app</td><td style="padding:6px 8px">❌ Requires internet</td></tr>
+</table>
 
+<!-- ═══ CONFIGURATION ═══ -->
 <h2 id="config" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Configuration (MORE → Configuration)</h2>
-<p>Runtime editor for all cockpit settings. Changes apply immediately without restarting.</p>
+<p>Runtime JSON editor — changes apply immediately without restarting.</p>
 <ul style="padding-left:20px;margin:8px 0">
-  <li style="margin:4px 0">Engine polling and thresholds</li>
-  <li style="margin:4px 0">Map defaults and layer visibility</li>
-  <li style="margin:4px 0">Flight recording auto-start RPM</li>
-  <li style="margin:4px 0">Radar loop playback speed</li>
-  <li style="margin:4px 0">Approach chart georef and orientation</li>
-  <li style="margin:4px 0">Takeoff alert altitudes</li>
+  <li style="margin:4px 0"><strong>enginePage</strong> — fuel caution/warning levels, trend chart window, sticky valve thresholds</li>
+  <li style="margin:4px 0"><strong>map</strong> — default center, zoom, overlay visibility</li>
+  <li style="margin:4px 0"><strong>flightRecording</strong> — auto-start RPM threshold, stop delay</li>
+  <li style="margin:4px 0"><strong>routeTable.columns</strong> — which columns appear in the route table (HDG, BRG, FUEL, etc.)</li>
+  <li style="margin:4px 0"><strong>instrumentStrip.fields</strong> — which fields appear in the instrument strip</li>
+  <li style="margin:4px 0"><strong>radar</strong> — loop duration, playback speed, opacity</li>
+  <li style="margin:4px 0"><strong>approachCharts</strong> — georef enable, ownship icon size</li>
+  <li style="margin:4px 0"><strong>traffic</strong> — max altitude separation filter, callsign display</li>
 </ul>
-<p>Aircraft-specific settings (V-speeds, fuel calibration, performance profiles) are in <code>aircraft-config.json</code>.</p>
+<p>Aircraft-specific data (V-speeds, fuel calibration, power settings table, engine limits) is in <code>aircraft-config.json</code>. The power settings table in that file is derived from actual N194JT flight data — 2,004 data points across 33 flights.</p>
+<p><strong>Stratux IP</strong> — tap the Stratux field to set a custom IP if your network uses a non-default address.</p>
 
 <div style="margin:40px 0 20px;padding-top:16px;border-top:1px solid #1a3055;text-align:center;font-size:12px;color:#8899aa">
-  FlyTab v${typeof FLYTAB_VERSION !== 'undefined' ? FLYTAB_VERSION : '4.10'} — N194JT RV-9A
+  FlyTab ${ver} · N194JT RV-9A · Lycoming O-360-A1A
 </div>
 
 </div>`;
