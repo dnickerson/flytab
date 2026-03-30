@@ -44,7 +44,55 @@
     "vs0_kt": 42,
     "vfe_kt": 78,
     "vno_kt": 156,
-    "vne_kt": 182
+    "vne_kt": 182,
+    "power_settings": [
+      {
+        "pct": 55,
+        "rpm": 2390,
+        "mp": 19.4,
+        "tas_kt": 128,
+        "gph": 6.5,
+        "gph_std": 0.42,
+        "samples": 149
+      },
+      {
+        "pct": 60,
+        "rpm": 2390,
+        "mp": 21.3,
+        "tas_kt": 140,
+        "gph": 7.3,
+        "gph_std": 0.9,
+        "samples": 329
+      },
+      {
+        "pct": 65,
+        "rpm": 2390,
+        "mp": 22.1,
+        "tas_kt": 153,
+        "gph": 8.1,
+        "gph_std": 1.13,
+        "samples": 1120
+      },
+      {
+        "pct": 70,
+        "rpm": 2400,
+        "mp": 23.6,
+        "tas_kt": 156,
+        "gph": 8.7,
+        "gph_std": 0.83,
+        "samples": 359
+      },
+      {
+        "pct": 75,
+        "rpm": 2410,
+        "mp": 24.5,
+        "tas_kt": 161,
+        "gph": 8.9,
+        "gph_std": 0.41,
+        "samples": 47
+      }
+    ],
+    "power_settings_source": "data-derived from 33 EDM+GPS flight logs, N194JT O-360-A1A"
   },
   "engine_type": "Lycoming",
   "engine_model": "O-360-A1A",
