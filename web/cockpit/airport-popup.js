@@ -196,12 +196,26 @@ class AirportPopup {
                 const pane = this._panel.querySelector(`.apt-tab-pane[data-pane="${tab.dataset.tab}"]`);
                 if (pane) pane.classList.add('active');
 
-                // Lazy-load plate panes on first activation
-                if (tab.dataset.tab === 'diag' || tab.dataset.tab === 'aptinfo') {
+                // Lazy-load panes on first activation
+                if (tab.dataset.tab === 'diag') {
                     const platePaneEl = pane?.querySelector('.apt-plate-pane');
                     if (platePaneEl && !platePaneEl.dataset.loaded) {
                         platePaneEl.dataset.loaded = '1';
                         this._loadPlatePaneForType(platePaneEl, airport.icao, platePaneEl.dataset.plateType);
+                    }
+                }
+                if (tab.dataset.tab === 'afd') {
+                    const afdPaneEl = pane?.querySelector('.apt-afd-pane');
+                    if (afdPaneEl && !afdPaneEl.dataset.loaded) {
+                        afdPaneEl.dataset.loaded = '1';
+                        this._loadAfdPane(afdPaneEl, airport.icao);
+                    }
+                }
+                if (tab.dataset.tab === 'iap') {
+                    const listPaneEl = pane?.querySelector('.apt-plate-list-pane');
+                    if (listPaneEl && !listPaneEl.dataset.loaded) {
+                        listPaneEl.dataset.loaded = '1';
+                        this._loadPlateListPane(listPaneEl, airport.icao);
                     }
                 }
             });
@@ -329,9 +343,9 @@ class AirportPopup {
             <button class="apt-tab active" data-tab="info">INFO</button>
             <button class="apt-tab" data-tab="wx">WX</button>
             <button class="apt-tab" data-tab="rwy">RWY</button>
-            <button class="apt-tab" data-tab="appr">APPR</button>
+            <button class="apt-tab" data-tab="iap">IAP</button>
             <button class="apt-tab" data-tab="diag">DIAG</button>
-            <button class="apt-tab" data-tab="aptinfo">A/FD</button>
+            <button class="apt-tab" data-tab="afd">A/FD</button>
         </div>
 
         <div class="apt-tab-content">
@@ -347,12 +361,14 @@ class AirportPopup {
             <div class="apt-tab-pane" data-pane="rwy">
                 ${apt.runways?.length ? this._runwaysHtml(apt.runways) : '<div style="padding:16px;color:var(--text-muted)">No runway data</div>'}
             </div>
-            <div class="apt-tab-pane" data-pane="appr"></div>
+            <div class="apt-tab-pane" data-pane="iap">
+                <div class="apt-plate-list-pane" data-plate-codes="IAP,DP,STAR,ODP"></div>
+            </div>
             <div class="apt-tab-pane" data-pane="diag">
                 <div class="apt-plate-pane" data-plate-type="APD"></div>
             </div>
-            <div class="apt-tab-pane" data-pane="aptinfo">
-                <div class="apt-plate-pane" data-plate-type="MIN"></div>
+            <div class="apt-tab-pane" data-pane="afd">
+                <div class="apt-afd-pane"></div>
             </div>
         </div>`;
     }
@@ -646,6 +662,148 @@ class AirportPopup {
      * Shows the plate inline as an <img> (WebP converted) or <iframe> (PDF fallback).
      * Uses the approach charts module's plate index if available.
      */
+    /**
+     * Load the A/FD (Airport/Facility Directory) Chart Supplement page for an airport.
+     * The pipeline downloads per-airport pages from the FAA Chart Supplement and stores
+     * them as AFD_PAGE.webp in data/plates/{ICAO}/AFD_PAGE.webp via NanoHTTPD.
+     */
+    async _loadAfdPane(containerEl, icao) {
+        containerEl.innerHTML = '<div style="padding:16px;color:var(--text-muted);font-size:13px">Loading A/FD…</div>';
+        const PLATES_BASE = 'http://localhost:9090/plates';
+        const webpUrl = `${PLATES_BASE}/${icao.toUpperCase()}/AFD_PAGE.webp`;
+
+        // Check if the file exists by attempting to load it
+        const img = document.createElement('img');
+        img.className = 'apt-plate-img';
+        img.alt = `${icao} A/FD Chart Supplement`;
+        img.style.cssText = 'width:100%;display:block;';
+
+        img.onload = () => {
+            containerEl.innerHTML = '';
+            const wrap = document.createElement('div');
+            wrap.className = 'apt-plate-viewer';
+            const titleEl = document.createElement('div');
+            titleEl.className = 'apt-plate-title';
+            titleEl.textContent = `${icao} — Chart Supplement (A/FD)`;
+            const imgWrap = document.createElement('div');
+            imgWrap.className = 'apt-plate-img-wrap';
+            imgWrap.appendChild(img);
+            wrap.appendChild(titleEl);
+            wrap.appendChild(imgWrap);
+            containerEl.appendChild(wrap);
+            this._enablePinchZoom(img);
+        };
+
+        img.onerror = () => {
+            containerEl.innerHTML = `
+                <div style="padding:16px;color:var(--text-muted);font-size:13px">
+                    <div style="font-weight:600;margin-bottom:8px;color:var(--text-primary)">${icao} — Chart Supplement</div>
+                    <div>A/FD page not downloaded for this airport.</div>
+                    <div style="margin-top:8px;font-size:11px;color:var(--text-dim)">
+                        Download via Pre-Flight Refresh when connected to the Pi.
+                        Coverage: NC, SC, VA, GA, TN and surrounding states.
+                    </div>
+                </div>`;
+        };
+
+        img.src = webpUrl;
+    }
+
+    /**
+     * Load a list of plates grouped by type (IAP / DP / STAR etc.) with tap-to-view.
+     * Used for the IAP tab.
+     */
+    async _loadPlateListPane(containerEl, icao) {
+        containerEl.innerHTML = '<div style="padding:16px;color:var(--text-muted);font-size:13px">Loading…</div>';
+        const PLATES_BASE = 'http://localhost:9090/plates';
+
+        try {
+            let plateIndex = this._approachCharts?._plateIndex || null;
+            if (!plateIndex) {
+                const r = await fetch(`${PLATES_BASE}/plate_index.json`, {
+                    cache: 'no-store', signal: AbortSignal.timeout(5000),
+                });
+                if (r.ok) {
+                    plateIndex = await r.json();
+                    if (this._approachCharts && !this._approachCharts._plateIndex) {
+                        this._approachCharts._plateIndex = plateIndex;
+                    }
+                }
+            }
+
+            const entry = plateIndex?.[icao];
+            const allPlates = entry?.plates || (Array.isArray(entry) ? entry : []);
+
+            // Filter and group by type
+            const WANTED_CODES = ['IAP', 'DP', 'STAR', 'ODP'];
+            const CODE_LABELS = { IAP: 'Approaches', DP: 'Departures', STAR: 'Arrivals', ODP: 'ODP' };
+            const plates = allPlates.filter(p => WANTED_CODES.includes(p.chart_code));
+
+            if (!plates.length) {
+                containerEl.innerHTML = `<div style="padding:16px;color:var(--text-muted);font-size:13px">
+                    No instrument procedures found for ${icao}.<br>
+                    <span style="font-size:11px;color:var(--text-dim)">Download plates via Pre-Flight Refresh to enable this tab.</span>
+                </div>`;
+                return;
+            }
+
+            // Group by chart_code
+            const groups = {};
+            for (const p of plates) {
+                if (!groups[p.chart_code]) groups[p.chart_code] = [];
+                groups[p.chart_code].push(p);
+            }
+
+            let html = '<div class="apt-plate-list">';
+            for (const code of WANTED_CODES) {
+                if (!groups[code]) continue;
+                html += `<div class="apt-plate-group-header">${CODE_LABELS[code] || code}</div>`;
+                for (const p of groups[code]) {
+                    const name = p.chart_name || p.name || p.pdf_name;
+                    html += `<button class="apt-plate-list-row" data-pdf="${p.pdf_name}" data-name="${name.replace(/"/g, '&quot;')}">${name}</button>`;
+                }
+            }
+            html += '</div>';
+
+            containerEl.innerHTML = html;
+
+            // Wire plate rows to show viewer
+            containerEl.querySelectorAll('.apt-plate-list-row').forEach(row => {
+                this._wireButton(row, () => {
+                    const file = row.dataset.pdf;
+                    const name = row.dataset.name;
+                    const webpUrl = `${PLATES_BASE}/${icao}/${file.replace(/\.pdf$/i, '.webp')}`;
+                    const pdfUrl  = `${PLATES_BASE}/${icao}/${file}`;
+
+                    containerEl.innerHTML = `
+                        <div class="apt-plate-viewer">
+                            <button class="apt-plate-back-btn">← Back</button>
+                            <div class="apt-plate-title">${name}</div>
+                            <div class="apt-plate-img-wrap">
+                                <img class="apt-plate-img" src="${webpUrl}" alt="${name}"
+                                     onerror="this.onerror=null;this.style.display='none';this.nextElementSibling.style.display='block'">
+                                <iframe class="apt-plate-iframe" src="${pdfUrl}" style="display:none" title="${name}"></iframe>
+                            </div>
+                        </div>`;
+
+                    const img = containerEl.querySelector('.apt-plate-img');
+                    if (img) this._enablePinchZoom(img);
+
+                    const backBtn = containerEl.querySelector('.apt-plate-back-btn');
+                    if (backBtn) {
+                        backBtn.addEventListener('click', () => {
+                            containerEl.dataset.loaded = '';
+                            this._loadPlateListPane(containerEl, icao);
+                        });
+                    }
+                });
+            });
+
+        } catch (err) {
+            containerEl.innerHTML = `<div style="padding:16px;color:var(--text-muted);font-size:13px">Error: ${err.message}</div>`;
+        }
+    }
+
     async _loadPlatePaneForType(containerEl, icao, plateType) {
         containerEl.innerHTML = '<div style="padding:16px;color:var(--text-muted);font-size:13px">Loading…</div>';
 
@@ -802,8 +960,9 @@ class AirportPopup {
     _aptFactsHtml(apt) {
         const facts = [];
         if (apt.elev_ft != null) facts.push({ label: 'ELEV', value: `${apt.elev_ft} ft` });
-        if (apt.tpa_ft)          facts.push({ label: 'TPA',  value: `${apt.tpa_ft} ft MSL` });
+        if (apt.tpa_ft)          facts.push({ label: 'TPA',  value: `${apt.tpa_ft} ft` });
         if (apt.fuel)            facts.push({ label: 'FUEL', value: apt.fuel });
+        if (apt.longest_rwy_ft)  facts.push({ label: 'RWY',  value: `${apt.longest_rwy_ft} ft` });
         if (!facts.length) return '';
         const cells = facts.map(f =>
             `<div class="apt-fact"><div class="apt-fact-label">${f.label}</div><div class="apt-fact-value">${f.value}</div></div>`
