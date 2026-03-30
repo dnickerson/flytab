@@ -5086,6 +5086,128 @@ body {
     color: var(--status-ok);
 }
 
+/* Delta sub-label below value — shows ±deviation from plan */
+.is-delta {
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1;
+    color: var(--text-muted);
+    min-height: 13px;
+}
+.is-delta-green { color: var(--status-ok); }
+.is-delta-amber { color: var(--status-warn); }
+.is-delta-red   { color: var(--status-err); }
+
+/* ── Power Tradeoff Panel ── */
+.pt-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 2000;
+}
+.pt-backdrop.pt-visible { display: block; }
+
+.pt-panel {
+    display: none;
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    background: var(--bg-surface);
+    border-top: 2px solid var(--border-strong);
+    border-radius: 12px 12px 0 0;
+    z-index: 2001;
+    max-height: 60vh;
+    overflow: hidden;
+    flex-direction: column;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.pt-panel.pt-visible { display: flex; }
+
+.pt-header {
+    display: flex;
+    align-items: center;
+    padding: 12px 16px 8px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+.pt-title {
+    flex: 1;
+    font-size: var(--text-base);
+    font-weight: 700;
+    color: var(--text-primary);
+}
+.pt-close {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 18px;
+    padding: 4px 8px;
+    cursor: pointer;
+    min-width: var(--touch-min);
+    min-height: var(--touch-min);
+}
+
+.pt-body {
+    overflow-y: auto;
+    flex: 1;
+    padding: 4px 0;
+}
+
+.pt-footer {
+    font-size: 11px;
+    color: var(--text-muted);
+    padding: 6px 16px 8px;
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.pt-no-data {
+    padding: 24px;
+    text-align: center;
+    color: var(--text-muted);
+}
+
+.pt-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--text-sm);
+}
+.pt-table thead th {
+    padding: 4px 10px;
+    text-align: right;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    border-bottom: 1px solid var(--border);
+}
+.pt-table thead th:first-child { text-align: left; }
+.pt-table tbody td {
+    padding: 8px 10px;
+    text-align: right;
+    font-family: var(--font-instrument);
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+    border-bottom: 1px solid var(--border);
+}
+.pt-table tbody td:first-child { text-align: left; }
+.pt-table tbody tr:last-child td { border-bottom: none; }
+
+/* Current power row */
+.pt-row-current {
+    background: rgba(0, 102, 204, 0.12);
+}
+.pt-row-current td { color: var(--accent-blue, #4aa8ff); }
+.pt-pwr { font-weight: 700 !important; }
+
+/* Delta colours */
+.pt-green  { color: var(--status-ok)   !important; }
+.pt-amber  { color: var(--status-warn) !important; }
+.pt-yellow { color: var(--status-warn) !important; }
+.pt-red    { color: var(--status-err)  !important; }
+
 /* Tab bar: fixed bottom nav, positioned above Android system nav bar */
 #tabBar {
     display: flex !important;

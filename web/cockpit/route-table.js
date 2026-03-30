@@ -1452,6 +1452,57 @@ class RouteTable {
                 rollingFuel = fuelRem + added;
             }
         }
+
+        // Emit leg update event so InstrumentStrip and PowerTradeoff can update
+        // without polling. Fires after every _computeEnroute() — ~1Hz in flight.
+        this._emitLegUpdate();
+    }
+
+    /**
+     * Publish activeroute:legupdate with destination-level data for the
+     * instrument strip and power tradeoff panel.
+     */
+    _emitLegUpdate() {
+        const active = this._activeIndex >= 0 ? this._waypoints[this._activeIndex] : null;
+        if (!active) return;
+
+        // Destination waypoint for current flight
+        const activeFlight = this._flights?.find(f =>
+            this._activeIndex >= f.depWpIndex && this._activeIndex <= f.destWpIndex
+        );
+        const destIdx = activeFlight?.destWpIndex ?? (this._waypoints.length - 1);
+        const destWp  = this._waypoints[destIdx];
+        if (!destWp) return;
+
+        // Planned GPH for remaining cruise (from config)
+        const plannedGph = CockpitConfig.aircraft('performance.cruise_gph') ?? 9.0;
+
+        // Live fuel remaining
+        const engData = window.enginePanel?.lastData;
+        const fuelRem = engData?.fuel_remaining_gal ?? engData?.fuel_gal ?? engData?.Gallons_Rem ?? engData?.Fuel_Remaining ?? null;
+        const liveGph = (engData?.fuel_flow_gph ?? engData?.gph ?? engData?.Fuel_Flow ?? null);
+
+        window.dispatchEvent(new CustomEvent('activeroute:legupdate', {
+            detail: {
+                // Active leg
+                hdg:            active._hdg,          // wind-corrected mag heading
+                activeWind:     active._wind,          // { dir, spd } wind at active leg
+                activeTas:      active._tas,           // planned TAS for active leg
+
+                // Destination
+                destDistNm:     destWp._cumDist,       // nm remaining to dest
+                destEteMin:     destWp._cumEte,        // planned ETE to dest (minutes)
+
+                // Fuel
+                plannedGph,
+                fuelRemaining:  fuelRem,
+                liveGph,
+
+                // Live performance
+                liveGs: this._lastSituation?.ground_speed ?? null,
+                livePctPower: engData?.percent_power ?? engData?.pwr ?? null,
+            }
+        }));
     }
 
     /** Toggle flight rules between VFR and IFR */

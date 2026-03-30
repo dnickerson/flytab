@@ -680,10 +680,17 @@ class FlyTabApp {
         this.rangeCalc = new RangeCalc(this.stratuxClient, this.enginePanel, this.cockpitMap);
         this.rangeCalc.init();
 
+        // ── Power Tradeoff Panel ─────────────────────────────────────────────
+        if (typeof PowerTradeoff !== 'undefined') {
+            this.powerTradeoff = new PowerTradeoff();
+            this.powerTradeoff.init();
+        }
+
         // ── v5 UI: Instrument Strip ──────────────────────────────────────────
         if (typeof InstrumentStrip !== 'undefined') {
             this.instrumentStrip = new InstrumentStrip(this.stratuxClient, this.engineClient);
             if (this.fuelOverlay) this.instrumentStrip.setFuelOverlay(this.fuelOverlay);
+            if (this.powerTradeoff) this.instrumentStrip.setPowerTradeoff(this.powerTradeoff);
             const stripEl = this.instrumentStrip.init();
             // Place instrument strip inside route-table-sheet (after handle) so they stack together
             const rtSheet = document.querySelector('.route-table-sheet');

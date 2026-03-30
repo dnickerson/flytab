@@ -1,6 +1,7 @@
 /**
  * FlyPi v5 — Instrument Strip
- * Bottom bar showing numeric flight instruments: GS, ALT, VS, FUEL, Dist, ETE.
+ * Bottom bar: GS, ALT, HDG, FUEL▲, DEST, ETE▲ when route active.
+ * Without route: GS, ALT, FUEL, DIST, ETE (config-driven fallback).
  * Config-driven field list via cockpit-config.json instrumentStrip.fields.
  */
 
@@ -9,18 +10,28 @@ class InstrumentStrip {
         this._stratux = stratuxClient;
         this._engine = engineClient || null;
         this._el = null;
-        this._activePlan = null;  // local ref for quick existence check in _update()
+        this._activePlan = null;
         this._onSituation = null;
         this._onRouteAdvance = null;
+        this._onLegUpdate = null;
 
         // Default fields if no config
-        this._fields = ['gs', 'alt', 'vs', 'dist', 'ete'];
+        this._fields = ['gs', 'alt', 'hdg', 'fuel', 'dest', 'ete'];
         this._fuelOverlay = null;
+        this._powerTradeoff = null;
+
+        // Last leg update from route-table
+        this._legData = null;
     }
 
     /** Wire the fuel field tap to open the fuel overlay. */
     setFuelOverlay(overlay) {
         this._fuelOverlay = overlay;
+    }
+
+    /** Wire the power tradeoff panel (tapping ETE▲ / FUEL▲ opens it). */
+    setPowerTradeoff(panel) {
+        this._powerTradeoff = panel;
     }
 
     init() {
@@ -50,8 +61,8 @@ class InstrumentStrip {
                 if (this._stratux._suppressGpsSituation) return;
                 this._set('gs', '—');
                 this._set('alt', '—');
-                this._set('vs', '—');
-                this._set('dist', '—');
+                this._set('hdg', '—');
+                this._set('dest', '—');
                 this._set('ete', '—');
             };
             this._stratux.addEventListener('stratux:disconnect', this._onDisconnect);
@@ -64,6 +75,13 @@ class InstrumentStrip {
         // Fuel updates from manual fuel overlay changes
         this._onFuelChanged = () => this._updateFuel();
         window.addEventListener('fuelstate:changed', this._onFuelChanged);
+
+        // Route leg updates from RouteTable — HDG, destination ETE/fuel deltas
+        this._onLegUpdate = (e) => {
+            this._legData = e.detail;
+            this._updateLegFields();
+        };
+        window.addEventListener('activeroute:legupdate', this._onLegUpdate);
 
         return this._el;
     }
@@ -80,6 +98,9 @@ class InstrumentStrip {
         }
         if (this._onFuelChanged) {
             window.removeEventListener('fuelstate:changed', this._onFuelChanged);
+        }
+        if (this._onLegUpdate) {
+            window.removeEventListener('activeroute:legupdate', this._onLegUpdate);
         }
     }
 
@@ -104,8 +125,10 @@ class InstrumentStrip {
             gs:   { label: 'GS',   unit: 'kt'  },
             alt:  { label: 'ALT',  unit: 'ft'  },
             vs:   { label: 'VS',   unit: 'fpm' },
+            hdg:  { label: 'HDG',  unit: '°'   },
             fuel: { label: 'FUEL', unit: 'gal' },
             dist: { label: 'DIST', unit: 'nm'  },
+            dest: { label: 'DEST', unit: 'nm'  },
             ete:  { label: 'ETE',  unit: ''    },
         };
 
@@ -123,14 +146,25 @@ class InstrumentStrip {
         unitEl.className = 'is-unit';
         unitEl.textContent = cfg.unit;
 
+        // Delta sub-label for ETE and DEST fields (shows ±delta vs plan)
+        let deltaEl = null;
+        if (field === 'ete' || field === 'dest' || field === 'fuel') {
+            deltaEl = document.createElement('span');
+            deltaEl.className = 'is-delta';
+            deltaEl.textContent = '';
+            div.appendChild(deltaEl);
+        }
+
         div.appendChild(labelEl);
         div.appendChild(valueEl);
         div.appendChild(unitEl);
+        if (deltaEl) div.appendChild(deltaEl);
 
-        // Cache reference for fast updates — no getElementById needed
+        // Cache references for fast updates
         this._els[field] = valueEl;
+        if (deltaEl) this._els[`${field}_delta`] = deltaEl;
 
-        // FUEL field is a tap target that opens the fuel entry overlay
+        // FUEL field — tap opens fuel overlay
         if (field === 'fuel') {
             div.classList.add('is-field-tap');
             let touchFired = false;
@@ -145,6 +179,21 @@ class InstrumentStrip {
             });
         }
 
+        // ETE / DEST — tap opens power tradeoff panel
+        if (field === 'ete' || field === 'dest') {
+            div.classList.add('is-field-tap');
+            let touchFired = false;
+            div.addEventListener('touchstart', (e) => {
+                e.stopPropagation();
+                touchFired = true;
+                this._powerTradeoff?.toggle();
+            }, { passive: true });
+            div.addEventListener('click', () => {
+                if (!touchFired) this._powerTradeoff?.toggle();
+                touchFired = false;
+            });
+        }
+
         return div;
     }
 
@@ -152,19 +201,74 @@ class InstrumentStrip {
         if (!sit) return;
 
         const gpsOk = sit.gps_fix_quality > 0;
-        const gs = gpsOk ? sit.ground_speed : null;
+        const gs  = gpsOk ? sit.ground_speed : null;
         const alt = gpsOk ? (sit.alt_msl || sit.alt_baro) : null;
-        const vs = gpsOk ? sit.vertical_speed : null;
 
-        this._set('gs', gs != null ? Math.round(gs) : '—');
+        this._set('gs',  gs  != null ? Math.round(gs)  : '—');
         this._set('alt', alt != null ? Math.round(alt).toLocaleString() : '—');
-        this._set('vs', vs != null ? (vs > 0 ? '+' : '') + Math.round(vs) : '—');
 
         this._updateFuel();
 
-        // Route distances
+        // Legacy dist/ete fields (when no leg data available)
         if (this._activePlan && sit.lat && sit.lon && gpsOk) {
             this._updateRoute(sit);
+        }
+    }
+
+    /**
+     * Update HDG, DEST, ETE and their delta sub-labels from the latest leg update.
+     * Called on every activeroute:legupdate event (~1 Hz in flight).
+     */
+    _updateLegFields() {
+        const d = this._legData;
+        if (!d) return;
+
+        // HDG — wind-corrected magnetic heading
+        const hdg = d.hdg != null ? Math.round(d.hdg) : null;
+        this._set('hdg', hdg != null ? hdg : '—');
+
+        // DEST — distance to destination
+        const destNm = d.destDistNm != null ? Math.round(d.destDistNm) : null;
+        this._set('dest', destNm != null ? destNm : '—');
+
+        // ETE — live time to destination using current GS
+        let eteMin = null;
+        if (d.destDistNm && d.liveGs > 10) {
+            eteMin = (d.destDistNm / d.liveGs) * 60;
+            this._set('ete', InstrumentStrip._formatEte(eteMin));
+        } else if (d.destEteMin != null) {
+            eteMin = d.destEteMin;
+            this._set('ete', InstrumentStrip._formatEte(eteMin));
+        }
+
+        // ETE delta vs plan
+        const eteDeltaEl = this._els['ete_delta'];
+        if (eteDeltaEl && eteMin != null && d.destEteMin != null) {
+            const delta = eteMin - d.destEteMin;
+            if (Math.abs(delta) >= 1) {
+                const sign = delta > 0 ? '+' : '';
+                eteDeltaEl.textContent = sign + InstrumentStrip._formatEte(Math.abs(delta));
+                eteDeltaEl.className = 'is-delta ' + (delta > 5 ? 'is-delta-red' : delta > 2 ? 'is-delta-amber' : 'is-delta-green');
+            } else {
+                eteDeltaEl.textContent = '';
+            }
+        }
+
+        // DEST delta (show how much dist remains vs nothing — just clear for now)
+        const destDeltaEl = this._els['dest_delta'];
+        if (destDeltaEl) destDeltaEl.textContent = '';
+
+        // FUEL delta — actual vs planned burn rate
+        const fuelDeltaEl = this._els['fuel_delta'];
+        if (fuelDeltaEl && d.liveGph != null && d.plannedGph != null) {
+            const delta = d.liveGph - d.plannedGph;
+            if (Math.abs(delta) >= 0.3) {
+                const sign = delta > 0 ? '+' : '';
+                fuelDeltaEl.textContent = `${sign}${delta.toFixed(1)}`;
+                fuelDeltaEl.className = 'is-delta ' + (delta > 0.5 ? 'is-delta-red' : delta > 0.2 ? 'is-delta-amber' : 'is-delta-green');
+            } else {
+                fuelDeltaEl.textContent = '';
+            }
         }
     }
 

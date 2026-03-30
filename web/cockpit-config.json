@@ -52,7 +52,7 @@
     "fields": ["next", "dest"]
   },
   "instrumentStrip": {
-    "fields": ["gs", "alt", "vs", "fuel", "dist", "ete"]
+    "fields": ["gs", "alt", "hdg", "fuel", "dest", "ete"]
   },
   "engineOverlay": {
     "enabled": true,
