@@ -58,13 +58,13 @@ class WxBriefing {
         this._el.className = 'wx-briefing-page';
         this._el.innerHTML = `
             <div class="wx-briefing-header">
-                <button class="wx-close-btn" aria-label="Close">✕</button>
                 <span class="wx-briefing-title">⛅ Weather</span>
                 <div class="wx-mode-toggle">
                     <button class="wx-mode-btn active" data-mode="day">7-DAY</button>
                     <button class="wx-mode-btn" data-mode="hour">24H</button>
                 </div>
                 <button class="wx-refresh-btn" title="Fetch fresh MOS data">↻</button>
+                <button class="wx-close-btn" aria-label="Close">✕</button>
             </div>
             <div class="wx-briefing-body">
                 <div class="wx-briefing-content"></div>

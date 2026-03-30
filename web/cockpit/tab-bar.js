@@ -42,6 +42,12 @@ class TabBar {
         }
     }
 
+    /** Public: programmatically switch to a tab by id (e.g. 'map') */
+    selectTab(tabId) {
+        const btn = this._tabBar?.querySelector(`.tab-btn[data-tab="${tabId}"]`);
+        this._selectTab(tabId, btn);
+    }
+
     _selectTab(tabId, btn) {
         // Update active state
         this._tabBar.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));

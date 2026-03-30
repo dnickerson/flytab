@@ -422,6 +422,8 @@ class FlyTabApp {
         if (typeof EnginePage !== 'undefined') {
             this.enginePage = new EnginePage(document.body, this.enginePanel);
             this.cockpitMap.setEnginePage(this.enginePage);
+            // Wire close callback so tab bar returns to map when ✕ is tapped
+            this.enginePage.onClose = () => this.tabBar?.selectTab('map');
         }
 
         // PlanSync — fetches flight plans from flywhere.app

@@ -315,6 +315,8 @@ class EnginePage {
         // continues accumulating data while the map page is shown.
         this._el.style.display = 'none';
         this._visible = false;
+        // Notify tab bar so it can sync its active state back to map
+        if (this.onClose) this.onClose();
     }
 
     get visible() { return this._visible; }
