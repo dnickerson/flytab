@@ -1331,15 +1331,14 @@ class FlyTabApp {
                 }
             }
 
-            // FIS-B: green when UAT radio is connected OR when messages are actively flowing.
-            // UAT_connected is a hardware-presence flag and may be false on some Stratux
-            // firmware versions even when towers are in range and data is being received.
-            // Fall back to message count as the authoritative signal.
-            // Guard: only show counts when Stratux is connected — never bleed prior session data.
+            // FIS-B: green ONLY when receiving data from ground towers.
+            // UAT_messages_last_minute includes aircraft traffic — not sufficient alone.
+            // UAT_Towers > 0 is the authoritative signal for ground station reception.
+            // Guard: only evaluate when Stratux is connected.
             if (this.dom.statusFisb) {
-                const uatConnected = !!(status?.UAT_connected || status?.UATRadio_connected);
-                const receiving = (status?.UAT_messages_last_minute > 0) || (status?.UAT_messages_max > 0);
-                this.dom.statusFisb.classList.toggle('active', uatConnected || receiving);
+                const towers = (status?.UAT_Towers ?? 0) > 0;
+                const receiving = (status?.UAT_messages_last_minute > 0) && towers;
+                this.dom.statusFisb.classList.toggle('active', receiving);
                 if (receiving && this.fisbClient) {
                     const mc = this.fisbClient.metarCount;
                     const tc = this.fisbClient.tafCount;

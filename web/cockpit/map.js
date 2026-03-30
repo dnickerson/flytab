@@ -94,6 +94,13 @@ class CockpitMap {
         this.stratux.addEventListener('stratux:situation', (e) => this._updateOwnship(e.detail));
         this.stratux.addEventListener('stratux:traffic', () => this._updateTraffic());
 
+        // Hide ownship when Stratux disconnects or data goes stale — never show stale position
+        const _hideOwnship = () => {
+            if (this.ownshipMarker) this.ownshipMarker.setOpacity(0);
+        };
+        this.stratux.addEventListener('stratux:disconnect', _hideOwnship);
+        this.stratux.addEventListener('stratux:stale', _hideOwnship);
+
         // Periodic traffic cleanup
         this._trafficTimer = setInterval(() => this._updateTraffic(), 2000);
     }
