@@ -211,13 +211,6 @@ class AirportPopup {
                         this._loadAfdPane(afdPaneEl, airport.icao);
                     }
                 }
-                if (tab.dataset.tab === 'iap') {
-                    const listPaneEl = pane?.querySelector('.apt-plate-list-pane');
-                    if (listPaneEl && !listPaneEl.dataset.loaded) {
-                        listPaneEl.dataset.loaded = '1';
-                        this._loadPlateListPane(listPaneEl, airport.icao);
-                    }
-                }
             });
         });
     }
@@ -343,7 +336,6 @@ class AirportPopup {
             <button class="apt-tab active" data-tab="info">INFO</button>
             <button class="apt-tab" data-tab="wx">WX</button>
             <button class="apt-tab" data-tab="rwy">RWY</button>
-            <button class="apt-tab" data-tab="iap">IAP</button>
             <button class="apt-tab" data-tab="diag">DIAG</button>
             <button class="apt-tab" data-tab="afd">A/FD</button>
         </div>
@@ -360,9 +352,6 @@ class AirportPopup {
             </div>
             <div class="apt-tab-pane" data-pane="rwy">
                 ${apt.runways?.length ? this._runwaysHtml(apt.runways) : '<div style="padding:16px;color:var(--text-muted)">No runway data</div>'}
-            </div>
-            <div class="apt-tab-pane" data-pane="iap">
-                <div class="apt-plate-list-pane" data-plate-codes="IAP,DP,STAR,ODP"></div>
             </div>
             <div class="apt-tab-pane" data-pane="diag">
                 <div class="apt-plate-pane" data-plate-type="APD"></div>
@@ -672,41 +661,99 @@ class AirportPopup {
         const PLATES_BASE = 'http://localhost:9090/plates';
         const webpUrl = `${PLATES_BASE}/${icao.toUpperCase()}/AFD_PAGE.webp`;
 
-        // Check if the file exists by attempting to load it
-        const img = document.createElement('img');
-        img.className = 'apt-plate-img';
-        img.alt = `${icao} A/FD Chart Supplement`;
-        img.style.cssText = 'width:100%;display:block;';
+        const thumb = document.createElement('img');
+        thumb.alt = `${icao} A/FD`;
+        thumb.style.cssText = 'width:100%;display:block;cursor:pointer;';
 
-        img.onload = () => {
+        thumb.onload = () => {
             containerEl.innerHTML = '';
-            const wrap = document.createElement('div');
-            wrap.className = 'apt-plate-viewer';
-            const titleEl = document.createElement('div');
-            titleEl.className = 'apt-plate-title';
-            titleEl.textContent = `${icao} — Chart Supplement (A/FD)`;
-            const imgWrap = document.createElement('div');
-            imgWrap.className = 'apt-plate-img-wrap';
-            imgWrap.appendChild(img);
-            wrap.appendChild(titleEl);
-            wrap.appendChild(imgWrap);
-            containerEl.appendChild(wrap);
-            this._enablePinchZoom(img);
+            const hint = document.createElement('div');
+            hint.style.cssText = 'padding:6px 12px;font-size:11px;color:var(--text-muted);text-align:center;';
+            hint.textContent = 'Tap to open full screen';
+            containerEl.appendChild(hint);
+            containerEl.appendChild(thumb);
+
+            // Tap thumbnail → open fullscreen overlay
+            const open = () => this._openAfdFullscreen(webpUrl, icao);
+            thumb.addEventListener('click', open);
+            thumb.addEventListener('touchend', (e) => { e.preventDefault(); open(); }, { passive: false });
         };
 
-        img.onerror = () => {
+        thumb.onerror = () => {
             containerEl.innerHTML = `
                 <div style="padding:16px;color:var(--text-muted);font-size:13px">
                     <div style="font-weight:600;margin-bottom:8px;color:var(--text-primary)">${icao} — Chart Supplement</div>
-                    <div>A/FD page not downloaded for this airport.</div>
+                    <div>A/FD page not yet downloaded for this airport.</div>
                     <div style="margin-top:8px;font-size:11px;color:var(--text-dim)">
-                        Download via Pre-Flight Refresh when connected to the Pi.
+                        Download via Pre-Flight Refresh when connected to the Pi.<br>
                         Coverage: NC, SC, VA, GA, TN and surrounding states.
                     </div>
                 </div>`;
         };
 
+        thumb.src = webpUrl;
+    }
+
+    /** Open A/FD page as a full-screen overlay with close button top-right and pinch-zoom */
+    _openAfdFullscreen(webpUrl, icao) {
+        document.getElementById('afdFullscreenOverlay')?.remove();
+
+        const overlay = document.createElement('div');
+        overlay.id = 'afdFullscreenOverlay';
+        overlay.style.cssText = `
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            z-index: 99999;
+            background: #111;
+            display: flex; flex-direction: column;
+            touch-action: none;
+        `;
+
+        // Header bar with title + close button top-right
+        const header = document.createElement('div');
+        header.style.cssText = `
+            display: flex; align-items: center;
+            padding: 10px 12px;
+            padding-top: max(10px, env(safe-area-inset-top));
+            background: #1a1a2e;
+            border-bottom: 1px solid #333;
+            flex-shrink: 0;
+            gap: 8px;
+        `;
+        header.innerHTML = `
+            <span style="flex:1;font-size:15px;font-weight:700;color:#e8ecf0;">${icao} — Chart Supplement (A/FD)</span>
+            <button id="afdCloseBtn" style="
+                background:#cc2222;color:#fff;border:none;border-radius:6px;
+                padding:6px 14px;font-size:15px;font-weight:700;
+                min-width:44px;min-height:44px;cursor:pointer;
+                touch-action:manipulation;flex-shrink:0;
+            ">✕</button>`;
+
+        const imgWrap = document.createElement('div');
+        imgWrap.style.cssText = 'flex:1;overflow:hidden;position:relative;';
+
+        const img = document.createElement('img');
         img.src = webpUrl;
+        img.alt = `${icao} A/FD`;
+        img.style.cssText = 'width:100%;display:block;';
+
+        imgWrap.appendChild(img);
+        overlay.appendChild(header);
+        overlay.appendChild(imgWrap);
+        document.body.appendChild(overlay);
+
+        // Close button
+        overlay.querySelector('#afdCloseBtn').addEventListener('click', () => overlay.remove());
+        overlay.querySelector('#afdCloseBtn').addEventListener('touchend', (e) => {
+            e.preventDefault();
+            overlay.remove();
+        }, { passive: false });
+
+        // Block touches from reaching map underneath
+        overlay.addEventListener('touchstart', (e) => e.stopPropagation(), { passive: true });
+        overlay.addEventListener('touchmove', (e) => e.stopPropagation(), { passive: true });
+
+        // Pinch-zoom on the full-screen image
+        this._enablePinchZoom(img);
     }
 
     /**
