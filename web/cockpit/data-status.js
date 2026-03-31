@@ -423,6 +423,24 @@ class DataStatus {
             }
         }
 
+        // Build Route Area card (promoted to main section)
+        const bbox = (() => { try { return JSON.parse(localStorage.getItem('flypi_route_bbox') || 'null'); } catch { return null; } })();
+        const routeAreaHtml = `
+            <div class="ds-section-title">Route Area</div>
+            <div class="ds-card">
+                <div class="ds-card-detail" style="margin-bottom:8px;font-size:12px;color:var(--text-muted)">Cache map tiles and weather for the active route corridor.</div>
+                ${bbox
+                    ? `<div class="ds-cache-row">
+                            <span class="ds-cache-info"><span class="ds-cache-name">${bbox.label}</span><span class="ds-cache-sub">+60 nm buffer</span></span>
+                            <button class="ds-cache-btn" id="dsCacheRouteBtn">Cache Maps</button>
+                       </div>`
+                    : `<div class="ds-cache-row"><span class="ds-cache-info"><span class="ds-cache-name" style="color:var(--text-muted)">No flight plan loaded</span></span></div>`
+                }
+                <div class="ds-cache-actions" style="margin-top:8px">
+                    <button class="ds-action-btn" id="dsCacheRouteWxBtn">⛅ Fetch Route Weather</button>
+                </div>
+            </div>`;
+
         body.innerHTML = `
             <div class="ds-banner" style="color:${bannerColor}">${bannerText}</div>
             <div class="ds-section-title">Aviation Data</div>
@@ -432,6 +450,7 @@ class DataStatus {
             ${this._section('Approach Plates',          platesServerLine, platesDevLine, platesBadge, platesPrimary,  platesSecondary, true)}
             <div class="ds-section-title">Offline Maps</div>
             ${mbtilesHtml}
+            ${routeAreaHtml}
             <div class="ds-footer">Checked: ${ts}</div>
             <div class="ds-section-title" style="cursor:pointer;user-select:none" id="dsSuppToggle">
                 Supplemental &amp; Advanced
@@ -581,9 +600,6 @@ class DataStatus {
             stickyFooter.innerHTML = `
                 <button class="ds-sync-btn" id="dsSyncAllBtn" ${!needsSync ? 'disabled' : ''}>
                     &#8645; ${needsSync ? 'Sync All Outdated' : 'All Data Current'}
-                </button>
-                <button class="ds-sync-btn ds-reload-btn" id="dsReloadAppBtn" title="Force reload all data into the app (fixes NASR ??)">
-                    &#8635; Reload App Data
                 </button>
             `;
         }
@@ -790,6 +806,11 @@ class DataStatus {
 
         return `
         <div class="ds-card">
+            <div class="ds-card-title">Reload App Data</div>
+            <div class="ds-card-detail" style="margin-bottom:10px;font-size:12px;color:var(--text-muted)">Re-imports NASR bundle from Pi into the app — use if the NASR badge shows ?? after a sync.</div>
+            <button class="ds-action-btn" id="dsReloadAppBtn">&#8635; Reload App Data</button>
+        </div>
+        <div class="ds-card">
             <div class="ds-card-title">Individual Tile Cache</div>
             <div class="ds-card-detail" style="margin-bottom:8px">Load tiles from home server or import a ZIP package.</div>
             ${suppNote}
@@ -799,10 +820,6 @@ class DataStatus {
                 <input type="file" id="dsZipInput" accept=".zip" style="display:none">
             </div>
             <div id="dsServerZips"></div>
-        </div>
-        <div class="ds-card">
-            <div class="ds-card-title">Route Area</div>
-            ${routeRow}
         </div>
         <div class="ds-card">
             <div class="ds-card-title">CONUS Regions <span style="font-weight:400;font-size:13px;color:var(--text-muted)">(SEC + IFR tiles)</span></div>
@@ -909,6 +926,36 @@ class DataStatus {
         if (routeBtn) {
             const bbox = (() => { try { return JSON.parse(localStorage.getItem('flypi_route_bbox') || 'null'); } catch { return null; } })();
             if (bbox) this._wireTap(routeBtn, () => this._cacheRegion(bbox, routeBtn, showProg, updateProg, doneProg));
+        }
+
+        // Route Weather button — triggers flywhere.app weather fetch for active plan
+        const routeWxBtn = body.querySelector('#dsCacheRouteWxBtn');
+        if (routeWxBtn) {
+            this._wireTap(routeWxBtn, async () => {
+                const app = window.app;
+                if (!app) return;
+                const plan = app.routeTable?._waypoints?.length
+                    ? { departure: app.routeTable._waypoints[0]?.icao, destination: app.routeTable._waypoints[app.routeTable._waypoints.length - 1]?.icao }
+                    : null;
+                if (!plan?.departure && !plan?.destination) {
+                    routeWxBtn.textContent = 'No route loaded';
+                    setTimeout(() => { routeWxBtn.innerHTML = '⛅ Fetch Route Weather'; }, 2000);
+                    return;
+                }
+                routeWxBtn.disabled = true;
+                routeWxBtn.textContent = 'Fetching…';
+                try {
+                    // Trigger weather fetch via flywhere.app plan weather step if available,
+                    // or notify user to use the Weather Briefing for now
+                    await app.wxBriefing?.show?.();
+                    routeWxBtn.innerHTML = '⛅ Fetch Route Weather';
+                    this.hide();
+                } catch {
+                    routeWxBtn.innerHTML = '⛅ Fetch Route Weather';
+                } finally {
+                    routeWxBtn.disabled = false;
+                }
+            });
         }
 
         // Region buttons
