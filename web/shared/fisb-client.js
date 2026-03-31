@@ -326,11 +326,32 @@ class FisbClient extends EventTarget {
         const icaoMatch = plain.match(/\b([A-Z]{4})\b/);
         if (icaoMatch) icao = icaoMatch[1];
 
-        // Extract coordinates from Points array if present
-        let lat = null, lon = null;
+        // Geometry: prefer Points array from message, fallback to text parsing
+        let lat = null, lon = null, points = [], radiusNm = null;
+
         if (msg.Points && msg.Points.length > 0) {
-            lat = msg.Points[0].Lat;
-            lon = msg.Points[0].Lon;
+            points = msg.Points.map(p => [p.Lat, p.Lon]);
+            lat = points[0][0];
+            lon = points[0][1];
+        }
+
+        // Text polygon fallback (same format as SIGMET/AIRMET)
+        if (!points.length) {
+            points = this._extractPolygonPoints(raw);
+            if (points.length) { lat = points[0][0]; lon = points[0][1]; }
+        }
+
+        // Circle: "WITHIN n NM OF lat/lon" or "n-NM RADIUS"
+        if (!points.length) {
+            const circleMatch = raw.match(/WITHIN\s+(\d+(?:\.\d+)?)\s*NM\s+OF\s+(\d{2})(\d{2})(N|S)\s*[\/]?\s*(\d{2,3})(\d{2})(W|E)/i)
+                             || raw.match(/(\d+(?:\.\d+)?)-NM\s+RADIUS.*?(\d{2})(\d{2})(N|S)\s*[\/]?\s*(\d{2,3})(\d{2})(W|E)/i);
+            if (circleMatch) {
+                radiusNm = parseFloat(circleMatch[1]);
+                lat = parseInt(circleMatch[2], 10) + parseInt(circleMatch[3], 10) / 60;
+                if (circleMatch[4] === 'S') lat = -lat;
+                lon = parseInt(circleMatch[5], 10) + parseInt(circleMatch[6], 10) / 60;
+                if (circleMatch[7] === 'W') lon = -lon;
+            }
         }
 
         const entry = {
@@ -339,7 +360,10 @@ class FisbClient extends EventTarget {
             icao,
             lat,
             lon,
+            points,           // polygon vertices [[lat,lon], ...]
+            radius_nm: radiusNm,  // circle radius if applicable
             product_id: msg.Product_id,
+            is_tfr: msg.Product_id === 8,
             received_at: now,
             expires_at: this._extractExpiry(raw, now),
         };

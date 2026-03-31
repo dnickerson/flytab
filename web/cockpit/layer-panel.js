@@ -163,6 +163,15 @@ class LayerPanel {
             });
         }
 
+        // Wire TFR toggle
+        const tfrInput = this._panel.querySelector('.lp-toggle input[data-action="tfrs"]');
+        if (tfrInput) {
+            tfrInput.checked = false;
+            tfrInput.addEventListener('change', () => {
+                window.app?.cockpitMap?.toggleTfrs(tfrInput.checked);
+            });
+        }
+
         // Wire ceiling/sky toggle
         const ceilInput = this._panel.querySelector('.lp-toggle input[data-action="wx-ceil"]');
         if (ceilInput) {
@@ -387,6 +396,10 @@ class LayerPanel {
                     <div class="lp-row">
                         <span class="lp-row-label">Restricted/MOA</span>
                         <label class="lp-toggle"><input type="checkbox" data-overlay="sua"><span class="lp-toggle-track"></span></label>
+                    </div>
+                    <div class="lp-row">
+                        <span class="lp-row-label">TFRs (FIS-B)</span>
+                        <label class="lp-toggle"><input type="checkbox" data-action="tfrs"><span class="lp-toggle-track"></span></label>
                     </div>
                     <div class="lp-row">
                         <span class="lp-row-label">Rwy Extensions</span>

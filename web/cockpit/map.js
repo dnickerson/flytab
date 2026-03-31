@@ -40,6 +40,11 @@ class CockpitMap {
         this._showPireps = false;        // off by default
         this._fisbClient = null;
 
+        // TFR overlay (FIS-B NOTAMs product_id=8)
+        this._tfrLayer = null;           // L.LayerGroup
+        this._tfrShapes = new Map();     // raw → L.layer
+        this._showTfrs = false;
+
         // Runway extension centerlines
         this._rwyExtLayer = null;
         this._destAirport = null;
@@ -278,13 +283,14 @@ class CockpitMap {
         this._ifrClearance = ifrClearance;
     }
 
-    /** Wire FIS-B client for live PIREP overlay */
+    /** Wire FIS-B client for live PIREP and TFR overlays */
     setFisbClient(fisbClient) {
         if (this._fisbClient) return; // already wired
         this._fisbClient = fisbClient;
 
-        // Create layer group (always exists, added/removed from map by toggle)
+        // Layer groups
         this._pirepLayer = L.layerGroup();
+        this._tfrLayer   = L.layerGroup();
 
         // New PIREP received
         this._onFisbPirep = (e) => {
@@ -292,14 +298,32 @@ class CockpitMap {
         };
         fisbClient.addEventListener('fisb:pirep', this._onFisbPirep);
 
-        // Periodic purge — remove markers for expired PIREPs
+        // New NOTAM/TFR received
+        this._onFisbNotam = (e) => {
+            if (e.detail.is_tfr && this._showTfrs) this._addTfrShape(e.detail);
+        };
+        fisbClient.addEventListener('fisb:notam', this._onFisbNotam);
+
+        // Periodic purge — remove markers for expired data
         this._pirepPurgeTimer = setInterval(() => {
-            if (!this._showPireps) return;
-            const activeRaws = new Set(fisbClient.pireps.map(p => p.raw));
-            for (const [key, marker] of this._pirepMarkers) {
-                if (!activeRaws.has(key)) {
-                    this._pirepLayer.removeLayer(marker);
-                    this._pirepMarkers.delete(key);
+            // PIREPs
+            if (this._showPireps) {
+                const activeRaws = new Set(fisbClient.pireps.map(p => p.raw));
+                for (const [key, marker] of this._pirepMarkers) {
+                    if (!activeRaws.has(key)) {
+                        this._pirepLayer.removeLayer(marker);
+                        this._pirepMarkers.delete(key);
+                    }
+                }
+            }
+            // TFRs
+            if (this._showTfrs) {
+                const activeRaws = new Set(fisbClient.notams.filter(n => n.is_tfr).map(n => n.raw));
+                for (const [key, shape] of this._tfrShapes) {
+                    if (!activeRaws.has(key)) {
+                        this._tfrLayer.removeLayer(shape);
+                        this._tfrShapes.delete(key);
+                    }
                 }
             }
         }, 30000);
@@ -319,6 +343,83 @@ class CockpitMap {
         } else {
             this.map.removeLayer(this._pirepLayer);
         }
+    }
+
+    toggleTfrs(on) {
+        this._showTfrs = on;
+        if (!this._tfrLayer || !this.map) return;
+        if (on) {
+            this._tfrLayer.addTo(this.map);
+            // Render any TFRs already in memory
+            if (this._fisbClient) {
+                this._tfrShapes.clear();
+                this._tfrLayer.clearLayers();
+                for (const n of this._fisbClient.notams) {
+                    if (n.is_tfr) this._addTfrShape(n);
+                }
+            }
+        } else {
+            this.map.removeLayer(this._tfrLayer);
+        }
+    }
+
+    _addTfrShape(notam) {
+        if (this._tfrShapes.has(notam.raw)) return;  // already shown
+
+        const fill   = 'rgba(220,38,38,0.15)';
+        const stroke = '#dc2626';
+        const weight = 2.5;
+
+        let shape = null;
+
+        // Polygon from Points array or parsed text
+        if (notam.points && notam.points.length >= 3) {
+            shape = L.polygon(notam.points, {
+                color: stroke, fillColor: fill,
+                weight, opacity: 1, fillOpacity: 0.2,
+                dashArray: '6,4',
+            });
+        }
+        // Circle from radius
+        else if (notam.radius_nm && notam.lat && notam.lon) {
+            shape = L.circle([notam.lat, notam.lon], {
+                radius: notam.radius_nm * 1852, // nm → metres
+                color: stroke, fillColor: fill,
+                weight, opacity: 1, fillOpacity: 0.2,
+                dashArray: '6,4',
+            });
+        }
+        // Point marker (no geometry — just a flag at the location)
+        else if (notam.lat && notam.lon) {
+            const icon = L.divIcon({
+                className: 'tfr-icon',
+                html: `<div style="background:#dc2626;color:#fff;font-size:10px;font-weight:700;padding:2px 5px;border-radius:3px;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,0.5)">TFR</div>`,
+                iconAnchor: [15, 10],
+            });
+            shape = L.marker([notam.lat, notam.lon], { icon, zIndexOffset: 700 });
+        }
+
+        if (!shape) return;
+
+        // Build popup
+        const ageMin = Math.round((Date.now() - notam.received_at) / 60000);
+        const ageStr = ageMin < 1 ? 'just now' : `${ageMin}m ago`;
+        const icao   = notam.icao ? `<strong>${notam.icao}</strong> · ` : '';
+        const expiry = notam.expires_at
+            ? `Exp: ${new Date(notam.expires_at).toUTCString().slice(17, 22)}Z`
+            : '';
+
+        const popupHtml = `
+            <div style="max-width:280px;font-family:monospace">
+                <div style="font-weight:700;font-size:13px;color:#dc2626;margin-bottom:4px">
+                    ⛔ TFR ${icao}<span style="font-size:10px;color:#888">${ageStr} ${expiry}</span>
+                </div>
+                <div style="font-size:11px;color:#444;word-break:break-all;white-space:pre-wrap">${notam.raw}</div>
+            </div>`;
+
+        shape.bindPopup(popupHtml, { maxWidth: 300 });
+        shape.addTo(this._tfrLayer);
+        this._tfrShapes.set(notam.raw, shape);
     }
 
     _addPirepMarker(pirep) {
