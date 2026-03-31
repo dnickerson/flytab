@@ -1352,10 +1352,10 @@ class DataStatus {
                 fetch(`${homeBase}/plates/plates_cycle_info.json`, { signal: AbortSignal.timeout(8000) }).then(r => r.ok ? r.json() : null),
                 fetch(`${LOCAL}/plates/plates_cycle_info.json`, { cache: 'no-store', signal: AbortSignal.timeout(2000) }).then(r => r.ok ? r.json() : null).catch(() => null),
             ]);
-            // Static server: states come from cycle_info
-            const statesResp = serverCycle?.states
-                ? serverCycle.states.map(s => ({ state: s, size_mb: 0 }))
-                : [];
+            // Prefer state_sizes (has real MB values) over states string array
+            const statesResp = serverCycle?.state_sizes
+                ? serverCycle.state_sizes
+                : (serverCycle?.states ? serverCycle.states.map(s => ({ state: s, size_mb: 0 })) : []);
 
             const serverDate = serverCycle?.effective_date;
             const localDate  = localCycle?.effective_date;
