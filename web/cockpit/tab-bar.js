@@ -598,9 +598,11 @@ class TabBar {
   <li style="margin:4px 0"><strong>Route line</strong> — magenta. Active leg solid, future dashed, past dimmed.</li>
   <li style="margin:4px 0"><strong>Airspace</strong> — Class B (blue), C (magenta), D (blue dashed). Altitude labels shown.</li>
   <li style="margin:4px 0"><strong>Track log</strong> — breadcrumb trail of your flight path.</li>
+  <li style="margin:4px 0"><strong>PIREPs</strong> — FIS-B pilot reports as diamond icons (🔶 orange = turbulence, 🔷 blue = icing). Enable in layer panel → Weather → PIREPs (FIS-B).</li>
+  <li style="margin:4px 0"><strong>TFRs</strong> — FIS-B NOTAM TFRs shown as red dashed polygons/circles. Enable in layer panel → Aviation → TFRs (FIS-B). Tap for full NOTAM text and expiry.</li>
 </ul>
 <p><strong>Map orientation:</strong> North-up by default. Heading-up mode available via the compass button.</p>
-<p><strong>Left rail layer buttons:</strong> Base map cycle (Vector/Sectional/IFR Low), NEXRAD, airports, navaids, fixes, airways.</p>
+<p><strong>Left rail layer buttons:</strong> Base map cycle (Vector/Sectional/IFR Low), NEXRAD, airports, navaids, fixes, airways, SUA/Restricted, TFRs.</p>
 <p><strong>Map corner buttons (top-right):</strong></p>
 <ul style="padding-left:20px;margin:8px 0">
   <li style="margin:4px 0"><strong>📍 Auto-pan</strong> — keeps ownship centered. Tap to toggle.</li>
@@ -738,11 +740,14 @@ class TabBar {
 
 <!-- ═══ WEATHER ═══ -->
 <h2 id="weather" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Weather</h2>
-<p><strong>In flight — FIS-B (primary):</strong> Stratux receives live METARs, TAFs, PIREPs, SIGMETs, NEXRAD via UAT ground stations. FIS-B badge turns green when towers are in range.</p>
-<p><strong>Pre-flight briefing:</strong> MORE → Weather Briefing opens the flywhere.app weather brief (requires connectivity).</p>
+<p><strong>In flight — FIS-B (primary):</strong> Stratux receives live METARs, TAFs, PIREPs, SIGMETs, AIRMETs, TFR NOTAMs, and NEXRAD radar via UAT ground stations. FIS-B badge turns green only when ground towers are in range (aircraft traffic alone does not trigger green).</p>
+<p><strong>PIREPs:</strong> Enable layer panel → Weather → PIREPs (FIS-B). Diamond icons appear at report location, color-coded by type and sized by severity. Tap for type, altitude, and raw text. Auto-expire after 60 minutes.</p>
+<p><strong>TFRs:</strong> Enable layer panel → Aviation → TFRs (FIS-B). Shown as red dashed polygons or circles. Tap for NOTAM text and expiry time.</p>
+<p><strong>SIGMETs/AIRMETs:</strong> Shown as colored overlays (toggle buttons: SIG/SRA/TNG/ZLU) from FIS-B in flight or from the weather brief pre-flight.</p>
 <p><strong>NEXRAD radar:</strong> Tap the WX layer button on the left rail. A 2-hour radar loop plays automatically.</p>
 <p><strong>Airport weather popup:</strong> Tap any airport marker on the map for its METAR and TAF.</p>
-<p><strong>SIGMETs/AIRMETs:</strong> Shown as colored overlays on the map when FIS-B data is available in flight, or from the weather brief pre-flight.</p>
+<p><strong>Pre-flight briefing:</strong> MORE → Weather Briefing opens the flywhere.app weather brief (requires connectivity).</p>
+<p><strong>Weather cache:</strong> MORE → Data &amp; Maps shows all cached pre-flight airport weather with flight category, wind, visibility, and age. Tap any row to open that airport's WX tab.</p>
 
 <!-- ═══ FLIGHT RECORDING ═══ -->
 <h2 id="recording" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Flight Recording</h2>
@@ -754,7 +759,8 @@ class TabBar {
   <li style="margin:4px 0">Fuel state, G-load</li>
 </ul>
 <p>Output format is compatible with <strong>Savvy Aviation CSV</strong> for upload to SavvyAnalysis.</p>
-<p>Files saved to device storage. Access via MORE → Save Flight CSV or via the Android Files app.</p>
+<p>Files saved to device storage. Access via the Android Files app under Documents/FlyTab/flights/.</p>
+<p><strong>Track log export:</strong> MORE → Export Track GPX or Export Track CSV — exports the GPS breadcrumb trail (recorded every 10 seconds throughout the flight). The label shows how many points are in the current session. GPX format works with ForeFlight, SkyVector, and Google Earth.</p>
 
 <!-- ═══ FUEL ═══ -->
 <h2 id="fuel" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Fuel Entry</h2>
