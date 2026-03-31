@@ -154,6 +154,15 @@ class LayerPanel {
             });
         }
 
+        // Wire PIREP toggle
+        const pirepInput = this._panel.querySelector('.lp-toggle input[data-action="pireps"]');
+        if (pirepInput) {
+            pirepInput.checked = false;
+            pirepInput.addEventListener('change', () => {
+                window.app?.cockpitMap?.togglePireps(pirepInput.checked);
+            });
+        }
+
         // Wire ceiling/sky toggle
         const ceilInput = this._panel.querySelector('.lp-toggle input[data-action="wx-ceil"]');
         if (ceilInput) {
@@ -418,6 +427,10 @@ class LayerPanel {
                     <div class="lp-row">
                         <span class="lp-row-label">Winds Aloft</span>
                         <label class="lp-toggle"><input type="checkbox" data-action="winds-aloft"><span class="lp-toggle-track"></span></label>
+                    </div>
+                    <div class="lp-row">
+                        <span class="lp-row-label">PIREPs (FIS-B)</span>
+                        <label class="lp-toggle"><input type="checkbox" data-action="pireps"><span class="lp-toggle-track"></span></label>
                     </div>
                 </div>
             </div>

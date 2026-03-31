@@ -34,6 +34,12 @@ class CockpitMap {
         this._fuelOverlay = null;
         this._logbook = null;
 
+        // PIREP markers (FIS-B pilot reports)
+        this._pirepMarkers = new Map();  // key → L.marker
+        this._pirepLayer = null;         // L.LayerGroup
+        this._showPireps = false;        // off by default
+        this._fisbClient = null;
+
         // Runway extension centerlines
         this._rwyExtLayer = null;
         this._destAirport = null;
@@ -270,6 +276,99 @@ class CockpitMap {
 
     setIfrClearance(ifrClearance) {
         this._ifrClearance = ifrClearance;
+    }
+
+    /** Wire FIS-B client for live PIREP overlay */
+    setFisbClient(fisbClient) {
+        if (this._fisbClient) return; // already wired
+        this._fisbClient = fisbClient;
+
+        // Create layer group (always exists, added/removed from map by toggle)
+        this._pirepLayer = L.layerGroup();
+
+        // New PIREP received
+        this._onFisbPirep = (e) => {
+            if (this._showPireps) this._addPirepMarker(e.detail);
+        };
+        fisbClient.addEventListener('fisb:pirep', this._onFisbPirep);
+
+        // Periodic purge — remove markers for expired PIREPs
+        this._pirepPurgeTimer = setInterval(() => {
+            if (!this._showPireps) return;
+            const activeRaws = new Set(fisbClient.pireps.map(p => p.raw));
+            for (const [key, marker] of this._pirepMarkers) {
+                if (!activeRaws.has(key)) {
+                    this._pirepLayer.removeLayer(marker);
+                    this._pirepMarkers.delete(key);
+                }
+            }
+        }, 30000);
+    }
+
+    togglePireps(on) {
+        this._showPireps = on;
+        if (!this._pirepLayer || !this.map) return;
+        if (on) {
+            this._pirepLayer.addTo(this.map);
+            // Render any PIREPs already in memory
+            if (this._fisbClient) {
+                this._pirepMarkers.clear();
+                this._pirepLayer.clearLayers();
+                for (const p of this._fisbClient.pireps) this._addPirepMarker(p);
+            }
+        } else {
+            this.map.removeLayer(this._pirepLayer);
+        }
+    }
+
+    _addPirepMarker(pirep) {
+        if (!pirep.lat || !pirep.lon) return;  // no position data
+        if (this._pirepMarkers.has(pirep.raw)) return;  // already shown
+
+        const COLORS = { turbulence: '#f97316', icing: '#60a5fa', other: '#facc15' };
+        const color = pirep.is_urgent ? '#ef4444' : (COLORS[pirep.type] || COLORS.other);
+
+        // Size 10–22px based on severity 0–4
+        const size = 10 + Math.min(pirep.severity || 1, 4) * 3;
+
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24">
+            <polygon points="12,2 22,12 12,22 2,12"
+                fill="${color}" fill-opacity="0.85"
+                stroke="${pirep.is_urgent ? '#fff' : color}" stroke-width="${pirep.is_urgent ? 2 : 0}"/>
+        </svg>`;
+
+        const icon = L.divIcon({
+            className: 'pirep-icon',
+            html: svg,
+            iconSize: [size, size],
+            iconAnchor: [size / 2, size / 2],
+        });
+
+        const marker = L.marker([pirep.lat, pirep.lon], { icon, zIndexOffset: 500 });
+
+        // Popup
+        const typeLabel = pirep.type === 'turbulence' ? 'TURB'
+                        : pirep.type === 'icing'       ? 'ICE'
+                        : 'PIREP';
+        const sevLabels = ['NEG', 'LGT', 'MOD', 'SVR', 'EXTRM'];
+        const sevLabel  = sevLabels[Math.min(pirep.severity || 0, 4)] || '';
+        const altLabel  = pirep.altitude ? `FL${Math.round(pirep.altitude / 100).toString().padStart(3,'0')}` : '';
+        const ageMin    = Math.round((Date.now() - pirep.received_at) / 60000);
+        const ageStr    = ageMin < 1 ? 'just now' : `${ageMin}m ago`;
+        const urgent    = pirep.is_urgent ? '<span style="color:#ef4444;font-weight:700"> URGENT</span>' : '';
+
+        const popupHtml = `
+            <div style="max-width:260px;font-family:monospace">
+                <div style="font-weight:700;font-size:13px;margin-bottom:4px">
+                    ${typeLabel} ${sevLabel}${urgent} ${altLabel}
+                    <span style="font-size:10px;color:#888;margin-left:6px">${ageStr}</span>
+                </div>
+                <div style="font-size:11px;color:#555;word-break:break-all;white-space:pre-wrap">${pirep.raw}</div>
+            </div>`;
+
+        marker.bindPopup(popupHtml, { maxWidth: 280 });
+        marker.addTo(this._pirepLayer);
+        this._pirepMarkers.set(pirep.raw, marker);
     }
 
     switchBaseLayer(name) {

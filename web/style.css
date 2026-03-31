@@ -1073,6 +1073,7 @@ body {
 
 /* Traffic icon */
 .traffic-icon { background: none !important; border: none !important; overflow: visible !important; }
+.pirep-icon   { background: none !important; border: none !important; overflow: visible !important; cursor: pointer; }
 .traffic-icon-wrap { display: flex; flex-direction: column; align-items: center; }
 .traffic-alt {
     font-size: 14px;

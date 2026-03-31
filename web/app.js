@@ -542,6 +542,11 @@ class FlyTabApp {
             }
         }
 
+        // Wire FIS-B client to map for PIREP overlay
+        if (this.fisbClient && this.cockpitMap?.setFisbClient) {
+            this.cockpitMap.setFisbClient(this.fisbClient);
+        }
+
         // FIS-B NEXRAD renderer (canvas overlay on map)
         if (typeof FisbNexrad !== 'undefined' && this.fisbClient) {
             this.fisbNexrad = new FisbNexrad(this.fisbClient);
