@@ -440,11 +440,113 @@ class DataStatus {
             <div id="dsSuppContent" style="display:none">
                 ${this._buildCacheSectionHtml(null, mbtiles)}
             </div>
+            <div id="dsWeatherCacheSection"></div>
         `;
+
+        // Load weather cache asynchronously and inject after main render
+        this._renderWeatherCache(body.querySelector('#dsWeatherCacheSection'));
 
         this._needsSync = needsSync;
         this._wireDataSections();
         this._wireCacheSection();
+    }
+
+    /** Render cached pre-flight weather into the given container element. */
+    async _renderWeatherCache(containerEl) {
+        if (!containerEl) return;
+        const nasrDb = window.app?._nasrDb;
+        if (!nasrDb) return;
+
+        try {
+            await nasrDb.open();
+            const entries = await nasrDb.getAllWeather();
+            if (!entries || !entries.length) return;
+
+            // Sort: departures/destinations first, then by age (newest first)
+            const route = window.app?.cockpitMap?._routeWaypoints || [];
+            const routeIcaos = new Set(route.map(w => w.icao).filter(Boolean));
+            entries.sort((a, b) => {
+                const aRoute = routeIcaos.has(a.icao) ? 0 : 1;
+                const bRoute = routeIcaos.has(b.icao) ? 0 : 1;
+                if (aRoute !== bRoute) return aRoute - bRoute;
+                return (b.fetched_at || '') > (a.fetched_at || '') ? 1 : -1;
+            });
+
+            const CAT_COLORS = {
+                VFR:  'var(--cat-vfr,  #22c55e)',
+                MVFR: 'var(--cat-mvfr, #3b82f6)',
+                IFR:  'var(--cat-ifr,  #ef4444)',
+                LIFR: 'var(--cat-lifr, #a855f7)',
+            };
+
+            const now = Date.now();
+            const rows = entries.map(e => {
+                const cat     = e.metar?.decoded?.flight_category || '—';
+                const color   = CAT_COLORS[cat] || '#888';
+                const wind    = e.metar?.decoded?.wind
+                    ? `${String(e.metar.decoded.wind.direction || '—').padStart(3,'0')}/${Math.round(e.metar.decoded.wind.speed || 0)}kt`
+                    : '';
+                const vis     = e.metar?.decoded?.visibility ? `${e.metar.decoded.visibility}sm` : '';
+                const ceil    = e.metar?.decoded?.ceiling ? `${e.metar.decoded.ceiling}ft` : '';
+                const summary = [wind, vis, ceil].filter(Boolean).join(' ');
+                const ageMin  = e.fetched_at ? Math.round((now - new Date(e.fetched_at).getTime()) / 60000) : null;
+                const ageStr  = ageMin !== null ? (ageMin < 60 ? `${ageMin}m` : `${Math.round(ageMin/60)}h`) : '';
+                const stale   = ageMin !== null && ageMin > 90;
+
+                return `<div class="ds-wx-row" data-icao="${e.icao}">
+                    <span class="ds-wx-icao">${e.icao}</span>
+                    <span class="ds-wx-cat" style="color:${color}">${cat}</span>
+                    <span class="ds-wx-summary">${summary}</span>
+                    <span class="ds-wx-age ${stale ? 'ds-wx-age-stale' : ''}">${ageStr}</span>
+                </div>`;
+            }).join('');
+
+            const oldestAge = entries.reduce((max, e) => {
+                const min = e.fetched_at ? Math.round((now - new Date(e.fetched_at).getTime()) / 60000) : 0;
+                return Math.max(max, min);
+            }, 0);
+            const oldestStr = oldestAge < 60 ? `${oldestAge}m` : `${Math.round(oldestAge/60)}h`;
+
+            containerEl.innerHTML = `
+                <div class="ds-section-title">Weather Cache
+                    <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px">${entries.length} airports · oldest ${oldestStr}</span>
+                </div>
+                <div class="ds-wx-list">${rows}</div>
+                <div style="padding:6px 12px 10px">
+                    <button class="ds-action-btn ds-secondary" id="dsWxClearBtn">Clear Cache</button>
+                </div>`;
+
+            // Wire airport rows → open airport popup WX tab
+            containerEl.querySelectorAll('.ds-wx-row[data-icao]').forEach(row => {
+                row.style.cursor = 'pointer';
+                row.addEventListener('click', () => {
+                    const icao = row.dataset.icao;
+                    const ap = window.app?.airportPopup;
+                    if (ap?.showForAirport) {
+                        ap.showForAirport(icao);
+                        // Switch to WX tab after popup opens
+                        setTimeout(() => {
+                            const wxTab = document.querySelector('.apt-tab[data-tab="wx"]');
+                            if (wxTab) wxTab.click();
+                        }, 300);
+                        // Close Data Status
+                        this.hide();
+                    }
+                });
+            });
+
+            // Wire clear button
+            const clearBtn = containerEl.querySelector('#dsWxClearBtn');
+            if (clearBtn) {
+                clearBtn.addEventListener('click', async () => {
+                    await nasrDb.clearOldWeather(0); // clear all
+                    containerEl.innerHTML = `<div style="padding:10px 12px;color:var(--text-muted);font-size:13px">Weather cache cleared.</div>`;
+                });
+            }
+
+        } catch (err) {
+            console.warn('[DataStatus] Weather cache render failed:', err);
+        }
     }
 
     /** Build a ForeFlight-style inventory section card. */

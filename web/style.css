@@ -2962,6 +2962,49 @@ body {
     font-weight: 600;
     padding: 8px 4px 12px;
 }
+
+/* Weather Cache section in Data Status */
+.ds-wx-list {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    margin: 0 0 6px;
+}
+.ds-wx-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+    -webkit-tap-highlight-color: transparent;
+}
+.ds-wx-row:last-child { border-bottom: none; }
+.ds-wx-row:active { background: var(--bg-surface-raised); }
+.ds-wx-icao {
+    font-family: var(--font-instrument);
+    font-weight: 700;
+    color: var(--text-primary);
+    min-width: 44px;
+}
+.ds-wx-cat {
+    font-weight: 700;
+    font-size: 12px;
+    min-width: 38px;
+}
+.ds-wx-summary {
+    flex: 1;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-family: var(--font-instrument);
+}
+.ds-wx-age {
+    font-size: 11px;
+    color: var(--text-muted);
+    min-width: 28px;
+    text-align: right;
+}
+.ds-wx-age-stale { color: var(--status-warn); }
 .ds-section-card {
     background: var(--bg-surface);
     border: 1px solid var(--border);

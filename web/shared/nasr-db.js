@@ -447,6 +447,10 @@ class NasrDB {
         });
     }
 
+    async getAllWeather() {
+        return this._getAll('weather_cache');
+    }
+
     async clearOldWeather(maxAgeMs = 3 * 3600000) {
         const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
         const all = await this._getAll('weather_cache');
