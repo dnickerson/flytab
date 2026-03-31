@@ -156,17 +156,27 @@ class TabBar {
                 if (c.configEditor?.show) c.configEditor.show();
                 this._closeMoreDrawer();
             }},
-            { icon: '🗺', label: 'Export Track GPX', action: () => {
+            { icon: '🗺', label: () => {
+                    const n = c.trackLog?.points?.length || 0;
+                    return n ? `Export Track GPX (${n} pts)` : 'Export Track GPX';
+                }, action: () => {
                 this._closeMoreDrawer();
                 if (c.trackLog?.points?.length) {
                     c.trackLog.exportGpx();
                 } else {
-                    window.app?.showToast('No track points recorded yet.');
+                    window.app?.showToast('No track points recorded yet.', null, 3000);
                 }
             }},
-            { icon: '📥', label: 'Save Flight CSV', action: () => {
+            { icon: '📍', label: () => {
+                    const n = c.trackLog?.points?.length || 0;
+                    return n ? `Export Track CSV (${n} pts)` : 'Export Track CSV';
+                }, action: () => {
                 this._closeMoreDrawer();
-                window.app?.showToast('Flight CSV export coming in Phase 3.');
+                if (c.trackLog?.points?.length) {
+                    c.trackLog.exportCsv();
+                } else {
+                    window.app?.showToast('No track points recorded yet.', null, 3000);
+                }
             }},
             { icon: '🔄', label: 'Reset NASR Data', action: () => {
                 this._closeMoreDrawer();
@@ -202,7 +212,8 @@ class TabBar {
         for (const row of rows) {
             const el = document.createElement('div');
             el.className = 'md-row';
-            el.innerHTML = `<span class="md-icon">${row.icon}</span><span class="md-label">${row.label}</span><span class="md-chevron">›</span>`;
+            const labelText = typeof row.label === 'function' ? row.label() : row.label;
+            el.innerHTML = `<span class="md-icon">${row.icon}</span><span class="md-label">${labelText}</span><span class="md-chevron">›</span>`;
             // Use scroll-safe tap: don't preventDefault on touchstart so scroll still works
             this._scrollSafeTap(el, row.action);
             body.appendChild(el);
