@@ -1064,8 +1064,12 @@ class DataStatus {
         this._cacheRunning = true; this._cacheCancelled = false;
         if (btn) { btn.disabled = true; btn.textContent = 'Downloading…'; }
 
-        const urls = this._homeServerUrls();
-        const homeBase = urls.tileBase.replace(/\/tiles\/?$/, '');
+        // Ensure resolved base (Tailscale fallback if local IP unreachable)
+        if (!this._resolvedBase) {
+            const { base } = await this._resolveHomeBase();
+            this._resolvedBase = base;
+        }
+        const homeBase = this._resolvedBase || this._homeServerUrls().tileBase.replace(/\/tiles\/?$/, '');
         const zipUrl = `${homeBase}/offline-maps/${region.id}.zip`;
 
         try {
@@ -1218,7 +1222,13 @@ class DataStatus {
         this._cacheRunning = true;
         if (btn) { btn.disabled = true; btn.textContent = 'Syncing…'; }
 
-        const homeBase = this._homeBase();
+        // Always resolve base dynamically — ensures Tailscale fallback is used
+        // if local IP is unreachable (e.g. tablet connected via Tailscale only).
+        if (!this._resolvedBase) {
+            const { base } = await this._resolveHomeBase();
+            this._resolvedBase = base;
+        }
+        const homeBase = this._resolvedBase;
         const LOCAL    = DataStatus.LOCAL_BASE;
 
         const body = this._el.querySelector('.data-status-body');
@@ -1383,7 +1393,16 @@ class DataStatus {
                     const newlySynced = [...syncedStates];
                     for (const stateInfo of statesToSync) {
                         const st = stateInfo.state;
-                        setStep('plates', 'running', `${st} plates (${stateInfo.size_mb} MB) — ${done}/${statesToSync.length} done…`);
+                        const mb = stateInfo.size_mb;
+                        setStep('plates', 'running', `↓ ${st} (${mb} MB) — ${done}/${statesToSync.length} done…`);
+
+                        // Tick elapsed time every 5s so pilot can see it's still working
+                        const startTs = Date.now();
+                        const ticker = setInterval(() => {
+                            const elapsed = Math.round((Date.now() - startTs) / 1000);
+                            setStep('plates', 'running', `↓ ${st} (${mb} MB) — ${elapsed}s — ${done}/${statesToSync.length} done…`);
+                        }, 5000);
+
                         try {
                             // NanoHTTPD fetch-zip: download state zip from home server
                             // and extract directly into the tablet's local storage
@@ -1392,13 +1411,15 @@ class DataStatus {
                                 `${LOCAL}/fetch-zip?url=${encodeURIComponent(zipUrl)}`,
                                 { method: 'POST', signal: AbortSignal.timeout(600000) }
                             );
+                            clearInterval(ticker);
                             if (!resp.ok) throw new Error(`${st}: ${await resp.text()}`);
                             const result = await resp.json();
                             done++;
                             if (!newlySynced.includes(st)) newlySynced.push(st);
-                            setStep('plates', 'running', `${done}/${statesToSync.length} done (${result.extracted?.toLocaleString() ?? '?'} files in ${st})…`);
+                            setStep('plates', 'running', `✓ ${st} done (${result.extracted?.toLocaleString() ?? '?'} files) — ${done}/${statesToSync.length} complete`);
                         } catch (e) {
-                            setStep('plates', 'running', `${st} failed: ${e.message} — continuing…`);
+                            clearInterval(ticker);
+                            setStep('plates', 'running', `✗ ${st} failed: ${e.message} — continuing…`);
                             done++;
                         }
                     }
