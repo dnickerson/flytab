@@ -6928,7 +6928,24 @@ body {
 .eml-sev-0 { background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border); }
 .eml-sev-1 { background: var(--status-caution); color: var(--bg-primary); }
 .eml-sev-2 { background: var(--status-danger); color: var(--text-on-dark); animation: thermal-flash 1.5s infinite; }
-.status-ml { font-size: 11px; letter-spacing: 0.5px; }
+.status-ml {
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    background: var(--bg-surface-raised);
+    border: 1px solid var(--border);
+    min-height: 28px;
+    min-width: var(--touch-min, 44px);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    touch-action: none;  /* prevent scroll interfering with long-press */
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: pointer;
+}
 
 /* ── ML Badge long-press feedback ────────────────────────── */
 .ml-badge-pressing {
@@ -7378,4 +7395,19 @@ body {
 }
 .eg-ack-btn:active {
     opacity: 0.8;
+}
+
+/* Test mode: floating panel, map visible underneath */
+.eg-overlay--test {
+    inset: auto;
+    top: 60px;
+    left: 10px;
+    right: 10px;
+    bottom: auto;
+    max-height: 70vh;
+    border-radius: 12px;
+    background: var(--bg-primary);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.7);
+    border: 2px solid var(--status-caution);
+    overflow: hidden;
 }

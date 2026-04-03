@@ -70,11 +70,11 @@ class EngineMLBridge {
      * @param {StratuxClient} stratuxClient — for altitude/speed
      */
     start(engineClient, stratuxClient) {
-        if (!this._initialized) return;
-
         this._engineClient = engineClient;
         this._stratuxClient = stratuxClient;
 
+        // Always listen for engine data — Layer 1 physics rules run without the native plugin.
+        // ML inference (Layer 2) is skipped gracefully when _initialized is false.
         engineClient.addEventListener('engine:data', (e) => {
             this._onEngineData(e.detail);
         });
@@ -106,11 +106,14 @@ class EngineMLBridge {
             // Only primary touch/button
             if (e.type === 'mousedown' && e.button !== 0) return;
             e.preventDefault();
+            e.stopPropagation();
+            if (typeof DiagLog !== 'undefined') DiagLog.log('ml', `Long-press start (${e.type})`);
             this._lpProgress = 0;
             el.classList.add('ml-badge-pressing');
 
             this._lpTimer = setTimeout(() => {
                 this._endPress(el, true);
+                if (typeof DiagLog !== 'undefined') DiagLog.log('ml', 'Long-press fired — calling simulateAnomaly');
                 this.simulateAnomaly();
             }, DURATION);
 
@@ -120,13 +123,17 @@ class EngineMLBridge {
             }, TICK);
         };
 
-        const cancel = () => {
+        const cancel = (e) => {
+            if (this._lpTimer) {
+                if (typeof DiagLog !== 'undefined') DiagLog.log('ml', `Long-press cancelled (${e?.type})`);
+            }
             this._endPress(el, false);
         };
 
         el.addEventListener('touchstart', start, { passive: false });
         el.addEventListener('touchend', cancel);
         el.addEventListener('touchcancel', cancel);
+        el.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false }); // prevent scroll cancelling long-press
         el.addEventListener('mousedown', start);
         el.addEventListener('mouseup', cancel);
         el.addEventListener('mouseleave', cancel);
@@ -155,6 +162,7 @@ class EngineMLBridge {
      */
     async simulateAnomaly() {
         console.log('[EngineML] simulateAnomaly() — injecting synthetic engine frame');
+        if (typeof DiagLog !== 'undefined') DiagLog.log('ml', `simulateAnomaly: emergencyGlide=${!!window.emergencyGlide} EmergencyGlide=${typeof EmergencyGlide}`);
 
         // Use last known real values as baseline, fall back to cruise defaults
         const base = window.enginePanel?.lastData ?? {};

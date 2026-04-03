@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v4.47';
+const FLYTAB_VERSION = 'v4.48';
 
 // ========== Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -118,8 +118,8 @@ class FlyTabApp {
         const StatusBar = window.Capacitor?.Plugins?.StatusBar;
         if (StatusBar) {
             StatusBar.setOverlaysWebView({ overlay: false }).catch(() => {});
-            StatusBar.setBackgroundColor({ color: '#1a1a1a' }).catch(() => {});
-            StatusBar.setStyle({ style: 'DARK' }).catch(() => {});
+            StatusBar.setBackgroundColor({ color: '#000000' }).catch(() => {});
+            StatusBar.setStyle({ style: 'LIGHT' }).catch(() => {}); // LIGHT = white icons on dark bg
         }
 
         // Warn loudly if sim mode is active
