@@ -59,6 +59,7 @@ class TerrainGrid {
             this._data   = new Int16Array(buf);
             this._loaded = true;
             console.log(`[TerrainGrid] Loaded: ${this._data.length.toLocaleString()} points`);
+            window.dispatchEvent(new CustomEvent('terrainGridLoaded'));
         } catch (err) {
             console.warn('[TerrainGrid] Load failed:', err.message);
         } finally {

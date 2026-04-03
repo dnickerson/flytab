@@ -30,12 +30,25 @@ class RouteProfileView {
         }
         // Defer render until layout is complete so offsetWidth/Height are valid
         requestAnimationFrame(() => this._render(routeData));
+
+        // If terrain grid is still loading, re-render once it finishes
+        if ((!routeData.terrainProfile || routeData.terrainProfile.length === 0)
+                && window.terrainGrid && !window.terrainGrid.isLoaded) {
+            this._terrainReadyHandler = () => {
+                routeData.terrainProfile = this._fetchTerrainProfile(routeData.coords);
+                this._render(this._routeData);
+            };
+            window.addEventListener('terrainGridLoaded', this._terrainReadyHandler, { once: true });
+        }
     }
 
     hide() {
         this._el.style.display = 'none';
         this._visible = false;
-
+        if (this._terrainReadyHandler) {
+            window.removeEventListener('terrainGridLoaded', this._terrainReadyHandler);
+            this._terrainReadyHandler = null;
+        }
     }
 
     // ── DOM ──────────────────────────────────────────────────────────────────
@@ -420,9 +433,11 @@ class RouteProfileView {
             }
 
             // Draw labels — stagger alternating up/down to avoid overlap
+            const fuelStopIds = new Set((routeData.fuelStops || []).map(fs => fs.icao));
             for (let i = 0; i < wpPositions.length; i++) {
                 const wp = wpPositions[i];
                 if (!wp.label) continue;
+                if (fuelStopIds.has(wp.label)) continue; // labeled by fuel stop section instead
                 const stagger = (i % 2 === 0) ? 0 : 14; // alternate row offset
                 const yBase = h - pad.bottom + 14 + stagger;
                 // Background pill for readability
@@ -456,7 +471,7 @@ class RouteProfileView {
                 // Label: ⛽ ICAO just below the x-axis
                 ctx.setLineDash([]);
                 ctx.fillStyle = 'rgba(251,191,36,0.9)';
-                ctx.fillText('\u26FD\u2009' + fs.icao, fx, h - pad.bottom + 18);
+                ctx.fillText('\u26FD\u2009' + fs.icao, fx, h - pad.bottom + 32);
                 ctx.setLineDash([4, 3]);
             }
             ctx.restore();
