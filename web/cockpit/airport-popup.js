@@ -1105,7 +1105,10 @@ class AirportPopup {
         // Observation time and age
         let timeStr = '';
         let ageStr = '';
-        const obsTime = d.observed_at || metar.fetched_at;
+        let ageStale = false;
+        // Use actual observation time for age — never fall back to fetched_at which
+        // would show (0m ago) even for hour-old METARs fetched fresh from the internet.
+        const obsTime = d.observed_at;
         if (obsTime) {
             const dt = new Date(obsTime);
             const day = dt.getUTCDate();
@@ -1118,6 +1121,11 @@ class AirportPopup {
             const ageMin = Math.round((Date.now() - dt.getTime()) / 60000);
             if (ageMin < 60) ageStr = `(${ageMin}m ago)`;
             else ageStr = `(${Math.floor(ageMin / 60)}h ${ageMin % 60}m ago)`;
+            ageStale = ageMin > 75; // FAA METAR cycle is 60min; flag at 75min
+        } else if (metar.fetched_at) {
+            // No observation time — show fetch time but label it clearly
+            timeStr = 'fetched ' + new Date(metar.fetched_at).toUTCString().slice(17, 22) + 'Z';
+            ageStr = '';
         }
 
         // Source label
@@ -1137,7 +1145,7 @@ class AirportPopup {
                 <span class="wx-cat" style="color:${catColor}">\u25CF ${cat}</span>
                 <span class="wx-wind">${windStr}</span>
             </div>
-            <div class="wx-time">${timeStr} <span class="wx-age">${ageStr}</span></div>
+            <div class="wx-time">${timeStr} <span class="wx-age${ageStale ? ' wx-age-stale' : ''}">${ageStr}${ageStale ? ' ⚠ STALE' : ''}</span></div>
             <div class="wx-metar">${raw}</div>
             ${tafHtml}
         </div>`;

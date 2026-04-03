@@ -441,16 +441,26 @@ class FisbClient extends EventTarget {
         const icaoMatch = text.match(/^([A-Z]{4})\s/);
         if (icaoMatch) result.icao = icaoMatch[1];
 
-        // Observation time: DDHHMMz
-        const timeMatch = text.match(/\b(\d{2})(\d{2})(\d{2})Z\b/);
-        if (timeMatch) {
+        // Observation time: DDHHMMz (6-digit) or HHMMz (4-digit, common in FIS-B)
+        const timeMatch6 = text.match(/\b(\d{2})(\d{2})(\d{2})Z\b/);
+        const timeMatch4 = !timeMatch6 && text.match(/\b(\d{2})(\d{2})Z\b/);
+        if (timeMatch6) {
             const now = new Date();
-            const day = parseInt(timeMatch[1], 10);
-            const hour = parseInt(timeMatch[2], 10);
-            const min = parseInt(timeMatch[3], 10);
+            const day = parseInt(timeMatch6[1], 10);
+            const hour = parseInt(timeMatch6[2], 10);
+            const min = parseInt(timeMatch6[3], 10);
             const obs = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), day, hour, min));
-            // Handle month rollover
+            // Handle month rollover (future date means previous month)
             if (obs > now) obs.setUTCMonth(obs.getUTCMonth() - 1);
+            result.observed_at = obs.toISOString();
+        } else if (timeMatch4) {
+            // FIS-B often omits the day — use today's date
+            const now = new Date();
+            const hour = parseInt(timeMatch4[1], 10);
+            const min = parseInt(timeMatch4[2], 10);
+            const obs = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hour, min));
+            // If future (e.g. 23:50Z when it's 00:10Z next day), roll back one day
+            if (obs > now) obs.setUTCDate(obs.getUTCDate() - 1);
             result.observed_at = obs.toISOString();
         }
 

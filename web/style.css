@@ -3201,6 +3201,7 @@ body {
 .wx-wind { font-family: var(--font-instrument); }
 .wx-time { font-size: 14px; color: var(--text-secondary); margin-top: 2px; }
 .wx-age { color: var(--text-label); }
+.wx-age-stale { color: var(--status-warn, #f59e0b); font-weight: 700; }
 .wx-metar {
     font-family: var(--font-mono); font-size: 16px;
     color: var(--text-primary); margin-top: 4px; word-break: break-all;

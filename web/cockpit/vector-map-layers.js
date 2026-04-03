@@ -272,6 +272,8 @@ class VectorMapLayers {
                 // fltCat (capital C), ceiling from clouds[0].base in feet
                 const flight_category = catMap[(obs.fltCat || '').toUpperCase()] || null;
                 const ceiling_ft = obs.clouds?.[0]?.base ?? null;
+                // obs.obsTime is Unix seconds from AWC API — convert to ISO for age display
+                const observed_at = obs.obsTime ? new Date(obs.obsTime * 1000).toISOString() : null;
                 this._internetMetars.set(icao, {
                     raw: obs.rawOb || '',
                     decoded: {
@@ -284,6 +286,7 @@ class VectorMapLayers {
                         temperature_c: obs.temp,
                         dewpoint_c: obs.dewp,
                         altimeter: obs.altim,
+                        observed_at,  // actual observation time, not fetch time
                     },
                     received_at: now,
                     source: 'internet',
