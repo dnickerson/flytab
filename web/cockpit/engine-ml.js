@@ -54,6 +54,11 @@ class EngineMLBridge {
             this._initialized = result.status === 'ok' || result.status === 'already_initialized';
             this._delegate = result.delegate;
             console.log(`[EngineML] Initialized — delegate: ${this._delegate}`);
+            // Update badge now that plugin is ready
+            if (this._badgeEl) {
+                this._badgeEl.textContent = 'ML:—';
+                this._badgeEl.style.color = 'var(--text-muted)';
+            }
         } catch (err) {
             console.error('[EngineML] Init failed:', err);
         }
@@ -85,6 +90,9 @@ class EngineMLBridge {
         this._advisoryEl = advisoryEl || null;
         if (badgeEl) {
             this._wireLongPress(badgeEl);
+            // Show initial state immediately — OFF if plugin unavailable, waiting dash if ready
+            badgeEl.textContent = this._initialized ? 'ML:—' : 'ML:OFF';
+            badgeEl.style.color = 'var(--text-muted)';
         }
     }
 
