@@ -398,6 +398,11 @@ class FlyTabApp {
         this.enginePanel.init();
         window.enginePanel = this.enginePanel;
 
+        // Emergency Glide Calculator (must init before EngineML so trigger() is available)
+        if (typeof EmergencyGlide !== 'undefined') {
+            this.emergencyGlide = new EmergencyGlide();
+        }
+
         // Engine ML (anomaly detection + advisories)
         if (typeof EngineMLBridge !== 'undefined') {
             this.engineML = new EngineMLBridge();

@@ -19,15 +19,20 @@ class EngineMLBridge {
         this._logStartTime = null;
         this._logActive = false;
 
-        // Multi-layer anomaly detection
+        // Multi-layer anomaly detection (Scenario 5)
         this._prevSample = null;              // previous engine sample for delta checks
         this._baseline = {};                  // rolling parameter averages
         this._baselineWindow = [];            // last 60 samples for baseline computation
         this._baselineWindowMax = 60;
         this._flightPhase = 'ground';         // derived phase: ground/climb/cruise/descent
-        this._advisoryLog = [];              // ring buffer, last 20 advisories for debrief
+        this._advisoryLog = [];               // ring buffer, last 20 advisories for debrief
         this._advisoryLogMax = 20;
         this._lastAdvisoryTime = {};          // type → timestamp, for per-type rate-limiting
+
+        // Physics rules state — Scenario 6 emergency trigger
+        this._prevMAP = null;       // previous manifold pressure (inches Hg)
+        this._prevRPM = null;       // previous RPM
+        this._physicsAlarm = false; // true when physics rule fired this cycle
 
         window.engineML = this;   // expose globally for logbook.js
     }
@@ -126,6 +131,9 @@ class EngineMLBridge {
             }
 
             this._updateDisplay(result);
+
+            // ── Scenario 6: physics + ML joint trigger ────────────────────
+            this._checkEmergencyTrigger(d, sit, result);
 
             // Append to ring buffer
             if (this._logActive && result) {
@@ -470,6 +478,63 @@ class EngineMLBridge {
 
         console.log(`[EngineML] Advisory [${advisory.severity}]: ${advisory.message}`);
         document.dispatchEvent(new CustomEvent('engineml:advisory', { detail: advisory }));
+    }
+
+    // ========== Scenario 6: Emergency Trigger (Physics + ML) ==========
+
+    /**
+     * Physics rules check + joint confirmation with ML anomaly.
+     * Both layers must fire to trigger the emergency glide overlay.
+     *
+     * Physics rules (any one sufficient):
+     *   - MAP drop  >5 inches Hg since last sample
+     *   - RPM drop  >300 RPM since last sample
+     *   - Oil press  <20 PSI
+     *
+     * ML confirmation: result.anomaly === true
+     */
+    _checkEmergencyTrigger(d, sit, result) {
+        if (!result) return;
+
+        const num = (v) => { const n = Number(v); return isFinite(n) ? n : null; };
+
+        const curMAP = num(d.manifold_pressure ?? d.mp ?? d.MAP);
+        const curRPM = num(d.rpm ?? d.RPM);
+        const oilPress = num(d.oil_pressure ?? d.oil_press_psi ?? d.Oil_Press);
+
+        // Evaluate physics rules
+        let physicsAlarm = false;
+
+        if (curMAP !== null && this._prevMAP !== null) {
+            if ((this._prevMAP - curMAP) > 5) {
+                physicsAlarm = true;
+                console.warn(`[EngineML] Physics: MAP drop ${(this._prevMAP - curMAP).toFixed(1)}" detected`);
+            }
+        }
+        if (curRPM !== null && this._prevRPM !== null) {
+            if ((this._prevRPM - curRPM) > 300) {
+                physicsAlarm = true;
+                console.warn(`[EngineML] Physics: RPM drop ${Math.round(this._prevRPM - curRPM)} detected`);
+            }
+        }
+        if (oilPress !== null && oilPress > 0 && oilPress < 20) {
+            physicsAlarm = true;
+            console.warn(`[EngineML] Physics: Low oil pressure ${oilPress} PSI`);
+        }
+
+        // Update previous values for next cycle
+        if (curMAP !== null) this._prevMAP = curMAP;
+        if (curRPM !== null) this._prevRPM = curRPM;
+
+        this._physicsAlarm = physicsAlarm;
+
+        // Joint trigger: physics AND ML must both confirm
+        if (physicsAlarm && result.anomaly === true) {
+            console.warn('[EngineML] EMERGENCY: physics + ML joint confirmation — power loss');
+            if (typeof EmergencyGlide !== 'undefined' && window.emergencyGlide) {
+                window.emergencyGlide.trigger({ engineRaw: d, sit, mlResult: result });
+            }
+        }
     }
 
     // ========== Flight Logging ==========

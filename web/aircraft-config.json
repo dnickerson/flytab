@@ -39,6 +39,7 @@
     "descent_pwr_pct": 50,
     "descent_rpm": 2400,
     "descent_mp": 14,
+    "glide_ratio": 10.0,
     "lop_sfc": 0.067,
     "max_rpm": 2700,
     "vs0_kt": 42,
