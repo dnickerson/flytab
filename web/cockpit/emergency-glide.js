@@ -3,6 +3,15 @@
  * On joint physics + ML confirmation of serious power loss, computes
  * reachable airports within glide range and displays a ranked emergency
  * routing overlay with headings and descent profiles.
+<<<<<<< HEAD
+ *
+ * Trigger (both required — dual-layer to prevent false alarms):
+ *   1. Physics rules: MAP drop >5" OR RPM drop >300 OR oil_press <20 PSI
+ *   2. ML anomaly: result.anomaly === true
+ *
+ * Computation completes within 2-3 seconds. Entirely on-device, no internet.
+=======
+>>>>>>> 562e81e (fix: replace emergency-glide.js with canonical Scenario 6 version, align trigger() API)
  *
  * Trigger (both required — dual-layer to prevent false alarms):
  *   1. Physics rules: MAP drop >5" OR RPM drop >300 OR oil_press <20 PSI
@@ -24,6 +33,7 @@ class EmergencyGlide {
     /**
      * Called when both physics rules AND ML anomaly confirm power loss.
      * @param {Object} options
+<<<<<<< HEAD
      * @param {Object} options.engineRaw  — raw engine data frame
      * @param {Object} [options.sit]      — stratuxClient.situation (falls back to live)
      * @param {Object} options.mlResult   — EngineML processSample result
@@ -39,13 +49,35 @@ class EmergencyGlide {
 
         console.warn('[EmergencyGlide] TRIGGERED — computing glide options');
 
+=======
+     * @param {Object}  [options.engineRaw]       — raw engine data frame
+     * @param {Object}  [options.engineData]      — alias for engineRaw
+     * @param {Object}  [options.mlResult]        — EngineML processSample result
+     * @param {boolean} [options.testMode=false]  — simulation / test run (bypasses cooldown)
+     */
+    async trigger(options = {}) {
+        const { engineRaw: engineRawOpt, engineData, mlResult, testMode = false } = options;
+        const engineRaw = engineRawOpt ?? engineData;
+
+        const now = Date.now();
+        if (!testMode && now - this._lastTriggerTime < this._COOLDOWN_MS) return;
+        if (!testMode) this._lastTriggerTime = now;
+
+        console.warn('[EmergencyGlide] TRIGGERED — computing glide options', { testMode });
+
+        const sit = window.app?.stratuxClient?.situation ?? window.stratuxClient?.situation;
+>>>>>>> 562e81e (fix: replace emergency-glide.js with canonical Scenario 6 version, align trigger() API)
         const lat = sit?.lat;
         const lon = sit?.lon;
         const altMsl = sit?.alt_msl ?? 0;
 
         if (!lat || !lon) {
             console.warn('[EmergencyGlide] No GPS position — cannot compute glide range');
+<<<<<<< HEAD
             this._showNoGpsOverlay();
+=======
+            this._showNoGpsOverlay(testMode);
+>>>>>>> 562e81e (fix: replace emergency-glide.js with canonical Scenario 6 version, align trigger() API)
             return;
         }
 
@@ -72,9 +104,15 @@ class EmergencyGlide {
 
         // Query NASR airports within glide range
         let airports = [];
+<<<<<<< HEAD
         if (window.app?._nasrDb) {
             try {
                 airports = await window.app._nasrDb.getAirportsNear(lat, lon, adjustedRangeNm);
+=======
+        if (window.nasrDB) {
+            try {
+                airports = await window.nasrDB.getAirportsNear(lat, lon, adjustedRangeNm);
+>>>>>>> 562e81e (fix: replace emergency-glide.js with canonical Scenario 6 version, align trigger() API)
             } catch (err) {
                 console.error('[EmergencyGlide] Airport query failed:', err);
             }
@@ -96,6 +134,10 @@ class EmergencyGlide {
             ml_score: mlResult?.score ?? null,
             ml_phase: mlResult?.phase ?? null,
             airports_in_range: airports.length,
+<<<<<<< HEAD
+=======
+            test: testMode,
+>>>>>>> 562e81e (fix: replace emergency-glide.js with canonical Scenario 6 version, align trigger() API)
             top_options: ranked.slice(0, 3).map(a => ({
                 icao: a.icao,
                 name: a.name,
@@ -213,6 +255,7 @@ class EmergencyGlide {
     _windAlignScore(trueCourse, runways) {
         let bestAngle = 180;
         for (const rwy of runways) {
+<<<<<<< HEAD
             for (const part of (rwy.id || "").split("/")) {
                 const match = part.trim().match(/^(\d{1,2})(L|R|C)?$/i);
                 if (!match) continue;
@@ -222,6 +265,16 @@ class EmergencyGlide {
                 const angle = diff > 180 ? 360 - diff : diff;
                 if (angle < bestAngle) bestAngle = angle;
             }
+=======
+            const digits = rwy.id?.match(/\d+/)?.[0];
+            if (!digits) continue;
+            const rwyHdg = parseInt(digits) * 10;
+            if (isNaN(rwyHdg) || rwyHdg === 0) continue;
+            // Smallest angle between landing direction and track (0=headwind, 180=tailwind)
+            const diff = ((trueCourse - rwyHdg + 360) % 360);
+            const angle = diff > 180 ? 360 - diff : diff;
+            if (angle < bestAngle) bestAngle = angle;
+>>>>>>> 562e81e (fix: replace emergency-glide.js with canonical Scenario 6 version, align trigger() API)
         }
         return Math.max(0, 15 * (1 - bestAngle / 180));
     }
@@ -265,15 +318,27 @@ class EmergencyGlide {
 
         const el = document.createElement('div');
         el.id = 'emergencyGlideOverlay';
+<<<<<<< HEAD
         el.className = testMode ? 'eg-overlay eg-overlay--test' : 'eg-overlay';
+=======
+        el.className = 'eg-overlay' + (testMode ? ' eg-overlay--test' : '');
+>>>>>>> 562e81e (fix: replace emergency-glide.js with canonical Scenario 6 version, align trigger() API)
 
         // Header
         const header = document.createElement('div');
         header.className = 'eg-header';
+<<<<<<< HEAD
         if (testMode) header.style.background = 'var(--status-caution)';
         header.innerHTML = `
             <div class="eg-title">⚡ ENGINE ANOMALY CONFIRMED</div>
             ${testMode ? '<div class="eg-subtitle eg-subtitle--test">⚠️ TEST MODE — SIMULATION</div>' : ''}
+=======
+        header.innerHTML = `
+            <div class="eg-title-row">
+                <div class="eg-title">${testMode ? '⚠\uFE0E TEST \u2014 ENGINE ANOMALY SIMULATION' : '⚡ ENGINE ANOMALY CONFIRMED'}</div>
+                ${testMode ? '<span class="eg-test-pill">TEST MODE</span>' : ''}
+            </div>
+>>>>>>> 562e81e (fix: replace emergency-glide.js with canonical Scenario 6 version, align trigger() API)
             <div class="eg-subtitle">
                 ${event.airports_in_range} airport${event.airports_in_range !== 1 ? 's' : ''}
                 within ${event.adjusted_range_nm} nm glide range
@@ -338,6 +403,7 @@ class EmergencyGlide {
 
         document.body.appendChild(el);
         this._overlay = el;
+<<<<<<< HEAD
     }
 
     _showNoGpsOverlay() {
@@ -348,6 +414,21 @@ class EmergencyGlide {
         el.innerHTML = `
             <div class="eg-header">
                 <div class="eg-title">⚡ ENGINE ANOMALY CONFIRMED</div>
+=======
+
+        // Focus the ack button for accessibility
+        setTimeout(() => btn.focus(), 50);
+    }
+
+    _showNoGpsOverlay(testMode = false) {
+        this._dismissOverlay();
+        const el = document.createElement('div');
+        el.id = 'emergencyGlideOverlay';
+        el.className = 'eg-overlay' + (testMode ? ' eg-overlay--test' : '');
+        el.innerHTML = `
+            <div class="eg-header">
+                <div class="eg-title">${testMode ? '⚠\uFE0E TEST \u2014 ENGINE ANOMALY SIMULATION' : '⚡ ENGINE ANOMALY CONFIRMED'}</div>
+>>>>>>> 562e81e (fix: replace emergency-glide.js with canonical Scenario 6 version, align trigger() API)
                 <div class="eg-subtitle">No GPS — cannot compute glide range</div>
             </div>
             <div class="eg-body">

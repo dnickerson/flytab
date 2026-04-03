@@ -34,6 +34,11 @@ class EngineMLBridge {
         this._prevRPM = null;       // previous RPM
         this._physicsAlarm = false; // true when physics rule fired this cycle
 
+        // Long-press state for test mode trigger
+        this._lpTimer = null;
+        this._lpProgressTimer = null;
+        this._lpProgress = 0;
+
         window.engineML = this;   // expose globally for logbook.js
     }
 
@@ -78,6 +83,141 @@ class EngineMLBridge {
     setDisplayElements(badgeEl, advisoryEl) {
         this._badgeEl = badgeEl;
         this._advisoryEl = advisoryEl || null;
+        if (badgeEl) {
+            this._wireLongPress(badgeEl);
+        }
+    }
+
+    // ========== Long-press test mode trigger ==========
+
+    _wireLongPress(el) {
+        const DURATION = 2000;  // ms
+        const TICK = 40;        // ms per progress update
+
+        const start = (e) => {
+            // Only primary touch/button
+            if (e.type === 'mousedown' && e.button !== 0) return;
+            e.preventDefault();
+            this._lpProgress = 0;
+            el.classList.add('ml-badge-pressing');
+
+            this._lpTimer = setTimeout(() => {
+                this._endPress(el, true);
+                this.simulateAnomaly();
+            }, DURATION);
+
+            this._lpProgressTimer = setInterval(() => {
+                this._lpProgress = Math.min(100, this._lpProgress + (TICK / DURATION * 100));
+                el.style.setProperty('--lp-pct', this._lpProgress + '%');
+            }, TICK);
+        };
+
+        const cancel = () => {
+            this._endPress(el, false);
+        };
+
+        el.addEventListener('touchstart', start, { passive: false });
+        el.addEventListener('touchend', cancel);
+        el.addEventListener('touchcancel', cancel);
+        el.addEventListener('mousedown', start);
+        el.addEventListener('mouseup', cancel);
+        el.addEventListener('mouseleave', cancel);
+    }
+
+    _endPress(el, fired) {
+        clearTimeout(this._lpTimer);
+        clearInterval(this._lpProgressTimer);
+        this._lpTimer = null;
+        this._lpProgressTimer = null;
+        this._lpProgress = 0;
+        el.classList.remove('ml-badge-pressing');
+        el.style.removeProperty('--lp-pct');
+        if (!fired) {
+            el.classList.add('ml-badge-cancelled');
+            setTimeout(() => el.classList.remove('ml-badge-cancelled'), 300);
+        }
+    }
+
+    // ========== Anomaly Simulation ==========
+
+    /**
+     * Inject a fake engine frame with MAP -6" Hg and RPM -350 to trigger
+     * the full anomaly detection pipeline (physics rules + ML confirmation).
+     * Calls EmergencyGlide.trigger() with testMode: true.
+     */
+    async simulateAnomaly() {
+        console.log('[EngineML] simulateAnomaly() — injecting synthetic engine frame');
+
+        // Use last known real values as baseline, fall back to cruise defaults
+        const base = window.enginePanel?.lastData ?? {};
+        const num = (v, fallback) => { const n = Number(v); return isFinite(n) && n > 0 ? n : fallback; };
+
+        const baseRpm = num(base.rpm ?? base.RPM, 2400);
+        const baseMp  = num(base.manifold_pressure ?? base.mp ?? base.MAP, 25);
+
+        // Synthetic frame: MAP drop >5" Hg, RPM drop >300 (trips Layer 1 physics rules)
+        const fakeFrame = {
+            ...base,
+            rpm:                 baseRpm - 350,
+            manifold_pressure:   baseMp  - 6,
+            mp:                  baseMp  - 6,
+            MAP:                 baseMp  - 6,
+            _simulated:          true,
+        };
+
+        // Build the plugin input (same flattening as _onEngineData)
+        const d = fakeFrame;
+        const sit = this._stratuxClient?.situation;
+
+        let result = null;
+        try {
+            if (this._initialized && this._plugin) {
+                result = await this._plugin.processSample({
+                    rpm:            fakeFrame.rpm,
+                    egt1:           num(d.egt1 ?? d.EGT1 ?? d['EGT 1'], 1400),
+                    egt2:           num(d.egt2 ?? d.EGT2 ?? d['EGT 2'], 1400),
+                    egt3:           num(d.egt3 ?? d.EGT3 ?? d['EGT 3'], 1400),
+                    egt4:           num(d.egt4 ?? d.EGT4 ?? d['EGT 4'], 1400),
+                    cht1:           num(d.cht1 ?? d.CHT1 ?? d['CHT 1'], 350),
+                    cht2:           num(d.cht2 ?? d.CHT2 ?? d['CHT 2'], 350),
+                    cht3:           num(d.cht3 ?? d.CHT3 ?? d['CHT 3'], 350),
+                    cht4:           num(d.cht4 ?? d.CHT4 ?? d['CHT 4'], 350),
+                    oil_temp:       num(d.oil_temp ?? d.oil_temp_f ?? d.Oil_Temp, 190),
+                    oil_press:      num(d.oil_pressure ?? d.oil_press_psi ?? d.Oil_Press, 60),
+                    fuel_flow:      num(d.fuel_flow_gph ?? d.gph ?? d.Fuel_Flow, 8),
+                    altitude:       num(sit?.alt_msl ?? d.altitude_ft, 3000),
+                    mp:             fakeFrame.manifold_pressure,
+                    carb_temp:      num(d.carb_temp ?? d.Carb_Temp, 40),
+                    fuel_remaining: num(d.fuel_remaining_gal ?? d.fuel_gal ?? d.Gallons_Rem, 20),
+                    ground_speed:   num(sit?.ground_speed, 100),
+                    distance_nm:    0,
+                });
+            }
+        } catch (err) {
+            console.warn('[EngineML] simulateAnomaly plugin.processSample failed:', err);
+        }
+
+        // Force Layer 2 anomaly confirmation even if plugin unavailable
+        const simResult = result
+            ? { ...result, anomaly: true, _simulated: true }
+            : { anomaly: true, phase: 'sim', score: 1.0, _simulated: true };
+
+        this._lastResult = simResult;
+        this._updateDisplay(simResult);
+
+        // Trigger emergency glide overlay in test mode
+        if (typeof EmergencyGlide !== 'undefined' && window.emergencyGlide) {
+            window.emergencyGlide.trigger({
+                testMode:   true,
+                engineRaw:  fakeFrame,
+                engineData: fakeFrame,
+                mlResult:   simResult,
+            });
+        } else {
+            console.warn('[EngineML] EmergencyGlide not available');
+        }
+
+        console.log('[EngineML] simulateAnomaly complete', { test: true, result: simResult });
     }
 
     async _onEngineData(raw) {

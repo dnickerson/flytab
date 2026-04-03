@@ -6930,6 +6930,115 @@ body {
 .eml-sev-2 { background: var(--status-danger); color: var(--text-on-dark); animation: thermal-flash 1.5s infinite; }
 .status-ml { font-size: 11px; letter-spacing: 0.5px; }
 
+/* ── ML Badge long-press feedback ────────────────────────── */
+.ml-badge-pressing {
+    position: relative;
+    outline: 2px solid var(--status-caution);
+    border-radius: 4px;
+    overflow: hidden;
+    cursor: progress;
+}
+.ml-badge-pressing::after {
+    content: '';
+    position: absolute;
+    bottom: 0; left: 0;
+    height: 3px;
+    width: var(--lp-pct, 0%);
+    background: var(--status-caution);
+    transition: width 40ms linear;
+    border-radius: 0 0 4px 4px;
+}
+.ml-badge-cancelled {
+    animation: lp-cancel-flash 0.3s ease-out;
+}
+@keyframes lp-cancel-flash {
+    0%   { opacity: 0.3; }
+    100% { opacity: 1; }
+}
+
+/* ── Emergency Glide Overlay ─────────────────────────────── */
+.eg-overlay {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    z-index: 9000;
+    background: rgba(0,0,0,0.85);
+    display: flex; flex-direction: column;
+    font-family: inherit; color: var(--text-primary);
+}
+.eg-header {
+    background: var(--status-danger);
+    color: var(--text-on-dark);
+    padding: 16px 18px 12px;
+    flex-shrink: 0;
+}
+.eg-overlay--test .eg-header {
+    background: var(--status-caution);
+    color: var(--bg-primary);
+}
+.eg-title-row {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+}
+.eg-title {
+    font-size: 20px; font-weight: 800; letter-spacing: 0.5px;
+    line-height: 1.2;
+}
+.eg-test-pill {
+    font-size: 11px; font-weight: 700; letter-spacing: 1px;
+    background: var(--bg-primary); color: var(--status-caution);
+    border: 1.5px solid var(--bg-primary);
+    border-radius: 20px; padding: 2px 8px;
+    text-transform: uppercase; flex-shrink: 0;
+}
+.eg-subtitle {
+    font-size: 13px; margin-top: 4px; opacity: 0.85;
+}
+.eg-body {
+    flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch;
+    padding: 14px 18px;
+    background: var(--bg-primary);
+}
+.eg-section-label {
+    font-size: 11px; font-weight: 700; letter-spacing: 1.2px;
+    color: var(--text-label); text-transform: uppercase;
+    margin: 10px 0 6px; border-bottom: 1px solid var(--border-light);
+    padding-bottom: 4px;
+}
+.eg-section-label:first-child { margin-top: 0; }
+.eg-pos-row {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 15px; font-weight: 600; color: var(--text-primary);
+    margin-bottom: 4px;
+}
+.eg-pos-alt { color: var(--text-secondary); font-weight: 500; }
+.eg-airports { display: flex; flex-direction: column; gap: 6px; }
+.eg-airport-row {
+    display: grid;
+    grid-template-columns: 52px 1fr 52px 60px;
+    align-items: center; gap: 6px;
+    background: var(--bg-surface); border-radius: 6px;
+    padding: 8px 12px; font-size: 14px;
+}
+.eg-apt-id {
+    font-weight: 800; letter-spacing: 0.5px; color: var(--text-primary);
+    font-size: 15px;
+}
+.eg-apt-name { color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.eg-apt-dist { text-align: right; font-weight: 700; color: var(--status-ok); }
+.eg-apt-elev { text-align: right; color: var(--text-muted); font-size: 12px; }
+.eg-no-airports { color: var(--text-muted); font-size: 14px; padding: 8px 0; }
+.eg-footer {
+    background: var(--bg-surface); border-top: 1px solid var(--border);
+    padding: 14px 18px; flex-shrink: 0;
+}
+.eg-ack-btn {
+    display: block; width: 100%;
+    min-height: var(--touch-large, 64px); font-size: 18px;
+    font-weight: 800; letter-spacing: 1px;
+    background: var(--bg-surface-raised); color: var(--text-primary);
+    border: 2px solid var(--border-strong, var(--border));
+    border-radius: 8px; cursor: pointer; touch-action: manipulation;
+}
+.eg-ack-btn:active { opacity: 0.7; }
+
 /* ── ML Monitor page ─────────────────────────────────────── */
 .ml-monitor {
     position: fixed; top: 0; left: 0; right: 0; bottom: 0;
