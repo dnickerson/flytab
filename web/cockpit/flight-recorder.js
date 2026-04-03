@@ -3,8 +3,8 @@
  * Records engine + GPS data at 1Hz to Savvy Aviation CSV format.
  * Stores CSV on device via NanoHTTPD filesystem.
  *
- * Auto-start: RPM > 500 for 10 consecutive seconds
- * Auto-stop:  RPM = 0 for 60 consecutive seconds (or manual)
+ * Auto-start: RPM > 500 for 10s (engine data) OR groundspeed > 30kt for 10s (GPS-only)
+ * Auto-stop:  RPM = 0 for 60s (engine data) OR groundspeed < 10kt for 60s (GPS-only)
  *
  * Data sources:
  *   - Engine:  EngineClient WebSocket (1Hz push from Pi)
@@ -40,6 +40,8 @@ class FlightRecorder {
         // Auto-start/stop counters
         this._rpmAboveCount = 0;
         this._rpmZeroCount = 0;
+        this._gsAboveCount = 0;
+        this._gsBelowCount = 0;
         this._autoMonitorInterval = null;
 
         // First/last GPS for dep/dest naming
@@ -145,13 +147,16 @@ class FlightRecorder {
     /** Build one CSV row from current engine + GPS state */
     _recordRow() {
         const eng = this._engine?.lastData;
-        if (!eng) return; // no engine data yet
-
-        const d = eng.data || {};
         const sit = this._stratux?.situation;
+        const d = eng?.data || {};
 
-        // GPS position for dep/dest naming
-        if (sit && sit.lat && sit.lon && sit.gps_fix_quality > 0) {
+        // Require at least a GPS fix or engine data to write a row
+        const hasGps = sit?.lat && sit?.lon && (sit?.gps_fix_quality > 0);
+        const hasEngine = !!eng;
+        if (!hasGps && !hasEngine) return;
+
+        // GPS position for dep/dest naming — always update from Stratux if available
+        if (hasGps) {
             const gps = { lat: sit.lat, lon: sit.lon, alt: sit.alt_msl || 0 };
             if (!this._firstGps) this._firstGps = gps;
             this._lastGps = gps;
@@ -184,20 +189,20 @@ class FlightRecorder {
         const dateStr = now.toISOString().slice(0, 10);
 
         // GPS/attitude from Stratux or engine status
-        const lon = eng.longitude || (sit?.lon) || '';
-        const lat = eng.latitude || (sit?.lat) || '';
-        const alt = eng.gps_altitude || (sit?.alt_msl) || 0;
-        const gs = eng.ground_speed || (sit?.ground_speed) || 0;
-        const bank = eng.bank != null ? eng.bank.toFixed(2) : (sit?.bank != null ? sit.bank.toFixed(2) : '');
-        const pitch = eng.pitch != null ? eng.pitch.toFixed(2) : (sit?.pitch != null ? sit.pitch.toFixed(2) : '');
-        const accVert = eng.acc_vert || (sit?.acc_vert) || '';
-        const course = eng.course != null ? Math.round(eng.course) : (sit?.true_course != null ? Math.round(sit.true_course) : '');
+        const lon = eng?.longitude || (sit?.lon) || '';
+        const lat = eng?.latitude || (sit?.lat) || '';
+        const alt = eng?.gps_altitude || (sit?.alt_msl) || 0;
+        const gs = eng?.ground_speed || (sit?.ground_speed) || 0;
+        const bank = eng?.bank != null ? eng.bank.toFixed(2) : (sit?.bank != null ? sit.bank.toFixed(2) : '');
+        const pitch = eng?.pitch != null ? eng.pitch.toFixed(2) : (sit?.pitch != null ? sit.pitch.toFixed(2) : '');
+        const accVert = eng?.acc_vert || (sit?.acc_vert) || '';
+        const course = eng?.course != null ? Math.round(eng.course) : (sit?.true_course != null ? Math.round(sit.true_course) : '');
 
         const rpm = d.RPM || 0;
-        const pctPower = rpm > 0 ? (eng.percent_power || '') : '';
-        const opCond = rpm > 0 ? (eng.rop_lop_mode || '') : '';
-        const pct = rpm > 0 ? (eng.rop_lop_percent || '') : '';
-        const sfc = rpm > 0 ? (eng.sfc || '') : '';
+        const pctPower = rpm > 0 ? (eng?.percent_power || '') : '';
+        const opCond = rpm > 0 ? (eng?.rop_lop_mode || '') : '';
+        const pct = rpm > 0 ? (eng?.rop_lop_percent || '') : '';
+        const sfc = rpm > 0 ? (eng?.sfc || '') : '';
 
         // Engine ML — grab latest result if inference is running
         const ml = window.engineML?.lastResult;
@@ -303,40 +308,69 @@ class FlightRecorder {
         return null;
     }
 
-    /** Auto-start/stop based on RPM */
+    /** Auto-start/stop based on RPM (engine data) or groundspeed (GPS-only) */
     _autoMonitor() {
         const eng = this._engine?.lastData;
-
-        // If engine data is unavailable (WebSocket disconnected / app backgrounded),
-        // do not count as RPM=0 — otherwise a brief disconnect mid-flight triggers
-        // a spurious auto-stop and splits the recording into two files.
-        if (!eng) return;
-
+        const sit = this._stratux?.situation;
         const rpm = eng?.data?.RPM || 0;
+        const gs = sit?.ground_speed || 0;
+
+        // Prefer RPM-based trigger when engine data is available.
+        // If engine data is unavailable (WebSocket disconnected / app backgrounded),
+        // fall back to GPS groundspeed so GPS-only flights auto-start/stop correctly.
+        const hasEngine = !!eng;
 
         if (!this._recording) {
-            // Check for auto-start
-            if (rpm >= FlightRecorder.RPM_START_THRESHOLD) {
-                this._rpmAboveCount++;
-                if (this._rpmAboveCount >= FlightRecorder.RPM_START_SECONDS) {
-                    this.start();
+            if (hasEngine) {
+                // RPM-based auto-start
+                if (rpm >= FlightRecorder.RPM_START_THRESHOLD) {
+                    this._rpmAboveCount++;
+                    if (this._rpmAboveCount >= FlightRecorder.RPM_START_SECONDS) {
+                        this.start();
+                        this._rpmAboveCount = 0;
+                    }
+                } else {
                     this._rpmAboveCount = 0;
                 }
             } else {
-                this._rpmAboveCount = 0;
+                // GPS-based auto-start: GS > 30kt for 10s
+                if (gs > 30) {
+                    this._gsAboveCount++;
+                    if (this._gsAboveCount >= 10) {
+                        this.start();
+                        this._gsAboveCount = 0;
+                    }
+                } else {
+                    this._gsAboveCount = 0;
+                }
             }
         } else {
-            // Check for auto-stop — use configurable threshold (default 0 = exact zero)
-            const cfg = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.get('flightRecording') : {};
-            const stopThreshold = cfg.rpmStopThreshold ?? 0;
-            if (rpm <= stopThreshold) {
-                this._rpmZeroCount++;
-                if (this._rpmZeroCount >= FlightRecorder.RPM_STOP_SECONDS) {
-                    this.stop();
+            if (hasEngine) {
+                // RPM-based auto-stop — use configurable threshold (default 0 = exact zero)
+                const cfg = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.get('flightRecording') : {};
+                const stopThreshold = cfg.rpmStopThreshold ?? 0;
+                if (rpm <= stopThreshold) {
+                    this._rpmZeroCount++;
+                    if (this._rpmZeroCount >= FlightRecorder.RPM_STOP_SECONDS) {
+                        this.stop();
+                        this._rpmZeroCount = 0;
+                    }
+                } else {
                     this._rpmZeroCount = 0;
                 }
             } else {
-                this._rpmZeroCount = 0;
+                // GPS-based auto-stop: GS < 10kt for stopDelaySeconds
+                const cfg = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.get('flightRecording') : {};
+                const stopDelay = cfg.stopDelaySeconds ?? 60;
+                if (gs < 10) {
+                    this._gsBelowCount++;
+                    if (this._gsBelowCount >= stopDelay) {
+                        this.stop();
+                        this._gsBelowCount = 0;
+                    }
+                } else {
+                    this._gsBelowCount = 0;
+                }
             }
         }
     }
