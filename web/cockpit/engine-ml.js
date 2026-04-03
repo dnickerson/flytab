@@ -19,6 +19,16 @@ class EngineMLBridge {
         this._logStartTime = null;
         this._logActive = false;
 
+        // Multi-layer anomaly detection
+        this._prevSample = null;              // previous engine sample for delta checks
+        this._baseline = {};                  // rolling parameter averages
+        this._baselineWindow = [];            // last 60 samples for baseline computation
+        this._baselineWindowMax = 60;
+        this._flightPhase = 'ground';         // derived phase: ground/climb/cruise/descent
+        this._advisoryLog = [];              // ring buffer, last 20 advisories for debrief
+        this._advisoryLogMax = 20;
+        this._lastAdvisoryTime = {};          // type → timestamp, for per-type rate-limiting
+
         window.engineML = this;   // expose globally for logbook.js
     }
 
@@ -57,10 +67,12 @@ class EngineMLBridge {
 
     get lastResult() { return this._lastResult; }
     get delegate() { return this._delegate; }
+    get advisoryLog() { return [...this._advisoryLog]; }
 
     /** Set DOM elements for advisory display */
-    setDisplayElements(badgeEl) {
+    setDisplayElements(badgeEl, advisoryEl) {
         this._badgeEl = badgeEl;
+        this._advisoryEl = advisoryEl || null;
     }
 
     async _onEngineData(raw) {
@@ -72,6 +84,16 @@ class EngineMLBridge {
 
         // Get altitude and speed from Stratux situation
         const sit = this._stratuxClient?.situation;
+
+        // Update phase and baseline before physics check so CHT phase-limit is current
+        this._derivePhase(d, this._lastResult?.phase);
+        this._updateBaseline(d);
+
+        // Layer 1: physics rules — run before ML (no latency)
+        const physicsAdvisories = this._checkPhysicsRules(d);
+        for (const adv of physicsAdvisories) {
+            this._dispatchAdvisory(adv);
+        }
 
         try {
             const result = await this._plugin.processSample({
@@ -96,6 +118,13 @@ class EngineMLBridge {
             });
 
             this._lastResult = result;
+
+            // Layer 2+3: ML anomaly analysis with advisory template mapping
+            if (result.anomaly) {
+                const mlAdvisory = this._analyzeMLAnomaly(result, d);
+                if (mlAdvisory) this._dispatchAdvisory(mlAdvisory);
+            }
+
             this._updateDisplay(result);
 
             // Append to ring buffer
@@ -112,6 +141,335 @@ class EngineMLBridge {
         } catch (err) {
             // Don't spam console — plugin may not be ready
         }
+
+        // Store sample for next delta checks (after ML call so prev is last complete sample)
+        this._prevSample = d;
+    }
+
+    // ========== Layer 1: Physics Rules ==========
+
+    /**
+     * Hard limit checks run every sample, no ML required.
+     * Returns array of advisory objects (may be empty).
+     */
+    _checkPhysicsRules(d) {
+        const num = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
+        const advisories = [];
+
+        const rpm = num(d.rpm ?? d.RPM ?? 0);
+        const mp = num(d.manifold_pressure ?? d.mp ?? d.MAP ?? 0);
+        const oilP = num(d.oil_pressure ?? d.oil_press_psi ?? d.Oil_Press ?? 0);
+        const fuelFlow = num(d.fuel_flow_gph ?? d.gph ?? d.Fuel_Flow ?? 0);
+
+        // Oil pressure critically low
+        if (oilP > 0 && oilP < 25) {
+            advisories.push({
+                type: 'oil_pressure_critical',
+                message: `Oil pressure critically low — ${Math.round(oilP)} PSI. Reduce power. Land as soon as practical.`,
+                severity: 'act-now',
+            });
+        }
+
+        // CHT exceedance >420°F — skip during climb (normal CHT rise expected)
+        const chtLimit = 420;
+        const chtClimbLimit = 440; // relaxed limit during climb
+        for (let i = 1; i <= 4; i++) {
+            const cht = num(d[`cht${i}`] ?? d[`CHT${i}`] ?? 0);
+            const limit = this._flightPhase === 'climb' ? chtClimbLimit : chtLimit;
+            if (cht > limit) {
+                advisories.push({
+                    type: `cht${i}_exceedance`,
+                    message: `CHT #${i} exceeding limit — ${Math.round(cht)}°F (limit: ${limit}°F). Enrich mixture, reduce power, or increase airspeed.`,
+                    severity: 'act-now',
+                });
+            }
+        }
+
+        // MAP sudden drop >3" Hg (unexplained power loss)
+        if (this._prevSample && mp > 0) {
+            const prevMp = num(this._prevSample.manifold_pressure ?? this._prevSample.mp ?? this._prevSample.MAP ?? 0);
+            const delta = prevMp - mp;
+            if (prevMp > 0 && delta > 3) {
+                advisories.push({
+                    type: 'map_sudden_drop',
+                    message: `MAP dropped ${delta.toFixed(1)}" unexpectedly — now ${mp.toFixed(1)}" Hg. Check throttle, carb heat, mixture.`,
+                    severity: 'act-now',
+                });
+            }
+        }
+
+        // RPM sudden drop >200 RPM
+        if (this._prevSample && rpm > 500) {
+            const prevRpm = num(this._prevSample.rpm ?? this._prevSample.RPM ?? 0);
+            const delta = prevRpm - rpm;
+            if (prevRpm > 500 && delta > 200) {
+                advisories.push({
+                    type: 'rpm_sudden_drop',
+                    message: `RPM dropped ${Math.round(delta)} unexpectedly — now ${Math.round(rpm)} RPM. Check carb heat, mixture, ignition.`,
+                    severity: 'act-now',
+                });
+            }
+        }
+
+        // Fuel flow collapse at cruise power
+        if (rpm > 2000 && fuelFlow > 0 && fuelFlow < 2) {
+            advisories.push({
+                type: 'fuel_flow_collapse',
+                message: `Fuel flow critically low at cruise power — ${fuelFlow.toFixed(1)} GPH at ${Math.round(rpm)} RPM. Check fuel selector, boost pump, mixture.`,
+                severity: 'act-now',
+            });
+        }
+
+        return advisories;
+    }
+
+    // ========== Layer 2: ML Anomaly Analysis ==========
+
+    /**
+     * When ML flags an anomaly, find the most-deviated parameter and generate advisory.
+     * Returns advisory object or null.
+     */
+    _analyzeMLAnomaly(result, d) {
+        if (!result.anomaly) return null;
+        if (Object.keys(this._baseline).length < 5) return null; // need baseline data
+
+        const num = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
+
+        const params = {
+            cht1: num(d.cht1 ?? d.CHT1 ?? 0),
+            cht2: num(d.cht2 ?? d.CHT2 ?? 0),
+            cht3: num(d.cht3 ?? d.CHT3 ?? 0),
+            cht4: num(d.cht4 ?? d.CHT4 ?? 0),
+            egt1: num(d.egt1 ?? d.EGT1 ?? 0),
+            egt2: num(d.egt2 ?? d.EGT2 ?? 0),
+            egt3: num(d.egt3 ?? d.EGT3 ?? 0),
+            egt4: num(d.egt4 ?? d.EGT4 ?? 0),
+            oil_press: num(d.oil_pressure ?? d.oil_press_psi ?? d.Oil_Press ?? 0),
+            fuel_flow: num(d.fuel_flow_gph ?? d.gph ?? d.Fuel_Flow ?? 0),
+            rpm: num(d.rpm ?? d.RPM ?? 0),
+            mp: num(d.manifold_pressure ?? d.mp ?? d.MAP ?? 0),
+        };
+
+        let maxDeviation = 0;
+        let maxParam = null;
+
+        for (const [key, value] of Object.entries(params)) {
+            const base = this._baseline[key];
+            if (!base || base === 0 || value === 0) continue;
+            const deviation = Math.abs(value - base) / base;
+            if (deviation > maxDeviation) {
+                maxDeviation = deviation;
+                maxParam = key;
+            }
+        }
+
+        // Require at least 5% deviation to generate advisory
+        if (!maxParam || maxDeviation < 0.05) return null;
+
+        return this._mapAdvisory(maxParam, params, this._baseline);
+    }
+
+    // ========== Layer 3: Advisory Templates ==========
+
+    /**
+     * Map the most-deviated parameter to a pre-written advisory text.
+     */
+    _mapAdvisory(paramKey, params, baseline) {
+        const r1 = (v) => Math.round(v * 10) / 10;
+
+        const chtMatch = paramKey.match(/^cht(\d)$/);
+        if (chtMatch) {
+            const cyl = chtMatch[1];
+            const current = Math.round(params[paramKey]);
+            const base = Math.round(baseline[paramKey]);
+            if (current > base) {
+                return {
+                    type: `ml_cht${cyl}_rising`,
+                    message: `CHT #${cyl} rising faster than baseline — ${current}°F (baseline: ${base}°F). Possible cooling restriction or lean misfire. Monitor.`,
+                    severity: current > 400 ? 'act-now' : 'monitor',
+                };
+            } else {
+                return {
+                    type: `ml_cht${cyl}_drop`,
+                    message: `CHT #${cyl} dropped below baseline — ${current}°F (baseline: ${base}°F). Possible misfire or fuel imbalance. Monitor.`,
+                    severity: 'monitor',
+                };
+            }
+        }
+
+        const egtMatch = paramKey.match(/^egt(\d)$/);
+        if (egtMatch) {
+            const cyl = egtMatch[1];
+            const current = Math.round(params[paramKey]);
+            const base = Math.round(baseline[paramKey]);
+            if (current > base) {
+                return {
+                    type: `ml_egt${cyl}_high`,
+                    message: `EGT #${cyl} elevated — ${current}°F (baseline: ${base}°F). Check mixture. Enrich if needed.`,
+                    severity: current > 1650 ? 'act-now' : 'monitor',
+                };
+            } else {
+                return {
+                    type: `ml_egt${cyl}_low`,
+                    message: `EGT #${cyl} low vs baseline — ${current}°F (baseline: ${base}°F). Possible misfire or fouled plug on cylinder ${cyl}.`,
+                    severity: 'monitor',
+                };
+            }
+        }
+
+        if (paramKey === 'fuel_flow') {
+            const current = r1(params.fuel_flow);
+            const base = r1(baseline.fuel_flow);
+            if (current > base) {
+                return {
+                    type: 'ml_fuel_flow_high',
+                    message: `Fuel flow elevated vs power setting — check mixture. Current: ${current} GPH, expected: ${base} GPH.`,
+                    severity: 'monitor',
+                };
+            } else {
+                return {
+                    type: 'ml_fuel_flow_low',
+                    message: `Fuel flow below baseline — ${current} GPH (expected: ${base} GPH). Check fuel selector, boost pump.`,
+                    severity: 'monitor',
+                };
+            }
+        }
+
+        if (paramKey === 'oil_press') {
+            const current = Math.round(params.oil_press);
+            const base = Math.round(baseline.oil_press);
+            return {
+                type: 'ml_oil_press_trending',
+                message: `Oil pressure trending low — ${current} PSI, baseline ${base} PSI. Monitor closely.`,
+                severity: current < 40 ? 'act-now' : 'monitor',
+            };
+        }
+
+        if (paramKey === 'rpm') {
+            const current = Math.round(params.rpm);
+            const base = Math.round(baseline.rpm);
+            return {
+                type: 'ml_rpm_anomaly',
+                message: `RPM deviation detected — ${current} RPM (baseline: ${base} RPM). Check throttle, governor, magnetos.`,
+                severity: 'monitor',
+            };
+        }
+
+        if (paramKey === 'mp') {
+            const current = r1(params.mp);
+            const base = r1(baseline.mp);
+            return {
+                type: 'ml_map_anomaly',
+                message: `Manifold pressure anomaly — ${current}" Hg (baseline: ${base}" Hg). Check throttle, turbo, wastegate.`,
+                severity: 'monitor',
+            };
+        }
+
+        return null;
+    }
+
+    // ========== Phase Tracking ==========
+
+    /** Derive flight phase from ML result if available, otherwise use MAP/RPM heuristic. */
+    _derivePhase(d, mlPhase) {
+        if (mlPhase && mlPhase !== 'unknown' && mlPhase !== 'ground') {
+            this._flightPhase = mlPhase;
+            return;
+        }
+        const num = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
+        const rpm = num(d.rpm ?? d.RPM ?? 0);
+        const mp = num(d.manifold_pressure ?? d.mp ?? d.MAP ?? 0);
+
+        if (rpm < 1000) {
+            this._flightPhase = 'ground';
+        } else if (mp > 26 && rpm > 2400) {
+            this._flightPhase = 'climb';
+        } else if (mp < 22 && rpm < 2400) {
+            this._flightPhase = 'descent';
+        } else {
+            this._flightPhase = 'cruise';
+        }
+    }
+
+    // ========== Baseline Computation ==========
+
+    /** Maintain rolling 60-sample average baseline for anomaly comparison. */
+    _updateBaseline(d) {
+        const num = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
+
+        const sample = {
+            cht1: num(d.cht1 ?? d.CHT1 ?? 0),
+            cht2: num(d.cht2 ?? d.CHT2 ?? 0),
+            cht3: num(d.cht3 ?? d.CHT3 ?? 0),
+            cht4: num(d.cht4 ?? d.CHT4 ?? 0),
+            egt1: num(d.egt1 ?? d.EGT1 ?? 0),
+            egt2: num(d.egt2 ?? d.EGT2 ?? 0),
+            egt3: num(d.egt3 ?? d.EGT3 ?? 0),
+            egt4: num(d.egt4 ?? d.EGT4 ?? 0),
+            oil_press: num(d.oil_pressure ?? d.oil_press_psi ?? d.Oil_Press ?? 0),
+            fuel_flow: num(d.fuel_flow_gph ?? d.gph ?? d.Fuel_Flow ?? 0),
+            rpm: num(d.rpm ?? d.RPM ?? 0),
+            mp: num(d.manifold_pressure ?? d.mp ?? d.MAP ?? 0),
+        };
+
+        this._baselineWindow.push(sample);
+        if (this._baselineWindow.length > this._baselineWindowMax) {
+            this._baselineWindow.shift();
+        }
+
+        // Recompute rolling averages (skip zero values)
+        const keys = Object.keys(sample);
+        const newBaseline = {};
+        for (const key of keys) {
+            let sum = 0, count = 0;
+            for (const s of this._baselineWindow) {
+                if (s[key] > 0) { sum += s[key]; count++; }
+            }
+            newBaseline[key] = count > 0 ? sum / count : 0;
+        }
+        this._baseline = newBaseline;
+    }
+
+    // ========== Advisory Dispatch ==========
+
+    /**
+     * Rate-limit, log, dispatch advisory event, and update display.
+     * Same advisory type won't fire more than once per 30 seconds.
+     */
+    _dispatchAdvisory(advisory) {
+        if (!advisory) return;
+
+        const now = Date.now();
+        const rateLimitMs = advisory.severity === 'act-now' ? 5000 : 30000;
+        const last = this._lastAdvisoryTime[advisory.type];
+        if (last && (now - last) < rateLimitMs) return;
+
+        this._lastAdvisoryTime[advisory.type] = now;
+
+        // Append to post-flight ring buffer
+        this._advisoryLog.push({ ...advisory, timestamp: now });
+        if (this._advisoryLog.length > this._advisoryLogMax) this._advisoryLog.shift();
+
+        // Update advisory display element if wired
+        if (this._advisoryEl) {
+            const isCritical = advisory.severity === 'act-now';
+            this._advisoryEl.textContent = advisory.message;
+            this._advisoryEl.classList.toggle('engine-advisory-banner--critical', isCritical);
+            this._advisoryEl.classList.remove('engine-advisory-banner--fadeout');
+            // Force reflow so animation restarts cleanly
+            void this._advisoryEl.offsetWidth;
+            this._advisoryEl.classList.add('engine-advisory-banner--fadeout');
+            this._advisoryEl.style.display = 'block';
+            clearTimeout(this._advisoryHideTimer);
+            this._advisoryHideTimer = setTimeout(() => {
+                this._advisoryEl.textContent = '';
+                this._advisoryEl.style.display = 'none';
+                this._advisoryEl.classList.remove('engine-advisory-banner--fadeout', 'engine-advisory-banner--critical');
+            }, 15000);
+        }
+
+        console.log(`[EngineML] Advisory [${advisory.severity}]: ${advisory.message}`);
+        document.dispatchEvent(new CustomEvent('engineml:advisory', { detail: advisory }));
     }
 
     // ========== Flight Logging ==========
@@ -150,6 +508,7 @@ class EngineMLBridge {
             phase_dist: Object.fromEntries(
                 Object.entries(phases).map(([k, v]) => [k, Math.round(v / total * 100)])
             ),
+            advisory_count: this._advisoryLog.length,
         };
     }
 

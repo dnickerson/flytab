@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v4.43';
+const FLYTAB_VERSION = 'v4.44';
 
 // ========== Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -403,7 +403,8 @@ class FlyTabApp {
             this.engineML = new EngineMLBridge();
             this.engineML.init().then(() => {
                 this.engineML.setDisplayElements(
-                    document.getElementById('statusML')
+                    document.getElementById('statusML'),
+                    document.getElementById('engineAdvisory')
                 );
                 this.engineML.start(this.engineClient, this.stratuxClient);
             });
