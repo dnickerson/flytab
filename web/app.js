@@ -951,7 +951,6 @@ class FlyTabApp {
                 const { plan: p, opts: o } = this._pendingPlanEdit;
                 this._pendingPlanEdit = null;
                 await this._applyPlan(p, { skipRouteTable: o.fromRouteTable });
-                try { localStorage.setItem('flypi_active_plan', JSON.stringify(p)); } catch {}
             }
         } finally {
             this._applyingPlan = false;
@@ -1070,7 +1069,19 @@ class FlyTabApp {
         }
 
         // Filter out unresolved waypoints so the route polyline doesn't break
+        const _wpsBeforeFilter = wps;
         wps = wps.filter(w => w.lat != null && w.lon != null);
+
+        // Warn if any waypoints were dropped (unresolved)
+        const droppedCount = _wpsBeforeFilter.length - wps.length;
+        if (droppedCount > 0) {
+            const resolvedIcaos = new Set(wps.map(w => w.icao));
+            const dropped = _wpsBeforeFilter
+                .filter(w => !resolvedIcaos.has(w.icao))
+                .map(w => w.icao)
+                .join(', ');
+            this.showToast(`⚠ ${droppedCount} waypoint${droppedCount > 1 ? 's' : ''} not found: ${dropped}`);
+        }
 
         // trip — normalized top-level plan object with resolved waypoints
         const normalized = { ...plan, waypoints: wps };
@@ -1123,6 +1134,11 @@ class FlyTabApp {
         }
 
         this._updateWeatherAge(plan);
+
+        // Save the resolved plan (with lat/lon stamped on all waypoints) to localStorage.
+        // This replaces the pre-resolution save in applyRouteEdit so a round-trip load
+        // does not need to re-resolve NASR (faster boot, survives offline/timeout).
+        try { localStorage.setItem('flypi_active_plan', JSON.stringify(normalized)); } catch {}
 
         // Seed IndexedDB weather cache from plan's weather_cache so airport popups can look it up
         const wc = plan.weather_cache || plan.weather;

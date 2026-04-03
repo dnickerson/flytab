@@ -77,6 +77,49 @@ class RouteEditor {
         if (this._visible) this._renderWaypoints();
     }
 
+    // ========== New / Edit Route ==========
+
+    async startNewRoute() {
+        this._waypoints = [];
+        this._plan = null;
+        this._altitude = 3500;
+        this._undoStack = [];
+        this._insertIndex = -1;
+        this._expandedIndex = -1;
+        this._newRouteMode = true;
+
+        // Pre-populate with nearest airport to current GPS position
+        const sit = this.stratux?.situation;
+        if (sit?.lat != null && sit?.lon != null && this.nasrDb) {
+            try {
+                const nearby = await this.nasrDb.getAirportsNear(sit.lat, sit.lon, 50);
+                if (nearby?.length) {
+                    const apt = nearby[0];
+                    this._waypoints = [{
+                        icao: apt.icao,
+                        name: apt.name,
+                        lat: apt.lat,
+                        lon: apt.lon,
+                        type: 'APT',
+                        alt: 0,
+                    }];
+                }
+            } catch { /* NASR not ready */ }
+        }
+
+        if (this._altInput) this._altInput.value = this._altitude;
+        this.show();
+    }
+
+    startEditRoute() {
+        if (this._waypoints.length === 0) {
+            if (typeof app !== 'undefined') app.showToast('No route loaded');
+            return;
+        }
+        this._newRouteMode = false;
+        this.show();
+    }
+
     // ========== Undo ==========
 
     _pushUndo() {
@@ -540,7 +583,14 @@ class RouteEditor {
                 fuelRemaining -= (legDist / gs) * gph;
             }
 
-            const roleLabel = i === 0 ? 'DEP' : (i === this._waypoints.length - 1 ? 'DEST' : '');
+            // Find index of last APT waypoint — that is the destination.
+            // Anything after it (approach fixes, MAP point) is labeled APCH.
+            let destIdx = -1;
+            for (let j = this._waypoints.length - 1; j >= 0; j--) {
+                if (this._waypoints[j].type === 'APT') { destIdx = j; break; }
+            }
+            if (destIdx < 0) destIdx = this._waypoints.length - 1;
+            const roleLabel = i === 0 ? 'DEP' : i === destIdx ? 'DEST' : i > destIdx ? 'APCH' : '';
             const fuelClass = this._fuelColorClass(fuelRemaining, cruiseGph);
             const isExpanded = (i === this._expandedIndex);
 
@@ -914,17 +964,20 @@ class RouteEditor {
         }
         if (!destIcao) destIcao = wps[wps.length - 1]?.icao || '';
 
-        // Build updated plan
+        // Build updated plan — rebuild route/legs cleanly to avoid stale leg data
         const plan = {
             ...(this._plan || {}),
+            departure: wps[0]?.icao || '',
             destination: destIcao,
-            waypoints: wps,
             cruise_altitude: this._altitude,
+            waypoints: wps,
             flight_plan: {
                 ...(this._plan?.flight_plan || {}),
                 departure: wps[0]?.icao || '',
                 destination: destIcao,
                 cruise_altitude: this._altitude,
+                route: wps.map(w => w.icao || w.name).filter(Boolean),
+                legs: [],  // cleared — route-table will rebuild via _buildMissingSegments + FIS-B winds
             },
         };
 

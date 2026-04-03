@@ -116,6 +116,14 @@ class TabBar {
                 window.open('https://flywhere.app/plan', '_blank');
                 this._closeMoreDrawer();
             }},
+            { icon: '🗺', label: 'New Route', action: () => {
+                this._closeMoreDrawer();
+                this._showNewRouteConfirm();
+            }},
+            { icon: '✏️', label: 'Edit Route', action: () => {
+                this._closeMoreDrawer();
+                window.app?.routeEditor?.startEditRoute();
+            }},
             { icon: '✈', label: 'Load Flight Plan', action: () => {
                 if (c.planSync?.show) c.planSync.show();
                 this._closeMoreDrawer();
@@ -220,6 +228,32 @@ class TabBar {
         }
 
         document.body.appendChild(this._moreDrawer);
+    }
+
+    _showNewRouteConfirm() {
+        const overlay = document.createElement('div');
+        overlay.style.cssText = `
+            position: fixed; inset: 0; z-index: 200000;
+            background: rgba(0,0,0,0.7);
+            display: flex; align-items: center; justify-content: center;
+            font-family: -apple-system, 'SF Pro Display', system-ui, sans-serif;
+        `;
+        overlay.innerHTML = `
+            <div style="background: var(--bg-surface, #1a2540); border-radius: 12px; padding: 24px; max-width: 320px; width: 90%; text-align: center;">
+                <div style="color: var(--text-primary, #e8ecf0); font-size: 17px; font-weight: 600; margin-bottom: 12px;">Clear current route and start new?</div>
+                <div style="display: flex; gap: 12px; margin-top: 20px; justify-content: center;">
+                    <button id="_newRouteCancel" style="flex:1; padding: 12px; border: none; border-radius: 8px; background: var(--bg-surface-raised, #2a3a5c); color: var(--text-primary, #e8ecf0); font-size: 16px; cursor: pointer; touch-action: manipulation;">CANCEL</button>
+                    <button id="_newRouteConfirm" style="flex:1; padding: 12px; border: none; border-radius: 8px; background: var(--status-ok, #1e8c3a); color: #fff; font-size: 16px; font-weight: 600; cursor: pointer; touch-action: manipulation;">CONFIRM</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+        overlay.querySelector('#_newRouteCancel').addEventListener('click', () => overlay.remove());
+        overlay.querySelector('#_newRouteConfirm').addEventListener('click', () => {
+            overlay.remove();
+            window.app?.routeEditor?.startNewRoute();
+        });
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
     }
 
     _openMoreDrawer() {
