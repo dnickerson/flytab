@@ -124,9 +124,10 @@ class EngineMLBridge {
         };
 
         const cancel = (e) => {
-            if (this._lpTimer) {
-                if (typeof DiagLog !== 'undefined') DiagLog.log('ml', `Long-press cancelled (${e?.type})`);
-            }
+            // If _lpTimer is null, the timeout already fired and handled itself — don't cancel.
+            // This prevents touchend (finger lift at 2s) from racing against the setTimeout.
+            if (!this._lpTimer) return;
+            if (typeof DiagLog !== 'undefined') DiagLog.log('ml', `Long-press cancelled (${e?.type})`);
             this._endPress(el, false);
         };
 
