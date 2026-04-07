@@ -53,6 +53,12 @@ class VectorMapLayers {
         this._onInternetMetar = null;      // callback(icao, entry) — used by airport popup live refresh
         this._onInternetMetarsFetched = null; // callback() — fired after each successful batch fetch
 
+        // Clear the fetch cache when internet reconnects so weather refreshes immediately
+        window.addEventListener('online', () => { this._internetFetchedAt = 0; });
+
+        // Refresh internet METARs every 10 minutes even when map is stationary
+        setInterval(() => { this._internetFetchedAt = 0; this._scheduleUpdate(); }, 10 * 60 * 1000);
+
         // Route waypoint ICAOs — suppress duplicate airport labels for these
         this._routeIcaos = new Set();
 
@@ -60,6 +66,7 @@ class VectorMapLayers {
         this._showCeil = false;
         this._showVis  = false;
         this._showWind = false;
+        this._showTemp = false;
 
         // Debounced update on map movement
         this._map.on('moveend zoomend', () => this._scheduleUpdate());
@@ -269,9 +276,10 @@ class VectorMapLayers {
             for (const obs of (Array.isArray(data) ? data : [])) {
                 const icao = (obs.icaoId || obs.stationId || '').toUpperCase();
                 if (!icao) continue;
-                // fltCat (capital C), ceiling from clouds[0].base in feet
+                // fltCat (capital C), ceiling from lowest BKN/OVC layer in feet (FEW/SCT are not ceiling)
                 const flight_category = catMap[(obs.fltCat || '').toUpperCase()] || null;
-                const ceiling_ft = obs.clouds?.[0]?.base ?? null;
+                const ceilCloud = obs.clouds?.find(c => c.cover === 'BKN' || c.cover === 'OVC');
+                const ceiling_ft = ceilCloud?.base ?? null;
                 // obs.obsTime is Unix seconds from AWC API — convert to ISO for age display
                 const observed_at = obs.obsTime ? new Date(obs.obsTime * 1000).toISOString() : null;
                 this._internetMetars.set(icao, {
@@ -280,7 +288,8 @@ class VectorMapLayers {
                         flight_category,
                         visibility_sm: obs.visib,
                         ceiling_ft,
-                        wind_dir: obs.wdir,
+                        wind_dir: (obs.wdir === 'VRB' || obs.wdir == null) ? null : obs.wdir,
+                        wind_variable: obs.wdir === 'VRB',
                         wind_speed: obs.wspd,
                         wind_gust: obs.wgst,
                         temperature_c: obs.temp,
@@ -300,6 +309,16 @@ class VectorMapLayers {
                 }
                 // Notify open popup so it can live-refresh if FIS-B isn't active
                 if (this._onInternetMetar) this._onInternetMetar(icao, this._internetMetars.get(icao));
+                // Persist to IndexedDB so data-status weather cache can show them
+                if (this._nasr) {
+                    const entry = this._internetMetars.get(icao);
+                    this._nasr.putWeather(icao, {
+                        metar: { raw: entry.raw, decoded: entry.decoded, fetched_at: new Date(now).toISOString() },
+                        taf: null,
+                        fetched_at: new Date(now).toISOString(),
+                        source: 'internet',
+                    }).catch(() => {});
+                }
             }
             this._internetFetchedAt = now;
             this._internetFetchBounds = { south, west, north, east };
@@ -348,10 +367,13 @@ class VectorMapLayers {
     toggleVis()  { this._showVis  = !this._showVis;  this._refreshWxLabels(); return this._showVis; }
     /** Toggle surface wind label layer. Returns new state. */
     toggleWind() { this._showWind = !this._showWind; this._refreshWxLabels(); return this._showWind; }
+    /** Toggle temperature/dewpoint label layer. Returns new state. */
+    toggleTemp() { this._showTemp = !this._showTemp; this._refreshWxLabels(); return this._showTemp; }
 
     get ceilVisible() { return this._showCeil; }
     get visVisible()  { return this._showVis; }
     get windVisible() { return this._showWind; }
+    get tempVisible() { return this._showTemp; }
 
     /** Re-render all wx label markers (called when a label layer is toggled). */
     _refreshWxLabels() {
@@ -369,7 +391,7 @@ class VectorMapLayers {
         const existing = this._wxLabelMarkers.get(icao);
         if (existing) { this._wxLabelLayer.removeLayer(existing); this._wxLabelMarkers.delete(icao); }
 
-        if (!this._showCeil && !this._showVis && !this._showWind) return;
+        if (!this._showCeil && !this._showVis && !this._showWind && !this._showTemp) return;
 
         const pos = this._aptPositions.get(icao);
         if (!pos) return;
@@ -389,9 +411,9 @@ class VectorMapLayers {
             }
         }
 
-        if (this._showVis && decoded?.visibility_sm != null) {
-            const v = decoded.visibility_sm;
-            const txt = v >= 6 ? `${v}SM` : v < 1 ? `${v}SM` : `${v}SM`;
+        const visSm = decoded?.visibility_sm ?? decoded?.visibility ?? null;
+        if (this._showVis && visSm != null) {
+            const txt = decoded.visibility_plus ? `>${visSm}SM` : `${visSm}SM`;
             html += `<div class="wx-lbl-vis">${txt}</div>`;
         }
 
@@ -400,6 +422,15 @@ class VectorMapLayers {
             const spd = String(decoded.wind_speed).padStart(2, '0');
             const gust = decoded.wind_gust ? `G${decoded.wind_gust}` : '';
             html += `<div class="wx-lbl-wind">${dir}/${spd}${gust}</div>`;
+        }
+
+        if (this._showTemp) {
+            const t = decoded?.temp_c ?? decoded?.temperature_c ?? decoded?.temperature ?? null;
+            const dew = decoded?.dewpoint_c ?? decoded?.dewpoint ?? null;
+            if (t != null) {
+                const dewStr = dew != null ? `/${Math.round(dew)}` : '';
+                html += `<div class="wx-lbl-temp">${Math.round(t)}${dewStr}°C</div>`;
+            }
         }
 
         if (!html) return;

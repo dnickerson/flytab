@@ -18,5 +18,8 @@
     "@capacitor/geolocation": "^8.1.0",
     "@capacitor/network": "^8.0.1",
     "@capacitor/status-bar": "^8.0.2"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.2"
   }
 }

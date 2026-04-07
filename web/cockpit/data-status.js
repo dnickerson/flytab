@@ -502,11 +502,17 @@ class DataStatus {
             const rows = entries.map(e => {
                 const cat     = e.metar?.decoded?.flight_category || '—';
                 const color   = CAT_COLORS[cat] || '#888';
-                const wind    = e.metar?.decoded?.wind
-                    ? `${String(e.metar.decoded.wind.direction || '—').padStart(3,'0')}/${Math.round(e.metar.decoded.wind.speed || 0)}kt`
+                const d       = e.metar?.decoded || {};
+                const wDir    = d.wind_dir ?? d.wind?.direction ?? null;
+                const wSpd    = d.wind_speed ?? d.wind?.speed ?? null;
+                const wind    = wDir != null || wSpd != null
+                    ? `${wDir != null ? String(wDir).padStart(3,'0') : '—'}/${Math.round(wSpd || 0)}kt`
                     : '';
-                const vis     = e.metar?.decoded?.visibility ? `${e.metar.decoded.visibility}sm` : '';
-                const ceil    = e.metar?.decoded?.ceiling ? `${e.metar.decoded.ceiling}ft` : '';
+                const visSm   = d.visibility_sm ?? d.visibility ?? null;
+                const visPlus = d.visibility_plus ?? false;
+                const vis     = visSm != null ? `${visPlus ? '>' : ''}${visSm}sm` : '';
+                const ceilFt  = d.ceiling_ft ?? d.ceiling ?? null;
+                const ceil    = ceilFt != null ? `${ceilFt}ft` : '';
                 const summary = [wind, vis, ceil].filter(Boolean).join(' ');
                 const ageMin  = e.fetched_at ? Math.round((now - new Date(e.fetched_at).getTime()) / 60000) : null;
                 const ageStr  = ageMin !== null ? (ageMin < 60 ? `${ageMin}m` : `${Math.round(ageMin/60)}h`) : '';

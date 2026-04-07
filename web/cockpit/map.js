@@ -3,6 +3,99 @@
  * Leaflet-based map with sectional tiles, own-ship, traffic, route, radar.
  */
 
+/**
+ * Internet NEXRAD radar source for RadarLoop.
+ * Uses Iowa State IEM's pre-built fixed-offset products:
+ *   nexrad-n0q-900913 (current), nexrad-n0q-m05m … nexrad-n0q-m55m
+ * One tile layer per frame, all added at opacity 0 so tiles preload immediately.
+ * Implements the same interface as FisbNexrad so RadarLoop drives it transparently.
+ */
+class InetRadarSource {
+    static PRODUCTS = [
+        { offset: -55, product: 'nexrad-n0q-m55m' },
+        { offset: -50, product: 'nexrad-n0q-m50m' },
+        { offset: -45, product: 'nexrad-n0q-m45m' },
+        { offset: -40, product: 'nexrad-n0q-m40m' },
+        { offset: -35, product: 'nexrad-n0q-m35m' },
+        { offset: -30, product: 'nexrad-n0q-m30m' },
+        { offset: -25, product: 'nexrad-n0q-m25m' },
+        { offset: -20, product: 'nexrad-n0q-m20m' },
+        { offset: -15, product: 'nexrad-n0q-m15m' },
+        { offset: -10, product: 'nexrad-n0q-m10m' },
+        { offset:  -5, product: 'nexrad-n0q-m05m' },
+        { offset:   0, product: 'nexrad-n0q-900913' },
+    ];
+
+    constructor(map, radarLayer) {
+        this._map = map;
+        this._radarLayer = radarLayer;  // live current tile — hidden while loop plays
+        this._frames = [];
+        this._layers = [];
+        this._loopActive = false;
+        this.sourceType = 'inet';
+        this._buildLayers();
+    }
+
+    get _active() { return true; }
+    get hasData() { return this._frames.length > 0; }
+    get blockCount() { return 0; }
+    get frameHistory() { return this._frames; }
+
+    addTo() {}  // no-op — map already stored in constructor
+
+    _draw() {
+        if (!this._loopActive && this._radarLayer) {
+            this._radarLayer.setOpacity(Settings.radarOpacity || 0.5);
+        }
+    }
+
+    enterLoopMode() {
+        this._loopActive = true;
+        if (this._radarLayer) this._radarLayer.setOpacity(0);
+    }
+
+    exitLoopMode() {
+        this._loopActive = false;
+        this._layers.forEach(l => l.setOpacity(0));
+        if (this._radarLayer) this._radarLayer.setOpacity(Settings.radarOpacity || 0.5);
+    }
+
+    drawFrame(index) {
+        if (index < 0 || index >= this._layers.length) return;
+        const opacity = Settings.radarOpacity || 0.5;
+        this._layers.forEach((l, i) => l.setOpacity(i === index ? opacity : 0));
+    }
+
+    _buildLayers() {
+        const now = Date.now();
+        InetRadarSource.PRODUCTS.forEach(({ offset, product }) => {
+            const url = `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/${product}/{z}/{x}/{y}.png`;
+            const layer = L.tileLayer(url, {
+                opacity: 0,
+                maxZoom: 14,
+                attribution: 'NEXRAD © Iowa State Mesonet',
+            });
+            layer.addTo(this._map);
+            this._layers.push(layer);
+            this._frames.push({ time: now + offset * 60 * 1000 });
+        });
+    }
+
+    refresh() {
+        const now = Date.now();
+        this._layers.forEach(l => l.redraw());
+        this._frames = InetRadarSource.PRODUCTS.map(({ offset }) => ({
+            time: now + offset * 60 * 1000,
+        }));
+    }
+
+    cleanup() {
+        this._layers.forEach(l => { if (this._map.hasLayer(l)) this._map.removeLayer(l); });
+        this._layers = [];
+        this._frames = [];
+    }
+}
+
 class CockpitMap {
     constructor(container, stratuxClient) {
         this.container = container;
@@ -496,19 +589,49 @@ class CockpitMap {
         this._activeBaseLayer = name;
     }
 
+    toggleLightning(on) {
+        if (!this._lightning) return;
+        if (on) this._lightning.show(this.map);
+        else this._lightning.hide();
+    }
+
     // ========== NEXRAD Radar ==========
 
     toggleRadar(on) {
         if (on && !this.radarLayer) {
+            // Live current-frame tile (always visible when radar is on but loop is not playing)
+            const fisbActive = this._fisbNexrad?._active;
             this.radarLayer = L.tileLayer(
                 'https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913/{z}/{x}/{y}.png',
-                { opacity: Settings.radarOpacity, maxZoom: 14 }
+                {
+                    opacity: fisbActive ? 0.3 : (Settings.radarOpacity || 0.5),
+                    maxZoom: 14,
+                    attribution: 'NEXRAD © Iowa State Mesonet',
+                }
             );
             this.radarLayer.addTo(this.map);
+            // IEM historical frames — drives RadarLoop when FIS-B unavailable
+            this._inetRadarSource = new InetRadarSource(this.map, this.radarLayer);
+            if (this._radarLoop && !this._fisbNexrad?._active) {
+                this._radarLoop.setNexrad(this._inetRadarSource);
+            }
         } else if (!on && this.radarLayer) {
+            if (this._inetRadarSource) {
+                this._inetRadarSource.cleanup();
+                this._inetRadarSource = null;
+            }
             this.map.removeLayer(this.radarLayer);
             this.radarLayer = null;
+            // Restore FIS-B source if available
+            if (this._radarLoop && this._fisbNexrad) {
+                this._radarLoop.setNexrad(this._fisbNexrad);
+            }
         }
+    }
+
+    /** Adjust internet radar tile opacity (dim when FIS-B active, full when sole source) */
+    setRadarTileOpacity(opacity) {
+        if (this.radarLayer) this.radarLayer.setOpacity(opacity);
     }
 
     // ========== Own-ship ==========

@@ -167,8 +167,25 @@ class FisbClient extends EventTarget {
         this.dispatchEvent(new CustomEvent('fisb:taf', { detail: { icao, ...entry } }));
     }
 
-    _handlePirep(raw, location, now, isUrgent) {
+    async _handlePirep(raw, location, now, isUrgent) {
         const parsed = FisbClient.parsePirep(raw);
+
+        // If direct lat/lon not found, try VOR-relative format: /OV BNA090025/
+        // Breakdown: navaid-id (2-5 chars) + 3-digit radial + 2-3 digit distance
+        if (parsed.lat == null) {
+            const vorMatch = raw.match(/\/OV\s+([A-Z]{2,5})(\d{3})(\d{2,3})/i);
+            if (vorMatch) {
+                const coords = await this._resolveNavaidCoords(vorMatch[1].toUpperCase());
+                if (coords) {
+                    const bearing = parseInt(vorMatch[2], 10);
+                    const distNm  = parseInt(vorMatch[3], 10);
+                    const pt = FisbClient._destPoint(coords.lat, coords.lon, bearing, distNm);
+                    parsed.lat = pt.lat;
+                    parsed.lon = pt.lon;
+                }
+            }
+        }
+
         const entry = {
             raw,
             lat: parsed.lat,
@@ -186,8 +203,26 @@ class FisbClient extends EventTarget {
         this.dispatchEvent(new CustomEvent('fisb:pirep', { detail: entry }));
     }
 
-    _handleSigmet(raw, location, now, type) {
+    async _handleSigmet(raw, location, now, type) {
+        // Start with direct lat/lon points (synchronous)
         const points = this._extractPolygonPoints(raw);
+
+        // Also resolve VOR-relative points: "50SSE BNA", "60NW ATL", etc.
+        if (this._nasr) {
+            const vorPattern = /(\d+)\s*(N|NNE|NE|ENE|E|ESE|SE|SSE|S|SSW|SW|WSW|W|WNW|NW|NNW)\s+([A-Z]{2,5})\b/g;
+            let m;
+            while ((m = vorPattern.exec(raw)) !== null) {
+                const distNm  = parseInt(m[1], 10);
+                const bearing = FisbClient._compassToDeg(m[2]);
+                if (bearing == null) continue;
+                const coords = await this._resolveNavaidCoords(m[3]);
+                if (coords) {
+                    const pt = FisbClient._destPoint(coords.lat, coords.lon, bearing, distNm);
+                    points.push([pt.lat, pt.lon]);
+                }
+            }
+        }
+
         const entry = {
             raw,
             type: type.toUpperCase().includes('CONVECTIVE') ? 'convective' : 'sigmet',
@@ -211,8 +246,25 @@ class FisbClient extends EventTarget {
         this.dispatchEvent(new CustomEvent('fisb:sigmet', { detail: entry }));
     }
 
-    _handleAirmet(raw, location, now) {
+    async _handleAirmet(raw, location, now) {
         const points = this._extractPolygonPoints(raw);
+
+        // Also resolve VOR-relative points: "50SSE BNA", "60NW ATL", etc.
+        if (this._nasr) {
+            const vorPattern = /(\d+)\s*(N|NNE|NE|ENE|E|ESE|SE|SSE|S|SSW|SW|WSW|W|WNW|NW|NNW)\s+([A-Z]{2,5})\b/g;
+            let m;
+            while ((m = vorPattern.exec(raw)) !== null) {
+                const distNm  = parseInt(m[1], 10);
+                const bearing = FisbClient._compassToDeg(m[2]);
+                if (bearing == null) continue;
+                const coords = await this._resolveNavaidCoords(m[3]);
+                if (coords) {
+                    const pt = FisbClient._destPoint(coords.lat, coords.lon, bearing, distNm);
+                    points.push([pt.lat, pt.lon]);
+                }
+            }
+        }
+
         const entry = {
             raw,
             type: 'airmet',
@@ -480,6 +532,7 @@ class FisbClient extends EventTarget {
         const intVisMatch = text.match(/\b(\d+)SM\b/);
         if (pVisMatch) {
             result.visibility_sm = parseInt(pVisMatch[1], 10); // P6SM → 6 (means >6)
+            result.visibility_plus = true; // flag: value is a minimum, not exact
         } else if (mixedVisMatch) {
             result.visibility_sm = parseInt(mixedVisMatch[1], 10) +
                 parseInt(mixedVisMatch[2], 10) / parseInt(mixedVisMatch[3], 10); // 1 1/2SM → 1.5
@@ -674,5 +727,50 @@ class FisbClient extends EventTarget {
             Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
             Math.sin(dLon / 2) ** 2;
         return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+
+    /**
+     * Compute destination point given start lat/lon, true bearing (degrees), and distance (nm).
+     * Uses spherical Earth (R = 3440.065 nm).
+     */
+    static _destPoint(lat, lon, bearingDeg, distNm) {
+        const R = 3440.065;
+        const d = distNm / R;
+        const b = bearingDeg * Math.PI / 180;
+        const lat1 = lat * Math.PI / 180;
+        const lon1 = lon * Math.PI / 180;
+        const lat2 = Math.asin(Math.sin(lat1) * Math.cos(d) +
+                               Math.cos(lat1) * Math.sin(d) * Math.cos(b));
+        const lon2 = lon1 + Math.atan2(Math.sin(b) * Math.sin(d) * Math.cos(lat1),
+                                        Math.cos(d) - Math.sin(lat1) * Math.sin(lat2));
+        return { lat: lat2 * 180 / Math.PI, lon: lon2 * 180 / Math.PI };
+    }
+
+    /**
+     * Convert a compass quadrant abbreviation (N, NNE, NE, ENE, E, …) to degrees true.
+     */
+    static _compassToDeg(compass) {
+        const dirs = {
+            N: 0, NNE: 22.5, NE: 45, ENE: 67.5,
+            E: 90, ESE: 112.5, SE: 135, SSE: 157.5,
+            S: 180, SSW: 202.5, SW: 225, WSW: 247.5,
+            W: 270, WNW: 292.5, NW: 315, NNW: 337.5,
+        };
+        return dirs[(compass || '').toUpperCase()] ?? null;
+    }
+
+    /**
+     * Look up a navaid or airport by identifier, trying bare ID then K-prefix.
+     * Returns { lat, lon } or null.
+     */
+    async _resolveNavaidCoords(id) {
+        if (!this._nasr || !id) return null;
+        try {
+            let found = await this._nasr.getNavaid(id);
+            if (!found) found = await this._nasr.getAirport('K' + id);
+            if (!found) found = await this._nasr.getAirport(id);
+            if (found?.lat != null) return { lat: found.lat, lon: found.lon };
+        } catch { /* ignore */ }
+        return null;
     }
 }

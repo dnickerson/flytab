@@ -154,12 +154,13 @@ class LayerPanel {
             });
         }
 
-        // Wire PIREP toggle
+        // Wire PIREP toggle — controlled by FisbWeatherDisplay layer
         const pirepInput = this._panel.querySelector('.lp-toggle input[data-action="pireps"]');
         if (pirepInput) {
             pirepInput.checked = false;
             pirepInput.addEventListener('change', () => {
-                window.app?.cockpitMap?.togglePireps(pirepInput.checked);
+                if (pirepInput.checked) window.app?.fisbWeather?.showPireps();
+                else window.app?.fisbWeather?.hidePireps();
             });
         }
 
@@ -169,6 +170,15 @@ class LayerPanel {
             tfrInput.checked = false;
             tfrInput.addEventListener('change', () => {
                 window.app?.cockpitMap?.toggleTfrs(tfrInput.checked);
+            });
+        }
+
+        // Wire lightning toggle
+        const lightningInput = this._panel.querySelector('.lp-toggle input[data-action="lightning"]');
+        if (lightningInput) {
+            lightningInput.checked = false;
+            lightningInput.addEventListener('change', () => {
+                window.app?.cockpitMap?.toggleLightning(lightningInput.checked);
             });
         }
 
@@ -191,6 +201,13 @@ class LayerPanel {
         if (windInput) {
             windInput.checked = this._vectorLayers?.windVisible ?? false;
             windInput.addEventListener('change', () => { this._vectorLayers?.toggleWind(); });
+        }
+
+        // Wire temp/dew toggle
+        const tempInput = this._panel.querySelector('.lp-toggle input[data-action="wx-temp"]');
+        if (tempInput) {
+            tempInput.checked = this._vectorLayers?.tempVisible ?? false;
+            tempInput.addEventListener('change', () => { this._vectorLayers?.toggleTemp(); });
         }
 
         // Wire airport filter controls
@@ -438,12 +455,20 @@ class LayerPanel {
                         <label class="lp-toggle"><input type="checkbox" data-action="wx-wind"><span class="lp-toggle-track"></span></label>
                     </div>
                     <div class="lp-row">
+                        <span class="lp-row-label">Temp / Dew</span>
+                        <label class="lp-toggle"><input type="checkbox" data-action="wx-temp"><span class="lp-toggle-track"></span></label>
+                    </div>
+                    <div class="lp-row">
                         <span class="lp-row-label">Winds Aloft</span>
                         <label class="lp-toggle"><input type="checkbox" data-action="winds-aloft"><span class="lp-toggle-track"></span></label>
                     </div>
                     <div class="lp-row">
                         <span class="lp-row-label">PIREPs (FIS-B)</span>
                         <label class="lp-toggle"><input type="checkbox" data-action="pireps"><span class="lp-toggle-track"></span></label>
+                    </div>
+                    <div class="lp-row">
+                        <span class="lp-row-label">Lightning Strikes</span>
+                        <label class="lp-toggle"><input type="checkbox" data-action="lightning"><span class="lp-toggle-track"></span></label>
                     </div>
                 </div>
             </div>

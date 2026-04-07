@@ -408,6 +408,27 @@ class AirportPopup {
             }
         };
         this._fisbClient.addEventListener('fisb:metar', this._onFisbMetar);
+
+        // Live TAF updates while popup is open
+        this._onFisbTaf = (e) => {
+            if (e.detail.icao !== airport.icao) return;
+            const tafRaw = e.detail.raw;
+            const pane = this._panel?.querySelector('.apt-tab-pane[data-pane="wx"]');
+            if (pane) {
+                const tafEl = pane.querySelector('.wx-taf');
+                if (tafEl) {
+                    tafEl.innerHTML = this._formatTaf(tafRaw);
+                } else {
+                    const metarEl = pane.querySelector('.wx-metar');
+                    if (metarEl) {
+                        metarEl.insertAdjacentHTML('afterend',
+                            `<div class="popup-section-title" style="margin-top:10px">TAF</div>` +
+                            `<div class="wx-metar wx-taf">${this._formatTaf(tafRaw)}</div>`);
+                    }
+                }
+            }
+        };
+        this._fisbClient.addEventListener('fisb:taf', this._onFisbTaf);
     }
 
     _startInternetMetarListener(airport) {
@@ -457,9 +478,15 @@ class AirportPopup {
     }
 
     _stopFisbListener() {
-        if (this._fisbClient && this._onFisbMetar) {
-            this._fisbClient.removeEventListener('fisb:metar', this._onFisbMetar);
-            this._onFisbMetar = null;
+        if (this._fisbClient) {
+            if (this._onFisbMetar) {
+                this._fisbClient.removeEventListener('fisb:metar', this._onFisbMetar);
+                this._onFisbMetar = null;
+            }
+            if (this._onFisbTaf) {
+                this._fisbClient.removeEventListener('fisb:taf', this._onFisbTaf);
+                this._onFisbTaf = null;
+            }
         }
         this._currentIcao = null;
     }
@@ -1096,7 +1123,11 @@ class AirportPopup {
 
         // Wind string
         let windStr = '';
-        if (d.wind_dir != null) {
+        if (d.wind_variable) {
+            windStr = `VRB @ ${d.wind_speed || 0}`;
+            if (d.wind_gust) windStr += `G${d.wind_gust}`;
+            windStr += ' kt';
+        } else if (d.wind_dir != null) {
             windStr = `${String(d.wind_dir).padStart(3, '0')}° @ ${d.wind_speed || 0}`;
             if (d.wind_gust) windStr += `G${d.wind_gust}`;
             windStr += ' kt';
@@ -1128,6 +1159,38 @@ class AirportPopup {
             ageStr = '';
         }
 
+        // Temp / dewpoint / visibility / altimeter (field names differ by source — use fallbacks)
+        const tempC  = d.temp_c    ?? d.temperature    ?? null;
+        const dewC   = d.dewpoint_c ?? d.dewpoint      ?? null;
+        const visSm  = d.visibility_sm ?? d.visibility ?? null;
+        const visPlus = d.visibility_plus ?? false;
+        const altim  = d.altimeter ?? null;
+
+        let condStr = '';
+        if (tempC != null) condStr += `${Math.round(tempC)}°/${dewC != null ? Math.round(dewC) : '—'}°C`;
+        if (visSm != null) condStr += (condStr ? ' · ' : '') + (visPlus ? `>${visSm}SM` : `${visSm}SM`);
+        if (altim != null) condStr += (condStr ? ' · ' : '') + `${altim.toFixed(2)}"`;
+
+        // Weather phenomena — parse from raw text (TS, RA, SN, FZRA, FG, etc.)
+        const wxPhenomena = [];
+        const wxRaw = raw.replace(/^(METAR|SPECI)\s+/i, '');
+        // Strip ICAO, time, AUTO, wind, vis, sky before extracting wx groups
+        const wxGroupMatch = wxRaw.match(/\b([-+]?(VC)?(MI|PR|BC|DR|BL|SH|TS|FZ)*(RA|DZ|SN|SG|IC|PL|GR|GS|UP|FG|BR|SA|DU|HZ|VA|PO|SQ|FC|SS|DS)+)\b/g);
+        if (wxGroupMatch) {
+            for (const code of wxGroupMatch) {
+                // Skip if it looks like part of ICAO or time (all caps ≤4 chars with no wx codes)
+                const isTs = /TS/.test(code);
+                const isFz = /FZ/.test(code);
+                const isSev = /^\+/.test(code);
+                const color = isTs ? '#ff4444' : isFz ? '#00ccff' : isSev ? '#ff8800' : '#aaddff';
+                wxPhenomena.push({ code, color });
+            }
+        }
+        const phenomenaHtml = wxPhenomena.length
+            ? `<div class="wx-phenomena">${wxPhenomena.map(p =>
+                `<span class="wx-phenom" style="color:${p.color}">${p.code}</span>`).join(' ')}</div>`
+            : '';
+
         // Source label
         const source = wx.source === 'fisb' ? 'FIS-B' : wx.source === 'internet' ? 'INTERNET' : 'PLAN';
 
@@ -1145,8 +1208,10 @@ class AirportPopup {
                 <span class="wx-cat" style="color:${catColor}">\u25CF ${cat}</span>
                 <span class="wx-wind">${windStr}</span>
             </div>
+            ${phenomenaHtml}
+            ${condStr ? `<div class="wx-cond">${condStr}</div>` : ''}
             <div class="wx-time">${timeStr} <span class="wx-age${ageStale ? ' wx-age-stale' : ''}">${ageStr}${ageStale ? ' ⚠ STALE' : ''}</span></div>
-            <div class="wx-metar">${raw}</div>
+            <div class="wx-metar"><span class="wx-metar-label">RAW:</span> ${raw}</div>
             ${tafHtml}
         </div>`;
     }
@@ -1155,7 +1220,7 @@ class AirportPopup {
         const metar = wx?.metar;
         if (!metar?.decoded) return '';
         const d = metar.decoded;
-        if (d.wind_dir == null || !d.wind_speed) return '';
+        if (d.wind_variable || d.wind_dir == null || !d.wind_speed) return '';
 
         const windDir = d.wind_dir; // degrees true
         const windSpd = d.wind_speed;

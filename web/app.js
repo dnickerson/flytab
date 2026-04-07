@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v4.50';
+const FLYTAB_VERSION = 'v4.69';
 
 // ========== Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -293,6 +293,14 @@ class FlyTabApp {
             // Left flight mode — disconnect live telemetry
             if (this.stratuxClient) this.stratuxClient.disconnect();
             if (this.engineClient) this.engineClient.disconnect();
+        }
+
+        // Trigger immediate internet METAR refresh whenever we gain internet access
+        if ((mode === 'internet' || mode === 'home') && previous === 'offline') {
+            if (this.vectorLayers) {
+                this.vectorLayers._internetFetchedAt = 0;
+                this.vectorLayers._scheduleUpdate();
+            }
         }
     }
 

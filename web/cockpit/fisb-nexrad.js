@@ -22,6 +22,8 @@ class FisbNexrad {
         // Config
         this._opacity = CockpitConfig.get('radar.opacity') || 0.5;
 
+        this.sourceType = 'fisb';
+
         // Loop mode: when true, suppress live _draw() so RadarLoop playback isn't overwritten
         this._loopMode = false;
 

@@ -58,7 +58,7 @@ class FisbWeatherDisplay {
 
     /** Initialize layers and start listening */
     init() {
-        this._pirepLayer.addTo(this._map);
+        // _pirepLayer starts hidden — layer panel checkbox initializes unchecked
         this._sigmetLayer.addTo(this._map);
         // _windsLayer starts hidden — layer panel checkbox initializes unchecked
 
@@ -191,6 +191,11 @@ class FisbWeatherDisplay {
 
         return marker;
     }
+
+    /** Show/hide PIREP layer. */
+    showPireps() { if (!this._map.hasLayer(this._pirepLayer)) this._pirepLayer.addTo(this._map); }
+    hidePireps() { if (this._map.hasLayer(this._pirepLayer)) this._map.removeLayer(this._pirepLayer); }
+    get pireipsVisible() { return this._map.hasLayer(this._pirepLayer); }
 
     /** Show/hide winds layer. */
     showWinds() { if (!this._map.hasLayer(this._windsLayer)) this._windsLayer.addTo(this._map); }

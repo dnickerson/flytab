@@ -46,11 +46,12 @@ class RadarLoop {
             // Suppress live draws while playing historical frames
             if (this._nexrad) this._nexrad.enterLoopMode();
             this._showControls();
+            this._updateSourceBadge();
             this._updateFrameCount();
             this._goToFrame(frames.length - 1);
             this.play();
         } else {
-            // No snapshots yet — show live NEXRAD blocks if any, "NO FIS-B RADAR" if none
+            // No snapshots yet — show live NEXRAD blocks if any, "NO DATA" if none
             this._showControls();
             this._showNoData();
             if (this._nexrad?.hasData) {
@@ -80,6 +81,22 @@ class RadarLoop {
             this.show(map);
         }
         return this._active;
+    }
+
+    refresh() {
+        if (!this._active) return;
+        this._nexrad?.refresh?.();
+        this.pause();
+        const frames = this._nexrad ? this._nexrad.frameHistory : [];
+        if (frames.length > 0) {
+            this._updateFrameCount();
+            this._goToFrame(frames.length - 1);
+            this.play();
+        }
+        if (this._refreshBtn) {
+            this._refreshBtn.style.color = 'var(--status-ok, #00c864)';
+            setTimeout(() => { if (this._refreshBtn) this._refreshBtn.style.color = ''; }, 600);
+        }
     }
 
     play() {
@@ -168,8 +185,27 @@ class RadarLoop {
 
     _showNoData() {
         if (this._timeDisplay) {
-            this._timeDisplay.textContent = 'NO FIS-B RADAR';
+            this._timeDisplay.textContent = 'NO RADAR DATA';
             this._timeDisplay.style.color = '#ff6666';
+        }
+        this._updateSourceBadge();
+    }
+
+    _updateSourceBadge() {
+        if (!this._sourceBadge) return;
+        const src = this._nexrad?.sourceType;
+        if (src === 'fisb') {
+            this._sourceBadge.textContent = 'FIS-B';
+            this._sourceBadge.style.background = 'rgba(0, 200, 100, 0.2)';
+            this._sourceBadge.style.color = '#00c864';
+        } else if (src === 'inet') {
+            this._sourceBadge.textContent = 'INET';
+            this._sourceBadge.style.background = 'rgba(0, 150, 255, 0.2)';
+            this._sourceBadge.style.color = '#00aaff';
+        } else {
+            this._sourceBadge.textContent = 'NO DATA';
+            this._sourceBadge.style.background = 'rgba(255, 80, 80, 0.2)';
+            this._sourceBadge.style.color = '#ff6666';
         }
     }
 
@@ -181,11 +217,13 @@ class RadarLoop {
         el.innerHTML = `
             <div class="radar-controls-inner">
                 <div class="radar-controls-row radar-transport">
+                    <span class="radar-source-badge"></span>
                     <button class="radar-btn radar-prev" title="Previous frame">&laquo;</button>
                     <button class="radar-btn radar-play" title="Play/Pause">&#9654;</button>
                     <button class="radar-btn radar-next" title="Next frame">&raquo;</button>
                     <span class="radar-time-display">--:--Z</span>
                     <span class="radar-frame-count"></span>
+                    <button class="radar-btn radar-refresh" title="Refresh">&#8635;</button>
                 </div>
                 <div class="radar-controls-row radar-scrubber-row">
                     <input type="range" class="radar-scrubber" min="0" max="0" value="0" />
@@ -216,9 +254,12 @@ class RadarLoop {
         const prevBtn = el.querySelector('.radar-prev');
         const playBtn = el.querySelector('.radar-play');
         const nextBtn = el.querySelector('.radar-next');
+        const refreshBtn = el.querySelector('.radar-refresh');
         this._playBtn = playBtn;
+        this._refreshBtn = refreshBtn;
         this._timeDisplay = el.querySelector('.radar-time-display');
         this._frameCountEl = el.querySelector('.radar-frame-count');
+        this._sourceBadge = el.querySelector('.radar-source-badge');
 
         prevBtn.addEventListener('click', (e) => { e.stopPropagation(); this.prevFrame(); });
         playBtn.addEventListener('click', (e) => {
@@ -226,9 +267,10 @@ class RadarLoop {
             if (this._playing) { this.pause(); } else { this.play(); }
         });
         nextBtn.addEventListener('click', (e) => { e.stopPropagation(); this.nextFrame(); });
+        refreshBtn.addEventListener('click', (e) => { e.stopPropagation(); this.refresh(); });
 
         // Touch support for iPad
-        [prevBtn, playBtn, nextBtn].forEach(btn => {
+        [prevBtn, playBtn, nextBtn, refreshBtn].forEach(btn => {
             btn.addEventListener('touchend', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
@@ -250,6 +292,18 @@ class RadarLoop {
                 touchAction: 'manipulation',
             });
         });
+
+        // Source badge
+        if (this._sourceBadge) {
+            Object.assign(this._sourceBadge.style, {
+                fontSize: '10px',
+                fontWeight: '700',
+                padding: '1px 5px',
+                borderRadius: '3px',
+                letterSpacing: '0.5px',
+                marginRight: '4px',
+            });
+        }
 
         // Time display
         Object.assign(this._timeDisplay.style, {
@@ -337,5 +391,6 @@ class RadarLoop {
         if (this._frameCountEl) {
             this._frameCountEl.textContent = `${this._frameIndex + 1}/${frames.length}`;
         }
+        this._updateSourceBadge();
     }
 }
