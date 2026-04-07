@@ -12,7 +12,8 @@ class VectorMapLayers {
         this._updateTimer = null;
 
         // Layer groups
-        this._geoLayer = L.layerGroup();           // static geographic context
+        this._geoLayer = L.layerGroup();           // static geographic context (lines only)
+        this._lakesLayer = L.layerGroup();         // water fill polygons — only visible in vector mode
         this._airspaceLayer = L.layerGroup();
         this._suaLayer = L.layerGroup();           // special use airspace (R/P/W/A/MOA)
         this._airportLayer = L.layerGroup();
@@ -140,6 +141,9 @@ class VectorMapLayers {
         const suaUserSet = localStorage.getItem('flypi_show_sua');
         if (suaUserSet !== null ? JSON.parse(suaUserSet) : overlays.sua?.enabled) this._suaLayer.addTo(this._map);
         this._geoLayer.addTo(this._map);
+        // _lakesLayer is added to the map only in vector mode (enableDarkBackground).
+        // In raster modes the tile layer renders water correctly; the dark fill polygons
+        // must stay hidden so they don't grey out lakes on sectional/IFR/TAC charts.
 
         // Load data in background — does NOT block cockpit render
         this._loadGeoContext()
@@ -150,16 +154,20 @@ class VectorMapLayers {
 
     /**
      * Set vector-mode background (warm cream for sunlight readability).
+     * Also shows lake fill polygons (hidden in raster modes to avoid covering tile water).
      */
     enableDarkBackground() {
         this._map.getContainer().style.background = '#F0EBD8';
+        if (!this._map.hasLayer(this._lakesLayer)) this._lakesLayer.addTo(this._map);
     }
 
     /**
-     * Remove vector background (when switching to sectional tiles).
+     * Remove vector background (when switching to sectional/IFR/TAC tiles).
+     * Hide lake fills so raster tiles show their own correct water rendering.
      */
     disableDarkBackground() {
         this._map.getContainer().style.background = '';
+        if (this._map.hasLayer(this._lakesLayer)) this._map.removeLayer(this._lakesLayer);
     }
 
     /**
@@ -624,7 +632,9 @@ class VectorMapLayers {
             }
         }
 
-        // Lakes/water
+        // Lakes/water — added to _lakesLayer, which is only shown in vector mode.
+        // In raster (sectional/IFR/TAC) mode the tiles already render water correctly;
+        // drawing dark fill polygons on top would grey out lakes on the chart.
         if (this._geoData.lakes) {
             for (const lake of this._geoData.lakes) {
                 if (lake.boundary && lake.boundary.length >= 3) {
@@ -633,7 +643,7 @@ class VectorMapLayers {
                         fillOpacity: styles.water?.fillOpacity || 0.6,
                         color: styles.coastlines?.color || '#5B7B8A',
                         weight: 0.5,
-                    }).addTo(this._geoLayer);
+                    }).addTo(this._lakesLayer);
                 }
             }
         }
