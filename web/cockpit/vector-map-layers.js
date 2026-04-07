@@ -1030,6 +1030,19 @@ class VectorMapLayers {
 
         // Opportunistically fetch internet METARs when online (15-min TTL, silent on failure)
         this.fetchInternetMetars(south, west, north, east);
+
+        // Draw dots from cached internet METARs for airports now in viewport that didn't
+        // get a dot during the fetch (e.g. map moved after last fetch, TTL not yet expired)
+        for (const [icao, entry] of this._internetMetars) {
+            if (!this._aptPositions.has(icao)) continue;
+            if (this._wxDotMarkers.has(icao)) continue; // already has a dot (FIS-B or existing)
+            const cat = this._fisbClient?.metars.get(icao)?.decoded?.flight_category
+                     || entry.decoded?.flight_category;
+            if (cat) {
+                this._upsertWxDot(icao, cat);
+                this._upsertWxLabel(icao);
+            }
+        }
     }
 
     /**

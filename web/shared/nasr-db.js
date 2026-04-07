@@ -352,19 +352,32 @@ class NasrDB {
      * Get airports within a lat/lon bounding box.
      * Uses cursor scan with in-memory filtering — fast enough for ~19K records.
      */
-    async getAirportsInBounds(south, west, north, east, limit = 300) {
+    async getAirportsInBounds(south, west, north, east, limit = 500) {
         const db = await this.open();
         return new Promise((resolve, reject) => {
             const tx = db.transaction('airports', 'readonly');
             tx.onabort = () => reject(tx.error || new Error('Transaction aborted'));
-            const results = [];
+            const all = [];
+            // Scan all airports — do NOT stop early on count since private strips
+            // (sorted before K-prefix ICAO airports) would fill the limit first,
+            // hiding weather-capable airports like KMCO from the results.
             const req = tx.objectStore('airports').openCursor();
             req.onsuccess = () => {
                 const cursor = req.result;
-                if (!cursor || results.length >= limit) { resolve(results); return; }
+                if (!cursor) {
+                    // Sort: K-prefix ICAO first (have weather data), then towered, then rest
+                    all.sort((a, b) => {
+                        const aK = a.icao?.startsWith('K') ? 0 : 1;
+                        const bK = b.icao?.startsWith('K') ? 0 : 1;
+                        if (aK !== bK) return aK - bK;
+                        return (b.tower ? 1 : 0) - (a.tower ? 1 : 0);
+                    });
+                    resolve(all.slice(0, limit));
+                    return;
+                }
                 const v = cursor.value;
                 if (v.lat >= south && v.lat <= north && v.lon >= west && v.lon <= east) {
-                    results.push(v);
+                    all.push(v);
                 }
                 cursor.continue();
             };
