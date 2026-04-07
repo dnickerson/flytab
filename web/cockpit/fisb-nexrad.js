@@ -141,6 +141,11 @@ class FisbNexrad {
 
         // Redraw
         if (this._active) this._draw();
+
+        // If this is the first block received, notify the map to switch from inet → FIS-B
+        if (this._blocks.size === blocks.length && this._map) {
+            window.app?.cockpitMap?.onFisbNexradData?.();
+        }
     }
 
     /** Take a snapshot of current NEXRAD state for radar loop */

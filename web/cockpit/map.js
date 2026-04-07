@@ -610,10 +610,12 @@ class CockpitMap {
                 }
             );
             this.radarLayer.addTo(this.map);
-            // IEM historical frames — drives RadarLoop when FIS-B unavailable
+            // IEM historical frames — drives RadarLoop when FIS-B has no data
             this._inetRadarSource = new InetRadarSource(this.map, this.radarLayer);
-            if (this._radarLoop && !this._fisbNexrad?._active) {
-                this._radarLoop.setNexrad(this._inetRadarSource);
+            // Use FIS-B if it has actual blocks; otherwise fall back to internet
+            if (this._radarLoop) {
+                const fisbHasData = this._fisbNexrad?._active && (this._fisbNexrad?.blockCount ?? 0) > 0;
+                this._radarLoop.setNexrad(fisbHasData ? this._fisbNexrad : this._inetRadarSource);
             }
         } else if (!on && this.radarLayer) {
             if (this._inetRadarSource) {
@@ -622,10 +624,18 @@ class CockpitMap {
             }
             this.map.removeLayer(this.radarLayer);
             this.radarLayer = null;
-            // Restore FIS-B source if available
-            if (this._radarLoop && this._fisbNexrad) {
-                this._radarLoop.setNexrad(this._fisbNexrad);
-            }
+        }
+    }
+
+    /**
+     * Called by FisbNexrad when it receives its first data block.
+     * Switches the radar loop source from internet to FIS-B.
+     */
+    onFisbNexradData() {
+        if (this._radarLoop && this._fisbNexrad && this._inetRadarSource) {
+            this._radarLoop.setNexrad(this._fisbNexrad);
+            // Dim the background tile now that FIS-B is the primary source
+            if (this.radarLayer) this.radarLayer.setOpacity(0.3);
         }
     }
 
