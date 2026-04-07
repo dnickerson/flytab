@@ -5153,7 +5153,7 @@ body {
 .pt-backdrop {
     display: none;
     position: fixed;
-    inset: 0;
+    top: 0; left: 0; right: 0; bottom: var(--tab-bar-height);
     background: rgba(0,0,0,0.5);
     z-index: 2000;
 }
@@ -5162,7 +5162,7 @@ body {
 .pt-panel {
     display: none;
     position: fixed;
-    left: 0; right: 0; bottom: 0;
+    left: 0; right: 0; bottom: var(--tab-bar-height);
     background: var(--bg-surface);
     border-top: 2px solid var(--border-strong);
     border-radius: 12px 12px 0 0;
@@ -5170,7 +5170,6 @@ body {
     max-height: 60vh;
     overflow: hidden;
     flex-direction: column;
-    padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 .pt-panel.pt-visible { display: flex; }
 
