@@ -7,7 +7,7 @@ Creates a WiFi hotspot with IP 192.168.10.1 so the iPad PWA
 
 Usage:
   1. sudo python3 extract_local_data.py
-  2. On iPad, connect to WiFi network "StratuxData" (password: extract1)
+  2. On iPad, connect to WiFi network "StratuxData" (password set via HOTSPOT_PASS env var)
   3. Open the engine monitor from the iPad home screen
   4. Tap "Download CSV" to save your flight data
   5. Ctrl+C to stop and restore your network
@@ -23,7 +23,7 @@ import time
 PORT = 8080
 HOTSPOT_IP = '192.168.10.1'
 HOTSPOT_SSID = 'StratuxData'
-HOTSPOT_PASS = 'extract1'
+HOTSPOT_PASS = os.environ.get('HOTSPOT_PASS', 'changeme')
 CON_NAME = 'stratux-extract'
 
 HTML_PAGE = """<!DOCTYPE html>

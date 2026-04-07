@@ -33,6 +33,7 @@ class EmergencyGlide {
         this._approachInterval = null;
         this._approachWindInterval = null;
         this._approachWind = null;
+        this._approachLine = null;
         this._glideRatio = 10.0;
 
         window.emergencyGlide = this;
@@ -70,7 +71,13 @@ class EmergencyGlide {
         const terrainElev = window.terrainGrid?.isLoaded
             ? window.terrainGrid.getElevationFt(lat, lon)
             : 0;
-        const altAgl = Math.max(altMsl - terrainElev, 0);
+        const rawAltAgl = Math.max(altMsl - terrainElev, 0);
+        // In test mode simulate configured altitude AGL so airports are visible during ground testing
+        const testAltAgl = (() => {
+            try { return CockpitConfig.aircraft('performance.test_alt_agl_ft') ?? 5000; }
+            catch (_) { return 5000; }
+        })();
+        const altAgl = (testMode && rawAltAgl < 2000) ? testAltAgl : rawAltAgl;
 
         // Glide ratio from aircraft config (default 10.0 for RV-9A)
         const glideRatio = (() => {
@@ -441,6 +448,12 @@ class EmergencyGlide {
         const body = this._overlayBody;
         if (!body) return;
 
+        // Get DMMS best-glide speed from config
+        const dmmsKt = (() => {
+            try { return Math.round(CockpitConfig.dmmsKt) || 80; }
+            catch (_) { return 80; }
+        })();
+
         const freqHtml = this._buildFreqHtml(apt.frequencies, apt.tower);
 
         body.innerHTML = `
@@ -451,14 +464,18 @@ class EmergencyGlide {
                     <button class="eg-fly-btn" id="egApFly">FLY TO</button>
                 </div>
 
-                <div class="eg-approach-live-row">
-                    <div class="eg-approach-stat">
-                        <div class="eg-approach-label">HEADING</div>
+                <div class="eg-approach-strip">
+                    <div class="eg-ap-cell">
+                        <div class="eg-approach-label">HDG</div>
                         <div class="eg-approach-value" id="eg-ap-hdg">—°</div>
                     </div>
-                    <div class="eg-approach-stat">
-                        <div class="eg-approach-label">DISTANCE</div>
+                    <div class="eg-ap-cell">
+                        <div class="eg-approach-label">DIST</div>
                         <div class="eg-approach-value" id="eg-ap-dist">— nm</div>
+                    </div>
+                    <div class="eg-ap-cell eg-ap-cell--speed">
+                        <div class="eg-approach-label">BEST GLIDE</div>
+                        <div class="eg-approach-value eg-ap-speed">${dmmsKt} kt</div>
                     </div>
                 </div>
 
@@ -466,33 +483,24 @@ class EmergencyGlide {
                     WAITING FOR GPS
                 </div>
 
-                <div class="eg-approach-live-row">
-                    <div class="eg-approach-stat">
-                        <div class="eg-approach-label">TARGET ALT</div>
+                <div class="eg-approach-strip">
+                    <div class="eg-ap-cell">
+                        <div class="eg-approach-label">OVERHEAD TGT</div>
                         <div class="eg-approach-value eg-approach-value--sm" id="eg-ap-tgt-alt">—</div>
                     </div>
-                    <div class="eg-approach-stat">
-                        <div class="eg-approach-label">ALT AGL</div>
+                    <div class="eg-ap-cell">
+                        <div class="eg-approach-label">ALT MSL</div>
                         <div class="eg-approach-value eg-approach-value--sm" id="eg-ap-agl">—</div>
                     </div>
-                </div>
-
-                <div class="eg-approach-live-row">
-                    <div class="eg-approach-stat">
+                    <div class="eg-ap-cell">
                         <div class="eg-approach-label">REQ V/S</div>
                         <div class="eg-approach-value eg-approach-value--sm" id="eg-ap-req-vs">—</div>
                     </div>
-                    <div class="eg-approach-stat">
-                        <div class="eg-approach-label">ACT V/S</div>
-                        <div class="eg-approach-value eg-approach-value--sm" id="eg-ap-act-vs">—</div>
-                    </div>
                 </div>
 
-                <div class="eg-approach-divider"></div>
-
-                <div class="eg-approach-section" id="eg-ap-rwy-section">
-                    <div class="eg-approach-label">BEST RUNWAY</div>
-                    <div class="eg-approach-rwy-val" id="eg-ap-rwy">CALCULATING…</div>
+                <div class="eg-approach-section eg-approach-rwy-row" id="eg-ap-rwy-section">
+                    <span class="eg-approach-label">RWY </span>
+                    <span class="eg-approach-rwy-val" id="eg-ap-rwy">CALCULATING…</span>
                     <div class="eg-approach-wind-src" id="eg-ap-wind-src"></div>
                 </div>
 
@@ -501,12 +509,21 @@ class EmergencyGlide {
 
         body.querySelector('#egApBack').addEventListener('click', () => {
             this._stopApproachMonitor();
+            if (!this._testMode) this._overlay.classList.remove('eg-overlay--approach-mode');
             this._buildAirportItems(this._approachTop3 || [], body);
         });
 
         body.querySelector('#egApFly').addEventListener('click', () => {
             this._setDestination(apt);
         });
+
+        // Shrink overlay to floating panel so map is visible below (non-test mode only)
+        if (!this._testMode) {
+            this._overlay.classList.add('eg-overlay--approach-mode');
+        }
+
+        // Center map to show current position → airport flight path
+        this._centerMapToApproach(apt);
 
         // Start live updates
         this._updateApproachPanel();
@@ -515,6 +532,52 @@ class EmergencyGlide {
         // Fetch wind immediately then every 30 s
         this._refreshApproachWind();
         this._approachWindInterval = setInterval(() => this._refreshApproachWind(), 30_000);
+    }
+
+    /** Draw glide-path line and fit the map so the route is centred in the
+     *  visible area below the approach panel. */
+    _centerMapToApproach(apt) {
+        const sit = window.app?.stratuxClient?.situation ?? window.stratuxClient?.situation;
+        if (!sit?.lat || !sit?.lon || !apt?.lat || !apt?.lon) return;
+        try {
+            const leafletMap = window.app?.cockpitMap?.map;
+            if (!leafletMap || typeof L === 'undefined') return;
+
+            // Draw dashed red glide-path line
+            if (this._approachLine) this._approachLine.remove();
+            this._approachLine = L.polyline(
+                [[sit.lat, sit.lon], [apt.lat, apt.lon]],
+                { color: '#ff3333', weight: 3, dashArray: '10 7', opacity: 0.95 }
+            ).addTo(leafletMap);
+
+            // Measure the actual rendered overlay height — more reliable than
+            // computing a fraction of window.innerHeight.
+            const overlayH = this._overlay
+                ? Math.round(this._overlay.getBoundingClientRect().height)
+                : Math.round(window.innerHeight * 0.52);
+
+            // Tab bar at bottom is ~56px. Leave comfortable margin on all sides
+            // so both the ownship and the destination have breathing room.
+            leafletMap.fitBounds(
+                L.latLngBounds([[sit.lat, sit.lon], [apt.lat, apt.lon]]),
+                {
+                    paddingTopLeft:     [60, overlayH + 40],
+                    paddingBottomRight: [60, 70],
+                    maxZoom: 11,
+                    animate: true,
+                }
+            );
+        } catch (_) {}
+    }
+
+    /** Update the glide-path line start point as GPS moves. */
+    _updateApproachLine(lat, lon) {
+        if (!this._approachLine || !this._approachApt) return;
+        try {
+            const latlngs = this._approachLine.getLatLngs();
+            latlngs[0] = L.latLng(lat, lon);
+            this._approachLine.setLatLngs(latlngs);
+        } catch (_) {}
     }
 
     /** 1 Hz: update distance, heading, altitude status, vertical speed. */
@@ -531,23 +594,29 @@ class EmergencyGlide {
         const vs = Math.round(sit.vertical_speed ?? 0);
         const gs = Math.max(sit.ground_speed ?? 0, 30); // floor to avoid div/0
 
-        const terrainElev = terrainElevAt(sit.lat, sit.lon);
-        const altAgl = Math.max(altMsl - terrainElev, 0);
-
-        // Approach profile — target threshold at 650 ft AGL (mid of 500–800 ft band)
+        // Approach profile —
+        // Target = altitude overhead the airport to fly a 2 nm emergency pattern
+        // and cross the runway threshold at 500 ft AGL.
         const gr = this._glideRatio || 10.0;
         const ftPerNm = 6076 / gr;
         const aptElev = apt.elev_ft ?? 0;
-        const targetMsl = Math.round(aptElev + 650 + distNm * ftPerNm);
-        const minMsl = aptElev + 500 + distNm * ftPerNm;
-        const maxMsl = aptElev + 800 + distNm * ftPerNm;
+
+        // Altitude needed overhead the airport to complete pattern → 500 ft threshold
+        const PATTERN_NM = 2.0; // overhead→threshold via downwind/base/final
+        const overheadAgl = 500 + PATTERN_NM * ftPerNm;
+        const overheadMsl = Math.round(aptElev + overheadAgl);
+
+        // Required altitude right now to arrive at overheadMsl over the airport
+        const reqAltNow = overheadMsl + distNm * ftPerNm;
+        const minAltNow = reqAltNow - 300;   // 300 ft low tolerance
+        const maxAltNow = reqAltNow + 500;   // 500 ft high tolerance
 
         // Profile status
         let statusText, statusClass;
-        if (altMsl > maxMsl) {
+        if (altMsl > maxAltNow) {
             statusText = '▲ HIGH — S-TURNS OR SLIP';
             statusClass = 'eg-approach-status--high';
-        } else if (altMsl < minMsl) {
+        } else if (altMsl < minAltNow) {
             statusText = '▼ LOW — FLY BEST GLIDE';
             statusClass = 'eg-approach-status--low';
         } else {
@@ -555,14 +624,10 @@ class EmergencyGlide {
             statusClass = 'eg-approach-status--ok';
         }
 
-        // Required vs actual vertical speed
-        const altToLose = altMsl - (aptElev + 650);
+        // Required V/S to arrive overhead at overheadMsl
+        const altToLose = altMsl - overheadMsl;
         const timeMin = distNm / gs * 60;
         const reqVs = timeMin > 0 ? -Math.round(altToLose / timeMin) : 0;
-        const vsDelta = Math.abs(vs - reqVs);
-        const vsClass = vsDelta < 100 ? 'eg-approach-vs--ok'
-                      : vsDelta < 300 ? 'eg-approach-vs--caution'
-                      : 'eg-approach-vs--danger';
 
         // Update DOM — targeted writes to avoid flicker
         const set = (id, text) => {
@@ -570,22 +635,19 @@ class EmergencyGlide {
             if (el) el.textContent = text;
         };
 
-        set('eg-ap-hdg', String(hdg).padStart(3, '0') + '°');
-        set('eg-ap-dist', distNm.toFixed(1) + ' nm');
-        set('eg-ap-tgt-alt', targetMsl.toLocaleString() + ' ft MSL');
-        set('eg-ap-agl', Math.round(altAgl).toLocaleString() + ' ft');
-        set('eg-ap-req-vs', (reqVs >= 0 ? '+' : '') + reqVs.toLocaleString() + ' fpm');
+        set('eg-ap-hdg',     String(hdg).padStart(3, '0') + '°');
+        set('eg-ap-dist',    distNm.toFixed(1) + ' nm');
+        set('eg-ap-tgt-alt', overheadMsl.toLocaleString() + ' ft');
+        set('eg-ap-agl',     Math.round(altMsl).toLocaleString() + ' ft');
+        set('eg-ap-req-vs',  (reqVs >= 0 ? '+' : '') + reqVs.toLocaleString() + ' fpm');
+
+        // Keep route line start at current GPS position
+        this._updateApproachLine(sit.lat, sit.lon);
 
         const statusEl = this._overlay?.querySelector('#eg-ap-status');
         if (statusEl) {
             statusEl.textContent = statusText;
             statusEl.className = `eg-approach-status ${statusClass}`;
-        }
-
-        const actVsEl = this._overlay?.querySelector('#eg-ap-act-vs');
-        if (actVsEl) {
-            actVsEl.textContent = (vs >= 0 ? '+' : '') + vs.toLocaleString() + ' fpm';
-            actVsEl.className = `eg-approach-value eg-approach-value--sm ${vsClass}`;
         }
     }
 
@@ -777,6 +839,10 @@ class EmergencyGlide {
         this._approachWindInterval = null;
         this._approachApt = null;
         this._approachWind = null;
+        if (this._approachLine) {
+            try { this._approachLine.remove(); } catch (_) {}
+            this._approachLine = null;
+        }
     }
 }
 

@@ -7,7 +7,7 @@
 
 class FuelEngine {
     /**
-     * Default tic mark polynomial coefficients for RV-9A N194JT.
+     * Default tic mark polynomial coefficients (calibrated for specific aircraft).
      * 5th-degree polynomial: gallons = a5*x^5 + a4*x^4 + a3*x^3 + a2*x^2 + a1*x + a0
      * Calibrated from fuel_tracking_app tank measurements.
      */

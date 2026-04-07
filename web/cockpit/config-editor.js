@@ -104,9 +104,15 @@ class ConfigEditor {
         }));
 
         sections.push(this._renderSection('ifr', 'IFR', this._cockpitConfig.ifr || {}, {
-            'showCdPhone': { type: 'bool', label: 'Show CD Phone' },
-            'defaultCdPhone': { type: 'text', label: 'Default CD Phone' },
-            'showCraft': { type: 'bool', label: 'Show CRAFT' },
+            'showCdPhone':    { type: 'bool', label: 'Show CD Phone' },
+            'defaultCdPhone': { type: 'text', label: 'Default CD Phone', wide: true },
+            'showCraft':      { type: 'bool', label: 'Show CRAFT' },
+        }));
+
+        sections.push(this._renderSection('traffic', 'Traffic', this._cockpitConfig.traffic || {}, {
+            'maxAboveAlt':    { type: 'number', label: 'Max Above (ft)', min: 500, max: 10000, step: 500 },
+            'maxBelowAlt':    { type: 'number', label: 'Max Below (ft)', min: 500, max: 10000, step: 500 },
+            'showCallsign':   { type: 'bool', label: 'Show Callsign' },
         }));
 
         sections.push(this._renderSection('logbook', 'Logbook', this._cockpitConfig.logbook || {}, {
@@ -198,7 +204,9 @@ class ConfigEditor {
             'vfe_kt': { type: 'number', label: 'Vfe (kt)', min: 40, max: 200 },
             'vno_kt': { type: 'number', label: 'Vno (kt)', min: 50, max: 250 },
             'vne_kt': { type: 'number', label: 'Vne (kt)', min: 80, max: 400 },
-            'dmms_factor': { type: 'number', label: 'DMMS Factor', min: 1.0, max: 2.0, step: 0.001 },
+            'dmms_factor':      { type: 'number', label: 'DMMS Factor', min: 1.0, max: 2.0, step: 0.001 },
+            'glide_ratio':      { type: 'number', label: 'Glide Ratio', min: 5, max: 30, step: 0.5 },
+            'test_alt_agl_ft':  { type: 'number', label: 'Test Alt AGL (ft)', min: 1000, max: 20000, step: 500 },
         }));
 
         // Save button
@@ -274,7 +282,8 @@ class ConfigEditor {
             const step = cfg.step || 1;
             input = `<input type="number" id="${id}" data-section="${section}" data-key="${key}" value="${value ?? ''}" min="${cfg.min ?? ''}" max="${cfg.max ?? ''}" step="${step}" class="ce-input">`;
         } else {
-            input = `<input type="text" id="${id}" data-section="${section}" data-key="${key}" value="${value ?? ''}" class="ce-input">`;
+            const widthClass = cfg.wide ? 'ce-input ce-input--wide' : 'ce-input';
+            input = `<input type="text" id="${id}" data-section="${section}" data-key="${key}" value="${value ?? ''}" class="${widthClass}">`;
         }
 
         return `<div class="ce-field-row">
@@ -378,7 +387,7 @@ class ConfigEditor {
 
         if (target === 'cockpit') {
             // Collect standard section fields
-            const sections = ['map', 'enginePage', 'flightRecording', 'radar', 'approachCharts', 'takeoffAlerts', 'ifr', 'logbook'];
+            const sections = ['map', 'enginePage', 'flightRecording', 'radar', 'approachCharts', 'takeoffAlerts', 'ifr', 'logbook', 'traffic'];
             for (const section of sections) {
                 if (!this._cockpitConfig[section]) this._cockpitConfig[section] = {};
                 body.querySelectorAll(`[data-section="${section}"]`).forEach(el => {
@@ -455,9 +464,52 @@ class ConfigEditor {
                 <span class="config-editor-title">Configuration</span>
                 <button class="btn-close config-editor-close">✕</button>
             </div>
+            <div class="ce-search-wrap">
+                <input type="search" class="ce-search-input" placeholder="Search settings…" autocomplete="off">
+            </div>
             <div class="config-editor-body"></div>
         `;
         this._wireTap(this._el.querySelector('.config-editor-close'), () => this.hide());
+
+        // Live search — filter cards and section headers
+        const searchEl = this._el.querySelector('.ce-search-input');
+        searchEl.addEventListener('input', () => this._applySearch(searchEl.value));
+
         this._parentEl.appendChild(this._el);
+    }
+
+    _applySearch(query) {
+        const body = this._el.querySelector('.config-editor-body');
+        const q = query.trim().toLowerCase();
+
+        // Walk top-level children: section headers and cards
+        let lastHeader = null;
+        let headerHasVisibleCard = false;
+
+        Array.from(body.children).forEach(child => {
+            if (child.classList.contains('ce-section-header')) {
+                // Flush previous header visibility
+                if (lastHeader) lastHeader.style.display = headerHasVisibleCard ? '' : 'none';
+                lastHeader = child;
+                headerHasVisibleCard = false;
+                return;
+            }
+            if (child.classList.contains('ce-actions')) {
+                child.style.display = '';
+                return;
+            }
+            // ds-card — check title + all labels
+            if (!q) {
+                child.style.display = '';
+                headerHasVisibleCard = true;
+                return;
+            }
+            const text = child.textContent.toLowerCase();
+            const visible = text.includes(q);
+            child.style.display = visible ? '' : 'none';
+            if (visible) headerHasVisibleCard = true;
+        });
+        // Flush last header
+        if (lastHeader) lastHeader.style.display = (!q || headerHasVisibleCard) ? '' : 'none';
     }
 }

@@ -1,1 +1,21 @@
 node_modules/
+
+# Build artifacts
+*.apk
+*.aab
+*.aar
+
+# Local development / Claude Code
+.claude/settings.local.json
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+.env.*.local

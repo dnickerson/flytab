@@ -40,6 +40,7 @@
     "descent_rpm": 2400,
     "descent_mp": 14,
     "glide_ratio": 10.0,
+    "test_alt_agl_ft": 10000,
     "lop_sfc": 0.067,
     "max_rpm": 2700,
     "vs0_kt": 42,

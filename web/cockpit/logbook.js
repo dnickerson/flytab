@@ -1081,7 +1081,7 @@ class Logbook {
 
     async _renderOil() {
         this._body.innerHTML = '<div class="logbook-empty">Loading oil history...</div>';
-        const tail = CockpitConfig.aircraft('tail') || 'N194JT';
+        const tail = CockpitConfig.aircraft('tail') || 'N00000';
 
         // Try server first
         let events = [];
@@ -1337,7 +1337,7 @@ class Logbook {
         document.getElementById('logbookForm')?.remove();
         const e = existing || {};
         const today = new Date().toISOString().slice(0, 10);
-        const tail = CockpitConfig.aircraft('tail') || 'N194JT';
+        const tail = CockpitConfig.aircraft('tail') || 'N00000';
 
         const overlay = document.createElement('div');
         overlay.id = 'logbookForm';
