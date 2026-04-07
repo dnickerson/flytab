@@ -573,11 +573,18 @@ class TabBar {
             ['#instruments','Instruments'],['#power','Power Tradeoff'],
             ['#route','Route Table'],['#profile','Terrain Profile'],
             ['#engine','Engine'],['#engineml','Engine ML'],
+            ['#emergency','Emergency Glide'],
             ['#checklist','Checklists'],['#logbook','Logbook'],
             ['#charts','Approach Charts'],['#weather','Weather'],
             ['#recording','Recording'],['#fuel','Fuel'],
             ['#offline','Offline'],['#config','Config'],
         ];
+
+        // Pull aircraft config for dynamic values
+        const acTail = (typeof CockpitConfig !== 'undefined' ? CockpitConfig.aircraft('tail') : null) || 'your aircraft';
+        const acType = (typeof CockpitConfig !== 'undefined' ? CockpitConfig.aircraft('type') : null) || 'RV-9A';
+        const acFuelCap = (typeof CockpitConfig !== 'undefined' ? CockpitConfig.aircraft('performance.fuel_capacity_gal') : null) || 36;
+        const acDmmsKt = (typeof CockpitConfig !== 'undefined' ? Math.round(CockpitConfig.dmmsKt) : null) || 80;
 
         overlay.innerHTML = `<div style="flex:1;overflow-y:scroll;-webkit-overflow-scrolling:touch;touch-action:pan-y;overscroll-behavior:contain;padding:12px 16px 40px;">
 
@@ -667,7 +674,7 @@ class TabBar {
   <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">FUEL@DEST</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Estimated fuel remaining on arrival. Red &lt;4 gal, amber &lt;8 gal.</td></tr>
   <tr><td style="padding:6px 8px">△TIME</td><td style="padding:6px 8px">Time cost/savings vs current setting</td></tr>
 </table>
-<p>Power table is derived from <strong>2,004 actual cruise data points</strong> from N194JT flight logs — not generic Lycoming charts.</p>
+<p>Power table is derived from <strong>2,004 actual cruise data points</strong> from ${acTail} flight logs — not generic Lycoming charts.</p>
 
 <!-- ═══ ROUTE TABLE ═══ -->
 <h2 id="route" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Route Table</h2>
@@ -702,7 +709,7 @@ class TabBar {
 
 <!-- ═══ ENGINE ═══ -->
 <h2 id="engine" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Engine Page (⚙️ ENG)</h2>
-<p>Full-screen engine instruments from your engine monitor. Tap ✕ to close and return to the map.</p>
+<p>Full-screen engine instruments from a <strong>Dynon D-180</strong> engine monitor connected to the Raspberry Pi via a USB-to-RS-232 serial adapter (INSIGNIA 23k02h). The Pi relays data over HTTP and WebSocket to the tablet. Tap ✕ to close and return to the map.</p>
 <table style="width:100%;border-collapse:collapse;margin:10px 0;font-size:13px">
   <tr style="background:#152847"><th style="padding:6px 8px;text-align:left;color:#8899aa">Gauge</th><th style="padding:6px 8px;text-align:left;color:#8899aa">Limits (O-360-A1A)</th></tr>
   <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055">RPM</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Max 2700 RPM</td></tr>
@@ -719,22 +726,48 @@ class TabBar {
 <p><strong>Fuel endurance</strong> — shows time remaining at current fuel flow.</p>
 
 <!-- ═══ ENGINE ML ═══ -->
-<h2 id="engineml" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Engine ML (MORE → Engine ML)</h2>
-<p>On-device machine learning running on the Snapdragon NPU. Monitors engine data in real time.</p>
+<h2 id="engineml" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Engine ML (ML badge — status bar)</h2>
+<p>On-device machine learning monitors all engine parameters at 1 Hz. The <strong>ML:</strong> badge in the status bar shows current status. Long-press the badge for 2 seconds to run a simulation.</p>
+<p><strong>Two-layer detection pipeline:</strong></p>
 <ul style="padding-left:20px;margin:8px 0">
-  <li style="margin:4px 0"><strong>Anomaly detection</strong> — flags deviations from your engine's normal patterns. Trained on N194JT flight data.</li>
-  <li style="margin:4px 0"><strong>Phase detection</strong> — automatically classifies taxi, climb, cruise, descent, approach.</li>
-  <li style="margin:4px 0"><strong>Sticky valve detection</strong> — monitors EGT spread per cylinder during run-up and cruise.</li>
-  <li style="margin:4px 0"><strong>Anomaly score</strong> — 0–100, shown in the ML status card. &gt;70 = advisory.</li>
+  <li style="margin:4px 0"><strong>Layer 1 — Physics rules</strong> — hard limits that fire immediately: oil pressure &lt;25 PSI, CHT &gt;420°F, MAP or RPM sudden drops, fuel flow collapse at cruise power. Generates plain-language advisories on the engine page.</li>
+  <li style="margin:4px 0"><strong>Layer 2 — ML model</strong> — TFLite model trained on actual flight data. Compares each sample against a rolling 60-second baseline. Identifies the most-deviated parameter and generates a specific advisory (e.g. "EGT #3 low vs baseline — possible misfire").</li>
+  <li style="margin:4px 0"><strong>Phase detection</strong> — classifies ground / takeoff / climb / cruise / descent using GPS altitude rate (60-second smoothed), overriding the model's phase to prevent turbulence-driven thrashing.</li>
 </ul>
-<p>ML logs are saved with each flight and viewable in the Logbook → ML tab.</p>
+<p><strong>Emergency trigger (Scenario 6):</strong> Both layers must confirm simultaneously — a physics alarm (MAP drop &gt;5", RPM drop &gt;300, or oil pressure &lt;20 PSI) <em>and</em> ML anomaly flag — before the Emergency Glide overlay appears. Neither layer alone can trigger it.</p>
+<p>ML advisory logs are saved with each flight and viewable in Logbook → ML.</p>
 <div style="background:rgba(255,170,0,0.1);border-left:3px solid #ffaa00;padding:8px 12px;border-radius:0 6px 6px 0;margin:10px 0;font-size:13px">
   Engine ML is advisory only. Always cross-check with your primary gauges. Never substitute ML output for direct instrument monitoring.
 </div>
 
+<!-- ═══ EMERGENCY GLIDE ═══ -->
+<h2 id="emergency" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Emergency Glide (Engine Anomaly overlay)</h2>
+<p>When the ML system confirms a serious engine anomaly (both physics and ML layers agree), a full-screen overlay lists the nearest airports reachable under glide.</p>
+<ul style="padding-left:20px;margin:8px 0">
+  <li style="margin:4px 0">Airports ranked by glide margin — <strong>BEST</strong> badge on the top choice, <strong>MARGINAL</strong> for airports at the edge of range</li>
+  <li style="margin:4px 0">Glide range adjusted for wind (headwind reduces range, tailwind increases it)</li>
+  <li style="margin:4px 0">Tap any airport to open the live <strong>Approach Guidance Panel</strong></li>
+</ul>
+<p><strong>Approach Guidance Panel</strong> (updates every second):</p>
+<ul style="padding-left:20px;margin:8px 0">
+  <li style="margin:4px 0"><strong>HDG</strong> — magnetic bearing to the airport from current position</li>
+  <li style="margin:4px 0"><strong>DIST</strong> — distance in nautical miles, live</li>
+  <li style="margin:4px 0"><strong>BEST GLIDE — ${acDmmsKt} kt</strong> — maintain this airspeed for maximum glide distance</li>
+  <li style="margin:4px 0"><strong>OVERHEAD TGT</strong> — altitude (MSL) to arrive overhead the airport with enough energy to complete a 2 nm emergency pattern and cross the runway threshold at 500 ft AGL</li>
+  <li style="margin:4px 0"><strong>Profile status</strong> — ON PROFILE (green) / HIGH — S-TURNS OR SLIP (amber) / LOW — FLY BEST GLIDE (red)</li>
+  <li style="margin:4px 0"><strong>REQ V/S</strong> — descent rate needed to arrive at the overhead altitude</li>
+  <li style="margin:4px 0"><strong>Best runway</strong> — computed from METAR wind (uses nearest available METAR if own airport has no report)</li>
+  <li style="margin:4px 0"><strong>Frequencies</strong> — CTAF or Tower listed first</li>
+</ul>
+<p>When an airport is selected, the overlay shrinks to the top of the screen revealing the map below. A dashed red line is drawn from your position to the airport, and the map zooms to show the full glide path.</p>
+<p><strong>FLY TO</strong> — sets the selected airport as your active route destination. <strong>← BACK</strong> — returns to the airport list.</p>
+<div style="background:rgba(255,68,68,0.1);border-left:3px solid #ff4444;padding:8px 12px;border-radius:0 6px 6px 0;margin:10px 0;font-size:13px">
+  Emergency guidance is advisory only. Fly the aircraft first. Use your POH emergency procedures as primary authority.
+</div>
+
 <!-- ═══ CHECKLISTS ═══ -->
 <h2 id="checklist" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Checklists (✅ CHK)</h2>
-<p>Three tabs: <strong>Normal</strong>, <strong>Abnormal</strong>, and <strong>Emergency</strong>. Customized for N194JT.</p>
+<p>Three tabs: <strong>Normal</strong>, <strong>Abnormal</strong>, and <strong>Emergency</strong>. Customized for ${acTail} — edit <code>checklist.json</code> to tailor items to your aircraft.</p>
 <ul style="padding-left:20px;margin:8px 0">
   <li style="margin:4px 0">Tap each item to check it off (item turns green)</li>
   <li style="margin:4px 0">Tap the section header to expand/collapse</li>
@@ -797,11 +830,11 @@ class TabBar {
 <p>Tap the <strong>FUEL</strong> field on the instrument strip, or use MORE → Fuel Entry.</p>
 <ul style="padding-left:20px;margin:8px 0">
   <li style="margin:4px 0">Set left and right tank tic mark readings using sliders or +/− buttons</li>
-  <li style="margin:4px 0">FlyTab converts tic marks to gallons using N194JT's calibration polynomial</li>
+  <li style="margin:4px 0">FlyTab converts tic marks to gallons using ${acTail}'s calibration polynomial (set in <code>aircraft-config.json</code>)</li>
   <li style="margin:4px 0">Tap <strong>Apply</strong> to update FUEL and RANGE in the instrument strip immediately</li>
   <li style="margin:4px 0">If the engine monitor reports live fuel remaining, that overrides the manual entry during flight</li>
 </ul>
-<p>Fuel capacity: 36 gallons total (18 per tank).</p>
+<p>Configured fuel capacity: ${acFuelCap} gal total.</p>
 
 <!-- ═══ OFFLINE ═══ -->
 <h2 id="offline" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Offline Use</h2>
@@ -832,11 +865,11 @@ class TabBar {
   <li style="margin:4px 0"><strong>approachCharts</strong> — georef enable, ownship icon size</li>
   <li style="margin:4px 0"><strong>traffic</strong> — max altitude separation filter, callsign display</li>
 </ul>
-<p>Aircraft-specific data (V-speeds, fuel calibration, power settings table, engine limits) is in <code>aircraft-config.json</code>. The power settings table in that file is derived from actual N194JT flight data — 2,004 data points across 33 flights.</p>
+<p>Aircraft-specific data (V-speeds, fuel calibration, power settings table, engine limits) is in <code>aircraft-config.json</code>. The power settings table in that file is derived from actual ${acTail} flight data — 2,004 data points across 33 flights.</p>
 <p><strong>Stratux IP</strong> — tap the Stratux field to set a custom IP if your network uses a non-default address.</p>
 
 <div style="margin:40px 0 20px;padding-top:16px;border-top:1px solid #1a3055;text-align:center;font-size:12px;color:#8899aa">
-  FlyTab ${ver} · N194JT RV-9A · Lycoming O-360-A1A
+  FlyTab ${ver} · ${acTail} ${acType}
 </div>
 
 </div>`;
