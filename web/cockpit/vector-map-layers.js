@@ -276,6 +276,10 @@ class VectorMapLayers {
             for (const obs of (Array.isArray(data) ? data : [])) {
                 const icao = (obs.icaoId || obs.stationId || '').toUpperCase();
                 if (!icao) continue;
+                // Skip if we already have a newer observation for this station
+                // (API returns multiple hours; keep only most recent obsTime)
+                const existing = this._internetMetars.get(icao);
+                if (existing?._obsTime && obs.obsTime && obs.obsTime <= existing._obsTime) continue;
                 // fltCat (capital C), ceiling from lowest BKN/OVC layer in feet (FEW/SCT are not ceiling)
                 const flight_category = catMap[(obs.fltCat || '').toUpperCase()] || null;
                 const ceilCloud = obs.clouds?.find(c => c.cover === 'BKN' || c.cover === 'OVC');
@@ -284,6 +288,7 @@ class VectorMapLayers {
                 const observed_at = obs.obsTime ? new Date(obs.obsTime * 1000).toISOString() : null;
                 this._internetMetars.set(icao, {
                     raw: obs.rawOb || '',
+                    _obsTime: obs.obsTime || 0,  // Unix seconds — used to deduplicate multi-hour response
                     decoded: {
                         flight_category,
                         visibility_sm: obs.visib,
