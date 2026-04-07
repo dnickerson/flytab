@@ -213,8 +213,7 @@ The Pi runs two services:
 
 ## Why the Lenovo Yoga Tab Plus
 
-The short version: OLED sunlight readability + kickstand mounting + large
-battery + sideloadable APK.
+The short version: OLED sunlight readability + kick ass processor plus NPU + large battery + sideloadable APK.
 
 It's actually become my go to mobile device. I don't take my laptop on trips anylonger as the Yoga Tab does everything
 
