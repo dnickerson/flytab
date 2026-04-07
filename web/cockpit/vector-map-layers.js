@@ -299,7 +299,7 @@ class VectorMapLayers {
                         wind_gust: obs.wgst,
                         temperature_c: obs.temp,
                         dewpoint_c: obs.dewp,
-                        altimeter: obs.altim,
+                        altimeter: obs.altim ? +(obs.altim / 33.8639).toFixed(2) : null, // AWC altim is hPa → convert to inHg
                         observed_at,  // actual observation time, not fetch time
                     },
                     received_at: now,
