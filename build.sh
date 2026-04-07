@@ -24,7 +24,13 @@ echo "[0] Version: $VERSION (code $VERSION_CODE) → build.gradle updated"
 echo ""
 echo "[1] Syncing web assets..."
 cd "$REPO_ROOT"
-npx cap sync android 2>&1 | tail -3
+if command -v npx &>/dev/null; then
+    npx cap sync android 2>&1 | tail -3
+else
+    echo "  npx not found — using rsync fallback"
+    rsync -a --delete web/ android/app/src/main/assets/public/
+    echo "  rsync: web/ → android/app/src/main/assets/public/"
+fi
 
 # Build APK
 echo ""

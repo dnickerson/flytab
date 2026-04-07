@@ -7424,3 +7424,199 @@ body {
     border: 2px solid var(--status-caution);
     overflow: hidden;
 }
+
+/* ── Airport list: tappable affordances ──────────────────────────────── */
+.eg-item--tappable {
+    cursor: pointer;
+    position: relative;
+}
+.eg-item--tappable:active {
+    opacity: 0.7;
+}
+.eg-item-chevron {
+    margin-left: auto;
+    font-size: 20px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    padding-left: 6px;
+}
+.eg-tap-hint {
+    font-size: 11px;
+    color: var(--text-muted);
+    grid-column: 1 / -1;
+    text-align: center;
+    margin-top: 2px;
+    letter-spacing: 0.04em;
+}
+
+/* ── Approach guidance panel ─────────────────────────────────────────── */
+.eg-approach-panel {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow-y: auto;
+}
+.eg-approach-nav {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px 6px;
+    border-bottom: 1px solid var(--border-color);
+}
+.eg-approach-apt-title {
+    flex: 1;
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.eg-back-btn {
+    background: transparent;
+    border: 1px solid var(--text-muted);
+    color: var(--text-secondary);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 13px;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+.eg-back-btn:active { opacity: 0.7; }
+.eg-fly-btn {
+    background: var(--status-ok);
+    border: none;
+    color: #000;
+    border-radius: 6px;
+    padding: 4px 12px;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+.eg-fly-btn:active { opacity: 0.7; }
+
+/* Live data row — HDG + DIST */
+.eg-approach-live-row {
+    display: flex;
+    gap: 0;
+    padding: 10px 12px 6px;
+    border-bottom: 1px solid var(--border-color);
+}
+.eg-approach-stat {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+.eg-approach-label {
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 2px;
+}
+.eg-approach-value {
+    font-size: 26px;
+    font-weight: 700;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+}
+.eg-approach-value--sm {
+    font-size: 18px;
+}
+
+/* Altitude / profile status badge */
+.eg-approach-status {
+    margin: 8px 12px 4px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    text-align: center;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    background: var(--bg-secondary);
+    color: var(--text-muted);
+}
+.eg-approach-status--ok {
+    background: rgba(0, 200, 80, 0.18);
+    color: var(--status-ok);
+    border: 1px solid var(--status-ok);
+}
+.eg-approach-status--high {
+    background: rgba(255, 180, 0, 0.15);
+    color: var(--status-caution);
+    border: 1px solid var(--status-caution);
+}
+.eg-approach-status--low {
+    background: rgba(255, 60, 60, 0.18);
+    color: var(--status-warn);
+    border: 1px solid var(--status-warn);
+}
+.eg-approach-status--unknown {
+    background: var(--bg-secondary);
+    color: var(--text-muted);
+    border: 1px solid var(--border-color);
+}
+
+/* Vertical speed coloring */
+.eg-approach-vs--ok      { color: var(--status-ok); }
+.eg-approach-vs--caution { color: var(--status-caution); }
+.eg-approach-vs--danger  { color: var(--status-warn); }
+
+/* Generic padded data section */
+.eg-approach-section {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-color);
+}
+.eg-approach-divider {
+    height: 1px;
+    background: var(--border-color);
+    margin: 4px 0;
+}
+
+/* Runway & wind */
+.eg-approach-rwy-val {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+}
+.eg-approach-wind-src {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+/* Frequency list */
+.eg-approach-freqs {
+    padding-bottom: 12px;
+}
+.eg-approach-freq-row {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 3px 0;
+}
+.eg-approach-freq--primary .eg-approach-freq-val {
+    color: var(--status-ok);
+    font-size: 18px;
+}
+.eg-approach-freq--primary .eg-approach-freq-type {
+    color: var(--status-ok);
+}
+.eg-approach-freq-type {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    width: 46px;
+    flex-shrink: 0;
+}
+.eg-approach-freq-val {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+}

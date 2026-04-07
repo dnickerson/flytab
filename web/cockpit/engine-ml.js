@@ -34,6 +34,13 @@ class EngineMLBridge {
         this._prevRPM = null;       // previous RPM
         this._physicsAlarm = false; // true when physics rule fired this cycle
 
+        // GPS-based phase smoothing — prevents model phase thrashing on turbulence
+        this._altHistory = [];      // circular buffer of MSL altitudes, last 60s
+        this._altHistoryMax = 60;
+        this._fieldElev = null;     // estimated field elevation (MSL), set on first samples
+        this._fieldElevSamples = 0; // number of ground samples used to estimate field elev
+        this._hasLaunched = false;  // true once aircraft has left the ground
+
         // Long-press state for test mode trigger
         this._lpTimer = null;
         this._lpProgressTimer = null;
@@ -247,8 +254,13 @@ class EngineMLBridge {
         // Get altitude and speed from Stratux situation
         const sit = this._stratuxClient?.situation;
 
+        // Compute GPS-smoothed phase once per sample (updates _altHistory).
+        // This is used both for physics-rule thresholds (_derivePhase) and
+        // to override the model's phase in result.phase before CSV logging.
+        const _gpsPhaseThisSample = this._computeGPSPhase(sit, d);
+
         // Update phase and baseline before physics check so CHT phase-limit is current
-        this._derivePhase(d, this._lastResult?.phase);
+        this._derivePhase(d, this._lastResult?.phase, _gpsPhaseThisSample);
         this._updateBaseline(d);
 
         // Layer 1: physics rules — run before ML (no latency)
@@ -278,6 +290,9 @@ class EngineMLBridge {
                 ground_speed: num(sit?.ground_speed ?? 0),
                 distance_nm: 0, // TODO: compute from route
             });
+
+            // Override model phase with GPS-smoothed phase when airborne.
+            if (_gpsPhaseThisSample) result.phase = _gpsPhaseThisSample;
 
             this._lastResult = result;
 
@@ -535,12 +550,90 @@ class EngineMLBridge {
 
     // ========== Phase Tracking ==========
 
-    /** Derive flight phase from ML result if available, otherwise use MAP/RPM heuristic. */
-    _derivePhase(d, mlPhase) {
+    /**
+     * Compute the current flight phase from GPS altitude rate using a 60-second
+     * smoothing window. This overrides the TFLite model's phase output when
+     * airborne, preventing thrashing caused by turbulence and GPS jitter.
+     *
+     * Returns a phase string, or null if GPS data is unavailable.
+     *
+     * Thresholds mirror the fixed detect_phases() in train_anomaly_model.py:
+     *   climb    > +300 fpm (60-second smoothed)
+     *   descent  < -300 fpm
+     *   cruise   |rate| <= 300 fpm, airborne
+     *   takeoff  high RPM, AGL <= 1000 ft, positive rate (initial departure)
+     */
+    _computeGPSPhase(sit, d) {
+        const num = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
+        const altMSL = num(sit?.alt_msl ?? d.altitude_ft ?? 0);
+        const groundSpeed = num(sit?.ground_speed ?? d.speed_kts ?? 0);
+        const rpm = num(d.rpm ?? d.RPM ?? 0);
+
+        if (altMSL === 0 && groundSpeed === 0) return null; // no GPS
+
+        // Maintain 60-sample altitude history
+        this._altHistory.push(altMSL);
+        if (this._altHistory.length > this._altHistoryMax) this._altHistory.shift();
+
+        // Build field elevation estimate from the first 5 minutes of low-speed samples.
+        // Only update while on the ground (speed < 20 kts, RPM < 2000) and within
+        // the first 300 samples so a runway run-up can't skew it.
+        if (!this._hasLaunched && groundSpeed < 20 && rpm < 2000 && this._fieldElevSamples < 300) {
+            if (this._fieldElev === null) {
+                this._fieldElev = altMSL;
+            } else {
+                // Running minimum — approach plates report field elev, GPS may read high
+                this._fieldElev = Math.min(this._fieldElev, altMSL);
+            }
+            this._fieldElevSamples++;
+        }
+
+        const fieldElev = this._fieldElev ?? altMSL;
+        const agl = altMSL - fieldElev;
+
+        // Compute smoothed altitude rate over available history (up to 60 seconds).
+        // Fewer than 10 samples: not enough data, fall through to model phase.
+        if (this._altHistory.length < 10) return null;
+        const oldest = this._altHistory[0];
+        const span = this._altHistory.length - 1; // seconds
+        const altRateFpm = ((altMSL - oldest) / span) * 60;
+
+        // Not yet airborne / on ground
+        if (groundSpeed < 30 && agl < 200) {
+            this._hasLaunched = false;
+            return null; // let engine MAP/RPM heuristic handle ground phases
+        }
+
+        // Airborne
+        this._hasLaunched = true;
+
+        if (agl <= 1000 && altRateFpm > 100 && rpm > 2400) return 'takeoff';
+        if (altRateFpm > 300) return 'climb';
+        if (altRateFpm < -300) return 'descent';
+        return 'cruise';
+    }
+
+    /**
+     * Derive flight phase for physics-rule threshold selection.
+     * GPS-based phase takes priority when airborne (60-second smoothed alt rate).
+     * Falls back to model phase, then MAP/RPM heuristic.
+     *
+     * @param {object} d - engine data sample
+     * @param {string|null} mlPhase - phase from TFLite model result
+     * @param {string|null} gpsPhase - pre-computed GPS phase (from _computeGPSPhase)
+     */
+    _derivePhase(d, mlPhase, gpsPhase = null) {
+        if (gpsPhase) {
+            this._flightPhase = gpsPhase;
+            return;
+        }
+
         if (mlPhase && mlPhase !== 'unknown' && mlPhase !== 'ground') {
             this._flightPhase = mlPhase;
             return;
         }
+
+        // MAP/RPM heuristic fallback (no GPS, no model phase)
         const num = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
         const rpm = num(d.rpm ?? d.RPM ?? 0);
         const mp = num(d.manifold_pressure ?? d.mp ?? d.MAP ?? 0);

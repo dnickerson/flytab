@@ -13,16 +13,15 @@
 #   - Tablet on same network as Pi (home WiFi or Pi hotspot)
 #
 # Usage:
-#   bash flytab/test-pipeline.sh                          # Largest flight file, 10x speed
-#   bash flytab/test-pipeline.sh --rate 30                # 30x speed (~2 min test)
-#   bash flytab/test-pipeline.sh --file stream_0033.txt   # Specific file
-#   bash flytab/test-pipeline.sh --stop                   # Stop test, restore normal
+#   bash test-pipeline.sh                          # Largest flight file, 10x speed
+#   bash test-pipeline.sh --rate 30                # 30x speed (~2 min test)
+#   bash test-pipeline.sh --file stream_0033.txt   # Specific file
+#   bash test-pipeline.sh --stop                   # Stop test, restore normal
 
 set -e
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 ENGINE_DATA_DIR="$HOME/Engine_Analysis"
-ENGINE_SRC="$REPO_ROOT/flypi/engine-monitor"
 PI_HOST="${PI_HOST:-192.168.1.212}"
 PI_USER="pi"
 PI_SSH="$PI_USER@$PI_HOST"

@@ -112,7 +112,7 @@ class TabBar {
 
         const c = this._comps;
         const rows = [
-            { icon: '✈️', label: 'Flight Planning (flywhere.app)', action: () => {
+            { icon: '✈️', label: 'Plan on flywhere.app', action: () => {
                 window.open('https://flywhere.app/plan', '_blank');
                 this._closeMoreDrawer();
             }},
@@ -120,11 +120,7 @@ class TabBar {
                 this._closeMoreDrawer();
                 this._showNewRouteConfirm();
             }},
-            { icon: '✏️', label: 'Edit Route', action: () => {
-                this._closeMoreDrawer();
-                window.app?.routeEditor?.startEditRoute();
-            }},
-            { icon: '✈', label: 'Load Flight Plan', action: () => {
+            { icon: '✈', label: 'Load Plan', action: () => {
                 if (c.planSync?.show) c.planSync.show();
                 this._closeMoreDrawer();
             }},

@@ -327,6 +327,27 @@ class PlanSync {
         }
     }
 
+    // ── Deep Link API ────────────────────────────────────────────────────────
+
+    /**
+     * Fetch a single plan by ID from the flywhere.app API and return a
+     * normalized plan object suitable for applyRouteEdit(). Returns null on failure.
+     */
+    async fetchPlanById(planId) {
+        try {
+            const resp = await fetch(`${this._apiUrl}/api/plans/${planId}`, {
+                headers: { 'x-api-key': this._apiKey },
+                signal: AbortSignal.timeout(8000),
+            });
+            if (!resp.ok) return null;
+            const { plan } = await resp.json();
+            return PlanSync._normalizePlan(plan);
+        } catch (err) {
+            console.warn('[PlanSync] fetchPlanById error:', err.message);
+            return null;
+        }
+    }
+
     // ── Plan Format Normalization ─────────────────────────────────────────────
 
     /**

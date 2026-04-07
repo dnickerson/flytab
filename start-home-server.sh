@@ -10,7 +10,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$SCRIPT_DIR"
 DATA_DIR="$REPO_ROOT/data"
 PORT=8090
 HOST_IP="$(hostname -I | awk '{print $1}')"

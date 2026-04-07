@@ -173,6 +173,40 @@ class FlyTabApp {
         console.log(`FlyTab ${FLYTAB_VERSION} initialized`);
 
         this._startWatchdog();
+        this._initDeepLink();
+    }
+
+    _initDeepLink() {
+        const App = window.Capacitor?.Plugins?.App;
+        if (!App) return;
+        App.addListener('appUrlOpen', async (event) => {
+            try {
+                const url = new URL(event.url);
+                if (url.hostname === 'plan') {
+                    const planId = url.pathname.replace(/^\//, '');
+                    if (planId) await this._loadPlanById(planId);
+                }
+            } catch (err) {
+                console.warn('[DeepLink] Failed to handle URL:', event.url, err.message);
+                this.showToast('Could not load plan from link.');
+            }
+        });
+    }
+
+    async _loadPlanById(planId) {
+        this.showToast('Loading plan…');
+        try {
+            const plan = await this.planSync?.fetchPlanById(planId);
+            if (!plan) {
+                this.showToast('Plan not found or failed to load.');
+                return;
+            }
+            await this.applyRouteEdit(plan);
+            this.tabBar?.selectTab('map');
+        } catch (err) {
+            console.error('[DeepLink] _loadPlanById error:', err.message);
+            this.showToast(`Failed to load plan: ${err.message}`);
+        }
     }
 
     /**

@@ -3,53 +3,43 @@
  * On joint physics + ML confirmation of serious power loss, computes
  * reachable airports within glide range and displays a ranked emergency
  * routing overlay with headings and descent profiles.
-<<<<<<< HEAD
  *
  * Trigger (both required — dual-layer to prevent false alarms):
  *   1. Physics rules: MAP drop >5" OR RPM drop >300 OR oil_press <20 PSI
  *   2. ML anomaly: result.anomaly === true
  *
- * Computation completes within 2-3 seconds. Entirely on-device, no internet.
-=======
->>>>>>> 562e81e (fix: replace emergency-glide.js with canonical Scenario 6 version, align trigger() API)
- *
- * Trigger (both required — dual-layer to prevent false alarms):
- *   1. Physics rules: MAP drop >5" OR RPM drop >300 OR oil_press <20 PSI
- *   2. ML anomaly: result.anomaly === true
- *
- * Computation completes within 2-3 seconds. Entirely on-device, no internet.
+ * Tapping an airport opens a live approach guidance panel (1 Hz updates):
+ *   - Heading and distance to threshold
+ *   - Altitude profile: target MSL, ON PROFILE / HIGH / LOW status
+ *   - Required vs actual vertical speed
+ *   - Best runway based on wind (METAR or nearest METAR fallback)
+ *   - CTAF / Tower frequencies
  */
 
 class EmergencyGlide {
     constructor() {
         this._overlay = null;
+        this._overlayBody = null;
         this._lastTriggerTime = 0;
         this._COOLDOWN_MS = 60_000;   // debounce: don't re-trigger within 60s
         this._eventLog = [];           // post-flight event log (in-memory)
+
+        // Approach guidance state
+        this._approachApt = null;
+        this._approachTop3 = null;
+        this._approachEvent = null;
+        this._testMode = false;
+        this._rankedAirports = [];
+        this._approachInterval = null;
+        this._approachWindInterval = null;
+        this._approachWind = null;
+        this._glideRatio = 10.0;
 
         window.emergencyGlide = this;
     }
 
     /**
      * Called when both physics rules AND ML anomaly confirm power loss.
-     * @param {Object} options
-<<<<<<< HEAD
-     * @param {Object} options.engineRaw  — raw engine data frame
-     * @param {Object} [options.sit]      — stratuxClient.situation (falls back to live)
-     * @param {Object} options.mlResult   — EngineML processSample result
-     * @param {boolean} [options.testMode] — if true, bypass cooldown and show test banner
-     */
-    async trigger(options = {}) {
-        const { engineRaw, sit: sitArg, mlResult, testMode = false } = options;
-        const sit = sitArg ?? window.app?.stratuxClient?.situation;
-
-        const now = Date.now();
-        if (!testMode && now - this._lastTriggerTime < this._COOLDOWN_MS) return;
-        this._lastTriggerTime = now;
-
-        console.warn('[EmergencyGlide] TRIGGERED — computing glide options');
-
-=======
      * @param {Object}  [options.engineRaw]       — raw engine data frame
      * @param {Object}  [options.engineData]      — alias for engineRaw
      * @param {Object}  [options.mlResult]        — EngineML processSample result
@@ -66,18 +56,13 @@ class EmergencyGlide {
         console.warn('[EmergencyGlide] TRIGGERED — computing glide options', { testMode });
 
         const sit = window.app?.stratuxClient?.situation ?? window.stratuxClient?.situation;
->>>>>>> 562e81e (fix: replace emergency-glide.js with canonical Scenario 6 version, align trigger() API)
         const lat = sit?.lat;
         const lon = sit?.lon;
         const altMsl = sit?.alt_msl ?? 0;
 
         if (!lat || !lon) {
             console.warn('[EmergencyGlide] No GPS position — cannot compute glide range');
-<<<<<<< HEAD
-            this._showNoGpsOverlay();
-=======
             this._showNoGpsOverlay(testMode);
->>>>>>> 562e81e (fix: replace emergency-glide.js with canonical Scenario 6 version, align trigger() API)
             return;
         }
 
@@ -104,15 +89,9 @@ class EmergencyGlide {
 
         // Query NASR airports within glide range
         let airports = [];
-<<<<<<< HEAD
         if (window.app?._nasrDb) {
             try {
                 airports = await window.app._nasrDb.getAirportsNear(lat, lon, adjustedRangeNm);
-=======
-        if (window.nasrDB) {
-            try {
-                airports = await window.nasrDB.getAirportsNear(lat, lon, adjustedRangeNm);
->>>>>>> 562e81e (fix: replace emergency-glide.js with canonical Scenario 6 version, align trigger() API)
             } catch (err) {
                 console.error('[EmergencyGlide] Airport query failed:', err);
             }
@@ -120,6 +99,10 @@ class EmergencyGlide {
 
         // Rank airports by suitability
         const ranked = this._rankAirports(airports, lat, lon, altAgl, sit);
+
+        // Store for approach guidance
+        this._rankedAirports = ranked;
+        this._glideRatio = glideRatio;
 
         // Build event payload for dispatch and logging
         const event = {
@@ -134,10 +117,7 @@ class EmergencyGlide {
             ml_score: mlResult?.score ?? null,
             ml_phase: mlResult?.phase ?? null,
             airports_in_range: airports.length,
-<<<<<<< HEAD
-=======
             test: testMode,
->>>>>>> 562e81e (fix: replace emergency-glide.js with canonical Scenario 6 version, align trigger() API)
             top_options: ranked.slice(0, 3).map(a => ({
                 icao: a.icao,
                 name: a.name,
@@ -194,10 +174,8 @@ class EmergencyGlide {
             .map(a => {
                 const distNm = NasrDB.haversineNm(lat, lon, a.lat, a.lon);
 
-                // Magnetic heading to airport (true, degrees 0-359)
-                const dLat = a.lat - lat;
-                const dLon = (a.lon - lon) * Math.cos(lat * Math.PI / 180);
-                const hdg = Math.round(((Math.atan2(dLon, dLat) * 180 / Math.PI) + 360) % 360);
+                // True heading to airport (degrees 0-359)
+                const hdg = this._bearingTo(lat, lon, a.lat, a.lon);
 
                 // Altitude needed to reach airport: glide distance in ft plus pattern buffer
                 const airportElevFt = a.elev_ft ?? 0;
@@ -255,7 +233,6 @@ class EmergencyGlide {
     _windAlignScore(trueCourse, runways) {
         let bestAngle = 180;
         for (const rwy of runways) {
-<<<<<<< HEAD
             for (const part of (rwy.id || "").split("/")) {
                 const match = part.trim().match(/^(\d{1,2})(L|R|C)?$/i);
                 if (!match) continue;
@@ -265,16 +242,6 @@ class EmergencyGlide {
                 const angle = diff > 180 ? 360 - diff : diff;
                 if (angle < bestAngle) bestAngle = angle;
             }
-=======
-            const digits = rwy.id?.match(/\d+/)?.[0];
-            if (!digits) continue;
-            const rwyHdg = parseInt(digits) * 10;
-            if (isNaN(rwyHdg) || rwyHdg === 0) continue;
-            // Smallest angle between landing direction and track (0=headwind, 180=tailwind)
-            const diff = ((trueCourse - rwyHdg + 360) % 360);
-            const angle = diff > 180 ? 360 - diff : diff;
-            if (angle < bestAngle) bestAngle = angle;
->>>>>>> 562e81e (fix: replace emergency-glide.js with canonical Scenario 6 version, align trigger() API)
         }
         return Math.max(0, 15 * (1 - bestAngle / 180));
     }
@@ -294,6 +261,15 @@ class EmergencyGlide {
             if (elev > maxElev) maxElev = elev;
         }
         return maxElev;
+    }
+
+    // ── Navigation math ────────────────────────────────────────────────────────
+
+    /** True bearing from (lat1,lon1) to (lat2,lon2), degrees 0-359. */
+    _bearingTo(lat1, lon1, lat2, lon2) {
+        const dLat = lat2 - lat1;
+        const dLon = (lon2 - lon1) * Math.cos(lat1 * Math.PI / 180);
+        return Math.round(((Math.atan2(dLon, dLat) * 180 / Math.PI) + 360) % 360);
     }
 
     // ── Post-flight logging ────────────────────────────────────────────────────
@@ -316,29 +292,23 @@ class EmergencyGlide {
     _showOverlay(top3, event, testMode = false) {
         this._dismissOverlay();
 
+        // Store for approach guidance and back navigation
+        this._approachTop3 = top3;
+        this._approachEvent = event;
+        this._testMode = testMode;
+
         const el = document.createElement('div');
         el.id = 'emergencyGlideOverlay';
-<<<<<<< HEAD
-        el.className = testMode ? 'eg-overlay eg-overlay--test' : 'eg-overlay';
-=======
         el.className = 'eg-overlay' + (testMode ? ' eg-overlay--test' : '');
->>>>>>> 562e81e (fix: replace emergency-glide.js with canonical Scenario 6 version, align trigger() API)
 
         // Header
         const header = document.createElement('div');
         header.className = 'eg-header';
-<<<<<<< HEAD
-        if (testMode) header.style.background = 'var(--status-caution)';
-        header.innerHTML = `
-            <div class="eg-title">⚡ ENGINE ANOMALY CONFIRMED</div>
-            ${testMode ? '<div class="eg-subtitle eg-subtitle--test">⚠️ TEST MODE — SIMULATION</div>' : ''}
-=======
         header.innerHTML = `
             <div class="eg-title-row">
                 <div class="eg-title">${testMode ? '⚠\uFE0E TEST \u2014 ENGINE ANOMALY SIMULATION' : '⚡ ENGINE ANOMALY CONFIRMED'}</div>
                 ${testMode ? '<span class="eg-test-pill">TEST MODE</span>' : ''}
             </div>
->>>>>>> 562e81e (fix: replace emergency-glide.js with canonical Scenario 6 version, align trigger() API)
             <div class="eg-subtitle">
                 ${event.airports_in_range} airport${event.airports_in_range !== 1 ? 's' : ''}
                 within ${event.adjusted_range_nm} nm glide range
@@ -346,49 +316,11 @@ class EmergencyGlide {
             </div>`;
         el.appendChild(header);
 
-        // Airport list
+        // Airport list body
         const body = document.createElement('div');
         body.className = 'eg-body';
-
-        if (top3.length === 0) {
-            body.innerHTML = `<div class="eg-none">
-                No airports within glide range.<br>
-                Declare emergency — squawk 7700.
-            </div>`;
-        } else {
-            top3.forEach((apt, idx) => {
-                const item = document.createElement('div');
-                item.className = `eg-item${idx === 0 ? ' eg-item--best' : ''}${!apt._reachable ? ' eg-item--marginal' : ''}`;
-
-                const rwyLen = apt.longest_rwy_ft
-                    ? `${apt.longest_rwy_ft.toLocaleString()} ft`
-                    : '—';
-                const surface = apt.has_paved_rwy ? 'paved' : 'grass';
-                const descentStr = apt._descentFpm < 9000
-                    ? ` · ${apt._descentFpm.toLocaleString()} fpm`
-                    : '';
-                const badgeHtml = idx === 0
-                    ? `<span class="eg-badge eg-badge--best">BEST OPTION</span>`
-                    : (!apt._reachable ? `<span class="eg-badge eg-badge--marginal">MARGINAL</span>` : '');
-
-                item.innerHTML = `
-                    <div class="eg-rank">${idx + 1}</div>
-                    <div class="eg-apt">
-                        <div class="eg-apt-id">
-                            ${apt.icao}
-                            <span class="eg-apt-name">${apt.name}</span>
-                            ${badgeHtml}
-                        </div>
-                        <div class="eg-apt-detail">
-                            ${apt._distNm} nm
-                            &nbsp;·&nbsp; hdg ${String(apt._hdg).padStart(3, '0')}°
-                            &nbsp;·&nbsp; ${rwyLen} ${surface}${descentStr}
-                        </div>
-                    </div>`;
-                body.appendChild(item);
-            });
-        }
-
+        this._overlayBody = body;
+        this._buildAirportItems(top3, body);
         el.appendChild(body);
 
         // Dismiss button
@@ -403,21 +335,66 @@ class EmergencyGlide {
 
         document.body.appendChild(el);
         this._overlay = el;
-<<<<<<< HEAD
-    }
-
-    _showNoGpsOverlay() {
-        this._dismissOverlay();
-        const el = document.createElement('div');
-        el.id = 'emergencyGlideOverlay';
-        el.className = 'eg-overlay';
-        el.innerHTML = `
-            <div class="eg-header">
-                <div class="eg-title">⚡ ENGINE ANOMALY CONFIRMED</div>
-=======
 
         // Focus the ack button for accessibility
         setTimeout(() => btn.focus(), 50);
+    }
+
+    /**
+     * Build tappable airport list items into body element.
+     * Extracted so it can be called from both _showOverlay and back-navigation.
+     */
+    _buildAirportItems(top3, body) {
+        body.innerHTML = '';
+
+        if (top3.length === 0) {
+            body.innerHTML = `<div class="eg-none">
+                No airports within glide range.<br>
+                Declare emergency — squawk 7700.
+            </div>`;
+            return;
+        }
+
+        top3.forEach((apt, idx) => {
+            const item = document.createElement('div');
+            item.className = `eg-item eg-item--tappable${idx === 0 ? ' eg-item--best' : ''}${!apt._reachable ? ' eg-item--marginal' : ''}`;
+
+            const rwyLen = apt.longest_rwy_ft
+                ? `${apt.longest_rwy_ft.toLocaleString()} ft`
+                : '—';
+            const surface = apt.has_paved_rwy ? 'paved' : 'grass';
+            const descentStr = apt._descentFpm < 9000
+                ? ` · ${apt._descentFpm.toLocaleString()} fpm`
+                : '';
+            const badgeHtml = idx === 0
+                ? `<span class="eg-badge eg-badge--best">BEST OPTION</span>`
+                : (!apt._reachable ? `<span class="eg-badge eg-badge--marginal">MARGINAL</span>` : '');
+
+            item.innerHTML = `
+                <div class="eg-rank">${idx + 1}</div>
+                <div class="eg-apt">
+                    <div class="eg-apt-id">
+                        ${apt.icao}
+                        <span class="eg-apt-name">${apt.name}</span>
+                        ${badgeHtml}
+                    </div>
+                    <div class="eg-apt-detail">
+                        ${apt._distNm} nm
+                        &nbsp;·&nbsp; hdg ${String(apt._hdg).padStart(3, '0')}°
+                        &nbsp;·&nbsp; ${rwyLen} ${surface}${descentStr}
+                    </div>
+                </div>
+                <div class="eg-item-chevron">›</div>`;
+
+            item.addEventListener('click', () => this._showApproachDetail(apt));
+            body.appendChild(item);
+        });
+
+        // Tap hint
+        const hint = document.createElement('div');
+        hint.className = 'eg-tap-hint';
+        hint.textContent = 'Tap airport for approach guidance';
+        body.appendChild(hint);
     }
 
     _showNoGpsOverlay(testMode = false) {
@@ -428,7 +405,6 @@ class EmergencyGlide {
         el.innerHTML = `
             <div class="eg-header">
                 <div class="eg-title">${testMode ? '⚠\uFE0E TEST \u2014 ENGINE ANOMALY SIMULATION' : '⚡ ENGINE ANOMALY CONFIRMED'}</div>
->>>>>>> 562e81e (fix: replace emergency-glide.js with canonical Scenario 6 version, align trigger() API)
                 <div class="eg-subtitle">No GPS — cannot compute glide range</div>
             </div>
             <div class="eg-body">
@@ -444,10 +420,363 @@ class EmergencyGlide {
     }
 
     _dismissOverlay() {
+        this._stopApproachMonitor();
         if (this._overlay) {
             this._overlay.remove();
             this._overlay = null;
+            this._overlayBody = null;
         }
+    }
+
+    // ── Approach Guidance Panel ────────────────────────────────────────────────
+
+    /**
+     * Show live approach guidance for the selected airport.
+     * Replaces the airport list body with a 1 Hz updating panel.
+     */
+    _showApproachDetail(apt) {
+        this._stopApproachMonitor();
+        this._approachApt = apt;
+
+        const body = this._overlayBody;
+        if (!body) return;
+
+        const freqHtml = this._buildFreqHtml(apt.frequencies, apt.tower);
+
+        body.innerHTML = `
+            <div class="eg-approach-panel">
+                <div class="eg-approach-nav">
+                    <button class="eg-back-btn" id="egApBack">← BACK</button>
+                    <div class="eg-approach-apt-title">${apt.icao} — ${apt.name}</div>
+                    <button class="eg-fly-btn" id="egApFly">FLY TO</button>
+                </div>
+
+                <div class="eg-approach-live-row">
+                    <div class="eg-approach-stat">
+                        <div class="eg-approach-label">HEADING</div>
+                        <div class="eg-approach-value" id="eg-ap-hdg">—°</div>
+                    </div>
+                    <div class="eg-approach-stat">
+                        <div class="eg-approach-label">DISTANCE</div>
+                        <div class="eg-approach-value" id="eg-ap-dist">— nm</div>
+                    </div>
+                </div>
+
+                <div class="eg-approach-status eg-approach-status--unknown" id="eg-ap-status">
+                    WAITING FOR GPS
+                </div>
+
+                <div class="eg-approach-live-row">
+                    <div class="eg-approach-stat">
+                        <div class="eg-approach-label">TARGET ALT</div>
+                        <div class="eg-approach-value eg-approach-value--sm" id="eg-ap-tgt-alt">—</div>
+                    </div>
+                    <div class="eg-approach-stat">
+                        <div class="eg-approach-label">ALT AGL</div>
+                        <div class="eg-approach-value eg-approach-value--sm" id="eg-ap-agl">—</div>
+                    </div>
+                </div>
+
+                <div class="eg-approach-live-row">
+                    <div class="eg-approach-stat">
+                        <div class="eg-approach-label">REQ V/S</div>
+                        <div class="eg-approach-value eg-approach-value--sm" id="eg-ap-req-vs">—</div>
+                    </div>
+                    <div class="eg-approach-stat">
+                        <div class="eg-approach-label">ACT V/S</div>
+                        <div class="eg-approach-value eg-approach-value--sm" id="eg-ap-act-vs">—</div>
+                    </div>
+                </div>
+
+                <div class="eg-approach-divider"></div>
+
+                <div class="eg-approach-section" id="eg-ap-rwy-section">
+                    <div class="eg-approach-label">BEST RUNWAY</div>
+                    <div class="eg-approach-rwy-val" id="eg-ap-rwy">CALCULATING…</div>
+                    <div class="eg-approach-wind-src" id="eg-ap-wind-src"></div>
+                </div>
+
+                ${freqHtml}
+            </div>`;
+
+        body.querySelector('#egApBack').addEventListener('click', () => {
+            this._stopApproachMonitor();
+            this._buildAirportItems(this._approachTop3 || [], body);
+        });
+
+        body.querySelector('#egApFly').addEventListener('click', () => {
+            this._setDestination(apt);
+        });
+
+        // Start live updates
+        this._updateApproachPanel();
+        this._approachInterval = setInterval(() => this._updateApproachPanel(), 1000);
+
+        // Fetch wind immediately then every 30 s
+        this._refreshApproachWind();
+        this._approachWindInterval = setInterval(() => this._refreshApproachWind(), 30_000);
+    }
+
+    /** 1 Hz: update distance, heading, altitude status, vertical speed. */
+    _updateApproachPanel() {
+        const apt = this._approachApt;
+        if (!apt || !this._overlay) return;
+
+        const sit = window.app?.stratuxClient?.situation ?? window.stratuxClient?.situation;
+        if (!sit?.lat || !sit?.lon) return;
+
+        const distNm = NasrDB.haversineNm(sit.lat, sit.lon, apt.lat, apt.lon);
+        const hdg = this._bearingTo(sit.lat, sit.lon, apt.lat, apt.lon);
+        const altMsl = sit.alt_msl ?? 0;
+        const vs = Math.round(sit.vertical_speed ?? 0);
+        const gs = Math.max(sit.ground_speed ?? 0, 30); // floor to avoid div/0
+
+        const terrainElev = terrainElevAt(sit.lat, sit.lon);
+        const altAgl = Math.max(altMsl - terrainElev, 0);
+
+        // Approach profile — target threshold at 650 ft AGL (mid of 500–800 ft band)
+        const gr = this._glideRatio || 10.0;
+        const ftPerNm = 6076 / gr;
+        const aptElev = apt.elev_ft ?? 0;
+        const targetMsl = Math.round(aptElev + 650 + distNm * ftPerNm);
+        const minMsl = aptElev + 500 + distNm * ftPerNm;
+        const maxMsl = aptElev + 800 + distNm * ftPerNm;
+
+        // Profile status
+        let statusText, statusClass;
+        if (altMsl > maxMsl) {
+            statusText = '▲ HIGH — S-TURNS OR SLIP';
+            statusClass = 'eg-approach-status--high';
+        } else if (altMsl < minMsl) {
+            statusText = '▼ LOW — FLY BEST GLIDE';
+            statusClass = 'eg-approach-status--low';
+        } else {
+            statusText = '✓ ON PROFILE';
+            statusClass = 'eg-approach-status--ok';
+        }
+
+        // Required vs actual vertical speed
+        const altToLose = altMsl - (aptElev + 650);
+        const timeMin = distNm / gs * 60;
+        const reqVs = timeMin > 0 ? -Math.round(altToLose / timeMin) : 0;
+        const vsDelta = Math.abs(vs - reqVs);
+        const vsClass = vsDelta < 100 ? 'eg-approach-vs--ok'
+                      : vsDelta < 300 ? 'eg-approach-vs--caution'
+                      : 'eg-approach-vs--danger';
+
+        // Update DOM — targeted writes to avoid flicker
+        const set = (id, text) => {
+            const el = this._overlay?.querySelector(`#${id}`);
+            if (el) el.textContent = text;
+        };
+
+        set('eg-ap-hdg', String(hdg).padStart(3, '0') + '°');
+        set('eg-ap-dist', distNm.toFixed(1) + ' nm');
+        set('eg-ap-tgt-alt', targetMsl.toLocaleString() + ' ft MSL');
+        set('eg-ap-agl', Math.round(altAgl).toLocaleString() + ' ft');
+        set('eg-ap-req-vs', (reqVs >= 0 ? '+' : '') + reqVs.toLocaleString() + ' fpm');
+
+        const statusEl = this._overlay?.querySelector('#eg-ap-status');
+        if (statusEl) {
+            statusEl.textContent = statusText;
+            statusEl.className = `eg-approach-status ${statusClass}`;
+        }
+
+        const actVsEl = this._overlay?.querySelector('#eg-ap-act-vs');
+        if (actVsEl) {
+            actVsEl.textContent = (vs >= 0 ? '+' : '') + vs.toLocaleString() + ' fpm';
+            actVsEl.className = `eg-approach-value eg-approach-value--sm ${vsClass}`;
+        }
+    }
+
+    /**
+     * Find nearest METAR with wind data.
+     * 1. Try own airport METAR from FIS-B.
+     * 2. Fall back to nearest ranked airport that has wind data.
+     * Updates runway guidance display after fetching.
+     */
+    _refreshApproachWind() {
+        const apt = this._approachApt;
+        if (!apt) return;
+
+        const fisb = window.app?.fisbClient;
+        if (!fisb?.getMetar) {
+            this._approachWind = null;
+            this._renderRunwayGuidance();
+            return;
+        }
+
+        let decoded = null, sourceName = null, sourceDist = 0;
+
+        // Own airport METAR first
+        const own = fisb.getMetar(apt.icao);
+        if (own?.decoded?.wind_dir != null && own.decoded.wind_speed != null) {
+            decoded = own.decoded;
+            sourceName = apt.icao;
+            sourceDist = 0;
+        }
+
+        // Nearest ranked airport with valid wind
+        if (!decoded) {
+            let bestDist = Infinity;
+            for (const a of this._rankedAirports) {
+                if (!a.lat || !a.lon) continue;
+                const m = fisb.getMetar(a.icao);
+                if (m?.decoded?.wind_dir == null || m.decoded.wind_speed == null) continue;
+                const d = NasrDB.haversineNm(apt.lat, apt.lon, a.lat, a.lon);
+                if (d < bestDist) {
+                    bestDist = d;
+                    decoded = m.decoded;
+                    sourceName = a.icao;
+                    sourceDist = parseFloat(d.toFixed(1));
+                }
+            }
+        }
+
+        this._approachWind = decoded ? { decoded, sourceName, sourceDist } : null;
+        this._renderRunwayGuidance();
+    }
+
+    /** Update the runway + wind source display in the approach panel. */
+    _renderRunwayGuidance() {
+        const apt = this._approachApt;
+        if (!apt || !this._overlay) return;
+
+        const rwyEl = this._overlay.querySelector('#eg-ap-rwy');
+        const srcEl = this._overlay.querySelector('#eg-ap-wind-src');
+        if (!rwyEl) return;
+
+        const wind = this._approachWind;
+        if (!wind) {
+            rwyEl.textContent = apt.runways?.length
+                ? `${apt.runways.length} runway(s) — wind unknown`
+                : 'No runway data';
+            if (srcEl) srcEl.textContent = 'No METAR available';
+            return;
+        }
+
+        const best = this._bestRunwayForWind(
+            apt.runways || [],
+            wind.decoded.wind_dir,
+            wind.decoded.wind_speed,
+        );
+
+        if (!best) {
+            rwyEl.textContent = 'No runway data';
+            if (srcEl) srcEl.textContent = '';
+            return;
+        }
+
+        const hwStr = best.headwind >= 0
+            ? `HW ${best.headwind} kt`
+            : `TW ${Math.abs(best.headwind)} kt`;
+        const xwStr = `XW ${best.crosswind} kt`;
+        const gustStr = wind.decoded.wind_gust
+            ? ` (gust ${wind.decoded.wind_gust} kt)`
+            : '';
+        rwyEl.textContent = `RWY ${best.label} — ${hwStr}, ${xwStr}${gustStr}`;
+
+        if (srcEl) {
+            const src = wind.sourceDist > 0
+                ? `Wind ${wind.decoded.wind_dir}°@${wind.decoded.wind_speed}kt — METAR ${wind.sourceName} (${wind.sourceDist} nm)`
+                : `Wind ${wind.decoded.wind_dir}°@${wind.decoded.wind_speed}kt — METAR ${wind.sourceName}`;
+            srcEl.textContent = src;
+        }
+    }
+
+    /**
+     * Select best runway end for given wind.
+     * Returns { label, hdg, headwind, crosswind } or null.
+     * Headwind formula mirrors airport-popup.js.
+     */
+    _bestRunwayForWind(runways, windDir, windSpd) {
+        const ends = [];
+        for (const rwy of runways) {
+            for (const part of (rwy.id || '').split('/')) {
+                const match = part.trim().match(/^(\d{1,2})(L|R|C)?$/i);
+                if (!match) continue;
+                const hdg = parseInt(match[1]) * 10;
+                const suffix = (match[2] || '').toUpperCase();
+                const label = String(match[1]).padStart(2, '0') + suffix;
+                const diff = (windDir - hdg) * Math.PI / 180;
+                const headwind = Math.round(windSpd * Math.cos(diff));
+                const crosswind = Math.abs(Math.round(windSpd * Math.sin(diff)));
+                ends.push({ label, hdg, headwind, crosswind });
+            }
+        }
+        if (ends.length === 0) return null;
+        ends.sort((a, b) => b.headwind - a.headwind);
+        return ends[0];
+    }
+
+    /**
+     * Build frequency display HTML for the approach panel.
+     * Primary frequency (CTAF / TWR) shown in green.
+     */
+    _buildFreqHtml(frequencies, isTowered) {
+        if (!frequencies?.length) return '';
+
+        const sorted = [...frequencies].sort((a, b) => {
+            const pri = (t) => {
+                if (!isTowered && t === 'ctaf') return 0;
+                if (isTowered && (t === 'twr' || t === 'tower')) return 0;
+                if (t === 'atis') return 1;
+                if (t === 'ground' || t === 'gnd') return 2;
+                return 3;
+            };
+            return pri(a.type) - pri(b.type);
+        });
+
+        const rows = sorted.map(f => {
+            const isPrimary = (!isTowered && f.type === 'ctaf') ||
+                              (isTowered && (f.type === 'twr' || f.type === 'tower'));
+            const label = f.type?.toUpperCase() || '';
+            return `<div class="eg-approach-freq-row${isPrimary ? ' eg-approach-freq--primary' : ''}">
+                <span class="eg-approach-freq-type">${label}</span>
+                <span class="eg-approach-freq-val">${f.freq}</span>
+            </div>`;
+        }).join('');
+
+        return `<div class="eg-approach-section eg-approach-freqs">
+            <div class="eg-approach-label">FREQUENCIES</div>
+            ${rows}
+        </div>`;
+    }
+
+    /**
+     * Set selected airport as active destination by loading a minimal flight plan.
+     */
+    _setDestination(apt) {
+        const plan = {
+            name: `→ ${apt.icao}`,
+            waypoints: [{
+                icao:    apt.icao,
+                name:    apt.name,
+                lat:     apt.lat,
+                lon:     apt.lon,
+                elev_ft: apt.elev_ft ?? null,
+                type:    'APT',
+            }],
+            flight_plan: {
+                departure:   null,
+                destination: apt.icao,
+                route:       [apt.icao],
+                legs:        [],
+                altitude:    null,
+            },
+        };
+        window.app?.applyRouteEdit(plan);
+        window.app?.showToast(`Route set to ${apt.icao}`);
+    }
+
+    /** Stop the approach monitor interval and clear related state. */
+    _stopApproachMonitor() {
+        clearInterval(this._approachInterval);
+        clearInterval(this._approachWindInterval);
+        this._approachInterval = null;
+        this._approachWindInterval = null;
+        this._approachApt = null;
+        this._approachWind = null;
     }
 }
 
