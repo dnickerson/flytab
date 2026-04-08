@@ -1027,7 +1027,6 @@ class FlyTabApp {
                     wp.alt = leg.altitude || fp.altitude;
                     wp.gs = leg.gs;
                     wp.tas = leg.tas;
-                    wp.gph = leg.gph;
                     // Preserve full segments array for route table phase computation
                     wp._segments = leg.segments || [];
                     // Wind

@@ -182,7 +182,7 @@ class RouteTable {
                             ? { dir: leg.windDir, spd: leg.windSpd } : null,
                         _segments: leg.segments || [],
                         tas: leg.tas || null, gs: leg.gs || null,
-                        gph: leg.gph || null,
+                        gph: ((leg.segments || []).find(s => s.phase === 'CRZ') || leg.segments?.[leg.segments.length - 1])?.gph || null,
                     });
                 }
                 plan = { ...plan, waypoints: wps };
@@ -262,7 +262,7 @@ class RouteTable {
                 mp: wp.mp ?? cruiseSeg.mp ?? null,
                 tas: wp.tas ?? leg.tas ?? null,
                 gs: wp.gs ?? leg.gs ?? null,
-                gph: wp.gph ?? cruiseSeg.gph ?? leg.gph ?? null,
+                gph: wp.gph ?? cruiseSeg.gph ?? null,
             };
         });
 

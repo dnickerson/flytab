@@ -379,6 +379,8 @@ class PlanSync {
         if (routeStep.resolvedWaypoints?.length >= 2) {
             waypoints = routeStep.resolvedWaypoints.map((rw, i) => {
                 const leg = i > 0 ? (fp.legs[i - 1] || {}) : {};
+                const cruiseSeg = (leg.segments || []).find(s => s.phase === 'CRZ')
+                               || leg.segments?.[leg.segments.length - 1];
                 return {
                     icao:   rw.id,
                     name:   rw.name || rw.id,
@@ -390,7 +392,7 @@ class PlanSync {
                     alt:    leg.altitude || fp.altitude || null,
                     gs:     leg.gs  || null,
                     tas:    leg.tas || null,
-                    gph:    leg.gph || null,
+                    gph:    cruiseSeg?.gph || null,
                     wind:   (leg.windDir != null && leg.windSpd != null)
                             ? { dir: leg.windDir, spd: leg.windSpd } : null,
                     _segments: leg.segments || [],

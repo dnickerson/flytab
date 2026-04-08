@@ -326,12 +326,13 @@ class FuelOverlay {
 
     _updateEdmComparison(ticTotal) {
         let edmFuel = 0;
+        let isStale = false;
         try {
             const panel = window.enginePanel;
-            if (panel && panel.lastData && panel.lastPollTime) {
-                const age = Date.now() - panel.lastPollTime;
-                if (age < FuelState.EDM_FRESHNESS_MS) {
-                    edmFuel = FuelEngine.extractEdmFuel(panel.lastData);
+            if (panel && panel.lastData) {
+                edmFuel = FuelEngine.extractEdmFuel(panel.lastData);
+                if (panel.lastPollTime) {
+                    isStale = (Date.now() - panel.lastPollTime) >= FuelState.EDM_FRESHNESS_MS;
                 }
             }
         } catch (_) { /* no engine data */ }
@@ -342,7 +343,7 @@ class FuelOverlay {
                 this._leftTic, this._rightTic, this._coefficients, edmFuel
             );
             this._dom.edmTic.textContent = m.total_gal.toFixed(1) + ' gal';
-            this._dom.edmEdm.textContent = edmFuel.toFixed(1) + ' gal';
+            this._dom.edmEdm.textContent = edmFuel.toFixed(1) + (isStale ? ' (LAST)' : '') + ' gal';
             this._dom.edmVar.textContent = (m.variance_gal > 0 ? '+' : '') + m.variance_gal.toFixed(1) + ' gal';
 
             const grade = m.accuracy || 'check';
