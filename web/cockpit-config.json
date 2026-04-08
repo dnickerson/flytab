@@ -118,7 +118,7 @@
   },
   "flywhere": {
     "apiUrl": "https://www.flywhere.app",
-    "apiKey": ""
+    "apiKey": "flytab2025"
   },
   "geoStyles": {
     "stateBoundaries": { "color": "#334466", "weight": 1, "opacity": 0.5 },
