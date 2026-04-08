@@ -15,6 +15,7 @@ class FuelOverlay {
         this._maxTic = 17;
         this._ticStep = 0.5;
         this._coefficients = FuelEngine.DEFAULT_COEFFICIENTS;
+        this._cachedCsvEdmFuel = 0;
         this._buildDOM();
     }
 
@@ -316,6 +317,14 @@ class FuelOverlay {
         this._renderHistory();
         this._el.style.display = 'flex';
         this._visible = true;
+
+        // Pre-fetch last flight CSV EDM value for comparison display
+        this._resolveEdmFuel().then(val => {
+            if (val > 0 && !this._cachedCsvEdmFuel) {
+                this._cachedCsvEdmFuel = val;
+                this._updateDisplay();
+            }
+        });
     }
 
     hide() {
@@ -352,10 +361,10 @@ class FuelOverlay {
                     isStale = (Date.now() - panel.lastPollTime) >= FuelState.EDM_FRESHNESS_MS;
                 }
             }
-            // Fallback: last value persisted by the flight recorder
-            if (!edmFuel) {
-                const stored = JSON.parse(localStorage.getItem('flypi_last_edm_fuel') || 'null');
-                if (stored?.gal > 0) { edmFuel = stored.gal; isStale = true; }
+            // Fallback: cached value from last flight CSV (loaded on show())
+            if (!edmFuel && this._cachedCsvEdmFuel > 0) {
+                edmFuel = this._cachedCsvEdmFuel;
+                isStale = true;
             }
         } catch (_) { /* no engine data */ }
 
@@ -392,35 +401,62 @@ class FuelOverlay {
      * Apply measurement
      * ----------------------------------------------------------------*/
     _applyMeasurement() {
-        let edmFuel = null;
+        // Resolve EDM fuel async, then complete measurement
+        this._resolveEdmFuel().then(edmFuel => {
+            const m = FuelEngine.createMeasurement(
+                this._leftTic, this._rightTic, this._coefficients, edmFuel
+            );
+            FuelState.saveMeasurement(m);
+            window.dispatchEvent(new CustomEvent('fuelstate:changed'));
+            this._updateSourceDisplay();
+            this._syncMeasurement(m);
+            this._renderHistory();
+            this.hide();
+        });
+    }
+
+    /**
+     * Resolve the best available EDM fuel remaining value.
+     * Priority: live engine panel → last row of most recent flight CSV.
+     * Returns null if no value is available.
+     */
+    async _resolveEdmFuel() {
+        // 1. Live engine panel (fresh within 10s)
         try {
-            // First: live engine panel (fresh within 10s)
             const panel = window.enginePanel;
             if (panel && panel.lastData && panel.lastPollTime) {
-                const age = Date.now() - panel.lastPollTime;
-                if (age < FuelState.EDM_FRESHNESS_MS) {
+                if ((Date.now() - panel.lastPollTime) < FuelState.EDM_FRESHNESS_MS) {
                     const val = FuelEngine.extractEdmFuel(panel.lastData);
-                    if (val > 0) edmFuel = val;
+                    if (val > 0) return val;
                 }
-            }
-            // Fallback: last value persisted by the flight recorder
-            if (!edmFuel) {
-                const stored = JSON.parse(localStorage.getItem('flypi_last_edm_fuel') || 'null');
-                if (stored?.gal > 0) edmFuel = stored.gal;
             }
         } catch (_) { /* */ }
 
-        const m = FuelEngine.createMeasurement(
-            this._leftTic, this._rightTic, this._coefficients, edmFuel
-        );
+        // 2. Last row of the most recent flight CSV from internal storage
+        try {
+            const listResp = await fetch('http://localhost:9090/flights/list',
+                { signal: AbortSignal.timeout(3000) });
+            if (!listResp.ok) return null;
+            const files = await listResp.json();
+            if (!files.length) return null;
 
-        FuelState.saveMeasurement(m);
-        window.dispatchEvent(new CustomEvent('fuelstate:changed'));
-        this._updateSourceDisplay();
-        this._syncMeasurement(m);
-        this._renderHistory();
+            // Files are sorted newest-first by the server
+            const csvResp = await fetch(`http://localhost:9090/flights/${files[0]}`,
+                { signal: AbortSignal.timeout(5000) });
+            if (!csvResp.ok) return null;
+            const text = await csvResp.text();
 
-        this.hide();
+            // Find last non-empty data row (skip header)
+            const lines = text.trim().split('\n');
+            for (let i = lines.length - 1; i >= 1; i--) {
+                const cols = lines[i].split(',');
+                // Gallons Remaining is column index 9
+                const gal = parseFloat(cols[9]);
+                if (gal > 0) return gal;
+            }
+        } catch (_) { /* server unavailable or no flights */ }
+
+        return null;
     }
 
     _recordFuelStop() {

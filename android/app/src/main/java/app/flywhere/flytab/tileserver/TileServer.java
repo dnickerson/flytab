@@ -164,6 +164,8 @@ public class TileServer extends NanoHTTPD {
             response = handleUnzip(session);
         } else if ("GET".equals(method) && uri.matches("^/plates/[^/]+/list$")) {
             response = handlePlatesList(uri);
+        } else if ("GET".equals(method) && "/flights/list".equals(uri)) {
+            response = handleFlightsList();
         } else if ("PUT".equals(method)) {
             response = handlePut(session, uri);
         } else if ("DELETE".equals(method)) {
@@ -496,6 +498,36 @@ public class TileServer extends NanoHTTPD {
         for (int i = 0; i < pdfs.size(); i++) {
             if (i > 0) sb.append(",");
             String escaped = pdfs.get(i).replace("\\", "\\\\").replace("\"", "\\\"");
+            sb.append("\"").append(escaped).append("\"");
+        }
+        sb.append("]");
+        return newFixedLengthResponse(Response.Status.OK, "application/json", sb.toString());
+    }
+
+    /**
+     * GET /flights/list
+     * Returns JSON array of flight CSV filenames sorted newest-first.
+     */
+    private Response handleFlightsList() {
+        File flightsDir = new File(baseDir, "flights");
+        if (!flightsDir.isDirectory()) {
+            return newFixedLengthResponse(Response.Status.OK, "application/json", "[]");
+        }
+        File[] files = flightsDir.listFiles();
+        if (files == null || files.length == 0) {
+            return newFixedLengthResponse(Response.Status.OK, "application/json", "[]");
+        }
+        java.util.List<String> csvs = new java.util.ArrayList<>();
+        for (File f : files) {
+            if (f.isFile() && f.getName().toLowerCase().endsWith(".csv")) {
+                csvs.add(f.getName());
+            }
+        }
+        java.util.Collections.sort(csvs, java.util.Collections.reverseOrder());
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < csvs.size(); i++) {
+            if (i > 0) sb.append(",");
+            String escaped = csvs.get(i).replace("\\", "\\\\").replace("\"", "\\\"");
             sb.append("\"").append(escaped).append("\"");
         }
         sb.append("]");

@@ -229,17 +229,6 @@ class FlightRecorder {
 
         this._csvBuffer.push(row);
         this._rowCount++;
-
-        // Persist last known EDM fuel so the fuel measurement page can reference
-        // it after an app restart (e.g. pilot measures tic marks the next morning).
-        if (d.Fuel_Remaining > 0) {
-            try {
-                localStorage.setItem('flypi_last_edm_fuel', JSON.stringify({
-                    gal: d.Fuel_Remaining,
-                    ts: Date.now(),
-                }));
-            } catch (_) { /* storage full */ }
-        }
     }
 
     /** Flush buffered rows to NanoHTTPD filesystem */
