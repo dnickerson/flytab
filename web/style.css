@@ -4912,6 +4912,42 @@ body {
 .fo-add-status-ok { background: var(--status-ok); color: #000; }
 .fo-add-status-error { background: var(--status-warning); color: #000; }
 
+.fo-hist-wrapper {
+    overflow-x: auto;
+    margin: 0 -4px 8px;
+}
+.fo-hist-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+}
+.fo-hist-table th {
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 700;
+    text-align: left;
+    padding: 4px 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.12);
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+.fo-hist-table td {
+    padding: 6px 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    color: var(--text-secondary);
+}
+.fo-hist-table tr:first-child td {
+    color: var(--text-primary);
+    font-weight: 700;
+}
+.fo-hist-empty {
+    color: var(--text-muted);
+    font-style: italic;
+    text-align: center;
+    padding: 12px;
+}
+
 /* Engine page TIC vs EDM row */
 .ep-tic-edm-row {
     display: flex;

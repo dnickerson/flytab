@@ -141,6 +141,21 @@ class FuelOverlay {
                 <button class="fo-apply-btn fo-add-record-btn" id="fo-add-record">RECORD FUEL STOP</button>
                 <div class="fo-add-status" id="fo-add-status"></div>
             </div>
+
+            <!-- F) MEASUREMENT HISTORY -->
+            <div class="fo-section-title">MEASUREMENT HISTORY</div>
+            <div class="fo-hist-wrapper">
+                <table class="fo-hist-table">
+                    <thead>
+                        <tr>
+                            <th>DATE / TIME</th>
+                            <th>TIC (gal)</th>
+                            <th>EDM (gal)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="fo-hist-body"></tbody>
+                </table>
+            </div>
         </div>`;
 
         this._container.appendChild(this._el);
@@ -170,6 +185,7 @@ class FuelOverlay {
             addPrice: this._el.querySelector('#fo-add-price'),
             addRecord: this._el.querySelector('#fo-add-record'),
             addStatus: this._el.querySelector('#fo-add-status'),
+            histBody:  this._el.querySelector('#fo-hist-body'),
         };
 
         // Wire close
@@ -297,6 +313,7 @@ class FuelOverlay {
 
         this._updateDisplay();
         this._updateSourceDisplay();
+        this._renderHistory();
         this._el.style.display = 'flex';
         this._visible = true;
     }
@@ -389,9 +406,8 @@ class FuelOverlay {
         FuelState.saveMeasurement(m);
         window.dispatchEvent(new CustomEvent('fuelstate:changed'));
         this._updateSourceDisplay();
-
-        // Fire-and-forget sync to flywhere.app
         this._syncMeasurement(m);
+        this._renderHistory();
 
         this.hide();
     }
@@ -450,6 +466,41 @@ class FuelOverlay {
         el.addEventListener('click', (e) => {
             if (!touchFired) handler(e);
         });
+    }
+
+    _renderHistory() {
+        const body = this._dom.histBody;
+        if (!body) return;
+
+        let history = [];
+        try {
+            history = JSON.parse(localStorage.getItem('flypi_fuel_history') || '[]');
+        } catch (_) { /* */ }
+
+        if (history.length === 0) {
+            body.innerHTML = '<tr><td colspan="3" class="fo-hist-empty">No measurements recorded yet</td></tr>';
+            return;
+        }
+
+        // Most recent first
+        const rows = [...history].reverse().slice(0, 25).map(m => {
+            const dt = m.measured_at ? new Date(m.measured_at) : (m.ts ? new Date(m.ts) : null);
+            const dateStr = dt ? this._fmtDate(dt) : '--';
+            const tic = m.total_gal != null ? m.total_gal.toFixed(1) : '--';
+            const edm = m.edm_gal  != null ? m.edm_gal.toFixed(1)   : '--';
+            return `<tr><td>${dateStr}</td><td>${tic}</td><td>${edm}</td></tr>`;
+        });
+        body.innerHTML = rows.join('');
+    }
+
+    _fmtDate(dt) {
+        const mo  = dt.getMonth() + 1;
+        const day = dt.getDate();
+        const hr  = dt.getHours();
+        const mn  = String(dt.getMinutes()).padStart(2, '0');
+        const ampm = hr >= 12 ? 'p' : 'a';
+        const hr12 = hr % 12 || 12;
+        return `${mo}/${day} ${hr12}:${mn}${ampm}`;
     }
 
     async _syncMeasurement(m) {
