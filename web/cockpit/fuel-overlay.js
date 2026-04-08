@@ -352,6 +352,11 @@ class FuelOverlay {
                     isStale = (Date.now() - panel.lastPollTime) >= FuelState.EDM_FRESHNESS_MS;
                 }
             }
+            // Fallback: last value persisted by the flight recorder
+            if (!edmFuel) {
+                const stored = JSON.parse(localStorage.getItem('flypi_last_edm_fuel') || 'null');
+                if (stored?.gal > 0) { edmFuel = stored.gal; isStale = true; }
+            }
         } catch (_) { /* no engine data */ }
 
         if (edmFuel > 0) {
@@ -389,6 +394,7 @@ class FuelOverlay {
     _applyMeasurement() {
         let edmFuel = null;
         try {
+            // First: live engine panel (fresh within 10s)
             const panel = window.enginePanel;
             if (panel && panel.lastData && panel.lastPollTime) {
                 const age = Date.now() - panel.lastPollTime;
@@ -396,6 +402,11 @@ class FuelOverlay {
                     const val = FuelEngine.extractEdmFuel(panel.lastData);
                     if (val > 0) edmFuel = val;
                 }
+            }
+            // Fallback: last value persisted by the flight recorder
+            if (!edmFuel) {
+                const stored = JSON.parse(localStorage.getItem('flypi_last_edm_fuel') || 'null');
+                if (stored?.gal > 0) edmFuel = stored.gal;
             }
         } catch (_) { /* */ }
 
