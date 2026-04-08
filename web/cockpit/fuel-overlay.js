@@ -438,10 +438,12 @@ class FuelOverlay {
                 { signal: AbortSignal.timeout(3000) });
             if (!listResp.ok) return null;
             const files = await listResp.json();
-            if (!files.length) return null;
+            // Only consider date-stamped flight recordings (YYYYMMDD_...), not engineml_ etc.
+            const flightFiles = files.filter(f => /^\d{8}_/.test(f));
+            if (!flightFiles.length) return null;
 
             // Files are sorted newest-first by the server
-            const csvResp = await fetch(`http://localhost:9090/flights/${files[0]}`,
+            const csvResp = await fetch(`http://localhost:9090/flights/${flightFiles[0]}`,
                 { signal: AbortSignal.timeout(5000) });
             if (!csvResp.ok) return null;
             const text = await csvResp.text();
