@@ -166,8 +166,8 @@ class GpsSource {
                 const msg = `Internal GPS error: code=${err.code} ${err.message}`;
                 console.warn('[GpsSource]', msg);
                 if (typeof DiagLog !== 'undefined') DiagLog.log('gps', msg);
-                // POSITION_UNAVAILABLE (2) = no GPS hardware — fall back to Stratux
-                if (err.code === 2) {
+                // PERMISSION_DENIED (1) or POSITION_UNAVAILABLE (2) = cannot use device GPS
+                if (err.code === 1 || err.code === 2) {
                     this._stopInternal();
                     this._fallbackToStratux();
                 }

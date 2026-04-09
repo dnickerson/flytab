@@ -50,6 +50,16 @@ class StratuxClient extends EventTarget {
             this._pollStatus();
         }
         this._startPurge();
+
+        // Start the stale timer immediately so that if Stratux never connects
+        // (e.g. not on the Stratux Wi-Fi network), stratux:stale fires after 5s
+        // and GpsSource auto-fallback can activate device GPS.
+        this._stale = false;
+        clearTimeout(this._staleTimer);
+        this._staleTimer = setTimeout(() => {
+            this._stale = true;
+            this.dispatchEvent(new CustomEvent('stratux:stale', { detail: { ageMs: 5000 } }));
+        }, 5000);
     }
 
     disconnect() {
@@ -355,6 +365,19 @@ class StratuxClient extends EventTarget {
         // Keep the traffic purge running regardless of connected state — stopping it
         // on a WS drop causes phantom aircraft to persist until reconnect.
         const event = state ? 'stratux:connect' : 'stratux:disconnect';
+        if (state) {
+            // Traffic WS just connected — reset the stale timer so situation data
+            // has a full 5s window to start flowing. Without this, the startup stale
+            // timer could fire between traffic WS connect and the first situation
+            // message (e.g. while the Pi is still booting), locking the app in
+            // fallback mode even though Stratux is reachable.
+            this._stale = false;
+            clearTimeout(this._staleTimer);
+            this._staleTimer = setTimeout(() => {
+                this._stale = true;
+                this.dispatchEvent(new CustomEvent('stratux:stale', { detail: { ageMs: 5000 } }));
+            }, 5000);
+        }
         this.dispatchEvent(new CustomEvent(event));
     }
 
