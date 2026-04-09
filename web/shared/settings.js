@@ -21,7 +21,7 @@ class Settings {
         show_airways: false,
         fuel_measurement: 'gallons',
         fuel_manual_override: false,
-        gps_source: 'stratux',  // 'stratux' (Pi/Stratux GPS — primary) or 'internal' (device GPS if available)
+        gps_source: 'auto',  // 'auto' (Stratux primary, device GPS fallback) | 'stratux' | 'internal'
         flytab_api_key: 'flytab2025',
     };
 
