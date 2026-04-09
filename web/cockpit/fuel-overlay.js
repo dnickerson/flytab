@@ -16,6 +16,7 @@ class FuelOverlay {
         this._ticStep = 0.5;
         this._coefficients = FuelEngine.DEFAULT_COEFFICIENTS;
         this._cachedCsvEdmFuel = 0;
+        this._shownAt = 0;
         this._buildDOM();
     }
 
@@ -152,10 +153,34 @@ class FuelOverlay {
                             <th>DATE / TIME</th>
                             <th>TIC (gal)</th>
                             <th>EDM (gal)</th>
+                            <th></th>
                         </tr>
                     </thead>
                     <tbody id="fo-hist-body"></tbody>
                 </table>
+            </div>
+
+            <!-- G) K-FACTOR CALCULATOR -->
+            <div class="fo-section-title">K-FACTOR CALCULATOR</div>
+            <div class="fo-kfactor-panel" id="fo-kfactor-panel">
+                <div class="fo-kfactor-row">
+                    <div class="fo-kfactor-item">
+                        <div class="fo-kfactor-label">FUEL FILLED (actual)</div>
+                        <div class="fo-kfactor-val" id="fo-kf-filled">-- gal</div>
+                    </div>
+                    <div class="fo-kfactor-item">
+                        <div class="fo-kfactor-label">FUEL USED (EDM)</div>
+                        <div class="fo-kfactor-val" id="fo-kf-used">-- gal</div>
+                    </div>
+                    <div class="fo-kfactor-item">
+                        <div class="fo-kfactor-label">K-FACTOR RATIO</div>
+                        <div class="fo-kfactor-val fo-kfactor-ratio" id="fo-kf-ratio">--</div>
+                    </div>
+                </div>
+                <div class="fo-kfactor-guidance" id="fo-kf-guidance"></div>
+                <div class="fo-kfactor-note">
+                    Ratio = Filled ÷ Used (EDM). Multiply by current K-factor to correct fuel flow accuracy.
+                </div>
             </div>
         </div>`;
 
@@ -187,6 +212,10 @@ class FuelOverlay {
             addRecord: this._el.querySelector('#fo-add-record'),
             addStatus: this._el.querySelector('#fo-add-status'),
             histBody:  this._el.querySelector('#fo-hist-body'),
+            kfFilled:  this._el.querySelector('#fo-kf-filled'),
+            kfUsed:    this._el.querySelector('#fo-kf-used'),
+            kfRatio:   this._el.querySelector('#fo-kf-ratio'),
+            kfGuidance: this._el.querySelector('#fo-kf-guidance'),
         };
 
         // Wire close
@@ -315,12 +344,15 @@ class FuelOverlay {
         this._updateDisplay();
         this._updateSourceDisplay();
         this._renderHistory();
+        this._renderKFactor();
+        this._cachedCsvEdmFuel = 0;
         this._el.style.display = 'flex';
         this._visible = true;
+        this._shownAt = Date.now();
 
         // Pre-fetch last flight CSV EDM value for comparison display
         this._resolveEdmFuel().then(val => {
-            if (val > 0 && !this._cachedCsvEdmFuel) {
+            if (val > 0) {
                 this._cachedCsvEdmFuel = val;
                 this._updateDisplay();
             }
@@ -401,6 +433,9 @@ class FuelOverlay {
      * Apply measurement
      * ----------------------------------------------------------------*/
     _applyMeasurement() {
+        // Guard against tap-through: ignore if overlay just opened (< 600ms ago)
+        if (Date.now() - this._shownAt < 600) return;
+
         // Resolve EDM fuel async, then complete measurement
         this._resolveEdmFuel().then(edmFuel => {
             const m = FuelEngine.createMeasurement(
@@ -517,29 +552,104 @@ class FuelOverlay {
         });
     }
 
+    _loadHistory() {
+        try { return JSON.parse(localStorage.getItem('flypi_fuel_history') || '[]'); }
+        catch (_) { return []; }
+    }
+
+    _saveHistory(history) {
+        localStorage.setItem('flypi_fuel_history', JSON.stringify(history));
+    }
+
     _renderHistory() {
         const body = this._dom.histBody;
         if (!body) return;
 
-        let history = [];
-        try {
-            history = JSON.parse(localStorage.getItem('flypi_fuel_history') || '[]');
-        } catch (_) { /* */ }
+        const history = this._loadHistory();
 
         if (history.length === 0) {
-            body.innerHTML = '<tr><td colspan="3" class="fo-hist-empty">No measurements recorded yet</td></tr>';
+            body.innerHTML = '<tr><td colspan="4" class="fo-hist-empty">No measurements recorded yet</td></tr>';
             return;
         }
 
-        // Most recent first
-        const rows = [...history].reverse().slice(0, 25).map(m => {
+        body.innerHTML = '';
+
+        // Show newest first; map display index → original array index
+        const slice = [...history].map((m, origIdx) => ({ m, origIdx }))
+            .reverse().slice(0, 25);
+
+        slice.forEach(({ m, origIdx }) => {
             const dt = m.measured_at ? new Date(m.measured_at) : (m.ts ? new Date(m.ts) : null);
             const dateStr = dt ? this._fmtDate(dt) : '--';
             const tic = m.total_gal != null ? m.total_gal.toFixed(1) : '--';
             const edm = m.edm_gal  != null ? m.edm_gal.toFixed(1)   : '--';
-            return `<tr><td>${dateStr}</td><td>${tic}</td><td>${edm}</td></tr>`;
+
+            const tr = document.createElement('tr');
+            tr.dataset.origIdx = origIdx;
+            tr.innerHTML = `
+                <td>${dateStr}</td>
+                <td>${tic}</td>
+                <td>${edm}</td>
+                <td class="fo-hist-actions">
+                    <button class="fo-hist-btn fo-hist-edit" title="Edit">✎</button>
+                    <button class="fo-hist-btn fo-hist-del" title="Delete">✕</button>
+                </td>`;
+
+            this._wireTap(tr.querySelector('.fo-hist-del'), () => {
+                this._deleteHistoryEntry(origIdx);
+            });
+            this._wireTap(tr.querySelector('.fo-hist-edit'), () => {
+                this._editHistoryRow(origIdx, tr);
+            });
+
+            body.appendChild(tr);
         });
-        body.innerHTML = rows.join('');
+    }
+
+    _deleteHistoryEntry(origIdx) {
+        const history = this._loadHistory();
+        history.splice(origIdx, 1);
+        this._saveHistory(history);
+        this._renderHistory();
+        this._renderKFactor();
+    }
+
+    _editHistoryRow(origIdx, tr) {
+        const history = this._loadHistory();
+        const m = history[origIdx];
+        if (!m) return;
+
+        const ticVal = m.total_gal != null ? m.total_gal.toFixed(1) : '';
+        const edmVal = m.edm_gal  != null ? m.edm_gal.toFixed(1)   : '';
+
+        // Replace row with edit inputs
+        tr.innerHTML = `
+            <td colspan="2" class="fo-hist-edit-cell">
+                <label class="fo-hist-edit-label">TIC</label>
+                <input type="number" class="fo-hist-edit-input" id="fo-hist-tic-${origIdx}"
+                       value="${ticVal}" min="0" max="100" step="0.1">
+                <label class="fo-hist-edit-label">EDM</label>
+                <input type="number" class="fo-hist-edit-input" id="fo-hist-edm-${origIdx}"
+                       value="${edmVal}" min="0" max="100" step="0.1">
+            </td>
+            <td colspan="2" class="fo-hist-actions">
+                <button class="fo-hist-btn fo-hist-save">✔</button>
+                <button class="fo-hist-btn fo-hist-cancel">✕</button>
+            </td>`;
+
+        this._wireTap(tr.querySelector('.fo-hist-save'), () => {
+            const newTic = parseFloat(tr.querySelector(`#fo-hist-tic-${origIdx}`).value);
+            const newEdm = parseFloat(tr.querySelector(`#fo-hist-edm-${origIdx}`).value);
+            if (!isNaN(newTic)) m.total_gal = newTic;
+            if (!isNaN(newEdm)) m.edm_gal = newEdm;
+            history[origIdx] = m;
+            this._saveHistory(history);
+            this._renderHistory();
+            this._renderKFactor();
+        });
+        this._wireTap(tr.querySelector('.fo-hist-cancel'), () => {
+            this._renderHistory();
+        });
     }
 
     _fmtDate(dt) {
@@ -550,6 +660,63 @@ class FuelOverlay {
         const ampm = hr >= 12 ? 'p' : 'a';
         const hr12 = hr % 12 || 12;
         return `${mo}/${day} ${hr12}:${mn}${ampm}`;
+    }
+
+    _renderKFactor() {
+        if (!this._dom.kfFilled) return;
+
+        // Total fuel filled from recorded fuel stops
+        let totalFilled = 0;
+        try {
+            const stops = JSON.parse(localStorage.getItem('flytab_fuel_stops') || '[]');
+            totalFilled = stops.reduce((sum, s) => sum + (parseFloat(s.gallons) || 0), 0);
+        } catch (_) { /* */ }
+
+        // Total EDM-computed fuel used: sum of drops between consecutive measurements with edm_gal
+        let totalUsed = 0;
+        try {
+            const history = JSON.parse(localStorage.getItem('flypi_fuel_history') || '[]');
+            const edmEntries = history.filter(m => m.edm_gal > 0).map(m => ({
+                ts: m.measured_at ? new Date(m.measured_at).getTime() : (m.ts || 0),
+                edm: m.edm_gal,
+            })).sort((a, b) => a.ts - b.ts);
+
+            for (let i = 1; i < edmEntries.length; i++) {
+                const drop = edmEntries[i - 1].edm - edmEntries[i].edm;
+                // Only count decreases (fuel was consumed, not added)
+                if (drop > 0) totalUsed += drop;
+            }
+        } catch (_) { /* */ }
+
+        if (totalFilled > 0) {
+            this._dom.kfFilled.textContent = totalFilled.toFixed(1) + ' gal';
+        } else {
+            this._dom.kfFilled.textContent = '-- gal';
+        }
+
+        if (totalUsed > 0) {
+            this._dom.kfUsed.textContent = totalUsed.toFixed(1) + ' gal';
+        } else {
+            this._dom.kfUsed.textContent = '-- gal';
+        }
+
+        if (totalFilled > 0 && totalUsed > 0) {
+            const ratio = totalFilled / totalUsed;
+            this._dom.kfRatio.textContent = ratio.toFixed(3);
+            // Color-code: green near 1.0, yellow if off by 5%, red if off by 10%
+            const dev = Math.abs(ratio - 1.0);
+            this._dom.kfRatio.className = 'fo-kfactor-val fo-kfactor-ratio ' +
+                (dev < 0.05 ? 'fo-kf-good' : dev < 0.10 ? 'fo-kf-warn' : 'fo-kf-bad');
+            this._dom.kfGuidance.textContent =
+                `New K-Factor = Current K-Factor × ${ratio.toFixed(3)}` +
+                (ratio > 1.0 ? '  (increase K-factor — EDM reads low)' : ratio < 1.0 ? '  (decrease K-factor — EDM reads high)' : '  (K-factor accurate)');
+        } else {
+            this._dom.kfRatio.textContent = '--';
+            this._dom.kfRatio.className = 'fo-kfactor-val fo-kfactor-ratio';
+            this._dom.kfGuidance.textContent = totalFilled > 0
+                ? 'Record more tic measurements with EDM data to compute ratio.'
+                : 'Record fuel stops to compute ratio.';
+        }
     }
 
     async _syncMeasurement(m) {

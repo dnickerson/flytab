@@ -280,8 +280,12 @@ class TabBar {
         overlay.id = 'mlMonitor';
         overlay.className = 'ml-monitor';
 
-        const closeBtn = '<button class="ep-close" id="mlMonClose">✕</button>';
-        overlay.innerHTML = `${closeBtn}<h2 class="ml-mon-title">Engine ML Monitor</h2><div class="ml-mon-body" id="mlMonBody"></div>`;
+        overlay.innerHTML = `
+            <div class="ml-mon-header">
+                <span class="ml-mon-title">ENGINE ML MONITOR</span>
+                <button class="btn-close" id="mlMonClose">✕</button>
+            </div>
+            <div class="ml-mon-body" id="mlMonBody"></div>`;
 
         document.body.appendChild(overlay);
         this._fastTap(overlay.querySelector('#mlMonClose'), () => overlay.remove());

@@ -108,8 +108,6 @@ The UI/UX is a little rough as I'm not a UI designer but it works for me.
 - Normal, abnormal, and emergency checklists (customizable via `checklist.json`)
 - Preflight weather brief generator
 
-
-
 ---
 
 ## Architecture

@@ -101,8 +101,8 @@ class WxBriefing {
         try {
             const ids = stations.join(',');
             const base = Settings.workerBase || 'https://www.flywhere.app/api';
-            const resp = await fetch(`${base}/mos?ids=${ids}`, { signal: AbortSignal.timeout(5000) });
-            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const resp = await fetch(`${base}/mos?ids=${ids}`, { signal: AbortSignal.timeout(45000) });
+            if (!resp.ok) throw new Error(`Server error ${resp.status}`);
             const data = await resp.json();
             this._mosData = data;
 
@@ -117,7 +117,12 @@ class WxBriefing {
             }
         } catch (err) {
             console.error('MOS fetch failed:', err);
-            this._showMessage(`Failed to fetch MOS: ${err.message}`);
+            const msg = err.name === 'AbortError'
+                ? 'Request timed out. NWS may be slow — try again.'
+                : err.name === 'TypeError'
+                ? 'Network error. Check internet connection and try again.'
+                : `Fetch failed: ${err.message}`;
+            this._showMessage(msg);
         } finally {
             this._loading = false;
             this._render();
