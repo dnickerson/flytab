@@ -278,6 +278,7 @@ class RouteEditor {
             this._renderDirectToResults(airports.slice(0, 5));
         } catch (err) {
             console.warn('Direct-To nearby error:', err);
+            this._directToResults.innerHTML = '<div class="route-search-empty">Airport data unavailable offline</div>';
         }
     }
 
@@ -921,6 +922,8 @@ class RouteEditor {
             this._renderSearchResults(airports.slice(0, 10), [], [], '');
         } catch (err) {
             console.warn('[RouteEditor] Nearby error:', err);
+            this._resultsDiv.hidden = false;
+            this._resultsDiv.innerHTML = '<div class="route-search-empty">Airport data unavailable offline</div>';
         }
     }
 

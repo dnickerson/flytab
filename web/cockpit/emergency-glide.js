@@ -59,7 +59,7 @@ class EmergencyGlide {
         const sit = window.app?.stratuxClient?.situation ?? window.stratuxClient?.situation;
         const lat = sit?.lat;
         const lon = sit?.lon;
-        const altMsl = sit?.alt_msl ?? 0;
+        const altMsl = sit?.alt_msl ?? sit?.alt_baro ?? 0;
 
         if (!lat || !lon) {
             console.warn('[EmergencyGlide] No GPS position — cannot compute glide range');
@@ -340,6 +340,7 @@ class EmergencyGlide {
         footer.appendChild(btn);
         el.appendChild(footer);
 
+        document.body.classList.add('emergency-active');
         document.body.appendChild(el);
         this._overlay = el;
 
@@ -420,6 +421,7 @@ class EmergencyGlide {
             <div class="eg-footer">
                 <button class="eg-ack-btn" id="egAckBtn">ACKNOWLEDGE</button>
             </div>`;
+        document.body.classList.add('emergency-active');
         document.body.appendChild(el);
         el.querySelector('#egAckBtn').addEventListener('click',
             () => this._dismissOverlay(), { once: true });
@@ -428,6 +430,7 @@ class EmergencyGlide {
 
     _dismissOverlay() {
         this._stopApproachMonitor();
+        document.body.classList.remove('emergency-active');
         if (this._overlay) {
             this._overlay.remove();
             this._overlay = null;

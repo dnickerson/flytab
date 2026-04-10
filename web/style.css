@@ -2223,6 +2223,26 @@ body {
     padding-top: 4px;
 }
 
+.rt-fuel-stop-cell {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 6px 4px 8px;
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+    background: var(--bg-surface);
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+}
+.rt-fuel-added-cell {
+    text-align: center;
+    font-size: var(--text-sm);
+    color: var(--status-ok);
+    padding: 2px 8px 4px;
+    background: var(--bg-surface);
+    border-bottom: 1px solid var(--border);
+}
+
 .route-table-content .rt-totals-label {
     color: var(--text-label);
     font-weight: 700;
@@ -7445,6 +7465,11 @@ body {
     color: var(--text-secondary);
 }
 .ps-error { color: var(--status-danger); }
+
+/* Hide tab bar while emergency overlay is active so ACKNOWLEDGE button is reachable */
+body.emergency-active #tabBar {
+    display: none !important;
+}
 
 /* ── Emergency Glide Overlay (Scenario 6) ───────────────────────────────── */
 .eg-overlay {

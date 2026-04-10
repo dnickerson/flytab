@@ -2393,11 +2393,12 @@ class RouteTable {
             // Fuel stop row between flights (not after the last flight)
             if (fi < flightsToRender.length - 1) {
                 const nextFlight = flightsToRender[fi + 1];
-                // Label: "⛽ Arrived KFGX — Refuel · Flight 2 continues to KLWA"
-                // This makes clear the DES rows above were the ARRIVAL, and CLB rows
-                // below are the DEPARTURE — the fuel stop is the boundary between them.
+                const stopIdx = nextFlight.depWpIndex;
+                // The DES rows above are the arrival into this stop; CLB rows below are
+                // the departure — this row is the boundary between those two legs.
                 html += `<tr class="rt-fuel-stop-row"><td colspan="${numCols}" class="rt-fuel-stop-cell">`;
-                html += `\u26FD\u2002Arrived ${flight.dest} \u2014 Refuel \u00b7 Flight ${fi + 2} continues to ${nextFlight.dest}`;
+                html += `<span>\u26FD\u2002Arrived ${flight.dest} \u2014 Refuel \u00b7 Flight ${fi + 2} continues to ${nextFlight.dest}</span>`;
+                html += `<button class="rt-delete-btn" data-idx="${stopIdx}" title="Remove fuel stop">\u00d7</button>`;
                 html += `</td></tr>`;
                 // Fuel added row — only shown if pilot explicitly set fuel_add_gal on this waypoint
                 const stopWp = this._waypoints[nextFlight.depWpIndex];
