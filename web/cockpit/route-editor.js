@@ -23,6 +23,7 @@ class RouteEditor {
         this._mapTapMode = false;
         this._mapTapHandler = null;
         this._plan = null; // reference to loaded plan for metadata
+        this._parseSeq = 0; // sequence counter to discard stale route parse results
     }
 
     init() {
@@ -104,7 +105,9 @@ class RouteEditor {
                         alt: 0,
                     }];
                 }
-            } catch { /* NASR not ready */ }
+            } catch {
+                // NASR DB not ready — user can still add waypoints manually
+            }
         }
 
         if (this._altInput) this._altInput.value = this._altitude;
@@ -263,7 +266,7 @@ class RouteEditor {
     }
 
     async _loadDirectToNearby() {
-        const sit = this.stratux.situation;
+        const sit = this.stratux?.situation;
         if (!sit || !sit.lat) {
             this._directToResults.innerHTML = '<div class="route-search-empty">No GPS position</div>';
             return;
@@ -278,7 +281,7 @@ class RouteEditor {
             this._renderDirectToResults(airports.slice(0, 5));
         } catch (err) {
             console.warn('Direct-To nearby error:', err);
-            this._directToResults.innerHTML = '<div class="route-search-empty">Airport data unavailable offline</div>';
+            this._directToResults.innerHTML = '<div class="route-search-empty">Airport database not available</div>';
         }
     }
 
@@ -293,13 +296,16 @@ class RouteEditor {
             try {
                 const results = await this.nasrDb.searchAll(q);
                 this._renderDirectToResults(results.airports || [], results.navaids || [], results.fixes || [], q);
-            } catch {}
+            } catch (err) {
+                console.warn('Direct-To search error:', err);
+                this._directToResults.innerHTML = '<div class="route-search-empty">Airport database not available</div>';
+            }
         }, 200);
     }
 
     _renderDirectToResults(airports, navaids, fixes, query = '') {
         const q = (query || '').toUpperCase();
-        const sit = this.stratux.situation;
+        const sit = this.stratux?.situation;
         const results = [];
 
         for (const a of airports) {
@@ -360,7 +366,7 @@ class RouteEditor {
 
     _executeDirectTo(apt) {
         this._pushUndo();
-        const sit = this.stratux.situation;
+        const sit = this.stratux?.situation;
 
         const directWp = {
             icao: apt.icao,
@@ -519,6 +525,7 @@ class RouteEditor {
                         icao: `${lat.toFixed(2)}/${lng.toFixed(2)}`,
                         name: `${lat.toFixed(2)}/${lng.toFixed(2)}`,
                         lat, lon: lng, alt: this._altitude,
+                        type: 'GPS',
                     }, idx);
                 }
             } catch {
@@ -528,6 +535,7 @@ class RouteEditor {
                     icao: `${lat.toFixed(2)}/${lng.toFixed(2)}`,
                     name: `${lat.toFixed(2)}/${lng.toFixed(2)}`,
                     lat, lon: lng, alt: this._altitude,
+                    type: 'GPS',
                 }, idx);
             }
             this._disableMapTapMode();
@@ -553,7 +561,7 @@ class RouteEditor {
 
     _renderWaypoints() {
         if (!this._waypointsDiv) return;
-        const sit = this.stratux.situation;
+        const sit = this.stratux?.situation;
         const plan = this._plan || {};
         const startFuel = this._getStartFuel();
         const cruiseGph = plan.cruise_gph || 7;
@@ -761,6 +769,7 @@ class RouteEditor {
     }
 
     async _parseRouteString(str) {
+        const seq = ++this._parseSeq;
         const tokens = str.trim().split(/\s+/);
 
         // Show "Parsing..." immediately so user knows something is happening
@@ -784,12 +793,15 @@ class RouteEditor {
         };
 
         let { resolved, unresolved } = await doResolve();
+        if (seq !== this._parseSeq) return; // newer parse superseded this one
 
         // If nothing resolved (DB was likely blocked), wait and retry once
         if (resolved.length === 0 && unresolved.length > 0) {
             this._resultsDiv.innerHTML = '<div class="route-search-empty">Retrying...</div>';
             await new Promise(r => setTimeout(r, 1500));
+            if (seq !== this._parseSeq) return;
             ({ resolved, unresolved } = await doResolve());
+            if (seq !== this._parseSeq) return;
         }
 
         this._showRoutePreview(resolved, unresolved);
@@ -834,6 +846,8 @@ class RouteEditor {
             this._renderSearchResults(results.airports || [], results.navaids || [], results.fixes || [], query);
         } catch (err) {
             console.warn('[RouteEditor] Search error:', err);
+            this._resultsDiv.hidden = false;
+            this._resultsDiv.innerHTML = '<div class="route-search-empty">Airport database not available</div>';
         }
     }
 
@@ -923,7 +937,7 @@ class RouteEditor {
         } catch (err) {
             console.warn('[RouteEditor] Nearby error:', err);
             this._resultsDiv.hidden = false;
-            this._resultsDiv.innerHTML = '<div class="route-search-empty">Airport data unavailable offline</div>';
+            this._resultsDiv.innerHTML = '<div class="route-search-empty">Airport database not available</div>';
         }
     }
 
@@ -945,7 +959,10 @@ class RouteEditor {
     // ========== Apply / Persist ==========
 
     async _applyRoute() {
-        if (this._waypoints.length === 0) return;
+        if (this._waypoints.length === 0) {
+            if (typeof app !== 'undefined') app.showToast('Add at least one waypoint', 'amber');
+            return;
+        }
 
         // Build legs with course/distance
         const wps = this._waypoints.map((wp, i) => {

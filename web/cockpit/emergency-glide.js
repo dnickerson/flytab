@@ -593,7 +593,7 @@ class EmergencyGlide {
 
         const distNm = NasrDB.haversineNm(sit.lat, sit.lon, apt.lat, apt.lon);
         const hdg = this._bearingTo(sit.lat, sit.lon, apt.lat, apt.lon);
-        const altMsl = sit.alt_msl ?? 0;
+        const altMsl = sit.alt_msl ?? sit.alt_baro ?? 0;
         const vs = Math.round(sit.vertical_speed ?? 0);
         const gs = Math.max(sit.ground_speed ?? 0, 30); // floor to avoid div/0
 

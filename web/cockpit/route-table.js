@@ -39,6 +39,8 @@ function isFuelStop(wp, index, waypoints) {
     if (index === 0 || index >= waypoints.length - 1) return false;
     // Primary check: type flag set on the waypoint object
     if (wp.type === 'APT') return true;
+    // Non-airport types are never fuel stops
+    if (wp.type === 'VOR' || wp.type === 'NDB' || wp.type === 'FIX' || wp.type === 'GPS' || wp.type === 'WPT') return false;
     // Fallback: plans loaded from legs-only (waypoints:null) don't have type set.
     // Treat any intermediate airport-looking waypoint (4-char K-prefix ICAO) as a
     // potential fuel stop. This handles the common US airport case.
@@ -436,13 +438,18 @@ class RouteTable {
     }
 
     _pushUndo() {
-        this._undoStack.push(JSON.parse(JSON.stringify(this._waypoints)));
+        this._undoStack.push({
+            waypoints: JSON.parse(JSON.stringify(this._waypoints)),
+            activeIndex: this._activeIndex,
+        });
         if (this._undoStack.length > 5) this._undoStack.shift();
     }
 
     _popUndo() {
         if (this._undoStack.length === 0) return;
-        this._waypoints = this._undoStack.pop();
+        const state = this._undoStack.pop();
+        this._waypoints = state.waypoints;
+        this._activeIndex = state.activeIndex;
         this._reindex();
         this._onEdited();
     }
@@ -451,6 +458,10 @@ class RouteTable {
         if (index < 0 || index >= this._waypoints.length) return;
         this._pushUndo();
         this._waypoints.splice(index, 1);
+        // Keep _activeIndex valid after removal
+        if (this._activeIndex >= this._waypoints.length) {
+            this._activeIndex = Math.max(this._waypoints.length - 1, -1);
+        }
         this._reindex();
         this._onEdited();
     }
@@ -600,6 +611,7 @@ class RouteTable {
 
     _moveWaypoint(fromIdx, toIdx) {
         if (fromIdx === toIdx) return;
+        if (fromIdx < 0 || fromIdx >= this._waypoints.length) return;
         if (toIdx < 0 || toIdx >= this._waypoints.length) return;
         this._pushUndo();
         const [wp] = this._waypoints.splice(fromIdx, 1);
@@ -650,13 +662,21 @@ class RouteTable {
         const plan = {
             ...(this._trip || {}),
             // trip.waypoints[] — all waypoints across all flights
-            waypoints: this._waypoints.map(wp => ({
-                icao: wp.icao,
-                name: wp.name,
-                lat: wp.lat,
-                lon: wp.lon,
-                alt: wp.alt ?? wp.altitude,
-            })),
+            waypoints: this._waypoints.map(wp => {
+                const out = {
+                    icao: wp.icao,
+                    name: wp.name,
+                    lat: wp.lat,
+                    lon: wp.lon,
+                    alt: wp.alt ?? wp.altitude,
+                };
+                if (wp.type) out.type = wp.type;
+                if (wp.fuel_add_gal != null) out.fuel_add_gal = wp.fuel_add_gal;
+                if (wp.alt_constraint) out.alt_constraint = wp.alt_constraint;
+                if (wp.alt_constraint_upper != null) out.alt_constraint_upper = wp.alt_constraint_upper;
+                if (wp.elev_ft != null) out.elev_ft = wp.elev_ft;
+                return out;
+            }),
             // trip.flights[] — airport-to-airport Flight segments
             flights: (this._flights || []).map(f => ({
                 dep:  f.dep,
@@ -2398,7 +2418,9 @@ class RouteTable {
                 // the departure — this row is the boundary between those two legs.
                 html += `<tr class="rt-fuel-stop-row"><td colspan="${numCols}" class="rt-fuel-stop-cell">`;
                 html += `<span>\u26FD\u2002Arrived ${flight.dest} \u2014 Refuel \u00b7 Flight ${fi + 2} continues to ${nextFlight.dest}</span>`;
-                html += `<button class="rt-delete-btn" data-idx="${stopIdx}" title="Remove fuel stop">\u00d7</button>`;
+                if (this._editMode) {
+                    html += `<button class="rt-delete-btn" data-idx="${stopIdx}" title="Remove fuel stop">\u00d7</button>`;
+                }
                 html += `</td></tr>`;
                 // Fuel added row — only shown if pilot explicitly set fuel_add_gal on this waypoint
                 const stopWp = this._waypoints[nextFlight.depWpIndex];
