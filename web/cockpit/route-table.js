@@ -2488,31 +2488,25 @@ class RouteTable {
 
         if (this._editMode) {
             if (segIndex === 0) {
-                const rs = segCount > 1 ? ` rowspan="${segCount}"` : '';
-                row += `<td class="rt-reorder-cell"${rs}>
+                row += `<td class="rt-reorder-cell">
                     <button class="rt-up-btn" data-idx="${wp.index}" ${wp.index === 0 ? 'disabled' : ''}>\u25B2</button>
                     <button class="rt-down-btn" data-idx="${wp.index}" ${wp.index === this._waypoints.length - 1 ? 'disabled' : ''}>\u25BC</button>
                 </td>`;
+            } else {
+                row += '<td></td>';
             }
-            // segIndex > 0: skip reorder cell (covered by rowspan)
         }
 
         for (const col of columns) {
-            // Multi-segment: rowspan wpt/hdg/wind across all SegmentRows for the same Leg
-            if (seg && segCount > 1 && (col.key === 'wpt' || col.key === 'hdg' || col.key === 'brg' || col.key === 'wind')) {
+            if (col.key === 'alt' && this._editMode) {
                 if (segIndex === 0) {
-                    const val = this._getCellValue(wp, col.key, seg, 0);
-                    row += `<td rowspan="${segCount}">${val}</td>`;
+                    // Tappable altitude cell in edit mode
+                    const altVal  = wp.alt ?? wp.altitude ?? '\u2014';
+                    const display = typeof altVal === 'number' ? (altVal >= 1000 ? altVal.toLocaleString() : altVal) : altVal;
+                    row += `<td class="rt-alt-cell" data-idx="${wp.index}">${display} <span class="rt-alt-edit-icon">\u25BE</span></td>`;
+                } else {
+                    row += `<td></td>`;
                 }
-                // segIndex > 0: omit — covered by rowspan
-            } else if (col.key === 'alt' && this._editMode && segIndex === 0) {
-                // Tappable altitude cell in edit mode (issue #31)
-                const altVal  = wp.alt ?? wp.altitude ?? '\u2014';
-                const display = typeof altVal === 'number' ? (altVal >= 1000 ? altVal.toLocaleString() : altVal) : altVal;
-                const rs      = segCount > 1 ? ` rowspan="${segCount}"` : '';
-                row += `<td class="rt-alt-cell" data-idx="${wp.index}"${rs}>${display} <span class="rt-alt-edit-icon">\u25BE</span></td>`;
-            } else if (col.key === 'alt' && this._editMode && segIndex > 0) {
-                // omit — covered by rowspan from segIndex===0
             } else {
                 const val = seg ? this._getCellValue(wp, col.key, seg, segIndex) : this._getCellValue(wp, col.key);
                 row += `<td>${val}</td>`;
@@ -2521,8 +2515,9 @@ class RouteTable {
 
         if (this._editMode) {
             if (segIndex === 0) {
-                const rs = segCount > 1 ? ` rowspan="${segCount}"` : '';
-                row += `<td${rs}><button class="rt-delete-btn" data-idx="${wp.index}">\u00d7</button></td>`;
+                row += `<td><button class="rt-delete-btn" data-idx="${wp.index}">\u00d7</button></td>`;
+            } else {
+                row += '<td></td>';
             }
         }
 
