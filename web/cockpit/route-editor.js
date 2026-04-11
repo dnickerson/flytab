@@ -127,7 +127,7 @@ class RouteEditor {
 
     _pushUndo() {
         this._undoStack.push(JSON.parse(JSON.stringify(this._waypoints)));
-        if (this._undoStack.length > 5) this._undoStack.shift();
+        if (this._undoStack.length > 15) this._undoStack.shift();
         if (this._undoBtn) this._undoBtn.disabled = false;
     }
 

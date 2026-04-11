@@ -188,6 +188,12 @@ class RouteTable {
                     });
                 }
                 plan = { ...plan, waypoints: wps };
+
+                // Async NASR resolution: fill in lat/lon for waypoints reconstructed
+                // from legs so HDG/BRG/DIST columns show real values instead of dashes.
+                if (this._nasrDb) {
+                    this._resolveWaypointCoords(wps);
+                }
             }
         }
 
@@ -319,6 +325,45 @@ class RouteTable {
     }
 
     /**
+     * Attempt to resolve lat/lon for waypoints that are missing coordinates
+     * (e.g. reconstructed from a legs-only saved plan). Looks up each ident
+     * in NasrDB (airports → navaids → fixes) and patches the waypoint in-place,
+     * then recomputes the route so HDG/BRG/DIST columns populate.
+     */
+    async _resolveWaypointCoords(waypoints) {
+        const db = this._nasrDb;
+        if (!db) return;
+
+        let resolved = 0;
+        for (const wp of waypoints) {
+            if (wp.lat != null && wp.lon != null) continue;
+            const ident = wp.icao || wp.name;
+            if (!ident) continue;
+
+            try {
+                // Try airport first, then navaid, then fix
+                let rec = await db.getAirport(ident);
+                if (!rec) rec = await db.getAirport('K' + ident); // US ICAO prefix
+                if (!rec) rec = await db.getNavaid(ident);
+                if (!rec) rec = await db.getFix(ident);
+
+                if (rec && rec.lat != null && rec.lon != null) {
+                    wp.lat = rec.lat;
+                    wp.lon = rec.lon;
+                    if (rec.name && !wp.name) wp.name = rec.name;
+                    resolved++;
+                }
+            } catch { /* NASR DB may not be loaded yet — leave as dashes */ }
+        }
+
+        if (resolved > 0) {
+            this._computeEnroute();
+            this._updateSummary();
+            this._renderTable();
+        }
+    }
+
+    /**
      * Update live data (GS, position) from Stratux situation.
      */
     updateLive(situation) {
@@ -362,7 +407,11 @@ class RouteTable {
         // Skip full DOM rebuild while editing — live updates would destroy
         // the edit-mode button event listeners mid-interaction (issue #30)
         if (!this._editMode) {
-            this._renderTable();
+            // Try selective cell update first to avoid full innerHTML rebuild every
+            // GPS tick (1 Hz). Falls back to full render when structure changes.
+            if (!this._updateTableCells()) {
+                this._renderTable();
+            }
         }
     }
 
@@ -442,7 +491,7 @@ class RouteTable {
             waypoints: JSON.parse(JSON.stringify(this._waypoints)),
             activeIndex: this._activeIndex,
         });
-        if (this._undoStack.length > 5) this._undoStack.shift();
+        if (this._undoStack.length > 15) this._undoStack.shift();
     }
 
     _popUndo() {
@@ -2471,6 +2520,113 @@ class RouteTable {
 
         // All interactive events (edit buttons, power header, row clicks) handled
         // by delegated listeners on _tableEl set up in _buildDOM().
+    }
+
+    /**
+     * Selective cell update for live GPS ticks (non-edit mode only).
+     * Walks existing <tr> rows and patches cell text in-place instead of
+     * destroying/recreating the entire DOM tree. Returns false if the table
+     * structure has changed (row count or waypoint order) and a full rebuild
+     * is needed.
+     */
+    _updateTableCells() {
+        if (!this._tableEl) return false;
+        const columns = CockpitConfig.get('routeTable.columns') || [];
+        const rows = this._tableEl.querySelectorAll('tbody tr.rt-row');
+
+        // Build the expected list of (wp, seg, segIndex) tuples that _renderTable would emit
+        const expected = [];
+        const hasMultipleFlights = this._flights.length > 1;
+        const flightsToRender = hasMultipleFlights
+            ? this._flights
+            : [{ index: 0, depWpIndex: 0, destWpIndex: this._waypoints.length - 1 }];
+
+        for (let fi = 0; fi < flightsToRender.length; fi++) {
+            const flight = flightsToRender[fi];
+            const wpStart = fi > 0 ? flight.depWpIndex + 1 : flight.depWpIndex;
+            const wpEnd = flight.destWpIndex;
+
+            for (let wpIdx = wpStart; wpIdx <= wpEnd; wpIdx++) {
+                const wp = this._waypoints[wpIdx];
+                const isDepRow = wpIdx === 0;
+                const segs = (!isDepRow && (wp._segments?.length ?? 0) > 1 && wp.index > 0)
+                    ? wp._segments : [];
+
+                if (segs.length > 1) {
+                    for (let si = 0; si < segs.length; si++) {
+                        expected.push({ wp, seg: segs[si], segIndex: si });
+                    }
+                } else {
+                    expected.push({ wp, seg: null, segIndex: 0 });
+                }
+            }
+        }
+
+        // Bail if row count doesn't match — structure changed, need full rebuild
+        if (rows.length !== expected.length) return false;
+
+        // Patch each row's cells in-place
+        for (let r = 0; r < rows.length; r++) {
+            const tr = rows[r];
+            const { wp, seg, segIndex } = expected[r];
+
+            // Verify row identity matches
+            if (parseInt(tr.dataset.idx) !== wp.index) return false;
+
+            // Update active/passed classes
+            const newCls = wp.active ? 'active' : (wp.passed ? 'passed' : '');
+            const segCls = segIndex > 0 ? 'rt-seg-row' : '';
+            const wantClass = `rt-row ${segCls} ${newCls}`.replace(/\s+/g, ' ').trim();
+            if (tr.className !== wantClass) tr.className = wantClass;
+
+            // Update cell values (skip edit-mode columns since we're never in edit mode here)
+            const cells = tr.children;
+            for (let c = 0; c < columns.length && c < cells.length; c++) {
+                const val = seg
+                    ? this._getCellValue(wp, columns[c].key, seg, segIndex)
+                    : this._getCellValue(wp, columns[c].key);
+                const valStr = String(val);
+                if (cells[c].innerHTML !== valStr) {
+                    cells[c].innerHTML = valStr;
+                }
+            }
+        }
+
+        // Update totals footer
+        const footerCells = this._tableEl.querySelectorAll('tfoot .rt-totals-row td');
+        if (footerCells.length > 0 && this._waypoints.length >= 2) {
+            let totDist = 0, totEte = 0, totFuel = 0;
+            const destIdx = typeof ActiveRoute !== 'undefined' ? ActiveRoute.getDestIndex() : -1;
+            const limitIdx = destIdx >= 0 ? destIdx : this._waypoints.length - 1;
+            for (let i = 0; i <= limitIdx; i++) {
+                const wp = this._waypoints[i];
+                totDist += wp._dist || 0;
+                totEte  += wp._ete  || 0;
+                totFuel += wp._fuel || 0;
+            }
+            const totalLabel = hasMultipleFlights ? 'TRIP' : 'TOTAL';
+            let ci = 0;
+            for (const col of columns) {
+                if (ci >= footerCells.length) break;
+                let val;
+                switch (col.key) {
+                    case 'wpt':  val = `<span class="rt-totals-label">${totalLabel}</span>`; break;
+                    case 'dist': val = `${Math.round(totDist)}nm`; break;
+                    case 'ete':  val = this._formatTime(totEte); break;
+                    case 'fuel': val = totFuel.toFixed(1); break;
+                    default:     val = ''; break;
+                }
+                const valStr = String(val);
+                if (footerCells[ci].innerHTML !== valStr) footerCells[ci].innerHTML = valStr;
+                ci++;
+            }
+        }
+
+        // Scroll active row into view
+        const activeRow = this._tableEl.querySelector('.rt-row.active');
+        if (activeRow) activeRow.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+
+        return true;
     }
 
     /**
