@@ -19,6 +19,7 @@ class StratuxClient extends EventTarget {
         this._maxDelay = 30000;
         this._reconnectTimer = null;
         this._statusTimer = null;
+        this._towerTimer = null;
 
         // Traffic map: icao_addr → target object
         this.traffic = new Map();
@@ -26,6 +27,8 @@ class StratuxClient extends EventTarget {
         this.situation = null;
         // Device status from /getStatus
         this.deviceStatus = null;
+        // Tower data from /getTowers
+        this.towerData = {};
 
         this._purgeInterval = null;
 
@@ -48,6 +51,7 @@ class StratuxClient extends EventTarget {
             this._connectWeather();
             this._connectJsonio();
             this._pollStatus();
+            this._pollTowers();
         }
         this._startPurge();
     }
@@ -60,6 +64,7 @@ class StratuxClient extends EventTarget {
         if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
         if (this._purgeInterval) { clearInterval(this._purgeInterval); this._purgeInterval = null; }
         if (this._statusTimer) { clearInterval(this._statusTimer); this._statusTimer = null; }
+        if (this._towerTimer) { clearInterval(this._towerTimer); this._towerTimer = null; }
         clearTimeout(this._staleTimer);
         this._staleTimer = null;
         this._stale = false;
@@ -248,6 +253,20 @@ class StratuxClient extends EventTarget {
         };
         poll();
         this._statusTimer = setInterval(poll, 10000);
+    }
+
+    _pollTowers() {
+        const poll = async () => {
+            try {
+                const r = await fetch(`http://${this.ip}/getTowers`, { cache: 'no-store' });
+                if (r.ok) {
+                    this.towerData = await r.json();
+                    this.dispatchEvent(new CustomEvent('stratux:towers', { detail: this.towerData }));
+                }
+            } catch { /* offline */ }
+        };
+        poll();
+        this._towerTimer = setInterval(poll, 10000);
     }
 
     // ========== Weather WebSocket (/weather) ==========

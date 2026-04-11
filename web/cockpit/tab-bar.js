@@ -152,6 +152,10 @@ class TabBar {
                 const ip = c.stratuxIp || '192.168.10.1';
                 window.open(`http://${ip}`, '_blank');
             }},
+            { icon: '📶', label: 'FIS-B Status', action: () => {
+                if (c.fisbStatus?.show) c.fisbStatus.show();
+                this._closeMoreDrawer();
+            }},
             { icon: '🗄', label: 'Data Status', action: () => {
                 if (c.dataStatus?.show) c.dataStatus.show();
                 this._closeMoreDrawer();
@@ -582,6 +586,7 @@ class TabBar {
             ['#charts','Approach Charts'],['#weather','Weather'],
             ['#recording','Recording'],['#fuel','Fuel'],
             ['#offline','Offline'],['#config','Config'],
+            ['#releases','Releases'],
         ];
 
         // Pull aircraft config for dynamic values
@@ -871,6 +876,24 @@ class TabBar {
 </ul>
 <p>Aircraft-specific data (V-speeds, fuel calibration, power settings table, engine limits) is in <code>aircraft-config.json</code>. The power settings table in that file is derived from actual ${acTail} flight data — 2,004 data points across 33 flights.</p>
 <p><strong>Stratux IP</strong> — tap the Stratux field to set a custom IP if your network uses a non-default address.</p>
+
+<!-- ═══ RELEASE NOTES ═══ -->
+<h2 id="releases" style="font-size:17px;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #1a3055;color:#00ff88">Release Notes</h2>
+<div style="background:rgba(0,136,255,0.08);border-left:3px solid #0088ff;padding:8px 12px;border-radius:0 6px 6px 0;margin:10px 0;font-size:13px">
+  <strong>Rollback:</strong> Previous APKs are saved in the repo at each version bump. To roll back during flight: open the Android Files app, navigate to the Downloads or FlyTab folder, and tap the previous APK to install. The app will downgrade in place — your plan, logbook, and settings are preserved in IndexedDB.
+</div>
+<table style="width:100%;border-collapse:collapse;margin:10px 0;font-size:13px">
+  <tr style="background:#152847"><th style="padding:6px 8px;text-align:left;color:#8899aa">Version</th><th style="padding:6px 8px;text-align:left;color:#8899aa">Changes</th></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055;white-space:nowrap;vertical-align:top">v4.87</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">FIS-B Status page — reception health, tower list, product freshness table with route-aware prioritization. Tap FIS-B badge or More → FIS-B Status. Tower polling added to Stratux client.</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055;white-space:nowrap;vertical-align:top">v4.86</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Runway extensions fetch from AWC API (fixes missing rwy ext on map). Airport popup RWY tab populated from AWC. Layer panel accordion max-height fix (Rwy Ext / Show ±ALT toggles no longer clipped).</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055;white-space:nowrap;vertical-align:top">v4.85</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Route editor auto-apply on every edit (add/remove/move/undo). NEW and REV buttons on route table. Airport sidebar no longer overlaps route table. Fuel moved below frequencies in airport INFO tab. SAVE button always visible.</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055;white-space:nowrap;vertical-align:top">v4.76</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Selective live update (only active leg recalcs in flight). NASR coordinate resolution for all waypoint types. Undo depth increased. CRZ/DES segment column alignment fix.</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055;white-space:nowrap;vertical-align:top">v4.75</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Auto GPS fallback to device GPS when Stratux unavailable. Issues #16-19: emergency overlay, NOTAM flood protection, offline route editing, fuel stop delete.</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055;white-space:nowrap;vertical-align:top">v4.69</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Fuel K-factor calculator. Measurement history. EDM fuel persist. Weather dots fix. Radar NO DATA fix. Altimeter hPa/inHg fix. Power tradeoff panel visibility fix.</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055;white-space:nowrap;vertical-align:top">v4.50</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Emergency glide approach guidance with live HDG/DIST/profile. Deep link support. METAR age parsing fix.</td></tr>
+  <tr><td style="padding:6px 8px;border-bottom:1px solid #1a3055;white-space:nowrap;vertical-align:top">v4.46</td><td style="padding:6px 8px;border-bottom:1px solid #1a3055">Route editor overhaul — New Route, Edit Route, APCH labels, save integrity. GPS track recording independent of engine data.</td></tr>
+  <tr><td style="padding:6px 8px;white-space:nowrap;vertical-align:top">v4.42</td><td style="padding:6px 8px">Terrain profile view with SRTM 30m data. Airspace bands in profile. Collision highlighting. Preflight brief package with Claude AI summary.</td></tr>
+</table>
 
 <div style="margin:40px 0 20px;padding-top:16px;border-top:1px solid #1a3055;text-align:center;font-size:12px;color:#8899aa">
   FlyTab ${ver} · ${acTail} ${acType}

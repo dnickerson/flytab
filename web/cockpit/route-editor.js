@@ -137,6 +137,7 @@ class RouteEditor {
         this._expandedIndex = -1;
         this._renderWaypoints();
         if (this._undoBtn) this._undoBtn.disabled = this._undoStack.length === 0;
+        this._applyRoute({ hide: false, toast: false });
     }
 
     // ========== Waypoint Operations ==========
@@ -150,6 +151,7 @@ class RouteEditor {
         }
         this._insertIndex = -1;
         this._renderWaypoints();
+        this._applyRoute({ hide: false, toast: false });
     }
 
     _removeWaypoint(index) {
@@ -158,6 +160,7 @@ class RouteEditor {
         this._waypoints.splice(index, 1);
         this._expandedIndex = -1;
         this._renderWaypoints();
+        this._applyRoute({ hide: false, toast: false });
     }
 
     _moveWaypoint(fromIdx, toIdx) {
@@ -168,6 +171,7 @@ class RouteEditor {
         this._waypoints.splice(toIdx, 0, wp);
         this._expandedIndex = toIdx;
         this._renderWaypoints();
+        this._applyRoute({ hide: false, toast: false });
     }
 
     // ========== Build DOM ==========
@@ -194,7 +198,6 @@ class RouteEditor {
                     <span class="route-editor-alt-unit">ft</span>
                 </div>
                 <div class="route-editor-actions">
-                    <button class="btn btn-primary route-editor-save">SAVE &amp; APPLY</button>
                     <button class="btn btn-secondary route-editor-undo" disabled>UNDO</button>
                 </div>
             </div>
@@ -218,7 +221,6 @@ class RouteEditor {
         this._wireTap(this._el.querySelector('.route-editor-go-btn'), () => this._onSearchInput());
         this._wireTap(this._el.querySelector('.route-editor-nearby-btn'), () => this._showNearby());
         this._wireTap(this._el.querySelector('.route-editor-maptap-btn'), () => this._toggleMapTapMode());
-        this._wireTap(this._el.querySelector('.route-editor-save'), () => this._applyRoute());
         this._wireTap(this._undoBtn, () => this._popUndo());
         this._altInput.addEventListener('change', () => {
             this._altitude = parseInt(this._altInput.value) || 3500;
@@ -835,6 +837,7 @@ class RouteEditor {
                 this._expandedIndex = -1;
                 this._renderWaypoints();
                 this._clearSearch();
+                this._applyRoute();
             });
         }
     }
@@ -958,7 +961,7 @@ class RouteEditor {
 
     // ========== Apply / Persist ==========
 
-    async _applyRoute() {
+    async _applyRoute({ hide = true, toast = true } = {}) {
         if (this._waypoints.length === 0) {
             if (typeof app !== 'undefined') app.showToast('Add at least one waypoint', 'amber');
             return;
@@ -1007,11 +1010,13 @@ class RouteEditor {
         }
 
         // Toast
-        const routeStr = wps.map(w => w.icao || w.name).join(' \u2192 ');
-        if (typeof app !== 'undefined') {
-            app.showToast(`Route updated: ${routeStr}`);
+        if (toast) {
+            const routeStr = wps.map(w => w.icao || w.name).join(' \u2192 ');
+            if (typeof app !== 'undefined') {
+                app.showToast(`Route updated: ${routeStr}`);
+            }
         }
 
-        this.hide();
+        if (hide) this.hide();
     }
 }

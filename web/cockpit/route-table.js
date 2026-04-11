@@ -1637,7 +1637,15 @@ class RouteTable {
                 this._updateSummary();
             }
         }
-        setTimeout(() => this._map?.invalidateSize(), 300);
+        setTimeout(() => {
+            this._map?.invalidateSize();
+            this._broadcastHeight();
+        }, 300);
+    }
+
+    _broadcastHeight() {
+        const h = this._el ? this._el.offsetHeight : 0;
+        document.documentElement.style.setProperty('--route-table-height', h + 'px');
     }
 
     // ========== Save Route ==========
@@ -1847,6 +1855,62 @@ class RouteTable {
         document.body.appendChild(overlay);
     }
 
+    _confirmNewRoute() {
+        if (this._newConfirmPending) {
+            // Second tap — confirmed
+            this._newConfirmPending = false;
+            clearTimeout(this._newConfirmTimer);
+            this._newBtn.textContent = 'NEW';
+            this._newBtn.style.color = '';
+            this._newBtn.style.borderColor = '';
+            // Clear persisted plan
+            try { localStorage.removeItem('flypi_active_plan'); } catch {}
+            // Open route editor in new-route mode
+            if (typeof app !== 'undefined' && app.routeEditor) {
+                app.routeEditor.startNewRoute();
+            }
+            return;
+        }
+        // First tap — show confirm state
+        this._newConfirmPending = true;
+        this._newBtn.textContent = 'DELETE?';
+        this._newBtn.style.color = '#e53e3e';
+        this._newBtn.style.borderColor = '#e53e3e';
+        // Revert after 3 seconds if not confirmed
+        this._newConfirmTimer = setTimeout(() => {
+            this._newConfirmPending = false;
+            this._newBtn.textContent = 'NEW';
+            this._newBtn.style.color = '';
+            this._newBtn.style.borderColor = '';
+        }, 3000);
+    }
+
+    _reverseRoute() {
+        if (!this._waypoints?.length || this._waypoints.length < 2) {
+            if (typeof app !== 'undefined') app.showToast('Need at least 2 waypoints to reverse', 'amber');
+            return;
+        }
+        const reversed = [...this._waypoints].reverse();
+        const trip = app?._currentTrip || {};
+        const plan = {
+            ...trip,
+            departure: reversed[0]?.icao || '',
+            destination: reversed[reversed.length - 1]?.icao || '',
+            waypoints: reversed,
+            flight_plan: {
+                ...(trip.flight_plan || {}),
+                departure: reversed[0]?.icao || '',
+                destination: reversed[reversed.length - 1]?.icao || '',
+                route: reversed.map(w => w.icao || w.name).filter(Boolean),
+                legs: [],
+            },
+        };
+        if (typeof app !== 'undefined') {
+            app.applyRouteEdit(plan);
+            app.showToast('Route reversed');
+        }
+    }
+
     // ========== DOM ==========
 
     _buildDOM() {
@@ -1859,9 +1923,11 @@ class RouteTable {
         this._handleEl.innerHTML = `
             <span class="handle-grip">\u2261</span>
             <span class="handle-summary"></span>
-            <button class="rt-save-btn" style="display:none">SAVE</button>
+            <button class="rt-save-btn">SAVE</button>
             <button class="rt-load-btn">LOAD</button>
             <button class="rt-upload-btn">UPLOAD</button>
+            <button class="rt-new-btn">NEW</button>
+            <button class="rt-reverse-btn">REV</button>
             <button class="rt-profile-btn" title="Terrain profile" style="min-width:44px;min-height:44px;font-size:18px;background:none;border:none;color:inherit;cursor:pointer;padding:0 8px">\u26F0</button>
             <button class="route-table-edit-btn">EDIT</button>
         `;
@@ -1899,6 +1965,12 @@ class RouteTable {
 
         this._uploadBtn = this._handleEl.querySelector('.rt-upload-btn');
         this._wireButton(this._uploadBtn, () => this._showUploadModal());
+
+        this._newBtn = this._handleEl.querySelector('.rt-new-btn');
+        this._wireButton(this._newBtn, () => this._confirmNewRoute());
+
+        this._reverseBtn = this._handleEl.querySelector('.rt-reverse-btn');
+        this._wireButton(this._reverseBtn, () => this._reverseRoute());
 
         this._profileBtn = this._handleEl.querySelector('.rt-profile-btn');
         this._wireButton(this._profileBtn, () => this._openProfileView());
@@ -2277,6 +2349,7 @@ class RouteTable {
             const delta = startY - clientY;
             const newH = Math.max(0, Math.min(window.innerHeight * 0.6, startH + delta));
             this._bodyEl.style.maxHeight = newH + 'px';
+            this._broadcastHeight();
         };
 
         const onEnd = () => {
@@ -2290,6 +2363,7 @@ class RouteTable {
             this._expanded = h > 20;
             this._el.classList.toggle('route-table-expanded', this._expanded);
             this._map?.invalidateSize();
+            this._broadcastHeight();
         };
 
         const grip = this._handleEl;
