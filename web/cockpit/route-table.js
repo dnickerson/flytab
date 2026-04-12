@@ -1528,8 +1528,8 @@ class RouteTable {
     }
 
     /**
-     * Publish activeroute:legupdate with destination-level data for the
-     * instrument strip and power tradeoff panel.
+     * Publish activeroute:legupdate with nav data for the route nav strip,
+     * instrument strip, and power tradeoff panel.
      */
     _emitLegUpdate() {
         const active = this._activeIndex >= 0 ? this._waypoints[this._activeIndex] : null;
@@ -1543,6 +1543,10 @@ class RouteTable {
         const destWp  = this._waypoints[destIdx];
         if (!destWp) return;
 
+        // Next waypoint after active (for preview row)
+        const nextIdx = this._activeIndex + 1;
+        const nextWp = nextIdx < this._waypoints.length ? this._waypoints[nextIdx] : null;
+
         // Planned GPH for remaining cruise (from config)
         const plannedGph = CockpitConfig.aircraft('performance.cruise_gph') ?? 9.0;
 
@@ -1551,16 +1555,58 @@ class RouteTable {
         const fuelRem = engData?.fuel_remaining_gal ?? engData?.fuel_gal ?? engData?.Gallons_Rem ?? engData?.Fuel_Remaining ?? null;
         const liveGph = (engData?.fuel_flow_gph ?? engData?.gph ?? engData?.Fuel_Flow ?? null);
 
+        // Cross-track error: perpendicular distance from current position to the
+        // planned track line (previous waypoint → active waypoint).
+        let xtk = null; // nm, positive = right of track, negative = left
+        const sit = this._lastSituation;
+        if (sit?.lat != null && sit?.lon != null && active.lat != null && active.lon != null) {
+            const prevIdx = this._activeIndex > 0 ? this._activeIndex - 1 : 0;
+            const prevWp = this._waypoints[prevIdx];
+            if (prevWp?.lat != null && prevWp?.lon != null && prevIdx !== this._activeIndex) {
+                xtk = this._crossTrackNm(prevWp.lat, prevWp.lon, active.lat, active.lon, sit.lat, sit.lon);
+            }
+        }
+
+        // Active waypoint crossing altitude
+        const activeAlt = this._getCrossingAlt(active);
+
+        // Build upcoming waypoints array for expanded nav strip view
+        const upcoming = [];
+        for (let i = this._activeIndex + 1; i < this._waypoints.length && upcoming.length < 5; i++) {
+            const wp = this._waypoints[i];
+            upcoming.push({
+                icao: wp.icao || wp.id || '',
+                name: wp.name || '',
+                dist: wp._cumDist,
+                ete:  wp._cumEte,
+                alt:  this._getCrossingAlt(wp),
+                fuelRem: wp._fuelRem,
+            });
+        }
+
         window.dispatchEvent(new CustomEvent('activeroute:legupdate', {
             detail: {
-                // Active leg
+                // Active waypoint
+                activeIcao:     active.icao || active.id || '',
+                activeName:     active.name || '',
+                activeDistNm:   active._liveDist ?? active._legDist ?? null,
+                activeEteMin:   active._ete ?? null,
+                activeAlt,
                 hdg:            active._hdg,          // wind-corrected mag heading
+                brg:            active._brg,          // true bearing to active
                 activeWind:     active._wind,          // { dir, spd } wind at active leg
                 activeTas:      active._tas,           // planned TAS for active leg
+                xtk,                                   // cross-track error (nm, +R/-L)
+
+                // Next waypoint preview
+                nextIcao:       nextWp?.icao || nextWp?.id || null,
+                nextDistNm:     nextWp?._cumDist ?? null,
 
                 // Destination
+                destIcao:       destWp.icao || destWp.id || '',
                 destDistNm:     destWp._cumDist,       // nm remaining to dest
                 destEteMin:     destWp._cumEte,        // planned ETE to dest (minutes)
+                destFuelRem:    destWp._fuelRem,       // planned fuel remaining at dest
 
                 // Fuel
                 plannedGph,
@@ -1568,10 +1614,39 @@ class RouteTable {
                 liveGph,
 
                 // Live performance
-                liveGs: this._lastSituation?.ground_speed ?? null,
+                liveGs: sit?.ground_speed ?? null,
                 livePctPower: engData?.percent_power ?? engData?.pwr ?? null,
+
+                // Upcoming waypoints for expanded view
+                upcoming,
             }
         }));
+    }
+
+    /**
+     * Get crossing altitude for a waypoint from its segments or constraint.
+     */
+    _getCrossingAlt(wp) {
+        const segs = wp.segments || [];
+        if (segs.length > 0) {
+            const last = segs[segs.length - 1];
+            return last.alt_to ?? last.alt_from ?? wp.alt ?? null;
+        }
+        return wp.alt ?? wp.constraint_alt ?? null;
+    }
+
+    /**
+     * Cross-track distance in nm. Positive = right of track, negative = left.
+     * Uses spherical approximation.
+     */
+    _crossTrackNm(lat1, lon1, lat2, lon2, latP, lonP) {
+        const R = 3440.065; // Earth radius in nm
+        const toRad = Math.PI / 180;
+        const d13 = NasrDB.haversineNm(lat1, lon1, latP, lonP);
+        const brg13 = this._bearing(lat1, lon1, latP, lonP) * toRad;
+        const brg12 = this._bearing(lat1, lon1, lat2, lon2) * toRad;
+        const xtd = Math.asin(Math.sin(d13 / R) * Math.sin(brg13 - brg12)) * R;
+        return xtd; // positive = right of track
     }
 
     /** Toggle flight rules between VFR and IFR */

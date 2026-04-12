@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v4.87';
+const FLYTAB_VERSION = 'v5.0';
 
 // ========== Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -62,6 +62,7 @@ class FlyTabApp {
         this.vectorLayers = null;
         this.airportPopup = null;
         this.routeTable = null;
+        this.routeNavStrip = null;
         this.engineOverlay = null;
         this.enginePage = null;
         this.flightSync = null;
@@ -750,6 +751,13 @@ class FlyTabApp {
         if (typeof PowerTradeoff !== 'undefined') {
             this.powerTradeoff = new PowerTradeoff();
             this.powerTradeoff.init();
+        }
+
+        // ── v5 UI: Route Nav Strip ───────────────────────────────────────────
+        if (typeof RouteNavStrip !== 'undefined') {
+            this.routeNavStrip = new RouteNavStrip();
+            const navStripContainer = document.getElementById('routeNavStrip');
+            if (navStripContainer) this.routeNavStrip.init(navStripContainer);
         }
 
         // ── v5 UI: Instrument Strip ──────────────────────────────────────────

@@ -46,6 +46,12 @@ class ConfigEditor {
             ]);
             this._cockpitConfig = cockpitResp.ok ? await cockpitResp.json() : {};
             this._aircraftConfig = aircraftResp.ok ? await aircraftResp.json() : {};
+
+            // Merge user-saved overrides from localStorage on top of bundled defaults
+            // so the editor shows the user's actual saved settings, not just bundled values.
+            this._cockpitConfig = CockpitConfig._mergeUserOverrides(this._cockpitConfig, 'flypi_user_cockpit');
+            this._aircraftConfig = CockpitConfig._mergeUserOverrides(this._aircraftConfig, 'flypi_user_aircraft');
+
             this._render();
         } catch (err) {
             body.innerHTML = `<div class="ds-error">Failed to load config: ${err.message}</div>`;
@@ -338,11 +344,12 @@ class ConfigEditor {
             this._collectValues('cockpit');
             this._collectValues('aircraft');
 
-            // FlyTab: save configs to localStorage (bundled files are read-only)
+            // FlyTab: save user overrides to localStorage (bundled files are read-only).
+            // Uses dedicated keys so _fetchJson's offline cache doesn't overwrite user edits.
             try {
-                localStorage.setItem('flypi_cfg_cockpit_config_json', JSON.stringify(this._cockpitConfig));
-                localStorage.setItem('flypi_cfg_aircraft_config_json', JSON.stringify(this._aircraftConfig));
-                // Update in-memory config
+                localStorage.setItem('flypi_user_cockpit', JSON.stringify(this._cockpitConfig));
+                localStorage.setItem('flypi_user_aircraft', JSON.stringify(this._aircraftConfig));
+                // Update in-memory config immediately
                 if (typeof CockpitConfig !== 'undefined') {
                     CockpitConfig._config = this._cockpitConfig;
                     CockpitConfig._aircraft = this._aircraftConfig;
@@ -360,11 +367,6 @@ class ConfigEditor {
                     saveBtn.style.background = '';
                     saveBtn.disabled = false;
                 }, 2000);
-
-                // Reload config in the running app
-                if (typeof CockpitConfig !== 'undefined') {
-                    await CockpitConfig.load();
-                }
                 if (typeof app !== 'undefined' && app.showToast) {
                     app.showToast('Configuration saved');
                 }

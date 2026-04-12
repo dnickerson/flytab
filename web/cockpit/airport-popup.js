@@ -1318,24 +1318,36 @@ class AirportPopup {
     // ========== Action Binding ==========
 
     /**
-     * Wire a button with click + touchstart for iPad/Leaflet reliability.
-     * touchend is blocked by Leaflet's drag handler (preventDefault on touchstart
-     * cancels the touch sequence before touchend fires). touchstart fires first.
+     * Wire a button with touch-distance detection.
+     * Fires on touchend only if the finger didn't move (not a scroll gesture).
+     * Falls back to click for non-touch devices.
      */
     _wireButton(el, action) {
-        let touchFired = false;
-        const fire = (e) => {
+        let startX = 0, startY = 0, isTap = false;
+        el.addEventListener('touchstart', (e) => {
+            const t = e.touches[0];
+            startX = t.clientX;
+            startY = t.clientY;
+            isTap = true;
+        }, { passive: true });
+        el.addEventListener('touchmove', (e) => {
+            if (!isTap) return;
+            const t = e.touches[0];
+            if (Math.abs(t.clientX - startX) > 10 || Math.abs(t.clientY - startY) > 10) {
+                isTap = false; // finger moved — this is a scroll, not a tap
+            }
+        }, { passive: true });
+        el.addEventListener('touchend', (e) => {
+            if (isTap) {
+                e.stopPropagation();
+                action();
+            }
+            isTap = false;
+        });
+        // Click fallback for non-touch devices
+        el.addEventListener('click', (e) => {
             e.stopPropagation();
             action();
-        };
-        el.addEventListener('touchstart', (e) => {
-            e.preventDefault();
-            touchFired = true;
-            fire(e);
-        }, { passive: false });
-        el.addEventListener('click', (e) => {
-            if (touchFired) { touchFired = false; return; }
-            fire(e);
         });
     }
 

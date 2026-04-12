@@ -947,15 +947,31 @@ class RouteEditor {
     /** Wire touchstart + click with debounce for iPad reliability */
     _wireTap(el, handler) {
         if (!el) return;
-        let touchFired = false;
+        let startX = 0, startY = 0, isTap = false, touchUsed = false;
         el.addEventListener('touchstart', (e) => {
-            e.stopPropagation();
-            touchFired = true;
-            handler(e);
-            setTimeout(() => { touchFired = false; }, 400);
+            const t = e.touches[0];
+            startX = t.clientX;
+            startY = t.clientY;
+            isTap = true;
+        }, { passive: true });
+        el.addEventListener('touchmove', (e) => {
+            if (!isTap) return;
+            const t = e.touches[0];
+            if (Math.abs(t.clientX - startX) > 10 || Math.abs(t.clientY - startY) > 10) {
+                isTap = false;
+            }
+        }, { passive: true });
+        el.addEventListener('touchend', (e) => {
+            if (isTap) {
+                e.stopPropagation();
+                touchUsed = true;
+                handler(e);
+                setTimeout(() => { touchUsed = false; }, 400);
+            }
+            isTap = false;
         });
         el.addEventListener('click', (e) => {
-            if (!touchFired) handler(e);
+            if (!touchUsed) handler(e);
         });
     }
 

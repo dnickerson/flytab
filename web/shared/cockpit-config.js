@@ -119,6 +119,11 @@ class CockpitConfig {
             metarMaxAgeMin: 90,
             sigmetAlertRadiusNm: 50,
         },
+        traffic: {
+            maxAboveAlt: 5000,
+            maxBelowAlt: 5000,
+            showCallsign: true,
+        },
         airspaceStyles: {
             B: { color: '#0088ff', weight: 2, fillOpacity: 0.08 },
             C: { color: '#ff44ff', weight: 1.5, fillOpacity: 0.06 },
@@ -167,7 +172,34 @@ class CockpitConfig {
 
         CockpitConfig._config = config || {};
         CockpitConfig._aircraft = aircraft || {};
+
+        // Merge user overrides saved by the config editor on top of bundled defaults.
+        // Uses a separate localStorage key so _fetchJson's offline cache doesn't clobber edits.
+        CockpitConfig._config = CockpitConfig._mergeUserOverrides(CockpitConfig._config, 'flypi_user_cockpit');
+        CockpitConfig._aircraft = CockpitConfig._mergeUserOverrides(CockpitConfig._aircraft, 'flypi_user_aircraft');
+
         CockpitConfig._loaded = true;
+    }
+
+    /**
+     * Deep-merge user overrides from localStorage on top of a base config object.
+     * Returns the merged result (base is not mutated).
+     */
+    static _mergeUserOverrides(base, storageKey) {
+        try {
+            const raw = localStorage.getItem(storageKey);
+            if (!raw) return base;
+            const saved = JSON.parse(raw);
+            const merged = { ...base };
+            for (const key of Object.keys(saved)) {
+                if (saved[key] != null && typeof saved[key] === 'object' && !Array.isArray(saved[key])) {
+                    merged[key] = Object.assign({}, merged[key] || {}, saved[key]);
+                } else {
+                    merged[key] = saved[key];
+                }
+            }
+            return merged;
+        } catch { return base; }
     }
 
     /**

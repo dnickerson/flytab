@@ -1632,10 +1632,10 @@ body {
 
 .route-editor {
     position: fixed;
-    bottom: 56px; /* above nav bar */
+    bottom: var(--bottom-chrome);
     left: 0;
     right: 0;
-    height: 65vh;
+    max-height: 60vh;
     background: var(--bg-surface);
     border-top: 2px solid var(--accent);
     z-index: 600;
@@ -1881,8 +1881,8 @@ body {
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 8px 12px;
-    min-height: 44px;
+    padding: 10px 12px;
+    min-height: var(--touch-preferred); /* 56px — cockpit turbulence target */
     cursor: pointer;
 }
 
@@ -1930,8 +1930,8 @@ body {
 }
 
 .route-wp-remove {
-    width: 36px;
-    height: 36px;
+    width: 44px;
+    height: 44px;
     border: none;
     background: transparent;
     color: var(--color-danger);
@@ -5478,6 +5478,104 @@ body {
     color: #000;
 }
 
+/* ── Route Nav Strip: in-flight navigation display ── */
+.rnav-strip {
+    flex-shrink: 0;
+    background: var(--bg-primary);
+    border-top: 1px solid var(--border);
+    overflow: hidden;
+    transition: max-height 0.2s ease;
+}
+.rnav-strip.rnav-hidden { display: none; }
+.rnav-compact { cursor: pointer; }
+.rnav-row {
+    display: flex;
+    align-items: center;
+    padding: 2px 8px;
+    gap: 4px;
+}
+.rnav-active-row {
+    min-height: 32px;
+    background: var(--bg-surface);
+}
+.rnav-detail-row {
+    min-height: 28px;
+    border-top: 1px solid var(--border);
+}
+.rnav-wpt {
+    font-family: var(--font-instrument);
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--status-ok);
+    min-width: 56px;
+    letter-spacing: 0.5px;
+}
+.rnav-cell {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex: 1;
+    min-width: 0;
+}
+.rnav-lbl {
+    font-size: 9px;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    line-height: 1;
+}
+.rnav-val {
+    font-family: var(--font-instrument);
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+    line-height: 1.2;
+}
+.rnav-val.rnav-green { color: var(--status-ok); }
+.rnav-val.rnav-amber { color: var(--status-warning); }
+.rnav-val.rnav-red   { color: var(--status-danger); }
+.rnav-fuel-dest { flex: 1.5; }
+.rnav-next .rnav-val { font-size: 13px; color: var(--text-secondary); }
+.rnav-edit-btn {
+    font-family: var(--font-instrument);
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--accent);
+    background: transparent;
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    padding: 4px 10px;
+    min-height: 28px;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+.rnav-edit-btn:active { background: var(--overlay-subtle); }
+
+/* Expanded state: show upcoming waypoints */
+.rnav-upcoming { display: none; }
+.rnav-expanded .rnav-upcoming {
+    display: block;
+    border-top: 1px solid var(--border);
+    max-height: 200px;
+    overflow-y: auto;
+}
+.rnav-upcoming-row {
+    min-height: 28px;
+    border-bottom: 1px solid var(--overlay-subtle);
+}
+.rnav-upcoming-row .rnav-wpt {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+.rnav-ucell {
+    flex: 1;
+    font-family: var(--font-instrument);
+    font-size: 13px;
+    color: var(--text-secondary);
+    text-align: center;
+}
+
 /* Instrument strip: bottom bar with numeric flight data */
 #instrumentStrip {
     display: flex;
@@ -6195,7 +6293,7 @@ body {
     position: absolute;
     top: 0;
     right: 0;
-    bottom: var(--route-table-height);
+    bottom: 0;
     width: 300px;
     z-index: 600;
     background: var(--bg-surface);

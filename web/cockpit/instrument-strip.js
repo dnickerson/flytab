@@ -83,6 +83,15 @@ class InstrumentStrip {
         };
         window.addEventListener('activeroute:legupdate', this._onLegUpdate);
 
+        // When route nav strip is active, hide fields it now owns (HDG, DEST, ETE)
+        // to avoid duplication. Show them again when no route is loaded.
+        this._routeNavFields = ['hdg', 'dest', 'ete'];
+        this._onPlanForStrip = (e) => {
+            const hasRoute = !!(e.detail?.plan?.waypoints?.length > 1);
+            this._setRouteFieldsVisible(!hasRoute);
+        };
+        window.addEventListener('activeroute:plan', this._onPlanForStrip);
+
         return this._el;
     }
 
@@ -101,6 +110,14 @@ class InstrumentStrip {
         }
         if (this._onLegUpdate) {
             window.removeEventListener('activeroute:legupdate', this._onLegUpdate);
+        }
+    }
+
+    /** Hide/show route-dependent fields (HDG, DEST, ETE) when route nav strip takes over */
+    _setRouteFieldsVisible(visible) {
+        for (const field of this._routeNavFields) {
+            const el = this._el.querySelector(`[data-field="${field}"]`);
+            if (el) el.style.display = visible ? '' : 'none';
         }
     }
 
