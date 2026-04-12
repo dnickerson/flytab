@@ -62,7 +62,6 @@ class FlyTabApp {
         this.vectorLayers = null;
         this.airportPopup = null;
         this.routeTable = null;
-        this.routeNavStrip = null;
         this.engineOverlay = null;
         this.enginePage = null;
         this.flightSync = null;
@@ -751,13 +750,6 @@ class FlyTabApp {
         if (typeof PowerTradeoff !== 'undefined') {
             this.powerTradeoff = new PowerTradeoff();
             this.powerTradeoff.init();
-        }
-
-        // ── v5 UI: Route Nav Strip ───────────────────────────────────────────
-        if (typeof RouteNavStrip !== 'undefined') {
-            this.routeNavStrip = new RouteNavStrip();
-            const navStripContainer = document.getElementById('routeNavStrip');
-            if (navStripContainer) this.routeNavStrip.init(navStripContainer);
         }
 
         // ── v5 UI: Instrument Strip ──────────────────────────────────────────

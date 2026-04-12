@@ -202,6 +202,13 @@ class RouteEditor {
                 </div>
             </div>
             <div class="route-editor-waypoints"></div>
+            <div class="route-editor-bottom-bar">
+                <button class="btn btn-secondary re-new-btn">NEW</button>
+                <button class="btn btn-secondary re-rev-btn">REV</button>
+                <button class="btn btn-secondary re-load-btn">LOAD</button>
+                <button class="btn btn-secondary re-upload-btn">UPLOAD</button>
+                <button class="btn btn-primary re-save-btn">SAVE</button>
+            </div>
         `;
         this.container.appendChild(this._el);
 
@@ -224,6 +231,23 @@ class RouteEditor {
         this._wireTap(this._undoBtn, () => this._popUndo());
         this._altInput.addEventListener('change', () => {
             this._altitude = parseInt(this._altInput.value) || 3500;
+        });
+
+        // Bottom bar: SAVE, LOAD, NEW, REV, UPLOAD — route management buttons
+        this._wireTap(this._el.querySelector('.re-new-btn'), () => {
+            if (typeof app !== 'undefined' && app.routeTable) app.routeTable._confirmNewRoute();
+        });
+        this._wireTap(this._el.querySelector('.re-rev-btn'), () => {
+            if (typeof app !== 'undefined' && app.routeTable) app.routeTable._reverseRoute();
+        });
+        this._wireTap(this._el.querySelector('.re-load-btn'), () => {
+            if (typeof app !== 'undefined' && app.routeTable) app.routeTable._showPlanPicker();
+        });
+        this._wireTap(this._el.querySelector('.re-upload-btn'), () => {
+            if (typeof app !== 'undefined' && app.routeTable) app.routeTable._showUploadModal();
+        });
+        this._wireTap(this._el.querySelector('.re-save-btn'), () => {
+            if (typeof app !== 'undefined' && app.routeTable) app.routeTable._saveRoute();
         });
     }
 

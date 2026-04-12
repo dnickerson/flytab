@@ -1698,19 +1698,9 @@ class RouteTable {
         this._expanded = !this._expanded;
         this._el.classList.toggle('route-table-expanded', this._expanded);
         if (this._expanded) {
-            const height = CockpitConfig.get('routeTable.defaultHeight') || '30vh';
-            this._bodyEl.style.maxHeight = height;
+            this._bodyEl.style.maxHeight = '40vh';
         } else {
             this._bodyEl.style.maxHeight = '0';
-            // Exit edit mode on collapse
-            if (this._editMode) {
-                this._editMode = false;
-                this._el.classList.remove('route-table-editing');
-                this._searchRowEl.hidden = true;
-                this._clearSearch();
-                this._hideAltPicker();
-                this._updateSummary();
-            }
         }
         setTimeout(() => {
             this._map?.invalidateSize();
@@ -1992,22 +1982,15 @@ class RouteTable {
         this._el = document.createElement('div');
         this._el.className = 'route-table-sheet';
 
-        // Handle bar
+        // Handle bar — read-only display, tap to toggle collapsed/expanded
         this._handleEl = document.createElement('div');
         this._handleEl.className = 'route-table-handle';
         this._handleEl.innerHTML = `
-            <span class="handle-grip">\u2261</span>
             <span class="handle-summary"></span>
-            <button class="rt-save-btn">SAVE</button>
-            <button class="rt-load-btn">LOAD</button>
-            <button class="rt-upload-btn">UPLOAD</button>
-            <button class="rt-new-btn">NEW</button>
-            <button class="rt-reverse-btn">REV</button>
             <button class="rt-profile-btn" title="Terrain profile" style="min-width:44px;min-height:44px;font-size:18px;background:none;border:none;color:inherit;cursor:pointer;padding:0 8px">\u26F0</button>
             <button class="route-table-edit-btn">EDIT</button>
         `;
-        // Toggle on tap — use both click and touchend for iPad.
-        // Track touch movement to distinguish taps from drags.
+        // Tap to toggle — no drag, just two states
         let touchStartY = 0;
         this._handleEl.addEventListener('touchstart', (e) => {
             touchStartY = e.touches[0].clientY;
@@ -2015,7 +1998,7 @@ class RouteTable {
         this._handleEl.addEventListener('touchend', (e) => {
             if (e.target.tagName === 'BUTTON') return;
             const dy = Math.abs(e.changedTouches[0].clientY - touchStartY);
-            if (dy < 10) { // tap, not drag
+            if (dy < 10) {
                 e.preventDefault();
                 this.toggle();
             }
@@ -2025,27 +2008,13 @@ class RouteTable {
             this.toggle();
         });
 
-        // Wire buttons with both click and touchend for iPad reliability.
-        // iPad WebKit can suppress click events on elements inside a container
-        // with a passive touchstart listener (the drag handler). Using touchend
-        // ensures the action fires even when click synthesis fails.
+        // EDIT button opens the separate route editor
         this._editBtn = this._handleEl.querySelector('.route-table-edit-btn');
-        this._wireButton(this._editBtn, () => this._toggleEditMode());
-
-        this._saveBtn = this._handleEl.querySelector('.rt-save-btn');
-        this._wireButton(this._saveBtn, () => this._saveRoute());
-
-        this._loadBtn2 = this._handleEl.querySelector('.rt-load-btn');
-        this._wireButton(this._loadBtn2, () => this._showPlanPicker());
-
-        this._uploadBtn = this._handleEl.querySelector('.rt-upload-btn');
-        this._wireButton(this._uploadBtn, () => this._showUploadModal());
-
-        this._newBtn = this._handleEl.querySelector('.rt-new-btn');
-        this._wireButton(this._newBtn, () => this._confirmNewRoute());
-
-        this._reverseBtn = this._handleEl.querySelector('.rt-reverse-btn');
-        this._wireButton(this._reverseBtn, () => this._reverseRoute());
+        this._wireButton(this._editBtn, () => {
+            if (typeof app !== 'undefined' && app.routeEditor) {
+                app.routeEditor.startEditRoute();
+            }
+        });
 
         this._profileBtn = this._handleEl.querySelector('.rt-profile-btn');
         this._wireButton(this._profileBtn, () => this._openProfileView());
@@ -2054,33 +2023,6 @@ class RouteTable {
         this._profileView = (typeof RouteProfileView !== 'undefined')
             ? new RouteProfileView()
             : null;
-
-        this._setupDrag();
-
-        // Search row (hidden until edit mode)
-        this._searchRowEl = document.createElement('div');
-        this._searchRowEl.className = 'rt-search-row';
-        this._searchRowEl.hidden = true;
-        this._searchRowEl.innerHTML = `
-            <input type="text" class="input rt-search-input" placeholder="Search or paste route..." autocomplete="off" autocorrect="off" spellcheck="false">
-            <button class="btn btn-primary rt-go-btn">GO</button>
-            <button class="rt-undo-btn" title="Undo">UNDO</button>
-        `;
-        this._searchInput = this._searchRowEl.querySelector('.rt-search-input');
-        this._searchInput.addEventListener('input', () => this._onSearchInput());
-        this._searchInput.addEventListener('keyup', () => this._onSearchInput());
-        this._searchInput.addEventListener('paste', () => setTimeout(() => this._onSearchInput(), 50));
-        this._searchRowEl.querySelector('.rt-go-btn').addEventListener('click', () => this._onSearchInput());
-
-        this._searchRowEl.querySelector('.rt-undo-btn').addEventListener('click', (e) => {
-            e.stopPropagation();
-            this._popUndo();
-        });
-
-        // Results
-        this._resultsEl = document.createElement('div');
-        this._resultsEl.className = 'rt-search-results';
-        this._resultsEl.hidden = true;
 
         // Body
         this._bodyEl = document.createElement('div');
@@ -2110,7 +2052,7 @@ class RouteTable {
             if (rules) { e.stopPropagation(); this._toggleFlightRules(); return; }
             // Row click pans map to waypoint
             const row = e.target.closest('.rt-row');
-            if (row && !this._editMode) {
+            if (row) {
                 const idx = parseInt(row.dataset.idx);
                 const wp = this._waypoints[idx];
                 if (wp && wp.lat && wp.lon && this._map) {
@@ -2184,8 +2126,6 @@ class RouteTable {
             }
         });
 
-        this._bodyEl.appendChild(this._searchRowEl);
-        this._bodyEl.appendChild(this._resultsEl);
         this._bodyEl.appendChild(this._tableEl);
 
         this._el.appendChild(this._handleEl);
@@ -2414,49 +2354,7 @@ class RouteTable {
         });
     }
 
-    _setupDrag() {
-        let startY = 0;
-        let startH = 0;
-
-        const onMove = (e) => {
-            if (!this._dragging) return;
-            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-            const delta = startY - clientY;
-            const newH = Math.max(0, Math.min(window.innerHeight * 0.6, startH + delta));
-            this._bodyEl.style.maxHeight = newH + 'px';
-            this._broadcastHeight();
-        };
-
-        const onEnd = () => {
-            this._dragging = false;
-            document.removeEventListener('mousemove', onMove);
-            document.removeEventListener('touchmove', onMove);
-            document.removeEventListener('mouseup', onEnd);
-            document.removeEventListener('touchend', onEnd);
-
-            const h = parseInt(this._bodyEl.style.maxHeight);
-            this._expanded = h > 20;
-            this._el.classList.toggle('route-table-expanded', this._expanded);
-            this._map?.invalidateSize();
-            this._broadcastHeight();
-        };
-
-        const grip = this._handleEl;
-        const startDrag = (e) => {
-            // Don't start drag on buttons — let their click handlers work
-            if (e.target.tagName === 'BUTTON') return;
-            this._dragging = true;
-            startY = e.touches ? e.touches[0].clientY : e.clientY;
-            startH = this._bodyEl.offsetHeight;
-            document.addEventListener('mousemove', onMove);
-            document.addEventListener('touchmove', onMove);
-            document.addEventListener('mouseup', onEnd);
-            document.addEventListener('touchend', onEnd);
-        };
-
-        grip.addEventListener('mousedown', startDrag);
-        grip.addEventListener('touchstart', startDrag, { passive: true });
-    }
+    // Drag removed in v5 — route display uses tap-to-toggle only
 
     _updateSummary() {
         const summaryEl = this._handleEl.querySelector('.handle-summary');

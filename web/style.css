@@ -1872,6 +1872,21 @@ body {
     padding: 4px 0;
 }
 
+.route-editor-bottom-bar {
+    display: flex;
+    gap: 6px;
+    padding: 8px 12px;
+    border-top: 1px solid var(--border);
+    background: var(--bg-surface-raised);
+    flex-shrink: 0;
+}
+.route-editor-bottom-bar .btn {
+    flex: 1;
+    min-height: var(--touch-min);
+    font-size: 13px;
+    font-weight: 700;
+}
+
 /* Waypoint rows */
 .route-wp-row {
     border-bottom: 1px solid var(--border-light);
@@ -2140,15 +2155,9 @@ body {
     align-items: center;
     gap: 8px;
     padding: 10px 16px;
-    cursor: grab;
-    min-height: 52px;
-    touch-action: none;
-}
-
-.handle-grip {
-    font-size: 18px;
-    color: var(--text-muted);
-    line-height: 1;
+    cursor: pointer;
+    min-height: 48px;
+    touch-action: manipulation;
 }
 
 .handle-summary {
