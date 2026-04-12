@@ -137,7 +137,6 @@ Home server (:8090)  ──HTTP──▶  map tiles, plates, NASR, CIFP
 | `web/cockpit-config.json`  | UI settings: map layers, overlays, radar, FIS-B, home server URLs          |
 | `web/aircraft-config.json` | Aircraft performance: V-speeds, fuel capacity, glide ratio, power settings |
 | `web/checklist.json`       | Checklist sections and items                                               |
-| `web/version.json`         | App version                                                                |
 
 The in-app **Configuration** page (MORE → ⚙) provides a GUI editor for all settings. Values are stored in `localStorage` and override the bundled JSON defaults.
 

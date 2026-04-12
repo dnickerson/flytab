@@ -39,6 +39,8 @@ function isFuelStop(wp, index, waypoints) {
     if (index === 0 || index >= waypoints.length - 1) return false;
     // Primary check: type flag set on the waypoint object
     if (wp.type === 'APT') return true;
+    // Non-airport types are never fuel stops
+    if (wp.type === 'VOR' || wp.type === 'NDB' || wp.type === 'FIX' || wp.type === 'GPS' || wp.type === 'WPT') return false;
     // Fallback: plans loaded from legs-only (waypoints:null) don't have type set.
     // Treat any intermediate airport-looking waypoint (4-char K-prefix ICAO) as a
     // potential fuel stop. This handles the common US airport case.
@@ -186,6 +188,12 @@ class RouteTable {
                     });
                 }
                 plan = { ...plan, waypoints: wps };
+
+                // Async NASR resolution: fill in lat/lon for waypoints reconstructed
+                // from legs so HDG/BRG/DIST columns show real values instead of dashes.
+                if (this._nasrDb) {
+                    this._resolveWaypointCoords(wps);
+                }
             }
         }
 
@@ -317,6 +325,45 @@ class RouteTable {
     }
 
     /**
+     * Attempt to resolve lat/lon for waypoints that are missing coordinates
+     * (e.g. reconstructed from a legs-only saved plan). Looks up each ident
+     * in NasrDB (airports → navaids → fixes) and patches the waypoint in-place,
+     * then recomputes the route so HDG/BRG/DIST columns populate.
+     */
+    async _resolveWaypointCoords(waypoints) {
+        const db = this._nasrDb;
+        if (!db) return;
+
+        let resolved = 0;
+        for (const wp of waypoints) {
+            if (wp.lat != null && wp.lon != null) continue;
+            const ident = wp.icao || wp.name;
+            if (!ident) continue;
+
+            try {
+                // Try airport first, then navaid, then fix
+                let rec = await db.getAirport(ident);
+                if (!rec) rec = await db.getAirport('K' + ident); // US ICAO prefix
+                if (!rec) rec = await db.getNavaid(ident);
+                if (!rec) rec = await db.getFix(ident);
+
+                if (rec && rec.lat != null && rec.lon != null) {
+                    wp.lat = rec.lat;
+                    wp.lon = rec.lon;
+                    if (rec.name && !wp.name) wp.name = rec.name;
+                    resolved++;
+                }
+            } catch { /* NASR DB may not be loaded yet — leave as dashes */ }
+        }
+
+        if (resolved > 0) {
+            this._computeEnroute();
+            this._updateSummary();
+            this._renderTable();
+        }
+    }
+
+    /**
      * Update live data (GS, position) from Stratux situation.
      */
     updateLive(situation) {
@@ -360,7 +407,11 @@ class RouteTable {
         // Skip full DOM rebuild while editing — live updates would destroy
         // the edit-mode button event listeners mid-interaction (issue #30)
         if (!this._editMode) {
-            this._renderTable();
+            // Try selective cell update first to avoid full innerHTML rebuild every
+            // GPS tick (1 Hz). Falls back to full render when structure changes.
+            if (!this._updateTableCells()) {
+                this._renderTable();
+            }
         }
     }
 
@@ -436,13 +487,18 @@ class RouteTable {
     }
 
     _pushUndo() {
-        this._undoStack.push(JSON.parse(JSON.stringify(this._waypoints)));
-        if (this._undoStack.length > 5) this._undoStack.shift();
+        this._undoStack.push({
+            waypoints: JSON.parse(JSON.stringify(this._waypoints)),
+            activeIndex: this._activeIndex,
+        });
+        if (this._undoStack.length > 15) this._undoStack.shift();
     }
 
     _popUndo() {
         if (this._undoStack.length === 0) return;
-        this._waypoints = this._undoStack.pop();
+        const state = this._undoStack.pop();
+        this._waypoints = state.waypoints;
+        this._activeIndex = state.activeIndex;
         this._reindex();
         this._onEdited();
     }
@@ -451,6 +507,10 @@ class RouteTable {
         if (index < 0 || index >= this._waypoints.length) return;
         this._pushUndo();
         this._waypoints.splice(index, 1);
+        // Keep _activeIndex valid after removal
+        if (this._activeIndex >= this._waypoints.length) {
+            this._activeIndex = Math.max(this._waypoints.length - 1, -1);
+        }
         this._reindex();
         this._onEdited();
     }
@@ -600,6 +660,7 @@ class RouteTable {
 
     _moveWaypoint(fromIdx, toIdx) {
         if (fromIdx === toIdx) return;
+        if (fromIdx < 0 || fromIdx >= this._waypoints.length) return;
         if (toIdx < 0 || toIdx >= this._waypoints.length) return;
         this._pushUndo();
         const [wp] = this._waypoints.splice(fromIdx, 1);
@@ -650,13 +711,21 @@ class RouteTable {
         const plan = {
             ...(this._trip || {}),
             // trip.waypoints[] — all waypoints across all flights
-            waypoints: this._waypoints.map(wp => ({
-                icao: wp.icao,
-                name: wp.name,
-                lat: wp.lat,
-                lon: wp.lon,
-                alt: wp.alt ?? wp.altitude,
-            })),
+            waypoints: this._waypoints.map(wp => {
+                const out = {
+                    icao: wp.icao,
+                    name: wp.name,
+                    lat: wp.lat,
+                    lon: wp.lon,
+                    alt: wp.alt ?? wp.altitude,
+                };
+                if (wp.type) out.type = wp.type;
+                if (wp.fuel_add_gal != null) out.fuel_add_gal = wp.fuel_add_gal;
+                if (wp.alt_constraint) out.alt_constraint = wp.alt_constraint;
+                if (wp.alt_constraint_upper != null) out.alt_constraint_upper = wp.alt_constraint_upper;
+                if (wp.elev_ft != null) out.elev_ft = wp.elev_ft;
+                return out;
+            }),
             // trip.flights[] — airport-to-airport Flight segments
             flights: (this._flights || []).map(f => ({
                 dep:  f.dep,
@@ -1568,7 +1637,15 @@ class RouteTable {
                 this._updateSummary();
             }
         }
-        setTimeout(() => this._map?.invalidateSize(), 300);
+        setTimeout(() => {
+            this._map?.invalidateSize();
+            this._broadcastHeight();
+        }, 300);
+    }
+
+    _broadcastHeight() {
+        const h = this._el ? this._el.offsetHeight : 0;
+        document.documentElement.style.setProperty('--route-table-height', h + 'px');
     }
 
     // ========== Save Route ==========
@@ -1778,6 +1855,62 @@ class RouteTable {
         document.body.appendChild(overlay);
     }
 
+    _confirmNewRoute() {
+        if (this._newConfirmPending) {
+            // Second tap — confirmed
+            this._newConfirmPending = false;
+            clearTimeout(this._newConfirmTimer);
+            this._newBtn.textContent = 'NEW';
+            this._newBtn.style.color = '';
+            this._newBtn.style.borderColor = '';
+            // Clear persisted plan
+            try { localStorage.removeItem('flypi_active_plan'); } catch {}
+            // Open route editor in new-route mode
+            if (typeof app !== 'undefined' && app.routeEditor) {
+                app.routeEditor.startNewRoute();
+            }
+            return;
+        }
+        // First tap — show confirm state
+        this._newConfirmPending = true;
+        this._newBtn.textContent = 'DELETE?';
+        this._newBtn.style.color = '#e53e3e';
+        this._newBtn.style.borderColor = '#e53e3e';
+        // Revert after 3 seconds if not confirmed
+        this._newConfirmTimer = setTimeout(() => {
+            this._newConfirmPending = false;
+            this._newBtn.textContent = 'NEW';
+            this._newBtn.style.color = '';
+            this._newBtn.style.borderColor = '';
+        }, 3000);
+    }
+
+    _reverseRoute() {
+        if (!this._waypoints?.length || this._waypoints.length < 2) {
+            if (typeof app !== 'undefined') app.showToast('Need at least 2 waypoints to reverse', 'amber');
+            return;
+        }
+        const reversed = [...this._waypoints].reverse();
+        const trip = app?._currentTrip || {};
+        const plan = {
+            ...trip,
+            departure: reversed[0]?.icao || '',
+            destination: reversed[reversed.length - 1]?.icao || '',
+            waypoints: reversed,
+            flight_plan: {
+                ...(trip.flight_plan || {}),
+                departure: reversed[0]?.icao || '',
+                destination: reversed[reversed.length - 1]?.icao || '',
+                route: reversed.map(w => w.icao || w.name).filter(Boolean),
+                legs: [],
+            },
+        };
+        if (typeof app !== 'undefined') {
+            app.applyRouteEdit(plan);
+            app.showToast('Route reversed');
+        }
+    }
+
     // ========== DOM ==========
 
     _buildDOM() {
@@ -1790,9 +1923,11 @@ class RouteTable {
         this._handleEl.innerHTML = `
             <span class="handle-grip">\u2261</span>
             <span class="handle-summary"></span>
-            <button class="rt-save-btn" style="display:none">SAVE</button>
+            <button class="rt-save-btn">SAVE</button>
             <button class="rt-load-btn">LOAD</button>
             <button class="rt-upload-btn">UPLOAD</button>
+            <button class="rt-new-btn">NEW</button>
+            <button class="rt-reverse-btn">REV</button>
             <button class="rt-profile-btn" title="Terrain profile" style="min-width:44px;min-height:44px;font-size:18px;background:none;border:none;color:inherit;cursor:pointer;padding:0 8px">\u26F0</button>
             <button class="route-table-edit-btn">EDIT</button>
         `;
@@ -1830,6 +1965,12 @@ class RouteTable {
 
         this._uploadBtn = this._handleEl.querySelector('.rt-upload-btn');
         this._wireButton(this._uploadBtn, () => this._showUploadModal());
+
+        this._newBtn = this._handleEl.querySelector('.rt-new-btn');
+        this._wireButton(this._newBtn, () => this._confirmNewRoute());
+
+        this._reverseBtn = this._handleEl.querySelector('.rt-reverse-btn');
+        this._wireButton(this._reverseBtn, () => this._reverseRoute());
 
         this._profileBtn = this._handleEl.querySelector('.rt-profile-btn');
         this._wireButton(this._profileBtn, () => this._openProfileView());
@@ -2208,6 +2349,7 @@ class RouteTable {
             const delta = startY - clientY;
             const newH = Math.max(0, Math.min(window.innerHeight * 0.6, startH + delta));
             this._bodyEl.style.maxHeight = newH + 'px';
+            this._broadcastHeight();
         };
 
         const onEnd = () => {
@@ -2221,6 +2363,7 @@ class RouteTable {
             this._expanded = h > 20;
             this._el.classList.toggle('route-table-expanded', this._expanded);
             this._map?.invalidateSize();
+            this._broadcastHeight();
         };
 
         const grip = this._handleEl;
@@ -2393,11 +2536,14 @@ class RouteTable {
             // Fuel stop row between flights (not after the last flight)
             if (fi < flightsToRender.length - 1) {
                 const nextFlight = flightsToRender[fi + 1];
-                // Label: "⛽ Arrived KFGX — Refuel · Flight 2 continues to KLWA"
-                // This makes clear the DES rows above were the ARRIVAL, and CLB rows
-                // below are the DEPARTURE — the fuel stop is the boundary between them.
+                const stopIdx = nextFlight.depWpIndex;
+                // The DES rows above are the arrival into this stop; CLB rows below are
+                // the departure — this row is the boundary between those two legs.
                 html += `<tr class="rt-fuel-stop-row"><td colspan="${numCols}" class="rt-fuel-stop-cell">`;
-                html += `\u26FD\u2002Arrived ${flight.dest} \u2014 Refuel \u00b7 Flight ${fi + 2} continues to ${nextFlight.dest}`;
+                html += `<span>\u26FD\u2002Arrived ${flight.dest} \u2014 Refuel \u00b7 Flight ${fi + 2} continues to ${nextFlight.dest}</span>`;
+                if (this._editMode) {
+                    html += `<button class="rt-delete-btn" data-idx="${stopIdx}" title="Remove fuel stop">\u00d7</button>`;
+                }
                 html += `</td></tr>`;
                 // Fuel added row — only shown if pilot explicitly set fuel_add_gal on this waypoint
                 const stopWp = this._waypoints[nextFlight.depWpIndex];
@@ -2451,6 +2597,113 @@ class RouteTable {
     }
 
     /**
+     * Selective cell update for live GPS ticks (non-edit mode only).
+     * Walks existing <tr> rows and patches cell text in-place instead of
+     * destroying/recreating the entire DOM tree. Returns false if the table
+     * structure has changed (row count or waypoint order) and a full rebuild
+     * is needed.
+     */
+    _updateTableCells() {
+        if (!this._tableEl) return false;
+        const columns = CockpitConfig.get('routeTable.columns') || [];
+        const rows = this._tableEl.querySelectorAll('tbody tr.rt-row');
+
+        // Build the expected list of (wp, seg, segIndex) tuples that _renderTable would emit
+        const expected = [];
+        const hasMultipleFlights = this._flights.length > 1;
+        const flightsToRender = hasMultipleFlights
+            ? this._flights
+            : [{ index: 0, depWpIndex: 0, destWpIndex: this._waypoints.length - 1 }];
+
+        for (let fi = 0; fi < flightsToRender.length; fi++) {
+            const flight = flightsToRender[fi];
+            const wpStart = fi > 0 ? flight.depWpIndex + 1 : flight.depWpIndex;
+            const wpEnd = flight.destWpIndex;
+
+            for (let wpIdx = wpStart; wpIdx <= wpEnd; wpIdx++) {
+                const wp = this._waypoints[wpIdx];
+                const isDepRow = wpIdx === 0;
+                const segs = (!isDepRow && (wp._segments?.length ?? 0) > 1 && wp.index > 0)
+                    ? wp._segments : [];
+
+                if (segs.length > 1) {
+                    for (let si = 0; si < segs.length; si++) {
+                        expected.push({ wp, seg: segs[si], segIndex: si });
+                    }
+                } else {
+                    expected.push({ wp, seg: null, segIndex: 0 });
+                }
+            }
+        }
+
+        // Bail if row count doesn't match — structure changed, need full rebuild
+        if (rows.length !== expected.length) return false;
+
+        // Patch each row's cells in-place
+        for (let r = 0; r < rows.length; r++) {
+            const tr = rows[r];
+            const { wp, seg, segIndex } = expected[r];
+
+            // Verify row identity matches
+            if (parseInt(tr.dataset.idx) !== wp.index) return false;
+
+            // Update active/passed classes
+            const newCls = wp.active ? 'active' : (wp.passed ? 'passed' : '');
+            const segCls = segIndex > 0 ? 'rt-seg-row' : '';
+            const wantClass = `rt-row ${segCls} ${newCls}`.replace(/\s+/g, ' ').trim();
+            if (tr.className !== wantClass) tr.className = wantClass;
+
+            // Update cell values (skip edit-mode columns since we're never in edit mode here)
+            const cells = tr.children;
+            for (let c = 0; c < columns.length && c < cells.length; c++) {
+                const val = seg
+                    ? this._getCellValue(wp, columns[c].key, seg, segIndex)
+                    : this._getCellValue(wp, columns[c].key);
+                const valStr = String(val);
+                if (cells[c].innerHTML !== valStr) {
+                    cells[c].innerHTML = valStr;
+                }
+            }
+        }
+
+        // Update totals footer
+        const footerCells = this._tableEl.querySelectorAll('tfoot .rt-totals-row td');
+        if (footerCells.length > 0 && this._waypoints.length >= 2) {
+            let totDist = 0, totEte = 0, totFuel = 0;
+            const destIdx = typeof ActiveRoute !== 'undefined' ? ActiveRoute.getDestIndex() : -1;
+            const limitIdx = destIdx >= 0 ? destIdx : this._waypoints.length - 1;
+            for (let i = 0; i <= limitIdx; i++) {
+                const wp = this._waypoints[i];
+                totDist += wp._dist || 0;
+                totEte  += wp._ete  || 0;
+                totFuel += wp._fuel || 0;
+            }
+            const totalLabel = hasMultipleFlights ? 'TRIP' : 'TOTAL';
+            let ci = 0;
+            for (const col of columns) {
+                if (ci >= footerCells.length) break;
+                let val;
+                switch (col.key) {
+                    case 'wpt':  val = `<span class="rt-totals-label">${totalLabel}</span>`; break;
+                    case 'dist': val = `${Math.round(totDist)}nm`; break;
+                    case 'ete':  val = this._formatTime(totEte); break;
+                    case 'fuel': val = totFuel.toFixed(1); break;
+                    default:     val = ''; break;
+                }
+                const valStr = String(val);
+                if (footerCells[ci].innerHTML !== valStr) footerCells[ci].innerHTML = valStr;
+                ci++;
+            }
+        }
+
+        // Scroll active row into view
+        const activeRow = this._tableEl.querySelector('.rt-row.active');
+        if (activeRow) activeRow.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+
+        return true;
+    }
+
+    /**
      * Render a single LegRow or SegmentRow as an HTML <tr> string.
      * @param {object} wp        — waypoint object
      * @param {Array}  columns   — column config array
@@ -2465,31 +2718,25 @@ class RouteTable {
 
         if (this._editMode) {
             if (segIndex === 0) {
-                const rs = segCount > 1 ? ` rowspan="${segCount}"` : '';
-                row += `<td class="rt-reorder-cell"${rs}>
+                row += `<td class="rt-reorder-cell">
                     <button class="rt-up-btn" data-idx="${wp.index}" ${wp.index === 0 ? 'disabled' : ''}>\u25B2</button>
                     <button class="rt-down-btn" data-idx="${wp.index}" ${wp.index === this._waypoints.length - 1 ? 'disabled' : ''}>\u25BC</button>
                 </td>`;
+            } else {
+                row += '<td></td>';
             }
-            // segIndex > 0: skip reorder cell (covered by rowspan)
         }
 
         for (const col of columns) {
-            // Multi-segment: rowspan wpt/hdg/wind across all SegmentRows for the same Leg
-            if (seg && segCount > 1 && (col.key === 'wpt' || col.key === 'hdg' || col.key === 'brg' || col.key === 'wind')) {
+            if (col.key === 'alt' && this._editMode) {
                 if (segIndex === 0) {
-                    const val = this._getCellValue(wp, col.key, seg, 0);
-                    row += `<td rowspan="${segCount}">${val}</td>`;
+                    // Tappable altitude cell in edit mode
+                    const altVal  = wp.alt ?? wp.altitude ?? '\u2014';
+                    const display = typeof altVal === 'number' ? (altVal >= 1000 ? altVal.toLocaleString() : altVal) : altVal;
+                    row += `<td class="rt-alt-cell" data-idx="${wp.index}">${display} <span class="rt-alt-edit-icon">\u25BE</span></td>`;
+                } else {
+                    row += `<td></td>`;
                 }
-                // segIndex > 0: omit — covered by rowspan
-            } else if (col.key === 'alt' && this._editMode && segIndex === 0) {
-                // Tappable altitude cell in edit mode (issue #31)
-                const altVal  = wp.alt ?? wp.altitude ?? '\u2014';
-                const display = typeof altVal === 'number' ? (altVal >= 1000 ? altVal.toLocaleString() : altVal) : altVal;
-                const rs      = segCount > 1 ? ` rowspan="${segCount}"` : '';
-                row += `<td class="rt-alt-cell" data-idx="${wp.index}"${rs}>${display} <span class="rt-alt-edit-icon">\u25BE</span></td>`;
-            } else if (col.key === 'alt' && this._editMode && segIndex > 0) {
-                // omit — covered by rowspan from segIndex===0
             } else {
                 const val = seg ? this._getCellValue(wp, col.key, seg, segIndex) : this._getCellValue(wp, col.key);
                 row += `<td>${val}</td>`;
@@ -2498,8 +2745,9 @@ class RouteTable {
 
         if (this._editMode) {
             if (segIndex === 0) {
-                const rs = segCount > 1 ? ` rowspan="${segCount}"` : '';
-                row += `<td${rs}><button class="rt-delete-btn" data-idx="${wp.index}">\u00d7</button></td>`;
+                row += `<td><button class="rt-delete-btn" data-idx="${wp.index}">\u00d7</button></td>`;
+            } else {
+                row += '<td></td>';
             }
         }
 

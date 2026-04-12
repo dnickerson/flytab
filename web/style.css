@@ -161,6 +161,7 @@
     /* ── Tab bar height — total reserved space at bottom (tab bar + nav bar) ── */
     --tab-bar-height:    calc(72px + var(--android-nav-height));
     --bottom-chrome:     calc(var(--tab-bar-height) + 64px);  /* tab bar + instrument strip */
+    --route-table-height: 0px;
 
     /* ── Touch targets — Apple HIG + sunlight glove tolerance ── */
     --touch-compact:     36px;      /* compact toolbar/table buttons (fixed, no cockpit override) */
@@ -2223,12 +2224,32 @@ body {
     padding-top: 4px;
 }
 
+.rt-fuel-stop-cell {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 6px 4px 8px;
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+    background: var(--bg-surface);
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+}
+.rt-fuel-added-cell {
+    text-align: center;
+    font-size: var(--text-sm);
+    color: var(--status-ok);
+    padding: 2px 8px 4px;
+    background: var(--bg-surface);
+    border-bottom: 1px solid var(--border);
+}
+
 .route-table-content .rt-totals-label {
     color: var(--text-label);
     font-weight: 700;
 }
 
-.rt-save-btn, .rt-load-btn, .rt-upload-btn {
+.rt-save-btn, .rt-load-btn, .rt-upload-btn, .rt-new-btn, .rt-reverse-btn {
     padding: 4px 10px;
     border: 1px solid var(--border);
     border-radius: 4px;
@@ -2243,7 +2264,7 @@ body {
     min-height: var(--touch-compact);
     margin-left: 4px;
 }
-.rt-save-btn:active, .rt-load-btn:active, .rt-upload-btn:active {
+.rt-save-btn:active, .rt-load-btn:active, .rt-upload-btn:active, .rt-new-btn:active, .rt-reverse-btn:active {
     background: var(--border);
     color: var(--text-primary);
 }
@@ -3100,6 +3121,235 @@ body {
     padding: 10px 16px 12px;
     background: var(--bg-primary);
     border-top: 1px solid var(--border);
+}
+
+/* ========== FIS-B Status Page ========== */
+
+.fisb-status-page {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    bottom: var(--tab-bar-height);
+    z-index: 800;
+    background: var(--bg-primary);
+    display: none;
+    flex-direction: column;
+    font-family: var(--font-ui);
+}
+.fisb-status-page.visible {
+    display: flex;
+}
+.fisb-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 16px;
+    background: var(--bg-surface);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+.fisb-title {
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    color: var(--text-primary);
+}
+.fisb-close {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-secondary);
+    font-size: 16px;
+    padding: 4px 10px;
+    cursor: pointer;
+    min-height: 36px;
+}
+.fisb-body {
+    flex: 1;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 8px 12px 20px;
+}
+
+/* Health bar */
+.fisb-health-bar {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+}
+.fisb-hcell {
+    flex: 1;
+    min-width: 70px;
+    padding: 6px 8px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    text-align: center;
+}
+.fisb-hcell-label {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 2px;
+}
+.fisb-hcell-value {
+    font-family: var(--font-instrument, monospace);
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+.fisb-hcell-value.ok   { color: #1e8c3a; }
+.fisb-hcell-value.warn { color: #cc8800; }
+.fisb-hcell-value.bad  { color: #cc2222; }
+
+/* Section labels */
+.fisb-section-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin: 12px 0 6px;
+    padding-bottom: 3px;
+    border-bottom: 1px solid var(--border);
+}
+
+/* Status dots */
+.fisb-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    vertical-align: middle;
+    margin-right: 4px;
+}
+.fisb-dot.ok   { background: #1e8c3a; }
+.fisb-dot.warn { background: #cc8800; }
+.fisb-dot.bad  { background: #cc2222; }
+.fisb-dot.none { background: #ccc; }
+
+/* Route weather table */
+.fisb-route-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+    margin-bottom: 4px;
+}
+.fisb-route-table th {
+    text-align: left;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--border);
+}
+.fisb-route-table td {
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--border-light);
+}
+.fisb-route-icao {
+    font-family: var(--font-instrument, monospace);
+    font-weight: 700;
+}
+.fisb-route-row.missing {
+    background: #fff0f0;
+}
+.fisb-route-row.partial {
+    background: #fffaf0;
+}
+
+/* Product table */
+.fisb-product-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+.fisb-product-table thead th {
+    text-align: left;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    padding: 4px 6px;
+    border-bottom: 1px solid var(--border);
+}
+.fisb-product-table thead th:first-child {
+    width: 16px;
+    padding-right: 0;
+}
+.fisb-product-row td {
+    padding: 6px 6px;
+    border-bottom: 1px solid var(--border-light);
+    vertical-align: top;
+}
+.fisb-product-row.none td {
+    color: var(--text-muted);
+}
+.fisb-product-name {
+    font-weight: 600;
+    white-space: nowrap;
+}
+.fisb-product-count, .fisb-product-age {
+    font-family: var(--font-instrument, monospace);
+    white-space: nowrap;
+    min-width: 36px;
+}
+.fisb-product-stations {
+    line-height: 1.6;
+    word-break: break-word;
+}
+.fisb-station {
+    display: inline-block;
+    font-family: var(--font-instrument, monospace);
+    font-size: 11px;
+    padding: 1px 4px;
+    margin: 1px 2px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+}
+.fisb-station.route {
+    font-weight: 700;
+    border-color: #0066cc;
+    background: #e8f0ff;
+    color: #003d7a;
+}
+.fisb-station-dim {
+    color: var(--text-muted);
+    font-size: 11px;
+}
+
+/* Tower table */
+.fisb-tower-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+.fisb-tower-table th {
+    text-align: left;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--border);
+}
+.fisb-tower-table td {
+    padding: 5px 8px;
+    border-bottom: 1px solid var(--border-light);
+    font-family: var(--font-instrument, monospace);
+}
+.fisb-tower-sig.ok   { color: #1e8c3a; font-weight: 700; }
+.fisb-tower-sig.warn { color: #cc8800; font-weight: 700; }
+.fisb-tower-sig.bad  { color: #cc2222; font-weight: 700; }
+
+.fisb-no-data {
+    color: var(--text-muted);
+    font-size: 12px;
+    padding: 8px 0;
 }
 
 /* ========== Airport Popup ========== */
@@ -5672,7 +5922,7 @@ body {
 }
 
 .lp-accordion.open .lp-accordion-body {
-    max-height: 600px;
+    max-height: 1200px;
 }
 
 /* ── Weather map labels (ceil / vis / wind) ─────────────────────────────────── */
@@ -5945,13 +6195,13 @@ body {
     position: absolute;
     top: 0;
     right: 0;
-    bottom: 0;
+    bottom: var(--route-table-height);
     width: 300px;
     z-index: 600;
     background: var(--bg-surface);
     border-left: 1px solid var(--border-strong);
     transform: translateX(100%);
-    transition: transform 0.2s ease;
+    transition: transform 0.2s ease, bottom 0.2s ease;
     overflow: hidden;
     display: flex;
     flex-direction: column;
@@ -7445,6 +7695,11 @@ body {
     color: var(--text-secondary);
 }
 .ps-error { color: var(--status-danger); }
+
+/* Hide tab bar while emergency overlay is active so ACKNOWLEDGE button is reachable */
+body.emergency-active #tabBar {
+    display: none !important;
+}
 
 /* ── Emergency Glide Overlay (Scenario 6) ───────────────────────────────── */
 .eg-overlay {

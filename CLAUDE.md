@@ -70,7 +70,6 @@ Standard Capacitor/Gradle project. Mixed HTTP content is explicitly allowed in t
 | `web/cockpit-config.json` | UI defaults: map layers, overlays, chart limits, FIS-B settings |
 | `web/aircraft-config.json` | Aircraft performance: speeds, power settings, W&B (RV-9A N194JT) |
 | `web/checklist.json` | VFR checklist sections |
-| `web/version.json` | Version tracking |
 | `capacitor.config.ts` | Capacitor/Android settings |
 
 ## Key Conventions

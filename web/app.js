@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v4.74';
+const FLYTAB_VERSION = 'v4.87';
 
 // ========== Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -105,6 +105,14 @@ class FlyTabApp {
         this._clockInterval = null;
         this._recorderInterval = null;
         this._piConnected = false;
+
+        // FIS-B badge opens FIS-B status page
+        if (this.dom.statusFisb) {
+            this.dom.statusFisb.style.cursor = 'pointer';
+            this.dom.statusFisb.addEventListener('click', () => {
+                if (this.fisbStatus) this.fisbStatus.show();
+            });
+        }
     }
 
     async init() {
@@ -617,6 +625,11 @@ class FlyTabApp {
             this.cockpitMap.setFisbWeather(this.fisbWeather);
         }
 
+        // FIS-B Status overlay (reception health, tower list, product grid)
+        if (typeof FisbStatus !== 'undefined' && this.fisbClient) {
+            this.fisbStatus = new FisbStatus(this.stratuxClient, this.fisbClient);
+        }
+
         // Lightning strikes (Blitzortung WebSocket)
         if (typeof LightningLayer !== 'undefined') {
             this.lightning = new LightningLayer();
@@ -781,6 +794,7 @@ class FlyTabApp {
                 approachCharts: this.approachCharts,
                 fuelOverlay: this.fuelOverlay,
                 dataStatus: this.dataStatus,
+                fisbStatus: this.fisbStatus,
                 configEditor: this.configEditor,
                 ifrClearance: this.ifrClearance,
                 wxBriefing: this.wxBriefing,
@@ -1159,10 +1173,11 @@ class FlyTabApp {
             this.approachCharts.setRouteAirports(icaoList);
         }
 
-        // Update FIS-B weather strip with route airports
-        if (this.fisbWeather) {
+        // Update FIS-B weather strip and status page with route airports
+        if (this.fisbWeather || this.fisbStatus) {
             const icaoList = wps.map(wp => wp.icao).filter(Boolean);
-            this.fisbWeather.setRouteAirports(icaoList);
+            if (this.fisbWeather) this.fisbWeather.setRouteAirports(icaoList);
+            if (this.fisbStatus) this.fisbStatus.setRouteAirports(icaoList);
         }
 
 

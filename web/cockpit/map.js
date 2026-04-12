@@ -1029,7 +1029,42 @@ class CockpitMap {
 
     async _drawDestRunways(icao) {
         const apt = await this._nasr.getAirport(icao);
-        if (!apt?.runways?.length) return;
+        if (!apt) return;
+
+        // Fetch runway data from AWC if not in NASR bundle
+        if (!apt.runways?.length) {
+            try {
+                const resp = await fetch(
+                    `https://aviationweather.gov/api/data/airport?ids=${encodeURIComponent(icao)}&format=json`,
+                    { signal: AbortSignal.timeout(5000) }
+                );
+                if (resp.ok) {
+                    const data = await resp.json();
+                    const awcApt = Array.isArray(data) ? data[0] : data;
+                    if (awcApt?.runways?.length) {
+                        apt.runways = awcApt.runways.map(r => {
+                            const [len, wid] = (r.dimension || '').split('x').map(Number);
+                            return {
+                                id: r.id,
+                                length_ft: len || 0,
+                                width_ft: wid || 0,
+                                surface: r.surface || '',
+                            };
+                        });
+                        // Cache on the NASR record for future use
+                        if (this._nasr?.open) {
+                            try {
+                                const db = await this._nasr.open();
+                                const tx = db.transaction('airports', 'readwrite');
+                                tx.objectStore('airports').put(apt);
+                            } catch { /* non-critical */ }
+                        }
+                    }
+                }
+            } catch { /* offline or timeout — no extensions */ }
+        }
+
+        if (!apt.runways?.length) return;
         this._destAirport = apt;
         this._rwyExtLayer = L.layerGroup();
         if (this._rwyExtVisible) this._rwyExtLayer.addTo(this.map);

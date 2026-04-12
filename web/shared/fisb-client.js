@@ -43,6 +43,8 @@ class FisbClient extends EventTarget {
         this._onFisbFrame = (e) => this._handleFisbFrame(e.detail);
     }
 
+    get nexradBlockCount() { return this._nexradBlocks?.size || 0; }
+
     start() {
         this._stratux.addEventListener('stratux:weather', this._onWeather);
         this._stratux.addEventListener('stratux:nexrad', this._onNexrad);

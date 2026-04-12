@@ -141,6 +141,7 @@ class GpsSource {
 
     _onInternalPosition(pos) {
         const c = pos.coords;
+        const M_TO_FT = 3.28084;
 
         // Calculate ground speed in knots (coords.speed is m/s, may be null)
         const speedKt = (c.speed != null && c.speed >= 0) ? c.speed * 1.94384 : 0;
@@ -148,8 +149,11 @@ class GpsSource {
         // Calculate course (coords.heading is degrees, may be null)
         const course = (c.heading != null && !isNaN(c.heading)) ? c.heading : 0;
 
-        // Altitude in feet (coords.altitude is meters MSL, may be null)
-        const altMsl = (c.altitude != null) ? c.altitude * 3.28084 : 0;
+        // Altitude in feet (coords.altitude is meters MSL, may be null).
+        // Use null — not 0 — when altitude is unavailable so consumers that guard
+        // with `!= null` bypass altitude-dependent logic (e.g. traffic filtering)
+        // rather than treating ownship as at sea level.
+        const altMsl = (c.altitude != null) ? c.altitude * M_TO_FT : null;
 
         // Vertical speed — EMA-smoothed to reduce consumer GPS altitude jitter.
         // Raw delta can swing ±2000 fpm from 10-30m jitter at 1Hz.
@@ -158,7 +162,7 @@ class GpsSource {
         if (this._lastInternal && this._lastInternal._rawAltM != null && c.altitude != null) {
             const dt = (now - this._lastInternal.timestamp) / 1000;
             if (dt > 0 && dt < 10) {
-                const rawVs = ((c.altitude - this._lastInternal._rawAltM) * 3.28084 / dt) * 60;
+                const rawVs = ((c.altitude - this._lastInternal._rawAltM) * M_TO_FT / dt) * 60;
                 this._vsSmoothed = 0.3 * rawVs + 0.7 * this._vsSmoothed;
             }
         }

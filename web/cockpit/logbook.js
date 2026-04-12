@@ -525,7 +525,7 @@ class Logbook {
             aircraft_tail: CockpitConfig.aircraft('tail') || 'N00000',
             aircraft_id: CockpitConfig.aircraft('tail') || 'N00000',
             aircraft_type: CockpitConfig.aircraft('type') || 'Unknown',
-            point_count: engData?.csv_points || 0,
+            point_count: flightDetail.rowCount || 0,
             source: 'flypi',
             draft: true,    // Draft until pilot reviews and edits
             created_at: new Date().toISOString(),

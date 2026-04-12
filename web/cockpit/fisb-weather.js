@@ -392,7 +392,11 @@ class FisbWeatherDisplay {
     _addNotam(notam) {
         const raw = notam.raw || '';
         const icaoStr = notam.icao ? `${notam.icao} ` : '';
-        this._toastAlert(`\ud83d\udccb NOTAM: ${icaoStr}${raw.slice(0, 80)}`, 'amber', 20000, raw);
+        // Only toast when there is decoded human-readable text — skip binary-encoded
+        // NOTAMs (product IDs 11/12) where raw is a JSON dump with no Text field.
+        if (notam.plain?.trim()) {
+            this._toastAlert(`\ud83d\udccb NOTAM: ${icaoStr}${raw.slice(0, 80)}`, 'amber', 20000, raw);
+        }
 
         if (notam.lat == null || notam.lon == null) return;
 

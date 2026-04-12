@@ -344,6 +344,7 @@ class AirportPopup {
             <div class="apt-tab-pane active" data-pane="info">
                 ${this._aptFactsHtml(apt)}
                 ${this._frequenciesHtml(apt.frequencies || [], apt.tower)}
+                ${this._fuelHtml(apt)}
                 ${(CockpitConfig.get('ifr.showCdPhone') || CockpitConfig.get('ifr.showCraft')) ? this._ifrHtml(apt) : ''}
             </div>
             <div class="apt-tab-pane" data-pane="wx">
@@ -502,6 +503,31 @@ class AirportPopup {
             const apt = await this._nasr.getAirport(icao);
             if (apt) {
                 if (latlng) { apt.lat = latlng[0]; apt.lon = latlng[1]; }
+                // Fetch runway data from AWC if missing from NASR bundle
+                if (!apt.runways?.length) {
+                    try {
+                        const resp = await fetch(
+                            `https://aviationweather.gov/api/data/airport?ids=${encodeURIComponent(icao)}&format=json`,
+                            { signal: AbortSignal.timeout(5000) }
+                        );
+                        if (resp.ok) {
+                            const data = await resp.json();
+                            const awc = Array.isArray(data) ? data[0] : data;
+                            if (awc?.runways?.length) {
+                                apt.runways = awc.runways.map(r => {
+                                    const [len, wid] = (r.dimension || '').split('x').map(Number);
+                                    return { id: r.id, length_ft: len || 0, width_ft: wid || 0, surface: r.surface || '' };
+                                });
+                                // Cache on the NASR record
+                                try {
+                                    const db = await this._nasr.open();
+                                    const tx = db.transaction('airports', 'readwrite');
+                                    tx.objectStore('airports').put(apt);
+                                } catch { /* non-critical */ }
+                            }
+                        }
+                    } catch { /* offline */ }
+                }
                 this.show(apt);
             } else {
                 // NASR not loaded yet (offline, first use) — show panel with stub so user knows why
@@ -1035,13 +1061,22 @@ class AirportPopup {
         const facts = [];
         if (apt.elev_ft != null) facts.push({ label: 'ELEV', value: `${apt.elev_ft} ft` });
         if (apt.tpa_ft)          facts.push({ label: 'TPA',  value: `${apt.tpa_ft} ft` });
-        if (apt.fuel)            facts.push({ label: 'FUEL', value: apt.fuel });
         if (apt.longest_rwy_ft)  facts.push({ label: 'RWY',  value: `${apt.longest_rwy_ft} ft` });
+        // Runway directions (e.g. "34/16")
+        if (apt.runways?.length) {
+            const dirs = apt.runways.map(r => r.id || '').filter(Boolean).join(', ');
+            if (dirs) facts.push({ label: 'DIR', value: dirs });
+        }
         if (!facts.length) return '';
         const cells = facts.map(f =>
             `<div class="apt-fact"><div class="apt-fact-label">${f.label}</div><div class="apt-fact-value">${f.value}</div></div>`
         ).join('');
         return `<div class="popup-section apt-facts-row">${cells}</div>`;
+    }
+
+    _fuelHtml(apt) {
+        if (!apt.fuel) return '';
+        return `<div class="popup-section apt-facts-row"><div class="apt-fact"><div class="apt-fact-label">FUEL</div><div class="apt-fact-value">${apt.fuel}</div></div></div>`;
     }
 
     _frequenciesHtml(frequencies, isTowered) {
