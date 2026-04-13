@@ -2394,8 +2394,50 @@ class RouteTable {
         const cruiseSpeed = gs > 30 ? gs : (CockpitConfig.aircraft('performance.cruise_speed_kt') || 120);
         const remainEte = cruiseSpeed > 0 ? (remainDist / cruiseSpeed * 60) : 0;
 
+        // Format ETE
+        const eteH = Math.floor(remainEte / 60);
+        const eteM = Math.round(remainEte % 60);
+        const eteFmt = eteH > 0 ? `${eteH}:${String(eteM).padStart(2, '0')}` : `${eteM}m`;
+
+        // Total fuel burn from flight computations
+        let totalFuelBurn = 0;
+        if (this._flights?.length) {
+            for (const f of this._flights) totalFuelBurn += f._totFuel || 0;
+        }
+        const fuelBurnFmt = totalFuelBurn > 0 ? totalFuelBurn.toFixed(1) : null;
+
+        // Fuel at destination — live engine GPH if available, else planned
+        const engData = window.enginePanel?.lastData;
+        const currentFuel = engData?.fuel_remaining_gal ?? engData?.fuel_gal ?? null;
+        const liveGph = engData?.fuel_flow_gph ?? engData?.gph ?? null;
+        const plannedGph = CockpitConfig.aircraft('performance.cruise_gph') ?? 9.0;
+        const destWp = this._waypoints[this._waypoints.length - 1];
+        let fuelAtDest = null;
+        if (currentFuel != null && remainDist > 0 && cruiseSpeed > 0) {
+            const gph = liveGph ?? plannedGph;
+            fuelAtDest = currentFuel - (remainDist / cruiseSpeed) * gph;
+        } else if (destWp?._fuelRem != null) {
+            fuelAtDest = destWp._fuelRem;
+        }
+
+        // Color code fuel@dest
+        const cautionGal = CockpitConfig.get('enginePage.fuelCautionGal') ?? 8;
+        const warnGal = CockpitConfig.get('enginePage.fuelWarningGal') ?? 4;
+        let fuelColor = 'var(--status-ok)';
+        if (fuelAtDest != null) {
+            if (fuelAtDest <= warnGal) fuelColor = 'var(--status-danger)';
+            else if (fuelAtDest <= cautionGal) fuelColor = 'var(--status-warning)';
+        }
+        const fuelDestHtml = fuelAtDest != null
+            ? `<span style="color:${fuelColor};font-weight:700">DEST:${fuelAtDest.toFixed(1)}</span>`
+            : '';
+
         summaryEl.innerHTML =
-            `<span style="color:var(--accent)">${dep.icao || '?'}\u2192${dest.icao || '?'}</span>`;
+            `<span style="color:var(--accent)">${dep.icao || '?'}\u2009\u2192\u2009${dest.icao || '?'}</span>` +
+            `<span class="handle-stat">${Math.round(remainDist)}nm</span>` +
+            `<span class="handle-stat">${eteFmt}</span>` +
+            (fuelBurnFmt ? `<span class="handle-stat">${fuelBurnFmt}g</span>` : '') +
+            (fuelDestHtml ? `<span class="handle-stat">${fuelDestHtml}</span>` : '');
     }
 
     /**

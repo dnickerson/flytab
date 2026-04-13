@@ -2161,13 +2161,22 @@ body {
 }
 
 .handle-summary {
+    display: flex;
+    align-items: center;
+    gap: 10px;
     font-family: var(--font-instrument);
-    font-size: 18px;
+    font-size: 16px;
     font-weight: 700;
     color: var(--text-primary);
     white-space: nowrap;
     overflow: hidden;
-    text-overflow: ellipsis;
+    flex: 1;
+    min-width: 0;
+}
+.handle-stat {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-secondary);
 }
 
 .route-table-body {
