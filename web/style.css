@@ -6356,6 +6356,13 @@ body {
     color: var(--text-muted);
     margin-top: 2px;
 }
+.apt-panel-nav {
+    font-family: var(--font-instrument);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--status-ok);
+    margin-top: 4px;
+}
 
 /* .apt-panel-close sizing handled by .btn-close */
 

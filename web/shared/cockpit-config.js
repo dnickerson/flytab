@@ -124,6 +124,7 @@ class CockpitConfig {
             maxBelowAlt: 5000,
             showCallsign: true,
         },
+        patternAltAboveFieldFt: 1000,
         airspaceStyles: {
             B: { color: '#0088ff', weight: 2, fillOpacity: 0.08 },
             C: { color: '#ff44ff', weight: 1.5, fillOpacity: 0.06 },
