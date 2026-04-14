@@ -114,6 +114,7 @@
   },
   "traffic": {
     "maxAboveAlt": 5000,
+    "maxBelowAlt": 5000,
     "showCallsign": true
   },
   "flywhere": {

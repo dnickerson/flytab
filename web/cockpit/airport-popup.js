@@ -316,12 +316,37 @@ class AirportPopup {
             catBadge = `<span style="color:${catColors[cat] || '#aaa'};font-size:14px;font-weight:900;margin-left:6px;">● ${cat}</span>`;
         }
 
+        // Distance and descent rate from current position
+        let navInfoHtml = '';
+        const sit = window.app?.stratuxClient?.situation;
+        if (sit?.lat != null && sit?.lon != null && apt.lat != null && apt.lon != null) {
+            const distNm = NasrDB.haversineNm(sit.lat, sit.lon, apt.lat, apt.lon);
+            const distFmt = distNm < 10 ? distNm.toFixed(1) : Math.round(distNm);
+
+            if (apt.elev_ft != null && sit.alt_msl != null && apt.type !== 'NAVAID') {
+                const patternAbove = (typeof CockpitConfig !== 'undefined'
+                    ? CockpitConfig.get('patternAltAboveFieldFt') : null) ?? 1000;
+                const targetAlt = apt.elev_ft + patternAbove;
+                const altDiff = sit.alt_msl - targetAlt;
+                if (altDiff > 100 && distNm > 0.5 && sit.ground_speed > 10) {
+                    const timeMin = (distNm / sit.ground_speed) * 60;
+                    const descentFpm = Math.round(altDiff / timeMin);
+                    navInfoHtml = `<div class="apt-panel-nav">${distFmt}nm · descend ${descentFpm} fpm → ${targetAlt.toLocaleString()} ft</div>`;
+                } else {
+                    navInfoHtml = `<div class="apt-panel-nav">${distFmt}nm</div>`;
+                }
+            } else {
+                navInfoHtml = `<div class="apt-panel-nav">${distFmt}nm</div>`;
+            }
+        }
+
         return `
         <div class="apt-panel-header">
             <div>
                 <div class="apt-panel-icao">${apt.icao}${catBadge}</div>
                 <div class="apt-panel-name">${apt.name || ''}</div>
                 <div class="apt-panel-meta">${apt.city || ''}${apt.state ? ', ' + apt.state : ''} · ${towerStr} · ${elevStr}${tpaStr}</div>
+                ${navInfoHtml}
             </div>
             <button class="apt-panel-close btn-close" aria-label="Close">✕</button>
         </div>
@@ -1318,24 +1343,36 @@ class AirportPopup {
     // ========== Action Binding ==========
 
     /**
-     * Wire a button with click + touchstart for iPad/Leaflet reliability.
-     * touchend is blocked by Leaflet's drag handler (preventDefault on touchstart
-     * cancels the touch sequence before touchend fires). touchstart fires first.
+     * Wire a button with touch-distance detection.
+     * Fires on touchend only if the finger didn't move (not a scroll gesture).
+     * Falls back to click for non-touch devices.
      */
     _wireButton(el, action) {
-        let touchFired = false;
-        const fire = (e) => {
+        let startX = 0, startY = 0, isTap = false;
+        el.addEventListener('touchstart', (e) => {
+            const t = e.touches[0];
+            startX = t.clientX;
+            startY = t.clientY;
+            isTap = true;
+        }, { passive: true });
+        el.addEventListener('touchmove', (e) => {
+            if (!isTap) return;
+            const t = e.touches[0];
+            if (Math.abs(t.clientX - startX) > 10 || Math.abs(t.clientY - startY) > 10) {
+                isTap = false; // finger moved — this is a scroll, not a tap
+            }
+        }, { passive: true });
+        el.addEventListener('touchend', (e) => {
+            if (isTap) {
+                e.stopPropagation();
+                action();
+            }
+            isTap = false;
+        });
+        // Click fallback for non-touch devices
+        el.addEventListener('click', (e) => {
             e.stopPropagation();
             action();
-        };
-        el.addEventListener('touchstart', (e) => {
-            e.preventDefault();
-            touchFired = true;
-            fire(e);
-        }, { passive: false });
-        el.addEventListener('click', (e) => {
-            if (touchFired) { touchFired = false; return; }
-            fire(e);
         });
     }
 

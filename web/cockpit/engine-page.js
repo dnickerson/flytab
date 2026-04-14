@@ -797,7 +797,7 @@ class EnginePage {
 
         for (let cyl = 0; cyl < 4; cyl++) {
             ctx.strokeStyle = colors[cyl];
-            ctx.lineWidth = 1.5;
+            ctx.lineWidth = 2;
             ctx.beginPath();
             let started = false;
             for (const p of pts) {
@@ -1152,7 +1152,7 @@ class EnginePage {
     background: var(--bg-surface);
     border: 1px solid var(--border);
     border-radius: 5px;
-    height: 140px;
+    height: 200px;
     margin-bottom: 4px;
 }
 .ep-chart-wrap canvas {

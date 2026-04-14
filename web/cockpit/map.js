@@ -768,6 +768,7 @@ class CockpitMap {
 
         const trafficCfg = (typeof CockpitConfig !== 'undefined') ? (CockpitConfig.raw?.traffic || {}) : {};
         const maxAboveAlt = trafficCfg.maxAboveAlt ?? 5000;
+        const maxBelowAlt = trafficCfg.maxBelowAlt ?? 5000;
         const showCallsign = trafficCfg.showCallsign !== false;
 
         for (const [icao, target] of this.stratux.traffic) {
@@ -777,9 +778,15 @@ class CockpitMap {
             seen.add(icao);
             if (!target.lat || !target.lon) continue;
 
-            // Altitude filter — hide traffic more than maxAboveAlt ft above ownship
+            // Altitude filter — hide traffic outside the configured altitude band
             if (this.stratux.situation?.alt_msl != null && target.alt != null) {
-                if ((target.alt - this.stratux.situation.alt_msl) > maxAboveAlt) continue;
+                const altDiff = target.alt - this.stratux.situation.alt_msl;
+                if (altDiff > maxAboveAlt || altDiff < -maxBelowAlt) {
+                    if (!this._trafficFilterLogged) {
+                        console.log(`[Traffic] Filtered ${target.hex}: altDiff=${Math.round(altDiff)}ft (band: -${maxBelowAlt}/+${maxAboveAlt}), ownAlt=${Math.round(this.stratux.situation.alt_msl)}, tgtAlt=${target.alt}`);
+                    }
+                    continue;
+                }
             }
 
             const color = this._trafficColor(target);
@@ -812,6 +819,12 @@ class CockpitMap {
                 m.on('click', () => this._showTrafficPopup(this.stratux.traffic.get(icao) || target, m));
                 this.trafficMarkers.set(icao, m);
             }
+        }
+
+        // Throttle filter logging — log once per 30s
+        if (!this._trafficFilterLogged) {
+            this._trafficFilterLogged = true;
+            setTimeout(() => { this._trafficFilterLogged = false; }, 30000);
         }
 
         // Remove stale markers
@@ -1006,10 +1019,11 @@ class CockpitMap {
         this.routeLayer.addTo(this.map);
         this.map.fitBounds(L.latLngBounds(latlngs).pad(0.1));
 
-        // Draw runway extensions for destination
+        // Draw runway extensions for departure and destination
+        const dep = waypoints[0];
         const dest = waypoints[waypoints.length - 1];
-        if (dest.icao && this._nasr) {
-            this._drawDestRunways(dest.icao);
+        if (this._nasr && (dep?.icao || dest?.icao)) {
+            this._drawRouteRunways(dep?.icao, dest?.icao);
         }
     }
 
@@ -1024,12 +1038,41 @@ class CockpitMap {
             this.map.off('zoomend', this._rwyExtZoomHandler);
             this._rwyExtZoomHandler = null;
         }
-        this._destAirport = null;
+        this._rwyExtAirports = [];
     }
 
+    /**
+     * Draw runway extensions for both departure and destination airports.
+     */
+    async _drawRouteRunways(depIcao, destIcao) {
+        this._clearRunwayExtensions();
+        this._rwyExtAirports = [];
+        this._rwyExtLayer = L.layerGroup();
+        if (this._rwyExtVisible) this._rwyExtLayer.addTo(this.map);
+
+        const icaos = [depIcao, destIcao].filter(Boolean);
+        const unique = [...new Set(icaos)];
+
+        for (const icao of unique) {
+            const apt = await this._fetchAirportRunways(icao);
+            if (apt?.runways?.length) this._rwyExtAirports.push(apt);
+        }
+
+        if (this._rwyExtAirports.length) {
+            this._renderRunwayExtensions();
+            this._rwyExtZoomHandler = () => this._renderRunwayExtensions();
+            this.map.on('zoomend', this._rwyExtZoomHandler);
+        }
+    }
+
+    /** Kept for backward compatibility — draws only destination */
     async _drawDestRunways(icao) {
-        const apt = await this._nasr.getAirport(icao);
-        if (!apt) return;
+        await this._drawRouteRunways(null, icao);
+    }
+
+    async _fetchAirportRunways(icao) {
+        const apt = await this._nasr?.getAirport(icao);
+        if (!apt) return null;
 
         // Fetch runway data from AWC if not in NASR bundle
         if (!apt.runways?.length) {
@@ -1051,7 +1094,6 @@ class CockpitMap {
                                 surface: r.surface || '',
                             };
                         });
-                        // Cache on the NASR record for future use
                         if (this._nasr?.open) {
                             try {
                                 const db = await this._nasr.open();
@@ -1064,13 +1106,7 @@ class CockpitMap {
             } catch { /* offline or timeout — no extensions */ }
         }
 
-        if (!apt.runways?.length) return;
-        this._destAirport = apt;
-        this._rwyExtLayer = L.layerGroup();
-        if (this._rwyExtVisible) this._rwyExtLayer.addTo(this.map);
-        this._renderRunwayExtensions();
-        this._rwyExtZoomHandler = () => this._renderRunwayExtensions();
-        this.map.on('zoomend', this._rwyExtZoomHandler);
+        return apt.runways?.length ? apt : null;
     }
 
     setRwyExtVisible(visible) {
@@ -1084,10 +1120,15 @@ class CockpitMap {
     }
 
     _renderRunwayExtensions() {
-        if (!this._rwyExtLayer || !this._destAirport) return;
+        if (!this._rwyExtLayer || !this._rwyExtAirports?.length) return;
         this._rwyExtLayer.clearLayers();
 
-        const apt = this._destAirport;
+        for (const apt of this._rwyExtAirports) {
+            this._renderAirportExtensions(apt);
+        }
+    }
+
+    _renderAirportExtensions(apt) {
         const aptLat = apt.lat;
         const aptLon = apt.lon;
         const zoom = this.map.getZoom();
