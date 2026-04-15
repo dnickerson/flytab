@@ -159,7 +159,7 @@ class ThermalMonitor {
         `;
 
         const closeBtn = document.createElement('button');
-        closeBtn.className = 'ep-close';
+        closeBtn.className = 'ep-close btn-close';
         closeBtn.textContent = '✕';
         closeBtn.onclick = () => overlay.remove();
 
