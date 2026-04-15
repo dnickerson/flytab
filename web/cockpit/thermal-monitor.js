@@ -158,14 +158,20 @@ class ThermalMonitor {
             overflow-y: auto;
         `;
 
+        const headerRow = document.createElement('div');
+        headerRow.style.cssText = 'display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;';
+
+        const header = document.createElement('h2');
+        header.style.cssText = 'color: var(--text-primary); margin: 0; font-size: 20px;';
+        header.textContent = 'Thermal Status';
+
         const closeBtn = document.createElement('button');
         closeBtn.className = 'ep-close btn-close';
         closeBtn.textContent = '✕';
         closeBtn.onclick = () => overlay.remove();
 
-        const header = document.createElement('h2');
-        header.style.cssText = 'color: var(--text-primary); margin: 0 0 16px; font-size: 20px;';
-        header.textContent = 'Thermal Status';
+        headerRow.appendChild(header);
+        headerRow.appendChild(closeBtn);
 
         const rows = document.createElement('div');
         rows.style.cssText = 'display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 20px;';
@@ -213,8 +219,7 @@ class ThermalMonitor {
         canvas.height = 200;
         canvas.style.cssText = 'width: 100%; max-height: 200px; background: var(--bg-dark-well); border-radius: 8px;';
 
-        overlay.appendChild(closeBtn);
-        overlay.appendChild(header);
+        overlay.appendChild(headerRow);
         overlay.appendChild(rows);
         overlay.appendChild(chartTitle);
         overlay.appendChild(canvas);
