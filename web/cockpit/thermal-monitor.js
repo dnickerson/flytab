@@ -159,14 +159,14 @@ class ThermalMonitor {
         `;
 
         const headerRow = document.createElement('div');
-        headerRow.style.cssText = 'display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;';
+        headerRow.style.cssText = 'display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; flex-shrink: 0;';
 
         const header = document.createElement('h2');
         header.style.cssText = 'color: var(--text-primary); margin: 0; font-size: 20px;';
         header.textContent = 'Thermal Status';
 
         const closeBtn = document.createElement('button');
-        closeBtn.className = 'ep-close btn-close';
+        closeBtn.className = 'ep-close';
         closeBtn.textContent = '✕';
         closeBtn.onclick = () => overlay.remove();
 
@@ -217,7 +217,7 @@ class ThermalMonitor {
         const canvas = document.createElement('canvas');
         canvas.width = 600;
         canvas.height = 200;
-        canvas.style.cssText = 'width: 100%; height: 200px; flex-shrink: 0; background: var(--bg-surface-raised); border-radius: 8px;';
+        canvas.style.cssText = 'width: 100%; max-height: 200px; background: var(--bg-dark-well); border-radius: 8px;';
 
         overlay.appendChild(headerRow);
         overlay.appendChild(rows);
