@@ -217,7 +217,7 @@ class ThermalMonitor {
         const canvas = document.createElement('canvas');
         canvas.width = 600;
         canvas.height = 200;
-        canvas.style.cssText = 'width: 100%; max-height: 200px; background: var(--bg-dark-well); border-radius: 8px;';
+        canvas.style.cssText = 'width: 100%; height: 200px; flex-shrink: 0; background: var(--bg-surface-raised); border-radius: 8px;';
 
         overlay.appendChild(headerRow);
         overlay.appendChild(rows);
