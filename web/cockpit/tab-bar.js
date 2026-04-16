@@ -69,6 +69,16 @@ class TabBar {
         if (c.planSync?.hide) c.planSync.hide();
         if (c.airportPopup?.close) c.airportPopup.close();
 
+        // Hide radar loop controls when leaving map — they bleed through
+        // full-screen panels in Android WebView despite lower z-index.
+        if (c.radarLoop?._active) {
+            if (tabId === 'map') {
+                c.radarLoop._showControls();
+            } else {
+                c.radarLoop._hideControls();
+            }
+        }
+
         if (tabId === 'tmr') {
             // Timer is a floating popup — toggle without closing other views
             this._toggleTimer();

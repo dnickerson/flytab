@@ -802,6 +802,7 @@ class FlyTabApp {
                 airportPopup: this.airportPopup,
                 stratuxIp: Settings.stratuxIp || '192.168.10.1',
                 planSync: this.planSync,
+                radarLoop: this.radarLoop,
             });
             this.tabBar.init();
         }
