@@ -539,7 +539,7 @@ class CockpitMap {
             iconAnchor: [size / 2, size / 2],
         });
 
-        const marker = L.marker([pirep.lat, pirep.lon], { icon, zIndexOffset: 500 });
+        const marker = L.marker([pirep.lat, pirep.lon], { icon, zIndexOffset: 400 });
 
         // Popup
         const typeLabel = pirep.type === 'turbulence' ? 'TURB'
