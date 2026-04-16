@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v5.03';
+const FLYTAB_VERSION = 'v5.13';
 
 // ========== Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -802,6 +802,7 @@ class FlyTabApp {
                 airportPopup: this.airportPopup,
                 stratuxIp: Settings.stratuxIp || '192.168.10.1',
                 planSync: this.planSync,
+                radarLoop: this.radarLoop,
             });
             this.tabBar.init();
         }

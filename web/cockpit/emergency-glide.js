@@ -567,7 +567,7 @@ class EmergencyGlide {
                     paddingTopLeft:     [60, overlayH + 40],
                     paddingBottomRight: [60, 70],
                     maxZoom: 11,
-                    animate: true,
+                    animate: false,
                 }
             );
         } catch (_) {}
