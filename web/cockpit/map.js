@@ -681,6 +681,22 @@ class CockpitMap {
             this.map.panTo(pos, { animate: !isFirstFix, duration: 0.5 });
         }
 
+        // Track vector — 3-minute lookahead line, only when airborne
+        if (sit.ground_speed >= 10 && sit.true_course != null) {
+            const nm = sit.ground_speed * 3 / 60;
+            const end = CockpitMap._destPoint(sit.lat, sit.lon, sit.true_course, nm);
+            if (!this._trackVector) {
+                this._trackVector = L.polyline([pos, end], {
+                    color: '#ffffff', weight: 2, opacity: 0.6, interactive: false,
+                }).addTo(this.map);
+            } else {
+                this._trackVector.setLatLngs([pos, end]);
+                if (this._trackVector.options.opacity !== 0.6) this._trackVector.setStyle({ opacity: 0.6 });
+            }
+        } else if (this._trackVector) {
+            this._trackVector.setStyle({ opacity: 0 });
+        }
+
         // Range rings
         this._updateRangeRings(pos);
 
@@ -1511,6 +1527,14 @@ class CockpitMap {
     }
 
     // ========== Geo Utilities ==========
+
+    static _destPoint(lat, lon, bearingDeg, nm) {
+        const R = 3440.065;
+        const brng = bearingDeg * Math.PI / 180;
+        const lat2 = lat + (nm / R) * Math.cos(brng) * (180 / Math.PI);
+        const lon2 = lon + (nm / R) * Math.sin(brng) * (180 / Math.PI) / Math.cos(lat * Math.PI / 180);
+        return [lat2, lon2];
+    }
 
     static _distNm(lat1, lon1, lat2, lon2) {
         const R = 3440.065; // NM
