@@ -203,6 +203,7 @@
 .leaflet-container img.leaflet-tile {
     margin: 0;
     padding: 0;
+    mix-blend-mode: normal;
 }
 
 html {
@@ -4074,21 +4075,30 @@ body {
 /* ========== Airspace / Vector Map Labels ========== */
 
 .apt-label {
-    font: 700 14px var(--font-instrument);
-    padding: 1px 3px;
-    border: none;
-    box-shadow: none;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    font-family: var(--font-instrument);
+    font-weight: 700;
+    color: #111111;
+    text-shadow:
+        -1px -1px 0 #fff,
+         1px -1px 0 #fff,
+        -1px  1px 0 #fff,
+         1px  1px 0 #fff,
+         0    -1px 0 #fff,
+         0     1px 0 #fff,
+        -1px   0   0 #fff,
+         1px   0   0 #fff;
+    letter-spacing: 0.03em;
+    white-space: nowrap;
 }
+.apt-label::before { display: none !important; }
 
-.apt-label-towered {
-    color: #0055aa;
-    background: rgba(255,255,255,0.75);
-}
-
-.apt-label-nontowered {
-    color: #cc2299;
-    background: rgba(255,255,255,0.75);
-}
+.apt-label-lg { font-size: 13px; }
+.apt-label-md { font-size: 11px; }
+.apt-label-sm { font-size: 9px; }
 
 .airspace-label {
     font: 700 14px var(--font-instrument);

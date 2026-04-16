@@ -5,6 +5,9 @@ node_modules/
 *.aab
 *.aar
 
+# Reference screenshots — not part of source
+screenshots/
+
 # Local development / Claude Code
 .claude/settings.local.json
 
