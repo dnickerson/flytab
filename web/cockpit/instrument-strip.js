@@ -22,6 +22,11 @@ class InstrumentStrip {
 
         // Last leg update from route-table
         this._legData = null;
+
+        // VectorMapLayers reference for nearest-baro lookup
+        this._vectorLayers = null;
+        this._baroLastPos = null;
+        this._baroLastTime = 0;
     }
 
     /** Wire the fuel field tap to open the fuel overlay. */
@@ -32,6 +37,11 @@ class InstrumentStrip {
     /** Wire the power tradeoff panel (tapping ETE▲ / FUEL▲ opens it). */
     setPowerTradeoff(panel) {
         this._powerTradeoff = panel;
+    }
+
+    /** Wire VectorMapLayers for nearest-baro airport lookup. */
+    setVectorLayers(vl) {
+        this._vectorLayers = vl;
     }
 
     init() {
@@ -130,6 +140,7 @@ class InstrumentStrip {
             dist: { label: 'DIST', unit: 'nm'  },
             dest: { label: 'DEST', unit: 'nm'  },
             ete:  { label: 'ETE',  unit: ''    },
+            baro: { label: 'BARO', unit: '"'   },
         };
 
         const cfg = configs[field] || { label: field.toUpperCase(), unit: '' };
@@ -163,6 +174,7 @@ class InstrumentStrip {
         // Cache references for fast updates
         this._els[field] = valueEl;
         if (deltaEl) this._els[`${field}_delta`] = deltaEl;
+        if (field === 'baro') this._els['baro_label'] = labelEl;
 
         // FUEL field — tap opens fuel overlay
         if (field === 'fuel') {
@@ -206,6 +218,10 @@ class InstrumentStrip {
 
         this._set('gs',  gs  != null ? Math.round(gs)  : '—');
         this._set('alt', alt != null ? Math.round(alt).toLocaleString() : '—');
+
+        if (this._fields.includes('baro') && gpsOk && sit.lat && sit.lon) {
+            this._updateBaro(sit.lat, sit.lon);
+        }
 
         this._updateFuel();
 
@@ -269,6 +285,38 @@ class InstrumentStrip {
             } else {
                 fuelDeltaEl.textContent = '';
             }
+        }
+    }
+
+    _updateBaro(lat, lon) {
+        const now = Date.now();
+        // Throttle: recalculate only every 30s or after moving > 1 NM
+        const movedNm = this._baroLastPos
+            ? CockpitMap._distNm(lat, lon, this._baroLastPos[0], this._baroLastPos[1])
+            : Infinity;
+        if (now - this._baroLastTime < 30000 && movedNm < 1) return;
+        this._baroLastTime = now;
+        this._baroLastPos = [lat, lon];
+
+        if (!this._vectorLayers) return;
+
+        let bestIcao = null, bestDist = Infinity;
+        for (const [icao, pos] of this._vectorLayers._aptPositions) {
+            const entry = this._vectorLayers._getMetarEntry(icao);
+            if (!entry?.decoded?.altimeter) continue;
+            const d = CockpitMap._distNm(lat, lon, pos.lat, pos.lon);
+            if (d < bestDist) { bestDist = d; bestIcao = icao; }
+        }
+
+        if (bestIcao) {
+            const alt = this._vectorLayers._getMetarEntry(bestIcao).decoded.altimeter;
+            this._set('baro', alt.toFixed(2));
+            const labelEl = this._els['baro_label'];
+            if (labelEl) labelEl.textContent = bestIcao;
+        } else {
+            this._set('baro', '—');
+            const labelEl = this._els['baro_label'];
+            if (labelEl) labelEl.textContent = 'BARO';
         }
     }
 

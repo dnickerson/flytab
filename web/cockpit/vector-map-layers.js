@@ -364,10 +364,10 @@ class VectorMapLayers {
     /** Map flight category to hex color. */
     _catColor(cat) {
         switch (cat) {
-            case 'VFR':  return '#00ff88';
-            case 'MVFR': return '#00aaff';
-            case 'IFR':  return '#ff4444';
-            case 'LIFR': return '#ff44ff';
+            case 'VFR':  return '#1e8f3c';
+            case 'MVFR': return '#0066cc';
+            case 'IFR':  return '#d92b22';
+            case 'LIFR': return '#8e2cb5';
             default:     return null;
         }
     }
@@ -1001,18 +1001,18 @@ class VectorMapLayers {
                 }
 
                 const towered = apt.tower;
-                // Neutral white/gray base — flight category dot overlays with category color.
-                // Size (7 vs 5) distinguishes towered from non-towered when no weather is known.
-                const baseColor = towered ? '#ffffff' : '#aaaaaa';
+                // Towered: solid ring. Non-towered: dashed ring (ForeFlight convention).
+                // Flight category dot overlays with color when METAR is available.
                 const radius = towered ? 7 : 5;
 
                 // Use default SVG renderer (not canvas) so click events work reliably
                 const marker = L.circleMarker([apt.lat, apt.lon], {
                     radius,
-                    color: '#333333',
-                    fillColor: baseColor,
-                    fillOpacity: 0.9,
-                    weight: 1,
+                    color: towered ? '#ffffff' : '#aaaaaa',
+                    weight: towered ? 1.5 : 1,
+                    dashArray: towered ? null : '4,3',
+                    fillColor: towered ? '#ffffff' : '#888888',
+                    fillOpacity: 0.15,
                     interactive: true,
                     bubblingMouseEvents: false,
                 });

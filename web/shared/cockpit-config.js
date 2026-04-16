@@ -218,7 +218,7 @@ class CockpitConfig {
     static async _fetchJson(url) {
         const cacheKey = 'flypi_cfg_' + url.replace(/[^a-z0-9]/gi, '_');
         try {
-            const resp = await fetch(url, { signal: AbortSignal.timeout(5000) });
+            const resp = await fetch(url, { cache: 'reload', signal: AbortSignal.timeout(5000) });
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
             const data = await resp.json();
             // Cache to localStorage for offline fallback
