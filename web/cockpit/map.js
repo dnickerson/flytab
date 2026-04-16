@@ -73,6 +73,7 @@ class InetRadarSource {
             const layer = L.tileLayer(url, {
                 opacity: 0,
                 maxZoom: 14,
+                updateWhenZooming: false,
                 attribution: 'NEXRAD © Iowa State Mesonet',
             });
             layer.addTo(this._map);
@@ -606,6 +607,7 @@ class CockpitMap {
                 {
                     opacity: fisbActive ? 0.3 : (Settings.radarOpacity || 0.5),
                     maxZoom: 14,
+                    updateWhenZooming: false,
                     attribution: 'NEXRAD © Iowa State Mesonet',
                 }
             );
