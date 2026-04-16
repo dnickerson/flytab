@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v5.13';
+const FLYTAB_VERSION = 'v5.14';
 
 // ========== Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -757,6 +757,7 @@ class FlyTabApp {
             this.instrumentStrip = new InstrumentStrip(this.stratuxClient, this.engineClient);
             if (this.fuelOverlay) this.instrumentStrip.setFuelOverlay(this.fuelOverlay);
             if (this.powerTradeoff) this.instrumentStrip.setPowerTradeoff(this.powerTradeoff);
+            if (this.vectorLayers) this.instrumentStrip.setVectorLayers(this.vectorLayers);
             const stripEl = this.instrumentStrip.init();
             // Place instrument strip inside route-table-sheet (after handle) so they stack together
             const rtSheet = document.querySelector('.route-table-sheet');

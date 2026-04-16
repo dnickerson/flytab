@@ -51,7 +51,7 @@
     "fields": ["next", "dest"]
   },
   "instrumentStrip": {
-    "fields": ["gs", "alt", "hdg", "fuel", "dest", "ete"]
+    "fields": ["gs", "alt", "baro", "hdg", "fuel", "dest", "ete"]
   },
   "engineOverlay": {
     "enabled": true,
