@@ -71,12 +71,10 @@ class TabBar {
 
         // Hide radar loop controls when leaving map — they bleed through
         // full-screen panels in Android WebView despite lower z-index.
-        if (c.radarLoop?._active) {
-            if (tabId === 'map') {
-                c.radarLoop._showControls();
-            } else {
-                c.radarLoop._hideControls();
-            }
+        if (tabId !== 'map' && tabId !== 'tmr' && tabId !== 'more') {
+            this._hideRadarControls();
+        } else if (tabId === 'map') {
+            this._restoreRadarControls();
         }
 
         if (tabId === 'tmr') {
@@ -132,18 +130,22 @@ class TabBar {
             }},
             { icon: '✈', label: 'Load Plan', action: () => {
                 if (c.planSync?.show) c.planSync.show();
+                this._hideRadarControls();
                 this._closeMoreDrawer();
             }},
             { icon: '🧠', label: 'Engine ML', action: () => {
                 this._closeMoreDrawer();
+                this._hideRadarControls();
                 this._showMLMonitor();
             }},
             { icon: '📋', label: 'Logbook', action: () => {
                 if (c.logbook?.show) c.logbook.show();
+                this._hideRadarControls();
                 this._closeMoreDrawer();
             }},
             { icon: '⛅', label: 'Weather Briefing', action: () => {
                 if (c.wxBriefing?.show) c.wxBriefing.show();
+                this._hideRadarControls();
                 this._closeMoreDrawer();
             }},
             { icon: '📊', label: 'Approach Charts', action: () => {
@@ -152,10 +154,12 @@ class TabBar {
                         ? c.approachCharts._showPlate(c.approachCharts._plateIdx)
                         : c.approachCharts.showForRoute();
                 }
+                this._hideRadarControls();
                 this._closeMoreDrawer();
             }},
             { icon: '⛽', label: 'Fuel Entry', action: () => {
                 if (c.fuelOverlay?.show) c.fuelOverlay.show();
+                this._hideRadarControls();
                 this._closeMoreDrawer();
             }},
             { icon: '📡', label: 'Stratux Status', action: () => {
@@ -164,14 +168,17 @@ class TabBar {
             }},
             { icon: '📶', label: 'FIS-B Status', action: () => {
                 if (c.fisbStatus?.show) c.fisbStatus.show();
+                this._hideRadarControls();
                 this._closeMoreDrawer();
             }},
             { icon: '🗄', label: 'Data Status', action: () => {
                 if (c.dataStatus?.show) c.dataStatus.show();
+                this._hideRadarControls();
                 this._closeMoreDrawer();
             }},
             { icon: '⚙', label: 'Configuration', action: () => {
                 if (c.configEditor?.show) c.configEditor.show();
+                this._hideRadarControls();
                 this._closeMoreDrawer();
             }},
             { icon: '🗺', label: () => {
@@ -209,6 +216,7 @@ class TabBar {
             }},
             { icon: '❓', label: 'Help', action: () => {
                 this._closeMoreDrawer();
+                this._hideRadarControls();
                 this._showHelp();
             }},
         ];
@@ -280,6 +288,18 @@ class TabBar {
             this._tabBar.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
             this._tabBar.querySelector('[data-tab="map"]')?.classList.add('active');
         }
+    }
+
+    // ========== Radar Loop Visibility ==========
+
+    _hideRadarControls() {
+        const rl = this._comps.radarLoop;
+        if (rl?._active) rl._hideControls();
+    }
+
+    _restoreRadarControls() {
+        const rl = this._comps.radarLoop;
+        if (rl?._active) rl._showControls();
     }
 
     // ========== ML Monitor ==========
