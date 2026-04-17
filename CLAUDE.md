@@ -72,6 +72,13 @@ Standard Capacitor/Gradle project. Mixed HTTP content is explicitly allowed in t
 | `web/checklist.json` | VFR checklist sections |
 | `capacitor.config.ts` | Capacitor/Android settings |
 
+## Data Pipeline Dependencies
+
+- **`pyshp` required for Class B/C/D/E airspace**: `~/fly-pipeline/build_nasr.py` parses Class B/C/D/E airspace from FAA shapefiles (`Additional_Data/Shape_Files/Class_Airspace.*` inside the NASR zip). Without `pyshp` installed, the step is silently skipped and the bundle only contains 26 ARTCC boundaries — no controlled airspace around airports. Install with `pip install pyshp --break-system-packages`.
+- **Home server data directory**: `start-home-server.sh` expects data at `~/flytab/data/`. NASR output lives in `~/fly-pipeline/data/nasr/`. If the `data/` dir is missing, the server crashes and the systemd service (`flytab-data.service`) loops in failure every 10 seconds. Fix with: `mkdir -p ~/flytab/data && ln -s ~/fly-pipeline/data/nasr ~/flytab/data/nasr`. The service recovers automatically once the directory exists.
+- **NASR update on tablet**: After rebuilding the bundle, start the home server and restart FlyTab on the tablet while on home WiFi — the app fetches and imports the bundle automatically at startup.
+- **Do not import data into the tablet via CDP/DevTools** — writing directly to the WebView's IndexedDB bypasses app integrity checks and can cause protection errors.
+
 ## Key Conventions
 
 - **Versioning**: The app version lives at the top of `web/app.js`. `build.sh` reads it and sets `versionCode`/`versionName` in `build.gradle` automatically.

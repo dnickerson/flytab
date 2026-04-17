@@ -1976,6 +1976,47 @@ body {
     min-height: 36px !important;
 }
 
+.route-wp-alt-row,
+.route-wp-crossing-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px 4px 38px;
+}
+
+.route-wp-alt-label {
+    font-size: 11px;
+    color: var(--text-label);
+    min-width: 28px;
+}
+
+.route-wp-alt-input,
+.route-wp-alt-min,
+.route-wp-alt-max {
+    width: 72px;
+    padding: 4px 6px;
+    border: 1px solid var(--border-strong);
+    border-radius: 4px;
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    font-size: 14px;
+    font-family: var(--font-instrument);
+}
+
+.route-wp-alt-unit {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.route-wp-alt-unlock {
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 14px;
+    padding: 2px 4px;
+    cursor: pointer;
+}
+
 .route-wp-insert {
     display: block;
     width: 100%;
