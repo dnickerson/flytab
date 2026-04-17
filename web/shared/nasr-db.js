@@ -6,7 +6,7 @@
 
 class NasrDB {
     static DB_NAME = 'flypi';
-    static DB_VERSION = 7;
+    static DB_VERSION = 8;
 
     constructor() {
         this._db = null;
@@ -50,6 +50,12 @@ class NasrDB {
                 if (!db.objectStoreNames.contains('airspace')) {
                     const store = db.createObjectStore('airspace', { keyPath: 'id' });
                     store.createIndex('class', 'class', { unique: false });
+                }
+
+                // Special Use Airspace (R/P/W/A/MOA)
+                if (!db.objectStoreNames.contains('sua')) {
+                    const store = db.createObjectStore('sua', { keyPath: 'id' });
+                    store.createIndex('type', 'type', { unique: false });
                 }
 
                 // Named fixes/waypoints for route parsing
@@ -414,6 +420,32 @@ class NasrDB {
     }
 
     /**
+     * Get Special Use Airspace (R/P/W/A/MOA) that overlaps a bounding box.
+     */
+    async getSuaInBounds(south, west, north, east, limit = 500) {
+        const db = await this.open();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction('sua', 'readonly');
+            tx.onabort = () => reject(tx.error || new Error('Transaction aborted'));
+            const results = [];
+            const req = tx.objectStore('sua').openCursor();
+            req.onsuccess = () => {
+                const cursor = req.result;
+                if (!cursor || results.length >= limit) { resolve(results); return; }
+                const v = cursor.value;
+                const boundary = v.boundary || [];
+                const inBounds = boundary.some(pt => {
+                    const lat = pt[0], lon = pt[1];
+                    return lat >= south && lat <= north && lon >= west && lon <= east;
+                });
+                if (inBounds) results.push(v);
+                cursor.continue();
+            };
+            req.onerror = () => reject(req.error);
+        });
+    }
+
+    /**
      * Get airways that have at least one waypoint within bounds.
      */
     async getAirwaysInBounds(south, west, north, east, limit = 100) {
@@ -619,11 +651,11 @@ class NasrDB {
     // ========== NASR Data Import ==========
 
     async importNasrBundle(bundle) {
-        // Bundle is an object with { airports, navaids, airways, airspace, fixes, cycle_info }
+        // Bundle is an object with { airports, navaids, airways, airspace, sua, fixes, cycle_info }
         // All stores are written in a single transaction so that a mid-import failure
         // never leaves the DB in a partially-cleared state.
         const db = await this.open();
-        const storeNames = ['airports', 'navaids', 'airways', 'airspace', 'fixes'];
+        const storeNames = ['airports', 'navaids', 'airways', 'airspace', 'sua', 'fixes'];
         let count = 0;
 
         await new Promise((resolve, reject) => {
@@ -646,6 +678,7 @@ class NasrDB {
             write('navaids', bundle.navaids);
             write('airways', bundle.airways);
             write('airspace', bundle.airspace);
+            write('sua', bundle.sua);
             write('fixes', bundle.fixes);
         });
 
