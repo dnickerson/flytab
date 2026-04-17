@@ -799,6 +799,13 @@ class VectorMapLayers {
         }
     }
 
+    /** CSS class for airport label size based on longest runway (ft). */
+    _aptLabelClass(rwyFt) {
+        if (rwyFt >= 5000) return 'apt-label apt-label-lg';
+        if (rwyFt >= 3000) return 'apt-label apt-label-md';
+        return 'apt-label apt-label-sm';
+    }
+
     // SUA type → base (inactive) style
     static SUA_STYLES = {
         R:   { color: '#ff2222', fillColor: '#ff2222', fillOpacity: 0.07, weight: 1.5, dashArray: '6 3' },
@@ -988,13 +995,12 @@ class VectorMapLayers {
                     const m = this._airportMarkers.get(apt.icao);
                     const tip = m.getTooltip();
                     if (tip && tip.options.permanent !== labelVisible) {
-                        const towered2 = m._aptData?.tower;
                         m.unbindTooltip();
                         m.bindTooltip(apt.icao, {
                             permanent: labelVisible,
                             direction: 'right',
                             offset: [8, 0],
-                            className: towered2 ? 'apt-label apt-label-towered' : 'apt-label apt-label-nontowered',
+                            className: this._aptLabelClass(m._aptData?.longest_rwy_ft || 0),
                         });
                     }
                     continue;
@@ -1021,7 +1027,7 @@ class VectorMapLayers {
                     permanent: labelVisible,
                     direction: 'right',
                     offset: [8, 0],
-                    className: towered ? 'apt-label apt-label-towered' : 'apt-label apt-label-nontowered',
+                    className: this._aptLabelClass(apt.longest_rwy_ft || 0),
                 });
 
                 marker.on('click', () => {

@@ -683,7 +683,9 @@ class NasrDB {
         });
 
         if (bundle.cycle_info) {
-            await this.setMeta('nasr_cycle_info', bundle.cycle_info);
+            // Always persist sua_count so staleness check can detect missing SUA on next startup
+            const cycleToStore = { ...bundle.cycle_info, sua_count: bundle.sua?.length ?? 0 };
+            await this.setMeta('nasr_cycle_info', cycleToStore);
         }
         await this.setMeta('nasr_last_import', new Date().toISOString());
         return count;

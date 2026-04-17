@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v5.17';
+const FLYTAB_VERSION = 'v5.23';
 
 // ========== Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -891,37 +891,52 @@ class FlyTabApp {
     }
 
     async _ensureNasrData(nasrDb) {
-        // Compare NanoHTTPD cycle_info against IndexedDB — re-import if cycle changed
+        // Compare cycle_info sources against IndexedDB — re-import if stale
+        let forceHomeServer = false;
         try {
-            const [localFile, dbCycle, testApt] = await Promise.all([
+            const bases = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.homeBases : [];
+            const [localFile, homeFile, dbCycle, testApt] = await Promise.all([
                 fetch('http://localhost:9090/nasr/cycle_info.json', { signal: AbortSignal.timeout(2000) })
                     .then(r => r.ok ? r.json() : null).catch(() => null),
+                bases.length
+                    ? fetch(`${bases[0]}/nasr/cycle_info.json`, { cache: 'no-store', signal: AbortSignal.timeout(3000) })
+                        .then(r => r.ok ? r.json() : null).catch(() => null)
+                    : Promise.resolve(null),
                 nasrDb.getCycleInfo().catch(() => null),
                 nasrDb.getAirport('KJFK').catch(() => null),
             ]);
-            const fileDate    = localFile?.effective_date;
-            const dbDate      = dbCycle?.effective_date;
-            const fileSuaCnt  = localFile?.sua_count ?? null;
-            const dbSuaCnt    = dbCycle?.sua_count    ?? null;
-            const dateMatch   = fileDate && fileDate === dbDate;
-            // suaMatch: if file advertises sua_count, DB must have same value
-            const suaMatch    = fileSuaCnt === null || (dbSuaCnt !== null && fileSuaCnt === dbSuaCnt);
+            const dbDate   = dbCycle?.effective_date;
+            const dbSuaCnt = dbCycle?.sua_count ?? null;
+
+            // Check home server first: if it has sua_count the DB doesn't, re-import from home server
+            if (homeFile?.sua_count > 0 && homeFile.sua_count !== dbSuaCnt) {
+                forceHomeServer = true;
+                throw new Error('home server has newer SUA data');
+            }
+
+            // Otherwise check NanoHTTPD
+            const fileDate   = localFile?.effective_date;
+            const fileSuaCnt = localFile?.sua_count ?? null;
+            const dateMatch  = fileDate && fileDate === dbDate;
+            const suaMatch   = fileSuaCnt === null || (dbSuaCnt !== null && fileSuaCnt === dbSuaCnt);
             if (testApt && dateMatch && suaMatch) return; // DB is current
             if (testApt && !fileDate) return; // NanoHTTPD not ready; DB exists, keep it
-        } catch { /* fall through to import */ }
+        } catch (e) { if (!forceHomeServer) { /* fall through to import */ } }
 
-        DiagLog.log('nasr', 'NASR DB empty or stale — importing from NanoHTTPD');
+        DiagLog.log('nasr', 'NASR DB empty or stale — importing');
         console.log('[FlyTab] NASR DB empty or stale — trying to import...');
 
         try {
-            // FlyTab: try local NanoHTTPD first (pre-downloaded), then home server
+            // Try local NanoHTTPD first (works offline), then home server
             let bundle;
-            try {
-                const localResp = await fetch('http://localhost:9090/nasr/bundle.json', {
-                    signal: AbortSignal.timeout(60000), // 18MB JSON; give tablet time to parse
-                });
-                if (localResp.ok) bundle = await localResp.json();
-            } catch { /* local not available */ }
+            if (!forceHomeServer) {
+                try {
+                    const localResp = await fetch('http://localhost:9090/nasr/bundle.json', {
+                        signal: AbortSignal.timeout(60000), // 18MB JSON; give tablet time to parse
+                    });
+                    if (localResp.ok) bundle = await localResp.json();
+                } catch { /* local not available */ }
+            }
             if (!bundle) {
                 // Fall back to home server — try primary, then Tailscale fallback
                 const bases = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.homeBases : [];
