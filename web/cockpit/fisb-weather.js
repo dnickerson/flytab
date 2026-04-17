@@ -25,12 +25,16 @@ class FisbWeatherDisplay {
         // Map layers
         this._pirepLayer = L.layerGroup();
         this._sigmetLayer = L.layerGroup();
+        this._airmetLayer = L.layerGroup();
         this._windsLayer = L.layerGroup();
         this._notamLayer = L.layerGroup();
         this._pirepMarkers = [];   // { marker, received_at }
-        this._sigmetPolygons = []; // { polygon, received_at }
+        this._sigmetPolygons = []; // { polygon, received_at, expires_at, type }
+        this._airmetPolygons = []; // { polygon, received_at, expires_at }
         this._windMarkers = new Map(); // "station:alt" → marker
         this._notamMarkers = [];   // { marker, received_at, expires_at }
+        // De-dup internet advisories by raw text to avoid FIS-B double-show
+        this._seenAdvisoryKeys = new Set();
 
         // Alert state
         this._activeAlerts = new Map(); // key → DOM element
@@ -52,6 +56,23 @@ class FisbWeatherDisplay {
 
         // Purge timer
         this._purgeTimer = null;
+
+        // Touch tap handler (Leaflet's tap plugin is disabled — bindPopup click unreliable on tablet)
+        this._tapStart = null;
+        this._onTapStart = (e) => {
+            if (e.touches.length === 1)
+                this._tapStart = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+            else
+                this._tapStart = null;
+        };
+        this._onTapEnd = (e) => {
+            if (!this._tapStart || e.changedTouches.length !== 1) { this._tapStart = null; return; }
+            const ts = this._tapStart; this._tapStart = null;
+            const dx = e.changedTouches[0].clientX - ts.x;
+            const dy = e.changedTouches[0].clientY - ts.y;
+            if (dx*dx + dy*dy > 400) return; // > 20px = pan, not tap
+            this._handleAdvisoryTap(e.changedTouches[0].clientX, e.changedTouches[0].clientY);
+        };
     }
 
     // ========== Public API ==========
@@ -60,6 +81,7 @@ class FisbWeatherDisplay {
     init() {
         // _pirepLayer starts hidden — layer panel checkbox initializes unchecked
         this._sigmetLayer.addTo(this._map);
+        this._airmetLayer.addTo(this._map);
         // _windsLayer starts hidden — layer panel checkbox initializes unchecked
 
         // Build alert container
@@ -78,6 +100,11 @@ class FisbWeatherDisplay {
 
         // Purge stale markers every 30 seconds
         this._purgeTimer = setInterval(() => this._purgeMarkers(), 30000);
+
+        // Register touch handlers on map container for reliable SIGMET/AIRMET tap detection
+        const container = this._map.getContainer();
+        container.addEventListener('touchstart', this._onTapStart, { capture: false, passive: true });
+        container.addEventListener('touchend',   this._onTapEnd,   { passive: true });
     }
 
     /** Set route airports (kept for API compatibility) */
@@ -94,18 +121,25 @@ class FisbWeatherDisplay {
         this._fisb.removeEventListener('fisb:winds',  this._onWinds);
         this._fisb.removeEventListener('fisb:notam',  this._onNotam);
         if (this._purgeTimer) { clearInterval(this._purgeTimer); this._purgeTimer = null; }
+        const container = this._map.getContainer();
+        container.removeEventListener('touchstart', this._onTapStart, { capture: false });
+        container.removeEventListener('touchend',   this._onTapEnd);
         this._pirepLayer.clearLayers();
         this._sigmetLayer.clearLayers();
+        this._airmetLayer.clearLayers();
         this._windsLayer.clearLayers();
         this._notamLayer.clearLayers();
         if (this._map.hasLayer(this._pirepLayer)) this._map.removeLayer(this._pirepLayer);
         if (this._map.hasLayer(this._sigmetLayer)) this._map.removeLayer(this._sigmetLayer);
+        if (this._map.hasLayer(this._airmetLayer)) this._map.removeLayer(this._airmetLayer);
         if (this._map.hasLayer(this._windsLayer)) this._map.removeLayer(this._windsLayer);
         if (this._map.hasLayer(this._notamLayer)) this._map.removeLayer(this._notamLayer);
         this._pirepMarkers = [];
         this._sigmetPolygons = [];
+        this._airmetPolygons = [];
         this._windMarkers.clear();
         this._notamMarkers = [];
+        this._seenAdvisoryKeys.clear();
         this._activeAlerts.clear();
         this._toastSeen.clear();
         if (this._alertContainer?.parentNode) this._alertContainer.parentNode.removeChild(this._alertContainer);
@@ -197,6 +231,65 @@ class FisbWeatherDisplay {
     hidePireps() { if (this._map.hasLayer(this._pirepLayer)) this._map.removeLayer(this._pirepLayer); }
     get pireipsVisible() { return this._map.hasLayer(this._pirepLayer); }
 
+    /** Show/hide SIGMET layer. */
+    showSigmets() { if (!this._map.hasLayer(this._sigmetLayer)) this._sigmetLayer.addTo(this._map); }
+    hideSigmets() { if (this._map.hasLayer(this._sigmetLayer)) this._map.removeLayer(this._sigmetLayer); }
+    get sigmetsVisible() { return this._map.hasLayer(this._sigmetLayer); }
+
+    /** Show/hide AIRMET layer. */
+    showAirmets() { if (!this._map.hasLayer(this._airmetLayer)) this._airmetLayer.addTo(this._map); }
+    hideAirmets() { if (this._map.hasLayer(this._airmetLayer)) this._map.removeLayer(this._airmetLayer); }
+    get airmetsVisible() { return this._map.hasLayer(this._airmetLayer); }
+
+    /**
+     * Inject internet-fetched advisories into the display.
+     * Skips entries already shown via FIS-B (keyed on first 80 chars of raw text).
+     * Safe to call repeatedly — deduplicates on the seen-keys set.
+     */
+    injectAdvisories(sigmets, airmets) {
+        for (const s of (sigmets || [])) {
+            const key = (s.raw || '').slice(0, 80);
+            if (this._seenAdvisoryKeys.has(key)) continue;
+            this._seenAdvisoryKeys.add(key);
+            this._addSigmet(s);
+        }
+        for (const a of (airmets || [])) {
+            const key = (a.raw || '').slice(0, 80);
+            if (this._seenAdvisoryKeys.has(key)) continue;
+            this._seenAdvisoryKeys.add(key);
+            this._addAirmet(a);
+        }
+    }
+
+    /**
+     * Hit-test a screen tap against all visible SIGMET/AIRMET polygons using SVG isPointInFill/Stroke.
+     * Opens the popup of the first polygon that contains the tap point.
+     */
+    _handleAdvisoryTap(clientX, clientY) {
+        const allPolygons = [
+            ...(this._map.hasLayer(this._sigmetLayer) ? this._sigmetPolygons : []),
+            ...(this._map.hasLayer(this._airmetLayer) ? this._airmetPolygons : []),
+        ];
+        if (!allPolygons.length) return;
+
+        for (const entry of allPolygons) {
+            const svgPath = entry.polygon.getElement();
+            if (!svgPath) continue;
+            const svg = svgPath.ownerSVGElement;
+            if (!svg) continue;
+            try {
+                const pt = svg.createSVGPoint();
+                pt.x = clientX;
+                pt.y = clientY;
+                const local = pt.matrixTransform(svgPath.getScreenCTM().inverse());
+                if (svgPath.isPointInFill(local) || svgPath.isPointInStroke(local)) {
+                    entry.polygon.openPopup();
+                    return;
+                }
+            } catch (_) { /* element not in DOM yet */ }
+        }
+    }
+
     /** Show/hide winds layer. */
     showWinds() { if (!this._map.hasLayer(this._windsLayer)) this._windsLayer.addTo(this._map); }
     hideWinds() { if (this._map.hasLayer(this._windsLayer)) this._map.removeLayer(this._windsLayer); }
@@ -259,6 +352,7 @@ class FisbWeatherDisplay {
     // ========== SIGMET/AIRMET Polygons ==========
 
     _addSigmet(sigmet) {
+        this._seenAdvisoryKeys.add((sigmet.raw || '').slice(0, 80));
         if (!sigmet.points || sigmet.points.length < 3) {
             // Text-only SIGMET — show as alert
             this._toastAlert(`\u26a0\ufe0f SIGMET: ${sigmet.raw.slice(0, 80)}`, 'red', 30000, sigmet.raw);
@@ -278,7 +372,7 @@ class FisbWeatherDisplay {
         polygon.bindPopup(`<div class="sigmet-popup">
             <div class="sigmet-header">${isConvective ? 'CONVECTIVE ' : ''}SIGMET</div>
             <div class="sigmet-text">${FisbWeatherDisplay._esc(sigmet.raw)}</div>
-        </div>`, { maxWidth: 340 });
+        </div>`, { minWidth: 480, maxWidth: 600, className: 'sigmet-popup-container' });
 
         polygon.addTo(this._sigmetLayer);
         this._sigmetPolygons.push({
@@ -295,6 +389,7 @@ class FisbWeatherDisplay {
     }
 
     _addAirmet(airmet) {
+        this._seenAdvisoryKeys.add((airmet.raw || '').slice(0, 80));
         if (!airmet.points || airmet.points.length < 3) return;
 
         // Determine AIRMET type from raw text for color coding
@@ -328,12 +423,12 @@ class FisbWeatherDisplay {
         polygon.bindPopup(`<div class="airmet-popup">
             <div class="airmet-header">${FisbWeatherDisplay._esc(label)}</div>
             <div class="airmet-text">${FisbWeatherDisplay._esc(raw)}</div>
-        </div>`, { maxWidth: 340 });
+        </div>`, { minWidth: 480, maxWidth: 600, className: 'airmet-popup-container' });
 
-        polygon.addTo(this._sigmetLayer);
-        this._sigmetPolygons.push({
+        polygon.addTo(this._airmetLayer);
+        this._airmetPolygons.push({
             polygon, received_at: airmet.received_at,
-            expires_at: airmet.expires_at, type: 'airmet',
+            expires_at: airmet.expires_at,
         });
 
         this._toastAlert(toastMsg, toastSeverity, 30000, raw);
@@ -442,12 +537,23 @@ class FisbWeatherDisplay {
             return true;
         });
 
-        // Expired SIGMETs/AIRMETs
+        // Expired SIGMETs
         this._sigmetPolygons = this._sigmetPolygons.filter(entry => {
             const expired = entry.expires_at && entry.expires_at < now;
             const tooOld = now - entry.received_at > 4 * 3600000;
             if (expired || tooOld) {
                 this._sigmetLayer.removeLayer(entry.polygon);
+                return false;
+            }
+            return true;
+        });
+
+        // Expired AIRMETs
+        this._airmetPolygons = this._airmetPolygons.filter(entry => {
+            const expired = entry.expires_at && entry.expires_at < now;
+            const tooOld = now - entry.received_at > 4 * 3600000;
+            if (expired || tooOld) {
+                this._airmetLayer.removeLayer(entry.polygon);
                 return false;
             }
             return true;

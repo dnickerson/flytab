@@ -169,7 +169,81 @@ class WeatherClient {
     }
 
     /**
-     * Fetch active SIGMETs/AIRMETs.
+     * Fetch active SIGMETs/AIRMETs from AWC, parse into internal format, and cache to localStorage.
+     * Returns { sigmets: [...], airmets: [...] } or throws on network error.
+     */
+    async fetchAndCacheAdvisories() {
+        // Route through flywhere.app proxy — direct AWC fetch is blocked by CORS from http://localhost (Capacitor)
+        const base = Settings.workerBase || 'https://www.flywhere.app/api';
+        const url = `${base}/weather?type=airsigmet&format=json`;
+        const resp = await fetch(url, { signal: AbortSignal.timeout(10000) });
+        if (!resp.ok) throw new Error(`Advisory fetch failed: ${resp.status} ${url}`);
+        const raw = await resp.json();
+        const items = Array.isArray(raw) ? raw : (raw.data || []);
+
+        const sigmets = [];
+        const airmets = [];
+        for (const item of items) {
+            const parsed = WeatherClient._parseAirsigmet(item);
+            if (!parsed) continue;
+            if (parsed.isSigmet) sigmets.push(parsed);
+            else airmets.push(parsed);
+        }
+
+        try {
+            localStorage.setItem('flytab_advisories_cache', JSON.stringify({
+                fetched_at: Date.now(),
+                sigmets,
+                airmets,
+            }));
+        } catch (_) { /* storage full — non-fatal */ }
+
+        return { sigmets, airmets };
+    }
+
+    /**
+     * Load advisories from localStorage cache. Returns null if missing or > 15 min old.
+     */
+    loadCachedAdvisories() {
+        try {
+            const raw = localStorage.getItem('flytab_advisories_cache');
+            if (!raw) return null;
+            const cache = JSON.parse(raw);
+            if (Date.now() - cache.fetched_at > 15 * 60000) return null;
+            return { sigmets: cache.sigmets || [], airmets: cache.airmets || [] };
+        } catch (_) {
+            return null;
+        }
+    }
+
+    /**
+     * Parse one AWC airsigmet API item into the internal advisory format used by FisbWeatherDisplay.
+     * Returns null if the item has no usable coordinates.
+     */
+    static _parseAirsigmet(item) {
+        const now = Date.now();
+        const points = (item.coords || []).map(c => [c.lat, c.lon]);
+        const raw = item.rawAirSigmet || '';
+        const hazard = (item.hazard || '').toUpperCase();
+        const sigType = (item.airSigmetType || '').toUpperCase();
+        const isSigmet = sigType === 'SIGMET' || sigType === 'CONVECTIVE SIGMET' || hazard === 'CONVECTIVE';
+        const isConvective = hazard === 'CONVECTIVE' || sigType === 'CONVECTIVE SIGMET';
+        const expires_at = item.validTimeTo ? item.validTimeTo * 1000 : now + 4 * 3600000;
+
+        // AIRMETs without coordinates still carry useful text — include them (FisbWeatherDisplay handles < 3 pts)
+        return {
+            raw,
+            type: isConvective ? 'convective' : (isSigmet ? 'sigmet' : 'airmet'),
+            hazard,
+            points,
+            received_at: now,
+            expires_at,
+            isSigmet,
+        };
+    }
+
+    /**
+     * Legacy: fetch raw AWC airsigmet response (used by fetchAllForRoute).
      */
     async fetchSigmets() {
         const url = `${WeatherClient.AWC_BASE}/airsigmet?format=json`;

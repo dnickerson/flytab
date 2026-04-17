@@ -4574,14 +4574,26 @@ body {
 .notam-age { color: #888; font-size: 12px; margin-top: 4px; }
 
 /* ========== SIGMET/AIRMET Popups ========== */
-.sigmet-popup, .airmet-popup {
-    font-size: 14px;
-    font-family: var(--font-mono, monospace);
-    max-width: 300px;
+.sigmet-popup-container .leaflet-popup-tip,
+.airmet-popup-container .leaflet-popup-tip { display: none; }
+.sigmet-popup-container .leaflet-popup-close-button,
+.airmet-popup-container .leaflet-popup-close-button {
+    width: 44px !important;
+    height: 44px !important;
+    font-size: 28px !important;
+    line-height: 44px !important;
+    right: 0 !important;
+    top: 0 !important;
+    text-align: center;
 }
-.sigmet-header { font-weight: 700; color: #ff4444; margin-bottom: 4px; }
-.airmet-header { font-weight: 700; color: #ffaa00; margin-bottom: 4px; }
-.sigmet-text, .airmet-text { color: #ccc; word-break: break-word; white-space: pre-wrap; }
+.sigmet-popup, .airmet-popup {
+    font-size: 18px;
+    font-family: var(--font-mono, monospace);
+    line-height: 1.5;
+}
+.sigmet-header { font-weight: 700; font-size: 20px; color: #ff4444; margin-bottom: 8px; }
+.airmet-header { font-weight: 700; font-size: 20px; color: #ffaa00; margin-bottom: 8px; }
+.sigmet-text, .airmet-text { color: #111; word-break: break-word; white-space: pre-wrap; }
 
 /* ========== Winds Aloft Barbs ========== */
 .wind-barb-icon {

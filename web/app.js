@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v5.26';
+const FLYTAB_VERSION = 'v5.36';
 
 // ========== Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -343,6 +343,8 @@ class FlyTabApp {
                 this.vectorLayers._internetFetchedAt = 0;
                 this.vectorLayers._scheduleUpdate();
             }
+            // Also refresh advisories now that we have connectivity
+            this._fetchAdvisories();
         }
     }
 
@@ -623,6 +625,7 @@ class FlyTabApp {
             this.fisbWeather = new FisbWeatherDisplay(this.fisbClient, this.cockpitMap.map);
             this.fisbWeather.init();
             this.cockpitMap.setFisbWeather(this.fisbWeather);
+            this._startAdvisoryRefresh();
         }
 
         // FIS-B Status overlay (reception health, tower list, product grid)
@@ -1572,6 +1575,37 @@ class FlyTabApp {
 
         if (duration || severity === 'blue') {
             setTimeout(() => banner.remove(), duration || 10000);
+        }
+    }
+
+    /**
+     * Load cached advisories immediately, then schedule 5-minute refresh.
+     * _fetchAdvisories() is also called by _onModeChanged when coming back online.
+     */
+    _startAdvisoryRefresh() {
+        if (typeof WeatherClient === 'undefined') return;
+        this._advisoryClient = new WeatherClient(null);
+
+        // Serve stale cache instantly (works offline)
+        const cached = this._advisoryClient.loadCachedAdvisories();
+        if (cached) {
+            console.log(`[Advisory] Loaded from cache: ${cached.sigmets.length} sigmets, ${cached.airmets.length} airmets`);
+            this.fisbWeather?.injectAdvisories(cached.sigmets, cached.airmets);
+        }
+
+        this._fetchAdvisories();
+        setInterval(() => this._fetchAdvisories(), 5 * 60000);
+    }
+
+    /** Fetch fresh SIGMETs/AIRMETs from the internet and inject into the weather display. */
+    async _fetchAdvisories() {
+        if (!this.fisbWeather || !this._advisoryClient) return;
+        try {
+            const fresh = await this._advisoryClient.fetchAndCacheAdvisories();
+            console.log(`[Advisory] Fetched: ${fresh.sigmets.length} sigmets, ${fresh.airmets.length} airmets`);
+            this.fisbWeather.injectAdvisories(fresh.sigmets, fresh.airmets);
+        } catch (e) {
+            console.warn(`[Advisory] Fetch failed: ${e.message}`);
         }
     }
 

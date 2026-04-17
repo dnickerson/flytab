@@ -164,6 +164,26 @@ class LayerPanel {
             });
         }
 
+        // Wire SIGMET toggle
+        const sigmetInput = this._panel.querySelector('.lp-toggle input[data-action="sigmets"]');
+        if (sigmetInput) {
+            sigmetInput.checked = true;
+            sigmetInput.addEventListener('change', () => {
+                if (sigmetInput.checked) window.app?.fisbWeather?.showSigmets();
+                else window.app?.fisbWeather?.hideSigmets();
+            });
+        }
+
+        // Wire AIRMET toggle
+        const airmetInput = this._panel.querySelector('.lp-toggle input[data-action="airmets"]');
+        if (airmetInput) {
+            airmetInput.checked = true;
+            airmetInput.addEventListener('change', () => {
+                if (airmetInput.checked) window.app?.fisbWeather?.showAirmets();
+                else window.app?.fisbWeather?.hideAirmets();
+            });
+        }
+
         // Wire TFR toggle
         const tfrInput = this._panel.querySelector('.lp-toggle input[data-action="tfrs"]');
         if (tfrInput) {
@@ -465,6 +485,14 @@ class LayerPanel {
                     <div class="lp-row">
                         <span class="lp-row-label">PIREPs (FIS-B)</span>
                         <label class="lp-toggle"><input type="checkbox" data-action="pireps"><span class="lp-toggle-track"></span></label>
+                    </div>
+                    <div class="lp-row">
+                        <span class="lp-row-label">SIGMETs</span>
+                        <label class="lp-toggle"><input type="checkbox" data-action="sigmets" checked><span class="lp-toggle-track"></span></label>
+                    </div>
+                    <div class="lp-row">
+                        <span class="lp-row-label">AIRMETs</span>
+                        <label class="lp-toggle"><input type="checkbox" data-action="airmets" checked><span class="lp-toggle-track"></span></label>
                     </div>
                     <div class="lp-row">
                         <span class="lp-row-label">Lightning Strikes</span>
