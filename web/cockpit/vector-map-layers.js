@@ -847,6 +847,7 @@ class VectorMapLayers {
         try {
             const areas = await this._nasr.getSuaInBounds(south, west, north, east);
             const currentIds = new Set();
+            const usedLabelPos = [];
 
             for (const sua of areas) {
                 currentIds.add(sua.id);
@@ -895,19 +896,27 @@ class VectorMapLayers {
                 polygon.addTo(this._suaLayer);
                 this._suaPolygons.set(sua.id, polygon);
 
-                // Altitude label at centroid
-                const center = VectorMapLayers._polygonCentroid(latlngs);
+                // Altitude label at centroid with collision offset
+                let labelPos = VectorMapLayers._polygonCentroid(latlngs);
                 const altLower = sua.lower_ft === 0 ? 'SFC' : (sua.lower_ft >= 1000 ? `${Math.round(sua.lower_ft / 100)}` : sua.lower_ft);
                 const altUpper = sua.upper_ft != null ? (sua.upper_ft >= 1000 ? `${Math.round(sua.upper_ft / 100)}` : sua.upper_ft) : '?';
                 const actBadge = isActive ? '<span class="sua-act-badge">ACT</span>' : '';
                 const altHtml  = `${altUpper}<br><span class="as-alt-floor">${altLower}</span>${actBadge}`;
                 const typeClass = `sua-lbl-${(sua.type || 'moa').toLowerCase()}`;
-                const label = L.marker(center, {
+
+                // Offset label vertically if another label is within ~0.05° of this pos
+                const SUA_CLOSE = 0.05;
+                const stackCount = usedLabelPos.filter(p =>
+                    Math.abs(p[0] - labelPos[0]) < SUA_CLOSE && Math.abs(p[1] - labelPos[1]) < SUA_CLOSE
+                ).length;
+                usedLabelPos.push(labelPos);
+
+                const label = L.marker(labelPos, {
                     icon: L.divIcon({
                         className: `as-alt-label ${typeClass}${isActive ? ' sua-lbl-active' : ''}`,
                         html: altHtml,
-                        iconSize: [44, 34],
-                        iconAnchor: [22, 17],
+                        iconSize: [48, 34],
+                        iconAnchor: [24, 17 - stackCount * 38],
                     }),
                     interactive: false,
                     zIndexOffset: -150,
