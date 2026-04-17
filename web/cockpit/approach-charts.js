@@ -1175,7 +1175,8 @@ class ApproachCharts {
                 name: s.fix_id.trim(),
                 lat: s.lat,
                 lon: s.lon,
-                alt: s.altitude1 ? s.altitude1 * 10 : null,
+                alt: s.altitude1 || null,
+                altLocked: !!s.altitude1,
             });
 
             // Identify key approach fixes:
