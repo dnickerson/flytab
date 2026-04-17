@@ -702,6 +702,8 @@ class VectorMapLayers {
             const airspaces = await this._nasr.getAirspaceInBounds(south, west, north, east);
             const currentIds = new Set();
             const styles = CockpitConfig.get('airspaceStyles');
+            // Track label latlngs used this render pass to offset stacked labels
+            const usedLabelPos = [];
 
             // Group Class B rings by airport name to find each airport's center
             const bravoGroups = new Map(); // name → [{as, latlngs}]
@@ -769,12 +771,18 @@ class VectorMapLayers {
                         labelPos = VectorMapLayers._polygonCentroid(latlngs);
                     }
 
+                    // Offset label vertically if another label is within ~0.03° of this pos
+                    const CLOSE = 0.03;
+                    const stackCount = usedLabelPos.filter(p =>
+                        Math.abs(p[0] - labelPos[0]) < CLOSE && Math.abs(p[1] - labelPos[1]) < CLOSE
+                    ).length;
+                    usedLabelPos.push(labelPos);
                     const altLabel = L.marker(labelPos, {
                         icon: L.divIcon({
                             className: `as-alt-label as-alt-${as.class.toLowerCase()}`,
                             html: altHtml,
                             iconSize: [40, 30],
-                            iconAnchor: [20, 15],
+                            iconAnchor: [20, 15 - stackCount * 32],
                         }),
                         interactive: false,
                         zIndexOffset: -100,
