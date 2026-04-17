@@ -4156,12 +4156,11 @@ body {
     font: 700 14px var(--font-instrument);
     text-align: center;
     line-height: 1.1;
-    background: rgba(0, 0, 0, 0.45);
+    background: none;
     border: none;
-    border-radius: 2px;
-    padding: 1px 3px;
     pointer-events: none;
     white-space: nowrap;
+    text-shadow: 0 0 3px #fff, 0 0 3px #fff, 0 0 3px #fff;
 }
 
 .as-alt-floor {
