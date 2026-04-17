@@ -203,6 +203,7 @@
 .leaflet-container img.leaflet-tile {
     margin: 0;
     padding: 0;
+    mix-blend-mode: normal;
 }
 
 html {
@@ -1974,6 +1975,47 @@ body {
     font-size: 14px !important;
     padding: 6px 16px !important;
     min-height: 36px !important;
+}
+
+.route-wp-alt-row,
+.route-wp-crossing-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px 4px 38px;
+}
+
+.route-wp-alt-label {
+    font-size: 11px;
+    color: var(--text-label);
+    min-width: 28px;
+}
+
+.route-wp-alt-input,
+.route-wp-alt-min,
+.route-wp-alt-max {
+    width: 72px;
+    padding: 4px 6px;
+    border: 1px solid var(--border-strong);
+    border-radius: 4px;
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    font-size: 14px;
+    font-family: var(--font-instrument);
+}
+
+.route-wp-alt-unit {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.route-wp-alt-unlock {
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 14px;
+    padding: 2px 4px;
+    cursor: pointer;
 }
 
 .route-wp-insert {
@@ -4074,21 +4116,30 @@ body {
 /* ========== Airspace / Vector Map Labels ========== */
 
 .apt-label {
-    font: 700 14px var(--font-instrument);
-    padding: 1px 3px;
-    border: none;
-    box-shadow: none;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    font-family: var(--font-instrument);
+    font-weight: 700;
+    color: #111111;
+    text-shadow:
+        -1px -1px 0 #fff,
+         1px -1px 0 #fff,
+        -1px  1px 0 #fff,
+         1px  1px 0 #fff,
+         0    -1px 0 #fff,
+         0     1px 0 #fff,
+        -1px   0   0 #fff,
+         1px   0   0 #fff;
+    letter-spacing: 0.03em;
+    white-space: nowrap;
 }
+.apt-label::before { display: none !important; }
 
-.apt-label-towered {
-    color: #0055aa;
-    background: rgba(255,255,255,0.75);
-}
-
-.apt-label-nontowered {
-    color: #cc2299;
-    background: rgba(255,255,255,0.75);
-}
+.apt-label-lg { font-size: 13px; }
+.apt-label-md { font-size: 11px; }
+.apt-label-sm { font-size: 9px; }
 
 .airspace-label {
     font: 700 14px var(--font-instrument);

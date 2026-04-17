@@ -2,8 +2,11 @@ package app.flywhere.flytab;
 
 import android.app.AlertDialog;
 import android.content.Intent;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
+import android.provider.Settings;
 import android.util.Log;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -23,6 +26,12 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(ThermalMonitorPlugin.class);
         registerPlugin(EngineMLPlugin.class);
         super.onCreate(savedInstanceState);
+
+        // Request "All files access" (MANAGE_EXTERNAL_STORAGE) — required to read
+        // MBTiles databases from Documents/FlyTab/tiles/ via the NanoHTTPD tile server.
+        // Must be requested at runtime via Settings on Android 11+; declaring in the
+        // manifest alone is not sufficient and the grant is revoked on reinstall.
+        checkStoragePermission();
 
         // Start flight service (keeps CPU awake for Stratux WebSocket when screen is off)
         startFlightService();
@@ -62,6 +71,24 @@ public class MainActivity extends BridgeActivity {
             }
             return ViewCompat.onApplyWindowInsets(v, insets);
         });
+    }
+
+    private void checkStoragePermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            if (!Environment.isExternalStorageManager()) {
+                new AlertDialog.Builder(this)
+                    .setTitle("Storage Access Required")
+                    .setMessage("FlyTab needs access to all files to read chart tiles and approach plates stored in Documents/FlyTab.\n\nTap OK to open the permission screen, then enable \"Allow management of all files\".")
+                    .setPositiveButton("OK", (dialog, which) -> {
+                        Intent intent = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                            Uri.parse("package:" + getPackageName()));
+                        startActivity(intent);
+                    })
+                    .setNegativeButton("Not now", null)
+                    .setCancelable(false)
+                    .show();
+            }
+        }
     }
 
     private void startFlightService() {

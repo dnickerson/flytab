@@ -36,16 +36,25 @@ function _pointInPolygon(lat, lon, boundary) {
  * Fuel stops divide the Trip into discrete Flights; the pilot refuels there.
  */
 function isFuelStop(wp, index, waypoints) {
-    if (index === 0 || index >= waypoints.length - 1) return false;
-    // Primary check: type flag set on the waypoint object
-    if (wp.type === 'APT') return true;
+    if (index === 0) return false;
     // Non-airport types are never fuel stops
     if (wp.type === 'VOR' || wp.type === 'NDB' || wp.type === 'FIX' || wp.type === 'GPS' || wp.type === 'WPT') return false;
-    // Fallback: plans loaded from legs-only (waypoints:null) don't have type set.
-    // Treat any intermediate airport-looking waypoint (4-char K-prefix ICAO) as a
-    // potential fuel stop. This handles the common US airport case.
-    const icao = wp.icao || wp.name || '';
-    return icao.length === 4 && icao.startsWith('K');
+
+    const isApt = wp.type === 'APT' ||
+        // Fallback: plans loaded from legs-only (waypoints:null) don't have type set.
+        // Treat any 4-char K-prefix ICAO as an airport.
+        (() => { const id = wp.icao || wp.name || ''; return id.length === 4 && id.startsWith('K'); })();
+
+    if (!isApt) return false;
+
+    // A fuel stop is an airport that has another airport later in the route.
+    // The destination is the last APT — approach fixes and MAP points after it
+    // do not make the destination a fuel stop.
+    return waypoints.slice(index + 1).some(w => {
+        if (w.type === 'APT') return true;
+        const id = w.icao || w.name || '';
+        return !w.type && id.length === 4 && id.startsWith('K');
+    });
 }
 
 class RouteTable {
@@ -520,6 +529,7 @@ class RouteTable {
         this._pushUndo();
         this._waypoints[index].alt = alt;
         this._waypoints[index].altitude = alt;
+        this._waypoints[index].altLocked = true;
         if (altUpper !== null) this._waypoints[index].alt_constraint_upper = altUpper;
         this._onEdited();
     }

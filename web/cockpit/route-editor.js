@@ -231,6 +231,11 @@ class RouteEditor {
         this._wireTap(this._undoBtn, () => this._popUndo());
         this._altInput.addEventListener('change', () => {
             this._altitude = parseInt(this._altInput.value) || 3500;
+            // Push unlocked waypoints to the new cruise altitude immediately
+            for (const wp of this._waypoints) {
+                if (!wp.altLocked) wp.alt = this._altitude;
+            }
+            this._applyRoute({ hide: false, toast: false });
         });
 
         // Bottom bar: SAVE, LOAD, NEW, REV, UPLOAD — route management buttons
@@ -403,45 +408,18 @@ class RouteEditor {
             type: apt.type || 'APT',
         };
 
-        if (this._waypoints.length === 0) {
-            // No existing route — create a simple PPOS → target route
-            if (sit && sit.lat) {
-                this._waypoints.push({
-                    icao: 'PPOS',
-                    name: 'Present Pos',
-                    lat: sit.lat,
-                    lon: sit.lon,
-                    alt: sit.alt_msl || this._altitude,
-                });
-            }
-            this._waypoints.push(directWp);
-        } else {
-            // Existing route — find the best insertion point.
-            // Insert before the next waypoint we are heading toward.
-            let insertIdx = this._findDirectToInsertIndex(sit, apt);
-
-            // Remove any previous PPOS marker
-            this._waypoints = this._waypoints.filter(w => w.icao !== 'PPOS');
-
-            // Don't duplicate if the target is already at the insert position
-            if (this._waypoints[insertIdx]?.icao === apt.icao) {
-                // Already in route at correct spot — just add PPOS before it
-            } else {
-                this._waypoints.splice(insertIdx, 0, directWp);
-            }
-
-            // Insert PPOS at the Direct-To point so the leg draws correctly
-            if (sit && sit.lat) {
-                const pposIdx = this._waypoints.findIndex(w => w.icao === apt.icao);
-                this._waypoints.splice(pposIdx < 0 ? insertIdx : pposIdx, 0, {
-                    icao: 'PPOS',
-                    name: 'Present Pos',
-                    lat: sit.lat,
-                    lon: sit.lon,
-                    alt: sit.alt_msl || this._altitude,
-                });
-            }
+        // Direct-To always overrides the current route: PPOS → destination.
+        this._waypoints = [];
+        if (sit && sit.lat) {
+            this._waypoints.push({
+                icao: 'PPOS',
+                name: 'Present Pos',
+                lat: sit.lat,
+                lon: sit.lon,
+                alt: sit.alt_msl || this._altitude,
+            });
         }
+        this._waypoints.push(directWp);
 
         this.hideDirectTo();
         this._applyRoute();
@@ -643,6 +621,24 @@ class RouteEditor {
                     <div class="route-wp-actions">
                         <button class="btn btn-secondary route-wp-up" data-idx="${i}" ${i === 0 ? 'disabled' : ''}>&#9650; Up</button>
                         <button class="btn btn-secondary route-wp-down" data-idx="${i}" ${i === this._waypoints.length - 1 ? 'disabled' : ''}>&#9660; Down</button>
+                    </div>
+                    <div class="route-wp-alt-row">
+                        <label class="route-wp-alt-label">ALT</label>
+                        <input type="number" class="route-wp-alt-input" data-idx="${i}"
+                            value="${wp.altLocked ? wp.alt : this._altitude}"
+                            placeholder="${this._altitude}" step="500" min="0" max="45000">
+                        <span class="route-wp-alt-unit">ft</span>
+                        ${wp.altLocked ? `<button class="route-wp-alt-unlock" data-idx="${i}" title="Use cruise altitude">&#128274;</button>` : ''}
+                    </div>
+                    <div class="route-wp-crossing-row">
+                        <label class="route-wp-alt-label">MIN</label>
+                        <input type="number" class="route-wp-alt-min" data-idx="${i}"
+                            value="${wp.alt_min || ''}" placeholder="—" step="500" min="0" max="45000">
+                        <span class="route-wp-alt-unit">ft</span>
+                        <label class="route-wp-alt-label" style="margin-left:8px">MAX</label>
+                        <input type="number" class="route-wp-alt-max" data-idx="${i}"
+                            value="${wp.alt_max || ''}" placeholder="—" step="500" min="0" max="45000">
+                        <span class="route-wp-alt-unit">ft</span>
                     </div>` : ''}
                     <button class="route-wp-insert" data-idx="${i + 1}">+ insert waypoint</button>
                 </div>
@@ -695,6 +691,47 @@ class RouteEditor {
                 this._insertIndex = parseInt(btn.dataset.idx);
                 this._searchInput.focus();
                 this._searchInput.placeholder = `Insert at position ${this._insertIndex + 1}...`;
+            });
+        });
+
+        // Per-waypoint altitude — locks the waypoint to a specific altitude
+        this._waypointsDiv.querySelectorAll('.route-wp-alt-input').forEach(input => {
+            input.addEventListener('change', () => {
+                const idx = parseInt(input.dataset.idx);
+                const val = parseInt(input.value);
+                if (!isNaN(val) && val >= 0) {
+                    this._waypoints[idx].alt = val;
+                    this._waypoints[idx].altLocked = true;
+                    this._applyRoute({ hide: false, toast: false });
+                }
+            });
+        });
+
+        this._waypointsDiv.querySelectorAll('.route-wp-alt-unlock').forEach(btn => {
+            this._wireTap(btn, () => {
+                const idx = parseInt(btn.dataset.idx);
+                this._waypoints[idx].altLocked = false;
+                this._waypoints[idx].alt = this._altitude;
+                this._applyRoute({ hide: false, toast: false });
+            });
+        });
+
+        // Min/max crossing altitudes
+        this._waypointsDiv.querySelectorAll('.route-wp-alt-min').forEach(input => {
+            input.addEventListener('change', () => {
+                const idx = parseInt(input.dataset.idx);
+                const val = parseInt(input.value);
+                this._waypoints[idx].alt_min = (!isNaN(val) && val > 0) ? val : null;
+                this._applyRoute({ hide: false, toast: false });
+            });
+        });
+
+        this._waypointsDiv.querySelectorAll('.route-wp-alt-max').forEach(input => {
+            input.addEventListener('change', () => {
+                const idx = parseInt(input.dataset.idx);
+                const val = parseInt(input.value);
+                this._waypoints[idx].alt_max = (!isNaN(val) && val > 0) ? val : null;
+                this._applyRoute({ hide: false, toast: false });
             });
         });
     }
@@ -1009,7 +1046,7 @@ class RouteEditor {
 
         // Build legs with course/distance
         const wps = this._waypoints.map((wp, i) => {
-            const result = { ...wp, alt: wp.alt || this._altitude };
+            const result = { ...wp, alt: wp.altLocked ? wp.alt : this._altitude };
             if (i > 0) {
                 const prev = this._waypoints[i - 1];
                 result._legDist = CockpitMap._distNm(prev.lat, prev.lon, wp.lat, wp.lon);

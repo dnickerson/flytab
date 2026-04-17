@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v5.14';
+const FLYTAB_VERSION = 'v5.26';
 
 // ========== Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -891,7 +891,9 @@ class FlyTabApp {
     }
 
     async _ensureNasrData(nasrDb) {
-        // Compare NanoHTTPD cycle_info against IndexedDB — re-import if cycle changed
+        // NanoHTTPD (localhost:9090) is the sole local data source.
+        // Re-import only if NanoHTTPD has a newer cycle than the DB.
+        // Never downgrade: if NanoHTTPD is older than DB, keep DB.
         try {
             const [localFile, dbCycle, testApt] = await Promise.all([
                 fetch('http://localhost:9090/nasr/cycle_info.json', { signal: AbortSignal.timeout(2000) })
@@ -899,31 +901,31 @@ class FlyTabApp {
                 nasrDb.getCycleInfo().catch(() => null),
                 nasrDb.getAirport('KJFK').catch(() => null),
             ]);
-            const fileDate    = localFile?.effective_date;
-            const dbDate      = dbCycle?.effective_date;
-            const fileSuaCnt  = localFile?.sua_count ?? null;
-            const dbSuaCnt    = dbCycle?.sua_count    ?? null;
-            const dateMatch   = fileDate && fileDate === dbDate;
-            // suaMatch: if file advertises sua_count, DB must have same value
-            const suaMatch    = fileSuaCnt === null || (dbSuaCnt !== null && fileSuaCnt === dbSuaCnt);
-            if (testApt && dateMatch && suaMatch) return; // DB is current
-            if (testApt && !fileDate) return; // NanoHTTPD not ready; DB exists, keep it
+            const fileDate   = localFile?.effective_date;
+            const dbDate     = dbCycle?.effective_date;
+            const fileSuaCnt = localFile?.sua_count ?? null;
+            const dbSuaCnt   = dbCycle?.sua_count ?? null;
+            const dateMatch  = fileDate && fileDate === dbDate;
+            const suaMatch   = fileSuaCnt === null || (dbSuaCnt !== null && fileSuaCnt === dbSuaCnt);
+            if (testApt && dateMatch && suaMatch) return;               // DB is current
+            if (testApt && !fileDate) return;                           // NanoHTTPD not ready; keep DB
+            if (testApt && fileDate && dbDate && fileDate < dbDate) return; // NanoHTTPD older than DB; don't downgrade
         } catch { /* fall through to import */ }
 
-        DiagLog.log('nasr', 'NASR DB empty or stale — importing from NanoHTTPD');
+        DiagLog.log('nasr', 'NASR DB empty or stale — importing');
         console.log('[FlyTab] NASR DB empty or stale — trying to import...');
 
         try {
-            // FlyTab: try local NanoHTTPD first (pre-downloaded), then home server
+            // Import from NanoHTTPD (the locally synced bundle)
             let bundle;
             try {
                 const localResp = await fetch('http://localhost:9090/nasr/bundle.json', {
-                    signal: AbortSignal.timeout(60000), // 18MB JSON; give tablet time to parse
+                    signal: AbortSignal.timeout(60000),
                 });
                 if (localResp.ok) bundle = await localResp.json();
             } catch { /* local not available */ }
             if (!bundle) {
-                // Fall back to home server — try primary, then Tailscale fallback
+                // NanoHTTPD unavailable — fall back to home server
                 const bases = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.homeBases : [];
                 if (!bases.length) throw new Error('No home server configured');
 

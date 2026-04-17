@@ -166,7 +166,7 @@ class VectorMapLayers {
      * Hide lake fills so raster tiles show their own correct water rendering.
      */
     disableDarkBackground() {
-        this._map.getContainer().style.background = '';
+        this._map.getContainer().style.background = '#ffffff';
         if (this._map.hasLayer(this._lakesLayer)) this._map.removeLayer(this._lakesLayer);
     }
 
@@ -702,6 +702,8 @@ class VectorMapLayers {
             const airspaces = await this._nasr.getAirspaceInBounds(south, west, north, east);
             const currentIds = new Set();
             const styles = CockpitConfig.get('airspaceStyles');
+            // Track label latlngs used this render pass to offset stacked labels
+            const usedLabelPos = [];
 
             // Group Class B rings by airport name to find each airport's center
             const bravoGroups = new Map(); // name → [{as, latlngs}]
@@ -769,12 +771,18 @@ class VectorMapLayers {
                         labelPos = VectorMapLayers._polygonCentroid(latlngs);
                     }
 
+                    // Offset label vertically if another label is within ~0.03° of this pos
+                    const CLOSE = 0.03;
+                    const stackCount = usedLabelPos.filter(p =>
+                        Math.abs(p[0] - labelPos[0]) < CLOSE && Math.abs(p[1] - labelPos[1]) < CLOSE
+                    ).length;
+                    usedLabelPos.push(labelPos);
                     const altLabel = L.marker(labelPos, {
                         icon: L.divIcon({
                             className: `as-alt-label as-alt-${as.class.toLowerCase()}`,
                             html: altHtml,
                             iconSize: [40, 30],
-                            iconAnchor: [20, 15],
+                            iconAnchor: [20, 15 - stackCount * 32],
                         }),
                         interactive: false,
                         zIndexOffset: -100,
@@ -797,6 +805,13 @@ class VectorMapLayers {
         } catch (err) {
             console.warn('VectorMapLayers: airspace query failed', err);
         }
+    }
+
+    /** CSS class for airport label size based on longest runway (ft). */
+    _aptLabelClass(rwyFt) {
+        if (rwyFt >= 5000) return 'apt-label apt-label-lg';
+        if (rwyFt >= 3000) return 'apt-label apt-label-md';
+        return 'apt-label apt-label-sm';
     }
 
     // SUA type → base (inactive) style
@@ -988,13 +1003,12 @@ class VectorMapLayers {
                     const m = this._airportMarkers.get(apt.icao);
                     const tip = m.getTooltip();
                     if (tip && tip.options.permanent !== labelVisible) {
-                        const towered2 = m._aptData?.tower;
                         m.unbindTooltip();
                         m.bindTooltip(apt.icao, {
                             permanent: labelVisible,
                             direction: 'right',
                             offset: [8, 0],
-                            className: towered2 ? 'apt-label apt-label-towered' : 'apt-label apt-label-nontowered',
+                            className: this._aptLabelClass(m._aptData?.longest_rwy_ft || 0),
                         });
                     }
                     continue;
@@ -1021,7 +1035,7 @@ class VectorMapLayers {
                     permanent: labelVisible,
                     direction: 'right',
                     offset: [8, 0],
-                    className: towered ? 'apt-label apt-label-towered' : 'apt-label apt-label-nontowered',
+                    className: this._aptLabelClass(apt.longest_rwy_ft || 0),
                 });
 
                 marker.on('click', () => {
