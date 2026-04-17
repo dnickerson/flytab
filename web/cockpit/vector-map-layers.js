@@ -166,7 +166,7 @@ class VectorMapLayers {
      * Hide lake fills so raster tiles show their own correct water rendering.
      */
     disableDarkBackground() {
-        this._map.getContainer().style.background = '';
+        this._map.getContainer().style.background = '#ffffff';
         if (this._map.hasLayer(this._lakesLayer)) this._map.removeLayer(this._lakesLayer);
     }
 

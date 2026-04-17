@@ -203,6 +203,7 @@
 .leaflet-container img.leaflet-tile {
     margin: 0;
     padding: 0;
+    mix-blend-mode: normal;
 }
 
 html {
