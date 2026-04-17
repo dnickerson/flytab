@@ -132,6 +132,7 @@
     --status-danger:     #ff3030;   /* danger / exceeding limits                 */
 
     /* Retained aliases for existing code */
+    --text-dim:          #888888;   /* dim hints, fallback for missing theme var  */
     --color-success:     #00e87a;
     --color-caution:     #ffc000;
     --color-danger:      #ff3030;
@@ -4158,6 +4159,8 @@ body {
     background: none;
     border: none;
     pointer-events: none;
+    white-space: nowrap;
+    text-shadow: 0 0 3px #fff, 0 0 3px #fff, 0 0 3px #fff;
 }
 
 .as-alt-floor {
@@ -6453,7 +6456,7 @@ body {
 
 .apt-chip:active {
     background: var(--accent);
-    color: #000;
+    color: var(--text-on-accent);
 }
 
 .apt-tabs {
