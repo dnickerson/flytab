@@ -1046,36 +1046,20 @@ class CockpitMap {
 
         // Waypoint markers — larger radius, tappable for airport popup
         this._wpMarkers = [];
-        const wpLabelZoom = 8;
-        const showWpLabels = this.map.getZoom() >= wpLabelZoom;
         waypoints.forEach(wp => {
             const marker = L.circleMarker([wp.lat, wp.lon], {
                 radius: 8, color: '#ff44ff', fillColor: '#ff44ff', fillOpacity: 0.8, weight: 2,
-            }).bindTooltip(wp.icao || wp.name || '', { permanent: showWpLabels, direction: 'top', className: 'wp-label' })
-              .addTo(this.routeLayer);
+            }).addTo(this.routeLayer);
 
             marker.on('click', () => {
                 if (wp.icao && this._airportPopup) {
                     this._airportPopup.showForAirport(wp.icao, [wp.lat, wp.lon]);
                 }
             });
-            marker._wpLabel = wp.icao || wp.name || '';
             this._wpMarkers.push(marker);
         });
 
-        // Toggle waypoint label permanence on zoom (hide at overview, show at detail)
-        if (this._wpZoomHandler) this.map.off('zoomend', this._wpZoomHandler);
-        this._wpZoomHandler = () => {
-            const show = this.map.getZoom() >= wpLabelZoom;
-            for (const m of this._wpMarkers) {
-                const tip = m.getTooltip();
-                if (tip && tip.options.permanent !== show) {
-                    m.unbindTooltip();
-                    m.bindTooltip(m._wpLabel, { permanent: show, direction: 'top', className: 'wp-label' });
-                }
-            }
-        };
-        this.map.on('zoomend', this._wpZoomHandler);
+        if (this._wpZoomHandler) { this.map.off('zoomend', this._wpZoomHandler); this._wpZoomHandler = null; }
 
         this.routeLayer.addTo(this.map);
         this.map.fitBounds(L.latLngBounds(latlngs).pad(0.1));
