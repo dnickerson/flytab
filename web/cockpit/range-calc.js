@@ -18,9 +18,6 @@ class RangeCalc {
     init() {
         // Update every 2s (matches engine poll cycle)
         this._updateTimer = setInterval(() => this._update(), 2000);
-
-        // Add range ring toggle button to map
-        this._addRangeRingControl();
     }
 
     destroy() {

@@ -789,12 +789,13 @@ class CockpitMap {
         const maxBelowAlt = trafficCfg.maxBelowAlt ?? 5000;
         const showCallsign = trafficCfg.showCallsign !== false;
 
+        let _nStale = 0, _nNoPos = 0, _nAltFilt = 0, _nShown = 0;
         for (const [icao, target] of this.stratux.traffic) {
             // Skip targets not seen in the last 60s — defence against stale entries
             // that survive a brief WS drop before the purge timer can evict them.
-            if (now - target.last_seen > 60000) continue;
+            if (now - target.last_seen > 60000) { _nStale++; continue; }
             seen.add(icao);
-            if (!target.lat || !target.lon) continue;
+            if (!target.lat || !target.lon) { _nNoPos++; continue; }
 
             // Altitude filter — hide traffic outside the configured altitude band
             if (this.stratux.situation?.alt_msl != null && target.alt != null) {
@@ -803,10 +804,12 @@ class CockpitMap {
                     if (!this._trafficFilterLogged) {
                         console.log(`[Traffic] Filtered ${target.hex}: altDiff=${Math.round(altDiff)}ft (band: -${maxBelowAlt}/+${maxAboveAlt}), ownAlt=${Math.round(this.stratux.situation.alt_msl)}, tgtAlt=${target.alt}`);
                     }
+                    _nAltFilt++;
                     continue;
                 }
             }
 
+            _nShown++;
             const color = this._trafficColor(target);
             let altLabel = '';
             if (this._showTrafficAlt && this.stratux.situation) {
@@ -843,6 +846,25 @@ class CockpitMap {
         if (!this._trafficFilterLogged) {
             this._trafficFilterLogged = true;
             setTimeout(() => { this._trafficFilterLogged = false; }, 30000);
+        }
+
+        // Diagnostic snapshot — does not affect display
+        if (typeof TrafficDiag !== 'undefined') {
+            TrafficDiag.snapshot({
+                ws:        this.stratux._trafficWs?.readyState ?? -1,
+                sit_ws:    this.stratux._situationWs?.readyState ?? -1,
+                conn:      this.stratux._connected ?? false,
+                total:     this.stratux.traffic.size,
+                stale:     _nStale,
+                no_pos:    _nNoPos,
+                alt_filt:  _nAltFilt,
+                shown:     _nShown,
+                own_alt:   this.stratux.situation?.alt_msl != null ? Math.round(this.stratux.situation.alt_msl) : null,
+                own_fix:   this.stratux.situation?.gps_fix_quality ?? null,
+                own_sats:  this.stratux.situation?.satellites ?? null,
+                band_above: maxAboveAlt,
+                band_below: maxBelowAlt,
+            });
         }
 
         // Remove stale markers

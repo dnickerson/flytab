@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v5.39';
+const FLYTAB_VERSION = 'v5.56';
 
 // ========== Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -444,6 +444,7 @@ class FlyTabApp {
         // Engine client (WebSocket to Pi engine monitor)
         this.engineClient = new EngineClient();
         this.engineClient.connect();
+        window.engineClient = this.engineClient;
 
         // Engine panel (receives data via WebSocket push)
         this.enginePanel = new EnginePanel(document.createElement('div'), this.engineClient);
@@ -511,6 +512,14 @@ class FlyTabApp {
             window.addEventListener('fuelstate:changed', () => {
                 if (this.routeTable) this.routeTable.refresh();
             });
+        }
+
+        // Synthetic per-tank fuel gauges — mounted inside map-area so position:absolute
+        // is relative to the map, not the viewport (avoids overlapping top rail)
+        if (typeof FuelTanksDisplay !== 'undefined') {
+            const mapArea = document.querySelector('.map-area') || document.body;
+            this.fuelTanksDisplay = new FuelTanksDisplay(mapArea);
+            this.fuelTanksDisplay.init();
         }
 
         // Flight recorder (records engine + GPS to Savvy CSV on device)

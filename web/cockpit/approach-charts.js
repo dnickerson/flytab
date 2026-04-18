@@ -39,6 +39,7 @@ class ApproachCharts {
         this._plateIdx = 0;
         this._loadPromise = null;
         this._pz = { scale: 1, tx: 0, ty: 0 }; // pan/zoom state
+        this._pickerShownAt = 0; // timestamp guard against synthetic click ghost-taps
 
         // Map overlay
         this._leafletMap = null;
@@ -190,12 +191,14 @@ class ApproachCharts {
         }
         if (!this._plateIndex?.[icao]) {
             this._showMessage(`No plates for ${icao} — download plates via Pre-Flight Refresh`);
+            this._pickerShownAt = Date.now();
             this._pickerEl.style.display = 'flex';
             return;
         }
 
         this._viewerEl.style.display = 'none';
         this._buildPicker(icao);
+        this._pickerShownAt = Date.now();
         this._pickerEl.style.display = 'flex';
     }
 
@@ -211,6 +214,7 @@ class ApproachCharts {
         }
         this._viewerEl.style.display = 'none';
         this._buildPicker(null);
+        this._pickerShownAt = Date.now();
         this._pickerEl.style.display = 'flex';
     }
 
@@ -677,8 +681,11 @@ class ApproachCharts {
                     this._showPlate(parseInt(btn.dataset.idx));
                 }
             });
-            // Fallback for non-touch (desktop)
-            btn.addEventListener('click', () => this._showPlate(parseInt(btn.dataset.idx)));
+            // Fallback for non-touch (desktop) — guard against synthetic click ghost-tap
+            btn.addEventListener('click', () => {
+                if (Date.now() - this._pickerShownAt < 600) return;
+                this._showPlate(parseInt(btn.dataset.idx));
+            });
         });
     }
 
@@ -1176,6 +1183,7 @@ class ApproachCharts {
                 lat: s.lat,
                 lon: s.lon,
                 alt: s.altitude1 ? s.altitude1 * 10 : null,
+                altLocked: !!s.altitude1,
             });
 
             // Identify key approach fixes:
