@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v5.61';
+const FLYTAB_VERSION = 'v5.62';
 
 // ========== Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -1800,33 +1800,33 @@ class FlyTabApp {
         const banner = document.createElement('div');
         banner.id = 'dataReadinessBanner';
         banner.style.cssText = `
-            position:fixed; top:0; left:0; right:0; z-index:9999;
             background:${hasCritical ? '#b91c1c' : '#92400e'};
             color:#fff; font-size:13px; font-weight:600;
             padding:6px 12px; display:flex; align-items:center; gap:8px;
-            box-shadow:0 2px 6px rgba(0,0,0,0.4);
+            width:100%; box-sizing:border-box;
         `;
         banner.innerHTML = `
             <span style="flex:1">⚠ ${issues.map(i => i.text).join(' · ')}</span>
             <button style="background:rgba(255,255,255,0.2);border:none;color:#fff;padding:4px 10px;border-radius:4px;font-weight:700;font-size:13px;cursor:pointer;touch-action:manipulation" id="_drFixBtn">Fix Now</button>
             <button style="background:none;border:none;color:#fff;font-size:18px;cursor:pointer;padding:0 4px;touch-action:manipulation" id="_drDismissBtn">✕</button>
         `;
-        document.body.appendChild(banner);
 
-        // Offset status bar down to make room
-        const statusBar = document.getElementById('statusBar');
-        const bannerH = banner.offsetHeight || 32;
-        if (statusBar) statusBar.style.marginTop = bannerH + 'px';
+        // Insert into the flex column after the engine advisory (below status bar, above map)
+        const advisory = document.getElementById('engineAdvisory');
+        const mainContent = document.getElementById('mainContent');
+        if (advisory) {
+            advisory.parentNode.insertBefore(banner, advisory.nextSibling);
+        } else if (mainContent) {
+            mainContent.parentNode.insertBefore(banner, mainContent);
+        } else {
+            document.body.appendChild(banner);
+        }
 
         banner.querySelector('#_drFixBtn').addEventListener('click', () => {
             banner.remove();
-            if (statusBar) statusBar.style.marginTop = '';
             if (this.dataStatus) this.dataStatus.show();
         });
-        banner.querySelector('#_drDismissBtn').addEventListener('click', () => {
-            banner.remove();
-            if (statusBar) statusBar.style.marginTop = '';
-        });
+        banner.querySelector('#_drDismissBtn').addEventListener('click', () => banner.remove());
     }
 
     showToast(message, actions = []) {
