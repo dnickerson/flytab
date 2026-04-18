@@ -1216,13 +1216,13 @@ class ApproachCharts {
                 return;
             }
 
-            // altitude1 is already in feet — no multiplier needed
+            // altitude1 is stored in tens-of-feet in ARINC 424 (e.g. 300 = 3000 ft, 52 = 520 ft)
             const toWp = s => ({
                 icao: s.fix_id,
                 name: s.fix_id,
                 lat: s.lat,
                 lon: s.lon,
-                alt: s.altitude1 > 0 ? s.altitude1 : null,
+                alt: s.altitude1 > 0 ? s.altitude1 * 10 : null,
                 altLocked: s.altitude1 > 0,
             });
 
