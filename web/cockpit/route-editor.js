@@ -39,6 +39,7 @@ class RouteEditor {
     }
 
     show() {
+        console.log('[RouteEditor] show() called, _visible=', this._visible);
         if (this._visible) return;
         this._visible = true;
         this._el.classList.add('route-editor-visible');
@@ -115,6 +116,7 @@ class RouteEditor {
     }
 
     startEditRoute() {
+        console.log('[RouteEditor] startEditRoute called, _waypoints.length=', this._waypoints.length, '_visible=', this._visible);
         if (this._waypoints.length === 0) {
             if (typeof app !== 'undefined') app.showToast('No route loaded');
             return;

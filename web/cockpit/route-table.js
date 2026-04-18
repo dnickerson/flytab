@@ -2021,6 +2021,7 @@ class RouteTable {
         // EDIT button opens the separate route editor
         this._editBtn = this._handleEl.querySelector('.route-table-edit-btn');
         this._wireButton(this._editBtn, () => {
+            console.log('[RouteTable] EDIT button fired, routeEditor=', !!(typeof app !== 'undefined' && app.routeEditor));
             if (typeof app !== 'undefined' && app.routeEditor) {
                 app.routeEditor.startEditRoute();
             }
