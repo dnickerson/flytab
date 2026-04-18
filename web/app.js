@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v5.60';
+const FLYTAB_VERSION = 'v5.61';
 
 // ========== Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -165,6 +165,9 @@ class FlyTabApp {
 
         // Update NASR age badge after data is loaded
         this._updateNasrBadge();
+
+        // Startup data readiness check — runs in background, shows banner if data is missing/expired
+        setTimeout(() => this._checkDataReadiness(), 3000);
 
         // Long-press version badge to show diagnostic log
         const verBadge = document.getElementById('statusVersion');
@@ -1757,6 +1760,74 @@ class FlyTabApp {
     }
 
     // ========== Toast Notifications ==========
+
+    async _checkDataReadiness() {
+        const LOCAL = 'http://localhost:9090';
+        const issues = [];
+
+        const fetchJson = async (url) => {
+            try {
+                const r = await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(3000) });
+                return r.ok ? r.json() : null;
+            } catch { return null; }
+        };
+
+        const [nasr, cifp] = await Promise.all([
+            fetchJson(`${LOCAL}/nasr/cycle_info.json`),
+            fetchJson(`${LOCAL}/cifp/cifp_cycle_info.json`),
+        ]);
+
+        if (!nasr) {
+            issues.push({ severity: 'critical', text: 'NASR aeronautical data not on tablet' });
+        } else {
+            const exp = nasr.expiration_date ? new Date(nasr.expiration_date)
+                : new Date(new Date(nasr.effective_date).getTime() + 28 * 86400000);
+            const daysLeft = Math.ceil((exp - Date.now()) / 86400000);
+            if (daysLeft < 0) {
+                issues.push({ severity: 'critical', text: `NASR data expired ${Math.abs(daysLeft)}d ago (cycle ${nasr.effective_date})` });
+            } else if (daysLeft <= 7) {
+                issues.push({ severity: 'warn', text: `NASR data expires in ${daysLeft}d (cycle ${nasr.effective_date})` });
+            }
+        }
+
+        if (!cifp) {
+            issues.push({ severity: 'warn', text: 'CIFP approach procedures not on tablet' });
+        }
+
+        if (issues.length === 0) return;
+
+        const hasCritical = issues.some(i => i.severity === 'critical');
+        const banner = document.createElement('div');
+        banner.id = 'dataReadinessBanner';
+        banner.style.cssText = `
+            position:fixed; top:0; left:0; right:0; z-index:9999;
+            background:${hasCritical ? '#b91c1c' : '#92400e'};
+            color:#fff; font-size:13px; font-weight:600;
+            padding:6px 12px; display:flex; align-items:center; gap:8px;
+            box-shadow:0 2px 6px rgba(0,0,0,0.4);
+        `;
+        banner.innerHTML = `
+            <span style="flex:1">⚠ ${issues.map(i => i.text).join(' · ')}</span>
+            <button style="background:rgba(255,255,255,0.2);border:none;color:#fff;padding:4px 10px;border-radius:4px;font-weight:700;font-size:13px;cursor:pointer;touch-action:manipulation" id="_drFixBtn">Fix Now</button>
+            <button style="background:none;border:none;color:#fff;font-size:18px;cursor:pointer;padding:0 4px;touch-action:manipulation" id="_drDismissBtn">✕</button>
+        `;
+        document.body.appendChild(banner);
+
+        // Offset status bar down to make room
+        const statusBar = document.getElementById('statusBar');
+        const bannerH = banner.offsetHeight || 32;
+        if (statusBar) statusBar.style.marginTop = bannerH + 'px';
+
+        banner.querySelector('#_drFixBtn').addEventListener('click', () => {
+            banner.remove();
+            if (statusBar) statusBar.style.marginTop = '';
+            if (this.dataStatus) this.dataStatus.show();
+        });
+        banner.querySelector('#_drDismissBtn').addEventListener('click', () => {
+            banner.remove();
+            if (statusBar) statusBar.style.marginTop = '';
+        });
+    }
 
     showToast(message, actions = []) {
         const existing = document.querySelector('.toast');
