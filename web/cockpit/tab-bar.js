@@ -266,12 +266,16 @@ class TabBar {
             </div>
         `;
         document.body.appendChild(overlay);
+        const openedAt = Date.now();
         overlay.querySelector('#_newRouteCancel').addEventListener('click', () => overlay.remove());
         overlay.querySelector('#_newRouteConfirm').addEventListener('click', () => {
             overlay.remove();
             window.app?.routeEditor?.startNewRoute();
         });
-        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+        overlay.addEventListener('click', (e) => {
+            if (Date.now() - openedAt < 500) return;
+            if (e.target === overlay) overlay.remove();
+        });
     }
 
     _openMoreDrawer() {

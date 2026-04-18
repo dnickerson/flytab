@@ -39,7 +39,6 @@ class RouteEditor {
     }
 
     show() {
-        console.log('[RouteEditor] show() called, _visible=', this._visible);
         if (this._visible) return;
         this._visible = true;
         this._el.classList.add('route-editor-visible');
@@ -112,17 +111,22 @@ class RouteEditor {
         }
 
         if (this._altInput) this._altInput.value = this._altitude;
+
+        // Sync cleared/new state to route-table and map so stale waypoints
+        // from the prior route are not left displayed.
+        if (typeof app !== 'undefined') {
+            if (app.routeTable) app.routeTable.loadPlan(null);
+            if (app.cockpitMap) app.cockpitMap.setRoute([]);
+        }
+
         this.show();
+        this._renderWaypoints();
     }
 
     startEditRoute() {
-        console.log('[RouteEditor] startEditRoute called, _waypoints.length=', this._waypoints.length, '_visible=', this._visible);
-        if (this._waypoints.length === 0) {
-            if (typeof app !== 'undefined') app.showToast('No route loaded');
-            return;
-        }
-        this._newRouteMode = false;
+        this._newRouteMode = this._waypoints.length === 0;
         this.show();
+        this._renderWaypoints();
     }
 
     // ========== Undo ==========

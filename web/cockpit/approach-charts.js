@@ -1162,37 +1162,73 @@ class ApproachCharts {
             const commonSteps = rawSteps.filter(s => s.transition === '');
             const ordered = [...transSteps, ...commonSteps];
 
-            // Deduplicate and filter to steps with valid coordinates
+            // Deduplicate by fix_id (no lat/lon check — coordinates resolved from NASR below)
             const seen = new Set();
-            const steps = ordered.filter(s => {
+            const uniqueSteps = ordered.filter(s => {
                 const id = (s.fix_id || '').trim();
-                if (!id || !s.lat || !s.lon) return false;
+                if (!id) return false;
                 if (seen.has(id)) return false;
                 seen.add(id);
                 return true;
             });
 
-            if (steps.length === 0) {
-                this._showToast('No waypoints with coordinates');
+            if (uniqueSteps.length === 0) {
+                this._showToast('No waypoints in procedure');
                 return;
             }
 
+            // Resolve coordinates from NASR DB for each step.
+            // CIFP bundle has null lat/lon — must look up by fix_id.
+            const resolveCoords = async (id, section) => {
+                if (!this._nasrDb) return null;
+                try {
+                    if (section === 'D') {
+                        const r = await this._nasrDb.getNavaid(id);
+                        if (r?.lat) return { lat: r.lat, lon: r.lon };
+                    } else if (section === 'PA') {
+                        const r = await this._nasrDb.getAirport(id);
+                        if (r?.lat) return { lat: r.lat, lon: r.lon };
+                    } else if (section === 'PG') {
+                        // Runway — use airport position as proxy
+                        const r = await this._nasrDb.getAirport(icao);
+                        if (r?.lat) return { lat: r.lat, lon: r.lon };
+                    } else {
+                        // PC, EA, unset — fix first, navaid fallback
+                        let r = await this._nasrDb.getFix(id);
+                        if (r?.lat) return { lat: r.lat, lon: r.lon };
+                        r = await this._nasrDb.getNavaid(id);
+                        if (r?.lat) return { lat: r.lat, lon: r.lon };
+                    }
+                } catch {}
+                return null;
+            };
+
+            const resolved = await Promise.all(uniqueSteps.map(async s => {
+                const id = (s.fix_id || '').trim();
+                const coords = await resolveCoords(id, s.fix_section || '');
+                if (!coords) return null;
+                return { ...s, fix_id: id, lat: coords.lat, lon: coords.lon };
+            }));
+            const steps = resolved.filter(Boolean);
+
+            if (steps.length === 0) {
+                this._showToast('No waypoints with coordinates found in NASR');
+                return;
+            }
+
+            // altitude1 is already in feet — no multiplier needed
             const toWp = s => ({
-                icao: s.fix_id.trim(),
-                name: s.fix_id.trim(),
+                icao: s.fix_id,
+                name: s.fix_id,
                 lat: s.lat,
                 lon: s.lon,
-                alt: s.altitude1 ? s.altitude1 * 10 : null,
-                altLocked: !!s.altitude1,
+                alt: s.altitude1 > 0 ? s.altitude1 : null,
+                altLocked: s.altitude1 > 0,
             });
 
-            // Identify key approach fixes:
-            //   IAF = first coordinated fix (start of chosen transition)
-            //   FAF = last fix before RW## (skip when same as IAF)
-            //   RW  = runway threshold (fix_id matches /^RW\d/)
-            //   MAP = first fix after RW## (missed approach point)
-            // Fallback: if no RW## found, insert all steps (SID/STAR/non-precision)
-            const rwIdx = steps.findIndex(s => /^RW\d/.test(s.fix_id.trim()));
+            // RW## = runway threshold fix. All fixes from IAF through RW## go
+            // insertBefore the airport; everything after (MAP, missed approach) goes insertAfter.
+            const rwIdx = steps.findIndex(s => /^RW\d/.test(s.fix_id));
 
             let insertBefore, insertAfter;
 
@@ -1200,16 +1236,11 @@ class ApproachCharts {
                 insertBefore = steps.map(toWp);
                 insertAfter = [];
             } else {
-                const iaf = steps[0];
-                const faf = rwIdx > 1 ? steps[rwIdx - 1] : null; // null when faf === iaf
-                const rw  = steps[rwIdx];
-                const map = rwIdx + 1 < steps.length ? steps[rwIdx + 1] : null;
-
-                insertBefore = [iaf, faf, rw].filter(Boolean).map(toWp);
-                insertAfter  = [map].filter(Boolean).map(toWp);
+                insertBefore = steps.slice(0, rwIdx + 1).map(toWp);
+                insertAfter  = steps.slice(rwIdx + 1).map(toWp);
             }
 
-            // Airport waypoint for empty-route case (RW## coords == airport coords)
+            // Airport waypoint for empty-route case
             const rwStep = rwIdx >= 0 ? steps[rwIdx] : steps[steps.length - 1];
             const airportWp = rwStep
                 ? { icao, name: icao, lat: rwStep.lat, lon: rwStep.lon, type: 'APT' }
@@ -1219,7 +1250,6 @@ class ApproachCharts {
                 detail: { icao, procName, transition, insertBefore, insertAfter, airportWp },
             }));
 
-            // Toast shows the full sequence being inserted
             const labels = [...insertBefore.map(w => w.icao), icao, ...insertAfter.map(w => w.icao)];
             this._showToast(`Approach: ${labels.join(' → ')}`);
         } catch (err) {
