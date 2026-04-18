@@ -1726,7 +1726,12 @@ class RouteTable {
     // ========== Save Route ==========
 
     async _saveRoute() {
-        if (!this._waypoints || this._waypoints.length < 2) return;
+        if (!this._waypoints || this._waypoints.length < 2) {
+            if (typeof app !== 'undefined' && app.showToast) {
+                app.showToast('Need at least 2 waypoints to save a route');
+            }
+            return;
+        }
 
         const dep = this._waypoints[0]?.icao || '?';
         const dest = this._waypoints[this._waypoints.length - 1]?.icao || '?';
@@ -1750,8 +1755,12 @@ class RouteTable {
                 </div>
             </div>`;
 
+        const openedAt = Date.now();
         overlay.querySelector('.plan-picker-close').addEventListener('click', () => overlay.remove());
-        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+        overlay.addEventListener('click', (e) => {
+            if (Date.now() - openedAt < 500) return; // ignore synthetic click from opening tap
+            if (e.target === overlay) overlay.remove();
+        });
 
         const nameInput = overlay.querySelector('.rt-save-name');
         const confirmBtn = overlay.querySelector('.rt-save-confirm');
@@ -1836,8 +1845,12 @@ class RouteTable {
             </div>`;
 
         this._wireButton(overlay.querySelector('.plan-picker-close'), () => overlay.remove());
-        // Dismiss on tap outside modal
-        const dismissOverlay = (e) => { if (e.target === overlay) overlay.remove(); };
+        // Dismiss on tap outside modal — guard against synthetic click from opening tap
+        const openedAt = Date.now();
+        const dismissOverlay = (e) => {
+            if (Date.now() - openedAt < 500) return;
+            if (e.target === overlay) overlay.remove();
+        };
         overlay.addEventListener('click', dismissOverlay);
         overlay.addEventListener('touchend', dismissOverlay);
 
@@ -1884,8 +1897,12 @@ class RouteTable {
             </div>`;
 
         const dismiss = () => overlay.remove();
+        const openedAt = Date.now();
         overlay.querySelector('.plan-picker-close').addEventListener('click', dismiss);
-        overlay.addEventListener('click', e => { if (e.target === overlay) dismiss(); });
+        overlay.addEventListener('click', e => {
+            if (Date.now() - openedAt < 500) return;
+            if (e.target === overlay) dismiss();
+        });
 
         overlay.querySelector('#rt-upload-input').addEventListener('change', async (e) => {
             const file = e.target.files?.[0];
@@ -1931,33 +1948,37 @@ class RouteTable {
     }
 
     _confirmNewRoute() {
-        if (this._newConfirmPending) {
-            // Second tap — confirmed
-            this._newConfirmPending = false;
-            clearTimeout(this._newConfirmTimer);
-            this._newBtn.textContent = 'NEW';
-            this._newBtn.style.color = '';
-            this._newBtn.style.borderColor = '';
-            // Clear persisted plan
+        const overlay = document.createElement('div');
+        overlay.style.cssText = `
+            position:fixed;inset:0;z-index:20000;
+            background:rgba(0,0,0,0.7);
+            display:flex;align-items:center;justify-content:center;
+        `;
+        overlay.innerHTML = `
+            <div style="background:var(--bg-surface,#1a2540);border-radius:12px;padding:24px;max-width:300px;width:88%;text-align:center;">
+                <div style="color:var(--text-primary,#e8ecf0);font-size:17px;font-weight:600;margin-bottom:8px;">Clear route?</div>
+                <div style="color:var(--text-secondary,#8899aa);font-size:14px;margin-bottom:20px;">This will delete the current route and open a blank editor.</div>
+                <div style="display:flex;gap:12px;justify-content:center;">
+                    <button id="_nrCancel" style="flex:1;padding:12px;border:none;border-radius:8px;background:var(--bg-surface-raised,#2a3a5c);color:var(--text-primary,#e8ecf0);font-size:16px;cursor:pointer;touch-action:manipulation;">CANCEL</button>
+                    <button id="_nrConfirm" style="flex:1;padding:12px;border:none;border-radius:8px;background:#c0392b;color:#fff;font-size:16px;font-weight:600;cursor:pointer;touch-action:manipulation;">CLEAR</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+        const openedAt = Date.now();
+        const dismiss = () => overlay.remove();
+        overlay.querySelector('#_nrCancel').addEventListener('click', dismiss);
+        overlay.querySelector('#_nrConfirm').addEventListener('click', () => {
+            dismiss();
             try { localStorage.removeItem('flypi_active_plan'); } catch {}
-            // Open route editor in new-route mode
             if (typeof app !== 'undefined' && app.routeEditor) {
                 app.routeEditor.startNewRoute();
             }
-            return;
-        }
-        // First tap — show confirm state
-        this._newConfirmPending = true;
-        this._newBtn.textContent = 'DELETE?';
-        this._newBtn.style.color = '#e53e3e';
-        this._newBtn.style.borderColor = '#e53e3e';
-        // Revert after 3 seconds if not confirmed
-        this._newConfirmTimer = setTimeout(() => {
-            this._newConfirmPending = false;
-            this._newBtn.textContent = 'NEW';
-            this._newBtn.style.color = '';
-            this._newBtn.style.borderColor = '';
-        }, 3000);
+        });
+        overlay.addEventListener('click', (e) => {
+            if (Date.now() - openedAt < 500) return;
+            if (e.target === overlay) dismiss();
+        });
     }
 
     _reverseRoute() {
@@ -2347,22 +2368,26 @@ class RouteTable {
     }
 
     /**
-     * Wire a button with touchstart + click fallback for iPad/Leaflet reliability.
-     * touchstart fires before Leaflet's drag handler can cancel the touch sequence.
+     * Wire a button with touchend + click fallback.
+     * Uses movement guard to distinguish tap from scroll; matches airport-popup pattern.
      */
     _wireButton(btn, action) {
-        let touchFired = false;
+        let startX = 0, startY = 0, isTap = false;
         btn.addEventListener('touchstart', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            touchFired = true;
-            action();
-        }, { passive: false });
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            if (touchFired) { touchFired = false; return; }
-            action();
+            startX = e.touches[0].clientX;
+            startY = e.touches[0].clientY;
+            isTap = true;
+        }, { passive: true });
+        btn.addEventListener('touchmove', (e) => {
+            if (!isTap) return;
+            if (Math.abs(e.touches[0].clientX - startX) > 10 ||
+                Math.abs(e.touches[0].clientY - startY) > 10) isTap = false;
+        }, { passive: true });
+        btn.addEventListener('touchend', (e) => {
+            if (isTap) { e.stopPropagation(); action(); }
+            isTap = false;
         });
+        btn.addEventListener('click', (e) => { e.stopPropagation(); action(); });
     }
 
     // Drag removed in v5 — route display uses tap-to-toggle only
