@@ -136,9 +136,15 @@ class FuelOverlay {
                 </div>
                 <div class="fo-add-row">
                     <input type="number" class="fo-add-input" id="fo-add-gal"
-                           placeholder="Gallons added" min="0" max="100" step="0.1">
+                           placeholder="Total gal added" min="0" max="100" step="0.1">
                     <input type="number" class="fo-add-input" id="fo-add-price"
                            placeholder="$/gal (optional)" min="0" max="20" step="0.01">
+                </div>
+                <div class="fo-add-row">
+                    <input type="number" class="fo-add-input" id="fo-add-gal-l"
+                           placeholder="L tank gal (optional)" min="0" max="100" step="0.1">
+                    <input type="number" class="fo-add-input" id="fo-add-gal-r"
+                           placeholder="R tank gal (optional)" min="0" max="100" step="0.1">
                 </div>
                 <button class="fo-apply-btn fo-add-record-btn" id="fo-add-record">RECORD FUEL STOP</button>
                 <div class="fo-add-status" id="fo-add-status"></div>
@@ -208,6 +214,8 @@ class FuelOverlay {
             addDate: this._el.querySelector('#fo-add-date'),
             addTime: this._el.querySelector('#fo-add-time'),
             addGal: this._el.querySelector('#fo-add-gal'),
+            addGalL: this._el.querySelector('#fo-add-gal-l'),
+            addGalR: this._el.querySelector('#fo-add-gal-r'),
             addPrice: this._el.querySelector('#fo-add-price'),
             addRecord: this._el.querySelector('#fo-add-record'),
             addStatus: this._el.querySelector('#fo-add-status'),
@@ -442,6 +450,10 @@ class FuelOverlay {
                 this._leftTic, this._rightTic, this._coefficients, edmFuel
             );
             FuelState.saveMeasurement(m);
+            if (typeof FuelTankState !== 'undefined') {
+                const existing = FuelTankState.getState();
+                FuelTankState.init(m.left_gal, m.right_gal, existing?.active_tank ?? 'L');
+            }
             window.dispatchEvent(new CustomEvent('fuelstate:changed'));
             this._updateSourceDisplay();
             this._syncMeasurement(m);
@@ -519,12 +531,28 @@ class FuelOverlay {
             const { gallons: currentFuel } = FuelState.getStartFuel();
             const newTotal = currentFuel + gallons;
             FuelState.saveMeasurement({ total_gal: newTotal, source: 'tic' });
+
+            // Update synthetic per-tank state if available
+            if (typeof FuelTankState !== 'undefined') {
+                const galL = parseFloat(this._dom.addGalL?.value);
+                const galR = parseFloat(this._dom.addGalR?.value);
+                if (galL > 0) FuelTankState.topOff('L', galL);
+                if (galR > 0) FuelTankState.topOff('R', galR);
+                if (!(galL > 0) && !(galR > 0)) {
+                    // No per-tank split given — divide evenly
+                    FuelTankState.topOff('L', gallons / 2);
+                    FuelTankState.topOff('R', gallons / 2);
+                }
+            }
+
             window.dispatchEvent(new CustomEvent('fuelstate:changed'));
             this._updateSourceDisplay();
 
             // Clear inputs and show success
             this._dom.addGal.value = '';
             this._dom.addPrice.value = '';
+            if (this._dom.addGalL) this._dom.addGalL.value = '';
+            if (this._dom.addGalR) this._dom.addGalR.value = '';
             this._setAddStatus(`Recorded: +${gallons.toFixed(1)} gal at ${airport || '—'} → ${newTotal.toFixed(1)} gal total`, 'ok');
         } catch (err) {
             this._setAddStatus(`Save failed: ${err.message}`, 'error');
