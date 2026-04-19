@@ -1127,10 +1127,11 @@ body {
     font-size: 14px;
     font-weight: 700;
     color: #ff44ff;
-    background: rgba(0,0,0,0.6);
-    border: 1px solid #ff44ff;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
     padding: 1px 4px;
-    border-radius: 3px;
+    text-shadow: 0 0 3px #000, 0 0 3px #000;
 }
 
 .rwy-ext-label {

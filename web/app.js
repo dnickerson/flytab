@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v5.62';
+const FLYTAB_VERSION = 'v5.67';
 
 // ========== Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -668,12 +668,31 @@ class FlyTabApp {
                 }
             });
             document.addEventListener('cifp:load-procedure', (e) => {
-                const { insertBefore = [], insertAfter = [], airportWp } = e.detail;
+                const { icao, insertBefore = [], insertAfter = [], airportWp } = e.detail;
                 if (!this.routeEditor) return;
 
                 // Empty route: seed the airport as destination first
                 if (this.routeEditor._waypoints.length === 0 && airportWp) {
                     this.routeEditor._addWaypoint(airportWp, 0);
+                }
+
+                // Stamp approach airport data (field elevation, altLocked) onto the
+                // existing destination waypoint so intermediate airport legs don't
+                // inherit cruise altitude. Find by matching ICAO, fallback to last wp.
+                if (airportWp && icao) {
+                    const wps = this.routeEditor._waypoints;
+                    let destIdx = wps.findIndex(w => w.icao?.toUpperCase() === icao.toUpperCase());
+                    if (destIdx < 0 && wps.length > 0) destIdx = wps.length - 1;
+                    if (destIdx >= 0) {
+                        const existing = wps[destIdx];
+                        wps[destIdx] = {
+                            ...existing,
+                            type: 'APT',
+                            elev_ft: existing.elev_ft ?? airportWp.elev_ft,
+                            alt: existing.elev_ft ?? airportWp.elev_ft ?? airportWp.alt,
+                            altLocked: true,
+                        };
+                    }
                 }
 
                 // Insert IAF, FAF, RW before the destination (last waypoint)
