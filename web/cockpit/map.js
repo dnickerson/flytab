@@ -187,6 +187,11 @@ class CockpitMap {
         // Corner buttons (auto-pan, D→)
         this._addCornerButtons();
 
+        // Zoom level in header
+        this._zoomBadgeHandler = () => this._updateZoomBadge();
+        this.map.on('zoomend', this._zoomBadgeHandler);
+        this._updateZoomBadge();
+
         // Resize map when virtual keyboard opens/closes (iPad)
         if (window.visualViewport) {
             this._viewportResizeHandler = () => {
@@ -217,9 +222,16 @@ class CockpitMap {
         if (this._initialized && !this._vectorLayers) this._setupFixOverlay();
     }
 
+    _updateZoomBadge() {
+        if (!this.map) return;
+        const el = document.getElementById('statusZoom');
+        if (el) el.textContent = `Z${Math.round(this.map.getZoom())}`;
+    }
+
     destroy() {
         if (this._trafficTimer) { clearInterval(this._trafficTimer); this._trafficTimer = null; }
         if (this._fixUpdateTimer) { clearTimeout(this._fixUpdateTimer); this._fixUpdateTimer = null; }
+        if (this._zoomBadgeHandler && this.map) { this.map.off('zoomend', this._zoomBadgeHandler); this._zoomBadgeHandler = null; }
         if (this._viewportResizeHandler && window.visualViewport) {
             window.visualViewport.removeEventListener('resize', this._viewportResizeHandler);
             this._viewportResizeHandler = null;

@@ -1552,6 +1552,10 @@ body {
 
 /* ========== Version Badge ========== */
 
+.status-zoom {
+    font-size: 14px; font-weight: 600; opacity: 0.6;
+    font-family: monospace;
+}
 .status-version {
     font-size: 14px; font-weight: 600; opacity: 0.6;
     padding: 1px 5px; border-radius: 4px;

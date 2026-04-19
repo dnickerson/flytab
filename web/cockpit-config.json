@@ -21,7 +21,15 @@
     "defaultZoom": 8,
     "overlays": {
       "airspace": { "enabled": true, "minZoom": 6 },
-      "airports": { "enabled": true, "minZoom": 7, "labelsMinZoom": 8 },
+      "airports": {
+        "enabled": true, "minZoom": 7, "labelsMinZoom": 8,
+        "zoomRunwayThresholds": [
+          { "zoom": 7, "minRunwayFt": 5000 },
+          { "zoom": 8, "minRunwayFt": 4000 },
+          { "zoom": 9, "minRunwayFt": 3000 },
+          { "zoom": 10, "minRunwayFt": 2000 }
+        ]
+      },
       "navaids": { "enabled": true, "minZoom": 7, "labelsMinZoom": 9 },
       "fixes": { "enabled": false, "minZoom": 8, "labelsMinZoom": 8 },
       "airways": { "enabled": true, "minZoom": 8 }

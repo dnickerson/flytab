@@ -985,6 +985,16 @@ class VectorMapLayers {
             const minRunwayFt      = aptFilter.minRunwayFt      ?? 0;
             const pavedOnly        = aptFilter.pavedOnly        ?? false;
 
+            // Zoom-adaptive runway threshold: progressively reveal smaller airports as user zooms in.
+            // Find the entry with the highest zoom value that is still >= current zoom.
+            // e.g. at zoom 8, [{zoom:7,5000},{zoom:8,4000},{zoom:9,3000}] → picks {zoom:8,4000}.
+            const zoomThresholds = overlays.airports?.zoomRunwayThresholds || [];
+            let zoomMinRwy = 0;
+            for (const t of zoomThresholds) {
+                if (zoom <= t.zoom && t.minRunwayFt > zoomMinRwy) zoomMinRwy = t.minRunwayFt;
+            }
+            const effectiveMinRwy = Math.max(minRunwayFt, zoomMinRwy);
+
             for (const apt of airports) {
                 if (apt.lat == null || apt.lon == null) continue;
 
@@ -996,8 +1006,8 @@ class VectorMapLayers {
                 if (fac === 'GLIDERPORT'   && !showGliderports)   continue;
                 if (fac === 'BALLOONPORT'                         ) continue; // never show
 
-                // Apply runway length filter (0 = unknown/grass strip, still shown unless minRunwayFt set)
-                if (minRunwayFt > 0 && apt.longest_rwy_ft > 0 && apt.longest_rwy_ft < minRunwayFt) continue;
+                // Apply runway length filter (0 = unknown, still shown unless explicit threshold)
+                if (effectiveMinRwy > 0 && apt.longest_rwy_ft > 0 && apt.longest_rwy_ft < effectiveMinRwy) continue;
 
                 // Paved-only filter
                 if (pavedOnly && apt.longest_rwy_ft > 0 && !apt.has_paved_rwy) continue;

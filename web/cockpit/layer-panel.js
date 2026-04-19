@@ -202,6 +202,7 @@ class LayerPanel {
             });
         }
 
+
         // Wire ceiling/sky toggle
         const ceilInput = this._panel.querySelector('.lp-toggle input[data-action="wx-ceil"]');
         if (ceilInput) {
