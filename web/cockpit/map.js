@@ -1044,12 +1044,20 @@ class CockpitMap {
             this._legLines.push(line);
         }
 
-        // Waypoint markers — larger radius, tappable for airport popup
+        // Waypoint markers — larger radius, tappable for airport popup, labelled with ICAO
         this._wpMarkers = [];
         waypoints.forEach(wp => {
             const marker = L.circleMarker([wp.lat, wp.lon], {
                 radius: 8, color: '#ff44ff', fillColor: '#ff44ff', fillOpacity: 0.8, weight: 2,
             }).addTo(this.routeLayer);
+
+            const label = wp.icao || wp.name || '';
+            if (label) {
+                marker.bindTooltip(label, {
+                    permanent: true, direction: 'top', offset: [0, -10],
+                    className: 'apt-label apt-label-lg',
+                });
+            }
 
             marker.on('click', () => {
                 if (wp.icao && this._airportPopup) {

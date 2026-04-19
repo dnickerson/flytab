@@ -132,6 +132,11 @@ class FlyTabHandler(http.server.SimpleHTTPRequestHandler):
             self._handle_terrain_grid_status()
             return
 
+        # /cifp/cifp.zip — on-the-fly zip of bundle + cycle_info for fetch-zip download
+        if path_only == '/cifp/cifp.zip':
+            self._handle_cifp_zip()
+            return
+
         # Everything else served from data/
         super().do_GET()
 
@@ -381,6 +386,26 @@ class FlyTabHandler(http.server.SimpleHTTPRequestHandler):
                 if not chunk:
                     break
                 self.wfile.write(chunk)
+
+    def _handle_cifp_zip(self):
+        import io, zipfile as zf
+        bundle_path = os.path.join(DATA_DIR, 'cifp', 'cifp_bundle.json')
+        cycle_path  = os.path.join(DATA_DIR, 'cifp', 'cifp_cycle_info.json')
+        if not os.path.isfile(bundle_path):
+            self.send_error(404, 'cifp_bundle.json not found')
+            return
+        buf = io.BytesIO()
+        with zf.ZipFile(buf, 'w', zf.ZIP_DEFLATED) as z:
+            z.write(bundle_path,  'cifp/cifp_bundle.json')
+            if os.path.isfile(cycle_path):
+                z.write(cycle_path, 'cifp/cifp_cycle_info.json')
+        data = buf.getvalue()
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/zip')
+        self.send_header('Content-Length', str(len(data)))
+        self.send_header('Cache-Control', 'no-cache')
+        self.end_headers()
+        self.wfile.write(data)
 
     def do_PUT(self):
         # Allow writing specific config files back to data/

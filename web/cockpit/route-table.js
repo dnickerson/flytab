@@ -262,6 +262,10 @@ class RouteTable {
                 // Destination: show user-set cruise altitude, not field elevation
                 const desSeg = segments.find(s => s.phase === 'DES');
                 wpAlt = wp.alt || desSeg?.altFrom || wp.elev_ft || null;
+            } else if (wp.type === 'APT' && wp.elev_ft != null) {
+                // Intermediate airport (e.g., destination with missed-approach
+                // waypoints after it) — use field elevation, not cruise altitude.
+                wpAlt = wp.elev_ft;
             }
 
             const isApt = wp.type === 'APT' || wp.icao === planDep || wp.icao === planDest;
@@ -1045,12 +1049,15 @@ class RouteTable {
             }
 
             const legDist = wp._legDist || 0;
-            // For the last waypoint (destination): cruise altitude is wp.alt or cruiseAlt,
-            // field elevation (elev_ft) is the descent target — handled by deferred descent below.
-            // For intermediate waypoints: use wp.alt (user-set) or cruiseAlt.
+            // Intermediate airports use field elevation (e.g. destination with a
+            // missed-approach fix after it). Last waypoint uses cruise altitude
+            // with field-elevation descent handled below. Others use wp.alt/cruiseAlt.
+            const isIntermediateApt = !isLast && wp.type === 'APT' && wp.elev_ft != null;
             const wpAlt = isLast
                 ? (wp.alt || cruiseAlt || wp.elev_ft || prevAlt)
-                : (wp.alt || cruiseAlt || prevAlt);
+                : (isIntermediateApt
+                    ? wp.elev_ft
+                    : (wp.alt || cruiseAlt || prevAlt));
             const segments = [];
             let remainingDist = legDist;
 

@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v5.59';
+const FLYTAB_VERSION = 'v5.67';
 
 // ========== Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -165,6 +165,9 @@ class FlyTabApp {
 
         // Update NASR age badge after data is loaded
         this._updateNasrBadge();
+
+        // Startup data readiness check — runs in background, shows banner if data is missing/expired
+        setTimeout(() => this._checkDataReadiness(), 3000);
 
         // Long-press version badge to show diagnostic log
         const verBadge = document.getElementById('statusVersion');
@@ -665,12 +668,31 @@ class FlyTabApp {
                 }
             });
             document.addEventListener('cifp:load-procedure', (e) => {
-                const { insertBefore = [], insertAfter = [], airportWp } = e.detail;
+                const { icao, insertBefore = [], insertAfter = [], airportWp } = e.detail;
                 if (!this.routeEditor) return;
 
                 // Empty route: seed the airport as destination first
                 if (this.routeEditor._waypoints.length === 0 && airportWp) {
                     this.routeEditor._addWaypoint(airportWp, 0);
+                }
+
+                // Stamp approach airport data (field elevation, altLocked) onto the
+                // existing destination waypoint so intermediate airport legs don't
+                // inherit cruise altitude. Find by matching ICAO, fallback to last wp.
+                if (airportWp && icao) {
+                    const wps = this.routeEditor._waypoints;
+                    let destIdx = wps.findIndex(w => w.icao?.toUpperCase() === icao.toUpperCase());
+                    if (destIdx < 0 && wps.length > 0) destIdx = wps.length - 1;
+                    if (destIdx >= 0) {
+                        const existing = wps[destIdx];
+                        wps[destIdx] = {
+                            ...existing,
+                            type: 'APT',
+                            elev_ft: existing.elev_ft ?? airportWp.elev_ft,
+                            alt: existing.elev_ft ?? airportWp.elev_ft ?? airportWp.alt,
+                            altLocked: true,
+                        };
+                    }
                 }
 
                 // Insert IAF, FAF, RW before the destination (last waypoint)
@@ -1757,6 +1779,74 @@ class FlyTabApp {
     }
 
     // ========== Toast Notifications ==========
+
+    async _checkDataReadiness() {
+        const LOCAL = 'http://localhost:9090';
+        const issues = [];
+
+        const fetchJson = async (url) => {
+            try {
+                const r = await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(3000) });
+                return r.ok ? r.json() : null;
+            } catch { return null; }
+        };
+
+        const [nasr, cifp] = await Promise.all([
+            fetchJson(`${LOCAL}/nasr/cycle_info.json`),
+            fetchJson(`${LOCAL}/cifp/cifp_cycle_info.json`),
+        ]);
+
+        if (!nasr) {
+            issues.push({ severity: 'critical', text: 'NASR aeronautical data not on tablet' });
+        } else {
+            const exp = nasr.expiration_date ? new Date(nasr.expiration_date)
+                : new Date(new Date(nasr.effective_date).getTime() + 28 * 86400000);
+            const daysLeft = Math.ceil((exp - Date.now()) / 86400000);
+            if (daysLeft < 0) {
+                issues.push({ severity: 'critical', text: `NASR data expired ${Math.abs(daysLeft)}d ago (cycle ${nasr.effective_date})` });
+            } else if (daysLeft <= 7) {
+                issues.push({ severity: 'warn', text: `NASR data expires in ${daysLeft}d (cycle ${nasr.effective_date})` });
+            }
+        }
+
+        if (!cifp) {
+            issues.push({ severity: 'warn', text: 'CIFP approach procedures not on tablet' });
+        }
+
+        if (issues.length === 0) return;
+
+        const hasCritical = issues.some(i => i.severity === 'critical');
+        const banner = document.createElement('div');
+        banner.id = 'dataReadinessBanner';
+        banner.style.cssText = `
+            background:${hasCritical ? '#b91c1c' : '#92400e'};
+            color:#fff; font-size:13px; font-weight:600;
+            padding:6px 12px; display:flex; align-items:center; gap:8px;
+            width:100%; box-sizing:border-box;
+        `;
+        banner.innerHTML = `
+            <span style="flex:1">⚠ ${issues.map(i => i.text).join(' · ')}</span>
+            <button style="background:rgba(255,255,255,0.2);border:none;color:#fff;padding:4px 10px;border-radius:4px;font-weight:700;font-size:13px;cursor:pointer;touch-action:manipulation" id="_drFixBtn">Fix Now</button>
+            <button style="background:none;border:none;color:#fff;font-size:18px;cursor:pointer;padding:0 4px;touch-action:manipulation" id="_drDismissBtn">✕</button>
+        `;
+
+        // Insert into the flex column after the engine advisory (below status bar, above map)
+        const advisory = document.getElementById('engineAdvisory');
+        const mainContent = document.getElementById('mainContent');
+        if (advisory) {
+            advisory.parentNode.insertBefore(banner, advisory.nextSibling);
+        } else if (mainContent) {
+            mainContent.parentNode.insertBefore(banner, mainContent);
+        } else {
+            document.body.appendChild(banner);
+        }
+
+        banner.querySelector('#_drFixBtn').addEventListener('click', () => {
+            banner.remove();
+            if (this.dataStatus) this.dataStatus.show();
+        });
+        banner.querySelector('#_drDismissBtn').addEventListener('click', () => banner.remove());
+    }
 
     showToast(message, actions = []) {
         const existing = document.querySelector('.toast');

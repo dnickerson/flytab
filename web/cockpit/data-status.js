@@ -1329,8 +1329,16 @@ class DataStatus {
                 setStep('cifp', 'skip', `Current — cycle ${serverCode}`);
             } else {
                 setStep('cifp', 'running', 'Downloading CIFP bundle…');
-                await fetchAndPut('/cifp/cifp_bundle.json',     'cifp/cifp_bundle.json',     'application/json');
-                await fetchAndPut('/cifp/cifp_cycle_info.json', 'cifp/cifp_cycle_info.json', 'application/json');
+                // Use Java-side fetch-zip (same as NASR) to avoid loading 30 MB blob into WebView
+                const cifpZipUrl = encodeURIComponent(`${homeBase}/cifp/cifp.zip`);
+                const cifpResp = await fetch(`${LOCAL}/fetch-zip?url=${cifpZipUrl}`, {
+                    method: 'POST',
+                    signal: AbortSignal.timeout(120000),
+                });
+                if (!cifpResp.ok) {
+                    const msg = await cifpResp.text().catch(() => `HTTP ${cifpResp.status}`);
+                    throw new Error(`fetch-zip failed: ${msg}`);
+                }
                 setStep('cifp', 'ok', `Updated to cycle ${serverCode}`);
             }
         } catch (e) { failStep('cifp', e); }

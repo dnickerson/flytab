@@ -1182,15 +1182,17 @@ class ApproachCharts {
             const resolveCoords = async (id, section) => {
                 if (!this._nasrDb) return null;
                 try {
+                    // RW## pattern: runway threshold — fix_section is null in bundle, detect by id
+                    if (/^RW\d/.test(id) || section === 'PG') {
+                        const r = await this._nasrDb.getAirport(icao);
+                        if (r?.lat) return { lat: r.lat, lon: r.lon };
+                        return null;
+                    }
                     if (section === 'D') {
                         const r = await this._nasrDb.getNavaid(id);
                         if (r?.lat) return { lat: r.lat, lon: r.lon };
                     } else if (section === 'PA') {
                         const r = await this._nasrDb.getAirport(id);
-                        if (r?.lat) return { lat: r.lat, lon: r.lon };
-                    } else if (section === 'PG') {
-                        // Runway — use airport position as proxy
-                        const r = await this._nasrDb.getAirport(icao);
                         if (r?.lat) return { lat: r.lat, lon: r.lon };
                     } else {
                         // PC, EA, unset — fix first, navaid fallback
@@ -1216,13 +1218,13 @@ class ApproachCharts {
                 return;
             }
 
-            // altitude1 is already in feet — no multiplier needed
+            // altitude1 is stored in tens-of-feet in ARINC 424 (e.g. 300 = 3000 ft, 52 = 520 ft)
             const toWp = s => ({
                 icao: s.fix_id,
                 name: s.fix_id,
                 lat: s.lat,
                 lon: s.lon,
-                alt: s.altitude1 > 0 ? s.altitude1 : null,
+                alt: s.altitude1 > 0 ? s.altitude1 * 10 : null,
                 altLocked: s.altitude1 > 0,
             });
 
@@ -1240,10 +1242,19 @@ class ApproachCharts {
                 insertAfter  = steps.slice(rwIdx + 1).map(toWp);
             }
 
-            // Airport waypoint for empty-route case
+            // Airport waypoint for empty-route case.
+            // Lock altitude to field elevation so it doesn't inherit cruise altitude.
             const rwStep = rwIdx >= 0 ? steps[rwIdx] : steps[steps.length - 1];
+            let aptElev = null;
+            if (this._nasrDb) {
+                try {
+                    const aptData = await this._nasrDb.getAirport(icao);
+                    aptElev = aptData?.elev_ft ?? null;
+                } catch {}
+            }
             const airportWp = rwStep
-                ? { icao, name: icao, lat: rwStep.lat, lon: rwStep.lon, type: 'APT' }
+                ? { icao, name: icao, lat: rwStep.lat, lon: rwStep.lon, type: 'APT',
+                    elev_ft: aptElev, alt: aptElev ?? 0, altLocked: true }
                 : null;
 
             document.dispatchEvent(new CustomEvent('cifp:load-procedure', {
