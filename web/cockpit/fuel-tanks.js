@@ -69,6 +69,11 @@ class FuelTanksDisplay {
         if (this._confirmTimer) clearTimeout(this._confirmTimer);
         if (this._mouseMoveHandler) document.removeEventListener('mousemove', this._mouseMoveHandler);
         if (this._mouseUpHandler)   document.removeEventListener('mouseup',   this._mouseUpHandler);
+        if (this._dragHandle) {
+            if (this._dragTouchStart) this._dragHandle.removeEventListener('touchstart', this._dragTouchStart);
+            if (this._dragTouchMove)  this._dragHandle.removeEventListener('touchmove',  this._dragTouchMove);
+            if (this._dragTouchEnd)   this._dragHandle.removeEventListener('touchend',   this._dragTouchEnd);
+        }
         if (this._el) this._el.remove();
     }
 
@@ -94,7 +99,6 @@ class FuelTanksDisplay {
         this._el = document.createElement('div');
         this._el.className = 'fuel-tanks-widget';
 
-        // Restore saved position before appending
         try {
             const pos = JSON.parse(localStorage.getItem('flypi_fuel_widget_pos') || 'null');
             if (pos && typeof pos.left === 'number' && typeof pos.top === 'number') {
@@ -425,27 +429,25 @@ class FuelTanksDisplay {
         const handle = this._el.querySelector('.ftw-drag-handle');
         if (!handle) return;
 
-        let active = false, startX, startY, startLeft, startTop;
+        let active = false, startX, startY, startLeft, startTop, maxL, maxT;
 
         const begin = (clientX, clientY) => {
             active = true;
             startX = clientX;
             startY = clientY;
-            const parent = this._el.offsetParent?.getBoundingClientRect() || { left: 0, top: 0 };
+            const parent = this._el.offsetParent;
+            const parentRect = parent?.getBoundingClientRect() || { left: 0, top: 0 };
+            maxL = parent ? parent.clientWidth  - this._el.offsetWidth  : 9999;
+            maxT = parent ? parent.clientHeight - this._el.offsetHeight : 9999;
             const rect = this._el.getBoundingClientRect();
-            startLeft = rect.left - parent.left;
-            startTop  = rect.top  - parent.top;
+            startLeft = rect.left - parentRect.left;
+            startTop  = rect.top  - parentRect.top;
         };
 
         const move = (clientX, clientY) => {
             if (!active) return;
-            const parent = this._el.offsetParent;
-            const maxL = parent ? parent.clientWidth  - this._el.offsetWidth  : 9999;
-            const maxT = parent ? parent.clientHeight - this._el.offsetHeight : 9999;
-            const newL = Math.min(maxL, Math.max(0, startLeft + clientX - startX));
-            const newT = Math.min(maxT, Math.max(0, startTop  + clientY - startY));
-            this._el.style.left = newL + 'px';
-            this._el.style.top  = newT + 'px';
+            this._el.style.left = Math.min(maxL, Math.max(0, startLeft + clientX - startX)) + 'px';
+            this._el.style.top  = Math.min(maxT, Math.max(0, startTop  + clientY - startY)) + 'px';
         };
 
         const end = () => {
@@ -459,25 +461,27 @@ class FuelTanksDisplay {
             } catch {}
         };
 
-        // Touch
-        handle.addEventListener('touchstart', (e) => {
+        this._dragTouchStart = (e) => {
             if (e.touches.length !== 1) return;
             begin(e.touches[0].clientX, e.touches[0].clientY);
             e.preventDefault();
-        }, { passive: false });
-        handle.addEventListener('touchmove', (e) => {
+        };
+        this._dragTouchMove = (e) => {
             if (e.touches.length !== 1) return;
             move(e.touches[0].clientX, e.touches[0].clientY);
             e.preventDefault();
-        }, { passive: false });
-        handle.addEventListener('touchend', end);
+        };
+        this._dragTouchEnd = end;
+        handle.addEventListener('touchstart', this._dragTouchStart, { passive: false });
+        handle.addEventListener('touchmove',  this._dragTouchMove,  { passive: false });
+        handle.addEventListener('touchend',   this._dragTouchEnd);
 
-        // Mouse (desktop testing)
         handle.addEventListener('mousedown', (e) => { begin(e.clientX, e.clientY); e.preventDefault(); });
         this._mouseMoveHandler = (e) => move(e.clientX, e.clientY);
         this._mouseUpHandler   = end;
         document.addEventListener('mousemove', this._mouseMoveHandler);
         document.addEventListener('mouseup',   this._mouseUpHandler);
+        this._dragHandle = handle;
     }
 
     /* ------------------------------------------------------------------

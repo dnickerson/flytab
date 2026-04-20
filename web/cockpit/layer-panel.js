@@ -202,8 +202,6 @@ class LayerPanel {
             });
         }
 
-
-        // Wire fuel gauges toggle
         const fuelGaugesInput = this._panel.querySelector('.lp-toggle input[data-action="fuel-gauges"]');
         if (fuelGaugesInput) {
             fuelGaugesInput.checked = localStorage.getItem('flypi_fuel_widget_visible') !== 'false';
