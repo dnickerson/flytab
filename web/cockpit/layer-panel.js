@@ -203,6 +203,16 @@ class LayerPanel {
         }
 
 
+        // Wire fuel gauges toggle
+        const fuelGaugesInput = this._panel.querySelector('.lp-toggle input[data-action="fuel-gauges"]');
+        if (fuelGaugesInput) {
+            fuelGaugesInput.checked = localStorage.getItem('flypi_fuel_widget_visible') !== 'false';
+            fuelGaugesInput.addEventListener('change', () => {
+                if (fuelGaugesInput.checked) window.app?.fuelTanksDisplay?.show();
+                else                         window.app?.fuelTanksDisplay?.hide();
+            });
+        }
+
         // Wire ceiling/sky toggle
         const ceilInput = this._panel.querySelector('.lp-toggle input[data-action="wx-ceil"]');
         if (ceilInput) {
@@ -446,6 +456,10 @@ class LayerPanel {
                     <div class="lp-row">
                         <span class="lp-row-label">Show ±ALT</span>
                         <label class="lp-toggle"><input type="checkbox" data-action="traffic-alt"><span class="lp-toggle-track"></span></label>
+                    </div>
+                    <div class="lp-row">
+                        <span class="lp-row-label">Fuel Gauges</span>
+                        <label class="lp-toggle"><input type="checkbox" data-action="fuel-gauges" checked><span class="lp-toggle-track"></span></label>
                     </div>
                 </div>
             </div>

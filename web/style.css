@@ -5438,6 +5438,27 @@ body {
     font-family: "Roboto Condensed", "Arial Narrow", Arial, sans-serif;
 }
 
+/* ── Drag handle ───────────────────────────────────────────────────── */
+.ftw-drag-handle {
+    width: 100%;
+    height: 10px;
+    cursor: grab;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 3px;
+    touch-action: none;
+}
+.ftw-drag-handle::before {
+    content: '';
+    display: block;
+    width: 28px;
+    height: 3px;
+    border-radius: 2px;
+    background: #8a9ab0;
+}
+.ftw-drag-handle:active { cursor: grabbing; }
+
 /* ── Gauge row ─────────────────────────────────────────────────────── */
 .ftw-gauges {
     display: flex;
@@ -6484,7 +6505,7 @@ body {
     font-size: 16px;
     font-weight: 700;
     line-height: 1.2;
-    text-shadow: 0 0 3px #000, 0 0 6px #000;
+    text-shadow: 1px 1px 2px #000;
     white-space: nowrap;
 }
 
@@ -6493,7 +6514,7 @@ body {
     font-weight: 600;
     color: #ffffff;
     line-height: 1.2;
-    text-shadow: 0 0 3px #000, 0 0 6px #000;
+    text-shadow: 1px 1px 2px #000;
     white-space: nowrap;
 }
 
@@ -6502,7 +6523,7 @@ body {
     font-weight: 600;
     color: #80e8ff;
     line-height: 1.2;
-    text-shadow: 0 0 3px #000, 0 0 6px #000;
+    text-shadow: 1px 1px 2px #000;
     white-space: nowrap;
 }
 
@@ -6511,7 +6532,7 @@ body {
     font-weight: 600;
     color: #ffcc66;
     line-height: 1.2;
-    text-shadow: 0 0 3px #000, 0 0 6px #000;
+    text-shadow: 1px 1px 2px #000;
     white-space: nowrap;
 }
 

@@ -51,8 +51,13 @@ class FuelTanksDisplay {
             setTimeout(() => this._showRecoveryModal(), 800);
         }
 
+        if (localStorage.getItem('flypi_fuel_widget_visible') === 'false') this.hide();
+
         this._render();
     }
+
+    show() { if (this._el) { this._el.style.display = ''; try { localStorage.setItem('flypi_fuel_widget_visible', 'true');  } catch {} } }
+    hide() { if (this._el) { this._el.style.display = 'none'; try { localStorage.setItem('flypi_fuel_widget_visible', 'false'); } catch {} } }
 
     destroy() {
         if (this._onEngineData && window.engineClient) {
@@ -62,6 +67,8 @@ class FuelTanksDisplay {
         if (this._onConfirmPrompt) window.removeEventListener('fueltankstate:confirm_prompt', this._onConfirmPrompt);
         if (this._timerInterval) clearInterval(this._timerInterval);
         if (this._confirmTimer) clearTimeout(this._confirmTimer);
+        if (this._mouseMoveHandler) document.removeEventListener('mousemove', this._mouseMoveHandler);
+        if (this._mouseUpHandler)   document.removeEventListener('mouseup',   this._mouseUpHandler);
         if (this._el) this._el.remove();
     }
 
@@ -87,7 +94,17 @@ class FuelTanksDisplay {
         this._el = document.createElement('div');
         this._el.className = 'fuel-tanks-widget';
 
+        // Restore saved position before appending
+        try {
+            const pos = JSON.parse(localStorage.getItem('flypi_fuel_widget_pos') || 'null');
+            if (pos && typeof pos.left === 'number' && typeof pos.top === 'number') {
+                this._el.style.left = pos.left + 'px';
+                this._el.style.top  = pos.top  + 'px';
+            }
+        } catch {}
+
         this._el.innerHTML = /* html */`
+            <div class="ftw-drag-handle"></div>
             <div class="ftw-gauges">
                 <div class="ftw-tank" id="ftw-tank-l" data-label="L">
                     <div class="ftw-bar-wrap">
@@ -173,6 +190,8 @@ class FuelTanksDisplay {
             confirmYes:    this._el.querySelector('#ftw-confirm-yes'),
             confirmSwitch: this._el.querySelector('#ftw-confirm-switch'),
         };
+
+        this._makeDraggable();
 
         this._wireTap(this._dom.badgeL, () => this._onBadgeTap('L'));
         this._wireTap(this._dom.badgeR, () => this._onBadgeTap('R'));
@@ -397,6 +416,68 @@ class FuelTanksDisplay {
             if (total > 0) this._dom.senderL.textContent = `s:${total.toFixed(0)}`;
         }
         if (senderR != null) this._dom.senderR.textContent = 's:' + senderR.toFixed(1);
+    }
+
+    /* ------------------------------------------------------------------
+     * Drag-to-reposition
+     * ----------------------------------------------------------------*/
+    _makeDraggable() {
+        const handle = this._el.querySelector('.ftw-drag-handle');
+        if (!handle) return;
+
+        let active = false, startX, startY, startLeft, startTop;
+
+        const begin = (clientX, clientY) => {
+            active = true;
+            startX = clientX;
+            startY = clientY;
+            const parent = this._el.offsetParent?.getBoundingClientRect() || { left: 0, top: 0 };
+            const rect = this._el.getBoundingClientRect();
+            startLeft = rect.left - parent.left;
+            startTop  = rect.top  - parent.top;
+        };
+
+        const move = (clientX, clientY) => {
+            if (!active) return;
+            const parent = this._el.offsetParent;
+            const maxL = parent ? parent.clientWidth  - this._el.offsetWidth  : 9999;
+            const maxT = parent ? parent.clientHeight - this._el.offsetHeight : 9999;
+            const newL = Math.min(maxL, Math.max(0, startLeft + clientX - startX));
+            const newT = Math.min(maxT, Math.max(0, startTop  + clientY - startY));
+            this._el.style.left = newL + 'px';
+            this._el.style.top  = newT + 'px';
+        };
+
+        const end = () => {
+            if (!active) return;
+            active = false;
+            try {
+                localStorage.setItem('flypi_fuel_widget_pos', JSON.stringify({
+                    left: parseInt(this._el.style.left) || 0,
+                    top:  parseInt(this._el.style.top)  || 0,
+                }));
+            } catch {}
+        };
+
+        // Touch
+        handle.addEventListener('touchstart', (e) => {
+            if (e.touches.length !== 1) return;
+            begin(e.touches[0].clientX, e.touches[0].clientY);
+            e.preventDefault();
+        }, { passive: false });
+        handle.addEventListener('touchmove', (e) => {
+            if (e.touches.length !== 1) return;
+            move(e.touches[0].clientX, e.touches[0].clientY);
+            e.preventDefault();
+        }, { passive: false });
+        handle.addEventListener('touchend', end);
+
+        // Mouse (desktop testing)
+        handle.addEventListener('mousedown', (e) => { begin(e.clientX, e.clientY); e.preventDefault(); });
+        this._mouseMoveHandler = (e) => move(e.clientX, e.clientY);
+        this._mouseUpHandler   = end;
+        document.addEventListener('mousemove', this._mouseMoveHandler);
+        document.addEventListener('mouseup',   this._mouseUpHandler);
     }
 
     /* ------------------------------------------------------------------

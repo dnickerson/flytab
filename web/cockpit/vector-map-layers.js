@@ -1025,8 +1025,8 @@ class VectorMapLayers {
                         m.unbindTooltip();
                         m.bindTooltip(apt.icao, {
                             permanent: labelVisible,
-                            direction: 'right',
-                            offset: [8, 0],
+                            direction: 'top',
+                            offset: [0, -5],
                             className: this._aptLabelClass(m._aptData?.longest_rwy_ft || 0),
                         });
                     }
@@ -1052,8 +1052,8 @@ class VectorMapLayers {
 
                 marker.bindTooltip(apt.icao, {
                     permanent: labelVisible,
-                    direction: 'right',
-                    offset: [8, 0],
+                    direction: 'top',
+                    offset: [0, -5],
                     className: this._aptLabelClass(apt.longest_rwy_ft || 0),
                 });
 
