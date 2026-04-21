@@ -47,41 +47,51 @@
 /* ── Cockpit Mode — direct sunlight on iPad ─────────────────────────────────── */
 /* All contrast ratios verified against bg-primary (#1a1a2e, L≈0.0083)          */
 [data-mode="cockpit"] {
-    /* Surfaces */
-    --bg-primary:        #1a1a2e;   /* main background                           */
-    --bg-surface:        #16213e;   /* cards, panels                             */
-    --bg-surface-raised: #1e2a4a;   /* elevated popups, modals                   */
-    /* Text — sunlight contrast ratios on bg-primary (#1a1a2e)                   */
-    --text-primary:      #ffffff;   /* 18.0:1 — instrument values, headings      */
-    --text-secondary:    #d8d8d8;   /* 12.4:1 — field values, body text          */
-    --text-label:        #b0b0b0;   /*  8.0:1 — field labels, column headers     */
-    --text-muted:        #909090;   /*  6.0:1 — timestamps, peripheral metadata  */
-    --text-on-accent:    #000000;   /* on cyan accent buttons                    */
+    /* Surfaces — light background for direct sunlight readability */
+    --bg-primary:        #f0f4f8;
+    --bg-surface:        #ffffff;
+    --bg-surface-raised: #e8edf4;
 
-    /* Instrument readouts — large numeric displays */
-    --instrument-value:  #ffffff;   /* 18.0:1 — ALT, IAS, HDG readouts          */
-    --instrument-unit:   #b0b0b0;   /*  8.0:1 — kt, ft, °, inHg units           */
-    --instrument-label:  #909090;   /*  6.0:1 — RPM / ALT / VS field names      */
+    /* Text — dark on light background */
+    --text-primary:      #111111;
+    --text-secondary:    #333333;
+    --text-label:        #555555;
+    --text-muted:        #888888;
+    --text-on-accent:    #ffffff;
+
+    /* Instrument readouts */
+    --instrument-value:  #111111;
+    --instrument-unit:   #555555;
+    --instrument-label:  #888888;
 
     /* Interactive */
-    --accent:            #00d4ff;   /* 10.3:1 — primary action, links            */
-    --accent-hover:      #33ddff;   /* 12.1:1 — hover state                      */
-    --accent-active:     #00aacc;   /*  7.8:1 — pressed state                    */
+    --accent:            #0055bb;
+    --accent-hover:      #0044aa;
+    --accent-active:     #003388;
 
     /* Borders */
-    --border:            #2a3a5e;   /* subtle panel dividers                     */
-    --border-light:      #1e2a4a;   /* very subtle internal lines                */
-    --border-strong:     #4a6080;   /* high-vis separators, input outlines       */
+    --border:            #ccd4e0;
+    --border-light:      #e4eaf2;
+    --border-strong:     #8899bb;
 
     /* Elevation */
-    --shadow:            0 2px 8px rgba(0,0,0,0.4);
-    --shadow-raised:     0 4px 20px rgba(0,0,0,0.6);
+    --shadow:            0 2px 8px rgba(0,0,0,0.12);
+    --shadow-raised:     0 4px 20px rgba(0,0,0,0.18);
 
-    /* Touch targets — enlarged for turbulence (~25% above Apple HIG minimum)    */
-    /* In turbulence the hand moves unpredictably; small X buttons are untappable */
-    --touch-min:         56px;   /* 21mm — minimum in turbulence (global: 48px)   */
-    --touch-preferred:   64px;   /* 24mm — standard cockpit action (global: 56px) */
-    --touch-large:       80px;   /* 30mm — dismiss/close buttons (global: 64px)   */
+    /* Status colors — deep tones readable on light background */
+    --status-ok:         #1a8c35;
+    --status-caution:    #b87000;
+    --status-warning:    #c45200;
+    --status-danger:     #cc2222;
+    --color-success:     #1a8c35;
+    --color-caution:     #b87000;
+    --color-danger:      #cc2222;
+    --color-info:        #0055bb;
+
+    /* Touch targets — enlarged for turbulence */
+    --touch-min:         56px;
+    --touch-preferred:   64px;
+    --touch-large:       80px;
 }
 
 /* ── Night Mode — red spectrum, preserves scotopic vision ───────────────────── */
