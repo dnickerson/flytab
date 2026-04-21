@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v5.74';
+const FLYTAB_VERSION = 'v5.79';
 
 // ========== Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -78,6 +78,7 @@ class FlyTabApp {
         this.instrumentStrip = null;
         this.layerPanel = null;
         this.tabBar = null;
+        this.everywhereSearch = null;
 
         this.thermalMonitor = null;
         this.engineML = null;
@@ -289,7 +290,8 @@ class FlyTabApp {
         const summary = document.createElement('div');
         summary.style.cssText = 'padding:8px 16px;background:var(--bg-surface);border-bottom:1px solid var(--border);font-size:13px;flex-shrink:0;font-family:monospace;';
         const sit = this.stratuxClient?.situation;
-        const src = this.gpsSource?.source || '?';
+        const src = this.gpsSource?.label ?? this.gpsSource?.source ?? '?';
+        const cfgSrc = this.gpsSource?._configuredSource ?? '?';
         const stxConnected = this.stratuxClient?._connected ? 'YES' : 'NO';
         const fixQ = sit?.gps_fix_quality ?? 'null';
         const lat = sit?.lat?.toFixed(4) ?? 'null';
@@ -297,7 +299,7 @@ class FlyTabApp {
         const sats = sit?.gps_sats ?? 'null';
         const acc = sit?._accuracy != null ? `${Math.round(sit._accuracy)}m` : 'n/a';
         summary.innerHTML = [
-            `<b>GPS Source:</b> ${src} | <b>Stratux connected:</b> ${stxConnected} | <b>Stratux IP:</b> ${this.stratuxClient?.ip || '?'}`,
+            `<b>GPS Source:</b> ${src} (configured: ${cfgSrc}) | <b>Stratux connected:</b> ${stxConnected} | <b>Stratux IP:</b> ${this.stratuxClient?.ip || '?'}`,
             `<b>Fix quality:</b> ${fixQ} | <b>Lat:</b> ${lat} | <b>Lon:</b> ${lon} | <b>Sats:</b> ${sats} | <b>Accuracy:</b> ${acc}`,
             `<b>Geolocation API:</b> ${'geolocation' in navigator ? 'available' : 'NOT available'} | <b>watchId:</b> ${this.gpsSource?._watchId ?? 'null'}`,
         ].join('<br>');
@@ -806,6 +808,17 @@ class FlyTabApp {
             }
         }
 
+        // ── Everywhere Search ────────────────────────────────────────────────
+        if (typeof EverywhereSearch !== 'undefined') {
+            this.everywhereSearch = new EverywhereSearch(nasrDb, this.stratuxClient);
+            if (this.approachCharts) this.everywhereSearch.setApproachCharts(this.approachCharts);
+            if (this.routeEditor)    this.everywhereSearch.setRouteEditor(this.routeEditor);
+            if (this.routeTable)     this.everywhereSearch.setRouteTable(this.routeTable);
+            if (this.airportPopup)   this.everywhereSearch.setAirportPopup(this.airportPopup);
+            if (this.cockpitMap)     this.everywhereSearch.setCockpitMap(this.cockpitMap);
+            this.everywhereSearch.setGetActiveTrip(() => this._currentTrip);
+        }
+
         // ── v5 UI: Left Rail ─────────────────────────────────────────────────
         this._buildLeftRail();
 
@@ -903,6 +916,13 @@ class FlyTabApp {
         }));
         rail.appendChild(makeBtn('−', 'Zoom out', () => {
             if (this.cockpitMap?.map) this.cockpitMap.map.zoomOut();
+        }));
+
+        rail.appendChild(sep());
+
+        // Search
+        rail.appendChild(makeBtn('SRC', 'Search', () => {
+            if (this.everywhereSearch) this.everywhereSearch.toggle();
         }));
 
         rail.appendChild(sep());
@@ -1438,7 +1458,7 @@ class FlyTabApp {
 
             // GPS: green if fix (quality >= 1), show solution type + source
             if (this.dom.statusGps) {
-                const src = this.gpsSource?.source === 'internal' ? 'INT' : 'STX';
+                const src = this.gpsSource?.label ?? (this.gpsSource?.source === 'internal' ? 'INT' : 'STX');
                 const q = sit?.gps_fix_quality ?? 0;
                 const gpsOk = q >= 1;
                 this.dom.statusGps.classList.toggle('active', gpsOk);
