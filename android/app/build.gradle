@@ -7,8 +7,8 @@ android {
         applicationId "app.flywhere.flytab"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 575
-        versionName "5.75"
+        versionCode 576
+        versionName "5.76"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.

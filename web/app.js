@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v5.75';
+const FLYTAB_VERSION = 'v5.76';
 
 // ========== Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -921,7 +921,7 @@ class FlyTabApp {
         rail.appendChild(sep());
 
         // Search
-        rail.appendChild(makeBtn('&#x2315;', 'Search', () => {
+        rail.appendChild(makeBtn('SRC', 'Search', () => {
             if (this.everywhereSearch) this.everywhereSearch.toggle();
         }));
 
