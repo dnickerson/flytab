@@ -1719,6 +1719,7 @@ class RouteTable {
         } else {
             this._bodyEl.style.maxHeight = '0';
         }
+        if (this._toggleBtn) this._toggleBtn.innerHTML = this._expanded ? '&#9660;' : '&#9650;';
         setTimeout(() => {
             this._map?.invalidateSize();
             this._broadcastHeight();
@@ -2027,6 +2028,7 @@ class RouteTable {
             <span class="handle-summary"></span>
             <button class="rt-profile-btn" title="Terrain profile" style="min-width:44px;min-height:44px;font-size:18px;background:none;border:none;color:inherit;cursor:pointer;padding:0 8px">\u26F0</button>
             <button class="route-table-edit-btn">EDIT</button>
+            <button class="rt-toggle-btn" title="Expand/collapse plan">&#9650;</button>
         `;
         // Tap to toggle — no drag, just two states
         let touchStartY = 0;
@@ -2057,6 +2059,9 @@ class RouteTable {
 
         this._profileBtn = this._handleEl.querySelector('.rt-profile-btn');
         this._wireButton(this._profileBtn, () => this._openProfileView());
+
+        this._toggleBtn = this._handleEl.querySelector('.rt-toggle-btn');
+        this._wireButton(this._toggleBtn, () => this.toggle());
 
         // Terrain profile panel (created once, floats above the sheet)
         this._profileView = (typeof RouteProfileView !== 'undefined')

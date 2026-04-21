@@ -2370,6 +2370,22 @@ body {
     border-bottom: 1px solid var(--border);
 }
 
+.rt-toggle-btn {
+    min-width: 44px;
+    min-height: 44px;
+    background: none;
+    border: none;
+    color: var(--accent);
+    font-size: 18px;
+    font-weight: 700;
+    cursor: pointer;
+    padding: 0 8px;
+    flex-shrink: 0;
+}
+.rt-toggle-btn:active {
+    opacity: 0.6;
+}
+
 /* Edit mode active state */
 .route-table-editing .route-table-edit-btn,
 .rt-edit-active {
