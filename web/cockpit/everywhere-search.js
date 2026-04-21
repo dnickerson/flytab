@@ -675,10 +675,12 @@ class EverywhereSearch {
 
     _fastTap(btn, handler) {
         let tapStart = null;
+        let touchHandled = false;
         btn.addEventListener('touchstart', (e) => {
             if (e.touches.length === 1)
                 tapStart = { x: e.touches[0].clientX, y: e.touches[0].clientY, t: Date.now() };
             else tapStart = null;
+            touchHandled = false;
         }, { passive: true });
         btn.addEventListener('touchend', (e) => {
             if (!tapStart || e.changedTouches.length !== 1) { tapStart = null; return; }
@@ -687,9 +689,13 @@ class EverywhereSearch {
             const dy = e.changedTouches[0].clientY - ts.y;
             if (dx*dx + dy*dy > 400) return;
             if (Date.now() - ts.t > 500) return;
+            touchHandled = true;
             handler(e);
         }, { passive: true });
-        btn.addEventListener('click', handler);
+        btn.addEventListener('click', (e) => {
+            if (touchHandled) { touchHandled = false; return; }
+            handler(e);
+        });
     }
 
     _scrollSafeTap(el, handler) {
