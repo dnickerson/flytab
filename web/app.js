@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v5.74';
+const FLYTAB_VERSION = 'v5.75';
 
 // ========== Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -78,6 +78,7 @@ class FlyTabApp {
         this.instrumentStrip = null;
         this.layerPanel = null;
         this.tabBar = null;
+        this.everywhereSearch = null;
 
         this.thermalMonitor = null;
         this.engineML = null;
@@ -807,6 +808,17 @@ class FlyTabApp {
             }
         }
 
+        // ── Everywhere Search ────────────────────────────────────────────────
+        if (typeof EverywhereSearch !== 'undefined') {
+            this.everywhereSearch = new EverywhereSearch(nasrDb, this.stratuxClient);
+            if (this.approachCharts) this.everywhereSearch.setApproachCharts(this.approachCharts);
+            if (this.routeEditor)    this.everywhereSearch.setRouteEditor(this.routeEditor);
+            if (this.routeTable)     this.everywhereSearch.setRouteTable(this.routeTable);
+            if (this.airportPopup)   this.everywhereSearch.setAirportPopup(this.airportPopup);
+            if (this.cockpitMap)     this.everywhereSearch.setCockpitMap(this.cockpitMap);
+            this.everywhereSearch.setGetActiveTrip(() => this._currentTrip);
+        }
+
         // ── v5 UI: Left Rail ─────────────────────────────────────────────────
         this._buildLeftRail();
 
@@ -904,6 +916,13 @@ class FlyTabApp {
         }));
         rail.appendChild(makeBtn('−', 'Zoom out', () => {
             if (this.cockpitMap?.map) this.cockpitMap.map.zoomOut();
+        }));
+
+        rail.appendChild(sep());
+
+        // Search
+        rail.appendChild(makeBtn('&#x2315;', 'Search', () => {
+            if (this.everywhereSearch) this.everywhereSearch.toggle();
         }));
 
         rail.appendChild(sep());

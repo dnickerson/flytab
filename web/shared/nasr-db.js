@@ -778,6 +778,58 @@ class NasrDB {
         return { airports, navaids, fixes };
     }
 
+    async searchAllExtended(query, limit = 20) {
+        const q = query.toUpperCase();
+        const db = await this.open();
+
+        const withTimeout = (promise, ms) => Promise.race([
+            promise,
+            new Promise(resolve => setTimeout(() => resolve([]), ms)),
+        ]);
+
+        const [base, airportsByCity, airways] = await Promise.all([
+            this.searchAll(query, limit),
+            withTimeout(new Promise((resolve) => {
+                try {
+                    const tx = db.transaction('airports', 'readonly');
+                    const results = [];
+                    const req = tx.objectStore('airports').openCursor();
+                    req.onsuccess = () => {
+                        const cursor = req.result;
+                        if (!cursor || results.length >= limit) { resolve(results); return; }
+                        const val = cursor.value;
+                        if (val.city && val.city.toUpperCase().includes(q)) {
+                            results.push({ ...val, _matchType: 'city' });
+                        }
+                        cursor.continue();
+                    };
+                    req.onerror = () => resolve([]);
+                    tx.onabort = () => resolve([]);
+                } catch { resolve([]); }
+            }), 3000),
+            withTimeout(new Promise((resolve) => {
+                try {
+                    const range = IDBKeyRange.bound(q, q + '￿');
+                    const tx = db.transaction('airways', 'readonly');
+                    const req = tx.objectStore('airways').getAll(range, limit);
+                    req.onsuccess = () => resolve((req.result || []).map(a => ({ ...a, _matchType: 'id' })));
+                    req.onerror = () => resolve([]);
+                    tx.onabort = () => resolve([]);
+                } catch { resolve([]); }
+            }), 3000),
+        ]);
+
+        const seenApts = new Set(base.airports.map(a => a.icao));
+        const extraApts = airportsByCity.filter(a => !seenApts.has(a.icao));
+
+        return {
+            airports: [...base.airports, ...extraApts].slice(0, limit),
+            navaids: base.navaids,
+            fixes: base.fixes,
+            airways,
+        };
+    }
+
     // ========== Fix Operations ==========
 
     async getFix(id) {
