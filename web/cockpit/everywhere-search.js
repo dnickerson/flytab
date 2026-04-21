@@ -130,8 +130,8 @@ class EverywhereSearch {
 
     _getOwnPos() {
         const sit = this._stratuxClient?.situation;
-        if (sit?.GPSLatitude && sit?.GPSLongitude && sit.GPSFixQuality > 0) {
-            return { lat: sit.GPSLatitude, lon: sit.GPSLongitude };
+        if (sit?.lat && sit?.lon && sit.gps_fix_quality > 0) {
+            return { lat: sit.lat, lon: sit.lon };
         }
         return null;
     }
