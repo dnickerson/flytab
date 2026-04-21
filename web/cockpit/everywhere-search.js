@@ -674,32 +674,47 @@ class EverywhereSearch {
     }
 
     _fastTap(btn, handler) {
-        let fired = false;
+        let tapStart = null;
+        let touchHandled = false;
         btn.addEventListener('touchstart', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            fired = true;
+            if (e.touches.length === 1)
+                tapStart = { x: e.touches[0].clientX, y: e.touches[0].clientY, t: Date.now() };
+            else tapStart = null;
+            touchHandled = false;
+        }, { passive: true });
+        btn.addEventListener('touchend', (e) => {
+            if (!tapStart || e.changedTouches.length !== 1) { tapStart = null; return; }
+            const ts = tapStart; tapStart = null;
+            const dx = e.changedTouches[0].clientX - ts.x;
+            const dy = e.changedTouches[0].clientY - ts.y;
+            if (dx*dx + dy*dy > 400) return;
+            if (Date.now() - ts.t > 500) return;
+            touchHandled = true;
             handler(e);
-        }, { passive: false });
+        }, { passive: true });
         btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            if (fired) { fired = false; return; }
+            if (touchHandled) { touchHandled = false; return; }
             handler(e);
         });
     }
 
     _scrollSafeTap(el, handler) {
-        let startY = null;
+        let tapStart = null;
         let touchHandled = false;
         el.addEventListener('touchstart', (e) => {
-            startY = e.touches[0].clientY;
+            if (e.touches.length === 1)
+                tapStart = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+            else tapStart = null;
             touchHandled = false;
         }, { passive: true });
         el.addEventListener('touchend', (e) => {
-            if (startY === null) return;
-            const dy = Math.abs(e.changedTouches[0].clientY - startY);
-            startY = null;
-            if (dy < 8) { touchHandled = true; handler(e); }
+            if (!tapStart || e.changedTouches.length !== 1) { tapStart = null; return; }
+            const ts = tapStart; tapStart = null;
+            const dx = e.changedTouches[0].clientX - ts.x;
+            const dy = e.changedTouches[0].clientY - ts.y;
+            if (dx*dx + dy*dy > 400) return;
+            touchHandled = true;
+            handler(e);
         }, { passive: true });
         el.addEventListener('click', (e) => {
             if (touchHandled) { touchHandled = false; return; }
