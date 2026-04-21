@@ -72,8 +72,17 @@ class VectorMapLayers {
         // Debounced update on map movement
         this._map.on('moveend zoomend', () => this._scheduleUpdate());
 
-        // Mouse click: use Leaflet's map click (reliable on desktop)
-        this._map.on('click', (e) => this._onMapClick(e));
+        // Mouse click: use Leaflet's map click (reliable on desktop).
+        // Guard: suppress the browser's synthetic click that fires after touchend
+        // (passive touchend cannot call preventDefault, so Android WebView always
+        // generates a click ~300ms later). Without this guard, a single finger tap
+        // calls _onMapClick twice — once from touchend and once from the synthetic
+        // click — which can silently insert the same waypoint twice (issue #84).
+        this._lastTouchTap = 0;
+        this._map.on('click', (e) => {
+            if (Date.now() - this._lastTouchTap < 400) return;
+            this._onMapClick(e);
+        });
 
         // Touch tap: bypass Leaflet entirely. Leaflet's drag handler eats
         // most single-finger taps on iPad (finger jitter > draggable threshold).
@@ -107,6 +116,7 @@ class VectorMapLayers {
                 const rect = container.getBoundingClientRect();
                 const pt = L.point(endX - rect.left, endY - rect.top);
                 const latlng = this._map.containerPointToLatLng(pt);
+                this._lastTouchTap = Date.now();
                 this._onMapClick({ latlng });
             }
         }, { passive: true });
