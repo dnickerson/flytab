@@ -1,7 +1,9 @@
 /**
  * FlyTab — GPS Source Manager
- * Selectable GPS: 'internal' (Android device GPS) or 'stratux' (Pi GPS via WebSocket).
- * When 'internal' is selected, injects device GPS into the StratuxClient's situation
+ * Selectable GPS: 'internal' (Android device GPS), 'stratux' (Pi GPS via WebSocket),
+ * or 'auto' (use Stratux when connected; fall back to device GPS if unavailable).
+ *
+ * When internal GPS is active, injects device GPS into the StratuxClient's situation
  * so all downstream modules (map, instrument strip, route table, etc.) work unchanged.
  *
  * Stratux still provides: traffic, ADS-B, AHRS pitch/roll/G-load, baro altitude.
@@ -12,12 +14,20 @@
 class GpsSource {
     constructor(stratuxClient) {
         this._stratux = stratuxClient;
-        this._source = Settings.get('gps_source') || 'stratux'; // 'internal' or 'stratux'
+        this._configuredSource = Settings.get('gps_source') || 'auto'; // 'internal', 'stratux', or 'auto'
+        // Runtime source is always 'internal' or 'stratux' — 'auto' is a config state only
+        this._source = (this._configuredSource === 'internal') ? 'internal' : 'stratux';
+        this._inFallback = false; // true when auto-mode is using device GPS due to Stratux dropout
         this._watchId = null;
         this._lastInternal = null;
         this._firstFixLogged = false;
         this._vsSmoothed = 0; // EMA-smoothed vertical speed (fpm)
         this._staleTimer = null; // fires when internal GPS stops updating
+
+        // Auto-listener references (null when not attached)
+        this._onStratuxDisconnect = null;
+        this._onStratuxStale = null;
+        this._onStratuxConnect = null;
 
         // If persisted source is 'internal', set suppress flag immediately
         // so no Stratux situation events leak before start() is called.
@@ -28,34 +38,106 @@ class GpsSource {
 
     get source() { return this._source; }
 
-    /** Switch GPS source. Persists to settings. */
+    /** Human-readable label for the current GPS state, for use in the status bar. */
+    get label() {
+        if (this._source === 'internal') {
+            return this._inFallback ? 'INT(fb)' : 'INT';
+        }
+        return 'STX';
+    }
+
+    /** Switch GPS source. Persists configured source to settings. */
     setSource(source) {
-        if (source !== 'internal' && source !== 'stratux') return;
-        if (typeof DiagLog !== 'undefined') DiagLog.log('gps', `Switching GPS source: ${this._source} → ${source}`);
-        this._source = source;
+        if (source !== 'internal' && source !== 'stratux' && source !== 'auto') return;
+        if (typeof DiagLog !== 'undefined') DiagLog.log('gps', `Switching GPS source: configured=${this._configuredSource} → ${source}`);
+        this._configuredSource = source;
+        this._inFallback = false;
         Settings.set('gps_source', source);
 
         if (source === 'internal') {
+            this._source = 'internal';
             this._stratux._suppressGpsSituation = true;
             this._startInternal();
-        } else {
+            this._detachAutoListeners();
+        } else if (source === 'stratux') {
+            this._source = 'stratux';
             this._stratux._suppressGpsSituation = false;
             this._stopInternal();
+            this._detachAutoListeners();
+        } else { // 'auto'
+            this._source = 'stratux';
+            this._stratux._suppressGpsSituation = false;
+            this._stopInternal();
+            this._attachAutoListeners();
         }
     }
 
     /** Start watching (call after StratuxClient.connect()) */
     start() {
-        if (typeof DiagLog !== 'undefined') DiagLog.log('gps', `GpsSource.start() source=${this._source}`);
+        if (typeof DiagLog !== 'undefined') DiagLog.log('gps', `GpsSource.start() configured=${this._configuredSource} runtime=${this._source}`);
         if (this._source === 'internal') {
             this._stratux._suppressGpsSituation = true;
             this._startInternal();
         }
+        if (this._configuredSource === 'auto') {
+            this._attachAutoListeners();
+        }
     }
 
     stop() {
+        this._detachAutoListeners();
         this._stratux._suppressGpsSituation = false;
         this._stopInternal();
+    }
+
+    _attachAutoListeners() {
+        if (this._onStratuxDisconnect) return; // already attached — idempotent
+        this._onStratuxDisconnect = () => this._activateFallback('disconnect');
+        this._onStratuxStale      = () => this._activateFallback('stale');
+        this._onStratuxConnect    = () => this._deactivateFallback();
+        this._stratux.addEventListener('stratux:disconnect', this._onStratuxDisconnect);
+        this._stratux.addEventListener('stratux:stale',      this._onStratuxStale);
+        this._stratux.addEventListener('stratux:connect',    this._onStratuxConnect);
+    }
+
+    _detachAutoListeners() {
+        if (!this._onStratuxDisconnect) return;
+        this._stratux.removeEventListener('stratux:disconnect', this._onStratuxDisconnect);
+        this._stratux.removeEventListener('stratux:stale',      this._onStratuxStale);
+        this._stratux.removeEventListener('stratux:connect',    this._onStratuxConnect);
+        this._onStratuxDisconnect = null;
+        this._onStratuxStale      = null;
+        this._onStratuxConnect    = null;
+    }
+
+    _activateFallback(reason) {
+        if (this._configuredSource !== 'auto') return;
+        if (this._inFallback) return; // re-entrancy guard
+        this._inFallback = true;
+        this._source = 'internal';
+        this._stratux._suppressGpsSituation = true;
+        this._startInternal();
+        const msg = `Auto GPS: Stratux ${reason} — activating device GPS fallback`;
+        console.log('[GpsSource]', msg);
+        if (typeof DiagLog !== 'undefined') DiagLog.log('gps', msg);
+        this._stratux.dispatchEvent(new CustomEvent('gpssource:changed', {
+            detail: { source: 'internal', fallback: true, reason }
+        }));
+    }
+
+    _deactivateFallback() {
+        if (this._configuredSource !== 'auto') return;
+        if (!this._inFallback) return;
+        this._inFallback = false;
+        this._source = 'stratux';
+        this._stratux._suppressGpsSituation = false;
+        this._stopInternal();
+        const msg = 'Auto GPS: Stratux reconnected — reverting to Stratux GPS';
+        console.log('[GpsSource]', msg);
+        if (typeof DiagLog !== 'undefined') DiagLog.log('gps', msg);
+        this._stratux.dispatchEvent(new CustomEvent('gpssource:changed', {
+            detail: { source: 'stratux', fallback: false }
+        }));
     }
 
     _startInternal() {
@@ -84,8 +166,8 @@ class GpsSource {
                 const msg = `Internal GPS error: code=${err.code} ${err.message}`;
                 console.warn('[GpsSource]', msg);
                 if (typeof DiagLog !== 'undefined') DiagLog.log('gps', msg);
-                // POSITION_UNAVAILABLE (2) = no GPS hardware — fall back to Stratux
-                if (err.code === 2) {
+                // PERMISSION_DENIED (1) or POSITION_UNAVAILABLE (2) = cannot use device GPS
+                if (err.code === 1 || err.code === 2) {
                     this._stopInternal();
                     this._fallbackToStratux();
                 }
@@ -101,12 +183,23 @@ class GpsSource {
         if (typeof DiagLog !== 'undefined') DiagLog.log('gps', 'watchPosition registered, waiting for fix…');
     }
 
-    /** Auto-switch to Stratux when internal GPS is unavailable */
+    /** Called when internal GPS is unavailable (no hardware or API missing) */
     _fallbackToStratux() {
-        if (typeof DiagLog !== 'undefined') DiagLog.log('gps', 'Falling back to Stratux GPS');
-        this._source = 'stratux';
-        this._stratux._suppressGpsSituation = false;
-        Settings.set('gps_source', 'stratux');
+        if (this._configuredSource === 'auto') {
+            // In auto mode: deactivate the fallback attempt; Stratux remains the source
+            const msg = 'Auto GPS: device GPS unavailable — remaining on Stratux GPS';
+            console.warn('[GpsSource]', msg);
+            if (typeof DiagLog !== 'undefined') DiagLog.log('gps', msg);
+            this._inFallback = false;
+            this._source = 'stratux';
+            this._stratux._suppressGpsSituation = false;
+        } else {
+            // Hard 'internal' mode: permanently flip to Stratux and persist
+            if (typeof DiagLog !== 'undefined') DiagLog.log('gps', 'Falling back to Stratux GPS');
+            this._source = 'stratux';
+            this._stratux._suppressGpsSituation = false;
+            Settings.set('gps_source', 'stratux');
+        }
     }
 
     _stopInternal() {

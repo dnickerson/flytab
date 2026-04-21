@@ -175,19 +175,20 @@ class ConfigEditor {
             </div>
         </div>`);
 
-        const currentGps = typeof Settings !== 'undefined' ? (Settings.get('gps_source') || 'stratux') : 'stratux';
+        const currentGps = typeof Settings !== 'undefined' ? (Settings.get('gps_source') || 'auto') : 'auto';
         sections.push(`<div class="ds-card">
             <div class="ds-card-title">GPS Source</div>
             <div class="ce-fields">
                 <div class="ce-field-row">
                     <label class="ce-label" for="ce-gps-source">Position Source</label>
                     <select id="ce-gps-source" class="ce-select">
-                        <option value="stratux" ${currentGps === 'stratux' ? 'selected' : ''}>Stratux (Pi GPS)</option>
-                        <option value="internal" ${currentGps === 'internal' ? 'selected' : ''}>Device GPS</option>
+                        <option value="auto"     ${currentGps === 'auto'     ? 'selected' : ''}>Auto (Stratux, device fallback)</option>
+                        <option value="stratux"  ${currentGps === 'stratux'  ? 'selected' : ''}>Stratux only</option>
+                        <option value="internal" ${currentGps === 'internal' ? 'selected' : ''}>Device GPS only</option>
                     </select>
                 </div>
                 <div class="ce-field-row" style="font-size:14px;color:var(--text-secondary)">
-                    Stratux GPS is the primary source. Device GPS only works if the tablet has a GPS receiver.
+                    Auto: uses Stratux GPS when connected, falls back to device GPS if Stratux is unavailable.
                 </div>
             </div>
         </div>`);
