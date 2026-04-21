@@ -67,11 +67,6 @@ class EverywhereSearch {
         const header = document.createElement('div');
         header.style.cssText = 'display:flex;align-items:center;padding:8px 10px;gap:8px;border-bottom:2px solid var(--border-strong);flex-shrink:0;';
 
-        const closeBtn = document.createElement('button');
-        closeBtn.innerHTML = '&#x2715;';
-        closeBtn.style.cssText = 'min-width:var(--touch-min,56px);min-height:var(--touch-min,56px);font-size:24px;font-weight:700;background:transparent;border:none;color:var(--text-primary);flex-shrink:0;cursor:pointer;';
-        this._fastTap(closeBtn, () => this.hide());
-
         const input = document.createElement('input');
         input.type = 'search';
         input.placeholder = 'Airport, navaid, fix, airway, or procedure…';
@@ -86,8 +81,13 @@ class EverywhereSearch {
         });
         this._input = input;
 
-        header.appendChild(closeBtn);
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'btn-close';
+        closeBtn.innerHTML = '&#x2715;';
+        this._fastTap(closeBtn, () => this.hide());
+
         header.appendChild(input);
+        header.appendChild(closeBtn);
         overlay.appendChild(header);
 
         const list = document.createElement('div');
@@ -333,7 +333,7 @@ class EverywhereSearch {
         const overlay = document.createElement('div');
         overlay.style.cssText = 'position:fixed;inset:0;z-index:99991;background:var(--bg-primary);display:flex;flex-direction:column;';
 
-        // Header: back + title
+        // Header: back + badge + title on left, ✕ on right
         const header = document.createElement('div');
         header.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px 10px;border-bottom:2px solid var(--border-strong);flex-shrink:0;';
 
@@ -360,9 +360,15 @@ class EverywhereSearch {
         title.appendChild(titleIdent);
         if (titleName.textContent) title.appendChild(titleName);
 
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'btn-close';
+        closeBtn.innerHTML = '&#x2715;';
+        this._fastTap(closeBtn, () => this.hide());
+
         header.appendChild(backBtn);
         header.appendChild(badge);
         header.appendChild(title);
+        header.appendChild(closeBtn);
         overlay.appendChild(header);
 
         // Scrollable body
