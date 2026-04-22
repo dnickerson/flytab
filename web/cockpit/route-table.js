@@ -2384,11 +2384,12 @@ class RouteTable {
      * Uses movement guard to distinguish tap from scroll; matches airport-popup pattern.
      */
     _wireButton(btn, action) {
-        let startX = 0, startY = 0, isTap = false;
+        let startX = 0, startY = 0, isTap = false, touchHandled = false;
         btn.addEventListener('touchstart', (e) => {
             startX = e.touches[0].clientX;
             startY = e.touches[0].clientY;
             isTap = true;
+            touchHandled = false;
         }, { passive: true });
         btn.addEventListener('touchmove', (e) => {
             if (!isTap) return;
@@ -2396,10 +2397,13 @@ class RouteTable {
                 Math.abs(e.touches[0].clientY - startY) > 10) isTap = false;
         }, { passive: true });
         btn.addEventListener('touchend', (e) => {
-            if (isTap) { e.stopPropagation(); action(); }
+            if (isTap) { e.stopPropagation(); touchHandled = true; action(); }
             isTap = false;
+        }, { passive: true });
+        btn.addEventListener('click', (e) => {
+            if (touchHandled) { touchHandled = false; return; }
+            e.stopPropagation(); action();
         });
-        btn.addEventListener('click', (e) => { e.stopPropagation(); action(); });
     }
 
     // Drag removed in v5 — route display uses tap-to-toggle only
