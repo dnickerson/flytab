@@ -6,6 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 FlyTab is an Android cockpit app for experimental aircraft. It runs as a Capacitor web app (vanilla JavaScript, no framework) and communicates with a Raspberry Pi running a Python engine monitor and an unmodified Stratux ADS-B/GPS receiver.
 
+## Build Policy
+
+Run `bash build.sh` automatically after any code change is complete — no need to wait for the user to ask. Always increment `FLYTAB_VERSION` in `web/app.js` before building (build.sh reads it to set versionCode/versionName).
+
 ## Build & Deploy Commands
 
 ```bash
