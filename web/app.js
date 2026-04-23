@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v5.89';
+const FLYTAB_VERSION = 'v5.90';
 
 // ========== Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -1225,6 +1225,13 @@ class FlyTabApp {
         if (this.cockpitMap && wps.length >= 2) this.cockpitMap.setRoute(wps);
         if (this.rangeCalc) this.rangeCalc.setPlan(normalized);
         if (this.routeEditor) this.routeEditor.loadRoute(normalized);
+
+        if (!skipRouteTable && this.routeTable && this.routeEditor) {
+            const tLen = this.routeTable._waypoints?.length;
+            const eLen = this.routeEditor._waypoints?.length;
+            if (tLen !== eLen)
+                DiagLog.log('plan', `state-drift: routeTable(${tLen}) ≠ routeEditor(${eLen})`);
+        }
 
         if (this.approachCharts) {
             const icaoList = wps.map(wp => wp.icao).filter(Boolean);
