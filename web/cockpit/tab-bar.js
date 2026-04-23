@@ -37,7 +37,7 @@ class TabBar {
             btn.className = 'tab-btn' + (tab.id === 'map' ? ' active' : '');
             btn.dataset.tab = tab.id;
             btn.innerHTML = `<span class="tab-btn-icon">${tab.icon}</span>${tab.label}`;
-            this._fastTap(btn, () => this._selectTab(tab.id, btn));
+            wireTap(btn, () => this._selectTab(tab.id, btn));
             tabBar.appendChild(btn);
         }
     }
@@ -231,7 +231,7 @@ class TabBar {
 
         const closeBtn = this._moreDrawer.querySelector('.more-drawer-close');
         if (closeBtn) {
-            this._fastTap(closeBtn, () => this._closeMoreDrawer());
+            wireTap(closeBtn, () => this._closeMoreDrawer());
         }
 
         const body = this._moreDrawer.querySelector('.more-drawer-body');
@@ -241,7 +241,7 @@ class TabBar {
             const labelText = typeof row.label === 'function' ? row.label() : row.label;
             el.innerHTML = `<span class="md-icon">${row.icon}</span><span class="md-label">${labelText}</span><span class="md-chevron">›</span>`;
             // Use scroll-safe tap: don't preventDefault on touchstart so scroll still works
-            this._scrollSafeTap(el, row.action);
+            wireTap(el, row.action);
             body.appendChild(el);
         }
 
@@ -326,7 +326,7 @@ class TabBar {
             <div class="ml-mon-body" id="mlMonBody"></div>`;
 
         document.body.appendChild(overlay);
-        this._fastTap(overlay.querySelector('#mlMonClose'), () => overlay.remove());
+        wireTap(overlay.querySelector('#mlMonClose'), () => overlay.remove());
 
         this._mlMonitorEl = overlay.querySelector('#mlMonBody');
         this._renderMLMonitor();
@@ -360,7 +360,7 @@ class TabBar {
                 <h3 class="ml-mon-section-title">Maintenance</h3>
                 <button class="ml-mon-reset-btn" id="mlResetThresholds">Reset Adapted Thresholds</button>
             </div>`;
-            this._fastTap(body.querySelector('#mlResetThresholds'), async () => {
+            wireTap(body.querySelector('#mlResetThresholds'), async () => {
                 if (!confirm('Reset all adapted thresholds? The model will revert to trained defaults and re-learn from scratch. Do this after engine maintenance or a phase detection bug fix.')) return;
                 await window.app?.engineML?.resetThresholds();
                 const btn = body.querySelector('#mlResetThresholds');
@@ -432,7 +432,7 @@ class TabBar {
 
         body.innerHTML = html;
 
-        this._fastTap(body.querySelector('#mlResetThresholds'), async () => {
+        wireTap(body.querySelector('#mlResetThresholds'), async () => {
             if (!confirm('Reset all adapted thresholds? The model will revert to trained defaults and re-learn from scratch. Do this after engine maintenance or a phase detection bug fix.')) return;
             await window.app?.engineML?.resetThresholds();
             const btn = body.querySelector('#mlResetThresholds');
@@ -475,7 +475,7 @@ class TabBar {
         const resetBtn = el.querySelector('.ft-reset');
         const closeBtn = el.querySelector('.ft-close');
 
-        this._fastTap(startBtn, () => {
+        wireTap(startBtn, () => {
             if (this._timerRunning) {
                 this._timerElapsed += Date.now() - this._timerStartMs;
                 this._timerRunning = false;
@@ -491,7 +491,7 @@ class TabBar {
             }
         });
 
-        this._fastTap(resetBtn, () => {
+        wireTap(resetBtn, () => {
             this._timerRunning = false;
             this._timerElapsed = 0;
             this._timerStartMs = 0;
@@ -501,7 +501,7 @@ class TabBar {
             startBtn.classList.remove('ft-running');
         });
 
-        this._fastTap(closeBtn, () => {
+        wireTap(closeBtn, () => {
             el.classList.add('hidden');
         });
 
@@ -550,43 +550,6 @@ class TabBar {
             const up = () => { document.removeEventListener('mousemove', move); };
             document.addEventListener('mousemove', move);
             document.addEventListener('mouseup', up, { once: true });
-        });
-    }
-
-    /**
-     * Scroll-safe tap handler for list items inside scrollable containers.
-     * Does NOT preventDefault on touchstart, so the parent can still scroll.
-     * Detects tap vs scroll by tracking movement — if finger moves >8px it's a scroll, not a tap.
-     */
-    _scrollSafeTap(el, handler) {
-        let startY = null;
-        el.addEventListener('touchstart', (e) => {
-            startY = e.touches[0].clientY;
-        }, { passive: true });
-        el.addEventListener('touchend', (e) => {
-            if (startY === null) return;
-            const dy = Math.abs(e.changedTouches[0].clientY - startY);
-            startY = null;
-            if (dy < 8) handler(e);
-        }, { passive: true });
-        el.addEventListener('click', (e) => {
-            handler(e);
-        });
-    }
-
-    /** Reliable tap handler for both touch and mouse */
-    _fastTap(btn, handler) {
-        let touchFired = false;
-        btn.addEventListener('touchstart', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            touchFired = true;
-            handler(e);
-        }, { passive: false });
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            if (touchFired) { touchFired = false; return; }
-            handler(e);
         });
     }
 

@@ -68,7 +68,7 @@ class LayerPanel {
 
         // Wire accordion headers
         this._panel.querySelectorAll('.lp-accordion-header[data-acc]').forEach(btn => {
-            this._fastTap(btn, () => {
+            wireTap(btn, () => {
                 const acc = this._panel.querySelector(`#${btn.dataset.acc}`);
                 if (!acc) return;
                 const open = acc.classList.toggle('open');
@@ -79,12 +79,12 @@ class LayerPanel {
         // Wire close button
         const closeBtn = this._panel.querySelector('.layer-panel-close');
         if (closeBtn) {
-            this._fastTap(closeBtn, () => this.close());
+            wireTap(closeBtn, () => this.close());
         }
 
         // Wire base chart radio buttons
         this._panel.querySelectorAll('.lp-radio-btn[data-layer]').forEach(btn => {
-            this._fastTap(btn, () => {
+            wireTap(btn, () => {
                 const layer = btn.dataset.layer;
                 this._cockpitMap.switchBaseLayer(layer);
                 this._panel.querySelectorAll('.lp-radio-btn[data-layer]').forEach(b => {
@@ -264,12 +264,12 @@ class LayerPanel {
         // Wire cancel button
         const cancelBtn = this._panel.querySelector('#lpCancelDownload');
         if (cancelBtn) {
-            this._fastTap(cancelBtn, () => { this._cancelPrefetch = true; });
+            wireTap(cancelBtn, () => { this._cancelPrefetch = true; });
         }
 
         // Wire region Cache buttons
         this._panel.querySelectorAll('.lp-cache-btn[data-region]').forEach(btn => {
-            this._fastTap(btn, () => {
+            wireTap(btn, () => {
                 const region = LayerPanel.REGIONS.find(r => r.id === btn.dataset.region);
                 if (region && !this._prefetchRunning) this._cacheRegion(region, btn);
             });
@@ -278,7 +278,7 @@ class LayerPanel {
         // Wire Route Area cache button
         const routeBtn = this._panel.querySelector('#lpRouteCacheBtn');
         if (routeBtn) {
-            this._fastTap(routeBtn, () => {
+            wireTap(routeBtn, () => {
                 if (this._prefetchRunning) return;
                 const bbox = this._getRouteBbox?.();
                 if (!bbox) return;
@@ -290,7 +290,7 @@ class LayerPanel {
         const zipInput = this._panel.querySelector('#lpZipInput');
         const importBtn = this._panel.querySelector('#lpImportZipBtn');
         if (importBtn && zipInput) {
-            this._fastTap(importBtn, () => zipInput.click());
+            wireTap(importBtn, () => zipInput.click());
             zipInput.addEventListener('change', () => {
                 if (zipInput.files && zipInput.files[0]) {
                     this._importZip(zipInput.files[0]);
@@ -303,7 +303,7 @@ class LayerPanel {
         const dlZipsBtn = this._panel.querySelector('#lpDownloadZipsBtn');
         const serverZipsEl = this._panel.querySelector('#lpServerZips');
         if (dlZipsBtn && serverZipsEl) {
-            this._fastTap(dlZipsBtn, async () => {
+            wireTap(dlZipsBtn, async () => {
                 dlZipsBtn.disabled = true;
                 dlZipsBtn.textContent = 'Checking server…';
                 serverZipsEl.style.display = 'none';
@@ -326,7 +326,7 @@ class LayerPanel {
                                 <button class="lp-cache-btn" data-zip-url="${base + p.url}" data-zip-id="${p.id}">Import</button>
                             </div>`).join('');
                         serverZipsEl.querySelectorAll('.lp-cache-btn[data-zip-url]').forEach(btn => {
-                            this._fastTap(btn, async () => {
+                            wireTap(btn, async () => {
                                 if (this._prefetchRunning) return;
                                 btn.disabled = true;
                                 btn.textContent = 'Downloading…';
@@ -361,7 +361,7 @@ class LayerPanel {
         // Wire Data & Maps button
         const dataMapsBtn = this._panel.querySelector('#lpOpenDataMaps');
         if (dataMapsBtn) {
-            this._fastTap(dataMapsBtn, () => {
+            wireTap(dataMapsBtn, () => {
                 this.close();
                 window.app?.dataStatus?.show();
             });
@@ -802,19 +802,4 @@ class LayerPanel {
         }
     }
 
-    /** Reliable tap handler for both touch and mouse */
-    _fastTap(btn, handler) {
-        let touchFired = false;
-        btn.addEventListener('touchstart', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            touchFired = true;
-            handler(e);
-        }, { passive: false });
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            if (touchFired) { touchFired = false; return; }
-            handler(e);
-        });
-    }
 }

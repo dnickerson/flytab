@@ -1261,31 +1261,6 @@ class CockpitMap {
 
     // ========== Map Controls ==========
 
-    /**
-     * Wire a button for instant tap response on touch devices.
-     * Uses touchend (fires immediately, no 300ms delay) with click fallback for desktop.
-     */
-    _fastTap(btn, handler) {
-        let touchFired = false;
-        // Use touchstart (not touchend) — on iOS/iPad, Leaflet's drag handler can
-        // cancel the touch sequence before touchend fires, swallowing the event.
-        // touchstart fires immediately when the finger goes down, before any drag
-        // logic can interfere. preventDefault() suppresses the subsequent click.
-        btn.addEventListener('touchstart', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            touchFired = true;
-            handler(e);
-        }, { passive: false });
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            if (touchFired) { touchFired = false; return; } // already handled by touchstart
-            handler(e);
-        });
-        L.DomEvent.disableClickPropagation(btn);
-        L.DomEvent.disableScrollPropagation(btn);
-    }
-
     _addCornerButtons() {
         // 3 corner buttons in #mapCornerBtns (outside Leaflet, wired by app.js)
         // Expose references so app.js can wire them after init
@@ -1298,12 +1273,14 @@ class CockpitMap {
         autoPanBtn.title = 'Toggle auto-pan';
         autoPanBtn.innerHTML = this._autoPan ? '&#x1F4CD;' : '&#x270B;';
         autoPanBtn.classList.toggle('active', this._autoPan);
-        this._fastTap(autoPanBtn, () => {
+        wireTap(autoPanBtn, () => {
             this._autoPan = !this._autoPan;
             Settings.autoPan = this._autoPan;
             autoPanBtn.innerHTML = this._autoPan ? '&#x1F4CD;' : '&#x270B;';
             autoPanBtn.classList.toggle('active', this._autoPan);
         });
+        L.DomEvent.disableClickPropagation(autoPanBtn);
+        L.DomEvent.disableScrollPropagation(autoPanBtn);
         container.appendChild(autoPanBtn);
         this._autoPanBtn = autoPanBtn;
 
@@ -1312,11 +1289,13 @@ class CockpitMap {
         directToBtn.className = 'map-corner-btn direct-to-btn';
         directToBtn.title = 'Direct To';
         directToBtn.innerHTML = 'D&rarr;';
-        this._fastTap(directToBtn, () => {
+        wireTap(directToBtn, () => {
             if (typeof app !== 'undefined' && app.routeEditor) {
                 app.routeEditor.showDirectTo();
             }
         });
+        L.DomEvent.disableClickPropagation(directToBtn);
+        L.DomEvent.disableScrollPropagation(directToBtn);
         container.appendChild(directToBtn);
         this._directToBtn = directToBtn;
     }
