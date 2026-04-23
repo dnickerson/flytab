@@ -27,6 +27,7 @@
                 { "title": "Master", "response": "ON" },
                 { "title": "Fuel Computer", "response": "SET" },
                 { "title": "ExpressVPN", "response": "OFF" },
+                { "title": "Tailscale", "response": "OFF" },
                 { "title": "Tablet WIFI", "response": "CONNECTED", "statusSource": "connectivity", "note": "Connect to Stratux hotspot" },
                 { "title": "Engine Data", "response": "RECORDING", "note": "Auto-starts when RPM > 500" },
                 { "title": "Fuel Selector", "response": "FULLEST TANK" }
