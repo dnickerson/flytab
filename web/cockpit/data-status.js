@@ -635,13 +635,13 @@ class DataStatus {
         // Sync All button (in sticky footer)
         const syncAllBtn = stickyFooter ? stickyFooter.querySelector('#dsSyncAllBtn') : body.querySelector('#dsSyncAllBtn');
         if (syncAllBtn && !syncAllBtn.disabled) {
-            this._wireTap(syncAllBtn, () => this._syncAll(syncAllBtn, showProg, updateProg, doneProg));
+            wireTap(syncAllBtn, () => this._syncAll(syncAllBtn, showProg, updateProg, doneProg));
         }
 
         // Reload App Data button (in sticky footer)
         const reloadBtn = stickyFooter ? stickyFooter.querySelector('#dsReloadAppBtn') : body.querySelector('#dsReloadAppBtn');
         if (reloadBtn) {
-            this._wireTap(reloadBtn, async () => {
+            wireTap(reloadBtn, async () => {
                 reloadBtn.disabled = true;
                 reloadBtn.textContent = 'Reloading…';
                 showProg('Reloading app data…', '');
@@ -655,13 +655,13 @@ class DataStatus {
         // Per-section SYNC/DOWNLOAD buttons all trigger _syncAll (skips already-current items)
         for (const id of ['dsNasrBtn', 'dsCifpBtn', 'dsPlatesBtn']) {
             const btn = body.querySelector(`#${id}`);
-            if (btn) this._wireTap(btn, () => this._syncAll(null, showProg, updateProg, doneProg));
+            if (btn) wireTap(btn, () => this._syncAll(null, showProg, updateProg, doneProg));
         }
 
         // NASR RE-DOWNLOAD — force re-download by clearing local cycle stamp
         const nasrRedlBtn = body.querySelector('#dsNasrRedownloadBtn');
         if (nasrRedlBtn) {
-            this._wireTap(nasrRedlBtn, async () => {
+            wireTap(nasrRedlBtn, async () => {
                 await fetch(`${DataStatus.LOCAL_BASE}/nasr/cycle_info.json`, {
                     method: 'PUT', headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ _force: true }),
@@ -673,7 +673,7 @@ class DataStatus {
         // CIFP RE-DOWNLOAD — force re-download by clearing local cycle stamp
         const cifpRedlBtn = body.querySelector('#dsCifpRedownloadBtn');
         if (cifpRedlBtn) {
-            this._wireTap(cifpRedlBtn, async () => {
+            wireTap(cifpRedlBtn, async () => {
                 await fetch(`${DataStatus.LOCAL_BASE}/cifp/cifp_cycle_info.json`, {
                     method: 'PUT', headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ _force: true }),
@@ -685,7 +685,7 @@ class DataStatus {
         // Plates RE-DOWNLOAD — clear sync state then run full sync
         const platesRedlBtn = body.querySelector('#dsPlatesRedownloadBtn');
         if (platesRedlBtn) {
-            this._wireTap(platesRedlBtn, () => {
+            wireTap(platesRedlBtn, () => {
                 localStorage.removeItem('flypi_plates_synced_states');
                 localStorage.removeItem('flypi_plates_cached_at');
                 this._syncAll(null, showProg, updateProg, doneProg);
@@ -694,13 +694,13 @@ class DataStatus {
 
         // MBTiles per-layer download buttons
         body.querySelectorAll('.ds-mbt-dl-btn').forEach(btn => {
-            this._wireTap(btn, () => this._downloadMbtiles(btn.dataset.layer, btn, showProg, doneProg));
+            wireTap(btn, () => this._downloadMbtiles(btn.dataset.layer, btn, showProg, doneProg));
         });
 
         // Terrain SYNC button
         const terrainSyncBtn = body.querySelector('.ds-terrain-sync-btn');
         if (terrainSyncBtn) {
-            this._wireTap(terrainSyncBtn, async () => {
+            wireTap(terrainSyncBtn, async () => {
                 const homeBase = this._resolvedBase;
                 if (!homeBase) return;
                 const prevDone = body.querySelector('#dsSyncDoneBtn');
@@ -718,7 +718,7 @@ class DataStatus {
         // Terrain RE-DOWNLOAD — just re-runs full sync (PUT overwrites existing tiles)
         const terrainRedlBtn = body.querySelector('.ds-terrain-redownload-btn');
         if (terrainRedlBtn) {
-            this._wireTap(terrainRedlBtn, async () => {
+            wireTap(terrainRedlBtn, async () => {
                 const homeBase = this._resolvedBase;
                 if (!homeBase) return;
                 const prevDone = body.querySelector('#dsSyncDoneBtn');
@@ -737,7 +737,7 @@ class DataStatus {
         const suppToggle = body.querySelector('#dsSuppToggle');
         const suppContent = body.querySelector('#dsSuppContent');
         if (suppToggle && suppContent) {
-            this._wireTap(suppToggle, () => {
+            wireTap(suppToggle, () => {
                 const hidden = suppContent.style.display === 'none';
                 suppContent.style.display = hidden ? '' : 'none';
             });
@@ -877,7 +877,7 @@ class DataStatus {
         const loadBtn = body.querySelector('#dsLoadServerBtn');
         const serverZips = body.querySelector('#dsServerZips');
         if (loadBtn) {
-            this._wireTap(loadBtn, async () => {
+            wireTap(loadBtn, async () => {
                 loadBtn.disabled = true; loadBtn.textContent = '…';
                 serverZips.innerHTML = '';
                 try {
@@ -894,7 +894,7 @@ class DataStatus {
                             row.style.marginTop = '6px';
                             row.innerHTML = `<span class="ds-cache-info"><span class="ds-cache-name">${p.id}</span><span class="ds-cache-sub">${p.size_mb} MB</span></span><button class="ds-cache-btn">Import</button>`;
                             const btn = row.querySelector('button');
-                            this._wireTap(btn, async () => {
+                            wireTap(btn, async () => {
                                 if (this._cacheRunning) return;
                                 btn.disabled = true; btn.textContent = 'Downloading…';
                                 showProg('Downloading ' + p.id + '.zip…');
@@ -921,7 +921,7 @@ class DataStatus {
         const zipInput = body.querySelector('#dsZipInput');
         const importBtn = body.querySelector('#dsImportZipBtn');
         if (importBtn && zipInput) {
-            this._wireTap(importBtn, () => zipInput.click());
+            wireTap(importBtn, () => zipInput.click());
             zipInput.addEventListener('change', () => {
                 if (zipInput.files[0]) { this._importZip(zipInput.files[0], showProg, updateProg, doneProg); zipInput.value = ''; }
             });
@@ -931,13 +931,13 @@ class DataStatus {
         const routeBtn = body.querySelector('#dsCacheRouteBtn');
         if (routeBtn) {
             const bbox = (() => { try { return JSON.parse(localStorage.getItem('flypi_route_bbox') || 'null'); } catch { return null; } })();
-            if (bbox) this._wireTap(routeBtn, () => this._cacheRegion(bbox, routeBtn, showProg, updateProg, doneProg));
+            if (bbox) wireTap(routeBtn, () => this._cacheRegion(bbox, routeBtn, showProg, updateProg, doneProg));
         }
 
         // Route Weather button — triggers flywhere.app weather fetch for active plan
         const routeWxBtn = body.querySelector('#dsCacheRouteWxBtn');
         if (routeWxBtn) {
-            this._wireTap(routeWxBtn, async () => {
+            wireTap(routeWxBtn, async () => {
                 const app = window.app;
                 if (!app) return;
                 const plan = app.routeTable?._waypoints?.length
@@ -968,7 +968,7 @@ class DataStatus {
         body.querySelectorAll('.ds-cache-btn[data-region]').forEach(btn => {
             const region = DataStatus.REGIONS.find(r => r.id === btn.dataset.region);
             if (!region) return;
-            this._wireTap(btn, () => this._cacheRegion(region, btn, showProg, updateProg, doneProg));
+            wireTap(btn, () => this._cacheRegion(region, btn, showProg, updateProg, doneProg));
         });
 
         // Approach Plates — Download from home server
@@ -976,7 +976,7 @@ class DataStatus {
         const platesInput  = body.querySelector('#dsPlateIcaoInput');
         const dlPlatesBtn  = body.querySelector('#dsDownloadPlatesBtn');
         if (dlPlatesBtn && platesInput) {
-            this._wireTap(dlPlatesBtn, async () => {
+            wireTap(dlPlatesBtn, async () => {
                 const raw = platesInput.value.trim();
                 if (!raw) { platesStatus.textContent = 'Enter at least one ICAO.'; return; }
                 const icaos = raw.split(/[\s,]+/).filter(Boolean).map(s => s.toUpperCase()).join(',');
@@ -1033,7 +1033,7 @@ class DataStatus {
         const platesZipInput = body.querySelector('#dsPlatesZipInput');
         const importPlatesBtn = body.querySelector('#dsImportPlatesBtn');
         if (importPlatesBtn && platesZipInput) {
-            this._wireTap(importPlatesBtn, () => platesZipInput.click());
+            wireTap(importPlatesBtn, () => platesZipInput.click());
             platesZipInput.addEventListener('change', () => {
                 if (platesZipInput.files[0]) {
                     this._importPlatesZip(platesZipInput.files[0], showProg, updateProg, doneProg);
@@ -1460,7 +1460,7 @@ class DataStatus {
     /** Wire the "Done — Refresh" button that appears after _syncAll completes. */
     _wireDoneBtn() {
         const btn = this._el.querySelector('#dsSyncDoneBtn');
-        if (btn) this._wireTap(btn, async () => {
+        if (btn) wireTap(btn, async () => {
             await window.app?._updateNasrBadge?.();
             this._refresh();
         });
@@ -1602,20 +1602,6 @@ class DataStatus {
 
     // ── Utilities ─────────────────────────────────────────────────────────────
 
-    _wireTap(el, handler) {
-        if (!el) return;
-        let touchFired = false;
-        el.addEventListener('touchstart', (e) => {
-            e.stopPropagation();
-            touchFired = true;
-            handler(e);
-            setTimeout(() => { touchFired = false; }, 400);
-        });
-        el.addEventListener('click', (e) => {
-            if (!touchFired) handler(e);
-        });
-    }
-
     _setMapControlsVisible(visible) {
         const containers = document.querySelectorAll('.leaflet-control-container');
         containers.forEach(c => c.style.display = visible ? '' : 'none');
@@ -1639,7 +1625,7 @@ class DataStatus {
             <div class="data-status-body"></div>
             <div class="ds-sticky-footer" id="dsStickyFooter"></div>
         `;
-        this._wireTap(this._el.querySelector('.data-status-close'), () => this.hide());
+        wireTap(this._el.querySelector('.data-status-close'), () => this.hide());
         this._parentEl.appendChild(this._el);
     }
 }

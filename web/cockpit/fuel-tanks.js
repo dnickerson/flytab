@@ -197,11 +197,11 @@ class FuelTanksDisplay {
 
         this._makeDraggable();
 
-        this._wireTap(this._dom.badgeL, () => this._onBadgeTap('L'));
-        this._wireTap(this._dom.badgeR, () => this._onBadgeTap('R'));
+        wireTap(this._dom.badgeL, () => this._onBadgeTap('L'));
+        wireTap(this._dom.badgeR, () => this._onBadgeTap('R'));
 
         this._dom.selRow.querySelectorAll('.ftw-sel-btn').forEach(btn => {
-            this._wireTap(btn, () => {
+            wireTap(btn, () => {
                 this._initSelectedTank = btn.dataset.tank;
                 this._dom.selRow.querySelectorAll('.ftw-sel-btn').forEach(b =>
                     b.classList.toggle('ftw-sel-active', b.dataset.tank === this._initSelectedTank)
@@ -209,10 +209,10 @@ class FuelTanksDisplay {
             });
         });
 
-        this._wireTap(this._dom.initOk, () => this._applyInit());
-        this._wireTap(this._dom.initCancel, () => { this._dom.initPanel.style.display = 'none'; });
-        this._wireTap(this._dom.confirmYes, () => this._dismissConfirm(false));
-        this._wireTap(this._dom.confirmSwitch, () => this._dismissConfirm(true));
+        wireTap(this._dom.initOk, () => this._applyInit());
+        wireTap(this._dom.initCancel, () => { this._dom.initPanel.style.display = 'none'; });
+        wireTap(this._dom.confirmYes, () => this._dismissConfirm(false));
+        wireTap(this._dom.confirmSwitch, () => this._dismissConfirm(true));
     }
 
     /* ------------------------------------------------------------------
@@ -484,20 +484,4 @@ class FuelTanksDisplay {
         this._dragHandle = handle;
     }
 
-    /* ------------------------------------------------------------------
-     * Touch handling (same pattern as fuel-overlay)
-     * ----------------------------------------------------------------*/
-    _wireTap(el, handler) {
-        if (!el) return;
-        let touchFired = false;
-        el.addEventListener('touchstart', (e) => {
-            e.stopPropagation();
-            touchFired = true;
-            handler(e);
-            setTimeout(() => { touchFired = false; }, 400);
-        });
-        el.addEventListener('click', (e) => {
-            if (!touchFired) handler(e);
-        });
-    }
 }

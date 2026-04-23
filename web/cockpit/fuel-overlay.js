@@ -227,7 +227,7 @@ class FuelOverlay {
         };
 
         // Wire close
-        this._wireTap(this._el.querySelector('#fo-close'), () => this.hide());
+        wireTap(this._el.querySelector('#fo-close'), () => this.hide());
 
         // Wire left tank controls
         this._dom.leftSlider.addEventListener('input', (e) => {
@@ -241,13 +241,13 @@ class FuelOverlay {
             this._dom.leftSlider.value = this._leftTic;
             this._updateDisplay();
         });
-        this._wireTap(this._el.querySelector('#fo-left-minus'), () => {
+        wireTap(this._el.querySelector('#fo-left-minus'), () => {
             this._leftTic = Math.max(0, Math.round((this._leftTic - this._ticStep) / this._ticStep) * this._ticStep);
             this._dom.leftSlider.value = this._leftTic;
             this._dom.leftInput.value = this._leftTic;
             this._updateDisplay();
         });
-        this._wireTap(this._el.querySelector('#fo-left-plus'), () => {
+        wireTap(this._el.querySelector('#fo-left-plus'), () => {
             this._leftTic = Math.min(this._maxTic, Math.round((this._leftTic + this._ticStep) / this._ticStep) * this._ticStep);
             this._dom.leftSlider.value = this._leftTic;
             this._dom.leftInput.value = this._leftTic;
@@ -266,13 +266,13 @@ class FuelOverlay {
             this._dom.rightSlider.value = this._rightTic;
             this._updateDisplay();
         });
-        this._wireTap(this._el.querySelector('#fo-right-minus'), () => {
+        wireTap(this._el.querySelector('#fo-right-minus'), () => {
             this._rightTic = Math.max(0, Math.round((this._rightTic - this._ticStep) / this._ticStep) * this._ticStep);
             this._dom.rightSlider.value = this._rightTic;
             this._dom.rightInput.value = this._rightTic;
             this._updateDisplay();
         });
-        this._wireTap(this._el.querySelector('#fo-right-plus'), () => {
+        wireTap(this._el.querySelector('#fo-right-plus'), () => {
             this._rightTic = Math.min(this._maxTic, Math.round((this._rightTic + this._ticStep) / this._ticStep) * this._ticStep);
             this._dom.rightSlider.value = this._rightTic;
             this._dom.rightInput.value = this._rightTic;
@@ -280,7 +280,7 @@ class FuelOverlay {
         });
 
         // Wire manual override
-        this._wireTap(this._el.querySelector('#fo-manual-set'), () => {
+        wireTap(this._el.querySelector('#fo-manual-set'), () => {
             const val = parseFloat(this._dom.manualInput.value);
             if (val > 0) {
                 FuelState.setManualOverride(val);
@@ -288,7 +288,7 @@ class FuelOverlay {
                 window.dispatchEvent(new CustomEvent('fuelstate:changed'));
             }
         });
-        this._wireTap(this._el.querySelector('#fo-manual-clear'), () => {
+        wireTap(this._el.querySelector('#fo-manual-clear'), () => {
             FuelState.clearManualOverride();
             this._dom.manualInput.value = '';
             this._updateSourceDisplay();
@@ -296,12 +296,12 @@ class FuelOverlay {
         });
 
         // Wire apply
-        this._wireTap(this._el.querySelector('#fo-apply'), () => {
+        wireTap(this._el.querySelector('#fo-apply'), () => {
             this._applyMeasurement();
         });
 
         // Wire fuel-add record button
-        this._wireTap(this._el.querySelector('#fo-add-record'), () => {
+        wireTap(this._el.querySelector('#fo-add-record'), () => {
             this._recordFuelStop();
         });
     }
@@ -565,21 +565,6 @@ class FuelOverlay {
         el.className = 'fo-add-status fo-add-status-' + (type || 'ok');
     }
 
-    /** Wire touchstart + click with debounce for iPad reliability */
-    _wireTap(el, handler) {
-        if (!el) return;
-        let touchFired = false;
-        el.addEventListener('touchstart', (e) => {
-            e.stopPropagation();
-            touchFired = true;
-            handler(e);
-            setTimeout(() => { touchFired = false; }, 400);
-        });
-        el.addEventListener('click', (e) => {
-            if (!touchFired) handler(e);
-        });
-    }
-
     _loadHistory() {
         try { return JSON.parse(localStorage.getItem('flypi_fuel_history') || '[]'); }
         catch (_) { return []; }
@@ -623,10 +608,10 @@ class FuelOverlay {
                     <button class="fo-hist-btn fo-hist-del" title="Delete">✕</button>
                 </td>`;
 
-            this._wireTap(tr.querySelector('.fo-hist-del'), () => {
+            wireTap(tr.querySelector('.fo-hist-del'), () => {
                 this._deleteHistoryEntry(origIdx);
             });
-            this._wireTap(tr.querySelector('.fo-hist-edit'), () => {
+            wireTap(tr.querySelector('.fo-hist-edit'), () => {
                 this._editHistoryRow(origIdx, tr);
             });
 
@@ -665,7 +650,7 @@ class FuelOverlay {
                 <button class="fo-hist-btn fo-hist-cancel">✕</button>
             </td>`;
 
-        this._wireTap(tr.querySelector('.fo-hist-save'), () => {
+        wireTap(tr.querySelector('.fo-hist-save'), () => {
             const newTic = parseFloat(tr.querySelector(`#fo-hist-tic-${origIdx}`).value);
             const newEdm = parseFloat(tr.querySelector(`#fo-hist-edm-${origIdx}`).value);
             if (!isNaN(newTic)) m.total_gal = newTic;
@@ -675,7 +660,7 @@ class FuelOverlay {
             this._renderHistory();
             this._renderKFactor();
         });
-        this._wireTap(tr.querySelector('.fo-hist-cancel'), () => {
+        wireTap(tr.querySelector('.fo-hist-cancel'), () => {
             this._renderHistory();
         });
     }

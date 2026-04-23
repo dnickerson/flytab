@@ -245,25 +245,13 @@ class PreflightCheck {
 
         document.body.appendChild(this._el);
 
-        this._wireTap(this._el.querySelector('.pfc-close'),      () => this.dismiss());
-        this._wireTap(this._el.querySelector('.pfc-btn-dismiss'), () => this.dismiss());
-        this._wireTap(this._el.querySelector('.pfc-btn-details'), () => {
+        wireTap(this._el.querySelector('.pfc-close'),      () => this.dismiss());
+        wireTap(this._el.querySelector('.pfc-btn-dismiss'), () => this.dismiss());
+        wireTap(this._el.querySelector('.pfc-btn-details'), () => {
             this.dismiss();
             // Open DataStatus if available
             if (window.app?.dataStatus) window.app.dataStatus.show();
         });
-    }
-
-    _wireTap(el, handler) {
-        if (!el) return;
-        let touchFired = false;
-        el.addEventListener('touchstart', (e) => {
-            e.stopPropagation();
-            touchFired = true;
-            handler(e);
-            setTimeout(() => { touchFired = false; }, 400);
-        });
-        el.addEventListener('click', (e) => { if (!touchFired) handler(e); });
     }
 
     static _css() {

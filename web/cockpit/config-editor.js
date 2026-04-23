@@ -225,8 +225,8 @@ class ConfigEditor {
         body.innerHTML = sections.join('');
 
         // Bind save/reload — touchstart + click for iPad
-        this._wireTap(body.querySelector('.ce-save-btn'), () => this._save());
-        this._wireTap(body.querySelector('.ce-reload-btn'), () => this._load());
+        wireTap(body.querySelector('.ce-save-btn'), () => this._save());
+        wireTap(body.querySelector('.ce-reload-btn'), () => this._load());
 
         // Track changes
         body.querySelectorAll('input, select').forEach(el => {
@@ -439,21 +439,6 @@ class ConfigEditor {
         return el.value;
     }
 
-    /** Wire touchstart + click with debounce for iPad reliability */
-    _wireTap(el, handler) {
-        if (!el) return;
-        let touchFired = false;
-        el.addEventListener('touchstart', (e) => {
-            e.stopPropagation();
-            touchFired = true;
-            handler(e);
-            setTimeout(() => { touchFired = false; }, 400);
-        });
-        el.addEventListener('click', (e) => {
-            if (!touchFired) handler(e);
-        });
-    }
-
     _setMapControlsVisible(visible) {
         document.querySelectorAll('.leaflet-control-container')
             .forEach(c => c.style.display = visible ? '' : 'none');
@@ -472,7 +457,7 @@ class ConfigEditor {
             </div>
             <div class="config-editor-body"></div>
         `;
-        this._wireTap(this._el.querySelector('.config-editor-close'), () => this.hide());
+        wireTap(this._el.querySelector('.config-editor-close'), () => this.hide());
 
         // Live search — filter cards and section headers
         const searchEl = this._el.querySelector('.ce-search-input');

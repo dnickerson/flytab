@@ -224,13 +224,13 @@ class EnginePage {
         this._tick();
 
         // Wire close button — touchstart + click for iPad
-        this._wireTap(this._el.querySelector('#ep-close'), () => this.hide());
+        wireTap(this._el.querySelector('#ep-close'), () => this.hide());
 
         // Wire capture stop button
-        this._wireTap(this._el.querySelector('#ep-capture-stop'), () => this._stopCapture());
+        wireTap(this._el.querySelector('#ep-capture-stop'), () => this._stopCapture());
 
         // Wire sticky-valve dismiss
-        this._wireTap(this._el.querySelector('#ep-sticky-dismiss'), () => {
+        wireTap(this._el.querySelector('#ep-sticky-dismiss'), () => {
             this._stickyDismissed = true;
             this._el.querySelector('#ep-sticky-banner').style.display = 'none';
         });
@@ -320,21 +320,6 @@ class EnginePage {
     }
 
     get visible() { return this._visible; }
-
-    /** Wire touchstart + click with debounce for iPad reliability */
-    _wireTap(el, handler) {
-        if (!el) return;
-        let touchFired = false;
-        el.addEventListener('touchstart', (e) => {
-            e.stopPropagation();
-            touchFired = true;
-            handler(e);
-            setTimeout(() => { touchFired = false; }, 400);
-        });
-        el.addEventListener('click', (e) => {
-            if (!touchFired) handler(e);
-        });
-    }
 
     /* ------------------------------------------------------------------
      * Config
@@ -873,7 +858,7 @@ class EnginePage {
                     dlBtn.style.color = 'var(--status-ok)';
                     dlBtn.style.borderColor = 'var(--status-ok)';
                     this._dom.captureStatus.parentNode.insertBefore(dlBtn, this._dom.captureStop);
-                    this._wireTap(dlBtn, () => {
+                    wireTap(dlBtn, () => {
                         window.flightSync.downloadToiPad(fname);
                         dlBtn.textContent = '✓ Saved';
                         dlBtn.disabled = true;

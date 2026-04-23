@@ -430,7 +430,7 @@ class ApproachCharts {
             </div>
             <div class="approach-picker-list"></div>
         `;
-        this._wireTap(this._pickerEl.querySelector('[data-action="close-picker"]'), () => this.hide());
+        wireTap(this._pickerEl.querySelector('[data-action="close-picker"]'), () => this.hide());
 
         // Plate viewer overlay
         this._viewerEl = document.createElement('div');
@@ -459,18 +459,18 @@ class ApproachCharts {
         this._panContainer = this._viewerEl.querySelector('.plate-pan-container');
         this._mapBtn = this._viewerEl.querySelector('[data-action="show-on-map"]');
 
-        // Viewer button handlers — use _wireTap for iPad reliability
-        this._wireTap(this._viewerEl.querySelector('[data-action="close-viewer"]'), () => {
+        // Viewer button handlers — use wireTap() for iPad reliability
+        wireTap(this._viewerEl.querySelector('[data-action="close-viewer"]'), () => {
             this._viewerEl.style.display = 'none';
             this._pickerEl.style.display = 'flex';
         });
-        this._wireTap(this._viewerEl.querySelector('[data-action="prev"]'), () => this._navigate(-1));
-        this._wireTap(this._viewerEl.querySelector('[data-action="next"]'), () => this._navigate(1));
-        this._wireTap(this._viewerEl.querySelector('[data-action="fullscreen"]'), () => {
+        wireTap(this._viewerEl.querySelector('[data-action="prev"]'), () => this._navigate(-1));
+        wireTap(this._viewerEl.querySelector('[data-action="next"]'), () => this._navigate(1));
+        wireTap(this._viewerEl.querySelector('[data-action="fullscreen"]'), () => {
             this._viewerEl.requestFullscreen?.();
         });
-        this._wireTap(this._mapBtn, () => this.showOnMap());
-        this._wireTap(this._viewerEl.querySelector('[data-action="load-proc"]'), () => {
+        wireTap(this._mapBtn, () => this.showOnMap());
+        wireTap(this._viewerEl.querySelector('[data-action="load-proc"]'), () => {
             if (this._currentPlate) this._loadCurrentPlateProc(this._currentPlate);
         });
 
@@ -1088,10 +1088,10 @@ class ApproachCharts {
         html += '</div>';
         el.innerHTML = html;
 
-        this._wireTap(el.querySelector('.cifp-proc-close'), () => el.remove());
+        wireTap(el.querySelector('.cifp-proc-close'), () => el.remove());
 
         el.querySelectorAll('.cifp-proc-item').forEach(item => {
-            this._wireTap(item, () => {
+            wireTap(item, () => {
                 const procName = item.dataset.proc;
                 const proc = procs.find(p => p.proc_name === procName);
                 if (proc && proc.transitions.length > 1) {
@@ -1121,9 +1121,9 @@ class ApproachCharts {
         }
         html += '</div>';
         el.innerHTML = html;
-        this._wireTap(el.querySelector('.cifp-proc-close'), () => el.remove());
+        wireTap(el.querySelector('.cifp-proc-close'), () => el.remove());
         el.querySelectorAll('.cifp-proc-item').forEach(item => {
-            this._wireTap(item, () => {
+            wireTap(item, () => {
                 this._loadProcedure(icao, proc.proc_name, item.dataset.trans);
                 el.remove();
             });
@@ -1140,7 +1140,7 @@ class ApproachCharts {
             const item = document.createElement('div');
             item.className = 'cifp-proc-item';
             item.textContent = t;
-            this._wireTap(item, () => {
+            wireTap(item, () => {
                 this._loadProcedure(icao, proc.proc_name, t);
                 parentEl.remove();
             });
@@ -1266,21 +1266,6 @@ class ApproachCharts {
         } catch (err) {
             this._showToast('Failed to load procedure');
         }
-    }
-
-    /** Wire touchstart + click with debounce for iPad reliability */
-    _wireTap(el, handler) {
-        if (!el) return;
-        let touchFired = false;
-        el.addEventListener('touchstart', (e) => {
-            e.stopPropagation();
-            touchFired = true;
-            handler(e);
-            setTimeout(() => { touchFired = false; }, 400);
-        });
-        el.addEventListener('click', (e) => {
-            if (!touchFired) handler(e);
-        });
     }
 
     _showToast(msg) {
