@@ -67,6 +67,7 @@ class TabBar {
         if (c.approachCharts?.closeViewer) c.approachCharts.closeViewer();
         if (c.fuelOverlay?.hide) c.fuelOverlay.hide();
         if (c.planSync?.hide) c.planSync.hide();
+        if (c.fisbStatus?.hide) c.fisbStatus.hide();
         if (c.airportPopup?.close) c.airportPopup.close();
 
         // Hide radar loop controls when leaving map — they bleed through

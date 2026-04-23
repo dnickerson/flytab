@@ -2104,12 +2104,31 @@ class RouteTable {
                 }
             }
         });
-        // Touchend delegation for iPad reliability on power/rules headers
+        // Touchend delegation for Android reliability — covers all row interactions.
+        // e.preventDefault() suppresses the synthetic click so the click handler below
+        // doesn't double-fire on touch devices.
         this._tableEl.addEventListener('touchend', (e) => {
+            const del = e.target.closest('.rt-delete-btn');
+            if (del) { e.preventDefault(); e.stopPropagation(); this._removeWaypoint(parseInt(del.dataset.idx)); return; }
+            const up = e.target.closest('.rt-up-btn');
+            if (up) { e.preventDefault(); e.stopPropagation(); this._moveWaypoint(parseInt(up.dataset.idx), parseInt(up.dataset.idx) - 1); return; }
+            const down = e.target.closest('.rt-down-btn');
+            if (down) { e.preventDefault(); e.stopPropagation(); this._moveWaypoint(parseInt(down.dataset.idx), parseInt(down.dataset.idx) + 1); return; }
+            const altCell = e.target.closest('.rt-alt-cell');
+            if (altCell && this._editMode) { e.preventDefault(); e.stopPropagation(); this._showAltPicker(parseInt(altCell.dataset.idx), altCell); return; }
             const pwr = e.target.closest('.rt-pwr-header');
-            if (pwr) { e.preventDefault(); e.stopPropagation(); this._cycleCruisePower(); }
+            if (pwr) { e.preventDefault(); e.stopPropagation(); this._cycleCruisePower(); return; }
             const rules = e.target.closest('.rt-rules-header');
-            if (rules) { e.preventDefault(); e.stopPropagation(); this._toggleFlightRules(); }
+            if (rules) { e.preventDefault(); e.stopPropagation(); this._toggleFlightRules(); return; }
+            const row = e.target.closest('.rt-row');
+            if (row) {
+                const idx = parseInt(row.dataset.idx);
+                const wp = this._waypoints[idx];
+                if (wp?.lat && wp.lon && this._map) {
+                    e.preventDefault();
+                    this._map.panTo([wp.lat, wp.lon]);
+                }
+            }
         });
 
         // Altitude picker overlay (reused, hidden by default)

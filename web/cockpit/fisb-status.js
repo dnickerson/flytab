@@ -72,7 +72,7 @@ class FisbStatus {
             </div>
         `;
 
-        this._el.querySelector('.fisb-close').addEventListener('click', () => this.hide());
+        wireTap(this._el.querySelector('.fisb-close'), () => this.hide());
         // Block touch events from reaching map underneath
         this._el.addEventListener('touchstart', (e) => e.stopPropagation(), { passive: true });
 
