@@ -142,13 +142,13 @@ class AirportPopup {
         // Wire close button
         const closeBtn = this._panel.querySelector('.apt-panel-close');
         if (closeBtn) {
-            this._wireButton(closeBtn, () => this.close());
+            wireTap(closeBtn, () => this.close());
         }
 
         // Wire action chips
         this._panel.querySelectorAll('.apt-chip[data-action]').forEach(chip => {
             const action = chip.dataset.action;
-            this._wireButton(chip, () => {
+            wireTap(chip, () => {
                 if (action === 'direct-to' && this._onDirectTo) {
                     this._onDirectTo(airport);
                     this.close();
@@ -168,12 +168,12 @@ class AirportPopup {
 
         // Wire frequency rows
         this._panel.querySelectorAll('.freq-row[data-freq]').forEach(row => {
-            this._wireButton(row, () => this._flashFrequency(row.dataset.freq));
+            wireTap(row, () => this._flashFrequency(row.dataset.freq));
         });
 
         // Wire phone rows
         this._panel.querySelectorAll('.ifr-phone, .airport-phone').forEach(phoneEl => {
-            this._wireButton(phoneEl, () => {
+            wireTap(phoneEl, () => {
                 const phone = phoneEl.dataset.phone;
                 navigator.clipboard?.writeText(phone);
                 phoneEl.style.background = '#224433';
@@ -183,7 +183,7 @@ class AirportPopup {
 
         // Wire tabs
         this._panel.querySelectorAll('.apt-tab[data-tab]').forEach(tab => {
-            this._wireButton(tab, () => {
+            wireTap(tab, () => {
                 // APPR tab: open the approach charts picker directly
                 if (tab.dataset.tab === 'appr' && this._approachCharts) {
                     this._approachCharts.showForAirport(airport.icao);
@@ -240,7 +240,7 @@ class AirportPopup {
 
     _wireTopNav() {
         this._panel.querySelectorAll('.apt-topnav-btn[data-topnav]').forEach(btn => {
-            this._wireButton(btn, async () => {
+            wireTap(btn, async () => {
                 const action = btn.dataset.topnav;
                 const airports = this._getRouteAirports?.() || {};
                 if (action === 'dep' && airports.departure?.icao) {
@@ -272,7 +272,7 @@ class AirportPopup {
         const results = this._panel.querySelector('.apt-search-results');
         const closeBtn = this._panel.querySelector('[data-topnav="search-close"]');
 
-        this._wireButton(closeBtn, () => this.close());
+        wireTap(closeBtn, () => this.close());
 
         let debounce = null;
         input.addEventListener('input', () => {
@@ -293,7 +293,7 @@ class AirportPopup {
                             <span class="apt-search-name">${a.name || ''}</span>
                         </div>`).join('');
                     results.querySelectorAll('.apt-search-row').forEach(row => {
-                        this._wireButton(row, () => this.showForAirport(row.dataset.icao));
+                        wireTap(row, () => this.showForAirport(row.dataset.icao));
                     });
                 } catch { results.innerHTML = '<div class="apt-search-empty">Search unavailable</div>'; }
             }, 250);
@@ -584,7 +584,7 @@ class AirportPopup {
         this._panel.classList.add('open');
         this._panelOpen = true;
         const closeBtn = this._panel.querySelector('.apt-panel-close');
-        if (closeBtn) this._wireButton(closeBtn, () => this.close());
+        if (closeBtn) wireTap(closeBtn, () => this.close());
     }
 
     /**
@@ -635,11 +635,11 @@ class AirportPopup {
             const container = this._popup.getElement();
             if (!container) return;
             container.querySelectorAll('.freq-row').forEach(row => {
-                this._wireButton(row, () => this._flashFrequency(row.dataset.freq));
+                wireTap(row, () => this._flashFrequency(row.dataset.freq));
             });
             container.querySelectorAll('.popup-btn').forEach(btn => {
                 const action = btn.dataset.action;
-                this._wireButton(btn, () => {
+                wireTap(btn, () => {
                     if (action === 'direct-to' && this._onDirectTo) {
                         this._onDirectTo({ icao: nav.id, name: nav.name, lat: nav.lat, lon: nav.lon });
                         this.close();
@@ -894,7 +894,7 @@ class AirportPopup {
 
             // Wire plate rows to show viewer
             containerEl.querySelectorAll('.apt-plate-list-row').forEach(row => {
-                this._wireButton(row, () => {
+                wireTap(row, () => {
                     const file = row.dataset.pdf;
                     const name = row.dataset.name;
                     const webpUrl = `${PLATES_BASE}/${icao}/${file.replace(/\.pdf$/i, '.webp')}`;
@@ -1342,52 +1342,18 @@ class AirportPopup {
 
     // ========== Action Binding ==========
 
-    /**
-     * Wire a button with touch-distance detection.
-     * Fires on touchend only if the finger didn't move (not a scroll gesture).
-     * Falls back to click for non-touch devices.
-     */
-    _wireButton(el, action) {
-        let startX = 0, startY = 0, isTap = false;
-        el.addEventListener('touchstart', (e) => {
-            const t = e.touches[0];
-            startX = t.clientX;
-            startY = t.clientY;
-            isTap = true;
-        }, { passive: true });
-        el.addEventListener('touchmove', (e) => {
-            if (!isTap) return;
-            const t = e.touches[0];
-            if (Math.abs(t.clientX - startX) > 10 || Math.abs(t.clientY - startY) > 10) {
-                isTap = false; // finger moved — this is a scroll, not a tap
-            }
-        }, { passive: true });
-        el.addEventListener('touchend', (e) => {
-            if (isTap) {
-                e.stopPropagation();
-                action();
-            }
-            isTap = false;
-        });
-        // Click fallback for non-touch devices
-        el.addEventListener('click', (e) => {
-            e.stopPropagation();
-            action();
-        });
-    }
-
     _bindActions(airport) {
         const container = this._popup.getElement();
         if (!container) return;
 
         // Frequency tap → show large for 3 seconds
         container.querySelectorAll('.freq-row').forEach(row => {
-            this._wireButton(row, () => this._flashFrequency(row.dataset.freq));
+            wireTap(row, () => this._flashFrequency(row.dataset.freq));
         });
 
         // Phone tap → copy (IFR CD phone and airport manager phone)
         container.querySelectorAll('.ifr-phone, .airport-phone').forEach(phoneEl => {
-            this._wireButton(phoneEl, () => {
+            wireTap(phoneEl, () => {
                 const phone = phoneEl.dataset.phone;
                 navigator.clipboard?.writeText(phone);
                 phoneEl.style.background = '#224433';
@@ -1398,7 +1364,7 @@ class AirportPopup {
         // Action buttons
         container.querySelectorAll('.popup-btn').forEach(btn => {
             const action = btn.dataset.action;
-            this._wireButton(btn, () => {
+            wireTap(btn, () => {
                 if (action === 'plates' && this._approachCharts) {
                     this._approachCharts.showForAirport(airport.icao);
                     this.close();

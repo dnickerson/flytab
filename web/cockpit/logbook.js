@@ -92,13 +92,13 @@ class Logbook {
         closeBtn.addEventListener('touchend', (e) => { e.preventDefault(); this.hide(); });
 
         const addBtn = this._el.querySelector('.logbook-add-btn');
-        this._wireButton(addBtn, () => {
+        wireTap(addBtn, () => {
             if (this._activeTab === 'oil') this._showOilForm(null);
             else if (this._activeTab !== 'ml') this._showForm(null);
         });
 
         const syncBtn = this._el.querySelector('.logbook-sync-btn');
-        this._wireButton(syncBtn, () => {
+        wireTap(syncBtn, () => {
             syncBtn.textContent = '...';
             this.syncWhenOnline().finally(() => {
                 syncBtn.textContent = 'SYNC';
@@ -108,7 +108,7 @@ class Logbook {
 
         // Tab switching
         this._el.querySelectorAll('.logbook-tab').forEach(tab => {
-            this._wireButton(tab, () => {
+            wireTap(tab, () => {
                 this._el.querySelectorAll('.logbook-tab').forEach(t => t.classList.remove('active'));
                 tab.classList.add('active');
                 this._activeTab = tab.dataset.tab;
@@ -189,7 +189,7 @@ class Logbook {
 
         // Wire edit buttons
         this._body.querySelectorAll('.logbook-edit-btn').forEach(btn => {
-            this._wireButton(btn, () => {
+            wireTap(btn, () => {
                 const entry = entries.find(e => e.id === btn.dataset.id);
                 if (entry) this._showForm(entry);
             });
@@ -199,7 +199,7 @@ class Logbook {
         this._body.querySelectorAll('.logbook-delete-btn').forEach(btn => {
             let confirmPending = false;
             let confirmTimer = null;
-            this._wireButton(btn, async () => {
+            wireTap(btn, async () => {
                 if (confirmPending) {
                     // Second tap — delete
                     clearTimeout(confirmTimer);
@@ -335,12 +335,12 @@ class Logbook {
         // Wire cancel
         const cancelBtns = overlay.querySelectorAll('.logbook-form-cancel, .logbook-form-cancel-btn');
         cancelBtns.forEach(btn => {
-            this._wireButton(btn, () => overlay.remove());
+            wireTap(btn, () => overlay.remove());
         });
 
         // Wire save
         const saveBtn = overlay.querySelector('.logbook-form-save');
-        this._wireButton(saveBtn, async () => {
+        wireTap(saveBtn, async () => {
             saveBtn.textContent = '...';
             saveBtn.disabled = true;
             try {
@@ -1182,7 +1182,7 @@ class Logbook {
         this._body.querySelectorAll('.logbook-delete-btn').forEach(btn => {
             let confirmPending = false;
             let confirmTimer = null;
-            this._wireButton(btn, async () => {
+            wireTap(btn, async () => {
                 if (confirmPending) {
                     clearTimeout(confirmTimer);
                     await this._deleteOilEvent(btn.dataset.id);
@@ -1299,7 +1299,7 @@ class Logbook {
 
         // Wire per-entry export (loads from IDB)
         this._body.querySelectorAll('.lb-ml-export-btn').forEach(btn => {
-            this._wireButton(btn, async () => {
+            wireTap(btn, async () => {
                 const entryId = btn.dataset.entryId;
                 try {
                     const db = await this._openIdb();
@@ -1385,11 +1385,11 @@ class Logbook {
         this._el.appendChild(overlay);
 
         overlay.querySelectorAll('.logbook-form-cancel, .logbook-form-cancel-btn').forEach(btn => {
-            this._wireButton(btn, () => overlay.remove());
+            wireTap(btn, () => overlay.remove());
         });
 
         const saveBtn = overlay.querySelector('.logbook-form-save');
-        this._wireButton(saveBtn, async () => {
+        wireTap(saveBtn, async () => {
             saveBtn.textContent = '...';
             saveBtn.disabled = true;
             try {
@@ -1590,23 +1590,6 @@ class Logbook {
             tx.objectStore(Logbook.IDB_STORE).put(entry);
             tx.oncomplete = () => { db.close(); resolve(); };
             tx.onerror = () => { db.close(); reject(tx.error); };
-        });
-    }
-
-    // ========== Internal: Touch Button Wiring ==========
-
-    _wireButton(el, action) {
-        let touchFired = false;
-        el.addEventListener('touchstart', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            touchFired = true;
-            action();
-        }, { passive: false });
-        el.addEventListener('click', (e) => {
-            e.stopPropagation();
-            if (touchFired) { touchFired = false; return; }
-            action();
         });
     }
 

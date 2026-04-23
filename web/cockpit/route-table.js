@@ -1852,7 +1852,7 @@ class RouteTable {
                 <div class="plan-picker-footer"></div>
             </div>`;
 
-        this._wireButton(overlay.querySelector('.plan-picker-close'), () => overlay.remove());
+        wireTap(overlay.querySelector('.plan-picker-close'), () => overlay.remove());
         // Dismiss on tap outside modal — guard against synthetic click from opening tap
         const openedAt = Date.now();
         const dismissOverlay = (e) => {
@@ -1864,7 +1864,7 @@ class RouteTable {
 
         // Plan items — load from localStorage by index
         overlay.querySelectorAll('.plan-picker-item').forEach(btn => {
-            this._wireButton(btn, async () => {
+            wireTap(btn, async () => {
                 try {
                     const idx = parseInt(btn.dataset.idx);
                     const plan = plans[idx];
@@ -2050,7 +2050,7 @@ class RouteTable {
 
         // EDIT button opens the separate route editor
         this._editBtn = this._handleEl.querySelector('.route-table-edit-btn');
-        this._wireButton(this._editBtn, () => {
+        wireTap(this._editBtn, () => {
             console.log('[RouteTable] EDIT button fired, routeEditor=', !!(typeof app !== 'undefined' && app.routeEditor));
             if (typeof app !== 'undefined' && app.routeEditor) {
                 app.routeEditor.startEditRoute();
@@ -2058,10 +2058,10 @@ class RouteTable {
         });
 
         this._profileBtn = this._handleEl.querySelector('.rt-profile-btn');
-        this._wireButton(this._profileBtn, () => this._openProfileView());
+        wireTap(this._profileBtn, () => this._openProfileView());
 
         this._toggleBtn = this._handleEl.querySelector('.rt-toggle-btn');
-        this._wireButton(this._toggleBtn, () => this.toggle());
+        wireTap(this._toggleBtn, () => this.toggle());
 
         // Terrain profile panel (created once, floats above the sheet)
         this._profileView = (typeof RouteProfileView !== 'undefined')
@@ -2377,33 +2377,6 @@ class RouteTable {
             return window.terrainGrid.buildProfile(coords, 1.0);
         }
         return [];
-    }
-
-    /**
-     * Wire a button with touchend + click fallback.
-     * Uses movement guard to distinguish tap from scroll; matches airport-popup pattern.
-     */
-    _wireButton(btn, action) {
-        let startX = 0, startY = 0, isTap = false, touchHandled = false;
-        btn.addEventListener('touchstart', (e) => {
-            startX = e.touches[0].clientX;
-            startY = e.touches[0].clientY;
-            isTap = true;
-            touchHandled = false;
-        }, { passive: true });
-        btn.addEventListener('touchmove', (e) => {
-            if (!isTap) return;
-            if (Math.abs(e.touches[0].clientX - startX) > 10 ||
-                Math.abs(e.touches[0].clientY - startY) > 10) isTap = false;
-        }, { passive: true });
-        btn.addEventListener('touchend', (e) => {
-            if (isTap) { e.stopPropagation(); touchHandled = true; action(); }
-            isTap = false;
-        }, { passive: true });
-        btn.addEventListener('click', (e) => {
-            if (touchHandled) { touchHandled = false; return; }
-            e.stopPropagation(); action();
-        });
     }
 
     // Drag removed in v5 — route display uses tap-to-toggle only

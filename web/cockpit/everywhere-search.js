@@ -84,7 +84,7 @@ class EverywhereSearch {
         const closeBtn = document.createElement('button');
         closeBtn.className = 'btn-close';
         closeBtn.innerHTML = '&#x2715;';
-        this._fastTap(closeBtn, () => this.hide());
+        wireTap(closeBtn, () => this.hide());
 
         header.appendChild(input);
         header.appendChild(closeBtn);
@@ -320,7 +320,7 @@ class EverywhereSearch {
         row.appendChild(middle);
         row.appendChild(right);
 
-        this._scrollSafeTap(row, () => this._showDetail(entity, type));
+        wireTap(row, () => this._showDetail(entity, type));
 
         return row;
     }
@@ -340,7 +340,7 @@ class EverywhereSearch {
         const backBtn = document.createElement('button');
         backBtn.innerHTML = '&#x2190;';
         backBtn.style.cssText = 'min-width:var(--touch-min,56px);min-height:var(--touch-min,56px);font-size:26px;font-weight:700;background:transparent;border:none;color:var(--accent);flex-shrink:0;cursor:pointer;';
-        this._fastTap(backBtn, () => this._hideDetail());
+        wireTap(backBtn, () => this._hideDetail());
 
         const badge = document.createElement('span');
         badge.textContent = type;
@@ -363,7 +363,7 @@ class EverywhereSearch {
         const closeBtn = document.createElement('button');
         closeBtn.className = 'btn-close';
         closeBtn.innerHTML = '&#x2715;';
-        this._fastTap(closeBtn, () => this.hide());
+        wireTap(closeBtn, () => this.hide());
 
         header.appendChild(backBtn);
         header.appendChild(badge);
@@ -617,7 +617,7 @@ class EverywhereSearch {
             (primary
                 ? 'background:var(--accent);color:var(--text-on-accent);'
                 : 'background:transparent;color:var(--accent);');
-        this._fastTap(btn, handler);
+        wireTap(btn, handler);
         return btn;
     }
 
@@ -673,52 +673,4 @@ class EverywhereSearch {
         return !!(trip?.waypoints?.length >= 2);
     }
 
-    _fastTap(btn, handler) {
-        let tapStart = null;
-        let touchHandled = false;
-        btn.addEventListener('touchstart', (e) => {
-            if (e.touches.length === 1)
-                tapStart = { x: e.touches[0].clientX, y: e.touches[0].clientY, t: Date.now() };
-            else tapStart = null;
-            touchHandled = false;
-        }, { passive: true });
-        btn.addEventListener('touchend', (e) => {
-            if (!tapStart || e.changedTouches.length !== 1) { tapStart = null; return; }
-            const ts = tapStart; tapStart = null;
-            const dx = e.changedTouches[0].clientX - ts.x;
-            const dy = e.changedTouches[0].clientY - ts.y;
-            if (dx*dx + dy*dy > 400) return;
-            if (Date.now() - ts.t > 500) return;
-            touchHandled = true;
-            handler(e);
-        }, { passive: true });
-        btn.addEventListener('click', (e) => {
-            if (touchHandled) { touchHandled = false; return; }
-            handler(e);
-        });
-    }
-
-    _scrollSafeTap(el, handler) {
-        let tapStart = null;
-        let touchHandled = false;
-        el.addEventListener('touchstart', (e) => {
-            if (e.touches.length === 1)
-                tapStart = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-            else tapStart = null;
-            touchHandled = false;
-        }, { passive: true });
-        el.addEventListener('touchend', (e) => {
-            if (!tapStart || e.changedTouches.length !== 1) { tapStart = null; return; }
-            const ts = tapStart; tapStart = null;
-            const dx = e.changedTouches[0].clientX - ts.x;
-            const dy = e.changedTouches[0].clientY - ts.y;
-            if (dx*dx + dy*dy > 400) return;
-            touchHandled = true;
-            handler(e);
-        }, { passive: true });
-        el.addEventListener('click', (e) => {
-            if (touchHandled) { touchHandled = false; return; }
-            handler(e);
-        });
-    }
 }

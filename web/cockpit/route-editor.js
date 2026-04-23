@@ -225,16 +225,16 @@ class RouteEditor {
         this._altInput = this._el.querySelector('.route-editor-alt');
         this._undoBtn = this._el.querySelector('.route-editor-undo');
 
-        // Events — use _wireTap for iPad touch reliability
-        this._wireTap(this._el.querySelector('.route-editor-close'), () => this.hide());
+        // Events
+        wireTap(this._el.querySelector('.route-editor-close'), () => this.hide());
         this._searchInput.addEventListener('input', () => this._onSearchInput());
         this._searchInput.addEventListener('keyup', () => this._onSearchInput());
         this._searchInput.addEventListener('paste', () => setTimeout(() => this._onSearchInput(), 50));
         // GO button: explicit trigger for Android paste (events unreliable)
-        this._wireTap(this._el.querySelector('.route-editor-go-btn'), () => this._onSearchInput());
-        this._wireTap(this._el.querySelector('.route-editor-nearby-btn'), () => this._showNearby());
-        this._wireTap(this._el.querySelector('.route-editor-maptap-btn'), () => this._toggleMapTapMode());
-        this._wireTap(this._undoBtn, () => this._popUndo());
+        wireTap(this._el.querySelector('.route-editor-go-btn'), () => this._onSearchInput());
+        wireTap(this._el.querySelector('.route-editor-nearby-btn'), () => this._showNearby());
+        wireTap(this._el.querySelector('.route-editor-maptap-btn'), () => this._toggleMapTapMode());
+        wireTap(this._undoBtn, () => this._popUndo());
         this._altInput.addEventListener('change', () => {
             this._altitude = parseInt(this._altInput.value) || 3500;
             // Push unlocked waypoints to the new cruise altitude immediately
@@ -245,19 +245,19 @@ class RouteEditor {
         });
 
         // Bottom bar: SAVE, LOAD, NEW, REV, UPLOAD — route management buttons
-        this._wireTap(this._el.querySelector('.re-new-btn'), () => {
+        wireTap(this._el.querySelector('.re-new-btn'), () => {
             if (typeof app !== 'undefined' && app.routeTable) app.routeTable._confirmNewRoute();
         });
-        this._wireTap(this._el.querySelector('.re-rev-btn'), () => {
+        wireTap(this._el.querySelector('.re-rev-btn'), () => {
             if (typeof app !== 'undefined' && app.routeTable) app.routeTable._reverseRoute();
         });
-        this._wireTap(this._el.querySelector('.re-load-btn'), () => {
+        wireTap(this._el.querySelector('.re-load-btn'), () => {
             if (typeof app !== 'undefined' && app.routeTable) app.routeTable._showPlanPicker();
         });
-        this._wireTap(this._el.querySelector('.re-upload-btn'), () => {
+        wireTap(this._el.querySelector('.re-upload-btn'), () => {
             if (typeof app !== 'undefined' && app.routeTable) app.routeTable._showUploadModal();
         });
-        this._wireTap(this._el.querySelector('.re-save-btn'), () => {
+        wireTap(this._el.querySelector('.re-save-btn'), () => {
             if (typeof app !== 'undefined' && app.routeTable) app.routeTable._saveRoute();
         });
     }
@@ -281,8 +281,8 @@ class RouteEditor {
         this._directToSearch = this._directToEl.querySelector('.direct-to-search');
         this._directToResults = this._directToEl.querySelector('.direct-to-results');
 
-        this._wireTap(this._directToEl.querySelector('.direct-to-close'), () => this.hideDirectTo());
-        this._wireTap(this._directToEl, (e) => {
+        wireTap(this._directToEl.querySelector('.direct-to-close'), () => this.hideDirectTo());
+        wireTap(this._directToEl, (e) => {
             if (e.target === this._directToEl) this.hideDirectTo();
         });
         this._directToSearch.addEventListener('input', () => this._onDirectToSearch());
@@ -389,7 +389,7 @@ class RouteEditor {
         }).join('');
 
         this._directToResults.querySelectorAll('.route-search-result').forEach(btn => {
-            this._wireTap(btn, () => {
+            wireTap(btn, () => {
                 this._executeDirectTo({
                     icao: btn.dataset.icao,
                     name: btn.dataset.name || btn.dataset.icao,
@@ -662,9 +662,9 @@ class RouteEditor {
 
         this._waypointsDiv.innerHTML = html;
 
-        // Attach events — use _wireTap for iPad touch reliability
+        // Attach events
         this._waypointsDiv.querySelectorAll('.route-wp-main').forEach(row => {
-            this._wireTap(row, (e) => {
+            wireTap(row, (e) => {
                 if (e.target?.classList?.contains('route-wp-remove')) return;
                 const idx = parseInt(row.parentElement.dataset.idx);
                 this._expandedIndex = (this._expandedIndex === idx) ? -1 : idx;
@@ -673,27 +673,27 @@ class RouteEditor {
         });
 
         this._waypointsDiv.querySelectorAll('.route-wp-remove').forEach(btn => {
-            this._wireTap(btn, () => {
+            wireTap(btn, () => {
                 this._removeWaypoint(parseInt(btn.dataset.idx));
             });
         });
 
         this._waypointsDiv.querySelectorAll('.route-wp-up').forEach(btn => {
-            this._wireTap(btn, () => {
+            wireTap(btn, () => {
                 const idx = parseInt(btn.dataset.idx);
                 this._moveWaypoint(idx, idx - 1);
             });
         });
 
         this._waypointsDiv.querySelectorAll('.route-wp-down').forEach(btn => {
-            this._wireTap(btn, () => {
+            wireTap(btn, () => {
                 const idx = parseInt(btn.dataset.idx);
                 this._moveWaypoint(idx, idx + 1);
             });
         });
 
         this._waypointsDiv.querySelectorAll('.route-wp-insert').forEach(btn => {
-            this._wireTap(btn, () => {
+            wireTap(btn, () => {
                 this._insertIndex = parseInt(btn.dataset.idx);
                 this._searchInput.focus();
                 this._searchInput.placeholder = `Insert at position ${this._insertIndex + 1}...`;
@@ -714,7 +714,7 @@ class RouteEditor {
         });
 
         this._waypointsDiv.querySelectorAll('.route-wp-alt-unlock').forEach(btn => {
-            this._wireTap(btn, () => {
+            wireTap(btn, () => {
                 const idx = parseInt(btn.dataset.idx);
                 this._waypoints[idx].altLocked = false;
                 this._waypoints[idx].alt = this._altitude;
@@ -897,7 +897,7 @@ class RouteEditor {
 
         const applyBtn = this._resultsDiv.querySelector('.route-parse-apply');
         if (applyBtn) {
-            this._wireTap(applyBtn, () => {
+            wireTap(applyBtn, () => {
                 this._pushUndo();
                 this._waypoints = resolved.map(wp => ({ ...wp, alt: this._altitude }));
                 this._insertIndex = -1;
@@ -966,7 +966,7 @@ class RouteEditor {
         `).join('');
 
         this._resultsDiv.querySelectorAll('.route-search-result').forEach(btn => {
-            this._wireTap(btn, () => {
+            wireTap(btn, () => {
                 const idx = this._insertIndex >= 0 ? this._insertIndex : this._waypoints.length;
                 this._addWaypoint({
                     icao: btn.dataset.id,
@@ -1009,37 +1009,6 @@ class RouteEditor {
             this._resultsDiv.hidden = false;
             this._resultsDiv.innerHTML = '<div class="route-search-empty">Airport database not available</div>';
         }
-    }
-
-    /** Wire touchstart + click with debounce for iPad reliability */
-    _wireTap(el, handler) {
-        if (!el) return;
-        let startX = 0, startY = 0, isTap = false, touchUsed = false;
-        el.addEventListener('touchstart', (e) => {
-            const t = e.touches[0];
-            startX = t.clientX;
-            startY = t.clientY;
-            isTap = true;
-        }, { passive: true });
-        el.addEventListener('touchmove', (e) => {
-            if (!isTap) return;
-            const t = e.touches[0];
-            if (Math.abs(t.clientX - startX) > 10 || Math.abs(t.clientY - startY) > 10) {
-                isTap = false;
-            }
-        }, { passive: true });
-        el.addEventListener('touchend', (e) => {
-            if (isTap) {
-                e.stopPropagation();
-                touchUsed = true;
-                handler(e);
-                setTimeout(() => { touchUsed = false; }, 400);
-            }
-            isTap = false;
-        });
-        el.addEventListener('click', (e) => {
-            if (!touchUsed) handler(e);
-        });
     }
 
     // ========== Apply / Persist ==========
