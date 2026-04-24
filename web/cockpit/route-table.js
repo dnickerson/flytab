@@ -37,6 +37,9 @@ function _pointInPolygon(lat, lon, boundary) {
  */
 function isFuelStop(wp, index, waypoints) {
     if (index === 0) return false;
+    // Explicit pilot override takes precedence over heuristic
+    if (wp.is_fuel_stop === false) return false;
+    if (wp.is_fuel_stop === true) return true;
     // Non-airport types are never fuel stops
     if (wp.type === 'VOR' || wp.type === 'NDB' || wp.type === 'FIX' || wp.type === 'GPS' || wp.type === 'WPT') return false;
 
@@ -465,13 +468,20 @@ class RouteTable {
         this._pushUndo();
         this._waypoints.splice(bestIdx, 0, wp);
         this._reindex();
-        this._onEdited();
 
-        // Flash feedback
-        if (typeof app !== 'undefined') {
-            const id = wp.icao || wp.name || '?';
-            const toast = app.showToast(`Added ${id} at position ${bestIdx + 1}`);
-            setTimeout(() => toast?.remove(), 3000);
+        // If the inserted waypoint qualifies as a fuel stop by position, suppress
+        // the heuristic and prompt the pilot before committing.
+        if (isFuelStop(this._waypoints[bestIdx], bestIdx, this._waypoints)) {
+            this._waypoints[bestIdx].is_fuel_stop = false;
+            this._onEdited();
+            this._promptFuelStop(bestIdx);
+        } else {
+            this._onEdited();
+            if (typeof app !== 'undefined') {
+                const id = wp.icao || wp.name || '?';
+                const toast = app.showToast(`Added ${id} at position ${bestIdx + 1}`);
+                setTimeout(() => toast?.remove(), 3000);
+            }
         }
     }
 
@@ -525,6 +535,23 @@ class RouteTable {
             this._activeIndex = Math.max(this._waypoints.length - 1, -1);
         }
         this._reindex();
+        this._onEdited();
+    }
+
+    _promptFuelStop(idx) {
+        const wp = this._waypoints[idx];
+        if (!wp || typeof app === 'undefined') return;
+        const id = wp.icao || wp.name || '?';
+        app.showToast(`Make ${id} a fuel stop?`, [
+            { label: 'Yes', action: () => { wp.is_fuel_stop = true;  this._onEdited(); } },
+            { label: 'No',  action: () => { /* wp.is_fuel_stop already false */ } }
+        ]);
+    }
+
+    _demoteFuelStop(idx) {
+        if (idx < 0 || idx >= this._waypoints.length) return;
+        this._pushUndo();
+        this._waypoints[idx].is_fuel_stop = false;
         this._onEdited();
     }
 
@@ -2081,6 +2108,8 @@ class RouteTable {
         this._tableEl.addEventListener('click', (e) => {
             const del = e.target.closest('.rt-delete-btn');
             if (del) { e.stopPropagation(); this._removeWaypoint(parseInt(del.dataset.idx)); return; }
+            const demote = e.target.closest('.rt-demote-fuel-stop-btn');
+            if (demote) { e.stopPropagation(); this._demoteFuelStop(parseInt(demote.dataset.idx)); return; }
             const up = e.target.closest('.rt-up-btn');
             if (up) { e.stopPropagation(); this._moveWaypoint(parseInt(up.dataset.idx), parseInt(up.dataset.idx) - 1); return; }
             const down = e.target.closest('.rt-down-btn');
@@ -2110,6 +2139,8 @@ class RouteTable {
         this._tableEl.addEventListener('touchend', (e) => {
             const del = e.target.closest('.rt-delete-btn');
             if (del) { e.preventDefault(); e.stopPropagation(); this._removeWaypoint(parseInt(del.dataset.idx)); return; }
+            const demote = e.target.closest('.rt-demote-fuel-stop-btn');
+            if (demote) { e.preventDefault(); e.stopPropagation(); this._demoteFuelStop(parseInt(demote.dataset.idx)); return; }
             const up = e.target.closest('.rt-up-btn');
             if (up) { e.preventDefault(); e.stopPropagation(); this._moveWaypoint(parseInt(up.dataset.idx), parseInt(up.dataset.idx) - 1); return; }
             const down = e.target.closest('.rt-down-btn');
@@ -2600,9 +2631,7 @@ class RouteTable {
                 // the departure — this row is the boundary between those two legs.
                 html += `<tr class="rt-fuel-stop-row"><td colspan="${numCols}" class="rt-fuel-stop-cell">`;
                 html += `<span>\u26FD\u2002Arrived ${flight.dest} \u2014 Refuel \u00b7 Flight ${fi + 2} continues to ${nextFlight.dest}</span>`;
-                if (this._editMode) {
-                    html += `<button class="rt-delete-btn" data-idx="${stopIdx}" title="Remove fuel stop">\u00d7</button>`;
-                }
+                html += `<button class="rt-demote-fuel-stop-btn" data-idx="${stopIdx}" title="Not a fuel stop">Not a stop</button>`;
                 html += `</td></tr>`;
                 // Fuel added row — only shown if pilot explicitly set fuel_add_gal on this waypoint
                 const stopWp = this._waypoints[nextFlight.depWpIndex];

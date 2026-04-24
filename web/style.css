@@ -2311,6 +2311,23 @@ body {
     border-top: 1px solid var(--border);
     border-bottom: 1px solid var(--border);
 }
+.rt-demote-fuel-stop-btn {
+    min-width: 80px;
+    min-height: var(--touch-compact);
+    padding: 0 10px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg-card);
+    color: var(--text-secondary);
+    font-size: var(--text-sm);
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.rt-demote-fuel-stop-btn:active {
+    background: var(--border);
+}
 .rt-fuel-added-cell {
     text-align: center;
     font-size: var(--text-sm);
