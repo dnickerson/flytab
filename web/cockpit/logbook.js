@@ -488,6 +488,20 @@ class Logbook {
             }
         }
 
+        // Final fallback: read departure/destination from the active route the pilot built.
+        // This is the most reliable source — always set when the pilot plans a flight —
+        // and doesn't require Stratux, NASR, or the local file server to all be working.
+        if (depIcao === 'UNKN' || destIcao === 'UNKN') {
+            try {
+                const activePlan = JSON.parse(localStorage.getItem('flypi_active_plan') || 'null');
+                const fp = activePlan?.flight_plan;
+                if (fp) {
+                    if (depIcao === 'UNKN' && fp.departure) depIcao = fp.departure;
+                    if (destIcao === 'UNKN' && fp.destination) destIcao = fp.destination;
+                }
+            } catch { /* ignore */ }
+        }
+
         let depName = depIcao, destName = destIcao;
         try {
             const dep = await this._nasrDb.getAirport(depIcao);
@@ -1520,17 +1534,18 @@ class Logbook {
         }
     }
 
-    async _getRouteString() {
+    _getRouteString() {
         try {
-            const plan = await this._nasrDb.getActiveFlightPlan();
-            if (plan && plan.route) {
-                if (typeof plan.route === 'string') return plan.route;
-                if (Array.isArray(plan.route)) {
-                    return plan.route.map(wp => wp.id || wp.name || wp.icao || '???').join(' ');
-                }
-                if (plan.waypoints && Array.isArray(plan.waypoints)) {
-                    return plan.waypoints.map(wp => wp.id || wp.name || wp.icao || '???').join(' ');
-                }
+            // Plans are stored in localStorage, not IDB
+            const activePlan = JSON.parse(localStorage.getItem('flypi_active_plan') || 'null');
+            const fp = activePlan?.flight_plan;
+            if (fp) {
+                if (typeof fp.route === 'string' && fp.route) return fp.route;
+                if (Array.isArray(fp.route) && fp.route.length) return fp.route.join(' ');
+            }
+            const wps = activePlan?.waypoints;
+            if (Array.isArray(wps) && wps.length) {
+                return wps.map(wp => wp.icao || wp.id || wp.name || '???').join(' ');
             }
         } catch { /* ignore */ }
         return 'LOCAL';
