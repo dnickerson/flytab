@@ -106,6 +106,15 @@ class LayerPanel {
             });
         });
 
+        // Wire traffic altitude filter bypass toggle
+        const taltBypassInput = this._panel.querySelector('.lp-toggle input[data-action="traffic-alt-bypass"]');
+        if (taltBypassInput) {
+            taltBypassInput.checked = this._cockpitMap._trafficAltBypass || false;
+            taltBypassInput.addEventListener('change', () => {
+                this._cockpitMap.setTrafficAltBypass?.(taltBypassInput.checked);
+            });
+        }
+
         // Wire traffic alt toggle
         const taltInput = this._panel.querySelector('.lp-toggle input[data-action="traffic-alt"]');
         if (taltInput) {
@@ -450,6 +459,10 @@ class LayerPanel {
                     <div class="lp-row">
                         <span class="lp-row-label">Rwy Extensions</span>
                         <label class="lp-toggle"><input type="checkbox" data-action="rwy-ext"><span class="lp-toggle-track"></span></label>
+                    </div>
+                    <div class="lp-row">
+                        <span class="lp-row-label">All Altitudes</span>
+                        <label class="lp-toggle"><input type="checkbox" data-action="traffic-alt-bypass"><span class="lp-toggle-track"></span></label>
                     </div>
                     <div class="lp-row">
                         <span class="lp-row-label">Show ±ALT</span>

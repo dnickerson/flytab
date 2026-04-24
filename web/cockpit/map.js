@@ -156,6 +156,7 @@ class CockpitMap {
         this._showAirports = Settings.showAirports;
         this._showAirways = Settings.showAirways;
         this._showTrafficAlt = false;
+        this._trafficAltBypass = false;
         this._fixUpdateTimer = null;
         this._nasr = null;
     }
@@ -809,8 +810,8 @@ class CockpitMap {
             seen.add(icao);
             if (!target.lat || !target.lon) { _nNoPos++; continue; }
 
-            // Altitude filter — hide traffic outside the configured altitude band
-            if (this.stratux.situation?.alt_msl != null && target.alt != null) {
+            // Altitude filter — hide traffic outside the configured band (bypassed by layer-panel toggle)
+            if (!this._trafficAltBypass && this.stratux.situation?.alt_msl != null && target.alt != null) {
                 const altDiff = target.alt - this.stratux.situation.alt_msl;
                 if (altDiff > maxAboveAlt || altDiff < -maxBelowAlt) {
                     if (!this._trafficFilterLogged) {
@@ -1303,6 +1304,12 @@ class CockpitMap {
     /** Toggle traffic altitude labels — called by layer panel */
     setShowTrafficAlt(enabled) {
         this._showTrafficAlt = enabled;
+        this._updateTraffic();
+    }
+
+    /** Bypass altitude filter entirely — called by layer panel "All Altitudes" toggle */
+    setTrafficAltBypass(enabled) {
+        this._trafficAltBypass = enabled;
         this._updateTraffic();
     }
 
