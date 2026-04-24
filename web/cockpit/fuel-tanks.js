@@ -82,12 +82,13 @@ class FuelTanksDisplay {
      * ----------------------------------------------------------------*/
     _handleEngineData(data) {
         if (!data) return;
-        const gph = data.fuel_flow_gph ?? data.gph ?? data.Fuel_Flow ?? 0;
+        const d = data.data ? { ...data, ...data.data } : data;
+        const gph = d.fuel_flow_gph ?? d.gph ?? d.Fuel_Flow ?? 0;
         this._lastGph = gph;
         if (gph > 0) {
             FuelTankState.onSample(gph, Date.now());
         }
-        this._updateSenderDisplay(data);
+        this._updateSenderDisplay(d);
         // Update endurance when GPH changes without a state change
         this._renderEndurance();
     }
