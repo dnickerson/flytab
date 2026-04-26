@@ -332,7 +332,43 @@ class WxBriefing {
 
         sec.appendChild(body);
     }
-    _renderAfdSection() {}
+    _renderAfdSection() {
+        const sec = this._section('wx-afd-section');
+        if (!sec) return;
+
+        if (this._afds === null) {
+            sec.innerHTML = this._buildRhsHeader('Fcst Discussions', null, 'Fetching…').outerHTML;
+            return;
+        }
+
+        const count = this._afds.length;
+        const hdr = this._buildRhsHeader('Fcst Discussions', 'info',
+            count > 0 ? `${count} OFFICE${count > 1 ? 'S' : ''}` : 'NONE');
+
+        sec.innerHTML = '';
+        sec.appendChild(hdr);
+
+        const body = document.createElement('div');
+        body.className = 'wx-rhs-body open';
+
+        if (!this._afds.length) {
+            body.innerHTML = '<div class="wx-section-empty">No AFDs fetched — requires internet.</div>';
+        } else {
+            for (const afd of this._afds) {
+                const issued = afd.issued
+                    ? new Date(afd.issued).toLocaleString([], {weekday:'short',hour:'2-digit',minute:'2-digit'}) + ' L'
+                    : '—';
+                body.appendChild(this._buildAdvCard(
+                    afd.office, 'afd',
+                    afd.name || afd.office,
+                    `Issued ${issued}`,
+                    afd.text
+                ));
+            }
+        }
+
+        sec.appendChild(body);
+    }
     _renderNotamSection() {}
 
     // ── Panel construction ────────────────────────────────────────────────────
@@ -1390,5 +1426,80 @@ class WxBriefing {
         const n = Math.min(lats.length, lons.length);
         if (n < 3) return null;
         return Array.from({ length: n }, (_, i) => [lats[i], lons[i]]);
+    }
+
+    // ── AFD fetch ─────────────────────────────────────────────────────────────
+
+    async _fetchAfds() {
+        this._afds = null;
+        this._renderAfdSection();
+        try {
+            const coords = await this._getRouteCoords();
+            const endpoints = [];
+            const keyCoords = [];
+            if (coords.length > 0) keyCoords.push(coords[0]);
+            if (coords.length > 1) keyCoords.push(coords[coords.length - 1]);
+
+            const officeIds = new Set();
+            for (const c of keyCoords) {
+                try {
+                    const ptResp = await fetch(`https://api.weather.gov/points/${c.lat.toFixed(4)},${c.lon.toFixed(4)}`,
+                        { signal: AbortSignal.timeout(8000) });
+                    if (ptResp.ok) {
+                        const pt = await ptResp.json();
+                        const cwa = pt?.properties?.cwa;
+                        const officeName = pt?.properties?.relativeLocation?.properties?.city
+                            ? `${pt.properties.relativeLocation.properties.city} NWS`
+                            : (cwa || '');
+                        if (cwa && !officeIds.has(cwa)) {
+                            officeIds.add(cwa);
+                            endpoints.push({ cwa: `K${cwa}`, name: officeName });
+                        }
+                    }
+                } catch (_) {}
+            }
+
+            if (!officeIds.size) throw new Error('No NWS offices found for route');
+
+            const afds = [];
+            for (const ep of endpoints) {
+                try {
+                    const pResp = await fetch(`https://api.weather.gov/products?type=AFD&office=${ep.cwa}&limit=1`,
+                        { signal: AbortSignal.timeout(8000) });
+                    if (!pResp.ok) continue;
+                    const pData = await pResp.json();
+                    const items = pData['@graph'] || [];
+                    if (!items.length) continue;
+                    const item = items[0];
+                    const tResp = await fetch(item['@id'], { signal: AbortSignal.timeout(8000) });
+                    if (!tResp.ok) continue;
+                    const tData = await tResp.json();
+                    afds.push({
+                        office: ep.cwa,
+                        name: ep.name,
+                        issued: item.issuanceTime || null,
+                        text: tData.productText || item.productText || '',
+                    });
+                } catch (_) {}
+            }
+
+            this._afds = afds;
+            this._afdFetchedAt = Date.now();
+            try {
+                localStorage.setItem('flytab_afd_cache', JSON.stringify({ fetched_at: Date.now(), data: afds }));
+            } catch (_) {}
+        } catch (err) {
+            console.error('AFD fetch failed:', err);
+            try {
+                const raw = localStorage.getItem('flytab_afd_cache');
+                if (raw) {
+                    const cache = JSON.parse(raw);
+                    if (Date.now() - cache.fetched_at < 4 * 3600000) {
+                        this._afds = cache.data || [];
+                    } else { this._afds = []; }
+                } else { this._afds = []; }
+            } catch (_) { this._afds = []; }
+        }
+        this._renderAfdSection();
     }
 }
