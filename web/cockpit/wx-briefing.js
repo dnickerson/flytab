@@ -49,7 +49,7 @@ class WxBriefing {
         this.visible = true;
 
         if (!this._mosData && this._flightPlan?.weather_cache?.mos) {
-            this._mosData = this._flightPlan.weather_cache.mos;
+            this._mosData = this._normalizeMos(this._flightPlan.weather_cache.mos);
         }
 
         this._renderAll();
@@ -63,7 +63,7 @@ class WxBriefing {
 
     setFlightPlan(plan) {
         this._flightPlan = plan;
-        if (plan?.weather_cache?.mos) this._mosData = plan.weather_cache.mos;
+        if (plan?.weather_cache?.mos) this._mosData = this._normalizeMos(plan.weather_cache.mos);
         this._routeCoords = null;
         if (this.visible) this._renderAll();
     }
@@ -510,12 +510,12 @@ class WxBriefing {
             const resp = await fetch(`${base}/mos?ids=${ids}`, { signal: AbortSignal.timeout(45000) });
             if (!resp.ok) throw new Error(`Server error ${resp.status}`);
             const data = await resp.json();
-            this._mosData = data;
+            this._mosData = this._normalizeMos(data);
 
             // Cache in flight plan for offline use
             if (this._flightPlan) {
                 if (!this._flightPlan.weather_cache) this._flightPlan.weather_cache = {};
-                this._flightPlan.weather_cache.mos = data;
+                this._flightPlan.weather_cache.mos = this._mosData;
                 // Persist to Pi if sync available
                 if (window.flightSync?.savePlan) {
                     window.flightSync.savePlan(this._flightPlan).catch(() => {});
@@ -856,6 +856,13 @@ class WxBriefing {
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
+    _normalizeMos(data) {
+        if (!data) return data;
+        if (data.stations && typeof data.stations === 'object') return data;
+        const { fetched_at, ...rest } = data;
+        return { fetched_at, stations: rest };
+    }
+
     _getStationList() {
         const plan = this._flightPlan;
         if (!plan) return [];
@@ -986,6 +993,7 @@ class WxBriefing {
         if (this._flightPlan?.waypoints) {
             for (const wp of this._flightPlan.waypoints) {
                 if (wp.lat && wp.lon) {
+                    if (wp.icao && coords.find(c => c.icao === wp.icao)) continue;
                     coords.push({ icao: wp.icao || '', lat: wp.lat, lon: wp.lon });
                 }
             }
@@ -1139,13 +1147,13 @@ class WxBriefing {
         if (!ids.length) return {};
         const batches = [];
         for (let i = 0; i < ids.length; i += 50) batches.push(ids.slice(i, i + 50));
-        const out = {};
-        for (const batch of batches) {
+        const results = await Promise.all(batches.map(async batch => {
             const url = `${WeatherClient.AWC_BASE}/taf?ids=${batch.join(',')}&format=json`;
             try {
                 const resp = await fetch(url, { signal: AbortSignal.timeout(15000) });
-                if (!resp.ok) continue;
+                if (!resp.ok) return {};
                 const items = await resp.json();
+                const out = {};
                 for (const item of (Array.isArray(items) ? items : [])) {
                     const icao = item.icaoId;
                     if (!icao) continue;
@@ -1157,9 +1165,10 @@ class WxBriefing {
                         fcsts: item.fcsts || [],
                     };
                 }
-            } catch (_) {}
-        }
-        return out;
+                return out;
+            } catch (_) { return {}; }
+        }));
+        return Object.assign({}, ...results);
     }
 
     // ── Station card rendering ────────────────────────────────────────────────
