@@ -12,8 +12,9 @@
  * Tap any airport row to expand full MOS detail table.
  */
 class WxBriefing {
-    constructor(db) {
+    constructor(db, config = {}) {
         this._db           = db;
+        this._config       = config;
         this._el           = null;
         this._flightPlan   = null;
         this._mosData      = null;
@@ -479,12 +480,11 @@ class WxBriefing {
     async _fetchMos() {
         const stations = this._getStationList();
         if (!stations.length) {
-            this._showMessage('Load a flight plan to fetch MOS data.');
             return;
         }
 
         this._loading = true;
-        this._render();
+        this._renderMos();
 
         try {
             const ids = stations.join(',');
@@ -505,109 +505,12 @@ class WxBriefing {
             }
         } catch (err) {
             console.error('MOS fetch failed:', err);
-            const msg = err.name === 'AbortError'
-                ? 'Request timed out. NWS may be slow — try again.'
-                : err.name === 'TypeError'
-                ? 'Network error. Check internet connection and try again.'
-                : `Fetch failed: ${err.message}`;
-            this._showMessage(msg);
         } finally {
             this._loading = false;
             this._renderSummaryBar();
             this._renderAgeGroup();
             this._renderMos();
         }
-    }
-
-    // ── Rendering ─────────────────────────────────────────────────────────────
-
-    _render() {
-        const content = this._el?.querySelector('.wx-briefing-content');
-        if (!content) return;
-        content.innerHTML = '';
-
-        if (this._loading) {
-            content.innerHTML = '<div class="wx-loading">Fetching MOS data…</div>';
-            return;
-        }
-
-        const stations = this._getStationList();
-        if (!stations.length) {
-            content.innerHTML = '<div class="wx-empty">No flight plan loaded.<br>Load a plan to see weather.</div>';
-            return;
-        }
-
-        // Summary bar
-        content.appendChild(this._buildSummaryBar(stations));
-
-        if (!this._mosData) {
-            const hint = document.createElement('div');
-            hint.className = 'wx-empty';
-            hint.innerHTML = 'No MOS data cached.<br>Tap ↻ to fetch (requires internet).';
-            content.appendChild(hint);
-            return;
-        }
-
-        // Age notice
-        const fetched = this._mosData.fetched_at;
-        if (fetched) {
-            const ageMin = Math.round((Date.now() - new Date(fetched)) / 60000);
-            const ageEl = document.createElement('div');
-            ageEl.className = 'wx-age-notice';
-            ageEl.textContent = `NWS forecast ${ageMin < 60 ? ageMin + 'm' : Math.round(ageMin / 60) + 'h'} old · Days 6-8 trend only`;
-            content.appendChild(ageEl);
-        }
-
-        // Timeline grid
-        if (this._mode === 'day') {
-            content.appendChild(this._buildDayGrid(stations));
-        } else {
-            content.appendChild(this._buildHourGrid(stations));
-        }
-
-        // Expanded airport detail
-        if (this._expandedIcao) {
-            const detail = this._buildAirportDetail(this._expandedIcao);
-            if (detail) content.appendChild(detail);
-        }
-    }
-
-    _showMessage(msg) {
-        const content = this._el?.querySelector('.wx-briefing-content');
-        if (!content) return;
-        const el = document.createElement('div');
-        el.className = 'wx-empty';
-        el.textContent = msg;
-        content.appendChild(el);
-    }
-
-    // ── Summary bar ───────────────────────────────────────────────────────────
-
-    _buildSummaryBar(stations) {
-        const bar = document.createElement('div');
-        bar.className = 'wx-summary-bar';
-
-        const plan = this._flightPlan;
-        const dep  = stations[0];
-        const dest = stations[stations.length - 1];
-
-        const routeLabel = dep !== dest ? `${dep} → ${dest}` : dep;
-        bar.innerHTML = `<span class="wx-summary-route">${routeLabel}</span>`;
-
-        if (!this._mosData) {
-            bar.innerHTML += '<span class="wx-summary-status wx-status-unknown">No data</span>';
-            return bar;
-        }
-
-        // Find best day for the route: all airports VFR during prime hours
-        const bestDay = this._findBestDay(stations);
-        if (bestDay) {
-            const label = this._dayLabel(bestDay.date);
-            const isCurrent = this._isSameDay(bestDay.date, new Date());
-            bar.innerHTML += `<span class="wx-summary-status wx-status-vfr">${isCurrent ? 'Today' : label}: ${bestDay.worstCat}</span>`;
-        }
-
-        return bar;
     }
 
     // ── 7-Day grid ────────────────────────────────────────────────────────────
@@ -652,7 +555,7 @@ class WxBriefing {
             labelCell.textContent = icao;
             labelCell.addEventListener('click', () => {
                 this._expandedIcao = isExpanded ? null : icao;
-                this._render();
+                this._renderMos();
             });
             grid.appendChild(labelCell);
 
@@ -677,7 +580,7 @@ class WxBriefing {
                 // Click to jump to hour view for this day
                 cell.addEventListener('click', () => {
                     this._expandedIcao = icao;
-                    this._render();
+                    this._renderMos();
                 });
                 grid.appendChild(cell);
             }
@@ -749,7 +652,7 @@ class WxBriefing {
             labelCell.textContent = icao;
             labelCell.addEventListener('click', () => {
                 this._expandedIcao = isExpanded ? null : icao;
-                this._render();
+                this._renderMos();
             });
             grid.appendChild(labelCell);
 
@@ -859,7 +762,7 @@ class WxBriefing {
             <button class="wx-detail-close">✕</button>`;
         title.querySelector('.wx-detail-close').addEventListener('click', () => {
             this._expandedIcao = null;
-            this._render();
+            this._renderMos();
         });
         section.appendChild(title);
 

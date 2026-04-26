@@ -746,7 +746,8 @@ class FlyTabApp {
 
         // Weather briefing (MOS timeline)
         if (typeof WxBriefing !== 'undefined') {
-            this.wxBriefing = new WxBriefing(nasrDb);
+            const wxCfg = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.raw : {};
+            this.wxBriefing = new WxBriefing(nasrDb, wxCfg);
             this.wxBriefing.init();
         }
 
