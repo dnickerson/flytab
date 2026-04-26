@@ -7464,6 +7464,7 @@ body {
     display: flex;
     align-items: center;
     gap: 8px;
+    min-height: 44px;
     padding: 9px 12px;
     cursor: pointer;
     user-select: none;
@@ -7504,6 +7505,7 @@ body {
     display: flex;
     align-items: center;
     gap: 8px;
+    min-height: 44px;
     padding: 9px 10px;
     cursor: pointer;
     user-select: none;
@@ -7617,6 +7619,7 @@ body {
     display: flex;
     align-items: flex-start;
     gap: 8px;
+    min-height: 44px;
     padding: 9px 12px;
     cursor: pointer;
     user-select: none;
