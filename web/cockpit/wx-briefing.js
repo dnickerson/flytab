@@ -369,7 +369,62 @@ class WxBriefing {
 
         sec.appendChild(body);
     }
-    _renderNotamSection() {}
+    _renderNotamSection() {
+        const sec = this._section('wx-notam-section');
+        if (!sec) return;
+
+        const apiKey = this._config?.notam_api_key || '';
+
+        if (this._notams === null) {
+            sec.innerHTML = this._buildRhsHeader('NOTAMs', null, 'Fetching…').outerHTML;
+            return;
+        }
+
+        if (!apiKey) {
+            const hdr = this._buildRhsHeader('NOTAMs', null, 'NO API KEY');
+            sec.innerHTML = '';
+            sec.appendChild(hdr);
+            const body = document.createElement('div');
+            body.className = 'wx-rhs-body open';
+            body.innerHTML = '<div class="wx-section-empty">NOTAM API key not configured in cockpit-config.json.</div>';
+            sec.appendChild(body);
+            return;
+        }
+
+        const critical = this._notams.filter(n => n.type === 'RWY' || n.type === 'NAVAID');
+        const badgeClass = critical.length > 0 ? 'warn' : (this._notams.length > 0 ? 'info' : 'ok');
+        const badgeText = critical.length > 0
+            ? `${critical.length} CRITICAL`
+            : (this._notams.length > 0 ? `${this._notams.length} ACTIVE` : 'NONE');
+
+        const hdr = this._buildRhsHeader('NOTAMs', badgeClass, badgeText);
+        sec.innerHTML = '';
+        sec.appendChild(hdr);
+
+        const body = document.createElement('div');
+        body.className = 'wx-rhs-body open';
+
+        if (!this._notams.length) {
+            body.innerHTML = '<div class="wx-section-empty">No active NOTAMs for route airports.</div>';
+        } else {
+            for (const notam of this._notams) {
+                const typeClass = (notam.type === 'RWY' || notam.type === 'NAVAID') ? 'rwy' : notam.type.toLowerCase();
+                const validStr = notam.validTo
+                    ? `Valid to <b>${new Date(notam.validTo).toLocaleDateString([], {weekday:'short',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})} L</b>`
+                    : '';
+                const card = this._buildAdvCard(
+                    notam.type, typeClass,
+                    `${notam.airport} · ${notam.summary}`,
+                    `${notam.airport}`,
+                    notam.raw,
+                    validStr
+                );
+                body.appendChild(card);
+            }
+        }
+
+        sec.appendChild(body);
+    }
 
     // ── Panel construction ────────────────────────────────────────────────────
 
@@ -1426,6 +1481,98 @@ class WxBriefing {
         const n = Math.min(lats.length, lons.length);
         if (n < 3) return null;
         return Array.from({ length: n }, (_, i) => [lats[i], lons[i]]);
+    }
+
+    // ── NOTAM fetch & helpers ─────────────────────────────────────────────────
+
+    async _fetchNotams() {
+        this._notams = null;
+        this._renderNotamSection();
+
+        const apiKey  = this._config?.notam_api_key  || '';
+        const apiBase = this._config?.notam_api_base || 'https://api-staging.cgifederal-aim.com/nmsapi/v1';
+
+        if (!apiKey) {
+            this._notams = [];
+            this._renderNotamSection();
+            return;
+        }
+
+        const stations = this._getStationList();
+        if (!stations.length) { this._notams = []; this._renderNotamSection(); return; }
+
+        try {
+            const notams = [];
+            const seen = new Set();
+
+            for (const icao of stations) {
+                const url = `${apiBase}/notams?icao=${icao}&radius=10`;
+                const resp = await fetch(url, {
+                    signal: AbortSignal.timeout(10000),
+                    headers: { 'X-API-Key': apiKey, 'Accept': 'application/json' },
+                });
+                if (!resp.ok) continue;
+                const data = await resp.json();
+                const items = data.notams || data.items || data || [];
+                for (const item of (Array.isArray(items) ? items : [])) {
+                    const num = item.notamNumber || item.id || '';
+                    if (seen.has(num)) continue;
+                    seen.add(num);
+                    notams.push(this._parseNotam(item, icao));
+                }
+            }
+
+            const order = ['RWY', 'NAVAID', 'OBST', 'TWY', 'AD', 'SVC'];
+            notams.sort((a, b) => {
+                const ai = order.indexOf(a.type);
+                const bi = order.indexOf(b.type);
+                if (ai !== bi) return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
+                const aRoute = stations.indexOf(a.airport);
+                const bRoute = stations.indexOf(b.airport);
+                if (aRoute !== bRoute) return aRoute - bRoute;
+                return 0;
+            });
+
+            this._notams = notams;
+            this._notamFetchedAt = Date.now();
+            try {
+                localStorage.setItem('flytab_notam_cache', JSON.stringify({ fetched_at: Date.now(), data: notams }));
+            } catch (_) {}
+        } catch (err) {
+            console.error('NOTAM fetch failed:', err);
+            try {
+                const raw = localStorage.getItem('flytab_notam_cache');
+                if (raw) { const c = JSON.parse(raw); this._notams = c.data || []; }
+                else this._notams = [];
+            } catch (_) { this._notams = []; }
+        }
+
+        this._renderAgeGroup();
+        this._renderNotamSection();
+    }
+
+    _parseNotam(item, airport) {
+        const raw = item.notamText || item.text || item.rawText || JSON.stringify(item);
+        const type = this._classifyNotam(raw);
+        const summary = this._summarizeNotam(raw, type);
+        const validFrom = item.effectiveStart || item.startDate || null;
+        const validTo   = item.effectiveEnd   || item.endDate   || null;
+        return { airport, type, summary, raw, validFrom, validTo };
+    }
+
+    _classifyNotam(raw) {
+        const r = raw.toUpperCase();
+        if (/\bRWY\b/.test(r)) return 'RWY';
+        if (/\bNAVAID\b|ILS|VOR|NDB|LOC\b|PAPI|VASI/.test(r)) return 'NAVAID';
+        if (/\bOBST\b|CRANE|TOWER|ANTENNA/.test(r)) return 'OBST';
+        if (/\bTWY\b/.test(r)) return 'TWY';
+        if (/\bAD\b|\bAPRON\b|\bRAMP\b/.test(r)) return 'AD';
+        return 'SVC';
+    }
+
+    _summarizeNotam(raw, type) {
+        const clean = raw.replace(/^![A-Z0-9\/\s]+\n?/, '').trim();
+        return clean.slice(0, 100).replace(/\n/g, ' ');
     }
 
     // ── AFD fetch ─────────────────────────────────────────────────────────────
