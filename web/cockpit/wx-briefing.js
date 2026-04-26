@@ -1330,6 +1330,7 @@ class WxBriefing {
         }
         this._renderAgeGroup();
         this._renderAirmetSection();
+        this._renderPlanningSection();
     }
 
     _filterAdvisoriesForRoute(advisories, bufferDeg = 0.83) {
@@ -1463,6 +1464,7 @@ class WxBriefing {
             } catch (_) { this._mcds = []; }
         }
         this._renderMcdSection();
+        this._renderPlanningSection();
     }
 
     _parseMcd(item) {
