@@ -371,7 +371,9 @@ class WxBriefing {
                     afd.office, 'afd',
                     afd.name || afd.office,
                     `Issued ${issued}`,
-                    this._extractAviationSection(afd.text)
+                    this._extractAviationSection(afd.text),
+                    '',
+                    true
                 ));
             }
         }
@@ -1405,7 +1407,7 @@ class WxBriefing {
         return (match[0] + rest.slice(0, end)).trim();
     }
 
-    _buildAdvCard(typeLabel, typeClass, hazard, meta, text, validHtml = '') {
+    _buildAdvCard(typeLabel, typeClass, hazard, meta, text, validHtml = '', expanded = false) {
         const card = document.createElement('div');
         card.className = 'wx-adv-card';
         card.innerHTML = `
@@ -1415,9 +1417,9 @@ class WxBriefing {
                     <div class="wx-adv-hazard">${this._escHtml(hazard)}</div>
                     <div class="wx-adv-meta">${this._escHtml(meta)}</div>
                 </div>
-                <span class="wx-adv-chevron">›</span>
+                <span class="wx-adv-chevron${expanded ? ' open' : ''}">›</span>
             </div>
-            <div class="wx-adv-body">
+            <div class="wx-adv-body${expanded ? ' open' : ''}">
                 <div class="wx-adv-text">${this._escHtml(text)}</div>
                 ${validHtml ? `<div class="wx-adv-valid">${validHtml}</div>` : ''}
             </div>
