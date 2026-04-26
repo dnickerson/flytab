@@ -100,6 +100,7 @@ class WxBriefing {
         this._renderMcdSection();
         this._renderAfdSection();
         this._renderNotamSection();
+        this._renderPlanningSection();
     }
 
     _section(id) {
@@ -463,6 +464,7 @@ class WxBriefing {
                     <div id="wx-mcd-section"></div>
                     <div id="wx-afd-section"></div>
                     <div id="wx-notam-section"></div>
+                    <div id="wx-planning-section"></div>
                 </div>
             </div>
         `;
@@ -1562,6 +1564,84 @@ class WxBriefing {
         return clean.slice(0, 100).replace(/\n/g, ' ');
     }
 
+    // ── Planning Summary section ──────────────────────────────────────────────
+
+    _renderPlanningSection() {
+        const sec = this._section('wx-planning-section');
+        if (!sec) return;
+
+        const stations = this._getStationList();
+        if (!stations.length) { sec.innerHTML = ''; return; }
+
+        const dep  = stations[0];
+        const dest = stations[stations.length - 1];
+        const mid  = stations.slice(1, -1);
+
+        const hdr = document.createElement('div');
+        hdr.className = 'wx-rhs-hdr wx-planning-hdr';
+        hdr.innerHTML = `
+            <span class="wx-rhs-title wx-planning-title">PLANNING SUMMARY</span>
+            <span class="wx-rhs-chevron open">›</span>
+        `;
+
+        const body = document.createElement('div');
+        body.className = 'wx-rhs-body open';
+
+        hdr.addEventListener('click', () => {
+            hdr.querySelector('.wx-rhs-chevron')?.classList.toggle('open');
+            body.classList.toggle('open');
+        });
+
+        const inner = document.createElement('div');
+        inner.className = 'wx-planning-body';
+
+        let routeStr = `${dep} → ${dest}`;
+        if (mid.length) routeStr += ` via ${mid.join(', ')}`;
+        let html = `<div class="wx-planning-route">${routeStr}</div>`;
+
+        if (this._mosData) {
+            const now = new Date();
+            const tomorrow = new Date(now);
+            tomorrow.setUTCDate(now.getUTCDate() + 1);
+            const fmtCat = (cat) => cat
+                ? `<span class="wx-cat-badge wx-cat-${cat.toLowerCase()}">&nbsp;${cat}&nbsp;</span>`
+                : '<span style="color:#888">—</span>';
+
+            for (const icao of [dep, ...mid.slice(0, 2), dest]) {
+                const sd = this._mosData?.stations?.[icao];
+                if (!sd) continue;
+                const todayCat = this._worstCatForDay(sd, now);
+                const tmrwCat  = this._worstCatForDay(sd, tomorrow);
+                if (!todayCat && !tmrwCat) continue;
+                html += `<div class="wx-planning-row">
+                    <b>${icao}</b> &nbsp;
+                    Today: ${fmtCat(todayCat)} &nbsp;
+                    Tomorrow: ${fmtCat(tmrwCat)}
+                </div>`;
+            }
+        }
+
+        const warnings = [];
+        if (this._airmets?.length) {
+            const filtered = this._filterAdvisoriesForRoute(this._airmets);
+            if (filtered.length) warnings.push(`${filtered.length} AIRMET${filtered.length > 1 ? 's' : ''} on route`);
+        }
+        if (this._mcds?.length) {
+            const filtered = this._mcds.filter(m =>
+                !m.polygon || this._filterAdvisoriesForRoute([{ points: m.polygon }]).length > 0);
+            if (filtered.length) warnings.push(`${filtered.length} Mesoscale Discussion${filtered.length > 1 ? 's' : ''} active`);
+        }
+        if (warnings.length) {
+            html += `<div class="wx-planning-warn">⚠ ${warnings.join(' · ')}</div>`;
+        }
+
+        inner.innerHTML = html;
+        body.appendChild(inner);
+        sec.innerHTML = '';
+        sec.appendChild(hdr);
+        sec.appendChild(body);
+    }
+
     // ── AFD fetch ─────────────────────────────────────────────────────────────
 
     async _fetchAfds() {
@@ -1569,34 +1649,50 @@ class WxBriefing {
         this._renderAfdSection();
         try {
             const coords = await this._getRouteCoords();
-            const endpoints = [];
             const keyCoords = [];
             if (coords.length > 0) keyCoords.push(coords[0]);
             if (coords.length > 1) keyCoords.push(coords[coords.length - 1]);
 
-            const officeIds = new Set();
+            // Map cwa → { cwa: 'KXXX', name: 'Office Name NWS', airports: [] }
+            const officeMap = new Map();
             for (const c of keyCoords) {
                 try {
                     const ptResp = await fetch(`https://api.weather.gov/points/${c.lat.toFixed(4)},${c.lon.toFixed(4)}`,
                         { signal: AbortSignal.timeout(8000) });
-                    if (ptResp.ok) {
-                        const pt = await ptResp.json();
-                        const cwa = pt?.properties?.cwa;
-                        const officeName = pt?.properties?.relativeLocation?.properties?.city
-                            ? `${pt.properties.relativeLocation.properties.city} NWS`
-                            : (cwa || '');
-                        if (cwa && !officeIds.has(cwa)) {
-                            officeIds.add(cwa);
-                            endpoints.push({ cwa: `K${cwa}`, name: officeName });
-                        }
+                    if (!ptResp.ok) continue;
+                    const pt = await ptResp.json();
+                    const cwa = pt?.properties?.cwa;
+                    if (!cwa) continue;
+                    if (!officeMap.has(cwa)) {
+                        // Fetch actual NWS office name (e.g. "Greenville-Spartanburg NWS")
+                        let officeName = cwa;
+                        try {
+                            const offResp = await fetch(`https://api.weather.gov/offices/${cwa}`,
+                                { signal: AbortSignal.timeout(6000) });
+                            if (offResp.ok) {
+                                const offData = await offResp.json();
+                                // "National Weather Service Greenville-Spartanburg SC" → "Greenville-Spartanburg"
+                                officeName = (offData.name || '')
+                                    .replace(/^National Weather Service\s*/i, '')
+                                    .replace(/\s+[A-Z]{2}$/, '');
+                            }
+                        } catch (_) {}
+                        officeMap.set(cwa, {
+                            cwa: `K${cwa}`,
+                            name: officeName ? `${officeName} NWS` : cwa,
+                            airports: [],
+                        });
                     }
+                    if (c.icao) officeMap.get(cwa).airports.push(c.icao);
                 } catch (_) {}
             }
 
-            if (!officeIds.size) throw new Error('No NWS offices found for route');
+            if (!officeMap.size) throw new Error('No NWS offices found for route');
 
             const afds = [];
-            for (const ep of endpoints) {
+            for (const ep of officeMap.values()) {
+                const displayName = ep.name +
+                    (ep.airports.length ? ` — covers ${ep.airports.join('/')}` : '');
                 try {
                     const pResp = await fetch(`https://api.weather.gov/products?type=AFD&office=${ep.cwa}&limit=1`,
                         { signal: AbortSignal.timeout(8000) });
@@ -1610,7 +1706,7 @@ class WxBriefing {
                     const tData = await tResp.json();
                     afds.push({
                         office: ep.cwa,
-                        name: ep.name,
+                        name: displayName,
                         issued: item.issuanceTime || null,
                         text: tData.productText || item.productText || '',
                     });
