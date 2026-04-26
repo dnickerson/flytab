@@ -20,8 +20,6 @@ class RouteEditor {
         this._insertIndex = -1; // -1 = append
         this._expandedIndex = -1;
         this._searchDebounce = null;
-        this._mapTapMode = false;
-        this._mapTapHandler = null;
         this._plan = null; // reference to loaded plan for metadata
         this._parseSeq = 0; // sequence counter to discard stale route parse results
     }
@@ -33,7 +31,6 @@ class RouteEditor {
 
     destroy() {
         this.hide();
-        this._disableMapTapMode();
         if (this._el && this._el.parentNode) this._el.remove();
         if (this._directToEl && this._directToEl.parentNode) this._directToEl.remove();
     }
@@ -48,7 +45,6 @@ class RouteEditor {
     hide() {
         this._visible = false;
         this._el.classList.remove('route-editor-visible');
-        this._disableMapTapMode();
         this._clearSearch();
     }
 
@@ -194,7 +190,6 @@ class RouteEditor {
                 <input type="text" class="input route-editor-search" placeholder="Search or paste route..." autocomplete="off" autocorrect="off" spellcheck="false">
                 <button class="btn btn-primary route-editor-go-btn" title="Parse route or search">GO</button>
                 <button class="btn btn-secondary route-editor-nearby-btn" title="Nearby airports">NEARBY</button>
-                <button class="btn btn-secondary route-editor-maptap-btn" title="Tap map to add">MAP+</button>
             </div>
             <div class="route-editor-results" hidden></div>
             <div class="route-editor-controls">
@@ -233,7 +228,6 @@ class RouteEditor {
         // GO button: explicit trigger for Android paste (events unreliable)
         wireTap(this._el.querySelector('.route-editor-go-btn'), () => this._onSearchInput());
         wireTap(this._el.querySelector('.route-editor-nearby-btn'), () => this._showNearby());
-        wireTap(this._el.querySelector('.route-editor-maptap-btn'), () => this._toggleMapTapMode());
         wireTap(this._undoBtn, () => this._popUndo());
         this._altInput.addEventListener('change', () => {
             this._altitude = parseInt(this._altInput.value) || 3500;
@@ -492,79 +486,6 @@ class RouteEditor {
         const projLat = aLat + t * dy;
         const projLon = aLon + t * dx;
         return CockpitMap._distNm(pLat, pLon, projLat, projLon);
-    }
-
-    // ========== Map Tap Mode ==========
-
-    _toggleMapTapMode() {
-        if (this._mapTapMode) {
-            this._disableMapTapMode();
-        } else {
-            this._enableMapTapMode();
-        }
-    }
-
-    _enableMapTapMode() {
-        if (!this.cockpitMap || !this.cockpitMap.map) return;
-        this._mapTapMode = true;
-        const btn = this._el.querySelector('.route-editor-maptap-btn');
-        if (btn) btn.classList.add('active');
-        this.cockpitMap.map.getContainer().style.cursor = 'crosshair';
-
-        this._mapTapHandler = async (e) => {
-            const { lat, lng } = e.latlng;
-            // Find nearest airport within 5nm
-            try {
-                const nearby = await this.nasrDb.getAirportsNear(lat, lng, 5);
-                if (nearby.length > 0) {
-                    nearby.sort((a, b) =>
-                        CockpitMap._distNm(lat, lng, a.lat, a.lon) -
-                        CockpitMap._distNm(lat, lng, b.lat, b.lon)
-                    );
-                    const apt = nearby[0];
-                    const idx = this._insertIndex >= 0 ? this._insertIndex : this._waypoints.length;
-                    this._addWaypoint({
-                        icao: apt.icao, name: apt.name || apt.icao,
-                        lat: apt.lat, lon: apt.lon, alt: this._altitude,
-                        type: 'APT',
-                    }, idx);
-                } else {
-                    // Add as lat/lon waypoint
-                    const idx = this._insertIndex >= 0 ? this._insertIndex : this._waypoints.length;
-                    this._addWaypoint({
-                        icao: `${lat.toFixed(2)}/${lng.toFixed(2)}`,
-                        name: `${lat.toFixed(2)}/${lng.toFixed(2)}`,
-                        lat, lon: lng, alt: this._altitude,
-                        type: 'GPS',
-                    }, idx);
-                }
-            } catch {
-                // Fallback: add as lat/lon
-                const idx = this._insertIndex >= 0 ? this._insertIndex : this._waypoints.length;
-                this._addWaypoint({
-                    icao: `${lat.toFixed(2)}/${lng.toFixed(2)}`,
-                    name: `${lat.toFixed(2)}/${lng.toFixed(2)}`,
-                    lat, lon: lng, alt: this._altitude,
-                    type: 'GPS',
-                }, idx);
-            }
-            this._disableMapTapMode();
-        };
-
-        this.cockpitMap.map.once('click', this._mapTapHandler);
-    }
-
-    _disableMapTapMode() {
-        this._mapTapMode = false;
-        const btn = this._el?.querySelector('.route-editor-maptap-btn');
-        if (btn) btn.classList.remove('active');
-        if (this.cockpitMap?.map) {
-            this.cockpitMap.map.getContainer().style.cursor = '';
-            if (this._mapTapHandler) {
-                this.cockpitMap.map.off('click', this._mapTapHandler);
-                this._mapTapHandler = null;
-            }
-        }
     }
 
     // ========== Render Waypoints ==========

@@ -2105,7 +2105,10 @@ class RouteTable {
 
         // Delegated event listeners for all interactive table elements.
         // Delegation survives DOM rebuilds from live Stratux updates (issue #30).
+        // Belt-and-suspenders: also check _wireTapLastTouchAt (from tap-utils.js) to
+        // suppress synthetic clicks that slip through e.preventDefault() on some Android versions.
         this._tableEl.addEventListener('click', (e) => {
+            if (Date.now() - (_wireTapLastTouchAt || 0) < 350) return;
             const del = e.target.closest('.rt-delete-btn');
             if (del) { e.stopPropagation(); this._removeWaypoint(parseInt(del.dataset.idx)); return; }
             const demote = e.target.closest('.rt-demote-fuel-stop-btn');
@@ -2134,23 +2137,23 @@ class RouteTable {
             }
         });
         // Touchend delegation for Android reliability — covers all row interactions.
-        // e.preventDefault() suppresses the synthetic click so the click handler below
-        // doesn't double-fire on touch devices.
+        // e.preventDefault() suppresses the synthetic click; _wireTapLastTouchAt provides
+        // a second guard in case preventDefault() is ignored by the WebView.
         this._tableEl.addEventListener('touchend', (e) => {
             const del = e.target.closest('.rt-delete-btn');
-            if (del) { e.preventDefault(); e.stopPropagation(); this._removeWaypoint(parseInt(del.dataset.idx)); return; }
+            if (del) { e.preventDefault(); e.stopPropagation(); _wireTapLastTouchAt = Date.now(); this._removeWaypoint(parseInt(del.dataset.idx)); return; }
             const demote = e.target.closest('.rt-demote-fuel-stop-btn');
-            if (demote) { e.preventDefault(); e.stopPropagation(); this._demoteFuelStop(parseInt(demote.dataset.idx)); return; }
+            if (demote) { e.preventDefault(); e.stopPropagation(); _wireTapLastTouchAt = Date.now(); this._demoteFuelStop(parseInt(demote.dataset.idx)); return; }
             const up = e.target.closest('.rt-up-btn');
-            if (up) { e.preventDefault(); e.stopPropagation(); this._moveWaypoint(parseInt(up.dataset.idx), parseInt(up.dataset.idx) - 1); return; }
+            if (up) { e.preventDefault(); e.stopPropagation(); _wireTapLastTouchAt = Date.now(); this._moveWaypoint(parseInt(up.dataset.idx), parseInt(up.dataset.idx) - 1); return; }
             const down = e.target.closest('.rt-down-btn');
-            if (down) { e.preventDefault(); e.stopPropagation(); this._moveWaypoint(parseInt(down.dataset.idx), parseInt(down.dataset.idx) + 1); return; }
+            if (down) { e.preventDefault(); e.stopPropagation(); _wireTapLastTouchAt = Date.now(); this._moveWaypoint(parseInt(down.dataset.idx), parseInt(down.dataset.idx) + 1); return; }
             const altCell = e.target.closest('.rt-alt-cell');
-            if (altCell && this._editMode) { e.preventDefault(); e.stopPropagation(); this._showAltPicker(parseInt(altCell.dataset.idx), altCell); return; }
+            if (altCell && this._editMode) { e.preventDefault(); e.stopPropagation(); _wireTapLastTouchAt = Date.now(); this._showAltPicker(parseInt(altCell.dataset.idx), altCell); return; }
             const pwr = e.target.closest('.rt-pwr-header');
-            if (pwr) { e.preventDefault(); e.stopPropagation(); this._cycleCruisePower(); return; }
+            if (pwr) { e.preventDefault(); e.stopPropagation(); _wireTapLastTouchAt = Date.now(); this._cycleCruisePower(); return; }
             const rules = e.target.closest('.rt-rules-header');
-            if (rules) { e.preventDefault(); e.stopPropagation(); this._toggleFlightRules(); return; }
+            if (rules) { e.preventDefault(); e.stopPropagation(); _wireTapLastTouchAt = Date.now(); this._toggleFlightRules(); return; }
             const row = e.target.closest('.rt-row');
             if (row) {
                 const idx = parseInt(row.dataset.idx);
