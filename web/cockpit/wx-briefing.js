@@ -146,8 +146,76 @@ class WxBriefing {
         return ts > 0 && (Date.now() - ts) < ttlMinutes * 60000;
     }
 
-    _renderSummaryBar() {}
-    _renderMos() {}
+    _renderSummaryBar() {
+        const bar = this._el?.querySelector('#wx-summary-bar');
+        if (!bar) return;
+        const stations = this._getStationList();
+        const dep  = stations[0]  || '—';
+        const dest = stations[stations.length - 1] || '—';
+        const route = dep !== dest ? `${dep} → ${dest}` : dep;
+
+        let badgeHtml = '';
+        if (this._mosData) {
+            const best = this._findBestDay(stations);
+            if (best) {
+                const label = this._isSameDay(best.date, new Date())
+                    ? 'Today'
+                    : this._dayLabel(best.date);
+                const cls = (best.worstCat || 'unknown').toLowerCase();
+                badgeHtml = `<span class="wx-summary-badge ${cls}">${label}: ${best.worstCat}</span>`;
+            }
+        }
+
+        bar.innerHTML = `<span class="wx-summary-route">${route}</span>${badgeHtml}`;
+    }
+
+    _renderMos() {
+        const sec = this._section('wx-mos-section');
+        if (!sec) return;
+        sec.innerHTML = '';
+
+        const stations = this._getStationList();
+        if (!stations.length) {
+            sec.innerHTML = '<div class="wx-section-empty">No flight plan loaded.</div>';
+            return;
+        }
+
+        if (this._loading) {
+            sec.innerHTML = this._loadingHtml('MOS');
+            return;
+        }
+
+        if (!this._mosData) {
+            sec.innerHTML = '<div class="wx-section-empty">No MOS cached. Tap ↻ to fetch.</div>';
+            return;
+        }
+
+        const wrap = document.createElement('div');
+        wrap.className = 'wx-mos-wrap';
+
+        if (this._mode === 'day') {
+            wrap.appendChild(this._buildDayGrid(stations));
+            const best = this._findBestDay(stations);
+            if (best) {
+                const note = document.createElement('div');
+                note.className = 'wx-mos-note';
+                note.textContent = `Best: ${this._dayLabel(best.date)} (${best.worstCat}) · Days 6–8 trend only`;
+                wrap.appendChild(note);
+            }
+        } else {
+            wrap.appendChild(this._buildHourGrid(stations));
+        }
+
+        if (this._mosData.fetched_at) {
+            const ageMin = Math.round((Date.now() - new Date(this._mosData.fetched_at)) / 60000);
+            const ageEl = document.createElement('div');
+            ageEl.className = 'wx-mos-note';
+            ageEl.textContent = `MOS ${ageMin < 60 ? ageMin + 'm' : Math.round(ageMin / 60) + 'h'} old`;
+            wrap.appendChild(ageEl);
+        }
+
+        sec.appendChild(wrap);
+    }
     _renderMetarSection() {}
     _renderAirmetSection() {}
     _renderMcdSection() {}
@@ -241,7 +309,9 @@ class WxBriefing {
             this._showMessage(msg);
         } finally {
             this._loading = false;
-            this._render();
+            this._renderSummaryBar();
+            this._renderAgeGroup();
+            this._renderMos();
         }
     }
 
