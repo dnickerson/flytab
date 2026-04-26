@@ -175,7 +175,14 @@ class WxBriefing {
         if (!sec) return;
         sec.innerHTML = '';
 
-        const stations = this._getStationList();
+        const allStations = this._getStationList();
+        // Filter to only stations that have MOS data
+        const stations = this._mosData
+            ? allStations.filter(id => {
+                const stData = this._mosData.stations?.[id] || this._mosData[id];
+                return stData != null;
+            })
+            : allStations;
         if (!stations.length) {
             sec.innerHTML = '<div class="wx-section-empty">No flight plan loaded.</div>';
             return;
@@ -363,7 +370,7 @@ class WxBriefing {
                     afd.office, 'afd',
                     afd.name || afd.office,
                     `Issued ${issued}`,
-                    afd.text
+                    this._extractAviationSection(afd.text)
                 ));
             }
         }
@@ -478,7 +485,16 @@ class WxBriefing {
     // ── Data fetching ─────────────────────────────────────────────────────────
 
     async _fetchMos() {
-        const stations = this._getStationList();
+        const baseStations = this._getStationList();
+        let stations = baseStations;
+        try {
+            const corridorApts = await this._getCorridorAirports(20);
+            if (corridorApts.length) {
+                const baseSet = new Set(baseStations);
+                const extra = corridorApts.map(a => a.icao).filter(id => !baseSet.has(id));
+                stations = [...baseStations, ...extra];
+            }
+        } catch (_) {}
         if (!stations.length) {
             return;
         }
@@ -977,6 +993,23 @@ class WxBriefing {
         return coords;
     }
 
+    async _getCorridorAirports(radiusNm = 20) {
+        const coords = await this._getRouteCoords();
+        if (!coords.length) return [];
+        const seen = new Set();
+        const airports = [];
+        for (const c of coords) {
+            const nearby = await this._db.getAirportsNear(c.lat, c.lon, radiusNm);
+            for (const apt of (nearby || [])) {
+                const icao = apt.icao_id || apt.id;
+                if (!icao || seen.has(icao)) continue;
+                seen.add(icao);
+                airports.push({ icao, lat: apt.lat, lon: apt.lon });
+            }
+        }
+        return airports;
+    }
+
     async _getRouteBbox(bufferDeg = 0.15) {
         const coords = await this._getRouteCoords();
         if (!coords.length) return null;
@@ -998,9 +1031,19 @@ class WxBriefing {
         this._renderMetarSection();
 
         try {
-            const bbox = await this._getRouteBbox(0.15);
+            // Get all airports within 20nm of route corridor
+            const corridorApts = await this._getCorridorAirports(20);
+            const allIds = corridorApts.length
+                ? corridorApts.map(a => a.icao)
+                : stations;
+
+            // Update routeCoords to include corridor airports for distance labels
+            if (corridorApts.length && !this._routeCoords) {
+                await this._getRouteCoords();
+            }
+
             const [metarRes, tafRes] = await Promise.allSettled([
-                bbox ? this._fetchMetarsByBbox(bbox) : this._fetchMetarsById(stations),
+                this._fetchMetarsForIds(allIds),
                 this._fetchTafsStructured(stations),
             ]);
 
@@ -1014,6 +1057,34 @@ class WxBriefing {
 
         this._renderAgeGroup();
         this._renderMetarSection();
+    }
+
+    async _fetchMetarsForIds(ids) {
+        if (!ids.length) return {};
+        // Batch into groups of 50 to avoid URL length limits
+        const batches = [];
+        for (let i = 0; i < ids.length; i += 50) batches.push(ids.slice(i, i + 50));
+        const out = {};
+        for (const batch of batches) {
+            const url = `${WeatherClient.AWC_BASE}/metar?ids=${batch.join(',')}&format=json&hoursBeforeNow=2`;
+            try {
+                const resp = await fetch(url, { signal: AbortSignal.timeout(15000) });
+                if (!resp.ok) continue;
+                const items = await resp.json();
+                for (const item of (Array.isArray(items) ? items : [])) {
+                    const icao = item.icaoId || item.station_id;
+                    if (!icao || out[icao]) continue;
+                    out[icao] = {
+                        raw: item.rawOb || '',
+                        decoded: WeatherClient.decodeMetar(item),
+                        reportTime: item.reportTime,
+                        lat: item.lat,
+                        lon: item.lon,
+                    };
+                }
+            } catch (_) {}
+        }
+        return out;
     }
 
     async _fetchMetarsByBbox(bbox) {
@@ -1284,6 +1355,19 @@ class WxBriefing {
             if (body) body.classList.toggle('open');
         });
         return hdr;
+    }
+
+    _extractAviationSection(text) {
+        if (!text) return text;
+        // Find .AVIATION section header (case-insensitive)
+        const match = text.match(/\.AVIATION\b[^\n]*/i);
+        if (!match) return text;
+        const start = text.indexOf(match[0]);
+        // Find end: next section header starting with . on its own line, or end of text
+        const rest = text.slice(start + match[0].length);
+        const nextSection = rest.match(/\n\.[A-Z]{2}/);
+        const end = nextSection ? rest.indexOf(nextSection[0]) : rest.length;
+        return (match[0] + rest.slice(0, end)).trim();
     }
 
     _buildAdvCard(typeLabel, typeClass, hazard, meta, text, validHtml = '') {
