@@ -216,7 +216,48 @@ class WxBriefing {
 
         sec.appendChild(wrap);
     }
-    _renderMetarSection() {}
+    _renderMetarSection() {
+        const sec = this._section('wx-metar-section');
+        if (!sec) return;
+
+        if (this._metarData === null) {
+            sec.innerHTML = this._loadingHtml('METARs & TAFs');
+            return;
+        }
+        if (this._metarData._error) {
+            sec.innerHTML = this._errorHtml('METARs & TAFs');
+            return;
+        }
+
+        const stations = this._getStationList();
+        const allIcaos = Object.keys(this._metarData).filter(k => k !== '_error');
+        const routeSet = new Set(stations);
+        const coords = this._routeCoords || [];
+
+        const sorted = [...allIcaos].sort((a, b) => {
+            const aRoute = routeSet.has(a) ? 0 : 1;
+            const bRoute = routeSet.has(b) ? 0 : 1;
+            if (aRoute !== bRoute) return aRoute - bRoute;
+            if (!coords.length) return 0;
+            const distA = this._distToNearestCoord(this._metarData[a]?.lat, this._metarData[a]?.lon, coords);
+            const distB = this._distToNearestCoord(this._metarData[b]?.lat, this._metarData[b]?.lon, coords);
+            return distA - distB;
+        });
+
+        const count = allIcaos.length;
+        sec.innerHTML = `
+            <div class="wx-section-hdr">
+                <span class="wx-section-hdr-title">METARs &amp; TAFs</span>
+                <span class="wx-section-hdr-sub">${count} STATION${count !== 1 ? 'S' : ''}</span>
+            </div>
+        `;
+
+        for (const icao of sorted) {
+            const m = this._metarData[icao];
+            if (!m) continue;
+            sec.appendChild(this._buildStationCard(icao, m, routeSet.has(icao)));
+        }
+    }
     _renderAirmetSection() {}
     _renderMcdSection() {}
     _renderAfdSection() {}
@@ -847,5 +888,258 @@ class WxBriefing {
         el.className = className || '';
         el.textContent = text;
         return el;
+    }
+
+    // ── METAR / TAF fetch ─────────────────────────────────────────────────────
+
+    async _getRouteCoords() {
+        if (this._routeCoords) return this._routeCoords;
+        const icaos = this._getStationList();
+        const coords = [];
+        for (const icao of icaos) {
+            const apt = await this._db.getAirport(icao);
+            if (apt?.lat && apt?.lon) coords.push({ icao, lat: apt.lat, lon: apt.lon });
+        }
+        if (this._flightPlan?.waypoints) {
+            for (const wp of this._flightPlan.waypoints) {
+                if (wp.lat && wp.lon && !coords.find(c => c.icao === wp.icao)) {
+                    coords.push({ icao: wp.icao || '', lat: wp.lat, lon: wp.lon });
+                }
+            }
+        }
+        this._routeCoords = coords;
+        return coords;
+    }
+
+    async _getRouteBbox(bufferDeg = 0.15) {
+        const coords = await this._getRouteCoords();
+        if (!coords.length) return null;
+        const lats = coords.map(c => c.lat);
+        const lons = coords.map(c => c.lon);
+        return {
+            s: Math.min(...lats) - bufferDeg,
+            n: Math.max(...lats) + bufferDeg,
+            w: Math.min(...lons) - bufferDeg,
+            e: Math.max(...lons) + bufferDeg,
+        };
+    }
+
+    async _fetchMetarTaf() {
+        const stations = this._getStationList();
+        if (!stations.length) return;
+
+        this._metarData = null; this._tafData = null;
+        this._renderMetarSection();
+
+        try {
+            const bbox = await this._getRouteBbox(0.15);
+            const [metarRes, tafRes] = await Promise.allSettled([
+                bbox ? this._fetchMetarsByBbox(bbox) : this._fetchMetarsById(stations),
+                this._fetchTafsStructured(stations),
+            ]);
+
+            this._metarData = metarRes.status === 'fulfilled' ? metarRes.value : {};
+            this._tafData   = tafRes.status === 'fulfilled'   ? tafRes.value   : {};
+            this._metarFetchedAt = Date.now();
+        } catch (err) {
+            console.error('METAR/TAF fetch failed:', err);
+            this._metarData = { _error: true };
+        }
+
+        this._renderAgeGroup();
+        this._renderMetarSection();
+    }
+
+    async _fetchMetarsByBbox(bbox) {
+        const url = `${WeatherClient.AWC_BASE}/metar?bbox=${bbox.s},${bbox.w},${bbox.n},${bbox.e}&format=json`;
+        const resp = await fetch(url, { signal: AbortSignal.timeout(15000) });
+        if (!resp.ok) throw new Error(`METAR bbox failed: ${resp.status}`);
+        const items = await resp.json();
+        const out = {};
+        for (const item of (Array.isArray(items) ? items : [])) {
+            const icao = item.icaoId || item.station_id;
+            if (!icao) continue;
+            if (!out[icao] || new Date(item.reportTime) > new Date(out[icao].reportTime)) {
+                out[icao] = { raw: item.rawOb || '', decoded: WeatherClient.decodeMetar(item), reportTime: item.reportTime, lat: item.lat, lon: item.lon };
+            }
+        }
+        return out;
+    }
+
+    async _fetchMetarsById(ids) {
+        const url = `${WeatherClient.AWC_BASE}/metar?ids=${ids.join(',')}&format=json`;
+        const resp = await fetch(url, { signal: AbortSignal.timeout(15000) });
+        if (!resp.ok) throw new Error(`METAR ids failed: ${resp.status}`);
+        const items = await resp.json();
+        const out = {};
+        for (const item of (Array.isArray(items) ? items : [])) {
+            const icao = item.icaoId || item.station_id;
+            if (!icao || out[icao]) continue;
+            out[icao] = { raw: item.rawOb || '', decoded: WeatherClient.decodeMetar(item), reportTime: item.reportTime, lat: item.lat, lon: item.lon };
+        }
+        return out;
+    }
+
+    async _fetchTafsStructured(ids) {
+        const url = `${WeatherClient.AWC_BASE}/taf?ids=${ids.join(',')}&format=json`;
+        const resp = await fetch(url, { signal: AbortSignal.timeout(15000) });
+        if (!resp.ok) throw new Error(`TAF failed: ${resp.status}`);
+        const items = await resp.json();
+        const out = {};
+        for (const item of (Array.isArray(items) ? items : [])) {
+            const icao = item.icaoId;
+            if (!icao) continue;
+            out[icao] = {
+                raw: item.rawTAF || '',
+                issued: item.issueTime || null,
+                valid_from: item.validTimeFrom || null,
+                valid_to: item.validTimeTo || null,
+                fcsts: item.fcsts || [],
+            };
+        }
+        return out;
+    }
+
+    // ── Station card rendering ────────────────────────────────────────────────
+
+    _buildStationCard(icao, metar, isOnRoute) {
+        const d = metar.decoded || {};
+        const cat = (d.flight_category || 'unknown').toLowerCase();
+        const obsTime = metar.reportTime
+            ? new Date(metar.reportTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' L'
+            : '—';
+
+        const card = document.createElement('div');
+        card.className = 'wx-station-card';
+
+        const proxLabel = isOnRoute ? 'ON ROUTE' : this._distLabelToRoute(metar.lat, metar.lon);
+
+        card.innerHTML = `
+            <div class="wx-card-hdr">
+                <span class="wx-card-icao">${icao}</span>
+                <span class="wx-card-prox${isOnRoute ? ' on-route' : ''}">${proxLabel}</span>
+                <span class="wx-card-obs">${obsTime}</span>
+                <span class="wx-card-cat ${cat}">${d.flight_category || '—'}</span>
+                <span class="wx-card-chevron">›</span>
+            </div>
+            <div class="wx-card-body"></div>
+        `;
+
+        const hdr = card.querySelector('.wx-card-hdr');
+        const body = card.querySelector('.wx-card-body');
+
+        if (isOnRoute) {
+            hdr.querySelector('.wx-card-chevron').classList.add('open');
+            body.classList.add('open');
+            this._populateStationCardBody(body, icao, metar);
+        }
+
+        hdr.addEventListener('click', () => {
+            const chevron = hdr.querySelector('.wx-card-chevron');
+            chevron.classList.toggle('open');
+            body.classList.toggle('open');
+            if (body.classList.contains('open') && !body.innerHTML.trim()) {
+                this._populateStationCardBody(body, icao, metar);
+            }
+        });
+
+        return card;
+    }
+
+    _populateStationCardBody(body, icao, metar) {
+        const d = metar.decoded || {};
+        const wind = d.wind_dir != null
+            ? `${String(d.wind_dir).padStart(3, '0')}° / ${d.wind_speed ?? '—'}kt${d.wind_gust ? ` G${d.wind_gust}` : ''}`
+            : 'Calm';
+        const vis  = d.visibility != null ? `${d.visibility} SM` : '—';
+        const ceil = d.ceiling != null
+            ? `${d.sky_condition?.find(s => s.base === d.ceiling)?.cover || 'BKN'} ${d.ceiling}ft`
+            : 'CLR';
+        const ceilClass = d.ceiling != null && d.ceiling < 1000 ? 'bad' : (d.ceiling != null && d.ceiling <= 3000 ? 'warn' : '');
+        const visClass  = d.visibility != null && d.visibility < 3 ? 'bad' : (d.visibility != null && d.visibility <= 5 ? 'warn' : '');
+        const temp = (d.temperature != null && d.dewpoint != null)
+            ? `${d.temperature}° / ${d.dewpoint}°` : '—';
+        const alt  = d.altimeter != null
+            ? (d.altimeter > 500 ? (d.altimeter / 33.8639).toFixed(2) : d.altimeter.toFixed(2))
+            : '—';
+
+        let bodyHtml = `
+            <div class="wx-metar-raw">${metar.raw || '—'}</div>
+            <div class="wx-decoded-grid">
+                <div class="wx-decoded-cell"><div class="wx-decoded-lbl">Wind</div><div class="wx-decoded-val">${wind}</div></div>
+                <div class="wx-decoded-cell"><div class="wx-decoded-lbl">Visibility</div><div class="wx-decoded-val ${visClass}">${vis}</div></div>
+                <div class="wx-decoded-cell"><div class="wx-decoded-lbl">Ceiling</div><div class="wx-decoded-val ${ceilClass}">${ceil}</div></div>
+                <div class="wx-decoded-cell"><div class="wx-decoded-lbl">Temp / Dew</div><div class="wx-decoded-val">${temp}</div></div>
+                <div class="wx-decoded-cell"><div class="wx-decoded-lbl">Altimeter</div><div class="wx-decoded-val">${alt}"</div></div>
+                <div class="wx-decoded-cell"><div class="wx-decoded-lbl">Observed</div><div class="wx-decoded-val" style="font-size:11px">${metar.reportTime ? new Date(metar.reportTime).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) + ' L' : '—'}</div></div>
+            </div>
+        `;
+
+        const taf = this._tafData?.[icao];
+        if (taf?.fcsts?.length) {
+            const issued = taf.issued ? new Date(taf.issued).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) + ' L' : '—';
+            const vFrom  = taf.valid_from ? new Date(taf.valid_from * 1000).toLocaleDateString([], {weekday:'short',month:'short',day:'numeric'}) : '—';
+            const vTo    = taf.valid_to   ? new Date(taf.valid_to   * 1000).toLocaleDateString([], {weekday:'short',month:'short',day:'numeric'}) : '—';
+            bodyHtml += `<div class="wx-taf-hdr">TAF</div>`;
+            bodyHtml += `<div class="wx-taf-issued">Issued ${issued} · Valid ${vFrom} → ${vTo}</div>`;
+            for (const f of taf.fcsts) {
+                const tf  = new Date(f.timeFrom * 1000);
+                const tt  = new Date(f.timeTo   * 1000);
+                const timeStr = `${tf.toLocaleDateString([],{weekday:'short'})} ${tf.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}–${tt.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} L`;
+                const cat = this._tafPeriodCat(f);
+                const catClass = cat.toLowerCase();
+                const clouds = f.clouds || [];
+                const ceilLayer = clouds.find(c => c.cover==='BKN'||c.cover==='OVC'||c.cover==='VV');
+                const ceilStr = ceilLayer
+                    ? `${ceilLayer.cover}${String(Math.round(ceilLayer.base / 100)).padStart(3,'0')}`
+                    : (clouds[0]?.cover === 'SKC' || clouds[0]?.cover === 'CLR' ? 'SKC' : (clouds[0] ? clouds[0].cover : '—'));
+                const windStr = (f.wdir != null && f.wspd != null)
+                    ? `${String(f.wdir).padStart(3,'0')}/${f.wspd}${f.wgst ? 'G'+f.wgst : ''}kt` : '—';
+                const visStr = f.visib != null ? `${f.visib}SM` : '—';
+                bodyHtml += `
+                    <div class="wx-taf-row">
+                        <span class="wx-taf-time">${timeStr}</span>
+                        <span class="wx-taf-cat wx-cat-${catClass}">${cat}</span>
+                        <span class="wx-taf-wind">${windStr}</span>
+                        <span class="wx-taf-ceil">${ceilStr}</span>
+                        <span class="wx-taf-vis">${visStr}</span>
+                    </div>`;
+            }
+        } else if (taf) {
+            bodyHtml += `<div class="wx-taf-no">TAF: no structured forecast periods</div>`;
+        } else {
+            bodyHtml += `<div class="wx-taf-no">No TAF available</div>`;
+        }
+
+        body.innerHTML = bodyHtml;
+    }
+
+    _tafPeriodCat(fcst) {
+        const clouds = fcst.clouds || [];
+        const ceilLayer = clouds.find(c => c.cover === 'BKN' || c.cover === 'OVC' || c.cover === 'VV');
+        const ceiling = ceilLayer ? ceilLayer.base : null;
+        const rawVis = fcst.visib;
+        const vis = (typeof rawVis === 'string' && rawVis.includes('+'))
+            ? parseFloat(rawVis) : (rawVis != null ? parseFloat(rawVis) : null);
+        return WeatherClient.getFlightCategory(ceiling, vis);
+    }
+
+    // ── Distance helpers ──────────────────────────────────────────────────────
+
+    _distToNearestCoord(lat, lon, coords) {
+        if (lat == null || lon == null || !coords.length) return 9999;
+        let min = Infinity;
+        for (const c of coords) {
+            const d = Math.hypot(lat - c.lat, (lon - c.lon) * Math.cos(lat * Math.PI / 180));
+            if (d < min) min = d;
+        }
+        return min * 60;
+    }
+
+    _distLabelToRoute(lat, lon) {
+        const coords = this._routeCoords || [];
+        if (!lat || !lon || !coords.length) return '—';
+        const nm = Math.round(this._distToNearestCoord(lat, lon, coords));
+        return `${nm} NM`;
     }
 }
