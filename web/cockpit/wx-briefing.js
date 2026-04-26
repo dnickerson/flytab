@@ -1130,7 +1130,7 @@ class WxBriefing {
             : '—';
 
         let bodyHtml = `
-            <div class="wx-metar-raw">${metar.raw || '—'}</div>
+            <div class="wx-metar-raw">${this._escHtml(metar.raw || '—')}</div>
             <div class="wx-decoded-grid">
                 <div class="wx-decoded-cell"><div class="wx-decoded-lbl">Wind</div><div class="wx-decoded-val">${wind}</div></div>
                 <div class="wx-decoded-cell"><div class="wx-decoded-lbl">Visibility</div><div class="wx-decoded-val ${visClass}">${vis}</div></div>
@@ -1293,8 +1293,8 @@ class WxBriefing {
             <div class="wx-adv-hdr">
                 <span class="wx-adv-type ${typeClass}">${typeLabel}</span>
                 <div class="wx-adv-info">
-                    <div class="wx-adv-hazard">${hazard}</div>
-                    <div class="wx-adv-meta">${meta}</div>
+                    <div class="wx-adv-hazard">${this._escHtml(hazard)}</div>
+                    <div class="wx-adv-meta">${this._escHtml(meta)}</div>
                 </div>
                 <span class="wx-adv-chevron">›</span>
             </div>
