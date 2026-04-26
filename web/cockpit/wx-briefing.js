@@ -296,7 +296,42 @@ class WxBriefing {
 
         sec.appendChild(body);
     }
-    _renderMcdSection() {}
+    _renderMcdSection() {
+        const sec = this._section('wx-mcd-section');
+        if (!sec) return;
+
+        if (this._mcds === null) {
+            sec.innerHTML = this._buildRhsHeader('Mesoscale Disc.', null, 'Fetching…').outerHTML;
+            return;
+        }
+
+        const filtered = this._mcds.filter(mcd => {
+            if (!mcd.polygon) return true;
+            return this._filterAdvisoriesForRoute([{ points: mcd.polygon }]).length > 0;
+        });
+
+        const hdr = this._buildRhsHeader('Mesoscale Disc.', filtered.length > 0 ? 'warn' : 'ok',
+            filtered.length > 0 ? `${filtered.length} ACTIVE` : 'NONE ACTIVE');
+
+        sec.innerHTML = '';
+        sec.appendChild(hdr);
+
+        const body = document.createElement('div');
+        body.className = 'wx-rhs-body open';
+
+        if (!filtered.length) {
+            body.innerHTML = '<div class="wx-section-empty">No active MCDs affecting route.</div>';
+        } else {
+            for (const mcd of filtered) {
+                const until = mcd.validUntil
+                    ? new Date(mcd.validUntil).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) + ' L'
+                    : '—';
+                body.appendChild(this._buildAdvCard(mcd.id, 'mcd', mcd.hazard, `Valid until ${until}`, mcd.productText));
+            }
+        }
+
+        sec.appendChild(body);
+    }
     _renderAfdSection() {}
     _renderNotamSection() {}
 
@@ -1284,5 +1319,76 @@ class WxBriefing {
 
     _escHtml(str) {
         return (str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    // ── MCD fetch & helpers ───────────────────────────────────────────────────
+
+    async _fetchMcds() {
+        this._mcds = null;
+        this._renderMcdSection();
+        try {
+            const resp = await fetch('https://api.weather.gov/products?type=MCD&office=KWNS&limit=20',
+                { signal: AbortSignal.timeout(10000) });
+            if (!resp.ok) throw new Error(`MCD fetch ${resp.status}`);
+            const data = await resp.json();
+            const items = data['@graph'] || [];
+            const parsed = items.map(item => this._parseMcd(item)).filter(Boolean);
+            this._mcds = parsed;
+            this._mcdFetchedAt = Date.now();
+            try {
+                localStorage.setItem('flytab_mcd_cache', JSON.stringify({ fetched_at: Date.now(), data: parsed }));
+            } catch (_) {}
+        } catch (err) {
+            console.error('MCD fetch failed:', err);
+            try {
+                const raw = localStorage.getItem('flytab_mcd_cache');
+                if (raw) {
+                    const cache = JSON.parse(raw);
+                    this._mcds = cache.data || [];
+                } else {
+                    this._mcds = [];
+                }
+            } catch (_) { this._mcds = []; }
+        }
+        this._renderMcdSection();
+    }
+
+    _parseMcd(item) {
+        const text = item.productText || '';
+        const idMatch = text.match(/Mesoscale Discussion\s+(\d+)/i) || text.match(/^MCD\s*(\d+)/im);
+        const id = idMatch ? `MD ${idMatch[1]}` : 'MD —';
+        const hazard = this._extractMcdHazard(text);
+        const validMatch = text.match(/VALID\s+(\d{6}Z)\s*-\s*(\d{6}Z)/i);
+        let validUntil = item.issuanceTime || null;
+        if (validMatch) {
+            const to = validMatch[2];
+            const day = parseInt(to.slice(0, 2));
+            const hh  = parseInt(to.slice(2, 4));
+            const mm  = parseInt(to.slice(4, 6));
+            const d = new Date();
+            d.setUTCDate(day); d.setUTCHours(hh, mm, 0, 0);
+            validUntil = d.toISOString();
+        }
+        const polygon = this._parseMcdPolygon(text);
+        return { id, hazard, validUntil, polygon, productText: text };
+    }
+
+    _extractMcdHazard(text) {
+        const m = text.match(/Concerning\.\.\.(.*)/i) || text.match(/SUMMARY\.\.\.(.*)/i);
+        return m ? m[1].trim().replace(/\n.*/s, '').slice(0, 80) : 'Convective/weather discussion';
+    }
+
+    _parseMcdPolygon(text) {
+        const match = text.match(/LAT\.\.\.LON\s+([\d\s]+)/i);
+        if (!match) return null;
+        const tokens = match[1].trim().split(/\s+/).map(Number).filter(n => !isNaN(n));
+        const lats = [], lons = [];
+        for (const t of tokens) {
+            if (t <= 5999) lats.push(t / 100);
+            else lons.push(-(t / 100));
+        }
+        const n = Math.min(lats.length, lons.length);
+        if (n < 3) return null;
+        return Array.from({ length: n }, (_, i) => [lats[i], lons[i]]);
     }
 }
