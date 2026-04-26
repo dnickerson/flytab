@@ -1185,12 +1185,21 @@ class WxBriefing {
         const card = document.createElement('div');
         card.className = 'wx-station-card';
 
-        const proxLabel = isOnRoute ? 'ON ROUTE' : this._distLabelToRoute(metar.lat, metar.lon);
+        let proxLabel;
+        if (isOnRoute) {
+            const stations = this._getStationList();
+            const idx = stations.indexOf(icao);
+            if (idx === 0) proxLabel = 'DEPARTURE';
+            else if (idx === stations.length - 1) proxLabel = 'DEST';
+            else proxLabel = 'EN ROUTE';
+        } else {
+            proxLabel = this._distLabelToRoute(metar.lat, metar.lon);
+        }
 
         card.innerHTML = `
             <div class="wx-card-hdr">
                 <span class="wx-card-icao">${icao}</span>
-                <span class="wx-card-prox${isOnRoute ? ' on-route' : ''}">${proxLabel}</span>
+                <span class="wx-card-prox${proxLabel === 'DEPARTURE' ? ' departure' : proxLabel === 'DEST' ? ' dest' : isOnRoute ? ' on-route' : ''}">${proxLabel}</span>
                 <span class="wx-card-obs">${obsTime}</span>
                 <span class="wx-card-cat ${cat}">${d.flight_category || '—'}</span>
                 <span class="wx-card-chevron">›</span>

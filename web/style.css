@@ -7537,6 +7537,14 @@ body {
     color: var(--accent, #0088ff);
     border-color: var(--accent, #0088ff);
 }
+.wx-card-prox.departure {
+    color: #1a8a1a;
+    border-color: #1a8a1a;
+}
+.wx-card-prox.dest {
+    color: #cc3300;
+    border-color: #cc3300;
+}
 .wx-card-obs { font-size: 11px; color: var(--text-muted); flex: 1; }
 .wx-card-cat {
     font-size: 11px;
