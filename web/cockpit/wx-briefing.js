@@ -13,14 +13,29 @@
  */
 class WxBriefing {
     constructor(db) {
-        this._db          = db;
-        this._el          = null;
-        this._flightPlan  = null;
-        this._mosData     = null;   // raw API response: { fetched_at, stations: { ICAO: {...} } }
-        this._mode        = 'day'; // 'day' | 'hour'
-        this._loading     = false;
+        this._db           = db;
+        this._el           = null;
+        this._flightPlan   = null;
+        this._mosData      = null;
+        this._mode         = 'day';
+        this._loading      = false;
         this._expandedIcao = null;
-        this.visible      = false;
+        this.visible       = false;
+
+        this._metarData    = null;
+        this._tafData      = null;
+        this._airmets      = null;
+        this._mcds         = null;
+        this._afds         = null;
+        this._notams       = null;
+
+        this._metarFetchedAt  = 0;
+        this._airmetFetchedAt = 0;
+        this._mcdFetchedAt    = 0;
+        this._afdFetchedAt    = 0;
+        this._notamFetchedAt  = 0;
+
+        this._routeCoords  = null;
     }
 
     init() {
@@ -31,11 +46,13 @@ class WxBriefing {
         if (!this._el) this.init();
         this._el.classList.add('visible');
         this.visible = true;
-        // Load MOS from cached flight plan if not yet fetched
+
         if (!this._mosData && this._flightPlan?.weather_cache?.mos) {
             this._mosData = this._flightPlan.weather_cache.mos;
         }
-        this._render();
+
+        this._renderAll();
+        this._fetchColdSections();
     }
 
     hide() {
@@ -45,11 +62,97 @@ class WxBriefing {
 
     setFlightPlan(plan) {
         this._flightPlan = plan;
-        if (plan?.weather_cache?.mos) {
-            this._mosData = plan.weather_cache.mos;
-        }
-        if (this.visible) this._render();
+        if (plan?.weather_cache?.mos) this._mosData = plan.weather_cache.mos;
+        this._routeCoords = null;
+        if (this.visible) this._renderAll();
     }
+
+    _fetchColdSections() {
+        const now = Date.now();
+        const TTL15 = 15 * 60000;
+        const TTL60 = 60 * 60000;
+
+        const fetches = [];
+        if (now - this._metarFetchedAt  > TTL15) fetches.push(this._fetchMetarTaf());
+        if (now - this._airmetFetchedAt > TTL15) fetches.push(this._fetchAirmets());
+        if (now - this._mcdFetchedAt    > TTL15) fetches.push(this._fetchMcds());
+        if (now - this._afdFetchedAt    > TTL60) fetches.push(this._fetchAfds());
+        if (now - this._notamFetchedAt  > TTL15) fetches.push(this._fetchNotams());
+
+        if (fetches.length) Promise.allSettled(fetches);
+    }
+
+    _refreshAll() {
+        this._metarFetchedAt = this._airmetFetchedAt = this._mcdFetchedAt =
+            this._afdFetchedAt = this._notamFetchedAt = 0;
+        this._fetchMos();
+        this._fetchColdSections();
+    }
+
+    _renderAll() {
+        if (!this._el) return;
+        this._renderSummaryBar();
+        this._renderAgeGroup();
+        this._renderMos();
+        this._renderMetarSection();
+        this._renderAirmetSection();
+        this._renderMcdSection();
+        this._renderAfdSection();
+        this._renderNotamSection();
+    }
+
+    _section(id) {
+        return this._el?.querySelector(`#${id}`);
+    }
+
+    _setSection(id, html) {
+        const el = this._section(id);
+        if (el) el.innerHTML = html;
+    }
+
+    _loadingHtml(label) {
+        return `<div class="wx-section-loading">Fetching ${label}…</div>`;
+    }
+
+    _errorHtml(label) {
+        return `<div class="wx-section-error">⚠ ${label} unavailable — tap ↻ to retry</div>`;
+    }
+
+    _renderAgeGroup() {
+        const el = this._section('wx-age-group');
+        if (!el) return;
+        const now = Date.now();
+        const age = (ts) => {
+            if (!ts) return null;
+            const m = Math.round((now - ts) / 60000);
+            return m < 60 ? `${m}m` : `${Math.round(m / 60)}h`;
+        };
+        const tag = (label, ts, ttl) => {
+            const a = age(ts);
+            const stale = !a || (now - ts) > ttl;
+            return `<span class="wx-age-tag${stale ? ' wx-age-stale' : ''}">
+                <span class="wx-age-dot"></span>
+                <b>${label}</b>${a ? ' ' + a : ' —'}
+            </span>`;
+        };
+        el.innerHTML =
+            tag('MOS', this._mosData ? new Date(this._mosData.fetched_at).getTime() : 0, 60 * 60000) +
+            tag('METARs', this._metarFetchedAt, 15 * 60000) +
+            tag('AIRMETs', this._airmetFetchedAt, 15 * 60000) +
+            tag('NOTAMs', this._notamFetchedAt, 15 * 60000);
+    }
+
+    _isWarm(ts, ttlMinutes) {
+        return ts > 0 && (Date.now() - ts) < ttlMinutes * 60000;
+    }
+
+    _renderSummaryBar() {}
+    _renderMos() {}
+    _renderMetarSection() {}
+    _renderAirmetSection() {}
+    _renderMcdSection() {}
+    _renderAfdSection() {}
+    _renderNotamSection() {}
 
     // ── Panel construction ────────────────────────────────────────────────────
 
@@ -58,28 +161,41 @@ class WxBriefing {
         this._el.className = 'wx-briefing-page';
         this._el.innerHTML = `
             <div class="wx-briefing-header">
-                <span class="wx-briefing-title">⛅ Weather</span>
+                <span class="wx-briefing-title">⛅ WX BRIEFING</span>
+                <div class="wx-age-group" id="wx-age-group"></div>
                 <div class="wx-mode-toggle">
                     <button class="wx-mode-btn active" data-mode="day">7-DAY</button>
                     <button class="wx-mode-btn" data-mode="hour">24H</button>
                 </div>
-                <button class="wx-refresh-btn" title="Fetch fresh MOS data">↻</button>
+                <button class="wx-refresh-btn" title="Refresh all weather">↻</button>
                 <button class="wx-close-btn" aria-label="Close">✕</button>
             </div>
             <div class="wx-briefing-body">
-                <div class="wx-briefing-content"></div>
+                <div class="wx-left">
+                    <div class="wx-summary-bar" id="wx-summary-bar">
+                        <span class="wx-summary-route">—</span>
+                    </div>
+                    <div id="wx-mos-section"></div>
+                    <div id="wx-metar-section"></div>
+                </div>
+                <div class="wx-right">
+                    <div id="wx-airmet-section"></div>
+                    <div id="wx-mcd-section"></div>
+                    <div id="wx-afd-section"></div>
+                    <div id="wx-notam-section"></div>
+                </div>
             </div>
         `;
 
         this._el.querySelector('.wx-close-btn').addEventListener('click', () => this.hide());
-        this._el.querySelector('.wx-refresh-btn').addEventListener('click', () => this._fetchMos());
+        this._el.querySelector('.wx-refresh-btn').addEventListener('click', () => this._refreshAll());
 
         this._el.querySelectorAll('.wx-mode-btn').forEach(btn => {
             btn.addEventListener('click', () => {
                 this._mode = btn.dataset.mode;
                 this._el.querySelectorAll('.wx-mode-btn').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
-                this._render();
+                this._renderMos();
             });
         });
 
