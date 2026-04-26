@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v5.96';
+const FLYTAB_VERSION = 'v5.97';
 
 // ========== Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -409,6 +409,7 @@ class FlyTabApp {
                 this.airportPopup.setVectorLayers(this.vectorLayers);
                 this.vectorLayers._onInternetMetarsFetched = () => this._updateWeatherAge(this._currentTrip);
                 this.vectorLayers.onAirportClick((apt) => {
+                    if (this.routeEditor?.isVisible()) return;
                     if (this.routeTable?.isEditing()) {
                         this.routeTable.addWaypointSmart({
                             icao: apt.icao, name: apt.name || apt.icao,
@@ -420,6 +421,7 @@ class FlyTabApp {
                 });
 
                 this.vectorLayers.onNavaidClick((nav) => {
+                    if (this.routeEditor?.isVisible()) return;
                     if (this.routeTable?.isEditing()) {
                         this.routeTable.addWaypointSmart({
                             icao: nav.id, name: nav.name || nav.id,
@@ -431,6 +433,7 @@ class FlyTabApp {
                 });
 
                 this.vectorLayers.onFixClick((fix) => {
+                    if (this.routeEditor?.isVisible()) return;
                     if (this.routeTable?.isEditing()) {
                         this.routeTable.addWaypointSmart({
                             icao: fix.id, name: fix.id,
