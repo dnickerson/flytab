@@ -528,6 +528,7 @@ class WxBriefing {
             this._renderSummaryBar();
             this._renderAgeGroup();
             this._renderMos();
+            this._renderPlanningSection();
         }
     }
 
@@ -978,19 +979,28 @@ class WxBriefing {
 
     async _getRouteCoords() {
         if (this._routeCoords) return this._routeCoords;
-        const icaos = this._getStationList();
         const coords = [];
-        for (const icao of icaos) {
-            const apt = await this._db.getAirport(icao);
-            if (apt?.lat && apt?.lon) coords.push({ icao, lat: apt.lat, lon: apt.lon });
-        }
+
+        // Use coords already on the flight plan waypoints first — plan normalization
+        // resolves lat/lon for all waypoints, so this avoids any DB access entirely.
         if (this._flightPlan?.waypoints) {
             for (const wp of this._flightPlan.waypoints) {
-                if (wp.lat && wp.lon && !coords.find(c => c.icao === wp.icao)) {
+                if (wp.lat && wp.lon) {
                     coords.push({ icao: wp.icao || '', lat: wp.lat, lon: wp.lon });
                 }
             }
         }
+
+        // Fallback: look up coordinates from NASR DB (only needed for bare ICAO plans)
+        if (!coords.length) {
+            for (const icao of this._getStationList()) {
+                try {
+                    const apt = await this._db.getAirport(icao);
+                    if (apt?.lat && apt?.lon) coords.push({ icao, lat: apt.lat, lon: apt.lon });
+                } catch (_) {}
+            }
+        }
+
         this._routeCoords = coords;
         return coords;
     }
@@ -1001,13 +1011,19 @@ class WxBriefing {
         const seen = new Set();
         const airports = [];
         for (const c of coords) {
-            const nearby = await this._db.getAirportsNear(c.lat, c.lon, radiusNm);
-            for (const apt of (nearby || [])) {
-                const icao = apt.icao_id || apt.id;
-                if (!icao || seen.has(icao)) continue;
-                seen.add(icao);
-                airports.push({ icao, lat: apt.lat, lon: apt.lon });
-            }
+            try {
+                // Race against a 4s timeout to guard against IDB-blocked state
+                const nearby = await Promise.race([
+                    this._db.getAirportsNear(c.lat, c.lon, radiusNm),
+                    new Promise(resolve => setTimeout(() => resolve([]), 4000)),
+                ]);
+                for (const apt of (nearby || [])) {
+                    const icao = apt.icao;    // keyPath in NASR DB is 'icao'
+                    if (!icao || seen.has(icao)) continue;
+                    seen.add(icao);
+                    airports.push({ icao, lat: apt.lat, lon: apt.lon });
+                }
+            } catch (_) {}
         }
         return airports;
     }
@@ -1046,7 +1062,7 @@ class WxBriefing {
 
             const [metarRes, tafRes] = await Promise.allSettled([
                 this._fetchMetarsForIds(allIds),
-                this._fetchTafsStructured(stations),
+                this._fetchTafsStructured(allIds),
             ]);
 
             this._metarData = metarRes.status === 'fulfilled' ? metarRes.value : {};
@@ -1120,21 +1136,28 @@ class WxBriefing {
     }
 
     async _fetchTafsStructured(ids) {
-        const url = `${WeatherClient.AWC_BASE}/taf?ids=${ids.join(',')}&format=json`;
-        const resp = await fetch(url, { signal: AbortSignal.timeout(15000) });
-        if (!resp.ok) throw new Error(`TAF failed: ${resp.status}`);
-        const items = await resp.json();
+        if (!ids.length) return {};
+        const batches = [];
+        for (let i = 0; i < ids.length; i += 50) batches.push(ids.slice(i, i + 50));
         const out = {};
-        for (const item of (Array.isArray(items) ? items : [])) {
-            const icao = item.icaoId;
-            if (!icao) continue;
-            out[icao] = {
-                raw: item.rawTAF || '',
-                issued: item.issueTime || null,
-                valid_from: item.validTimeFrom || null,
-                valid_to: item.validTimeTo || null,
-                fcsts: item.fcsts || [],
-            };
+        for (const batch of batches) {
+            const url = `${WeatherClient.AWC_BASE}/taf?ids=${batch.join(',')}&format=json`;
+            try {
+                const resp = await fetch(url, { signal: AbortSignal.timeout(15000) });
+                if (!resp.ok) continue;
+                const items = await resp.json();
+                for (const item of (Array.isArray(items) ? items : [])) {
+                    const icao = item.icaoId;
+                    if (!icao) continue;
+                    out[icao] = {
+                        raw: item.rawTAF || '',
+                        issued: item.issueTime || null,
+                        valid_from: item.validTimeFrom || null,
+                        valid_to: item.validTimeTo || null,
+                        fcsts: item.fcsts || [],
+                    };
+                }
+            } catch (_) {}
         }
         return out;
     }
@@ -1608,7 +1631,7 @@ class WxBriefing {
                 : '<span style="color:#888">—</span>';
 
             for (const icao of [dep, ...mid.slice(0, 2), dest]) {
-                const sd = this._mosData?.stations?.[icao];
+                const sd = this._mosData?.stations?.[icao] || this._mosData?.[icao];
                 if (!sd) continue;
                 const todayCat = this._worstCatForDay(sd, now);
                 const tmrwCat  = this._worstCatForDay(sd, tomorrow);
