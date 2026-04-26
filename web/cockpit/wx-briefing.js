@@ -258,7 +258,44 @@ class WxBriefing {
             sec.appendChild(this._buildStationCard(icao, m, routeSet.has(icao)));
         }
     }
-    _renderAirmetSection() {}
+    _renderAirmetSection() {
+        const sec = this._section('wx-airmet-section');
+        if (!sec) return;
+
+        if (this._airmets === null) {
+            sec.innerHTML = this._buildRhsHeader('AIRMETs', null, 'Fetching…').outerHTML;
+            return;
+        }
+
+        const filtered = this._filterAdvisoriesForRoute(this._airmets);
+        const hdr = this._buildRhsHeader('AIRMETs', filtered.length > 0 ? 'warn' : 'ok',
+            filtered.length > 0 ? `${filtered.length} ON ROUTE` : 'NONE ON ROUTE');
+
+        sec.innerHTML = '';
+        sec.appendChild(hdr);
+
+        const body = document.createElement('div');
+        body.className = 'wx-rhs-body open';
+
+        if (!filtered.length) {
+            body.innerHTML = '<div class="wx-section-empty">No active AIRMETs in route corridor.</div>';
+        } else {
+            for (const adv of filtered) {
+                const hazard = adv.hazard || '';
+                const typeLabel = hazard.includes('IFR') ? 'SIERRA'
+                    : hazard.includes('TURB') ? 'TANGO'
+                    : hazard.includes('ICE') || hazard.includes('ICING') ? 'ZULU'
+                    : 'AIRMET';
+                const typeClass = typeLabel.toLowerCase();
+                const validUntil = adv.expires_at
+                    ? new Date(adv.expires_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) + ' L'
+                    : '—';
+                body.appendChild(this._buildAdvCard(typeLabel, typeClass, hazard || 'Advisory', `Valid until ${validUntil}`, adv.raw || ''));
+            }
+        }
+
+        sec.appendChild(body);
+    }
     _renderMcdSection() {}
     _renderAfdSection() {}
     _renderNotamSection() {}
@@ -1141,5 +1178,111 @@ class WxBriefing {
         if (!lat || !lon || !coords.length) return '—';
         const nm = Math.round(this._distToNearestCoord(lat, lon, coords));
         return `${nm} NM`;
+    }
+
+    // ── AIRMET fetch & helpers ────────────────────────────────────────────────
+
+    async _fetchAirmets() {
+        this._airmets = null;
+        this._renderAirmetSection();
+        try {
+            const client = new WeatherClient(this._db);
+            const { airmets } = await client.fetchAndCacheAdvisories();
+            this._airmets = airmets;
+            this._airmetFetchedAt = Date.now();
+        } catch (err) {
+            console.error('AIRMET fetch failed:', err);
+            this._airmets = [];
+        }
+        this._renderAgeGroup();
+        this._renderAirmetSection();
+    }
+
+    _filterAdvisoriesForRoute(advisories, bufferDeg = 0.83) {
+        const coords = this._routeCoords || [];
+        if (!coords.length || !advisories?.length) return advisories || [];
+
+        const routeLats = coords.map(c => c.lat);
+        const routeLons = coords.map(c => c.lon);
+        const bbox = {
+            s: Math.min(...routeLats) - bufferDeg,
+            n: Math.max(...routeLats) + bufferDeg,
+            w: Math.min(...routeLons) - bufferDeg,
+            e: Math.max(...routeLons) + bufferDeg,
+        };
+
+        return advisories.filter(adv => {
+            const pts = adv.points || [];
+            if (!pts.length) return true;
+            const advLats = pts.map(p => p[0]);
+            const advLons = pts.map(p => p[1]);
+            if (Math.max(...advLats) < bbox.s || Math.min(...advLats) > bbox.n) return false;
+            if (Math.max(...advLons) < bbox.w || Math.min(...advLons) > bbox.e) return false;
+            for (const c of coords) {
+                if (this._pointInPolygon(c.lat, c.lon, pts)) return true;
+            }
+            return true;
+        });
+    }
+
+    _pointInPolygon(lat, lon, polygon) {
+        let inside = false;
+        for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+            const xi = polygon[i][0], yi = polygon[i][1];
+            const xj = polygon[j][0], yj = polygon[j][1];
+            if (((yi > lon) !== (yj > lon)) && (lat < (xj - xi) * (lon - yi) / (yj - yi) + xi)) {
+                inside = !inside;
+            }
+        }
+        return inside;
+    }
+
+    _buildRhsHeader(title, badgeClass, badgeText) {
+        const hdr = document.createElement('div');
+        hdr.className = 'wx-rhs-hdr';
+        const badge = badgeClass
+            ? `<span class="wx-rhs-badge ${badgeClass}">${badgeText}</span>`
+            : `<span class="wx-rhs-badge">${badgeText}</span>`;
+        hdr.innerHTML = `
+            <span class="wx-rhs-title">${title}</span>
+            ${badge}
+            <span class="wx-rhs-chevron open">›</span>
+        `;
+        hdr.addEventListener('click', () => {
+            const chevron = hdr.querySelector('.wx-rhs-chevron');
+            chevron.classList.toggle('open');
+            const body = hdr.nextElementSibling;
+            if (body) body.classList.toggle('open');
+        });
+        return hdr;
+    }
+
+    _buildAdvCard(typeLabel, typeClass, hazard, meta, text, validHtml = '') {
+        const card = document.createElement('div');
+        card.className = 'wx-adv-card';
+        card.innerHTML = `
+            <div class="wx-adv-hdr">
+                <span class="wx-adv-type ${typeClass}">${typeLabel}</span>
+                <div class="wx-adv-info">
+                    <div class="wx-adv-hazard">${hazard}</div>
+                    <div class="wx-adv-meta">${meta}</div>
+                </div>
+                <span class="wx-adv-chevron">›</span>
+            </div>
+            <div class="wx-adv-body">
+                <div class="wx-adv-text">${this._escHtml(text)}</div>
+                ${validHtml ? `<div class="wx-adv-valid">${validHtml}</div>` : ''}
+            </div>
+        `;
+        card.querySelector('.wx-adv-hdr').addEventListener('click', () => {
+            const chevron = card.querySelector('.wx-adv-chevron');
+            chevron.classList.toggle('open');
+            card.querySelector('.wx-adv-body').classList.toggle('open');
+        });
+        return card;
+    }
+
+    _escHtml(str) {
+        return (str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     }
 }
