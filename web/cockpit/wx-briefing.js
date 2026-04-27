@@ -1075,8 +1075,20 @@ class WxBriefing {
             }
 
             const [metarRes, tafRes] = await Promise.allSettled([metarPromise, tafPromise]);
-            this._metarData = metarRes.status === 'fulfilled' ? metarRes.value : {};
-            this._tafData   = tafRes.status === 'fulfilled'   ? tafRes.value   : {};
+            const metars = metarRes.status === 'fulfilled' ? metarRes.value : {};
+            this._tafData = tafRes.status === 'fulfilled' ? tafRes.value : {};
+
+            // Trim to stations within 30nm of any route waypoint so bbox doesn't
+            // flood the panel with off-route airports.
+            const coords = this._routeCoords || [];
+            if (coords.length) {
+                for (const icao of Object.keys(metars)) {
+                    const m = metars[icao];
+                    if (m?.lat && m?.lon && this._distToNearestCoord(m.lat, m.lon, coords) > 30)
+                        delete metars[icao];
+                }
+            }
+            this._metarData = metars;
             this._metarFetchedAt = Date.now();
         } catch (err) {
             console.error('METAR/TAF fetch failed:', err);
