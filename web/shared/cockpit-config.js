@@ -136,6 +136,11 @@ class CockpitConfig {
             coastlines: { color: '#446688', weight: 1.5 },
             water: { fillColor: '#1a2a44', fillOpacity: 0.6 },
         },
+        notam: {
+            apiKey: '',
+            apiSecret: '',
+            baseUrl: 'https://api-staging.cgifederal-aim.com',
+        },
     };
 
     static AIRCRAFT_DEFAULTS = {
@@ -293,6 +298,7 @@ class CockpitConfig {
      */
     static get homeBase() {
         const hs = CockpitConfig.raw?.homeServer || {};
+        if (hs.base)    return hs.base.replace(/\/$/, '');
         if (hs.nasrBase) return hs.nasrBase.replace(/\/nasr\/?$/, '').replace(/\/$/, '');
         if (hs.tileBase) return hs.tileBase.replace(/\/tiles\/?$/, '').replace(/\/$/, '');
         return null;

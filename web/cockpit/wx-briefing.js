@@ -17,7 +17,10 @@ class WxBriefing {
         this._el          = null;
         this._flightPlan  = null;
         this._mosData     = null;   // raw API response: { fetched_at, stations: { ICAO: {...} } }
-        this._mode        = 'day'; // 'day' | 'hour'
+        this._notamData   = null;   // { fetched_at, byLocation: { ICAO: [...features] } }
+        this._notamToken  = null;
+        this._notamTokenExpiry = 0;
+        this._mode        = 'day'; // 'day' | 'hour' | 'notam'
         this._loading     = false;
         this._expandedIcao = null;
         this.visible      = false;
@@ -31,9 +34,11 @@ class WxBriefing {
         if (!this._el) this.init();
         this._el.classList.add('visible');
         this.visible = true;
-        // Load MOS from cached flight plan if not yet fetched
         if (!this._mosData && this._flightPlan?.weather_cache?.mos) {
             this._mosData = this._flightPlan.weather_cache.mos;
+        }
+        if (!this._notamData && this._flightPlan?.weather_cache?.notams) {
+            this._notamData = this._flightPlan.weather_cache.notams;
         }
         this._render();
     }
@@ -47,6 +52,9 @@ class WxBriefing {
         this._flightPlan = plan;
         if (plan?.weather_cache?.mos) {
             this._mosData = plan.weather_cache.mos;
+        }
+        if (plan?.weather_cache?.notams) {
+            this._notamData = plan.weather_cache.notams;
         }
         if (this.visible) this._render();
     }
@@ -62,8 +70,9 @@ class WxBriefing {
                 <div class="wx-mode-toggle">
                     <button class="wx-mode-btn active" data-mode="day">7-DAY</button>
                     <button class="wx-mode-btn" data-mode="hour">24H</button>
+                    <button class="wx-mode-btn" data-mode="notam">NOTAM</button>
                 </div>
-                <button class="wx-refresh-btn" title="Fetch fresh MOS data">↻</button>
+                <button class="wx-refresh-btn" title="Fetch fresh data">↻</button>
                 <button class="wx-close-btn" aria-label="Close">✕</button>
             </div>
             <div class="wx-briefing-body">
@@ -72,7 +81,10 @@ class WxBriefing {
         `;
 
         this._el.querySelector('.wx-close-btn').addEventListener('click', () => this.hide());
-        this._el.querySelector('.wx-refresh-btn').addEventListener('click', () => this._fetchMos());
+        this._el.querySelector('.wx-refresh-btn').addEventListener('click', () => {
+            if (this._mode === 'notam') this._fetchNotams();
+            else this._fetchMos();
+        });
 
         this._el.querySelectorAll('.wx-mode-btn').forEach(btn => {
             btn.addEventListener('click', () => {
@@ -137,13 +149,19 @@ class WxBriefing {
         content.innerHTML = '';
 
         if (this._loading) {
-            content.innerHTML = '<div class="wx-loading">Fetching MOS data…</div>';
+            const label = this._mode === 'notam' ? 'Fetching NOTAMs…' : 'Fetching MOS data…';
+            content.innerHTML = `<div class="wx-loading">${label}</div>`;
             return;
         }
 
         const stations = this._getStationList();
         if (!stations.length) {
             content.innerHTML = '<div class="wx-empty">No flight plan loaded.<br>Load a plan to see weather.</div>';
+            return;
+        }
+
+        if (this._mode === 'notam') {
+            content.appendChild(this._buildNotamView(stations));
             return;
         }
 
@@ -540,6 +558,193 @@ class WxBriefing {
         table.appendChild(tbody);
         section.appendChild(table);
         return section;
+    }
+
+    // ── NOTAM fetch ───────────────────────────────────────────────────────────
+
+    async _fetchToken() {
+        if (this._notamToken && Date.now() < this._notamTokenExpiry) {
+            return this._notamToken;
+        }
+        const key    = CockpitConfig.get('notam.apiKey');
+        const secret = CockpitConfig.get('notam.apiSecret');
+        const base   = CockpitConfig.get('notam.baseUrl');
+        if (!key || !secret) throw new Error('NOTAM API credentials not configured');
+
+        const creds = btoa(`${key}:${secret}`);
+        const resp = await fetch(`${base}/v1/auth/token`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Basic ${creds}`,
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: 'grant_type=client_credentials',
+            signal: AbortSignal.timeout(15000),
+        });
+        if (!resp.ok) throw new Error(`Auth failed: HTTP ${resp.status}`);
+        const data = await resp.json();
+        const expiresIn = parseInt(data.expires_in || '1799', 10);
+        this._notamToken = data.access_token;
+        this._notamTokenExpiry = Date.now() + (expiresIn - 60) * 1000;
+        return this._notamToken;
+    }
+
+    async _fetchNotams() {
+        const stations = this._getStationList();
+        if (!stations.length) {
+            this._showMessage('Load a flight plan to fetch NOTAMs.');
+            return;
+        }
+
+        this._loading = true;
+        this._render();
+
+        try {
+            const token = await this._fetchToken();
+            const base  = CockpitConfig.get('notam.baseUrl');
+            const byLocation = {};
+
+            for (const icao of stations) {
+                try {
+                    const resp = await fetch(
+                        `${base}/nmsapi/v1/notams?location=${icao}`,
+                        {
+                            headers: {
+                                'Authorization': `Bearer ${token}`,
+                                'nmsResponseFormat': 'GEOJSON',
+                            },
+                            signal: AbortSignal.timeout(20000),
+                        }
+                    );
+                    if (!resp.ok) {
+                        byLocation[icao] = { error: `HTTP ${resp.status}` };
+                        continue;
+                    }
+                    const data = await resp.json();
+                    byLocation[icao] = data.data?.geojson || [];
+                } catch (err) {
+                    byLocation[icao] = { error: err.message };
+                }
+            }
+
+            this._notamData = { fetched_at: new Date().toISOString(), byLocation };
+
+            if (this._flightPlan) {
+                if (!this._flightPlan.weather_cache) this._flightPlan.weather_cache = {};
+                this._flightPlan.weather_cache.notams = this._notamData;
+                if (window.flightSync?.savePlan) {
+                    window.flightSync.savePlan(this._flightPlan).catch(() => {});
+                }
+            }
+        } catch (err) {
+            console.error('NOTAM fetch failed:', err);
+            const msg = err.message.startsWith('Auth')
+                ? 'Authentication failed. Check NOTAM API credentials.'
+                : err.name === 'AbortError'
+                ? 'Request timed out.'
+                : `Fetch failed: ${err.message}`;
+            this._showMessage(msg);
+        } finally {
+            this._loading = false;
+            this._render();
+        }
+    }
+
+    // ── NOTAM rendering ───────────────────────────────────────────────────────
+
+    _buildNotamView(stations) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'wx-notam-wrapper';
+
+        if (!this._notamData) {
+            const hint = document.createElement('div');
+            hint.className = 'wx-empty';
+            hint.textContent = 'No NOTAMs cached. Tap ↻ to fetch (requires internet).';
+            wrapper.appendChild(hint);
+            return wrapper;
+        }
+
+        const ageMin = Math.round((Date.now() - new Date(this._notamData.fetched_at)) / 60000);
+        const ageEl = document.createElement('div');
+        ageEl.className = 'wx-age-notice';
+        ageEl.textContent = `NOTAMs ${ageMin < 60 ? ageMin + 'm' : Math.round(ageMin / 60) + 'h'} old`;
+        wrapper.appendChild(ageEl);
+
+        for (const icao of stations) {
+            const notams = this._notamData.byLocation[icao];
+            const section = document.createElement('div');
+            section.className = 'wx-notam-section';
+
+            const hdr = document.createElement('div');
+            hdr.className = 'wx-notam-airport-hdr';
+
+            if (!notams || notams.error) {
+                hdr.innerHTML = `<span class="wx-notam-icao">${icao}</span><span class="wx-notam-count wx-notam-err">${notams?.error || 'No data'}</span>`;
+                section.appendChild(hdr);
+                wrapper.appendChild(section);
+                continue;
+            }
+
+            const count = notams.length;
+            hdr.innerHTML = `<span class="wx-notam-icao">${icao}</span><span class="wx-notam-count">${count} NOTAM${count !== 1 ? 's' : ''}</span>`;
+            section.appendChild(hdr);
+
+            if (!count) {
+                const none = document.createElement('div');
+                none.className = 'wx-notam-none';
+                none.textContent = 'No active NOTAMs';
+                section.appendChild(none);
+            } else {
+                const sorted = [...notams].sort((a, b) => {
+                    const ta = a.properties?.coreNOTAMData?.notam?.effectiveStart || '';
+                    const tb = b.properties?.coreNOTAMData?.notam?.effectiveStart || '';
+                    return ta < tb ? -1 : ta > tb ? 1 : 0;
+                });
+                for (const feature of sorted) {
+                    section.appendChild(this._buildNotamCard(feature));
+                }
+            }
+
+            wrapper.appendChild(section);
+        }
+
+        return wrapper;
+    }
+
+    _buildNotamCard(feature) {
+        const n = feature.properties?.coreNOTAMData?.notam || {};
+        const translations = feature.properties?.coreNOTAMData?.notamTranslation || [];
+        const localFmt = translations.find(t => t.type === 'LOCAL_FORMAT');
+        const text = localFmt?.simpleText || localFmt?.domestic_message || n.text || '';
+
+        const cls  = n.classification || '';
+        const now  = new Date();
+        const start = n.effectiveStart ? new Date(n.effectiveStart) : null;
+        const end   = n.effectiveEnd   ? new Date(n.effectiveEnd)   : null;
+        const isActive = (!start || start <= now) && (!end || end >= now);
+
+        const fmtDt = (dt) => dt
+            ? `${String(dt.getUTCMonth()+1).padStart(2,'0')}/${String(dt.getUTCDate()).padStart(2,'0')} ${String(dt.getUTCHours()).padStart(2,'0')}${String(dt.getUTCMinutes()).padStart(2,'0')}Z`
+            : '—';
+
+        const card = document.createElement('div');
+        card.className = 'wx-notam-card';
+
+        const clsLower = cls.toLowerCase().replace('_', '-');
+        const schedulePart = n.schedule ? n.schedule.split('~').pop() : '';
+
+        card.innerHTML = `
+            <div class="wx-notam-card-hdr">
+                <span class="wx-notam-num">${n.number || '—'}</span>
+                ${cls ? `<span class="wx-notam-cls wx-notam-cls-${clsLower}">${cls}</span>` : ''}
+                ${isActive ? '<span class="wx-notam-active">ACTIVE</span>' : ''}
+            </div>
+            <div class="wx-notam-period">${fmtDt(start)} – ${fmtDt(end)}${n.estimated === 'true' ? ' EST' : ''}</div>
+            ${schedulePart ? `<div class="wx-notam-schedule">${schedulePart}</div>` : ''}
+            <pre class="wx-notam-text">${text}</pre>
+        `;
+
+        return card;
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

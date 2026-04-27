@@ -3564,32 +3564,180 @@ body {
 }
 
 /* Weather section in airport popup */
-.popup-wx-section { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--border); }
+.popup-wx-section { margin-top: 8px; padding-top: 0; border-top: 1px solid var(--border); }
 .popup-section-title {
     font-size: 14px; font-weight: 700; text-transform: uppercase;
     color: var(--text-muted); letter-spacing: 0.5px; margin-bottom: 4px;
 }
-/* wx section title needs higher contrast for direct sunlight */
-.popup-wx-section .popup-section-title { color: var(--text-label); }
-.wx-source {
-    font-size: 14px; padding: 1px 4px; border-radius: 3px;
-    background: var(--border-strong); color: var(--text-secondary); margin-left: 6px;
+
+/* ── Weather card header ── */
+.wx-card-hdr {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: 4px 4px 0 0;
+    margin-bottom: 2px;
 }
-.wx-cat { font-weight: 700; margin-right: 8px; }
-.wx-wind { font-family: var(--font-instrument); }
-.wx-time { font-size: 14px; color: var(--text-secondary); margin-top: 2px; }
-.wx-age { color: var(--text-label); }
-.wx-age-stale { color: var(--status-warn, #f59e0b); font-weight: 700; }
+.wx-cat-dot {
+    font-size: 20px;
+    line-height: 1;
+    flex-shrink: 0;
+}
+.wx-cat-name {
+    font-family: var(--font-instrument);
+    font-size: 20px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    flex: 1;
+}
+.wx-hdr-right {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+.wx-source {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    padding: 2px 5px;
+    border-radius: 3px;
+    background: var(--bg-surface-raised);
+    color: var(--text-label);
+    border: 1px solid var(--border);
+}
+
+/* ── Labeled data rows ── */
+.wx-rows {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+    margin: 4px 0;
+}
+.wx-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0;
+    border-bottom: 1px solid var(--border-light);
+}
+.wx-row:last-child { border-bottom: none; }
+.wx-row-lbl {
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.10em;
+    color: var(--text-label);
+    background: var(--bg-surface-raised);
+    min-width: 52px;
+    padding: 7px 6px 7px 8px;
+    text-transform: uppercase;
+    border-right: 1px solid var(--border-light);
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+}
+.wx-row-val {
+    font-family: var(--font-instrument);
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+    padding: 6px 8px;
+    flex: 1;
+}
+
+/* ── Sky / cloud layers ── */
+.wx-sky-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 6px 8px;
+    flex: 1;
+}
+.wx-sky-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-instrument);
+    font-size: 15px;
+    font-weight: 600;
+}
+.wx-sky-cover {
+    min-width: 38px;
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+}
+.wx-sky-alt {
+    color: var(--text-primary);
+    flex: 1;
+}
+.wx-ceil-badge {
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.10em;
+    color: var(--status-warning);
+    border: 1px solid var(--status-warning);
+    padding: 1px 4px;
+    border-radius: 2px;
+    flex-shrink: 0;
+}
+
+/* ── Phenomena, time, raw ── */
+.wx-phenomena {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 6px 0 2px;
+}
+.wx-phenom {
+    font-family: var(--font-instrument);
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    padding: 2px 6px;
+    border-radius: 3px;
+    border: 1px solid currentColor;
+}
+.wx-time {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-instrument);
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin: 4px 0 2px;
+}
+.wx-age { color: var(--text-muted); }
+.wx-age-stale { color: var(--status-warning); font-weight: 700; }
 .wx-metar {
-    font-family: var(--font-mono); font-size: 16px;
-    color: var(--text-primary); margin-top: 4px; word-break: break-all;
-    line-height: 1.3; padding: 6px 8px; background: var(--bg-surface-raised); border-radius: 4px;
+    font-family: var(--font-instrument);
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-top: 4px;
+    word-break: break-all;
+    line-height: 1.4;
+    padding: 6px 8px;
+    background: var(--bg-surface-raised);
+    border-radius: 4px;
+    border: 1px solid var(--border-light);
 }
 .wx-taf { line-height: 1.6; }
-.wx-metar-label { font-size: 11px; color: var(--text-muted); letter-spacing: 0.05em; vertical-align: middle; }
+.wx-metar-label {
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.10em;
+    color: var(--text-muted);
+    margin-right: 6px;
+    vertical-align: middle;
+}
+/* kept for backwards compat with other references */
+.wx-cat { font-weight: 700; margin-right: 8px; }
+.wx-wind { font-family: var(--font-instrument); }
 .wx-cond { font-size: 15px; color: var(--text-secondary); margin-top: 2px; }
-.wx-phenomena { margin-top: 3px; }
-.wx-phenom { font-size: 14px; font-weight: 700; letter-spacing: 0.04em; margin-right: 4px; }
 
 /* Best runway section */
 .popup-rwy-wind-section { margin-top: 6px; }
@@ -7561,6 +7709,106 @@ body {
     padding: 4px 8px;
     border-top: 2px solid var(--border-strong);
     letter-spacing: 0.05em;
+}
+
+/* ── NOTAM view ── */
+.wx-notam-wrapper {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.wx-notam-section {
+    background: var(--bg-surface);
+    border-radius: 6px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+}
+.wx-notam-airport-hdr {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    background: var(--bg-surface-raised);
+    border-bottom: 1px solid var(--border);
+}
+.wx-notam-icao {
+    font-size: var(--text-lg, 18px);
+    font-weight: 700;
+    color: var(--text-primary);
+    letter-spacing: 0.04em;
+}
+.wx-notam-count {
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+.wx-notam-err { color: var(--status-danger, #ff4444); }
+.wx-notam-none {
+    padding: 12px;
+    color: var(--text-muted);
+    font-size: var(--text-sm);
+    font-style: italic;
+}
+.wx-notam-card {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+}
+.wx-notam-card:last-child { border-bottom: none; }
+.wx-notam-card-hdr {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+.wx-notam-num {
+    font-size: var(--text-base);
+    font-weight: 700;
+    color: var(--text-primary);
+    font-family: var(--font-instrument, monospace);
+}
+.wx-notam-cls {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    padding: 2px 6px;
+    border-radius: 3px;
+    color: #fff;
+    background: #666;
+}
+.wx-notam-cls-dom      { background: #0066cc; }
+.wx-notam-cls-fdc      { background: #cc2200; }
+.wx-notam-cls-military { background: #5a6e2b; }
+.wx-notam-cls-local-military { background: #7a8e3b; }
+.wx-notam-cls-international { background: #555; }
+.wx-notam-active {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    padding: 2px 6px;
+    border-radius: 3px;
+    color: #fff;
+    background: #00aa33;
+    margin-left: auto;
+}
+.wx-notam-period {
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
+    font-family: var(--font-instrument, monospace);
+    margin-bottom: 2px;
+}
+.wx-notam-schedule {
+    font-size: var(--text-xs);
+    color: var(--text-label);
+    margin-bottom: 4px;
+}
+.wx-notam-text {
+    font-size: 13px;
+    font-family: var(--font-instrument, 'SF Mono', monospace);
+    color: var(--text-primary);
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin: 0;
+    line-height: 1.5;
 }
 
 /* ============================================================

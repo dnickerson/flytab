@@ -130,25 +130,15 @@ class ConfigEditor {
         // Connection settings (from localStorage, not cockpit-config.json)
         sections.push(this._sectionHeader('Connection'));
         const hs = this._cockpitConfig.homeServer || {};
+        const hsBase = hs.base || (hs.nasrBase ? hs.nasrBase.replace(/\/nasr\/?$/, '').replace(/\/$/, '') : '') || (hs.tileBase ? hs.tileBase.replace(/\/tiles\/?$/, '').replace(/\/$/, '') : '');
         sections.push(`<div class="ds-card">
             <div class="ds-card-title">Home Network</div>
             <div class="ce-fields">
                 <div class="ce-field-row">
-                    <label class="ce-label" for="ce-home-tile">Tile Server</label>
-                    <input type="text" id="ce-home-tile" class="ce-input" style="width:250px"
-                        placeholder="http://192.168.1.x:8090/tiles"
-                        value="${hs.tileBase || ''}">
-                </div>
-                <div class="ce-field-row">
-                    <label class="ce-label" for="ce-home-plate">Plate Server</label>
-                    <input type="text" id="ce-home-plate" class="ce-input" style="width:250px"
-                        placeholder="http://192.168.1.x:8090/plates"
-                        value="${hs.plateBase || ''}">
-                </div>
-                <div class="ce-field-row">
-                    <label class="ce-label" for="ce-home-nasr">NASR Server</label>
-                    <input type="text" id="ce-home-nasr" class="ce-input" style="width:250px"
-                        value="${hs.nasrBase || ''}">
+                    <label class="ce-label" for="ce-home-base">Home Server</label>
+                    <input type="text" id="ce-home-base" class="ce-input" style="width:250px"
+                        placeholder="http://192.168.1.x:8090"
+                        value="${hsBase}">
                 </div>
                 <div class="ce-field-row">
                     <label class="ce-label" for="ce-home-fallback">Tailscale Fallback</label>
@@ -157,7 +147,7 @@ class ConfigEditor {
                         value="${hs.fallbackBase || ''}">
                 </div>
                 <div class="ce-field-row" style="font-size:14px;color:var(--text-secondary)">
-                    Home server URLs. Change these when your IP address changes.
+                    Tiles, plates, and NASR paths are appended automatically.
                 </div>
             </div>
         </div>`);
@@ -326,19 +316,14 @@ class ConfigEditor {
                 app.gpsSource.setSource(gpsEl.value);
             }
 
-            // Collect home server URLs
-            const tileEl     = body.querySelector('#ce-home-tile');
-            const plateEl    = body.querySelector('#ce-home-plate');
-            const nasrEl     = body.querySelector('#ce-home-nasr');
+            // Collect home server base URL — paths are derived automatically
+            const baseEl     = body.querySelector('#ce-home-base');
             const fallbackEl = body.querySelector('#ce-home-fallback');
-            if (!this._cockpitConfig.homeServer) this._cockpitConfig.homeServer = {};
-            if (tileEl)     this._cockpitConfig.homeServer.tileBase    = tileEl.value.trim();
-            if (plateEl)    this._cockpitConfig.homeServer.plateBase   = plateEl.value.trim();
-            if (nasrEl)     this._cockpitConfig.homeServer.nasrBase    = nasrEl.value.trim();
+            this._cockpitConfig.homeServer = {};
+            if (baseEl) this._cockpitConfig.homeServer.base = baseEl.value.trim().replace(/\/$/, '');
             if (fallbackEl) {
                 const fb = fallbackEl.value.trim();
                 if (fb) this._cockpitConfig.homeServer.fallbackBase = fb;
-                else    delete this._cockpitConfig.homeServer.fallbackBase;
             }
 
             // Collect cockpit config values
