@@ -853,6 +853,16 @@ class WxBriefing {
 
         table.appendChild(tbody);
         section.appendChild(table);
+
+        const today = new Date(); today.setUTCHours(0, 0, 0, 0);
+        const noteText = this._buildMosSummaryNote(icao, today);
+        if (noteText) {
+            const noteEl = document.createElement('div');
+            noteEl.className = 'wx-hourly-note';
+            noteEl.textContent = noteText;
+            section.appendChild(noteEl);
+        }
+
         return section;
     }
 
