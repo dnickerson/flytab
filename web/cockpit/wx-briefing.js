@@ -1065,11 +1065,6 @@ class WxBriefing {
                 ? corridorApts.map(a => a.icao)
                 : stations;
 
-            // Update routeCoords to include corridor airports for distance labels
-            if (corridorApts.length && !this._routeCoords) {
-                await this._getRouteCoords();
-            }
-
             const [metarRes, tafRes] = await Promise.allSettled([
                 this._fetchMetarsForIds(allIds),
                 this._fetchTafsStructured(allIds),

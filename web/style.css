@@ -7538,12 +7538,12 @@ body {
     border-color: var(--accent, #0088ff);
 }
 .wx-card-prox.departure {
-    color: #1a8a1a;
-    border-color: #1a8a1a;
+    color: #196419;
+    border-color: #196419;
 }
 .wx-card-prox.dest {
-    color: #cc3300;
-    border-color: #cc3300;
+    color: #a82400;
+    border-color: #a82400;
 }
 .wx-card-obs { font-size: 11px; color: var(--text-muted); flex: 1; }
 .wx-card-cat {
