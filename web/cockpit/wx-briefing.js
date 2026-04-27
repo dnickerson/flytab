@@ -1059,17 +1059,22 @@ class WxBriefing {
         this._renderMetarSection();
 
         try {
-            // Get all airports within 20nm of route corridor
-            const corridorApts = await this._getCorridorAirports(20);
-            const allIds = corridorApts.length
-                ? corridorApts.map(a => a.icao)
-                : stations;
+            // Bbox covers all METAR stations in the route corridor without requiring
+            // NASR DB or knowing which airports are METAR reporters.
+            const bbox = await this._getRouteBbox(0.5);
 
-            const [metarRes, tafRes] = await Promise.allSettled([
-                this._fetchMetarsForIds(allIds),
-                this._fetchTafsStructured(allIds),
-            ]);
+            let metarPromise, tafPromise;
+            if (bbox) {
+                metarPromise = this._fetchMetarsByBbox(bbox);
+                tafPromise   = this._fetchTafsByBbox(bbox);
+            } else {
+                // No route coords — fall back to by-ID, skipping navaid fixes
+                const ids = stations.filter(id => /^K[A-Z]{3}$/.test(id));
+                metarPromise = ids.length ? this._fetchMetarsForIds(ids) : Promise.resolve({});
+                tafPromise   = ids.length ? this._fetchTafsStructured(ids) : Promise.resolve({});
+            }
 
+            const [metarRes, tafRes] = await Promise.allSettled([metarPromise, tafPromise]);
             this._metarData = metarRes.status === 'fulfilled' ? metarRes.value : {};
             this._tafData   = tafRes.status === 'fulfilled'   ? tafRes.value   : {};
             this._metarFetchedAt = Date.now();
@@ -1111,7 +1116,7 @@ class WxBriefing {
     }
 
     async _fetchMetarsByBbox(bbox) {
-        const url = `${WeatherClient.AWC_BASE}/metar?bbox=${bbox.s},${bbox.w},${bbox.n},${bbox.e}&format=json`;
+        const url = `${WeatherClient.AWC_BASE}/metar?bbox=${bbox.s},${bbox.w},${bbox.n},${bbox.e}&format=json&hoursBeforeNow=2`;
         const resp = await fetch(url, { signal: AbortSignal.timeout(15000) });
         if (!resp.ok) throw new Error(`METAR bbox failed: ${resp.status}`);
         const items = await resp.json();
@@ -1122,6 +1127,26 @@ class WxBriefing {
             if (!out[icao] || new Date(item.reportTime) > new Date(out[icao].reportTime)) {
                 out[icao] = { raw: item.rawOb || '', decoded: WeatherClient.decodeMetar(item), reportTime: item.reportTime, lat: item.lat, lon: item.lon };
             }
+        }
+        return out;
+    }
+
+    async _fetchTafsByBbox(bbox) {
+        const url = `${WeatherClient.AWC_BASE}/taf?bbox=${bbox.s},${bbox.w},${bbox.n},${bbox.e}&format=json`;
+        const resp = await fetch(url, { signal: AbortSignal.timeout(15000) });
+        if (!resp.ok) throw new Error(`TAF bbox failed: ${resp.status}`);
+        const items = await resp.json();
+        const out = {};
+        for (const item of (Array.isArray(items) ? items : [])) {
+            const icao = item.icaoId;
+            if (!icao) continue;
+            out[icao] = {
+                raw: item.rawTAF || '',
+                issued: item.issueTime || null,
+                valid_from: item.validTimeFrom || null,
+                valid_to: item.validTimeTo || null,
+                fcsts: item.fcsts || [],
+            };
         }
         return out;
     }
