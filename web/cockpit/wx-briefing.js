@@ -1089,12 +1089,12 @@ class WxBriefing {
 
     async _fetchMetarsForIds(ids) {
         if (!ids.length) return {};
-        // Batch into groups of 50 to avoid URL length limits
+        const base = Settings.workerBase || 'https://www.flywhere.app/api';
         const batches = [];
         for (let i = 0; i < ids.length; i += 50) batches.push(ids.slice(i, i + 50));
         const out = {};
         for (const batch of batches) {
-            const url = `${WeatherClient.AWC_BASE}/metar?ids=${batch.join(',')}&format=json&hoursBeforeNow=2`;
+            const url = `${base}/weather?type=metar&ids=${batch.join(',')}&format=json&hoursBeforeNow=2`;
             try {
                 const resp = await fetch(url, { signal: AbortSignal.timeout(15000) });
                 if (!resp.ok) continue;
@@ -1116,7 +1116,8 @@ class WxBriefing {
     }
 
     async _fetchMetarsByBbox(bbox) {
-        const url = `${WeatherClient.AWC_BASE}/metar?bbox=${bbox.s},${bbox.w},${bbox.n},${bbox.e}&format=json&hoursBeforeNow=2`;
+        const base = Settings.workerBase || 'https://www.flywhere.app/api';
+        const url = `${base}/weather?type=metar&bbox=${bbox.s},${bbox.w},${bbox.n},${bbox.e}&format=json&hoursBeforeNow=2`;
         const resp = await fetch(url, { signal: AbortSignal.timeout(15000) });
         if (!resp.ok) throw new Error(`METAR bbox failed: ${resp.status}`);
         const items = await resp.json();
@@ -1132,7 +1133,8 @@ class WxBriefing {
     }
 
     async _fetchTafsByBbox(bbox) {
-        const url = `${WeatherClient.AWC_BASE}/taf?bbox=${bbox.s},${bbox.w},${bbox.n},${bbox.e}&format=json`;
+        const base = Settings.workerBase || 'https://www.flywhere.app/api';
+        const url = `${base}/weather?type=taf&bbox=${bbox.s},${bbox.w},${bbox.n},${bbox.e}&format=json`;
         const resp = await fetch(url, { signal: AbortSignal.timeout(15000) });
         if (!resp.ok) throw new Error(`TAF bbox failed: ${resp.status}`);
         const items = await resp.json();
@@ -1152,7 +1154,8 @@ class WxBriefing {
     }
 
     async _fetchMetarsById(ids) {
-        const url = `${WeatherClient.AWC_BASE}/metar?ids=${ids.join(',')}&format=json`;
+        const base = Settings.workerBase || 'https://www.flywhere.app/api';
+        const url = `${base}/weather?type=metar&ids=${ids.join(',')}&format=json&hoursBeforeNow=2`;
         const resp = await fetch(url, { signal: AbortSignal.timeout(15000) });
         if (!resp.ok) throw new Error(`METAR ids failed: ${resp.status}`);
         const items = await resp.json();
@@ -1167,10 +1170,11 @@ class WxBriefing {
 
     async _fetchTafsStructured(ids) {
         if (!ids.length) return {};
+        const base = Settings.workerBase || 'https://www.flywhere.app/api';
         const batches = [];
         for (let i = 0; i < ids.length; i += 50) batches.push(ids.slice(i, i + 50));
         const results = await Promise.all(batches.map(async batch => {
-            const url = `${WeatherClient.AWC_BASE}/taf?ids=${batch.join(',')}&format=json`;
+            const url = `${base}/weather?type=taf&ids=${batch.join(',')}&format=json`;
             try {
                 const resp = await fetch(url, { signal: AbortSignal.timeout(15000) });
                 if (!resp.ok) return {};

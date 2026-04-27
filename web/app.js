@@ -5,7 +5,7 @@
 
 
 
-const FLYTAB_VERSION = 'v6.08';
+const FLYTAB_VERSION = 'v6.09';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
