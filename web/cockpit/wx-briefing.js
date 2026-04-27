@@ -36,9 +36,6 @@ class WxBriefing {
         this._afdFetchedAt    = 0;
         this._notamFetchedAt  = 0;
 
-        this._notamToken       = null;
-        this._notamTokenExpiry = 0;
-
         this._routeCoords  = null;
     }
 
@@ -387,21 +384,8 @@ class WxBriefing {
         const sec = this._section('wx-notam-section');
         if (!sec) return;
 
-        const apiKey = CockpitConfig.get('notam.apiKey');
-
         if (this._notams === null) {
             sec.innerHTML = this._buildRhsHeader('NOTAMs', null, 'Fetching…').outerHTML;
-            return;
-        }
-
-        if (!apiKey) {
-            const hdr = this._buildRhsHeader('NOTAMs', null, 'NO API KEY');
-            sec.innerHTML = '';
-            sec.appendChild(hdr);
-            const body = document.createElement('div');
-            body.className = 'wx-rhs-body open';
-            body.innerHTML = '<div class="wx-section-empty">NOTAM API key not configured in cockpit-config.json.</div>';
-            sec.appendChild(body);
             return;
         }
 
@@ -1631,63 +1615,32 @@ class WxBriefing {
 
     // ── NOTAM fetch & helpers ─────────────────────────────────────────────────
 
-    async _fetchNotamToken() {
-        if (this._notamToken && Date.now() < this._notamTokenExpiry) return this._notamToken;
-        const key    = CockpitConfig.get('notam.apiKey');
-        const secret = CockpitConfig.get('notam.apiSecret');
-        const base   = CockpitConfig.get('notam.baseUrl');
-        if (!key || !secret) throw new Error('NOTAM credentials not configured');
-        const creds = btoa(`${key}:${secret}`);
-        const resp = await fetch(`${base}/v1/auth/token`, {
-            method: 'POST',
-            headers: { 'Authorization': `Basic ${creds}`, 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: 'grant_type=client_credentials',
-            signal: AbortSignal.timeout(15000),
-        });
-        if (!resp.ok) throw new Error(`NOTAM auth failed: HTTP ${resp.status}`);
-        const data = await resp.json();
-        const expiresIn = parseInt(data.expires_in || '1799', 10);
-        this._notamToken = data.access_token;
-        this._notamTokenExpiry = Date.now() + (expiresIn - 60) * 1000;
-        return this._notamToken;
-    }
-
     async _fetchNotams() {
         this._notams = null;
         this._renderNotamSection();
-
-        const apiKey = CockpitConfig.get('notam.apiKey');
-        const apiBase = CockpitConfig.get('notam.baseUrl');
-
-        if (!apiKey) {
-            this._notams = [];
-            this._renderNotamSection();
-            return;
-        }
 
         const stations = this._getStationList();
         if (!stations.length) { this._notams = []; this._renderNotamSection(); return; }
 
         try {
-            const token = await this._fetchNotamToken();
+            const base = Settings.workerBase || 'https://www.flywhere.app/api';
+            const url  = `${base}/notams?location=${stations.join(',')}`;
+            const resp = await fetch(url, { signal: AbortSignal.timeout(30000) });
+            if (!resp.ok) throw new Error(`NOTAM proxy ${resp.status}`);
+            const data = await resp.json();
+            const features = data.features || [];
+
             const notams = [];
             const seen = new Set();
-
-            for (const icao of stations) {
-                const resp = await fetch(`${apiBase}/nmsapi/v1/notams?location=${icao}`, {
-                    headers: { 'Authorization': `Bearer ${token}`, 'nmsResponseFormat': 'GEOJSON' },
-                    signal: AbortSignal.timeout(20000),
-                });
-                if (!resp.ok) continue;
-                const data = await resp.json();
-                const features = data.data?.geojson || [];
-                for (const feature of features) {
-                    const n = feature.properties?.coreNOTAMData?.notam || {};
-                    const num = n.number || '';
-                    if (seen.has(num)) continue;
-                    seen.add(num);
-                    notams.push(this._parseNotam(feature, icao));
-                }
+            for (const feature of features) {
+                const n = feature.properties?.coreNOTAMData?.notam || {};
+                const num = n.number || '';
+                if (seen.has(num)) continue;
+                seen.add(num);
+                // n.location is the 3-letter FAA id (e.g. LKR); map back to ICAO
+                const nLoc = (n.location || '').toUpperCase();
+                const loc = stations.find(s => s === nLoc || s === 'K' + nLoc) || stations[0];
+                notams.push(this._parseNotam(feature, loc));
             }
 
             const order = ['RWY', 'NAVAID', 'OBST', 'TWY', 'AD', 'SVC'];
@@ -1725,7 +1678,7 @@ class WxBriefing {
         const localFmt = translations.find(t => t.type === 'LOCAL_FORMAT');
         const raw = localFmt?.simpleText || localFmt?.domestic_message || n.text || '';
         const type = this._classifyNotam(raw);
-        const summary = this._summarizeNotam(raw, type);
+        const summary = this._summarizeNotam(raw);
         return { airport, type, summary, raw, validFrom: n.effectiveStart || null, validTo: n.effectiveEnd || null };
     }
 
@@ -1739,9 +1692,11 @@ class WxBriefing {
         return 'SVC';
     }
 
-    _summarizeNotam(raw, type) {
-        const clean = raw.replace(/^![A-Z0-9\/\s]+\n?/, '').trim();
-        return clean.slice(0, 100).replace(/\n/g, ' ');
+    _summarizeNotam(raw) {
+        // First line is "!TYPE NUM ICAO SUBJECT AIRPORT_NAME, STATE." — skip it
+        const lines = raw.trim().split('\n').map(l => l.trim()).filter(Boolean);
+        const content = lines.length > 1 ? lines.slice(1).join(' ') : lines[0] || '';
+        return content.slice(0, 120);
     }
 
     // ── Planning Summary section ──────────────────────────────────────────────
