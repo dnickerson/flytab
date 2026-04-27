@@ -1800,10 +1800,8 @@ class WxBriefing {
             <span class="wx-rhs-title wx-planning-title">PLANNING SUMMARY</span>
             <span class="wx-rhs-chevron open">›</span>
         `;
-
         const body = document.createElement('div');
         body.className = 'wx-rhs-body open';
-
         hdr.addEventListener('click', () => {
             hdr.querySelector('.wx-rhs-chevron')?.classList.toggle('open');
             body.classList.toggle('open');
@@ -1816,16 +1814,40 @@ class WxBriefing {
         if (mid.length) routeStr += ` via ${mid.join(', ')}`;
         let html = `<div class="wx-planning-route">${routeStr}</div>`;
 
-        if (this._mosData) {
+        // Use best flying day if MOS available, else today
+        const today = new Date(); today.setUTCHours(0, 0, 0, 0);
+        const bestDay = this._mosData ? this._findBestDay(stations) : null;
+        const targetDay = bestDay ? bestDay.date : today;
+
+        const narrative = this._buildPlanningNarrative(stations, targetDay);
+
+        if (narrative) {
+            for (const row of narrative.rows) {
+                const isOk   = row.ok === true;
+                const isWarn = row.ok === 'warn';
+                const isBad  = row.ok === false;
+                const icon   = isOk ? '✅' : (isWarn ? '⚠' : (isBad ? '🚫' : ''));
+                const cls    = isOk ? 'wx-planning-leg ok' : isWarn ? 'wx-planning-leg warn' : isBad ? 'wx-planning-leg bad' : 'wx-planning-leg';
+                html += `<div class="${cls}">
+                    <span class="wx-planning-icao">${row.icao}</span>
+                    <span class="wx-planning-text">${icon ? icon + ' ' : ''}${this._escHtml(row.text)}</span>
+                </div>`;
+            }
+
+            if (narrative.warnings.length) {
+                html += `<div class="wx-planning-warn">⚠ ${narrative.warnings.join(' · ')}</div>`;
+            }
+
+            html += `<div class="wx-planning-rec">${this._escHtml(narrative.rec)}</div>`;
+        } else {
+            // MOS not yet loaded — show badge grid as fallback
             const now = new Date();
-            const tomorrow = new Date(now);
-            tomorrow.setUTCDate(now.getUTCDate() + 1);
-            const fmtCat = (cat) => cat
+            const tomorrow = new Date(now); tomorrow.setUTCDate(now.getUTCDate() + 1);
+            const fmtCat = cat => cat
                 ? `<span class="wx-cat-badge wx-cat-${cat.toLowerCase()}">&nbsp;${cat}&nbsp;</span>`
                 : '<span style="color:#888">—</span>';
-
             for (const icao of [dep, ...mid.slice(0, 2), dest]) {
-                const sd = this._mosData?.stations?.[icao] || this._mosData?.[icao];
+                const sd = this._mosData?.stations?.[icao];
                 if (!sd) continue;
                 const todayCat = this._worstCatForDay(sd, now);
                 const tmrwCat  = this._worstCatForDay(sd, tomorrow);
@@ -1836,20 +1858,7 @@ class WxBriefing {
                     Tomorrow: ${fmtCat(tmrwCat)}
                 </div>`;
             }
-        }
-
-        const warnings = [];
-        if (this._airmets?.length) {
-            const filtered = this._filterAdvisoriesForRoute(this._airmets);
-            if (filtered.length) warnings.push(`${filtered.length} AIRMET${filtered.length > 1 ? 's' : ''} on route`);
-        }
-        if (this._mcds?.length) {
-            const filtered = this._mcds.filter(m =>
-                !m.polygon || this._filterAdvisoriesForRoute([{ points: m.polygon }]).length > 0);
-            if (filtered.length) warnings.push(`${filtered.length} Mesoscale Discussion${filtered.length > 1 ? 's' : ''} active`);
-        }
-        if (warnings.length) {
-            html += `<div class="wx-planning-warn">⚠ ${warnings.join(' · ')}</div>`;
+            html += `<div class="wx-planning-row" style="color:#888;font-style:italic">Fetching forecast…</div>`;
         }
 
         inner.innerHTML = html;
