@@ -3,9 +3,9 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v6.08';
+const FLYTAB_VERSION = 'v6.11';
 
-// ========== Diagnostic Logger (ring buffer in localStorage) ==========
+// === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
     const KEY = 'flypi_diag_log';
     const MAX = 200; // max log entries
@@ -353,7 +353,7 @@ class FlyTabApp {
         }
     }
 
-    // ========== Cockpit Init ==========
+    // === Cockpit Init ==========
 
     async _initCockpit() {
         if (this._cockpitInitialized) {
@@ -749,7 +749,8 @@ class FlyTabApp {
 
         // Weather briefing (MOS timeline)
         if (typeof WxBriefing !== 'undefined') {
-            this.wxBriefing = new WxBriefing(nasrDb);
+            const wxCfg = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.raw : {};
+            this.wxBriefing = new WxBriefing(nasrDb, wxCfg);
             this.wxBriefing.init();
         }
 
@@ -1013,7 +1014,7 @@ class FlyTabApp {
         }
     }
 
-    // ========== Route Bbox (for Cache Tiles) ==========
+    // === Route Bbox (for Cache Tiles) ==========
 
     /** Returns bounding box for the current route + ~1° buffer, or null if no plan loaded. */
     _getRouteBbox() {
@@ -1033,7 +1034,7 @@ class FlyTabApp {
         return { latMin, latMax, lonMin, lonMax, label, id: 'route', sub: label };
     }
 
-    // ========== Plan Loading ==========
+    // === Plan Loading ==========
 
     async _loadActivePlan() {
         // FlyTab: plans are stored locally — load from localStorage
@@ -1309,7 +1310,7 @@ class FlyTabApp {
         this.dom.statusWeather.className = `status-item ${className}`;
     }
 
-    // ========== Wake Lock ==========
+    // === Wake Lock ==========
 
     async _acquireWakeLock() {
         if (!('wakeLock' in navigator)) return;
@@ -1325,7 +1326,7 @@ class FlyTabApp {
         }
     }
 
-    // ========== Thermal Monitor ==========
+    // === Thermal Monitor ==========
 
     _initThermalMonitor() {
         if (typeof ThermalMonitor === 'undefined') return;
@@ -1351,7 +1352,7 @@ class FlyTabApp {
         };
     }
 
-    // ========== Clock ==========
+    // === Clock ==========
 
     _startClock() {
         // Create local time element if the HTML doesn't have it yet
@@ -1378,7 +1379,7 @@ class FlyTabApp {
         window.addEventListener('beforeunload', () => clearInterval(this._clockInterval));
     }
 
-    // ========== Aircraft Config Sync ==========
+    // === Aircraft Config Sync ==========
 
     /**
      * Map Supabase aircraft profile to Pi format and merge with existing config.
@@ -1455,7 +1456,7 @@ class FlyTabApp {
         }
     }
 
-    // ========== GPS & FIS-B Status ==========
+    // === GPS & FIS-B Status ==========
 
     _startDeviceStatusMonitor() {
         const update = () => {
@@ -1506,7 +1507,7 @@ class FlyTabApp {
         this._deviceStatusInterval = setInterval(update, 5000);
     }
 
-    // ========== Connectivity Monitor ==========
+    // === Connectivity Monitor ==========
 
     _startConnectivityMonitor() {
         const el = this.dom.statusSync;
@@ -1584,7 +1585,7 @@ class FlyTabApp {
         }
     }
 
-    // ========== NASR Age Badge ==========
+    // === NASR Age Badge ==========
 
     async _updateNasrBadge() {
         const el = this.dom.statusNasr;
@@ -1625,7 +1626,7 @@ class FlyTabApp {
         }
     }
 
-    // ========== Alerts ==========
+    // === Alerts ==========
 
     showAlert(message, severity = 'blue', duration = null) {
         const banner = document.createElement('div');
@@ -1670,7 +1671,7 @@ class FlyTabApp {
         }
     }
 
-    // ========== Fuel Stop Proximity ==========
+    // === Fuel Stop Proximity ==========
 
     /** Check if the aircraft is within 10nm of any fuel stop waypoint. */
     _checkFuelStopProximity(situation) {
@@ -1808,7 +1809,7 @@ class FlyTabApp {
         });
     }
 
-    // ========== Toast Notifications ==========
+    // === Toast Notifications ==========
 
     async _checkDataReadiness() {
         const LOCAL = 'http://localhost:9090';
@@ -1906,7 +1907,7 @@ class FlyTabApp {
     }
 }
 
-// ========== Initialize on DOM ready ==========
+// === Initialize on DOM ready ==========
 
 const app = new FlyTabApp();
 window.app = app;
