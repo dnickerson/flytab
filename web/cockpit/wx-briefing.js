@@ -856,6 +856,69 @@ class WxBriefing {
         return section;
     }
 
+    _buildMosSummaryNote(icao, day) {
+        const sd = this._mosData?.stations?.[icao];
+        if (!sd?.periods) return '';
+
+        const dayStart = new Date(day); dayStart.setUTCHours(0, 0, 0, 0);
+        const dayEnd   = new Date(day); dayEnd.setUTCHours(24, 0, 0, 0);
+        const order = ['LIFR', 'IFR', 'MVFR', 'VFR'];
+
+        const periods = sd.periods
+            .filter(p => p.valid_time && p.flight_cat)
+            .map(p => ({ vt: new Date(p.valid_time), cat: p.flight_cat }))
+            .filter(p => p.vt >= dayStart && p.vt < dayEnd)
+            .sort((a, b) => a.vt - b.vt);
+
+        if (!periods.length) return '';
+        if (periods.every(p => p.cat === 'VFR')) return 'VFR all day ✓';
+
+        const fmtH = d => d.toLocaleTimeString([], { hour: 'numeric', hour12: true });
+
+        const blocks = [];
+        let i = 0;
+        while (i < periods.length) {
+            if (periods[i].cat === 'VFR') { i++; continue; }
+            let j = i;
+            let worst = periods[i].cat;
+            while (j < periods.length && periods[j].cat !== 'VFR') {
+                if (order.indexOf(periods[j].cat) < order.indexOf(worst)) worst = periods[j].cat;
+                j++;
+            }
+            const clearsAfter = j < periods.length;
+            blocks.push({ start: periods[i].vt, end: periods[j - 1].vt, cat: worst, clearsAfter });
+            i = j;
+        }
+
+        if (!blocks.length) return 'VFR all day ✓';
+
+        return blocks.map(b =>
+            `${b.cat} ${fmtH(b.start)}–${fmtH(b.end)}${b.clearsAfter ? ', then VFR' : ''}`
+        ).join(' · ');
+    }
+
+    _findFirstVfrTime(icao, day) {
+        const sd = this._mosData?.stations?.[icao];
+        if (!sd?.periods) return null;
+
+        const dayStart = new Date(day); dayStart.setUTCHours(0, 0, 0, 0);
+        const dayEnd   = new Date(day); dayEnd.setUTCHours(24, 0, 0, 0);
+
+        const periods = sd.periods
+            .filter(p => p.valid_time && p.flight_cat)
+            .map(p => ({ vt: new Date(p.valid_time), cat: p.flight_cat }))
+            .filter(p => p.vt >= dayStart && p.vt < dayEnd)
+            .sort((a, b) => a.vt - b.vt);
+
+        if (!periods.length) return null;
+        if (periods[0].cat === 'VFR') return periods[0].vt;
+
+        for (let i = 1; i < periods.length; i++) {
+            if (periods[i].cat === 'VFR' && periods[i - 1].cat !== 'VFR') return periods[i].vt;
+        }
+        return null;
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     _normalizeMos(data) {
