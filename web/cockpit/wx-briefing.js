@@ -1720,6 +1720,69 @@ class WxBriefing {
 
     // ── Planning Summary section ──────────────────────────────────────────────
 
+    _buildPlanningNarrative(stations, day) {
+        if (!this._mosData) return null;
+
+        const dep  = stations[0];
+        const dest = stations[stations.length - 1];
+        const mids = stations.slice(1, -1).slice(0, 2);
+        const key  = [dep, ...mids, dest];
+
+        const fmtH = d => d.toLocaleTimeString([], { hour: 'numeric', hour12: true });
+        const fmtDay = d => {
+            const now = new Date();
+            if (this._isSameDay(d, now)) return 'Today';
+            const tomorrow = new Date(now); tomorrow.setUTCDate(now.getUTCDate() + 1);
+            if (this._isSameDay(d, tomorrow)) return 'Tomorrow';
+            return d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+        };
+
+        const rows = [];
+        let latestClearTime = null;
+
+        for (const icao of key) {
+            const sd = this._mosData.stations?.[icao];
+            if (!sd) { rows.push({ icao, text: 'No MOS data', ok: null }); continue; }
+
+            const worst = this._worstCatForDay(sd, day);
+            if (!worst) { rows.push({ icao, text: 'No forecast', ok: null }); continue; }
+
+            if (worst === 'VFR') {
+                rows.push({ icao, text: 'VFR all day', ok: true });
+            } else {
+                const note  = this._buildMosSummaryNote(icao, day);
+                const clear = this._findFirstVfrTime(icao, day);
+                if (clear && (!latestClearTime || clear > latestClearTime)) latestClearTime = clear;
+                const suffix = clear ? ` Clears ${fmtH(clear)}.` : ' No clear period.';
+                const ok = worst === 'MVFR' ? 'warn' : false;
+                rows.push({ icao, text: (note || worst) + suffix, ok });
+            }
+        }
+
+        const warnings = [];
+        if (this._airmets?.length) {
+            const filtered = this._filterAdvisoriesForRoute(this._airmets);
+            if (filtered.length) warnings.push(`${filtered.length} AIRMET${filtered.length > 1 ? 's' : ''} on route`);
+        }
+        if (this._mcds?.length) {
+            const onRoute = this._mcds.filter(m =>
+                !m.polygon || this._filterAdvisoriesForRoute([{ points: m.polygon }]).length > 0);
+            if (onRoute.length) warnings.push(`${onRoute.length} MCD${onRoute.length > 1 ? 's' : ''} active`);
+        }
+
+        const allVfr = rows.every(r => r.ok === true);
+        let rec;
+        if (allVfr) {
+            rec = `${fmtDay(day)}: Route looks clear. Depart at your convenience.`;
+        } else if (latestClearTime) {
+            rec = `${fmtDay(day)}: Plan departure after ${fmtH(latestClearTime)} for VFR along the full route.`;
+        } else {
+            rec = `${fmtDay(day)}: IMC forecast along the route. Consider filing IFR or alternate date.`;
+        }
+
+        return { rows, warnings, rec, dayLabel: fmtDay(day) };
+    }
+
     _renderPlanningSection() {
         const sec = this._section('wx-planning-section');
         if (!sec) return;
