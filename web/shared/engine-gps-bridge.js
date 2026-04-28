@@ -52,10 +52,14 @@ class EngineGpsBridge {
                     _source:         'engine',
                 }
             }));
-        } else if (this._active && !this._stratux.stale) {
+        } else if (this._active) {
             this._active = false;
-            if (typeof DiagLog !== 'undefined')
-                DiagLog.log('gps', 'Engine GPS bridge inactive — Stratux situation WS recovered');
+            if (typeof DiagLog !== 'undefined') {
+                const reason = !this._stratux.stale
+                    ? 'Stratux situation WS recovered'
+                    : 'engine GPS unavailable';
+                DiagLog.log('gps', `Engine GPS bridge inactive — ${reason}`);
+            }
         }
     }
 }
