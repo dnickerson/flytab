@@ -319,8 +319,9 @@ class FlyTabApp {
             return entries.map(e => {
                 const time = e.t.slice(11, 19);
                 const color = CAT_COLORS[e.cat] || 'var(--text-secondary)';
-                const data = e.d ? ` <span style="color:var(--text-muted)">${e.d}</span>` : '';
-                return `<div style="margin:2px 0;line-height:1.5"><span style="color:var(--text-muted)">${time}</span> <span style="color:${color};font-weight:600">[${e.cat}]</span> ${e.msg}${data}</div>`;
+                const escStr = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+                const data = e.d ? ` <span style="color:var(--text-muted)">${escStr(typeof e.d === 'object' ? JSON.stringify(e.d) : e.d)}</span>` : '';
+                return `<div style="margin:2px 0;line-height:1.5"><span style="color:var(--text-muted)">${time}</span> <span style="color:${color};font-weight:600">[${escStr(e.cat)}]</span> ${escStr(e.msg)}${data}</div>`;
             }).join('');
         };
 
@@ -1567,9 +1568,10 @@ class FlyTabApp {
             .filter(e => e.cat === 'gps' || e.cat === 'stratux')
             .slice(-10)
             .reverse();
+        const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
         const logHtml = entries.length
             ? entries.map(e =>
-                `<div>${e.t.slice(11, 19)} [${e.cat}] ${e.msg}</div>`
+                `<div>${esc(e.t.slice(11, 19))} [${esc(e.cat)}] ${esc(e.msg)}</div>`
               ).join('')
             : '<div>No GPS log entries yet</div>';
 

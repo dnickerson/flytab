@@ -22,6 +22,13 @@ class EngineGpsBridge {
     }
 
     _tick() {
+        // Don't inject while internal/auto-fallback GPS is active — _suppressGpsSituation
+        // means GpsSource is deliberately blocking Stratux situation events.
+        if (this._stratux._suppressGpsSituation) {
+            if (this._active) this._active = false;
+            return;
+        }
+
         const d = this._engine.lastData;
         const shouldInject =
             this._stratux.stale === true &&
