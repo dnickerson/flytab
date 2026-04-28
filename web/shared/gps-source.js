@@ -216,6 +216,7 @@ class GpsSource {
             this._watchId = null;
             this._firstFixLogged = false;
             this._vsSmoothed = 0;
+            this._timeoutCount = 0;
             console.log('[GpsSource] Internal GPS stopped');
         }
         if (this._staleTimer) {
