@@ -285,10 +285,20 @@ class WeatherClient {
             'M_FZLVL': 'FRZLVL',
         }[hazard] || hazard;
 
+        // Build detail string: due_to + severity + altitude range + freezing level range
+        const detailParts = [due_to].filter(Boolean);
+        if (item.severity)                   detailParts.push(item.severity);
+        if (item.base && item.top)           detailParts.push(`${item.base}-${item.top}`);
+        else if (item.base)                  detailParts.push(`BASE ${item.base}`);
+        else if (item.top)                   detailParts.push(`TOP ${item.top}`);
+        if (item.fzlbase && item.fzltop)     detailParts.push(`FZL ${item.fzlbase}-${item.fzltop}`);
+        if (item.level)                      detailParts.push(`LEVEL ${item.level}`);
+        const detail = detailParts.join(' ');
+
         // Use first coordinate to guarantee uniqueness — tag and validTime alone collide across
         // multiple polygons of the same hazard type within the same issuance.
         const anchor = points.length > 0 ? `${points[0][0].toFixed(2)},${points[0][1].toFixed(2)}` : (item.tag || '');
-        const raw = `G-AIRMET ${product} ${hazardToken} [${anchor}]: ${due_to} VALID ${item.validTime || ''}`;
+        const raw = `G-AIRMET ${product} ${hazardToken} [${anchor}]: ${detail} VALID ${item.validTime || ''}`;
 
         return {
             raw,
