@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v6.20';
+const FLYTAB_VERSION = 'v6.21';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -51,6 +51,8 @@ class FlyTabApp {
     constructor() {
         // Cockpit components
         this.stratuxClient = null;
+        this.engineGpsBridge = null;
+        this._gpsDiagPanel = null;
         this.cockpitMap = null;
         this.enginePanel = null;
         this.trackLog = null;
@@ -453,6 +455,12 @@ class FlyTabApp {
         this.engineClient = new EngineClient();
         this.engineClient.connect();
         window.engineClient = this.engineClient;
+
+        // Engine GPS bridge — injects engine GPS when Stratux situation WS is unavailable
+        if (typeof EngineGpsBridge !== 'undefined') {
+            this.engineGpsBridge = new EngineGpsBridge(this.stratuxClient, this.engineClient);
+            this.engineGpsBridge.start();
+        }
 
         // Engine panel (receives data via WebSocket push)
         this.enginePanel = new EnginePanel(document.createElement('div'), this.engineClient);

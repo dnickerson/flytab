@@ -1,0 +1,61 @@
+class EngineGpsBridge {
+    constructor(stratuxClient, engineClient) {
+        this._stratux = stratuxClient;
+        this._engine  = engineClient;
+        this._active  = false;
+        this._onEngineData = null;
+    }
+
+    get active() { return this._active; }
+
+    start() {
+        this._onEngineData = () => this._tick();
+        this._engine.addEventListener('engine:data', this._onEngineData);
+    }
+
+    stop() {
+        if (this._onEngineData) {
+            this._engine.removeEventListener('engine:data', this._onEngineData);
+            this._onEngineData = null;
+        }
+        this._active = false;
+    }
+
+    _tick() {
+        const d = this._engine.lastData;
+        const shouldInject =
+            this._stratux.stale === true &&
+            this._engine.stale === false &&
+            d?.latitude  != null &&
+            d?.longitude != null;
+
+        if (shouldInject) {
+            if (!this._active) {
+                this._active = true;
+                if (typeof DiagLog !== 'undefined')
+                    DiagLog.log('gps', 'Engine GPS bridge active — injecting engine GPS as Stratux situation');
+            }
+            this._stratux.dispatchEvent(new CustomEvent('stratux:situation', {
+                detail: {
+                    lat:             d.latitude,
+                    lon:             d.longitude,
+                    alt_msl:         d.gps_altitude,
+                    alt_baro:        d.gps_altitude,
+                    ground_speed:    d.ground_speed,
+                    true_course:     d.course,
+                    pitch:           d.pitch,
+                    roll:            d.bank,
+                    g_load:          d.acc_vert,
+                    gps_fix_quality: 1,
+                    gps_sats:        null,
+                    vertical_speed:  0,
+                    _source:         'engine',
+                }
+            }));
+        } else if (this._active && !this._stratux.stale) {
+            this._active = false;
+            if (typeof DiagLog !== 'undefined')
+                DiagLog.log('gps', 'Engine GPS bridge inactive — Stratux situation WS recovered');
+        }
+    }
+}
