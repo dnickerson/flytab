@@ -57,6 +57,12 @@ class FisbWeatherDisplay {
         // Purge timer
         this._purgeTimer = null;
 
+        // Advisory toast + panel
+        this._advisoryToast  = null;
+        this._advisoryPanel  = null;
+        this._startupComplete  = false;
+        this._startupToastTimer = null;
+
         // Touch tap handler (Leaflet's tap plugin is disabled — bindPopup click unreliable on tablet)
         this._tapStart = null;
         this._onTapStart = (e) => {
@@ -101,6 +107,9 @@ class FisbWeatherDisplay {
         // Purge stale markers every 30 seconds
         this._purgeTimer = setInterval(() => this._purgeMarkers(), 30000);
 
+        // Build advisory list panel (hidden until opened)
+        this._buildAdvisoryPanel();
+
         // Register touch handlers on map container for reliable SIGMET/AIRMET tap detection
         const container = this._map.getContainer();
         container.addEventListener('touchstart', this._onTapStart, { capture: false, passive: true });
@@ -143,6 +152,9 @@ class FisbWeatherDisplay {
         this._activeAlerts.clear();
         this._toastSeen.clear();
         if (this._alertContainer?.parentNode) this._alertContainer.parentNode.removeChild(this._alertContainer);
+        if (this._advisoryToast?.parentNode) this._advisoryToast.remove();
+        if (this._advisoryPanel?.parentNode) this._advisoryPanel.remove();
+        clearTimeout(this._startupToastTimer);
     }
 
     // ========== Winds Aloft ==========
@@ -247,17 +259,35 @@ class FisbWeatherDisplay {
      * Safe to call repeatedly — deduplicates on the seen-keys set.
      */
     injectAdvisories(sigmets, airmets) {
+        let newCount = 0;
         for (const s of (sigmets || [])) {
             const key = (s.raw || '').slice(0, 80);
             if (this._seenAdvisoryKeys.has(key)) continue;
             this._seenAdvisoryKeys.add(key);
             this._addSigmet(s);
+            newCount++;
         }
         for (const a of (airmets || [])) {
             const key = (a.raw || '').slice(0, 80);
             if (this._seenAdvisoryKeys.has(key)) continue;
             this._seenAdvisoryKeys.add(key);
             this._addAirmet(a);
+            newCount++;
+        }
+
+        if (newCount > 0) {
+            if (!this._startupComplete) {
+                // Debounce startup toast — cache load + fresh fetch both call injectAdvisories
+                // quickly; wait 3s for both to settle before showing one consolidated toast.
+                clearTimeout(this._startupToastTimer);
+                this._startupToastTimer = setTimeout(() => {
+                    this._startupComplete = true;
+                    this._showAdvisoryToast();
+                }, 3000);
+            } else {
+                // Mid-session new advisory — show immediately
+                this._showAdvisoryToast();
+            }
         }
     }
 
@@ -375,6 +405,7 @@ class FisbWeatherDisplay {
             polygon, received_at: sigmet.received_at,
             expires_at: sigmet.expires_at, type: 'sigmet',
             rawKey: (sigmet.raw || '').slice(0, 80),
+            advisory: sigmet,
         });
 
     }
@@ -417,8 +448,137 @@ class FisbWeatherDisplay {
             polygon, received_at: airmet.received_at,
             expires_at: airmet.expires_at,
             rawKey: (airmet.raw || '').slice(0, 80),
+            advisory: airmet,
         });
 
+    }
+
+    // ========== Advisory Toast & Panel ==========
+
+    /** Show (or refresh) the consolidated red advisory toast. */
+    _showAdvisoryToast() {
+        const sigmetCount = this._sigmetPolygons.length;
+        const airmetCount = this._airmetPolygons.length;
+        if (sigmetCount === 0 && airmetCount === 0) return;
+
+        // Dismiss any existing toast before creating a fresh one
+        if (this._advisoryToast?.parentNode) this._advisoryToast.remove();
+
+        const parts = [];
+        if (sigmetCount > 0) parts.push(`${sigmetCount} SIGMET${sigmetCount !== 1 ? 'S' : ''}`);
+        if (airmetCount > 0) parts.push(`${airmetCount} AIRMET${airmetCount !== 1 ? 'S' : ''}`);
+
+        const toast = document.createElement('div');
+        toast.className = 'wx-adv-toast';
+        toast.innerHTML = `
+            <div class="wx-adv-toast-icon">&#9888;</div>
+            <div class="wx-adv-toast-body">
+                <div class="wx-adv-toast-title">WEATHER ADVISORY</div>
+                <div class="wx-adv-toast-sub">${parts.join(' &middot; ')} ACTIVE</div>
+            </div>
+            <button class="wx-adv-toast-view">VIEW</button>
+            <button class="wx-adv-toast-close">&#x2715;</button>`;
+        document.body.appendChild(toast);
+        this._advisoryToast = toast;
+
+        toast.querySelector('.wx-adv-toast-view').addEventListener('click', () => {
+            this.openAdvisoryPanel();
+            toast.remove();
+            this._advisoryToast = null;
+        });
+        toast.querySelector('.wx-adv-toast-close').addEventListener('click', () => {
+            toast.remove();
+            this._advisoryToast = null;
+        });
+
+        // Auto-dismiss after 60 seconds
+        setTimeout(() => {
+            if (toast.parentNode) { toast.remove(); this._advisoryToast = null; }
+        }, 60000);
+    }
+
+    /** Build the advisory list panel and attach to document body (initially hidden). */
+    _buildAdvisoryPanel() {
+        const panel = document.createElement('div');
+        panel.className = 'wx-adv-panel';
+        panel.innerHTML = `
+            <div class="wx-adv-panel-header">
+                <span class="wx-adv-panel-title">&#9888; ACTIVE ADVISORIES</span>
+                <span class="wx-adv-panel-count">0</span>
+                <button class="wx-adv-panel-close">&#x2715;</button>
+            </div>
+            <div class="wx-adv-panel-scroll"></div>`;
+        panel.querySelector('.wx-adv-panel-close').addEventListener('click', () => {
+            panel.classList.remove('visible');
+        });
+        document.body.appendChild(panel);
+        this._advisoryPanel = panel;
+    }
+
+    /** Open the advisory list panel and render current active advisories. */
+    openAdvisoryPanel() {
+        if (!this._advisoryPanel) return;
+        this._renderAdvisoryPanel();
+        this._advisoryPanel.classList.add('visible');
+    }
+
+    _renderAdvisoryPanel() {
+        const now = Date.now();
+        const active = (entries) => entries.filter(e => !e.expires_at || e.expires_at > now);
+
+        const sigmets  = active(this._sigmetPolygons);
+        const airmets  = active(this._airmetPolygons);
+        const total    = sigmets.length + airmets.length;
+
+        this._advisoryPanel.querySelector('.wx-adv-panel-count').textContent = total;
+
+        const scroll = this._advisoryPanel.querySelector('.wx-adv-panel-scroll');
+
+        const convective = sigmets.filter(e => e.type === 'convective');
+        const nonConv    = sigmets.filter(e => e.type !== 'convective');
+        const tangos     = airmets.filter(e => /\bTURB\b/i.test(e.advisory?.raw || ''));
+        const zulus      = airmets.filter(e => /\b(ICING|FRZLVL)\b/i.test(e.advisory?.raw || '') && !/\bTURB\b/i.test(e.advisory?.raw || ''));
+        const sierras    = airmets.filter(e => /\b(IFR|MTN\s*OBS)\b/i.test(e.advisory?.raw || '') && !tangos.includes(e) && !zulus.includes(e));
+        const others     = airmets.filter(e => !tangos.includes(e) && !zulus.includes(e) && !sierras.includes(e));
+
+        const renderSection = (label, entries, rowClass, badge) => {
+            if (!entries.length) return '';
+            let html = `<div class="wx-adv-section-label">${label} (${entries.length})</div>`;
+            for (const e of entries) {
+                const detail = this._formatAdvisoryDetail(e.advisory?.raw || '');
+                const until  = e.expires_at ? this._fmtUtcTime(e.expires_at) : '';
+                html += `<div class="wx-adv-row ${rowClass}">
+                    <span class="wx-adv-row-badge">${badge}</span>
+                    <span class="wx-adv-row-detail">${FisbWeatherDisplay._esc(detail)}</span>
+                    ${until ? `<span class="wx-adv-row-time">UNTIL ${until}</span>` : ''}
+                </div>`;
+            }
+            return html;
+        };
+
+        let html = '';
+        html += renderSection('CONVECTIVE SIGMET', convective, 'wx-adv-row-sigmet', 'CONV SIGMET');
+        html += renderSection('SIGMET',            nonConv,    'wx-adv-row-sigmet', 'SIGMET');
+        html += renderSection('AIRMET TANGO — Turbulence', tangos,  'wx-adv-row-tango',  'TANGO');
+        html += renderSection('AIRMET ZULU — Icing/FZL',  zulus,   'wx-adv-row-zulu',   'ZULU');
+        html += renderSection('AIRMET SIERRA — IFR/Mtn',  sierras, 'wx-adv-row-sierra', 'SIERRA');
+        html += renderSection('AIRMET',            others,     'wx-adv-row-tango',  'AIRMET');
+
+        if (!html) html = '<p class="wx-adv-empty">No active advisories</p>';
+        scroll.innerHTML = html;
+    }
+
+    /** Strip G-AIRMET coordinate anchor and VALID timestamp; return human-readable detail. */
+    _formatAdvisoryDetail(raw) {
+        return (raw || '')
+            .replace(/^G-AIRMET\s+\S+\s+\S+\s+\[[^\]]+\]:\s*/, '')
+            .replace(/\s+VALID\s+\S+\s*$/, '')
+            .trim() || raw;
+    }
+
+    _fmtUtcTime(ts) {
+        const d = new Date(ts);
+        return `${String(d.getUTCHours()).padStart(2,'0')}${String(d.getUTCMinutes()).padStart(2,'0')}Z`;
     }
 
     // ========== Alerts ==========
