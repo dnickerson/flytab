@@ -175,19 +175,35 @@ class WeatherClient {
     async fetchAndCacheAdvisories() {
         // Route through flywhere.app proxy — direct AWC fetch is blocked by CORS from http://localhost (Capacitor)
         const base = Settings.workerBase || 'https://www.flywhere.app/api';
-        const url = `${base}/weather?type=airsigmet&format=json`;
-        const resp = await fetch(url, { signal: AbortSignal.timeout(10000) });
-        if (!resp.ok) throw new Error(`Advisory fetch failed: ${resp.status} ${url}`);
-        const raw = await resp.json();
-        const items = Array.isArray(raw) ? raw : (raw.data || []);
+
+        // Fetch traditional AIRMETs/SIGMETs and G-AIRMETs in parallel.
+        // G-AIRMET is a separate AWC product with different field names and string coords.
+        const [airsigmetResp, gairmetResp] = await Promise.all([
+            fetch(`${base}/weather?type=airsigmet&format=json`, { signal: AbortSignal.timeout(10000) }),
+            fetch(`${base}/weather?type=gairmet&format=json`,   { signal: AbortSignal.timeout(10000) }),
+        ]);
+        if (!airsigmetResp.ok) throw new Error(`Advisory fetch failed: ${airsigmetResp.status}`);
+
+        const airsigmetRaw = await airsigmetResp.json();
+        const airsigmetItems = Array.isArray(airsigmetRaw) ? airsigmetRaw : (airsigmetRaw.data || []);
 
         const sigmets = [];
         const airmets = [];
-        for (const item of items) {
+        for (const item of airsigmetItems) {
             const parsed = WeatherClient._parseAirsigmet(item);
             if (!parsed) continue;
             if (parsed.isSigmet) sigmets.push(parsed);
             else airmets.push(parsed);
+        }
+
+        // G-AIRMETs are non-fatal — proxy may not support them on older deploys
+        if (gairmetResp.ok) {
+            const gairmetRaw = await gairmetResp.json();
+            const gairmetItems = Array.isArray(gairmetRaw) ? gairmetRaw : (gairmetRaw.data || []);
+            for (const item of gairmetItems) {
+                const parsed = WeatherClient._parseGairmet(item);
+                if (parsed) airmets.push(parsed);
+            }
         }
 
         try {
@@ -239,6 +255,50 @@ class WeatherClient {
             received_at: now,
             expires_at,
             isSigmet,
+        };
+    }
+
+    /**
+     * Parse one AWC G-AIRMET API item into the internal advisory format.
+     * G-AIRMETs have string coords, no rawAirSigmet, and different field names.
+     * Returns null if the item has no polygon geometry.
+     */
+    static _parseGairmet(item) {
+        const now = Date.now();
+        // G-AIRMET coords are strings ("43.36"), not numbers
+        const points = (item.coords || []).map(c => [parseFloat(c.lat), parseFloat(c.lon)])
+            .filter(([lat, lon]) => !isNaN(lat) && !isNaN(lon));
+
+        const hazard = (item.hazard || '').toUpperCase();
+        const product = (item.product || '').toUpperCase(); // SIERRA, TANGO, ZULU
+        const due_to = item.due_to || '';
+        const expires_at = item.expireTime ? item.expireTime * 1000 : now + 6 * 3600000;
+
+        // Map G-AIRMET hazard codes to tokens that _addAirmet's regex can classify
+        const hazardToken = {
+            'ICE':     'ICING',
+            'TURB-HI': 'TURB',
+            'TURB-LO': 'TURB',
+            'IFR':     'IFR',
+            'MT_OBSC': 'MTN OBSCN',
+            'FZLVL':   'FRZLVL',
+            'M_FZLVL': 'FRZLVL',
+        }[hazard] || hazard;
+
+        // Use first coordinate to guarantee uniqueness — tag and validTime alone collide across
+        // multiple polygons of the same hazard type within the same issuance.
+        const anchor = points.length > 0 ? `${points[0][0].toFixed(2)},${points[0][1].toFixed(2)}` : (item.tag || '');
+        const raw = `G-AIRMET ${product} ${hazardToken} [${anchor}]: ${due_to} VALID ${item.validTime || ''}`;
+
+        return {
+            raw,
+            type: 'airmet',
+            hazard: hazardToken,
+            points,
+            received_at: now,
+            expires_at,
+            isSigmet: false,
+            isGairmet: true,
         };
     }
 
