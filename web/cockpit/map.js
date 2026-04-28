@@ -214,6 +214,20 @@ class CockpitMap {
 
         // Periodic traffic cleanup
         this._trafficTimer = setInterval(() => this._updateTraffic(), 2000);
+
+        // Suppress synthetic clicks that follow a Leaflet popup close button tap.
+        // The X button is inside the map container but outside wireTap, so _wireTapLastTouchAt
+        // is never set. Track the last touchend on the map container; on popupclose, if a touch
+        // happened within 500ms, brand _wireTapLastTouchAt to block the follow-on synthetic click.
+        this._lastMapContainerTouchAt = 0;
+        this.map.getContainer().addEventListener('touchend', () => {
+            this._lastMapContainerTouchAt = Date.now();
+        }, { passive: true, capture: true });
+        this.map.on('popupclose', () => {
+            if (Date.now() - this._lastMapContainerTouchAt < 500) {
+                if (typeof _wireTapLastTouchAt !== 'undefined') _wireTapLastTouchAt = Date.now();
+            }
+        });
     }
 
     /** Provide a NasrDB instance for fix/navaid queries */
