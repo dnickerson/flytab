@@ -316,6 +316,44 @@ body {
 .status-fisb { background: #661111; color: #ff6666; }
 .status-gps.active { background: #116611; color: #44ff44; }
 .status-fisb.active { background: #116611; color: #44ff44; }
+.status-gps.active-degraded { background: #664400; color: #ffcc44; }
+
+#gps-diag-panel {
+    display: none;
+    background: #1a0000;
+    border-bottom: 2px solid #cc2200;
+    padding: 10px 12px;
+    font-family: monospace;
+    font-size: 11px;
+    color: #ff9999;
+    flex-shrink: 0;
+}
+#gps-diag-panel.visible { display: block; }
+.gps-diag-status {
+    font-size: 12px;
+    font-weight: 600;
+    color: #ffcc44;
+    margin-bottom: 8px;
+}
+.gps-diag-log {
+    max-height: 120px;
+    overflow-y: auto;
+    margin-bottom: 8px;
+    line-height: 1.5;
+}
+.gps-diag-actions { display: flex; gap: 8px; }
+.gps-diag-fix-btn {
+    background: #cc2200; color: #fff;
+    border: none; border-radius: 4px;
+    padding: 8px 14px; font-size: 12px; font-weight: 700;
+    cursor: pointer;
+}
+.gps-diag-sec-btn {
+    background: #333; color: #ccc;
+    border: 1px solid #555; border-radius: 4px;
+    padding: 8px 14px; font-size: 12px;
+    cursor: pointer;
+}
 
 /* ========== Overlay Safe-Area Padding ========== */
 /* All full-screen overlay headers need safe-area top padding for iPad status bar */

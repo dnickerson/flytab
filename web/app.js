@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v6.21';
+const FLYTAB_VERSION = 'v6.22';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -104,6 +104,8 @@ class FlyTabApp {
             mainContent: document.getElementById('mainContent'),
             cockpitView: document.getElementById('cockpitView'),
         };
+
+        this._initGpsDiagPanel();
 
         this._clockInterval = null;
         this._recorderInterval = null;
@@ -1475,19 +1477,28 @@ class FlyTabApp {
             const sit = (connected && !stale) ? this.stratuxClient?.situation : null;
             const status = connected ? this.stratuxClient?.deviceStatus : null;
 
-            // GPS: green if fix (quality >= 1), show solution type + source
+            // GPS: green if fix (quality >= 1), amber if engine bridge active, show solution type + source
             if (this.dom.statusGps) {
-                const src = this.gpsSource?.label ?? (this.gpsSource?.source === 'internal' ? 'INT' : 'STX');
+                const bridgeActive = this.engineGpsBridge?.active === true;
+                const src = bridgeActive ? 'ENG'
+                    : (this.gpsSource?.label ?? (this.gpsSource?.source === 'internal' ? 'INT' : 'STX'));
                 const q = sit?.gps_fix_quality ?? 0;
-                const gpsOk = q >= 1;
+                const gpsOk = !bridgeActive && q >= 1;
                 this.dom.statusGps.classList.toggle('active', gpsOk);
+                this.dom.statusGps.classList.toggle('active-degraded', bridgeActive);
                 if (gpsOk) {
                     const sats = sit.gps_sats != null ? `${sit.gps_sats}sv` : '';
                     const sol = GPS_SOLUTION_LABELS[q] || 'FIX';
                     const acc = sit._accuracy != null ? `±${Math.round(sit._accuracy)}m` : '';
                     this.dom.statusGps.textContent = `${src} ${sol} ${sats || acc}`.trim();
+                } else if (bridgeActive) {
+                    this.dom.statusGps.textContent = 'ENG GPS';
                 } else {
                     this.dom.statusGps.textContent = `${src} GPS`;
+                }
+                // Auto-dismiss diag panel when GPS resolves
+                if (gpsOk && this._gpsDiagPanel?.classList.contains('visible')) {
+                    this._gpsDiagPanel.classList.remove('visible');
                 }
             }
 
@@ -1513,6 +1524,80 @@ class FlyTabApp {
         };
         update();
         this._deviceStatusInterval = setInterval(update, 5000);
+    }
+
+    // === GPS Diag Panel ==========
+
+    _initGpsDiagPanel() {
+        const panel = document.createElement('div');
+        panel.id = 'gps-diag-panel';
+        const statusBar = document.getElementById('statusBar');
+        if (statusBar) statusBar.insertAdjacentElement('afterend', panel);
+        this._gpsDiagPanel = panel;
+        this.dom.statusGps?.addEventListener('click', () => this._toggleGpsDiagPanel());
+    }
+
+    _toggleGpsDiagPanel() {
+        if (!this._gpsDiagPanel) return;
+        const nowVisible = this._gpsDiagPanel.classList.toggle('visible');
+        if (nowVisible) this._renderGpsDiagPanel();
+    }
+
+    _renderGpsDiagPanel() {
+        const panel = this._gpsDiagPanel;
+        if (!panel) return;
+
+        const bridgeActive = this.engineGpsBridge?.active === true;
+        const stale = this.stratuxClient?.stale;
+        const sit = this.stratuxClient?.situation;
+        const q = sit?.gps_fix_quality ?? 0;
+
+        let statusLine;
+        if (bridgeActive) {
+            statusLine = 'Situation WS unavailable — position from engine monitor. Stratux reconnecting.';
+        } else if (!stale && q === 0) {
+            statusLine = 'Stratux connected — no GPS fix';
+        } else if (stale) {
+            statusLine = 'Situation WS closed — engine GPS also unavailable';
+        } else {
+            statusLine = 'GPS nominal';
+        }
+
+        const entries = DiagLog.entries
+            .filter(e => e.cat === 'gps' || e.cat === 'stratux')
+            .slice(-10)
+            .reverse();
+        const logHtml = entries.length
+            ? entries.map(e =>
+                `<div>${e.t.slice(11, 19)} [${e.cat}] ${e.msg}</div>`
+              ).join('')
+            : '<div>No GPS log entries yet</div>';
+
+        const cfgSrc = this.gpsSource?._configuredSource;
+        const inFallback = this.gpsSource?._inFallback;
+        let fixLabel, fixAction;
+        if (cfgSrc === 'internal' && q >= 1) {
+            fixLabel = 'USE STRATUX GPS';
+            fixAction = () => this.gpsSource.setSource('stratux');
+        } else if (cfgSrc === 'auto' && inFallback) {
+            fixLabel = 'RESET GPS SOURCE';
+            fixAction = () => this.gpsSource.setSource('auto');
+        } else {
+            fixLabel = 'GPS SETTINGS';
+            fixAction = () => this.configEditor?.show();
+        }
+
+        panel.innerHTML = `
+            <div class="gps-diag-status">${statusLine}</div>
+            <div class="gps-diag-log">${logHtml}</div>
+            <div class="gps-diag-actions">
+                <button class="gps-diag-fix-btn" id="gpsDiagFixBtn">${fixLabel}</button>
+                <button class="gps-diag-sec-btn" id="gpsDiagSettingsBtn">GPS SETTINGS</button>
+            </div>
+        `;
+
+        document.getElementById('gpsDiagFixBtn')?.addEventListener('click', fixAction);
+        document.getElementById('gpsDiagSettingsBtn')?.addEventListener('click', () => this.configEditor?.show());
     }
 
     // === Connectivity Monitor ==========
