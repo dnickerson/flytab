@@ -353,11 +353,7 @@ class FisbWeatherDisplay {
 
     _addSigmet(sigmet) {
         this._seenAdvisoryKeys.add((sigmet.raw || '').slice(0, 80));
-        if (!sigmet.points || sigmet.points.length < 3) {
-            // Text-only SIGMET — show as alert
-            this._toastAlert(`\u26a0\ufe0f SIGMET: ${sigmet.raw.slice(0, 80)}`, 'red', 30000, sigmet.raw);
-            return;
-        }
+        if (!sigmet.points || sigmet.points.length < 3) return;
 
         const isConvective = sigmet.type === 'convective';
         const style = {
@@ -381,12 +377,6 @@ class FisbWeatherDisplay {
             rawKey: (sigmet.raw || '').slice(0, 80),
         });
 
-        // Toast for all SIGMETs
-        if (isConvective) {
-            this._toastAlert(`\u26a0\ufe0f CONVECTIVE SIGMET: ${sigmet.raw.slice(0, 80)}`, 'red', 30000, sigmet.raw);
-        } else {
-            this._toastAlert(`\u26a0\ufe0f SIGMET: ${sigmet.raw.slice(0, 80)}`, 'red', 30000, sigmet.raw);
-        }
     }
 
     _addAirmet(airmet) {
@@ -399,19 +389,15 @@ class FisbWeatherDisplay {
         const isTango  = /\b(TURB|LLW|LLWS|TURBC)\b/i.test(raw);
         const isSierra = /\b(IFR|MTN\s*OBS|CIG|VIS)\b/i.test(raw);
 
-        let color, label, toastMsg, toastSeverity;
+        let color, label;
         if (isZulu) {
             color = '#00ccff'; label = 'AIRMET ZULU (Icing)';
-            toastMsg = `\ud83e\uddca AIRMET ZULU (Icing): ${raw.slice(0, 80)}`; toastSeverity = 'blue';
         } else if (isTango) {
             color = '#ffcc00'; label = 'AIRMET TANGO (Turbulence)';
-            toastMsg = `\u26a1 AIRMET TANGO: ${raw.slice(0, 80)}`; toastSeverity = 'amber';
         } else if (isSierra) {
             color = '#ff44cc'; label = 'AIRMET SIERRA (IFR/Mtn)';
-            toastMsg = `\ud83c\udf2b\ufe0f AIRMET SIERRA (IFR): ${raw.slice(0, 80)}`; toastSeverity = 'amber';
         } else {
             color = '#ffaa00'; label = 'AIRMET';
-            toastMsg = `\u26a1 AIRMET: ${raw.slice(0, 80)}`; toastSeverity = 'amber';
         }
 
         const polygon = L.polygon(airmet.points, {
@@ -433,7 +419,6 @@ class FisbWeatherDisplay {
             rawKey: (airmet.raw || '').slice(0, 80),
         });
 
-        this._toastAlert(toastMsg, toastSeverity, 30000, raw);
     }
 
     // ========== Alerts ==========
