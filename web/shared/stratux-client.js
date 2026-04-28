@@ -403,6 +403,10 @@ class StratuxClient extends EventTarget {
                 this._stale = true;
                 this.dispatchEvent(new CustomEvent('stratux:stale', { detail: { ageMs: 5000 } }));
             }, 5000);
+            // Rescue situation WS if it lost the startup race
+            if (!this._situationWs || this._situationWs.readyState === WebSocket.CLOSED) {
+                this._connectSituation();
+            }
         }
         this.dispatchEvent(new CustomEvent(event));
     }
