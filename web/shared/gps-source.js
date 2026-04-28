@@ -160,6 +160,7 @@ class GpsSource {
                     const c = pos.coords;
                     if (typeof DiagLog !== 'undefined') DiagLog.log('gps', `First fix: ${c.latitude.toFixed(4)}, ${c.longitude.toFixed(4)} acc=${Math.round(c.accuracy)}m alt=${c.altitude != null ? Math.round(c.altitude) + 'm' : 'null'}`);
                 }
+                this._timeoutCount = 0;
                 this._onInternalPosition(pos);
                 this._resetStaleTimer();
             },
@@ -171,6 +172,12 @@ class GpsSource {
                 if (err.code === 1 || err.code === 2) {
                     this._stopInternal();
                     this._fallbackToStratux();
+                } else if (err.code === 3) {
+                    this._timeoutCount++;
+                    if (this._timeoutCount >= 2) {
+                        this._stopInternal();
+                        this._fallbackToStratux();
+                    }
                 }
             },
             {
