@@ -28,13 +28,15 @@ class WxBriefing {
         this._airmets      = null;
         this._mcds         = null;
         this._afds         = null;
-        this._notams       = null;
+        this._notams         = null;
+        this._enrouteNotams  = null;
 
-        this._metarFetchedAt  = 0;
-        this._airmetFetchedAt = 0;
-        this._mcdFetchedAt    = 0;
-        this._afdFetchedAt    = 0;
-        this._notamFetchedAt  = 0;
+        this._metarFetchedAt       = 0;
+        this._airmetFetchedAt      = 0;
+        this._mcdFetchedAt         = 0;
+        this._afdFetchedAt         = 0;
+        this._notamFetchedAt       = 0;
+        this._enrouteNotamFetchedAt = 0;
 
         this._routeCoords  = null;
     }
@@ -78,14 +80,15 @@ class WxBriefing {
         if (now - this._airmetFetchedAt > TTL15) fetches.push(this._fetchAirmets());
         if (now - this._mcdFetchedAt    > TTL15) fetches.push(this._fetchMcds());
         if (now - this._afdFetchedAt    > TTL60) fetches.push(this._fetchAfds());
-        if (now - this._notamFetchedAt  > TTL15) fetches.push(this._fetchNotams());
+        if (now - this._notamFetchedAt        > TTL15) fetches.push(this._fetchNotams());
+        if (now - this._enrouteNotamFetchedAt > TTL15) fetches.push(this._fetchEnrouteNotams());
 
         if (fetches.length) Promise.allSettled(fetches);
     }
 
     _refreshAll() {
         this._metarFetchedAt = this._airmetFetchedAt = this._mcdFetchedAt =
-            this._afdFetchedAt = this._notamFetchedAt = 0;
+            this._afdFetchedAt = this._notamFetchedAt = this._enrouteNotamFetchedAt = 0;
         this._fetchMos();
         this._fetchColdSections();
     }
@@ -384,16 +387,16 @@ class WxBriefing {
         const sec = this._section('wx-notam-section');
         if (!sec) return;
 
-        if (this._notams === null) {
-            sec.innerHTML = this._buildRhsHeader('NOTAMs', null, 'Fetching…').outerHTML;
-            return;
-        }
+        const airportLoading = this._notams === null;
+        const enrouteLoading = this._enrouteNotams === null;
+        const loading = airportLoading || enrouteLoading;
 
-        const critical = this._notams.filter(n => n.type === 'RWY' || n.type === 'NAVAID');
-        const badgeClass = critical.length > 0 ? 'warn' : (this._notams.length > 0 ? 'info' : 'ok');
-        const badgeText = critical.length > 0
-            ? `${critical.length} CRITICAL`
-            : (this._notams.length > 0 ? `${this._notams.length} ACTIVE` : 'NONE');
+        const allNotams = [...(this._notams || []), ...(this._enrouteNotams || [])];
+        const critical = allNotams.filter(n => ['RWY', 'NAVAID', 'TFR', 'RESTR'].includes(n.type));
+        const badgeClass = loading ? null : (critical.length > 0 ? 'warn' : allNotams.length > 0 ? 'info' : 'ok');
+        const badgeText  = loading
+            ? 'Fetching…'
+            : (critical.length > 0 ? `${critical.length} CRITICAL` : allNotams.length > 0 ? `${allNotams.length} ACTIVE` : 'NONE');
 
         const hdr = this._buildRhsHeader('NOTAMs', badgeClass, badgeText);
         sec.innerHTML = '';
@@ -402,22 +405,44 @@ class WxBriefing {
         const body = document.createElement('div');
         body.className = 'wx-rhs-body open';
 
-        if (!this._notams.length) {
-            body.innerHTML = '<div class="wx-section-empty">No active NOTAMs for route airports.</div>';
+        // ── Airport NOTAMs ────────────────────────────────────────────────────
+        const aptGrpHdr = document.createElement('div');
+        aptGrpHdr.className = 'wx-notam-group-hdr';
+        aptGrpHdr.textContent = 'AIRPORT';
+        body.appendChild(aptGrpHdr);
+
+        if (airportLoading) {
+            body.insertAdjacentHTML('beforeend', '<div class="wx-section-loading">Fetching airport NOTAMs…</div>');
+        } else if (!this._notams.length) {
+            body.insertAdjacentHTML('beforeend', '<div class="wx-section-empty">No active NOTAMs for route airports.</div>');
         } else {
             for (const notam of this._notams) {
                 const typeClass = (notam.type === 'RWY' || notam.type === 'NAVAID') ? 'rwy' : notam.type.toLowerCase();
                 const validStr = notam.validTo
                     ? `Valid to <b>${new Date(notam.validTo).toLocaleDateString([], {weekday:'short',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})} L</b>`
                     : '';
-                const card = this._buildAdvCard(
-                    notam.type, typeClass,
-                    `${notam.airport} · ${notam.summary}`,
-                    `${notam.airport}`,
-                    notam.raw,
-                    validStr
-                );
-                body.appendChild(card);
+                body.appendChild(this._buildAdvCard(notam.type, typeClass, `${notam.airport} · ${notam.summary}`, notam.airport, notam.raw, validStr));
+            }
+        }
+
+        // ── En-Route Airspace NOTAMs ──────────────────────────────────────────
+        const enrGrpHdr = document.createElement('div');
+        enrGrpHdr.className = 'wx-notam-group-hdr';
+        enrGrpHdr.textContent = 'EN-ROUTE AIRSPACE';
+        body.appendChild(enrGrpHdr);
+
+        if (enrouteLoading) {
+            body.insertAdjacentHTML('beforeend', '<div class="wx-section-loading">Fetching en-route NOTAMs…</div>');
+        } else if (!this._enrouteNotams.length) {
+            body.insertAdjacentHTML('beforeend', '<div class="wx-section-empty">No TFRs, MOAs, or restricted areas on route.</div>');
+        } else {
+            for (const notam of this._enrouteNotams) {
+                const typeClass = { TFR: 'rwy', RESTR: 'restr', MOA: 'moa', WARN: 'warn',
+                    ATCAA: 'atcaa', UAS: 'uas', LASER: 'laser' }[notam.type] || 'sua';
+                const validStr = notam.validTo
+                    ? `Valid to <b>${new Date(notam.validTo).toLocaleDateString([], {weekday:'short',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})} L</b>`
+                    : '';
+                body.appendChild(this._buildAdvCard(notam.type, typeClass, `${notam.airport} · ${notam.summary}`, notam.airport, notam.raw, validStr));
             }
         }
 
@@ -1670,6 +1695,126 @@ class WxBriefing {
 
         this._renderAgeGroup();
         this._renderNotamSection();
+    }
+
+    async _fetchEnrouteNotams() {
+        this._enrouteNotams = null;
+        this._renderNotamSection();
+
+        const bbox = await this._getRouteBbox(0);
+        if (!bbox) { this._enrouteNotams = []; this._renderNotamSection(); return; }
+
+        // Pick the 2 nearest ARTCCs to the route center + national ZZZ
+        const centerLat = (bbox.n + bbox.s) / 2;
+        const centerLon = (bbox.e + bbox.w) / 2;
+        const artccs = this._nearestArtccs(centerLat, centerLon, 2);
+        const locations = [...artccs, 'ZZZ'].join(',');
+
+        try {
+            const base = Settings.workerBase || 'https://www.flywhere.app/api';
+            const resp = await fetch(`${base}/notams?location=${locations}`, { signal: AbortSignal.timeout(30000) });
+            if (!resp.ok) throw new Error(`En-route NOTAM proxy ${resp.status}`);
+            const data = await resp.json();
+            const features = data.features || [];
+
+            const seen = new Set();
+            const notams = [];
+            for (const feature of features) {
+                const n = feature.properties?.coreNOTAMData?.notam || {};
+                const num = n.number || n.id || '';
+                if (seen.has(num)) continue;
+                seen.add(num);
+
+                // Skip cancellations — they remove a restriction, not add one
+                if (n.type === 'C' || /\bNOTAMC\b/.test(n.text || '')) continue;
+
+                // n.text is the plain prose field; simpleText can include ICAO-format headers
+                const translations = feature.properties?.coreNOTAMData?.notamTranslation || [];
+                const localFmt = translations.find(t => t.type === 'LOCAL_FORMAT');
+                const raw = n.text || localFmt?.simpleText || '';
+
+                if (!this._isEnrouteRelevant(raw)) continue;
+
+                notams.push({
+                    airport: n.location || '',
+                    type: this._classifyEnrouteNotam(raw),
+                    summary: this._summarizeEnrouteNotam(raw),
+                    raw,
+                    validFrom: n.effectiveStart || null,
+                    validTo:   n.effectiveEnd   || null,
+                    isEnroute: true,
+                });
+            }
+
+            const PRIORITY = { TFR: 0, RESTR: 1, MOA: 2, WARN: 3, ATCAA: 4, UAS: 5, LASER: 6 };
+            notams.sort((a, b) => {
+                const ap = PRIORITY[a.type] ?? 9;
+                const bp = PRIORITY[b.type] ?? 9;
+                return ap !== bp ? ap - bp : a.airport.localeCompare(b.airport);
+            });
+
+            this._enrouteNotams = notams;
+            this._enrouteNotamFetchedAt = Date.now();
+        } catch (err) {
+            console.error('En-route NOTAM fetch failed:', err);
+            this._enrouteNotams = [];
+        }
+
+        this._renderNotamSection();
+    }
+
+    _nearestArtccs(lat, lon, count = 2) {
+        const table = [
+            { id: 'KZAB', lat: 34.0, lon: -106.5 }, { id: 'KZAU', lat: 41.8, lon: -88.3  },
+            { id: 'KZBW', lat: 42.8, lon: -71.7  }, { id: 'KZDC', lat: 38.9, lon: -77.5  },
+            { id: 'KZDV', lat: 39.9, lon: -104.7 }, { id: 'KZFW', lat: 32.8, lon: -97.2  },
+            { id: 'KZHU', lat: 30.1, lon: -95.4  }, { id: 'KZID', lat: 39.7, lon: -86.3  },
+            { id: 'KZJX', lat: 30.5, lon: -82.2  }, { id: 'KZKC', lat: 38.9, lon: -94.7  },
+            { id: 'KZLA', lat: 34.0, lon: -117.0 }, { id: 'KZLC', lat: 40.8, lon: -111.9 },
+            { id: 'KZMA', lat: 25.8, lon: -80.3  }, { id: 'KZME', lat: 32.3, lon: -90.1  },
+            { id: 'KZMP', lat: 44.9, lon: -93.2  }, { id: 'KZNY', lat: 40.6, lon: -73.8  },
+            { id: 'KZOA', lat: 37.6, lon: -121.9 }, { id: 'KZOB', lat: 41.1, lon: -82.0  },
+            { id: 'KZSE', lat: 47.5, lon: -122.3 }, { id: 'KZTL', lat: 33.6, lon: -84.6  },
+        ];
+        const cosLat = Math.cos(lat * Math.PI / 180);
+        return table
+            .map(a => ({ id: a.id, d: (a.lat - lat) ** 2 + ((a.lon - lon) * cosLat) ** 2 }))
+            .sort((a, b) => a.d - b.d)
+            .slice(0, count)
+            .map(a => a.id);
+    }
+
+    _isEnrouteRelevant(raw) {
+        const r = raw.toUpperCase();
+        return /\bTFR\b|TEMPORARY FLIGHT RESTRICTION/.test(r) ||
+               /\bUAS\b|\bDRONE\b/.test(r) ||
+               /\bLASER\b/.test(r) ||
+               / P-\d+|\bPROHIBITED AREA\b/.test(r) ||
+               / R-\d+|\bRESTRICTED AREA\b/.test(r) ||
+               /\bMOA\b/.test(r) ||
+               /\bWARNING AREA\b| W-\d+/.test(r) ||
+               /\bATCAA\b/.test(r);
+    }
+
+    _classifyEnrouteNotam(raw) {
+        const r = raw.toUpperCase();
+        if (/\bTFR\b|TEMPORARY FLIGHT RESTRICTION/.test(r)) return 'TFR';
+        if (/ P-\d+|\bPROHIBITED AREA\b/.test(r)) return 'RESTR';
+        if (/ R-\d+|\bRESTRICTED AREA\b/.test(r)) return 'RESTR';
+        if (/\bMOA\b/.test(r)) return 'MOA';
+        if (/\bWARNING AREA\b| W-\d+/.test(r)) return 'WARN';
+        if (/\bATCAA\b/.test(r)) return 'ATCAA';
+        if (/\bUAS\b|\bDRONE\b/.test(r)) return 'UAS';
+        if (/\bLASER\b/.test(r)) return 'LASER';
+        return 'SUA';
+    }
+
+    _summarizeEnrouteNotam(raw) {
+        // Strip leading "XX.." state prefix (e.g. "GA..AIRSPACE" → "AIRSPACE")
+        return (raw || '').trim()
+            .replace(/^[A-Z]{2}\.\./i, '')
+            .replace(/\s+/g, ' ')
+            .slice(0, 120);
     }
 
     _parseNotam(feature, airport) {

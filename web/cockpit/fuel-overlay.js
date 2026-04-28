@@ -458,6 +458,8 @@ class FuelOverlay {
             this._updateSourceDisplay();
             this._syncMeasurement(m);
             this._renderHistory();
+            // Sync authoritative tic measurement to Pi so both systems agree
+            this._syncFuelSetToEngine(m.total_gal, 'Preflight tic mark measurement');
             this.hide();
         });
     }
@@ -548,6 +550,9 @@ class FuelOverlay {
             window.dispatchEvent(new CustomEvent('fuelstate:changed'));
             this._updateSourceDisplay();
 
+            // Sync fuel stop to Pi — use add endpoint so Pi logs the stop in its own history
+            this._syncFuelAddToEngine(gallons, airport, price);
+
             // Clear inputs and show success
             this._dom.addGal.value = '';
             this._dom.addPrice.value = '';
@@ -557,6 +562,32 @@ class FuelOverlay {
         } catch (err) {
             this._setAddStatus(`Save failed: ${err.message}`, 'error');
         }
+    }
+
+    _engineBaseUrl() {
+        const ip = window.engineClient?.ip || '192.168.10.1';
+        return `http://${ip}:8080`;
+    }
+
+    _syncFuelSetToEngine(gallons, reason = '') {
+        fetch(`${this._engineBaseUrl()}/api/fuel/set`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ fuel_remaining: gallons, reason }),
+            signal: AbortSignal.timeout(4000),
+        }).catch(() => { /* best-effort — Pi may be unreachable at fuel station */ });
+    }
+
+    _syncFuelAddToEngine(gallons, airport = '', price = null) {
+        const body = { gallons };
+        if (airport) body.airport = airport;
+        if (price != null) body.price_per_gallon = price;
+        fetch(`${this._engineBaseUrl()}/api/fuel/add`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+            signal: AbortSignal.timeout(4000),
+        }).catch(() => { /* best-effort */ });
     }
 
     _setAddStatus(msg, type) {

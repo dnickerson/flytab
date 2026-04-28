@@ -23,6 +23,7 @@ class GpsSource {
         this._firstFixLogged = false;
         this._vsSmoothed = 0; // EMA-smoothed vertical speed (fpm)
         this._staleTimer = null; // fires when internal GPS stops updating
+        this._timeoutCount = 0; // consecutive watchPosition TIMEOUT errors
 
         // Auto-listener references (null when not attached)
         this._onStratuxDisconnect = null;

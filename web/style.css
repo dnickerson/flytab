@@ -7809,6 +7809,11 @@ body {
 .wx-adv-type.afd    { color: #0066cc; border-color: rgba(0,102,204,.35); background: rgba(0,102,204,.08); }
 .wx-adv-type.rwy    { color: #cc2200; border-color: rgba(204,34,0,.4); background: rgba(204,34,0,.1); }
 .wx-adv-type.navaid { color: #cc0000; border-color: rgba(204,0,0,.4); background: rgba(204,0,0,.08); }
+.wx-adv-type.sua, .wx-adv-type.moa, .wx-adv-type.restr, .wx-adv-type.warn, .wx-adv-type.atcaa {
+    color: #6633aa; border-color: rgba(102,51,170,.4); background: rgba(102,51,170,.08);
+}
+.wx-adv-type.uas  { color: #cc6600; border-color: rgba(204,102,0,.4); background: rgba(204,102,0,.08); }
+.wx-adv-type.laser { color: #007744; border-color: rgba(0,119,68,.4); background: rgba(0,119,68,.08); }
 .wx-adv-type.ad, .wx-adv-type.svc, .wx-adv-type.twy, .wx-adv-type.obst {
     color: #555; border-color: #ccc; background: transparent;
 }
@@ -7934,6 +7939,18 @@ body {
     border-top: 1px solid #dde0dd;
     font-style: italic;
 }
+
+/* ── NOTAM group sub-headers ── */
+.wx-notam-group-hdr {
+    padding: 6px 14px 4px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    border-top: 1px solid var(--border);
+    margin-top: 4px;
+}
+.wx-notam-group-hdr:first-child { border-top: none; margin-top: 0; }
 
 /* ── Loading / empty / error states ── */
 .wx-section-loading,
