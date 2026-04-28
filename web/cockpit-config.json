@@ -5,11 +5,7 @@
   "simBridgeIp": "10.0.2.2",
   "simBridgePort": 5678,
 
-  "homeServer": {
-    "tileBase": "http://192.168.1.X:8090/tiles",
-    "plateBase": "http://192.168.1.X:8090/plates",
-    "nasrBase": "http://192.168.1.X:8090/nasr"
-  },
+  "homeServer": {},
   "plateStates": ["NC", "SC", "VA", "GA", "TN"],
 
   "enginePolling": {
@@ -129,9 +125,16 @@
     "apiUrl": "https://www.flywhere.app",
     "apiKey": "flytab2025"
   },
+  "notam": {
+    "apiKey": "Zul4Ap9oAusAGINDA1naAQrXYBD4CDVromZ3dEUAv0C3XGxA",
+    "apiSecret": "sFgZNLHqO6K3mZAAKjl6AVnZZfhDIVgg0YFxtOyX4Iyb5r9sqCP0S0QRmOZzc9U9",
+    "baseUrl": "https://api-staging.cgifederal-aim.com"
+  },
   "geoStyles": {
     "stateBoundaries": { "color": "#334466", "weight": 1, "opacity": 0.5 },
     "coastlines": { "color": "#446688", "weight": 1.5 },
     "water": { "fillColor": "#1a2a44", "fillOpacity": 0.6 }
-  }
+  },
+  "notam_api_key": "",
+  "notam_api_base": "https://api-staging.cgifederal-aim.com/nmsapi/v1"
 }

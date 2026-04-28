@@ -374,9 +374,9 @@ class AirportPopup {
             </div>
             <div class="apt-tab-pane" data-pane="wx">
                 ${wx ? this._weatherHtml(wx) : '<div style="padding:16px;color:var(--text-muted)">No weather data</div>'}
-                ${wx && apt.runways?.length ? this._bestRunwayHtml(apt.runways, wx) : ''}
             </div>
             <div class="apt-tab-pane" data-pane="rwy">
+                ${wx && apt.runways?.length ? this._bestRunwayHtml(apt.runways, wx) : ''}
                 ${apt.runways?.length ? this._runwaysHtml(apt.runways) : '<div style="padding:16px;color:var(--text-muted)">No runway data</div>'}
             </div>
             <div class="apt-tab-pane" data-pane="diag">
@@ -675,8 +675,9 @@ class AirportPopup {
         // Header
         sections.push(this._headerHtml(apt));
 
-        // Runways
+        // Runways + best runway
         if (apt.runways && apt.runways.length) {
+            if (wx) sections.push(this._bestRunwayHtml(apt.runways, wx));
             sections.push(this._runwaysHtml(apt.runways));
         }
 
@@ -690,12 +691,9 @@ class AirportPopup {
             sections.push(this._ifrHtml(apt));
         }
 
-        // Weather + best runway
+        // Weather
         if (wx) {
             sections.push(this._weatherHtml(wx));
-            if (apt.runways?.length) {
-                sections.push(this._bestRunwayHtml(apt.runways, wx));
-            }
         }
 
         // Action buttons
@@ -1178,8 +1176,10 @@ class AirportPopup {
 
         // Flight category
         const catColors = { VFR: 'var(--cat-vfr)', MVFR: 'var(--cat-mvfr)', IFR: 'var(--cat-ifr)', LIFR: 'var(--cat-lifr)' };
+        const catBg     = { VFR: '#00cc4418', MVFR: '#0088ff18', IFR: '#ff444418', LIFR: '#ff44ff18' };
         const cat = d.flight_category || '?';
         const catColor = catColors[cat] || '#aaa';
+        const catBgColor = catBg[cat] || 'transparent';
 
         // Wind string
         let windStr = '';
@@ -1226,29 +1226,69 @@ class AirportPopup {
         const visPlus = d.visibility_plus ?? false;
         const altim  = d.altimeter ?? null;
 
-        let condStr = '';
-        if (tempC != null) condStr += `${Math.round(tempC)}°/${dewC != null ? Math.round(dewC) : '—'}°C`;
-        if (visSm != null) condStr += (condStr ? ' · ' : '') + (visPlus ? `>${visSm}SM` : `${visSm}SM`);
-        if (altim != null) condStr += (condStr ? ' · ' : '') + `${altim.toFixed(2)}"`;
+        // Sky conditions — parse from raw (strip remarks first)
+        const rawNoRmk = raw.replace(/\bRMK\b.*$/i, '').trim();
+        const skyLayers = [];
+        const skyRe = /\b(CLR|SKC|NSC|CAVOK|FEW|SCT|BKN|OVC|VV)(\d{3})?(CB|TCU)?\b/g;
+        let skyMatch;
+        let ceilingFound = false;
+        while ((skyMatch = skyRe.exec(rawNoRmk)) !== null) {
+            const cover = skyMatch[1];
+            const altFt = skyMatch[2] ? parseInt(skyMatch[2], 10) * 100 : null;
+            const mod   = skyMatch[3] || '';
+            if (['CLR','SKC','NSC','CAVOK'].includes(cover)) {
+                skyLayers.push({ cover, altFt: null, mod, isCeiling: false });
+                break;
+            }
+            if (altFt == null) continue;
+            const isCeiling = (cover === 'BKN' || cover === 'OVC' || cover === 'VV') && !ceilingFound;
+            if (isCeiling) ceilingFound = true;
+            skyLayers.push({ cover, altFt, mod, isCeiling });
+        }
+
+        // Sky row HTML
+        let skyRowHtml = '';
+        if (skyLayers.length) {
+            if (skyLayers[0].altFt === null) {
+                const lbl = skyLayers[0].cover === 'CAVOK' ? 'CAVOK' : 'CLEAR';
+                skyRowHtml = `<div class="wx-row"><div class="wx-row-lbl">SKY</div><div class="wx-row-val">${lbl}</div></div>`;
+            } else {
+                const items = skyLayers.map(g => {
+                    const altStr = g.altFt.toLocaleString() + ' ft';
+                    const modStr = g.mod ? ` ${g.mod}` : '';
+                    const ceil   = g.isCeiling ? ' <span class="wx-ceil-badge">CEIL</span>' : '';
+                    return `<div class="wx-sky-item"><span class="wx-sky-cover">${g.cover}${modStr}</span><span class="wx-sky-alt">${altStr}</span>${ceil}</div>`;
+                }).join('');
+                skyRowHtml = `<div class="wx-row"><div class="wx-row-lbl">SKY</div><div class="wx-sky-stack">${items}</div></div>`;
+            }
+        }
 
         // Weather phenomena — parse from raw text (TS, RA, SN, FZRA, FG, etc.)
         const wxPhenomena = [];
-        const wxRaw = raw.replace(/^(METAR|SPECI)\s+/i, '');
-        // Strip ICAO, time, AUTO, wind, vis, sky before extracting wx groups
-        const wxGroupMatch = wxRaw.match(/\b([-+]?(VC)?(MI|PR|BC|DR|BL|SH|TS|FZ)*(RA|DZ|SN|SG|IC|PL|GR|GS|UP|FG|BR|SA|DU|HZ|VA|PO|SQ|FC|SS|DS)+)\b/g);
+        const wxGroupMatch = rawNoRmk.match(/\b([-+]?(VC)?(MI|PR|BC|DR|BL|SH|TS|FZ)*(RA|DZ|SN|SG|IC|PL|GR|GS|UP|FG|BR|SA|DU|HZ|VA|PO|SQ|FC|SS|DS)+)\b/g);
         if (wxGroupMatch) {
             for (const code of wxGroupMatch) {
-                // Skip if it looks like part of ICAO or time (all caps ≤4 chars with no wx codes)
-                const isTs = /TS/.test(code);
-                const isFz = /FZ/.test(code);
+                const isTs  = /TS/.test(code);
+                const isFz  = /FZ/.test(code);
                 const isSev = /^\+/.test(code);
-                const color = isTs ? '#ff4444' : isFz ? '#00ccff' : isSev ? '#ff8800' : '#aaddff';
+                const color = isTs ? 'var(--status-danger)' : isFz ? '#0099cc' : isSev ? 'var(--status-warning)' : 'var(--text-secondary)';
                 wxPhenomena.push({ code, color });
             }
         }
         const phenomenaHtml = wxPhenomena.length
             ? `<div class="wx-phenomena">${wxPhenomena.map(p =>
-                `<span class="wx-phenom" style="color:${p.color}">${p.code}</span>`).join(' ')}</div>`
+                `<span class="wx-phenom" style="color:${p.color}">${p.code}</span>`).join('')}</div>`
+            : '';
+
+        // Labeled data rows
+        const visRow = visSm != null
+            ? `<div class="wx-row"><div class="wx-row-lbl">VIS</div><div class="wx-row-val">${visPlus ? '&gt;' : ''}${visSm} SM</div></div>`
+            : '';
+        const tdRow = tempC != null
+            ? `<div class="wx-row"><div class="wx-row-lbl">T / DP</div><div class="wx-row-val">${Math.round(tempC)}&deg; / ${dewC != null ? Math.round(dewC) : '&mdash;'}&deg;C</div></div>`
+            : '';
+        const altRow = altim != null
+            ? `<div class="wx-row"><div class="wx-row-lbl">ALT</div><div class="wx-row-val">${altim.toFixed(2)}&quot;</div></div>`
             : '';
 
         // Source label
@@ -1262,16 +1302,32 @@ class AirportPopup {
             ? `<div class="popup-section-title" style="margin-top:10px">TAF</div><div class="wx-metar wx-taf">${this._formatTaf(wx.taf.raw)}</div>`
             : '';
 
+        const windRow = windStr
+            ? `<div class="wx-row"><div class="wx-row-lbl">WIND</div><div class="wx-row-val">${windStr}</div></div>`
+            : '';
+
         return `<div class="popup-section popup-wx-section${speciClass}">
-            <div class="popup-section-title">WEATHER <span class="wx-source">${source}</span>${isSpeci ? ' <span class="wx-speci-badge">SPECI</span>' : ''}</div>
-            <div>
-                <span class="wx-cat" style="color:${catColor}">\u25CF ${cat}</span>
-                <span class="wx-wind">${windStr}</span>
+            <div class="wx-card-hdr" style="background:${catBgColor};border-left:4px solid ${catColor}">
+                <span class="wx-cat-dot" style="color:${catColor}">&#9679;</span>
+                <span class="wx-cat-name" style="color:${catColor}">${cat}</span>
+                <div class="wx-hdr-right">
+                    <span class="wx-source">${source}</span>
+                    ${isSpeci ? '<span class="wx-speci-badge">SPECI</span>' : ''}
+                </div>
+            </div>
+            <div class="wx-rows">
+                ${windRow}
+                ${skyRowHtml}
+                ${visRow}
+                ${tdRow}
+                ${altRow}
             </div>
             ${phenomenaHtml}
-            ${condStr ? `<div class="wx-cond">${condStr}</div>` : ''}
-            <div class="wx-time">${timeStr} <span class="wx-age${ageStale ? ' wx-age-stale' : ''}">${ageStr}${ageStale ? ' ⚠ STALE' : ''}</span></div>
-            <div class="wx-metar"><span class="wx-metar-label">RAW:</span> ${raw}</div>
+            <div class="wx-time">
+                <span>${timeStr}</span>
+                ${ageStr ? `<span class="wx-age${ageStale ? ' wx-age-stale' : ''}">${ageStr}${ageStale ? ' ⚠ STALE' : ''}</span>` : ''}
+            </div>
+            <div class="wx-metar"><span class="wx-metar-label">RAW</span>${raw}</div>
             ${tafHtml}
         </div>`;
     }

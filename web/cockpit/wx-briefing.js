@@ -12,15 +12,33 @@
  * Tap any airport row to expand full MOS detail table.
  */
 class WxBriefing {
-    constructor(db) {
-        this._db          = db;
-        this._el          = null;
-        this._flightPlan  = null;
-        this._mosData     = null;   // raw API response: { fetched_at, stations: { ICAO: {...} } }
-        this._mode        = 'day'; // 'day' | 'hour'
-        this._loading     = false;
+    constructor(db, config = {}) {
+        this._db           = db;
+        this._config       = config;
+        this._el           = null;
+        this._flightPlan   = null;
+        this._mosData      = null;
+        this._mode         = 'day';
+        this._loading      = false;
         this._expandedIcao = null;
-        this.visible      = false;
+        this.visible       = false;
+
+        this._metarData    = null;
+        this._tafData      = null;
+        this._airmets      = null;
+        this._mcds         = null;
+        this._afds         = null;
+        this._notams         = null;
+        this._enrouteNotams  = null;
+
+        this._metarFetchedAt       = 0;
+        this._airmetFetchedAt      = 0;
+        this._mcdFetchedAt         = 0;
+        this._afdFetchedAt         = 0;
+        this._notamFetchedAt       = 0;
+        this._enrouteNotamFetchedAt = 0;
+
+        this._routeCoords  = null;
     }
 
     init() {
@@ -31,11 +49,13 @@ class WxBriefing {
         if (!this._el) this.init();
         this._el.classList.add('visible');
         this.visible = true;
-        // Load MOS from cached flight plan if not yet fetched
+
         if (!this._mosData && this._flightPlan?.weather_cache?.mos) {
-            this._mosData = this._flightPlan.weather_cache.mos;
+            this._mosData = this._normalizeMos(this._flightPlan.weather_cache.mos);
         }
-        this._render();
+
+        this._renderAll();
+        this._fetchColdSections();
     }
 
     hide() {
@@ -45,10 +65,388 @@ class WxBriefing {
 
     setFlightPlan(plan) {
         this._flightPlan = plan;
-        if (plan?.weather_cache?.mos) {
-            this._mosData = plan.weather_cache.mos;
+        if (plan?.weather_cache?.mos) this._mosData = this._normalizeMos(plan.weather_cache.mos);
+        this._routeCoords = null;
+        if (this.visible) this._renderAll();
+    }
+
+    _fetchColdSections() {
+        const now = Date.now();
+        const TTL15 = 15 * 60000;
+        const TTL60 = 60 * 60000;
+
+        const fetches = [];
+        if (now - this._metarFetchedAt  > TTL15) fetches.push(this._fetchMetarTaf());
+        if (now - this._airmetFetchedAt > TTL15) fetches.push(this._fetchAirmets());
+        if (now - this._mcdFetchedAt    > TTL15) fetches.push(this._fetchMcds());
+        if (now - this._afdFetchedAt    > TTL60) fetches.push(this._fetchAfds());
+        if (now - this._notamFetchedAt        > TTL15) fetches.push(this._fetchNotams());
+        if (now - this._enrouteNotamFetchedAt > TTL15) fetches.push(this._fetchEnrouteNotams());
+
+        if (fetches.length) Promise.allSettled(fetches);
+    }
+
+    _refreshAll() {
+        this._metarFetchedAt = this._airmetFetchedAt = this._mcdFetchedAt =
+            this._afdFetchedAt = this._notamFetchedAt = this._enrouteNotamFetchedAt = 0;
+        this._fetchMos();
+        this._fetchColdSections();
+    }
+
+    _renderAll() {
+        if (!this._el) return;
+        this._renderSummaryBar();
+        this._renderAgeGroup();
+        this._renderMos();
+        this._renderMetarSection();
+        this._renderAirmetSection();
+        this._renderMcdSection();
+        this._renderAfdSection();
+        this._renderNotamSection();
+        this._renderPlanningSection();
+    }
+
+    _section(id) {
+        return this._el?.querySelector(`#${id}`);
+    }
+
+    _setSection(id, html) {
+        const el = this._section(id);
+        if (el) el.innerHTML = html;
+    }
+
+    _loadingHtml(label) {
+        return `<div class="wx-section-loading">Fetching ${label}…</div>`;
+    }
+
+    _errorHtml(label) {
+        return `<div class="wx-section-error">⚠ ${label} unavailable — tap ↻ to retry</div>`;
+    }
+
+    _renderAgeGroup() {
+        const el = this._section('wx-age-group');
+        if (!el) return;
+        const now = Date.now();
+        const age = (ts) => {
+            if (!ts) return null;
+            const m = Math.round((now - ts) / 60000);
+            return m < 60 ? `${m}m` : `${Math.round(m / 60)}h`;
+        };
+        const tag = (label, ts, ttl) => {
+            const a = age(ts);
+            const stale = !a || (now - ts) > ttl;
+            return `<span class="wx-age-tag${stale ? ' wx-age-stale' : ''}">
+                <span class="wx-age-dot"></span>
+                <b>${label}</b>${a ? ' ' + a : ' —'}
+            </span>`;
+        };
+        el.innerHTML =
+            tag('MOS', this._mosData ? new Date(this._mosData.fetched_at).getTime() : 0, 60 * 60000) +
+            tag('METARs', this._metarFetchedAt, 15 * 60000) +
+            tag('AIRMETs', this._airmetFetchedAt, 15 * 60000) +
+            tag('NOTAMs', this._notamFetchedAt, 15 * 60000);
+    }
+
+    _isWarm(ts, ttlMinutes) {
+        return ts > 0 && (Date.now() - ts) < ttlMinutes * 60000;
+    }
+
+    _renderSummaryBar() {
+        const bar = this._el?.querySelector('#wx-summary-bar');
+        if (!bar) return;
+        const stations = this._getStationList();
+        const dep  = stations[0]  || '—';
+        const dest = stations[stations.length - 1] || '—';
+        const route = dep !== dest ? `${dep} → ${dest}` : dep;
+
+        let badgeHtml = '';
+        if (this._mosData) {
+            const best = this._findBestDay(stations);
+            if (best) {
+                const label = this._isSameDay(best.date, new Date())
+                    ? 'Today'
+                    : this._dayLabel(best.date);
+                const cls = (best.worstCat || 'unknown').toLowerCase();
+                badgeHtml = `<span class="wx-summary-badge ${cls}">${label}: ${best.worstCat}</span>`;
+            }
         }
-        if (this.visible) this._render();
+
+        bar.innerHTML = `<span class="wx-summary-route">${route}</span>${badgeHtml}`;
+    }
+
+    _renderMos() {
+        const sec = this._section('wx-mos-section');
+        if (!sec) return;
+        sec.innerHTML = '';
+
+        const allStations = this._getStationList();
+        // Filter to only stations that have MOS data
+        const stations = this._mosData
+            ? allStations.filter(id => {
+                const stData = this._mosData.stations?.[id] || this._mosData[id];
+                return stData != null;
+            })
+            : allStations;
+        if (!stations.length) {
+            sec.innerHTML = '<div class="wx-section-empty">No flight plan loaded.</div>';
+            return;
+        }
+
+        if (this._loading) {
+            sec.innerHTML = this._loadingHtml('MOS');
+            return;
+        }
+
+        if (!this._mosData) {
+            sec.innerHTML = '<div class="wx-section-empty">No MOS cached. Tap ↻ to fetch.</div>';
+            return;
+        }
+
+        const wrap = document.createElement('div');
+        wrap.className = 'wx-mos-wrap';
+
+        if (this._mode === 'day') {
+            wrap.appendChild(this._buildDayGrid(stations));
+            const best = this._findBestDay(stations);
+            if (best) {
+                const note = document.createElement('div');
+                note.className = 'wx-mos-note';
+                note.textContent = `Best: ${this._dayLabel(best.date)} (${best.worstCat}) · Days 6–8 trend only`;
+                wrap.appendChild(note);
+            }
+        } else {
+            wrap.appendChild(this._buildHourGrid(stations));
+        }
+
+        if (this._mosData.fetched_at) {
+            const ageMin = Math.round((Date.now() - new Date(this._mosData.fetched_at)) / 60000);
+            const ageEl = document.createElement('div');
+            ageEl.className = 'wx-mos-note';
+            ageEl.textContent = `MOS ${ageMin < 60 ? ageMin + 'm' : Math.round(ageMin / 60) + 'h'} old`;
+            wrap.appendChild(ageEl);
+        }
+
+        sec.appendChild(wrap);
+    }
+    _renderMetarSection() {
+        const sec = this._section('wx-metar-section');
+        if (!sec) return;
+
+        if (this._metarData === null) {
+            sec.innerHTML = this._loadingHtml('METARs & TAFs');
+            return;
+        }
+        if (this._metarData._error) {
+            sec.innerHTML = this._errorHtml('METARs & TAFs');
+            return;
+        }
+
+        const stations = this._getStationList();
+        const allIcaos = Object.keys(this._metarData).filter(k => k !== '_error');
+        const routeSet = new Set(stations);
+        const coords = this._routeCoords || [];
+
+        const sorted = [...allIcaos].sort((a, b) => {
+            const aRoute = routeSet.has(a) ? 0 : 1;
+            const bRoute = routeSet.has(b) ? 0 : 1;
+            if (aRoute !== bRoute) return aRoute - bRoute;
+            if (!coords.length) return 0;
+            const distA = this._distToNearestCoord(this._metarData[a]?.lat, this._metarData[a]?.lon, coords);
+            const distB = this._distToNearestCoord(this._metarData[b]?.lat, this._metarData[b]?.lon, coords);
+            return distA - distB;
+        });
+
+        const count = allIcaos.length;
+        sec.innerHTML = `
+            <div class="wx-section-hdr">
+                <span class="wx-section-hdr-title">METARs &amp; TAFs</span>
+                <span class="wx-section-hdr-sub">${count} STATION${count !== 1 ? 'S' : ''}</span>
+            </div>
+        `;
+
+        for (const icao of sorted) {
+            const m = this._metarData[icao];
+            if (!m) continue;
+            sec.appendChild(this._buildStationCard(icao, m, routeSet.has(icao)));
+        }
+    }
+    _renderAirmetSection() {
+        const sec = this._section('wx-airmet-section');
+        if (!sec) return;
+
+        if (this._airmets === null) {
+            sec.innerHTML = this._buildRhsHeader('AIRMETs', null, 'Fetching…').outerHTML;
+            return;
+        }
+
+        const filtered = this._filterAdvisoriesForRoute(this._airmets);
+        const hdr = this._buildRhsHeader('AIRMETs', filtered.length > 0 ? 'warn' : 'ok',
+            filtered.length > 0 ? `${filtered.length} ON ROUTE` : 'NONE ON ROUTE');
+
+        sec.innerHTML = '';
+        sec.appendChild(hdr);
+
+        const body = document.createElement('div');
+        body.className = 'wx-rhs-body open';
+
+        if (!filtered.length) {
+            body.innerHTML = '<div class="wx-section-empty">No active AIRMETs in route corridor.</div>';
+        } else {
+            for (const adv of filtered) {
+                const hazard = adv.hazard || '';
+                const typeLabel = hazard.includes('IFR') ? 'SIERRA'
+                    : hazard.includes('TURB') ? 'TANGO'
+                    : hazard.includes('ICE') || hazard.includes('ICING') ? 'ZULU'
+                    : 'AIRMET';
+                const typeClass = typeLabel.toLowerCase();
+                const validUntil = adv.expires_at
+                    ? new Date(adv.expires_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) + ' L'
+                    : '—';
+                body.appendChild(this._buildAdvCard(typeLabel, typeClass, hazard || 'Advisory', `Valid until ${validUntil}`, adv.raw || ''));
+            }
+        }
+
+        sec.appendChild(body);
+    }
+    _renderMcdSection() {
+        const sec = this._section('wx-mcd-section');
+        if (!sec) return;
+
+        if (this._mcds === null) {
+            sec.innerHTML = this._buildRhsHeader('Mesoscale Disc.', null, 'Fetching…').outerHTML;
+            return;
+        }
+
+        const filtered = this._mcds.filter(mcd => {
+            if (!mcd.polygon) return true;
+            return this._filterAdvisoriesForRoute([{ points: mcd.polygon }]).length > 0;
+        });
+
+        const hdr = this._buildRhsHeader('Mesoscale Disc.', filtered.length > 0 ? 'warn' : 'ok',
+            filtered.length > 0 ? `${filtered.length} ACTIVE` : 'NONE ACTIVE');
+
+        sec.innerHTML = '';
+        sec.appendChild(hdr);
+
+        const body = document.createElement('div');
+        body.className = 'wx-rhs-body open';
+
+        if (!filtered.length) {
+            body.innerHTML = '<div class="wx-section-empty">No active MCDs affecting route.</div>';
+        } else {
+            for (const mcd of filtered) {
+                const until = mcd.validUntil
+                    ? new Date(mcd.validUntil).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) + ' L'
+                    : '—';
+                body.appendChild(this._buildAdvCard(mcd.id, 'mcd', mcd.hazard, `Valid until ${until}`, mcd.productText));
+            }
+        }
+
+        sec.appendChild(body);
+    }
+    _renderAfdSection() {
+        const sec = this._section('wx-afd-section');
+        if (!sec) return;
+
+        if (this._afds === null) {
+            sec.innerHTML = this._buildRhsHeader('Fcst Discussions', null, 'Fetching…').outerHTML;
+            return;
+        }
+
+        const count = this._afds.length;
+        const hdr = this._buildRhsHeader('Fcst Discussions', 'info',
+            count > 0 ? `${count} OFFICE${count > 1 ? 'S' : ''}` : 'NONE');
+
+        sec.innerHTML = '';
+        sec.appendChild(hdr);
+
+        const body = document.createElement('div');
+        body.className = 'wx-rhs-body open';
+
+        if (!this._afds.length) {
+            body.innerHTML = '<div class="wx-section-empty">No AFDs fetched — requires internet.</div>';
+        } else {
+            for (const afd of this._afds) {
+                const issued = afd.issued
+                    ? new Date(afd.issued).toLocaleString([], {weekday:'short',hour:'2-digit',minute:'2-digit'}) + ' L'
+                    : '—';
+                body.appendChild(this._buildAdvCard(
+                    afd.office, 'afd',
+                    afd.name || afd.office,
+                    `Issued ${issued}`,
+                    this._extractAviationSection(afd.text),
+                    '',
+                    true
+                ));
+            }
+        }
+
+        sec.appendChild(body);
+    }
+    _renderNotamSection() {
+        const sec = this._section('wx-notam-section');
+        if (!sec) return;
+
+        const airportLoading = this._notams === null;
+        const enrouteLoading = this._enrouteNotams === null;
+        const loading = airportLoading || enrouteLoading;
+
+        const allNotams = [...(this._notams || []), ...(this._enrouteNotams || [])];
+        const critical = allNotams.filter(n => ['RWY', 'NAVAID', 'TFR', 'RESTR'].includes(n.type));
+        const badgeClass = loading ? null : (critical.length > 0 ? 'warn' : allNotams.length > 0 ? 'info' : 'ok');
+        const badgeText  = loading
+            ? 'Fetching…'
+            : (critical.length > 0 ? `${critical.length} CRITICAL` : allNotams.length > 0 ? `${allNotams.length} ACTIVE` : 'NONE');
+
+        const hdr = this._buildRhsHeader('NOTAMs', badgeClass, badgeText);
+        sec.innerHTML = '';
+        sec.appendChild(hdr);
+
+        const body = document.createElement('div');
+        body.className = 'wx-rhs-body open';
+
+        // ── Airport NOTAMs ────────────────────────────────────────────────────
+        const aptGrpHdr = document.createElement('div');
+        aptGrpHdr.className = 'wx-notam-group-hdr';
+        aptGrpHdr.textContent = 'AIRPORT';
+        body.appendChild(aptGrpHdr);
+
+        if (airportLoading) {
+            body.insertAdjacentHTML('beforeend', '<div class="wx-section-loading">Fetching airport NOTAMs…</div>');
+        } else if (!this._notams.length) {
+            body.insertAdjacentHTML('beforeend', '<div class="wx-section-empty">No active NOTAMs for route airports.</div>');
+        } else {
+            for (const notam of this._notams) {
+                const typeClass = (notam.type === 'RWY' || notam.type === 'NAVAID') ? 'rwy' : notam.type.toLowerCase();
+                const validStr = notam.validTo
+                    ? `Valid to <b>${new Date(notam.validTo).toLocaleDateString([], {weekday:'short',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})} L</b>`
+                    : '';
+                body.appendChild(this._buildAdvCard(notam.type, typeClass, `${notam.airport} · ${notam.summary}`, notam.airport, notam.raw, validStr));
+            }
+        }
+
+        // ── En-Route Airspace NOTAMs ──────────────────────────────────────────
+        const enrGrpHdr = document.createElement('div');
+        enrGrpHdr.className = 'wx-notam-group-hdr';
+        enrGrpHdr.textContent = 'EN-ROUTE AIRSPACE';
+        body.appendChild(enrGrpHdr);
+
+        if (enrouteLoading) {
+            body.insertAdjacentHTML('beforeend', '<div class="wx-section-loading">Fetching en-route NOTAMs…</div>');
+        } else if (!this._enrouteNotams.length) {
+            body.insertAdjacentHTML('beforeend', '<div class="wx-section-empty">No TFRs, MOAs, or restricted areas on route.</div>');
+        } else {
+            for (const notam of this._enrouteNotams) {
+                const typeClass = { TFR: 'rwy', RESTR: 'restr', MOA: 'moa', WARN: 'warn',
+                    ATCAA: 'atcaa', UAS: 'uas', LASER: 'laser' }[notam.type] || 'sua';
+                const validStr = notam.validTo
+                    ? `Valid to <b>${new Date(notam.validTo).toLocaleDateString([], {weekday:'short',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})} L</b>`
+                    : '';
+                body.appendChild(this._buildAdvCard(notam.type, typeClass, `${notam.airport} · ${notam.summary}`, notam.airport, notam.raw, validStr));
+            }
+        }
+
+        sec.appendChild(body);
     }
 
     // ── Panel construction ────────────────────────────────────────────────────
@@ -58,28 +456,42 @@ class WxBriefing {
         this._el.className = 'wx-briefing-page';
         this._el.innerHTML = `
             <div class="wx-briefing-header">
-                <span class="wx-briefing-title">⛅ Weather</span>
+                <span class="wx-briefing-title">⛅ WX BRIEFING</span>
+                <div class="wx-age-group" id="wx-age-group"></div>
                 <div class="wx-mode-toggle">
                     <button class="wx-mode-btn active" data-mode="day">7-DAY</button>
                     <button class="wx-mode-btn" data-mode="hour">24H</button>
                 </div>
-                <button class="wx-refresh-btn" title="Fetch fresh MOS data">↻</button>
+                <button class="wx-refresh-btn" title="Refresh all weather">↻</button>
                 <button class="wx-close-btn" aria-label="Close">✕</button>
             </div>
             <div class="wx-briefing-body">
-                <div class="wx-briefing-content"></div>
+                <div class="wx-left">
+                    <div class="wx-summary-bar" id="wx-summary-bar">
+                        <span class="wx-summary-route">—</span>
+                    </div>
+                    <div id="wx-mos-section"></div>
+                    <div id="wx-metar-section"></div>
+                </div>
+                <div class="wx-right">
+                    <div id="wx-airmet-section"></div>
+                    <div id="wx-mcd-section"></div>
+                    <div id="wx-afd-section"></div>
+                    <div id="wx-notam-section"></div>
+                    <div id="wx-planning-section"></div>
+                </div>
             </div>
         `;
 
         this._el.querySelector('.wx-close-btn').addEventListener('click', () => this.hide());
-        this._el.querySelector('.wx-refresh-btn').addEventListener('click', () => this._fetchMos());
+        this._el.querySelector('.wx-refresh-btn').addEventListener('click', () => this._refreshAll());
 
         this._el.querySelectorAll('.wx-mode-btn').forEach(btn => {
             btn.addEventListener('click', () => {
                 this._mode = btn.dataset.mode;
                 this._el.querySelectorAll('.wx-mode-btn').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
-                this._render();
+                this._renderMos();
             });
         });
 
@@ -89,14 +501,22 @@ class WxBriefing {
     // ── Data fetching ─────────────────────────────────────────────────────────
 
     async _fetchMos() {
-        const stations = this._getStationList();
+        const baseStations = this._getStationList();
+        let stations = baseStations;
+        try {
+            const corridorApts = await this._getCorridorAirports(20);
+            if (corridorApts.length) {
+                const baseSet = new Set(baseStations);
+                const extra = corridorApts.map(a => a.icao).filter(id => !baseSet.has(id));
+                stations = [...baseStations, ...extra];
+            }
+        } catch (_) {}
         if (!stations.length) {
-            this._showMessage('Load a flight plan to fetch MOS data.');
             return;
         }
 
         this._loading = true;
-        this._render();
+        this._renderMos();
 
         try {
             const ids = stations.join(',');
@@ -104,12 +524,12 @@ class WxBriefing {
             const resp = await fetch(`${base}/mos?ids=${ids}`, { signal: AbortSignal.timeout(45000) });
             if (!resp.ok) throw new Error(`Server error ${resp.status}`);
             const data = await resp.json();
-            this._mosData = data;
+            this._mosData = this._normalizeMos(data);
 
             // Cache in flight plan for offline use
             if (this._flightPlan) {
                 if (!this._flightPlan.weather_cache) this._flightPlan.weather_cache = {};
-                this._flightPlan.weather_cache.mos = data;
+                this._flightPlan.weather_cache.mos = this._mosData;
                 // Persist to Pi if sync available
                 if (window.flightSync?.savePlan) {
                     window.flightSync.savePlan(this._flightPlan).catch(() => {});
@@ -117,107 +537,13 @@ class WxBriefing {
             }
         } catch (err) {
             console.error('MOS fetch failed:', err);
-            const msg = err.name === 'AbortError'
-                ? 'Request timed out. NWS may be slow — try again.'
-                : err.name === 'TypeError'
-                ? 'Network error. Check internet connection and try again.'
-                : `Fetch failed: ${err.message}`;
-            this._showMessage(msg);
         } finally {
             this._loading = false;
-            this._render();
+            this._renderSummaryBar();
+            this._renderAgeGroup();
+            this._renderMos();
+            this._renderPlanningSection();
         }
-    }
-
-    // ── Rendering ─────────────────────────────────────────────────────────────
-
-    _render() {
-        const content = this._el?.querySelector('.wx-briefing-content');
-        if (!content) return;
-        content.innerHTML = '';
-
-        if (this._loading) {
-            content.innerHTML = '<div class="wx-loading">Fetching MOS data…</div>';
-            return;
-        }
-
-        const stations = this._getStationList();
-        if (!stations.length) {
-            content.innerHTML = '<div class="wx-empty">No flight plan loaded.<br>Load a plan to see weather.</div>';
-            return;
-        }
-
-        // Summary bar
-        content.appendChild(this._buildSummaryBar(stations));
-
-        if (!this._mosData) {
-            const hint = document.createElement('div');
-            hint.className = 'wx-empty';
-            hint.innerHTML = 'No MOS data cached.<br>Tap ↻ to fetch (requires internet).';
-            content.appendChild(hint);
-            return;
-        }
-
-        // Age notice
-        const fetched = this._mosData.fetched_at;
-        if (fetched) {
-            const ageMin = Math.round((Date.now() - new Date(fetched)) / 60000);
-            const ageEl = document.createElement('div');
-            ageEl.className = 'wx-age-notice';
-            ageEl.textContent = `NWS forecast ${ageMin < 60 ? ageMin + 'm' : Math.round(ageMin / 60) + 'h'} old · Days 6-8 trend only`;
-            content.appendChild(ageEl);
-        }
-
-        // Timeline grid
-        if (this._mode === 'day') {
-            content.appendChild(this._buildDayGrid(stations));
-        } else {
-            content.appendChild(this._buildHourGrid(stations));
-        }
-
-        // Expanded airport detail
-        if (this._expandedIcao) {
-            const detail = this._buildAirportDetail(this._expandedIcao);
-            if (detail) content.appendChild(detail);
-        }
-    }
-
-    _showMessage(msg) {
-        const content = this._el?.querySelector('.wx-briefing-content');
-        if (!content) return;
-        const el = document.createElement('div');
-        el.className = 'wx-empty';
-        el.textContent = msg;
-        content.appendChild(el);
-    }
-
-    // ── Summary bar ───────────────────────────────────────────────────────────
-
-    _buildSummaryBar(stations) {
-        const bar = document.createElement('div');
-        bar.className = 'wx-summary-bar';
-
-        const plan = this._flightPlan;
-        const dep  = stations[0];
-        const dest = stations[stations.length - 1];
-
-        const routeLabel = dep !== dest ? `${dep} → ${dest}` : dep;
-        bar.innerHTML = `<span class="wx-summary-route">${routeLabel}</span>`;
-
-        if (!this._mosData) {
-            bar.innerHTML += '<span class="wx-summary-status wx-status-unknown">No data</span>';
-            return bar;
-        }
-
-        // Find best day for the route: all airports VFR during prime hours
-        const bestDay = this._findBestDay(stations);
-        if (bestDay) {
-            const label = this._dayLabel(bestDay.date);
-            const isCurrent = this._isSameDay(bestDay.date, new Date());
-            bar.innerHTML += `<span class="wx-summary-status wx-status-vfr">${isCurrent ? 'Today' : label}: ${bestDay.worstCat}</span>`;
-        }
-
-        return bar;
     }
 
     // ── 7-Day grid ────────────────────────────────────────────────────────────
@@ -262,7 +588,7 @@ class WxBriefing {
             labelCell.textContent = icao;
             labelCell.addEventListener('click', () => {
                 this._expandedIcao = isExpanded ? null : icao;
-                this._render();
+                this._renderMos();
             });
             grid.appendChild(labelCell);
 
@@ -287,7 +613,7 @@ class WxBriefing {
                 // Click to jump to hour view for this day
                 cell.addEventListener('click', () => {
                     this._expandedIcao = icao;
-                    this._render();
+                    this._renderMos();
                 });
                 grid.appendChild(cell);
             }
@@ -359,7 +685,7 @@ class WxBriefing {
             labelCell.textContent = icao;
             labelCell.addEventListener('click', () => {
                 this._expandedIcao = isExpanded ? null : icao;
-                this._render();
+                this._renderMos();
             });
             grid.appendChild(labelCell);
 
@@ -469,7 +795,7 @@ class WxBriefing {
             <button class="wx-detail-close">✕</button>`;
         title.querySelector('.wx-detail-close').addEventListener('click', () => {
             this._expandedIcao = null;
-            this._render();
+            this._renderMos();
         });
         section.appendChild(title);
 
@@ -539,10 +865,90 @@ class WxBriefing {
 
         table.appendChild(tbody);
         section.appendChild(table);
+
+        const today = new Date(); today.setUTCHours(0, 0, 0, 0);
+        const noteText = this._buildMosSummaryNote(icao, today);
+        if (noteText) {
+            const noteEl = document.createElement('div');
+            noteEl.className = 'wx-hourly-note';
+            noteEl.textContent = noteText;
+            section.appendChild(noteEl);
+        }
+
         return section;
     }
 
+    _buildMosSummaryNote(icao, day) {
+        const sd = this._mosData?.stations?.[icao];
+        if (!sd?.periods) return '';
+
+        const dayStart = new Date(day); dayStart.setUTCHours(0, 0, 0, 0);
+        const dayEnd   = new Date(day); dayEnd.setUTCHours(24, 0, 0, 0);
+        const order = ['LIFR', 'IFR', 'MVFR', 'VFR'];
+
+        const periods = sd.periods
+            .filter(p => p.valid_time && p.flight_cat)
+            .map(p => ({ vt: new Date(p.valid_time), cat: p.flight_cat }))
+            .filter(p => p.vt >= dayStart && p.vt < dayEnd)
+            .sort((a, b) => a.vt - b.vt);
+
+        if (!periods.length) return '';
+        if (periods.every(p => p.cat === 'VFR')) return 'VFR all day ✓';
+
+        const fmtH = d => d.toLocaleTimeString([], { hour: 'numeric', hour12: true });
+
+        const blocks = [];
+        let i = 0;
+        while (i < periods.length) {
+            if (periods[i].cat === 'VFR') { i++; continue; }
+            let j = i;
+            let worst = periods[i].cat;
+            while (j < periods.length && periods[j].cat !== 'VFR') {
+                if (order.indexOf(periods[j].cat) < order.indexOf(worst)) worst = periods[j].cat;
+                j++;
+            }
+            const clearsAfter = j < periods.length;
+            blocks.push({ start: periods[i].vt, end: periods[j - 1].vt, cat: worst, clearsAfter });
+            i = j;
+        }
+
+        if (!blocks.length) return 'VFR all day ✓';
+
+        return blocks.map(b =>
+            `${b.cat} ${fmtH(b.start)}–${fmtH(b.end)}${b.clearsAfter ? ', then VFR' : ''}`
+        ).join(' · ');
+    }
+
+    _findFirstVfrTime(icao, day) {
+        const sd = this._mosData?.stations?.[icao];
+        if (!sd?.periods) return null;
+
+        const dayStart = new Date(day); dayStart.setUTCHours(0, 0, 0, 0);
+        const dayEnd   = new Date(day); dayEnd.setUTCHours(24, 0, 0, 0);
+
+        const periods = sd.periods
+            .filter(p => p.valid_time && p.flight_cat)
+            .map(p => ({ vt: new Date(p.valid_time), cat: p.flight_cat }))
+            .filter(p => p.vt >= dayStart && p.vt < dayEnd)
+            .sort((a, b) => a.vt - b.vt);
+
+        if (!periods.length) return null;
+        if (periods[0].cat === 'VFR') return periods[0].vt;
+
+        for (let i = 1; i < periods.length; i++) {
+            if (periods[i].cat === 'VFR' && periods[i - 1].cat !== 'VFR') return periods[i].vt;
+        }
+        return null;
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    _normalizeMos(data) {
+        if (!data) return data;
+        if (data.stations && typeof data.stations === 'object') return data;
+        const { fetched_at, ...rest } = data;
+        return { fetched_at, stations: rest };
+    }
 
     _getStationList() {
         const plan = this._flightPlan;
@@ -661,5 +1067,1021 @@ class WxBriefing {
         el.className = className || '';
         el.textContent = text;
         return el;
+    }
+
+    // ── METAR / TAF fetch ─────────────────────────────────────────────────────
+
+    async _getRouteCoords() {
+        if (this._routeCoords) return this._routeCoords;
+        const coords = [];
+
+        // Use coords already on the flight plan waypoints first — plan normalization
+        // resolves lat/lon for all waypoints, so this avoids any DB access entirely.
+        if (this._flightPlan?.waypoints) {
+            for (const wp of this._flightPlan.waypoints) {
+                if (wp.lat && wp.lon) {
+                    if (wp.icao && coords.find(c => c.icao === wp.icao)) continue;
+                    coords.push({ icao: wp.icao || '', lat: wp.lat, lon: wp.lon });
+                }
+            }
+        }
+
+        // Fallback: look up coordinates from NASR DB (only needed for bare ICAO plans)
+        if (!coords.length) {
+            for (const icao of this._getStationList()) {
+                try {
+                    const apt = await this._db.getAirport(icao);
+                    if (apt?.lat && apt?.lon) coords.push({ icao, lat: apt.lat, lon: apt.lon });
+                } catch (_) {}
+            }
+        }
+
+        this._routeCoords = coords;
+        return coords;
+    }
+
+    async _getCorridorAirports(radiusNm = 20) {
+        const coords = await this._getRouteCoords();
+        if (!coords.length) return [];
+        const seen = new Set();
+        const airports = [];
+        for (const c of coords) {
+            try {
+                // Race against a 4s timeout to guard against IDB-blocked state
+                const nearby = await Promise.race([
+                    this._db.getAirportsNear(c.lat, c.lon, radiusNm),
+                    new Promise(resolve => setTimeout(() => resolve([]), 4000)),
+                ]);
+                for (const apt of (nearby || [])) {
+                    const icao = apt.icao;    // keyPath in NASR DB is 'icao'
+                    if (!icao || seen.has(icao)) continue;
+                    seen.add(icao);
+                    airports.push({ icao, lat: apt.lat, lon: apt.lon });
+                }
+            } catch (_) {}
+        }
+        return airports;
+    }
+
+    async _getRouteBbox(bufferDeg = 0.15) {
+        const coords = await this._getRouteCoords();
+        if (!coords.length) return null;
+        const lats = coords.map(c => c.lat);
+        const lons = coords.map(c => c.lon);
+        return {
+            s: Math.min(...lats) - bufferDeg,
+            n: Math.max(...lats) + bufferDeg,
+            w: Math.min(...lons) - bufferDeg,
+            e: Math.max(...lons) + bufferDeg,
+        };
+    }
+
+    async _fetchMetarTaf() {
+        const stations = this._getStationList();
+        if (!stations.length) return;
+
+        this._metarData = null; this._tafData = null;
+        this._renderMetarSection();
+
+        try {
+            // Bbox covers all METAR stations in the route corridor without requiring
+            // NASR DB or knowing which airports are METAR reporters.
+            const bbox = await this._getRouteBbox(0.5);
+
+            let metarPromise, tafPromise;
+            if (bbox) {
+                metarPromise = this._fetchMetarsByBbox(bbox);
+                tafPromise   = this._fetchTafsByBbox(bbox);
+            } else {
+                // No route coords — fall back to by-ID, skipping navaid fixes
+                const ids = stations.filter(id => /^K[A-Z]{3}$/.test(id));
+                metarPromise = ids.length ? this._fetchMetarsForIds(ids) : Promise.resolve({});
+                tafPromise   = ids.length ? this._fetchTafsStructured(ids) : Promise.resolve({});
+            }
+
+            const [metarRes, tafRes] = await Promise.allSettled([metarPromise, tafPromise]);
+            const metars = metarRes.status === 'fulfilled' ? metarRes.value : {};
+            this._tafData = tafRes.status === 'fulfilled' ? tafRes.value : {};
+
+            // Trim to stations within 30nm of any route waypoint so bbox doesn't
+            // flood the panel with off-route airports.
+            const coords = this._routeCoords || [];
+            if (coords.length) {
+                for (const icao of Object.keys(metars)) {
+                    const m = metars[icao];
+                    if (m?.lat && m?.lon && this._distToNearestCoord(m.lat, m.lon, coords) > 30)
+                        delete metars[icao];
+                }
+            }
+            this._metarData = metars;
+            this._metarFetchedAt = Date.now();
+        } catch (err) {
+            console.error('METAR/TAF fetch failed:', err);
+            this._metarData = { _error: true };
+        }
+
+        this._renderAgeGroup();
+        this._renderMetarSection();
+    }
+
+    async _fetchMetarsForIds(ids) {
+        if (!ids.length) return {};
+        const base = Settings.workerBase || 'https://www.flywhere.app/api';
+        const batches = [];
+        for (let i = 0; i < ids.length; i += 50) batches.push(ids.slice(i, i + 50));
+        const out = {};
+        for (const batch of batches) {
+            const url = `${base}/weather?type=metar&ids=${batch.join(',')}&format=json&hoursBeforeNow=2`;
+            try {
+                const resp = await fetch(url, { signal: AbortSignal.timeout(15000) });
+                if (!resp.ok) continue;
+                const items = await resp.json();
+                for (const item of (Array.isArray(items) ? items : [])) {
+                    const icao = item.icaoId || item.station_id;
+                    if (!icao || out[icao]) continue;
+                    out[icao] = {
+                        raw: item.rawOb || '',
+                        decoded: WeatherClient.decodeMetar(item),
+                        reportTime: item.reportTime,
+                        lat: item.lat,
+                        lon: item.lon,
+                    };
+                }
+            } catch (_) {}
+        }
+        return out;
+    }
+
+    async _fetchMetarsByBbox(bbox) {
+        const base = Settings.workerBase || 'https://www.flywhere.app/api';
+        const url = `${base}/weather?type=metar&bbox=${bbox.s},${bbox.w},${bbox.n},${bbox.e}&format=json&hoursBeforeNow=2`;
+        const resp = await fetch(url, { signal: AbortSignal.timeout(15000) });
+        if (!resp.ok) throw new Error(`METAR bbox failed: ${resp.status}`);
+        const items = await resp.json();
+        const out = {};
+        for (const item of (Array.isArray(items) ? items : [])) {
+            const icao = item.icaoId || item.station_id;
+            if (!icao) continue;
+            if (!out[icao] || new Date(item.reportTime) > new Date(out[icao].reportTime)) {
+                out[icao] = { raw: item.rawOb || '', decoded: WeatherClient.decodeMetar(item), reportTime: item.reportTime, lat: item.lat, lon: item.lon };
+            }
+        }
+        return out;
+    }
+
+    async _fetchTafsByBbox(bbox) {
+        const base = Settings.workerBase || 'https://www.flywhere.app/api';
+        const url = `${base}/weather?type=taf&bbox=${bbox.s},${bbox.w},${bbox.n},${bbox.e}&format=json`;
+        const resp = await fetch(url, { signal: AbortSignal.timeout(15000) });
+        if (!resp.ok) throw new Error(`TAF bbox failed: ${resp.status}`);
+        const items = await resp.json();
+        const out = {};
+        for (const item of (Array.isArray(items) ? items : [])) {
+            const icao = item.icaoId;
+            if (!icao) continue;
+            out[icao] = {
+                raw: item.rawTAF || '',
+                issued: item.issueTime || null,
+                valid_from: item.validTimeFrom || null,
+                valid_to: item.validTimeTo || null,
+                fcsts: item.fcsts || [],
+            };
+        }
+        return out;
+    }
+
+    async _fetchMetarsById(ids) {
+        const base = Settings.workerBase || 'https://www.flywhere.app/api';
+        const url = `${base}/weather?type=metar&ids=${ids.join(',')}&format=json&hoursBeforeNow=2`;
+        const resp = await fetch(url, { signal: AbortSignal.timeout(15000) });
+        if (!resp.ok) throw new Error(`METAR ids failed: ${resp.status}`);
+        const items = await resp.json();
+        const out = {};
+        for (const item of (Array.isArray(items) ? items : [])) {
+            const icao = item.icaoId || item.station_id;
+            if (!icao || out[icao]) continue;
+            out[icao] = { raw: item.rawOb || '', decoded: WeatherClient.decodeMetar(item), reportTime: item.reportTime, lat: item.lat, lon: item.lon };
+        }
+        return out;
+    }
+
+    async _fetchTafsStructured(ids) {
+        if (!ids.length) return {};
+        const base = Settings.workerBase || 'https://www.flywhere.app/api';
+        const batches = [];
+        for (let i = 0; i < ids.length; i += 50) batches.push(ids.slice(i, i + 50));
+        const results = await Promise.all(batches.map(async batch => {
+            const url = `${base}/weather?type=taf&ids=${batch.join(',')}&format=json`;
+            try {
+                const resp = await fetch(url, { signal: AbortSignal.timeout(15000) });
+                if (!resp.ok) return {};
+                const items = await resp.json();
+                const out = {};
+                for (const item of (Array.isArray(items) ? items : [])) {
+                    const icao = item.icaoId;
+                    if (!icao) continue;
+                    out[icao] = {
+                        raw: item.rawTAF || '',
+                        issued: item.issueTime || null,
+                        valid_from: item.validTimeFrom || null,
+                        valid_to: item.validTimeTo || null,
+                        fcsts: item.fcsts || [],
+                    };
+                }
+                return out;
+            } catch (_) { return {}; }
+        }));
+        return Object.assign({}, ...results);
+    }
+
+    // ── Station card rendering ────────────────────────────────────────────────
+
+    _buildStationCard(icao, metar, isOnRoute) {
+        const d = metar.decoded || {};
+        const cat = (d.flight_category || 'unknown').toLowerCase();
+        const obsTime = metar.reportTime
+            ? new Date(metar.reportTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' L'
+            : '—';
+
+        const card = document.createElement('div');
+        card.className = 'wx-station-card';
+
+        let proxLabel;
+        if (isOnRoute) {
+            const stations = this._getStationList();
+            const idx = stations.indexOf(icao);
+            if (idx === 0) proxLabel = 'DEPARTURE';
+            else if (idx === stations.length - 1) proxLabel = 'DEST';
+            else proxLabel = 'EN ROUTE';
+        } else {
+            proxLabel = this._distLabelToRoute(metar.lat, metar.lon);
+        }
+
+        card.innerHTML = `
+            <div class="wx-card-hdr">
+                <span class="wx-card-icao">${icao}</span>
+                <span class="wx-card-prox${proxLabel === 'DEPARTURE' ? ' departure' : proxLabel === 'DEST' ? ' dest' : isOnRoute ? ' on-route' : ''}">${proxLabel}</span>
+                <span class="wx-card-obs">${obsTime}</span>
+                <span class="wx-card-cat ${cat}">${d.flight_category || '—'}</span>
+                <span class="wx-card-chevron">›</span>
+            </div>
+            <div class="wx-card-body"></div>
+        `;
+
+        const hdr = card.querySelector('.wx-card-hdr');
+        const body = card.querySelector('.wx-card-body');
+
+        if (isOnRoute) {
+            hdr.querySelector('.wx-card-chevron').classList.add('open');
+            body.classList.add('open');
+            this._populateStationCardBody(body, icao, metar);
+        }
+
+        hdr.addEventListener('click', () => {
+            const chevron = hdr.querySelector('.wx-card-chevron');
+            chevron.classList.toggle('open');
+            body.classList.toggle('open');
+            if (body.classList.contains('open') && !body.innerHTML.trim()) {
+                this._populateStationCardBody(body, icao, metar);
+            }
+        });
+
+        return card;
+    }
+
+    _populateStationCardBody(body, icao, metar) {
+        const d = metar.decoded || {};
+        const wind = d.wind_dir != null
+            ? `${String(d.wind_dir).padStart(3, '0')}° / ${d.wind_speed ?? '—'}kt${d.wind_gust ? ` G${d.wind_gust}` : ''}`
+            : 'Calm';
+        const vis  = d.visibility != null ? `${d.visibility} SM` : '—';
+        const ceil = d.ceiling != null
+            ? `${d.sky_condition?.find(s => s.base === d.ceiling)?.cover || 'BKN'} ${d.ceiling}ft`
+            : 'CLR';
+        const ceilClass = d.ceiling != null && d.ceiling < 1000 ? 'bad' : (d.ceiling != null && d.ceiling <= 3000 ? 'warn' : '');
+        const visClass  = d.visibility != null && d.visibility < 3 ? 'bad' : (d.visibility != null && d.visibility <= 5 ? 'warn' : '');
+        const temp = (d.temperature != null && d.dewpoint != null)
+            ? `${d.temperature}° / ${d.dewpoint}°` : '—';
+        const alt  = d.altimeter != null
+            ? (d.altimeter > 500 ? (d.altimeter / 33.8639).toFixed(2) : d.altimeter.toFixed(2))
+            : '—';
+
+        let bodyHtml = `
+            <div class="wx-metar-raw">${this._escHtml(metar.raw || '—')}</div>
+            <div class="wx-decoded-grid">
+                <div class="wx-decoded-cell"><div class="wx-decoded-lbl">Wind</div><div class="wx-decoded-val">${wind}</div></div>
+                <div class="wx-decoded-cell"><div class="wx-decoded-lbl">Visibility</div><div class="wx-decoded-val ${visClass}">${vis}</div></div>
+                <div class="wx-decoded-cell"><div class="wx-decoded-lbl">Ceiling</div><div class="wx-decoded-val ${ceilClass}">${ceil}</div></div>
+                <div class="wx-decoded-cell"><div class="wx-decoded-lbl">Temp / Dew</div><div class="wx-decoded-val">${temp}</div></div>
+                <div class="wx-decoded-cell"><div class="wx-decoded-lbl">Altimeter</div><div class="wx-decoded-val">${alt}"</div></div>
+                <div class="wx-decoded-cell"><div class="wx-decoded-lbl">Observed</div><div class="wx-decoded-val" style="font-size:11px">${metar.reportTime ? new Date(metar.reportTime).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) + ' L' : '—'}</div></div>
+            </div>
+        `;
+
+        const taf = this._tafData?.[icao];
+        if (taf?.fcsts?.length) {
+            const issued = taf.issued ? new Date(taf.issued).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) + ' L' : '—';
+            const vFrom  = taf.valid_from ? new Date(taf.valid_from * 1000).toLocaleDateString([], {weekday:'short',month:'short',day:'numeric'}) : '—';
+            const vTo    = taf.valid_to   ? new Date(taf.valid_to   * 1000).toLocaleDateString([], {weekday:'short',month:'short',day:'numeric'}) : '—';
+            bodyHtml += `<div class="wx-taf-hdr">TAF</div>`;
+            bodyHtml += `<div class="wx-taf-issued">Issued ${issued} · Valid ${vFrom} → ${vTo}</div>`;
+            for (const f of taf.fcsts) {
+                const tf  = new Date(f.timeFrom * 1000);
+                const tt  = new Date(f.timeTo   * 1000);
+                const timeStr = `${tf.toLocaleDateString([],{weekday:'short'})} ${tf.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}–${tt.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} L`;
+                const cat = this._tafPeriodCat(f);
+                const catClass = cat.toLowerCase();
+                const clouds = f.clouds || [];
+                const ceilLayer = clouds.find(c => c.cover==='BKN'||c.cover==='OVC'||c.cover==='VV');
+                const ceilStr = ceilLayer
+                    ? `${ceilLayer.cover}${String(Math.round(ceilLayer.base / 100)).padStart(3,'0')}`
+                    : (clouds[0]?.cover === 'SKC' || clouds[0]?.cover === 'CLR' ? 'SKC' : (clouds[0] ? clouds[0].cover : '—'));
+                const windStr = (f.wdir != null && f.wspd != null)
+                    ? `${String(f.wdir).padStart(3,'0')}/${f.wspd}${f.wgst ? 'G'+f.wgst : ''}kt` : '—';
+                const visStr = f.visib != null ? `${f.visib}SM` : '—';
+                bodyHtml += `
+                    <div class="wx-taf-row">
+                        <span class="wx-taf-time">${timeStr}</span>
+                        <span class="wx-taf-cat wx-cat-${catClass}">${cat}</span>
+                        <span class="wx-taf-wind">${windStr}</span>
+                        <span class="wx-taf-ceil">${ceilStr}</span>
+                        <span class="wx-taf-vis">${visStr}</span>
+                    </div>`;
+            }
+        } else if (taf) {
+            bodyHtml += `<div class="wx-taf-no">TAF: no structured forecast periods</div>`;
+        } else {
+            bodyHtml += `<div class="wx-taf-no">No TAF available</div>`;
+        }
+
+        body.innerHTML = bodyHtml;
+    }
+
+    _tafPeriodCat(fcst) {
+        const clouds = fcst.clouds || [];
+        const ceilLayer = clouds.find(c => c.cover === 'BKN' || c.cover === 'OVC' || c.cover === 'VV');
+        const ceiling = ceilLayer ? ceilLayer.base : null;
+        const rawVis = fcst.visib;
+        const vis = (typeof rawVis === 'string' && rawVis.includes('+'))
+            ? parseFloat(rawVis) : (rawVis != null ? parseFloat(rawVis) : null);
+        return WeatherClient.getFlightCategory(ceiling, vis);
+    }
+
+    // ── Distance helpers ──────────────────────────────────────────────────────
+
+    _distToNearestCoord(lat, lon, coords) {
+        if (lat == null || lon == null || !coords.length) return 9999;
+        let min = Infinity;
+        for (const c of coords) {
+            const d = Math.hypot(lat - c.lat, (lon - c.lon) * Math.cos(lat * Math.PI / 180));
+            if (d < min) min = d;
+        }
+        return min * 60;
+    }
+
+    _distLabelToRoute(lat, lon) {
+        const coords = this._routeCoords || [];
+        if (!lat || !lon || !coords.length) return '—';
+        const nm = Math.round(this._distToNearestCoord(lat, lon, coords));
+        return `${nm} NM`;
+    }
+
+    // ── AIRMET fetch & helpers ────────────────────────────────────────────────
+
+    async _fetchAirmets() {
+        this._airmets = null;
+        this._renderAirmetSection();
+        try {
+            const client = new WeatherClient(this._db);
+            const { airmets } = await client.fetchAndCacheAdvisories();
+            this._airmets = airmets;
+            this._airmetFetchedAt = Date.now();
+        } catch (err) {
+            console.error('AIRMET fetch failed:', err);
+            this._airmets = [];
+        }
+        this._renderAgeGroup();
+        this._renderAirmetSection();
+        this._renderPlanningSection();
+    }
+
+    _filterAdvisoriesForRoute(advisories, bufferDeg = 0.83) {
+        const coords = this._routeCoords || [];
+        if (!coords.length || !advisories?.length) return advisories || [];
+
+        const routeLats = coords.map(c => c.lat);
+        const routeLons = coords.map(c => c.lon);
+        const bbox = {
+            s: Math.min(...routeLats) - bufferDeg,
+            n: Math.max(...routeLats) + bufferDeg,
+            w: Math.min(...routeLons) - bufferDeg,
+            e: Math.max(...routeLons) + bufferDeg,
+        };
+
+        return advisories.filter(adv => {
+            const pts = adv.points || [];
+            if (!pts.length) return true;
+            const advLats = pts.map(p => p[0]);
+            const advLons = pts.map(p => p[1]);
+            if (Math.max(...advLats) < bbox.s || Math.min(...advLats) > bbox.n) return false;
+            if (Math.max(...advLons) < bbox.w || Math.min(...advLons) > bbox.e) return false;
+            for (const c of coords) {
+                if (this._pointInPolygon(c.lat, c.lon, pts)) return true;
+            }
+            return true;
+        });
+    }
+
+    _pointInPolygon(lat, lon, polygon) {
+        let inside = false;
+        for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+            const xi = polygon[i][0], yi = polygon[i][1];
+            const xj = polygon[j][0], yj = polygon[j][1];
+            if (((yi > lon) !== (yj > lon)) && (lat < (xj - xi) * (lon - yi) / (yj - yi) + xi)) {
+                inside = !inside;
+            }
+        }
+        return inside;
+    }
+
+    _buildRhsHeader(title, badgeClass, badgeText) {
+        const hdr = document.createElement('div');
+        hdr.className = 'wx-rhs-hdr';
+        const badge = badgeClass
+            ? `<span class="wx-rhs-badge ${badgeClass}">${badgeText}</span>`
+            : `<span class="wx-rhs-badge">${badgeText}</span>`;
+        hdr.innerHTML = `
+            <span class="wx-rhs-title">${title}</span>
+            ${badge}
+            <span class="wx-rhs-chevron open">›</span>
+        `;
+        hdr.addEventListener('click', () => {
+            const chevron = hdr.querySelector('.wx-rhs-chevron');
+            chevron.classList.toggle('open');
+            const body = hdr.nextElementSibling;
+            if (body) body.classList.toggle('open');
+        });
+        return hdr;
+    }
+
+    _extractAviationSection(text) {
+        if (!text) return text;
+        // Find .AVIATION section header (case-insensitive)
+        const match = text.match(/\.AVIATION\b[^\n]*/i);
+        if (!match) return text;
+        const start = text.indexOf(match[0]);
+        // Find end: next section header starting with . on its own line, or end of text
+        const rest = text.slice(start + match[0].length);
+        const nextSection = rest.match(/\n\.[A-Z]{2}/);
+        const end = nextSection ? rest.indexOf(nextSection[0]) : rest.length;
+        return (match[0] + rest.slice(0, end)).trim();
+    }
+
+    _buildAdvCard(typeLabel, typeClass, hazard, meta, text, validHtml = '', expanded = false) {
+        const card = document.createElement('div');
+        card.className = 'wx-adv-card';
+        card.innerHTML = `
+            <div class="wx-adv-hdr">
+                <span class="wx-adv-type ${typeClass}">${typeLabel}</span>
+                <div class="wx-adv-info">
+                    <div class="wx-adv-hazard">${this._escHtml(hazard)}</div>
+                    <div class="wx-adv-meta">${this._escHtml(meta)}</div>
+                </div>
+                <span class="wx-adv-chevron${expanded ? ' open' : ''}">›</span>
+            </div>
+            <div class="wx-adv-body${expanded ? ' open' : ''}">
+                <div class="wx-adv-text">${this._escHtml(text)}</div>
+                ${validHtml ? `<div class="wx-adv-valid">${validHtml}</div>` : ''}
+            </div>
+        `;
+        card.querySelector('.wx-adv-hdr').addEventListener('click', () => {
+            const chevron = card.querySelector('.wx-adv-chevron');
+            chevron.classList.toggle('open');
+            card.querySelector('.wx-adv-body').classList.toggle('open');
+        });
+        return card;
+    }
+
+    _escHtml(str) {
+        return (str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    // ── MCD fetch & helpers ───────────────────────────────────────────────────
+
+    async _fetchMcds() {
+        this._mcds = null;
+        this._renderMcdSection();
+        try {
+            const resp = await fetch('https://api.weather.gov/products?type=MCD&office=KWNS&limit=20',
+                { signal: AbortSignal.timeout(10000) });
+            if (!resp.ok) throw new Error(`MCD fetch ${resp.status}`);
+            const data = await resp.json();
+            const items = data['@graph'] || [];
+            const parsed = items.map(item => this._parseMcd(item)).filter(Boolean);
+            this._mcds = parsed;
+            this._mcdFetchedAt = Date.now();
+            try {
+                localStorage.setItem('flytab_mcd_cache', JSON.stringify({ fetched_at: Date.now(), data: parsed }));
+            } catch (_) {}
+        } catch (err) {
+            console.error('MCD fetch failed:', err);
+            try {
+                const raw = localStorage.getItem('flytab_mcd_cache');
+                if (raw) {
+                    const cache = JSON.parse(raw);
+                    this._mcds = cache.data || [];
+                } else {
+                    this._mcds = [];
+                }
+            } catch (_) { this._mcds = []; }
+        }
+        this._renderMcdSection();
+        this._renderPlanningSection();
+    }
+
+    _parseMcd(item) {
+        const text = item.productText || '';
+        const idMatch = text.match(/Mesoscale Discussion\s+(\d+)/i) || text.match(/^MCD\s*(\d+)/im);
+        const id = idMatch ? `MD ${idMatch[1]}` : 'MD —';
+        const hazard = this._extractMcdHazard(text);
+        const validMatch = text.match(/VALID\s+(\d{6}Z)\s*-\s*(\d{6}Z)/i);
+        let validUntil = item.issuanceTime || null;
+        if (validMatch) {
+            const to = validMatch[2];
+            const day = parseInt(to.slice(0, 2));
+            const hh  = parseInt(to.slice(2, 4));
+            const mm  = parseInt(to.slice(4, 6));
+            const d = new Date();
+            d.setUTCDate(day); d.setUTCHours(hh, mm, 0, 0);
+            validUntil = d.toISOString();
+        }
+        const polygon = this._parseMcdPolygon(text);
+        return { id, hazard, validUntil, polygon, productText: text };
+    }
+
+    _extractMcdHazard(text) {
+        const m = text.match(/Concerning\.\.\.(.*)/i) || text.match(/SUMMARY\.\.\.(.*)/i);
+        return m ? m[1].trim().replace(/\n.*/s, '').slice(0, 80) : 'Convective/weather discussion';
+    }
+
+    _parseMcdPolygon(text) {
+        const match = text.match(/LAT\.\.\.LON\s+([\d\s]+)/i);
+        if (!match) return null;
+        const tokens = match[1].trim().split(/\s+/).map(Number).filter(n => !isNaN(n));
+        const lats = [], lons = [];
+        for (const t of tokens) {
+            if (t <= 5999) lats.push(t / 100);
+            else lons.push(-(t / 100));
+        }
+        const n = Math.min(lats.length, lons.length);
+        if (n < 3) return null;
+        return Array.from({ length: n }, (_, i) => [lats[i], lons[i]]);
+    }
+
+    // ── NOTAM fetch & helpers ─────────────────────────────────────────────────
+
+    async _fetchNotams() {
+        this._notams = null;
+        this._renderNotamSection();
+
+        const stations = this._getStationList();
+        if (!stations.length) { this._notams = []; this._renderNotamSection(); return; }
+
+        try {
+            const base = Settings.workerBase || 'https://www.flywhere.app/api';
+            const url  = `${base}/notams?location=${stations.join(',')}`;
+            const resp = await fetch(url, { signal: AbortSignal.timeout(30000) });
+            if (!resp.ok) throw new Error(`NOTAM proxy ${resp.status}`);
+            const data = await resp.json();
+            const features = data.features || [];
+
+            const notams = [];
+            const seen = new Set();
+            for (const feature of features) {
+                const n = feature.properties?.coreNOTAMData?.notam || {};
+                const num = n.number || '';
+                if (seen.has(num)) continue;
+                seen.add(num);
+                // n.location is the 3-letter FAA id (e.g. LKR); map back to ICAO
+                const nLoc = (n.location || '').toUpperCase();
+                const loc = stations.find(s => s === nLoc || s === 'K' + nLoc) || stations[0];
+                notams.push(this._parseNotam(feature, loc));
+            }
+
+            const order = ['RWY', 'NAVAID', 'OBST', 'TWY', 'AD', 'SVC'];
+            notams.sort((a, b) => {
+                const ai = order.indexOf(a.type);
+                const bi = order.indexOf(b.type);
+                if (ai !== bi) return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
+                const aRoute = stations.indexOf(a.airport);
+                const bRoute = stations.indexOf(b.airport);
+                if (aRoute !== bRoute) return aRoute - bRoute;
+                return 0;
+            });
+
+            this._notams = notams;
+            this._notamFetchedAt = Date.now();
+            try {
+                localStorage.setItem('flytab_notam_cache', JSON.stringify({ fetched_at: Date.now(), data: notams }));
+            } catch (_) {}
+        } catch (err) {
+            console.error('NOTAM fetch failed:', err);
+            try {
+                const raw = localStorage.getItem('flytab_notam_cache');
+                if (raw) { const c = JSON.parse(raw); this._notams = c.data || []; }
+                else this._notams = [];
+            } catch (_) { this._notams = []; }
+        }
+
+        this._renderAgeGroup();
+        this._renderNotamSection();
+    }
+
+    async _fetchEnrouteNotams() {
+        this._enrouteNotams = null;
+        this._renderNotamSection();
+
+        const bbox = await this._getRouteBbox(0);
+        if (!bbox) { this._enrouteNotams = []; this._renderNotamSection(); return; }
+
+        // Pick the 2 nearest ARTCCs to the route center + national ZZZ
+        const centerLat = (bbox.n + bbox.s) / 2;
+        const centerLon = (bbox.e + bbox.w) / 2;
+        const artccs = this._nearestArtccs(centerLat, centerLon, 2);
+        const locations = [...artccs, 'ZZZ'].join(',');
+
+        try {
+            const base = Settings.workerBase || 'https://www.flywhere.app/api';
+            const resp = await fetch(`${base}/notams?location=${locations}`, { signal: AbortSignal.timeout(30000) });
+            if (!resp.ok) throw new Error(`En-route NOTAM proxy ${resp.status}`);
+            const data = await resp.json();
+            const features = data.features || [];
+
+            const seen = new Set();
+            const notams = [];
+            for (const feature of features) {
+                const n = feature.properties?.coreNOTAMData?.notam || {};
+                const num = n.number || n.id || '';
+                if (seen.has(num)) continue;
+                seen.add(num);
+
+                // Skip cancellations — they remove a restriction, not add one
+                if (n.type === 'C' || /\bNOTAMC\b/.test(n.text || '')) continue;
+
+                // n.text is the plain prose field; simpleText can include ICAO-format headers
+                const translations = feature.properties?.coreNOTAMData?.notamTranslation || [];
+                const localFmt = translations.find(t => t.type === 'LOCAL_FORMAT');
+                const raw = n.text || localFmt?.simpleText || '';
+
+                if (!this._isEnrouteRelevant(raw)) continue;
+
+                notams.push({
+                    airport: n.location || '',
+                    type: this._classifyEnrouteNotam(raw),
+                    summary: this._summarizeEnrouteNotam(raw),
+                    raw,
+                    validFrom: n.effectiveStart || null,
+                    validTo:   n.effectiveEnd   || null,
+                    isEnroute: true,
+                });
+            }
+
+            const PRIORITY = { TFR: 0, RESTR: 1, MOA: 2, WARN: 3, ATCAA: 4, UAS: 5, LASER: 6 };
+            notams.sort((a, b) => {
+                const ap = PRIORITY[a.type] ?? 9;
+                const bp = PRIORITY[b.type] ?? 9;
+                return ap !== bp ? ap - bp : a.airport.localeCompare(b.airport);
+            });
+
+            this._enrouteNotams = notams;
+            this._enrouteNotamFetchedAt = Date.now();
+        } catch (err) {
+            console.error('En-route NOTAM fetch failed:', err);
+            this._enrouteNotams = [];
+        }
+
+        this._renderNotamSection();
+    }
+
+    _nearestArtccs(lat, lon, count = 2) {
+        const table = [
+            { id: 'KZAB', lat: 34.0, lon: -106.5 }, { id: 'KZAU', lat: 41.8, lon: -88.3  },
+            { id: 'KZBW', lat: 42.8, lon: -71.7  }, { id: 'KZDC', lat: 38.9, lon: -77.5  },
+            { id: 'KZDV', lat: 39.9, lon: -104.7 }, { id: 'KZFW', lat: 32.8, lon: -97.2  },
+            { id: 'KZHU', lat: 30.1, lon: -95.4  }, { id: 'KZID', lat: 39.7, lon: -86.3  },
+            { id: 'KZJX', lat: 30.5, lon: -82.2  }, { id: 'KZKC', lat: 38.9, lon: -94.7  },
+            { id: 'KZLA', lat: 34.0, lon: -117.0 }, { id: 'KZLC', lat: 40.8, lon: -111.9 },
+            { id: 'KZMA', lat: 25.8, lon: -80.3  }, { id: 'KZME', lat: 32.3, lon: -90.1  },
+            { id: 'KZMP', lat: 44.9, lon: -93.2  }, { id: 'KZNY', lat: 40.6, lon: -73.8  },
+            { id: 'KZOA', lat: 37.6, lon: -121.9 }, { id: 'KZOB', lat: 41.1, lon: -82.0  },
+            { id: 'KZSE', lat: 47.5, lon: -122.3 }, { id: 'KZTL', lat: 33.6, lon: -84.6  },
+        ];
+        const cosLat = Math.cos(lat * Math.PI / 180);
+        return table
+            .map(a => ({ id: a.id, d: (a.lat - lat) ** 2 + ((a.lon - lon) * cosLat) ** 2 }))
+            .sort((a, b) => a.d - b.d)
+            .slice(0, count)
+            .map(a => a.id);
+    }
+
+    _isEnrouteRelevant(raw) {
+        const r = raw.toUpperCase();
+        return /\bTFR\b|TEMPORARY FLIGHT RESTRICTION/.test(r) ||
+               /\bUAS\b|\bDRONE\b/.test(r) ||
+               /\bLASER\b/.test(r) ||
+               / P-\d+|\bPROHIBITED AREA\b/.test(r) ||
+               / R-\d+|\bRESTRICTED AREA\b/.test(r) ||
+               /\bMOA\b/.test(r) ||
+               /\bWARNING AREA\b| W-\d+/.test(r) ||
+               /\bATCAA\b/.test(r);
+    }
+
+    _classifyEnrouteNotam(raw) {
+        const r = raw.toUpperCase();
+        if (/\bTFR\b|TEMPORARY FLIGHT RESTRICTION/.test(r)) return 'TFR';
+        if (/ P-\d+|\bPROHIBITED AREA\b/.test(r)) return 'RESTR';
+        if (/ R-\d+|\bRESTRICTED AREA\b/.test(r)) return 'RESTR';
+        if (/\bMOA\b/.test(r)) return 'MOA';
+        if (/\bWARNING AREA\b| W-\d+/.test(r)) return 'WARN';
+        if (/\bATCAA\b/.test(r)) return 'ATCAA';
+        if (/\bUAS\b|\bDRONE\b/.test(r)) return 'UAS';
+        if (/\bLASER\b/.test(r)) return 'LASER';
+        return 'SUA';
+    }
+
+    _summarizeEnrouteNotam(raw) {
+        // Strip leading "XX.." state prefix (e.g. "GA..AIRSPACE" → "AIRSPACE")
+        return (raw || '').trim()
+            .replace(/^[A-Z]{2}\.\./i, '')
+            .replace(/\s+/g, ' ')
+            .slice(0, 120);
+    }
+
+    _parseNotam(feature, airport) {
+        const n = feature.properties?.coreNOTAMData?.notam || {};
+        const translations = feature.properties?.coreNOTAMData?.notamTranslation || [];
+        const localFmt = translations.find(t => t.type === 'LOCAL_FORMAT');
+        const raw = localFmt?.simpleText || localFmt?.domestic_message || n.text || '';
+        const type = this._classifyNotam(raw);
+        const summary = this._summarizeNotam(raw);
+        return { airport, type, summary, raw, validFrom: n.effectiveStart || null, validTo: n.effectiveEnd || null };
+    }
+
+    _classifyNotam(raw) {
+        const r = raw.toUpperCase();
+        if (/\bRWY\b/.test(r)) return 'RWY';
+        if (/\bNAVAID\b|ILS|VOR|NDB|LOC\b|PAPI|VASI/.test(r)) return 'NAVAID';
+        if (/\bOBST\b|CRANE|TOWER|ANTENNA/.test(r)) return 'OBST';
+        if (/\bTWY\b/.test(r)) return 'TWY';
+        if (/\bAD\b|\bAPRON\b|\bRAMP\b/.test(r)) return 'AD';
+        return 'SVC';
+    }
+
+    _summarizeNotam(raw) {
+        // First line is "!TYPE NUM ICAO SUBJECT AIRPORT_NAME, STATE." — skip it
+        const lines = raw.trim().split('\n').map(l => l.trim()).filter(Boolean);
+        const content = lines.length > 1 ? lines.slice(1).join(' ') : lines[0] || '';
+        return content.slice(0, 120);
+    }
+
+    // ── Planning Summary section ──────────────────────────────────────────────
+
+    _buildPlanningNarrative(stations, day) {
+        if (!this._mosData) return null;
+
+        const dep  = stations[0];
+        const dest = stations[stations.length - 1];
+        const mids = stations.slice(1, -1).slice(0, 2);
+        const key  = [dep, ...mids, dest];
+
+        const fmtH = d => d.toLocaleTimeString([], { hour: 'numeric', hour12: true });
+        const fmtDay = d => {
+            const now = new Date();
+            if (this._isSameDay(d, now)) return 'Today';
+            const tomorrow = new Date(now); tomorrow.setUTCDate(now.getUTCDate() + 1);
+            if (this._isSameDay(d, tomorrow)) return 'Tomorrow';
+            return d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+        };
+
+        const rows = [];
+        let latestClearTime = null;
+
+        for (const icao of key) {
+            const sd = this._mosData.stations?.[icao];
+            if (!sd) { rows.push({ icao, text: 'No MOS data', ok: null }); continue; }
+
+            const worst = this._worstCatForDay(sd, day);
+            if (!worst) { rows.push({ icao, text: 'No forecast', ok: null }); continue; }
+
+            if (worst === 'VFR') {
+                rows.push({ icao, text: 'VFR all day', ok: true });
+            } else {
+                const note  = this._buildMosSummaryNote(icao, day);
+                const clear = this._findFirstVfrTime(icao, day);
+                if (clear && (!latestClearTime || clear > latestClearTime)) latestClearTime = clear;
+                const suffix = clear ? ` Clears ${fmtH(clear)}.` : ' No clear period.';
+                const ok = worst === 'MVFR' ? 'warn' : false;
+                rows.push({ icao, text: (note || worst) + suffix, ok });
+            }
+        }
+
+        const warnings = [];
+        if (this._airmets?.length) {
+            const filtered = this._filterAdvisoriesForRoute(this._airmets);
+            if (filtered.length) warnings.push(`${filtered.length} AIRMET${filtered.length > 1 ? 's' : ''} on route`);
+        }
+        if (this._mcds?.length) {
+            const onRoute = this._mcds.filter(m =>
+                !m.polygon || this._filterAdvisoriesForRoute([{ points: m.polygon }]).length > 0);
+            if (onRoute.length) warnings.push(`${onRoute.length} MCD${onRoute.length > 1 ? 's' : ''} active`);
+        }
+
+        const allVfr = rows.every(r => r.ok === true);
+        let rec;
+        if (allVfr) {
+            rec = `${fmtDay(day)}: Route looks clear. Depart at your convenience.`;
+        } else if (latestClearTime) {
+            rec = `${fmtDay(day)}: Plan departure after ${fmtH(latestClearTime)} for VFR along the full route.`;
+        } else {
+            rec = `${fmtDay(day)}: IMC forecast along the route. Consider filing IFR or alternate date.`;
+        }
+
+        return { rows, warnings, rec, dayLabel: fmtDay(day) };
+    }
+
+    _renderPlanningSection() {
+        const sec = this._section('wx-planning-section');
+        if (!sec) return;
+
+        const stations = this._getStationList();
+        if (!stations.length) { sec.innerHTML = ''; return; }
+
+        const dep  = stations[0];
+        const dest = stations[stations.length - 1];
+        const mid  = stations.slice(1, -1);
+
+        const hdr = document.createElement('div');
+        hdr.className = 'wx-rhs-hdr wx-planning-hdr';
+        hdr.innerHTML = `
+            <span class="wx-rhs-title wx-planning-title">PLANNING SUMMARY</span>
+            <span class="wx-rhs-chevron open">›</span>
+        `;
+        const body = document.createElement('div');
+        body.className = 'wx-rhs-body open';
+        hdr.addEventListener('click', () => {
+            hdr.querySelector('.wx-rhs-chevron')?.classList.toggle('open');
+            body.classList.toggle('open');
+        });
+
+        const inner = document.createElement('div');
+        inner.className = 'wx-planning-body';
+
+        let routeStr = `${dep} → ${dest}`;
+        if (mid.length) routeStr += ` via ${mid.join(', ')}`;
+        let html = `<div class="wx-planning-route">${routeStr}</div>`;
+
+        // Use best flying day if MOS available, else today
+        const today = new Date(); today.setUTCHours(0, 0, 0, 0);
+        const bestDay = this._mosData ? this._findBestDay(stations) : null;
+        const targetDay = bestDay ? bestDay.date : today;
+
+        const narrative = this._buildPlanningNarrative(stations, targetDay);
+
+        if (narrative) {
+            for (const row of narrative.rows) {
+                const isOk   = row.ok === true;
+                const isWarn = row.ok === 'warn';
+                const isBad  = row.ok === false;
+                const icon   = isOk ? '✅' : (isWarn ? '⚠' : (isBad ? '🚫' : ''));
+                const cls    = isOk ? 'wx-planning-leg ok' : isWarn ? 'wx-planning-leg warn' : isBad ? 'wx-planning-leg bad' : 'wx-planning-leg';
+                html += `<div class="${cls}">
+                    <span class="wx-planning-icao">${row.icao}</span>
+                    <span class="wx-planning-text">${icon ? icon + ' ' : ''}${this._escHtml(row.text)}</span>
+                </div>`;
+            }
+
+            if (narrative.warnings.length) {
+                html += `<div class="wx-planning-warn">⚠ ${narrative.warnings.join(' · ')}</div>`;
+            }
+
+            html += `<div class="wx-planning-rec">${this._escHtml(narrative.rec)}</div>`;
+        } else {
+            // MOS not yet loaded — show badge grid as fallback
+            const now = new Date();
+            const tomorrow = new Date(now); tomorrow.setUTCDate(now.getUTCDate() + 1);
+            const fmtCat = cat => cat
+                ? `<span class="wx-cat-badge wx-cat-${cat.toLowerCase()}">&nbsp;${cat}&nbsp;</span>`
+                : '<span style="color:#888">—</span>';
+            for (const icao of [dep, ...mid.slice(0, 2), dest]) {
+                const sd = this._mosData?.stations?.[icao];
+                if (!sd) continue;
+                const todayCat = this._worstCatForDay(sd, now);
+                const tmrwCat  = this._worstCatForDay(sd, tomorrow);
+                if (!todayCat && !tmrwCat) continue;
+                html += `<div class="wx-planning-row">
+                    <b>${icao}</b> &nbsp;
+                    Today: ${fmtCat(todayCat)} &nbsp;
+                    Tomorrow: ${fmtCat(tmrwCat)}
+                </div>`;
+            }
+            html += `<div class="wx-planning-row" style="color:#888;font-style:italic">Fetching forecast…</div>`;
+        }
+
+        inner.innerHTML = html;
+        body.appendChild(inner);
+        sec.innerHTML = '';
+        sec.appendChild(hdr);
+        sec.appendChild(body);
+    }
+
+    // ── AFD fetch ─────────────────────────────────────────────────────────────
+
+    async _fetchAfds() {
+        this._afds = null;
+        this._renderAfdSection();
+        try {
+            const coords = await this._getRouteCoords();
+            const keyCoords = [];
+            if (coords.length > 0) keyCoords.push(coords[0]);
+            if (coords.length > 1) keyCoords.push(coords[coords.length - 1]);
+
+            // Map cwa → { cwa: 'KXXX', name: 'Office Name NWS', airports: [] }
+            const officeMap = new Map();
+            for (const c of keyCoords) {
+                try {
+                    const ptResp = await fetch(`https://api.weather.gov/points/${c.lat.toFixed(4)},${c.lon.toFixed(4)}`,
+                        { signal: AbortSignal.timeout(8000) });
+                    if (!ptResp.ok) continue;
+                    const pt = await ptResp.json();
+                    const cwa = pt?.properties?.cwa;
+                    if (!cwa) continue;
+                    if (!officeMap.has(cwa)) {
+                        // Fetch actual NWS office name (e.g. "Greenville-Spartanburg NWS")
+                        let officeName = cwa;
+                        try {
+                            const offResp = await fetch(`https://api.weather.gov/offices/${cwa}`,
+                                { signal: AbortSignal.timeout(6000) });
+                            if (offResp.ok) {
+                                const offData = await offResp.json();
+                                // "National Weather Service Greenville-Spartanburg SC" → "Greenville-Spartanburg"
+                                officeName = (offData.name || '')
+                                    .replace(/^National Weather Service\s*/i, '')
+                                    .replace(/\s+[A-Z]{2}$/, '');
+                            }
+                        } catch (_) {}
+                        officeMap.set(cwa, {
+                            cwa: `K${cwa}`,
+                            name: officeName ? `${officeName} NWS` : cwa,
+                            airports: [],
+                        });
+                    }
+                    if (c.icao) officeMap.get(cwa).airports.push(c.icao);
+                } catch (_) {}
+            }
+
+            if (!officeMap.size) throw new Error('No NWS offices found for route');
+
+            const afds = [];
+            for (const ep of officeMap.values()) {
+                const displayName = ep.name +
+                    (ep.airports.length ? ` — covers ${ep.airports.join('/')}` : '');
+                try {
+                    const pResp = await fetch(`https://api.weather.gov/products?type=AFD&office=${ep.cwa}&limit=1`,
+                        { signal: AbortSignal.timeout(8000) });
+                    if (!pResp.ok) continue;
+                    const pData = await pResp.json();
+                    const items = pData['@graph'] || [];
+                    if (!items.length) continue;
+                    const item = items[0];
+                    const tResp = await fetch(item['@id'], { signal: AbortSignal.timeout(8000) });
+                    if (!tResp.ok) continue;
+                    const tData = await tResp.json();
+                    afds.push({
+                        office: ep.cwa,
+                        name: displayName,
+                        issued: item.issuanceTime || null,
+                        text: tData.productText || item.productText || '',
+                    });
+                } catch (_) {}
+            }
+
+            this._afds = afds;
+            this._afdFetchedAt = Date.now();
+            try {
+                localStorage.setItem('flytab_afd_cache', JSON.stringify({ fetched_at: Date.now(), data: afds }));
+            } catch (_) {}
+        } catch (err) {
+            console.error('AFD fetch failed:', err);
+            try {
+                const raw = localStorage.getItem('flytab_afd_cache');
+                if (raw) {
+                    const cache = JSON.parse(raw);
+                    if (Date.now() - cache.fetched_at < 4 * 3600000) {
+                        this._afds = cache.data || [];
+                    } else { this._afds = []; }
+                } else { this._afds = []; }
+            } catch (_) { this._afds = []; }
+        }
+        this._renderAfdSection();
     }
 }

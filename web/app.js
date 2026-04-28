@@ -3,9 +3,9 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v5.97';
+const FLYTAB_VERSION = 'v6.22';
 
-// ========== Diagnostic Logger (ring buffer in localStorage) ==========
+// === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
     const KEY = 'flypi_diag_log';
     const MAX = 200; // max log entries
@@ -51,6 +51,8 @@ class FlyTabApp {
     constructor() {
         // Cockpit components
         this.stratuxClient = null;
+        this.engineGpsBridge = null;
+        this._gpsDiagPanel = null;
         this.cockpitMap = null;
         this.enginePanel = null;
         this.trackLog = null;
@@ -102,6 +104,8 @@ class FlyTabApp {
             mainContent: document.getElementById('mainContent'),
             cockpitView: document.getElementById('cockpitView'),
         };
+
+        this._initGpsDiagPanel();
 
         this._clockInterval = null;
         this._recorderInterval = null;
@@ -315,8 +319,9 @@ class FlyTabApp {
             return entries.map(e => {
                 const time = e.t.slice(11, 19);
                 const color = CAT_COLORS[e.cat] || 'var(--text-secondary)';
-                const data = e.d ? ` <span style="color:var(--text-muted)">${e.d}</span>` : '';
-                return `<div style="margin:2px 0;line-height:1.5"><span style="color:var(--text-muted)">${time}</span> <span style="color:${color};font-weight:600">[${e.cat}]</span> ${e.msg}${data}</div>`;
+                const escStr = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+                const data = e.d ? ` <span style="color:var(--text-muted)">${escStr(typeof e.d === 'object' ? JSON.stringify(e.d) : e.d)}</span>` : '';
+                return `<div style="margin:2px 0;line-height:1.5"><span style="color:var(--text-muted)">${time}</span> <span style="color:${color};font-weight:600">[${escStr(e.cat)}]</span> ${escStr(e.msg)}${data}</div>`;
             }).join('');
         };
 
@@ -353,7 +358,7 @@ class FlyTabApp {
         }
     }
 
-    // ========== Cockpit Init ==========
+    // === Cockpit Init ==========
 
     async _initCockpit() {
         if (this._cockpitInitialized) {
@@ -453,6 +458,12 @@ class FlyTabApp {
         this.engineClient = new EngineClient();
         this.engineClient.connect();
         window.engineClient = this.engineClient;
+
+        // Engine GPS bridge — injects engine GPS when Stratux situation WS is unavailable
+        if (typeof EngineGpsBridge !== 'undefined') {
+            this.engineGpsBridge = new EngineGpsBridge(this.stratuxClient, this.engineClient);
+            this.engineGpsBridge.start();
+        }
 
         // Engine panel (receives data via WebSocket push)
         this.enginePanel = new EnginePanel(document.createElement('div'), this.engineClient);
@@ -749,7 +760,8 @@ class FlyTabApp {
 
         // Weather briefing (MOS timeline)
         if (typeof WxBriefing !== 'undefined') {
-            this.wxBriefing = new WxBriefing(nasrDb);
+            const wxCfg = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.raw : {};
+            this.wxBriefing = new WxBriefing(nasrDb, wxCfg);
             this.wxBriefing.init();
         }
 
@@ -1013,7 +1025,7 @@ class FlyTabApp {
         }
     }
 
-    // ========== Route Bbox (for Cache Tiles) ==========
+    // === Route Bbox (for Cache Tiles) ==========
 
     /** Returns bounding box for the current route + ~1° buffer, or null if no plan loaded. */
     _getRouteBbox() {
@@ -1033,7 +1045,7 @@ class FlyTabApp {
         return { latMin, latMax, lonMin, lonMax, label, id: 'route', sub: label };
     }
 
-    // ========== Plan Loading ==========
+    // === Plan Loading ==========
 
     async _loadActivePlan() {
         // FlyTab: plans are stored locally — load from localStorage
@@ -1309,7 +1321,7 @@ class FlyTabApp {
         this.dom.statusWeather.className = `status-item ${className}`;
     }
 
-    // ========== Wake Lock ==========
+    // === Wake Lock ==========
 
     async _acquireWakeLock() {
         if (!('wakeLock' in navigator)) return;
@@ -1325,7 +1337,7 @@ class FlyTabApp {
         }
     }
 
-    // ========== Thermal Monitor ==========
+    // === Thermal Monitor ==========
 
     _initThermalMonitor() {
         if (typeof ThermalMonitor === 'undefined') return;
@@ -1351,7 +1363,7 @@ class FlyTabApp {
         };
     }
 
-    // ========== Clock ==========
+    // === Clock ==========
 
     _startClock() {
         // Create local time element if the HTML doesn't have it yet
@@ -1378,7 +1390,7 @@ class FlyTabApp {
         window.addEventListener('beforeunload', () => clearInterval(this._clockInterval));
     }
 
-    // ========== Aircraft Config Sync ==========
+    // === Aircraft Config Sync ==========
 
     /**
      * Map Supabase aircraft profile to Pi format and merge with existing config.
@@ -1455,7 +1467,7 @@ class FlyTabApp {
         }
     }
 
-    // ========== GPS & FIS-B Status ==========
+    // === GPS & FIS-B Status ==========
 
     _startDeviceStatusMonitor() {
         const update = () => {
@@ -1466,19 +1478,28 @@ class FlyTabApp {
             const sit = (connected && !stale) ? this.stratuxClient?.situation : null;
             const status = connected ? this.stratuxClient?.deviceStatus : null;
 
-            // GPS: green if fix (quality >= 1), show solution type + source
+            // GPS: green if fix (quality >= 1), amber if engine bridge active, show solution type + source
             if (this.dom.statusGps) {
-                const src = this.gpsSource?.label ?? (this.gpsSource?.source === 'internal' ? 'INT' : 'STX');
+                const bridgeActive = this.engineGpsBridge?.active === true;
+                const src = bridgeActive ? 'ENG'
+                    : (this.gpsSource?.label ?? (this.gpsSource?.source === 'internal' ? 'INT' : 'STX'));
                 const q = sit?.gps_fix_quality ?? 0;
-                const gpsOk = q >= 1;
+                const gpsOk = !bridgeActive && q >= 1;
                 this.dom.statusGps.classList.toggle('active', gpsOk);
+                this.dom.statusGps.classList.toggle('active-degraded', bridgeActive);
                 if (gpsOk) {
                     const sats = sit.gps_sats != null ? `${sit.gps_sats}sv` : '';
                     const sol = GPS_SOLUTION_LABELS[q] || 'FIX';
                     const acc = sit._accuracy != null ? `±${Math.round(sit._accuracy)}m` : '';
                     this.dom.statusGps.textContent = `${src} ${sol} ${sats || acc}`.trim();
+                } else if (bridgeActive) {
+                    this.dom.statusGps.textContent = 'ENG GPS';
                 } else {
                     this.dom.statusGps.textContent = `${src} GPS`;
+                }
+                // Auto-dismiss diag panel when GPS resolves
+                if (gpsOk && this._gpsDiagPanel?.classList.contains('visible')) {
+                    this._gpsDiagPanel.classList.remove('visible');
                 }
             }
 
@@ -1506,7 +1527,82 @@ class FlyTabApp {
         this._deviceStatusInterval = setInterval(update, 5000);
     }
 
-    // ========== Connectivity Monitor ==========
+    // === GPS Diag Panel ==========
+
+    _initGpsDiagPanel() {
+        const panel = document.createElement('div');
+        panel.id = 'gps-diag-panel';
+        const statusBar = document.getElementById('statusBar');
+        if (statusBar) statusBar.insertAdjacentElement('afterend', panel);
+        this._gpsDiagPanel = panel;
+        this.dom.statusGps?.addEventListener('click', () => this._toggleGpsDiagPanel());
+    }
+
+    _toggleGpsDiagPanel() {
+        if (!this._gpsDiagPanel) return;
+        const nowVisible = this._gpsDiagPanel.classList.toggle('visible');
+        if (nowVisible) this._renderGpsDiagPanel();
+    }
+
+    _renderGpsDiagPanel() {
+        const panel = this._gpsDiagPanel;
+        if (!panel) return;
+
+        const bridgeActive = this.engineGpsBridge?.active === true;
+        const stale = this.stratuxClient?.stale;
+        const sit = this.stratuxClient?.situation;
+        const q = sit?.gps_fix_quality ?? 0;
+
+        let statusLine;
+        if (bridgeActive) {
+            statusLine = 'Situation WS unavailable — position from engine monitor. Stratux reconnecting.';
+        } else if (stale) {
+            statusLine = 'Situation WS closed — engine GPS also unavailable';
+        } else if (q === 0) {
+            statusLine = 'Stratux connected — no GPS fix';
+        } else {
+            statusLine = 'GPS nominal';
+        }
+
+        const entries = DiagLog.entries
+            .filter(e => e.cat === 'gps' || e.cat === 'stratux')
+            .slice(-10)
+            .reverse();
+        const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        const logHtml = entries.length
+            ? entries.map(e =>
+                `<div>${esc(e.t.slice(11, 19))} [${esc(e.cat)}] ${esc(e.msg)}</div>`
+              ).join('')
+            : '<div>No GPS log entries yet</div>';
+
+        const cfgSrc = this.gpsSource?._configuredSource;
+        const inFallback = this.gpsSource?._inFallback;
+        let fixLabel, fixAction;
+        if (cfgSrc === 'internal' && q >= 1) {
+            fixLabel = 'USE STRATUX GPS';
+            fixAction = () => this.gpsSource.setSource('stratux');
+        } else if (cfgSrc === 'auto' && inFallback) {
+            fixLabel = 'RESET GPS SOURCE';
+            fixAction = () => this.gpsSource.setSource('auto');
+        } else {
+            fixLabel = 'GPS SETTINGS';
+            fixAction = () => this.configEditor?.show();
+        }
+
+        panel.innerHTML = `
+            <div class="gps-diag-status">${statusLine}</div>
+            <div class="gps-diag-log">${logHtml}</div>
+            <div class="gps-diag-actions">
+                <button class="gps-diag-fix-btn" id="gpsDiagFixBtn">${fixLabel}</button>
+                <button class="gps-diag-sec-btn" id="gpsDiagSettingsBtn">GPS SETTINGS</button>
+            </div>
+        `;
+
+        document.getElementById('gpsDiagFixBtn')?.addEventListener('click', fixAction);
+        document.getElementById('gpsDiagSettingsBtn')?.addEventListener('click', () => this.configEditor?.show());
+    }
+
+    // === Connectivity Monitor ==========
 
     _startConnectivityMonitor() {
         const el = this.dom.statusSync;
@@ -1584,7 +1680,7 @@ class FlyTabApp {
         }
     }
 
-    // ========== NASR Age Badge ==========
+    // === NASR Age Badge ==========
 
     async _updateNasrBadge() {
         const el = this.dom.statusNasr;
@@ -1625,7 +1721,7 @@ class FlyTabApp {
         }
     }
 
-    // ========== Alerts ==========
+    // === Alerts ==========
 
     showAlert(message, severity = 'blue', duration = null) {
         const banner = document.createElement('div');
@@ -1670,7 +1766,7 @@ class FlyTabApp {
         }
     }
 
-    // ========== Fuel Stop Proximity ==========
+    // === Fuel Stop Proximity ==========
 
     /** Check if the aircraft is within 10nm of any fuel stop waypoint. */
     _checkFuelStopProximity(situation) {
@@ -1808,7 +1904,7 @@ class FlyTabApp {
         });
     }
 
-    // ========== Toast Notifications ==========
+    // === Toast Notifications ==========
 
     async _checkDataReadiness() {
         const LOCAL = 'http://localhost:9090';
@@ -1906,7 +2002,7 @@ class FlyTabApp {
     }
 }
 
-// ========== Initialize on DOM ready ==========
+// === Initialize on DOM ready ==========
 
 const app = new FlyTabApp();
 window.app = app;
