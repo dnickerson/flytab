@@ -1555,10 +1555,10 @@ class FlyTabApp {
         let statusLine;
         if (bridgeActive) {
             statusLine = 'Situation WS unavailable — position from engine monitor. Stratux reconnecting.';
-        } else if (!stale && q === 0) {
-            statusLine = 'Stratux connected — no GPS fix';
         } else if (stale) {
             statusLine = 'Situation WS closed — engine GPS also unavailable';
+        } else if (q === 0) {
+            statusLine = 'Stratux connected — no GPS fix';
         } else {
             statusLine = 'GPS nominal';
         }
