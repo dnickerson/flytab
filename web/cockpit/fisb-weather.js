@@ -378,6 +378,7 @@ class FisbWeatherDisplay {
         this._sigmetPolygons.push({
             polygon, received_at: sigmet.received_at,
             expires_at: sigmet.expires_at, type: 'sigmet',
+            rawKey: (sigmet.raw || '').slice(0, 80),
         });
 
         // Toast for all SIGMETs
@@ -429,6 +430,7 @@ class FisbWeatherDisplay {
         this._airmetPolygons.push({
             polygon, received_at: airmet.received_at,
             expires_at: airmet.expires_at,
+            rawKey: (airmet.raw || '').slice(0, 80),
         });
 
         this._toastAlert(toastMsg, toastSeverity, 30000, raw);
@@ -543,6 +545,7 @@ class FisbWeatherDisplay {
             const tooOld = now - entry.received_at > 4 * 3600000;
             if (expired || tooOld) {
                 this._sigmetLayer.removeLayer(entry.polygon);
+                if (entry.rawKey) this._seenAdvisoryKeys.delete(entry.rawKey);
                 return false;
             }
             return true;
@@ -554,6 +557,7 @@ class FisbWeatherDisplay {
             const tooOld = now - entry.received_at > 4 * 3600000;
             if (expired || tooOld) {
                 this._airmetLayer.removeLayer(entry.polygon);
+                if (entry.rawKey) this._seenAdvisoryKeys.delete(entry.rawKey);
                 return false;
             }
             return true;

@@ -850,7 +850,10 @@ class CockpitMap {
                 const m = L.marker([target.lat, target.lon], { icon, zIndexOffset: 500 })
                     .addTo(this.map);
                 // Always fetch current target at click time — stale closure causes popup offset
-                m.on('click', () => this._showTrafficPopup(this.stratux.traffic.get(icao) || target, m));
+                m.on('click', () => {
+                    if (typeof _wireTapLastTouchAt !== 'undefined' && Date.now() - _wireTapLastTouchAt < 500) return;
+                    this._showTrafficPopup(this.stratux.traffic.get(icao) || target, m);
+                });
                 this.trafficMarkers.set(icao, m);
             }
         }
@@ -1073,6 +1076,7 @@ class CockpitMap {
             }
 
             marker.on('click', () => {
+                if (typeof _wireTapLastTouchAt !== 'undefined' && Date.now() - _wireTapLastTouchAt < 500) return;
                 if (wp.icao && this._airportPopup) {
                     this._airportPopup.showForAirport(wp.icao, [wp.lat, wp.lon]);
                 }

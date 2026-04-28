@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v6.22';
+const FLYTAB_VERSION = 'v6.25';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -414,6 +414,7 @@ class FlyTabApp {
                 this.airportPopup.setVectorLayers(this.vectorLayers);
                 this.vectorLayers._onInternetMetarsFetched = () => this._updateWeatherAge(this._currentTrip);
                 this.vectorLayers.onAirportClick((apt) => {
+                    if (typeof _wireTapLastTouchAt !== 'undefined' && Date.now() - _wireTapLastTouchAt < 500) return;
                     if (this.routeEditor?.isVisible()) return;
                     if (this.routeTable?.isEditing()) {
                         this.routeTable.addWaypointSmart({
@@ -426,6 +427,7 @@ class FlyTabApp {
                 });
 
                 this.vectorLayers.onNavaidClick((nav) => {
+                    if (typeof _wireTapLastTouchAt !== 'undefined' && Date.now() - _wireTapLastTouchAt < 500) return;
                     if (this.routeEditor?.isVisible()) return;
                     if (this.routeTable?.isEditing()) {
                         this.routeTable.addWaypointSmart({
@@ -438,6 +440,7 @@ class FlyTabApp {
                 });
 
                 this.vectorLayers.onFixClick((fix) => {
+                    if (typeof _wireTapLastTouchAt !== 'undefined' && Date.now() - _wireTapLastTouchAt < 500) return;
                     if (this.routeEditor?.isVisible()) return;
                     if (this.routeTable?.isEditing()) {
                         this.routeTable.addWaypointSmart({

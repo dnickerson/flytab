@@ -81,6 +81,12 @@ class VectorMapLayers {
         this._lastTouchTap = 0;
         this._map.on('click', (e) => {
             if (Date.now() - this._lastTouchTap < 400) return;
+            // Suppress synthetic clicks that follow a UI panel button tap.
+            // When a panel button is tapped and the panel closes, the browser fires
+            // a synthetic click ~300ms later at the same coordinates — now over the map.
+            // _wireTapLastTouchAt is set by wireTap (tap-utils.js) and route-table.js
+            // delegated handlers on every UI button tap.
+            if (typeof _wireTapLastTouchAt !== 'undefined' && Date.now() - _wireTapLastTouchAt < 500) return;
             this._onMapClick(e);
         });
 
