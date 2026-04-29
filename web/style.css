@@ -321,11 +321,6 @@ body {
     font-size: 14px; font-weight: 800; padding: 1px 7px;
     border-radius: 4px; letter-spacing: 0.3px; cursor: pointer;
     background: #c00; color: #fff;
-    animation: wx-badge-pulse 2s ease-in-out infinite;
-}
-@keyframes wx-badge-pulse {
-    0%, 100% { opacity: 1; }
-    50%       { opacity: 0.7; }
 }
 
 #gps-diag-panel {
