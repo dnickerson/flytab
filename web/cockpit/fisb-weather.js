@@ -289,6 +289,7 @@ class FisbWeatherDisplay {
                 this._showAdvisoryToast();
             }
         }
+        this._updateAdvisoryBadge();
     }
 
     /**
@@ -513,6 +514,23 @@ class FisbWeatherDisplay {
         });
         document.body.appendChild(panel);
         this._advisoryPanel = panel;
+
+        // Wire the status-bar badge (may not exist yet if init runs early, so use delegation)
+        const badge = document.getElementById('statusAdvisory');
+        if (badge) badge.addEventListener('click', () => this.openAdvisoryPanel());
+    }
+
+    /** Update the status-bar WX badge with current advisory count. */
+    _updateAdvisoryBadge() {
+        const el = document.getElementById('statusAdvisory');
+        if (!el) return;
+        const count = this._sigmetPolygons.length + this._airmetPolygons.length;
+        if (count === 0) {
+            el.hidden = true;
+        } else {
+            el.textContent = `WX ${count}`;
+            el.hidden = false;
+        }
     }
 
     /** Open the advisory list panel and render current active advisories. */
@@ -723,5 +741,7 @@ class FisbWeatherDisplay {
         for (const [key, expiry] of this._toastSeen) {
             if (expiry < now) this._toastSeen.delete(key);
         }
+
+        this._updateAdvisoryBadge();
     }
 }
