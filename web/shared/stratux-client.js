@@ -113,7 +113,11 @@ class StratuxClient extends EventTarget {
     // ========== Traffic WebSocket ==========
 
     _connectTraffic() {
-        if (this._trafficWs) { this._trafficWs.close(); }
+        if (this._trafficWs) {
+            this._trafficWs.onclose = null;
+            this._trafficWs.onerror = null;
+            this._trafficWs.close();
+        }
         const url = this._wsUrl('/traffic');
         try {
             this._trafficWs = new WebSocket(url);
@@ -353,16 +357,15 @@ class StratuxClient extends EventTarget {
         if (this._reconnectTimer) return;
         this._reconnectTimer = setTimeout(() => {
             this._reconnectTimer = null;
-            this._reconnectDelay = 2000;
             this._connectTraffic();
-            // Reconnect other sockets only if they're also closed
-            if (!this._situationWs || this._situationWs.readyState !== WebSocket.OPEN) {
+            // Reconnect companion sockets only if fully closed — not if still connecting
+            if (!this._situationWs || this._situationWs.readyState === WebSocket.CLOSED) {
                 this._connectSituation();
             }
-            if (!this._weatherWs || this._weatherWs.readyState !== WebSocket.OPEN) {
+            if (!this._weatherWs || this._weatherWs.readyState === WebSocket.CLOSED) {
                 this._connectWeather();
             }
-            if (!this._jsonioWs || this._jsonioWs.readyState !== WebSocket.OPEN) {
+            if (!this._jsonioWs || this._jsonioWs.readyState === WebSocket.CLOSED) {
                 this._connectJsonio();
             }
         }, this._reconnectDelay);
