@@ -44,6 +44,9 @@ class StratuxClient extends EventTarget {
     }
 
     connect() {
+        // Cancel any pending reconnect timer so the external call and the timer
+        // don't both call _connectTraffic() independently.
+        if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
         if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', `Connecting to Stratux at ${this._wsBase} (sim=${this._simMode})`);
         this._connectTraffic();
         this._connectSituation();
@@ -265,6 +268,7 @@ class StratuxClient extends EventTarget {
     // ========== Device Status Polling ==========
 
     _pollStatus() {
+        if (this._statusTimer) return;
         const poll = async () => {
             try {
                 // Direct HTTP to Stratux — no proxy needed on Android
@@ -277,6 +281,7 @@ class StratuxClient extends EventTarget {
     }
 
     _pollTowers() {
+        if (this._towerTimer) return;
         const poll = async () => {
             try {
                 const r = await fetch(`http://${this.ip}/getTowers`, { cache: 'no-store' });
