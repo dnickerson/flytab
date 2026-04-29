@@ -314,7 +314,7 @@ class FisbWeatherDisplay {
                 pt.y = clientY;
                 const local = pt.matrixTransform(svgPath.getScreenCTM().inverse());
                 if (svgPath.isPointInFill(local) || svgPath.isPointInStroke(local)) {
-                    entry.polygon.openPopup();
+                    this.openAdvisoryPanel();
                     return;
                 }
             } catch (_) { /* element not in DOM yet */ }
@@ -554,10 +554,12 @@ class FisbWeatherDisplay {
 
         const convective = sigmets.filter(e => e.type === 'convective');
         const nonConv    = sigmets.filter(e => e.type !== 'convective');
-        const tangos     = airmets.filter(e => /\bTURB\b/i.test(e.advisory?.raw || ''));
-        const zulus      = airmets.filter(e => /\b(ICING|FRZLVL)\b/i.test(e.advisory?.raw || '') && !/\bTURB\b/i.test(e.advisory?.raw || ''));
-        const sierras    = airmets.filter(e => /\b(IFR|MTN\s*OBS)\b/i.test(e.advisory?.raw || '') && !tangos.includes(e) && !zulus.includes(e));
-        const others     = airmets.filter(e => !tangos.includes(e) && !zulus.includes(e) && !sierras.includes(e));
+        // Use advisory.hazard (set by _parseGairmet/_parseAirsigmet) for reliable classification
+        const hz = (e) => (e.advisory?.hazard || '').toUpperCase();
+        const tangos  = airmets.filter(e => hz(e).startsWith('TURB') || hz(e) === 'LLW' || hz(e) === 'LLWS');
+        const zulus   = airmets.filter(e => ['ICING', 'FRZLVL', 'ICE'].includes(hz(e)));
+        const sierras = airmets.filter(e => ['IFR', 'MTN OBSCN'].includes(hz(e)));
+        const others  = airmets.filter(e => !tangos.includes(e) && !zulus.includes(e) && !sierras.includes(e));
 
         const renderSection = (label, entries, rowClass, badge) => {
             if (!entries.length) return '';

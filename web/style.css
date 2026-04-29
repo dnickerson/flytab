@@ -4911,59 +4911,56 @@ body {
     flex: 1;
 }
 .wx-adv-section-label {
-    padding: 8px 16px 6px;
-    font-size: 10px;
+    padding: 5px 12px 4px;
+    font-size: 11px;
     font-weight: 800;
-    letter-spacing: 0.14em;
-    background: #eef0f3;
-    color: #444;
+    letter-spacing: 0.12em;
+    background: #e4e7ec;
+    color: #333;
     text-transform: uppercase;
-    border-top: 1px solid #dde0e5;
-    border-bottom: 1px solid #dde0e5;
+    border-top: 1px solid #cdd2da;
+    border-bottom: 1px solid #cdd2da;
 }
 .wx-adv-row {
     display: flex;
-    align-items: flex-start;
-    padding: 12px 14px 12px 11px;
-    border-bottom: 1px solid #eee;
-    gap: 10px;
-    min-height: 56px;
+    align-items: baseline;
+    padding: 7px 12px 7px 10px;
+    border-bottom: 1px solid #e8e8e8;
+    gap: 8px;
     border-left: 5px solid #ccc;
 }
 .wx-adv-row-badge {
-    font-size: 9px;
+    font-size: 10px;
     font-weight: 800;
-    letter-spacing: 0.06em;
-    padding: 3px 6px;
+    letter-spacing: 0.05em;
+    padding: 2px 5px;
     border-radius: 2px;
     flex-shrink: 0;
     color: #fff;
-    margin-top: 1px;
     text-transform: uppercase;
     white-space: nowrap;
 }
 .wx-adv-row-detail {
     flex: 1;
     font-family: var(--font-mono, 'Courier New', monospace);
-    font-size: 13px;
+    font-size: 15px;
     font-weight: 600;
     color: #111;
-    line-height: 1.5;
+    line-height: 1.35;
     word-break: break-word;
 }
 .wx-adv-row-time {
-    font-size: 11px;
+    font-size: 13px;
     font-weight: 700;
-    color: #555;
+    color: #444;
     flex-shrink: 0;
     font-family: var(--font-mono, 'Courier New', monospace);
-    margin-top: 2px;
     white-space: nowrap;
 }
 .wx-adv-empty {
     padding: 24px 16px;
     color: #666;
-    font-size: 15px;
+    font-size: 16px;
     font-style: italic;
 }
 /* SIGMET — red */
