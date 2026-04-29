@@ -25,7 +25,10 @@ class FisbWeatherDisplay {
         // Map layers
         this._pirepLayer = L.layerGroup();
         this._sigmetLayer = L.layerGroup();
-        this._airmetLayer = L.layerGroup();
+        this._airmetTangoLayer  = L.layerGroup(); // Turbulence
+        this._airmetZuluLayer   = L.layerGroup(); // Icing / Freezing Level
+        this._airmetSierraLayer = L.layerGroup(); // IFR / Mountain Obscuration
+        this._airmetOtherLayer  = L.layerGroup(); // Unclassified
         this._windsLayer = L.layerGroup();
         this._notamLayer = L.layerGroup();
         this._pirepMarkers = [];   // { marker, received_at }
@@ -87,7 +90,10 @@ class FisbWeatherDisplay {
     init() {
         // _pirepLayer starts hidden — layer panel checkbox initializes unchecked
         this._sigmetLayer.addTo(this._map);
-        this._airmetLayer.addTo(this._map);
+        this._airmetTangoLayer.addTo(this._map);
+        this._airmetZuluLayer.addTo(this._map);
+        this._airmetSierraLayer.addTo(this._map);
+        this._airmetOtherLayer.addTo(this._map);
         // _windsLayer starts hidden — layer panel checkbox initializes unchecked
 
         // Build alert container
@@ -135,12 +141,18 @@ class FisbWeatherDisplay {
         container.removeEventListener('touchend',   this._onTapEnd);
         this._pirepLayer.clearLayers();
         this._sigmetLayer.clearLayers();
-        this._airmetLayer.clearLayers();
+        this._airmetTangoLayer.clearLayers();
+        this._airmetZuluLayer.clearLayers();
+        this._airmetSierraLayer.clearLayers();
+        this._airmetOtherLayer.clearLayers();
         this._windsLayer.clearLayers();
         this._notamLayer.clearLayers();
         if (this._map.hasLayer(this._pirepLayer)) this._map.removeLayer(this._pirepLayer);
         if (this._map.hasLayer(this._sigmetLayer)) this._map.removeLayer(this._sigmetLayer);
-        if (this._map.hasLayer(this._airmetLayer)) this._map.removeLayer(this._airmetLayer);
+        if (this._map.hasLayer(this._airmetTangoLayer))  this._map.removeLayer(this._airmetTangoLayer);
+        if (this._map.hasLayer(this._airmetZuluLayer))   this._map.removeLayer(this._airmetZuluLayer);
+        if (this._map.hasLayer(this._airmetSierraLayer)) this._map.removeLayer(this._airmetSierraLayer);
+        if (this._map.hasLayer(this._airmetOtherLayer))  this._map.removeLayer(this._airmetOtherLayer);
         if (this._map.hasLayer(this._windsLayer)) this._map.removeLayer(this._windsLayer);
         if (this._map.hasLayer(this._notamLayer)) this._map.removeLayer(this._notamLayer);
         this._pirepMarkers = [];
@@ -248,10 +260,29 @@ class FisbWeatherDisplay {
     hideSigmets() { if (this._map.hasLayer(this._sigmetLayer)) this._map.removeLayer(this._sigmetLayer); }
     get sigmetsVisible() { return this._map.hasLayer(this._sigmetLayer); }
 
-    /** Show/hide AIRMET layer. */
-    showAirmets() { if (!this._map.hasLayer(this._airmetLayer)) this._airmetLayer.addTo(this._map); }
-    hideAirmets() { if (this._map.hasLayer(this._airmetLayer)) this._map.removeLayer(this._airmetLayer); }
-    get airmetsVisible() { return this._map.hasLayer(this._airmetLayer); }
+    /** Show/hide all AIRMET type layers at once. */
+    showAirmets() {
+        this.showAirmetTango();
+        this.showAirmetZulu();
+        this.showAirmetSierra();
+        this.showAirmetOther();
+    }
+    hideAirmets() {
+        this.hideAirmetTango();
+        this.hideAirmetZulu();
+        this.hideAirmetSierra();
+        this.hideAirmetOther();
+    }
+
+    /** Per-type AIRMET show/hide. */
+    showAirmetTango()  { if (!this._map.hasLayer(this._airmetTangoLayer))  this._airmetTangoLayer.addTo(this._map); }
+    hideAirmetTango()  { if (this._map.hasLayer(this._airmetTangoLayer))   this._map.removeLayer(this._airmetTangoLayer); }
+    showAirmetZulu()   { if (!this._map.hasLayer(this._airmetZuluLayer))   this._airmetZuluLayer.addTo(this._map); }
+    hideAirmetZulu()   { if (this._map.hasLayer(this._airmetZuluLayer))    this._map.removeLayer(this._airmetZuluLayer); }
+    showAirmetSierra() { if (!this._map.hasLayer(this._airmetSierraLayer)) this._airmetSierraLayer.addTo(this._map); }
+    hideAirmetSierra() { if (this._map.hasLayer(this._airmetSierraLayer))  this._map.removeLayer(this._airmetSierraLayer); }
+    showAirmetOther()  { if (!this._map.hasLayer(this._airmetOtherLayer))  this._airmetOtherLayer.addTo(this._map); }
+    hideAirmetOther()  { if (this._map.hasLayer(this._airmetOtherLayer))   this._map.removeLayer(this._airmetOtherLayer); }
 
     /**
      * Inject internet-fetched advisories into the display.
@@ -299,7 +330,7 @@ class FisbWeatherDisplay {
     _handleAdvisoryTap(clientX, clientY) {
         const allPolygons = [
             ...(this._map.hasLayer(this._sigmetLayer) ? this._sigmetPolygons : []),
-            ...(this._map.hasLayer(this._airmetLayer) ? this._airmetPolygons : []),
+            ...this._airmetPolygons.filter(e => e.layer && this._map.hasLayer(e.layer)),
         ];
         if (!allPolygons.length) return;
 
@@ -415,21 +446,25 @@ class FisbWeatherDisplay {
         this._seenAdvisoryKeys.add((airmet.raw || '').slice(0, 80));
         if (!airmet.points || airmet.points.length < 3) return;
 
-        // Determine AIRMET type from raw text for color coding
+        // Classify by hazard field first (G-AIRMET), then fall back to raw text (FIS-B/text AIRMET)
+        const hazard = (airmet.hazard || '').toUpperCase();
         const raw = airmet.raw || '';
-        const isZulu   = /\b(ICG|ICING|FRZLVL|FRZE?)\b/i.test(raw);
-        const isTango  = /\b(TURB|LLW|LLWS|TURBC)\b/i.test(raw);
-        const isSierra = /\b(IFR|MTN\s*OBS|CIG|VIS)\b/i.test(raw);
+        const isTango  = hazard.startsWith('TURB') || hazard === 'LLW' || hazard === 'LLWS'
+                      || /\b(TURB|LLW|LLWS|TURBC)\b/i.test(raw);
+        const isZulu   = ['ICING', 'FRZLVL', 'ICE'].includes(hazard)
+                      || /\b(ICG|ICING|FRZLVL|FRZE?)\b/i.test(raw);
+        const isSierra = ['IFR', 'MTN OBSCN'].includes(hazard)
+                      || /\b(IFR|MTN\s*OBS|CIG|VIS)\b/i.test(raw);
 
-        let color, label;
-        if (isZulu) {
-            color = '#00ccff'; label = 'AIRMET ZULU (Icing)';
-        } else if (isTango) {
-            color = '#ffcc00'; label = 'AIRMET TANGO (Turbulence)';
+        let color, label, layer;
+        if (isTango) {
+            color = '#ffcc00'; label = 'AIRMET TANGO (Turbulence)'; layer = this._airmetTangoLayer;
+        } else if (isZulu) {
+            color = '#00ccff'; label = 'AIRMET ZULU (Icing)';       layer = this._airmetZuluLayer;
         } else if (isSierra) {
-            color = '#ff44cc'; label = 'AIRMET SIERRA (IFR/Mtn)';
+            color = '#ff44cc'; label = 'AIRMET SIERRA (IFR/Mtn)';   layer = this._airmetSierraLayer;
         } else {
-            color = '#ffaa00'; label = 'AIRMET';
+            color = '#ffaa00'; label = 'AIRMET';                     layer = this._airmetOtherLayer;
         }
 
         const polygon = L.polygon(airmet.points, {
@@ -444,14 +479,14 @@ class FisbWeatherDisplay {
             <div class="airmet-text">${FisbWeatherDisplay._esc(raw)}</div>
         </div>`, { minWidth: 480, maxWidth: 600, className: 'airmet-popup-container' });
 
-        polygon.addTo(this._airmetLayer);
+        polygon.addTo(layer);
         this._airmetPolygons.push({
             polygon, received_at: airmet.received_at,
             expires_at: airmet.expires_at,
             rawKey: (airmet.raw || '').slice(0, 80),
             advisory: airmet,
+            layer,
         });
-
     }
 
     // ========== Advisory Toast & Panel ==========
@@ -721,7 +756,7 @@ class FisbWeatherDisplay {
             const expired = entry.expires_at && entry.expires_at < now;
             const tooOld = now - entry.received_at > 4 * 3600000;
             if (expired || tooOld) {
-                this._airmetLayer.removeLayer(entry.polygon);
+                entry.layer?.removeLayer(entry.polygon);
                 if (entry.rawKey) this._seenAdvisoryKeys.delete(entry.rawKey);
                 return false;
             }

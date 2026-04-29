@@ -183,14 +183,22 @@ class LayerPanel {
             });
         }
 
-        // Wire AIRMET toggle
-        const airmetInput = this._panel.querySelector('.lp-toggle input[data-action="airmets"]');
-        if (airmetInput) {
-            airmetInput.checked = true;
-            airmetInput.addEventListener('change', () => {
-                if (airmetInput.checked) window.app?.fisbWeather?.showAirmets();
-                else window.app?.fisbWeather?.hideAirmets();
-            });
+        // Wire per-type AIRMET toggles
+        const airmetTypes = [
+            { action: 'airmets-tango',  show: 'showAirmetTango',  hide: 'hideAirmetTango'  },
+            { action: 'airmets-zulu',   show: 'showAirmetZulu',   hide: 'hideAirmetZulu'   },
+            { action: 'airmets-sierra', show: 'showAirmetSierra', hide: 'hideAirmetSierra' },
+            { action: 'airmets-other',  show: 'showAirmetOther',  hide: 'hideAirmetOther'  },
+        ];
+        for (const { action, show, hide } of airmetTypes) {
+            const input = this._panel.querySelector(`.lp-toggle input[data-action="${action}"]`);
+            if (input) {
+                input.checked = true;
+                input.addEventListener('change', () => {
+                    if (input.checked) window.app?.fisbWeather?.[show]?.();
+                    else               window.app?.fisbWeather?.[hide]?.();
+                });
+            }
         }
 
         // Wire TFR toggle
@@ -517,8 +525,20 @@ class LayerPanel {
                         <label class="lp-toggle"><input type="checkbox" data-action="sigmets" checked><span class="lp-toggle-track"></span></label>
                     </div>
                     <div class="lp-row">
-                        <span class="lp-row-label">AIRMETs</span>
-                        <label class="lp-toggle"><input type="checkbox" data-action="airmets" checked><span class="lp-toggle-track"></span></label>
+                        <span class="lp-row-label">AIRMET Tango (Turb)</span>
+                        <label class="lp-toggle"><input type="checkbox" data-action="airmets-tango" checked><span class="lp-toggle-track"></span></label>
+                    </div>
+                    <div class="lp-row">
+                        <span class="lp-row-label">AIRMET Zulu (Icing)</span>
+                        <label class="lp-toggle"><input type="checkbox" data-action="airmets-zulu" checked><span class="lp-toggle-track"></span></label>
+                    </div>
+                    <div class="lp-row">
+                        <span class="lp-row-label">AIRMET Sierra (IFR)</span>
+                        <label class="lp-toggle"><input type="checkbox" data-action="airmets-sierra" checked><span class="lp-toggle-track"></span></label>
+                    </div>
+                    <div class="lp-row">
+                        <span class="lp-row-label">AIRMET Other</span>
+                        <label class="lp-toggle"><input type="checkbox" data-action="airmets-other" checked><span class="lp-toggle-track"></span></label>
                     </div>
                     <div class="lp-row">
                         <span class="lp-row-label">Lightning Strikes</span>
