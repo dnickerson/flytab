@@ -350,7 +350,7 @@ class DataStatus {
             if (base && plateSCode) platesPrimary = `<button class="ds-action-btn" id="dsPlatesBtn">DOWNLOAD</button>`;
         } else {
             platesDevLine = stateChips + '<br>' + platesIncludesNote;
-            const allSynced = serverStates.every(s => syncedStates.includes(s));
+            const allSynced = serverStates.length > 0 && serverStates.every(s => syncedStates.includes(s));
             if (!allSynced || !cycleOkForStates) {
                 platesBadge   = this._badge('UPDATE AVAILABLE', 'yellow');
                 if (base) platesPrimary = `<button class="ds-action-btn ds-update" id="dsPlatesBtn">SYNC</button>`;
@@ -392,7 +392,7 @@ class DataStatus {
         const needsSync = !!base && (
             (nasrServerDate  && nasrDevDate  !== nasrServerDate)  ||
             (cifpSCode       && cifpDCode    !== cifpSCode)       ||
-            (plateSCode      && (!cycleOkForStates || serverStates.some(s => !syncedStates.includes(s)))) ||
+            (plateSCode      && (serverStates.length === 0 || !cycleOkForStates || serverStates.some(s => !syncedStates.includes(s)))) ||
             !mbt.find(l => l.layer === 'sectional')?.exists       ||
             !mbt.find(l => l.layer === 'ifr-low')?.exists
         );
