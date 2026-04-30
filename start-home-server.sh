@@ -9,9 +9,9 @@
 
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$SCRIPT_DIR"
-DATA_DIR="$REPO_ROOT/data"
+PIPELINE_DIR="$HOME/fly-pipeline"
+DATA_DIR="$PIPELINE_DIR/data"
+ADMIN_HTML="$PIPELINE_DIR/admin-states.html"
 PORT=8090
 HOST_IP="$(hostname -I | awk '{print $1}')"
 
@@ -51,12 +51,30 @@ echo ""
 echo "Press Ctrl+C to stop."
 echo ""
 
-exec python3 - "$DATA_DIR" "$SCRIPT_DIR/admin-states.html" "$PORT" << 'PYEOF'
-import sys, http.server, os, json, struct, math, urllib.parse
+exec python3 - "$DATA_DIR" "$ADMIN_HTML" "$PORT" "$PIPELINE_DIR" << 'PYEOF'
+import sys, http.server, os, json, struct, math, urllib.parse, subprocess, threading
+from pathlib import Path
 
-DATA_DIR   = sys.argv[1]
-ADMIN_HTML = sys.argv[2]
-PORT       = int(sys.argv[3])
+DATA_DIR     = sys.argv[1]
+ADMIN_HTML   = sys.argv[2]
+PORT         = int(sys.argv[3])
+PIPELINE_DIR = Path(sys.argv[4])
+
+# ── Pipeline state ────────────────────────────────────────────────────────────
+_pipeline_proc  = None
+_pipeline_lines = []
+_pipeline_lock  = threading.Lock()
+
+VALID_STEPS = {'nasr', 'cifp', 'plates', 'plate-georef', 'plate-zips',
+               'charts', 'ifr-tiles', 'terrain', 'mbtiles'}
+
+def _read_pipeline_output(proc):
+    global _pipeline_lines
+    for raw in proc.stdout:
+        line = raw.rstrip('\n')
+        with _pipeline_lock:
+            _pipeline_lines.append(line)
+    proc.wait()
 
 WRITABLE_FILES = {
     'plate_states_config.json',
@@ -102,8 +120,16 @@ class FlyTabHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_error(404, str(e))
             return
 
-        # ── Terrain endpoints ────────────────────────────────────────────────
+        # ── Admin API ────────────────────────────────────────────────────────
         path_only = self.path.split('?')[0]
+        if path_only == '/api/admin/plate-states':
+            self._handle_admin_plate_states_get()
+            return
+        if path_only == '/api/admin/pipeline-status':
+            self._handle_admin_pipeline_status()
+            return
+
+        # ── Terrain endpoints ────────────────────────────────────────────────
         if path_only == '/terrain/status':
             self._handle_terrain_status()
             return
@@ -407,31 +433,144 @@ class FlyTabHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def do_PUT(self):
-        # Allow writing specific config files back to data/
-        filename = self.path.lstrip('/')
-        if filename not in WRITABLE_FILES:
-            self.send_error(403, f'PUT not allowed for {filename}')
-            return
+    # ── Admin API handlers ────────────────────────────────────────────────────
+
+    def _handle_admin_plate_states_get(self):
+        pipeline_data = PIPELINE_DIR / 'data'
+
+        config_file = pipeline_data / 'plate_states_config.json'
+        configured = []
+        if config_file.exists():
+            try:
+                configured = json.loads(config_file.read_text()).get('states', [])
+            except Exception:
+                pass
+
+        state_zips_dir = pipeline_data / 'plates' / 'state_zips'
+        built = []
+        if state_zips_dir.is_dir():
+            plate_index_file = pipeline_data / 'plates' / 'plate_index.json'
+            state_airports = {}
+            if plate_index_file.exists():
+                try:
+                    plate_index = json.loads(plate_index_file.read_text())
+                    for info in plate_index.values():
+                        st = info.get('state', '')
+                        if st:
+                            state_airports[st] = state_airports.get(st, 0) + 1
+                except Exception:
+                    pass
+            for zf in sorted(state_zips_dir.glob('*.zip')):
+                state = zf.stem
+                built.append({
+                    'state':    state,
+                    'size_mb':  round(zf.stat().st_size / (1024 * 1024), 1),
+                    'airports': state_airports.get(state, 0),
+                })
+
+        cycle = None
+        cycle_file = pipeline_data / 'nasr' / 'cycle_info.json'
+        if cycle_file.exists():
+            try:
+                cycle = json.loads(cycle_file.read_text())
+            except Exception:
+                pass
+
+        plates_cycle = None
+        plates_cycle_file = pipeline_data / 'plates' / 'plates_cycle_info.json'
+        if plates_cycle_file.exists():
+            try:
+                plates_cycle = json.loads(plates_cycle_file.read_text())
+            except Exception:
+                pass
+
+        self._send_json({'configured': configured, 'built': built,
+                         'cycle': cycle, 'plates_cycle': plates_cycle})
+
+    def _handle_admin_pipeline_status(self):
+        global _pipeline_proc, _pipeline_lines
+        with _pipeline_lock:
+            running   = _pipeline_proc is not None and _pipeline_proc.poll() is None
+            exit_code = None if _pipeline_proc is None else _pipeline_proc.returncode
+            lines     = list(_pipeline_lines)
+        self._send_json({'running': running, 'exit_code': exit_code, 'lines': lines})
+
+    def _handle_admin_plate_states_put(self):
         length = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(length)
-        # Validate JSON
         try:
-            json.loads(body)
+            payload = json.loads(body)
         except Exception as e:
             self.send_error(400, f'Invalid JSON: {e}')
             return
-        dest = os.path.join(DATA_DIR, filename)
+        states = payload.get('states', [])
+        dest = PIPELINE_DIR / 'data' / 'plate_states_config.json'
         try:
-            with open(dest, 'wb') as f:
-                f.write(body)
+            dest.write_text(json.dumps({'states': states}, indent=2))
+            data = json.dumps({'states': states}).encode()
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(data)))
             self.end_headers()
-            self.wfile.write(b'{"ok":true}')
-            print(f'[PUT] {filename} saved ({len(body)} bytes)')
+            self.wfile.write(data)
+            print(f'[admin] plate_states_config saved: {states}')
         except Exception as e:
             self.send_error(500, str(e))
+
+    def _handle_admin_run_pipeline(self):
+        global _pipeline_proc, _pipeline_lines
+        length  = int(self.headers.get('Content-Length', 0))
+        payload = {}
+        if length:
+            try:
+                payload = json.loads(self.rfile.read(length))
+            except Exception:
+                pass
+        steps = payload.get('steps', [])
+
+        with _pipeline_lock:
+            if _pipeline_proc is not None and _pipeline_proc.poll() is None:
+                self.send_error(409, 'Pipeline already running')
+                return
+
+        valid = [s for s in steps if s in VALID_STEPS]
+        if not valid:
+            self.send_error(400, f'No valid steps in: {steps}')
+            return
+
+        cmd = ['python3', '-u', str(PIPELINE_DIR / 'build_all.py'), '--only'] + valid
+
+        with _pipeline_lock:
+            _pipeline_lines = [f'$ {" ".join(cmd)}', '']
+            _pipeline_proc  = subprocess.Popen(
+                cmd,
+                cwd=str(PIPELINE_DIR),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+
+        threading.Thread(target=_read_pipeline_output,
+                         args=(_pipeline_proc,), daemon=True).start()
+
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps({'ok': True, 'steps': steps}).encode())
+        print(f'[admin] pipeline started: {steps}')
+
+    def do_POST(self):
+        if self.path.split('?')[0] == '/api/admin/run-pipeline':
+            self._handle_admin_run_pipeline()
+            return
+        self.send_error(405, 'Method Not Allowed')
+
+    def do_PUT(self):
+        if self.path.split('?')[0] == '/api/admin/plate-states':
+            self._handle_admin_plate_states_put()
+            return
+        self.send_error(403, f'PUT not allowed for {self.path}')
 
     def log_message(self, fmt, *args):
         msg = fmt % args
