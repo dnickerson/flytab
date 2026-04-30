@@ -37,6 +37,10 @@ class WxBriefing {
         this._enrouteNotamFetchedAt = 0;
 
         this._routeCoords  = null;
+
+        const savedCorridor = parseInt(localStorage.getItem('flytab_wx_corridor'));
+        this._corridorMi    = [10, 25, 50].includes(savedCorridor) ? savedCorridor : 25;
+        this._notamFetchError = null;
     }
 
     init() {
@@ -84,6 +88,7 @@ class WxBriefing {
     }
 
     _refreshAll() {
+        this._notamFetchError = null;
         this._metarFetchedAt = this._airmetFetchedAt = this._afdFetchedAt =
             this._notamFetchedAt = this._enrouteNotamFetchedAt = 0;
         this._fetchMos();
