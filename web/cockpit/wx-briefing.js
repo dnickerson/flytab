@@ -2017,9 +2017,7 @@ class WxBriefing {
         this._renderAfdSection();
         try {
             const coords = await this._getRouteCoords();
-            const keyCoords = [];
-            if (coords.length > 0) keyCoords.push(coords[0]);
-            if (coords.length > 1) keyCoords.push(coords[coords.length - 1]);
+            const keyCoords = coords;
 
             // Map cwa → { cwa: 'KXXX', name: 'Office Name NWS', airports: [] }
             const officeMap = new Map();
