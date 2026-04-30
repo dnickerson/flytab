@@ -307,11 +307,10 @@ class DataStatus {
         }
 
         // ── Plates section ───────────────────────────────────────────────────
-        const configuredStates = (typeof CockpitConfig !== 'undefined' && CockpitConfig.raw?.plateStates)
-            || ['NC', 'SC', 'VA', 'GA', 'TN'];
-        const syncedStates = JSON.parse(localStorage.getItem('flypi_plates_synced_states') || '[]');
-        const plateSCode   = sPlates?.cycle?.effective_date || null;
-        const plateDCode   = dPlates?.effective_date || null;
+        const serverStates    = (sPlates?.states || []).map(s => s.state);
+        const syncedStates    = JSON.parse(localStorage.getItem('flypi_plates_synced_states') || '[]');
+        const plateSCode      = sPlates?.cycle?.effective_date || null;
+        const plateDCode      = dPlates?.effective_date || null;
         let platesServerLine, platesDevLine, platesBadge, platesPrimary = '', platesSecondary = '';
 
         const adminUrl = base ? `${base}/admin-states.html` : null;
@@ -322,26 +321,25 @@ class DataStatus {
         if (!base) {
             platesServerLine = '<span class="ds-muted">Server not reachable</span>';
         } else if (plateSCode) {
-            const serverStateSet = new Set((sPlates?.states || []).map(s => s.state));
-            const avail = configuredStates.filter(s => serverStateSet.has(s)).length;
-            platesServerLine = `Cycle ${plateSCode} &mdash; ${avail}/${configuredStates.length} states &mdash; IAP, DP, STAR, DIAG, A/FD${configureLink}`;
+            platesServerLine = `Cycle ${plateSCode} &mdash; ${serverStates.length} states &mdash; IAP, DP, STAR, DIAG, A/FD${configureLink}`;
         } else {
             platesServerLine = `<span class="ds-muted">Unavailable</span>${configureLink}`;
         }
 
-        // Per-state chips
-        const serverStateSet = new Set((sPlates?.states || []).map(s => s.state));
+        // Per-state chips — server states drive the list; synced states removed from server shown dimmed
+        const serverStateSet   = new Set(serverStates);
         const serverStateSizes = Object.fromEntries((sPlates?.states || []).map(s => [s.state, s.size_mb]));
         const cycleOkForStates = !plateSCode || plateDCode === plateSCode;
-        const stateChips = configuredStates.map(st => {
+        const allDisplayStates = [...serverStates, ...syncedStates.filter(s => !serverStateSet.has(s))];
+        const stateChips = allDisplayStates.map(st => {
             const onDevice = syncedStates.includes(st);
             const onServer = serverStateSet.has(st);
-            const ok = onDevice && cycleOkForStates;
+            const ok = onDevice && onServer && cycleOkForStates;
             const sizeTxt = serverStateSizes[st] ? ` ${serverStateSizes[st]}MB` : '';
             const cls = ok ? 'ds-state-ok' : 'ds-state-missing';
             const icon = ok ? '&#10003;' : '&#9675;';
-            const notOnServer = !onServer && base ? ' <span class="ds-muted">(server n/a)</span>' : '';
-            return `<span class="ds-state-chip ${cls}">${icon} ${st}${sizeTxt}${notOnServer}</span>`;
+            const note = !onServer ? ' <span class="ds-muted">(removed from server)</span>' : '';
+            return `<span class="ds-state-chip ${cls}">${icon} ${st}${sizeTxt}${note}</span>`;
         }).join('');
 
         const platesIncludesNote = '<span class="ds-muted" style="font-size:10px">Includes: IAP &middot; DP &middot; STAR &middot; Airport Diagrams (DIAG) &middot; Airport Info (A/FD)</span>';
@@ -352,7 +350,7 @@ class DataStatus {
             if (base && plateSCode) platesPrimary = `<button class="ds-action-btn" id="dsPlatesBtn">DOWNLOAD</button>`;
         } else {
             platesDevLine = stateChips + '<br>' + platesIncludesNote;
-            const allSynced = configuredStates.every(s => syncedStates.includes(s));
+            const allSynced = serverStates.every(s => syncedStates.includes(s));
             if (!allSynced || !cycleOkForStates) {
                 platesBadge   = this._badge('UPDATE AVAILABLE', 'yellow');
                 if (base) platesPrimary = `<button class="ds-action-btn ds-update" id="dsPlatesBtn">SYNC</button>`;
@@ -394,7 +392,7 @@ class DataStatus {
         const needsSync = !!base && (
             (nasrServerDate  && nasrDevDate  !== nasrServerDate)  ||
             (cifpSCode       && cifpDCode    !== cifpSCode)       ||
-            (plateSCode      && (!cycleOkForStates || !configuredStates.every(s => syncedStates.includes(s)))) ||
+            (plateSCode      && (!cycleOkForStates || serverStates.some(s => !syncedStates.includes(s)))) ||
             !mbt.find(l => l.layer === 'sectional')?.exists       ||
             !mbt.find(l => l.layer === 'ifr-low')?.exists
         );
