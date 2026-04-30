@@ -1172,7 +1172,7 @@ class WxBriefing {
         try {
             // Bbox covers all METAR stations in the route corridor without requiring
             // NASR DB or knowing which airports are METAR reporters.
-            const bbox = await this._getRouteBbox(0.5);
+            const bbox = await this._getRouteBbox(this._corridorMi / 69);
 
             let metarPromise, tafPromise;
             if (bbox) {
@@ -1195,7 +1195,7 @@ class WxBriefing {
             if (coords.length) {
                 for (const icao of Object.keys(metars)) {
                     const m = metars[icao];
-                    if (m?.lat && m?.lon && this._distToNearestCoord(m.lat, m.lon, coords) > 30)
+                    if (m?.lat && m?.lon && this._distToNearestCoord(m.lat, m.lon, coords) > this._corridorMi)
                         delete metars[icao];
                 }
             }
