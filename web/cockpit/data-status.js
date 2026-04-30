@@ -1383,9 +1383,7 @@ class DataStatus {
             const localDate  = localCycle?.effective_date;
             const cycleMatch = localDate && localDate === serverDate;
             const syncedStates = JSON.parse(localStorage.getItem('flypi_plates_synced_states') || '[]');
-            const configuredStates = (typeof CockpitConfig !== 'undefined' && CockpitConfig.raw?.plateStates)
-                || ['NC', 'SC', 'VA', 'GA', 'TN'];
-            const allStatesSynced = configuredStates.every(s => syncedStates.includes(s));
+            const allStatesSynced = statesResp.length > 0 && statesResp.every(s => syncedStates.includes(s.state));
             const needsUpdate = !cycleMatch || !allStatesSynced;
 
             if (!needsUpdate) {
@@ -1393,58 +1391,54 @@ class DataStatus {
             } else if (!statesResp.length) {
                 setStep('plates', 'skip', 'No plate states available on server');
             } else {
-                const statesToSync = statesResp.filter(s => configuredStates.includes(s.state));
-                if (!statesToSync.length) {
-                    setStep('plates', 'skip', 'No configured states on server (set plateStates in config)');
-                } else {
-                    const totalMb = statesToSync.reduce((s, r) => s + r.size_mb, 0);
-                    const stateList = statesToSync.map(s => s.state).join(', ');
-                    setStep('plates', 'running', `Downloading ${statesToSync.length} states (${stateList}) — ~${totalMb.toLocaleString()} MB…`);
+                const statesToSync = statesResp;
+                const totalMb = statesToSync.reduce((s, r) => s + r.size_mb, 0);
+                const stateList = statesToSync.map(s => s.state).join(', ');
+                setStep('plates', 'running', `Downloading ${statesToSync.length} states (${stateList}) — ~${totalMb.toLocaleString()} MB…`);
 
-                    let done = 0;
-                    const newlySynced = [...syncedStates];
-                    for (const stateInfo of statesToSync) {
-                        const st = stateInfo.state;
-                        const mb = stateInfo.size_mb;
-                        setStep('plates', 'running', `↓ ${st} (${mb} MB) — ${done}/${statesToSync.length} done…`);
+                let done = 0;
+                const newlySynced = [...syncedStates];
+                for (const stateInfo of statesToSync) {
+                    const st = stateInfo.state;
+                    const mb = stateInfo.size_mb;
+                    setStep('plates', 'running', `↓ ${st} (${mb} MB) — ${done}/${statesToSync.length} done…`);
 
-                        // Tick elapsed time every 5s so pilot can see it's still working
-                        const startTs = Date.now();
-                        const ticker = setInterval(() => {
-                            const elapsed = Math.round((Date.now() - startTs) / 1000);
-                            setStep('plates', 'running', `↓ ${st} (${mb} MB) — ${elapsed}s — ${done}/${statesToSync.length} done…`);
-                        }, 5000);
+                    // Tick elapsed time every 5s so pilot can see it's still working
+                    const startTs = Date.now();
+                    const ticker = setInterval(() => {
+                        const elapsed = Math.round((Date.now() - startTs) / 1000);
+                        setStep('plates', 'running', `↓ ${st} (${mb} MB) — ${elapsed}s — ${done}/${statesToSync.length} done…`);
+                    }, 5000);
 
-                        try {
-                            // NanoHTTPD fetch-zip: download state zip from home server
-                            // and extract directly into the tablet's local storage
-                            const zipUrl = `${homeBase}/plates/state_zips/${st}.zip`;
-                            const resp = await fetch(
-                                `${LOCAL}/fetch-zip?url=${encodeURIComponent(zipUrl)}`,
-                                { method: 'POST', signal: AbortSignal.timeout(600000) }
-                            );
-                            clearInterval(ticker);
-                            if (!resp.ok) throw new Error(`${st}: ${await resp.text()}`);
-                            const result = await resp.json();
-                            done++;
-                            if (!newlySynced.includes(st)) newlySynced.push(st);
-                            setStep('plates', 'running', `✓ ${st} done (${result.extracted?.toLocaleString() ?? '?'} files) — ${done}/${statesToSync.length} complete`);
-                        } catch (e) {
-                            clearInterval(ticker);
-                            setStep('plates', 'running', `✗ ${st} failed: ${e.message} — continuing…`);
-                            done++;
-                        }
+                    try {
+                        // NanoHTTPD fetch-zip: download state zip from home server
+                        // and extract directly into the tablet's local storage
+                        const zipUrl = `${homeBase}/plates/state_zips/${st}.zip`;
+                        const resp = await fetch(
+                            `${LOCAL}/fetch-zip?url=${encodeURIComponent(zipUrl)}`,
+                            { method: 'POST', signal: AbortSignal.timeout(600000) }
+                        );
+                        clearInterval(ticker);
+                        if (!resp.ok) throw new Error(`${st}: ${await resp.text()}`);
+                        const result = await resp.json();
+                        done++;
+                        if (!newlySynced.includes(st)) newlySynced.push(st);
+                        setStep('plates', 'running', `✓ ${st} done (${result.extracted?.toLocaleString() ?? '?'} files) — ${done}/${statesToSync.length} complete`);
+                    } catch (e) {
+                        clearInterval(ticker);
+                        setStep('plates', 'running', `✗ ${st} failed: ${e.message} — continuing…`);
+                        done++;
                     }
-                    if (serverCycle) {
-                        await fetch(`${LOCAL}/plates/plates_cycle_info.json`, {
-                            method: 'PUT', headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(serverCycle),
-                        }).catch(() => {});
-                    }
-                    localStorage.setItem('flypi_plates_synced_states', JSON.stringify(newlySynced));
-                    localStorage.setItem('flypi_plates_cached_at', Date.now().toString());
-                    setStep('plates', 'ok', `${done} states downloaded — cycle ${serverDate}`);
                 }
+                if (serverCycle) {
+                    await fetch(`${LOCAL}/plates/plates_cycle_info.json`, {
+                        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(serverCycle),
+                    }).catch(() => {});
+                }
+                localStorage.setItem('flypi_plates_synced_states', JSON.stringify(newlySynced));
+                localStorage.setItem('flypi_plates_cached_at', Date.now().toString());
+                setStep('plates', 'ok', `${done} states downloaded — cycle ${serverDate}`);
             }
         } catch (e) { failStep('plates', e); }
 
