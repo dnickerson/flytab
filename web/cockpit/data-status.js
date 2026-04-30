@@ -330,15 +330,17 @@ class DataStatus {
         const serverStateSet   = new Set(serverStates);
         const serverStateSizes = Object.fromEntries((sPlates?.states || []).map(s => [s.state, s.size_mb]));
         const cycleOkForStates = !plateSCode || plateDCode === plateSCode;
-        const allDisplayStates = [...serverStates, ...syncedStates.filter(s => !serverStateSet.has(s))];
+        const allDisplayStates = base
+            ? [...serverStates, ...syncedStates.filter(s => !serverStateSet.has(s))]
+            : syncedStates;
         const stateChips = allDisplayStates.map(st => {
             const onDevice = syncedStates.includes(st);
-            const onServer = serverStateSet.has(st);
-            const ok = onDevice && onServer && cycleOkForStates;
+            const onServer = base ? serverStateSet.has(st) : true;
+            const ok = base ? (onDevice && onServer && cycleOkForStates) : onDevice;
             const sizeTxt = serverStateSizes[st] ? ` ${serverStateSizes[st]}MB` : '';
             const cls = ok ? 'ds-state-ok' : 'ds-state-missing';
             const icon = ok ? '&#10003;' : '&#9675;';
-            const note = !onServer ? ' <span class="ds-muted">(removed from server)</span>' : '';
+            const note = (base && !onServer) ? ' <span class="ds-muted">(removed from server)</span>' : '';
             return `<span class="ds-state-chip ${cls}">${icon} ${st}${sizeTxt}${note}</span>`;
         }).join('');
 
@@ -350,7 +352,7 @@ class DataStatus {
             if (base && plateSCode) platesPrimary = `<button class="ds-action-btn" id="dsPlatesBtn">DOWNLOAD</button>`;
         } else {
             platesDevLine = stateChips + '<br>' + platesIncludesNote;
-            const allSynced = serverStates.length > 0 && serverStates.every(s => syncedStates.includes(s));
+            const allSynced = !base || (serverStates.length > 0 && serverStates.every(s => syncedStates.includes(s)));
             if (!allSynced || !cycleOkForStates) {
                 platesBadge   = this._badge('UPDATE AVAILABLE', 'yellow');
                 if (base) platesPrimary = `<button class="ds-action-btn ds-update" id="dsPlatesBtn">SYNC</button>`;
