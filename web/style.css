@@ -8156,14 +8156,15 @@ body {
 .wx-adv-sev.sev-sev { color: #cc2200; }
 .wx-adv-text {
     font-family: 'Courier New', monospace;
-    font-size: 11px;
-    color: #222;
-    background: #efefef;
+    font-size: 14px;
+    font-weight: 500;
+    color: #0a0a0a;
+    background: #f4f4f4;
     border-radius: 3px;
-    padding: 7px 9px;
-    max-height: 200px;
+    padding: 9px 11px;
+    max-height: 320px;
     overflow-y: auto;
-    line-height: 1.6;
+    line-height: 1.7;
     white-space: pre-wrap;
     word-break: break-word;
     -webkit-overflow-scrolling: touch;
