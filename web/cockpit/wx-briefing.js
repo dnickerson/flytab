@@ -240,13 +240,15 @@ class WxBriefing {
 
         const stations = this._getStationList();
         const allIcaos = Object.keys(this._metarData).filter(k => k !== '_error');
-        const routeSet = new Set(stations);
+        const routeIndexMap = new Map(stations.map((id, i) => [id, i]));
         const coords = this._routeCoords || [];
 
         const sorted = [...allIcaos].sort((a, b) => {
-            const aRoute = routeSet.has(a) ? 0 : 1;
-            const bRoute = routeSet.has(b) ? 0 : 1;
-            if (aRoute !== bRoute) return aRoute - bRoute;
+            const aIdx = routeIndexMap.has(a) ? routeIndexMap.get(a) : Infinity;
+            const bIdx = routeIndexMap.has(b) ? routeIndexMap.get(b) : Infinity;
+            const aOnRoute = aIdx < Infinity, bOnRoute = bIdx < Infinity;
+            if (aOnRoute !== bOnRoute) return aOnRoute ? -1 : 1;
+            if (aOnRoute) return aIdx - bIdx;   // both on-route: preserve dep→dest order
             if (!coords.length) return 0;
             const distA = this._distToNearestCoord(this._metarData[a]?.lat, this._metarData[a]?.lon, coords);
             const distB = this._distToNearestCoord(this._metarData[b]?.lat, this._metarData[b]?.lon, coords);
@@ -264,7 +266,7 @@ class WxBriefing {
         for (const icao of sorted) {
             const m = this._metarData[icao];
             if (!m) continue;
-            sec.appendChild(this._buildStationCard(icao, m, routeSet.has(icao)));
+            sec.appendChild(this._buildStationCard(icao, m, routeIndexMap.has(icao)));
         }
     }
     _renderAirmetSection() {
