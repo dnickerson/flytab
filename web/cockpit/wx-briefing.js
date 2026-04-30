@@ -1463,11 +1463,38 @@ class WxBriefing {
 
     // ── Distance helpers ──────────────────────────────────────────────────────
 
+    /**
+     * Distance in nautical miles from (lat, lon) to the nearest point on the
+     * route line — perpendicular distance to the closest segment between
+     * consecutive waypoints, not just to the nearest waypoint. The latter is
+     * what the prior implementation did, which made stations in the middle of
+     * a long route (e.g. KIAD on a KLKR→KMHT leg) appear hundreds of NM away
+     * and get trimmed out, so only stations near the endpoints showed.
+     */
     _distToNearestCoord(lat, lon, coords) {
         if (lat == null || lon == null || !coords.length) return 9999;
+        const cosLat = Math.cos(lat * Math.PI / 180);
+        const px = lon * cosLat, py = lat;
+        if (coords.length === 1) {
+            const c = coords[0];
+            return Math.hypot(py - c.lat, px - c.lon * cosLat) * 60;
+        }
         let min = Infinity;
-        for (const c of coords) {
-            const d = Math.hypot(lat - c.lat, (lon - c.lon) * Math.cos(lat * Math.PI / 180));
+        for (let i = 0; i < coords.length - 1; i++) {
+            const a = coords[i], b = coords[i + 1];
+            const ax = a.lon * cosLat, ay = a.lat;
+            const bx = b.lon * cosLat, by = b.lat;
+            const dx = bx - ax, dy = by - ay;
+            const lenSq = dx * dx + dy * dy;
+            let d;
+            if (lenSq === 0) {
+                d = Math.hypot(px - ax, py - ay);
+            } else {
+                let t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
+                t = Math.max(0, Math.min(1, t));
+                const cx = ax + t * dx, cy = ay + t * dy;
+                d = Math.hypot(px - cx, py - cy);
+            }
             if (d < min) min = d;
         }
         return min * 60;
