@@ -326,21 +326,24 @@ class DataStatus {
             platesServerLine = `<span class="ds-muted">Unavailable</span>${configureLink}`;
         }
 
-        // Per-state chips — server states drive the list; synced states removed from server shown dimmed
+        // Per-state chips — server states drive the list; synced states removed from server shown dimmed.
+        // serverHasPlates: only compare server vs device when server has a valid cycle with known states.
+        // When plates are unavailable or server unreachable, show synced states as-is (can't determine diff).
+        const serverHasPlates  = !!(base && plateSCode && serverStates.length > 0);
         const serverStateSet   = new Set(serverStates);
         const serverStateSizes = Object.fromEntries((sPlates?.states || []).map(s => [s.state, s.size_mb]));
         const cycleOkForStates = !plateSCode || plateDCode === plateSCode;
-        const allDisplayStates = base
+        const allDisplayStates = serverHasPlates
             ? [...serverStates, ...syncedStates.filter(s => !serverStateSet.has(s))]
             : syncedStates;
         const stateChips = allDisplayStates.map(st => {
             const onDevice = syncedStates.includes(st);
-            const onServer = base ? serverStateSet.has(st) : true;
-            const ok = base ? (onDevice && onServer && cycleOkForStates) : onDevice;
+            const onServer = serverHasPlates ? serverStateSet.has(st) : true;
+            const ok = serverHasPlates ? (onDevice && onServer && cycleOkForStates) : onDevice;
             const sizeTxt = serverStateSizes[st] ? ` ${serverStateSizes[st]}MB` : '';
             const cls = ok ? 'ds-state-ok' : 'ds-state-missing';
             const icon = ok ? '&#10003;' : '&#9675;';
-            const note = (base && !onServer) ? ' <span class="ds-muted">(removed from server)</span>' : '';
+            const note = (serverHasPlates && !onServer) ? ' <span class="ds-muted">(removed from server)</span>' : '';
             return `<span class="ds-state-chip ${cls}">${icon} ${st}${sizeTxt}${note}</span>`;
         }).join('');
 
@@ -352,7 +355,7 @@ class DataStatus {
             if (base && plateSCode) platesPrimary = `<button class="ds-action-btn" id="dsPlatesBtn">DOWNLOAD</button>`;
         } else {
             platesDevLine = stateChips + '<br>' + platesIncludesNote;
-            const allSynced = !base || (serverStates.length > 0 && serverStates.every(s => syncedStates.includes(s)));
+            const allSynced = !serverHasPlates || serverStates.every(s => syncedStates.includes(s));
             if (!allSynced || !cycleOkForStates) {
                 platesBadge   = this._badge('UPDATE AVAILABLE', 'yellow');
                 if (base) platesPrimary = `<button class="ds-action-btn ds-update" id="dsPlatesBtn">SYNC</button>`;
@@ -394,7 +397,7 @@ class DataStatus {
         const needsSync = !!base && (
             (nasrServerDate  && nasrDevDate  !== nasrServerDate)  ||
             (cifpSCode       && cifpDCode    !== cifpSCode)       ||
-            (plateSCode      && (serverStates.length === 0 || !cycleOkForStates || serverStates.some(s => !syncedStates.includes(s)))) ||
+            (serverHasPlates && (!cycleOkForStates || serverStates.some(s => !syncedStates.includes(s)))) ||
             !mbt.find(l => l.layer === 'sectional')?.exists       ||
             !mbt.find(l => l.layer === 'ifr-low')?.exists
         );
