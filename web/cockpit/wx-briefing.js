@@ -1557,7 +1557,8 @@ class WxBriefing {
         this._renderPlanningSection();
     }
 
-    _filterAdvisoriesForRoute(advisories, bufferDeg = 0.83) {
+    _filterAdvisoriesForRoute(advisories) {
+        const bufferDeg = this._corridorMi / 69;
         const coords = this._routeCoords || [];
         if (!coords.length || !advisories?.length) return advisories || [];
 
