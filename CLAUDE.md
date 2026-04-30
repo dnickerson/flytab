@@ -22,7 +22,7 @@ bash deploy-pi.sh --clean  # Also removes old tiles/NASR/plates
 bash deploy-pi.sh --full   # Also restarts services
 
 # Start home server (tiles, plates, NASR, CIFP) on port 8090
-bash start-home-server.sh
+bash ~/fly-pipeline/start-home-server.sh
 
 # Test the full data pipeline (serial → engine monitor → FlyTab)
 bash test-pipeline.sh
