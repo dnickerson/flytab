@@ -1074,6 +1074,7 @@ class VectorMapLayers {
                 });
 
                 marker.on('click', () => {
+                    if (typeof _wireTapLastTouchAt !== 'undefined' && Date.now() - _wireTapLastTouchAt < 500) return;
                     if (this._onAirportClick) this._onAirportClick(apt);
                 });
 
@@ -1201,6 +1202,7 @@ class VectorMapLayers {
                     offset: [8, 0], className: 'nav-label',
                 });
                 m.on('click', () => {
+                    if (typeof _wireTapLastTouchAt !== 'undefined' && Date.now() - _wireTapLastTouchAt < 500) return;
                     if (this._onNavaidClick) this._onNavaidClick(nav);
                 });
                 m._navData = nav;

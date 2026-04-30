@@ -63,6 +63,7 @@ class FisbWeatherDisplay {
         // Advisory toast + panel
         this._advisoryToast  = null;
         this._advisoryPanel  = null;
+        this._advisoryPopup  = null;
         this._startupComplete  = false;
         this._startupToastTimer = null;
 
@@ -118,7 +119,7 @@ class FisbWeatherDisplay {
 
         // Register touch handlers on map container for reliable SIGMET/AIRMET tap detection
         const container = this._map.getContainer();
-        container.addEventListener('touchstart', this._onTapStart, { capture: false, passive: true });
+        container.addEventListener('touchstart', this._onTapStart, { capture: true, passive: true });
         container.addEventListener('touchend',   this._onTapEnd,   { passive: true });
     }
 
@@ -137,7 +138,7 @@ class FisbWeatherDisplay {
         this._fisb.removeEventListener('fisb:notam',  this._onNotam);
         if (this._purgeTimer) { clearInterval(this._purgeTimer); this._purgeTimer = null; }
         const container = this._map.getContainer();
-        container.removeEventListener('touchstart', this._onTapStart, { capture: false });
+        container.removeEventListener('touchstart', this._onTapStart, { capture: true });
         container.removeEventListener('touchend',   this._onTapEnd);
         this._pirepLayer.clearLayers();
         this._sigmetLayer.clearLayers();
@@ -166,6 +167,7 @@ class FisbWeatherDisplay {
         if (this._alertContainer?.parentNode) this._alertContainer.parentNode.removeChild(this._alertContainer);
         if (this._advisoryToast?.parentNode) this._advisoryToast.remove();
         if (this._advisoryPanel?.parentNode) this._advisoryPanel.remove();
+        if (this._advisoryPopup) { this._map.closePopup(this._advisoryPopup); this._advisoryPopup = null; }
         clearTimeout(this._startupToastTimer);
     }
 
@@ -325,15 +327,19 @@ class FisbWeatherDisplay {
 
     /**
      * Hit-test a screen tap against all visible SIGMET/AIRMET polygons using SVG isPointInFill/Stroke.
-     * Opens the popup of the first polygon that contains the tap point.
+     * Collects every polygon that contains the tap point and opens a single consolidated popup.
      */
     _handleAdvisoryTap(clientX, clientY) {
+        // LINE advisories (freezing-level contours) are skipped — they're map
+        // overlays, not tappable weather areas, and a 2px stroke is unreliable
+        // as a touch target on a tablet.
         const allPolygons = [
             ...(this._map.hasLayer(this._sigmetLayer) ? this._sigmetPolygons : []),
-            ...this._airmetPolygons.filter(e => e.layer && this._map.hasLayer(e.layer)),
+            ...this._airmetPolygons.filter(e => !e.isLine && e.layer && this._map.hasLayer(e.layer)),
         ];
         if (!allPolygons.length) return;
 
+        const hits = [];
         for (const entry of allPolygons) {
             const svgPath = entry.polygon.getElement();
             if (!svgPath) continue;
@@ -345,11 +351,108 @@ class FisbWeatherDisplay {
                 pt.y = clientY;
                 const local = pt.matrixTransform(svgPath.getScreenCTM().inverse());
                 if (svgPath.isPointInFill(local) || svgPath.isPointInStroke(local)) {
-                    this.openAdvisoryPanel();
-                    return;
+                    hits.push(entry);
                 }
             } catch (_) { /* element not in DOM yet */ }
         }
+
+        if (!hits.length) return;
+        this._openAdvisoryPopup(hits, clientX, clientY);
+    }
+
+    _openAdvisoryPopup(hits, clientX, clientY) {
+        hits.sort((a, b) => {
+            const aIsSigmet = FisbWeatherDisplay._isSigmetType(a.type);
+            const bIsSigmet = FisbWeatherDisplay._isSigmetType(b.type);
+            if (aIsSigmet !== bIsSigmet) return aIsSigmet ? -1 : 1;
+            // SIGMETs without a base sort to top of their group
+            const av = parseAltFt(a.advisory?.base) ?? (aIsSigmet ? -1 : 0);
+            const bv = parseAltFt(b.advisory?.base) ?? (bIsSigmet ? -1 : 0);
+            return av - bv;
+        });
+
+        const rows = hits.map(entry => FisbWeatherDisplay._renderAdvisoryRow(entry)).join('');
+        const html = `<div class="adv-tap-popup"><div class="adv-tap-title">Advisories at point</div>${rows}</div>`;
+
+        if (!this._advisoryPopup) {
+            this._advisoryPopup = L.popup({ className: 'advisory-tap-popup-container', maxWidth: 420 });
+        }
+        const container = this._map.getContainer();
+        const rect = container.getBoundingClientRect();
+        const latlng = this._map.containerPointToLatLng(
+            L.point(clientX - rect.left, clientY - rect.top)
+        );
+        this._advisoryPopup.setLatLng(latlng).setContent(html).openOn(this._map);
+        this._wireAdvisoryCloseBtn();
+    }
+
+    static _isSigmetType(t) { return t === 'sigmet' || t === 'convective'; }
+
+    static _fmtLocalHM(ts) {
+        return ts
+            ? new Date(ts).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) + ' L'
+            : '—';
+    }
+
+    static _renderAdvisoryRow(entry) {
+        const adv = entry.advisory || {};
+        const esc = FisbWeatherDisplay._esc;
+        const until = FisbWeatherDisplay._fmtLocalHM(adv.expires_at);
+
+        if (FisbWeatherDisplay._isSigmetType(entry.type)) {
+            const badge = entry.type === 'convective' ? 'CONV SIGMET' : 'SIGMET';
+            return `<div class="adv-tap-row sigmet-row">
+                <span class="adv-tap-badge sigmet">${esc(badge)}</span>
+                <div class="adv-tap-detail">
+                    <div class="adv-tap-raw">${esc((adv.raw || '').slice(0, 120))}</div>
+                    <div class="adv-tap-valid">Until ${esc(until)}</div>
+                </div>
+            </div>`;
+        }
+
+        const product = adv.product || adv.hazard || 'AIRMET';
+        const altBand = formatAdvisoryAltBand(adv);
+        const isFrzlvl = (adv.hazard || '').toUpperCase() === 'FRZLVL';
+        // For FRZLVL the FZL is already in altBand; for other hazards it's
+        // supplementary info — only show below FL180 since aircraft can't fly higher.
+        const fzlBase = formatAlt(adv.fzlbase);
+        const fzlTop  = formatAlt(adv.fzltop);
+        const fzlBaseFt = parseAltFt(adv.fzlbase);
+        const fzlStr  = (!isFrzlvl && fzlBase && fzlTop && fzlBaseFt != null && fzlBaseFt < 18000)
+                      ? `FZL ${fzlBase}–${fzlTop}`
+                      : '';
+        const sev = adv.severity || '';
+        // For FRZLVL the band already says "FZL X" — suppress the redundant
+        // "FRZLVL" hazard text in the description.
+        const hazardText = isFrzlvl ? '' : (adv.due_to || adv.hazard || '');
+        const descParts = [sev, hazardText, fzlStr].filter(Boolean);
+        const sevClass = { LGT: 'sev-lgt', MDT: 'sev-mdt', SEV: 'sev-sev' }[sev] || '';
+
+        return `<div class="adv-tap-row">
+            <span class="adv-tap-badge ${esc(product.toLowerCase())}">${esc(product)}</span>
+            <div class="adv-tap-detail">
+                <div class="adv-tap-alt">${esc(altBand)}</div>
+                <div class="adv-tap-desc"><span class="adv-tap-sev ${sevClass}">${esc(descParts.join(' · '))}</span></div>
+                <div class="adv-tap-valid">Until ${esc(until)}</div>
+            </div>
+        </div>`;
+    }
+
+    /** Wire the popup's close button once. stopPropagation prevents Leaflet's
+     *  tap detector on the map container from firing _onMapClick at the X's
+     *  position (which would hit the airport/navaid under it). */
+    _wireAdvisoryCloseBtn() {
+        const wrapper = this._advisoryPopup.getElement();
+        if (!wrapper || wrapper._advisoryCloseBtnWired) return;
+        const closeBtn = wrapper.querySelector('.leaflet-popup-close-button');
+        if (!closeBtn) return;
+        wrapper._advisoryCloseBtnWired = true;
+        closeBtn.addEventListener('touchend', (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            if (typeof _wireTapLastTouchAt !== 'undefined') _wireTapLastTouchAt = Date.now();
+            this._map.closePopup(this._advisoryPopup);
+        }, { passive: false });
     }
 
     /** Show/hide winds layer. */
@@ -427,11 +530,6 @@ class FisbWeatherDisplay {
         };
 
         const polygon = L.polygon(sigmet.points, style);
-        polygon.bindPopup(`<div class="sigmet-popup">
-            <div class="sigmet-header">${isConvective ? 'CONVECTIVE ' : ''}SIGMET</div>
-            <div class="sigmet-text">${FisbWeatherDisplay._esc(sigmet.raw)}</div>
-        </div>`, { minWidth: 480, maxWidth: 600, className: 'sigmet-popup-container' });
-
         polygon.addTo(this._sigmetLayer);
         this._sigmetPolygons.push({
             polygon, received_at: sigmet.received_at,
@@ -444,7 +542,12 @@ class FisbWeatherDisplay {
 
     _addAirmet(airmet) {
         this._seenAdvisoryKeys.add((airmet.raw || '').slice(0, 80));
-        if (!airmet.points || airmet.points.length < 3) return;
+        // FZLVL G-AIRMETs are LINEs (freezing-level contours, often only 2 points
+        // for short segments). Other AIRMETs are AREAs and need ≥ 3 points to form
+        // a polygon.
+        const isLine = airmet.geometryType === 'LINE';
+        const minPoints = isLine ? 2 : 3;
+        if (!airmet.points || airmet.points.length < minPoints) return;
 
         // Classify by hazard field first (G-AIRMET), then fall back to raw text (FIS-B/text AIRMET)
         const hazard = (airmet.hazard || '').toUpperCase();
@@ -467,25 +570,19 @@ class FisbWeatherDisplay {
             color = '#ffaa00'; label = 'AIRMET';                     layer = this._airmetOtherLayer;
         }
 
-        const polygon = L.polygon(airmet.points, {
-            color,
-            weight: 1.5,
-            fillColor: color,
-            fillOpacity: 0.10,
-        });
+        const shape = isLine
+            ? L.polyline(airmet.points, { color, weight: 2, opacity: 0.7, dashArray: '6,4' })
+            : L.polygon(airmet.points, { color, weight: 1.5, fillColor: color, fillOpacity: 0.10 });
 
-        polygon.bindPopup(`<div class="airmet-popup">
-            <div class="airmet-header">${FisbWeatherDisplay._esc(label)}</div>
-            <div class="airmet-text">${FisbWeatherDisplay._esc(raw)}</div>
-        </div>`, { minWidth: 480, maxWidth: 600, className: 'airmet-popup-container' });
+        shape.addTo(layer);
 
-        polygon.addTo(layer);
         this._airmetPolygons.push({
-            polygon, received_at: airmet.received_at,
+            polygon: shape, received_at: airmet.received_at,
             expires_at: airmet.expires_at,
             rawKey: (airmet.raw || '').slice(0, 80),
             advisory: airmet,
             layer,
+            isLine,
         });
     }
 
@@ -539,7 +636,7 @@ class FisbWeatherDisplay {
         panel.className = 'wx-adv-panel';
         panel.innerHTML = `
             <div class="wx-adv-panel-header">
-                <span class="wx-adv-panel-title">&#9888; ACTIVE ADVISORIES</span>
+                <span class="wx-adv-panel-title">&#9888; ACTIVE SIGMETS</span>
                 <span class="wx-adv-panel-count">0</span>
                 <button class="wx-adv-panel-close">&#x2715;</button>
             </div>
@@ -579,22 +676,14 @@ class FisbWeatherDisplay {
         const now = Date.now();
         const active = (entries) => entries.filter(e => !e.expires_at || e.expires_at > now);
 
-        const sigmets  = active(this._sigmetPolygons);
-        const airmets  = active(this._airmetPolygons);
-        const total    = sigmets.length + airmets.length;
-
-        this._advisoryPanel.querySelector('.wx-adv-panel-count').textContent = total;
-
-        const scroll = this._advisoryPanel.querySelector('.wx-adv-panel-scroll');
-
+        const sigmets    = active(this._sigmetPolygons);
         const convective = sigmets.filter(e => e.type === 'convective');
         const nonConv    = sigmets.filter(e => e.type !== 'convective');
-        // Use advisory.hazard (set by _parseGairmet/_parseAirsigmet) for reliable classification
-        const hz = (e) => (e.advisory?.hazard || '').toUpperCase();
-        const tangos  = airmets.filter(e => hz(e).startsWith('TURB') || hz(e) === 'LLW' || hz(e) === 'LLWS');
-        const zulus   = airmets.filter(e => ['ICING', 'FRZLVL', 'ICE'].includes(hz(e)));
-        const sierras = airmets.filter(e => ['IFR', 'MTN OBSCN'].includes(hz(e)));
-        const others  = airmets.filter(e => !tangos.includes(e) && !zulus.includes(e) && !sierras.includes(e));
+        const total      = sigmets.length;
+
+        this._advisoryPanel.querySelector('.wx-adv-panel-count').textContent = total || '';
+
+        const scroll = this._advisoryPanel.querySelector('.wx-adv-panel-scroll');
 
         const renderSection = (label, entries, rowClass, badge) => {
             if (!entries.length) return '';
@@ -614,12 +703,8 @@ class FisbWeatherDisplay {
         let html = '';
         html += renderSection('CONVECTIVE SIGMET', convective, 'wx-adv-row-sigmet', 'CONV SIGMET');
         html += renderSection('SIGMET',            nonConv,    'wx-adv-row-sigmet', 'SIGMET');
-        html += renderSection('AIRMET TANGO — Turbulence', tangos,  'wx-adv-row-tango',  'TANGO');
-        html += renderSection('AIRMET ZULU — Icing/FZL',  zulus,   'wx-adv-row-zulu',   'ZULU');
-        html += renderSection('AIRMET SIERRA — IFR/Mtn',  sierras, 'wx-adv-row-sierra', 'SIERRA');
-        html += renderSection('AIRMET',            others,     'wx-adv-row-tango',  'AIRMET');
 
-        if (!html) html = '<p class="wx-adv-empty">No active advisories</p>';
+        if (!html) html = '<p class="wx-adv-empty">No active SIGMETs · Tap AIRMET polygons on map for details</p>';
         scroll.innerHTML = html;
     }
 

@@ -193,7 +193,7 @@ class WeatherClient {
             const parsed = WeatherClient._parseAirsigmet(item);
             if (!parsed) continue;
             if (parsed.isSigmet) sigmets.push(parsed);
-            else airmets.push(parsed);
+            // Traditional text AIRMETs are dropped — G-AIRMETs are the sole AIRMET source
         }
 
         // G-AIRMETs are non-fatal — proxy may not support them on older deploys
@@ -246,7 +246,6 @@ class WeatherClient {
         const isConvective = hazard === 'CONVECTIVE' || sigType === 'CONVECTIVE SIGMET';
         const expires_at = item.validTimeTo ? item.validTimeTo * 1000 : now + 4 * 3600000;
 
-        // AIRMETs without coordinates still carry useful text — include them (FisbWeatherDisplay handles < 3 pts)
         return {
             raw,
             type: isConvective ? 'convective' : (isSigmet ? 'sigmet' : 'airmet'),
@@ -304,11 +303,19 @@ class WeatherClient {
             raw,
             type: 'airmet',
             hazard: hazardToken,
+            product,
             points,
             received_at: now,
             expires_at,
             isSigmet: false,
-            isGairmet: true,
+            geometryType: (item.geometryType || item.geom || 'AREA').toUpperCase(),
+            base:     item.base     != null && item.base     !== '' ? item.base     : null,
+            top:      item.top      != null && item.top      !== '' ? item.top      : null,
+            severity: item.severity != null && item.severity !== '' ? item.severity : null,
+            fzlbase:  item.fzlbase  != null && item.fzlbase  !== '' ? item.fzlbase  : null,
+            fzltop:   item.fzltop   != null && item.fzltop   !== '' ? item.fzltop   : null,
+            level:    item.level    != null && item.level    !== '' ? item.level    : null,
+            due_to:   item.due_to   || '',
         };
     }
 

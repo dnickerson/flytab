@@ -87,6 +87,24 @@ Standard Capacitor/Gradle project. Mixed HTTP content is explicitly allowed in t
 - **SUA layer is off by default**: `sua: false` in `cockpit-config.json`. Pilot must enable in the layer panel. The layer renders R/P/W/A/MOA areas from z6 up.
 - **IDB transaction hang**: An extremely long JS execution during NASR import (parsing 18MB JSON + writing 98k records) can leave IDB connections in a blocked state where new `indexedDB.open()` calls never resolve. Force-stopping the app clears it.
 
+## Display Bugs From External Data — Inspect Before Fixing
+
+**When a UI bug involves rendering data from an external API, hit the live endpoint and inspect the actual response BEFORE writing any fix.** Field names, value formats, and special tokens are routinely surprising and can't be inferred from the symptom or the existing parser. Guessing at semantics produces fixes that look correct in the diff but fail in production — and burns multiple iterations to discover what 30 seconds of `curl | jq` would have shown up front.
+
+This rule applies whenever the bug is "display X looks wrong" and X comes from a network source: AWC, FAA NMS-API, NWS, Stratux FIS-B JSON frames, etc. It does NOT apply to bugs in pure local logic (touch handling, layout, state machines).
+
+### AWC G-AIRMET data conventions (verified April 2026)
+
+These caught me five times before I inspected the raw API. Endpoint: `https://aviationweather.gov/api/data/gairmet?format=json`.
+
+- **Numeric altitudes are in HUNDREDS of feet, not feet.** `"260"` means FL260 (26,000 ft). `"080"` means 8,000 ft. `"040"` means 4,000 ft. Apply `*100` when parsing.
+- **`base: "FZL"` is a literal string token** for ICING G-AIRMETs, meaning "from the freezing level." The freezing-level range is in `fzlbase`/`fzltop`. Display as `FZL–<top>` with the FZL range as supplementary description, not "Below 160."
+- **FZLVL G-AIRMETs are LINEs, not areas.** `geometryType: "LINE"`, with the freezing altitude in the `level` field. 11 of 13 active FZLVL items in a typical fetch are lines. Render with `L.polyline` (no fill); never `L.polygon`. Skip them in popup hit-tests — they're map overlays, not tappable weather areas.
+- **Empty fields come back as empty strings (`""`), not null.** `?? null` does NOT normalize them. Use `(v != null && v !== '') ? v : null` or check both at the display site.
+- **MT_OBSC and IFR have no altitude data at all** — all altitude fields are empty strings. Don't display "—" as a bug; that's correct (these are surface-to-ceiling advisories described entirely in `due_to`).
+
+The shared parser/formatter for these lives in `web/shared/altitude-utils.js` (`parseAltFt`, `formatAlt`, `formatAdvisoryAltBand`). Use those — don't write inline alt-formatting closures.
+
 ## Leaflet Touch Handling
 
 Leaflet's `.on('click')` and `.bindPopup()` are **unreliable on Android tablets** — Leaflet's drag handler swallows synthetic click events and `L.Map.Tap` is not loaded. Never rely on Leaflet's click pipeline for tap targets on map layers.
