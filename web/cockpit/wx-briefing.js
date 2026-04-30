@@ -420,9 +420,12 @@ class WxBriefing {
 
         const allNotams = [...(this._notams || []), ...(this._enrouteNotams || [])];
         const critical = allNotams.filter(n => ['RWY', 'NAVAID', 'TFR', 'RESTR'].includes(n.type));
-        const badgeClass = loading ? null : (critical.length > 0 ? 'warn' : allNotams.length > 0 ? 'info' : 'ok');
+        const fetchErr = !loading && this._notamFetchError && !allNotams.length;
+        const badgeClass = loading ? null : fetchErr ? 'warn' : (critical.length > 0 ? 'warn' : allNotams.length > 0 ? 'info' : 'ok');
         const badgeText  = loading
             ? 'Fetching…'
+            : fetchErr
+            ? 'UNAVAIL'
             : (critical.length > 0 ? `${critical.length} CRITICAL` : allNotams.length > 0 ? `${allNotams.length} ACTIVE` : 'NONE');
 
         const hdr = this._buildRhsHeader('NOTAMs', badgeClass, badgeText);
@@ -431,6 +434,13 @@ class WxBriefing {
 
         const body = document.createElement('div');
         body.className = 'wx-rhs-body open';
+
+        if (fetchErr) {
+            body.insertAdjacentHTML('beforeend',
+                `<div class="wx-section-error">⚠ ${this._escHtml(this._notamFetchError)} · tap ↻ to retry</div>`);
+            sec.appendChild(body);
+            return;
+        }
 
         // ── Airport NOTAMs ────────────────────────────────────────────────────
         const aptGrpHdr = document.createElement('div');
@@ -1672,7 +1682,11 @@ class WxBriefing {
             const base = Settings.workerBase || 'https://www.flywhere.app/api';
             const url  = `${base}/notams?location=${stations.join(',')}`;
             const resp = await fetch(url, { signal: AbortSignal.timeout(30000) });
-            if (!resp.ok) throw new Error(`NOTAM proxy ${resp.status}`);
+            if (!resp.ok) {
+                let errMsg = `NOTAM fetch failed (${resp.status})`;
+                try { const d = await resp.json(); if (d.error) errMsg = d.error; } catch (_) {}
+                throw new Error(errMsg);
+            }
             const data = await resp.json();
             const features = data.features || [];
 
@@ -1707,6 +1721,7 @@ class WxBriefing {
             } catch (_) {}
         } catch (err) {
             console.error('NOTAM fetch failed:', err);
+            this._notamFetchError = err.message;
             try {
                 const raw = localStorage.getItem('flytab_notam_cache');
                 if (raw) { const c = JSON.parse(raw); this._notams = c.data || []; }
@@ -1734,7 +1749,11 @@ class WxBriefing {
         try {
             const base = Settings.workerBase || 'https://www.flywhere.app/api';
             const resp = await fetch(`${base}/notams?location=${locations}`, { signal: AbortSignal.timeout(30000) });
-            if (!resp.ok) throw new Error(`En-route NOTAM proxy ${resp.status}`);
+            if (!resp.ok) {
+                let errMsg = `En-route NOTAM fetch failed (${resp.status})`;
+                try { const d = await resp.json(); if (d.error) errMsg = d.error; } catch (_) {}
+                throw new Error(errMsg);
+            }
             const data = await resp.json();
             const features = data.features || [];
 
@@ -1778,6 +1797,7 @@ class WxBriefing {
             this._enrouteNotamFetchedAt = Date.now();
         } catch (err) {
             console.error('En-route NOTAM fetch failed:', err);
+            this._notamFetchError = err.message;
             this._enrouteNotams = [];
         }
 
