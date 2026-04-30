@@ -53,7 +53,8 @@ function formatAltBand(base, top) {
  * Three hazard-specific cases that need explicit handling:
  *   - FRZLVL: altitude lives in `level` (and sometimes `fzlbase/fzltop`), NOT base/top.
  *   - ICING with `base === "FZL"`: icing extends from the freezing level (defined
- *     by fzlbase/fzltop) up to `top`. Display "FZL–<top>".
+ *     by fzlbase/fzltop) up to `top`. Display "FRZLVL → <top>" so it reads as
+ *     "from the freezing level up to <top>" rather than a numeric range.
  *   - Everything else: ordinary base/top range, with `level` as fallback.
  */
 function formatAdvisoryAltBand(adv) {
@@ -62,16 +63,16 @@ function formatAdvisoryAltBand(adv) {
     if (hazard === 'FRZLVL') {
         const fb = formatAlt(adv.fzlbase);
         const ft = formatAlt(adv.fzltop);
-        if (fb && ft) return `FZL ${fb}–${ft}`;
+        if (fb && ft) return `FRZLVL ${fb}–${ft}`;
         const lvl = formatAlt(adv.level);
-        if (lvl) return `FZL ${lvl}`;
+        if (lvl) return `FRZLVL ${lvl}`;
         return '—';
     }
 
     const baseToken = String(adv.base || '').trim().toUpperCase();
     if (baseToken === 'FZL') {
         const t = formatAlt(adv.top);
-        return t ? `FZL–${t}` : 'FZL';
+        return t ? `FRZLVL → ${t}` : 'Above FRZLVL';
     }
 
     const baseTop = formatAltBand(adv.base, adv.top);

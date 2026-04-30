@@ -419,7 +419,7 @@ class FisbWeatherDisplay {
         const fzlTop  = formatAlt(adv.fzltop);
         const fzlBaseFt = parseAltFt(adv.fzlbase);
         const fzlStr  = (!isFrzlvl && fzlBase && fzlTop && fzlBaseFt != null && fzlBaseFt < 18000)
-                      ? `FZL ${fzlBase}–${fzlTop}`
+                      ? `FRZLVL ${fzlBase}–${fzlTop}`
                       : '';
         const sev = adv.severity || '';
         // For FRZLVL the band already says "FZL X" — suppress the redundant

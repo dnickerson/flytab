@@ -315,7 +315,7 @@ class WxBriefing {
         const fzlTop   = formatAlt(adv.fzltop);
         const fzlBaseFt = parseAltFt(adv.fzlbase);
         const fzlStr   = (!isFrzlvl && fzlBase && fzlTop && fzlBaseFt != null && fzlBaseFt < 18000)
-                       ? `FZL ${fzlBase}–${fzlTop}`
+                       ? `FRZLVL ${fzlBase}–${fzlTop}`
                        : '';
         const sevClass = { LGT: 'sev-lgt', MDT: 'sev-mdt', SEV: 'sev-sev' }[adv.severity] || '';
         const sevStr   = adv.severity ? `<span class="wx-adv-sev ${sevClass}">${adv.severity}</span>` : '';
