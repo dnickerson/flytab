@@ -261,12 +261,36 @@ class WxBriefing {
         });
 
         const count = allIcaos.length;
-        sec.innerHTML = `
-            <div class="wx-section-hdr">
-                <span class="wx-section-hdr-title">METARs &amp; TAFs</span>
-                <span class="wx-section-hdr-sub">${count} STATION${count !== 1 ? 'S' : ''}</span>
-            </div>
+
+        sec.innerHTML = '';
+
+        // Corridor chip row
+        const chips = document.createElement('div');
+        chips.className = 'wx-corridor-chips';
+        for (const mi of [10, 25, 50]) {
+            const btn = document.createElement('button');
+            btn.className = 'wx-corridor-chip' + (this._corridorMi === mi ? ' active' : '');
+            btn.textContent = `${mi} mi`;
+            btn.addEventListener('click', () => {
+                if (this._corridorMi === mi) return;
+                this._corridorMi = mi;
+                localStorage.setItem('flytab_wx_corridor', String(mi));
+                this._metarFetchedAt = 0;
+                this._metarData = null;
+                this._fetchMetarTaf();
+            });
+            chips.appendChild(btn);
+        }
+        sec.appendChild(chips);
+
+        // Section header
+        const hdrDiv = document.createElement('div');
+        hdrDiv.className = 'wx-section-hdr';
+        hdrDiv.innerHTML = `
+            <span class="wx-section-hdr-title">METARs &amp; TAFs</span>
+            <span class="wx-section-hdr-sub">${count} STATION${count !== 1 ? 'S' : ''}</span>
         `;
+        sec.appendChild(hdrDiv);
 
         for (const icao of sorted) {
             const m = this._metarData[icao];
