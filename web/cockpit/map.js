@@ -821,7 +821,6 @@ class CockpitMap {
             // Skip targets not seen in the last 60s — defence against stale entries
             // that survive a brief WS drop before the purge timer can evict them.
             if (now - target.last_seen > 60000) { _nStale++; continue; }
-            seen.add(icao);
             if (!target.lat || !target.lon) { _nNoPos++; continue; }
 
             // Altitude filter — hide traffic outside the configured band (bypassed by layer-panel toggle)
@@ -836,6 +835,10 @@ class CockpitMap {
                 }
             }
 
+            // Only mark as "seen" once the target survives all filters. Filtered
+            // targets fall through to the marker-removal pass below so they don't
+            // get left frozen on the map.
+            seen.add(icao);
             _nShown++;
             const color = this._trafficColor(target);
             let altLabel = '';

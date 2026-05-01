@@ -5,7 +5,83 @@
  * Auto-reconnect with exponential backoff.
  * Fires DOM events: stratux:traffic, stratux:situation, stratux:connect, stratux:disconnect,
  *   stratux:weather, stratux:nexrad, stratux:fisb-frame
+ *
+ * Transport: prefers the native StratuxWS Capacitor plugin (OkHttp under the hood,
+ * with TCP keepalive and WebSocket protocol-level pings). Falls back to the
+ * browser WebSocket API when running outside Capacitor. The browser API can't
+ * detect half-closed connections, which manifests in flight as readyState=OPEN
+ * forever after a network glitch with no onclose firing.
  */
+
+// One global event router for the StratuxWS plugin: a single addListener per
+// event type, dispatched to the active wrapper for each channel via session id
+// (so events from a closed socket can't be misrouted to its replacement).
+const _StratuxNativeBus = (() => {
+    const native = (typeof Capacitor !== 'undefined' && Capacitor.Plugins && Capacitor.Plugins.StratuxWS)
+        ? Capacitor.Plugins.StratuxWS : null;
+    if (!native) return null;
+    const sessions = new Map(); // channel → { id, handlers }
+    const route = (type) => (ev) => {
+        const s = sessions.get(ev.channel);
+        if (!s || s.id !== ev.session) return;  // stale event from a replaced socket
+        const h = s.handlers[type];
+        if (h) h(ev);
+    };
+    native.addListener('open',    route('onopen'));
+    native.addListener('message', route('onmessage'));
+    native.addListener('close',   route('onclose'));
+    native.addListener('error',   route('onerror'));
+    let nextId = 1;
+    return {
+        attach(channel, handlers) {
+            const id = String(nextId++);
+            sessions.set(channel, { id, handlers });
+            return id;
+        },
+        detach(channel, id) {
+            const s = sessions.get(channel);
+            if (s && s.id === id) sessions.delete(channel);
+        },
+        open(channel, url, session) { native.open({ channel, url, session }); },
+        close(channel)              { native.close({ channel }); },
+    };
+})();
+
+// _createStratuxWs returns an object that mimics the surface of the browser
+// WebSocket API used by this client (readyState, onopen, onmessage, onclose,
+// onerror, close()), backed by the native plugin when available.
+function _createStratuxWs(channel, url) {
+    if (!_StratuxNativeBus) return new WebSocket(url);
+    const ws = {
+        url, readyState: 0,            // CONNECTING
+        onopen: null, onmessage: null, onclose: null, onerror: null,
+        _channel: channel, _sid: '',
+        close() {
+            if (this.readyState >= 2) return;
+            this.readyState = 3;
+            _StratuxNativeBus.detach(this._channel, this._sid);
+            _StratuxNativeBus.close(this._channel);
+            // Mirror the browser WebSocket: close() fires onclose. The native
+            // plugin's eventual close event is filtered by session id, so this
+            // is the only path that fires for client-initiated closes.
+            const cb = this.onclose;
+            if (cb) queueMicrotask(() => cb({ code: 1000, reason: 'client_close' }));
+        },
+    };
+    ws._sid = _StratuxNativeBus.attach(channel, {
+        onopen:    ()   => { ws.readyState = 1; if (ws.onopen)    ws.onopen({}); },
+        onmessage: (ev) => { if (ws.onmessage) ws.onmessage({ data: ev.data }); },
+        onclose:   (ev) => {
+            if (ws.readyState === 3) return;
+            ws.readyState = 3;
+            _StratuxNativeBus.detach(channel, ws._sid);
+            if (ws.onclose) ws.onclose({ code: ev.code, reason: ev.reason });
+        },
+        onerror:   (ev) => { if (ws.onerror) ws.onerror({ message: ev.message }); },
+    });
+    _StratuxNativeBus.open(channel, url, ws._sid);
+    return ws;
+}
 
 class StratuxClient extends EventTarget {
     constructor() {
@@ -123,7 +199,7 @@ class StratuxClient extends EventTarget {
         }
         const url = this._wsUrl('/traffic');
         try {
-            this._trafficWs = new WebSocket(url);
+            this._trafficWs = _createStratuxWs('traffic', url);
         } catch { this._scheduleReconnect(); return; }
 
         this._trafficWs.onopen = () => {
@@ -185,7 +261,7 @@ class StratuxClient extends EventTarget {
         if (this._situationWs) { this._situationWs.close(); }
         const url = this._wsUrl('/situation');
         try {
-            this._situationWs = new WebSocket(url);
+            this._situationWs = _createStratuxWs('situation', url);
         } catch { return; }
 
         this._situationWs.onopen = () => {
@@ -301,7 +377,7 @@ class StratuxClient extends EventTarget {
         if (this._weatherWs) { this._weatherWs.close(); }
         const url = this._wsUrl('/weather');
         try {
-            this._weatherWs = new WebSocket(url);
+            this._weatherWs = _createStratuxWs('weather', url);
         } catch { return; }
 
         this._weatherWs.onmessage = (e) => {
@@ -327,7 +403,7 @@ class StratuxClient extends EventTarget {
         if (this._jsonioWs) { this._jsonioWs.close(); }
         const url = this._wsUrl('/jsonio');
         try {
-            this._jsonioWs = new WebSocket(url);
+            this._jsonioWs = _createStratuxWs('jsonio', url);
         } catch { return; }
 
         this._jsonioWs.onmessage = (e) => {
