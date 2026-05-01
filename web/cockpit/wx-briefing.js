@@ -41,6 +41,7 @@ class WxBriefing {
         const savedCorridor = parseInt(localStorage.getItem('flytab_wx_corridor'));
         this._corridorMi    = [10, 25, 50].includes(savedCorridor) ? savedCorridor : 25;
         this._notamFetchError = null;
+        this._enrouteNotamFetchError = null;
     }
 
     init() {
@@ -89,6 +90,7 @@ class WxBriefing {
 
     _refreshAll() {
         this._notamFetchError = null;
+        this._enrouteNotamFetchError = null;
         this._metarFetchedAt = this._airmetFetchedAt = this._afdFetchedAt =
             this._notamFetchedAt = this._enrouteNotamFetchedAt = 0;
         this._fetchMos();
@@ -234,12 +236,34 @@ class WxBriefing {
         const sec = this._section('wx-metar-section');
         if (!sec) return;
 
+        sec.innerHTML = '';
+
+        // Corridor chip row — render before early returns so it persists during loading
+        const chips = document.createElement('div');
+        chips.className = 'wx-corridor-chips';
+        for (const mi of [10, 25, 50]) {
+            const btn = document.createElement('button');
+            btn.className = 'wx-corridor-chip' + (this._corridorMi === mi ? ' active' : '');
+            btn.textContent = `${mi} mi`;
+            btn.addEventListener('click', () => {
+                if (this._corridorMi === mi) return;
+                this._corridorMi = mi;
+                localStorage.setItem('flytab_wx_corridor', String(mi));
+                this._metarFetchedAt = 0;
+                this._metarData = null;
+                this._renderAirmetSection();
+                this._fetchMetarTaf();
+            });
+            chips.appendChild(btn);
+        }
+        sec.appendChild(chips);
+
         if (this._metarData === null) {
-            sec.innerHTML = this._loadingHtml('METARs & TAFs');
+            sec.insertAdjacentHTML('beforeend', this._loadingHtml('METARs & TAFs'));
             return;
         }
         if (this._metarData._error) {
-            sec.innerHTML = this._errorHtml('METARs & TAFs');
+            sec.insertAdjacentHTML('beforeend', this._errorHtml('METARs & TAFs'));
             return;
         }
 
@@ -261,27 +285,6 @@ class WxBriefing {
         });
 
         const count = allIcaos.length;
-
-        sec.innerHTML = '';
-
-        // Corridor chip row
-        const chips = document.createElement('div');
-        chips.className = 'wx-corridor-chips';
-        for (const mi of [10, 25, 50]) {
-            const btn = document.createElement('button');
-            btn.className = 'wx-corridor-chip' + (this._corridorMi === mi ? ' active' : '');
-            btn.textContent = `${mi} mi`;
-            btn.addEventListener('click', () => {
-                if (this._corridorMi === mi) return;
-                this._corridorMi = mi;
-                localStorage.setItem('flytab_wx_corridor', String(mi));
-                this._metarFetchedAt = 0;
-                this._metarData = null;
-                this._fetchMetarTaf();
-            });
-            chips.appendChild(btn);
-        }
-        sec.appendChild(chips);
 
         // Section header
         const hdrDiv = document.createElement('div');
@@ -423,7 +426,9 @@ class WxBriefing {
         const allNotams = [...(this._notams || []), ...(this._enrouteNotams || [])];
         const critical = allNotams.filter(n => ['RWY', 'NAVAID', 'TFR', 'RESTR'].includes(n.type));
         const fetchErr = !loading && this._notamFetchError && !allNotams.length;
-        const badgeClass = loading ? null : fetchErr ? 'warn' : (critical.length > 0 ? 'warn' : allNotams.length > 0 ? 'info' : 'ok');
+        const fetchErrWithCache = !loading && this._notamFetchError && allNotams.length > 0;
+        const anyErr = fetchErr || fetchErrWithCache || (!loading && this._enrouteNotamFetchError);
+        const badgeClass = loading ? null : (fetchErr ? 'warn' : anyErr ? 'warn' : critical.length > 0 ? 'warn' : allNotams.length > 0 ? 'info' : 'ok');
         const badgeText  = loading
             ? 'Fetching…'
             : fetchErr
@@ -442,6 +447,11 @@ class WxBriefing {
                 `<div class="wx-section-error">⚠ ${this._escHtml(this._notamFetchError)} · tap ↻ to retry</div>`);
             sec.appendChild(body);
             return;
+        }
+
+        if (fetchErrWithCache) {
+            body.insertAdjacentHTML('beforeend',
+                `<div class="wx-section-error">⚠ Refresh failed — showing cached airport NOTAMs · tap ↻ to retry</div>`);
         }
 
         // ── Airport NOTAMs ────────────────────────────────────────────────────
@@ -472,6 +482,9 @@ class WxBriefing {
 
         if (enrouteLoading) {
             body.insertAdjacentHTML('beforeend', '<div class="wx-section-loading">Fetching en-route NOTAMs…</div>');
+        } else if (this._enrouteNotamFetchError) {
+            body.insertAdjacentHTML('beforeend',
+                `<div class="wx-section-error">⚠ ${this._escHtml(this._enrouteNotamFetchError)} · tap ↻ to retry</div>`);
         } else if (!this._enrouteNotams.length) {
             body.insertAdjacentHTML('beforeend', '<div class="wx-section-empty">No TFRs, MOAs, or restricted areas on route.</div>');
         } else {
@@ -1852,7 +1865,7 @@ class WxBriefing {
             this._enrouteNotamFetchedAt = Date.now();
         } catch (err) {
             console.error('En-route NOTAM fetch failed:', err);
-            this._notamFetchError = err.message;
+            this._enrouteNotamFetchError = err.message;
             this._enrouteNotams = [];
         }
 
