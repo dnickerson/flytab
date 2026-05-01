@@ -431,7 +431,7 @@ class WxBriefing {
         const badgeClass = loading ? null : (fetchErr ? 'warn' : anyErr ? 'warn' : critical.length > 0 ? 'warn' : allNotams.length > 0 ? 'info' : 'ok');
         const badgeText  = loading
             ? 'Fetching…'
-            : fetchErr
+            : (anyErr && !allNotams.length)
             ? 'UNAVAIL'
             : (critical.length > 0 ? `${critical.length} CRITICAL` : allNotams.length > 0 ? `${allNotams.length} ACTIVE` : 'NONE');
 
@@ -1609,7 +1609,7 @@ class WxBriefing {
             for (const c of coords) {
                 if (this._pointInPolygon(c.lat, c.lon, pts)) return true;
             }
-            return true;
+            return false;
         });
     }
 
