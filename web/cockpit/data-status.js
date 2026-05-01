@@ -307,11 +307,10 @@ class DataStatus {
         }
 
         // ── Plates section ───────────────────────────────────────────────────
-        const configuredStates = (typeof CockpitConfig !== 'undefined' && CockpitConfig.raw?.plateStates)
-            || ['NC', 'SC', 'VA', 'GA', 'TN'];
-        const syncedStates = JSON.parse(localStorage.getItem('flypi_plates_synced_states') || '[]');
-        const plateSCode   = sPlates?.cycle?.effective_date || null;
-        const plateDCode   = dPlates?.effective_date || null;
+        const serverStates    = (sPlates?.states || []).map(s => s.state);
+        const syncedStates    = JSON.parse(localStorage.getItem('flypi_plates_synced_states') || '[]');
+        const plateSCode      = sPlates?.cycle?.effective_date || null;
+        const plateDCode      = dPlates?.effective_date || null;
         let platesServerLine, platesDevLine, platesBadge, platesPrimary = '', platesSecondary = '';
 
         const adminUrl = base ? `${base}/admin-states.html` : null;
@@ -322,26 +321,30 @@ class DataStatus {
         if (!base) {
             platesServerLine = '<span class="ds-muted">Server not reachable</span>';
         } else if (plateSCode) {
-            const serverStateSet = new Set((sPlates?.states || []).map(s => s.state));
-            const avail = configuredStates.filter(s => serverStateSet.has(s)).length;
-            platesServerLine = `Cycle ${plateSCode} &mdash; ${avail}/${configuredStates.length} states &mdash; IAP, DP, STAR, DIAG, A/FD${configureLink}`;
+            platesServerLine = `Cycle ${plateSCode} &mdash; ${serverStates.length} states &mdash; IAP, DP, STAR, DIAG, A/FD${configureLink}`;
         } else {
             platesServerLine = `<span class="ds-muted">Unavailable</span>${configureLink}`;
         }
 
-        // Per-state chips
-        const serverStateSet = new Set((sPlates?.states || []).map(s => s.state));
+        // Per-state chips — server states drive the list; synced states removed from server shown dimmed.
+        // serverHasPlates: only compare server vs device when server has a valid cycle with known states.
+        // When plates are unavailable or server unreachable, show synced states as-is (can't determine diff).
+        const serverHasPlates  = !!(base && plateSCode && serverStates.length > 0);
+        const serverStateSet   = new Set(serverStates);
         const serverStateSizes = Object.fromEntries((sPlates?.states || []).map(s => [s.state, s.size_mb]));
         const cycleOkForStates = !plateSCode || plateDCode === plateSCode;
-        const stateChips = configuredStates.map(st => {
+        const allDisplayStates = serverHasPlates
+            ? [...serverStates, ...syncedStates.filter(s => !serverStateSet.has(s))]
+            : syncedStates;
+        const stateChips = allDisplayStates.map(st => {
             const onDevice = syncedStates.includes(st);
-            const onServer = serverStateSet.has(st);
-            const ok = onDevice && cycleOkForStates;
+            const onServer = serverHasPlates ? serverStateSet.has(st) : true;
+            const ok = serverHasPlates ? (onDevice && onServer && cycleOkForStates) : onDevice;
             const sizeTxt = serverStateSizes[st] ? ` ${serverStateSizes[st]}MB` : '';
             const cls = ok ? 'ds-state-ok' : 'ds-state-missing';
             const icon = ok ? '&#10003;' : '&#9675;';
-            const notOnServer = !onServer && base ? ' <span class="ds-muted">(server n/a)</span>' : '';
-            return `<span class="ds-state-chip ${cls}">${icon} ${st}${sizeTxt}${notOnServer}</span>`;
+            const note = (serverHasPlates && !onServer) ? ' <span class="ds-muted">(removed from server)</span>' : '';
+            return `<span class="ds-state-chip ${cls}">${icon} ${st}${sizeTxt}${note}</span>`;
         }).join('');
 
         const platesIncludesNote = '<span class="ds-muted" style="font-size:10px">Includes: IAP &middot; DP &middot; STAR &middot; Airport Diagrams (DIAG) &middot; Airport Info (A/FD)</span>';
@@ -352,7 +355,7 @@ class DataStatus {
             if (base && plateSCode) platesPrimary = `<button class="ds-action-btn" id="dsPlatesBtn">DOWNLOAD</button>`;
         } else {
             platesDevLine = stateChips + '<br>' + platesIncludesNote;
-            const allSynced = configuredStates.every(s => syncedStates.includes(s));
+            const allSynced = !serverHasPlates || serverStates.every(s => syncedStates.includes(s));
             if (!allSynced || !cycleOkForStates) {
                 platesBadge   = this._badge('UPDATE AVAILABLE', 'yellow');
                 if (base) platesPrimary = `<button class="ds-action-btn ds-update" id="dsPlatesBtn">SYNC</button>`;
@@ -394,7 +397,7 @@ class DataStatus {
         const needsSync = !!base && (
             (nasrServerDate  && nasrDevDate  !== nasrServerDate)  ||
             (cifpSCode       && cifpDCode    !== cifpSCode)       ||
-            (plateSCode      && (!cycleOkForStates || !configuredStates.every(s => syncedStates.includes(s)))) ||
+            (serverHasPlates && (!cycleOkForStates || serverStates.some(s => !syncedStates.includes(s)))) ||
             !mbt.find(l => l.layer === 'sectional')?.exists       ||
             !mbt.find(l => l.layer === 'ifr-low')?.exists
         );
@@ -1385,9 +1388,7 @@ class DataStatus {
             const localDate  = localCycle?.effective_date;
             const cycleMatch = localDate && localDate === serverDate;
             const syncedStates = JSON.parse(localStorage.getItem('flypi_plates_synced_states') || '[]');
-            const configuredStates = (typeof CockpitConfig !== 'undefined' && CockpitConfig.raw?.plateStates)
-                || ['NC', 'SC', 'VA', 'GA', 'TN'];
-            const allStatesSynced = configuredStates.every(s => syncedStates.includes(s));
+            const allStatesSynced = statesResp.length > 0 && statesResp.every(s => syncedStates.includes(s.state));
             const needsUpdate = !cycleMatch || !allStatesSynced;
 
             if (!needsUpdate) {
@@ -1395,58 +1396,54 @@ class DataStatus {
             } else if (!statesResp.length) {
                 setStep('plates', 'skip', 'No plate states available on server');
             } else {
-                const statesToSync = statesResp.filter(s => configuredStates.includes(s.state));
-                if (!statesToSync.length) {
-                    setStep('plates', 'skip', 'No configured states on server (set plateStates in config)');
-                } else {
-                    const totalMb = statesToSync.reduce((s, r) => s + r.size_mb, 0);
-                    const stateList = statesToSync.map(s => s.state).join(', ');
-                    setStep('plates', 'running', `Downloading ${statesToSync.length} states (${stateList}) — ~${totalMb.toLocaleString()} MB…`);
+                const statesToSync = statesResp;
+                const totalMb = statesToSync.reduce((s, r) => s + r.size_mb, 0);
+                const stateList = statesToSync.map(s => s.state).join(', ');
+                setStep('plates', 'running', `Downloading ${statesToSync.length} states (${stateList}) — ~${totalMb.toLocaleString()} MB…`);
 
-                    let done = 0;
-                    const newlySynced = [...syncedStates];
-                    for (const stateInfo of statesToSync) {
-                        const st = stateInfo.state;
-                        const mb = stateInfo.size_mb;
-                        setStep('plates', 'running', `↓ ${st} (${mb} MB) — ${done}/${statesToSync.length} done…`);
+                let done = 0;
+                const newlySynced = [...syncedStates];
+                for (const stateInfo of statesToSync) {
+                    const st = stateInfo.state;
+                    const mb = stateInfo.size_mb;
+                    setStep('plates', 'running', `↓ ${st} (${mb} MB) — ${done}/${statesToSync.length} done…`);
 
-                        // Tick elapsed time every 5s so pilot can see it's still working
-                        const startTs = Date.now();
-                        const ticker = setInterval(() => {
-                            const elapsed = Math.round((Date.now() - startTs) / 1000);
-                            setStep('plates', 'running', `↓ ${st} (${mb} MB) — ${elapsed}s — ${done}/${statesToSync.length} done…`);
-                        }, 5000);
+                    // Tick elapsed time every 5s so pilot can see it's still working
+                    const startTs = Date.now();
+                    const ticker = setInterval(() => {
+                        const elapsed = Math.round((Date.now() - startTs) / 1000);
+                        setStep('plates', 'running', `↓ ${st} (${mb} MB) — ${elapsed}s — ${done}/${statesToSync.length} done…`);
+                    }, 5000);
 
-                        try {
-                            // NanoHTTPD fetch-zip: download state zip from home server
-                            // and extract directly into the tablet's local storage
-                            const zipUrl = `${homeBase}/plates/state_zips/${st}.zip`;
-                            const resp = await fetch(
-                                `${LOCAL}/fetch-zip?url=${encodeURIComponent(zipUrl)}`,
-                                { method: 'POST', signal: AbortSignal.timeout(600000) }
-                            );
-                            clearInterval(ticker);
-                            if (!resp.ok) throw new Error(`${st}: ${await resp.text()}`);
-                            const result = await resp.json();
-                            done++;
-                            if (!newlySynced.includes(st)) newlySynced.push(st);
-                            setStep('plates', 'running', `✓ ${st} done (${result.extracted?.toLocaleString() ?? '?'} files) — ${done}/${statesToSync.length} complete`);
-                        } catch (e) {
-                            clearInterval(ticker);
-                            setStep('plates', 'running', `✗ ${st} failed: ${e.message} — continuing…`);
-                            done++;
-                        }
+                    try {
+                        // NanoHTTPD fetch-zip: download state zip from home server
+                        // and extract directly into the tablet's local storage
+                        const zipUrl = `${homeBase}/plates/state_zips/${st}.zip`;
+                        const resp = await fetch(
+                            `${LOCAL}/fetch-zip?url=${encodeURIComponent(zipUrl)}`,
+                            { method: 'POST', signal: AbortSignal.timeout(600000) }
+                        );
+                        clearInterval(ticker);
+                        if (!resp.ok) throw new Error(`${st}: ${await resp.text()}`);
+                        const result = await resp.json();
+                        done++;
+                        if (!newlySynced.includes(st)) newlySynced.push(st);
+                        setStep('plates', 'running', `✓ ${st} done (${result.extracted?.toLocaleString() ?? '?'} files) — ${done}/${statesToSync.length} complete`);
+                    } catch (e) {
+                        clearInterval(ticker);
+                        setStep('plates', 'running', `✗ ${st} failed: ${e.message} — continuing…`);
+                        done++;
                     }
-                    if (serverCycle) {
-                        await fetch(`${LOCAL}/plates/plates_cycle_info.json`, {
-                            method: 'PUT', headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(serverCycle),
-                        }).catch(() => {});
-                    }
-                    localStorage.setItem('flypi_plates_synced_states', JSON.stringify(newlySynced));
-                    localStorage.setItem('flypi_plates_cached_at', Date.now().toString());
-                    setStep('plates', 'ok', `${done} states downloaded — cycle ${serverDate}`);
                 }
+                if (serverCycle) {
+                    await fetch(`${LOCAL}/plates/plates_cycle_info.json`, {
+                        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(serverCycle),
+                    }).catch(() => {});
+                }
+                localStorage.setItem('flypi_plates_synced_states', JSON.stringify(newlySynced));
+                localStorage.setItem('flypi_plates_cached_at', Date.now().toString());
+                setStep('plates', 'ok', `${done} states downloaded — cycle ${serverDate}`);
             }
         } catch (e) { failStep('plates', e); }
 

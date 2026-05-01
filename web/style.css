@@ -9579,3 +9579,46 @@ body.emergency-active #tabBar {
     color: var(--text-primary);
     font-variant-numeric: tabular-nums;
 }
+
+/* ── WxBriefing corridor width selector ── */
+.wx-corridor-chips {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 12px 4px;
+}
+.wx-corridor-chips::before {
+    content: 'Corridor:';
+    font-size: 10px;
+    font-weight: 700;
+    color: #888;
+    letter-spacing: 0.05em;
+    margin-right: 4px;
+    flex-shrink: 0;
+}
+.wx-corridor-chip {
+    background: #f0f0f0;
+    border: 1px solid #ccc;
+    color: #222;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 3px 8px;
+    cursor: pointer;
+    border-radius: 3px;
+    letter-spacing: 0.03em;
+    min-height: 28px;
+}
+.wx-corridor-chip.active {
+    background: #1a2744;
+    color: #fff;
+    border-color: #1a2744;
+}
+
+/* ── WxBriefing G-AIRMET state abbreviations ── */
+.wx-adv-states {
+    font-size: 10px;
+    font-weight: 600;
+    color: #666;
+    letter-spacing: 0.04em;
+    padding: 0 12px 4px;
+}

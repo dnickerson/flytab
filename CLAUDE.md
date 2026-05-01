@@ -22,7 +22,7 @@ bash deploy-pi.sh --clean  # Also removes old tiles/NASR/plates
 bash deploy-pi.sh --full   # Also restarts services
 
 # Start home server (tiles, plates, NASR, CIFP) on port 8090
-bash start-home-server.sh
+bash ~/fly-pipeline/start-home-server.sh
 
 # Test the full data pipeline (serial → engine monitor → FlyTab)
 bash test-pipeline.sh
@@ -79,7 +79,7 @@ Standard Capacitor/Gradle project. Mixed HTTP content is explicitly allowed in t
 ## Data Pipeline Dependencies
 
 - **`pyshp` required for Class B/C/D/E airspace**: `~/fly-pipeline/build_nasr.py` parses Class B/C/D/E airspace from FAA shapefiles (`Additional_Data/Shape_Files/Class_Airspace.*` inside the NASR zip). Without `pyshp` installed, the step is silently skipped and the bundle only contains 26 ARTCC boundaries — no controlled airspace around airports. Install with `pip install pyshp --break-system-packages`.
-- **Home server data directory**: `start-home-server.sh` expects data at `~/flytab/data/`. NASR output lives in `~/fly-pipeline/data/nasr/`. If the `data/` dir is missing, the server crashes and the systemd service (`flytab-data.service`) loops in failure every 10 seconds. Fix with: `mkdir -p ~/flytab/data && ln -s ~/fly-pipeline/data/nasr ~/flytab/data/nasr`. The service recovers automatically once the directory exists.
+- **Home server data directory**: `start-home-server.sh` serves directly from `~/fly-pipeline/data/`. All data (NASR, CIFP, plates, terrain, tiles, mbtiles) lives there — no symlinks needed in `~/flytab/data/`. If the pipeline directory is missing the server fails at startup.
 - **NASR update on tablet**: After rebuilding the bundle, start the home server and restart FlyTab on the tablet while on home WiFi — the app fetches and imports the bundle automatically at startup. The staleness check compares `sua_count` in the home server's `cycle_info.json` against what's stored in IDB meta — if they differ, it re-imports from the home server automatically.
 - **Do not import data into the tablet via CDP/DevTools** — writing directly to the WebView's IndexedDB bypasses app integrity checks and can cause protection errors.
 - **SAA AIXM boundary parsing**: All 1234 SUA XML files have `gml:PolygonPatch/LinearRing/pos` with pre-computed coordinates — use this as primary boundary source. `gml:Curve` (arcs/circles) is only present in 795 files; keep as fallback only. Files without `Curve` (e.g. R-6001A/B) were silently skipped before this fix.

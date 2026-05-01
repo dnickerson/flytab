@@ -37,6 +37,11 @@ class WxBriefing {
         this._enrouteNotamFetchedAt = 0;
 
         this._routeCoords  = null;
+
+        const savedCorridor = parseInt(localStorage.getItem('flytab_wx_corridor'));
+        this._corridorMi    = [10, 25, 50].includes(savedCorridor) ? savedCorridor : 25;
+        this._notamFetchError = null;
+        this._enrouteNotamFetchError = null;
     }
 
     init() {
@@ -84,6 +89,8 @@ class WxBriefing {
     }
 
     _refreshAll() {
+        this._notamFetchError = null;
+        this._enrouteNotamFetchError = null;
         this._metarFetchedAt = this._airmetFetchedAt = this._afdFetchedAt =
             this._notamFetchedAt = this._enrouteNotamFetchedAt = 0;
         this._fetchMos();
@@ -229,24 +236,48 @@ class WxBriefing {
         const sec = this._section('wx-metar-section');
         if (!sec) return;
 
+        sec.innerHTML = '';
+
+        // Corridor chip row — render before early returns so it persists during loading
+        const chips = document.createElement('div');
+        chips.className = 'wx-corridor-chips';
+        for (const mi of [10, 25, 50]) {
+            const btn = document.createElement('button');
+            btn.className = 'wx-corridor-chip' + (this._corridorMi === mi ? ' active' : '');
+            btn.textContent = `${mi} mi`;
+            btn.addEventListener('click', () => {
+                if (this._corridorMi === mi) return;
+                this._corridorMi = mi;
+                localStorage.setItem('flytab_wx_corridor', String(mi));
+                this._metarFetchedAt = 0;
+                this._metarData = null;
+                this._renderAirmetSection();
+                this._fetchMetarTaf();
+            });
+            chips.appendChild(btn);
+        }
+        sec.appendChild(chips);
+
         if (this._metarData === null) {
-            sec.innerHTML = this._loadingHtml('METARs & TAFs');
+            sec.insertAdjacentHTML('beforeend', this._loadingHtml('METARs & TAFs'));
             return;
         }
         if (this._metarData._error) {
-            sec.innerHTML = this._errorHtml('METARs & TAFs');
+            sec.insertAdjacentHTML('beforeend', this._errorHtml('METARs & TAFs'));
             return;
         }
 
         const stations = this._getStationList();
         const allIcaos = Object.keys(this._metarData).filter(k => k !== '_error');
-        const routeSet = new Set(stations);
+        const routeIndexMap = new Map(stations.map((id, i) => [id, i]));
         const coords = this._routeCoords || [];
 
         const sorted = [...allIcaos].sort((a, b) => {
-            const aRoute = routeSet.has(a) ? 0 : 1;
-            const bRoute = routeSet.has(b) ? 0 : 1;
-            if (aRoute !== bRoute) return aRoute - bRoute;
+            const aIdx = routeIndexMap.has(a) ? routeIndexMap.get(a) : Infinity;
+            const bIdx = routeIndexMap.has(b) ? routeIndexMap.get(b) : Infinity;
+            const aOnRoute = aIdx < Infinity, bOnRoute = bIdx < Infinity;
+            if (aOnRoute !== bOnRoute) return aOnRoute ? -1 : 1;
+            if (aOnRoute) return aIdx - bIdx;   // both on-route: preserve dep→dest order
             if (!coords.length) return 0;
             const distA = this._distToNearestCoord(this._metarData[a]?.lat, this._metarData[a]?.lon, coords);
             const distB = this._distToNearestCoord(this._metarData[b]?.lat, this._metarData[b]?.lon, coords);
@@ -254,17 +285,20 @@ class WxBriefing {
         });
 
         const count = allIcaos.length;
-        sec.innerHTML = `
-            <div class="wx-section-hdr">
-                <span class="wx-section-hdr-title">METARs &amp; TAFs</span>
-                <span class="wx-section-hdr-sub">${count} STATION${count !== 1 ? 'S' : ''}</span>
-            </div>
+
+        // Section header
+        const hdrDiv = document.createElement('div');
+        hdrDiv.className = 'wx-section-hdr';
+        hdrDiv.innerHTML = `
+            <span class="wx-section-hdr-title">METARs &amp; TAFs</span>
+            <span class="wx-section-hdr-sub">${count} STATION${count !== 1 ? 'S' : ''}</span>
         `;
+        sec.appendChild(hdrDiv);
 
         for (const icao of sorted) {
             const m = this._metarData[icao];
             if (!m) continue;
-            sec.appendChild(this._buildStationCard(icao, m, routeSet.has(icao)));
+            sec.appendChild(this._buildStationCard(icao, m, routeIndexMap.has(icao)));
         }
     }
     _renderAirmetSection() {
@@ -311,6 +345,7 @@ class WxBriefing {
         // For FRZLVL the band already conveys it ("FZL X") — drop redundant text.
         const hazard   = isFrzlvl ? 'Freezing level' : (adv.due_to || adv.hazard || 'Advisory');
         const altBand  = formatAdvisoryAltBand(adv);
+        const statesStr = adv.states?.length ? adv.states.join(' · ') : '';
         const fzlBase  = formatAlt(adv.fzlbase);
         const fzlTop   = formatAlt(adv.fzltop);
         const fzlBaseFt = parseAltFt(adv.fzlbase);
@@ -332,6 +367,7 @@ class WxBriefing {
                 <div class="wx-adv-info">
                     <div class="wx-adv-hazard">${this._escHtml(hazard)}</div>
                     <div class="wx-adv-alt">${this._escHtml(altBand)}</div>
+                    ${statesStr ? `<div class="wx-adv-states">${this._escHtml(statesStr)}</div>` : ''}
                 </div>
             </div>
             <div class="wx-adv-foot">
@@ -389,9 +425,14 @@ class WxBriefing {
 
         const allNotams = [...(this._notams || []), ...(this._enrouteNotams || [])];
         const critical = allNotams.filter(n => ['RWY', 'NAVAID', 'TFR', 'RESTR'].includes(n.type));
-        const badgeClass = loading ? null : (critical.length > 0 ? 'warn' : allNotams.length > 0 ? 'info' : 'ok');
+        const fetchErr = !loading && this._notamFetchError && !allNotams.length;
+        const fetchErrWithCache = !loading && this._notamFetchError && allNotams.length > 0;
+        const anyErr = fetchErr || fetchErrWithCache || (!loading && this._enrouteNotamFetchError);
+        const badgeClass = loading ? null : (fetchErr ? 'warn' : anyErr ? 'warn' : critical.length > 0 ? 'warn' : allNotams.length > 0 ? 'info' : 'ok');
         const badgeText  = loading
             ? 'Fetching…'
+            : (anyErr && !allNotams.length)
+            ? 'UNAVAIL'
             : (critical.length > 0 ? `${critical.length} CRITICAL` : allNotams.length > 0 ? `${allNotams.length} ACTIVE` : 'NONE');
 
         const hdr = this._buildRhsHeader('NOTAMs', badgeClass, badgeText);
@@ -400,6 +441,18 @@ class WxBriefing {
 
         const body = document.createElement('div');
         body.className = 'wx-rhs-body open';
+
+        if (fetchErr) {
+            body.insertAdjacentHTML('beforeend',
+                `<div class="wx-section-error">⚠ ${this._escHtml(this._notamFetchError)} · tap ↻ to retry</div>`);
+            sec.appendChild(body);
+            return;
+        }
+
+        if (fetchErrWithCache) {
+            body.insertAdjacentHTML('beforeend',
+                `<div class="wx-section-error">⚠ Refresh failed — showing cached airport NOTAMs · tap ↻ to retry</div>`);
+        }
 
         // ── Airport NOTAMs ────────────────────────────────────────────────────
         const aptGrpHdr = document.createElement('div');
@@ -429,6 +482,9 @@ class WxBriefing {
 
         if (enrouteLoading) {
             body.insertAdjacentHTML('beforeend', '<div class="wx-section-loading">Fetching en-route NOTAMs…</div>');
+        } else if (this._enrouteNotamFetchError) {
+            body.insertAdjacentHTML('beforeend',
+                `<div class="wx-section-error">⚠ ${this._escHtml(this._enrouteNotamFetchError)} · tap ↻ to retry</div>`);
         } else if (!this._enrouteNotams.length) {
             body.insertAdjacentHTML('beforeend', '<div class="wx-section-empty">No TFRs, MOAs, or restricted areas on route.</div>');
         } else {
@@ -1141,7 +1197,7 @@ class WxBriefing {
         try {
             // Bbox covers all METAR stations in the route corridor without requiring
             // NASR DB or knowing which airports are METAR reporters.
-            const bbox = await this._getRouteBbox(0.5);
+            const bbox = await this._getRouteBbox(this._corridorMi / 69);
 
             let metarPromise, tafPromise;
             if (bbox) {
@@ -1164,7 +1220,7 @@ class WxBriefing {
             if (coords.length) {
                 for (const icao of Object.keys(metars)) {
                     const m = metars[icao];
-                    if (m?.lat && m?.lon && this._distToNearestCoord(m.lat, m.lon, coords) > 30)
+                    if (m?.lat && m?.lon && this._distToNearestCoord(m.lat, m.lon, coords) > this._corridorMi)
                         delete metars[icao];
                 }
             }
@@ -1515,6 +1571,9 @@ class WxBriefing {
         try {
             const client = new WeatherClient(this._db);
             const { airmets } = await client.fetchAndCacheAdvisories();
+            for (const adv of (airmets || [])) {
+                adv.states = this._statesForPoints(adv.points || []);
+            }
             this._airmets = airmets;
             this._airmetFetchedAt = Date.now();
         } catch (err) {
@@ -1526,7 +1585,8 @@ class WxBriefing {
         this._renderPlanningSection();
     }
 
-    _filterAdvisoriesForRoute(advisories, bufferDeg = 0.83) {
+    _filterAdvisoriesForRoute(advisories) {
+        const bufferDeg = this._corridorMi / 69;
         const coords = this._routeCoords || [];
         if (!coords.length || !advisories?.length) return advisories || [];
 
@@ -1549,7 +1609,7 @@ class WxBriefing {
             for (const c of coords) {
                 if (this._pointInPolygon(c.lat, c.lon, pts)) return true;
             }
-            return true;
+            return false;
         });
     }
 
@@ -1563,6 +1623,56 @@ class WxBriefing {
             }
         }
         return inside;
+    }
+
+    _statesForPoints(points) {
+        if (!points.length) return [];
+        const lats = points.map(p => p[0]);
+        const lons = points.map(p => p[1]);
+        const cLat = lats.reduce((s, v) => s + v, 0) / lats.length;
+        const cLon = lons.reduce((s, v) => s + v, 0) / lons.length;
+        // Sample centroid + midpoints toward bbox edges to catch multi-state advisories
+        const samples = [
+            [cLat, cLon],
+            [(Math.min(...lats) + cLat) / 2, cLon],
+            [(Math.max(...lats) + cLat) / 2, cLon],
+            [cLat, (Math.min(...lons) + cLon) / 2],
+            [cLat, (Math.max(...lons) + cLon) / 2],
+        ];
+        // [abbr, minLat, maxLat, minLon, maxLon]
+        const STATES = [
+            ['AL',30.1,35.0,-88.5,-84.9],['AR',33.0,36.5,-94.6,-89.6],
+            ['AZ',31.3,37.0,-114.8,-109.0],['CA',32.5,42.0,-124.5,-114.1],
+            ['CO',37.0,41.0,-109.1,-102.0],['CT',41.0,42.1,-73.7,-71.8],
+            ['DE',38.4,39.8,-75.8,-75.0],['FL',24.4,31.0,-87.6,-80.0],
+            ['GA',30.3,35.0,-85.6,-80.8],['IA',40.4,43.5,-96.6,-90.1],
+            ['ID',42.0,49.0,-117.2,-111.0],['IL',36.9,42.5,-91.5,-87.0],
+            ['IN',37.8,41.8,-88.1,-84.8],['KS',37.0,40.0,-102.1,-94.6],
+            ['KY',36.5,39.1,-89.6,-81.9],['LA',29.0,33.0,-94.0,-89.0],
+            ['MA',41.2,42.9,-73.5,-69.9],['MD',37.9,39.7,-79.5,-75.0],
+            ['ME',43.1,47.5,-71.1,-67.0],['MI',41.7,47.5,-90.4,-82.4],
+            ['MN',43.5,49.4,-97.2,-89.5],['MO',36.0,40.6,-95.8,-89.1],
+            ['MS',30.2,35.0,-91.7,-88.1],['MT',44.4,49.0,-116.0,-104.0],
+            ['NC',33.8,36.6,-84.3,-75.5],['ND',45.9,49.0,-104.1,-96.6],
+            ['NE',40.0,43.0,-104.1,-95.3],['NH',42.7,45.3,-72.6,-70.6],
+            ['NJ',38.9,41.4,-75.6,-73.9],['NM',31.3,37.0,-109.1,-103.0],
+            ['NV',35.0,42.0,-120.0,-114.0],['NY',40.5,45.0,-79.8,-71.9],
+            ['OH',38.4,42.3,-84.8,-80.5],['OK',33.6,37.0,-103.0,-94.4],
+            ['OR',42.0,46.2,-124.6,-116.5],['PA',39.7,42.3,-80.5,-74.7],
+            ['RI',41.1,42.0,-71.9,-71.1],['SC',32.0,35.2,-83.4,-78.6],
+            ['SD',42.5,45.9,-104.1,-96.4],['TN',35.0,36.7,-90.3,-81.6],
+            ['TX',25.8,36.5,-106.6,-93.5],['UT',37.0,42.0,-114.1,-109.0],
+            ['VA',36.5,39.5,-83.7,-75.2],['VT',42.7,45.0,-73.4,-71.5],
+            ['WA',45.5,49.0,-124.8,-116.9],['WI',42.5,47.1,-92.9,-86.2],
+            ['WV',37.2,40.6,-82.6,-77.7],['WY',41.0,45.0,-111.1,-104.1],
+        ];
+        const found = new Set();
+        for (const [sLat, sLon] of samples) {
+            for (const [abbr, s, n, w, e] of STATES) {
+                if (sLat >= s && sLat <= n && sLon >= w && sLon <= e) found.add(abbr);
+            }
+        }
+        return [...found].sort();
     }
 
     _buildRhsHeader(title, badgeClass, badgeText) {
@@ -1640,7 +1750,11 @@ class WxBriefing {
             const base = Settings.workerBase || 'https://www.flywhere.app/api';
             const url  = `${base}/notams?location=${stations.join(',')}`;
             const resp = await fetch(url, { signal: AbortSignal.timeout(30000) });
-            if (!resp.ok) throw new Error(`NOTAM proxy ${resp.status}`);
+            if (!resp.ok) {
+                let errMsg = `NOTAM fetch failed (${resp.status})`;
+                try { const d = await resp.json(); if (d.error) errMsg = d.error; } catch (_) {}
+                throw new Error(errMsg);
+            }
             const data = await resp.json();
             const features = data.features || [];
 
@@ -1675,6 +1789,7 @@ class WxBriefing {
             } catch (_) {}
         } catch (err) {
             console.error('NOTAM fetch failed:', err);
+            this._notamFetchError = err.message;
             try {
                 const raw = localStorage.getItem('flytab_notam_cache');
                 if (raw) { const c = JSON.parse(raw); this._notams = c.data || []; }
@@ -1702,7 +1817,11 @@ class WxBriefing {
         try {
             const base = Settings.workerBase || 'https://www.flywhere.app/api';
             const resp = await fetch(`${base}/notams?location=${locations}`, { signal: AbortSignal.timeout(30000) });
-            if (!resp.ok) throw new Error(`En-route NOTAM proxy ${resp.status}`);
+            if (!resp.ok) {
+                let errMsg = `En-route NOTAM fetch failed (${resp.status})`;
+                try { const d = await resp.json(); if (d.error) errMsg = d.error; } catch (_) {}
+                throw new Error(errMsg);
+            }
             const data = await resp.json();
             const features = data.features || [];
 
@@ -1746,6 +1865,7 @@ class WxBriefing {
             this._enrouteNotamFetchedAt = Date.now();
         } catch (err) {
             console.error('En-route NOTAM fetch failed:', err);
+            this._enrouteNotamFetchError = err.message;
             this._enrouteNotams = [];
         }
 
@@ -1985,9 +2105,7 @@ class WxBriefing {
         this._renderAfdSection();
         try {
             const coords = await this._getRouteCoords();
-            const keyCoords = [];
-            if (coords.length > 0) keyCoords.push(coords[0]);
-            if (coords.length > 1) keyCoords.push(coords[coords.length - 1]);
+            const keyCoords = coords;
 
             // Map cwa → { cwa: 'KXXX', name: 'Office Name NWS', airports: [] }
             const officeMap = new Map();
