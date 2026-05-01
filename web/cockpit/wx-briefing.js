@@ -1014,8 +1014,11 @@ class WxBriefing {
             // saved in an older session), the sort would put destination at the top.
             // Detect by checking whether the known departure appears last.
             if (dep && icaos[0] !== dep && icaos[icaos.length - 1] === dep) {
-                return [...icaos].reverse();
+                icaos.reverse();
             }
+            // Ensure destination appears last — flight plans often store only
+            // intermediate waypoints, leaving the destination out of plan.waypoints.
+            if (dest && dest !== dep && !icaos.includes(dest)) icaos.push(dest);
             return icaos;
         }
         // Fallback: departure/destination strings
@@ -1155,6 +1158,16 @@ class WxBriefing {
                     if (apt?.lat && apt?.lon) coords.push({ icao, lat: apt.lat, lon: apt.lon });
                 } catch (_) {}
             }
+        }
+
+        // Ensure the destination is always in the route line so corridor filter
+        // doesn't exclude it when it's absent from plan.waypoints.
+        const dest = this._flightPlan?.flight_plan?.destination || this._flightPlan?.destination;
+        if (dest && !coords.find(c => c.icao === dest)) {
+            try {
+                const apt = await this._db.getAirport(dest);
+                if (apt?.lat && apt?.lon) coords.push({ icao: dest, lat: apt.lat, lon: apt.lon });
+            } catch (_) {}
         }
 
         this._routeCoords = coords;
