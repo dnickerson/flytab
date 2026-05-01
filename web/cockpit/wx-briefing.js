@@ -1004,14 +1004,24 @@ class WxBriefing {
     _getStationList() {
         const plan = this._flightPlan;
         if (!plan) return [];
+        const dep  = plan.flight_plan?.departure  || plan.departure;
+        const dest = plan.flight_plan?.destination || plan.destination;
         // Extract ICAO codes from waypoints (same structure used by approach charts)
         const wps = plan.waypoints || [];
         const icaos = wps.map(wp => wp.icao).filter(id => id && /^[A-Z]{3,4}$/.test(id));
-        if (icaos.length) return icaos;
+        if (icaos.length) {
+            // Guard: if waypoints were stored destination-first (e.g. reversed route
+            // saved in an older session), the sort would put destination at the top.
+            // Detect by checking whether the known departure appears last.
+            if (dep && icaos[0] !== dep && icaos[icaos.length - 1] === dep) {
+                return [...icaos].reverse();
+            }
+            return icaos;
+        }
         // Fallback: departure/destination strings
         const list = [];
-        if (plan.departure) list.push(plan.departure);
-        if (plan.destination && plan.destination !== plan.departure) list.push(plan.destination);
+        if (dep) list.push(dep);
+        if (dest && dest !== dep) list.push(dest);
         return list;
     }
 
