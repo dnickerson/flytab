@@ -188,7 +188,7 @@ class DataStatus {
             cycle_code: dPlates.cycle_code || dPlates.effective_date,
             synced_states: JSON.parse(localStorage.getItem('flypi_plates_synced_states') || '[]'),
         };
-        if (dTerrain?.hasTerrain) seeded.terrain = { built_at: null };
+        if (dTerrain?.exists) seeded.terrain = { built_at: dTerrain.builtAt || null };
         for (const entry of mbt) {
             if (entry.exists) {
                 seeded.tiles = seeded.tiles || {};
