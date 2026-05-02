@@ -50,6 +50,7 @@ class DataStatus {
         this._cacheCancelled = false;
         this._resolvedBase = null;  // cached from _resolveHomeBase()
         this._resolvedVia  = null;
+        this._serverManifest = null;
         this._buildDOM();
     }
 
@@ -119,23 +120,18 @@ class DataStatus {
         const body = this._el.querySelector('.data-status-body');
         body.innerHTML = '<div class="ds-loading">Checking data…</div>';
 
-        const { base, via, nasrCycleInfo } = await this._resolveHomeBase();
+        const { base, via } = await this._resolveHomeBase();
         this._resolvedBase = base;
         this._resolvedVia  = via;
 
-        const [sNasr, dNasr, sCifp, dCifp, sPlates, dPlates, mbtiles, sTerrain, dTerrain] = await Promise.all([
-            nasrCycleInfo ? Promise.resolve(nasrCycleInfo) : (base ? this._probeServerNasr(base) : Promise.resolve(null)),
-            this._probeDeviceNasr(),
-            base ? this._probeServerCifp(base)   : Promise.resolve(null),
-            this._probeDeviceCifp(),
-            base ? this._probeServerPlates(base) : Promise.resolve({ cycle: null, states: [] }),
-            this._probeDevicePlates(),
+        const [serverManifest, mbtStatus] = await Promise.all([
+            base ? this._probeServerManifest(base) : Promise.resolve(null),
             this._probeMbtiles(),
-            base ? this._probeServerTerrain(base) : Promise.resolve(null),
-            this._probeDeviceTerrain(),
         ]);
+        this._serverManifest = serverManifest;
 
-        this._render({ via, base, sNasr, dNasr, sCifp, dCifp, sPlates, dPlates, mbtiles, sTerrain, dTerrain });
+        const deviceManifest = await this._readOrMigrateDeviceManifest();
+        this._render(serverManifest, deviceManifest, mbtStatus);
     }
 
     // ── Probe Methods ─────────────────────────────────────────────────────────
