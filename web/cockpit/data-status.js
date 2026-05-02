@@ -203,10 +203,21 @@ class DataStatus {
 
     // ── Render ────────────────────────────────────────────────────────────────
 
-    _render({ via, base, sNasr, dNasr, sCifp, dCifp, sPlates, dPlates, mbtiles, sTerrain, dTerrain }) {
+    _render(serverManifest, deviceManifest, mbtStatus) {
+        const via  = this._resolvedVia;
+        const base = this._resolvedBase;
         const body = this._el.querySelector('.data-status-body');
         const now  = new Date();
-        const mbt  = mbtiles || [];
+        const mbt  = mbtStatus || [];
+
+        const sNasr    = serverManifest?.nasr    || null;
+        const dNasr    = deviceManifest?.nasr    || null;
+        const sCifp    = serverManifest?.cifp    || null;
+        const dCifp    = deviceManifest?.cifp    || null;
+        const sPlates  = serverManifest?.plates  || null;
+        const dPlates  = deviceManifest?.plates  || null;
+        const sTerrain = serverManifest?.terrain || null;
+        const dTerrain = deviceManifest?.terrain || null;
 
         // ── Connection banner ────────────────────────────────────────────────
         let bannerColor, bannerText;
@@ -241,10 +252,15 @@ class DataStatus {
             nasrDevLine = '<span class="ds-muted">Not on tablet</span>';
         }
 
+        const nasrUpdateAvail = base && nasrServerDate && (
+            nasrDevDate !== nasrServerDate ||
+            (sNasr?.bundle_version != null && sNasr.bundle_version !== dNasr?.bundle_version)
+        );
+
         if (!nasrDevDate) {
             nasrBadge = this._badge('NOT DOWNLOADED', 'gray');
             if (base && nasrServerDate) nasrPrimary = `<button class="ds-action-btn" id="dsNasrBtn">DOWNLOAD</button>`;
-        } else if (base && nasrServerDate && nasrDevDate !== nasrServerDate) {
+        } else if (nasrUpdateAvail) {
             nasrBadge = this._badge('UPDATE AVAILABLE', 'yellow');
             nasrPrimary   = `<button class="ds-action-btn ds-update" id="dsNasrBtn">SYNC</button>`;
             nasrSecondary = `<button class="ds-action-btn ds-secondary" id="dsNasrRedownloadBtn">RE-DOWNLOAD</button>`;
@@ -291,10 +307,10 @@ class DataStatus {
         }
 
         // ── Plates section ───────────────────────────────────────────────────
-        const serverStates    = (sPlates?.states || []).map(s => s.state);
-        const syncedStates    = JSON.parse(localStorage.getItem('flypi_plates_synced_states') || '[]');
-        const plateSCode      = sPlates?.cycle?.effective_date || null;
-        const plateDCode      = dPlates?.effective_date || null;
+        const serverStates    = (sPlates?.state_sizes || []).map(s => s.state);
+        const syncedStates    = dPlates?.synced_states || [];
+        const plateSCode      = sPlates?.cycle_code || null;
+        const plateDCode      = dPlates?.cycle_code || null;
         let platesServerLine, platesDevLine, platesBadge, platesPrimary = '', platesSecondary = '';
 
         const adminUrl = base ? `${base}/admin-states.html` : null;
@@ -315,7 +331,7 @@ class DataStatus {
         // When plates are unavailable or server unreachable, show synced states as-is (can't determine diff).
         const serverHasPlates  = !!(base && plateSCode && serverStates.length > 0);
         const serverStateSet   = new Set(serverStates);
-        const serverStateSizes = Object.fromEntries((sPlates?.states || []).map(s => [s.state, s.size_mb]));
+        const serverStateSizes = Object.fromEntries((sPlates?.state_sizes || []).map(s => [s.state, s.size_mb]));
         const cycleOkForStates = !plateSCode || plateDCode === plateSCode;
         const allDisplayStates = serverHasPlates
             ? [...serverStates, ...syncedStates.filter(s => !serverStateSet.has(s))]
@@ -344,7 +360,8 @@ class DataStatus {
                 platesBadge   = this._badge('UPDATE AVAILABLE', 'yellow');
                 if (base) platesPrimary = `<button class="ds-action-btn ds-update" id="dsPlatesBtn">SYNC</button>`;
             } else {
-                const expDate = sNasr?.expiration_date ? new Date(sNasr.expiration_date) : null;
+                const expDate = sPlates?.expiration_date ? new Date(sPlates.expiration_date)
+                              : sNasr?.expiration_date   ? new Date(sNasr.expiration_date) : null;
                 platesBadge   = expDate ? this._cycleStatus(expDate, now) : this._badge('CURRENT', 'green');
                 if (base) platesPrimary = `<button class="ds-action-btn ds-secondary" id="dsPlatesBtn">SYNC</button>`;
             }
@@ -357,7 +374,13 @@ class DataStatus {
             { layer: 'ifr-low',   label: 'IFR Low Enroute (z7–11)',  approxMb: 600  },
             { layer: 'tac',       label: 'Terminal Area Charts (z8–12) — VFR Flyways', approxMb: 250 },
         ].map(({ layer, label, approxMb }) => {
-            const entry = mbt.find(l => l.layer === layer);
+            const entry  = mbt.find(l => l.layer === layer);
+            const sTile  = serverManifest?.tiles?.[layer] || null;
+            const dTile  = deviceManifest?.tiles?.[layer] || null;
+            const tileUpdateAvail = entry?.exists && sTile && dTile && (
+                sTile.cycle_date !== dTile.cycle_date ||
+                sTile.built_at   !== dTile.built_at
+            );
             let serverLine, devLine, badge, action = '';
 
             serverLine = base
@@ -366,8 +389,13 @@ class DataStatus {
 
             if (entry?.exists) {
                 devLine = `${(entry.size_mb || 0).toLocaleString()} MB on tablet`;
-                badge   = this._badge('ON DEVICE', 'green');
-                if (base) action = `<button class="ds-action-btn ds-mbt-dl-btn" data-layer="${layer}">RE-DOWNLOAD</button>`;
+                if (tileUpdateAvail) {
+                    badge  = this._badge('UPDATE AVAILABLE', 'yellow');
+                    action = base ? `<button class="ds-action-btn ds-update ds-mbt-dl-btn" data-layer="${layer}">RE-DOWNLOAD</button>` : '';
+                } else {
+                    badge  = this._badge('ON DEVICE', 'green');
+                    action = base ? `<button class="ds-action-btn ds-mbt-dl-btn" data-layer="${layer}">RE-DOWNLOAD</button>` : '';
+                }
             } else {
                 devLine = '<span class="ds-muted">Not downloaded</span>';
                 badge   = this._badge('NOT DOWNLOADED', 'gray');
@@ -379,33 +407,38 @@ class DataStatus {
 
         // ── Need Sync? ────────────────────────────────────────────────────────
         const needsSync = !!base && (
-            (nasrServerDate  && nasrDevDate  !== nasrServerDate)  ||
-            (cifpSCode       && cifpDCode    !== cifpSCode)       ||
+            nasrUpdateAvail  ||
+            (cifpSCode && cifpDCode !== cifpSCode) ||
             (serverHasPlates && (!cycleOkForStates || serverStates.some(s => !syncedStates.includes(s)))) ||
-            !mbt.find(l => l.layer === 'sectional')?.exists       ||
+            !mbt.find(l => l.layer === 'sectional')?.exists ||
             !mbt.find(l => l.layer === 'ifr-low')?.exists
         );
 
         const ts = new Date().toISOString().slice(0, 16).replace('T', ' ') + 'Z';
 
         // ── Terrain section ───────────────────────────────────────────────────
+        const terrainOnDevice    = dTerrain?.built_at != null;
+        const terrainUpdateAvail = terrainOnDevice && sTerrain && sTerrain.built_at !== dTerrain.built_at;
+        const terrainSizeMb      = sTerrain?.size_mb ?? null;
+        const terrainDevBuilt    = dTerrain?.built_at?.slice(0, 10) ?? '?';
+
         const terrainServerLine = sTerrain
-            ? (sTerrain.exists
-                ? `terrain.bin available (${sTerrain.sizeMb?.toFixed(0) ?? '?'} MB)`
-                : 'Not built on server')
-            : base ? 'Not available' : 'Server not reachable';
-        const terrainDevLine = (dTerrain?.exists)
-            ? `terrain.bin on device (${dTerrain.sizeMb?.toFixed(0) ?? '?'} MB, built ${dTerrain.builtAt?.slice(0, 10) ?? '?'})`
-            : 'Not synced';
-        const terrainBadge = (dTerrain?.exists)
-            ? this._badge('ON DEVICE', 'green')
-            : this._badge('NEEDED', 'gray');
+            ? `terrain.bin available${terrainSizeMb != null ? ` (${terrainSizeMb} MB)` : ''}`
+            : base ? '<span class="ds-muted">Not available</span>' : '<span class="ds-muted">Server not reachable</span>';
+        const terrainDevLine = terrainOnDevice
+            ? `terrain.bin on device (built ${terrainDevBuilt})`
+            : '<span class="ds-muted">Not synced</span>';
+        const terrainBadge = !terrainOnDevice
+            ? this._badge('NEEDED', 'gray')
+            : terrainUpdateAvail
+                ? this._badge('UPDATE AVAILABLE', 'yellow')
+                : this._badge('ON DEVICE', 'green');
         let terrainPrimary = '', terrainSecondary = '';
-        if (base && sTerrain?.exists) {
-            if (!dTerrain?.exists) {
+        if (base && sTerrain) {
+            if (!terrainOnDevice) {
                 terrainPrimary = `<button class="ds-action-btn ds-terrain-sync-btn">DOWNLOAD</button>`;
             } else {
-                terrainPrimary   = `<button class="ds-action-btn ds-secondary ds-terrain-sync-btn">SYNC</button>`;
+                terrainPrimary   = `<button class="ds-action-btn ${terrainUpdateAvail ? 'ds-update' : 'ds-secondary'} ds-terrain-sync-btn">SYNC</button>`;
                 terrainSecondary = `<button class="ds-action-btn ds-secondary ds-terrain-redownload-btn">RE-DOWNLOAD</button>`;
             }
         }
