@@ -477,7 +477,7 @@ class DataStatus {
                 <span style="font-size:11px;font-weight:400;color:var(--text-muted)">&#9660;</span>
             </div>
             <div id="dsSuppContent" style="display:none">
-                ${this._buildCacheSectionHtml(null, mbtiles)}
+                ${this._buildCacheSectionHtml(null, mbt)}
             </div>
             <div id="dsWeatherCacheSection"></div>
         `;
@@ -1414,7 +1414,7 @@ class DataStatus {
             const serverDate = serverCycle?.effective_date;
             const localDate  = localCycle?.effective_date;
             const cycleMatch = localDate && localDate === serverDate;
-            const syncedStates = JSON.parse(localStorage.getItem('flypi_plates_synced_states') || '[]');
+            const syncedStates = this._readDeviceManifest().plates?.synced_states || [];
             const allStatesSynced = statesResp.length > 0 && statesResp.every(s => syncedStates.includes(s.state));
             const needsUpdate = !cycleMatch || !allStatesSynced;
 
