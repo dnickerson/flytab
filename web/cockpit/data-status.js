@@ -140,55 +140,10 @@ class DataStatus {
 
     // ── Probe Methods ─────────────────────────────────────────────────────────
 
-    async _probeServerNasr(base) {
+    async _probeServerManifest(base) {
         try {
-            const r = await fetch(`${base}/nasr/cycle_info.json`,
+            const r = await fetch(`${base}/manifest.json`,
                 { cache: 'no-store', signal: AbortSignal.timeout(5000) });
-            return r.ok ? r.json() : null;
-        } catch { return null; }
-    }
-
-    async _probeDeviceNasr() {
-        try {
-            const r = await fetch(`${DataStatus.LOCAL_BASE}/nasr/cycle_info.json`,
-                { cache: 'no-store', signal: AbortSignal.timeout(2000) });
-            return r.ok ? r.json() : null;
-        } catch { return null; }
-    }
-
-    async _probeServerCifp(base) {
-        try {
-            const r = await fetch(`${base}/cifp/cifp_cycle_info.json`,
-                { cache: 'no-store', signal: AbortSignal.timeout(5000) });
-            return r.ok ? r.json() : null;
-        } catch { return null; }
-    }
-
-    async _probeDeviceCifp() {
-        try {
-            const r = await fetch(`${DataStatus.LOCAL_BASE}/cifp/cifp_cycle_info.json`,
-                { cache: 'no-store', signal: AbortSignal.timeout(2000) });
-            return r.ok ? r.json() : null;
-        } catch { return null; }
-    }
-
-    async _probeServerPlates(base) {
-        try {
-            const cycleR = await fetch(`${base}/plates/plates_cycle_info.json`,
-                { cache: 'no-store', signal: AbortSignal.timeout(5000) });
-            const cycle = cycleR.ok ? await cycleR.json() : null;
-            // Derive states list from cycle_info — use state_sizes if available for accurate MB display
-            const states = cycle?.state_sizes
-                ? cycle.state_sizes
-                : (cycle?.states ? cycle.states.map(s => ({ state: s, size_mb: 0 })) : []);
-            return { cycle, states };
-        } catch { return { cycle: null, states: [] }; }
-    }
-
-    async _probeDevicePlates() {
-        try {
-            const r = await fetch(`${DataStatus.LOCAL_BASE}/plates/plates_cycle_info.json`,
-                { cache: 'no-store', signal: AbortSignal.timeout(2000) });
             return r.ok ? r.json() : null;
         } catch { return null; }
     }
@@ -201,20 +156,53 @@ class DataStatus {
         } catch { return []; }
     }
 
-    async _probeServerTerrain(base) {
-        try {
-            const r = await fetch(`${base}/terrain/grid/status`,
-                { cache: 'no-store', signal: AbortSignal.timeout(5000) });
-            return r.ok ? r.json() : null;
-        } catch { return null; }
+    // ── Device Manifest (localStorage) ───────────────────────────────────────
+
+    _readDeviceManifest() {
+        try { return JSON.parse(localStorage.getItem('flytab_device_manifest')) || {}; }
+        catch { return {}; }
     }
 
-    async _probeDeviceTerrain() {
-        try {
-            const r = await fetch(`${DataStatus.LOCAL_BASE}/terrain/grid/status`,
-                { cache: 'no-store', signal: AbortSignal.timeout(2000) });
-            return r.ok ? r.json() : null;
-        } catch { return null; }
+    _saveDeviceSection(section, data) {
+        const m = this._readDeviceManifest();
+        m[section] = data;
+        localStorage.setItem('flytab_device_manifest', JSON.stringify(m));
+    }
+
+    async _readOrMigrateDeviceManifest() {
+        const m = this._readDeviceManifest();
+        if (Object.keys(m).length > 0) return m;
+        // One-time migration from old per-dataset device probes
+        const LOCAL = DataStatus.LOCAL_BASE;
+        const [dNasr, dCifp, dPlates, dTerrain, mbt] = await Promise.all([
+            fetch(`${LOCAL}/nasr/cycle_info.json`, { cache: 'no-store', signal: AbortSignal.timeout(2000) })
+                .then(r => r.ok ? r.json() : null).catch(() => null),
+            fetch(`${LOCAL}/cifp/cifp_cycle_info.json`, { cache: 'no-store', signal: AbortSignal.timeout(2000) })
+                .then(r => r.ok ? r.json() : null).catch(() => null),
+            fetch(`${LOCAL}/plates/plates_cycle_info.json`, { cache: 'no-store', signal: AbortSignal.timeout(2000) })
+                .then(r => r.ok ? r.json() : null).catch(() => null),
+            fetch(`${LOCAL}/terrain/grid/status`, { cache: 'no-store', signal: AbortSignal.timeout(2000) })
+                .then(r => r.ok ? r.json() : null).catch(() => null),
+            this._probeMbtiles(),
+        ]);
+        const seeded = {};
+        if (dNasr)    seeded.nasr    = { effective_date: dNasr.effective_date, bundle_version: dNasr.bundle_version };
+        if (dCifp)    seeded.cifp    = { cycle_code: dCifp.cycle_code || dCifp.effective_date };
+        if (dPlates)  seeded.plates  = {
+            cycle_code: dPlates.cycle_code || dPlates.effective_date,
+            synced_states: JSON.parse(localStorage.getItem('flypi_plates_synced_states') || '[]'),
+        };
+        if (dTerrain?.hasTerrain) seeded.terrain = { built_at: null };
+        for (const entry of mbt) {
+            if (entry.exists) {
+                seeded.tiles = seeded.tiles || {};
+                seeded.tiles[entry.layer] = {};  // no version — forces update check on next sync
+            }
+        }
+        if (Object.keys(seeded).length > 0) {
+            localStorage.setItem('flytab_device_manifest', JSON.stringify(seeded));
+        }
+        return seeded;
     }
 
     // ── Render ────────────────────────────────────────────────────────────────
