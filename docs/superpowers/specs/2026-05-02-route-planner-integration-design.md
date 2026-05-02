@@ -148,11 +148,32 @@ Pilot builds route pill-by-pill using the add-input row. "Apply" resolves coordi
 
 ## Pill Editor — Reliability Fixes from Prototype
 
-### Replace desktop drag-and-drop with tap-based reorder
-`routeEditor.html` uses `dragstart/dragover/drop` which doesn't work on Android. Replace with:
-- Up/down arrow buttons on each pill (revealed on tap, consistent with 44px target rule)
-- OR long-press → context menu → "Move up / Move down"
-The old `route-editor.js` already used tap-based reorder — follow that pattern.
+### Replace desktop drag-and-drop with touch drag handle
+
+`routeEditor.html` uses `dragstart/dragover/drop` which never fires on Android WebView — the browser fires touch events, not mouse events, and does not synthesize drag events from them. The `⠿` handle icon is already in the prototype; the missing piece is the touch implementation.
+
+The pill list is always a vertical column in both orientations, so drag axis is always Y.
+
+**Implementation (~80 lines, three handlers on the handle element):**
+
+```
+touchstart on ⠿ handle
+  → mark pill as dragging (reduce opacity, add dragging class)
+  → create a floating ghost clone that follows the finger
+  → record startY and original index
+
+touchmove
+  → translate ghost to follow touch Y
+  → iterate sibling pills via getBoundingClientRect() to find insertion slot
+  → highlight the target slot with a visual indicator (e.g. coloured top border)
+
+touchend
+  → splice pill from original index to detected slot
+  → remove ghost, re-render pills
+```
+
+No timers, no async, no state machine. Works for moves of any distance in one gesture.
+The `touch-action: none` already on pills in the prototype suppresses scroll interference — keep it on the handle only (not the whole pill) so the pill list itself remains scrollable when the pilot is not dragging.
 
 ### Replace `prompt()` with the existing add-input row
 "Insert Before/After" from the context menu sets an `_insertIndex` and focuses the add-input row. Same pattern as the old editor.
