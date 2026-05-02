@@ -708,6 +708,7 @@ class DataStatus {
             wireTap(platesRedlBtn, () => {
                 localStorage.removeItem('flypi_plates_synced_states');
                 localStorage.removeItem('flypi_plates_cached_at');
+                this._saveDeviceSection('plates', { cycle_code: null, synced_states: [] });
                 this._syncAll(null, showProg, updateProg, doneProg);
             });
         }
@@ -1331,6 +1332,10 @@ class DataStatus {
                 setStep('nasr', 'ok', `Updated to cycle ${serverDate} — loading into app…`);
                 // Force reimport into IndexedDB so the app reflects the new data immediately
                 await DataStatus._reimportNasr();
+                this._saveDeviceSection('nasr', {
+                    effective_date: serverResp.effective_date,
+                    bundle_version: serverResp.bundle_version,
+                });
                 setStep('nasr', 'ok', `Updated to cycle ${serverDate}`);
             }
         } catch (e) { failStep('nasr', e); }
@@ -1359,6 +1364,7 @@ class DataStatus {
                     const msg = await cifpResp.text().catch(() => `HTTP ${cifpResp.status}`);
                     throw new Error(`fetch-zip failed: ${msg}`);
                 }
+                this._saveDeviceSection('cifp', { cycle_code: serverCode });
                 setStep('cifp', 'ok', `Updated to cycle ${serverCode}`);
             }
         } catch (e) { failStep('cifp', e); }
@@ -1385,6 +1391,10 @@ class DataStatus {
                 );
                 if (!resp.ok) throw new Error(await resp.text());
                 const result = await resp.json();
+                if (this._serverManifest?.tiles?.[layer]) {
+                    const devTiles = this._readDeviceManifest().tiles || {};
+                    this._saveDeviceSection('tiles', { ...devTiles, [layer]: this._serverManifest.tiles[layer] });
+                }
                 setStep(stepId, 'ok', `Downloaded — ${Math.round(result.bytes / (1024 * 1024)).toLocaleString()} MB`);
             } catch (e) { failStep(stepId, e); }
         }
@@ -1460,6 +1470,10 @@ class DataStatus {
                 }
                 localStorage.setItem('flypi_plates_synced_states', JSON.stringify(newlySynced));
                 localStorage.setItem('flypi_plates_cached_at', Date.now().toString());
+                this._saveDeviceSection('plates', {
+                    cycle_code: serverCycle.cycle_code || serverCycle.effective_date,
+                    synced_states: newlySynced,
+                });
                 setStep('plates', 'ok', `${done} states downloaded — cycle ${serverDate}`);
             }
         } catch (e) { failStep('plates', e); }
@@ -1558,6 +1572,9 @@ class DataStatus {
                 window.terrainGrid.load();
             }
 
+            if (this._serverManifest?.terrain) {
+                this._saveDeviceSection('terrain', this._serverManifest.terrain);
+            }
             doneProg('Terrain grid synced — reload app to activate', 'var(--status-ok)');
         } catch (err) {
             doneProg('Terrain sync failed: ' + err.message, 'var(--status-danger)');
@@ -1602,6 +1619,10 @@ class DataStatus {
             if (!resp.ok) throw new Error(await resp.text());
             const result = await resp.json();
             const mb = Math.round(result.bytes / (1024 * 1024));
+            if (this._serverManifest?.tiles?.[layer]) {
+                const devTiles = this._readDeviceManifest().tiles || {};
+                this._saveDeviceSection('tiles', { ...devTiles, [layer]: this._serverManifest.tiles[layer] });
+            }
             doneProg(`\u2713 ${layer}.mbtiles downloaded (${mb.toLocaleString()} MB)`, 'var(--status-ok)');
             setTimeout(() => this._refresh(), 1500);
         } catch (err) {
