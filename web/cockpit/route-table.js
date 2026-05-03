@@ -80,7 +80,6 @@ class RouteTable {
         this._resultsEl = null;
 
         this._lastSituation = null;
-        this._routeEditor = null; // for Direct-To modal
         this._nasrDb = null;
         this._undoStack = [];
         this._searchDebounce = null;
@@ -95,10 +94,6 @@ class RouteTable {
         this._buildDOM();
     }
 
-    /** Wire up route editor so Direct-To still works */
-    setRouteEditor(editor) {
-        this._routeEditor = editor;
-    }
 
     /** Wire EngineMLBridge so the status card stays in sync */
     setEngineML(engineML) {
@@ -2075,12 +2070,11 @@ class RouteTable {
             this.toggle();
         });
 
-        // EDIT button opens the separate route editor
+        // EDIT button opens the route planner panel
         this._editBtn = this._handleEl.querySelector('.route-table-edit-btn');
         wireTap(this._editBtn, () => {
-            console.log('[RouteTable] EDIT button fired, routeEditor=', !!(typeof app !== 'undefined' && app.routeEditor));
-            if (typeof app !== 'undefined' && app.routeEditor) {
-                app.routeEditor.startEditRoute();
+            if (typeof app !== 'undefined') {
+                app.openRoutePlanner(app._currentTrip);
             }
         });
 
