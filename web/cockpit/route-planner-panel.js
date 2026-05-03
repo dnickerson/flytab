@@ -43,6 +43,12 @@ class RoutePlannerPanel {
 
         // Drag state
         this._dragIdx = null;
+
+        // Render epoch — incremented on each _renderPills() call to invalidate stale long-press timers
+        this._renderEpoch = 0;
+
+        // Document click handler ref for destroy()
+        this._onDocClick = null;
     }
 
     /** Build DOM, wire events, start building airway graph. */
@@ -62,6 +68,18 @@ class RoutePlannerPanel {
     close() {
         this._route       = [];
         this._insertIndex = null;
+    }
+
+    /** Clean up listeners. Call when the panel is permanently removed. */
+    destroy() {
+        if (this._onDocClick) {
+            document.removeEventListener('click', this._onDocClick);
+            this._onDocClick = null;
+        }
+        if (this._ctxMenu) {
+            this._ctxMenu.remove();
+            this._ctxMenu = null;
+        }
     }
 
     // ── Persistence ──────────────────────────────────────────────────────────
@@ -97,7 +115,7 @@ class RoutePlannerPanel {
 
         // Rebuild pill array from waypoints (no airway annotation at load time)
         this._route = wps.map((wp, i) => {
-            const id   = wp.icao || wp.name || '?';
+            const id   = wp.icao || wp.name || wp.fix || '?';
             let   type = 'fix';
             if (i === 0)            type = 'dep';
             else if (i === wps.length - 1) type = 'dest';
@@ -108,7 +126,7 @@ class RoutePlannerPanel {
 
         // Seed _coords from loaded plan so Apply works without re-running plan()
         for (const wp of wps) {
-            const id = wp.icao || wp.name;
+            const id = wp.icao || wp.name || wp.fix;
             if (id && wp.lat != null && wp.lon != null)
                 this._coords[id] = { lat: wp.lat, lon: wp.lon };
         }
@@ -397,7 +415,8 @@ class RoutePlannerPanel {
         `;
         document.body.appendChild(this._ctxMenu);
 
-        document.addEventListener('click', () => this._closeMenu());
+        this._onDocClick = () => this._closeMenu();
+        document.addEventListener('click', this._onDocClick);
         this._ctxMenu.addEventListener('click', e => e.stopPropagation());
 
         this._ctxMenu.querySelector('#rppMDelete').addEventListener('click', () => {
@@ -452,6 +471,7 @@ class RoutePlannerPanel {
 
     _renderPills() {
         if (!this._pillsEl) return;
+        this._renderEpoch++;
         this._pillsEl.innerHTML = '';
 
         this._route.forEach((item, i) => {
@@ -513,8 +533,12 @@ class RoutePlannerPanel {
 
     _wireLongPress(pill, idx) {
         let timer = null;
+        const epoch = this._renderEpoch;
         pill.addEventListener('touchstart', e => {
-            timer = setTimeout(() => this._openMenu(e.touches[0], idx), 400);
+            timer = setTimeout(() => {
+                if (this._renderEpoch !== epoch) return;
+                this._openMenu(e.touches[0], idx);
+            }, 400);
         }, { passive: true });
         pill.addEventListener('touchend',   () => clearTimeout(timer), { passive: true });
         pill.addEventListener('touchmove',  () => clearTimeout(timer), { passive: true });
@@ -598,6 +622,15 @@ class RoutePlannerPanel {
             this._dragIdx = null;
             dropTarget    = null;
             this._render();
+        }, { passive: true });
+
+        handleEl.addEventListener('touchcancel', () => {
+            ghost?.remove();
+            ghost = null;
+            allPills().forEach(p =>
+                p.classList.remove('dragging', 'drag-over-left', 'drag-over-right'));
+            this._dragIdx = null;
+            dropTarget    = null;
         }, { passive: true });
     }
 
