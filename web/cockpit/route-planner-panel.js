@@ -531,7 +531,9 @@ class RoutePlannerPanel {
         this._renderEpoch++;
         this._pillsEl.innerHTML = '';
 
-        const view = this._compactView ? this._collapseSameAirway(this._route) : this._route;
+        const view = this._compactView
+            ? this._collapseSameAirway(this._route)
+            : this._route.map((item, i) => ({ item, originalIdx: i }));
         view.forEach(({ item, originalIdx }) => {
             const pill = this._buildPill(item, originalIdx);
             this._pillsEl.appendChild(pill);
