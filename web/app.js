@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v6.57';
+const FLYTAB_VERSION = 'v7.04';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -58,7 +58,7 @@ class FlyTabApp {
         this.trackLog = null;
         this.deviceStatus = null;
         this.rangeCalc = null;
-        this.routeEditor = null;
+        this.routePlannerPanel = null;
 
         // Cockpit redesign components
         this.vectorLayers = null;
@@ -189,6 +189,10 @@ class FlyTabApp {
         console.log(`FlyTab ${FLYTAB_VERSION} initialized`);
 
         this._startWatchdog();
+        window.addEventListener('resize', () => {
+            if (document.getElementById('cockpitContainer')?.classList.contains('route-editing'))
+                setTimeout(() => this.cockpitMap?.map?.invalidateSize(), 50);
+        });
         this._initDeepLink();
     }
 
@@ -415,7 +419,7 @@ class FlyTabApp {
                 this.vectorLayers._onInternetMetarsFetched = () => this._updateWeatherAge(this._currentTrip);
                 this.vectorLayers.onAirportClick((apt) => {
                     if (typeof _wireTapLastTouchAt !== 'undefined' && Date.now() - _wireTapLastTouchAt < 500) return;
-                    if (this.routeEditor?.isVisible()) return;
+                    if (document.getElementById('cockpitContainer')?.classList.contains('route-editing')) return;
                     if (this.routeTable?.isEditing()) {
                         this.routeTable.addWaypointSmart({
                             icao: apt.icao, name: apt.name || apt.icao,
@@ -428,7 +432,7 @@ class FlyTabApp {
 
                 this.vectorLayers.onNavaidClick((nav) => {
                     if (typeof _wireTapLastTouchAt !== 'undefined' && Date.now() - _wireTapLastTouchAt < 500) return;
-                    if (this.routeEditor?.isVisible()) return;
+                    if (document.getElementById('cockpitContainer')?.classList.contains('route-editing')) return;
                     if (this.routeTable?.isEditing()) {
                         this.routeTable.addWaypointSmart({
                             icao: nav.id, name: nav.name || nav.id,
@@ -441,7 +445,7 @@ class FlyTabApp {
 
                 this.vectorLayers.onFixClick((fix) => {
                     if (typeof _wireTapLastTouchAt !== 'undefined' && Date.now() - _wireTapLastTouchAt < 500) return;
-                    if (this.routeEditor?.isVisible()) return;
+                    if (document.getElementById('cockpitContainer')?.classList.contains('route-editing')) return;
                     if (this.routeTable?.isEditing()) {
                         this.routeTable.addWaypointSmart({
                             icao: fix.id, name: fix.id,
@@ -687,47 +691,8 @@ class FlyTabApp {
                 }
             });
             document.addEventListener('cifp:load-procedure', (e) => {
-                const { icao, insertBefore = [], insertAfter = [], airportWp } = e.detail;
-                if (!this.routeEditor) return;
-
-                // Empty route: seed the airport as destination first
-                if (this.routeEditor._waypoints.length === 0 && airportWp) {
-                    this.routeEditor._addWaypoint(airportWp, 0);
-                }
-
-                // Stamp approach airport data (field elevation, altLocked) onto the
-                // existing destination waypoint so intermediate airport legs don't
-                // inherit cruise altitude. Find by matching ICAO, fallback to last wp.
-                if (airportWp && icao) {
-                    const wps = this.routeEditor._waypoints;
-                    let destIdx = wps.findIndex(w => w.icao?.toUpperCase() === icao.toUpperCase());
-                    if (destIdx < 0 && wps.length > 0) destIdx = wps.length - 1;
-                    if (destIdx >= 0) {
-                        const existing = wps[destIdx];
-                        wps[destIdx] = {
-                            ...existing,
-                            type: 'APT',
-                            elev_ft: existing.elev_ft ?? airportWp.elev_ft,
-                            alt: existing.elev_ft ?? airportWp.elev_ft ?? airportWp.alt,
-                            altLocked: true,
-                        };
-                    }
-                }
-
-                // Insert IAF, FAF, RW before the destination (last waypoint)
-                if (insertBefore.length) {
-                    const destIdx = Math.max(this.routeEditor._waypoints.length - 1, 0);
-                    for (let i = 0; i < insertBefore.length; i++) {
-                        this.routeEditor._addWaypoint(insertBefore[i], destIdx + i);
-                    }
-                }
-
-                // Append MAP after destination
-                for (const wp of insertAfter) {
-                    this.routeEditor._addWaypoint(wp, this.routeEditor._waypoints.length);
-                }
-
-                this.routeEditor._applyRoute();
+                // Approach procedure insertion via route planner panel not yet implemented (Stage 2).
+                console.log('[FlyTab] cifp:load-procedure received — Stage 2 feature', e.detail?.icao);
             });
         }
 
@@ -772,22 +737,12 @@ class FlyTabApp {
         this.trackLog = new TrackLog(this.stratuxClient, this.cockpitMap);
         this.trackLog.init();
 
-        // Route editor (NasrDB lazy-opens on first query)
-        this.routeEditor = new RouteEditor(
-            document.body, nasrDb, this.stratuxClient, this.cockpitMap
-        );
-        this.routeEditor.init();
-
-        // Wire route table EDIT button to route editor
-        if (this.routeTable) {
-            this.routeTable.setRouteEditor(this.routeEditor);
-        }
-
-        // Wire airport popup Direct-To to route editor
-        if (this.airportPopup && this.routeEditor) {
-            this.airportPopup.onDirectTo((apt) => {
-                this.routeEditor._executeDirectTo(apt);
-            });
+        // Route planner panel
+        if (typeof RoutePlannerPanel !== 'undefined') {
+            this.routePlannerPanel = new RoutePlannerPanel(
+                document.getElementById('routePlannerPanel'), nasrDb
+            );
+            this.routePlannerPanel.init();
         }
 
         // Device status (headless — only shown on demand)
@@ -830,7 +785,6 @@ class FlyTabApp {
         if (typeof EverywhereSearch !== 'undefined') {
             this.everywhereSearch = new EverywhereSearch(nasrDb, this.stratuxClient);
             if (this.approachCharts) this.everywhereSearch.setApproachCharts(this.approachCharts);
-            if (this.routeEditor)    this.everywhereSearch.setRouteEditor(this.routeEditor);
             if (this.routeTable)     this.everywhereSearch.setRouteTable(this.routeTable);
             if (this.airportPopup)   this.everywhereSearch.setAirportPopup(this.airportPopup);
             if (this.cockpitMap)     this.everywhereSearch.setCockpitMap(this.cockpitMap);
@@ -1068,6 +1022,18 @@ class FlyTabApp {
         if (loadBtn) loadBtn.style.display = '';
     }
 
+    openRoutePlanner(plan) {
+        document.getElementById('cockpitContainer')?.classList.add('route-editing');
+        this.routePlannerPanel?.open(plan || this._currentTrip);
+        setTimeout(() => this.cockpitMap?.map?.invalidateSize(), 300);
+    }
+
+    closeRoutePlanner() {
+        document.getElementById('cockpitContainer')?.classList.remove('route-editing');
+        this.routePlannerPanel?.close();
+        setTimeout(() => this.cockpitMap?.map?.invalidateSize(), 300);
+    }
+
     async applyRouteEdit(plan, { fromRouteTable = false } = {}) {
         if (!plan) return;
         plan.edited_at = new Date().toISOString();
@@ -1242,14 +1208,8 @@ class FlyTabApp {
         if (this.routeTable && !skipRouteTable) this.routeTable.loadPlan(normalized);
         if (this.cockpitMap && wps.length >= 2) this.cockpitMap.setRoute(wps);
         if (this.rangeCalc) this.rangeCalc.setPlan(normalized);
-        if (this.routeEditor) this.routeEditor.loadRoute(normalized);
-
-        if (!skipRouteTable && this.routeTable && this.routeEditor) {
-            const tLen = this.routeTable._waypoints?.length;
-            const eLen = this.routeEditor._waypoints?.length;
-            if (tLen !== eLen)
-                DiagLog.log('plan', `state-drift: routeTable(${tLen}) ≠ routeEditor(${eLen})`);
-        }
+        // routePlannerPanel syncs via open() when the pilot explicitly opens it;
+        // no live-sync needed while the panel is closed.
 
         if (this.approachCharts) {
             const icaoList = wps.map(wp => wp.icao).filter(Boolean);

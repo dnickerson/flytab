@@ -271,7 +271,7 @@ class TabBar {
         overlay.querySelector('#_newRouteCancel').addEventListener('click', () => overlay.remove());
         overlay.querySelector('#_newRouteConfirm').addEventListener('click', () => {
             overlay.remove();
-            window.app?.routeEditor?.startNewRoute();
+            if (typeof app !== 'undefined') app.openRoutePlanner(null);
         });
         overlay.addEventListener('click', (e) => {
             if (Date.now() - openedAt < 500) return;

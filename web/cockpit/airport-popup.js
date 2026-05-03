@@ -155,9 +155,9 @@ class AirportPopup {
                 } else if (action === 'plates' && this._approachCharts) {
                     this._approachCharts.showForAirport(airport.icao);
                     this.close();
-                } else if (action === 'add-route' && typeof app !== 'undefined' && app.routeEditor) {
-                    app.routeEditor._addWaypoint({ icao: airport.icao, name: airport.name, lat: airport.lat, lon: airport.lon, type: 'APT' });
-                    app.routeEditor._applyRoute();
+                } else if (action === 'add-route') {
+                    // Add-to-route via route planner not yet implemented (Stage 2)
+                    console.log('[FlyTab] Add to Route — Stage 2 feature');
                     this.close();
                 } else if (action === 'craft' && this._ifrClearance) {
                     this._ifrClearance.show(null, airport);
