@@ -9659,7 +9659,6 @@ body.emergency-active #tabBar {
     .route-editing #routePlannerPanel {
         grid-row: 1;
         grid-column: 1;
-        order: -1;
     }
     .route-editing #mapContainer {
         grid-row: 1;
@@ -9707,7 +9706,7 @@ body.emergency-active #tabBar {
     font-size: 9px;
     letter-spacing: .1em;
     text-transform: uppercase;
-    color: #6b7a8d;
+    color: #4a5568;
     margin-bottom: 3px;
 }
 .rpp-icao-field input {
@@ -9723,7 +9722,7 @@ body.emergency-active #tabBar {
     letter-spacing: .06em;
 }
 .rpp-icao-field input::placeholder { color: #b0bac6; }
-.rpp-arrow-sep { text-align: center; font-size: 16px; color: #6b7a8d; }
+.rpp-arrow-sep { text-align: center; font-size: 16px; color: #4a5568; }
 
 /* Options row */
 .rpp-opts-row {
@@ -9736,7 +9735,7 @@ body.emergency-active #tabBar {
     font-size: 9px;
     letter-spacing: .1em;
     text-transform: uppercase;
-    color: #6b7a8d;
+    color: #4a5568;
     white-space: nowrap;
 }
 .rpp-alt-input {
@@ -9765,7 +9764,8 @@ body.emergency-active #tabBar {
     color: #0a0c0f;
     cursor: pointer;
     min-width: 44px;
-    min-height: 36px;
+    min-height: 44px;
+    touch-action: manipulation;
 }
 .rpp-leg-btn.active {
     background: #1a6fbb;
@@ -9875,6 +9875,9 @@ body.emergency-active #tabBar {
     flex-shrink: 0;
 }
 .rpp-pill:hover .rpp-pill-del { display: inline-flex; }
+@media (pointer: coarse) {
+    .rpp-pill-del { display: inline-flex; }
+}
 
 .rpp-type-badge {
     font-size: 9px;
@@ -9928,6 +9931,7 @@ body.emergency-active #tabBar {
     cursor: pointer;
     white-space: nowrap;
     min-height: 44px;
+    touch-action: manipulation;
 }
 .rpp-add-btn:active { background: #155fa0; }
 
@@ -9949,6 +9953,7 @@ body.emergency-active #tabBar {
     flex: 1;
     text-align: center;
     min-height: 44px;
+    touch-action: manipulation;
 }
 .rpp-tbtn:active { background: #e8f0fb; border-color: #1a6fbb; }
 .rpp-tbtn-apply {
@@ -9964,7 +9969,7 @@ body.emergency-active #tabBar {
     font-size: 9px;
     letter-spacing: .1em;
     text-transform: uppercase;
-    color: #6b7a8d;
+    color: #4a5568;
     margin-bottom: 2px;
 }
 .rpp-route-str {
@@ -10004,6 +10009,7 @@ body.emergency-active #tabBar {
     align-items: center;
     gap: 8px;
     white-space: nowrap;
+    touch-action: manipulation;
 }
 .rpp-menu-item:hover { background: #f0f6ff; }
 .rpp-menu-item:active { background: #e0eefa; }
@@ -10015,5 +10021,5 @@ body.emergency-active #tabBar {
     font-size: 9px;
     letter-spacing: .1em;
     text-transform: uppercase;
-    color: #6b7a8d;
+    color: #4a5568;
 }
