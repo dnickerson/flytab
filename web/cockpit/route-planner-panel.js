@@ -234,17 +234,12 @@ class RoutePlannerPanel {
         // Add-input row
         inner.appendChild(this._buildAddRow());
 
-        // Toolbar: Paste | Plan | Clear | Copy
+        // Toolbar: action buttons + Apply on the same row
         inner.appendChild(this._buildToolbar());
 
-        // Route string
-        const routeLabel = document.createElement('div');
-        routeLabel.className = 'rpp-route-label';
-        routeLabel.textContent = 'Route string';
-        inner.appendChild(routeLabel);
-
+        // Hidden element backing the Copy button (kept so Copy can read the route)
         this._routeStrEl = document.createElement('div');
-        this._routeStrEl.className = 'rpp-route-str';
+        this._routeStrEl.hidden = true;
         inner.appendChild(this._routeStrEl);
 
         this._el.appendChild(inner);
@@ -439,22 +434,16 @@ class RoutePlannerPanel {
         bar.appendChild(mkBtn('Clear',       () => this._onClearTap()));
         bar.appendChild(mkBtn('Copy',        () => this._onCopyTap()));
 
-        // Compact toggle — collapses consecutive same-airway fixes to just the airway
-        this._compactBtn = mkBtn(this._compactView ? 'Full' : 'Compact',
+        // Compact toggle — label always reads 'Compact'; active state shown via blue fill
+        this._compactBtn = mkBtn('Compact',
                                   () => this._onCompactToggle(),
                                   this._compactView ? 'rpp-tbtn-active' : '');
         bar.appendChild(this._compactBtn);
 
-        // Apply button on its own row (full-width, prominent)
-        const applyBar = document.createElement('div');
-        applyBar.className = 'rpp-toolbar';
-        applyBar.appendChild(mkBtn('Apply & Close', () => this._onApplyTap(), 'rpp-tbtn-apply'));
+        // Apply on the same row — flex grows so it dominates without a second row
+        bar.appendChild(mkBtn('Apply & Close', () => this._onApplyTap(), 'rpp-tbtn-apply'));
 
-        // Return a fragment with both bars
-        const frag = document.createDocumentFragment();
-        frag.appendChild(bar);
-        frag.appendChild(applyBar);
-        return frag;
+        return bar;
     }
 
     _buildContextMenu() {
@@ -586,7 +575,6 @@ class RoutePlannerPanel {
         this._compactView = !this._compactView;
         this._saveOpts();
         if (this._compactBtn) {
-            this._compactBtn.textContent = this._compactView ? 'Full' : 'Compact';
             this._compactBtn.classList.toggle('rpp-tbtn-active', this._compactView);
         }
         this._renderPills();

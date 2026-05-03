@@ -9715,6 +9715,12 @@ body.route-editing-mode .route-table-sheet {
     display: none !important;
 }
 
+/* Reclaim the tab-bar padding reservation when those bars are hidden — but keep
+   safe-area-inset-bottom so touch targets don't sit on the Android nav gesture. */
+body.route-editing-mode #cockpitView {
+    padding-bottom: env(safe-area-inset-bottom, 0px) !important;
+}
+
 /* ── Route Planner Panel Inner Layout ────────────────────────────────────── */
 .rpp-inner {
     padding: 12px;
@@ -10012,6 +10018,9 @@ body.route-editing-mode .route-table-sheet {
     color: #fff;
     border-color: #1a6fbb;
     font-weight: 700;
+    flex: 2;             /* dominate the toolbar row */
+    font-size: 13px;
+    letter-spacing: 0.03em;
 }
 .rpp-tbtn-apply:active { background: #155fa0; }
 
