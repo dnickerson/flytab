@@ -285,8 +285,9 @@ class CockpitMap {
             errorTileUrl: '',
         });
 
-        // IFR Low Enroute — 512px retina tiles (stored at standard z/x/y coords, 2× pixel density)
-        // tileSize stays 256 — Leaflet positions tiles by z/x/y grid, 512px images scale crisper on retina.
+        // IFR Low Enroute — z7-z10: 512px retina (stitched from z+1); z11: 512px retina in
+        // terminal areas where ArcGIS z12 has content, 256px native fallback elsewhere.
+        // tileSize stays 256 — Leaflet positions tiles by z/x/y grid, 512px images render crisper on retina.
         // updateWhenZooming: false — prevents zoom-transition seam where CSS-scaled old tiles and
         // newly-loading tiles appear at different scales. Leaflet waits until zoom ends to load.
         this._ifrLayer = L.tileLayer(`${tileBase}/ifr-low/{z}/{x}/{y}.webp`, {
