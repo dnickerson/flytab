@@ -9622,3 +9622,398 @@ body.emergency-active #tabBar {
     letter-spacing: 0.04em;
     padding: 0 12px 4px;
 }
+
+/* ── Route Planner Layout ──────────────────────────────────────────────────── */
+
+/* cockpitContainer wraps the map area + route planner panel.
+   Left rail remains outside and is unaffected by route editing mode. */
+#cockpitContainer {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-width: 0;
+    position: relative;
+}
+
+/* Portrait: map top 60%, editor bottom 40% */
+.route-editing #cockpitContainer {
+    display: grid;
+    grid-template-rows: 60fr 40fr;
+    grid-template-columns: 1fr;
+    height: 100%;
+}
+.route-editing #routePlannerPanel {
+    grid-row: 2;
+    grid-column: 1;
+}
+
+/* Landscape: editor left 40%, map right 60%.
+   Right sidebar overlays the map column — pilot can tap an airport while
+   the route editor is open. */
+@media (orientation: landscape) {
+    .route-editing #cockpitContainer {
+        grid-template-rows: 1fr;
+        grid-template-columns: 40fr 60fr;
+    }
+    .route-editing #routePlannerPanel {
+        grid-row: 1;
+        grid-column: 1;
+        order: -1;
+    }
+    .route-editing #mapContainer {
+        grid-row: 1;
+        grid-column: 2;
+    }
+}
+
+#routePlannerPanel {
+    display: none;
+    overflow-y: auto;
+    background: #f0f2f4;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 13px;
+    color: #0a0c0f;
+}
+.route-editing #routePlannerPanel {
+    display: flex;
+    flex-direction: column;
+}
+
+/* ── Route Planner Panel Inner Layout ────────────────────────────────────── */
+.rpp-inner {
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    flex: 1;
+}
+
+/* DEP/DEST row */
+.rpp-dep-row {
+    display: grid;
+    grid-template-columns: 1fr 28px 1fr;
+    gap: 6px;
+    align-items: center;
+}
+.rpp-icao-field {
+    background: #fff;
+    border: 1.5px solid #b0bac6;
+    border-radius: 8px;
+    padding: 8px 10px;
+}
+.rpp-icao-field label {
+    display: block;
+    font-size: 9px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: #6b7a8d;
+    margin-bottom: 3px;
+}
+.rpp-icao-field input {
+    background: transparent;
+    border: none;
+    outline: none;
+    font-family: inherit;
+    font-size: 17px;
+    font-weight: 700;
+    color: #0a0c0f;
+    width: 100%;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+}
+.rpp-icao-field input::placeholder { color: #b0bac6; }
+.rpp-arrow-sep { text-align: center; font-size: 16px; color: #6b7a8d; }
+
+/* Options row */
+.rpp-opts-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+}
+.rpp-opts-label {
+    font-size: 9px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: #6b7a8d;
+    white-space: nowrap;
+}
+.rpp-alt-input {
+    width: 72px;
+    background: #fff;
+    border: 1.5px solid #b0bac6;
+    border-radius: 6px;
+    padding: 5px 7px;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    color: #0a0c0f;
+    outline: none;
+    text-align: right;
+}
+.rpp-alt-input:focus { border-color: #1a6fbb; }
+.rpp-leg-btns { display: flex; gap: 3px; }
+.rpp-leg-btn {
+    background: #fff;
+    border: 1.5px solid #b0bac6;
+    border-radius: 6px;
+    padding: 5px 9px;
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    color: #0a0c0f;
+    cursor: pointer;
+    min-width: 44px;
+    min-height: 36px;
+}
+.rpp-leg-btn.active {
+    background: #1a6fbb;
+    border-color: #1a6fbb;
+    color: #fff;
+}
+.rpp-check-row {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    color: #0a0c0f;
+    white-space: nowrap;
+}
+.rpp-check-row input[type=checkbox] { width: 18px; height: 18px; cursor: pointer; }
+.rpp-reserve-input {
+    width: 46px;
+    background: #fff;
+    border: 1.5px solid #b0bac6;
+    border-radius: 6px;
+    padding: 5px 6px;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    color: #0a0c0f;
+    outline: none;
+    text-align: right;
+}
+.rpp-reserve-input:focus { border-color: #1a6fbb; }
+
+/* Pill box */
+.rpp-pill-box {
+    background: #fff;
+    border: 1.5px solid #b0bac6;
+    border-radius: 10px;
+    padding: 10px;
+    min-height: 60px;
+}
+.rpp-pill-box.drag-active {
+    border-color: #1a6fbb;
+    background: #f0f6ff;
+}
+
+/* Pills — horizontal left-to-right wrapping */
+.rpp-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    align-items: center;
+    min-height: 38px;
+}
+
+.rpp-pill {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    height: 32px;
+    border-radius: 16px;
+    font-family: inherit;
+    font-weight: 600;
+    font-size: 12px;
+    letter-spacing: .04em;
+    cursor: default;
+    transition: transform .1s, box-shadow .1s;
+    padding: 0 11px 0 6px;
+    user-select: none;
+    -webkit-user-select: none;
+}
+.rpp-pill.dragging { opacity: .35; transform: scale(.96); }
+.rpp-pill.drag-over-left  { box-shadow: -3px 0 0 2px #1a6fbb; }
+.rpp-pill.drag-over-right { box-shadow:  3px 0 0 2px #1a6fbb; }
+
+.rpp-pill-fix    { background: #dbeffe; border: 1.5px solid #5aaee8; color: #0a4a7c; }
+.rpp-pill-dep,
+.rpp-pill-dest   { background: #e8e2ff; border: 1.5px solid #7c62d4; color: #3a1e8a; }
+.rpp-pill-awy    { background: #d4f5e2; border: 1.5px solid #3fb86a; color: #0e4a26; }
+.rpp-pill-direct { background: #fff3d0; border: 1.5px solid #d4a017; color: #5a3a00; font-style: italic; }
+.rpp-pill-fuel   { background: #ffe4cc; border: 1.5px solid #e07030; color: #7a2800; }
+
+.rpp-pill-handle {
+    display: inline-flex;
+    align-items: center;
+    margin-right: 4px;
+    opacity: .4;
+    font-size: 10px;
+    cursor: grab;
+    touch-action: none;
+    padding: 4px 2px;
+    min-width: 18px;
+    min-height: 28px;
+    justify-content: center;
+}
+.rpp-pill-handle:active { cursor: grabbing; }
+
+.rpp-pill-del {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: rgba(0,0,0,.12);
+    margin-left: 5px;
+    font-size: 11px;
+    cursor: pointer;
+    color: inherit;
+    flex-shrink: 0;
+}
+.rpp-pill:hover .rpp-pill-del { display: inline-flex; }
+
+.rpp-type-badge {
+    font-size: 9px;
+    background: rgba(0,0,0,.09);
+    border-radius: 6px;
+    padding: 1px 5px;
+    margin-left: 4px;
+    letter-spacing: .04em;
+}
+
+/* Add input row */
+.rpp-add-row {
+    display: flex;
+    gap: 6px;
+}
+.rpp-add-input {
+    flex: 1;
+    background: #fff;
+    border: 1.5px solid #b0bac6;
+    border-radius: 8px;
+    padding: 7px 10px;
+    font-family: inherit;
+    font-size: 13px;
+    color: #0a0c0f;
+    outline: none;
+    text-transform: uppercase;
+}
+.rpp-add-input:focus { border-color: #1a6fbb; }
+.rpp-add-input::placeholder { text-transform: none; color: #b0bac6; }
+.rpp-add-sel {
+    flex: 0 0 82px;
+    background: #fff;
+    border: 1.5px solid #b0bac6;
+    border-radius: 8px;
+    padding: 7px 6px;
+    font-family: inherit;
+    font-size: 12px;
+    color: #0a0c0f;
+    outline: none;
+}
+.rpp-add-sel:focus { border-color: #1a6fbb; }
+.rpp-add-btn {
+    background: #1a6fbb;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    padding: 7px 12px;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    min-height: 44px;
+}
+.rpp-add-btn:active { background: #155fa0; }
+
+/* Toolbar buttons */
+.rpp-toolbar {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+.rpp-tbtn {
+    background: #fff;
+    border: 1.5px solid #b0bac6;
+    border-radius: 7px;
+    padding: 6px 10px;
+    font-family: inherit;
+    font-size: 11px;
+    color: #0a0c0f;
+    cursor: pointer;
+    flex: 1;
+    text-align: center;
+    min-height: 44px;
+}
+.rpp-tbtn:active { background: #e8f0fb; border-color: #1a6fbb; }
+.rpp-tbtn-apply {
+    background: #1a6fbb;
+    color: #fff;
+    border-color: #1a6fbb;
+    font-weight: 700;
+}
+.rpp-tbtn-apply:active { background: #155fa0; }
+
+/* Route string display */
+.rpp-route-label {
+    font-size: 9px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: #6b7a8d;
+    margin-bottom: 2px;
+}
+.rpp-route-str {
+    background: #fff;
+    border: 1.5px solid #b0bac6;
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-family: inherit;
+    font-size: 11px;
+    color: #0a4a7c;
+    letter-spacing: .04em;
+    word-break: break-all;
+    line-height: 1.8;
+    min-height: 36px;
+}
+
+/* Context menu */
+.rpp-menu {
+    position: fixed;
+    background: #fff;
+    border: 1.5px solid #b0bac6;
+    border-radius: 10px;
+    box-shadow: 0 4px 18px rgba(0,0,0,.16);
+    z-index: 9999;
+    min-width: 170px;
+    padding: 4px 0;
+    display: none;
+}
+.rpp-menu.open { display: block; }
+.rpp-menu-item {
+    padding: 9px 14px;
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    color: #0a0c0f;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    white-space: nowrap;
+}
+.rpp-menu-item:hover { background: #f0f6ff; }
+.rpp-menu-item:active { background: #e0eefa; }
+.rpp-menu-item.danger { color: #c0231f; }
+.rpp-menu-item.danger:hover { background: #fff0f0; }
+.rpp-menu-sep { height: .5px; background: #e0e5ea; margin: 3px 0; }
+.rpp-menu-label {
+    padding: 5px 14px 2px;
+    font-size: 9px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: #6b7a8d;
+}
