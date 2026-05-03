@@ -2001,8 +2001,8 @@ class RouteTable {
         overlay.querySelector('#_nrConfirm').addEventListener('click', () => {
             dismiss();
             try { localStorage.removeItem('flypi_active_plan'); } catch {}
-            if (typeof app !== 'undefined' && app.routeEditor) {
-                app.routeEditor.startNewRoute();
+            if (typeof app !== 'undefined') {
+                app.openRoutePlanner(null);
             }
         });
         overlay.addEventListener('click', (e) => {
