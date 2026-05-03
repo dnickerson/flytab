@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v7.04';
+const FLYTAB_VERSION = 'v7.05';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -245,6 +245,14 @@ class FlyTabApp {
         };
         requestAnimationFrame(tick);
 
+        // Wake-from-suspend isn't a hang — when the WebView resumes after the
+        // screen has been off, rAF was paused and lastFrame is stale. Reset on
+        // visibility transition so the first post-wake check doesn't log the
+        // entire sleep duration as a stall.
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') lastFrame = Date.now();
+        });
+
         setInterval(() => {
             if (document.visibilityState !== 'visible') return;
             const age = Date.now() - lastFrame;
@@ -265,7 +273,7 @@ class FlyTabApp {
 
         const overlay = document.createElement('div');
         overlay.id = 'diagLogOverlay';
-        overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:9999;background:var(--bg-primary);display:flex;flex-direction:column;';
+        overlay.style.cssText = 'position:fixed;top:env(safe-area-inset-top,0px);left:0;right:0;bottom:env(safe-area-inset-bottom,0px);z-index:9999;background:var(--bg-primary);display:flex;flex-direction:column;';
 
         const header = document.createElement('div');
         header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--border);flex-shrink:0;';

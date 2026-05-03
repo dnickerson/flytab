@@ -9668,7 +9668,6 @@ body.emergency-active #tabBar {
 
 #routePlannerPanel {
     display: none;
-    overflow-y: auto;
     background: #f0f2f4;
     font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
     font-size: 13px;
@@ -9686,6 +9685,8 @@ body.emergency-active #tabBar {
     flex-direction: column;
     gap: 10px;
     flex: 1;
+    min-height: 0;    /* allow flex child to shrink below content size */
+    overflow-y: auto; /* panel scrolls to reach Apply & Close and toolbar */
 }
 
 /* DEP/DEST row */
