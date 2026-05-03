@@ -9637,13 +9637,13 @@ body.emergency-active #tabBar {
 }
 
 /* Portrait: map top 60%, editor bottom 40% */
-.route-editing #cockpitContainer {
+#cockpitContainer.route-editing {
     display: grid;
     grid-template-rows: 60fr 40fr;
     grid-template-columns: 1fr;
     height: 100%;
 }
-.route-editing #routePlannerPanel {
+#cockpitContainer.route-editing #routePlannerPanel {
     grid-row: 2;
     grid-column: 1;
 }
@@ -9651,12 +9651,12 @@ body.emergency-active #tabBar {
 /* Landscape: panel left 40%, map right 60%.
    Class set by JS (_updateOrientation) — more reliable than CSS media query
    in Capacitor Android WebView. */
-.route-editing.landscape {
+#cockpitContainer.route-editing.landscape {
     grid-template-rows: 1fr;
     grid-template-columns: 40fr 60fr;
 }
-.route-editing.landscape #routePlannerPanel { grid-row: 1; grid-column: 1; }
-.route-editing.landscape #mapContainer      { grid-row: 1; grid-column: 2; }
+#cockpitContainer.route-editing.landscape #routePlannerPanel { grid-row: 1; grid-column: 1; }
+#cockpitContainer.route-editing.landscape #mapContainer      { grid-row: 1; grid-column: 2; }
 
 #routePlannerPanel {
     display: none;
