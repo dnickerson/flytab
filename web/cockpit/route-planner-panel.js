@@ -384,7 +384,8 @@ class RoutePlannerPanel {
         };
 
         bar.appendChild(mkBtn('Paste',       () => this._onPasteTap()));
-        bar.appendChild(mkBtn('Plan',        () => this._onPlanTap()));
+        this._planBtn = mkBtn('Plan',        () => this._onPlanTap());
+        bar.appendChild(this._planBtn);
         bar.appendChild(mkBtn('Clear',       () => this._onClearTap()));
         bar.appendChild(mkBtn('Copy',        () => this._onCopyTap()));
 
@@ -701,11 +702,34 @@ class RoutePlannerPanel {
 
         this._checkPlannerVersion();
 
+        const setBtn = (label, disabled) => {
+            if (!this._planBtn) return;
+            this._planBtn.textContent = label;
+            this._planBtn.disabled = disabled;
+            this._planBtn.classList.toggle('rpp-tbtn-busy', disabled);
+        };
+
+        // Wait for planner if still initializing — don't fail silently
         if (!this._planner) {
-            this._toast('Route planner loading — try again in a moment');
+            setBtn('Loading…', true);
+            const ready = await this._waitForPlanner(20000);
+            if (!ready) {
+                setBtn('Plan', false);
+                this._toast('Airway data not loaded — check NASR import on data status panel', 5000);
+                console.error('[RoutePlannerPanel] planner never became ready');
+                return;
+            }
+        }
+
+        // Verify the airway graph is non-empty before attempting A*
+        const graphSize = Object.keys(this._planner._airwayGraph?.graph || {}).length;
+        if (graphSize === 0) {
+            this._toast('Airway graph is empty — NASR data missing', 5000);
+            console.error('[RoutePlannerPanel] empty airway graph; airways store has no records');
             return;
         }
 
+        setBtn('Planning…', true);
         this._toast('Planning route…', 0);
         try {
             const result = await this._planner.plan({
@@ -728,11 +752,26 @@ class RoutePlannerPanel {
             this._depInput.value  = dep;
             this._destInput.value = dest;
             this._render();
-            this._toast('Route planned');
+            this._toast(`Route planned · ${result.waypoints?.length || 0} waypoints`, 2500);
         } catch (err) {
             console.error('[RoutePlannerPanel] plan() failed:', err);
-            this._toast('Could not plan route: ' + (err.message || err));
+            this._toast('Could not plan route: ' + (err.message || err), 5000);
+        } finally {
+            setBtn('Plan', false);
         }
+    }
+
+    _waitForPlanner(timeoutMs) {
+        return new Promise(resolve => {
+            if (this._planner) return resolve(true);
+            const start = Date.now();
+            const tick = () => {
+                if (this._planner) return resolve(true);
+                if (Date.now() - start > timeoutMs) return resolve(false);
+                setTimeout(tick, 200);
+            };
+            tick();
+        });
     }
 
     _resultToPills(dep, dest, result) {
@@ -920,21 +959,16 @@ class RoutePlannerPanel {
     // ── Utilities ─────────────────────────────────────────────────────────────
 
     _toast(msg, duration = 2500) {
-        const existing = document.getElementById('rppToast');
+        const host = this._el || document.body;
+        const existing = host.querySelector('.rpp-toast');
         if (existing) existing.remove();
 
         const el = document.createElement('div');
-        el.id = 'rppToast';
-        el.style.cssText = [
-            'position:fixed','bottom:80px','left:50%','transform:translateX(-50%)',
-            'background:rgba(10,12,15,.85)','color:#fff','border-radius:8px',
-            'padding:10px 18px','font-size:13px','z-index:10001',
-            'font-family:\'SF Mono\',monospace','pointer-events:none',
-        ].join(';');
+        el.className = 'rpp-toast';
         el.textContent = msg;
-        document.body.appendChild(el);
+        host.appendChild(el);
 
-        if (duration > 0) setTimeout(() => el.remove(), duration);
+        if (duration > 0) setTimeout(() => { if (el.parentNode) el.remove(); }, duration);
     }
 
     _confirm(msg) {

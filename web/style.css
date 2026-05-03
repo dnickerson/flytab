@@ -9664,10 +9664,39 @@ body.emergency-active #tabBar {
     font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
     font-size: 13px;
     color: #0a0c0f;
+    position: relative; /* anchor for absolute children (.rpp-toast) */
 }
 .route-editing #routePlannerPanel {
     display: flex;
     flex-direction: column;
+}
+
+/* In-panel toast — always visible where the user is looking */
+.rpp-toast {
+    position: absolute;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(10, 12, 15, 0.95);
+    color: #fff;
+    border-radius: 8px;
+    padding: 10px 18px;
+    font-size: 13px;
+    font-weight: 600;
+    z-index: 200;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    pointer-events: none;
+    max-width: 92%;
+    text-align: center;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+    line-height: 1.4;
+}
+
+/* Plan button busy state */
+.rpp-tbtn-busy {
+    background: #b3c0d2 !important;
+    color: #fff !important;
+    cursor: progress !important;
 }
 
 /* ── Route Planner Panel Inner Layout ────────────────────────────────────── */
