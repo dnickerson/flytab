@@ -114,18 +114,59 @@ closeRoutePlanner() {
 
 ---
 
+## Planning Options State
+
+`RoutePlannerPanel` holds these user-adjustable fields (persisted to `localStorage` under key `flypi_planner_opts`):
+
+| Field | Default | UI control |
+|-------|---------|------------|
+| `_altitude` | `5500` | Text input (ft MSL) |
+| `_maxLegHrs` | `2.0` | 3-button toggle: `2h / 2.5h / 3h` |
+| `_selfServeOnly` | `false` | Checkbox |
+| `_reserveGal` | `10` | Number input (gallons) |
+
+These are shown in a compact options row between the DEP/DEST fields and the pill box:
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│  DEP [____]  →  DEST [____]      Altitude [5500] ft          │
+│  Max leg: [2h] [2.5h] [3h]   □ Self-serve   Reserve [10] gal │
+├───────────────────────────────────────────────────────────────┤
+│  pill box (flex-wrap)                                         │
+│  add-input row                                                │
+├───────────────────────────────────────────────────────────────┤
+│  [Paste]  [Plan]  [Clear]   [Copy string]                     │
+│  [Apply & Close]                                              │
+└───────────────────────────────────────────────────────────────┘
+```
+
+---
+
 ## Data Flow
 
 ### "Plan" button (auto-route)
-1. Pilot enters DEP + DEST ICAO fields
-2. Tap "Plan" → `RoutePlanner.plan({departure, destination})` (uses cached airway graph)
-3. Returns `{waypoints, legs, routeString}`
+1. Pilot enters DEP + DEST ICAO fields; adjusts planning options if needed
+2. Tap "Plan" → `RoutePlanner.plan({departure, destination, preferredLegHrs: this._maxLegHrs, reserveGal: this._reserveGal, selfServeOnly: this._selfServeOnly})` (uses cached airway graph)
+3. Returns `{waypoints, legs, routeString, fuelStops}`
 4. `legs` converted to pills: DEP airport → `{id, type:'dep'}`, each intermediate fix → `{id, type:'fix'}`, each airway label → `{id, type:'awy'}`, DEST airport → `{id, type:'dest'}`
-5. Pills rendered in editor
+5. Fuel stop airports inserted as pills of type `'fuel'` at their position in the sequence
+6. Pills rendered in editor; route string displayed below
+
+### "Paste" button (import route string)
+1. Read clipboard via `navigator.clipboard.readText()`. If unavailable, show a modal `<textarea>` for manual paste.
+2. Parse the pasted string: split on whitespace, classify each token:
+   - Matches `/^[VT]\d/` → `type:'awy'`
+   - Equals `'DIRECT'` → `type:'direct'`
+   - First token → `type:'dep'`
+   - Last token → `type:'dest'`
+   - All others → `type:'fix'`
+3. If current pill list is non-empty, confirm: "Replace current route with pasted route?" (toast with Confirm / Cancel). If empty, replace immediately.
+4. Set `_depInput` and `_destInput` fields from first/last token.
+5. Render pills. Coordinates resolved lazily on Apply (same path as manual-only flow).
 
 ### "Apply" button (commit route)
 1. Pill list → waypoint array:
-   - Non-airway pills: coordinates from `AirwayGraph.coords[id]` (in memory from last plan) or IDB airports store for DEP/DEST
+   - Non-airway, non-fuel pills: coordinates from `AirwayGraph.coords[id]` (in memory from last plan) or IDB airports store for DEP/DEST
    - Airway pills: skipped (they annotate the route string, not waypoints)
    - Manually added pills not in `coords`: IDB `searchAll()` lookup; if still not found, skip with warning toast
 2. Build plan object:
@@ -223,10 +264,14 @@ Replace with a `WorkGraph` wrapper that reads through to the shared graph for al
 | Pill ID not in `coords` or IDB on Apply | Skip waypoint, warn toast: "GSO not found — skipped" |
 | Apply with < 2 valid waypoints | Toast: "Add at least 2 waypoints", do not call `applyRouteEdit` |
 | Tablet rotates while editor open | `window` resize → `invalidateSize()`, CSS auto-reflows grid |
+| Clipboard read unavailable on Paste | Show modal `<textarea>` for manual paste; parse on confirm |
+| Paste into non-empty pill list | Confirm toast before replacing existing route |
 
 ---
 
 ## Scope Boundaries
+
+### Stage 1 — Ground Planning (this spec, ~1 week before flight)
 
 **In scope:**
 - New `RoutePlannerPanel` component with pill editor + A* planning
@@ -234,9 +279,36 @@ Replace with a `WorkGraph` wrapper that reads through to the shared graph for al
 - Reliability fixes to `routeEditor.html` and `routePlanner.js` prototypes
 - "Edit Route" button on `route-table.js`
 - `app.js` wiring (open/close, remove old `routeEditor` references)
+- Planning options: cruise altitude, max leg hours, self-serve filter, reserve gallons
+- Paste route string → pills
+- Fuel stop pills shown in pill sequence after Plan
 
-**Out of scope:**
-- Fuel stop display UI (optimizer exists in `routePlanner.js` but no UI planned for v1)
-- Search-while-typing for add-input (plain ICAO/fix-ID entry only in v1)
+**Not in this stage:**
+- Search-while-typing for add-input (plain ICAO/fix-ID entry only)
 - `aircraft_profiles` IDB store population (planner falls back to RV-9A defaults when store is empty)
-- `DIRECT-TO` modal (was in old editor; can be added later as a separate feature)
+- `DIRECT-TO` modal (separate feature)
+- Per-waypoint min/max crossing altitude constraints (Stage 2)
+
+---
+
+### Stage 2 — Pre-flight Briefing (~1 day before flight)
+*Implemented via `wx-briefing.js` + `ifr-clearance.js`, already partially built. Route planner feeds plans forward; Stage 2 refines them.*
+
+- Load Stage 1 plan into wx-briefing panel
+- TAF review for DEP, DEST, and every fuel stop airport
+- NOTAM scan for all route airports
+- IFR alternate identification and weather check
+- Per-waypoint MEA / crossing altitude annotation (from enriched airway bundle)
+- Route adjustments driven by weather (edit pills, re-apply)
+- Pre-file IFR clearance generation
+
+---
+
+### Stage 3 — Final Review (day of flight)
+*Integrates real-time data available only close to departure.*
+
+- METAR review at DEP and route airports
+- Winds aloft integration → suggest optimal cruise altitude per leg
+- Fuel burn recalculation with forecast winds (actual TAS vs GS)
+- Go/no-go checklist with weather and NOTAM confirmation
+- Final route lock and export to IFR clearance
