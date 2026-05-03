@@ -191,7 +191,7 @@ class FlyTabApp {
         this._startWatchdog();
         window.addEventListener('resize', () => {
             if (document.getElementById('cockpitContainer')?.classList.contains('route-editing'))
-                setTimeout(() => this.cockpitMap?.getMap()?.invalidateSize(), 50);
+                setTimeout(() => this.cockpitMap?.map?.invalidateSize(), 50);
         });
         this._initDeepLink();
     }
@@ -1023,15 +1023,15 @@ class FlyTabApp {
     }
 
     openRoutePlanner(plan) {
-        document.getElementById('cockpitContainer').classList.add('route-editing');
+        document.getElementById('cockpitContainer')?.classList.add('route-editing');
         this.routePlannerPanel?.open(plan || this._currentTrip);
-        setTimeout(() => this.cockpitMap?.getMap()?.invalidateSize(), 300);
+        setTimeout(() => this.cockpitMap?.map?.invalidateSize(), 300);
     }
 
     closeRoutePlanner() {
-        document.getElementById('cockpitContainer').classList.remove('route-editing');
+        document.getElementById('cockpitContainer')?.classList.remove('route-editing');
         this.routePlannerPanel?.close();
-        setTimeout(() => this.cockpitMap?.getMap()?.invalidateSize(), 300);
+        setTimeout(() => this.cockpitMap?.map?.invalidateSize(), 300);
     }
 
     async applyRouteEdit(plan, { fromRouteTable = false } = {}) {

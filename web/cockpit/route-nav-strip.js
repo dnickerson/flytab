@@ -32,9 +32,7 @@ class RouteNavStrip {
         if (editBtn) {
             editBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                if (typeof app !== 'undefined' && app.routeEditor) {
-                    app.routeEditor.startEditRoute();
-                }
+                if (typeof app !== 'undefined') app.openRoutePlanner(app._currentTrip);
             });
         }
 

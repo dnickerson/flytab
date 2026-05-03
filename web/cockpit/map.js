@@ -1312,9 +1312,8 @@ class CockpitMap {
         directToBtn.title = 'Direct To';
         directToBtn.innerHTML = 'D&rarr;';
         wireTap(directToBtn, () => {
-            if (typeof app !== 'undefined' && app.routeEditor) {
-                app.routeEditor.showDirectTo();
-            }
+            // Direct-To via route planner not yet implemented (Stage 2)
+            console.log('[FlyTab] Direct-To — Stage 2 feature');
         });
         L.DomEvent.disableClickPropagation(directToBtn);
         L.DomEvent.disableScrollPropagation(directToBtn);
