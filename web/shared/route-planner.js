@@ -12,7 +12,7 @@
  * Designed for the Lenovo Yoga Tab Plus — all computation on-device.
  *
  * Usage:
- *   const planner = new RoutePlanner('FlyTabDB');
+ *   const planner = new RoutePlanner('flypi');
  *   await planner.init();
  *
  *   const plan = await planner.plan({
@@ -844,9 +844,9 @@ function buildLegs(depIcao, destIcao, fuelStops, routeLegs, aircraft, reserveGal
 
 class RoutePlanner {
   /**
-   * @param {string} dbName  IndexedDB database name (default 'FlyTabDB')
+   * @param {string} dbName  IndexedDB database name (default 'flypi' — same as NasrDB)
    */
-  constructor(dbName = 'FlyTabDB') {
+  constructor(dbName = 'flypi') {
     this.dbName = dbName;
     this.db     = null;
     this._suas    = null;
@@ -1021,7 +1021,7 @@ class RoutePlanner {
  * Create and initialise a RoutePlanner in one call.
  * @param {string} dbName
  */
-async function createRoutePlanner(dbName = 'FlyTabDB') {
+async function createRoutePlanner(dbName = 'flypi') {
   return new RoutePlanner(dbName).init();
 }
 

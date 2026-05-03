@@ -149,7 +149,11 @@ class RoutePlannerPanel {
             this._plannerInitError = 'RoutePlanner module not loaded';
             return;
         }
-        new RoutePlanner('FlyTabDB').init()
+        // Use the SAME database as NasrDB (default 'flypi'). The original prototype's
+        // 'FlyTabDB' default never matched the real DB and resulted in opening an
+        // empty v1 database with no stores.
+        const dbName = this._nasrDb?.constructor?.DB_NAME || 'flypi';
+        new RoutePlanner(dbName).init()
             .then(p => { this._planner = p; this._plannerInitError = null; })
             .catch(err => {
                 console.warn('[RoutePlannerPanel] planner init failed:', err);
@@ -158,16 +162,17 @@ class RoutePlannerPanel {
     }
 
     /**
-     * Read record counts from FlyTabDB so the user can see at a glance whether
-     * the NASR import populated the right stores. Returns a summary string.
+     * Read record counts from the NASR database so the user can see at a glance
+     * whether the NASR import populated the right stores. Returns a summary string.
      */
     async _diagnoseIdb() {
+        const dbName = this._nasrDb?.constructor?.DB_NAME || 'flypi';
         const STORES = ['airports', 'airways', 'navaids', 'fixes', 'sua'];
         const counts = {};
         let dbVersion = null;
         try {
             const db = await new Promise((resolve, reject) => {
-                const req = indexedDB.open('FlyTabDB');
+                const req = indexedDB.open(dbName);
                 req.onsuccess = () => resolve(req.result);
                 req.onerror   = () => reject(req.error);
             });
@@ -187,7 +192,7 @@ class RoutePlannerPanel {
             return `IDB read failed: ${err?.message || err}`;
         }
         const parts = STORES.map(n => `${n}=${counts[n]}`);
-        return `DB v${dbVersion}, ${parts.join(', ')}`;
+        return `${dbName} v${dbVersion}, ${parts.join(', ')}`;
     }
 
     _checkPlannerVersion() {
