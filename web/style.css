@@ -9669,6 +9669,9 @@ body.emergency-active #tabBar {
 .route-editing #routePlannerPanel {
     display: flex;
     flex-direction: column;
+    min-height: 0;        /* constrain to grid cell, don't grow with content */
+    height: 100%;
+    overflow: hidden;
 }
 
 /* In-panel toast — always visible where the user is looking */
