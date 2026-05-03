@@ -9648,23 +9648,15 @@ body.emergency-active #tabBar {
     grid-column: 1;
 }
 
-/* Landscape: editor left 40%, map right 60%.
-   Right sidebar overlays the map column — pilot can tap an airport while
-   the route editor is open. */
-@media (orientation: landscape) {
-    .route-editing #cockpitContainer {
-        grid-template-rows: 1fr;
-        grid-template-columns: 40fr 60fr;
-    }
-    .route-editing #routePlannerPanel {
-        grid-row: 1;
-        grid-column: 1;
-    }
-    .route-editing #mapContainer {
-        grid-row: 1;
-        grid-column: 2;
-    }
+/* Landscape: panel left 40%, map right 60%.
+   Class set by JS (_updateOrientation) — more reliable than CSS media query
+   in Capacitor Android WebView. */
+.route-editing.landscape {
+    grid-template-rows: 1fr;
+    grid-template-columns: 40fr 60fr;
 }
+.route-editing.landscape #routePlannerPanel { grid-row: 1; grid-column: 1; }
+.route-editing.landscape #mapContainer      { grid-row: 1; grid-column: 2; }
 
 #routePlannerPanel {
     display: none;

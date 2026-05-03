@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v7.06';
+const FLYTAB_VERSION = 'v7.07';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -190,8 +190,10 @@ class FlyTabApp {
 
         this._startWatchdog();
         window.addEventListener('resize', () => {
-            if (document.getElementById('cockpitContainer')?.classList.contains('route-editing'))
-                setTimeout(() => this.cockpitMap?.map?.invalidateSize(), 50);
+            if (document.getElementById('cockpitContainer')?.classList.contains('route-editing')) {
+                this._updateOrientation();
+                setTimeout(() => this.cockpitMap?.map?.invalidateSize(), 300);
+            }
         });
         this._initDeepLink();
     }
@@ -1030,14 +1032,20 @@ class FlyTabApp {
         if (loadBtn) loadBtn.style.display = '';
     }
 
+    _updateOrientation() {
+        document.getElementById('cockpitContainer')
+            ?.classList.toggle('landscape', window.innerWidth > window.innerHeight);
+    }
+
     openRoutePlanner(plan) {
         document.getElementById('cockpitContainer')?.classList.add('route-editing');
+        this._updateOrientation();
         this.routePlannerPanel?.open(plan || this._currentTrip);
         setTimeout(() => this.cockpitMap?.map?.invalidateSize(), 300);
     }
 
     closeRoutePlanner() {
-        document.getElementById('cockpitContainer')?.classList.remove('route-editing');
+        document.getElementById('cockpitContainer')?.classList.remove('route-editing', 'landscape');
         this.routePlannerPanel?.close();
         setTimeout(() => this.cockpitMap?.map?.invalidateSize(), 300);
     }
