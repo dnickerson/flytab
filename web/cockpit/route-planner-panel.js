@@ -144,10 +144,50 @@ class RoutePlannerPanel {
         // Build RoutePlanner (opens IDB + warms airway graph) in background.
         // Plan button waits for this._planner to be non-null.
         this._nasrVersion = localStorage.getItem('flypi_nasr_version') || '';
-        if (typeof RoutePlanner === 'undefined') return;
+        this._plannerInitError = null;
+        if (typeof RoutePlanner === 'undefined') {
+            this._plannerInitError = 'RoutePlanner module not loaded';
+            return;
+        }
         new RoutePlanner('FlyTabDB').init()
-            .then(p => { this._planner = p; })
-            .catch(err => console.warn('[RoutePlannerPanel] planner init failed:', err));
+            .then(p => { this._planner = p; this._plannerInitError = null; })
+            .catch(err => {
+                console.warn('[RoutePlannerPanel] planner init failed:', err);
+                this._plannerInitError = err?.message || String(err);
+            });
+    }
+
+    /**
+     * Read record counts from FlyTabDB so the user can see at a glance whether
+     * the NASR import populated the right stores. Returns a summary string.
+     */
+    async _diagnoseIdb() {
+        const STORES = ['airports', 'airways', 'navaids', 'fixes', 'sua'];
+        const counts = {};
+        let dbVersion = null;
+        try {
+            const db = await new Promise((resolve, reject) => {
+                const req = indexedDB.open('FlyTabDB');
+                req.onsuccess = () => resolve(req.result);
+                req.onerror   = () => reject(req.error);
+            });
+            dbVersion = db.version;
+            const existing = STORES.filter(n => db.objectStoreNames.contains(n));
+            for (const name of STORES) {
+                if (!existing.includes(name)) { counts[name] = 'no store'; continue; }
+                counts[name] = await new Promise((resolve, reject) => {
+                    const tx = db.transaction(name, 'readonly');
+                    const req = tx.objectStore(name).count();
+                    req.onsuccess = () => resolve(req.result);
+                    req.onerror   = () => reject(req.error);
+                });
+            }
+            db.close();
+        } catch (err) {
+            return `IDB read failed: ${err?.message || err}`;
+        }
+        const parts = STORES.map(n => `${n}=${counts[n]}`);
+        return `DB v${dbVersion}, ${parts.join(', ')}`;
     }
 
     _checkPlannerVersion() {
@@ -715,8 +755,10 @@ class RoutePlannerPanel {
             const ready = await this._waitForPlanner(20000);
             if (!ready) {
                 setBtn('Plan', false);
-                this._toast('Airway data not loaded — check NASR import on data status panel', 5000);
-                console.error('[RoutePlannerPanel] planner never became ready');
+                const counts = await this._diagnoseIdb();
+                const reason = this._plannerInitError ? ` — init error: ${this._plannerInitError}` : '';
+                this._toast(`Airway data not loaded${reason}\n${counts}`, 12000);
+                console.error('[RoutePlannerPanel] planner never became ready', counts);
                 return;
             }
         }
@@ -724,8 +766,9 @@ class RoutePlannerPanel {
         // Verify the airway graph is non-empty before attempting A*
         const graphSize = Object.keys(this._planner._airwayGraph?.graph || {}).length;
         if (graphSize === 0) {
-            this._toast('Airway graph is empty — NASR data missing', 5000);
-            console.error('[RoutePlannerPanel] empty airway graph; airways store has no records');
+            const counts = await this._diagnoseIdb();
+            this._toast(`Airway graph is empty — NASR data missing\n${counts}`, 12000);
+            console.error('[RoutePlannerPanel] empty airway graph;', counts);
             return;
         }
 

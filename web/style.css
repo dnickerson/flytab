@@ -9689,7 +9689,8 @@ body.emergency-active #tabBar {
     max-width: 92%;
     text-align: center;
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
-    line-height: 1.4;
+    line-height: 1.5;
+    white-space: pre-line; /* render \n in diagnostic strings */
 }
 
 /* Plan button busy state */
