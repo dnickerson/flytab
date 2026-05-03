@@ -2,15 +2,16 @@
  * routePlanner.js
  * FlyTab Route Planning Module
  *
- * Self-contained ES module. Queries FlyTab's existing IndexedDB stores:
+ * Plain script — loaded via <script src="./shared/route-planner.js">.
+ * All classes are global (RoutePlanner, WorkGraph, RouteConstructor, etc.).
+ *
+ * Queries FlyTab's existing IndexedDB stores:
  *   airports, navaids, airways, sua, fixes, fuel_prices, aircraft_profiles
  *
  * No external dependencies. No network calls (weather excluded).
  * Designed for the Lenovo Yoga Tab Plus — all computation on-device.
  *
  * Usage:
- *   import { RoutePlanner } from './routePlanner.js';
- *
  *   const planner = new RoutePlanner('FlyTabDB');
  *   await planner.init();
  *
@@ -365,7 +366,6 @@ class AirwayGraph {
 
 class WorkGraph {
     constructor(base) {
-        this._base  = base;
         this._extra = {};
         // Shallow-copy coords so DEP/DEST entries don't mutate the shared graph
         this.coords = { ...base.coords };
@@ -374,9 +374,9 @@ class WorkGraph {
         this.graph = new Proxy(base.graph, {
             get(target, fixId) {
                 if (typeof fixId !== 'string') return target[fixId];
-                const base  = target[fixId]      || [];
-                const extra = self._extra[fixId] || [];
-                return extra.length ? [...base, ...extra] : base;
+                const baseEdges = target[fixId]      || [];
+                const extra     = self._extra[fixId] || [];
+                return extra.length ? [...baseEdges, ...extra] : baseEdges;
             },
         });
     }
