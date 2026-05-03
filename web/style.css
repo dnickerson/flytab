@@ -9700,6 +9700,21 @@ body.emergency-active #tabBar {
     cursor: progress !important;
 }
 
+/* Active toggle button (e.g. Compact when on) */
+.rpp-tbtn-active {
+    background: #1a6fbb !important;
+    color: #fff !important;
+    border-color: #155fa0 !important;
+}
+
+/* When the route planner is open, hide bottom UI strips so the map+panel
+   fill the available screen area. */
+body.route-editing-mode #instrumentStrip,
+body.route-editing-mode #tabBar,
+body.route-editing-mode .route-table-sheet {
+    display: none !important;
+}
+
 /* ── Route Planner Panel Inner Layout ────────────────────────────────────── */
 .rpp-inner {
     padding: 12px;
@@ -9708,7 +9723,18 @@ body.emergency-active #tabBar {
     gap: 10px;
     flex: 1;
     min-height: 0;    /* allow flex child to shrink below content size */
-    overflow-y: auto; /* panel scrolls to reach Apply & Close and toolbar */
+    /* No overflow here — the pill-box is the scroll region; everything else
+       has a fixed height so DEP/DEST, options, toolbar, Apply stay anchored. */
+}
+
+/* Fix-height rows: don't shrink, don't grow */
+.rpp-dep-row,
+.rpp-opts-row,
+.rpp-add-input-row,
+.rpp-toolbar,
+.rpp-route-label,
+.rpp-route-str {
+    flex-shrink: 0;
 }
 
 /* DEP/DEST row */
@@ -9825,7 +9851,9 @@ body.emergency-active #tabBar {
     border: 1.5px solid #b0bac6;
     border-radius: 10px;
     padding: 10px;
-    min-height: 60px;
+    flex: 1;             /* take remaining vertical space in .rpp-inner */
+    min-height: 60px;    /* never collapse below ~one row */
+    overflow-y: auto;    /* scroll when pill list is too tall */
 }
 .rpp-pill-box.drag-active {
     border-color: #1a6fbb;

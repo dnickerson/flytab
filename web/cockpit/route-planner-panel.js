@@ -29,6 +29,9 @@ class RoutePlannerPanel {
         this._selfServeOnly = false;
         this._reserveGal    = 10;
 
+        // Display: compact view collapses same-airway fixes to just the airway pill
+        this._compactView   = false;
+
         // DOM refs (set by _buildDOM)
         this._depInput    = null;
         this._destInput   = null;
@@ -91,6 +94,7 @@ class RoutePlannerPanel {
             if (saved.maxLegHrs     != null) this._maxLegHrs     = saved.maxLegHrs;
             if (saved.selfServeOnly != null) this._selfServeOnly = saved.selfServeOnly;
             if (saved.reserveGal    != null) this._reserveGal    = saved.reserveGal;
+            if (saved.compactView   != null) this._compactView   = saved.compactView;
         } catch {}
     }
 
@@ -101,6 +105,7 @@ class RoutePlannerPanel {
                 maxLegHrs:     this._maxLegHrs,
                 selfServeOnly: this._selfServeOnly,
                 reserveGal:    this._reserveGal,
+                compactView:   this._compactView,
             }));
         } catch {}
     }
@@ -434,6 +439,12 @@ class RoutePlannerPanel {
         bar.appendChild(mkBtn('Clear',       () => this._onClearTap()));
         bar.appendChild(mkBtn('Copy',        () => this._onCopyTap()));
 
+        // Compact toggle — collapses consecutive same-airway fixes to just the airway
+        this._compactBtn = mkBtn(this._compactView ? 'Full' : 'Compact',
+                                  () => this._onCompactToggle(),
+                                  this._compactView ? 'rpp-tbtn-active' : '');
+        bar.appendChild(this._compactBtn);
+
         // Apply button on its own row (full-width, prominent)
         const applyBar = document.createElement('div');
         applyBar.className = 'rpp-toolbar';
@@ -520,10 +531,63 @@ class RoutePlannerPanel {
         this._renderEpoch++;
         this._pillsEl.innerHTML = '';
 
-        this._route.forEach((item, i) => {
-            const pill = this._buildPill(item, i);
+        const view = this._compactView ? this._collapseSameAirway(this._route) : this._route;
+        view.forEach(({ item, originalIdx }) => {
+            const pill = this._buildPill(item, originalIdx);
             this._pillsEl.appendChild(pill);
         });
+    }
+
+    /**
+     * Collapse consecutive fixes that all use the same airway. Keep DEP, DEST,
+     * the airway pill, and the entry/exit fix for each airway segment.
+     *
+     * Input/output is an array of pill objects. Output preserves a reference back
+     * to the original index in this._route so drag/edit operations target the
+     * underlying full route.
+     */
+    _collapseSameAirway(route) {
+        const wrap = (i) => ({ item: route[i], originalIdx: i });
+        const out = [];
+        const len = route.length;
+        let i = 0;
+        while (i < len) {
+            const item = route[i];
+            if (item.type === 'awy') {
+                // standalone airway — already handled by previous fix's lookahead
+                out.push(wrap(i));
+                i++;
+                continue;
+            }
+            // Fix-like (dep, fix, fuel, direct, dest)
+            out.push(wrap(i));
+            i++;
+            // Look ahead: airway → fix → same airway → fix → ...
+            if (i < len && route[i].type === 'awy') {
+                const awy = route[i].id;
+                out.push(wrap(i));   // airway pill
+                i++;
+                // Skip consecutive fix-awy(same) pairs; the loop ends pointing at
+                // a fix that's NOT followed by the same airway (the exit fix).
+                while (i + 1 < len
+                       && route[i + 1].type === 'awy'
+                       && route[i + 1].id === awy) {
+                    i += 2;
+                }
+                // The next iteration will push that exit fix.
+            }
+        }
+        return out;
+    }
+
+    _onCompactToggle() {
+        this._compactView = !this._compactView;
+        this._saveOpts();
+        if (this._compactBtn) {
+            this._compactBtn.textContent = this._compactView ? 'Full' : 'Compact';
+            this._compactBtn.classList.toggle('rpp-tbtn-active', this._compactView);
+        }
+        this._renderPills();
     }
 
     _pillClass(type) {
