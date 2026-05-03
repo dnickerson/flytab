@@ -10,7 +10,6 @@ class EverywhereSearch {
         this._nasrDb = nasrDb;
         this._stratuxClient = stratuxClient;
         this._approachCharts = null;
-        this._routeEditor = null;
         this._routeTable = null;
         this._airportPopup = null;
         this._cockpitMap = null;
@@ -28,7 +27,6 @@ class EverywhereSearch {
     }
 
     setApproachCharts(ac)   { this._approachCharts = ac; }
-    setRouteEditor(re)      { this._routeEditor = re; }
     setRouteTable(rt)       { this._routeTable = rt; }
     setAirportPopup(ap)     { this._airportPopup = ap; }
     setCockpitMap(cm)       { this._cockpitMap = cm; }
@@ -600,11 +598,7 @@ class EverywhereSearch {
                 this.hide();
                 if (this._routeTable) this._routeTable.addWaypointSmart(wp);
             }));
-            btns.push(this._makeActionBtn('DIRECT-TO', true, () => {
-                this._saveRecent({ ...entity, type });
-                this.hide();
-                if (this._routeEditor) this._routeEditor._executeDirectTo(entity);
-            }));
+            // DIRECT-TO: Stage 2 feature — not yet implemented
         }
 
         return btns;
