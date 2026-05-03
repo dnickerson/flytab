@@ -152,20 +152,22 @@ Pilot builds route pill-by-pill using the add-input row. "Apply" resolves coordi
 
 `routeEditor.html` uses `dragstart/dragover/drop` which never fires on Android WebView — the browser fires touch events, not mouse events, and does not synthesize drag events from them. The `⠿` handle icon is already in the prototype; the missing piece is the touch implementation.
 
-The pill list is always a vertical column in both orientations, so drag axis is always Y.
+Pills flow **left-to-right, wrapping** (`display:flex; flex-wrap:wrap`). This matches the prototype and keeps the route readable in reading order. Drag detection must be 2D (X and Y) because pills can be on any row.
 
-**Implementation (~80 lines, three handlers on the handle element):**
+**Implementation (~90 lines, three handlers on the handle element):**
 
 ```
 touchstart on ⠿ handle
   → mark pill as dragging (reduce opacity, add dragging class)
   → create a floating ghost clone that follows the finger
-  → record startY and original index
+  → record touch start and original index
 
 touchmove
-  → translate ghost to follow touch Y
-  → iterate sibling pills via getBoundingClientRect() to find insertion slot
-  → highlight the target slot with a visual indicator (e.g. coloured top border)
+  → translate ghost to follow touch X, Y freely
+  → for each sibling pill, compute getBoundingClientRect() center
+  → find the pill whose center is nearest to current touch X, Y
+  → determine before/after by comparing touch X to that pill's horizontal midpoint
+  → highlight the insertion gap with a coloured left or right border on the target pill
 
 touchend
   → splice pill from original index to detected slot
