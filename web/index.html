@@ -39,11 +39,14 @@
             <div class="cockpit-main">
                 <!-- Left rail: icon-only, 44px, NOT overlaying map -->
                 <div id="leftRail"></div>
-                <!-- Map area: fills remaining space -->
-                <div class="map-area">
-                    <div id="primaryView" class="primary-view"></div>
-                    <!-- 3 corner buttons (auto-pan, D→, ⋮) -->
-                    <div id="mapCornerBtns"></div>
+                <!-- cockpitContainer: map + route planner panel in CSS grid -->
+                <div id="cockpitContainer">
+                    <div class="map-area" id="mapContainer">
+                        <div id="primaryView" class="primary-view"></div>
+                        <!-- 3 corner buttons (auto-pan, D→, ⋮) -->
+                        <div id="mapCornerBtns"></div>
+                    </div>
+                    <div id="routePlannerPanel"></div>
                 </div>
             </div>
             <!-- Instrument strip: GS/ALT/FUEL -->
@@ -95,7 +98,8 @@
     <script src="./cockpit/track-log.js"></script>
     <script src="./cockpit/device-status.js"></script>
     <script src="./cockpit/range-calc.js"></script>
-    <script src="./cockpit/route-editor.js"></script>
+    <script src="./shared/route-planner.js"></script>
+    <script src="./cockpit/route-planner-panel.js"></script>
     <script src="./cockpit/sua-notams.js"></script>
     <script src="./cockpit/vector-map-layers.js"></script>
     <script src="./cockpit/airport-popup.js"></script>
