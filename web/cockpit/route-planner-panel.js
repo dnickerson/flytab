@@ -119,9 +119,19 @@ class RoutePlannerPanel {
 
         // Prefer flight_plan.route — it preserves airway pills (V143, T295, etc.)
         // that otherwise would be stripped when only waypoints are saved.
+        // Process the array directly — joining with spaces would split multi-word
+        // fix names like 'La Guardia' into two pills (LA + GUARDIA).
         const routeIds = plan.flight_plan?.route;
         if (Array.isArray(routeIds) && routeIds.length >= 2) {
-            this._route = this._parsePasteStr(routeIds.join(' '));
+            this._route = routeIds.map((id, i) => {
+                let type;
+                if (i === 0)                          type = 'dep';
+                else if (i === routeIds.length - 1)   type = 'dest';
+                else if (/^[VT]\d/.test(id))          type = 'awy';
+                else if (id === 'DIRECT')             type = 'direct';
+                else                                   type = 'fix';
+                return { id, type };
+            });
         } else {
             const wps = plan.waypoints || [];
             if (wps.length === 0) { this._route = []; return; }
