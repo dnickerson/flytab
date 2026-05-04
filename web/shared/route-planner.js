@@ -593,10 +593,14 @@ class RouteConstructor {
 
   _applySuaAvoidance(waypoints, workGraph) {
     const result = [waypoints[0]];
-    let i = 0, safety = 0;
+    let i = 0, splices = 0;
     const wpts = [...waypoints];
 
-    while (i < wpts.length - 1 && safety++ < 30) {
+    // The safety counter only guards against runaway splice insertions.
+    // Counting every iteration (the previous bug) truncated routes longer
+    // than 30 waypoints — A*'s final waypoint (the destination airport)
+    // would be dropped, leaving legs that end at the previous fix.
+    while (i < wpts.length - 1) {
       const from = wpts[i];
       const to   = wpts[i + 1];
       const conflict = segmentConflictsSua(from.lat, from.lon, to.lat, to.lon, this.suas);
@@ -604,7 +608,7 @@ class RouteConstructor {
       if (conflict) {
         // Find a nearby on-airway fix that routes around the conflict
         const avoidFix = this._findAvoidanceFix(from, to, conflict, workGraph);
-        if (avoidFix && !result.find(w => w.fix === avoidFix.fix)) {
+        if (avoidFix && !result.find(w => w.fix === avoidFix.fix) && splices++ < 10) {
           result.push(avoidFix);
           wpts.splice(i + 1, 0, avoidFix);
         } else {
