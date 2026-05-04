@@ -307,8 +307,12 @@ class AirwayGraph {
           s => s.from_seq === wpts[i].seq && s.to_seq === wpts[i+1].seq
         ) ?? awy.segments?.[i] ?? {};
 
-        const dist = seg.dist_nm
-          ?? haversine(wpts[i].lat, wpts[i].lon, wpts[i+1].lat, wpts[i+1].lon);
+        // FAA AWY_SEG_ALT.csv has gaps where dist_nm is 0. A* treats 0 as a
+        // free edge and produces nonsense routes (e.g. via WV when V143 is
+        // available). Fall back to haversine when dist is missing OR zero.
+        const dist = (seg.dist_nm && seg.dist_nm > 0)
+            ? seg.dist_nm
+            : haversine(wpts[i].lat, wpts[i].lon, wpts[i+1].lat, wpts[i+1].lon);
         const mea = seg.mea_ft ?? seg.mea ?? 0;
 
         this._addEdge(fromId, toId, dist, mea, awy.name);
