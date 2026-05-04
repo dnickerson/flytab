@@ -537,29 +537,48 @@ class RoutePlannerPanel {
     }
 
     /**
-     * Compact view: airways only. Show just DEP, airway pills, fuel stops, and
-     * DEST. Transition/intermediate fixes are dropped — the map shows them
-     * separately, so pilots only need the airway summary in the planner.
+     * Compact view: FAA-style route summary. Keeps DEP, DEST, fuel stops,
+     * airway pills, and transition fixes (entry to and exit from each airway).
+     * Drops fixes that are interior to a single airway run.
+     *
+     * Algorithm: walk the route. For each fix, push it, then if it's followed
+     * by an airway, push the airway and skip ahead through consecutive same-
+     * airway segments until we reach a fix that's not followed by the same
+     * airway — that's the exit fix, which the next iteration pushes.
      *
      * Output preserves a reference back to the original index in this._route
      * so drag/edit operations target the underlying full route.
      */
     _collapseSameAirway(route) {
+        const wrap = (i) => ({ item: route[i], originalIdx: i });
         const out = [];
-        // Collapse consecutive same-airway pills to one (e.g. T216 T216 T216 → T216)
-        let lastAwy = null;
-        route.forEach((item, i) => {
-            if (item.type === 'dep' || item.type === 'dest' || item.type === 'fuel') {
-                out.push({ item, originalIdx: i });
-                lastAwy = null;
-            } else if (item.type === 'awy' || item.type === 'direct') {
-                if (item.id !== lastAwy) {
-                    out.push({ item, originalIdx: i });
-                    lastAwy = item.id;
-                }
+        const len = route.length;
+        let i = 0;
+        while (i < len) {
+            const item = route[i];
+            if (item.type === 'awy' || item.type === 'direct') {
+                // standalone airway — already handled by previous fix's lookahead
+                out.push(wrap(i));
+                i++;
+                continue;
             }
-            // skip fix-type pills entirely
-        });
+            // Fix-like (dep, fix, fuel, dest)
+            out.push(wrap(i));
+            i++;
+            if (i < len && (route[i].type === 'awy' || route[i].type === 'direct')) {
+                const awy = route[i].id;
+                out.push(wrap(i));
+                i++;
+                // Skip consecutive fix-awy(same) pairs — the loop ends pointing at
+                // a fix that's NOT followed by the same airway (the exit fix).
+                while (i + 1 < len
+                       && (route[i + 1].type === 'awy' || route[i + 1].type === 'direct')
+                       && route[i + 1].id === awy) {
+                    i += 2;
+                }
+                // Next iteration will push that exit fix.
+            }
+        }
         return out;
     }
 
