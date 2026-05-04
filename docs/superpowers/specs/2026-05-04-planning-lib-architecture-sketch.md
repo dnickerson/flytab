@@ -50,7 +50,9 @@
 
   web/shared/planning-adapters/         ← flytab's adapter implementations (NOT in the lib)
     idb-aero.js                           reads NASR from IndexedDB
-    fisb-weather.js                       Stratux FIS-B + AWC fallback
+    fisb-weather.js                       Stratux FIS-B (in-flight tier — direct, no internet)
+    flywhere-weather.js                   AWC/NOTAMs/TFRs via flywhere.app proxy (online tier — see below)
+    weather-router.js                     selects fisb-weather vs flywhere-weather by NetworkStatus.mode()
     idb-plan.js                           flight plans in IDB
     idb-profile.js                        aircraft profiles in IDB
     capacitor-network.js                  Capacitor Network plugin → online/mode
@@ -156,16 +158,23 @@ class Clock {
 import { RoutePlanner, Optimizer } from './shared/planning/index.js';
 import { IdbAeroData }       from './shared/planning-adapters/idb-aero.js';
 import { FisbWeather }       from './shared/planning-adapters/fisb-weather.js';
+import { FlywhereWeather }   from './shared/planning-adapters/flywhere-weather.js';
+import { WeatherRouter }     from './shared/planning-adapters/weather-router.js';
 import { IdbPlanStore }      from './shared/planning-adapters/idb-plan.js';
 import { IdbProfileStore }   from './shared/planning-adapters/idb-profile.js';
 import { CapacitorNetwork }  from './shared/planning-adapters/capacitor-network.js';
 
+const network = new CapacitorNetwork();
+
 const adapters = {
   aero:     new IdbAeroData(idb),
-  weather:  new FisbWeather(stratuxClient, awcClient /* fallback when online */),
+  weather:  new WeatherRouter(network, {
+              inFlight: new FisbWeather(stratuxClient),
+              online:   new FlywhereWeather('https://flywhere.app/api'),
+            }),
   plans:    new IdbPlanStore(idb),
   profiles: new IdbProfileStore(idb),
-  network:  new CapacitorNetwork(),
+  network,
   clock:    { now: () => Date.now() },
 };
 this.routePlanner = new RoutePlanner(adapters);
@@ -186,6 +195,39 @@ const planner = new RoutePlanner(adapters);
 ```
 
 **Adapters always live in the shell's repo, never in the lib.**
+
+## Online data routes through flywhere.app
+
+flytab's online weather/NOTAMs/TFRs/winds are **proxied through flywhere.app**, not fetched directly from AWC / FAA NMS-API / NWS. This is non-negotiable because:
+
+- **CORS.** AWC partially supports CORS; FAA NMS-API and several NOTAM/TFR feeds do not. A flytab browser shell at `localhost:8000` (dev) or any non-`*.aviationweather.gov` origin gets blocked by the browser's preflight check. Capacitor on Android escapes CORS via the native bridge, but the same code in any browser shell hits the wall.
+- **Rate-limiting and API keys.** FAA NMS-API requires registered credentials; embedding them in client code (especially on a tablet APK) leaks them. flywhere.app holds the credentials server-side.
+- **Caching and amortization.** flywhere.app can cache aggressively (METARs revalidate every minute, TFRs every 5 min, winds every hour) and serve all of flytab's calls from cache. Direct calls would hit upstream providers redundantly.
+- **One throat to choke.** When AWC changes a field name (and they do), one update to flywhere.app's proxy fixes flytab everywhere. No client deploys required.
+
+**Consequence on the architecture:** the lib's `WeatherSource` interface is unchanged — it still asks `getMetar(icao)`. Where the call goes is an **adapter implementation** decision, set at boot:
+
+| Tier | flytab adapter | Where it actually fetches from |
+|---|---|---|
+| In-flight (no internet, FIS-B available) | `FisbWeather` | Stratux WebSocket — direct, no proxy |
+| Online (any internet path: home WiFi, Tailscale, cellular) | `FlywhereWeather` | `https://flywhere.app/api/wx/*` — proxied |
+| flywhere shell itself | `AwcWeather` (server-side) | Direct from AWC/FAA — server can call without CORS |
+
+The `WeatherRouter` adapter (in flytab's adapter dir, not in the lib) inspects `NetworkStatus.mode()` and delegates to the right tier on each call.
+
+**flywhere.app endpoint shape (TBD in its own brainstorm — this sketch only commits to the routing decision):**
+```
+GET  /api/wx/metar?icao=KLKR
+GET  /api/wx/taf?icao=KLKR
+GET  /api/wx/winds-aloft?lat=33.0&lon=-85.0&alt=6000
+GET  /api/wx/tfrs?bbox=...
+GET  /api/wx/sigmets
+GET  /api/wx/airmets
+GET  /api/notam?icao=KLKR
+```
+Each returns the same JSON shape the corresponding `@typedef` in `web/shared/planning/types/weather.js` defines. flywhere is responsible for normalizing AWC/FAA quirks (e.g., G-AIRMET altitudes-in-hundreds-of-feet, FZL string handling per CLAUDE.md) before returning.
+
+**Failure path:** if `https://flywhere.app/api/*` returns 5xx or times out, the `FlywhereWeather` adapter throws a typed `WeatherUnavailable` error. The Spec B UI handles it with a "weather data unavailable — using cached" badge; the planner uses last-cached values from IDB.
 
 ## Sibling-repo setup (one-time)
 
@@ -255,6 +297,8 @@ const plan = await planner.plan({ departure: 'KLKR', destination: 'K44N' });
 | Stale data in flywhere after editing lib | `npm install` doesn't re-link. Use `npm link` during active development, or re-run `npm install`. |
 | flytab WebView crashes on `import` | Capacitor's WebView on Android < 5 doesn't support ESM. flytab targets API 21+ which does. Check `android/app/build.gradle` `minSdkVersion`. |
 | Tests pass on flywhere but plan is wrong on flytab | Check the adapter implementations — math is shared, data plumbing is not. Likely the FIS-B weather adapter is returning a different shape than AWC. Use the JSDoc `@typedef` as the contract. |
+| flytab in browser shows "weather data unavailable" | `https://flywhere.app/api/wx/*` reachable from your browser? Open one in a new tab. CORS preflight passing? Check Network tab for OPTIONS. Don't try to call AWC directly to "fix" it — that's exactly the CORS issue this routing solves. |
+| flytab in flight has no weather | Stratux WebSocket connected? `FisbWeather` adapter receiving frames? `WeatherRouter` should auto-fall through to FIS-B when `NetworkStatus.mode() === 'offline'`. |
 
 ## What this enables
 
@@ -276,5 +320,6 @@ const plan = await planner.plan({ departure: 'KLKR', destination: 'K44N' });
 
 1. **Cross-runtime / unified-app strategic direction** — converge flywhere + flytab into one product, or keep them as two apps sharing a lib? 1–2 day brainstorm.
 2. **Spec B — Route editing UX** — paste/Apply/Apply-&-Close, bidirectional map↔list, smart-suggest avoidance, three-tier mode awareness, generic copy/share. **Next**, after this sketch is approved.
-3. **Garmin GPS 175 interop** — deferred indefinitely; no realistic OSS path.
-4. **Wind-corrected leg ETE & TFR-on-route check** — bundled into Spec B.
+3. **flywhere.app proxy endpoint design** — exact URL paths, auth (if any), response shapes, rate limits, caching policy, error contract. Bounded by the typedefs in `web/shared/planning/types/weather.js` but the wire protocol is its own design. Must land before flytab's `FlywhereWeather` adapter can be implemented.
+4. **Garmin GPS 175 interop** — deferred indefinitely; no realistic OSS path.
+5. **Wind-corrected leg ETE & TFR-on-route check** — bundled into Spec B.
