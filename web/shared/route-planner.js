@@ -282,6 +282,11 @@ class AirwayGraph {
     this.graph  = {};
     this.coords = {};
 
+    // Prefer the navaid's 3-letter id (PWL, LGA, CMK) over its long name
+    // ('Pawling', 'La Guardia', 'Carmel'). Intersections (REP-PT, WAY-PT)
+    // have only `name` — use that. Always uppercase for FAA route format.
+    const fixKey = (w) => ((w.id || w.name || '') + '').toUpperCase();
+
     for (const awy of airways) {
       // Only low-altitude airways for the RV-9A
       if (!['V', 'T'].includes(awy.type)) continue;
@@ -291,7 +296,7 @@ class AirwayGraph {
 
       // Register all fix coordinates
       for (const w of wpts) {
-        const id = w.name || w.id;
+        const id = fixKey(w);
         if (id && w.lat != null && w.lon != null && !this.coords[id]) {
           this.coords[id] = { lat: w.lat, lon: w.lon };
         }
@@ -299,8 +304,8 @@ class AirwayGraph {
 
       // Add edges for each segment, bidirectional
       for (let i = 0; i < wpts.length - 1; i++) {
-        const fromId = wpts[i].name   || wpts[i].id;
-        const toId   = wpts[i+1].name || wpts[i+1].id;
+        const fromId = fixKey(wpts[i]);
+        const toId   = fixKey(wpts[i+1]);
         if (!fromId || !toId) continue;
 
         const seg = awy.segments?.find(
