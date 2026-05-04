@@ -55,7 +55,7 @@
     weather-router.js                     selects fisb-weather vs flywhere-weather by NetworkStatus.mode()
     idb-plan.js                           flight plans in IDB
     idb-profile.js                        aircraft profiles in IDB
-    capacitor-network.js                  Capacitor Network plugin → online/mode
+    (no new network adapter — reuses existing app.networkMode singleton from web/shared/network-mode.js)
 
 ~/flywhere/
   package.json                            "flywhere-planning": "file:../flytab/web/shared/planning"
@@ -138,9 +138,17 @@ class PlanStore {
 // adapters/profile-store.js — same shape as PlanStore for AircraftProfile
 
 // adapters/network-status.js
-class NetworkStatus {
-  /** @returns {boolean} */                                     isOnline() {}
-  /** @returns {'home'|'tailscale'|'internet'|'offline'} */     mode() {}
+//
+// IMPORTANT: this interface matches the EXISTING `NetworkMode` class at
+// web/shared/network-mode.js. flytab already instantiates it once as
+// `app.networkMode` and starts monitoring at boot. The planning lib's
+// network adapter consumes that singleton directly — DO NOT create a
+// wrapper class or a second instance. Adapters in flytab pass
+// `network: app.networkMode` straight through.
+class NetworkStatus extends EventTarget {
+  /** @returns {'flight'|'home'|'internet'|'offline'} */
+  get mode() {}
+  // Emits 'mode:changed' events with detail: { mode, previous }.
 }
 
 // adapters/clock.js
@@ -162,19 +170,19 @@ import { FlywhereWeather }   from './shared/planning-adapters/flywhere-weather.j
 import { WeatherRouter }     from './shared/planning-adapters/weather-router.js';
 import { IdbPlanStore }      from './shared/planning-adapters/idb-plan.js';
 import { IdbProfileStore }   from './shared/planning-adapters/idb-profile.js';
-import { CapacitorNetwork }  from './shared/planning-adapters/capacitor-network.js';
-
-const network = new CapacitorNetwork();
+// NOTE: do NOT create a new network instance — reuse the existing
+// app.networkMode singleton (web/shared/network-mode.js). It already
+// implements the NetworkStatus interface and is started at app boot.
 
 const adapters = {
   aero:     new IdbAeroData(idb),
-  weather:  new WeatherRouter(network, {
+  weather:  new WeatherRouter(this.networkMode, {
               inFlight: new FisbWeather(stratuxClient),
               online:   new FlywhereWeather('https://flywhere.app/api'),
             }),
   plans:    new IdbPlanStore(idb),
   profiles: new IdbProfileStore(idb),
-  network,
+  network:  this.networkMode,            // existing singleton
   clock:    { now: () => Date.now() },
 };
 this.routePlanner = new RoutePlanner(adapters);
