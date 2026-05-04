@@ -29,8 +29,10 @@ class RoutePlannerPanel {
         this._selfServeOnly = false;
         this._reserveGal    = 10;
 
-        // Display: compact view collapses same-airway fixes to just the airway pill
-        this._compactView   = false;
+        // Display: compact view shows airways only (no transition fixes).
+        // Default ON — pilots want the airway summary in the planner; the map
+        // shows all fixes separately.
+        this._compactView   = true;
 
         // DOM refs (set by _buildDOM)
         this._depInput    = null;
@@ -115,32 +117,37 @@ class RoutePlannerPanel {
     _loadPlan(plan) {
         if (!plan) { this._route = []; return; }
 
-        const wps = plan.waypoints || [];
-        if (wps.length === 0) { this._route = []; return; }
-
-        // Rebuild pill array from waypoints (no airway annotation at load time)
-        this._route = wps.map((wp, i) => {
-            const id   = wp.icao || wp.name || wp.fix || '?';
-            let   type = 'fix';
-            if (i === 0)            type = 'dep';
-            else if (i === wps.length - 1) type = 'dest';
-            else if (wp.type === 'APT' || (id.length === 4 && id.startsWith('K')))
-                type = 'fix'; // intermediate airport
-            return { id, type };
-        });
+        // Prefer flight_plan.route — it preserves airway pills (V143, T295, etc.)
+        // that otherwise would be stripped when only waypoints are saved.
+        const routeIds = plan.flight_plan?.route;
+        if (Array.isArray(routeIds) && routeIds.length >= 2) {
+            this._route = this._parsePasteStr(routeIds.join(' '));
+        } else {
+            const wps = plan.waypoints || [];
+            if (wps.length === 0) { this._route = []; return; }
+            // Fall back to fix-only pills from waypoints (no airway annotation)
+            this._route = wps.map((wp, i) => {
+                const id   = wp.icao || wp.name || wp.fix || '?';
+                let   type = 'fix';
+                if (i === 0)                   type = 'dep';
+                else if (i === wps.length - 1) type = 'dest';
+                return { id, type };
+            });
+        }
 
         // Seed _coords from loaded plan so Apply works without re-running plan()
+        const wps = plan.waypoints || [];
         for (const wp of wps) {
             const id = wp.icao || wp.name || wp.fix;
             if (id && wp.lat != null && wp.lon != null)
                 this._coords[id] = { lat: wp.lat, lon: wp.lon };
         }
 
-        // Sync DEP/DEST inputs
-        if (this._depInput && wps.length > 0)
-            this._depInput.value = wps[0].icao || wps[0].name || '';
-        if (this._destInput && wps.length > 1)
-            this._destInput.value = wps[wps.length - 1].icao || wps[wps.length - 1].name || '';
+        // Sync DEP/DEST inputs from the first/last non-airway pill
+        const firstFix = this._route.find(p => p.type !== 'awy' && p.type !== 'direct');
+        const lastFix  = [...this._route].reverse().find(p => p.type !== 'awy' && p.type !== 'direct');
+        if (this._depInput  && firstFix) this._depInput.value  = firstFix.id;
+        if (this._destInput && lastFix)  this._destInput.value = lastFix.id;
     }
 
     // ── Async planner build ───────────────────────────────────────────────────
@@ -530,44 +537,29 @@ class RoutePlannerPanel {
     }
 
     /**
-     * Collapse consecutive fixes that all use the same airway. Keep DEP, DEST,
-     * the airway pill, and the entry/exit fix for each airway segment.
+     * Compact view: airways only. Show just DEP, airway pills, fuel stops, and
+     * DEST. Transition/intermediate fixes are dropped — the map shows them
+     * separately, so pilots only need the airway summary in the planner.
      *
-     * Input/output is an array of pill objects. Output preserves a reference back
-     * to the original index in this._route so drag/edit operations target the
-     * underlying full route.
+     * Output preserves a reference back to the original index in this._route
+     * so drag/edit operations target the underlying full route.
      */
     _collapseSameAirway(route) {
-        const wrap = (i) => ({ item: route[i], originalIdx: i });
         const out = [];
-        const len = route.length;
-        let i = 0;
-        while (i < len) {
-            const item = route[i];
-            if (item.type === 'awy') {
-                // standalone airway — already handled by previous fix's lookahead
-                out.push(wrap(i));
-                i++;
-                continue;
-            }
-            // Fix-like (dep, fix, fuel, direct, dest)
-            out.push(wrap(i));
-            i++;
-            // Look ahead: airway → fix → same airway → fix → ...
-            if (i < len && route[i].type === 'awy') {
-                const awy = route[i].id;
-                out.push(wrap(i));   // airway pill
-                i++;
-                // Skip consecutive fix-awy(same) pairs; the loop ends pointing at
-                // a fix that's NOT followed by the same airway (the exit fix).
-                while (i + 1 < len
-                       && route[i + 1].type === 'awy'
-                       && route[i + 1].id === awy) {
-                    i += 2;
+        // Collapse consecutive same-airway pills to one (e.g. T216 T216 T216 → T216)
+        let lastAwy = null;
+        route.forEach((item, i) => {
+            if (item.type === 'dep' || item.type === 'dest' || item.type === 'fuel') {
+                out.push({ item, originalIdx: i });
+                lastAwy = null;
+            } else if (item.type === 'awy' || item.type === 'direct') {
+                if (item.id !== lastAwy) {
+                    out.push({ item, originalIdx: i });
+                    lastAwy = item.id;
                 }
-                // The next iteration will push that exit fix.
             }
-        }
+            // skip fix-type pills entirely
+        });
         return out;
     }
 
