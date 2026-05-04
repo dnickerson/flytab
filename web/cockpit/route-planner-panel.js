@@ -1028,12 +1028,19 @@ class RoutePlannerPanel {
         const wps = [];
         const skipped = [];
 
+        // Build case-insensitive index of cached coords. AirwayGraph stores
+        // fix names as they appear in the NASR bundle (e.g. 'Pawling') but
+        // pill IDs come back uppercased after save→reload via _parsePasteStr.
+        const coordsCi = {};
+        for (const key of Object.keys(this._coords))
+            coordsCi[key.toUpperCase()] = this._coords[key];
+
         for (const pill of this._route) {
             // Airway pills don't become waypoints
             if (pill.type === 'awy') continue;
 
             const id = pill.id;
-            let coord = this._coords[id];
+            let coord = this._coords[id] || coordsCi[id.toUpperCase()];
 
             if (!coord && this._nasrDb) {
                 // Try IDB: airport → navaid → fix
