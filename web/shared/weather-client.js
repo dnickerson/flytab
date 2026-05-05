@@ -339,6 +339,7 @@ class WeatherClient {
         const decoded = {
             station: item.icaoId || item.station_id || '',
             observed_at: item.reportTime || item.observation_time || '',
+            wind_variable: false,
             wind_dir: null,
             wind_speed: null,
             wind_gust: null,
@@ -352,7 +353,10 @@ class WeatherClient {
             weather: [],
         };
 
-        // Wind
+        // Wind — detect VRB from raw METAR string; AWC API returns wdir=0 for both
+        // variable and calm/north winds so we can't distinguish from the decoded fields alone.
+        const rawOb = item.rawOb || '';
+        decoded.wind_variable = /\bVRB\d{2}(?:G\d{2})?(?:KT|MPS)\b/.test(rawOb);
         decoded.wind_dir = item.wdir ?? null;
         decoded.wind_speed = item.wspd ?? null;
         decoded.wind_gust = item.wgst ?? null;

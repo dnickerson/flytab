@@ -1425,8 +1425,9 @@ class WxBriefing {
 
     _populateStationCardBody(body, icao, metar) {
         const d = metar.decoded || {};
-        const wind = d.wind_dir != null
-            ? `${String(d.wind_dir).padStart(3, '0')}° / ${d.wind_speed ?? '—'}kt${d.wind_gust ? ` G${d.wind_gust}` : ''}`
+        const windDir = d.wind_variable ? 'VRB' : (d.wind_dir != null ? `${String(d.wind_dir).padStart(3, '0')}°` : null);
+        const wind = windDir != null
+            ? `${windDir} / ${d.wind_speed ?? '—'}kt${d.wind_gust ? ` G${d.wind_gust}` : ''}`
             : 'Calm';
         const vis  = d.visibility != null ? `${d.visibility} SM` : '—';
         const ceil = d.ceiling != null
