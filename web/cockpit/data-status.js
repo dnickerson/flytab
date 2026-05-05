@@ -665,10 +665,21 @@ class DataStatus {
                 reloadBtn.disabled = true;
                 reloadBtn.textContent = 'Reloading…';
                 showProg('Reloading app data…', '');
-                await DataStatus._reimportNasr();
+                try {
+                    const count = await DataStatus._reimportNasr();
+                    // Android path swallows errors and returns undefined — preserve original UI message.
+                    // Browser path returns the import count or throws.
+                    if (typeof count === 'number') {
+                        doneProg(`NASR imported: ${count.toLocaleString()} records`, 'var(--status-ok)');
+                        await this._refresh();
+                    } else {
+                        doneProg('App data reloaded', 'var(--status-ok)');
+                    }
+                } catch (e) {
+                    doneProg(`Reload failed: ${e.message}`, 'var(--status-danger)');
+                }
                 reloadBtn.disabled = false;
                 reloadBtn.innerHTML = '&#8635; Reload App Data';
-                doneProg('App data reloaded', 'var(--status-ok)');
             });
         }
 
@@ -1331,7 +1342,8 @@ class DataStatus {
                 }
                 setStep('nasr', 'ok', `Updated to cycle ${serverDate} — loading into app…`);
                 // Force reimport into IndexedDB so the app reflects the new data immediately
-                await DataStatus._reimportNasr();
+                try { await DataStatus._reimportNasr(); }
+                catch (e) { console.warn('[DataStatus] post-sync NASR reimport failed:', e?.message); }
                 this._saveDeviceSection('nasr', {
                     effective_date: serverResp.effective_date,
                     bundle_version: serverResp.bundle_version,
@@ -1501,18 +1513,54 @@ class DataStatus {
     static async _reimportNasr() {
         const app = window.app;
         if (!app?._nasrDb) return;
-        try {
-            const resp = await fetch('http://localhost:9090/nasr/bundle.json', {
-                signal: AbortSignal.timeout(60000), // 18MB JSON parse can be slow on tablet
-            });
-            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-            const bundle = await resp.json();
-            await app._nasrDb.importNasrBundle(bundle);
-            await app._updateNasrBadge?.();
-            app.vectorLayers?._updateDynamicLayers?.();
-        } catch (e) {
-            console.warn('[DataStatus] NASR reimport failed:', e?.message);
+
+        // Cockpit / Android wrapper: original NanoHTTPD-only path, byte-identical
+        // to before. Never reach for the home server here — offline cockpit must
+        // not block on a 60s fetch against an unreachable home base.
+        const isNative = !!(window.Capacitor?.isNativePlatform?.());
+        if (isNative) {
+            try {
+                const resp = await fetch('http://localhost:9090/nasr/bundle.json', {
+                    signal: AbortSignal.timeout(60000), // 18MB JSON parse can be slow on tablet
+                });
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                const bundle = await resp.json();
+                await app._nasrDb.importNasrBundle(bundle);
+                await app._updateNasrBadge?.();
+                app.vectorLayers?._updateDynamicLayers?.();
+            } catch (e) {
+                console.warn('[DataStatus] NASR reimport failed:', e?.message);
+            }
+            return;
         }
+
+        // Browser dev mode: NanoHTTPD is absent, pull bundle.json directly from
+        // the configured home server. Throws on failure so the caller can surface
+        // it. This path is unreachable on Android.
+        const bases = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.homeBases : [];
+        if (!bases.length) throw new Error('No home server configured');
+
+        let bundle = null;
+        let lastErr = null;
+        for (const base of bases) {
+            try {
+                const resp = await fetch(`${base}/nasr/bundle.json`, {
+                    cache: 'no-store',
+                    signal: AbortSignal.timeout(60000),
+                });
+                if (!resp.ok) { lastErr = new Error(`HTTP ${resp.status} from ${base}`); continue; }
+                bundle = await resp.json();
+                break;
+            } catch (e) {
+                lastErr = e;
+            }
+        }
+        if (!bundle) throw lastErr || new Error('Home server bundle.json not reachable');
+
+        const count = await app._nasrDb.importNasrBundle(bundle);
+        await app._updateNasrBadge?.();
+        app.vectorLayers?._updateDynamicLayers?.();
+        return count;
     }
 
     /**
