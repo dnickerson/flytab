@@ -517,7 +517,11 @@ class FisbWeatherDisplay {
     // ========== SIGMET/AIRMET Polygons ==========
 
     _addSigmet(sigmet) {
-        this._seenAdvisoryKeys.add((sigmet.raw || '').slice(0, 80));
+        // Dedup: FIS-B re-broadcasts the same SIGMET every few minutes; without
+        // this check the toast count multiplied by the broadcast count.
+        const key = (sigmet.raw || '').slice(0, 80);
+        if (this._seenAdvisoryKeys.has(key)) return;
+        this._seenAdvisoryKeys.add(key);
         if (!sigmet.points || sigmet.points.length < 3) return;
 
         const isConvective = sigmet.type === 'convective';
@@ -541,7 +545,9 @@ class FisbWeatherDisplay {
     }
 
     _addAirmet(airmet) {
-        this._seenAdvisoryKeys.add((airmet.raw || '').slice(0, 80));
+        const key = (airmet.raw || '').slice(0, 80);
+        if (this._seenAdvisoryKeys.has(key)) return;
+        this._seenAdvisoryKeys.add(key);
         // FZLVL G-AIRMETs are LINEs (freezing-level contours, often only 2 points
         // for short segments). Other AIRMETs are AREAs and need ≥ 3 points to form
         // a polygon.
