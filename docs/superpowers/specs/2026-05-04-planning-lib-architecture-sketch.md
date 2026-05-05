@@ -157,6 +157,106 @@ class Clock {
 }
 ```
 
+## Lib API surface
+
+The lib's public surface beyond the adapter interfaces. Documented here so adapter authors and shells know exactly what method names and option keys they're targeting.
+
+### `RoutePlanner.plan(opts)`
+
+```js
+/**
+ * @typedef PlanOpts
+ * @property {string}   departure          ICAO/identifier of dep
+ * @property {string}   destination        ICAO/identifier of dest
+ * @property {number}   [cruiseAltFt=6000] cruising altitude in feet MSL
+ * @property {number}   [reserveGal=10]    fuel reserve gallons
+ * @property {number}   [maxLegHrs=2.0]    fuel-stop split threshold
+ * @property {boolean}  [selfServeOnly=false] only use self-serve fuel airports
+ * @property {RoutingMode} [routingMode='any']  airway-type filter — see below
+ * @property {AvoidanceConstraint[]} [avoidance=[]]  airspace IDs / polygons to avoid
+ * @property {AbortSignal} [signal]        cancel an in-flight A*
+ */
+async plan(opts) { /* returns FlightPlan */ }
+```
+
+**`RoutingMode`** — controls which airway edges the A* graph contains:
+
+| Value | Graph contents |
+|---|---|
+| `'gps-direct'` | No airway edges. A* reduces to a single direct edge. |
+| `'vors-direct'` | No airway edges; intermediate VOR navaids included as nodes for opt-in pinning. |
+| `'v-airways'` | Only edges from airways whose `type === 'V'` (Victor — conventional low-altitude). **Default for any aircraft profile whose `equipment.tAirways === false`.** |
+| `'t-airways'` | Only edges from airways whose `type === 'T'` (RNAV — high-altitude, RNP-capable GPS only). |
+| `'any'` | All airway edges regardless of type. |
+
+The lib filters at graph-build time, not search time, so `gps-direct` and `vors-direct` queries skip the entire airway-graph load.
+
+### `RoutePlanner.parseRoute(str, opts)`
+
+```js
+/**
+ * Parse an ICAO Field 15 / clearance / 1800wxbrief route string into a
+ * fully-expanded FlightPlan. Pasted airway tokens are expanded to all of
+ * their interior transition fixes between the entry and exit fixes via
+ * `AeroDataSource.getAirway(id)`.
+ *
+ * Example:
+ *   "KLKR V143 GSO V268 ESN K44N"
+ * is parsed as a token sequence, then each `Vxxx` / `Txxx` / `Jxxx` token
+ * is replaced with the slice of its airway between the prior and next
+ * non-airway tokens. Output `waypoints[]` contains every fix on the route,
+ * each with lat/lon resolved.
+ *
+ * @param {string} str
+ * @param {PlanOpts} [opts]  same options as plan(); routingMode validates that
+ *                           pasted airways' types are permitted
+ * @returns {Promise<FlightPlan>}
+ */
+async parseRoute(str, opts) { /* … */ }
+```
+
+Failures (per the spec's error contract): `UnknownWaypoint`, `UnknownAirway`, `AmbiguousIdentifier`, `RoutingModeViolation` (e.g., a pasted T-airway under `routingMode: 'v-airways'`).
+
+### `RoutePlanner.recomputeLegs(plan)`
+
+```js
+/**
+ * Recompute leg-level data (distances, ETE, fuel, phase decomposition) for an
+ * existing waypoints[] array. Does NOT touch the airway graph. Cheap; runs
+ * synchronously. Used after pilot-driven edits like insert/replace/remove fix,
+ * altitude change, reserve change.
+ * @param {FlightPlan} plan
+ * @returns {FlightPlan}
+ */
+recomputeLegs(plan) { /* … */ }
+```
+
+### Aircraft-profile typedef
+
+```js
+/**
+ * @typedef AircraftProfile
+ * @property {string}  id
+ * @property {string}  tailNumber
+ * @property {string}  model              e.g., "RV-9A", "Cessna 172"
+ * @property {number}  cruise_ktas
+ * @property {number}  fuel_burn_gph
+ * @property {number}  fuel_capacity_gal
+ * @property {number}  reserve_gal
+ * @property {AircraftEquipment} equipment
+ */
+
+/**
+ * @typedef AircraftEquipment
+ * @property {boolean} vAirways    true when GPS / nav radios can fly V airways (almost always true)
+ * @property {boolean} tAirways    true ONLY when GPS supports T (RNAV) airways. Garmin GPS 175 = false.
+ * @property {boolean} jAirways    true when capable of high-altitude Jet routes
+ * @property {boolean} gpsApproach RNAV approaches supported (LPV/LNAV/VNAV)
+ */
+```
+
+The lib uses `equipment` only as a **default source** for `routingMode` when the shell doesn't pass an override. The pilot can always pick a more restrictive mode per flight.
+
 ## Boot sequences
 
 ### flytab (Capacitor on tablet)
