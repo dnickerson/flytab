@@ -1285,7 +1285,13 @@ class AirportPopup {
             ? `<div class="wx-row"><div class="wx-row-lbl">VIS</div><div class="wx-row-val">${visPlus ? '&gt;' : ''}${visSm} SM</div></div>`
             : '';
         const tdRow = tempC != null
-            ? `<div class="wx-row"><div class="wx-row-lbl">T / DP</div><div class="wx-row-val">${Math.round(tempC)}&deg; / ${dewC != null ? Math.round(dewC) : '&mdash;'}&deg;C</div></div>`
+            ? (() => {
+                const tF = Math.round(tempC * 9 / 5 + 32);
+                const dF = dewC != null ? Math.round(dewC * 9 / 5 + 32) : null;
+                const c = `${Math.round(tempC)}&deg; / ${dewC != null ? Math.round(dewC) : '&mdash;'}&deg;C`;
+                const f = `${tF}&deg; / ${dF != null ? dF : '&mdash;'}&deg;F`;
+                return `<div class="wx-row"><div class="wx-row-lbl">T / DP</div><div class="wx-row-val">${c} &middot; ${f}</div></div>`;
+            })()
             : '';
         const altRow = altim != null
             ? `<div class="wx-row"><div class="wx-row-lbl">ALT</div><div class="wx-row-val">${altim.toFixed(2)}&quot;</div></div>`
