@@ -47,6 +47,26 @@ const _StratuxNativeBus = (() => {
     };
 })();
 
+// One global router for the StratuxUDP plugin (GDL 90 over UDP). When this
+// is available the client uses it for ownship + traffic and skips the WS
+// /traffic and /situation channels entirely. FIS-B weather (/weather and
+// /jsonio) keeps using the WS — GDL 90 doesn't carry pre-parsed FIS-B.
+const _StratuxUdpBus = (() => {
+    const native = (typeof Capacitor !== 'undefined' && Capacitor.Plugins && Capacitor.Plugins.StratuxUDP)
+        ? Capacitor.Plugins.StratuxUDP : null;
+    if (!native) return null;
+    let attached = null;
+    native.addListener('situation', (ev) => { if (attached && attached.onSituation) attached.onSituation(ev); });
+    native.addListener('traffic',   (ev) => { if (attached && attached.onTraffic)   attached.onTraffic(ev); });
+    native.addListener('heartbeat', (ev) => { if (attached && attached.onHeartbeat) attached.onHeartbeat(ev); });
+    return {
+        start(port) { return native.start({ port }); },
+        stop()      { return native.stop(); },
+        attach(handlers) { attached = handlers; },
+        detach()         { attached = null; },
+    };
+})();
+
 // _createStratuxWs returns an object that mimics the surface of the browser
 // WebSocket API used by this client (readyState, onopen, onmessage, onclose,
 // onerror, close()), backed by the native plugin when available.
@@ -119,11 +139,39 @@ class StratuxClient extends EventTarget {
         this._staleTimer = null;
     }
 
+    /** True when GDL 90 UDP transport is available and active. */
+    get udpMode() { return !!_StratuxUdpBus && !this._simMode; }
+
     connect() {
         // Cancel any pending reconnect timer so the external call and the timer
         // don't both call _connectTraffic() independently.
         if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
-        if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', `Connecting to Stratux at ${this._wsBase} (sim=${this._simMode})`);
+        if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', `Connecting to Stratux at ${this._wsBase} (sim=${this._simMode}, udp=${this.udpMode})`);
+
+        // Run UDP (GDL 90) and WS (JSON) in parallel: GDL 90 is the more
+        // reliable transport (no connection state, no half-closed problem),
+        // but WS is the proven path. Both feed the same _handleTraffic /
+        // _handleSituation, keyed by ICAO so duplicate updates are harmless.
+        // If either transport fails for any reason, the other keeps the
+        // cockpit alive.
+        if (this.udpMode) {
+            _StratuxUdpBus.attach({
+                onSituation: (msg) => this._handleSituation(msg),
+                onTraffic:   (msg) => this._handleTraffic(msg),
+                onHeartbeat: () => {
+                    if (!this._connected) {
+                        if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', 'GDL 90: first heartbeat — connected');
+                        this._setConnected(true);
+                    }
+                },
+            });
+            // Surface a bind failure to the diag log; WS path keeps the cockpit
+            // alive in that case but the user should know UDP isn't available.
+            Promise.resolve(_StratuxUdpBus.start(4000)).then(
+                () => { if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', 'GDL 90 UDP listening on :4000'); },
+                (e) => { if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', `GDL 90 UDP start failed: ${e?.message || e}`); }
+            );
+        }
         this._connectTraffic();
         this._connectSituation();
         if (!this._simMode) {
@@ -146,6 +194,7 @@ class StratuxClient extends EventTarget {
     }
 
     disconnect() {
+        if (_StratuxUdpBus) { _StratuxUdpBus.detach(); _StratuxUdpBus.stop(); }
         if (this._trafficWs) { this._trafficWs.close(); this._trafficWs = null; }
         if (this._situationWs) { this._situationWs.close(); this._situationWs = null; }
         if (this._weatherWs) { this._weatherWs.close(); this._weatherWs = null; }
@@ -388,9 +437,11 @@ class StratuxClient extends EventTarget {
         };
 
         this._weatherWs.onclose = () => {
-            // Reconnect after 5s if traffic is still alive
+            // Reconnect after 5s if the overall Stratux connection is still alive
+            // (covers both WS-mode traffic OPEN and UDP-mode where traffic flows
+            // separately).
             setTimeout(() => {
-                if (this._trafficWs?.readyState === WebSocket.OPEN) {
+                if (this.udpMode || this._trafficWs?.readyState === WebSocket.OPEN) {
                     this._connectWeather();
                 }
             }, 5000);
@@ -420,7 +471,7 @@ class StratuxClient extends EventTarget {
 
         this._jsonioWs.onclose = () => {
             setTimeout(() => {
-                if (this._trafficWs?.readyState === WebSocket.OPEN) {
+                if (this.udpMode || this._trafficWs?.readyState === WebSocket.OPEN) {
                     this._connectJsonio();
                 }
             }, 5000);

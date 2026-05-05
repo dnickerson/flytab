@@ -26,6 +26,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(ThermalMonitorPlugin.class);
         registerPlugin(EngineMLPlugin.class);
         registerPlugin(StratuxWsPlugin.class);
+        registerPlugin(StratuxUdpPlugin.class);
         super.onCreate(savedInstanceState);
 
         // Request "All files access" (MANAGE_EXTERNAL_STORAGE) — required to read
