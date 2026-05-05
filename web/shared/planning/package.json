@@ -1,0 +1,14 @@
+{
+  "name": "flywhere-planning",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./math/*":    "./math/*.js",
+    "./planner/*": "./planner/*.js",
+    "./types/*":   "./types/*.js",
+    "./adapters/*":"./adapters/*.js"
+  },
+  "description": "Flight planning library shared by flytab and flywhere. Pure math + stateful planner; adapters injected by the consumer."
+}
