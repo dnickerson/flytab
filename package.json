@@ -4,7 +4,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:ui": "vitest --ui"
   },
   "keywords": [],
   "author": "",
@@ -20,8 +22,11 @@
     "@capacitor/status-bar": "^8.0.2"
   },
   "devDependencies": {
+    "@vitest/ui": "^2.1.9",
+    "jsdom": "^25.0.1",
     "playwright": "^1.59.1",
     "typescript": "^6.0.2",
+    "vitest": "^2.1.9",
     "ws": "^8.20.0"
   }
 }
