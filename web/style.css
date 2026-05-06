@@ -9854,6 +9854,29 @@ body.route-editing-mode #cockpitView {
 }
 .rpp-reserve-input:focus { border-color: #1a6fbb; }
 
+/* Routing-mode row — full-width child of rpp-opts-row flex container */
+.rpp-mode-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 2px;
+    width: 100%;
+}
+.rpp-mode-sel {
+    flex: 1;
+    height: 32px;
+    border: 1.5px solid #b0bac6;
+    border-radius: 7px;
+    background: #fff;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    color: #0a0c0f;
+    padding: 0 6px;
+    cursor: pointer;
+}
+.rpp-mode-sel:focus { border-color: #1a6fbb; outline: none; }
+
 /* Pill box */
 .rpp-pill-box {
     background: #fff;

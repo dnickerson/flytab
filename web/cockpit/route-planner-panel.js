@@ -35,6 +35,9 @@ class RoutePlannerPanel {
         // shows all fixes separately.
         this._compactView   = true;
 
+        // Routing mode for A* planner. Default v-airways — GPS 175 doesn't support T-airways.
+        this._routingMode   = 'v-airways';
+
         // DOM refs (set by _buildDOM)
         this._depInput     = null;
         this._destInput    = null;
@@ -47,6 +50,7 @@ class RoutePlannerPanel {
         this._ctxMenuIdx  = null;
         this._altInput    = null;
         this._reserveInput = null;
+        this._modeSel      = null;
 
         // Drag state
         this._dragIdx = null;
@@ -104,6 +108,7 @@ class RoutePlannerPanel {
             if (saved.selfServeOnly != null) this._selfServeOnly = saved.selfServeOnly;
             if (saved.reserveGal    != null) this._reserveGal    = saved.reserveGal;
             if (saved.compactView   != null) this._compactView   = saved.compactView;
+            if (saved.routingMode   != null) this._routingMode   = saved.routingMode;
         } catch {}
     }
 
@@ -115,6 +120,7 @@ class RoutePlannerPanel {
                 selfServeOnly: this._selfServeOnly,
                 reserveGal:    this._reserveGal,
                 compactView:   this._compactView,
+                routingMode:   this._routingMode,
             }));
         } catch {}
     }
@@ -413,6 +419,34 @@ class RoutePlannerPanel {
         row.appendChild(rsvLabel);
         row.appendChild(this._reserveInput);
         row.appendChild(rsvSuffix);
+
+        // Routing-mode row
+        const modeRow = document.createElement('div');
+        modeRow.className = 'rpp-mode-row';
+        const modeLabel = document.createElement('span');
+        modeLabel.className = 'rpp-opts-label';
+        modeLabel.textContent = 'Routing';
+        this._modeSel = document.createElement('select');
+        this._modeSel.className = 'rpp-mode-sel';
+        [
+            ['v-airways',  'V-airways (default)'],
+            ['t-airways',  'T-airways (RNAV)'],
+            ['any',        'Any airway'],
+            ['gps-direct', 'GPS Direct'],
+            ['vors-direct','VORs Direct'],
+        ].forEach(([v, t]) => {
+            const o = document.createElement('option');
+            o.value = v; o.textContent = t;
+            if (v === this._routingMode) o.selected = true;
+            this._modeSel.appendChild(o);
+        });
+        this._modeSel.addEventListener('change', () => {
+            this._routingMode = this._modeSel.value;
+            this._saveOpts();
+        });
+        modeRow.appendChild(modeLabel);
+        modeRow.appendChild(this._modeSel);
+        row.appendChild(modeRow);
 
         return row;
     }
@@ -946,6 +980,7 @@ class RoutePlannerPanel {
                 maxLegHrs:     this._maxLegHrs,
                 selfServeOnly: this._selfServeOnly,
                 avoidance:     this._avoidList.slice(),
+                routingMode:   this._routingMode,
             });
 
             // Cache all fix coordinates returned by the planner
@@ -1264,6 +1299,13 @@ class RoutePlannerPanel {
                 continue;
             }
 
+            // airway: prefer the explicit pendingAirway set by an AWY pill, fall
+            // back to the pill's own .airway tag (populated by _loadPlan /
+            // _waypointsToPills for interior airway fixes). Without the fallback,
+            // only the first fix after an AWY pill carries the airway label —
+            // all subsequent interior fixes on the same airway lose it, breaking
+            // legs[].airway in the applied plan.
+            const aw = pendingAirway || pill.airway || null;
             wps.push({
                 icao: id,
                 name: id,
@@ -1273,7 +1315,7 @@ class RoutePlannerPanel {
                       pill.type === 'dest' ? 'APT' :
                       pill.type === 'fuel' ? 'APT' : undefined,
                 alt: this._altitude,
-                ...(pendingAirway ? { airway: pendingAirway } : {}),
+                ...(aw ? { airway: aw } : {}),
             });
             pendingAirway = null;
         }
