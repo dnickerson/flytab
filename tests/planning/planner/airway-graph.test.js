@@ -79,3 +79,29 @@ describe('AirwayGraph.clearDirectEdges', () => {
         expect(g.edges('A').length).toBe(beforeAEdges);
     });
 });
+
+describe('AirwayGraph inline waypoints', () => {
+    it('builds edges from airway.waypoints when fixes/navaids stores are empty', async () => {
+        // Mirrors the real NASR bundle shape: waypoint has id+lat+lon inline
+        const inlineAero = makeAeroAdapter({
+            fixes: {},
+            airways: {
+                V99: {
+                    id: 'V99',
+                    type: 'V',
+                    fixIds: ['P', 'Q', 'R'],
+                    waypoints: [
+                        { id: 'P', lat: 33.0, lon: -85.0 },
+                        { id: 'Q', lat: 33.5, lon: -84.5 },
+                        { id: 'R', lat: 34.0, lon: -84.0 },
+                    ],
+                },
+            },
+        });
+        const g = new AirwayGraph(inlineAero, { routingMode: 'v-airways' });
+        await g.load();
+        expect(g.edges('P').some(e => e.toId === 'Q' && e.airway === 'V99')).toBe(true);
+        expect(g.edges('Q').some(e => e.toId === 'R' && e.airway === 'V99')).toBe(true);
+        expect(g.coords['Q']).toEqual({ lat: 33.5, lon: -84.5 });
+    });
+});

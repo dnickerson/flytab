@@ -40,12 +40,7 @@ export class IdbAeroData {
     async getAirway(airwayId) {
         const r = await this._db.getAirway(airwayId);
         if (!r) return null;
-        return {
-            id:      r.id || airwayId,
-            type:    r.type,
-            fixIds:  r.fix_ids || r.fixIds || [],
-            segments: r.segments || [],
-        };
+        return this._normaliseAirway(r, airwayId);
     }
 
     async listAirspace() {
@@ -65,18 +60,28 @@ export class IdbAeroData {
     }
 
     async listAirways() {
-        // NasrDb does not yet have a listAirways method; add it in this task,
-        // following the same shape as listAirspace. See nasr-db.js:477 for
-        // getAirway(name); listAirways iterates the 'airways' object store.
-        if (typeof this._db.listAirways === 'function') {
-            const records = await this._db.listAirways();
-            return records.map(r => ({
-                id: r.id || r.name,
-                type: r.type,
-                fixIds: r.fix_ids || r.fixIds || [],
-                segments: r.segments || [],
-            }));
-        }
-        return [];
+        if (typeof this._db.listAirways !== 'function') return [];
+        const records = await this._db.listAirways();
+        return records.map(r => this._normaliseAirway(r));
+    }
+
+    /**
+     * NASR bundle airway records carry their fix sequence as
+     * `waypoints: [{seq, name, lat, lon, id?, type?}, ...]`. Navaid waypoints
+     * have a short `id` (e.g. "CRG"); fix waypoints (REP-PT) have only `name`.
+     * We extract the canonical identifier per waypoint and pass coords inline
+     * so AirwayGraph can build edges without per-fix IDB round-trips.
+     */
+    _normaliseAirway(r, fallbackId) {
+        const wps = (r.waypoints || [])
+            .map(w => ({ id: w.id || w.name, lat: w.lat, lon: w.lon }))
+            .filter(w => w.id && Number.isFinite(w.lat) && Number.isFinite(w.lon));
+        return {
+            id:      r.name || r.id || fallbackId,
+            type:    r.type,
+            fixIds:  wps.map(w => w.id),
+            waypoints: wps,
+            segments: r.segments || [],
+        };
     }
 }

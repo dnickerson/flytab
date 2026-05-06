@@ -64,11 +64,23 @@ export class AirwayGraph {
         for (const a of airways) {
             if (allowed && !allowed.has(a.type)) continue;
             const ids = a.fixIds || [];
+            // Inline waypoint coords from the airway record itself (faster, and
+            // necessary for fix waypoints not stored in the fixes/navaids IDB
+            // stores). Falls back to per-fix adapter lookups when absent.
+            const inline = {};
+            for (const w of (a.waypoints || [])) {
+                if (w.id && Number.isFinite(w.lat) && Number.isFinite(w.lon)) {
+                    inline[w.id] = { id: w.id, lat: w.lat, lon: w.lon };
+                }
+            }
+            const lookup = async (id) =>
+                inline[id]
+                || await this._aero.getFix(id)
+                || await this._aero.getNavaid(id);
+
             for (let i = 0; i < ids.length - 1; i++) {
-                const fa = await this._aero.getFix(ids[i])
-                        || await this._aero.getNavaid(ids[i]);
-                const fb = await this._aero.getFix(ids[i + 1])
-                        || await this._aero.getNavaid(ids[i + 1]);
+                const fa = await lookup(ids[i]);
+                const fb = await lookup(ids[i + 1]);
                 if (!fa || !fb) continue;
                 this.coords[fa.id] = { lat: fa.lat, lon: fa.lon };
                 this.coords[fb.id] = { lat: fb.lat, lon: fb.lon };
