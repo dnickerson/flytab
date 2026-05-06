@@ -838,12 +838,15 @@ class RoutePlannerPanel {
             }
         }
 
-        // Verify the airway graph is non-empty before attempting A*
-        const graphSize = Object.keys(this._planner._airwayGraph?.graph || {}).length;
-        if (graphSize === 0) {
+        // Sanity check — NASR airways present in IDB. The new planning lib's
+        // RoutePlanner builds its airway graph lazily on the first plan() call,
+        // so we probe the source-of-truth IDB store rather than the planner's
+        // internal cache.
+        const airwayCount = await this._nasrDb?.listAirways?.().then(a => a.length).catch(() => 0) ?? 0;
+        if (airwayCount === 0) {
             const counts = await this._diagnoseIdb();
-            this._toast(`Airway graph is empty — NASR data missing\n${counts}`, 12000);
-            console.error('[RoutePlannerPanel] empty airway graph;', counts);
+            this._toast(`Airway data not loaded — NASR import incomplete\n${counts}`, 12000);
+            console.error('[RoutePlannerPanel] no airways in IDB;', counts);
             return;
         }
 
