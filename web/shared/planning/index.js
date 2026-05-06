@@ -1,21 +1,43 @@
 // @ts-check
 'use strict';
 
-/**
- * flywhere-planning — flight planning library.
- *
- * In flytab (Capacitor / browser): loaded once via <script type="module"
- * src="shared/planning/index.js">. This file attaches the public API to
- * `window.FlyTabPlanning` so plain-<script> consumers can use it.
- *
- * In flywhere (Next.js): consumed via `import { RoutePlanner } from
- * 'flywhere-planning'` after the file: dependency resolves.
- */
+export { RoutePlanner } from './planner/route-planner.js';
+export { Optimizer }    from './planner/optimizer.js';
+export { AirwayGraph }  from './planner/airway-graph.js';
+export { parseRouteString } from './planner/parser.js';
+export {
+    PlanError, NoRouteFoundError, DestinationUnreachableError, TimeoutError,
+} from './planner/route-planner-errors.js';
+export {
+    UnknownWaypointError, UnknownAirwayError, AmbiguousIdentifierError, RoutingModeViolationError,
+} from './planner/parser.js';
+export { buildAvoidancePenalty, segmentIntersectsPolygon } from './planner/avoidance.js';
+export { haversine, bearing, intermediatePoint, formatTime } from './math/route-math.js';
+export { tasAtAltitude, gphAtPower, climbRateAtAltitude } from './math/engine-data.js';
+export { decomposeLeg } from './math/fuel-phases.js';
 
-// Public exports — populated by Tasks 5-13.
 export const VERSION = '0.1.0';
 
-// Browser global for non-module consumers (flytab pattern).
 if (typeof window !== 'undefined') {
-    window.FlyTabPlanning = Object.assign(window.FlyTabPlanning || {}, { VERSION });
+    Promise.all([
+        import('./planner/route-planner.js'),
+        import('./planner/optimizer.js'),
+        import('./planner/airway-graph.js'),
+        import('./planner/parser.js'),
+        import('./planner/route-planner-errors.js'),
+        import('./planner/avoidance.js'),
+        import('./math/route-math.js'),
+        import('./math/engine-data.js'),
+        import('./math/fuel-phases.js'),
+    ]).then(([rp, op, ag, ps, errs, av, rm, ed, fp]) => {
+        window.FlyTabPlanning = {
+            VERSION,
+            RoutePlanner: rp.RoutePlanner,
+            Optimizer:    op.Optimizer,
+            AirwayGraph:  ag.AirwayGraph,
+            parseRouteString: ps.parseRouteString,
+            ...errs, ...av, ...rm, ...ed, ...fp,
+        };
+        document.dispatchEvent(new CustomEvent('flytab-planning:ready'));
+    });
 }
