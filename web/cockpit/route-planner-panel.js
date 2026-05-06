@@ -7,9 +7,10 @@
  * Only outward calls: app.applyRouteEdit(plan) and app.closeRoutePlanner().
  */
 class RoutePlannerPanel {
-    constructor(panelEl, nasrDb) {
+    constructor(panelEl, nasrDb, planningAdapters) {
         this._el      = panelEl;
         this._nasrDb  = nasrDb;
+        this._adapters = planningAdapters;
 
         // Route state — [{id, type}] where type: dep|dest|fix|awy|direct|fuel
         this._route   = [];
@@ -163,24 +164,18 @@ class RoutePlannerPanel {
     // ── Async planner build ───────────────────────────────────────────────────
 
     _startBuildPlanner() {
-        // Build RoutePlanner (opens IDB + warms airway graph) in background.
-        // Plan button waits for this._planner to be non-null.
+        // Use the new planning library via window.FlyTabPlanning. If the module
+        // hasn't loaded yet (asynchronous), wait for the 'flytab-planning:ready' event.
         this._nasrVersion = localStorage.getItem('flypi_nasr_version') || '';
-        this._plannerInitError = null;
-        if (typeof RoutePlanner === 'undefined') {
-            this._plannerInitError = 'RoutePlanner module not loaded';
-            return;
-        }
-        // Use the SAME database as NasrDB (default 'flypi'). The original prototype's
-        // 'FlyTabDB' default never matched the real DB and resulted in opening an
-        // empty v1 database with no stores.
-        const dbName = this._nasrDb?.constructor?.DB_NAME || 'flypi';
-        new RoutePlanner(dbName).init()
-            .then(p => { this._planner = p; this._plannerInitError = null; })
-            .catch(err => {
+        const start = () => {
+            try {
+                this._planner = new window.FlyTabPlanning.RoutePlanner(this._adapters);
+            } catch (err) {
                 console.warn('[RoutePlannerPanel] planner init failed:', err);
-                this._plannerInitError = err?.message || String(err);
-            });
+            }
+        };
+        if (window.FlyTabPlanning?.RoutePlanner) start();
+        else document.addEventListener('flytab-planning:ready', start, { once: true });
     }
 
     /**
@@ -856,11 +851,12 @@ class RoutePlannerPanel {
         this._toast('Planning route…', 0);
         try {
             const result = await this._planner.plan({
-                departure:       dep,
-                destination:     dest,
-                preferredLegHrs: this._maxLegHrs,
-                reserveGal:      this._reserveGal,
-                selfServeOnly:   this._selfServeOnly,
+                departure:     dep,
+                destination:   dest,
+                cruiseAltFt:   this._altitude,
+                reserveGal:    this._reserveGal,
+                maxLegHrs:     this._maxLegHrs,
+                selfServeOnly: this._selfServeOnly,
             });
 
             // Cache all fix coordinates returned by the planner
