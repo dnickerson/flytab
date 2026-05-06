@@ -66,14 +66,16 @@ class RoutePlannerPanel {
 
     /** Load plan into pill editor and show. Called by app.openRoutePlanner(plan). */
     open(plan) {
+        this._applyAborted = false;
         this._loadPlan(plan);
         this._render();
     }
 
     /** Clear state. Called by app.closeRoutePlanner(). */
     close() {
-        this._route       = [];
-        this._insertIndex = null;
+        this._applyAborted = true;
+        this._route        = [];
+        this._insertIndex  = null;
     }
 
     /** Clean up listeners. Call when the panel is permanently removed. */
@@ -786,7 +788,12 @@ class RoutePlannerPanel {
 
     // ── Toolbar handlers ──────────────────────────────────────────────────────
 
-    _onClearTap() {
+    async _onClearTap() {
+        const hasInterior = this._route.some(r => r.type === 'fix' || r.type === 'awy' || r.type === 'direct' || r.type === 'fuel');
+        if (hasInterior) {
+            const ok = await this._confirm('Clear the route? This cannot be undone.');
+            if (!ok) return;
+        }
         const dep  = this._depInput?.value.trim().toUpperCase()  || '';
         const dest = this._destInput?.value.trim().toUpperCase() || '';
         this._route = [];
@@ -797,7 +804,7 @@ class RoutePlannerPanel {
     }
 
     _onCopyTap() {
-        const str = this._route.map(r => r.id).join(' ');
+        const str = this._buildField15String(this._route);
         if (navigator.clipboard?.writeText) {
             navigator.clipboard.writeText(str).catch(() => this._selectRouteStr());
         } else {
@@ -1098,11 +1105,15 @@ class RoutePlannerPanel {
     }
 
     async _doApply() {
+        if (this._applyAborted) return false;
+
         const wps = await this._pillsToWaypoints();
         if (wps.length < 2) {
             this._toast('Add at least 2 waypoints');
             return false;
         }
+
+        if (this._applyAborted) return false;
 
         const dep  = wps[0].icao  || wps[0].name;
         const dest = wps[wps.length - 1].icao || wps[wps.length - 1].name;
@@ -1116,13 +1127,28 @@ class RoutePlannerPanel {
                 departure:   dep,
                 destination: dest,
                 route: this._route.map(r => r.id),
-                legs:  [],
+                legs:  this._buildLegsFromWaypoints(wps),
             },
         };
 
         if (typeof app === 'undefined') return false;
         await app.applyRouteEdit(plan);
         return true;
+    }
+
+    _buildLegsFromWaypoints(wps) {
+        if (!wps || wps.length < 2) return [];
+        const legs = [];
+        for (let i = 0; i < wps.length - 1; i++) {
+            const leg = { from: wps[i].icao || wps[i].name, to: wps[i + 1].icao || wps[i + 1].name };
+            if (wps[i + 1].airway != null) leg.airway = wps[i + 1].airway;
+            legs.push(leg);
+        }
+        return legs;
+    }
+
+    _buildField15String(route) {
+        return this._collapseSameAirway(route).map(e => e.item.id).join(' ');
     }
 
     async _pillsToWaypoints() {
