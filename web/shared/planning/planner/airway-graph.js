@@ -107,6 +107,18 @@ export class AirwayGraph {
     }
 
     /**
+     * Remove all DIRECT edges previously added via addDirectEdge.
+     * Used by RoutePlanner.plan() to keep the cached graph clean across
+     * successive plans with different DEP/DEST.
+     */
+    clearDirectEdges() {
+        for (const fromId of Object.keys(this._adj)) {
+            this._adj[fromId] = this._adj[fromId].filter(e => e.airway !== 'DIRECT');
+            if (this._adj[fromId].length === 0) delete this._adj[fromId];
+        }
+    }
+
+    /**
      * Add an edge to the adjacency list, avoiding duplicates.
      * @param {string} fromId
      * @param {Edge} edge

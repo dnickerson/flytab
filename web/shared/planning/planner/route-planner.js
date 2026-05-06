@@ -75,6 +75,7 @@ export class RoutePlanner {
         if (!dest) throw new PlanError(`Unknown destination: ${opts.destination}`);
 
         const graph = await this._getGraph(routingMode);
+        graph.clearDirectEdges();
         graph.addDirectEdge(dep.icao, dep.lat, dep.lon, dest.icao, dest.lat, dest.lon);
 
         const penalty = buildAvoidancePenalty(opts.avoidance || []);
