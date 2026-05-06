@@ -51,6 +51,7 @@ class RoutePlannerPanel {
         this._altInput    = null;
         this._reserveInput = null;
         this._modeSel      = null;
+        this._statsEl      = null;
 
         // Drag state
         this._dragIdx = null;
@@ -277,6 +278,12 @@ class RoutePlannerPanel {
 
         // Toolbar: action buttons + Apply on the same row
         inner.appendChild(this._buildToolbar());
+
+        // Distance stats bar: route vs great-circle, shown after plan()
+        this._statsEl = document.createElement('div');
+        this._statsEl.className = 'rpp-stats';
+        this._statsEl.style.display = 'none';
+        inner.appendChild(this._statsEl);
 
         // Hidden element backing the Copy button (kept so Copy can read the route)
         this._routeStrEl = document.createElement('div');
@@ -638,6 +645,30 @@ class RoutePlannerPanel {
             this._routeStrEl.textContent = this._buildField15String(this._route);
     }
 
+    _updateStats(result) {
+        if (!this._statsEl) return;
+        const wps = result?.waypoints;
+        const routeNm = result?.summary?.totalDistNm ?? result?.legs?.reduce((s, l) => s + (l.distNm || 0), 0);
+        if (!wps?.length || routeNm == null) { this._statsEl.style.display = 'none'; return; }
+
+        const dep  = wps[0];
+        const dest = wps[wps.length - 1];
+        if (dep.lat == null || dest.lat == null) { this._statsEl.style.display = 'none'; return; }
+
+        const directNm = NasrDB.haversineNm(dep.lat, dep.lon, dest.lat, dest.lon);
+        const deltaNm  = routeNm - directNm;
+        const deltaPct = directNm > 0 ? (deltaNm / directNm) * 100 : 0;
+
+        const fmt = n => Math.round(n).toLocaleString();
+        this._statsEl.innerHTML =
+            `<span class="rpp-stat-item"><span class="rpp-stat-label">Route</span>${fmt(routeNm)} nm</span>` +
+            `<span class="rpp-stat-sep">·</span>` +
+            `<span class="rpp-stat-item"><span class="rpp-stat-label">Direct</span>${fmt(directNm)} nm</span>` +
+            `<span class="rpp-stat-sep">·</span>` +
+            `<span class="rpp-stat-item rpp-stat-delta">+${fmt(deltaNm)} nm (+${deltaPct.toFixed(0)}%)</span>`;
+        this._statsEl.style.display = '';
+    }
+
     _renderPills() {
         if (!this._pillsEl) return;
         this._renderEpoch++;
@@ -997,6 +1028,7 @@ class RoutePlannerPanel {
             this._route = this._resultToPills(dep, dest, result);
             this._depInput.value  = dep;
             this._destInput.value = dest;
+            this._updateStats(result);
             this._render();
             this._toast(`Route planned · ${result.waypoints?.length || 0} waypoints`, 2500);
         } catch (err) {

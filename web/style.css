@@ -9854,6 +9854,31 @@ body.route-editing-mode #cockpitView {
 }
 .rpp-reserve-input:focus { border-color: #1a6fbb; }
 
+/* Distance stats bar */
+.rpp-stats {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 8px;
+    background: #f0f4fa;
+    border: 1px solid #c8d4e8;
+    border-radius: 7px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #1a2840;
+    flex-shrink: 0;
+}
+.rpp-stat-item { display: flex; align-items: baseline; gap: 4px; }
+.rpp-stat-label {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: #4a6080;
+}
+.rpp-stat-sep { color: #8090a8; font-weight: 400; }
+.rpp-stat-delta { color: #a05000; }
+
 /* Routing-mode row — full-width child of rpp-opts-row flex container */
 .rpp-mode-row {
     display: flex;
