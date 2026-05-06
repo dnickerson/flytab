@@ -61,13 +61,15 @@ export class RoutePlanner {
      * @param {number} [opts.reserveGal]
      * @param {number} [opts.maxLegHrs]
      * @param {boolean} [opts.selfServeOnly]
-     * @param {Array} [opts.avoidance]
+     * @param {Array<string|{id:string,polygon?:any,fixIds?:string[]}>} [opts.avoidance]
      * @returns {Promise<import('../types/flight-plan.js').FlightPlan>}
      */
     async plan(opts) {
         const profile = (await this._adapters.profiles.getActive?.()) || RV9A_FALLBACK;
-        const routingMode = opts.routingMode
+        const routingModeOrNull = opts.routingMode
             || (profile.equipment?.tAirways ? 'any' : 'v-airways');
+        // Type assertion: we know this is always a valid RoutingMode
+        const routingMode = /** @type {import('./airway-graph.js').RoutingMode} */ (routingModeOrNull);
 
         const dep = await this._adapters.aero.getAirport(opts.departure);
         const dest = await this._adapters.aero.getAirport(opts.destination);
@@ -78,7 +80,16 @@ export class RoutePlanner {
         graph.clearDirectEdges();
         graph.addDirectEdge(dep.icao, dep.lat, dep.lon, dest.icao, dest.lat, dest.lon);
 
-        const penalty = buildAvoidancePenalty(opts.avoidance || []);
+        // Normalize avoidance: accept both string[] and {id:string}[]
+        const avoidanceConstraints = [];
+        for (const a of (opts.avoidance || [])) {
+            if (typeof a === 'string') {
+                avoidanceConstraints.push(/** @type {import('./avoidance.js').AvoidanceConstraint} */ ({ id: a, polygon: [] }));
+            } else {
+                avoidanceConstraints.push(/** @type {import('./avoidance.js').AvoidanceConstraint} */ (a));
+            }
+        }
+        const penalty = buildAvoidancePenalty(avoidanceConstraints);
         const path = this._aStar(graph, dep.icao, dest.icao, penalty);
         if (!path) throw new DestinationUnreachableError(`No route from ${opts.departure} to ${opts.destination}`);
 
@@ -97,7 +108,7 @@ export class RoutePlanner {
                 routingMode,
                 maxLegHrs: opts.maxLegHrs ?? 2.0,
                 selfServeOnly: !!opts.selfServeOnly,
-                avoidance: (opts.avoidance || []).map(a => a.id),
+                avoidance: (opts.avoidance || []).map(a => typeof a === 'string' ? a : a.id),
             },
         };
         return this.recomputeLegs(flightPlan, profile);
@@ -115,8 +126,10 @@ export class RoutePlanner {
      */
     async parseRoute(str, opts = {}) {
         const profile = (await this._adapters.profiles.getActive?.()) || RV9A_FALLBACK;
-        const routingMode = opts.routingMode
+        const routingModeOrNull = opts.routingMode
             || (profile.equipment?.tAirways ? 'any' : 'v-airways');
+        // Type assertion: we know this is always a valid RoutingMode
+        const routingMode = /** @type {import('./airway-graph.js').RoutingMode} */ (routingModeOrNull);
         const parsed = await parseRouteString(str, { aero: this._adapters.aero, routingMode });
         return this.recomputeLegs({
             departure: parsed.departure,
@@ -143,7 +156,7 @@ export class RoutePlanner {
             const a = wps[i];
             const b = wps[i + 1];
             const distNm = haversine(a.lat, a.lon, b.lat, b.lon);
-            const altFt = plan.cruiseAltFt;
+            const altFt = plan.cruiseAltFt ?? 6000;
             const decomp = decomposeLeg(profile, {
                 distNm,
                 altFt,
@@ -182,8 +195,9 @@ export class RoutePlanner {
      * @private
      */
     async _getGraph(mode) {
-        if (this._graphCache.has(mode)) return this._graphCache.get(mode);
-        const g = new AirwayGraph(this._adapters.aero, { routingMode: mode });
+        const cached = this._graphCache.get(mode);
+        if (cached) return cached;
+        const g = new AirwayGraph(this._adapters.aero, { routingMode: /** @type {import('./airway-graph.js').RoutingMode} */ (mode) });
         await g.load();
         this._graphCache.set(mode, g);
         return g;
@@ -194,7 +208,7 @@ export class RoutePlanner {
      * @param {AirwayGraph} graph
      * @param {string} startId
      * @param {string} goalId
-     * @param {Function} penaltyFn
+     * @param {(edge:{from:{lat:number,lon:number},to:{lat:number,lon:number}})=>number} penaltyFn
      * @returns {string[] | null}
      * @private
      */
@@ -205,6 +219,10 @@ export class RoutePlanner {
         const cameFrom = new Map();
         const gScore = new Map();
         gScore.set(startId, 0);
+        /**
+         * @param {string} id
+         * @returns {number}
+         */
         const h = (id) => {
             const c = graph.coords[id];
             return c ? haversine(c.lat, c.lon, goal.lat, goal.lon) : Infinity;
@@ -246,7 +264,11 @@ export class RoutePlanner {
      */
     _reconstruct(cameFrom, end) {
         const path = [end];
-        while (cameFrom.has(path[0])) path.unshift(cameFrom.get(path[0]));
+        while (cameFrom.has(path[0])) {
+            const prev = cameFrom.get(path[0]);
+            if (!prev) break;
+            path.unshift(prev);
+        }
         return path;
     }
 }

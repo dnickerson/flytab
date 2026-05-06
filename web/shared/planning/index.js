@@ -1,6 +1,12 @@
 // @ts-check
 'use strict';
 
+// Augment window type to include FlyTabPlanning (JSDoc limitation)
+if (typeof window !== 'undefined') {
+    // @ts-ignore
+    window.FlyTabPlanning = {};  // eslint-disable-line no-undef
+}
+
 export { RoutePlanner } from './planner/route-planner.js';
 export { Optimizer }    from './planner/optimizer.js';
 export { AirwayGraph }  from './planner/airway-graph.js';
@@ -30,6 +36,7 @@ if (typeof window !== 'undefined') {
         import('./math/engine-data.js'),
         import('./math/fuel-phases.js'),
     ]).then(([rp, op, ag, ps, errs, av, rm, ed, fp]) => {
+        // @ts-ignore - augment window
         window.FlyTabPlanning = {
             VERSION,
             RoutePlanner: rp.RoutePlanner,

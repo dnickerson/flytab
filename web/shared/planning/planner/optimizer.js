@@ -45,16 +45,18 @@ export class Optimizer {
      * @param {number} [opts.reserveGal]
      * @param {number} [opts.maxLegHrs]
      * @param {boolean} [opts.selfServeOnly]
-     * @param {Array} [opts.avoidance]
+     * @param {Array<string>} [opts.avoidance]
      * @returns {Promise<OptimizationResult>}
      */
     async bestAltitude(opts) {
+        /** @type {OptimizationResult|null} */
         let best = null;
         for (const altFt of ALT_CANDIDATES_FT) {
             const plan = await this._planner.plan({ ...opts, cruiseAltFt: altFt });
             const fuel = plan.summary?.totalFuelGal ?? Infinity;
-            if (!best || fuel < best.fuel) best = { altFt, fuel, plan };
+            if (!best || fuel < (best.fuel ?? Infinity)) best = { altFt, fuel, plan };
         }
+        if (!best) throw new Error('No altitudes evaluated');
         return best;
     }
 
@@ -67,11 +69,12 @@ export class Optimizer {
      * @param {number} [opts.reserveGal]
      * @param {number} [opts.maxLegHrs]
      * @param {boolean} [opts.selfServeOnly]
-     * @param {Array} [opts.avoidance]
+     * @param {Array<string>} [opts.avoidance]
      * @returns {Promise<import('../types/flight-plan.js').FlightPlan>}
      */
     async leastFuel(opts) {
-        return (await this.bestAltitude(opts)).plan;
+        const result = await this.bestAltitude(opts);
+        return result.plan;
     }
 
     /**
@@ -83,16 +86,18 @@ export class Optimizer {
      * @param {number} [opts.reserveGal]
      * @param {number} [opts.maxLegHrs]
      * @param {boolean} [opts.selfServeOnly]
-     * @param {Array} [opts.avoidance]
+     * @param {Array<string>} [opts.avoidance]
      * @returns {Promise<import('../types/flight-plan.js').FlightPlan>}
      */
     async leastTime(opts) {
+        /** @type {OptimizationResult|null} */
         let best = null;
         for (const altFt of ALT_CANDIDATES_FT) {
             const plan = await this._planner.plan({ ...opts, cruiseAltFt: altFt });
             const time = plan.summary?.totalEteHrs ?? Infinity;
-            if (!best || time < best.time) best = { altFt, time, plan };
+            if (!best || time < (best.time ?? Infinity)) best = { altFt, time, plan };
         }
+        if (!best) throw new Error('No altitudes evaluated');
         return best.plan;
     }
 }

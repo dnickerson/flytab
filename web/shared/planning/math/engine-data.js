@@ -14,7 +14,12 @@
 
 const DEFAULT_BEST_ALT_FT = 8000;
 
-/** TAS at a given altitude, knots. */
+/**
+ * TAS at a given altitude, knots.
+ * @param {AircraftProfile} profile
+ * @param {number} altFt
+ * @returns {number}
+ */
 export function tasAtAltitude(profile, altFt) {
     const best = profile.best_alt_ft ?? DEFAULT_BEST_ALT_FT;
     const tasBest = profile.cruise_ktas;
@@ -27,13 +32,23 @@ export function tasAtAltitude(profile, altFt) {
     return tasBest - (altFt - best) / 1000;
 }
 
-/** GPH at a given fractional power 0–1. */
+/**
+ * GPH at a given fractional power 0–1.
+ * @param {AircraftProfile} profile
+ * @param {number} powerFrac
+ * @returns {number}
+ */
 export function gphAtPower(profile, powerFrac) {
     const baseGph = profile.fuel_burn_gph; // assume base is at 75% power
     return baseGph * (powerFrac / 0.75);
 }
 
-/** Climb rate fpm at altitude. Linear from sea-level rate to 0 at service ceiling. */
+/**
+ * Climb rate fpm at altitude. Linear from sea-level rate to 0 at service ceiling.
+ * @param {AircraftProfile} profile
+ * @param {number} altFt
+ * @returns {number}
+ */
 export function climbRateAtAltitude(profile, altFt) {
     const sl = profile.climb_rate_fpm ?? 700;
     const ceil = profile.service_ceiling_ft ?? 14000;

@@ -25,7 +25,12 @@ import { tasAtAltitude, gphAtPower, climbRateAtAltitude } from './engine-data.js
  * @property {number} totalFuelGal
  */
 
-/** Decompose a leg into climb/cruise/descent (and taxi if departing from ground). */
+/**
+ * Decompose a leg into climb/cruise/descent (and taxi if departing from ground).
+ * @param {AircraftProfile} profile
+ * @param {LegOpts} leg
+ * @returns {LegDecomposition}
+ */
 export function decomposeLeg(profile, leg) {
     const wind = leg.windKt ?? 0;
     const phases = {

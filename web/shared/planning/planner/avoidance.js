@@ -15,7 +15,13 @@
  * @property {number}  [softCostNm=200]
  */
 
-/** Standard ray-cast point-in-polygon. */
+/**
+ * Standard ray-cast point-in-polygon.
+ * @param {number} lat
+ * @param {number} lon
+ * @param {Array<{lat:number,lon:number}>} poly
+ * @returns {boolean}
+ */
 function pointInPolygon(lat, lon, poly) {
     let inside = false;
     for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
@@ -28,7 +34,14 @@ function pointInPolygon(lat, lon, poly) {
     return inside;
 }
 
-/** Check whether two 2D segments intersect (lon-lat, ignoring earth curvature for short legs). */
+/**
+ * Check whether two 2D segments intersect (lon-lat, ignoring earth curvature for short legs).
+ * @param {{lat:number,lon:number}} a1
+ * @param {{lat:number,lon:number}} a2
+ * @param {{lat:number,lon:number}} b1
+ * @param {{lat:number,lon:number}} b2
+ * @returns {boolean}
+ */
 function segmentsIntersect(a1, a2, b1, b2) {
     const d  = (a2.lon - a1.lon) * (b2.lat - b1.lat) - (a2.lat - a1.lat) * (b2.lon - b1.lon);
     if (d === 0) return false;
@@ -37,7 +50,15 @@ function segmentsIntersect(a1, a2, b1, b2) {
     return t >= 0 && t <= 1 && u >= 0 && u <= 1;
 }
 
-/** True if any segment endpoint is inside or any segment side crosses the polygon perimeter. */
+/**
+ * True if any segment endpoint is inside or any segment side crosses the polygon perimeter.
+ * @param {number} lat1
+ * @param {number} lon1
+ * @param {number} lat2
+ * @param {number} lon2
+ * @param {Array<{lat:number,lon:number}>} poly
+ * @returns {boolean}
+ */
 export function segmentIntersectsPolygon(lat1, lon1, lat2, lon2, poly) {
     if (pointInPolygon(lat1, lon1, poly) || pointInPolygon(lat2, lon2, poly)) return true;
     const a1 = { lat: lat1, lon: lon1 }, a2 = { lat: lat2, lon: lon2 };
@@ -58,6 +79,10 @@ export function buildAvoidancePenalty(constraints, opts = {}) {
     const hardBlock = opts.hardBlock ?? true;
     const softCost  = opts.softCostNm ?? 200;
     if (!constraints.length) return () => 0;
+    /**
+     * @param {{from: {lat:number,lon:number}, to: {lat:number,lon:number}}} edge
+     * @returns {number}
+     */
     return ({ from, to }) => {
         for (const c of constraints) {
             if (segmentIntersectsPolygon(from.lat, from.lon, to.lat, to.lon, c.polygon)) {

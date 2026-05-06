@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v7.25';
+const FLYTAB_VERSION = 'v7.26';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {

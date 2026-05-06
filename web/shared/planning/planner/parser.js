@@ -7,6 +7,9 @@ import { PlanError } from './route-planner-errors.js';
  * Thrown when a waypoint identifier (airport, navaid, or fix) cannot be resolved.
  */
 export class UnknownWaypointError extends PlanError {
+    /**
+     * @param {string} id
+     */
     constructor(id) {
         super(`Unknown waypoint: ${id}`);
         this.name = 'UnknownWaypointError';
@@ -18,6 +21,9 @@ export class UnknownWaypointError extends PlanError {
  * Thrown when an airway identifier does not exist in the aero data source.
  */
 export class UnknownAirwayError extends PlanError {
+    /**
+     * @param {string} id
+     */
     constructor(id) {
         super(`Unknown airway: ${id}`);
         this.name = 'UnknownAirwayError';
@@ -29,6 +35,10 @@ export class UnknownAirwayError extends PlanError {
  * Thrown when an identifier matches multiple navaids/fixes (disambiguation needed).
  */
 export class AmbiguousIdentifierError extends PlanError {
+    /**
+     * @param {string} id
+     * @param {Array<any>} matches
+     */
     constructor(id, matches) {
         super(`Ambiguous: ${id}`);
         this.name = 'AmbiguousIdentifierError';
@@ -41,6 +51,10 @@ export class AmbiguousIdentifierError extends PlanError {
  * Thrown when an airway type violates the routing mode constraint.
  */
 export class RoutingModeViolationError extends PlanError {
+    /**
+     * @param {string} airwayId
+     * @param {string} mode
+     */
     constructor(airwayId, mode) {
         super(`Airway ${airwayId} not allowed under routingMode "${mode}"`);
         this.name = 'RoutingModeViolationError';
@@ -84,17 +98,29 @@ function airwayTypeAllowed(type, mode) {
  *
  * @param {import('../adapters/aero-data-source.js').AeroDataSource} aero
  * @param {string} id
- * @returns {Promise<{id: string, lat: number, lon: number, kind: string}>}
+ * @returns {Promise<import('../types/flight-plan.js').Waypoint>}
  */
 async function resolveIdentifier(aero, id) {
     const apt = await aero.getAirport(id);
-    if (apt) return { id, lat: apt.lat, lon: apt.lon, kind: 'APT' };
+    if (apt) {
+        /** @type {import('../types/flight-plan.js').Waypoint} */
+        const wp = { id, lat: apt.lat, lon: apt.lon, kind: 'APT' };
+        return wp;
+    }
 
     const nav = await aero.getNavaid(id);
-    if (nav) return { id, lat: nav.lat, lon: nav.lon, kind: 'NAV' };
+    if (nav) {
+        /** @type {import('../types/flight-plan.js').Waypoint} */
+        const wp = { id, lat: nav.lat, lon: nav.lon, kind: 'NAV' };
+        return wp;
+    }
 
     const fix = await aero.getFix(id);
-    if (fix) return { id, lat: fix.lat, lon: fix.lon, kind: 'FIX' };
+    if (fix) {
+        /** @type {import('../types/flight-plan.js').Waypoint} */
+        const wp = { id, lat: fix.lat, lon: fix.lon, kind: 'FIX' };
+        return wp;
+    }
 
     throw new UnknownWaypointError(id);
 }
@@ -108,9 +134,11 @@ async function resolveIdentifier(aero, id) {
  *
  * @param {string} str - Route string (e.g., "KLKR V143 GSO T1 K44N")
  * @param {{aero: import('../adapters/aero-data-source.js').AeroDataSource, routingMode?: string}} opts
- * @returns {Promise<{departure: string, destination: string, waypoints: any[]}>}
+ * @returns {Promise<{departure: string, destination: string, waypoints: import('../types/flight-plan.js').Waypoint[]}>}
  */
 export async function parseRouteString(str, opts) {
+    /** @type {{aero: import('../adapters/aero-data-source.js').AeroDataSource, routingMode?: string}} */
+    const safeOpts = opts;
     const aero = opts.aero;
     const mode = opts.routingMode || 'any';
 
@@ -121,6 +149,7 @@ export async function parseRouteString(str, opts) {
         throw new PlanError('Need at least 2 tokens (departure + destination)');
     }
 
+    /** @type {import('../types/flight-plan.js').Waypoint[]} */
     const waypoints = [];
     let i = 0;
 

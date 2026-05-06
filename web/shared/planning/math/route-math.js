@@ -11,7 +11,14 @@ const EARTH_RADIUS_NM = 3440.065;
 const RAD = Math.PI / 180;
 const DEG = 180 / Math.PI;
 
-/** Great-circle distance in nautical miles. */
+/**
+ * Great-circle distance in nautical miles.
+ * @param {number} lat1
+ * @param {number} lon1
+ * @param {number} lat2
+ * @param {number} lon2
+ * @returns {number}
+ */
 export function haversine(lat1, lon1, lat2, lon2) {
     const dLat = (lat2 - lat1) * RAD;
     const dLon = (lon2 - lon1) * RAD;
@@ -20,7 +27,14 @@ export function haversine(lat1, lon1, lat2, lon2) {
     return 2 * EARTH_RADIUS_NM * Math.asin(Math.sqrt(a));
 }
 
-/** Initial true bearing from p1 to p2, degrees 0–360. */
+/**
+ * Initial true bearing from p1 to p2, degrees 0–360.
+ * @param {number} lat1
+ * @param {number} lon1
+ * @param {number} lat2
+ * @param {number} lon2
+ * @returns {number}
+ */
 export function bearing(lat1, lon1, lat2, lon2) {
     const φ1 = lat1 * RAD, φ2 = lat2 * RAD;
     const Δλ = (lon2 - lon1) * RAD;
@@ -29,7 +43,15 @@ export function bearing(lat1, lon1, lat2, lon2) {
     return (Math.atan2(x, y) * DEG + 360) % 360;
 }
 
-/** Point along the great-circle path at fraction f∈[0,1]. */
+/**
+ * Point along the great-circle path at fraction f∈[0,1].
+ * @param {number} lat1
+ * @param {number} lon1
+ * @param {number} lat2
+ * @param {number} lon2
+ * @param {number} f
+ * @returns {{lat: number, lon: number}}
+ */
 export function intermediatePoint(lat1, lon1, lat2, lon2, f) {
     const φ1 = lat1 * RAD, λ1 = lon1 * RAD;
     const φ2 = lat2 * RAD, λ2 = lon2 * RAD;
@@ -45,7 +67,16 @@ export function intermediatePoint(lat1, lon1, lat2, lon2, f) {
     return { lat: φ * DEG, lon: λ * DEG };
 }
 
-/** Perpendicular distance from point P to the great-circle through 1→2, nm. */
+/**
+ * Perpendicular distance from point P to the great-circle through 1→2, nm.
+ * @param {number} lat1
+ * @param {number} lon1
+ * @param {number} lat2
+ * @param {number} lon2
+ * @param {number} latP
+ * @param {number} lonP
+ * @returns {number}
+ */
 export function crossTrackDistanceNm(lat1, lon1, lat2, lon2, latP, lonP) {
     const δ13 = haversine(lat1, lon1, latP, lonP) / EARTH_RADIUS_NM;
     const θ13 = bearing(lat1, lon1, latP, lonP) * RAD;
@@ -53,7 +84,16 @@ export function crossTrackDistanceNm(lat1, lon1, lat2, lon2, latP, lonP) {
     return Math.asin(Math.sin(δ13) * Math.sin(θ13 - θ12)) * EARTH_RADIUS_NM;
 }
 
-/** Along-track fraction of P projected onto leg 1→2 (0=at start, 1=at end). */
+/**
+ * Along-track fraction of P projected onto leg 1→2 (0=at start, 1=at end).
+ * @param {number} lat1
+ * @param {number} lon1
+ * @param {number} lat2
+ * @param {number} lon2
+ * @param {number} latP
+ * @param {number} lonP
+ * @returns {number}
+ */
 export function alongTrackFraction(lat1, lon1, lat2, lon2, latP, lonP) {
     const δ13 = haversine(lat1, lon1, latP, lonP) / EARTH_RADIUS_NM;
     const δxt = Math.abs(crossTrackDistanceNm(lat1, lon1, lat2, lon2, latP, lonP)) / EARTH_RADIUS_NM;
@@ -62,7 +102,11 @@ export function alongTrackFraction(lat1, lon1, lat2, lon2, latP, lonP) {
     return δ12 === 0 ? 0 : δat / δ12;
 }
 
-/** Format hours as "H:MM". */
+/**
+ * Format hours as "H:MM".
+ * @param {number} hrs
+ * @returns {string}
+ */
 export function formatTime(hrs) {
     if (!Number.isFinite(hrs) || hrs < 0) return '—';
     const totalMin = Math.round(hrs * 60);

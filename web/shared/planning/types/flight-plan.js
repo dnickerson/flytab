@@ -8,6 +8,7 @@
  * @property {number} lon
  * @property {'APT'|'NAV'|'FIX'} [kind]
  * @property {number} [altFt]
+ * @property {string} [airway]              parser: airway origin tag for interior fixes
  *
  * @typedef Leg
  * @property {string} from
