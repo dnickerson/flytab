@@ -109,6 +109,7 @@ class RoutePlannerPanel {
             if (saved.reserveGal    != null) this._reserveGal    = saved.reserveGal;
             if (saved.compactView   != null) this._compactView   = saved.compactView;
             if (saved.routingMode   != null) this._routingMode   = saved.routingMode;
+            if (Array.isArray(saved.avoidList)) this._avoidList  = saved.avoidList;
         } catch {}
     }
 
@@ -121,6 +122,7 @@ class RoutePlannerPanel {
                 reserveGal:    this._reserveGal,
                 compactView:   this._compactView,
                 routingMode:   this._routingMode,
+                avoidList:     this._avoidList,
             }));
         } catch {}
     }
@@ -562,6 +564,7 @@ class RoutePlannerPanel {
             const item = this._route[i];
             if (!this._avoidList.includes(item.id)) this._avoidList.push(item.id);
             this._route.splice(i, 1);
+            this._saveOpts();
             this._render();
             this._onPlanTap();
         });
@@ -618,6 +621,7 @@ class RoutePlannerPanel {
             chip.textContent = id + ' ×';
             chip.addEventListener('click', () => {
                 this._avoidList = this._avoidList.filter(x => x !== id);
+                this._saveOpts();
                 this._render();
             });
             this._avoidStripEl.appendChild(chip);
@@ -625,7 +629,7 @@ class RoutePlannerPanel {
         const clearAll = document.createElement('span');
         clearAll.className = 'rpp-avoid-clearall';
         clearAll.textContent = 'Clear all';
-        clearAll.addEventListener('click', () => { this._avoidList = []; this._render(); });
+        clearAll.addEventListener('click', () => { this._avoidList = []; this._saveOpts(); this._render(); });
         this._avoidStripEl.appendChild(clearAll);
     }
 
@@ -900,7 +904,6 @@ class RoutePlannerPanel {
         const dep  = this._depInput?.value.trim().toUpperCase()  || '';
         const dest = this._destInput?.value.trim().toUpperCase() || '';
         this._route = [];
-        this._avoidList = [];
         if (dep)  this._route.push({ id: dep,  type: 'dep'  });
         if (dest) this._route.push({ id: dest, type: 'dest' });
         this._insertIndex = null;
