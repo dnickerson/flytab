@@ -452,8 +452,10 @@ class RoutePlannerPanel {
                                   this._compactView ? 'rpp-tbtn-active' : '');
         bar.appendChild(this._compactBtn);
 
-        // Apply on the same row — flex grows so it dominates without a second row
-        bar.appendChild(mkBtn('Apply & Close', () => this._onApplyTap(), 'rpp-tbtn-apply'));
+        // Apply (panel stays open, pilot can iterate) and Apply & Close
+        // (legacy commit-and-dismiss). Both run the same _doApply() pipeline.
+        bar.appendChild(mkBtn('Apply',         () => this._onApplyKeepOpenTap(), 'rpp-tbtn-apply'));
+        bar.appendChild(mkBtn('Apply & Close', () => this._onApplyTap(),         'rpp-tbtn-apply'));
 
         return bar;
     }
@@ -1056,11 +1058,29 @@ class RoutePlannerPanel {
 
     // ── Apply button ──────────────────────────────────────────────────────────
 
+    /**
+     * Apply the current pill list to the live trip without closing the
+     * panel. Pilot can keep editing and apply again. Returns true on
+     * successful apply.
+     */
+    async _onApplyKeepOpenTap() {
+        const ok = await this._doApply();
+        if (ok) this._toast('Applied — pilot may keep editing', 1800);
+    }
+
+    /** Apply and dismiss the panel (legacy default). */
     async _onApplyTap() {
+        const ok = await this._doApply();
+        if (ok && typeof app !== 'undefined') {
+            app.closeRoutePlanner();
+        }
+    }
+
+    async _doApply() {
         const wps = await this._pillsToWaypoints();
         if (wps.length < 2) {
             this._toast('Add at least 2 waypoints');
-            return;
+            return false;
         }
 
         const dep  = wps[0].icao  || wps[0].name;
@@ -1079,10 +1099,9 @@ class RoutePlannerPanel {
             },
         };
 
-        if (typeof app !== 'undefined') {
-            await app.applyRouteEdit(plan);
-            app.closeRoutePlanner();
-        }
+        if (typeof app === 'undefined') return false;
+        await app.applyRouteEdit(plan);
+        return true;
     }
 
     async _pillsToWaypoints() {

@@ -194,8 +194,26 @@ const log = (label, val) =>
     await page.waitForTimeout(250);
     await page.screenshot({ path: path.join(SHOTS_DIR, '03b-after-paste.png'), fullPage: false });
 
+    // -------- 5c. Apply (keep open) — should update _currentTrip but leave panel visible --------
+    const applyKeepBtn = page.locator('.rpp-tbtn-apply', { hasText: /^Apply$/ });
+    await applyKeepBtn.click();
+    await page.waitForTimeout(500);
+
+    const afterApplyKeep = await page.evaluate(() => ({
+        panelStillOpen: document.getElementById('cockpitContainer')?.classList.contains('route-editing'),
+        pillCountAfter: document.querySelectorAll('.rpp-pill').length,
+        tripWaypointCount: window.app?._currentTrip?.waypoints?.length ?? 0,
+        tripDep: window.app?._currentTrip?.departure,
+        tripDest: window.app?._currentTrip?.destination,
+    }));
+    log('after Apply (keep-open)', afterApplyKeep);
+
+    if (!afterApplyKeep.panelStillOpen) {
+        log('FAIL', 'Apply (keep-open) closed the panel — should stay open');
+    }
+
     // -------- 6. Apply & Close --------
-    const applyBtn = page.locator('.rpp-tbtn-apply');
+    const applyBtn = page.locator('.rpp-tbtn-apply', { hasText: /Apply & Close/ });
     await applyBtn.click();
 
     await page.waitForFunction(
