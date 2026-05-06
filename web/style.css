@@ -10078,7 +10078,50 @@ body.route-editing-mode #cockpitView {
 .rpp-menu-item:active { background: #e0eefa; }
 .rpp-menu-item.danger { color: #c0231f; }
 .rpp-menu-item.danger:hover { background: #fff0f0; }
+.rpp-menu-item.rpp-menu-avoid { color: #b05d00; font-weight: 600; }
+.rpp-menu-item.rpp-menu-avoid:hover { background: #fff7ee; }
 .rpp-menu-sep { height: .5px; background: #e0e5ea; margin: 3px 0; }
+
+/* Avoid strip — sits above the pill row */
+.rpp-avoid-strip {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 6px;
+    background: #fff7ee;
+    border: 1px solid #e0b070;
+    border-radius: 7px;
+    margin-bottom: 4px;
+}
+.rpp-avoid-label {
+    font-size: 10px;
+    font-weight: 700;
+    color: #7a4500;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+}
+.rpp-avoid-chip {
+    background: #fde8bb;
+    border: 1px solid #c8860a;
+    border-radius: 5px;
+    padding: 2px 7px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #7a3d00;
+    cursor: pointer;
+    white-space: nowrap;
+    touch-action: manipulation;
+}
+.rpp-avoid-chip:hover { background: #fcd08a; }
+.rpp-avoid-clearall {
+    margin-left: auto;
+    font-size: 10px;
+    color: #7a4500;
+    text-decoration: underline;
+    cursor: pointer;
+    touch-action: manipulation;
+}
 .rpp-menu-label {
     padding: 5px 14px 2px;
     font-size: 9px;

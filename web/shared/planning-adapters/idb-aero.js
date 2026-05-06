@@ -101,19 +101,32 @@ export class IdbAeroData {
         //   - id=null,  name="Locas"       (REP-PT/intersection — only the human name)
         // Normalize fix IDs to uppercase since FAA reporting always is, and
         // the planner's parser will uppercase pasted tokens before indexOf.
+        const unusable_from_seqs = new Set(r.unusable_from_seqs || []);
         const wps = (r.waypoints || [])
             .map(w => ({
-                id: ((w.id || w.name) || '').toUpperCase(),
+                id:  ((w.id || w.name) || '').toUpperCase(),
                 lat: w.lat,
                 lon: w.lon,
+                seq: w.seq,
             }))
             .filter(w => w.id && Number.isFinite(w.lat) && Number.isFinite(w.lon));
+
+        // Build set of "fromId|toId" strings for segments the FAA marks UNUSABLE (AWY4).
+        // airway-graph.js will skip these edges so A* never routes through them.
+        const unusable_pairs = new Set();
+        for (let i = 0; i < wps.length - 1; i++) {
+            if (unusable_from_seqs.has(wps[i].seq)) {
+                unusable_pairs.add(`${wps[i].id}|${wps[i + 1].id}`);
+            }
+        }
+
         return {
             id:      r.name || r.id || fallbackId,
             type:    r.type,
             fixIds:  wps.map(w => w.id),
-            waypoints: wps,
+            waypoints: wps.map(({ id, lat, lon }) => ({ id, lat, lon })),
             segments: r.segments || [],
+            unusable_pairs,
         };
     }
 }

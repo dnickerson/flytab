@@ -36,9 +36,10 @@ class RoutePlannerPanel {
         this._compactView   = true;
 
         // DOM refs (set by _buildDOM)
-        this._depInput    = null;
-        this._destInput   = null;
-        this._pillsEl     = null;
+        this._depInput     = null;
+        this._destInput    = null;
+        this._pillsEl      = null;
+        this._avoidStripEl = null;
         this._addInput    = null;
         this._addSel      = null;
         this._routeStrEl  = null;
@@ -49,6 +50,9 @@ class RoutePlannerPanel {
 
         // Drag state
         this._dragIdx = null;
+
+        // Avoid list — IDs of fixes/airways the user has chosen to route around
+        this._avoidList = [];
 
         // Render epoch — incremented on each _renderPills() call to invalidate stale long-press timers
         this._renderEpoch = 0;
@@ -130,11 +134,20 @@ class RoutePlannerPanel {
                 let type;
                 if (i === 0)                          type = 'dep';
                 else if (i === routeIds.length - 1)   type = 'dest';
-                else if (/^[VT]\d/.test(id))          type = 'awy';
+                else if (/^[VTJQ]\d/.test(id))        type = 'awy';
                 else if (id === 'DIRECT')             type = 'direct';
                 else                                   type = 'fix';
                 return { id, type };
             });
+            // Re-tag fix pills with their preceding airway so _collapseSameAirway
+            // can identify interior fixes in compact view. Without this, saved
+            // routes load with no airway tags and compact has nothing to hide.
+            let activeAirway = null;
+            for (const pill of this._route) {
+                if (pill.type === 'awy')    activeAirway = pill.id;
+                else if (pill.type === 'direct') activeAirway = null;
+                else if (pill.type === 'fix' && activeAirway) pill.airway = activeAirway;
+            }
         } else {
             const wps = plan.waypoints || [];
             if (wps.length === 0) { this._route = []; return; }
@@ -236,6 +249,12 @@ class RoutePlannerPanel {
 
         // Planning options row
         inner.appendChild(this._buildOptsRow());
+
+        // Avoid strip — shown above pills when the user has excluded fixes/airways
+        this._avoidStripEl = document.createElement('div');
+        this._avoidStripEl.className = 'rpp-avoid-strip';
+        this._avoidStripEl.style.display = 'none';
+        inner.appendChild(this._avoidStripEl);
 
         // Pill box
         const pillBox = document.createElement('div');
@@ -472,6 +491,8 @@ class RoutePlannerPanel {
             <div class="rpp-menu-item" id="rppMInsertAfter">Insert after</div>
             <div class="rpp-menu-sep"></div>
             <div class="rpp-menu-item" id="rppMChangeType">Change type</div>
+            <div class="rpp-menu-sep" id="rppMAvoidSep"></div>
+            <div class="rpp-menu-item rpp-menu-avoid" id="rppMAvoid">Avoid &amp; Re-plan</div>
             <div class="rpp-menu-sep"></div>
             <div class="rpp-menu-item danger" id="rppMDelete">Remove</div>
         `;
@@ -500,6 +521,16 @@ class RoutePlannerPanel {
             this._route[this._ctxMenuIdx].type = types[(types.indexOf(cur) + 1) % types.length];
             this._closeMenu(); this._render();
         });
+        this._ctxMenu.querySelector('#rppMAvoid').addEventListener('click', () => {
+            const i = this._ctxMenuIdx;
+            this._closeMenu();
+            if (i === null) return;
+            const item = this._route[i];
+            if (!this._avoidList.includes(item.id)) this._avoidList.push(item.id);
+            this._route.splice(i, 1);
+            this._render();
+            this._onPlanTap();
+        });
     }
 
     _openMenu(e, idx) {
@@ -507,6 +538,14 @@ class RoutePlannerPanel {
         const item = this._route[idx];
         this._ctxMenu.querySelector('#rppMenuTitle').textContent =
             item.id + ' · ' + item.type.toUpperCase();
+
+        // "Avoid & Re-plan" is only meaningful for intermediate fix/airway pills
+        // and requires the planner to be ready. Hide it for DEP, DEST, and fuel stops.
+        const canAvoid = this._planner &&
+            (item.type === 'fix' || item.type === 'awy' || item.type === 'direct');
+        this._ctxMenu.querySelector('#rppMAvoid').style.display    = canAvoid ? '' : 'none';
+        this._ctxMenu.querySelector('#rppMAvoidSep').style.display = canAvoid ? '' : 'none';
+
         this._ctxMenu.classList.add('open');
         const x = Math.min((e.clientX || e.pageX || 0), window.innerWidth  - 180);
         const y = Math.min((e.clientY || e.pageY || 0) + 8, window.innerHeight - 180);
@@ -522,13 +561,43 @@ class RoutePlannerPanel {
     // ── Render ────────────────────────────────────────────────────────────────
 
     _render() {
+        this._renderAvoidStrip();
         this._renderPills();
         this._renderRouteStr();
     }
 
+    _renderAvoidStrip() {
+        if (!this._avoidStripEl) return;
+        this._avoidStripEl.innerHTML = '';
+        if (!this._avoidList.length) {
+            this._avoidStripEl.style.display = 'none';
+            return;
+        }
+        this._avoidStripEl.style.display = '';
+        const label = document.createElement('span');
+        label.className = 'rpp-avoid-label';
+        label.textContent = 'Avoiding:';
+        this._avoidStripEl.appendChild(label);
+        for (const id of this._avoidList) {
+            const chip = document.createElement('span');
+            chip.className = 'rpp-avoid-chip';
+            chip.textContent = id + ' ×';
+            chip.addEventListener('click', () => {
+                this._avoidList = this._avoidList.filter(x => x !== id);
+                this._render();
+            });
+            this._avoidStripEl.appendChild(chip);
+        }
+        const clearAll = document.createElement('span');
+        clearAll.className = 'rpp-avoid-clearall';
+        clearAll.textContent = 'Clear all';
+        clearAll.addEventListener('click', () => { this._avoidList = []; this._render(); });
+        this._avoidStripEl.appendChild(clearAll);
+    }
+
     _renderRouteStr() {
         if (this._routeStrEl)
-            this._routeStrEl.textContent = this._route.map(r => r.id).join(' ');
+            this._routeStrEl.textContent = this._buildField15String(this._route);
     }
 
     _renderPills() {
@@ -797,6 +866,7 @@ class RoutePlannerPanel {
         const dep  = this._depInput?.value.trim().toUpperCase()  || '';
         const dest = this._destInput?.value.trim().toUpperCase() || '';
         this._route = [];
+        this._avoidList = [];
         if (dep)  this._route.push({ id: dep,  type: 'dep'  });
         if (dest) this._route.push({ id: dest, type: 'dest' });
         this._insertIndex = null;
@@ -875,6 +945,7 @@ class RoutePlannerPanel {
                 reserveGal:    this._reserveGal,
                 maxLegHrs:     this._maxLegHrs,
                 selfServeOnly: this._selfServeOnly,
+                avoidance:     this._avoidList.slice(),
             });
 
             // Cache all fix coordinates returned by the planner

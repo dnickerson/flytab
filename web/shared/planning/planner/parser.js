@@ -214,7 +214,19 @@ export async function parseRouteString(str, opts) {
             // navaids/REP-PTs — never airports — so resolveIdentifier with
             // position='interior' skips the K-prefix airport retry.
             const step = exitIdx > entryIdx ? 1 : -1;
+            const unusable = airway.unusable_pairs || new Set();
             for (let k = entryIdx + step; k !== exitIdx; k += step) {
+                // Unusable pairs are stored in forward-airway order (lower index first).
+                const edgeKey = step === 1
+                    ? `${airway.fixIds[k - 1]}|${airway.fixIds[k]}`
+                    : `${airway.fixIds[k]}|${airway.fixIds[k + 1]}`;
+                if (unusable.has(edgeKey)) {
+                    const fromId = step === 1 ? airway.fixIds[k - 1] : airway.fixIds[k + 1];
+                    const toId   = step === 1 ? airway.fixIds[k]     : airway.fixIds[k - 1];
+                    throw new PlanError(
+                        `${tok} ${fromId}→${toId} is unusable (crosses restricted airspace or chart restriction)`
+                    );
+                }
                 const interior = await resolveIdentifier(aero, airway.fixIds[k], 'interior');
                 interior.airway = airway.id;
                 waypoints.push(interior);

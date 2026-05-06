@@ -102,24 +102,33 @@ export class RoutePlanner {
         }
 
         // Normalize avoidance: accept both string[] and {id:string}[]
+        // Airway IDs (V/T/J/Q + digits) go into the hard-exclusion set; everything
+        // else is treated as a fix ID to skip during A* neighbour expansion.
+        const AIRWAY_RE = /^[VTJQ]\d+[A-Z]?$/;
         const avoidanceConstraints = [];
+        const excludeFixIds   = new Set();
+        const excludeAirways  = new Set();
         for (const a of (opts.avoidance || [])) {
-            if (typeof a === 'string') {
-                avoidanceConstraints.push(/** @type {import('./avoidance.js').AvoidanceConstraint} */ ({ id: a, polygon: [] }));
-            } else {
+            const id = typeof a === 'string' ? a : a.id;
+            if (typeof a !== 'string' && a.polygon?.length) {
                 avoidanceConstraints.push(/** @type {import('./avoidance.js').AvoidanceConstraint} */ (a));
+            } else if (AIRWAY_RE.test(id)) {
+                excludeAirways.add(id);
+            } else {
+                excludeFixIds.add(id);
             }
         }
         const penalty = buildAvoidancePenalty(avoidanceConstraints);
+        const excl = { excludeFixIds, excludeAirways };
         // Try a tight corridor first; if no path, widen; if still nothing,
         // fall back to a single DEP→DEST direct edge.
-        let path = this._aStar(graph, dep.icao, dest.icao, penalty);
+        let path = this._aStar(graph, dep.icao, dest.icao, penalty, excl);
         if (!path && !directOnly) {
-            path = this._aStar(graph, dep.icao, dest.icao, penalty, { corridorNm: 300 });
+            path = this._aStar(graph, dep.icao, dest.icao, penalty, { corridorNm: 300, ...excl });
         }
         if (!path && !directOnly) {
             graph.addDirectEdge(dep.icao, dep.lat, dep.lon, dest.icao, dest.lat, dest.lon);
-            path = this._aStar(graph, dep.icao, dest.icao, penalty, { corridorNm: Infinity });
+            path = this._aStar(graph, dep.icao, dest.icao, penalty, { corridorNm: Infinity, ...excl });
         }
         if (!path) throw new DestinationUnreachableError(`No route from ${opts.departure} to ${opts.destination}`);
 
@@ -247,6 +256,10 @@ export class RoutePlanner {
         const goal  = graph.coords[goalId];
         if (!start || !goal) return null;
 
+        // Hard-exclusion sets injected by plan() from the avoidance list.
+        const excludeFixIds  = opts.excludeFixIds  || null;
+        const excludeAirways = opts.excludeAirways || null;
+
         // Corridor prune: skip nodes whose perpendicular distance from the
         // dep→dest great-circle exceeds CORRIDOR_NM. Without this, A* on a
         // 5000-node airway graph wanders into far-off-track VOR junctions
@@ -291,6 +304,8 @@ export class RoutePlanner {
             for (const e of graph.edges(cur)) {
                 const next = e.toId;
                 if (!inCorridor(next)) continue;
+                if (excludeFixIds?.has(next))   continue;   // avoid this fix node
+                if (excludeAirways?.has(e.airway)) continue; // avoid this airway
                 const nextCoord = graph.coords[next];
                 if (!curCoord || !nextCoord) continue;
                 const pen = penaltyFn({ from: curCoord, to: nextCoord });

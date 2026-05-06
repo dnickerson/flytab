@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v7.32';
+const FLYTAB_VERSION = 'v7.37';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -974,11 +974,14 @@ class FlyTabApp {
             ]);
             const fileDate   = localFile?.effective_date;
             const dbDate     = dbCycle?.effective_date;
-            const fileSuaCnt = localFile?.sua_count ?? null;
-            const dbSuaCnt   = dbCycle?.sua_count ?? null;
-            const dateMatch  = fileDate && fileDate === dbDate;
-            const suaMatch   = fileSuaCnt === null || (dbSuaCnt !== null && fileSuaCnt === dbSuaCnt);
-            if (testApt && dateMatch && suaMatch) return;               // DB is current
+            const fileSuaCnt    = localFile?.sua_count ?? null;
+            const dbSuaCnt      = dbCycle?.sua_count ?? null;
+            const fileBundleVer = localFile?.bundle_version ?? null;
+            const dbBundleVer   = dbCycle?.bundle_version ?? null;
+            const dateMatch     = fileDate && fileDate === dbDate;
+            const suaMatch      = fileSuaCnt === null || (dbSuaCnt !== null && fileSuaCnt === dbSuaCnt);
+            const bundleMatch   = fileBundleVer === null || (dbBundleVer !== null && fileBundleVer <= dbBundleVer);
+            if (testApt && dateMatch && suaMatch && bundleMatch) return; // DB is current
             if (testApt && !fileDate) return;                           // NanoHTTPD not ready; keep DB
             if (testApt && fileDate && dbDate && fileDate < dbDate) return; // NanoHTTPD older than DB; don't downgrade
         } catch { /* fall through to import */ }

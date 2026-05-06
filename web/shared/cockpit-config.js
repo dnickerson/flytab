@@ -278,8 +278,10 @@ class CockpitConfig {
             obj = obj[keys[i]];
         }
         obj[keys[keys.length - 1]] = value;
+        // Write to flypi_user_cockpit (the user-overrides key read by _mergeUserOverrides on
+        // next load) so patches survive page reloads even when the network fetch succeeds.
         try {
-            localStorage.setItem('flypi_cfg_cockpit_config_json', JSON.stringify(CockpitConfig._config));
+            localStorage.setItem('flypi_user_cockpit', JSON.stringify(CockpitConfig._config));
         } catch { /* quota */ }
     }
 

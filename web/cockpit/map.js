@@ -267,10 +267,13 @@ class CockpitMap {
     // ========== Tile Layers ==========
 
     _setupLayers() {
-        // FlyTab: tiles served from NanoHTTPD at localhost:9090 (Android filesystem).
-        // Tiles are downloaded from home server via Layer Panel / Data & Maps and
-        // stored to Documents/FlyTab/tiles/ where NanoHTTPD serves them.
-        const tileBase = 'http://localhost:9090/tiles';
+        // On Android (Capacitor native), tiles are served from NanoHTTPD at localhost:9090.
+        // In a browser (dev/desktop), fall back to the home server tiles if configured.
+        const isNative = typeof window.Capacitor !== 'undefined' && window.Capacitor.isNativePlatform?.();
+        const homeBase = typeof CockpitConfig !== 'undefined' ? CockpitConfig.homeBase : null;
+        const tileBase = isNative ? 'http://localhost:9090/tiles'
+                       : homeBase ? `${homeBase}/tiles`
+                       : 'http://localhost:9090/tiles';
         console.log('[FlyTab] Tile base:', tileBase);
 
         // FAA Sectional — 256px tiles, z5-11

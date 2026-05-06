@@ -64,6 +64,9 @@ export class AirwayGraph {
         for (const a of airways) {
             if (allowed && !allowed.has(a.type)) continue;
             const ids = a.fixIds || [];
+            // Segments the FAA marks UNUSABLE in AWY4 — skip them entirely so A*
+            // never proposes a route through a published restriction.
+            const unusable = a.unusable_pairs || new Set();
             // Inline waypoint coords from the airway record itself (faster, and
             // necessary for fix waypoints not stored in the fixes/navaids IDB
             // stores). Falls back to per-fix adapter lookups when absent.
@@ -79,6 +82,7 @@ export class AirwayGraph {
                 || await this._aero.getNavaid(id);
 
             for (let i = 0; i < ids.length - 1; i++) {
+                if (unusable.has(`${ids[i]}|${ids[i + 1]}`)) continue;
                 const fa = await lookup(ids[i]);
                 const fb = await lookup(ids[i + 1]);
                 if (!fa || !fb) continue;
