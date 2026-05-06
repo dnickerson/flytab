@@ -78,7 +78,28 @@ export class RoutePlanner {
 
         const graph = await this._getGraph(routingMode);
         graph.clearDirectEdges();
-        graph.addDirectEdge(dep.icao, dep.lat, dep.lon, dest.icao, dest.lat, dest.lon);
+
+        // Fan out from DEP and DEST onto the airway network so A* has entry
+        // points. Fan-out edges are DIRECT-typed and clearDirectEdges() removes
+        // them on the next plan() call.
+        const FANOUT_MAX_NM = 60;
+        const FANOUT_LIMIT  = 5;
+        for (const f of graph.nearestFixes(dep.lat, dep.lon, FANOUT_MAX_NM, FANOUT_LIMIT)) {
+            const c = graph.coords[f.id];
+            graph.addDirectEdge(dep.icao, dep.lat, dep.lon, f.id, c.lat, c.lon);
+        }
+        for (const f of graph.nearestFixes(dest.lat, dest.lon, FANOUT_MAX_NM, FANOUT_LIMIT)) {
+            const c = graph.coords[f.id];
+            graph.addDirectEdge(dest.icao, dest.lat, dest.lon, f.id, c.lat, c.lon);
+        }
+
+        // For direct-only modes (gps-direct / vors-direct) the airway graph is
+        // empty, so fan-out adds nothing — we need an explicit DEP→DEST direct
+        // edge or A* has no path at all.
+        const directOnly = routingMode === 'gps-direct' || routingMode === 'vors-direct';
+        if (directOnly) {
+            graph.addDirectEdge(dep.icao, dep.lat, dep.lon, dest.icao, dest.lat, dest.lon);
+        }
 
         // Normalize avoidance: accept both string[] and {id:string}[]
         const avoidanceConstraints = [];
@@ -90,12 +111,19 @@ export class RoutePlanner {
             }
         }
         const penalty = buildAvoidancePenalty(avoidanceConstraints);
-        const path = this._aStar(graph, dep.icao, dest.icao, penalty);
+        let path = this._aStar(graph, dep.icao, dest.icao, penalty);
+        if (!path && !directOnly) {
+            // Airway graph couldn't connect DEP→DEST (sparse fan-out, isolated
+            // airway clusters, or avoidance constraints blocking every path).
+            // Fall back to a single direct edge so the pilot still gets a plan.
+            graph.addDirectEdge(dep.icao, dep.lat, dep.lon, dest.icao, dest.lat, dest.lon);
+            path = this._aStar(graph, dep.icao, dest.icao, penalty);
+        }
         if (!path) throw new DestinationUnreachableError(`No route from ${opts.departure} to ${opts.destination}`);
 
-        const waypoints = path.map(id => {
+        const waypoints = path.map(({ id, airway }) => {
             const c = graph.coords[id];
-            return { id, lat: c.lat, lon: c.lon };
+            return { id, lat: c.lat, lon: c.lon, ...(airway ? { airway } : {}) };
         });
 
         const flightPlan = {
@@ -209,13 +237,14 @@ export class RoutePlanner {
      * @param {string} startId
      * @param {string} goalId
      * @param {(edge:{from:{lat:number,lon:number},to:{lat:number,lon:number}})=>number} penaltyFn
-     * @returns {string[] | null}
+     * @returns {Array<{id:string, airway:(string|null)}> | null}
      * @private
      */
     _aStar(graph, startId, goalId, penaltyFn) {
         const goal = graph.coords[goalId];
         if (!goal) return null;
         const open = new Map();      // id → fScore
+        /** @type {Map<string, {prev:string, airway:string}>} */
         const cameFrom = new Map();
         const gScore = new Map();
         gScore.set(startId, 0);
@@ -246,7 +275,7 @@ export class RoutePlanner {
                 if (pen === Infinity) continue;
                 const tentative = (gScore.get(cur) ?? Infinity) + e.distNm + pen;
                 if (tentative < (gScore.get(next) ?? Infinity)) {
-                    cameFrom.set(next, cur);
+                    cameFrom.set(next, { prev: cur, airway: e.airway });
                     gScore.set(next, tentative);
                     open.set(next, tentative + h(next));
                 }
@@ -256,18 +285,23 @@ export class RoutePlanner {
     }
 
     /**
-     * Reconstruct the path from start to end.
-     * @param {Map<string, string>} cameFrom
+     * Reconstruct the path from start to end. Each entry carries the airway
+     * used to REACH that node from its predecessor. The first node's airway
+     * is null (it's the departure).
+     * @param {Map<string, {prev:string, airway:string}>} cameFrom
      * @param {string} end
-     * @returns {string[]}
+     * @returns {Array<{id:string, airway:(string|null)}>}
      * @private
      */
     _reconstruct(cameFrom, end) {
-        const path = [end];
-        while (cameFrom.has(path[0])) {
-            const prev = cameFrom.get(path[0]);
-            if (!prev) break;
-            path.unshift(prev);
+        /** @type {Array<{id:string, airway:(string|null)}>} */
+        const path = [{ id: end, airway: null }];
+        while (cameFrom.has(path[0].id)) {
+            const link = cameFrom.get(path[0].id);
+            if (!link) break;
+            // Airway used to reach this node — attach to the current head.
+            path[0].airway = link.airway;
+            path.unshift({ id: link.prev, airway: null });
         }
         return path;
     }

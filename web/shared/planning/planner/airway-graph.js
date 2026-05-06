@@ -119,6 +119,28 @@ export class AirwayGraph {
     }
 
     /**
+     * Return airway fixes near (lat, lon), sorted by distance ascending.
+     * Used by RoutePlanner.plan() to fan out from DEP/DEST airports onto
+     * the airway network. Linear scan over `coords` — fine for ~5k nodes.
+     *
+     * @param {number} lat
+     * @param {number} lon
+     * @param {number} [maxNm=60]   Hard distance cap
+     * @param {number} [limit=5]    Maximum candidates to return
+     * @returns {Array<{id:string, distNm:number}>}
+     */
+    nearestFixes(lat, lon, maxNm = 60, limit = 5) {
+        const candidates = [];
+        for (const id of Object.keys(this.coords)) {
+            const c = this.coords[id];
+            const d = haversine(lat, lon, c.lat, c.lon);
+            if (d <= maxNm) candidates.push({ id, distNm: d });
+        }
+        candidates.sort((a, b) => a.distNm - b.distNm);
+        return candidates.slice(0, limit);
+    }
+
+    /**
      * Remove all DIRECT edges previously added via addDirectEdge.
      * Used by RoutePlanner.plan() to keep the cached graph clean across
      * successive plans with different DEP/DEST.

@@ -80,6 +80,38 @@ describe('AirwayGraph.clearDirectEdges', () => {
     });
 });
 
+describe('AirwayGraph.nearestFixes', () => {
+    it('returns fixes within maxNm sorted by distance', async () => {
+        const g = new AirwayGraph(aero, { routingMode: 'v-airways' });
+        await g.load();
+        // FIXES.A is (33.0, -85.0). FIXES.B is (33.5, -84.5) — about 41 nm.
+        const near = g.nearestFixes(33.0, -85.0, 100, 3);
+        expect(near.length).toBeGreaterThan(0);
+        expect(near[0].id).toBe('A');           // distance 0
+        expect(near[0].distNm).toBeCloseTo(0, 4);
+        // results are sorted ascending
+        for (let i = 1; i < near.length; i++) {
+            expect(near[i].distNm).toBeGreaterThanOrEqual(near[i - 1].distNm);
+        }
+    });
+
+    it('respects maxNm cap', async () => {
+        const g = new AirwayGraph(aero, { routingMode: 'v-airways' });
+        await g.load();
+        const near = g.nearestFixes(33.0, -85.0, 1, 10);  // 1nm cap
+        // Only FIXES.A itself (distance 0) is within 1nm
+        expect(near.length).toBe(1);
+        expect(near[0].id).toBe('A');
+    });
+
+    it('respects limit', async () => {
+        const g = new AirwayGraph(aero, { routingMode: 'v-airways' });
+        await g.load();
+        const near = g.nearestFixes(33.0, -85.0, 1000, 2);
+        expect(near.length).toBeLessThanOrEqual(2);
+    });
+});
+
 describe('AirwayGraph inline waypoints', () => {
     it('builds edges from airway.waypoints when fixes/navaids stores are empty', async () => {
         // Mirrors the real NASR bundle shape: waypoint has id+lat+lon inline
