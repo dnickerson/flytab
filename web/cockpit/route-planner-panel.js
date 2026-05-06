@@ -937,21 +937,73 @@ class RoutePlannerPanel {
             if (!str) return;
         }
 
-        const pills = this._parsePasteStr(str.trim());
-        if (pills.length < 2) {
-            this._toast('Could not parse route — need at least 2 tokens');
-            return;
-        }
-
         if (this._route.length > 0) {
             const ok = await this._confirm('Replace current route with pasted route?');
             if (!ok) return;
         }
 
+        // Prefer the lib's parseRoute when the planner is ready — it walks
+        // each airway record and emits every interior transition fix, so the
+        // map renders the actual airway path. Fall back to the local
+        // tokenizer only when the planner hasn't initialised yet.
+        let pills;
+        if (this._planner?.parseRoute) {
+            try {
+                const result = await this._planner.parseRoute(str.trim());
+                pills = this._waypointsToPills(result.waypoints);
+            } catch (err) {
+                console.warn('[RoutePlannerPanel] paste parseRoute failed:', err?.message || err);
+                this._toast('Could not parse: ' + (err?.message || err), 5000);
+                return;
+            }
+        } else {
+            pills = this._parsePasteStr(str.trim());
+        }
+
+        if (pills.length < 2) {
+            this._toast('Could not parse route — need at least 2 tokens');
+            return;
+        }
+
         this._route = pills;
         this._depInput.value  = pills[0].id;
         this._destInput.value = pills[pills.length - 1].id;
+        // Cache coords from the expanded waypoints so Apply can resolve them
+        // without going back to IDB.
+        if (this._planner?.parseRoute) {
+            // `pills` came from parseRoute; coords are on the waypoint objects
+            // we already produced. Re-walk them here.
+        }
         this._render();
+    }
+
+    /**
+     * Convert parseRoute()'s waypoint output into the panel's pill array.
+     * Each waypoint after the first carries an `airway` field naming the
+     * airway used to reach it from the previous waypoint (null = direct).
+     * Emit a single AWY pill at each airway boundary — when entering a new
+     * airway from a non-airway segment OR a different airway.
+     */
+    _waypointsToPills(waypoints) {
+        if (!waypoints?.length) return [];
+        const pills = [];
+        let lastAirway = null;
+        for (let i = 0; i < waypoints.length; i++) {
+            const w = waypoints[i];
+            if (w.lat != null && w.lon != null) this._coords[w.id] = { lat: w.lat, lon: w.lon };
+
+            const aw = w.airway || null;
+            if (aw && aw !== lastAirway) {
+                pills.push({ id: aw, type: 'awy' });
+            }
+            lastAirway = aw;
+
+            const type = i === 0 ? 'dep'
+                       : i === waypoints.length - 1 ? 'dest'
+                       : 'fix';
+            pills.push({ id: w.id, type });
+        }
+        return pills;
     }
 
     _parsePasteStr(str) {

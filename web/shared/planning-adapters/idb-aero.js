@@ -11,7 +11,12 @@ export class IdbAeroData {
     constructor(nasrDb) { this._db = nasrDb; }
 
     async getAirport(icao) {
-        const r = await this._db.getAirport(icao);
+        // US airports are stored with a leading 'K' in NASR (e.g. K44N, KLGA).
+        // Pilots and ATC routinely use the bare form for FAA-internal
+        // identifiers ('44N') and even for major airports ('LGA' instead of
+        // 'KLGA'). Retry with K-prefix on miss.
+        let r = await this._db.getAirport(icao);
+        if (!r && !icao.startsWith('K')) r = await this._db.getAirport('K' + icao);
         if (!r) return null;
         return {
             icao: r.icao || icao,
@@ -73,8 +78,17 @@ export class IdbAeroData {
      * so AirwayGraph can build edges without per-fix IDB round-trips.
      */
     _normaliseAirway(r, fallbackId) {
+        // NASR airway-waypoint records use:
+        //   - id="CLT", name="Charlotte"   (navaid waypoints — id is short, name is long)
+        //   - id=null,  name="Locas"       (REP-PT/intersection — only the human name)
+        // Normalize fix IDs to uppercase since FAA reporting always is, and
+        // the planner's parser will uppercase pasted tokens before indexOf.
         const wps = (r.waypoints || [])
-            .map(w => ({ id: w.id || w.name, lat: w.lat, lon: w.lon }))
+            .map(w => ({
+                id: ((w.id || w.name) || '').toUpperCase(),
+                lat: w.lat,
+                lon: w.lon,
+            }))
             .filter(w => w.id && Number.isFinite(w.lat) && Number.isFinite(w.lon));
         return {
             id:      r.name || r.id || fallbackId,

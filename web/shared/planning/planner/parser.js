@@ -151,24 +151,28 @@ export async function parseRouteString(str, opts) {
 
     /** @type {import('../types/flight-plan.js').Waypoint[]} */
     const waypoints = [];
+    /**
+     * The airway used to reach the next non-airway token. Set when an airway
+     * block is processed; consumed by the next normal-token resolve. Without
+     * this, airways with zero interior fixes (LOCAS V409 GANTS) would lose
+     * the airway label entirely — only the exit fix carries it.
+     */
+    let pendingAirway = null;
     let i = 0;
 
     while (i < tokens.length) {
         const tok = tokens[i];
 
         if (isAirwayToken(tok)) {
-            // Look up the airway
             const airway = await aero.getAirway(tok);
             if (!airway) {
                 throw new UnknownAirwayError(tok);
             }
 
-            // Check routing mode constraint
             if (!airwayTypeAllowed(airway.type, mode)) {
                 throw new RoutingModeViolationError(tok, mode);
             }
 
-            // Need entry (= last waypoint added) and exit (= next non-airway token)
             const entry = waypoints[waypoints.length - 1];
             if (!entry) {
                 throw new PlanError(`Airway ${tok} cannot be the first token`);
@@ -179,7 +183,6 @@ export async function parseRouteString(str, opts) {
                 throw new PlanError(`Airway ${tok} must be followed by a fix token`);
             }
 
-            // Find entry and exit indices in the airway's fix list
             const entryIdx = airway.fixIds.indexOf(entry.id);
             const exitIdx = airway.fixIds.indexOf(exitTok);
 
@@ -190,8 +193,10 @@ export async function parseRouteString(str, opts) {
                 throw new PlanError(`Exit fix ${exitTok} not on airway ${tok}`);
             }
 
-            // Walk the airway from entryIdx → exitIdx (forward or reverse) and add interior fixes.
-            // Tag each interior fix with the airway it came from.
+            // Walk the airway from entryIdx → exitIdx (forward or reverse) and
+            // emit each interior fix tagged with the airway. Mark the FIRST
+            // interior fix as the airway-entry boundary (used by pill builders
+            // that emit a single AWY pill at each transition).
             const step = exitIdx > entryIdx ? 1 : -1;
             for (let k = entryIdx + step; k !== exitIdx; k += step) {
                 const interior = await resolveIdentifier(aero, airway.fixIds[k]);
@@ -199,13 +204,20 @@ export async function parseRouteString(str, opts) {
                 waypoints.push(interior);
             }
 
-            // Don't advance past the airway token — let the next iteration consume the exit token
-            i++;
+            // Even when the airway has zero interior fixes (entryIdx adjacent
+            // to exitIdx), the exit token also belongs to this airway — stamp
+            // it via pendingAirway when the next iteration resolves it.
+            pendingAirway = airway.id;
+
+            i++;  // skip past the airway token; next iteration will resolve exitTok
             continue;
         }
 
-        // Non-airway token: resolve it as a waypoint
         const wp = await resolveIdentifier(aero, tok);
+        if (pendingAirway && waypoints.length > 0) {
+            wp.airway = pendingAirway;
+            pendingAirway = null;
+        }
         waypoints.push(wp);
         i++;
     }

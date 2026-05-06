@@ -168,6 +168,32 @@ const log = (label, val) =>
     });
     log('hit-target sizes (px)', sizes);
 
+    // -------- 5b. Paste the wxbrief route via the panel's _onPasteTap path --------
+    const pasteResult = await page.evaluate(async () => {
+        const panel = window.app?.routePlannerPanel;
+        const wxbrief = 'KLKR LOCAS V409 GANTS V103 GSO V143 LRP V39 SAX V249 HELON V167 SPECL 44N';
+        // Stub the clipboard read so _onPasteTap picks up our string
+        const origReadText = navigator.clipboard.readText;
+        navigator.clipboard.readText = async () => wxbrief;
+        try {
+            // Bypass the confirm prompt by clearing _route first
+            panel._route = [];
+            await panel._onPasteTap();
+        } finally {
+            navigator.clipboard.readText = origReadText;
+        }
+        return {
+            pillCount: panel._route.length,
+            airwayPills: panel._route.filter(p => p.type === 'awy').map(p => p.id),
+            dep: panel._route[0]?.id,
+            dest: panel._route[panel._route.length - 1]?.id,
+        };
+    });
+    log('paste wxbrief result', pasteResult);
+
+    await page.waitForTimeout(250);
+    await page.screenshot({ path: path.join(SHOTS_DIR, '03b-after-paste.png'), fullPage: false });
+
     // -------- 6. Apply & Close --------
     const applyBtn = page.locator('.rpp-tbtn-apply');
     await applyBtn.click();

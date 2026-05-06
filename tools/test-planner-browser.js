@@ -121,11 +121,45 @@ const log = (label, val) => console.log(`[${label}]`, typeof val === 'string' ? 
                 cruiseAltFt: 6000,
                 routingMode: 'v-airways',
             });
+
+            // Build the wxbrief-style route string by interleaving fix and
+            // airway tokens. Each leg's airway is the airway used to ENTER
+            // leg.to from leg.from. Collapse consecutive identical airways
+            // (matches how ATC writes routes).
+            const tokens = [r.waypoints[0].id];
+            let lastAirway = null;
+            for (const leg of (r.legs || [])) {
+                if (leg.airway && leg.airway !== 'DIRECT' && leg.airway !== lastAirway) {
+                    tokens.push(leg.airway);
+                    lastAirway = leg.airway;
+                } else if (leg.airway === 'DIRECT' || leg.airway !== lastAirway) {
+                    lastAirway = leg.airway;
+                }
+                tokens.push(leg.to);
+            }
+
+            // Compact wxbrief view: only show fixes that are airway entry/exit
+            // (the previous or next leg's airway is different from the current).
+            const compactTokens = [r.waypoints[0].id];
+            for (let i = 0; i < (r.legs || []).length; i++) {
+                const leg  = r.legs[i];
+                const next = r.legs[i + 1];
+                const showFix = (i === r.legs.length - 1)               // last leg → always show
+                              || (!next)                                  // safety
+                              || (leg.airway !== next.airway);            // airway changes
+                if (leg.airway && leg.airway !== 'DIRECT' && leg.airway !== compactTokens[compactTokens.length - 1]) {
+                    compactTokens.push(leg.airway);
+                }
+                if (showFix) compactTokens.push(leg.to);
+            }
+
             return {
                 ok: true,
-                waypoints: r.waypoints.map(w => w.id),
+                waypointCount: r.waypoints.length,
                 legCount: r.legs?.length ?? 0,
                 airways: [...new Set((r.legs || []).map(l => l.airway))].filter(Boolean),
+                fullRoute:    tokens.join(' '),
+                compactRoute: compactTokens.join(' '),
                 totalDistNm: r.summary?.totalDistNm,
                 totalEteHrs: r.summary?.totalEteHrs,
             };
@@ -135,33 +169,32 @@ const log = (label, val) => console.log(`[${label}]`, typeof val === 'string' ? 
     }, { from: PLAN_FROM, to: PLAN_TO });
     log(`plan ${PLAN_FROM}→${PLAN_TO}`, planResult);
 
-    // 6. Test the new pasted-airway expansion (issue 2 from the spec changes)
-    const parseResult = await page.evaluate(async () => {
+    // 6. Paste expansion against the actual 1800wxbrief reference for KLKR→44N.
+    //    parseRoute must walk each airway and emit every interior fix.
+    const wxBriefStr = 'KLKR LOCAS V409 GANTS V103 GSO V143 LRP V39 SAX V249 HELON V167 SPECL 44N';
+    const parseResult = await page.evaluate(async (str) => {
         const planner = window.app?.routePlannerPanel?._planner;
         try {
-            // Use a real well-known V airway segment if airways exist.
-            // V139 between SBV and PSK is one common option in the SE US.
-            // Fall back to whatever first V airway is in the graph.
-            const adapters = window.app?._planningAdapters;
-            const all = await adapters.aero.listAirways();
-            const firstV = all.find(a => a.type === 'V' && (a.fixIds?.length ?? 0) >= 3);
-            if (!firstV) return { skipped: true, reason: 'No V-airway with 3+ fixes' };
-            const dep = firstV.fixIds[0];
-            const exit = firstV.fixIds[firstV.fixIds.length - 1];
-            const str = `${dep} ${firstV.id} ${exit}`;
             const r = await planner.parseRoute(str);
+            // Group expanded waypoints by the airway tag attached during parse.
+            const groups = [];
+            for (const w of r.waypoints) {
+                const aw = w.airway || null;
+                const last = groups[groups.length - 1];
+                if (last && last.airway === aw) last.fixes.push(w.id);
+                else groups.push({ airway: aw, fixes: [w.id] });
+            }
             return {
                 ok: true,
                 input: str,
-                airwayId: firstV.id,
-                expectedFixCount: firstV.fixIds.length,
-                actualWaypoints: r.waypoints.map(w => w.id),
+                totalFixes: r.waypoints.length,
+                groups,
             };
         } catch (e) {
             return { ok: false, error: String(e) };
         }
-    });
-    log('parseRoute (airway expansion)', parseResult);
+    }, wxBriefStr);
+    log('parseRoute (wxbrief KLKR→44N expansion)', parseResult);
 
     console.log('\n--- console errors ---');
     consoleErrors.forEach(e => console.log('!', e));
