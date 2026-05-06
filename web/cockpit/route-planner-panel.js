@@ -1044,9 +1044,17 @@ class RoutePlannerPanel {
         for (const key of Object.keys(this._coords))
             coordsCi[key.toUpperCase()] = this._coords[key];
 
+        // AWY pills sit BETWEEN two fix pills and represent the airway used to
+        // reach the next fix. Capture the most recent AWY so we can stamp it
+        // onto the next pushed waypoint. Without this the route table loses
+        // every airway label the planner produced.
+        let pendingAirway = null;
+
         for (const pill of this._route) {
-            // Airway pills don't become waypoints
-            if (pill.type === 'awy') continue;
+            if (pill.type === 'awy') {
+                pendingAirway = pill.id;
+                continue;
+            }
 
             const id = pill.id;
             let coord = this._coords[id] || coordsCi[id.toUpperCase()];
@@ -1076,7 +1084,9 @@ class RoutePlannerPanel {
                       pill.type === 'dest' ? 'APT' :
                       pill.type === 'fuel' ? 'APT' : undefined,
                 alt: this._altitude,
+                ...(pendingAirway ? { airway: pendingAirway } : {}),
             });
+            pendingAirway = null;
         }
 
         if (skipped.length > 0)

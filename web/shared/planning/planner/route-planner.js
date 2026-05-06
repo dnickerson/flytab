@@ -4,7 +4,7 @@
 import { AirwayGraph } from './airway-graph.js';
 import { parseRouteString } from './parser.js';
 import { buildAvoidancePenalty } from './avoidance.js';
-import { haversine, bearing } from '../math/route-math.js';
+import { haversine, bearing, crossTrackDistanceNm } from '../math/route-math.js';
 import { decomposeLeg } from '../math/fuel-phases.js';
 import { PlanError, DestinationUnreachableError } from './route-planner-errors.js';
 
@@ -111,13 +111,15 @@ export class RoutePlanner {
             }
         }
         const penalty = buildAvoidancePenalty(avoidanceConstraints);
+        // Try a tight corridor first; if no path, widen; if still nothing,
+        // fall back to a single DEP→DEST direct edge.
         let path = this._aStar(graph, dep.icao, dest.icao, penalty);
         if (!path && !directOnly) {
-            // Airway graph couldn't connect DEP→DEST (sparse fan-out, isolated
-            // airway clusters, or avoidance constraints blocking every path).
-            // Fall back to a single direct edge so the pilot still gets a plan.
+            path = this._aStar(graph, dep.icao, dest.icao, penalty, { corridorNm: 300 });
+        }
+        if (!path && !directOnly) {
             graph.addDirectEdge(dep.icao, dep.lat, dep.lon, dest.icao, dest.lat, dest.lon);
-            path = this._aStar(graph, dep.icao, dest.icao, penalty);
+            path = this._aStar(graph, dep.icao, dest.icao, penalty, { corridorNm: Infinity });
         }
         if (!path) throw new DestinationUnreachableError(`No route from ${opts.departure} to ${opts.destination}`);
 
@@ -240,22 +242,41 @@ export class RoutePlanner {
      * @returns {Array<{id:string, airway:(string|null)}> | null}
      * @private
      */
-    _aStar(graph, startId, goalId, penaltyFn) {
-        const goal = graph.coords[goalId];
-        if (!goal) return null;
+    _aStar(graph, startId, goalId, penaltyFn, opts = {}) {
+        const start = graph.coords[startId];
+        const goal  = graph.coords[goalId];
+        if (!start || !goal) return null;
+
+        // Corridor prune: skip nodes whose perpendicular distance from the
+        // dep→dest great-circle exceeds CORRIDOR_NM. Without this, A* on a
+        // 5000-node airway graph wanders into far-off-track VOR junctions
+        // (e.g. routing KLKR→KMIA via HPW in central Virginia).
+        const CORRIDOR_NM = opts.corridorNm ?? 150;
+        // Greedy bias on the heuristic — slightly inadmissible but explores
+        // far fewer nodes. Set to 1.0 for exact A*.
+        const HEURISTIC_BIAS = opts.heuristicBias ?? 1.15;
+
         const open = new Map();      // id → fScore
         /** @type {Map<string, {prev:string, airway:string}>} */
         const cameFrom = new Map();
         const gScore = new Map();
         gScore.set(startId, 0);
-        /**
-         * @param {string} id
-         * @returns {number}
-         */
+
+        /** @param {string} id @returns {number} */
         const h = (id) => {
             const c = graph.coords[id];
-            return c ? haversine(c.lat, c.lon, goal.lat, goal.lon) : Infinity;
+            return c ? haversine(c.lat, c.lon, goal.lat, goal.lon) * HEURISTIC_BIAS : Infinity;
         };
+
+        /** @param {string} id @returns {boolean} */
+        const inCorridor = (id) => {
+            if (id === startId || id === goalId) return true;
+            const c = graph.coords[id];
+            if (!c) return false;
+            const xt = Math.abs(crossTrackDistanceNm(start.lat, start.lon, goal.lat, goal.lon, c.lat, c.lon));
+            return xt <= CORRIDOR_NM;
+        };
+
         open.set(startId, h(startId));
 
         while (open.size) {
@@ -269,6 +290,7 @@ export class RoutePlanner {
             const curCoord = graph.coords[cur];
             for (const e of graph.edges(cur)) {
                 const next = e.toId;
+                if (!inCorridor(next)) continue;
                 const nextCoord = graph.coords[next];
                 if (!curCoord || !nextCoord) continue;
                 const pen = penaltyFn({ from: curCoord, to: nextCoord });
