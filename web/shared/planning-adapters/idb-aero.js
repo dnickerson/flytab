@@ -14,10 +14,28 @@ export class IdbAeroData {
         // US airports are stored with a leading 'K' in NASR (e.g. K44N, KLGA).
         // Pilots and ATC routinely use the bare form for FAA-internal
         // identifiers ('44N') and even for major airports ('LGA' instead of
-        // 'KLGA'). Retry with K-prefix on miss.
+        // 'KLGA'). Retry with K-prefix on miss. Only call this for
+        // departure/destination — using it for interior airway fixes would
+        // misidentify navaids that share an FAA ID with an airport (e.g.
+        // MRB is the Martinsburg VOR, KMRB is the airport).
         let r = await this._db.getAirport(icao);
         if (!r && !icao.startsWith('K')) r = await this._db.getAirport('K' + icao);
         if (!r) return null;
+        return this._normaliseAirport(r, icao);
+    }
+
+    /**
+     * Like getAirport but does NOT retry with K-prefix. Used by parser when
+     * resolving interior airway tokens — MRB on V143 is the navaid, not the
+     * KMRB airport.
+     */
+    async getAirportLiteral(icao) {
+        const r = await this._db.getAirport(icao);
+        if (!r) return null;
+        return this._normaliseAirport(r, icao);
+    }
+
+    _normaliseAirport(r, icao) {
         return {
             icao: r.icao || icao,
             name: r.name,

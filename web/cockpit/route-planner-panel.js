@@ -560,31 +560,37 @@ class RoutePlannerPanel {
         const wrap = (i) => ({ item: route[i], originalIdx: i });
         const out = [];
         const len = route.length;
-        let i = 0;
-        while (i < len) {
+
+        // Rule: a fix pill is INTERIOR (hidden in compact view) iff its
+        // airway tag matches the airway tag of the next fix pill in the
+        // route. Airway/direct pills are always shown. DEP and DEST are
+        // always shown. This works for both the legacy "alternating
+        // [fix awy fix awy fix]" pattern produced by Plan and the
+        // "[fix awy fix fix fix awy fix ...]" pattern produced by paste.
+        const isAwy = (i) => i >= 0 && i < len &&
+            (route[i].type === 'awy' || route[i].type === 'direct');
+
+        // Pre-compute the next-fix index from each position, skipping any
+        // intermediate airway pills.
+        /** @type {number[]} */
+        const nextFix = new Array(len + 1).fill(-1);
+        for (let i = len - 1; i >= 0; i--) {
+            nextFix[i] = isAwy(i) ? nextFix[i + 1] : i;
+        }
+
+        for (let i = 0; i < len; i++) {
             const item = route[i];
-            if (item.type === 'awy' || item.type === 'direct') {
-                // standalone airway — already handled by previous fix's lookahead
+            if (isAwy(i)) {
                 out.push(wrap(i));
-                i++;
                 continue;
             }
-            // Fix-like (dep, fix, fuel, dest)
-            out.push(wrap(i));
-            i++;
-            if (i < len && (route[i].type === 'awy' || route[i].type === 'direct')) {
-                const awy = route[i].id;
-                out.push(wrap(i));
-                i++;
-                // Skip consecutive fix-awy(same) pairs — the loop ends pointing at
-                // a fix that's NOT followed by the same airway (the exit fix).
-                while (i + 1 < len
-                       && (route[i + 1].type === 'awy' || route[i + 1].type === 'direct')
-                       && route[i + 1].id === awy) {
-                    i += 2;
-                }
-                // Next iteration will push that exit fix.
-            }
+            // Fix-like. Always show DEP / DEST / fuel and any fix without an
+            // airway tag (transition fixes between airways).
+            const myAw = item.airway || null;
+            const nfIdx = nextFix[i + 1];
+            const nextAw = (nfIdx >= 0) ? (route[nfIdx].airway || null) : null;
+            const isInterior = myAw && nextAw === myAw && item.type === 'fix';
+            if (!isInterior) out.push(wrap(i));
         }
         return out;
     }
@@ -903,24 +909,35 @@ class RoutePlannerPanel {
         const routeLegs = result.routeLegs || result.legs || [];
 
         pills.push({ id: dep, type: 'dep' });
+        let lastDestAirway = null;
 
         // Build from routeLegs: each leg has from→to and airway
         for (let i = 0; i < routeLegs.length; i++) {
             const leg = routeLegs[i];
-            // Insert airway pill if this leg uses a named airway
-            if (leg.airway && leg.airway !== 'DIRECT' &&
-                (pills.length === 0 || pills[pills.length - 1].id !== leg.airway))
-                pills.push({ id: leg.airway, type: 'awy' });
+            const airway = (leg.airway && leg.airway !== 'DIRECT') ? leg.airway : null;
 
-            // Insert the 'to' fix unless it's the destination (added at the end)
-            if (leg.to && leg.to !== dest) {
-                // Mark as fuel stop if it appears in fuelStops
-                const isFuel = (result.fuelStops || []).some(fs => fs.icao === leg.to);
-                pills.push({ id: leg.to, type: isFuel ? 'fuel' : 'fix' });
+            // Insert airway pill if this leg uses a named airway and we
+            // haven't already inserted one for this same airway.
+            if (airway && pills[pills.length - 1]?.id !== airway && pills[pills.length - 1]?.type !== 'awy') {
+                // Only emit a new airway pill at airway transitions, not for
+                // every leg of the same airway.
+                if (airway !== lastDestAirway) {
+                    pills.push({ id: airway, type: 'awy' });
+                }
             }
+
+            if (leg.to && leg.to !== dest) {
+                const isFuel = (result.fuelStops || []).some(fs => fs.icao === leg.to);
+                const pill = { id: leg.to, type: isFuel ? 'fuel' : 'fix' };
+                if (airway) pill.airway = airway;
+                pills.push(pill);
+            }
+            lastDestAirway = airway;
         }
 
-        pills.push({ id: dest, type: 'dest' });
+        const destPill = { id: dest, type: 'dest' };
+        if (lastDestAirway) destPill.airway = lastDestAirway;
+        pills.push(destPill);
         return pills;
     }
 
@@ -1003,7 +1020,11 @@ class RoutePlannerPanel {
             const type = i === 0 ? 'dep'
                        : i === waypoints.length - 1 ? 'dest'
                        : 'fix';
-            pills.push({ id: w.id, type });
+            // Tag fix pills with the airway used to reach them so
+            // _collapseSameAirway can identify interior fixes.
+            const pill = { id: w.id, type };
+            if (aw) pill.airway = aw;
+            pills.push(pill);
         }
         return pills;
     }

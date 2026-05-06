@@ -93,34 +93,50 @@ function airwayTypeAllowed(type, mode) {
 }
 
 /**
- * Resolve a fix/navaid/airport identifier to a waypoint with coordinates.
- * Tries airport → navaid → fix in order; throws UnknownWaypointError if none found.
+ * Resolve an identifier to a waypoint. The lookup order depends on
+ * `position` because the same 3-char ID can be both an airport and a
+ * navaid (e.g. `MRB` is the Martinsburg VOR; `KMRB` is the airport).
+ *
+ * - 'endpoint' (DEP / DEST): airport first, with K-prefix retry. Only
+ *   falls through to navaid/fix when no airport matches.
+ * - 'transition' or 'interior' (anywhere else in the route, including
+ *   inside an airway expansion): navaid → fix → bare airport, NO
+ *   K-prefix retry. Airports never appear as interior airway fixes.
  *
  * @param {import('../adapters/aero-data-source.js').AeroDataSource} aero
  * @param {string} id
+ * @param {'endpoint'|'transition'|'interior'} position
  * @returns {Promise<import('../types/flight-plan.js').Waypoint>}
  */
-async function resolveIdentifier(aero, id) {
-    const apt = await aero.getAirport(id);
-    if (apt) {
-        /** @type {import('../types/flight-plan.js').Waypoint} */
-        const wp = { id, lat: apt.lat, lon: apt.lon, kind: 'APT' };
-        return wp;
+async function resolveIdentifier(aero, id, position = 'transition') {
+    if (position === 'endpoint') {
+        // DEP/DEST — airport first (with K-prefix retry inside the adapter)
+        const apt = await aero.getAirport(id);
+        if (apt) return { id, lat: apt.lat, lon: apt.lon, kind: 'APT' };
+
+        const nav = await aero.getNavaid(id);
+        if (nav) return { id, lat: nav.lat, lon: nav.lon, kind: 'NAV' };
+
+        const fix = await aero.getFix(id);
+        if (fix) return { id, lat: fix.lat, lon: fix.lon, kind: 'FIX' };
+
+        throw new UnknownWaypointError(id);
     }
 
+    // Interior / transition — navaid > fix; only consult the airport store
+    // for an EXACT match (no K-prefix retry) so MRB → Martinsburg VOR, not
+    // KMRB airport.
     const nav = await aero.getNavaid(id);
-    if (nav) {
-        /** @type {import('../types/flight-plan.js').Waypoint} */
-        const wp = { id, lat: nav.lat, lon: nav.lon, kind: 'NAV' };
-        return wp;
-    }
+    if (nav) return { id, lat: nav.lat, lon: nav.lon, kind: 'NAV' };
 
     const fix = await aero.getFix(id);
-    if (fix) {
-        /** @type {import('../types/flight-plan.js').Waypoint} */
-        const wp = { id, lat: fix.lat, lon: fix.lon, kind: 'FIX' };
-        return wp;
-    }
+    if (fix) return { id, lat: fix.lat, lon: fix.lon, kind: 'FIX' };
+
+    // Last resort: a published-airway waypoint may legitimately be an
+    // airport (e.g. some V-airways anchor on military fields). Only accept
+    // a literal-key hit, not the K-prefix retry which would munge fix IDs.
+    const apt = await aero.getAirportLiteral?.(id);
+    if (apt) return { id, lat: apt.lat, lon: apt.lon, kind: 'APT' };
 
     throw new UnknownWaypointError(id);
 }
@@ -194,12 +210,12 @@ export async function parseRouteString(str, opts) {
             }
 
             // Walk the airway from entryIdx → exitIdx (forward or reverse) and
-            // emit each interior fix tagged with the airway. Mark the FIRST
-            // interior fix as the airway-entry boundary (used by pill builders
-            // that emit a single AWY pill at each transition).
+            // emit each interior fix tagged with the airway. These are
+            // navaids/REP-PTs — never airports — so resolveIdentifier with
+            // position='interior' skips the K-prefix airport retry.
             const step = exitIdx > entryIdx ? 1 : -1;
             for (let k = entryIdx + step; k !== exitIdx; k += step) {
-                const interior = await resolveIdentifier(aero, airway.fixIds[k]);
+                const interior = await resolveIdentifier(aero, airway.fixIds[k], 'interior');
                 interior.airway = airway.id;
                 waypoints.push(interior);
             }
@@ -213,7 +229,13 @@ export async function parseRouteString(str, opts) {
             continue;
         }
 
-        const wp = await resolveIdentifier(aero, tok);
+        // First and last non-airway tokens are DEP/DEST (endpoint position —
+        // airport-first lookup with K-prefix retry). All others are transition
+        // fixes between airways (navaid/fix only, no K-prefix retry).
+        const isFirst = waypoints.length === 0;
+        const isLast  = i === tokens.length - 1;
+        const position = (isFirst || isLast) ? 'endpoint' : 'transition';
+        const wp = await resolveIdentifier(aero, tok, position);
         if (pendingAirway && waypoints.length > 0) {
             wp.airway = pendingAirway;
             pendingAirway = null;

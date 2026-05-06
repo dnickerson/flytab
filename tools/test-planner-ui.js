@@ -194,6 +194,27 @@ const log = (label, val) =>
     await page.waitForTimeout(250);
     await page.screenshot({ path: path.join(SHOTS_DIR, '03b-after-paste.png'), fullPage: false });
 
+    // -------- 5b2. Toggle Compact view — should hide interior airway fixes --------
+    const compactResult = await page.evaluate(async () => {
+        const panel = window.app.routePlannerPanel;
+        const before = panel._route.length;
+        // Force compact ON
+        if (!panel._compactView) panel._onCompactToggle();
+        const compactPillCount = document.querySelectorAll('.rpp-pill').length;
+        // Force compact OFF
+        panel._onCompactToggle();
+        const fullPillCount = document.querySelectorAll('.rpp-pill').length;
+        // Restore compact ON for screenshot
+        panel._onCompactToggle();
+        const compactPillIds = Array.from(document.querySelectorAll('.rpp-pill'))
+            .map(el => panel._route[parseInt(el.dataset.idx, 10)])
+            .map(p => p.id);
+        return { underlyingRouteLen: before, compactPillCount, fullPillCount, compactPillIds };
+    });
+    log('compact toggle result', compactResult);
+    await page.waitForTimeout(200);
+    await page.screenshot({ path: path.join(SHOTS_DIR, '03c-compact-after-paste.png'), fullPage: false });
+
     // -------- 5c. Apply (keep open) — should update _currentTrip but leave panel visible --------
     const applyKeepBtn = page.locator('.rpp-tbtn-apply', { hasText: /^Apply$/ });
     await applyKeepBtn.click();
