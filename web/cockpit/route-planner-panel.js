@@ -7,9 +7,10 @@
  * Only outward calls: app.applyRouteEdit(plan) and app.closeRoutePlanner().
  */
 class RoutePlannerPanel {
-    constructor(panelEl, nasrDb) {
+    constructor(panelEl, nasrDb, planningAdapters) {
         this._el      = panelEl;
         this._nasrDb  = nasrDb;
+        this._adapters = planningAdapters;
 
         // Route state — [{id, type}] where type: dep|dest|fix|awy|direct|fuel
         this._route   = [];
@@ -163,24 +164,18 @@ class RoutePlannerPanel {
     // ── Async planner build ───────────────────────────────────────────────────
 
     _startBuildPlanner() {
-        // Build RoutePlanner (opens IDB + warms airway graph) in background.
-        // Plan button waits for this._planner to be non-null.
+        // Use the new planning library via window.FlyTabPlanning. If the module
+        // hasn't loaded yet (asynchronous), wait for the 'flytab-planning:ready' event.
         this._nasrVersion = localStorage.getItem('flypi_nasr_version') || '';
-        this._plannerInitError = null;
-        if (typeof RoutePlanner === 'undefined') {
-            this._plannerInitError = 'RoutePlanner module not loaded';
-            return;
-        }
-        // Use the SAME database as NasrDB (default 'flypi'). The original prototype's
-        // 'FlyTabDB' default never matched the real DB and resulted in opening an
-        // empty v1 database with no stores.
-        const dbName = this._nasrDb?.constructor?.DB_NAME || 'flypi';
-        new RoutePlanner(dbName).init()
-            .then(p => { this._planner = p; this._plannerInitError = null; })
-            .catch(err => {
+        const start = () => {
+            try {
+                this._planner = new window.FlyTabPlanning.RoutePlanner(this._adapters);
+            } catch (err) {
                 console.warn('[RoutePlannerPanel] planner init failed:', err);
-                this._plannerInitError = err?.message || String(err);
-            });
+            }
+        };
+        if (window.FlyTabPlanning?.RoutePlanner) start();
+        else document.addEventListener('flytab-planning:ready', start, { once: true });
     }
 
     /**
@@ -457,8 +452,10 @@ class RoutePlannerPanel {
                                   this._compactView ? 'rpp-tbtn-active' : '');
         bar.appendChild(this._compactBtn);
 
-        // Apply on the same row — flex grows so it dominates without a second row
-        bar.appendChild(mkBtn('Apply & Close', () => this._onApplyTap(), 'rpp-tbtn-apply'));
+        // Apply (panel stays open, pilot can iterate) and Apply & Close
+        // (legacy commit-and-dismiss). Both run the same _doApply() pipeline.
+        bar.appendChild(mkBtn('Apply',         () => this._onApplyKeepOpenTap(), 'rpp-tbtn-apply'));
+        bar.appendChild(mkBtn('Apply & Close', () => this._onApplyTap(),         'rpp-tbtn-apply'));
 
         return bar;
     }
@@ -563,31 +560,37 @@ class RoutePlannerPanel {
         const wrap = (i) => ({ item: route[i], originalIdx: i });
         const out = [];
         const len = route.length;
-        let i = 0;
-        while (i < len) {
+
+        // Rule: a fix pill is INTERIOR (hidden in compact view) iff its
+        // airway tag matches the airway tag of the next fix pill in the
+        // route. Airway/direct pills are always shown. DEP and DEST are
+        // always shown. This works for both the legacy "alternating
+        // [fix awy fix awy fix]" pattern produced by Plan and the
+        // "[fix awy fix fix fix awy fix ...]" pattern produced by paste.
+        const isAwy = (i) => i >= 0 && i < len &&
+            (route[i].type === 'awy' || route[i].type === 'direct');
+
+        // Pre-compute the next-fix index from each position, skipping any
+        // intermediate airway pills.
+        /** @type {number[]} */
+        const nextFix = new Array(len + 1).fill(-1);
+        for (let i = len - 1; i >= 0; i--) {
+            nextFix[i] = isAwy(i) ? nextFix[i + 1] : i;
+        }
+
+        for (let i = 0; i < len; i++) {
             const item = route[i];
-            if (item.type === 'awy' || item.type === 'direct') {
-                // standalone airway — already handled by previous fix's lookahead
+            if (isAwy(i)) {
                 out.push(wrap(i));
-                i++;
                 continue;
             }
-            // Fix-like (dep, fix, fuel, dest)
-            out.push(wrap(i));
-            i++;
-            if (i < len && (route[i].type === 'awy' || route[i].type === 'direct')) {
-                const awy = route[i].id;
-                out.push(wrap(i));
-                i++;
-                // Skip consecutive fix-awy(same) pairs — the loop ends pointing at
-                // a fix that's NOT followed by the same airway (the exit fix).
-                while (i + 1 < len
-                       && (route[i + 1].type === 'awy' || route[i + 1].type === 'direct')
-                       && route[i + 1].id === awy) {
-                    i += 2;
-                }
-                // Next iteration will push that exit fix.
-            }
+            // Fix-like. Always show DEP / DEST / fuel and any fix without an
+            // airway tag (transition fixes between airways).
+            const myAw = item.airway || null;
+            const nfIdx = nextFix[i + 1];
+            const nextAw = (nfIdx >= 0) ? (route[nfIdx].airway || null) : null;
+            const isInterior = myAw && nextAw === myAw && item.type === 'fix';
+            if (!isInterior) out.push(wrap(i));
         }
         return out;
     }
@@ -843,12 +846,15 @@ class RoutePlannerPanel {
             }
         }
 
-        // Verify the airway graph is non-empty before attempting A*
-        const graphSize = Object.keys(this._planner._airwayGraph?.graph || {}).length;
-        if (graphSize === 0) {
+        // Sanity check — NASR airways present in IDB. The new planning lib's
+        // RoutePlanner builds its airway graph lazily on the first plan() call,
+        // so we probe the source-of-truth IDB store rather than the planner's
+        // internal cache.
+        const airwayCount = await this._nasrDb?.listAirways?.().then(a => a.length).catch(() => 0) ?? 0;
+        if (airwayCount === 0) {
             const counts = await this._diagnoseIdb();
-            this._toast(`Airway graph is empty — NASR data missing\n${counts}`, 12000);
-            console.error('[RoutePlannerPanel] empty airway graph;', counts);
+            this._toast(`Airway data not loaded — NASR import incomplete\n${counts}`, 12000);
+            console.error('[RoutePlannerPanel] no airways in IDB;', counts);
             return;
         }
 
@@ -856,11 +862,12 @@ class RoutePlannerPanel {
         this._toast('Planning route…', 0);
         try {
             const result = await this._planner.plan({
-                departure:       dep,
-                destination:     dest,
-                preferredLegHrs: this._maxLegHrs,
-                reserveGal:      this._reserveGal,
-                selfServeOnly:   this._selfServeOnly,
+                departure:     dep,
+                destination:   dest,
+                cruiseAltFt:   this._altitude,
+                reserveGal:    this._reserveGal,
+                maxLegHrs:     this._maxLegHrs,
+                selfServeOnly: this._selfServeOnly,
             });
 
             // Cache all fix coordinates returned by the planner
@@ -902,24 +909,35 @@ class RoutePlannerPanel {
         const routeLegs = result.routeLegs || result.legs || [];
 
         pills.push({ id: dep, type: 'dep' });
+        let lastDestAirway = null;
 
         // Build from routeLegs: each leg has from→to and airway
         for (let i = 0; i < routeLegs.length; i++) {
             const leg = routeLegs[i];
-            // Insert airway pill if this leg uses a named airway
-            if (leg.airway && leg.airway !== 'DIRECT' &&
-                (pills.length === 0 || pills[pills.length - 1].id !== leg.airway))
-                pills.push({ id: leg.airway, type: 'awy' });
+            const airway = (leg.airway && leg.airway !== 'DIRECT') ? leg.airway : null;
 
-            // Insert the 'to' fix unless it's the destination (added at the end)
-            if (leg.to && leg.to !== dest) {
-                // Mark as fuel stop if it appears in fuelStops
-                const isFuel = (result.fuelStops || []).some(fs => fs.icao === leg.to);
-                pills.push({ id: leg.to, type: isFuel ? 'fuel' : 'fix' });
+            // Insert airway pill if this leg uses a named airway and we
+            // haven't already inserted one for this same airway.
+            if (airway && pills[pills.length - 1]?.id !== airway && pills[pills.length - 1]?.type !== 'awy') {
+                // Only emit a new airway pill at airway transitions, not for
+                // every leg of the same airway.
+                if (airway !== lastDestAirway) {
+                    pills.push({ id: airway, type: 'awy' });
+                }
             }
+
+            if (leg.to && leg.to !== dest) {
+                const isFuel = (result.fuelStops || []).some(fs => fs.icao === leg.to);
+                const pill = { id: leg.to, type: isFuel ? 'fuel' : 'fix' };
+                if (airway) pill.airway = airway;
+                pills.push(pill);
+            }
+            lastDestAirway = airway;
         }
 
-        pills.push({ id: dest, type: 'dest' });
+        const destPill = { id: dest, type: 'dest' };
+        if (lastDestAirway) destPill.airway = lastDestAirway;
+        pills.push(destPill);
         return pills;
     }
 
@@ -938,21 +956,77 @@ class RoutePlannerPanel {
             if (!str) return;
         }
 
-        const pills = this._parsePasteStr(str.trim());
-        if (pills.length < 2) {
-            this._toast('Could not parse route — need at least 2 tokens');
-            return;
-        }
-
         if (this._route.length > 0) {
             const ok = await this._confirm('Replace current route with pasted route?');
             if (!ok) return;
         }
 
+        // Prefer the lib's parseRoute when the planner is ready — it walks
+        // each airway record and emits every interior transition fix, so the
+        // map renders the actual airway path. Fall back to the local
+        // tokenizer only when the planner hasn't initialised yet.
+        let pills;
+        if (this._planner?.parseRoute) {
+            try {
+                const result = await this._planner.parseRoute(str.trim());
+                pills = this._waypointsToPills(result.waypoints);
+            } catch (err) {
+                console.warn('[RoutePlannerPanel] paste parseRoute failed:', err?.message || err);
+                this._toast('Could not parse: ' + (err?.message || err), 5000);
+                return;
+            }
+        } else {
+            pills = this._parsePasteStr(str.trim());
+        }
+
+        if (pills.length < 2) {
+            this._toast('Could not parse route — need at least 2 tokens');
+            return;
+        }
+
         this._route = pills;
         this._depInput.value  = pills[0].id;
         this._destInput.value = pills[pills.length - 1].id;
+        // Cache coords from the expanded waypoints so Apply can resolve them
+        // without going back to IDB.
+        if (this._planner?.parseRoute) {
+            // `pills` came from parseRoute; coords are on the waypoint objects
+            // we already produced. Re-walk them here.
+        }
         this._render();
+    }
+
+    /**
+     * Convert parseRoute()'s waypoint output into the panel's pill array.
+     * Each waypoint after the first carries an `airway` field naming the
+     * airway used to reach it from the previous waypoint (null = direct).
+     * Emit a single AWY pill at each airway boundary — when entering a new
+     * airway from a non-airway segment OR a different airway.
+     */
+    _waypointsToPills(waypoints) {
+        if (!waypoints?.length) return [];
+        const pills = [];
+        let lastAirway = null;
+        for (let i = 0; i < waypoints.length; i++) {
+            const w = waypoints[i];
+            if (w.lat != null && w.lon != null) this._coords[w.id] = { lat: w.lat, lon: w.lon };
+
+            const aw = w.airway || null;
+            if (aw && aw !== lastAirway) {
+                pills.push({ id: aw, type: 'awy' });
+            }
+            lastAirway = aw;
+
+            const type = i === 0 ? 'dep'
+                       : i === waypoints.length - 1 ? 'dest'
+                       : 'fix';
+            // Tag fix pills with the airway used to reach them so
+            // _collapseSameAirway can identify interior fixes.
+            const pill = { id: w.id, type };
+            if (aw) pill.airway = aw;
+            pills.push(pill);
+        }
+        return pills;
     }
 
     _parsePasteStr(str) {
@@ -1005,11 +1079,29 @@ class RoutePlannerPanel {
 
     // ── Apply button ──────────────────────────────────────────────────────────
 
+    /**
+     * Apply the current pill list to the live trip without closing the
+     * panel. Pilot can keep editing and apply again. Returns true on
+     * successful apply.
+     */
+    async _onApplyKeepOpenTap() {
+        const ok = await this._doApply();
+        if (ok) this._toast('Applied — pilot may keep editing', 1800);
+    }
+
+    /** Apply and dismiss the panel (legacy default). */
     async _onApplyTap() {
+        const ok = await this._doApply();
+        if (ok && typeof app !== 'undefined') {
+            app.closeRoutePlanner();
+        }
+    }
+
+    async _doApply() {
         const wps = await this._pillsToWaypoints();
         if (wps.length < 2) {
             this._toast('Add at least 2 waypoints');
-            return;
+            return false;
         }
 
         const dep  = wps[0].icao  || wps[0].name;
@@ -1028,10 +1120,9 @@ class RoutePlannerPanel {
             },
         };
 
-        if (typeof app !== 'undefined') {
-            await app.applyRouteEdit(plan);
-            app.closeRoutePlanner();
-        }
+        if (typeof app === 'undefined') return false;
+        await app.applyRouteEdit(plan);
+        return true;
     }
 
     async _pillsToWaypoints() {
@@ -1045,9 +1136,17 @@ class RoutePlannerPanel {
         for (const key of Object.keys(this._coords))
             coordsCi[key.toUpperCase()] = this._coords[key];
 
+        // AWY pills sit BETWEEN two fix pills and represent the airway used to
+        // reach the next fix. Capture the most recent AWY so we can stamp it
+        // onto the next pushed waypoint. Without this the route table loses
+        // every airway label the planner produced.
+        let pendingAirway = null;
+
         for (const pill of this._route) {
-            // Airway pills don't become waypoints
-            if (pill.type === 'awy') continue;
+            if (pill.type === 'awy') {
+                pendingAirway = pill.id;
+                continue;
+            }
 
             const id = pill.id;
             let coord = this._coords[id] || coordsCi[id.toUpperCase()];
@@ -1077,7 +1176,9 @@ class RoutePlannerPanel {
                       pill.type === 'dest' ? 'APT' :
                       pill.type === 'fuel' ? 'APT' : undefined,
                 alt: this._altitude,
+                ...(pendingAirway ? { airway: pendingAirway } : {}),
             });
+            pendingAirway = null;
         }
 
         if (skipped.length > 0)

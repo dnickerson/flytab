@@ -1,0 +1,256 @@
+// @ts-check
+'use strict';
+
+import { PlanError } from './route-planner-errors.js';
+
+/**
+ * Thrown when a waypoint identifier (airport, navaid, or fix) cannot be resolved.
+ */
+export class UnknownWaypointError extends PlanError {
+    /**
+     * @param {string} id
+     */
+    constructor(id) {
+        super(`Unknown waypoint: ${id}`);
+        this.name = 'UnknownWaypointError';
+        this.waypointId = id;
+    }
+}
+
+/**
+ * Thrown when an airway identifier does not exist in the aero data source.
+ */
+export class UnknownAirwayError extends PlanError {
+    /**
+     * @param {string} id
+     */
+    constructor(id) {
+        super(`Unknown airway: ${id}`);
+        this.name = 'UnknownAirwayError';
+        this.airwayId = id;
+    }
+}
+
+/**
+ * Thrown when an identifier matches multiple navaids/fixes (disambiguation needed).
+ */
+export class AmbiguousIdentifierError extends PlanError {
+    /**
+     * @param {string} id
+     * @param {Array<any>} matches
+     */
+    constructor(id, matches) {
+        super(`Ambiguous: ${id}`);
+        this.name = 'AmbiguousIdentifierError';
+        this.id = id;
+        this.matches = matches;
+    }
+}
+
+/**
+ * Thrown when an airway type violates the routing mode constraint.
+ */
+export class RoutingModeViolationError extends PlanError {
+    /**
+     * @param {string} airwayId
+     * @param {string} mode
+     */
+    constructor(airwayId, mode) {
+        super(`Airway ${airwayId} not allowed under routingMode "${mode}"`);
+        this.name = 'RoutingModeViolationError';
+        this.airwayId = airwayId;
+        this.mode = mode;
+    }
+}
+
+/**
+ * Regex for validating airway tokens (V/T/J/Q followed by digits, optional letter).
+ * Examples: V143, T44, J500, Q2A
+ */
+const AIRWAY_RE = /^[VTJQ]\d+[A-Z]?$/;
+
+/**
+ * Check if a token looks like an airway identifier.
+ * @param {string} tok
+ * @returns {boolean}
+ */
+function isAirwayToken(tok) {
+    return AIRWAY_RE.test(tok);
+}
+
+/**
+ * Check if an airway type (V/T/J/Q) is allowed under the specified routing mode.
+ * @param {string} type - Single letter: V, T, J, or Q
+ * @param {string} mode - Routing mode: 'any', 'v-airways', 't-airways', 'gps-direct', 'vors-direct'
+ * @returns {boolean}
+ */
+function airwayTypeAllowed(type, mode) {
+    if (mode === 'any') return true;
+    if (mode === 'v-airways') return type === 'V';
+    if (mode === 't-airways') return type === 'T';
+    // gps-direct and vors-direct don't allow pasted airways
+    return false;
+}
+
+/**
+ * Resolve an identifier to a waypoint. The lookup order depends on
+ * `position` because the same 3-char ID can be both an airport and a
+ * navaid (e.g. `MRB` is the Martinsburg VOR; `KMRB` is the airport).
+ *
+ * - 'endpoint' (DEP / DEST): airport first, with K-prefix retry. Only
+ *   falls through to navaid/fix when no airport matches.
+ * - 'transition' or 'interior' (anywhere else in the route, including
+ *   inside an airway expansion): navaid → fix → bare airport, NO
+ *   K-prefix retry. Airports never appear as interior airway fixes.
+ *
+ * @param {import('../adapters/aero-data-source.js').AeroDataSource} aero
+ * @param {string} id
+ * @param {'endpoint'|'transition'|'interior'} position
+ * @returns {Promise<import('../types/flight-plan.js').Waypoint>}
+ */
+async function resolveIdentifier(aero, id, position = 'transition') {
+    if (position === 'endpoint') {
+        // DEP/DEST — airport first (with K-prefix retry inside the adapter)
+        const apt = await aero.getAirport(id);
+        if (apt) return { id, lat: apt.lat, lon: apt.lon, kind: 'APT' };
+
+        const nav = await aero.getNavaid(id);
+        if (nav) return { id, lat: nav.lat, lon: nav.lon, kind: 'NAV' };
+
+        const fix = await aero.getFix(id);
+        if (fix) return { id, lat: fix.lat, lon: fix.lon, kind: 'FIX' };
+
+        throw new UnknownWaypointError(id);
+    }
+
+    // Interior / transition — navaid > fix; only consult the airport store
+    // for an EXACT match (no K-prefix retry) so MRB → Martinsburg VOR, not
+    // KMRB airport.
+    const nav = await aero.getNavaid(id);
+    if (nav) return { id, lat: nav.lat, lon: nav.lon, kind: 'NAV' };
+
+    const fix = await aero.getFix(id);
+    if (fix) return { id, lat: fix.lat, lon: fix.lon, kind: 'FIX' };
+
+    // Last resort: a published-airway waypoint may legitimately be an
+    // airport (e.g. some V-airways anchor on military fields). Only accept
+    // a literal-key hit, not the K-prefix retry which would munge fix IDs.
+    const apt = await aero.getAirportLiteral?.(id);
+    if (apt) return { id, lat: apt.lat, lon: apt.lon, kind: 'APT' };
+
+    throw new UnknownWaypointError(id);
+}
+
+/**
+ * Parse a route string into a fully-expanded waypoint sequence. Airway tokens
+ * are replaced by the slice of their fix list lying between the prior and
+ * next non-airway tokens (inclusive of those endpoints — but the endpoints
+ * are added by their own resolve calls; airway expansion only contributes
+ * the strictly-interior fixes).
+ *
+ * @param {string} str - Route string (e.g., "KLKR V143 GSO T1 K44N")
+ * @param {{aero: import('../adapters/aero-data-source.js').AeroDataSource, routingMode?: string}} opts
+ * @returns {Promise<{departure: string, destination: string, waypoints: import('../types/flight-plan.js').Waypoint[]}>}
+ */
+export async function parseRouteString(str, opts) {
+    /** @type {{aero: import('../adapters/aero-data-source.js').AeroDataSource, routingMode?: string}} */
+    const safeOpts = opts;
+    const aero = opts.aero;
+    const mode = opts.routingMode || 'any';
+
+    // Tokenize the input
+    const tokens = str.trim().split(/\s+/).filter(Boolean).map(t => t.toUpperCase());
+
+    if (tokens.length < 2) {
+        throw new PlanError('Need at least 2 tokens (departure + destination)');
+    }
+
+    /** @type {import('../types/flight-plan.js').Waypoint[]} */
+    const waypoints = [];
+    /**
+     * The airway used to reach the next non-airway token. Set when an airway
+     * block is processed; consumed by the next normal-token resolve. Without
+     * this, airways with zero interior fixes (LOCAS V409 GANTS) would lose
+     * the airway label entirely — only the exit fix carries it.
+     */
+    let pendingAirway = null;
+    let i = 0;
+
+    while (i < tokens.length) {
+        const tok = tokens[i];
+
+        if (isAirwayToken(tok)) {
+            const airway = await aero.getAirway(tok);
+            if (!airway) {
+                throw new UnknownAirwayError(tok);
+            }
+
+            if (!airwayTypeAllowed(airway.type, mode)) {
+                throw new RoutingModeViolationError(tok, mode);
+            }
+
+            const entry = waypoints[waypoints.length - 1];
+            if (!entry) {
+                throw new PlanError(`Airway ${tok} cannot be the first token`);
+            }
+
+            const exitTok = tokens[i + 1];
+            if (!exitTok || isAirwayToken(exitTok)) {
+                throw new PlanError(`Airway ${tok} must be followed by a fix token`);
+            }
+
+            const entryIdx = airway.fixIds.indexOf(entry.id);
+            const exitIdx = airway.fixIds.indexOf(exitTok);
+
+            if (entryIdx < 0) {
+                throw new PlanError(`Entry fix ${entry.id} not on airway ${tok}`);
+            }
+            if (exitIdx < 0) {
+                throw new PlanError(`Exit fix ${exitTok} not on airway ${tok}`);
+            }
+
+            // Walk the airway from entryIdx → exitIdx (forward or reverse) and
+            // emit each interior fix tagged with the airway. These are
+            // navaids/REP-PTs — never airports — so resolveIdentifier with
+            // position='interior' skips the K-prefix airport retry.
+            const step = exitIdx > entryIdx ? 1 : -1;
+            for (let k = entryIdx + step; k !== exitIdx; k += step) {
+                const interior = await resolveIdentifier(aero, airway.fixIds[k], 'interior');
+                interior.airway = airway.id;
+                waypoints.push(interior);
+            }
+
+            // Even when the airway has zero interior fixes (entryIdx adjacent
+            // to exitIdx), the exit token also belongs to this airway — stamp
+            // it via pendingAirway when the next iteration resolves it.
+            pendingAirway = airway.id;
+
+            i++;  // skip past the airway token; next iteration will resolve exitTok
+            continue;
+        }
+
+        // First and last non-airway tokens are DEP/DEST (endpoint position —
+        // airport-first lookup with K-prefix retry). All others are transition
+        // fixes between airways (navaid/fix only, no K-prefix retry).
+        const isFirst = waypoints.length === 0;
+        const isLast  = i === tokens.length - 1;
+        const position = (isFirst || isLast) ? 'endpoint' : 'transition';
+        const wp = await resolveIdentifier(aero, tok, position);
+        if (pendingAirway && waypoints.length > 0) {
+            wp.airway = pendingAirway;
+            pendingAirway = null;
+        }
+        waypoints.push(wp);
+        i++;
+    }
+
+    if (waypoints.length < 2) {
+        throw new PlanError('Parsed route has fewer than 2 waypoints');
+    }
+
+    return {
+        departure: waypoints[0].id,
+        destination: waypoints[waypoints.length - 1].id,
+        waypoints,
+    };
+}

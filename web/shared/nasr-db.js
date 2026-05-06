@@ -478,6 +478,18 @@ class NasrDB {
         return this._get('airways', name.toUpperCase());
     }
 
+    /** Return all airway records (for graph build). */
+    async listAirways() {
+        const db = await this.open();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(['airways'], 'readonly');
+            const store = tx.objectStore('airways');
+            const req = store.getAll();
+            req.onsuccess = () => resolve(req.result || []);
+            req.onerror   = () => reject(req.error);
+        });
+    }
+
     // ========== Weather Cache ==========
 
     async getWeather(icao) {

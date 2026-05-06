@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v7.24';
+const FLYTAB_VERSION = 'v7.31';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -118,6 +118,34 @@ class FlyTabApp {
                 if (this.fisbStatus) this.fisbStatus.show();
             });
         }
+    }
+
+    /**
+     * Build planning library adapters. Dynamic imports allow app.js to remain
+     * a plain script. The planning lib lands on window.FlyTabPlanning asynchronously;
+     * route-planner-panel.js waits for the 'flytab-planning:ready' event.
+     */
+    async _buildPlanningAdapters() {
+        const [aero, plan, profile, fisb, fly, router] = await Promise.all([
+            import('./shared/planning-adapters/idb-aero.js'),
+            import('./shared/planning-adapters/idb-plan.js'),
+            import('./shared/planning-adapters/idb-profile.js'),
+            import('./shared/planning-adapters/fisb-weather.js'),
+            import('./shared/planning-adapters/flywhere-weather.js'),
+            import('./shared/planning-adapters/weather-router.js'),
+        ]);
+
+        const inFlight = new fisb.FisbWeather(this.fisbClient);
+        const online   = new fly.FlywhereWeather('https://flywhere.app/api/wx');
+
+        return {
+            aero:     new aero.IdbAeroData(this._nasrDb),
+            weather:  new router.WeatherRouter(this.networkMode, { inFlight, online }),
+            plans:    new plan.IdbPlanStore(),
+            profiles: new profile.IdbProfileStore(),
+            network:  this.networkMode,
+            clock:    { now: () => Date.now() },
+        };
     }
 
     async init() {
@@ -747,10 +775,17 @@ class FlyTabApp {
         this.trackLog = new TrackLog(this.stratuxClient, this.cockpitMap);
         this.trackLog.init();
 
+        // Build planning adapters. The lib's window namespace lands asynchronously;
+        // route-planner-panel.js waits on the 'flytab-planning:ready' event before
+        // instantiating the planner.
+        this._planningAdapters = await this._buildPlanningAdapters();
+
         // Route planner panel
         if (typeof RoutePlannerPanel !== 'undefined') {
             this.routePlannerPanel = new RoutePlannerPanel(
-                document.getElementById('routePlannerPanel'), nasrDb
+                document.getElementById('routePlannerPanel'),
+                nasrDb,
+                this._planningAdapters,
             );
             this.routePlannerPanel.init();
         }

@@ -122,6 +122,7 @@ plan.legs[i] = {                                ─ renders one row per leg
 │ ─────────────────────────────────────│                                             │
 │ DEP [KLKR  ]  →  DEST [K44N  ]       │                                             │
 │ Cruise: [6000 ▼]  Reserve: [10 gal]  │                                             │
+│ Routing: [V-airways ▼]               │                                             │
 │ ─────────────────────────────────────│                                             │
 │ 📋 PASTE / TYPE ROUTE                │                                             │
 │ ┌────────────────────────────────┐   │                                             │
@@ -280,13 +281,26 @@ this._editorState = {
 
 | Trigger | Operation | Cost |
 |---|---|---|
-| Paste + Parse | `RoutePlanner.parseRoute(str)` → full plan, replaces working | one A* + phase decomposition |
+| Paste + Parse | `RoutePlanner.parseRoute(str)` → full plan, replaces working. **Each airway token is expanded into its interior transition fixes** via `AeroDataSource.getAirway(id)` so all fixes render as map markers and as pills in the list. | one airway-graph lookup per airway token + phase decomposition |
 | Tap airspace polygon to avoid | `RoutePlanner.replanWithAvoidance(working, constraints)` → produces `pendingComparison` | one A* with avoidance cost |
 | Branch-point override (in comparison) | Same with branch-point override | one A* |
 | Add/remove avoidance constraint | Same | one A* |
 | Insert / Replace / Remove fix via popup | `RoutePlanner.recomputeLegs(working)` — no graph search | leg math + phase decomposition |
 | Change cruise altitude / reserve / leg time | `RoutePlanner.recomputeLegs(working)` | leg math + phase decomposition |
+| Change **routing mode** (GPS-Direct / VORs-Direct / V-airways / T-airways / Any) | `RoutePlanner.plan(working, { routingMode })` re-runs A* with the airway-type filter applied to the graph. | one A* + phase decomposition |
 | Mode change (`mode:changed`) | None — section visibility only | nothing |
+
+### Routing-mode picker
+
+A dropdown in the Ground-mode header (one row below Cruise/Reserve). Defaults from `aircraft.equipment` on the active profile; pilot can override per flight. The active value is part of `working.options.routingMode` and is included in the comparison panel's "what changed" line when it differs from baseline.
+
+| Mode | A* graph | Use case |
+|---|---|---|
+| `gps-direct` | No airway edges. Direct point-to-point only. | Equipment without IFR airway capability; sightseeing direct. |
+| `vors-direct` | No airway edges; A* pinned through VOR navaids. | Conventional VOR-based routing without committing to a published airway. |
+| `v-airways` | Only `V`-prefixed (Victor — conventional low-altitude) airway edges. | **Default for Garmin GPS 175 — does not support T airways.** |
+| `t-airways` | Only `T`-prefixed (RNAV) airway edges. | RNP-capable GPS, RNAV-only routing. |
+| `any` | All airway types in the graph. | Latest GPS, no airway-type restrictions. |
 
 Cheap path runs sync in-process. Expensive path runs async, cancellable via `AbortController`. Comparison panel shows `Computing…` while awaiting; editor remains responsive.
 
@@ -634,9 +648,17 @@ GESTURES (each ≥3/5 successful under sun)
 
 PASTE FLOW
   □ Paste 1800wxbrief route, hit Parse → see route on map within 2s
+  □ Pasted airway tokens (e.g., V143) expand to their interior transition fixes;
+    every fix appears as a map marker AND as a pill in the route list
   □ Invalid route → inline error visible, doesn't dismiss editor
   □ Apply → map updates, editor stays open
   □ Apply & Close → editor closes, map full-screen
+
+ROUTING-MODE PICKER
+  □ Aircraft profile defaults to v-airways → planner produces V-only routes
+  □ Switch to gps-direct → next plan/replan returns 2 fixes (DEP, DEST)
+  □ Switch to t-airways with a profile that has none → red "no T-airway route"
+    banner; pilot can switch back without losing edits
 
 SMART-SUGGEST AVOIDANCE
   □ Open KLKR→K44N route, tap NY Class B → comparison appears within 5s
