@@ -60,6 +60,21 @@ export function tasAtAltitude(profile, altFt) {
 }
 
 /**
+ * Convert IAS to TAS using standard atmosphere model (ISA, no temp deviation).
+ * Matches flywhere route-math.ts iasToTas.
+ * @param {number} ias knots
+ * @param {number} altFt pressure altitude
+ * @returns {number} TAS in knots
+ */
+export function iasToTas(ias, altFt) {
+    const T0 = 288.15;
+    const lapseRate = 0.001981;  // K/ft standard lapse
+    const Tstd = T0 - lapseRate * altFt;
+    const delta = Math.pow(Tstd / T0, 5.2561);
+    return ias / Math.sqrt(delta);
+}
+
+/**
  * Climb rate fpm at altitude. Linear from sea-level rate to 0 at service ceiling.
  * @param {AircraftProfile} profile
  * @param {number} altFt

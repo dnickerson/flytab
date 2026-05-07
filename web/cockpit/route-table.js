@@ -67,7 +67,8 @@ class RouteTable {
         this._waypoints = [];   // trip.waypoints[] — all waypoints across all flights
         this._flights = [];     // trip.flights[]   — computed by _buildFlights()
         this._activeIndex = -1;
-        this._expanded = false;
+        this._expanded = false;   // kept for back-compat checks
+        this._expandState = 0;    // 0=closed, 1=partial(~25%), 2=full(~50%)
         this._dragging = false;
         this._editMode = false;
 
@@ -214,7 +215,7 @@ class RouteTable {
                 this._editMode = true;
                 this._el?.classList.add('route-table-editing');
                 if (this._searchRowEl) this._searchRowEl.hidden = false;
-                if (!this._expanded) this.toggle?.();
+                if (this._expandState === 0) this.toggle?.();
             }
             return;
         }
@@ -506,7 +507,7 @@ class RouteTable {
 
         if (this._editMode) {
             // Auto-expand when entering edit mode
-            if (!this._expanded) this.toggle();
+            if (this._expandState === 0) this.toggle();
             this._searchRowEl.hidden = false;
         } else {
             this._searchRowEl.hidden = true;
@@ -1740,14 +1741,16 @@ class RouteTable {
      * Expand or collapse the bottom sheet.
      */
     toggle() {
-        this._expanded = !this._expanded;
-        this._el.classList.toggle('route-table-expanded', this._expanded);
-        if (this._expanded) {
-            this._bodyEl.style.maxHeight = '40vh';
-        } else {
-            this._bodyEl.style.maxHeight = '0';
-        }
-        if (this._toggleBtn) this._toggleBtn.innerHTML = this._expanded ? '&#9660;' : '&#9650;';
+        this._expandState = (this._expandState + 1) % 3;
+        this._expanded = this._expandState > 0;
+        this._el.classList.toggle('route-table-expanded', this._expandState === 2);
+        this._el.classList.toggle('route-table-partial',  this._expandState === 1);
+        if (this._expandState === 0)      this._bodyEl.style.maxHeight = '0';
+        else if (this._expandState === 1) this._bodyEl.style.maxHeight = '25vh';
+        else                              this._bodyEl.style.maxHeight = '50vh';
+        if (this._toggleBtn) this._toggleBtn.innerHTML =
+            this._expandState === 0 ? '&#9650;' :
+            this._expandState === 1 ? '&#9650;&#9650;' : '&#9660;';
         setTimeout(() => {
             this._map?.invalidateSize();
             this._broadcastHeight();

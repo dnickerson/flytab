@@ -36,14 +36,17 @@ export class IdbAeroData {
     }
 
     _normaliseAirport(r, icao) {
+        // NASR stores fuel types as a raw string (e.g. "100LL", "100LL MOGAS").
+        // has_fuel / has_self_serve_fuel booleans are not in the pipeline output.
+        const fuelStr = (r.fuel || r.fuel_types || '').toString().trim();
         return {
             icao: r.icao || icao,
             name: r.name,
             lat:  r.lat,
             lon:  r.lon,
             elevFt: r.elev_ft ?? r.elevation_ft,
-            hasFuel: !!r.has_fuel,
-            hasSelfServeFuel: !!r.has_self_serve_fuel,
+            hasFuel: !!(r.has_fuel || fuelStr),
+            hasSelfServeFuel: !!(r.has_self_serve_fuel),
             runways: r.runways || [],
         };
     }
@@ -86,6 +89,13 @@ export class IdbAeroData {
         if (typeof this._db.listAirways !== 'function') return [];
         const records = await this._db.listAirways();
         return records.map(r => this._normaliseAirway(r));
+    }
+
+    async nearestAirports(lat, lon, radiusNm) {
+        const records = await this._db.getAirportsNear(lat, lon, radiusNm);
+        return records
+            .map(r => this._normaliseAirport(r, r.icao))
+            .filter(a => a.lat != null && a.lon != null);
     }
 
     /**

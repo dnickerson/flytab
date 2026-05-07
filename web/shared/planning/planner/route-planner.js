@@ -155,7 +155,8 @@ export class RoutePlanner {
                 avoidance: (opts.avoidance || []).map(a => typeof a === 'string' ? a : a.id),
             },
         };
-        return this.recomputeLegs(flightPlan, profile);
+        const computed = this.recomputeLegs(flightPlan, profile);
+        return this._insertFuelStops(computed, profile);
     }
 
     /**
@@ -252,8 +253,8 @@ export class RoutePlanner {
             const decomp = decomposeLeg(profile, {
                 distNm,
                 altFt: legAltFt,
-                departingFromGround: i === 0,
-                endingAtGround: i === wps.length - 2,
+                departingFromGround: i === 0 || !!a.fuelStop,
+                endingAtGround: i === wps.length - 2 || !!b.fuelStop,
                 gsKt: gs,
                 tasKt: tas,
                 powerFrac: pctPower,
@@ -261,6 +262,51 @@ export class RoutePlanner {
 
             fuelRem -= decomp.totalFuelGal;
             etaMs   += decomp.totalTimeHrs * 3_600_000;
+
+            // Build CLB/CRZ/DES segments so route-table can display per-phase rows
+            const fp = profile.fuelPhases;
+            const legSegs = [];
+            const wdDir = windDir ?? 0;
+            const wdSpd = windSpd ?? 0;
+            if (decomp.phases.climb.timeHrs > 0) {
+                const clbTas = fp?.climb?.ias_kt
+                    ? iasToTas(fp.climb.ias_kt, legAltFt / 2, oatC)
+                    : tas * 0.87;
+                const clbGs = wdDir || wdSpd ? groundSpeed(clbTas, brgTrue, wdDir, wdSpd) : clbTas;
+                const clbGph = decomp.phases.climb.timeHrs > 0
+                    ? decomp.phases.climb.fuelGal / decomp.phases.climb.timeHrs : 0;
+                legSegs.push({ phase: 'CLB', altFrom: 0, altTo: legAltFt,
+                    dist: parseFloat(decomp.phases.climb.distNm.toFixed(1)),
+                    tas: Math.round(clbTas), gs: Math.round(clbGs),
+                    ete_min: decomp.phases.climb.timeHrs * 60,
+                    gph: parseFloat(clbGph.toFixed(1)),
+                    rpm: fp?.climb?.rpm, mp: fp?.climb?.mp,
+                    percent_power: fp?.climb?.percent_power });
+            }
+            if (decomp.phases.cruise.timeHrs > 0) {
+                const crzGph = decomp.phases.cruise.fuelGal / decomp.phases.cruise.timeHrs;
+                legSegs.push({ phase: 'CRZ', altFrom: legAltFt, altTo: legAltFt,
+                    dist: parseFloat(decomp.phases.cruise.distNm.toFixed(1)),
+                    tas: Math.round(tas), gs: Math.round(gs),
+                    ete_min: decomp.phases.cruise.timeHrs * 60,
+                    gph: parseFloat(crzGph.toFixed(1)),
+                    rpm: fp?.cruise?.rpm, mp: fp?.cruise?.mp,
+                    percent_power: fp?.cruise?.percent_power ?? Math.round(pctPower * 100) });
+            }
+            if (decomp.phases.descent.timeHrs > 0) {
+                const desTas = fp?.descent?.ias_kt
+                    ? iasToTas(fp.descent.ias_kt, legAltFt / 2, oatC)
+                    : tas * 0.95;
+                const desGs = wdDir || wdSpd ? groundSpeed(desTas, brgTrue, wdDir, wdSpd) : desTas;
+                const desGph = decomp.phases.descent.fuelGal / decomp.phases.descent.timeHrs;
+                legSegs.push({ phase: 'DES', altFrom: legAltFt, altTo: 0,
+                    dist: parseFloat(decomp.phases.descent.distNm.toFixed(1)),
+                    tas: Math.round(desTas), gs: Math.round(desGs),
+                    ete_min: decomp.phases.descent.timeHrs * 60,
+                    gph: parseFloat(desGph.toFixed(1)),
+                    rpm: fp?.descent?.rpm, mp: fp?.descent?.mp,
+                    percent_power: fp?.descent?.percent_power });
+            }
 
             legs.push({
                 from: a.id,
@@ -281,6 +327,7 @@ export class RoutePlanner {
                 fuelRemGal:  fuelRem,
                 eta:         etaMs,
                 airway:      b.airway || 'DIRECT',
+                segments:    legSegs,
             });
         }
 
@@ -292,6 +339,73 @@ export class RoutePlanner {
             fixCount:     wps.length,
         };
         return { ...plan, legs, summary };
+    }
+
+    /**
+     * Post-process a computed plan to insert fuel-stop airports where the
+     * cumulative leg time would exceed plan.options.maxLegHrs.
+     * @param {import('../types/flight-plan.js').FlightPlan} plan
+     * @param {import('../types/aircraft-profile.js').AircraftProfile} profile
+     * @returns {Promise<import('../types/flight-plan.js').FlightPlan>}
+     * @private
+     */
+    async _insertFuelStops(plan, profile) {
+        const maxLegHrs = plan.options?.maxLegHrs;
+        if (!maxLegHrs || maxLegHrs >= 10 || !plan.legs?.length) {
+            return { ...plan, fuelStops: [], fuelStopCandidates: [] };
+        }
+
+        // No stops needed if total route time fits within one leg
+        if ((plan.summary?.totalEteHrs ?? 0) <= maxLegHrs) {
+            return { ...plan, fuelStops: [], fuelStopCandidates: [] };
+        }
+
+        const selfServeOnly = !!plan.options?.selfServeOnly;
+        const fuelStopCandidates = [];
+        let cumHrs = 0;
+
+        for (let i = 0; i < plan.legs.length; i++) {
+            const leg = plan.legs[i];
+            const isLast = i === plan.legs.length - 1;
+
+            // Skip first leg (just departed, full fuel) and last leg (destination).
+            // Trigger when cumulative flight time since last stop exceeds maxLegHrs.
+            if (i > 0 && !isLast && cumHrs > maxLegHrs) {
+                const fromWp = plan.waypoints[i];
+                const nearby = (await this._adapters.aero.nearestAirports?.(fromWp.lat, fromWp.lon, 40)) || [];
+                const options = nearby
+                    .filter(a =>
+                        a.hasFuel &&
+                        (!selfServeOnly || a.hasSelfServeFuel) &&
+                        a.icao !== plan.departure &&
+                        a.icao !== plan.destination &&
+                        a.icao !== fromWp.id
+                    )
+                    .map(a => ({
+                        icao: a.icao,
+                        name: a.name || a.icao,
+                        lat: a.lat,
+                        lon: a.lon,
+                        hasSelfServeFuel: !!a.hasSelfServeFuel,
+                        distNm: Math.round(haversine(fromWp.lat, fromWp.lon, a.lat, a.lon) * 10) / 10,
+                    }))
+                    .sort((x, y) => x.distNm - y.distNm)
+                    .slice(0, 6);
+
+                if (options.length > 0) {
+                    fuelStopCandidates.push({
+                        afterFixId: fromWp.id,
+                        cumHrsAtStop: Math.round(cumHrs * 100) / 100,
+                        options,
+                    });
+                    cumHrs = 0;  // assume a stop will be made here for next detection
+                }
+            }
+
+            cumHrs += leg.timeHrs;
+        }
+
+        return { ...plan, fuelStops: [], fuelStopCandidates };
     }
 
     /**

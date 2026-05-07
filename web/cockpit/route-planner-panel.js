@@ -91,6 +91,9 @@ class RoutePlannerPanel {
         this._applyAborted = false;
         this._loadPlan(plan);
         this._render();
+        // Restore stats from the most recent computed plan
+        const prior = this._currentPlan || this._lastPlan;
+        if (prior?.summary) this._updateStats(prior);
     }
 
     /** Clear state. Called by app.closeRoutePlanner(). */
@@ -983,15 +986,38 @@ class RoutePlannerPanel {
 
     _wireLongPress(pill, idx) {
         let timer = null;
+        let longPressed = false;
         const epoch = this._renderEpoch;
         pill.addEventListener('touchstart', e => {
+            longPressed = false;
             timer = setTimeout(() => {
                 if (this._renderEpoch !== epoch) return;
+                longPressed = true;
                 this._openMenu(e.touches[0], idx);
             }, 400);
         }, { passive: true });
-        pill.addEventListener('touchend',   () => clearTimeout(timer), { passive: true });
-        pill.addEventListener('touchmove',  () => clearTimeout(timer), { passive: true });
+        pill.addEventListener('touchend', e => {
+            clearTimeout(timer);
+            if (e.target.closest('.rpp-pill-del')) return;
+            if (!longPressed && this._renderEpoch === epoch) {
+                this._focusMapOnPill(idx);
+            }
+        }, { passive: true });
+        pill.addEventListener('touchmove', () => { clearTimeout(timer); }, { passive: true });
+        pill.addEventListener('click', e => {
+            if (e.target.closest('.rpp-pill-del')) return;
+            this._focusMapOnPill(idx);
+        });
+    }
+
+    _focusMapOnPill(idx) {
+        const pill = this._route[idx];
+        if (!pill || pill.type === 'awy' || pill.type === 'direct') return;
+        const id = pill.id;
+        const coord = this._coords[id] || this._coords[id.toUpperCase?.()];
+        if (!coord) return;
+        const map = (typeof app !== 'undefined') ? app?.cockpitMap?.map : null;
+        if (map) map.setView([coord.lat, coord.lon], 11);
     }
 
     // ── Touch drag handle (2D nearest-center slot detection) ──────────────────
@@ -1218,14 +1244,114 @@ class RoutePlannerPanel {
             this._updateStats(result);
             this._render();
             this._toast(`Route planned · ${result.waypoints?.length || 0} waypoints`, 2500);
-            // Apply winds/perf in background — updates stats bar when done
-            this._applyWindsToLastPlan();
+
+            // If fuel stops are needed, show picker before applying winds
+            if (result.fuelStopCandidates?.length > 0) {
+                await this._processFuelStopCandidates(result);
+            } else {
+                this._applyWindsToLastPlan();
+            }
         } catch (err) {
             console.error('[RoutePlannerPanel] plan() failed:', err);
             this._toast('Could not plan route: ' + (err.message || err), 5000);
         } finally {
             setBtn('Plan', false);
         }
+    }
+
+    // ── Fuel stop picker ─────────────────────────────────────────────────────
+
+    async _processFuelStopCandidates(result) {
+        const candidates = result.fuelStopCandidates || [];
+        let currentWaypoints = (result.waypoints || []).slice();
+        const fuelStops = [];
+
+        for (const candidate of candidates) {
+            const chosen = await this._showFuelStopPicker(candidate);
+            if (!chosen) continue;
+
+            // Insert fuel pill after the anchor fix in _route
+            const pillIdx = this._route.findIndex(p => p.id === candidate.afterFixId);
+            if (pillIdx >= 0) {
+                this._route.splice(pillIdx + 1, 0, { id: chosen.icao, type: 'fuel' });
+            }
+            this._coords[chosen.icao] = { lat: chosen.lat, lon: chosen.lon };
+
+            // Insert waypoint after anchor fix
+            const wpIdx = currentWaypoints.findIndex(wp => wp.id === candidate.afterFixId);
+            if (wpIdx >= 0) {
+                currentWaypoints.splice(wpIdx + 1, 0,
+                    { id: chosen.icao, lat: chosen.lat, lon: chosen.lon, fuelStop: true });
+            }
+            fuelStops.push({ icao: chosen.icao, lat: chosen.lat, lon: chosen.lon, name: chosen.name });
+        }
+
+        if (fuelStops.length > 0) {
+            this._lastPlan = { ...result, waypoints: currentWaypoints, fuelStops };
+        }
+        this._render();
+        this._applyWindsToLastPlan();
+    }
+
+    _showFuelStopPicker(candidate) {
+        return new Promise(resolve => {
+            const hh = Math.floor(candidate.cumHrsAtStop);
+            const mm = String(Math.round((candidate.cumHrsAtStop - hh) * 60)).padStart(2, '0');
+            const overlay = document.createElement('div');
+            overlay.style.cssText =
+                'position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:9999;' +
+                'display:flex;align-items:center;justify-content:center';
+
+            overlay.innerHTML = `
+              <div style="background:#1a2030;border-radius:10px;max-width:420px;width:92%;
+                           max-height:80vh;overflow:hidden;display:flex;flex-direction:column;
+                           box-shadow:0 8px 32px rgba(0,0,0,.6)">
+                <div style="padding:16px;border-bottom:1px solid #2a3040;
+                             display:flex;justify-content:space-between;align-items:flex-start">
+                  <div>
+                    <div style="font-size:17px;font-weight:700;color:#fff">⛽ Fuel Stop Required</div>
+                    <div style="font-size:13px;color:#8899aa;margin-top:4px">
+                      Near ${candidate.afterFixId} · ${hh}:${mm} flight time
+                    </div>
+                  </div>
+                  <button class="rpp-fs-skip" style="background:none;border:1px solid #3a4050;
+                    border-radius:6px;padding:6px 12px;color:#8899aa;cursor:pointer;
+                    font-size:14px;flex-shrink:0;margin-left:12px">Skip</button>
+                </div>
+                <div class="rpp-fs-list" style="overflow-y:auto;padding:4px 0"></div>
+              </div>`;
+
+            const list = overlay.querySelector('.rpp-fs-list');
+            for (const apt of candidate.options) {
+                const row = document.createElement('div');
+                row.style.cssText =
+                    'padding:13px 16px;border-bottom:1px solid #2a3040;cursor:pointer;' +
+                    'display:flex;justify-content:space-between;align-items:center';
+                row.innerHTML = `
+                  <div>
+                    <div style="font-size:16px;font-weight:600;color:#fff">${apt.icao}</div>
+                    <div style="font-size:12px;color:#8899aa;margin-top:2px">
+                      ${apt.name}${apt.hasSelfServeFuel ? ' · <span style="color:#4db8ff">Self-serve</span>' : ''}
+                    </div>
+                  </div>
+                  <div style="font-size:14px;color:#aabbd0;white-space:nowrap;margin-left:12px">
+                    ${apt.distNm} nm
+                  </div>`;
+                row.addEventListener('touchstart', () => { row.style.background = '#243040'; }, { passive: true });
+                row.addEventListener('touchend',   () => { row.style.background = ''; }, { passive: true });
+                row.addEventListener('click', () => { overlay.remove(); resolve(apt); });
+                list.appendChild(row);
+            }
+
+            overlay.querySelector('.rpp-fs-skip').addEventListener('click', () => {
+                overlay.remove(); resolve(null);
+            });
+            overlay.addEventListener('click', e => {
+                if (e.target === overlay) { overlay.remove(); resolve(null); }
+            });
+
+            document.body.appendChild(overlay);
+        });
     }
 
     async _applyWindsToLastPlan() {
@@ -1267,7 +1393,8 @@ class RoutePlannerPanel {
             this._windWarnings.push('Wind data unavailable — time and fuel use calm-air estimates');
         }
         const fuelRem = this._currentPlan?.summary?.fuelRemGal;
-        if (fuelRem != null && this._reserveGal > 0 && fuelRem < this._reserveGal) {
+        const hasFuelStops = (this._lastPlan?.fuelStops?.length ?? 0) > 0;
+        if (!hasFuelStops && fuelRem != null && this._reserveGal > 0 && fuelRem < this._reserveGal) {
             this._windWarnings.push(
                 `Fuel below reserve: ${fuelRem.toFixed(1)} gal at dest, ${this._reserveGal} gal reserve required`
             );
@@ -1589,7 +1716,7 @@ class RoutePlannerPanel {
                 type: pill.type === 'dep'  ? 'APT' :
                       pill.type === 'dest' ? 'APT' :
                       pill.type === 'fuel' ? 'APT' : undefined,
-                alt: this._altitude,
+                altFt: pill.altFt ?? this._altitude,
                 ...(aw ? { airway: aw } : {}),
             });
             pendingAirway = null;

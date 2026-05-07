@@ -19,4 +19,9 @@ export class AeroDataSource {
     async listAirspace() { throw new Error('not implemented'); }
     /** @returns {Promise<import('../types/airway.js').Airway[]>} */
     async listAirways() { throw new Error('not implemented'); }
+    /**
+     * @param {number} lat @param {number} lon @param {number} radiusNm
+     * @returns {Promise<Array<{icao:string,name:string,lat:number,lon:number,hasFuel:boolean,hasSelfServeFuel:boolean}>>}
+     */
+    async nearestAirports(lat, lon, radiusNm) { return []; }
 }
