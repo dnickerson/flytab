@@ -74,7 +74,7 @@ leg.eta = prevEta + decomp.totalTimeHrs * 3_600_000
 **Per-leg altitude:** Each leg uses `legAltFt = wps[i+1].overrideAlt ?? cruiseAltFt`. Wind lookup and TAS use `legAltFt`, not the global cruise altitude, for that leg.
 
 **Fuel burn at altitude:**
-- Cruise: `engineData.gphAtPower(maxPowerAtAltitude(legAltFt) * (pctPower / 100), legAltFt)` — pilot-set power %
+- Cruise: `engineData.gphAtPower(maxPowerAtAltitude(legAltFt) * (pctPower / 100), legAltFt, 'LOP')` — lean of peak assumed for all cruise fuel calculations (SFC ≈ 0.067 lb/HP/hr). Climb and descent phases use full-rich (higher SFC) as in the existing phase model.
 - Climb/descent phases: existing `decomposeLeg` phase logic, extended to accept `gsKt/tasKt`
 - Climb TAS computed at mid-altitude `(depElev + legAltFt) / 2`
 
@@ -201,7 +201,7 @@ findSplitPoints(legs, maxLegHrs, coords)
 |---|---|---|---|
 | Departure time | `datetime-local` input | `now` | `flypi_planner_opts` |
 | Cruise altitude | Dropdown (Auto / VFR altitudes) | Auto | `flypi_planner_opts` |
-| Power % | Dropdown (55 / 60 / 65 / 70 / 75%) | 65% | `flypi_planner_opts` |
+| Power % | Dropdown (55 / 60 / 65 / 70 / 75%) | 65% LOP | `flypi_planner_opts` |
 
 Auto altitude label shows resolved value: `Auto · 6,500 ft`.
 Altitude dropdown options filtered by route bearing (eastbound shows odd+500, westbound shows even+500).
