@@ -857,12 +857,17 @@ class NasrDB {
     // ========== Static Utility: Haversine ==========
 
     static haversineNm(lat1, lon1, lat2, lon2) {
+        // Delegates to planning/math/route-math.js — prefer haversine() from FlyTabPlanning
+        if (typeof FlyTabPlanning !== 'undefined' && FlyTabPlanning.haversine) {
+            return FlyTabPlanning.haversine(lat1, lon1, lat2, lon2);
+        }
+        // Fallback if planning lib not yet ready
         const R = 3440.065; // Earth radius in nautical miles
         const dLat = (lat2 - lat1) * Math.PI / 180;
         const dLon = (lon2 - lon1) * Math.PI / 180;
         const a = Math.sin(dLat / 2) ** 2 +
             Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
             Math.sin(dLon / 2) ** 2;
-        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return 2 * R * Math.asin(Math.sqrt(a));
     }
 }
