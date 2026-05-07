@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { haversine, bearing, intermediatePoint, crossTrackDistanceNm, alongTrackFraction, formatTime, windCorrectedMagHdg } from '../../../web/shared/planning/math/route-math.js';
+import { haversine, bearing, intermediatePoint, crossTrackDistanceNm, alongTrackFraction, formatTime, windCorrectedMagHdg, iasToTas, groundSpeed, vfrAltitude } from '../../../web/shared/planning/math/route-math.js';
 
 describe('haversine', () => {
     it('returns 0 for the same point', () => {
@@ -69,5 +69,65 @@ describe('windCorrectedMagHdg', () => {
         const hdg = windCorrectedMagHdg(360, 34, -81, 150, 90, 30);
         const hdgNoWind = windCorrectedMagHdg(360, 34, -81, 150, 0, 0);
         expect(hdg - hdgNoWind).toBeCloseTo(11.5, 0);
+    });
+});
+
+describe('iasToTas', () => {
+    it('at sea level standard day, IAS ≈ TAS', () => {
+        expect(iasToTas(100, 0, null)).toBeCloseTo(100, 0);
+    });
+    it('at 8000 ft standard day, TAS > IAS by ~12–13%', () => {
+        // ISA density altitude formula: TAS ≈ IAS / sqrt(sigma), sigma=(T/T0)^4.2561
+        // At 8000 ft ISA: sigma ≈ 0.786, TAS ≈ 148 / sqrt(0.786) ≈ 166.9 kt (~12.8% increase)
+        const tas = iasToTas(148, 8000, null);
+        expect(tas).toBeGreaterThan(155);
+        expect(tas).toBeLessThan(175);
+    });
+    it('warmer OAT increases TAS', () => {
+        const cold = iasToTas(148, 8000, -15);
+        const warm = iasToTas(148, 8000, 15);
+        expect(warm).toBeGreaterThan(cold);
+    });
+});
+
+describe('groundSpeed', () => {
+    it('direct headwind reduces GS by wind speed', () => {
+        // tas=150, course=360, wind from 360 at 20kt
+        expect(groundSpeed(150, 360, 360, 20)).toBeCloseTo(130, 0);
+    });
+    it('direct tailwind increases GS by wind speed', () => {
+        // tas=150, course=360, wind from 180 at 20kt
+        expect(groundSpeed(150, 360, 180, 20)).toBeCloseTo(170, 0);
+    });
+    it('crosswind reduces GS slightly', () => {
+        // 90° crosswind reduces GS by crosswind²/2TAS approximately
+        const gs = groundSpeed(150, 360, 90, 30);
+        expect(gs).toBeLessThan(150);
+        expect(gs).toBeGreaterThan(130);
+    });
+    it('calm wind returns TAS', () => {
+        expect(groundSpeed(155, 270, 0, 0)).toBeCloseTo(155, 0);
+    });
+});
+
+describe('vfrAltitude', () => {
+    it('eastbound short route returns 3500 or 5500 ft', () => {
+        // KLKR→KCLT bearing ~30° (eastbound), dist ~32nm → short → 3500 or 4000 base
+        const alt = vfrAltitude(30, { lat: 34.73, lon: -81.21 }, { lat: 35.21, lon: -80.94 });
+        expect([3500, 5500]).toContain(alt);
+    });
+    it('westbound medium route returns even+500', () => {
+        // ~220° course, 200nm → 8000 base → 8500 westbound
+        const alt = vfrAltitude(220, { lat: 35, lon: -80 }, { lat: 33, lon: -83 });
+        expect(alt % 2000).toBe(500);
+        expect(alt).toBeGreaterThanOrEqual(4500);
+    });
+    it('eastbound long route returns odd+500', () => {
+        // ~090° course, ~737nm → 10000 base → 9500 eastbound
+        // odd+500 pattern: 3500, 5500, 7500, 9500 — these all have alt%2000 === 1500
+        const alt = vfrAltitude(90, { lat: 35, lon: -95 }, { lat: 35, lon: -80 });
+        expect(alt % 2000).toBe(1500);
+        const remainder = ((alt - 500) / 1000) % 2;
+        expect(remainder).toBe(1); // odd thousand
     });
 });

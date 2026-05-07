@@ -18,7 +18,7 @@ export {
     UnknownWaypointError, UnknownAirwayError, AmbiguousIdentifierError, RoutingModeViolationError,
 } from './planner/parser.js';
 export { buildAvoidancePenalty, segmentIntersectsPolygon } from './planner/avoidance.js';
-export { haversine, bearing, intermediatePoint, crossTrackDistanceNm, formatTime, windCorrectedMagHdg } from './math/route-math.js';
+export { haversine, bearing, intermediatePoint, crossTrackDistanceNm, formatTime, windCorrectedMagHdg, iasToTas, groundSpeed, vfrAltitude } from './math/route-math.js';
 export { tasAtAltitude, gphAtPower, climbRateAtAltitude } from './math/engine-data.js';
 export { decomposeLeg } from './math/fuel-phases.js';
 

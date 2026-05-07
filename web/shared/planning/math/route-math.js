@@ -145,3 +145,64 @@ export function windCorrectedMagHdg(brgTrue, lat, lon, tas, windDir, windSpd) {
     const magVar = _magVarConus(lat, lon);
     return ((brgTrue + wcaDeg - magVar) + 360) % 360;
 }
+
+/**
+ * Convert indicated airspeed to true airspeed using ISA atmosphere.
+ * @param {number} ias   indicated airspeed, kt
+ * @param {number} altFt pressure altitude, ft
+ * @param {number|null} tempC  OAT in °C; null = ISA standard
+ * @returns {number} TAS in kt
+ */
+export function iasToTas(ias, altFt, tempC) {
+    const T0 = 288.15;
+    const lapseRate = 0.001981; // K/ft
+    const Tstd = T0 - lapseRate * altFt;
+    const delta = Math.pow(Tstd / T0, 5.2561);
+    const Tactual = (tempC !== null && tempC !== undefined) ? tempC + 273.15 : Tstd;
+    const sigma = delta * (T0 / Tactual);
+    return ias / Math.sqrt(sigma);
+}
+
+/**
+ * Ground speed from TAS, course, and wind.
+ * @param {number} tas       true airspeed, kt
+ * @param {number} course    true course, degrees
+ * @param {number} windDir   wind FROM direction, degrees true
+ * @param {number} windSpd   wind speed, kt
+ * @returns {number} ground speed, kt
+ */
+export function groundSpeed(tas, course, windDir, windSpd) {
+    if (!windSpd) return tas;
+    const toRad = Math.PI / 180;
+    const wca = (windDir - course) * toRad;
+    const headwind = windSpd * Math.cos(wca);
+    const crosswind = windSpd * Math.sin(wca);
+    const crossSq = crosswind * crosswind;
+    const tasSq = tas * tas;
+    if (crossSq >= tasSq) return tas * 0.5;
+    return Math.max(Math.sqrt(tasSq - crossSq) - headwind, tas * 0.3);
+}
+
+/**
+ * VFR hemispheric altitude for a given magnetic course and route.
+ * @param {number} magCourse  overall magnetic course, degrees
+ * @param {{lat:number,lon:number}} depCoord
+ * @param {{lat:number,lon:number}} destCoord
+ * @returns {number} altitude in feet
+ */
+export function vfrAltitude(magCourse, depCoord, destCoord) {
+    const eastbound = magCourse >= 0 && magCourse < 180;
+    const dist = haversine(depCoord.lat, depCoord.lon, destCoord.lat, destCoord.lon);
+    let targetAlt;
+    if (dist < 50)       targetAlt = 4000;
+    else if (dist < 150) targetAlt = 6000;
+    else if (dist < 300) targetAlt = 8000;
+    else                 targetAlt = 10000;
+    if (eastbound) {
+        const thousands = Math.round(targetAlt / 2000) * 2 - 1;
+        return Math.max(3500, Math.min(thousands * 1000 + 500, 17500));
+    } else {
+        const thousands = Math.round(targetAlt / 2000) * 2;
+        return Math.max(4500, Math.min(thousands * 1000 + 500, 16500));
+    }
+}
