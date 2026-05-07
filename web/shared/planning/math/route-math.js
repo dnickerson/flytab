@@ -114,3 +114,34 @@ export function formatTime(hrs) {
     const m = totalMin % 60;
     return `${h}:${String(m).padStart(2, '0')}`;
 }
+
+/**
+ * Simplified CONUS magnetic variation (±2° accuracy).
+ * @param {number} lat
+ * @param {number} lon
+ * @returns {number} degrees (positive = west variation)
+ */
+function _magVarConus(lat, lon) {
+    return -6.0 + (lon + 90) * -0.12 + (lat - 35) * 0.05;
+}
+
+/**
+ * Wind-corrected magnetic heading from a true bearing.
+ * @param {number} brgTrue  true bearing to destination, degrees
+ * @param {number} lat      midpoint latitude (for mag var)
+ * @param {number} lon      midpoint longitude
+ * @param {number} tas      true airspeed, kt
+ * @param {number} windDir  wind FROM direction, degrees true
+ * @param {number} windSpd  wind speed, kt
+ * @returns {number} magnetic heading, degrees 0–360
+ */
+export function windCorrectedMagHdg(brgTrue, lat, lon, tas, windDir, windSpd) {
+    const toRad = Math.PI / 180;
+    let wcaDeg = 0;
+    if (windSpd > 0 && tas > 0) {
+        const sinWca = (windSpd * Math.sin((windDir - brgTrue) * toRad)) / tas;
+        wcaDeg = Math.asin(Math.max(-1, Math.min(1, sinWca))) / toRad;
+    }
+    const magVar = _magVarConus(lat, lon);
+    return ((brgTrue + wcaDeg - magVar) + 360) % 360;
+}

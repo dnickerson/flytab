@@ -1347,7 +1347,9 @@ class RouteTable {
             wp._wind = wp.wind || null;
 
             // Compute wind-corrected magnetic heading from bearing + wind + TAS
-            wp._hdg = this._computeMagHdg(wp._brg, wp._wind, wp._tas, wp.lat, wp.lon);
+            wp._hdg = (wp._brg != null && wp.lat != null && wp.lon != null)
+                ? FlyTabPlanning.windCorrectedMagHdg(wp._brg, wp.lat, wp.lon, wp._tas ?? 0, wp._wind?.dir ?? 0, wp._wind?.spd ?? 0)
+                : null;
 
             // Multi-flight: reset fuel counter when a new Flight departs from a fuel stop.
             // This waypoint is the departure of the next Flight — pilot refuelled here.
@@ -2976,29 +2978,6 @@ class RouteTable {
         return fmtAlt(seg.altTo ?? seg.altFrom ?? seg.alt);
     }
 
-    /**
-     * Compute wind-corrected magnetic heading.
-     * Returns null if bearing, TAS, or position are unavailable.
-     * Falls back to magnetic bearing (no wind correction) when wind is missing.
-     * Formula: WCA = asin(windSpd * sin(windDir - bearing) / TAS)
-     * magHdg = trueBearing + WCA + magVar
-     *
-     * Simplified mag var model (CONUS, ~2° accuracy):
-     *   magVar = -6.0 + (lon + 90) * -0.12 + (lat - 35) * 0.05
-     */
-    _computeMagHdg(brg, wind, tas, lat, lon) {
-        if (brg == null || lat == null || lon == null) return null;
-        const magVar = -6.0 + (lon + 90) * -0.12 + (lat - 35) * 0.05;
-        let trueHdg = brg;
-        if (wind && wind.spd > 0 && tas > 0) {
-            const windRad = (wind.dir - brg) * Math.PI / 180;
-            const sinWca = (wind.spd * Math.sin(windRad)) / tas;
-            // Clamp to [-1, 1] to guard against edge cases (very high winds)
-            const wca = Math.asin(Math.max(-1, Math.min(1, sinWca))) * 180 / Math.PI;
-            trueHdg = brg + wca;
-        }
-        return ((trueHdg + magVar) + 360) % 360;
-    }
 
     _buildEngineStatusCard() {
         const card = document.createElement('div');

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { haversine, bearing, intermediatePoint, crossTrackDistanceNm, alongTrackFraction, formatTime } from '../../../web/shared/planning/math/route-math.js';
+import { haversine, bearing, intermediatePoint, crossTrackDistanceNm, alongTrackFraction, formatTime, windCorrectedMagHdg } from '../../../web/shared/planning/math/route-math.js';
 
 describe('haversine', () => {
     it('returns 0 for the same point', () => {
@@ -47,4 +47,27 @@ describe('alongTrackFraction', () => {
 describe('formatTime', () => {
     it('1.5 hrs → "1:30"', () => { expect(formatTime(1.5)).toBe('1:30'); });
     it('0.25 hrs → "0:15"', () => { expect(formatTime(0.25)).toBe('0:15'); });
+});
+
+describe('windCorrectedMagHdg', () => {
+    it('with no wind returns bearing minus mag var (CONUS approx)', () => {
+        // At lat=34, lon=-81 (SC): magVar ≈ -6 + (-81+90)*-0.12 + (34-35)*0.05 = -6 + 9*-0.12 + (-0.05) = -6 -1.08 -0.05 ≈ -7.13
+        // bearing 90° true → mag hdg ≈ 90 - (-7.13) = 97.13°
+        const hdg = windCorrectedMagHdg(90, 34, -81, 150, 0, 0);
+        expect(hdg).toBeCloseTo(97.1, 0);
+    });
+    it('direct headwind shifts heading toward track', () => {
+        // 270° track, wind from 270° (direct headwind) → no WCA
+        const hdg = windCorrectedMagHdg(270, 34, -81, 150, 270, 20);
+        const hdgNoWind = windCorrectedMagHdg(270, 34, -81, 150, 0, 0);
+        expect(Math.abs(hdg - hdgNoWind)).toBeLessThan(1);
+    });
+    it('90° crosswind produces WCA', () => {
+        // 360° track, wind from 090° (right/easterly crosswind at 30 kt, tas 150)
+        // Wind pushes aircraft west; pilot crab right (east). WCA = asin(30/150) ≈ 11.5°
+        // Wind-corrected heading is larger than no-wind heading (crabbing right of 360°→wraps)
+        const hdg = windCorrectedMagHdg(360, 34, -81, 150, 90, 30);
+        const hdgNoWind = windCorrectedMagHdg(360, 34, -81, 150, 0, 0);
+        expect(hdg - hdgNoWind).toBeCloseTo(11.5, 0);
+    });
 });
