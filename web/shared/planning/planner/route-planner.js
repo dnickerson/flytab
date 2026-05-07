@@ -367,12 +367,23 @@ export class RoutePlanner {
         for (let i = 0; i < plan.legs.length; i++) {
             const leg = plan.legs[i];
             const isLast = i === plan.legs.length - 1;
+            const fromWp = plan.waypoints[i];
+            const toWp   = plan.waypoints[i + 1];
 
-            // Skip first leg (just departed, full fuel) and last leg (destination).
-            // Trigger when cumulative flight time since last stop exceeds maxLegHrs.
-            if (i > 0 && !isLast && cumHrs > maxLegHrs) {
-                const fromWp = plan.waypoints[i];
-                const nearby = (await this._adapters.aero.nearestAirports?.(fromWp.lat, fromWp.lon, 40)) || [];
+            // Fire when this leg would push cumulative time past maxLegHrs.
+            // Works for GPS Direct (single leg) and multi-leg routes.
+            // Interpolate the stop position along the leg so we search near where
+            // the pilot would actually need to land, not at the leg start waypoint.
+            // Note: !isLast guard removed — GPS Direct has only one leg which IS
+            // the last, but still needs a stop if it exceeds maxLegHrs.
+            if (cumHrs + leg.timeHrs > maxLegHrs) {
+                const hoursIntoLeg = Math.max(0, maxLegHrs - cumHrs);
+                const fraction = leg.timeHrs > 0
+                    ? Math.min(hoursIntoLeg / leg.timeHrs, 0.85) : 0.5;
+                const stopLat = fromWp.lat + (toWp.lat - fromWp.lat) * fraction;
+                const stopLon = fromWp.lon + (toWp.lon - fromWp.lon) * fraction;
+
+                const nearby = (await this._adapters.aero.nearestAirports?.(stopLat, stopLon, 40)) || [];
                 const options = nearby
                     .filter(a =>
                         a.hasFuel &&
@@ -387,7 +398,7 @@ export class RoutePlanner {
                         lat: a.lat,
                         lon: a.lon,
                         hasSelfServeFuel: !!a.hasSelfServeFuel,
-                        distNm: Math.round(haversine(fromWp.lat, fromWp.lon, a.lat, a.lon) * 10) / 10,
+                        distNm: Math.round(haversine(stopLat, stopLon, a.lat, a.lon) * 10) / 10,
                     }))
                     .sort((x, y) => x.distNm - y.distNm)
                     .slice(0, 6);
@@ -395,10 +406,12 @@ export class RoutePlanner {
                 if (options.length > 0) {
                     fuelStopCandidates.push({
                         afterFixId: fromWp.id,
-                        cumHrsAtStop: Math.round(cumHrs * 100) / 100,
+                        cumHrsAtStop: Math.round((cumHrs + hoursIntoLeg) * 100) / 100,
                         options,
                     });
-                    cumHrs = 0;  // assume a stop will be made here for next detection
+                    // Remaining time on this leg continues accumulating toward next stop
+                    cumHrs = leg.timeHrs - hoursIntoLeg;
+                    continue;
                 }
             }
 

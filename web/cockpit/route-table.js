@@ -191,7 +191,7 @@ class RouteTable {
                         wind: (leg.windDir != null && leg.windSpd != null)
                             ? { dir: leg.windDir, spd: leg.windSpd } : null,
                         _segments: leg.segments || [],
-                        tas: leg.tas || null, gs: leg.gs || null,
+                        tas: leg.tasKt || null, gs: leg.gsKt || null,
                         gph: ((leg.segments || []).find(s => s.phase === 'CRZ') || leg.segments?.[leg.segments.length - 1])?.gph || null,
                     });
                 }
@@ -291,8 +291,8 @@ class RouteTable {
                 percent_power: wp.percent_power ?? leg.percentPwr ?? cruiseSeg.percent_power ?? null,
                 rpm: wp.rpm ?? cruiseSeg.rpm ?? null,
                 mp: wp.mp ?? cruiseSeg.mp ?? null,
-                tas: wp.tas ?? leg.tasKt ?? leg.tas ?? null,
-                gs: wp.gs ?? leg.gsKt ?? leg.gs ?? null,
+                tas: wp.tas ?? leg.tasKt ?? null,
+                gs: wp.gs ?? leg.gsKt ?? null,
                 gph: wp.gph ?? cruiseSeg.gph ?? null,
                 _eta: leg.eta ?? null,        // UTC ms ETA at this waypoint (from recomputeLegs)
                 _planAltFt: leg.altFt ?? null, // cruise altitude used for this leg's TAS/fuel

@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v7.57';
+const FLYTAB_VERSION = 'v7.64';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -457,7 +457,6 @@ class FlyTabApp {
                 this.vectorLayers._onInternetMetarsFetched = () => this._updateWeatherAge(this._currentTrip);
                 this.vectorLayers.onAirportClick((apt) => {
                     if (typeof _wireTapLastTouchAt !== 'undefined' && Date.now() - _wireTapLastTouchAt < 500) return;
-                    if (document.getElementById('cockpitContainer')?.classList.contains('route-editing')) return;
                     if (this.routeTable?.isEditing()) {
                         this.routeTable.addWaypointSmart({
                             icao: apt.icao, name: apt.name || apt.icao,
@@ -470,7 +469,6 @@ class FlyTabApp {
 
                 this.vectorLayers.onNavaidClick((nav) => {
                     if (typeof _wireTapLastTouchAt !== 'undefined' && Date.now() - _wireTapLastTouchAt < 500) return;
-                    if (document.getElementById('cockpitContainer')?.classList.contains('route-editing')) return;
                     if (this.routeTable?.isEditing()) {
                         this.routeTable.addWaypointSmart({
                             icao: nav.id, name: nav.name || nav.id,
@@ -483,7 +481,6 @@ class FlyTabApp {
 
                 this.vectorLayers.onFixClick((fix) => {
                     if (typeof _wireTapLastTouchAt !== 'undefined' && Date.now() - _wireTapLastTouchAt < 500) return;
-                    if (document.getElementById('cockpitContainer')?.classList.contains('route-editing')) return;
                     if (this.routeTable?.isEditing()) {
                         this.routeTable.addWaypointSmart({
                             icao: fix.id, name: fix.id,
@@ -1137,8 +1134,8 @@ class FlyTabApp {
                     const leg = legByDest[wp.icao?.toUpperCase()];
                     if (!leg) continue;
                     wp.alt = leg.altitude || fp.altitude;
-                    wp.gs = leg.gs;
-                    wp.tas = leg.tas;
+                    wp.gs = leg.gsKt;
+                    wp.tas = leg.tasKt;
                     // Preserve full segments array for route table phase computation
                     wp._segments = leg.segments || [];
                     // Wind

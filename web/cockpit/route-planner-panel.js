@@ -76,6 +76,8 @@ class RoutePlannerPanel {
         this._lastPlan      = null;     // raw A* result before winds applied
         this._currentPlan   = null;     // wind-corrected result
         this._fetchingWinds = false;
+        this._windsPromise  = null;     // pending _applyWindsToLastPlan() call
+        this._lastWinds     = null;     // most recently fetched winds data
         this._windWarnings  = [];
     }
 
@@ -503,7 +505,7 @@ class RoutePlannerPanel {
         this._depTimeSel.addEventListener('change', () => {
             this._departureTime = this._depTimeSel.value ? new Date(this._depTimeSel.value) : null;
             this._saveOpts();
-            if (this._lastPlan) this._applyWindsToLastPlan();
+            if (this._lastPlan) this._windsPromise = this._applyWindsToLastPlan();
         });
         depRow.appendChild(depLabel);
         depRow.appendChild(this._depTimeSel);
@@ -537,7 +539,7 @@ class RoutePlannerPanel {
         this._altSel.addEventListener('change', () => {
             this._cruiseAltFt = this._altSel.value ? parseInt(this._altSel.value, 10) : null;
             this._saveOpts();
-            if (this._lastPlan) this._applyWindsToLastPlan();
+            if (this._lastPlan) this._windsPromise = this._applyWindsToLastPlan();
         });
         altRow.appendChild(altLabel2);
         altRow.appendChild(this._altSel);
@@ -566,7 +568,7 @@ class RoutePlannerPanel {
         this._pwrSel.addEventListener('change', () => {
             this._pctPower = parseInt(this._pwrSel.value, 10);
             this._saveOpts();
-            if (this._lastPlan) this._applyWindsToLastPlan();
+            if (this._lastPlan) this._windsPromise = this._applyWindsToLastPlan();
         });
         pwrRow.appendChild(pwrLabel);
         pwrRow.appendChild(this._pwrSel);
@@ -703,7 +705,7 @@ class RoutePlannerPanel {
             item.altFt = input.trim() ? parseInt(input) : undefined;
             this._saveOpts();
             this._render();
-            if (this._lastPlan) this._applyWindsToLastPlan();
+            if (this._lastPlan) this._windsPromise = this._applyWindsToLastPlan();
         });
     }
 
@@ -1155,19 +1157,28 @@ class RoutePlannerPanel {
 
     _onCopyTap() {
         const str = this._buildField15String(this._route);
+        if (!str) { this._toast('No route to copy'); return; }
         if (navigator.clipboard?.writeText) {
-            navigator.clipboard.writeText(str).catch(() => this._selectRouteStr());
+            navigator.clipboard.writeText(str)
+                .then(() => this._toast('Route copied'))
+                .catch(() => this._execCommandCopy(str));
         } else {
-            this._selectRouteStr();
+            this._execCommandCopy(str);
         }
     }
 
-    _selectRouteStr() {
-        if (!this._routeStrEl) return;
-        const range = document.createRange();
-        range.selectNode(this._routeStrEl);
-        window.getSelection().removeAllRanges();
-        window.getSelection().addRange(range);
+    _execCommandCopy(str) {
+        const ta = document.createElement('textarea');
+        ta.value = str;
+        ta.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        ta.setSelectionRange(0, str.length);
+        let ok = false;
+        try { ok = document.execCommand('copy'); } catch (_) {}
+        document.body.removeChild(ta);
+        this._toast(ok ? 'Route copied' : 'Copy failed — select manually from route string');
     }
 
     // ── Plan button ───────────────────────────────────────────────────────────
@@ -1249,7 +1260,7 @@ class RoutePlannerPanel {
             if (result.fuelStopCandidates?.length > 0) {
                 await this._processFuelStopCandidates(result);
             } else {
-                this._applyWindsToLastPlan();
+                this._windsPromise = this._applyWindsToLastPlan();
             }
         } catch (err) {
             console.error('[RoutePlannerPanel] plan() failed:', err);
@@ -1290,7 +1301,7 @@ class RoutePlannerPanel {
             this._lastPlan = { ...result, waypoints: currentWaypoints, fuelStops };
         }
         this._render();
-        this._applyWindsToLastPlan();
+        this._windsPromise = this._applyWindsToLastPlan();
     }
 
     _showFuelStopPicker(candidate) {
@@ -1372,6 +1383,7 @@ class RoutePlannerPanel {
             }
         } catch (_) {}
         this._fetchingWinds = false;
+        this._lastWinds = opts.winds ?? null;
         // Build plan copy with per-fix altitude overrides from _route pills so
         // we never mutate the cached _lastPlan object (fragile shared reference).
         const routeAltMap = new Map(
@@ -1611,6 +1623,9 @@ class RoutePlannerPanel {
     async _doApply() {
         if (this._applyAborted) return false;
 
+        // Wait for any in-progress wind fetch so _lastWinds is current
+        if (this._windsPromise) await this._windsPromise.catch(() => {});
+
         const wps = await this._pillsToWaypoints();
         if (wps.length < 2) {
             this._toast('Add at least 2 waypoints');
@@ -1618,6 +1633,24 @@ class RoutePlannerPanel {
         }
 
         if (this._applyAborted) return false;
+
+        // Compute legs from the exact waypoints being applied so the leg count
+        // always matches plan.waypoints.length - 1 (route-table guard). Using
+        // _currentPlan.legs breaks for airway routes where the A* expanded
+        // waypoint count exceeds the user-visible pill count.
+        let legs;
+        if (this._planner && wps.length >= 2) {
+            const recomputeOpts = {
+                departureTime: this._departureTime ?? new Date(),
+                pctPower:      this._pctPower,
+                cruiseAltFt:   this._cruiseAltFt ?? undefined,
+                winds:         this._lastWinds ?? undefined,
+            };
+            const pillPlan = this._planner.recomputeLegs({ waypoints: wps }, null, recomputeOpts);
+            legs = pillPlan.legs;
+        } else {
+            legs = this._buildLegsFromWaypoints(wps);
+        }
 
         const dep  = wps[0].icao  || wps[0].name;
         const dest = wps[wps.length - 1].icao || wps[wps.length - 1].name;
@@ -1631,11 +1664,7 @@ class RoutePlannerPanel {
                 departure:   dep,
                 destination: dest,
                 route: this._route.map(r => r.id),
-                // Use wind-corrected legs from recomputeLegs so GS, ETE, winds
-                // transfer to the route table and nav strip. Fall back to bare
-                // stubs only when no plan has been computed yet.
-                legs: this._currentPlan?.legs || this._lastPlan?.legs
-                      || this._buildLegsFromWaypoints(wps),
+                legs,
             },
         };
 
@@ -1709,6 +1738,7 @@ class RoutePlannerPanel {
             // legs[].airway in the applied plan.
             const aw = pendingAirway || pill.airway || null;
             wps.push({
+                id:   id,
                 icao: id,
                 name: id,
                 lat:  coord.lat,
