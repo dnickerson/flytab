@@ -239,6 +239,55 @@ findSplitPoints(legs, maxLegHrs, coords)
 
 ---
 
+## Display Integration
+
+### FlightPlan.legs[] — New Fields
+
+`recomputeLegs` must store all computed values in the leg so downstream consumers don't need to recompute them:
+
+| Field | Type | Description |
+|---|---|---|
+| `eta` | `number` (ms UTC) | Absolute arrival time at `to` waypoint |
+| `legAltFt` | `number` | Resolved altitude for this leg (`overrideAlt ?? cruiseAltFt`) |
+| `windDir` | `number\|null` | Wind direction used (degrees true) |
+| `windSpd` | `number\|null` | Wind speed used (kt) |
+| `tasKt` | `number` | Altitude-corrected TAS (already present; confirm populated) |
+| `gsKt` | `number` | Wind-corrected ground speed (already present; confirm populated) |
+| `pctPower` | `number` | Power setting used (e.g. 65) |
+
+These fields are stored in `flight-plan.js` type and written by `recomputeLegs`.
+
+### route-table.js
+
+The route table has `_computeEnroute()` which calculates per-waypoint display values. When a plan is loaded pre-flight, `_computeEnroute()` should read `tasKt`, `gsKt`, `windDir`, `windSpd`, `legAltFt`, and `eta` from `plan.legs[]` rather than recomputing them — the plan is now the authoritative source for these values. In-flight, live GPS/engine data continues to override as it does today.
+
+**Changes needed in route-table.js:**
+
+1. **ETA column** — not currently shown anywhere. Read `leg.eta`, format as local time (`toLocaleTimeString()`). Add as a column in the route table alongside ETE. Also add to the `upcoming` waypoints list in the nav strip event.
+
+2. **Per-leg altitude** — route-table already shows `wp.altitude`; confirm it reads `leg.legAltFt` when set (may require routing through `_computeEnroute()`).
+
+3. **TAS / GS / wind** — already displayed; wire to read from `leg.tasKt`, `leg.gsKt`, `leg.windDir/windSpd` when plan is loaded, so pre-flight table shows wind-corrected values without requiring live GPS.
+
+4. **Power %** — already displayed (`wp._pwr`); read `leg.pctPower` from plan when pre-flight.
+
+### activeroute:legupdate Event
+
+Add to the event payload emitted by `route-table._emitLegUpdate()`:
+
+```javascript
+eta: leg.eta,              // ms UTC — arrival time at active waypoint
+destEta: destLeg.eta,      // ms UTC — arrival time at destination
+legAltFt: leg.legAltFt,    // resolved altitude for active leg
+```
+
+### Nav Strip / Instrument Strip
+
+- **Nav strip**: Show `destEta` formatted as local time alongside existing `destEteMin`. E.g.: `KMIA  342nm  ETE 2:14  ETA 14:32`.
+- **Instrument strip**: Show `destEta` in the ETE delta field area; pilot can compare plan ETA vs live ETA as winds deviate from forecast.
+
+---
+
 ## UI Changes: route-planner-panel.js
 
 ### Opts Row Additions
@@ -299,8 +348,10 @@ Clears automatically when condition resolves.
 | `web/shared/planning/planner/route-planner.js` | Extend `recomputeLegs` signature; wire winds + altitude |
 | `web/shared/planning/planner/winds-interpolator.js` | **New** — fetch, cache, lookup |
 | `web/shared/planning/planner/fuel-stop-search.js` | **New** (Milestone 2) — `findSplitPoints`, airport search, ranking |
-| `web/shared/planning/types/flight-plan.js` | Add `overrideAlt?: number` to waypoint type |
+| `web/shared/planning/types/flight-plan.js` | Add `overrideAlt?` to waypoint type; add `eta`, `legAltFt`, `windDir`, `windSpd`, `pctPower` to leg type |
 | `web/cockpit/route-planner-panel.js` | Departure time picker, altitude selector, power % selector, per-fix altitude override UI, stats bar update, fuel stop section |
+| `web/cockpit/route-table.js` | ETA column; read `tasKt`/`gsKt`/`windDir`/`windSpd`/`legAltFt`/`pctPower` from plan legs pre-flight; add `eta`/`destEta`/`legAltFt` to `activeroute:legupdate` event |
+| `web/cockpit/route-nav-strip.js` | Show `destEta` as local time alongside ETE |
 | `web/style.css` | New panel elements for opts additions, fuel stop section |
 | `web/index.html` | Add `<script>` tag for `winds-interpolator.js` |
 
