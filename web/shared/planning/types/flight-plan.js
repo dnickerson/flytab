@@ -23,6 +23,8 @@
  * @property {number} [gsKt]
  * @property {number} [windDir]
  * @property {number} [windKt]
+ * @property {number} [windSpd]           wind speed used for this leg (kt) — complements windDir
+ * @property {number} [eta]               absolute ETA at 'to' waypoint (UTC ms since epoch)
  * @property {number} [rpm]
  * @property {number} [mp]
  * @property {number} [percentPwr]

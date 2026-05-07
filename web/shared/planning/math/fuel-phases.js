@@ -17,7 +17,9 @@ import { tasAtAltitude, gphAtPower, climbRateAtAltitude } from './engine-data.js
  * @property {number}  altFt
  * @property {boolean} [departingFromGround]
  * @property {boolean} [endingAtGround]
- * @property {number}  [windKt]              tailwind +, headwind -
+ * @property {number}  [windKt]     tailwind +, headwind - (scalar component)
+ * @property {number}  [gsKt]       wind-corrected GS override — when set, used for cruise time
+ * @property {number}  [tasKt]      altitude-corrected TAS override — when set, used for climb/descent
  *
  * @typedef LegDecomposition
  * @property {{climb:PhaseResult,cruise:PhaseResult,descent:PhaseResult,taxi?:PhaseResult}} phases
@@ -32,7 +34,9 @@ import { tasAtAltitude, gphAtPower, climbRateAtAltitude } from './engine-data.js
  * @returns {LegDecomposition}
  */
 export function decomposeLeg(profile, leg) {
-    const wind = leg.windKt ?? 0;
+    const wind        = leg.windKt ?? 0;
+    const overrideTas = leg.tasKt;
+    const overrideGs  = leg.gsKt;
     const phases = {
         taxi:    { timeHrs: 0, fuelGal: 0, distNm: 0, altFt: 0 },
         climb:   { timeHrs: 0, fuelGal: 0, distNm: 0, altFt: leg.altFt },
@@ -51,11 +55,11 @@ export function decomposeLeg(profile, leg) {
         // Climb: time = altFt / climbRate(0..altFt avg) ; distance covered = TAS_climb × time
         const climbRate = (climbRateAtAltitude(profile, 0) + climbRateAtAltitude(profile, leg.altFt)) / 2 || 1;
         const climbHrs  = leg.altFt / climbRate / 60;       // fpm → hrs
-        const tasClimb  = tasAtAltitude(profile, leg.altFt / 2);
+        const tasClimb  = overrideTas ? overrideTas * (1 - 0.075 * 0.5) : tasAtAltitude(profile, leg.altFt / 2);
         const climbDist = (tasClimb + wind) * climbHrs;
         phases.climb = {
             timeHrs: climbHrs,
-            fuelGal: gphAtPower(profile, 0.75) * climbHrs * 1.10,  // 10% richer in climb
+            fuelGal: gphAtPower(profile, 0.75, leg.altFt / 2, 'FULL_RICH') * climbHrs * 1.10,  // 10% richer in climb
             distNm:  Math.min(climbDist, leg.distNm * 0.4),
             altFt:   leg.altFt,
         };
@@ -64,22 +68,23 @@ export function decomposeLeg(profile, leg) {
     if (leg.endingAtGround) {
         const descRate  = 500;  // standard 500 fpm descent
         const descHrs   = leg.altFt / descRate / 60;
-        const tasDesc   = tasAtAltitude(profile, leg.altFt / 2);
+        const tasDesc   = overrideTas ? overrideTas * (1 - 0.075 * 0.5) : tasAtAltitude(profile, leg.altFt / 2);
         const descDist  = (tasDesc + wind) * descHrs;
         phases.descent = {
             timeHrs: descHrs,
-            fuelGal: gphAtPower(profile, 0.55) * descHrs,
+            fuelGal: gphAtPower(profile, 0.55, leg.altFt / 2, 'FULL_RICH') * descHrs,
             distNm:  Math.min(descDist, leg.distNm * 0.3),
             altFt:   leg.altFt,
         };
     }
 
     const cruiseDist = Math.max(0, leg.distNm - phases.climb.distNm - phases.descent.distNm);
-    const tasCruise  = tasAtAltitude(profile, leg.altFt);
-    const cruiseHrs  = cruiseDist / Math.max(1, tasCruise + wind);
+    const tasCruise  = overrideTas ?? tasAtAltitude(profile, leg.altFt);
+    const gsCruise   = overrideGs  ?? Math.max(1, tasCruise + wind);
+    const cruiseHrs  = cruiseDist / Math.max(1, gsCruise);
     phases.cruise = {
         timeHrs: cruiseHrs,
-        fuelGal: gphAtPower(profile, 0.75) * cruiseHrs,
+        fuelGal: gphAtPower(profile, 0.75, leg.altFt, 'LOP') * cruiseHrs,
         distNm:  cruiseDist,
         altFt:   leg.altFt,
     };
