@@ -391,7 +391,7 @@ class RouteTable {
             if (wp.lat && wp.lon && lat && lon) {
                 const dist = NasrDB.haversineNm(lat, lon, wp.lat, wp.lon);
                 const track = situation.true_course ?? situation.gps_track ?? null;
-                const bearingToWpt = this._bearing(lat, lon, wp.lat, wp.lon);
+                const bearingToWpt = FlyTabPlanning.bearing(lat, lon, wp.lat, wp.lon);
 
                 // Passed if within 1nm, OR if waypoint is >90° behind our track
                 // (handles flying past without getting within 1nm of it)
@@ -409,7 +409,7 @@ class RouteTable {
         const active = this._waypoints[this._activeIndex];
         if (active && active.lat && active.lon && lat && lon) {
             active._liveDist = NasrDB.haversineNm(lat, lon, active.lat, active.lon);
-            active._liveHdg = this._bearing(lat, lon, active.lat, active.lon);
+            active._liveHdg = FlyTabPlanning.bearing(lat, lon, active.lat, active.lon);
         }
 
         // Recompute all enroute data with current GS
@@ -1330,7 +1330,7 @@ class RouteTable {
             if (i > this._activeIndex && i > 0) {
                 const prev = this._waypoints[i - 1];
                 if (prev.lat != null && prev.lon != null && wp.lat != null && wp.lon != null) {
-                    wp._brg = this._bearing(prev.lat, prev.lon, wp.lat, wp.lon);
+                    wp._brg = FlyTabPlanning.bearing(prev.lat, prev.lon, wp.lat, wp.lon);
                 }
             } else if (i === this._activeIndex) {
                 // Live bearing from GPS when airborne; fall back to planned bearing on ground
@@ -1339,7 +1339,7 @@ class RouteTable {
                 } else if (i > 0) {
                     const prev = this._waypoints[i - 1];
                     if (prev.lat != null && prev.lon != null && wp.lat != null && wp.lon != null) {
-                        wp._brg = this._bearing(prev.lat, prev.lon, wp.lat, wp.lon);
+                        wp._brg = FlyTabPlanning.bearing(prev.lat, prev.lon, wp.lat, wp.lon);
                     }
                 }
             }
@@ -1602,7 +1602,7 @@ class RouteTable {
             const prevIdx = this._activeIndex > 0 ? this._activeIndex - 1 : 0;
             const prevWp = this._waypoints[prevIdx];
             if (prevWp?.lat != null && prevWp?.lon != null && prevIdx !== this._activeIndex) {
-                xtk = this._crossTrackNm(prevWp.lat, prevWp.lon, active.lat, active.lon, sit.lat, sit.lon);
+                xtk = FlyTabPlanning.crossTrackDistanceNm(prevWp.lat, prevWp.lon, active.lat, active.lon, sit.lat, sit.lon);
             }
         }
 
@@ -1672,20 +1672,6 @@ class RouteTable {
             return last.alt_to ?? last.alt_from ?? wp.alt ?? null;
         }
         return wp.alt ?? wp.constraint_alt ?? null;
-    }
-
-    /**
-     * Cross-track distance in nm. Positive = right of track, negative = left.
-     * Uses spherical approximation.
-     */
-    _crossTrackNm(lat1, lon1, lat2, lon2, latP, lonP) {
-        const R = 3440.065; // Earth radius in nm
-        const toRad = Math.PI / 180;
-        const d13 = NasrDB.haversineNm(lat1, lon1, latP, lonP);
-        const brg13 = this._bearing(lat1, lon1, latP, lonP) * toRad;
-        const brg12 = this._bearing(lat1, lon1, lat2, lon2) * toRad;
-        const xtd = Math.asin(Math.sin(d13 / R) * Math.sin(brg13 - brg12)) * R;
-        return xtd; // positive = right of track
     }
 
     /** Toggle flight rules between VFR and IFR */
@@ -2988,15 +2974,6 @@ class RouteTable {
             return base;
         }
         return fmtAlt(seg.altTo ?? seg.altFrom ?? seg.alt);
-    }
-
-    _bearing(lat1, lon1, lat2, lon2) {
-        const dLon = (lon2 - lon1) * Math.PI / 180;
-        const rLat1 = lat1 * Math.PI / 180;
-        const rLat2 = lat2 * Math.PI / 180;
-        const y = Math.sin(dLon) * Math.cos(rLat2);
-        const x = Math.cos(rLat1) * Math.sin(rLat2) - Math.sin(rLat1) * Math.cos(rLat2) * Math.cos(dLon);
-        return ((Math.atan2(y, x) * 180 / Math.PI) + 360) % 360;
     }
 
     /**
