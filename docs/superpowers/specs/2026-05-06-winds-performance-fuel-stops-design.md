@@ -361,6 +361,16 @@ Clears automatically when condition resolves.
 
 Code review found duplications that will cause the winds/altitude feature to diverge immediately if not consolidated first. These must ship before winds work begins.
 
+### Preserve: Live Fuel-Flow Update Path
+
+`route-table.js` has a unique in-flight capability: `_computeEnroute()` runs at ~1 Hz and continuously overrides planned GPH with live fuel flow from the engine monitor (`liveGph` from `engine-client.js`). This reproj­ects fuel remaining at every downstream waypoint in real time — if you're burning 0.5 GPH more than planned, every fuel-remaining figure updates immediately. The instrument strip delta (±GPH vs plan) surfaces this to the pilot.
+
+This path must be preserved intact through all cleanup and feature work. The distinction is:
+- **Planned GPH** (from `recomputeLegs`) — wind/altitude-corrected baseline, used pre-flight and as the plan reference
+- **Live GPH** (from engine monitor) — overrides planned GPH when airborne; `_computeEnroute()` switches to live data automatically
+
+The cleanup items below must not touch the live-GPH override logic in `_computeEnroute()`. Extracting `_buildMissingSegments` to the planning lib affects segment *structure*, not the live fuel-flow update — keep those concerns separate.
+
 ### 1. Extract `_buildMissingSegments` from route-table.js → planning lib
 
 `route-table.js` (lines ~1001–1182) contains 180 lines of climb/cruise/descent segment logic that duplicates what `decomposeLeg` does. When `recomputeLegs` gains wind/altitude awareness, this code path won't inherit those changes — routes displayed via route-table's segment builder will show stale flat-air numbers while the planner shows corrected ones.
