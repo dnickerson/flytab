@@ -602,7 +602,7 @@ class RoutePlannerPanel {
 
         this._addSel = document.createElement('select');
         this._addSel.className = 'rpp-add-sel';
-        [['fix','Fix'],['awy','Airway'],['direct','Direct']].forEach(([v,t]) => {
+        [['fix','Fix'],['airport','Airport'],['fuel','Fuel Stop'],['awy','Airway'],['direct','Direct']].forEach(([v,t]) => {
             const o = document.createElement('option');
             o.value = v; o.textContent = t;
             this._addSel.appendChild(o);
@@ -693,7 +693,7 @@ class RoutePlannerPanel {
         });
         this._ctxMenu.querySelector('#rppMChangeType').addEventListener('click', () => {
             if (this._ctxMenuIdx === null) { this._closeMenu(); return; }
-            const types = ['fix','awy','direct','dep','dest','fuel'];
+            const types = ['fix','airport','fuel','awy','direct','dep','dest'];
             const cur = this._route[this._ctxMenuIdx].type;
             this._route[this._ctxMenuIdx].type = types[(types.indexOf(cur) + 1) % types.length];
             this._closeMenu(); this._render();
@@ -947,12 +947,13 @@ class RoutePlannerPanel {
     _pillClass(type) {
         return {
             fix: 'rpp-pill-fix', awy: 'rpp-pill-awy', direct: 'rpp-pill-direct',
-            dep: 'rpp-pill-dep', dest: 'rpp-pill-dest', fuel: 'rpp-pill-fuel',
+            dep: 'rpp-pill-dep', dest: 'rpp-pill-dest',
+            airport: 'rpp-pill-apt', fuel: 'rpp-pill-fuel',
         }[type] || 'rpp-pill-fix';
     }
 
     _typeLabel(type) {
-        return { fix: 'FIX', awy: 'AWY', direct: 'GPS', dep: 'DEP', dest: 'DEST', fuel: '⛽' }[type] || '';
+        return { fix: 'FIX', awy: 'AWY', direct: 'GPS', dep: 'DEP', dest: 'DEST', airport: 'APT', fuel: '⛽' }[type] || '';
     }
 
     _buildPill(item, i) {
@@ -1147,6 +1148,20 @@ class RoutePlannerPanel {
                     this._toast(`Airway "${v}" not found in navigation database`, 4000);
                     return;
                 }
+            } else if (type === 'airport' || type === 'fuel') {
+                // Airport and fuel-stop pills must resolve to an actual airport.
+                let coord = this._coords[v];
+                if (!coord) {
+                    const rec = await this._nasrDb.getAirport(v).catch(() => null);
+                    if (rec?.lat != null) {
+                        coord = { lat: rec.lat, lon: rec.lon };
+                        this._coords[v] = coord;
+                    }
+                }
+                if (!coord) {
+                    this._toast(`"${v}" not found as an airport — check identifier`, 4000);
+                    return;
+                }
             } else {
                 // Check coords cache first, then IDB airport → navaid → fix
                 let coord = this._coords[v];
@@ -1184,7 +1199,7 @@ class RoutePlannerPanel {
     // ── Toolbar handlers ──────────────────────────────────────────────────────
 
     async _onClearTap() {
-        const hasInterior = this._route.some(r => r.type === 'fix' || r.type === 'awy' || r.type === 'direct' || r.type === 'fuel');
+        const hasInterior = this._route.some(r => r.type === 'fix' || r.type === 'airport' || r.type === 'awy' || r.type === 'direct' || r.type === 'fuel');
         if (hasInterior) {
             const ok = await this._confirm('Clear the route? This cannot be undone.');
             if (!ok) return;
@@ -1294,7 +1309,7 @@ class RoutePlannerPanel {
             // If the user has manually-added interior waypoints, confirm before
             // replacing them — Plan would otherwise silently discard their edits.
             const hasManual = this._route.some(
-                p => p.type === 'fix' || p.type === 'awy' || p.type === 'direct' || p.type === 'fuel'
+                p => p.type === 'fix' || p.type === 'airport' || p.type === 'awy' || p.type === 'direct' || p.type === 'fuel'
             );
             if (hasManual) {
                 const ok = await this._confirm('Replace your current route with the newly planned route?');
@@ -1811,9 +1826,10 @@ class RoutePlannerPanel {
                 name: id,
                 lat:  coord.lat,
                 lon:  coord.lon,
-                type: pill.type === 'dep'  ? 'APT' :
-                      pill.type === 'dest' ? 'APT' :
-                      pill.type === 'fuel' ? 'APT' : undefined,
+                type: pill.type === 'dep'     ? 'APT' :
+                      pill.type === 'dest'    ? 'APT' :
+                      pill.type === 'airport' ? 'APT' :
+                      pill.type === 'fuel'    ? 'APT' : undefined,
                 altFt: pill.altFt ?? this._altitude,
                 ...(aw ? { airway: aw } : {}),
             });

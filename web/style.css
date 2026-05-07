@@ -9967,6 +9967,7 @@ body.route-editing-mode #cockpitView {
 .rpp-pill-dest   { background: #e8e2ff; border: 1.5px solid #7c62d4; color: #3a1e8a; }
 .rpp-pill-awy    { background: #d4f5e2; border: 1.5px solid #3fb86a; color: #0e4a26; }
 .rpp-pill-direct { background: #fff3d0; border: 1.5px solid #d4a017; color: #5a3a00; font-style: italic; }
+.rpp-pill-apt    { background: #ddf3f0; border: 1.5px solid #28a097; color: #0d4a45; }
 .rpp-pill-fuel   { background: #ffe4cc; border: 1.5px solid #e07030; color: #7a2800; }
 
 .rpp-pill-handle {
