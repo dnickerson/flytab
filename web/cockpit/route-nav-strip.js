@@ -163,13 +163,23 @@ class RouteNavStrip {
             this._setVal('dev', '---');
         }
 
-        // Destination distance and ETE
+        // Destination distance and ETE/ETA
         this._setVal('dest_dist', d.destDistNm != null ? Math.round(d.destDistNm) + 'nm' : '---');
         let destEte = d.destEteMin;
         if (d.destDistNm != null && d.liveGs > 10) {
             destEte = (d.destDistNm / d.liveGs) * 60;
         }
-        this._setVal('dest_ete', destEte != null ? RouteNavStrip._fmtTime(destEte) : '---');
+        if (destEte != null) {
+            const eteStr = RouteNavStrip._fmtTime(destEte);
+            if (d.destEta) {
+                const etaStr = new Date(d.destEta).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                this._setVal('dest_ete', `${eteStr} · ${etaStr}`);
+            } else {
+                this._setVal('dest_ete', eteStr);
+            }
+        } else {
+            this._setVal('dest_ete', '---');
+        }
 
         // Next waypoint
         if (d.nextIcao) {
