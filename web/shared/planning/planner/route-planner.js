@@ -30,12 +30,15 @@ const RV9A_FALLBACK = {
     tailNumber: '',
     model: 'RV-9A',
     cruise_ktas: 155,
+    cruise_ias: 148,       // 155 KTAS at 8000 ft ISA ≈ 148 KIAS
     fuel_burn_gph: 8.0,
     fuel_capacity_gal: 36,
     reserve_gal: 10,
     climb_rate_fpm: 750,
     service_ceiling_ft: 17500,
     taxi_burn_gal: 1.5,
+    max_hp: 180,           // Lycoming O-360-A1A
+    alt_power_loss_pct_per_kft: 3.0,
     equipment: { vAirways: true, tAirways: false, jAirways: false, gpsApproach: true },
 };
 
