@@ -296,6 +296,12 @@ class RoutePlannerPanel {
         this._warnStripEl.style.display = 'none';
         inner.appendChild(this._warnStripEl);
 
+        // Distance/time/fuel stats bar — shown above pills after plan() so it's always visible
+        this._statsEl = document.createElement('div');
+        this._statsEl.className = 'rpp-stats';
+        this._statsEl.style.display = 'none';
+        inner.appendChild(this._statsEl);
+
         // Pill box
         const pillBox = document.createElement('div');
         pillBox.className = 'rpp-pill-box';
@@ -309,12 +315,6 @@ class RoutePlannerPanel {
 
         // Toolbar: action buttons + Apply on the same row
         inner.appendChild(this._buildToolbar());
-
-        // Distance stats bar: route vs great-circle, shown after plan()
-        this._statsEl = document.createElement('div');
-        this._statsEl.className = 'rpp-stats';
-        this._statsEl.style.display = 'none';
-        inner.appendChild(this._statsEl);
 
         // Hidden element backing the Copy button (kept so Copy can read the route)
         this._routeStrEl = document.createElement('div');
