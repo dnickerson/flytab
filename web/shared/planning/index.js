@@ -36,7 +36,8 @@ if (typeof window !== 'undefined') {
         import('./math/route-math.js'),
         import('./math/engine-data.js'),
         import('./math/fuel-phases.js'),
-    ]).then(([rp, op, ag, ps, errs, av, rm, ed, fp]) => {
+        import('./planner/winds-interpolator.js'),
+    ]).then(([rp, op, ag, ps, errs, av, rm, ed, fp, wi]) => {
         // @ts-ignore - augment window
         window.FlyTabPlanning = {
             VERSION,
@@ -44,7 +45,7 @@ if (typeof window !== 'undefined') {
             Optimizer:    op.Optimizer,
             AirwayGraph:  ag.AirwayGraph,
             parseRouteString: ps.parseRouteString,
-            ...errs, ...av, ...rm, ...ed, ...fp,
+            ...errs, ...av, ...rm, ...ed, ...fp, ...wi,
         };
         document.dispatchEvent(new CustomEvent('flytab-planning:ready'));
     });
