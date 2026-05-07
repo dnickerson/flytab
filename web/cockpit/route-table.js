@@ -239,8 +239,19 @@ class RouteTable {
             // Map leg performance data onto waypoints.
             // Legs array: leg[0] is dep→wp[1], so wp[i] uses leg[i-1].
             const leg = i > 0 ? (legs[i - 1] || {}) : {};
-            // Preserve ALL segments for phase-aware computation
-            const segments = wp._segments || leg.segments || [];
+            // Prefer explicit segments; synthesize one CRZ segment from planning-library
+            // fuelGal/timeHrs when present so _computeEnroute uses the planner's fuel
+            // model instead of the flat aircraft-config GPH fallback.
+            const segments = wp._segments || leg.segments
+                || (leg.fuelGal != null && leg.timeHrs > 0
+                    ? [{ phase: 'CRZ',
+                         gph: leg.fuelGal / leg.timeHrs,
+                         ete_min: leg.timeHrs * 60,
+                         tas: leg.tasKt,
+                         gs: leg.gsKt,
+                         percent_power: leg.percentPwr,
+                         dist: leg.distNm }]
+                    : []);
             // Use cruise segment for default rpm/mp/pwr display
             const cruiseSeg = segments.find(s => s.phase === 'CRZ')
                            || segments[segments.length - 1]
