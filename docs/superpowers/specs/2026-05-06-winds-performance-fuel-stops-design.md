@@ -74,9 +74,42 @@ leg.eta = prevEta + decomp.totalTimeHrs * 3_600_000
 **Per-leg altitude:** Each leg uses `legAltFt = wps[i+1].overrideAlt ?? cruiseAltFt`. Wind lookup and TAS use `legAltFt`, not the global cruise altitude, for that leg.
 
 **Fuel burn at altitude:**
-- Cruise: `engineData.gphAtPower(maxPowerAtAltitude(legAltFt) * (pctPower / 100), legAltFt, 'LOP')` — lean of peak assumed for all cruise fuel calculations (SFC ≈ 0.067 lb/HP/hr). Climb and descent phases use full-rich (higher SFC) as in the existing phase model.
-- Climb/descent phases: existing `decomposeLeg` phase logic, extended to accept `gsKt/tasKt`
-- Climb TAS computed at mid-altitude `(depElev + legAltFt) / 2`
+- Cruise: `gphAtPower(profile, pctPower / 100, legAltFt, 'LOP')` — lean of peak for all cruise phases
+- Climb/descent phases: `gphAtPower(profile, climbPowerFrac, midAltFt, 'FULL_RICH')` — full rich as in existing model
+- All calculations driven by aircraft profile data — no hardcoded SFC constants in planning code
+
+**`gphAtPower` extension (engine-data.js):**
+
+When the profile carries `max_hp`, use SFC-based calculation matching flywhere's model:
+```javascript
+// SFC defaults from flywhere engine-data.ts (gal/HP/hr):
+const SFC = { LOP: 0.067, ROP: 0.083, FULL_RICH: 0.093 };
+export function gphAtPower(profile, powerFrac, altFt, mixture = 'ROP') {
+    if (profile.max_hp) {
+        const maxPct = maxPowerAtAltitude(profile, altFt);  // % available at altitude
+        const actualFrac = Math.min(powerFrac, maxPct / 100);
+        return actualFrac * profile.max_hp * (profile['sfc_' + mixture.toLowerCase()] ?? SFC[mixture]);
+    }
+    // Fallback: linear scale from fuel_burn_gph (assumed at 75% power, ROP)
+    return profile.fuel_burn_gph * (powerFrac / 0.75);
+}
+
+export function maxPowerAtAltitude(profile, altFt) {
+    const lossPerKft = profile.alt_power_loss_pct_per_kft ?? 3.0;
+    return Math.max(0, 100 - altFt * lossPerKft / 1000);
+}
+```
+
+**`AircraftProfile` additions** (types/aircraft-profile.js):
+```
+max_hp                    engine rated HP (e.g. 180 for O-360-A1A)
+alt_power_loss_pct_per_kft  % power lost per 1000 ft (default 3.0)
+sfc_lop                   optional override for LOP SFC (gal/HP/hr)
+sfc_rop                   optional override for ROP SFC (gal/HP/hr)
+sfc_full_rich             optional override for full-rich SFC
+```
+
+The RV-9A default profile in `route-planner.js` gains `max_hp: 180`. Existing generic profiles without `max_hp` continue to use the linear fallback.
 
 ### Phase Model
 
@@ -247,7 +280,9 @@ Clears automatically when condition resolves.
 | File | Change |
 |---|---|
 | `web/shared/planning/math/route-math.js` | Add `iasToTas`, `groundSpeed`, `vfrAltitude`, `getWindAtAlt`, `findNearestFdStation` |
+| `web/shared/planning/math/engine-data.js` | Extend `gphAtPower` with `altFt` + `mixture` params; add `maxPowerAtAltitude` |
 | `web/shared/planning/math/fuel-phases.js` | Extend `decomposeLeg` opts: `gsKt`, `tasKt`, `oatC` |
+| `web/shared/planning/types/aircraft-profile.js` | Add `max_hp`, `alt_power_loss_pct_per_kft`, `sfc_lop/rop/full_rich` |
 | `web/shared/planning/planner/route-planner.js` | Extend `recomputeLegs` signature; wire winds + altitude |
 | `web/shared/planning/planner/winds-interpolator.js` | **New** — fetch, cache, lookup |
 | `web/shared/planning/planner/fuel-stop-search.js` | **New** (Milestone 2) — `findSplitPoints`, airport search, ranking |
