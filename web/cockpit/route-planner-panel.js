@@ -1717,6 +1717,7 @@ class RoutePlannerPanel {
         // _currentPlan.legs breaks for airway routes where the A* expanded
         // waypoint count exceeds the user-visible pill count.
         let legs;
+        let appliedPlan = null;
         if (this._planner && wps.length >= 2) {
             try {
                 const recomputeOpts = {
@@ -1725,8 +1726,8 @@ class RoutePlannerPanel {
                     cruiseAltFt:   this._cruiseAltFt ?? undefined,
                     winds:         this._lastWinds ?? undefined,
                 };
-                const pillPlan = this._planner.recomputeLegs({ waypoints: wps }, null, recomputeOpts);
-                legs = pillPlan.legs;
+                appliedPlan = this._planner.recomputeLegs({ waypoints: wps }, null, recomputeOpts);
+                legs = appliedPlan.legs;
             } catch (err) {
                 console.warn('[RoutePlannerPanel] recomputeLegs failed, using bare legs:', err);
                 legs = this._buildLegsFromWaypoints(wps);
@@ -1753,6 +1754,14 @@ class RoutePlannerPanel {
 
         if (typeof app === 'undefined') return false;
         await app.applyRouteEdit(plan);
+
+        // Update stats bar to reflect exactly what was applied, not the stale
+        // A*-planned route which may have a different waypoint count/distance.
+        if (appliedPlan) {
+            this._currentPlan = appliedPlan;
+            this._updateStats(appliedPlan);
+        }
+
         return true;
     }
 
