@@ -41,6 +41,7 @@
       { "key": "brg", "label": "BRG", "width": "42px" },
       { "key": "dist", "label": "DIST", "width": "42px" },
       { "key": "ete", "label": "TIME", "width": "45px" },
+      { "key": "eta", "label": "ETA", "width": "52px" },
       { "key": "fuel", "label": "FUEL", "width": "42px" },
       { "key": "fuel_rem", "label": "REM", "width": "42px" },
       { "key": "tas", "label": "TAS", "width": "38px" },

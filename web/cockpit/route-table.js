@@ -276,12 +276,14 @@ class RouteTable {
                 passed: false,
                 wind,
                 _segments: segments,
-                percent_power: wp.percent_power ?? cruiseSeg.percent_power ?? null,
+                percent_power: wp.percent_power ?? leg.percentPwr ?? cruiseSeg.percent_power ?? null,
                 rpm: wp.rpm ?? cruiseSeg.rpm ?? null,
                 mp: wp.mp ?? cruiseSeg.mp ?? null,
-                tas: wp.tas ?? leg.tas ?? null,
-                gs: wp.gs ?? leg.gs ?? null,
+                tas: wp.tas ?? leg.tasKt ?? leg.tas ?? null,
+                gs: wp.gs ?? leg.gsKt ?? leg.gs ?? null,
                 gph: wp.gph ?? cruiseSeg.gph ?? null,
+                _eta: leg.eta ?? null,        // UTC ms ETA at this waypoint (from recomputeLegs)
+                _planAltFt: leg.altFt ?? null, // cruise altitude used for this leg's TAS/fuel
             };
         });
 
@@ -1649,6 +1651,11 @@ class RouteTable {
                 destEteMin:     destWp._cumEte,        // planned ETE to dest (minutes)
                 destFuelRem:    destWp._fuelRem,       // planned fuel remaining at dest
 
+                // ETA fields (from plan legs via recomputeLegs)
+                eta:         active._eta ?? null,       // ETA at active waypoint (UTC ms)
+                destEta:     destWp._eta ?? null,       // ETA at destination (UTC ms)
+                legAltFt:    active._planAltFt ?? active.alt ?? null,  // cruise altitude for active leg
+
                 // Fuel
                 plannedGph,
                 fuelRemaining:  fuelRem,
@@ -2852,6 +2859,11 @@ class RouteTable {
                     return segIndex === 0
                         ? (wp._cumEte != null ? this._formatTime(wp._cumEte) : '\u2014')
                         : (seg._ete != null ? this._formatTime(seg._ete) : '');
+                case 'eta':
+                    if (segIndex === 0 && wp._eta) {
+                        return new Date(wp._eta).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                    }
+                    return segIndex === 0 ? '\u2014' : '';
                 case 'fuel':
                     return seg._fuel != null ? seg._fuel.toFixed(1) : '\u2014';
                 case 'fuel_rem': {
@@ -2901,6 +2913,10 @@ class RouteTable {
                 return wp._cumDist != null ? wp._cumDist : '\u2014';
             case 'ete':
                 return wp._cumEte != null ? this._formatTime(wp._cumEte) : '\u2014';
+            case 'eta':
+                return wp._eta
+                    ? new Date(wp._eta).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                    : '\u2014';
             case 'fuel':
                 return wp._fuel != null ? wp._fuel.toFixed(1) : '\u2014';
             case 'fuel_rem': {
