@@ -93,3 +93,75 @@ describe('RoutePlanner.recomputeLegs()', () => {
         expect(recomputed.legs[0].distNm).toBeGreaterThan(0);
     });
 });
+
+// Minimal mocks for recomputeLegs-only tests (no aero/A* needed)
+const mockAero = { getAirport: async () => null };
+const mockPlans = { get: async () => null, put: async () => '', list: async () => [], delete: async () => {} };
+
+describe('recomputeLegs with winds and altitude', () => {
+    const profile = {
+        id: 'test', tailNumber: '', model: 'Test',
+        cruise_ktas: 155, cruise_ias: 148, fuel_burn_gph: 8.0,
+        fuel_capacity_gal: 36, reserve_gal: 10,
+        climb_rate_fpm: 750, service_ceiling_ft: 17500, taxi_burn_gal: 1.5,
+        max_hp: 180,
+        equipment: { vAirways: true, tAirways: false, jAirways: false, gpsApproach: true },
+    };
+    const simplePlan = {
+        departure: 'KLKR', destination: 'KCLT',
+        cruiseAltFt: 6500,
+        reserveGal: 10,
+        waypoints: [
+            { id: 'KLKR', lat: 34.7281, lon: -81.2128 },
+            { id: 'KCLT', lat: 35.2140, lon: -80.9431 },
+        ],
+        options: { routingMode: 'v-airways', maxLegHrs: 2, selfServeOnly: false, avoidance: [] },
+    };
+
+    it('populates legAltFt from cruiseAltFt when no waypoint override', () => {
+        const planner = new RoutePlanner({ aero: mockAero, plans: mockPlans });
+        const result = planner.recomputeLegs(simplePlan, profile);
+        expect(result.legs[0].altFt).toBe(6500);
+    });
+
+    it('uses waypoint.altFt as per-leg altitude override', () => {
+        const planWithOverride = {
+            ...simplePlan,
+            waypoints: [
+                { id: 'KLKR', lat: 34.7281, lon: -81.2128 },
+                { id: 'KCLT', lat: 35.2140, lon: -80.9431, altFt: 9500 },
+            ],
+        };
+        const planner = new RoutePlanner({ aero: mockAero, plans: mockPlans });
+        const result = planner.recomputeLegs(planWithOverride, profile);
+        expect(result.legs[0].altFt).toBe(9500);
+    });
+
+    it('headwind increases flight time', () => {
+        // KLKR→KCLT bearing ~030° (northeast), headwind would be from ~030°
+        const winds = { CLT: { 6000: { dir: 30, spd: 30 } } };
+        // fdLocs maps station IDs to [lat, lon] so findNearestFdStation can locate them in tests
+        const fdLocs = { CLT: [35.2140, -80.9431] };
+        const planner = new RoutePlanner({ aero: mockAero, plans: mockPlans });
+        const calm   = planner.recomputeLegs(simplePlan, profile);
+        const windy  = planner.recomputeLegs(simplePlan, profile, { winds, fdLocs });
+        expect(windy.legs[0].timeHrs).toBeGreaterThan(calm.legs[0].timeHrs);
+    });
+
+    it('populates eta on each leg as UTC ms', () => {
+        const dep = new Date('2026-05-06T14:00:00Z');
+        const planner = new RoutePlanner({ aero: mockAero, plans: mockPlans });
+        const result = planner.recomputeLegs(simplePlan, profile, { departureTime: dep });
+        expect(result.legs[0].eta).toBeGreaterThan(dep.getTime());
+        expect(typeof result.legs[0].eta).toBe('number');
+    });
+
+    it('VFR altitude auto-selected when cruiseAltFt absent', () => {
+        const noCruiseAlt = { ...simplePlan };
+        delete noCruiseAlt.cruiseAltFt;
+        const planner = new RoutePlanner({ aero: mockAero, plans: mockPlans });
+        const result = planner.recomputeLegs(noCruiseAlt, profile);
+        // KLKR→KCLT bearing ~030° (eastbound, short) → should be 3500 or 5500
+        expect([3500, 5500]).toContain(result.legs[0].altFt);
+    });
+});

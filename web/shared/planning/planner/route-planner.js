@@ -4,8 +4,10 @@
 import { AirwayGraph } from './airway-graph.js';
 import { parseRouteString } from './parser.js';
 import { buildAvoidancePenalty } from './avoidance.js';
-import { haversine, bearing, crossTrackDistanceNm } from '../math/route-math.js';
+import { haversine, bearing, crossTrackDistanceNm, iasToTas, groundSpeed, vfrAltitude } from '../math/route-math.js';
 import { decomposeLeg } from '../math/fuel-phases.js';
+import { tasAtAltitude } from '../math/engine-data.js';
+import { findNearestFdStation, getWindAtAlt } from './winds-interpolator.js';
 import { PlanError, DestinationUnreachableError } from './route-planner-errors.js';
 
 /**
@@ -187,45 +189,106 @@ export class RoutePlanner {
      * Recompute leg-level data without re-running A*.
      * @param {import('../types/flight-plan.js').FlightPlan} plan
      * @param {import('../types/aircraft-profile.js').AircraftProfile} [profileOverride]
+     * @param {object} [opts]
+     * @param {Date}   [opts.departureTime]    defaults to now
+     * @param {number} [opts.pctPower]         cruise power percentage (default 65)
+     * @param {number} [opts.cruiseAltFt]      override plan.cruiseAltFt
+     * @param {Record<string,Record<number,{dir:number,spd:number,temp?:number,variable?:boolean}>>} [opts.winds]
+     * @param {Record<string,[number,number]>} [opts.fdLocs]  FD station coords override (for testing)
      * @returns {import('../types/flight-plan.js').FlightPlan}
      */
-    recomputeLegs(plan, profileOverride) {
+    recomputeLegs(plan, profileOverride, opts = {}) {
         const profile = profileOverride || RV9A_FALLBACK;
         const wps = plan.waypoints;
         const legs = [];
         let fuelRem = profile.fuel_capacity_gal;
+        const pctPower = (opts.pctPower ?? 65) / 100;
+        let etaMs = (opts.departureTime instanceof Date ? opts.departureTime.getTime() : Date.now());
+
+        // Resolve cruise altitude: opts override → plan field → VFR auto-select
+        const dep  = wps[0];
+        const dest = wps[wps.length - 1];
+        let globalCruiseAltFt = opts.cruiseAltFt ?? plan.cruiseAltFt;
+        if (!globalCruiseAltFt && dep && dest) {
+            const magCourse = bearing(dep.lat, dep.lon, dest.lat, dest.lon);
+            globalCruiseAltFt = vfrAltitude(magCourse, dep, dest);
+        }
+        globalCruiseAltFt = globalCruiseAltFt ?? 6000;
+
         for (let i = 0; i < wps.length - 1; i++) {
             const a = wps[i];
             const b = wps[i + 1];
+
+            // Per-leg altitude: use destination waypoint altFt override, else global cruise
+            const legAltFt = b.altFt ?? globalCruiseAltFt;
+
             const distNm = haversine(a.lat, a.lon, b.lat, b.lon);
-            const altFt = plan.cruiseAltFt ?? 6000;
+            const brgTrue = bearing(a.lat, a.lon, b.lat, b.lon);
+
+            // Wind at leg midpoint
+            let windDir = null, windSpd = null, oatC = null;
+            if (opts.winds) {
+                const midLat = (a.lat + b.lat) / 2;
+                const midLon = (a.lon + b.lon) / 2;
+                const station = findNearestFdStation(opts.winds, midLat, midLon, opts.fdLocs);
+                const windEntry = station ? getWindAtAlt(opts.winds[station], legAltFt) : null;
+                if (windEntry && !windEntry.variable) {
+                    windDir = windEntry.dir;
+                    windSpd = windEntry.spd;
+                    oatC    = windEntry.temp ?? null;
+                }
+            }
+
+            // TAS: use ISA model if cruise_ias available, else empirical tasAtAltitude
+            const tas = profile.cruise_ias
+                ? iasToTas(profile.cruise_ias, legAltFt, oatC)
+                : tasAtAltitude(profile, legAltFt);
+
+            // GS: wind-corrected or flat TAS
+            const gs = (windDir !== null && windSpd !== null)
+                ? groundSpeed(tas, brgTrue, windDir, windSpd)
+                : tas;
+
             const decomp = decomposeLeg(profile, {
                 distNm,
-                altFt,
+                altFt: legAltFt,
                 departingFromGround: i === 0,
                 endingAtGround: i === wps.length - 2,
+                gsKt: gs,
+                tasKt: tas,
             });
+
             fuelRem -= decomp.totalFuelGal;
+            etaMs   += decomp.totalTimeHrs * 3_600_000;
+
             legs.push({
                 from: a.id,
-                to: b.id,
+                to:   b.id,
                 distNm,
-                bearingTrue: bearing(a.lat, a.lon, b.lat, b.lon),
-                altFt,
-                tasKt: profile.cruise_ktas,
-                gsKt: profile.cruise_ktas,
-                timeHrs: decomp.totalTimeHrs,
-                fuelGal: decomp.totalFuelGal,
-                fuelRemGal: fuelRem,
-                airway: b.airway || 'DIRECT',
+                bearingTrue: brgTrue,
+                altFt:       legAltFt,
+                tasKt:       Math.round(tas),
+                gsKt:        Math.round(gs),
+                windDir:     windDir ?? undefined,
+                windSpd:     windSpd ?? undefined,
+                windKt:      (windDir !== null && windSpd !== null)
+                             ? Math.round(gs - tas)
+                             : undefined,
+                percentPwr:  Math.round(pctPower * 100),
+                timeHrs:     decomp.totalTimeHrs,
+                fuelGal:     decomp.totalFuelGal,
+                fuelRemGal:  fuelRem,
+                eta:         etaMs,
+                airway:      b.airway || 'DIRECT',
             });
         }
+
         const summary = {
-            totalDistNm: legs.reduce((s, l) => s + l.distNm, 0),
-            totalEteHrs: legs.reduce((s, l) => s + l.timeHrs, 0),
+            totalDistNm:  legs.reduce((s, l) => s + l.distNm, 0),
+            totalEteHrs:  legs.reduce((s, l) => s + l.timeHrs, 0),
             totalFuelGal: legs.reduce((s, l) => s + l.fuelGal, 0),
-            fuelRemGal: fuelRem,
-            fixCount: wps.length,
+            fuelRemGal:   fuelRem,
+            fixCount:     wps.length,
         };
         return { ...plan, legs, summary };
     }
