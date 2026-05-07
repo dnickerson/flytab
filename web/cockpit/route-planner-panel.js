@@ -64,6 +64,18 @@ class RoutePlannerPanel {
 
         // Document click handler ref for destroy()
         this._onDocClick = null;
+
+        // Winds / performance opts
+        this._departureTime = null;     // Date | null
+        this._cruiseAltFt   = null;     // number | null — separate from _altitude (A* planning alt)
+        this._pctPower      = 65;
+        this._altSel        = null;     // <select> DOM ref
+        this._depTimeSel    = null;     // <input datetime-local> DOM ref
+        this._pwrSel        = null;     // <select> DOM ref
+        this._lastPlan      = null;     // raw A* result before winds applied
+        this._currentPlan   = null;     // wind-corrected result
+        this._fetchingWinds = false;
+        this._windWarnings  = [];
     }
 
     /** Build DOM, wire events, start building airway graph. */
@@ -111,6 +123,15 @@ class RoutePlannerPanel {
             if (saved.compactView   != null) this._compactView   = saved.compactView;
             if (saved.routingMode   != null) this._routingMode   = saved.routingMode;
             if (Array.isArray(saved.avoidList)) this._avoidList  = saved.avoidList;
+            if (saved.departureTime) this._departureTime = new Date(saved.departureTime);
+            if (saved.cruiseAltFt  != null) {
+                this._cruiseAltFt = saved.cruiseAltFt;
+                if (this._altSel) this._altSel.value = String(saved.cruiseAltFt);
+            }
+            if (saved.pctPower != null) {
+                this._pctPower = saved.pctPower;
+                if (this._pwrSel) this._pwrSel.value = String(saved.pctPower);
+            }
         } catch {}
     }
 
@@ -124,6 +145,9 @@ class RoutePlannerPanel {
                 compactView:   this._compactView,
                 routingMode:   this._routingMode,
                 avoidList:     this._avoidList,
+                departureTime: this._departureTime ? this._departureTime.toISOString() : null,
+                cruiseAltFt:   this._cruiseAltFt,
+                pctPower:      this._pctPower,
             }));
         } catch {}
     }
@@ -456,6 +480,87 @@ class RoutePlannerPanel {
         modeRow.appendChild(modeLabel);
         modeRow.appendChild(this._modeSel);
         row.appendChild(modeRow);
+
+        // Departure time row
+        const depRow = document.createElement('div');
+        depRow.className = 'rpp-mode-row';
+        const depLabel = document.createElement('span');
+        depLabel.className = 'rpp-opts-label';
+        depLabel.textContent = 'Depart';
+        this._depTimeSel = document.createElement('input');
+        this._depTimeSel.type = 'datetime-local';
+        this._depTimeSel.className = 'rpp-dep-time';
+        this._depTimeSel.addEventListener('change', () => {
+            this._departureTime = this._depTimeSel.value ? new Date(this._depTimeSel.value) : null;
+            this._saveOpts();
+            if (this._lastPlan) this._applyWindsToLastPlan();
+        });
+        depRow.appendChild(depLabel);
+        depRow.appendChild(this._depTimeSel);
+        row.appendChild(depRow);
+
+        // Altitude (cruise, for wind/perf — distinct from A* planning altitude)
+        const altRow = document.createElement('div');
+        altRow.className = 'rpp-mode-row';
+        const altLabel2 = document.createElement('span');
+        altLabel2.className = 'rpp-opts-label';
+        altLabel2.textContent = 'Altitude';
+        this._altSel = document.createElement('select');
+        this._altSel.className = 'rpp-mode-sel';
+        [
+            ['',     'Auto (VFR)'],
+            ['3500', '3,500 ft'],
+            ['4500', '4,500 ft'],
+            ['5500', '5,500 ft'],
+            ['6500', '6,500 ft'],
+            ['7500', '7,500 ft'],
+            ['8500', '8,500 ft'],
+            ['9500', '9,500 ft'],
+            ['10500','10,500 ft'],
+            ['11500','11,500 ft'],
+        ].forEach(([v, t]) => {
+            const o = document.createElement('option');
+            o.value = v; o.textContent = t;
+            if (v && parseInt(v) === this._cruiseAltFt) o.selected = true;
+            this._altSel.appendChild(o);
+        });
+        this._altSel.addEventListener('change', () => {
+            this._cruiseAltFt = this._altSel.value ? parseInt(this._altSel.value, 10) : null;
+            this._saveOpts();
+            if (this._lastPlan) this._applyWindsToLastPlan();
+        });
+        altRow.appendChild(altLabel2);
+        altRow.appendChild(this._altSel);
+        row.appendChild(altRow);
+
+        // Power %
+        const pwrRow = document.createElement('div');
+        pwrRow.className = 'rpp-mode-row';
+        const pwrLabel = document.createElement('span');
+        pwrLabel.className = 'rpp-opts-label';
+        pwrLabel.textContent = 'Power';
+        this._pwrSel = document.createElement('select');
+        this._pwrSel.className = 'rpp-mode-sel';
+        [
+            ['55', '55% LOP'],
+            ['60', '60% LOP'],
+            ['65', '65% LOP'],
+            ['70', '70% LOP'],
+            ['75', '75% LOP'],
+        ].forEach(([v, t]) => {
+            const o = document.createElement('option');
+            o.value = v; o.textContent = t;
+            if (parseInt(v) === this._pctPower) o.selected = true;
+            this._pwrSel.appendChild(o);
+        });
+        this._pwrSel.addEventListener('change', () => {
+            this._pctPower = parseInt(this._pwrSel.value, 10);
+            this._saveOpts();
+            if (this._lastPlan) this._applyWindsToLastPlan();
+        });
+        pwrRow.appendChild(pwrLabel);
+        pwrRow.appendChild(this._pwrSel);
+        row.appendChild(pwrRow);
 
         return row;
     }
@@ -1028,15 +1133,45 @@ class RoutePlannerPanel {
             this._route = this._resultToPills(dep, dest, result);
             this._depInput.value  = dep;
             this._destInput.value = dest;
+            this._lastPlan = result;
             this._updateStats(result);
             this._render();
             this._toast(`Route planned · ${result.waypoints?.length || 0} waypoints`, 2500);
+            // Apply winds/perf in background — updates stats bar when done
+            this._applyWindsToLastPlan();
         } catch (err) {
             console.error('[RoutePlannerPanel] plan() failed:', err);
             this._toast('Could not plan route: ' + (err.message || err), 5000);
         } finally {
             setBtn('Plan', false);
         }
+    }
+
+    async _applyWindsToLastPlan() {
+        if (!this._lastPlan || !this._planner) return;
+        const opts = {
+            departureTime: this._departureTime ?? new Date(),
+            pctPower:      this._pctPower,
+            cruiseAltFt:   this._cruiseAltFt ?? undefined,
+        };
+        this._fetchingWinds = true;
+        if (this._statsEl) this._updateStats(this._lastPlan);
+        try {
+            const fetchWindsFn = (typeof FlyTabPlanning !== 'undefined' && FlyTabPlanning.fetchWinds)
+                ? FlyTabPlanning.fetchWinds
+                : null;
+            if (fetchWindsFn) {
+                opts.winds = await fetchWindsFn(opts.departureTime).catch(() => null);
+            }
+        } catch (_) {}
+        this._fetchingWinds = false;
+        this._currentPlan = this._planner.recomputeLegs(this._lastPlan, null, opts);
+        if (this._statsEl) this._updateStats(this._currentPlan);
+        this._windWarnings = [];
+        if (!opts.winds) {
+            this._windWarnings = ['Wind data unavailable — calm-air estimates'];
+        }
+        this._renderWindWarnings?.();
     }
 
     _waitForPlanner(timeoutMs) {
