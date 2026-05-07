@@ -71,7 +71,19 @@ decomp = decomposeLeg(profile, {
 leg.eta = prevEta + decomp.totalTimeHrs * 3_600_000
 ```
 
-**Per-leg altitude:** Each leg uses `legAltFt = wps[i+1].overrideAlt ?? cruiseAltFt`. Wind lookup and TAS use `legAltFt`, not the global cruise altitude, for that leg.
+**Per-leg altitude:** Each leg uses `legAltFt = wps[i+1].overrideAlt ?? cruiseAltFt`. TAS, ground speed, wind lookup, and fuel burn all use `legAltFt` — legs at different altitudes (step climbs, per-leg overrides) automatically get the correct performance numbers for that altitude.
+
+**TAS and ground speed per leg:**
+```javascript
+// OAT from wind data at legAltFt; null falls back to ISA standard
+const oatC  = wind?.temp ?? null;
+const tas   = profile.cruise_ias
+            ? iasToTas(profile.cruise_ias, legAltFt, oatC)   // ISA atmosphere model
+            : tasAtAltitude(profile, legAltFt);               // empirical fallback
+const gs    = groundSpeed(tas, bearingTrue, wind?.dir ?? 0, wind?.spd ?? 0);
+```
+
+TAS rises with altitude (thinner air for same IAS) and falls slightly above the engine's critical altitude. At 9,500 ft vs 5,500 ft the difference for an RV-9A is roughly 8–10 kt TAS — a material difference in leg time and fuel.
 
 **Fuel burn at altitude:**
 - Cruise: `gphAtPower(profile, pctPower / 100, legAltFt, 'LOP')` — lean of peak for all cruise phases
@@ -102,6 +114,7 @@ export function maxPowerAtAltitude(profile, altFt) {
 
 **`AircraftProfile` additions** (types/aircraft-profile.js):
 ```
+cruise_ias                indicated airspeed at cruise power (kt); enables ISA-model TAS
 max_hp                    engine rated HP (e.g. 180 for O-360-A1A)
 alt_power_loss_pct_per_kft  % power lost per 1000 ft (default 3.0)
 sfc_lop                   optional override for LOP SFC (gal/HP/hr)
@@ -109,7 +122,7 @@ sfc_rop                   optional override for ROP SFC (gal/HP/hr)
 sfc_full_rich             optional override for full-rich SFC
 ```
 
-The RV-9A default profile in `route-planner.js` gains `max_hp: 180`. Existing generic profiles without `max_hp` continue to use the linear fallback.
+The RV-9A default profile in `route-planner.js` gains `max_hp: 180` and `cruise_ias` (derived from 155 KTAS at 8,000 ft standard day ≈ 148 KIAS). Profiles without `cruise_ias` fall back to `tasAtAltitude` (empirical two-segment model).
 
 ### Phase Model
 
