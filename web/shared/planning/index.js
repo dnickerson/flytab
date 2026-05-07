@@ -21,6 +21,7 @@ export { buildAvoidancePenalty, segmentIntersectsPolygon } from './planner/avoid
 export { haversine, bearing, intermediatePoint, crossTrackDistanceNm, formatTime, windCorrectedMagHdg, iasToTas, groundSpeed, vfrAltitude } from './math/route-math.js';
 export { tasAtAltitude, gphAtPower, climbRateAtAltitude, maxPowerAtAltitude } from './math/engine-data.js';
 export { decomposeLeg } from './math/fuel-phases.js';
+export { fetchWinds, getWindAtAlt, findNearestFdStation, selectFdCycle } from './planner/winds-interpolator.js';
 
 export const VERSION = '0.1.0';
 
