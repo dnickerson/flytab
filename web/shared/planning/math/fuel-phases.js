@@ -20,6 +20,7 @@ import { tasAtAltitude, gphAtPower, climbRateAtAltitude } from './engine-data.js
  * @property {number}  [windKt]     tailwind +, headwind - (scalar component)
  * @property {number}  [gsKt]       wind-corrected GS override — when set, used for cruise time
  * @property {number}  [tasKt]      altitude-corrected TAS override — when set, used for climb/descent
+ * @property {number}  [powerFrac]  cruise power fraction 0–1 (default 0.75)
  *
  * @typedef LegDecomposition
  * @property {{climb:PhaseResult,cruise:PhaseResult,descent:PhaseResult,taxi?:PhaseResult}} phases
@@ -84,7 +85,7 @@ export function decomposeLeg(profile, leg) {
     const cruiseHrs  = cruiseDist / Math.max(1, gsCruise);
     phases.cruise = {
         timeHrs: cruiseHrs,
-        fuelGal: gphAtPower(profile, 0.75, leg.altFt, 'LOP') * cruiseHrs,
+        fuelGal: gphAtPower(profile, leg.powerFrac ?? 0.75, leg.altFt, 'LOP') * cruiseHrs,
         distNm:  cruiseDist,
         altFt:   leg.altFt,
     };

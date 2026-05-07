@@ -256,6 +256,7 @@ export class RoutePlanner {
                 endingAtGround: i === wps.length - 2,
                 gsKt: gs,
                 tasKt: tas,
+                powerFrac: pctPower,
             });
 
             fuelRem -= decomp.totalFuelGal;

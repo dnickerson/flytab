@@ -46,3 +46,12 @@ describe('decomposeLeg with gsKt/tasKt overrides', () => {
         expect(hiAlt.phases.climb.distNm).toBeGreaterThanOrEqual(loAlt.phases.climb.distNm);
     });
 });
+
+describe('decomposeLeg powerFrac', () => {
+    it('cruise fuel scales with powerFrac', () => {
+        const prof = { max_hp: 180, fuel_capacity_gal: 50, cruise_ktas: 148 };
+        const base = decomposeLeg(prof, { distNm: 100, altFt: 7500 });
+        const low  = decomposeLeg(prof, { distNm: 100, altFt: 7500, powerFrac: 0.55 });
+        expect(low.totalFuelGal).toBeLessThan(base.totalFuelGal);
+    });
+});

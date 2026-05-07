@@ -1266,6 +1266,12 @@ class RoutePlannerPanel {
         if (!opts.winds) {
             this._windWarnings.push('Wind data unavailable — time and fuel use calm-air estimates');
         }
+        const fuelRem = this._currentPlan?.summary?.fuelRemGal;
+        if (fuelRem != null && this._reserveGal > 0 && fuelRem < this._reserveGal) {
+            this._windWarnings.push(
+                `Fuel below reserve: ${fuelRem.toFixed(1)} gal at dest, ${this._reserveGal} gal reserve required`
+            );
+        }
         this._renderWindWarnings();
     }
 
