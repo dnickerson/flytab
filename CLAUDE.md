@@ -87,6 +87,22 @@ Standard Capacitor/Gradle project. Mixed HTTP content is explicitly allowed in t
 - **SUA layer is off by default**: `sua: false` in `cockpit-config.json`. Pilot must enable in the layer panel. The layer renders R/P/W/A/MOA areas from z6 up.
 - **IDB transaction hang**: An extremely long JS execution during NASR import (parsing 18MB JSON + writing 98k records) can leave IDB connections in a blocked state where new `indexedDB.open()` calls never resolve. Force-stopping the app clears it.
 
+## AWC Network Calls Must Go Through the flywhere Proxy
+
+**Never fetch `aviationweather.gov` directly from app code.** The Capacitor WebView runs as `http://localhost` — AWC sends no `Access-Control-Allow-Origin` header on any endpoint, so the browser silently blocks every direct AWC fetch. The error is swallowed and the feature just doesn't work.
+
+All AWC calls must route through `Settings.workerBase` (defaults to `https://www.flywhere.app/api`):
+
+```javascript
+const base = (typeof Settings !== 'undefined' && Settings.workerBase)
+    ? Settings.workerBase : 'https://www.flywhere.app/api';
+const url = `${base}/weather?type=windtemp&region=all&level=low&fcst=${cycle}`;
+```
+
+The proxy at `flywhere/app/api/weather/route.ts` accepts `type=` values: `metar`, `taf`, `windtemp`, `pirep`, `airsigmet`, `fcstdisc`, `gairmet`. All other query params are forwarded to AWC verbatim.
+
+**When adding a new AWC endpoint type to the proxy**, verify the response branch in `route.ts` includes `'Access-Control-Allow-Origin': '*'` — the text/plain and JSON branches are separate and both must carry the header. Missing it on the plain-text branch is how `windtemp` was broken (May 2026).
+
 ## Display Bugs From External Data — Inspect Before Fixing
 
 **When a UI bug involves rendering data from an external API, hit the live endpoint and inspect the actual response BEFORE writing any fix.** Field names, value formats, and special tokens are routinely surprising and can't be inferred from the symptom or the existing parser. Guessing at semantics produces fixes that look correct in the diff but fail in production — and burns multiple iterations to discover what 30 seconds of `curl | jq` would have shown up front.
