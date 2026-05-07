@@ -104,18 +104,41 @@ Wind lookup functions (`getWindAtAlt`, `findNearestFdStation`) live in `winds-in
 ### New Module: `web/shared/planning/planner/winds-interpolator.js`
 
 Responsibilities:
-- `fetchWinds(departureTime)` — AWC fetch → FIS-B fallback → cache fallback → null
-- `findNearestFdStation(allWinds, lat, lon)` — haversine nearest
-- `getWindAtAlt(stationWinds, altFt)` — nearest-key lookup
-- Cache management (localStorage keyed by forecast cycle)
+- `fetchWinds(departureTime)` — AWC fetch (with cycle selected from `departureTime.getUTCHours()`) → FIS-B fallback → cache fallback → null
+- `findNearestFdStation(allWinds, lat, lon)` — delegates to `WeatherClient.findNearestFdStation` (already implemented)
+- `getWindAtAlt(stationWinds, altFt)` — nearest-key lookup (simple, inline)
+- Cache management (localStorage keyed by forecast cycle + date)
+
+**Reuse note:** `WeatherClient.parseAllWindsAloft`, `WeatherClient.findNearestFdStation`, and `WeatherClient.parseWindGroup` already exist in `web/shared/weather-client.js` — call them directly rather than reimplementing.
 
 ### Departure Time and ETA
 
-- Pilot sets departure time via `<input type="datetime-local">` (defaults to `Date.now()`)
+**Time zones:** AWC FD data and FIS-B winds are always Zulu (UTC). The pilot-facing UI shows local time. All internal times are stored as ms since epoch (UTC). Conversion points:
+
+| Layer | Format | How |
+|---|---|---|
+| `datetime-local` input | Local time (browser default) | `new Date(inputValue)` → UTC ms internally |
+| Forecast cycle selection | UTC | `departureDate.getUTCHours()` selects FD cycle |
+| `leg.eta` | UTC ms epoch | `Date.toLocaleTimeString()` for display |
+| FIS-B wind timestamps | Zulu | Map to canonical shape before use |
+
+**Forecast cycle selection:** FD bulletins are issued ~00Z and ~12Z with 6/12/24-hour lookaheads. Given departure UTC hour, pick the FD cycle whose valid time is closest to departure:
+
+```javascript
+// fcst param: '06', '12', or '24'
+function selectFdCycle(departureUtcHour) {
+    if (departureUtcHour < 9)  return '06';   // valid ~06Z
+    if (departureUtcHour < 21) return '12';   // valid ~12Z or ~18Z
+    return '24';                               // valid ~00Z next day
+}
+```
+
+**Panel behavior:**
+- Pilot sets departure time via `<input type="datetime-local">` (displays local, stored as UTC ms)
+- Defaults to `Date.now()`
 - Stored in `flypi_planner_opts`
-- ETA computed per waypoint and stored in `leg.eta` (ms since epoch)
-- AWC forecast cycle selected based on departure time hour
 - Changing departure time re-runs `recomputeLegs` only (no A* re-run — fast)
+- ETAs displayed as local time throughout panel and route table
 
 ---
 
