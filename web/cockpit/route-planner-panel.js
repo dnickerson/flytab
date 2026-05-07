@@ -700,11 +700,7 @@ class RoutePlannerPanel {
             item.altFt = input.trim() ? parseInt(input) : undefined;
             this._saveOpts();
             this._render();
-            if (this._lastPlan) {
-                const wp = this._lastPlan.waypoints?.find(w => (w.id || w.fix) === item.id);
-                if (wp) wp.altFt = item.altFt;
-                this._applyWindsToLastPlan();
-            }
+            if (this._lastPlan) this._applyWindsToLastPlan();
         });
     }
 
@@ -841,12 +837,13 @@ class RoutePlannerPanel {
         const fuelLabel = summary?.totalFuelGal != null
             ? `<span class="rpp-stat-fuel">${summary.totalFuelGal.toFixed(1)} gal</span>` : '';
 
+        const sign = n => n >= 0 ? '+' : '';
         this._statsEl.innerHTML =
             `${altLabel}${windLabel}` +
             `<span class="rpp-stat-sep">·</span>` +
             `<span class="rpp-stat-item"><span class="rpp-stat-label">Route</span>${Math.round(routeNm)} nm</span>` +
             `<span class="rpp-stat-sep">·</span>` +
-            `<span class="rpp-stat-item rpp-stat-delta">+${Math.round(deltaNm)} nm (+${deltaPct.toFixed(0)}%)</span>` +
+            `<span class="rpp-stat-item rpp-stat-delta">${sign(deltaNm)}${Math.round(deltaNm)} nm (${sign(deltaPct)}${deltaPct.toFixed(0)}%)</span>` +
             (eteLabel ? `<span class="rpp-stat-sep">·</span><span class="rpp-stat-item">${eteLabel}${etaLabel ? ` · ETA ${etaLabel}` : ''}</span>` : '') +
             (fuelLabel ? `<span class="rpp-stat-sep">·</span>${fuelLabel}` : '');
         this._statsEl.style.display = '';
@@ -1249,7 +1246,21 @@ class RoutePlannerPanel {
             }
         } catch (_) {}
         this._fetchingWinds = false;
-        this._currentPlan = this._planner.recomputeLegs(this._lastPlan, null, opts);
+        // Build plan copy with per-fix altitude overrides from _route pills so
+        // we never mutate the cached _lastPlan object (fragile shared reference).
+        const routeAltMap = new Map(
+            this._route.filter(p => p.altFt != null).map(p => [p.id, p.altFt])
+        );
+        const plan = routeAltMap.size > 0 && this._lastPlan.waypoints
+            ? {
+                ...this._lastPlan,
+                waypoints: this._lastPlan.waypoints.map(wp => {
+                    const override = routeAltMap.get(wp.id || wp.fix);
+                    return override != null ? { ...wp, altFt: override } : wp;
+                }),
+              }
+            : this._lastPlan;
+        this._currentPlan = this._planner.recomputeLegs(plan, null, opts);
         if (this._statsEl) this._updateStats(this._currentPlan);
         this._windWarnings = [];
         if (!opts.winds) {
