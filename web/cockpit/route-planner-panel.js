@@ -96,6 +96,21 @@ class RoutePlannerPanel {
         // Restore stats from the most recent computed plan
         const prior = this._currentPlan || this._lastPlan;
         if (prior?.summary) this._updateStats(prior);
+        // If no prior computed plan (e.g. after app restart), synthesize _lastPlan
+        // from the loaded plan's waypoints so _applyWindsToLastPlan can compute
+        // stats and fetch winds without needing the user to replan first.
+        if (!this._lastPlan && plan?.waypoints?.length >= 2) {
+            this._lastPlan = {
+                ...plan,
+                waypoints: plan.waypoints.map(wp => ({
+                    ...wp,
+                    id: wp.icao || wp.name || wp.fix || wp.id,
+                })),
+            };
+        }
+        if (this._lastPlan) {
+            this._windsPromise = this._applyWindsToLastPlan();
+        }
     }
 
     /** Clear state. Called by app.closeRoutePlanner(). */
@@ -1114,7 +1129,7 @@ class RoutePlannerPanel {
 
     // ── Add input handler ─────────────────────────────────────────────────────
 
-    _onAddTap() {
+    async _onAddTap() {
         const v = this._addInput.value.trim().toUpperCase();
         if (!v) return;
 
@@ -1122,6 +1137,34 @@ class RoutePlannerPanel {
         // Auto-detect: override select if input looks like a known type
         if (v === 'DIRECT') type = 'direct';
         else if (/^[VT]\d/.test(v)) type = 'awy';
+
+        // Validate the identifier exists in the navigation database before
+        // adding it — unknown fixes would silently vanish during Apply.
+        if (type !== 'direct' && this._nasrDb) {
+            if (type === 'awy') {
+                const awy = await this._nasrDb.getAirway(v).catch(() => null);
+                if (!awy) {
+                    this._toast(`Airway "${v}" not found in navigation database`, 4000);
+                    return;
+                }
+            } else {
+                // Check coords cache first, then IDB airport → navaid → fix
+                let coord = this._coords[v];
+                if (!coord) {
+                    let rec = await this._nasrDb.getAirport(v).catch(() => null);
+                    if (!rec) rec = await this._nasrDb.getNavaid(v).catch(() => null);
+                    if (!rec) rec = await this._nasrDb.getFix(v).catch(() => null);
+                    if (rec?.lat != null) {
+                        coord = { lat: rec.lat, lon: rec.lon };
+                        this._coords[v] = coord;
+                    }
+                }
+                if (!coord) {
+                    this._toast(`"${v}" not found in navigation database`, 4000);
+                    return;
+                }
+            }
+        }
 
         // Determine insertion index
         let at;
@@ -1246,6 +1289,16 @@ class RoutePlannerPanel {
                     if (wp.fix && wp.lat != null)
                         this._coords[wp.fix] = { lat: wp.lat, lon: wp.lon };
                 }
+            }
+
+            // If the user has manually-added interior waypoints, confirm before
+            // replacing them — Plan would otherwise silently discard their edits.
+            const hasManual = this._route.some(
+                p => p.type === 'fix' || p.type === 'awy' || p.type === 'direct' || p.type === 'fuel'
+            );
+            if (hasManual) {
+                const ok = await this._confirm('Replace your current route with the newly planned route?');
+                if (!ok) { setBtn('Plan', false); return; }
             }
 
             this._route = this._resultToPills(dep, dest, result);
@@ -1608,15 +1661,25 @@ class RoutePlannerPanel {
      * successful apply.
      */
     async _onApplyKeepOpenTap() {
-        const ok = await this._doApply();
-        if (ok) this._toast('Applied — pilot may keep editing', 1800);
+        try {
+            const ok = await this._doApply();
+            if (ok) this._toast('Applied — pilot may keep editing', 1800);
+        } catch (err) {
+            console.error('[RoutePlannerPanel] apply failed:', err);
+            this._toast('Apply failed: ' + (err?.message || err), 5000);
+        }
     }
 
     /** Apply and dismiss the panel (legacy default). */
     async _onApplyTap() {
-        const ok = await this._doApply();
-        if (ok && typeof app !== 'undefined') {
-            app.closeRoutePlanner();
+        try {
+            const ok = await this._doApply();
+            if (ok && typeof app !== 'undefined') {
+                app.closeRoutePlanner();
+            }
+        } catch (err) {
+            console.error('[RoutePlannerPanel] apply failed:', err);
+            this._toast('Apply failed: ' + (err?.message || err), 5000);
         }
     }
 
@@ -1640,14 +1703,19 @@ class RoutePlannerPanel {
         // waypoint count exceeds the user-visible pill count.
         let legs;
         if (this._planner && wps.length >= 2) {
-            const recomputeOpts = {
-                departureTime: this._departureTime ?? new Date(),
-                pctPower:      this._pctPower,
-                cruiseAltFt:   this._cruiseAltFt ?? undefined,
-                winds:         this._lastWinds ?? undefined,
-            };
-            const pillPlan = this._planner.recomputeLegs({ waypoints: wps }, null, recomputeOpts);
-            legs = pillPlan.legs;
+            try {
+                const recomputeOpts = {
+                    departureTime: this._departureTime ?? new Date(),
+                    pctPower:      this._pctPower,
+                    cruiseAltFt:   this._cruiseAltFt ?? undefined,
+                    winds:         this._lastWinds ?? undefined,
+                };
+                const pillPlan = this._planner.recomputeLegs({ waypoints: wps }, null, recomputeOpts);
+                legs = pillPlan.legs;
+            } catch (err) {
+                console.warn('[RoutePlannerPanel] recomputeLegs failed, using bare legs:', err);
+                legs = this._buildLegsFromWaypoints(wps);
+            }
         } else {
             legs = this._buildLegsFromWaypoints(wps);
         }
