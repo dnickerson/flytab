@@ -357,6 +357,43 @@ Clears automatically when condition resolves.
 
 ---
 
+## Pre-Implementation Cleanup (Required Before Milestone 1)
+
+Code review found duplications that will cause the winds/altitude feature to diverge immediately if not consolidated first. These must ship before winds work begins.
+
+### 1. Extract `_buildMissingSegments` from route-table.js → planning lib
+
+`route-table.js` (lines ~1001–1182) contains 180 lines of climb/cruise/descent segment logic that duplicates what `decomposeLeg` does. When `recomputeLegs` gains wind/altitude awareness, this code path won't inherit those changes — routes displayed via route-table's segment builder will show stale flat-air numbers while the planner shows corrected ones.
+
+**Action:** Extract segment building into `web/shared/planning/planner/segment-builder.js` (or integrate into `recomputeLegs`). Route-table.js calls the shared function instead of building segments independently.
+
+### 2. Consolidate haversine (3 copies → 1)
+
+| Location | Action |
+|---|---|
+| `web/shared/planning/math/route-math.js` | Keep — canonical |
+| `web/shared/nasr-db.js` `NasrDB.haversineNm()` | Delete; callers use planning lib export |
+| `web/cockpit/route-table.js` via `NasrDB.haversineNm()` | Switch to planning lib import |
+
+Also: `route-planner-panel.js` calls `NasrDB.haversineNm()` in `_updateStats` — switch to planning lib.
+
+### 3. Move `_computeMagHdg` to planning lib
+
+`route-table.js:_computeMagHdg()` contains the WCA math (sin WCA = windSpd × sin(windDir − brg) / TAS) and a simplified magnetic variation model. The winds feature needs this in the planning lib so wind-corrected magnetic headings appear in the plan legs, not just in the route-table display. Move to `web/shared/planning/math/route-math.js` as `windCorrectedMagHdg(brg, lat, lon, tas, windDir, windSpd)`.
+
+### 4. Delete route-table.js private duplicates of planning lib functions
+
+| Private method | Planning lib equivalent | Action |
+|---|---|---|
+| `RouteTable._bearing()` | `route-math.js:bearing()` | Delete; import from planning lib |
+| `RouteTable._crossTrackNm()` | `route-math.js:crossTrackDistanceNm()` | Delete; import from planning lib |
+
+### 5. Document `formatTime` unit convention
+
+`route-math.js:formatTime(hrs)` takes hours. `RouteTable._formatTime(minutes)` takes minutes. Pick one convention (recommend **minutes** — most internal values are already in minutes) and document it. Do not merge yet — different signature; just add a JSDoc note to each clarifying units to prevent future bugs.
+
+---
+
 ## Out of Scope
 
 - Terrain-aware altitude selection (minimum en-route altitude enforcement) — separate future spec
