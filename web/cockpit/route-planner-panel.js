@@ -52,6 +52,7 @@ class RoutePlannerPanel {
         this._reserveInput = null;
         this._modeSel      = null;
         this._statsEl      = null;
+        this._warnStripEl  = null;
 
         // Drag state
         this._dragIdx = null;
@@ -288,6 +289,12 @@ class RoutePlannerPanel {
         this._avoidStripEl.className = 'rpp-avoid-strip';
         this._avoidStripEl.style.display = 'none';
         inner.appendChild(this._avoidStripEl);
+
+        // Amber warning strip — shown when wind data unavailable or other planning warnings
+        this._warnStripEl = document.createElement('div');
+        this._warnStripEl.className = 'rpp-warn-strip';
+        this._warnStripEl.style.display = 'none';
+        inner.appendChild(this._warnStripEl);
 
         // Pill box
         const pillBox = document.createElement('div');
@@ -642,6 +649,8 @@ class RoutePlannerPanel {
             <div class="rpp-menu-sep" id="rppMAvoidSep"></div>
             <div class="rpp-menu-item rpp-menu-avoid" id="rppMAvoid">Avoid &amp; Re-plan</div>
             <div class="rpp-menu-sep"></div>
+            <div class="rpp-menu-item" id="rppMAlt">Set altitude…</div>
+            <div class="rpp-menu-sep"></div>
             <div class="rpp-menu-item danger" id="rppMDelete">Remove</div>
         `;
         document.body.appendChild(this._ctxMenu);
@@ -680,6 +689,23 @@ class RoutePlannerPanel {
             this._render();
             this._onPlanTap();
         });
+        this._ctxMenu.querySelector('#rppMAlt').addEventListener('click', () => {
+            const i = this._ctxMenuIdx; this._closeMenu();
+            if (i === null) return;
+            const item = this._route[i];
+            if (item.type !== 'fix') return;
+            const current = item.altFt ? String(item.altFt) : '';
+            const input = prompt(`Altitude for ${item.id} (ft, blank = route default):`, current);
+            if (input === null) return;
+            item.altFt = input.trim() ? parseInt(input) : undefined;
+            this._saveOpts();
+            this._render();
+            if (this._lastPlan) {
+                const wp = this._lastPlan.waypoints?.find(w => (w.id || w.fix) === item.id);
+                if (wp) wp.altFt = item.altFt;
+                this._applyWindsToLastPlan();
+            }
+        });
     }
 
     _openMenu(e, idx) {
@@ -694,6 +720,9 @@ class RoutePlannerPanel {
             (item.type === 'fix' || item.type === 'awy' || item.type === 'direct');
         this._ctxMenu.querySelector('#rppMAvoid').style.display    = canAvoid ? '' : 'none';
         this._ctxMenu.querySelector('#rppMAvoidSep').style.display = canAvoid ? '' : 'none';
+
+        const canSetAlt = item.type === 'fix';
+        this._ctxMenu.querySelector('#rppMAlt').style.display = canSetAlt ? '' : 'none';
 
         this._ctxMenu.classList.add('open');
         const x = Math.min((e.clientX || e.pageX || 0), window.innerWidth  - 180);
@@ -745,6 +774,21 @@ class RoutePlannerPanel {
         this._avoidStripEl.appendChild(clearAll);
     }
 
+    _renderWindWarnings() {
+        if (!this._warnStripEl) return;
+        if (!this._windWarnings.length) { this._warnStripEl.style.display = 'none'; return; }
+        this._warnStripEl.style.display = '';
+        this._warnStripEl.innerHTML = this._windWarnings.map((w, i) =>
+            `<span class="rpp-warn-chip">${w}<button class="rpp-warn-x" data-i="${i}">×</button></span>`
+        ).join('');
+        this._warnStripEl.querySelectorAll('.rpp-warn-x').forEach(btn => {
+            btn.addEventListener('click', () => {
+                this._windWarnings.splice(parseInt(btn.dataset.i), 1);
+                this._renderWindWarnings();
+            });
+        });
+    }
+
     _renderRouteStr() {
         if (this._routeStrEl)
             this._routeStrEl.textContent = this._buildField15String(this._route);
@@ -752,25 +796,59 @@ class RoutePlannerPanel {
 
     _updateStats(result) {
         if (!this._statsEl) return;
+        const legs = result?.legs || [];
+        const summary = result?.summary;
         const wps = result?.waypoints;
-        const routeNm = result?.summary?.totalDistNm ?? result?.legs?.reduce((s, l) => s + (l.distNm || 0), 0);
-        if (!wps?.length || routeNm == null) { this._statsEl.style.display = 'none'; return; }
+        if (!wps?.length) { this._statsEl.style.display = 'none'; return; }
 
         const dep  = wps[0];
         const dest = wps[wps.length - 1];
-        if (dep.lat == null || dest.lat == null) { this._statsEl.style.display = 'none'; return; }
+        const routeNm = summary?.totalDistNm ?? legs.reduce((s, l) => s + (l.distNm || 0), 0);
+        if (routeNm == null || dep?.lat == null || dest?.lat == null) { this._statsEl.style.display = 'none'; return; }
 
-        const directNm = NasrDB.haversineNm(dep.lat, dep.lon, dest.lat, dest.lon);
-        const deltaNm  = routeNm - directNm;
-        const deltaPct = directNm > 0 ? (deltaNm / directNm) * 100 : 0;
+        const directNm  = NasrDB.haversineNm(dep.lat, dep.lon, dest.lat, dest.lon);
+        const deltaNm   = routeNm - directNm;
+        const deltaPct  = directNm > 0 ? (deltaNm / directNm * 100) : 0;
 
-        const fmt = n => Math.round(n).toLocaleString();
+        // Wind summary: average (GS - TAS) across legs that have wind data
+        const windLegs = legs.filter(l => l.windDir !== undefined && l.gsKt && l.tasKt);
+        let windLabel = '';
+        if (windLegs.length) {
+            const avgComp = windLegs.reduce((s, l) => s + (l.gsKt - l.tasKt), 0) / windLegs.length;
+            const tag = avgComp >= 0 ? `TW ${Math.round(avgComp)}kt` : `HW ${Math.round(-avgComp)}kt`;
+            windLabel = `<span class="rpp-stat-wind">${tag}</span>`;
+        } else if (this._fetchingWinds) {
+            windLabel = `<span class="rpp-stat-wind rpp-stat-fetching">Fetching winds…</span>`;
+        }
+
+        // Altitude label (first leg's altFt, or selector value)
+        const altFt = legs[0]?.altFt ?? this._cruiseAltFt;
+        const altLabel = altFt != null ? `<span class="rpp-stat-alt">${altFt.toLocaleString()} ft</span>` : '';
+
+        // ETE
+        const eteHrs = summary?.totalEteHrs;
+        const eteLabel = eteHrs != null
+            ? (() => { const h = Math.floor(eteHrs); const m = Math.round((eteHrs - h) * 60); return `${h}h ${String(m).padStart(2,'0')}m`; })()
+            : '';
+
+        // ETA — local time from last leg
+        const lastEta = legs.length ? legs[legs.length - 1]?.eta : undefined;
+        const etaLabel = lastEta
+            ? new Date(lastEta).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : '';
+
+        // Fuel
+        const fuelLabel = summary?.totalFuelGal != null
+            ? `<span class="rpp-stat-fuel">${summary.totalFuelGal.toFixed(1)} gal</span>` : '';
+
         this._statsEl.innerHTML =
-            `<span class="rpp-stat-item"><span class="rpp-stat-label">Route</span>${fmt(routeNm)} nm</span>` +
+            `${altLabel}${windLabel}` +
             `<span class="rpp-stat-sep">·</span>` +
-            `<span class="rpp-stat-item"><span class="rpp-stat-label">Direct</span>${fmt(directNm)} nm</span>` +
+            `<span class="rpp-stat-item"><span class="rpp-stat-label">Route</span>${Math.round(routeNm)} nm</span>` +
             `<span class="rpp-stat-sep">·</span>` +
-            `<span class="rpp-stat-item rpp-stat-delta">+${fmt(deltaNm)} nm (+${deltaPct.toFixed(0)}%)</span>`;
+            `<span class="rpp-stat-item rpp-stat-delta">+${Math.round(deltaNm)} nm (+${deltaPct.toFixed(0)}%)</span>` +
+            (eteLabel ? `<span class="rpp-stat-sep">·</span><span class="rpp-stat-item">${eteLabel}${etaLabel ? ` · ETA ${etaLabel}` : ''}</span>` : '') +
+            (fuelLabel ? `<span class="rpp-stat-sep">·</span>${fuelLabel}` : '');
         this._statsEl.style.display = '';
     }
 
@@ -888,6 +966,12 @@ class RoutePlannerPanel {
         pill.appendChild(handle);
         pill.appendChild(label);
         pill.appendChild(badge);
+        if (item.altFt) {
+            const altBadge = document.createElement('span');
+            altBadge.className = 'rpp-alt-badge';
+            altBadge.textContent = String(Math.round(item.altFt / 100) * 100);
+            pill.insertBefore(altBadge, del);
+        }
         pill.appendChild(del);
 
         // Context menu on right-click and long-press
@@ -1169,9 +1253,9 @@ class RoutePlannerPanel {
         if (this._statsEl) this._updateStats(this._currentPlan);
         this._windWarnings = [];
         if (!opts.winds) {
-            this._windWarnings = ['Wind data unavailable — calm-air estimates'];
+            this._windWarnings.push('Wind data unavailable — time and fuel use calm-air estimates');
         }
-        this._renderWindWarnings?.();
+        this._renderWindWarnings();
     }
 
     _waitForPlanner(timeoutMs) {
