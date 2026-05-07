@@ -10,8 +10,8 @@
 
 Upgrade `recomputeLegs` to produce wind-corrected, altitude-accurate time and fuel estimates, then add a proactive fuel stop recommendation panel. Work is split into two milestones:
 
-- **Milestone 1** — Core accuracy: winds, altitude-based TAS/fuel, VFR auto-altitude, departure time/ETA
-- **Milestone 2** — Fuel stops: proactive candidate search, dual stacked plans
+- **Milestone 1** — Core accuracy: winds, altitude-based TAS/fuel, VFR auto-altitude, power setting, per-leg altitude overrides (IFR step climbs), departure time/ETA
+- **Milestone 2** — Fuel stops: proactive candidate search with fuel pricing, dual stacked plans
 
 ---
 
@@ -71,10 +71,12 @@ decomp = decomposeLeg(profile, {
 leg.eta = prevEta + decomp.totalTimeHrs * 3_600_000
 ```
 
+**Per-leg altitude:** Each leg uses `legAltFt = wps[i+1].overrideAlt ?? cruiseAltFt`. Wind lookup and TAS use `legAltFt`, not the global cruise altitude, for that leg.
+
 **Fuel burn at altitude:**
-- Cruise: `engineData.gphAtPower(maxPowerAtAltitude(altFt) * 0.65, altFt)` — 65% power
+- Cruise: `engineData.gphAtPower(maxPowerAtAltitude(legAltFt) * (pctPower / 100), legAltFt)` — pilot-set power %
 - Climb/descent phases: existing `decomposeLeg` phase logic, extended to accept `gsKt/tasKt`
-- Climb TAS computed at mid-altitude `(depElev + cruiseAlt) / 2`
+- Climb TAS computed at mid-altitude `(depElev + legAltFt) / 2`
 
 ### Phase Model
 
@@ -82,6 +84,24 @@ leg.eta = prevEta + decomp.totalTimeHrs * 3_600_000
 - When present, replace `profile.cruise_ktas` for time and fuel calculations for that leg
 - Climb and descent mid-altitude TAS computed via `tasAtAltitude` at the phase midpoint altitude
 - Existing climb/cruise/descent phase structure unchanged
+
+### Per-Leg Altitude Overrides and IFR Step Climbs
+
+Any fix waypoint can carry an `overrideAlt` that supersedes the global cruise altitude for legs that pass through it.
+
+**Data model:** `waypoint.overrideAlt?: number` — added to the `FlightPlan` waypoints type.
+
+**Interaction:** Long-press any fix pill → altitude picker appears (same VFR altitude options as the global selector, plus a "Clear" option to remove the override). Pill shows a small altitude badge (e.g., `9,500`) when an override is set.
+
+**IFR step climbs** use this same mechanism — pilot sets `overrideAlt` at the fix where ATC assigns a new altitude; subsequent legs use that altitude until the next override or the route end.
+
+**Computation:** `recomputeLegs` resolves altitude per leg:
+```
+legAltFt = wps[i+1].overrideAlt ?? cruiseAltFt
+```
+Wind, TAS, and fuel burn all use `legAltFt` for that leg. Where consecutive legs share the same altitude, the phase model is continuous (no repeated climb/descent penalty).
+
+**Persistence:** `overrideAlt` is stored in the plan's waypoints array in `flypi_planner_opts`.
 
 ### VFR Altitude Auto-Selection
 
@@ -149,9 +169,9 @@ function selectFdCycle(departureUtcHour) {
 After every successful plan, search for fuel stop candidates based on `maxLegHrs`:
 
 1. Run `findSplitPoints(legs, maxLegHrs)` — finds route positions where cumulative ETE hits `maxLegHrs`; interpolates lat/lon within the crossing leg
-2. For each split point, search airports within 25nm with 100LL or Jet-A fuel
+2. For each split point, search airports within 25nm with 100LL or Jet-A fuel (from NASR airport data)
 3. Rank by: (1) fuel availability, (2) runway length ≥ 3,000 ft, (3) distance off-route, (4) paved surface
-4. Fetch fuel price where available (AOPA/AirNav API TBD)
+4. Fetch fuel price per candidate airport — source to be confirmed before Milestone 2 begins (investigate AirNav, AOPA Fuel Hub, SkyVector); cache per airport for 24 hours; display inline; omit gracefully on fetch failure
 5. Show top 3 candidates per split point
 
 ### Dual Plan Model
@@ -181,9 +201,11 @@ findSplitPoints(legs, maxLegHrs, coords)
 |---|---|---|---|
 | Departure time | `datetime-local` input | `now` | `flypi_planner_opts` |
 | Cruise altitude | Dropdown (Auto / VFR altitudes) | Auto | `flypi_planner_opts` |
+| Power % | Dropdown (55 / 60 / 65 / 70 / 75%) | 65% | `flypi_planner_opts` |
 
 Auto altitude label shows resolved value: `Auto · 6,500 ft`.
 Altitude dropdown options filtered by route bearing (eastbound shows odd+500, westbound shows even+500).
+Changing departure time or power % re-runs `recomputeLegs` only (no A* re-run — fast).
 
 ### Stats Bar Update
 
@@ -229,7 +251,8 @@ Clears automatically when condition resolves.
 | `web/shared/planning/planner/route-planner.js` | Extend `recomputeLegs` signature; wire winds + altitude |
 | `web/shared/planning/planner/winds-interpolator.js` | **New** — fetch, cache, lookup |
 | `web/shared/planning/planner/fuel-stop-search.js` | **New** (Milestone 2) — `findSplitPoints`, airport search, ranking |
-| `web/cockpit/route-planner-panel.js` | Departure time picker, altitude selector, stats bar update, fuel stop section |
+| `web/shared/planning/types/flight-plan.js` | Add `overrideAlt?: number` to waypoint type |
+| `web/cockpit/route-planner-panel.js` | Departure time picker, altitude selector, power % selector, per-fix altitude override UI, stats bar update, fuel stop section |
 | `web/style.css` | New panel elements for opts additions, fuel stop section |
 | `web/index.html` | Add `<script>` tag for `winds-interpolator.js` |
 
@@ -237,8 +260,4 @@ Clears automatically when condition resolves.
 
 ## Out of Scope
 
-- Per-leg altitude overrides (pilot-set crossing altitudes per waypoint)
-- Power setting control (fixed at 65% cruise)
-- Fuel price API (TBD — show when available, omit gracefully when not)
-- IFR step climbs
-- Terrain-aware altitude selection
+- Terrain-aware altitude selection (minimum en-route altitude enforcement) — separate future spec
