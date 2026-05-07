@@ -1504,7 +1504,11 @@ class RoutePlannerPanel {
                 departure:   dep,
                 destination: dest,
                 route: this._route.map(r => r.id),
-                legs:  this._buildLegsFromWaypoints(wps),
+                // Use wind-corrected legs from recomputeLegs so GS, ETE, winds
+                // transfer to the route table and nav strip. Fall back to bare
+                // stubs only when no plan has been computed yet.
+                legs: this._currentPlan?.legs || this._lastPlan?.legs
+                      || this._buildLegsFromWaypoints(wps),
             },
         };
 
