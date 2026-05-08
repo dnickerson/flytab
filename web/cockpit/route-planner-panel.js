@@ -93,21 +93,29 @@ class RoutePlannerPanel {
         this._applyAborted = false;
         this._loadPlan(plan);
         this._render();
-        // Restore stats from the most recent computed plan
-        const prior = this._currentPlan || this._lastPlan;
-        if (prior?.summary) this._updateStats(prior);
-        // If no prior computed plan (e.g. after app restart), synthesize _lastPlan
-        // from the loaded plan's waypoints so _applyWindsToLastPlan can compute
-        // stats and fetch winds without needing the user to replan first.
-        if (!this._lastPlan && plan?.waypoints?.length >= 2) {
+
+        // Always reset computed-plan state so a different trip doesn't inherit
+        // the previous trip's _lastPlan and show stale distance/fuel in the
+        // stats bar. We synthesize a fresh _lastPlan below.
+        this._lastPlan    = null;
+        this._currentPlan = null;
+
+        // Synthesize _lastPlan from the loaded plan's waypoints so
+        // _applyWindsToLastPlan can compute stats without needing the user to
+        // run Plan first. Only forward the fields recomputeLegs actually needs —
+        // do NOT splat the whole saved plan, which would paint stale summary/legs
+        // from the prior trip until the async recompute finishes.
+        if (plan?.waypoints?.length >= 2) {
             this._lastPlan = {
-                ...plan,
+                departure:   plan.departure,
+                destination: plan.destination,
                 waypoints: plan.waypoints.map(wp => ({
                     ...wp,
                     id: wp.icao || wp.name || wp.fix || wp.id,
                 })),
             };
         }
+
         if (this._lastPlan) {
             this._windsPromise = this._applyWindsToLastPlan();
         }
@@ -520,7 +528,7 @@ class RoutePlannerPanel {
         this._depTimeSel.addEventListener('change', () => {
             this._departureTime = this._depTimeSel.value ? new Date(this._depTimeSel.value) : null;
             this._saveOpts();
-            if (this._lastPlan) this._windsPromise = this._applyWindsToLastPlan();
+            if (this._lastPlan) this._windsPromise = (this._windsPromise || Promise.resolve()).then(() => this._applyWindsToLastPlan());
         });
         depRow.appendChild(depLabel);
         depRow.appendChild(this._depTimeSel);
@@ -554,7 +562,7 @@ class RoutePlannerPanel {
         this._altSel.addEventListener('change', () => {
             this._cruiseAltFt = this._altSel.value ? parseInt(this._altSel.value, 10) : null;
             this._saveOpts();
-            if (this._lastPlan) this._windsPromise = this._applyWindsToLastPlan();
+            if (this._lastPlan) this._windsPromise = (this._windsPromise || Promise.resolve()).then(() => this._applyWindsToLastPlan());
         });
         altRow.appendChild(altLabel2);
         altRow.appendChild(this._altSel);
@@ -583,7 +591,7 @@ class RoutePlannerPanel {
         this._pwrSel.addEventListener('change', () => {
             this._pctPower = parseInt(this._pwrSel.value, 10);
             this._saveOpts();
-            if (this._lastPlan) this._windsPromise = this._applyWindsToLastPlan();
+            if (this._lastPlan) this._windsPromise = (this._windsPromise || Promise.resolve()).then(() => this._applyWindsToLastPlan());
         });
         pwrRow.appendChild(pwrLabel);
         pwrRow.appendChild(this._pwrSel);
@@ -720,7 +728,7 @@ class RoutePlannerPanel {
             item.altFt = input.trim() ? parseInt(input) : undefined;
             this._saveOpts();
             this._render();
-            if (this._lastPlan) this._windsPromise = this._applyWindsToLastPlan();
+            if (this._lastPlan) this._windsPromise = (this._windsPromise || Promise.resolve()).then(() => this._applyWindsToLastPlan());
         });
     }
 
@@ -1022,10 +1030,10 @@ class RoutePlannerPanel {
             }
         }, { passive: true });
         pill.addEventListener('touchmove', () => { clearTimeout(timer); }, { passive: true });
-        pill.addEventListener('click', e => {
-            if (e.target.closest('.rpp-pill-del')) return;
-            this._focusMapOnPill(idx);
-        });
+        // No click listener — on Android the synthetic click fires ~300ms after
+        // touchend. If _render() has rebuilt the pill by then (e.g. after delete)
+        // the stale handler would re-center the map on an already-removed waypoint.
+        // The touchend path above handles focus correctly.
     }
 
     _focusMapOnPill(idx) {
@@ -1141,6 +1149,10 @@ class RoutePlannerPanel {
 
         // Validate the identifier exists in the navigation database before
         // adding it — unknown fixes would silently vanish during Apply.
+        if (type !== 'direct' && !this._nasrDb) {
+            this._toast('Navigation database still loading — try again in a moment', 3500);
+            return;
+        }
         if (type !== 'direct' && this._nasrDb) {
             if (type === 'awy') {
                 const awy = await this._nasrDb.getAirway(v).catch(() => null);
@@ -1704,6 +1716,11 @@ class RoutePlannerPanel {
         // Wait for any in-progress wind fetch so _lastWinds is current
         if (this._windsPromise) await this._windsPromise.catch(() => {});
 
+        // Capture departure time once so the recompute and (if called) the
+        // wind-fetch use the same reference point — not two separate new Date()
+        // calls that could land in different FD wind cycles.
+        const departureTime = this._departureTime ?? new Date();
+
         const wps = await this._pillsToWaypoints();
         if (wps.length < 2) {
             this._toast('Add at least 2 waypoints');
@@ -1721,10 +1738,10 @@ class RoutePlannerPanel {
         if (this._planner && wps.length >= 2) {
             try {
                 const recomputeOpts = {
-                    departureTime: this._departureTime ?? new Date(),
-                    pctPower:      this._pctPower,
-                    cruiseAltFt:   this._cruiseAltFt ?? undefined,
-                    winds:         this._lastWinds ?? undefined,
+                    departureTime,
+                    pctPower:    this._pctPower,
+                    cruiseAltFt: this._cruiseAltFt ?? undefined,
+                    winds:       this._lastWinds ?? undefined,
                 };
                 appliedPlan = this._planner.recomputeLegs({ waypoints: wps }, null, recomputeOpts);
                 legs = appliedPlan.legs;
@@ -1839,7 +1856,14 @@ class RoutePlannerPanel {
                       pill.type === 'dest'    ? 'APT' :
                       pill.type === 'airport' ? 'APT' :
                       pill.type === 'fuel'    ? 'APT' : undefined,
-                altFt: pill.altFt ?? this._altitude,
+                // Only stamp altFt when the pilot set an explicit per-waypoint
+                // override. Without this, every waypoint gets this._altitude
+                // (the A* default) which overrides cruiseAltFt in recomputeOpts
+                // and causes TAS/GS/fuel to be computed at the wrong altitude.
+                ...(pill.altFt != null ? { altFt: pill.altFt } : {}),
+                // fuelStop:true tells recomputeLegs to model descent/climb at
+                // this stop rather than treating it as a level pass-over.
+                ...(pill.type === 'fuel' ? { fuelStop: true } : {}),
                 ...(aw ? { airway: aw } : {}),
             });
             pendingAirway = null;

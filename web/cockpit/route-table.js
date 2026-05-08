@@ -191,7 +191,7 @@ class RouteTable {
                         wind: (leg.windDir != null && leg.windSpd != null)
                             ? { dir: leg.windDir, spd: leg.windSpd } : null,
                         _segments: leg.segments || [],
-                        tas: leg.tasKt || null, gs: leg.gsKt || null,
+                        tas: leg.tasKt ?? null, gs: leg.gsKt ?? null,
                         gph: ((leg.segments || []).find(s => s.phase === 'CRZ') || leg.segments?.[leg.segments.length - 1])?.gph || null,
                     });
                 }
@@ -251,7 +251,9 @@ class RouteTable {
                          tas: leg.tasKt,
                          gs: leg.gsKt,
                          percent_power: leg.percentPwr,
-                         dist: leg.distNm }]
+                         dist: leg.distNm,
+                         altFrom: leg.altFt ?? plan.cruise_altitude ?? null,
+                         altTo:   leg.altFt ?? plan.cruise_altitude ?? null }]
                     : []);
             // Use cruise segment for default rpm/mp/pwr display
             const cruiseSeg = segments.find(s => s.phase === 'CRZ')
