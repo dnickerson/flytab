@@ -67,6 +67,7 @@ export class RoutePlanner {
      * @param {number} [opts.maxLegHrs]
      * @param {boolean} [opts.selfServeOnly]
      * @param {Array<string|{id:string,polygon?:any,fixIds?:string[]}>} [opts.avoidance]
+     * @param {Record<string,Record<number,{dir:number,spd:number,temp?:number,variable?:boolean}>>} [opts.winds]
      * @returns {Promise<import('../types/flight-plan.js').FlightPlan>}
      */
     async plan(opts) {
@@ -155,7 +156,10 @@ export class RoutePlanner {
                 avoidance: (opts.avoidance || []).map(a => typeof a === 'string' ? a : a.id),
             },
         };
-        const computed = this.recomputeLegs(flightPlan, profile);
+        // Pass winds so _insertFuelStops sees wind-corrected ETE. Without this,
+        // the fuel stop check uses calm-air time and misses routes that only
+        // exceed the leg limit due to headwinds.
+        const computed = this.recomputeLegs(flightPlan, profile, { winds: opts.winds });
         return this._insertFuelStops(computed, profile);
     }
 

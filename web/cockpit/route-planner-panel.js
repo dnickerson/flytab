@@ -748,9 +748,21 @@ class RoutePlannerPanel {
         const canSetAlt = item.type === 'fix';
         this._ctxMenu.querySelector('#rppMAlt').style.display = canSetAlt ? '' : 'none';
 
+        // Show first (off-screen) so getBoundingClientRect returns real dimensions.
+        this._ctxMenu.style.left = '-9999px';
+        this._ctxMenu.style.top  = '-9999px';
         this._ctxMenu.classList.add('open');
-        const x = Math.min((e.clientX || e.pageX || 0), window.innerWidth  - 180);
-        const y = Math.min((e.clientY || e.pageY || 0) + 8, window.innerHeight - 180);
+        const rect = this._ctxMenu.getBoundingClientRect();
+        const mw = rect.width  || 180;
+        const mh = rect.height || 280;
+        const tx = e.clientX || e.pageX || 0;
+        const ty = e.clientY || e.pageY || 0;
+        // Clamp x so menu stays on screen
+        const x = Math.min(Math.max(4, tx), window.innerWidth  - mw - 4);
+        // Flip above touch point if not enough room below
+        const y = (ty + 8 + mh > window.innerHeight)
+            ? Math.max(4, ty - mh - 4)
+            : ty + 8;
         this._ctxMenu.style.left = x + 'px';
         this._ctxMenu.style.top  = y + 'px';
     }
@@ -937,7 +949,9 @@ class RoutePlannerPanel {
             const myAw = item.airway || null;
             const nfIdx = nextFix[i + 1];
             const nextAw = (nfIdx >= 0) ? (route[nfIdx].airway || null) : null;
-            const isInterior = myAw && nextAw === myAw && item.type === 'fix';
+            // A fix with a pilot-entered altitude restriction must always be
+            // visible — hiding it would silently discard a user-set constraint.
+            const isInterior = myAw && nextAw === myAw && item.type === 'fix' && !item.altFt;
             if (!isInterior) out.push(wrap(i));
         }
         return out;
@@ -1308,6 +1322,7 @@ class RoutePlannerPanel {
                 selfServeOnly: this._selfServeOnly,
                 avoidance:     this._avoidList.slice(),
                 routingMode:   this._routingMode,
+                winds:         this._lastWinds ?? undefined,
             });
 
             // Cache all fix coordinates returned by the planner

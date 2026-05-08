@@ -263,8 +263,10 @@ class RouteTable {
             const wind = (leg.windDir != null && leg.windSpd != null)
                 ? { dir: leg.windDir, spd: leg.windSpd } : (wp.wind || null);
 
-            // Departure/destination: use field elevation, not cruise altitude
-            let wpAlt = wp.alt;
+            // Departure/destination: use field elevation, not cruise altitude.
+            // Planning-library waypoints carry altFt (not alt); prefer it so
+            // pilot-entered per-waypoint altitude restrictions are displayed.
+            let wpAlt = wp.altFt ?? wp.alt;
             if (i === 0) {
                 // Departure has no inbound leg — look at the first outbound leg for CLB altFrom
                 const depSegs = legs[0]?.segments || [];
