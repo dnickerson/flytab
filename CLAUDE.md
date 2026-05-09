@@ -10,6 +10,8 @@ FlyTab is an Android cockpit app for experimental aircraft. It runs as a Capacit
 
 Run `bash build.sh` automatically after any code change is complete — no need to wait for the user to ask. Always increment `FLYTAB_VERSION` in `web/app.js` before building (build.sh reads it to set versionCode/versionName).
 
+If the change touches any file under `web/shared/planning/`, run `npm test` first and fix failures before building.
+
 ## Build & Deploy Commands
 
 ```bash
@@ -31,7 +33,7 @@ bash test-pipeline.sh --file <name>    # Specific file
 bash test-pipeline.sh --stop           # Stop test
 ```
 
-There are no automated tests and no npm build step — all JS is loaded directly via `<script>` tags in `web/index.html`.
+The planning library (`web/shared/planning/`) has a vitest test suite in `tests/`. Run with `npm test`. All other app JS is loaded directly via `<script>` tags in `web/index.html` — no test coverage there.
 
 ## Architecture
 
@@ -190,6 +192,16 @@ Style inner content only; enlarge close button via the container class:
     font-size: 28px !important; line-height: 44px !important;
 }
 ```
+
+## Spec Quality Requirements
+
+Apply these rules to any spec or plan that touches more than one file:
+
+**Interface contracts** — Name the exact field at every module boundary. "Pass altitude" is not enough; say "waypoint.altFt (number, feet) consumed by `recomputeLegs`; `route-table.js` reads `wp.altFt`, not `wp.alt`." Mismatches here produce silent null display bugs with no error.
+
+**Trigger conditions** — Every picker, modal, or action must list all conditions that fire it — not just the primary one. "Fuel stop picker fires when route exceeds limit" is incomplete; say "fires on Plan tap AND on leg-limit button tap when a route already exists."
+
+**State lifecycle** — For any async state or modal state, note what exists and when it's cleared. (`_lastPlan` is set by `plan()`, cleared on `open()`, never cleared by a leg-limit change.)
 
 ## Key Conventions
 

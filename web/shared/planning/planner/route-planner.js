@@ -426,6 +426,16 @@ export class RoutePlanner {
     }
 
     /**
+     * Check whether fuel stops are required for a pre-computed plan.
+     * Callers pass the result of recomputeLegs() with plan.options.maxLegHrs set.
+     * @param {object} plan
+     * @returns {Promise<object>} plan with fuelStopCandidates array
+     */
+    async insertFuelStops(plan) {
+        return this._insertFuelStops(plan, null);
+    }
+
+    /**
      * Get or create the AirwayGraph for a routing mode.
      * @param {string} mode
      * @returns {Promise<AirwayGraph>}

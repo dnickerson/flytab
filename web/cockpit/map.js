@@ -284,6 +284,7 @@ class CockpitMap {
             maxZoom: 14,
             tms: false,
             updateWhenZooming: false,
+            keepBuffer: 1,
             attribution: 'FAA Sectional Charts',
             errorTileUrl: '',
         });
@@ -298,6 +299,7 @@ class CockpitMap {
             maxZoom: 14,
             tms: false,
             updateWhenZooming: false,
+            keepBuffer: 1,
             attribution: 'FAA IFR Low Enroute',
             errorTileUrl: '',
         });
@@ -311,6 +313,7 @@ class CockpitMap {
             maxZoom: 14,
             tms: false,
             updateWhenZooming: false,
+            keepBuffer: 1,
             attribution: 'FAA IFR Area Charts',
             errorTileUrl: '',
         });
@@ -330,6 +333,7 @@ class CockpitMap {
             maxZoom: 14,
             tms: false,
             updateWhenZooming: false,
+            keepBuffer: 1,
             attribution: 'FAA Terminal Area Charts',
             errorTileUrl: '',
         });

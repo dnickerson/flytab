@@ -9718,10 +9718,12 @@ body.route-editing-mode .route-table-sheet {
     display: none !important;
 }
 
-/* Reclaim the tab-bar padding reservation when those bars are hidden — but keep
-   safe-area-inset-bottom so touch targets don't sit on the Android nav gesture. */
+/* Reclaim the tab-bar padding when those bars are hidden, but preserve the
+   Android system nav bar height so the planner toolbar isn't clipped.
+   env(safe-area-inset-bottom) is unreliable in Capacitor's WebView on Android;
+   --android-nav-height is set from the Java-measured exact value. */
 body.route-editing-mode #cockpitView {
-    padding-bottom: env(safe-area-inset-bottom, 0px) !important;
+    padding-bottom: var(--android-nav-height) !important;
 }
 
 /* ── Route Planner Panel Inner Layout ────────────────────────────────────── */
@@ -10147,6 +10149,27 @@ body.route-editing-mode #cockpitView {
 .rpp-menu-item.rpp-menu-avoid:hover { background: #fff7ee; }
 .rpp-menu-sep { height: .5px; background: #e0e5ea; margin: 3px 0; }
 
+/* Change-type submenu */
+.rpp-menu-has-sub { justify-content: space-between; }
+.rpp-menu-arrow { color: #9aabb8; font-size: 14px; }
+.rpp-type-submenu { min-width: 160px; }
+.rpp-type-item { display: flex; align-items: center; gap: 9px; }
+.rpp-type-item-active { background: #eef4ff; color: #1a6fbb; font-weight: 700; }
+.rpp-type-item-active:hover { background: #e4effe; }
+.rpp-type-dot {
+    display: inline-block;
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.rpp-dot-fix    { background: #5aaee8; border: 1.5px solid #3a8ec8; }
+.rpp-dot-apt    { background: #28a097; border: 1.5px solid #1a8080; }
+.rpp-dot-fuel   { background: #e07030; border: 1.5px solid #c05820; }
+.rpp-dot-awy    { background: #3fb86a; border: 1.5px solid #2a9050; }
+.rpp-dot-direct { background: #d4a017; border: 1.5px solid #b08010; }
+.rpp-dot-dep    { background: #7c62d4; border: 1.5px solid #5a44b0; }
+.rpp-dot-dest   { background: #7c62d4; border: 1.5px solid #5a44b0; }
+
 /* Avoid strip — sits above the pill row */
 .rpp-avoid-strip {
     display: flex;
@@ -10214,3 +10237,291 @@ body.route-editing-mode #cockpitView {
 .rpp-stat-alt { font-weight: 700; }
 .rpp-stat-fetching { color: #888; font-style: italic; }
 .rpp-stat-fuel { font-weight: 700; }
+
+/* ── Route Planner Redesign ─────────────────────────────────────────────── */
+
+/* Panel header — title + close ✕ */
+.rpp-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 4px 0 10px;
+    background: #fff;
+    border-bottom: 1px solid #d0d8e4;
+    flex-shrink: 0;
+    min-height: 48px;
+}
+.rpp-header-title {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: #1a6fbb;
+}
+.rpp-close-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 48px;
+    min-width: 48px;
+    background: none;
+    border: none;
+    color: #6a7e94;
+    font-size: 22px;
+    cursor: pointer;
+    touch-action: manipulation;
+    border-radius: 6px;
+}
+.rpp-close-btn:active { background: #e8f0f8; }
+
+/* Compact dep/dest row */
+.rpp-top-row {
+    display: flex;
+    align-items: flex-end;
+    gap: 6px;
+    padding: 8px 8px 7px;
+    background: #fff;
+    border-bottom: 2px solid #d0d8e4;
+    flex-shrink: 0;
+}
+.rpp-icao-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.rpp-icao-lbl {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+    color: #8090a8;
+    padding-left: 1px;
+}
+.rpp-icao-inp {
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 17px;
+    font-weight: 700;
+    color: #0a0c0f;
+    width: 72px;
+    padding: 5px 7px;
+    border: 1.5px solid #b8c8d8;
+    border-radius: 5px;
+    text-align: center;
+    text-transform: uppercase;
+    background: #fff;
+    outline: none;
+}
+.rpp-icao-inp:focus { border-color: #1a6fbb; }
+.rpp-icao-inp::placeholder { color: #b0bac6; font-weight: 400; }
+.rpp-top-arrow { font-size: 16px; color: #8090a8; flex-shrink: 0; padding-bottom: 7px; }
+
+/* Leg (fuel-stop) buttons in top row */
+.rpp-leg-group {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-left: 2px;
+}
+.rpp-leg-group-lbl {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+    color: #8090a8;
+    padding-left: 1px;
+}
+
+/* Settings gear button */
+.rpp-settings-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 9px;
+    background: #fff;
+    border: 1.5px solid #b8c8d8;
+    border-radius: 5px;
+    cursor: pointer;
+    color: #2a3a50;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 700;
+    touch-action: manipulation;
+    white-space: nowrap;
+    margin-bottom: 0;
+}
+.rpp-settings-btn:active { background: #edf2fa; }
+.rpp-top-spacer { flex: 1; }
+
+/* Summary bar */
+.rpp-summary {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0 10px;
+    padding: 4px 10px;
+    background: #eef4ff;
+    border-bottom: 1.5px solid #c0d4f0;
+    font-size: 11px;
+    cursor: pointer;
+    flex-shrink: 0;
+    touch-action: manipulation;
+}
+.rpp-summary:active { background: #e4ecfa; }
+.rpp-sum-chip { display: flex; align-items: baseline; gap: 3px; white-space: nowrap; }
+.rpp-sum-lbl {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: #6080b0;
+}
+.rpp-sum-val {
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 11px;
+    font-weight: 700;
+    color: #0d2b55;
+}
+.rpp-sum-sep { color: #90a8c8; font-size: 10px; }
+
+/* Settings popup overlay */
+.rpp-popup-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,10,30,.48);
+    z-index: 10000;
+    display: none;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 56px 16px 16px;
+}
+.rpp-popup-overlay.open { display: flex; }
+.rpp-popup {
+    background: #fff;
+    border-radius: 8px;
+    width: 100%;
+    max-width: 420px;
+    box-shadow: 0 12px 48px rgba(0,10,40,.28);
+    overflow: hidden;
+}
+.rpp-popup-hdr {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px;
+    background: #0d2b55;
+    color: #fff;
+}
+.rpp-popup-title {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+}
+.rpp-popup-hdr-close {
+    background: none;
+    border: none;
+    color: rgba(255,255,255,.65);
+    font-size: 20px;
+    cursor: pointer;
+    padding: 0 4px;
+    line-height: 1;
+    touch-action: manipulation;
+}
+.rpp-popup-section {
+    padding: 8px 14px 4px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: .11em;
+    text-transform: uppercase;
+    color: #90a8c0;
+    border-top: 1px solid #eaf0f8;
+}
+.rpp-popup-row {
+    display: flex;
+    align-items: center;
+    padding: 6px 14px;
+    gap: 10px;
+}
+.rpp-popup-lbl {
+    font-size: 12px;
+    font-weight: 700;
+    color: #3a5070;
+    width: 66px;
+    flex-shrink: 0;
+}
+.rpp-popup-ctrl { flex: 1; }
+.rpp-popup-sel,
+.rpp-popup-inp-dt {
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 700;
+    width: 100%;
+    padding: 7px 9px;
+    border: 1.5px solid #c0d0e0;
+    border-radius: 5px;
+    color: #0a0c0f;
+    background: #fff;
+    outline: none;
+}
+.rpp-popup-sel:focus,
+.rpp-popup-inp-dt:focus { border-color: #1a6fbb; }
+.rpp-popup-num-row { display: flex; align-items: center; gap: 7px; }
+.rpp-popup-inp-num {
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 15px;
+    font-weight: 700;
+    width: 70px;
+    padding: 6px 8px;
+    border: 1.5px solid #c0d0e0;
+    border-radius: 5px;
+    color: #0a0c0f;
+    text-align: center;
+    outline: none;
+}
+.rpp-popup-inp-num:focus { border-color: #1a6fbb; }
+.rpp-popup-unit { font-size: 12px; font-weight: 700; color: #6080a0; }
+.rpp-popup-check-row {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 5px 14px 8px;
+    cursor: pointer;
+}
+.rpp-popup-check-row input[type=checkbox] {
+    width: 20px; height: 20px; cursor: pointer; accent-color: #1a6fbb;
+}
+.rpp-popup-check-row label { font-size: 13px; font-weight: 700; color: #2a3a50; cursor: pointer; }
+.rpp-popup-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 14px 14px;
+    border-top: 1.5px solid #e0eaf4;
+    gap: 8px;
+}
+.rpp-popup-plan-btn {
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 700;
+    padding: 10px 20px;
+    background: #0d2b55;
+    color: #fff;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    touch-action: manipulation;
+}
+.rpp-popup-plan-btn:active { background: #06182e; }
+.rpp-popup-done-btn {
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 700;
+    padding: 10px 24px;
+    background: #1a6fbb;
+    color: #fff;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    touch-action: manipulation;
+}
+.rpp-popup-done-btn:active { background: #155fa0; }

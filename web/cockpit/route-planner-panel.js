@@ -48,6 +48,10 @@ class RoutePlannerPanel {
         this._routeStrEl  = null;
         this._ctxMenu     = null;
         this._ctxMenuIdx  = null;
+        this._typeSubMenu = null;
+        this._summaryEl   = null;   // summary bar element
+        this._popupOverlay= null;   // settings popup overlay
+        this._legBtnsEl   = null;   // leg-button container (for active-state sync)
         this._altInput    = null;
         this._reserveInput = null;
         this._modeSel      = null;
@@ -138,6 +142,14 @@ class RoutePlannerPanel {
             this._ctxMenu.remove();
             this._ctxMenu = null;
         }
+        if (this._typeSubMenu) {
+            this._typeSubMenu.remove();
+            this._typeSubMenu = null;
+        }
+        if (this._popupOverlay) {
+            this._popupOverlay.remove();
+            this._popupOverlay = null;
+        }
     }
 
     // ── Persistence ──────────────────────────────────────────────────────────
@@ -162,6 +174,7 @@ class RoutePlannerPanel {
                 if (this._pwrSel) this._pwrSel.value = String(saved.pctPower);
             }
         } catch {}
+        this._updateSummaryBar();
     }
 
     _saveOpts() {
@@ -306,25 +319,23 @@ class RoutePlannerPanel {
         const inner = document.createElement('div');
         inner.className = 'rpp-inner';
 
-        // DEP / DEST row
-        inner.appendChild(this._buildDepDestRow());
+        inner.appendChild(this._buildHeader());
+        inner.appendChild(this._buildTopRow());
+        inner.appendChild(this._buildSummaryBar());
 
-        // Planning options row
-        inner.appendChild(this._buildOptsRow());
-
-        // Avoid strip — shown above pills when the user has excluded fixes/airways
+        // Avoid strip
         this._avoidStripEl = document.createElement('div');
         this._avoidStripEl.className = 'rpp-avoid-strip';
         this._avoidStripEl.style.display = 'none';
         inner.appendChild(this._avoidStripEl);
 
-        // Amber warning strip — shown when wind data unavailable or other planning warnings
+        // Amber warning strip
         this._warnStripEl = document.createElement('div');
         this._warnStripEl.className = 'rpp-warn-strip';
         this._warnStripEl.style.display = 'none';
         inner.appendChild(this._warnStripEl);
 
-        // Distance/time/fuel stats bar — shown above pills after plan() so it's always visible
+        // Stats bar
         this._statsEl = document.createElement('div');
         this._statsEl.className = 'rpp-stats';
         this._statsEl.style.display = 'none';
@@ -338,50 +349,127 @@ class RoutePlannerPanel {
         pillBox.appendChild(this._pillsEl);
         inner.appendChild(pillBox);
 
-        // Add-input row
         inner.appendChild(this._buildAddRow());
-
-        // Toolbar: action buttons + Apply on the same row
         inner.appendChild(this._buildToolbar());
 
-        // Hidden element backing the Copy button (kept so Copy can read the route)
         this._routeStrEl = document.createElement('div');
         this._routeStrEl.hidden = true;
         inner.appendChild(this._routeStrEl);
 
         this._el.appendChild(inner);
 
-        // Context menu (appended to body so it floats above everything)
         this._buildContextMenu();
+        this._buildSettingsPopup();
     }
 
-    _buildDepDestRow() {
-        const row = document.createElement('div');
-        row.className = 'rpp-dep-row';
+    _buildHeader() {
+        const hdr = document.createElement('div');
+        hdr.className = 'rpp-header';
+        const title = document.createElement('div');
+        title.className = 'rpp-header-title';
+        title.textContent = 'Route Planner';
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'rpp-close-btn';
+        closeBtn.setAttribute('aria-label', 'Close');
+        closeBtn.innerHTML = '&#x2715;';
+        wireTap(closeBtn, () => {
+            if (typeof app !== 'undefined') app.closeRoutePlanner();
+        });
+        hdr.appendChild(title);
+        hdr.appendChild(closeBtn);
+        return hdr;
+    }
 
-        const depField = document.createElement('div');
-        depField.className = 'rpp-icao-field';
-        depField.innerHTML = '<label>Departure</label>';
+    _buildTopRow() {
+        const row = document.createElement('div');
+        row.className = 'rpp-top-row';
+
+        // Departure
+        const depWrap = document.createElement('div');
+        depWrap.className = 'rpp-icao-wrap';
+        const depLbl = document.createElement('div');
+        depLbl.className = 'rpp-icao-lbl';
+        depLbl.textContent = 'Dep';
         this._depInput = document.createElement('input');
+        this._depInput.className = 'rpp-icao-inp';
         this._depInput.maxLength = 5;
         this._depInput.placeholder = 'ICAO';
-        depField.appendChild(this._depInput);
+        this._depInput.autocomplete = 'off';
+        this._depInput.spellcheck = false;
+        depWrap.appendChild(depLbl);
+        depWrap.appendChild(this._depInput);
 
         const arrow = document.createElement('div');
-        arrow.className = 'rpp-arrow-sep';
+        arrow.className = 'rpp-top-arrow';
         arrow.textContent = '→';
 
-        const destField = document.createElement('div');
-        destField.className = 'rpp-icao-field';
-        destField.innerHTML = '<label>Destination</label>';
+        // Destination
+        const destWrap = document.createElement('div');
+        destWrap.className = 'rpp-icao-wrap';
+        const destLbl = document.createElement('div');
+        destLbl.className = 'rpp-icao-lbl';
+        destLbl.textContent = 'Dest';
         this._destInput = document.createElement('input');
+        this._destInput.className = 'rpp-icao-inp';
         this._destInput.maxLength = 5;
         this._destInput.placeholder = 'ICAO';
-        destField.appendChild(this._destInput);
+        this._destInput.autocomplete = 'off';
+        this._destInput.spellcheck = false;
+        destWrap.appendChild(destLbl);
+        destWrap.appendChild(this._destInput);
 
-        row.appendChild(depField);
+        // Fuel-stop / max-leg buttons
+        const legGroup = document.createElement('div');
+        legGroup.className = 'rpp-leg-group';
+        const legLbl = document.createElement('div');
+        legLbl.className = 'rpp-leg-group-lbl';
+        legLbl.textContent = 'Fuel stop';
+        this._legBtnsEl = document.createElement('div');
+        this._legBtnsEl.className = 'rpp-leg-btns';
+        [2.0, 2.5, 3.0].forEach(hrs => {
+            const btn = document.createElement('button');
+            btn.className = 'rpp-leg-btn' + (this._maxLegHrs === hrs ? ' active' : '');
+            btn.textContent = hrs === 2.0 ? '2h' : hrs === 2.5 ? '2.5h' : '3h';
+            btn.dataset.hrs = hrs;
+            wireTap(btn, () => {
+                this._maxLegHrs = hrs;
+                this._saveOpts();
+                this._legBtnsEl.querySelectorAll('.rpp-leg-btn').forEach(b =>
+                    b.classList.toggle('active', parseFloat(b.dataset.hrs) === hrs));
+                if (this._route.length >= 2) this._recheckFuelStops();
+            });
+            this._legBtnsEl.appendChild(btn);
+        });
+        legGroup.appendChild(legLbl);
+        legGroup.appendChild(this._legBtnsEl);
+
+        const spacer = document.createElement('div');
+        spacer.className = 'rpp-top-spacer';
+
+        // Settings gear
+        const settingsBtn = document.createElement('button');
+        settingsBtn.className = 'rpp-settings-btn';
+        settingsBtn.innerHTML =
+            '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+            'stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+            '<circle cx="12" cy="12" r="3"/>' +
+            '<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06' +
+            'a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09' +
+            'A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83' +
+            'l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09' +
+            'A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83' +
+            'l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09' +
+            'a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83' +
+            'l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09' +
+            'a1.65 1.65 0 0 0-1.51 1z"/></svg> Settings';
+        wireTap(settingsBtn, () => this._openSettingsPopup());
+
+        row.appendChild(depWrap);
         row.appendChild(arrow);
-        row.appendChild(destField);
+        row.appendChild(destWrap);
+        row.appendChild(legGroup);
+        row.appendChild(spacer);
+        row.appendChild(settingsBtn);
 
         // Sync DEP/DEST inputs → first/last pill
         this._depInput.addEventListener('change', () => {
@@ -404,145 +492,117 @@ class RoutePlannerPanel {
         return row;
     }
 
-    _buildOptsRow() {
-        const row = document.createElement('div');
-        row.className = 'rpp-opts-row';
+    _buildSummaryBar() {
+        this._summaryEl = document.createElement('div');
+        this._summaryEl.className = 'rpp-summary';
+        this._summaryEl.title = 'Tap to edit settings';
+        wireTap(this._summaryEl, () => this._openSettingsPopup());
+        this._updateSummaryBar();
+        return this._summaryEl;
+    }
 
-        // Altitude
-        const altLabel = document.createElement('span');
-        altLabel.className = 'rpp-opts-label';
-        altLabel.textContent = 'Alt';
-        this._altInput = document.createElement('input');
-        this._altInput.className = 'rpp-alt-input';
-        this._altInput.type = 'number';
-        this._altInput.min = '500';
-        this._altInput.max = '17500';
-        this._altInput.step = '500';
-        this._altInput.value = this._altitude;
-        const altSuffix = document.createElement('span');
-        altSuffix.className = 'rpp-opts-label';
-        altSuffix.textContent = 'ft';
-        this._altInput.addEventListener('change', () => {
-            this._altitude = parseInt(this._altInput.value, 10) || 5500;
-            this._saveOpts();
-        });
+    _updateSummaryBar() {
+        if (!this._summaryEl) return;
+        const ROUTE_LABELS = {
+            'v-airways':   'V-airways',
+            't-airways':   'T-airways',
+            'any':         'Any airway',
+            'gps-direct':  'GPS Direct',
+            'vors-direct': 'VORs Direct',
+        };
+        const altText   = this._cruiseAltFt
+            ? this._cruiseAltFt.toLocaleString() + ' ft'
+            : 'Auto VFR';
+        const pwrText   = this._pctPower + '% LOP';
+        const routeText = ROUTE_LABELS[this._routingMode] || this._routingMode;
+        const depText   = this._departureTime
+            ? this._departureTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + 'Z'
+            : 'Now';
+        const rsvText   = this._reserveGal + ' gal rsv';
 
-        // Max leg buttons
-        const legLabel = document.createElement('span');
-        legLabel.className = 'rpp-opts-label';
-        legLabel.textContent = 'Leg';
-        const legBtns = document.createElement('div');
-        legBtns.className = 'rpp-leg-btns';
-        [2.0, 2.5, 3.0].forEach(hrs => {
-            const btn = document.createElement('button');
-            btn.className = 'rpp-leg-btn' + (this._maxLegHrs === hrs ? ' active' : '');
-            btn.textContent = hrs === 2.0 ? '2h' : hrs === 2.5 ? '2.5h' : '3h';
-            btn.dataset.hrs = hrs;
-            wireTap(btn, () => {
-                this._maxLegHrs = hrs;
-                this._saveOpts();
-                legBtns.querySelectorAll('.rpp-leg-btn').forEach(b =>
-                    b.classList.toggle('active', parseFloat(b.dataset.hrs) === hrs));
+        const chip = (lbl, val) =>
+            `<span class="rpp-sum-chip"><span class="rpp-sum-lbl">${lbl}</span>` +
+            `<span class="rpp-sum-val">${val}</span></span>`;
+        const sep = '<span class="rpp-sum-sep">·</span>';
+
+        this._summaryEl.innerHTML =
+            chip('Alt', altText) + sep +
+            chip('Pwr', pwrText) + sep +
+            `<span class="rpp-sum-chip"><span class="rpp-sum-val">${routeText}</span></span>` + sep +
+            chip('Dep', depText) + sep +
+            `<span class="rpp-sum-chip"><span class="rpp-sum-val">${rsvText}</span></span>`;
+
+        // Re-attach tap after innerHTML wipe
+        wireTap(this._summaryEl, () => this._openSettingsPopup());
+    }
+
+    _buildSettingsPopup() {
+        this._popupOverlay = document.createElement('div');
+        this._popupOverlay.className = 'rpp-popup-overlay';
+
+        const popup = document.createElement('div');
+        popup.className = 'rpp-popup';
+
+        // Header
+        const hdr = document.createElement('div');
+        hdr.className = 'rpp-popup-hdr';
+        const hdrTitle = document.createElement('div');
+        hdrTitle.className = 'rpp-popup-title';
+        hdrTitle.textContent = 'Flight Settings';
+        const hdrClose = document.createElement('button');
+        hdrClose.className = 'rpp-popup-hdr-close';
+        hdrClose.textContent = '✕';
+        wireTap(hdrClose, () => this._closeSettingsPopup());
+        hdr.appendChild(hdrTitle);
+        hdr.appendChild(hdrClose);
+        popup.appendChild(hdr);
+
+        const mkRow = (lbl, ctrl) => {
+            const row = document.createElement('div');
+            row.className = 'rpp-popup-row';
+            const l = document.createElement('div');
+            l.className = 'rpp-popup-lbl';
+            l.textContent = lbl;
+            const c = document.createElement('div');
+            c.className = 'rpp-popup-ctrl';
+            c.appendChild(ctrl);
+            row.appendChild(l);
+            row.appendChild(c);
+            return row;
+        };
+        const mkSel = (options, currentVal) => {
+            const sel = document.createElement('select');
+            sel.className = 'rpp-popup-sel';
+            options.forEach(([v, t]) => {
+                const o = document.createElement('option');
+                o.value = v; o.textContent = t;
+                if (v === currentVal) o.selected = true;
+                sel.appendChild(o);
             });
-            legBtns.appendChild(btn);
-        });
+            return sel;
+        };
+        const mkSection = (label) => {
+            const s = document.createElement('div');
+            s.className = 'rpp-popup-section';
+            s.textContent = label;
+            return s;
+        };
 
-        // Self-serve checkbox
-        const ssLabel = document.createElement('label');
-        ssLabel.className = 'rpp-check-row';
-        const ssCheck = document.createElement('input');
-        ssCheck.type = 'checkbox';
-        ssCheck.checked = this._selfServeOnly;
-        ssCheck.addEventListener('change', () => {
-            this._selfServeOnly = ssCheck.checked;
-            this._saveOpts();
-        });
-        ssLabel.appendChild(ssCheck);
-        ssLabel.appendChild(document.createTextNode('Self-serve'));
+        // ── Winds & Performance ──
+        popup.appendChild(mkSection('Winds & Performance'));
 
-        // Reserve gallon input
-        const rsvLabel = document.createElement('span');
-        rsvLabel.className = 'rpp-opts-label';
-        rsvLabel.textContent = 'Rsv';
-        this._reserveInput = document.createElement('input');
-        this._reserveInput.className = 'rpp-reserve-input';
-        this._reserveInput.type = 'number';
-        this._reserveInput.min = '1';
-        this._reserveInput.max = '30';
-        this._reserveInput.value = this._reserveGal;
-        const rsvSuffix = document.createElement('span');
-        rsvSuffix.className = 'rpp-opts-label';
-        rsvSuffix.textContent = 'gal';
-        this._reserveInput.addEventListener('change', () => {
-            this._reserveGal = parseInt(this._reserveInput.value, 10) || 10;
-            this._saveOpts();
-        });
-
-        row.appendChild(altLabel);
-        row.appendChild(this._altInput);
-        row.appendChild(altSuffix);
-        row.appendChild(legLabel);
-        row.appendChild(legBtns);
-        row.appendChild(ssLabel);
-        row.appendChild(rsvLabel);
-        row.appendChild(this._reserveInput);
-        row.appendChild(rsvSuffix);
-
-        // Routing-mode row
-        const modeRow = document.createElement('div');
-        modeRow.className = 'rpp-mode-row';
-        const modeLabel = document.createElement('span');
-        modeLabel.className = 'rpp-opts-label';
-        modeLabel.textContent = 'Routing';
-        this._modeSel = document.createElement('select');
-        this._modeSel.className = 'rpp-mode-sel';
-        [
-            ['v-airways',  'V-airways (default)'],
-            ['t-airways',  'T-airways (RNAV)'],
-            ['any',        'Any airway'],
-            ['gps-direct', 'GPS Direct'],
-            ['vors-direct','VORs Direct'],
-        ].forEach(([v, t]) => {
-            const o = document.createElement('option');
-            o.value = v; o.textContent = t;
-            if (v === this._routingMode) o.selected = true;
-            this._modeSel.appendChild(o);
-        });
-        this._modeSel.addEventListener('change', () => {
-            this._routingMode = this._modeSel.value;
-            this._saveOpts();
-        });
-        modeRow.appendChild(modeLabel);
-        modeRow.appendChild(this._modeSel);
-        row.appendChild(modeRow);
-
-        // Departure time row
-        const depRow = document.createElement('div');
-        depRow.className = 'rpp-mode-row';
-        const depLabel = document.createElement('span');
-        depLabel.className = 'rpp-opts-label';
-        depLabel.textContent = 'Depart';
         this._depTimeSel = document.createElement('input');
         this._depTimeSel.type = 'datetime-local';
-        this._depTimeSel.className = 'rpp-dep-time';
+        this._depTimeSel.className = 'rpp-popup-inp-dt';
         this._depTimeSel.addEventListener('change', () => {
             this._departureTime = this._depTimeSel.value ? new Date(this._depTimeSel.value) : null;
             this._saveOpts();
+            this._updateSummaryBar();
             if (this._lastPlan) this._windsPromise = (this._windsPromise || Promise.resolve()).then(() => this._applyWindsToLastPlan());
         });
-        depRow.appendChild(depLabel);
-        depRow.appendChild(this._depTimeSel);
-        row.appendChild(depRow);
+        popup.appendChild(mkRow('Depart', this._depTimeSel));
 
-        // Altitude (cruise, for wind/perf — distinct from A* planning altitude)
-        const altRow = document.createElement('div');
-        altRow.className = 'rpp-mode-row';
-        const altLabel2 = document.createElement('span');
-        altLabel2.className = 'rpp-opts-label';
-        altLabel2.textContent = 'Altitude';
-        this._altSel = document.createElement('select');
-        this._altSel.className = 'rpp-mode-sel';
-        [
+        this._altSel = mkSel([
             ['',     'Auto (VFR)'],
             ['3500', '3,500 ft'],
             ['4500', '4,500 ft'],
@@ -553,51 +613,146 @@ class RoutePlannerPanel {
             ['9500', '9,500 ft'],
             ['10500','10,500 ft'],
             ['11500','11,500 ft'],
-        ].forEach(([v, t]) => {
-            const o = document.createElement('option');
-            o.value = v; o.textContent = t;
-            if (v && parseInt(v) === this._cruiseAltFt) o.selected = true;
-            this._altSel.appendChild(o);
-        });
+        ], this._cruiseAltFt ? String(this._cruiseAltFt) : '');
         this._altSel.addEventListener('change', () => {
             this._cruiseAltFt = this._altSel.value ? parseInt(this._altSel.value, 10) : null;
             this._saveOpts();
+            this._updateSummaryBar();
             if (this._lastPlan) this._windsPromise = (this._windsPromise || Promise.resolve()).then(() => this._applyWindsToLastPlan());
         });
-        altRow.appendChild(altLabel2);
-        altRow.appendChild(this._altSel);
-        row.appendChild(altRow);
+        popup.appendChild(mkRow('Altitude', this._altSel));
 
-        // Power %
-        const pwrRow = document.createElement('div');
-        pwrRow.className = 'rpp-mode-row';
-        const pwrLabel = document.createElement('span');
-        pwrLabel.className = 'rpp-opts-label';
-        pwrLabel.textContent = 'Power';
-        this._pwrSel = document.createElement('select');
-        this._pwrSel.className = 'rpp-mode-sel';
-        [
-            ['55', '55% LOP'],
-            ['60', '60% LOP'],
-            ['65', '65% LOP'],
-            ['70', '70% LOP'],
-            ['75', '75% LOP'],
-        ].forEach(([v, t]) => {
-            const o = document.createElement('option');
-            o.value = v; o.textContent = t;
-            if (parseInt(v) === this._pctPower) o.selected = true;
-            this._pwrSel.appendChild(o);
-        });
+        this._pwrSel = mkSel([
+            ['55','55% LOP'],['60','60% LOP'],['65','65% LOP'],['70','70% LOP'],['75','75% LOP'],
+        ], String(this._pctPower));
         this._pwrSel.addEventListener('change', () => {
             this._pctPower = parseInt(this._pwrSel.value, 10);
             this._saveOpts();
+            this._updateSummaryBar();
             if (this._lastPlan) this._windsPromise = (this._windsPromise || Promise.resolve()).then(() => this._applyWindsToLastPlan());
         });
-        pwrRow.appendChild(pwrLabel);
-        pwrRow.appendChild(this._pwrSel);
-        row.appendChild(pwrRow);
+        popup.appendChild(mkRow('Power', this._pwrSel));
 
-        return row;
+        // ── Auto-routing ──
+        popup.appendChild(mkSection('Auto-routing'));
+
+        this._modeSel = mkSel([
+            ['v-airways',  'V-airways (default)'],
+            ['t-airways',  'T-airways (RNAV)'],
+            ['any',        'Any airway'],
+            ['gps-direct', 'GPS Direct'],
+            ['vors-direct','VORs Direct'],
+        ], this._routingMode);
+        this._modeSel.addEventListener('change', () => {
+            this._routingMode = this._modeSel.value;
+            this._saveOpts();
+            this._updateSummaryBar();
+        });
+        popup.appendChild(mkRow('Routing', this._modeSel));
+
+        this._altInput = document.createElement('input');
+        this._altInput.className = 'rpp-popup-inp-num';
+        this._altInput.type = 'number';
+        this._altInput.min = '500';
+        this._altInput.max = '17500';
+        this._altInput.step = '500';
+        this._altInput.value = this._altitude;
+        this._altInput.addEventListener('change', () => {
+            this._altitude = parseInt(this._altInput.value, 10) || 5500;
+            this._saveOpts();
+        });
+        const altNumRow = document.createElement('div');
+        altNumRow.className = 'rpp-popup-num-row';
+        altNumRow.appendChild(this._altInput);
+        const altUnit = document.createElement('span');
+        altUnit.className = 'rpp-popup-unit';
+        altUnit.textContent = 'ft';
+        altNumRow.appendChild(altUnit);
+        popup.appendChild(mkRow('A* Alt', altNumRow));
+
+        // ── Fuel Planning ──
+        popup.appendChild(mkSection('Fuel Planning'));
+
+        this._reserveInput = document.createElement('input');
+        this._reserveInput.className = 'rpp-popup-inp-num';
+        this._reserveInput.type = 'number';
+        this._reserveInput.min = '1';
+        this._reserveInput.max = '30';
+        this._reserveInput.value = this._reserveGal;
+        this._reserveInput.addEventListener('change', () => {
+            this._reserveGal = parseInt(this._reserveInput.value, 10) || 10;
+            this._saveOpts();
+            this._updateSummaryBar();
+        });
+        const rsvNumRow = document.createElement('div');
+        rsvNumRow.className = 'rpp-popup-num-row';
+        rsvNumRow.appendChild(this._reserveInput);
+        const rsvUnit = document.createElement('span');
+        rsvUnit.className = 'rpp-popup-unit';
+        rsvUnit.textContent = 'gal';
+        rsvNumRow.appendChild(rsvUnit);
+        popup.appendChild(mkRow('Reserve', rsvNumRow));
+
+        const ssRow = document.createElement('div');
+        ssRow.className = 'rpp-popup-check-row';
+        const ssCheck = document.createElement('input');
+        ssCheck.type = 'checkbox';
+        ssCheck.id = 'rppSelfServe';
+        ssCheck.checked = this._selfServeOnly;
+        ssCheck.addEventListener('change', () => {
+            this._selfServeOnly = ssCheck.checked;
+            this._saveOpts();
+        });
+        const ssLabel = document.createElement('label');
+        ssLabel.htmlFor = 'rppSelfServe';
+        ssLabel.textContent = 'Self-serve fuel only';
+        ssRow.appendChild(ssCheck);
+        ssRow.appendChild(ssLabel);
+        popup.appendChild(ssRow);
+
+        // Footer: Plan Route | Done
+        const footer = document.createElement('div');
+        footer.className = 'rpp-popup-footer';
+        const planRouteBtn = document.createElement('button');
+        planRouteBtn.className = 'rpp-popup-plan-btn';
+        planRouteBtn.textContent = 'Plan Route';
+        wireTap(planRouteBtn, () => { this._closeSettingsPopup(); this._onPlanRouteTap(); });
+        const doneBtn = document.createElement('button');
+        doneBtn.className = 'rpp-popup-done-btn';
+        doneBtn.textContent = 'Done';
+        wireTap(doneBtn, () => this._closeSettingsPopup());
+        footer.appendChild(planRouteBtn);
+        footer.appendChild(doneBtn);
+        popup.appendChild(footer);
+
+        this._popupOverlay.appendChild(popup);
+        document.body.appendChild(this._popupOverlay);
+
+        this._popupOverlay.addEventListener('click', e => {
+            if (e.target === this._popupOverlay) this._closeSettingsPopup();
+        });
+    }
+
+    _openSettingsPopup() {
+        if (this._depTimeSel && this._departureTime) {
+            const d = this._departureTime;
+            const pad = n => String(n).padStart(2, '0');
+            this._depTimeSel.value =
+                `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}` +
+                `T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        }
+        if (this._altSel) this._altSel.value = this._cruiseAltFt ? String(this._cruiseAltFt) : '';
+        if (this._pwrSel) this._pwrSel.value = String(this._pctPower);
+        if (this._modeSel) this._modeSel.value = this._routingMode;
+        if (this._altInput) this._altInput.value = this._altitude;
+        if (this._reserveInput) this._reserveInput.value = this._reserveGal;
+        const ssCheck = this._popupOverlay?.querySelector('#rppSelfServe');
+        if (ssCheck) ssCheck.checked = this._selfServeOnly;
+        this._popupOverlay?.classList.add('open');
+    }
+
+    _closeSettingsPopup() {
+        this._popupOverlay?.classList.remove('open');
     }
 
     _buildAddRow() {
@@ -644,24 +799,43 @@ class RoutePlannerPanel {
             return btn;
         };
 
-        bar.appendChild(mkBtn('Paste',       () => this._onPasteTap()));
-        this._planBtn = mkBtn('Plan',        () => this._onPlanTap());
-        bar.appendChild(this._planBtn);
-        bar.appendChild(mkBtn('Clear',       () => this._onClearTap()));
-        bar.appendChild(mkBtn('Copy',        () => this._onCopyTap()));
+        // Clipboard ops side by side
+        bar.appendChild(mkBtn('Paste', () => this._onPasteTap()));
+        bar.appendChild(mkBtn('Copy',  () => this._onCopyTap()));
 
-        // Compact toggle — label always reads 'Compact'; active state shown via blue fill
+        // Plan = recompute existing pills with winds; does not replace route
+        this._planBtn = mkBtn('Plan', () => this._onRecomputeTap());
+        bar.appendChild(this._planBtn);
+
+        bar.appendChild(mkBtn('Clear', () => this._onClearTap()));
+
         this._compactBtn = mkBtn('Compact',
-                                  () => this._onCompactToggle(),
-                                  this._compactView ? 'rpp-tbtn-active' : '');
+            () => this._onCompactToggle(),
+            this._compactView ? 'rpp-tbtn-active' : '');
         bar.appendChild(this._compactBtn);
 
-        // Apply (panel stays open, pilot can iterate) and Apply & Close
-        // (legacy commit-and-dismiss). Both run the same _doApply() pipeline.
-        bar.appendChild(mkBtn('Apply',         () => this._onApplyKeepOpenTap(), 'rpp-tbtn-apply'));
-        bar.appendChild(mkBtn('Apply & Close', () => this._onApplyTap(),         'rpp-tbtn-apply'));
+        bar.appendChild(mkBtn('Apply', () => this._onApplyKeepOpenTap(), 'rpp-tbtn-apply'));
 
         return bar;
+    }
+
+    async _onRecomputeTap() {
+        if (this._route.length < 2) {
+            this._toast('Add at least 2 waypoints, or use Settings → Plan Route to auto-route');
+            return;
+        }
+        const setBtn = (label, disabled) => {
+            if (!this._planBtn) return;
+            this._planBtn.textContent = label;
+            this._planBtn.disabled = disabled;
+            this._planBtn.classList.toggle('rpp-tbtn-busy', disabled);
+        };
+        setBtn('Planning…', true);
+        try {
+            await this._applyWindsToLastPlan();
+        } finally {
+            setBtn('Plan', false);
+        }
     }
 
     _buildContextMenu() {
@@ -673,7 +847,7 @@ class RoutePlannerPanel {
             <div class="rpp-menu-item" id="rppMInsertBefore">Insert before</div>
             <div class="rpp-menu-item" id="rppMInsertAfter">Insert after</div>
             <div class="rpp-menu-sep"></div>
-            <div class="rpp-menu-item" id="rppMChangeType">Change type</div>
+            <div class="rpp-menu-item rpp-menu-has-sub" id="rppMChangeType">Change type <span class="rpp-menu-arrow">›</span></div>
             <div class="rpp-menu-sep" id="rppMAvoidSep"></div>
             <div class="rpp-menu-item rpp-menu-avoid" id="rppMAvoid">Avoid &amp; Re-plan</div>
             <div class="rpp-menu-sep"></div>
@@ -683,9 +857,30 @@ class RoutePlannerPanel {
         `;
         document.body.appendChild(this._ctxMenu);
 
+        // Type submenu — appears to the side of the main menu
+        const TYPE_DEFS = [
+            { type: 'fix',     label: 'Fix',         dotClass: 'rpp-dot-fix'    },
+            { type: 'airport', label: 'Airport',      dotClass: 'rpp-dot-apt'    },
+            { type: 'fuel',    label: 'Fuel Stop',    dotClass: 'rpp-dot-fuel'   },
+            { type: 'awy',     label: 'Airway',       dotClass: 'rpp-dot-awy'    },
+            { type: 'direct',  label: 'Direct (GPS)', dotClass: 'rpp-dot-direct' },
+            { type: 'dep',     label: 'Departure',    dotClass: 'rpp-dot-dep'    },
+            { type: 'dest',    label: 'Destination',  dotClass: 'rpp-dot-dest'   },
+        ];
+        this._typeSubMenu = document.createElement('div');
+        this._typeSubMenu.className = 'rpp-menu rpp-type-submenu';
+        this._typeSubMenu.innerHTML =
+            `<div class="rpp-menu-label">Select type</div><div class="rpp-menu-sep"></div>` +
+            TYPE_DEFS.map(d =>
+                `<div class="rpp-menu-item rpp-type-item" data-type="${d.type}">` +
+                `<span class="rpp-type-dot ${d.dotClass}"></span>${d.label}</div>`
+            ).join('');
+        document.body.appendChild(this._typeSubMenu);
+
         this._onDocClick = () => this._closeMenu();
         document.addEventListener('click', this._onDocClick);
         this._ctxMenu.addEventListener('click', e => e.stopPropagation());
+        this._typeSubMenu.addEventListener('click', e => e.stopPropagation());
 
         this._ctxMenu.querySelector('#rppMDelete').addEventListener('click', () => {
             if (this._ctxMenuIdx !== null) this._route.splice(this._ctxMenuIdx, 1);
@@ -699,12 +894,18 @@ class RoutePlannerPanel {
             const i = this._ctxMenuIdx; this._closeMenu();
             if (i !== null) { this._insertIndex = i + 1; this._addInput.focus(); }
         });
-        this._ctxMenu.querySelector('#rppMChangeType').addEventListener('click', () => {
-            if (this._ctxMenuIdx === null) { this._closeMenu(); return; }
-            const types = ['fix','airport','fuel','awy','direct','dep','dest'];
-            const cur = this._route[this._ctxMenuIdx].type;
-            this._route[this._ctxMenuIdx].type = types[(types.indexOf(cur) + 1) % types.length];
-            this._closeMenu(); this._render();
+        this._ctxMenu.querySelector('#rppMChangeType').addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (this._ctxMenuIdx === null) return;
+            this._openTypeSubmenu();
+        });
+        this._typeSubMenu.querySelectorAll('.rpp-type-item').forEach(item => {
+            item.addEventListener('click', () => {
+                if (this._ctxMenuIdx !== null)
+                    this._route[this._ctxMenuIdx].type = item.dataset.type;
+                this._closeMenu();
+                this._render();
+            });
         });
         this._ctxMenu.querySelector('#rppMAvoid').addEventListener('click', () => {
             const i = this._ctxMenuIdx;
@@ -715,7 +916,7 @@ class RoutePlannerPanel {
             this._route.splice(i, 1);
             this._saveOpts();
             this._render();
-            this._onPlanTap();
+            this._onPlanRouteTap();
         });
         this._ctxMenu.querySelector('#rppMAlt').addEventListener('click', () => {
             const i = this._ctxMenuIdx; this._closeMenu();
@@ -730,6 +931,37 @@ class RoutePlannerPanel {
             this._render();
             if (this._lastPlan) this._windsPromise = (this._windsPromise || Promise.resolve()).then(() => this._applyWindsToLastPlan());
         });
+    }
+
+    _openTypeSubmenu() {
+        const anchorEl = this._ctxMenu.querySelector('#rppMChangeType');
+        const anchorRect = anchorEl.getBoundingClientRect();
+        const menuRect   = this._ctxMenu.getBoundingClientRect();
+
+        // Measure submenu off-screen before positioning
+        this._typeSubMenu.style.left = '-9999px';
+        this._typeSubMenu.style.top  = '-9999px';
+        this._typeSubMenu.classList.add('open');
+        const subRect = this._typeSubMenu.getBoundingClientRect();
+        const sw = subRect.width  || 170;
+        const sh = subRect.height || 240;
+
+        // Prefer right of main menu; flip left if not enough room
+        let x = menuRect.right + 6;
+        if (x + sw > window.innerWidth - 4) x = menuRect.left - sw - 6;
+
+        // Align top of submenu with the "Change type" item; clamp vertically
+        let y = anchorRect.top;
+        y = Math.min(Math.max(4, y), window.innerHeight - sh - 4);
+
+        this._typeSubMenu.style.left = x + 'px';
+        this._typeSubMenu.style.top  = y + 'px';
+
+        // Highlight the pill's current type
+        const cur = this._ctxMenuIdx !== null ? this._route[this._ctxMenuIdx].type : null;
+        this._typeSubMenu.querySelectorAll('.rpp-type-item').forEach(el =>
+            el.classList.toggle('rpp-type-item-active', el.dataset.type === cur)
+        );
     }
 
     _openMenu(e, idx) {
@@ -769,6 +1001,7 @@ class RoutePlannerPanel {
 
     _closeMenu() {
         this._ctxMenu.classList.remove('open');
+        this._typeSubMenu.classList.remove('open');
         this._ctxMenuIdx = null;
     }
 
@@ -1267,7 +1500,7 @@ class RoutePlannerPanel {
 
     // ── Plan button ───────────────────────────────────────────────────────────
 
-    async _onPlanTap() {
+    async _onPlanRouteTap() {
         const dep  = this._depInput?.value.trim().toUpperCase();
         const dest = this._destInput?.value.trim().toUpperCase();
         if (!dep || !dest) {
@@ -1277,19 +1510,11 @@ class RoutePlannerPanel {
 
         this._checkPlannerVersion();
 
-        const setBtn = (label, disabled) => {
-            if (!this._planBtn) return;
-            this._planBtn.textContent = label;
-            this._planBtn.disabled = disabled;
-            this._planBtn.classList.toggle('rpp-tbtn-busy', disabled);
-        };
-
         // Wait for planner if still initializing — don't fail silently
         if (!this._planner) {
-            setBtn('Loading…', true);
+            this._toast('Loading airway data…', 3000);
             const ready = await this._waitForPlanner(20000);
             if (!ready) {
-                setBtn('Plan', false);
                 const counts = await this._diagnoseIdb();
                 const reason = this._plannerInitError ? ` — init error: ${this._plannerInitError}` : '';
                 this._toast(`Airway data not loaded${reason}\n${counts}`, 12000);
@@ -1310,7 +1535,6 @@ class RoutePlannerPanel {
             return;
         }
 
-        setBtn('Planning…', true);
         this._toast('Planning route…', 0);
         try {
             const result = await this._planner.plan({
@@ -1334,13 +1558,13 @@ class RoutePlannerPanel {
             }
 
             // If the user has manually-added interior waypoints, confirm before
-            // replacing them — Plan would otherwise silently discard their edits.
+            // replacing them — Plan Route would otherwise silently discard their edits.
             const hasManual = this._route.some(
                 p => p.type === 'fix' || p.type === 'airport' || p.type === 'awy' || p.type === 'direct' || p.type === 'fuel'
             );
             if (hasManual) {
                 const ok = await this._confirm('Replace your current route with the newly planned route?');
-                if (!ok) { setBtn('Plan', false); return; }
+                if (!ok) return;
             }
 
             this._route = this._resultToPills(dep, dest, result);
@@ -1360,8 +1584,6 @@ class RoutePlannerPanel {
         } catch (err) {
             console.error('[RoutePlannerPanel] plan() failed:', err);
             this._toast('Could not plan route: ' + (err.message || err), 5000);
-        } finally {
-            setBtn('Plan', false);
         }
     }
 
@@ -1810,6 +2032,33 @@ class RoutePlannerPanel {
 
     _buildField15String(route) {
         return this._collapseSameAirway(route).map(e => e.item.id).join(' ');
+    }
+
+    // ── Fuel stop re-check ────────────────────────────────────────────────────
+
+    async _recheckFuelStops() {
+        if (!this._planner) return;
+        // Wait for any in-flight winds fetch so _lastWinds is current
+        await this._windsPromise;
+        const wps = await this._pillsToWaypoints();
+        if (!wps || wps.length < 2) return;
+
+        const plan = {
+            departure:   wps[0].id,
+            destination: wps[wps.length - 1].id,
+            cruiseAltFt: this._altitude,
+            waypoints:   wps,
+            options: {
+                maxLegHrs:     this._maxLegHrs,
+                selfServeOnly: this._selfServeOnly,
+            },
+        };
+        const computed = this._planner.recomputeLegs(plan, null, { winds: this._lastWinds ?? undefined });
+        this._updateStats(computed);
+        const result = await this._planner.insertFuelStops(computed);
+        if (result.fuelStopCandidates?.length > 0) {
+            await this._processFuelStopCandidates(result);
+        }
     }
 
     async _pillsToWaypoints() {
