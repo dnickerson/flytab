@@ -2,13 +2,15 @@
 
 ## Goal
 
-Provide the pilot with a clear, actionable health check of every data source — Stratux, engine monitor, GPS, and internet weather — delivered inline in the Before Start checklist. When something is wrong, tell the pilot what it is and what to do about it.
+Provide the pilot with a clear, actionable health check of every in-cockpit data source — Stratux, engine monitor, GPS, and FIS-B weather — delivered inline in the Before Start checklist. When something is wrong, tell the pilot what it is and what to do about it.
 
 ## Background / What Went Wrong
 
-On a test flight, Stratux traffic and weather were silent. Engine data worked. Root cause discovered post-landing: `stratux_ip` in localStorage had been cleared (likely by ExpressVPN or Tailscale resetting app storage). The app fell back silently to the hardcoded default `192.168.10.1` — the correct Stratux IP — so the IP itself wasn't the failure. The VPN was. But the pilot had no way to know this without inspecting DiagLog after landing.
+On a test flight, Stratux traffic and FIS-B weather were silent. Engine data worked fine. Root cause discovered post-landing: `stratux_ip` in localStorage was null. Some code paths fell back silently to the hardcoded default `192.168.10.1` but others did not, so Stratux never connected and the pilot had no indication anything was wrong during the flight.
 
-Engine data worked because `EngineClient` is instantiated with `new EngineClient()` — no arguments — so it always connects to the hardcoded default `192.168.10.1:8082` regardless of Settings. This is a latent bug: if the Pi ever moves to a different IP, there is no Settings value to change.
+Engine data worked because `EngineClient` is instantiated with `new EngineClient()` — no arguments — so it always connects to the hardcoded default `192.168.10.1:8082` regardless of Settings. This is a latent bug: if the Pi ever moves to a different IP there is no Settings value to change.
+
+The diagnostic must catch a null or cleared `stratux_ip` before the pilot leaves the ramp.
 
 ## What We Are Building
 
@@ -20,7 +22,7 @@ Engine data worked because `EngineClient` is instantiated with `new EngineClient
 
 ## Simplifications Made Along the Way
 
-The existing code has duplicated connection-monitoring logic across three files. This feature consolidates them.
+The existing code has duplicated connection-monitoring logic scattered across three files. This feature consolidates them.
 
 | Existing | Replaced by |
 |---|---|
@@ -34,19 +36,19 @@ The 5s polling timer in `_startDeviceStatusMonitor` is deleted. Status badge upd
 
 ```
 app.js (startup)
-  ├── new SystemsMonitor(stratuxClient, engineClient, gpsSource, settings)
+  ├── new SystemsMonitor(stratuxClient, engineClient, gpsSource, fisbClient)
   └── systemsMonitor.start()           ← attaches event listeners, inspects Settings
 
 SystemsMonitor (web/shared/systems-monitor.js)
   ├── listens: stratux:connect, stratux:disconnect, stratux:stale
   ├── listens: engine:connect, engine:disconnect, engine:stale
   ├── listens: gpssource:changed
-  ├── inspects: Settings.stratuxIp, Settings.piIp, Settings.workerBase on start
-  ├── probes: one fetch to Settings.workerBase on start (weather reachability)
+  ├── listens: fisb:metar, fisb:winds  ← FIS-B weather frame arrival
+  ├── inspects: Settings.stratuxIp, Settings.piIp on start
   ├── emits: 'systems:changed' on every state transition
   └── getStatus() → { stratux, engine, gps, weather }
 
-ChecklistPanel (web/cockpit/checklist.js)
+checklist.js (web/cockpit/checklist.js)
   ├── detects item type === 'systems_check'
   └── renders live status table from systemsMonitor.getStatus()
 
@@ -71,35 +73,37 @@ EngineClient (web/shared/engine-client.js)
 }
 ```
 
-`'unknown'` = not enough time has elapsed to conclude anything (first 10s after start).
-`'ok'` = source confirmed healthy.
+`'unknown'` = not enough time has elapsed to conclude anything (first 10s after start).  
+`'ok'` = source confirmed healthy.  
 `'degraded'` = source confirmed unhealthy, cause and suggestions populated.
 
-### Stratux checks (in order)
+### Stratux checks (evaluated in order)
 
-1. `Settings.stratuxIp` is null → **cause:** "Stratux IP was cleared from Settings" → **suggestions:** ["Restored to default 192.168.10.1. Verify this is correct in Settings."]
-2. 15 seconds elapsed, WebSocket never opened → **cause:** "Stratux unreachable at {ip}" → **suggestions:** ["Disable ExpressVPN and Tailscale — both can block Stratux.", "Verify WiFi is connected to the Stratux network.", "Check Stratux has power — blue and green LEDs."]
-3. WebSocket open but no situation data for 30s → **cause:** "Stratux connected but GPS not locked" → **suggestions:** ["Wait 2–3 minutes outdoors for GPS lock."]
+1. `Settings.stratuxIp` is null → **degraded** · **cause:** "Stratux IP was cleared from Settings" · **suggestions:** ["Open Settings and verify Stratux IP is set to 192.168.10.1."]
+2. 15s elapsed, WebSocket never opened → **degraded** · **cause:** "Stratux not reachable at {ip}" · **suggestions:** ["Disable ExpressVPN and Tailscale — both can block Stratux.", "Verify tablet WiFi is connected to the Stratux network.", "Check Stratux has power — blue and green LEDs."]
+3. WebSocket open but no situation data after 30s → **degraded** · **cause:** "Stratux connected — waiting for GPS lock" · **suggestions:** ["Normal on first power-up. Wait 2–3 minutes outdoors."]
 4. Connected and situation arriving → **ok**
 
-### Engine checks
+### Engine checks (evaluated in order)
 
-1. `Settings.piIp` differs from `192.168.10.1` after fix → **cause:** "Pi IP in Settings ({piIp}) does not match engine client default" → **suggestions:** ["Update Settings.piIp to {piIp} or verify Pi address."] — *this check becomes a no-op once EngineClient reads Settings.piIp*
-2. 15 seconds elapsed, WebSocket never opened and HTTP fallback also failing → **cause:** "Engine monitor not reachable at {ip}:8082" → **suggestions:** ["Check Pi is powered.", "Disable ExpressVPN or Tailscale — port 8082 may be blocked."]
-3. HTTP fallback active (WS failed 3x, polling) → **degraded** with **cause:** "Engine monitor WebSocket degraded — using HTTP fallback" → **suggestions:** ["Check Pi network stability.", "Consider restarting engine monitor."]
-4. Data flowing (WS or HTTP) → **ok**
+1. 15s elapsed, WebSocket never opened and HTTP fallback also failing → **degraded** · **cause:** "Engine monitor not reachable at {ip}:8082" · **suggestions:** ["Check Pi is powered.", "Disable ExpressVPN or Tailscale — port 8082 may be blocked."]
+2. HTTP fallback active (WS failed 3×, polling HTTP) → **degraded** · **cause:** "Engine monitor in HTTP fallback mode" · **suggestions:** ["Engine data is available but WebSocket is down.", "Check Pi network stability or restart engine monitor."]
+3. Data flowing (WS or HTTP) → **ok**
 
-### GPS checks
+### GPS checks (evaluated in order)
 
-1. Configured source is `'stratux'` or `'auto'`, but Stratux is degraded → **cause:** "GPS depends on Stratux (currently unavailable)" → **suggestions:** ["Fix Stratux connection first, or switch GPS source to Internal in Settings."]
-2. Source is `'internal'`, no fix received after 30s → **cause:** "Device GPS has not acquired a fix" → **suggestions:** ["Move to open sky.", "GPS may take 1–2 minutes after app start."]
-3. Fix received (internal or Stratux) → **ok**
+1. Configured source is `'stratux'` or `'auto'` and Stratux is degraded → **degraded** · **cause:** "GPS source is Stratux — unavailable until Stratux connects" · **suggestions:** ["Fix Stratux first, or switch GPS source to Internal in Settings."]
+2. Source is `'internal'`, no fix after 30s → **degraded** · **cause:** "Device GPS has not acquired a fix" · **suggestions:** ["Move to open sky.", "GPS lock may take 1–2 minutes."]
+3. Fix received → **ok**
 
-### Weather checks
+### FIS-B weather checks (evaluated in order)
 
-One fetch probe to `Settings.workerBase + '/health'` (or any AWC-proxied endpoint) on startup:
-1. Fetch fails or times out in 10s → **degraded** with **cause:** "Internet weather (METAR/TAF/winds) unavailable — no network" → **suggestions:** ["Check cellular or WiFi internet.", "FIS-B weather from Stratux still works in-flight."]
-2. Fetch succeeds → **ok**
+FIS-B weather is delivered via Stratux only. There is no internet weather check.
+
+1. Stratux is degraded → **degraded** · **cause:** "FIS-B weather requires Stratux connection" · **suggestions:** ["Fix Stratux connection first."]
+2. Stratux connected, `deviceStatus.UAT_Towers === 0` after 60s → **degraded** · **cause:** "No UAT towers in range" · **suggestions:** ["FIS-B requires UAT ground stations.", "Check Stratux UAT receiver — yellow LED should be lit.", "Weather will become available as you approach an airport."]
+3. Stratux connected and at least one `fisb:metar` or `fisb:winds` event received → **ok**
+4. Stratux connected, towers > 0, no frames yet → **unknown** (still settling)
 
 ### Event emission
 
@@ -107,37 +111,34 @@ Every time any status field changes, emit `'systems:changed'` on `document` with
 
 ## Checklist Item Rendering
 
-The item `{ "title": "Systems Check", "type": "systems_check" }` is placed after the "Tailscale" item in the Before Start section (where VPN items already exist, so context is set).
+The item `{ "title": "Systems Check", "type": "systems_check" }` is placed after the "Tailscale" item in the Before Start section.
 
-The checklist panel renders it as:
+Healthy display:
 
 ```
 Systems Check
   ● Stratux      Traffic and ADS-B — OK
   ● Engine       Engine monitor — OK
   ● GPS          Stratux GPS, fix acquired — OK
-  ● Weather      Internet weather — OK
+  ● FIS-B Wx     Weather frames received — OK
   All systems nominal
 ```
 
-When degraded:
+Degraded display (example — the scenario that triggered this feature):
 
 ```
 Systems Check
-  ● Stratux      Unreachable at 192.168.10.1
-                 · Disable ExpressVPN and Tailscale — both can block Stratux.
-                 · Verify WiFi is connected to the Stratux network.
-                 · Check Stratux has power — blue and green LEDs.
+  ● Stratux      IP was cleared from Settings
+                 · Open Settings and verify Stratux IP is set to 192.168.10.1.
   ● Engine       OK
-  ● GPS          Depends on Stratux (unavailable)
-                 · Fix Stratux connection first, or switch GPS source to Internal.
-  ● Weather      OK
-  2 issues — review before departure
+  ● GPS          GPS source is Stratux — unavailable until Stratux connects
+                 · Fix Stratux first, or switch GPS source to Internal.
+  ● FIS-B Wx     FIS-B weather requires Stratux connection
+                 · Fix Stratux connection first.
+  3 issues — review before departure
 ```
 
-Dot colours: green = ok, amber = unknown/settling, red = degraded. Text weight 600, no mid-tone greys. Suggestions are always visible — no expand tap required.
-
-The item is informational, not blocking. Pilot can proceed.
+Dot colours: green = ok, amber = unknown/settling, red = degraded. Text weight 600, no mid-tone greys. Suggestions always visible — no expand tap required. Item is informational, not blocking.
 
 ## Files Changed
 
@@ -147,29 +148,31 @@ The item is informational, not blocking. Pilot can proceed.
 | `web/shared/engine-client.js` | Constructor reads `Settings.piIp ?? '192.168.10.1'` |
 | `web/shared/settings.js` | `Settings.piIp` getter already exists — no change needed |
 | `web/cockpit/checklist.js` | Render `systems_check` item type; accept `systemsMonitor` in constructor |
-| `web/checklist.json` | Add Systems Check item to Before Start |
-| `web/app.js` | Instantiate SystemsMonitor; replace `_startDeviceStatusMonitor` polling with `systems:changed` event; pass monitor to ChecklistPanel; feed DiagLog overlay summary from `getStatus()` |
-| `web/index.html` | Add `<script>` tag for `systems-monitor.js` |
+| `web/checklist.json` | Add Systems Check item to Before Start after "Tailscale" |
+| `web/app.js` | Instantiate SystemsMonitor; replace `_startDeviceStatusMonitor` polling with `systems:changed` event; pass monitor to checklist; feed DiagLog overlay summary from `getStatus()` |
+| `web/index.html` | Add `<script>` tag for `systems-monitor.js` before cockpit components |
 
 ## Interface Contracts
 
-**SystemsMonitor constructor:** `new SystemsMonitor(stratuxClient, engineClient, gpsSource)`  
-— reads `Settings` directly; no Settings object parameter needed.
+**SystemsMonitor constructor:** `new SystemsMonitor(stratuxClient, engineClient, gpsSource, fisbClient)`  
+— reads `Settings` directly (no Settings parameter).  
+— `fisbClient` may be null if FisbClient failed to load; weather status stays `'unknown'` in that case.
 
 **`getStatus()` return fields used by checklist:**
 - `status`: `'ok' | 'degraded' | 'unknown'` — drives dot colour
-- `cause`: one-line string or null — shown after source name
-- `suggestions`: string[] — shown as bulleted lines below cause
+- `cause`: one-line string or null — shown on same line as source name
+- `suggestions`: string[] — shown as indented bullet lines below cause
 
 **`'systems:changed'` event:** fired on `document`, `detail` = `getStatus()` return value.
 
 **Trigger conditions:**
-- Status transitions to `'ok'` on: client connect event received
-- Status transitions to `'degraded'` on: 15s timeout with no connect, or stale event, or fetch probe failure
+- Status → `'ok'` on: connect event received, fix received, FIS-B frame received
+- Status → `'degraded'` on: 15s timeout with no connect, stale event, null IP detected at start
 - Status stays `'unknown'` for first 10s after `start()` to avoid false alarms during normal boot
 
 ## What Is Not In Scope
 
-- Continuous in-flight re-notification when sources degrade mid-flight (the `systems:changed` event provides the data; a future feature can act on it)
+- Internet weather (METAR/TAF/winds from AWC) — in-cockpit weather is FIS-B only
 - Home / dual-mode WiFi scenarios
+- Continuous in-flight re-alerting when sources degrade mid-flight
 - NOTAM or chart data source health
