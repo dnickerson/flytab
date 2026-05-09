@@ -22,8 +22,9 @@ class LayerPanel {
     ];
 
     // Zoom levels stored on Pi for each layer type
-    static SEC_ZOOMS = [5, 6, 7, 8, 9, 10, 11];
-    static IFR_ZOOMS = [7, 8, 9, 10, 11];
+    static SEC_ZOOMS      = [5, 6, 7, 8, 9, 10, 11];
+    static IFR_ZOOMS      = [4, 5, 6, 7, 8, 9, 10];
+    static IFR_AREA_ZOOMS = [10, 11, 12];
     static TILE_CONCURRENCY = 6;  // max concurrent fetches (home server is threaded but keep moderate)
 
     static _lon2tile(lon, z) {
@@ -199,6 +200,15 @@ class LayerPanel {
                     else               window.app?.fisbWeather?.[hide]?.();
                 });
             }
+        }
+
+        // Wire IFR Area Charts toggle
+        const ifrAreaInput = this._panel.querySelector('.lp-toggle input[data-action="ifr-area"]');
+        if (ifrAreaInput) {
+            ifrAreaInput.checked = false;
+            ifrAreaInput.addEventListener('change', () => {
+                this._cockpitMap.toggleIfrArea(ifrAreaInput.checked);
+            });
         }
 
         // Wire TFR toggle
@@ -461,6 +471,10 @@ class LayerPanel {
                         <label class="lp-toggle"><input type="checkbox" data-overlay="sua"><span class="lp-toggle-track"></span></label>
                     </div>
                     <div class="lp-row">
+                        <span class="lp-row-label">IFR Area Charts</span>
+                        <label class="lp-toggle"><input type="checkbox" data-action="ifr-area"><span class="lp-toggle-track"></span></label>
+                    </div>
+                    <div class="lp-row">
                         <span class="lp-row-label">TFRs (FIS-B)</span>
                         <label class="lp-toggle"><input type="checkbox" data-action="tfrs"><span class="lp-toggle-track"></span></label>
                     </div>
@@ -674,6 +688,7 @@ class LayerPanel {
         };
         addLayer('sectional', LayerPanel.SEC_ZOOMS);
         addLayer('ifr-low',   LayerPanel.IFR_ZOOMS);
+        addLayer('ifr-area',  LayerPanel.IFR_AREA_ZOOMS);
 
         const total = paths.length;
         this._prefetchRunning = true;

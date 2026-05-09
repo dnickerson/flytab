@@ -13,8 +13,9 @@ class DataStatus {
     // ── Constants ─────────────────────────────────────────────────────────────
     static LOCAL_BASE  = 'http://localhost:9090';
     static CONCURRENCY = 6;
-    static SEC_ZOOMS   = [5, 6, 7, 8, 9, 10, 11];
-    static IFR_ZOOMS   = [7, 8, 9, 10, 11];
+    static SEC_ZOOMS      = [5, 6, 7, 8, 9, 10, 11];
+    static IFR_ZOOMS      = [4, 5, 6, 7, 8, 9, 10];
+    static IFR_AREA_ZOOMS = [10, 11, 12];
     static REGIONS = [
         { id: 'southeast',    label: 'Southeast',     sub: 'FL GA SC NC TN(e) VA(s)', latMin: 24.0, latMax: 36.5, lonMin: -88.5, lonMax: -74.5, mb: 188 },
         { id: 'midatlantic',  label: 'Mid-Atlantic',  sub: 'VA MD DC DE NJ NY',       latMin: 36.5, latMax: 42.5, lonMin: -82.0, lonMax: -71.0, mb: 120 },
@@ -370,8 +371,9 @@ class DataStatus {
 
         // ── MBTiles sections ──────────────────────────────────────────────────
         const mbtilesHtml = [
-            { layer: 'sectional', label: 'Sectional Charts (z5–11)', approxMb: 1800 },
-            { layer: 'ifr-low',   label: 'IFR Low Enroute (z7–11)',  approxMb: 600  },
+            { layer: 'sectional', label: 'Sectional Charts (z5–11)',               approxMb: 1800 },
+            { layer: 'ifr-low',   label: 'IFR Low Enroute (z4–10, 512px retina)',  approxMb: 600  },
+            { layer: 'ifr-area',  label: 'IFR Area Charts (z10–12)',               approxMb: 150  },
             { layer: 'tac',       label: 'Terminal Area Charts (z8–12) — VFR Flyways', approxMb: 250 },
         ].map(({ layer, label, approxMb }) => {
             const entry  = mbt.find(l => l.layer === layer);
@@ -1094,6 +1096,7 @@ class DataStatus {
         };
         add('sectional', DataStatus.SEC_ZOOMS);
         add('ifr-low',   DataStatus.IFR_ZOOMS);
+        add('ifr-area',  DataStatus.IFR_AREA_ZOOMS);
         return urls;
     }
 
@@ -1388,7 +1391,7 @@ class DataStatus {
             if (r.ok) mbStatus = await r.json();
         } catch { /* NanoHTTPD offline */ }
 
-        for (const [stepId, layer, label] of [['sec', 'sectional', 'Sectional (~1.8 GB)'], ['ifr', 'ifr-low', 'IFR Low (~600 MB)']]) {
+        for (const [stepId, layer, label] of [['sec', 'sectional', 'Sectional (~1.8 GB)'], ['ifr', 'ifr-low', 'IFR Low (~600 MB)'], ['ifr-area', 'ifr-area', 'IFR Area (~150 MB)']]) {
             const entry = mbStatus.find(s => s.layer === layer);
             if (entry?.exists) {
                 setStep(stepId, 'skip', `On device — ${entry.size_mb.toLocaleString()} MB`);

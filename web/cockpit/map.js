@@ -288,19 +288,30 @@ class CockpitMap {
             errorTileUrl: '',
         });
 
-        // IFR Low Enroute — z7-z10: 512px retina (stitched from z+1); z11: 512px retina in
-        // terminal areas where ArcGIS z12 has content, 256px native fallback elsewhere.
-        // tileSize stays 256 — Leaflet positions tiles by z/x/y grid, 512px images render crisper on retina.
-        // updateWhenZooming: false — prevents zoom-transition seam where CSS-scaled old tiles and
-        // newly-loading tiles appear at different scales. Leaflet waits until zoom ends to load.
+        // IFR Low Enroute — FAA GeoTIFF source (ENR_L series), 512px retina tiles z4-z10.
+        // 512px images render at 256px CSS = 2x density on HiDPI displays.
+        // updateWhenZooming: false — waits for zoom end before loading new tiles (no seam flash).
         this._ifrLayer = L.tileLayer(`${tileBase}/ifr-low/{z}/{x}/{y}.webp`, {
-            minZoom: 7,
-            minNativeZoom: 7,
-            maxNativeZoom: 11,
+            minZoom: 4,
+            minNativeZoom: 4,
+            maxNativeZoom: 10,
             maxZoom: 14,
             tms: false,
             updateWhenZooming: false,
             attribution: 'FAA IFR Low Enroute',
+            errorTileUrl: '',
+        });
+
+        // IFR Area Charts — ArcGIS IFR_AreaLow z10-z12, explicit toggle overlay only.
+        // Terminal area detail near major airports. Separate from IFR Low Enroute layer.
+        this._ifrAreaLayer = L.tileLayer(`${tileBase}/ifr-area/{z}/{x}/{y}.webp`, {
+            minZoom: 10,
+            minNativeZoom: 10,
+            maxNativeZoom: 12,
+            maxZoom: 14,
+            tms: false,
+            updateWhenZooming: false,
+            attribution: 'FAA IFR Area Charts',
             errorTileUrl: '',
         });
 
@@ -326,6 +337,7 @@ class CockpitMap {
         logTileError(this._sectionalLayer);
         logTileError(this._ifrLayer);
         logTileError(this._tacLayer);
+        logTileError(this._ifrAreaLayer);
 
         // Start with sectional
         this._sectionalLayer.addTo(this.map);
@@ -485,6 +497,15 @@ class CockpitMap {
             }
         } else {
             this.map.removeLayer(this._tfrLayer);
+        }
+    }
+
+    toggleIfrArea(on) {
+        if (!this._ifrAreaLayer || !this.map) return;
+        if (on) {
+            this._ifrAreaLayer.addTo(this.map);
+        } else {
+            this.map.removeLayer(this._ifrAreaLayer);
         }
     }
 
