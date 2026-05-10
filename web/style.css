@@ -10239,7 +10239,6 @@ body.route-editing-mode #cockpitView {
 .rpp-stat-fuel { font-weight: 700; }
 
 /* ── Altitude Optimizer Table ── */
-/* ── Altitude Optimizer Table ── */
 .rpp-opt-table { margin-top: 10px; background: #f0f4f8; border-radius: 6px; padding: 8px 10px; font-family: monospace; font-size: 0.85em; color: #1a2a3a; }
 .rpp-opt-header, .rpp-opt-row { display: grid; grid-template-columns: 70px 1fr 48px 48px; gap: 0 4px; }
 .rpp-opt-has-mix .rpp-opt-header, .rpp-opt-has-mix .rpp-opt-row { grid-template-columns: 68px 1fr 44px 44px 62px; }
