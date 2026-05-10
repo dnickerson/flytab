@@ -10246,13 +10246,13 @@ body.route-editing-mode #cockpitView {
 .rpp-opt-row { padding: 5px 6px; border-radius: 4px; border-left: 3px solid transparent; }
 .rpp-opt-row.rpp-opt-selected { background: #ddeeff; border-left-color: #1a6fbb; color: #0a2050; font-weight: 600; }
 .rpp-opt-row.rpp-opt-dim { color: #9aabbf; }
-.rpp-opt-mix-ok { color: #1a8040; } .rpp-opt-mix-warn { color: #b85000; }
+.rpp-opt-mix-ok { color: #116633; } .rpp-opt-mix-warn { color: #943d00; }
 .rpp-opt-empty, .rpp-opt-note { color: #667; font-size: 0.8em; text-align: center; padding: 6px 0 2px; }
 
 /* ── MEA on Airway Pills ── */
-.rpp-pill-mea { font-size: 0.72em; color: #1a8040; font-weight: 600; margin-left: 4px; }
-.rpp-pill-mea.rpp-pill-mea-warn { color: #b85000; }
-.rpp-pill.rpp-pill-mea-warn { border-color: #b85000; }
+.rpp-pill-mea { font-size: 0.72em; color: #116633; font-weight: 600; margin-left: 4px; }
+.rpp-pill-mea.rpp-pill-mea-warn { color: #943d00; }
+.rpp-pill.rpp-pill-mea-warn { border-color: #943d00; }
 
 /* ── Route Planner Redesign ─────────────────────────────────────────────── */
 

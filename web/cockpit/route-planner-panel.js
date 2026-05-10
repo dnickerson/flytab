@@ -1485,7 +1485,7 @@ class RoutePlannerPanel {
             altBadge.textContent = String(Math.round(item.altFt / 100) * 100);
             pill.insertBefore(altBadge, del);
         }
-        if (item.type === 'awy' && item.mea_ft != null) {
+        if (item.type === 'awy' && item.mea_ft != null && this._cruiseAltFt != null) {
             const meaOk = this._cruiseAltFt >= item.mea_ft;
             const meaSpan = document.createElement('span');
             meaSpan.className = `rpp-pill-mea${meaOk ? '' : ' rpp-pill-mea-warn'}`;
