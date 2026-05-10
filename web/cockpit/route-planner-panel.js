@@ -806,6 +806,9 @@ class RoutePlannerPanel {
         hdr.appendChild(hdrClose);
         popup.appendChild(hdr);
 
+        const body = document.createElement('div');
+        body.className = 'rpp-popup-body';
+
         const mkRow = (lbl, ctrl) => {
             const row = document.createElement('div');
             row.className = 'rpp-popup-row';
@@ -838,7 +841,7 @@ class RoutePlannerPanel {
         };
 
         // ── Winds & Performance ──
-        popup.appendChild(mkSection('Winds & Performance'));
+        body.appendChild(mkSection('Winds & Performance'));
 
         this._depTimeSel = document.createElement('input');
         this._depTimeSel.type = 'datetime-local';
@@ -849,7 +852,7 @@ class RoutePlannerPanel {
             this._updateSummaryBar();
             if (this._lastPlan) this._windsPromise = (this._windsPromise || Promise.resolve()).then(() => this._applyWindsToLastPlan());
         });
-        popup.appendChild(mkRow('Depart', this._depTimeSel));
+        body.appendChild(mkRow('Depart', this._depTimeSel));
 
         this._altSel = document.createElement('select');
         this._altSel.className = 'rpp-popup-sel';
@@ -890,7 +893,7 @@ class RoutePlannerPanel {
             this._reRenderPillsInPlace();
             if (this._lastPlan) this._windsPromise = (this._windsPromise || Promise.resolve()).then(() => this._applyWindsToLastPlan());
         });
-        popup.appendChild(mkRow('Altitude', this._altSel));
+        body.appendChild(mkRow('Altitude', this._altSel));
 
         this._pwrSel = mkSel([
             ['55','55% LOP'],['60','60% LOP'],['65','65% LOP'],['70','70% LOP'],['75','75% LOP'],
@@ -902,14 +905,14 @@ class RoutePlannerPanel {
             this._renderOptTable();
             if (this._lastPlan) this._windsPromise = (this._windsPromise || Promise.resolve()).then(() => this._applyWindsToLastPlan());
         });
-        popup.appendChild(mkRow('Power', this._pwrSel));
+        body.appendChild(mkRow('Power', this._pwrSel));
 
         this._optTableEl = document.createElement('div');
         this._optTableEl.className = 'rpp-opt-table';
-        popup.appendChild(this._optTableEl);
+        body.appendChild(this._optTableEl);
 
         // ── Auto-routing ──
-        popup.appendChild(mkSection('Auto-routing'));
+        body.appendChild(mkSection('Auto-routing'));
 
         this._modeSel = mkSel([
             ['v-airways',  'V-airways (default)'],
@@ -923,11 +926,11 @@ class RoutePlannerPanel {
             this._saveOpts();
             this._updateSummaryBar();
         });
-        popup.appendChild(mkRow('Routing', this._modeSel));
+        body.appendChild(mkRow('Routing', this._modeSel));
 
 
         // ── Fuel Planning ──
-        popup.appendChild(mkSection('Fuel Planning'));
+        body.appendChild(mkSection('Fuel Planning'));
 
         this._reserveInput = document.createElement('input');
         this._reserveInput.className = 'rpp-popup-inp-num';
@@ -947,7 +950,7 @@ class RoutePlannerPanel {
         rsvUnit.className = 'rpp-popup-unit';
         rsvUnit.textContent = 'gal';
         rsvNumRow.appendChild(rsvUnit);
-        popup.appendChild(mkRow('Reserve', rsvNumRow));
+        body.appendChild(mkRow('Reserve', rsvNumRow));
 
         const ssRow = document.createElement('div');
         ssRow.className = 'rpp-popup-check-row';
@@ -964,7 +967,8 @@ class RoutePlannerPanel {
         ssLabel.textContent = 'Self-serve fuel only';
         ssRow.appendChild(ssCheck);
         ssRow.appendChild(ssLabel);
-        popup.appendChild(ssRow);
+        body.appendChild(ssRow);
+        popup.appendChild(body);
 
         // Footer: Plan Route | Done
         const footer = document.createElement('div');
