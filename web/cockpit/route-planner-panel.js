@@ -610,6 +610,7 @@ class RoutePlannerPanel {
 
     async _fetchRouteMea() {
         if (!this._route) return;
+        if (!this._nasrDb) return;
         const epoch = ++this._meaEpoch;
 
         for (let i = 0; i < this._route.length; i++) {
@@ -623,6 +624,7 @@ class RoutePlannerPanel {
 
             try {
                 const awy = await this._nasrDb.getAirway(pill.id);
+                if (epoch !== this._meaEpoch) return;
                 if (!awy || !awy.waypoints || !awy.segments) { pill.mea_ft = null; continue; }
 
                 // Match waypoints by id, fallback to name
@@ -637,9 +639,10 @@ class RoutePlannerPanel {
                 const toWp   = findWp(toPill);
                 if (!fromWp || !toWp) { pill.mea_ft = null; continue; }
 
-                // Find segment — direction-agnostic: match by from_seq or to_seq
+                // Find segment — direction-agnostic: match both endpoints (bidirectional AND)
                 const seg = awy.segments.find(s =>
-                    s.from_seq === fromWp.seq || s.to_seq === fromWp.seq
+                    (s.from_seq === fromWp.seq && s.to_seq === toWp.seq) ||
+                    (s.from_seq === toWp.seq && s.to_seq === fromWp.seq)
                 );
                 pill.mea_ft = seg ? (seg.mea_gnss_ft ?? seg.mea_ft ?? null) : null;
             } catch (_) {
