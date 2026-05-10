@@ -171,6 +171,7 @@ class RoutePlannerPanel {
             if (saved.departureTime) this._departureTime = new Date(saved.departureTime);
             if (saved.cruiseAltFt  != null) {
                 this._cruiseAltFt = saved.cruiseAltFt;
+                this._altitude    = saved.cruiseAltFt;
                 if (this._altSel) this._altSel.value = String(saved.cruiseAltFt);
             }
             if (saved.pctPower != null) {
@@ -565,11 +566,11 @@ class RoutePlannerPanel {
     }
 
     _computeAltComparison() {
-        const ALTS = [3000, 6000, 9000, 12000, 18000];
+        const ALTS = [3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 11000, 12000, 13000, 18000];
         const O2_REQUIRED_FT = 14000; // FAR 91.211: supplemental O2 required above this altitude
         if (!this._lastPlan || !this._lastPlan.waypoints || this._lastPlan.waypoints.length < 2) return [];
         const profileOverride = this._profileForPower(this._pctPower);
-        const baseTasKt = profileOverride.cruise_ktas ?? 0;
+        const tasAtAlt = window.FlyTabPlanning?.tasAtAltitude;
         const rows = [];
         for (const altFt of ALTS) {
             if (altFt > O2_REQUIRED_FT) {
@@ -583,7 +584,8 @@ class RoutePlannerPanel {
             });
             const s = result.summary;
             const gsKt = s.totalEteHrs > 0 ? Math.round(s.totalDistNm / s.totalEteHrs) : 0;
-            const windKt = baseTasKt > 0 ? gsKt - Math.round(baseTasKt) : null;
+            const tasKt = tasAtAlt ? Math.round(tasAtAlt(profileOverride, altFt)) : 0;
+            const windKt = tasKt > 0 ? gsKt - tasKt : null;
             rows.push({ altFt, eteHrs: s.totalEteHrs, gsKt, windKt, fuelGal: s.totalFuelGal, aboveCeiling: false });
         }
         const validRows = rows.filter(r => !r.aboveCeiling);
@@ -852,11 +854,6 @@ class RoutePlannerPanel {
         this._altSel = document.createElement('select');
         this._altSel.className = 'rpp-popup-sel';
         {
-            const addOpt = (val, label) => {
-                const o = document.createElement('option');
-                o.value = val; o.textContent = label;
-                this._altSel.appendChild(o);
-            };
             const addGroup = (label, pairs) => {
                 const grp = document.createElement('optgroup');
                 grp.label = label;
@@ -867,7 +864,9 @@ class RoutePlannerPanel {
                 }
                 this._altSel.appendChild(grp);
             };
-            addOpt('', 'Auto');
+            const autoOpt = document.createElement('option');
+            autoOpt.value = ''; autoOpt.textContent = 'Auto';
+            this._altSel.appendChild(autoOpt);
             addGroup('IFR (thousands)', [
                 ['3000','3,000 ft'],['4000','4,000 ft'],['5000','5,000 ft'],
                 ['6000','6,000 ft'],['7000','7,000 ft'],['8000','8,000 ft'],
