@@ -85,9 +85,11 @@ public class PhaseDetector {
             return WARMUP;
         }
 
-        // Takeoff: full power AND climbing fast (ground roll → initial climb).
-        // No altitude cap — altRate > 300 is the reliable signal; cruise altRate ≈ 0.
-        if (rpm > 2400 && altRate > 300) {
+        // Takeoff: full power AND either climbing (altRate > 300 fpm) OR rolling (speedKts > 20).
+        // The causal 10-sample buffer reads ~0 fpm during the ground roll because all prior
+        // samples were stationary; speed builds immediately at throttle advance and reliably
+        // identifies the takeoff roll before the altitude rate buffer catches up.
+        if (rpm > 2400 && (altRate > 300 || speedKts > 20)) {
             return TAKEOFF;
         }
 

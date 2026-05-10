@@ -76,8 +76,9 @@ public class PhaseDetector {
             return WARMUP;
         }
 
-        // Takeoff: high power, accelerating or climbing fast
-        if (rpm > 2400 && (altRate > 300 || speedKts > 50)) {
+        // Takeoff: high power AND either climbing (altRate > 300 fpm) OR rolling (speedKts > 20).
+        // 20 kts catches the ground roll from throttle advance; 50 kts was too late.
+        if (rpm > 2400 && (altRate > 300 || speedKts > 20)) {
             return TAKEOFF;
         }
 
