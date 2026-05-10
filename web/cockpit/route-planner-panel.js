@@ -566,6 +566,57 @@ class RoutePlannerPanel {
         return rows;
     }
 
+    async _fetchMos() {
+        if (!this._lastPlan?.waypoints) return;
+        const ids = this._lastPlan.waypoints
+            .filter(wp => /^[A-Z]{3,4}$/.test(wp.icao ?? ''))
+            .map(wp => wp.icao)
+            .filter((v, i, a) => a.indexOf(v) === i)  // dedupe
+            .join(',');
+        if (!ids) return;
+        const base = (typeof Settings !== 'undefined' && Settings.workerBase)
+            ? Settings.workerBase : 'https://www.flywhere.app/api';
+        const url = `${base}/mos?ids=${ids}`;
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 45000);
+        try {
+            let resp = await fetch(url, { signal: controller.signal });
+            if (resp.status === 503) {
+                await new Promise(r => setTimeout(r, 2000));
+                resp = await fetch(url, { signal: controller.signal });
+            }
+            if (!resp.ok) { this._lastMos = null; return; }
+            const data = await resp.json();
+            this._lastMos = { fetched_at: Date.now(), stations: data.stations ?? data };
+        } catch (_) {
+            this._lastMos = null;
+        } finally {
+            clearTimeout(timeout);
+        }
+        if (this._popupOverlay?.classList.contains('open')) this._renderOptTable();
+    }
+
+    _getMixHt(departureTime) {
+        if (!this._lastMos?.stations) return null;
+        const refTime = departureTime instanceof Date ? departureTime.getTime() : Date.now();
+        const heights = [];
+        for (const station of Object.values(this._lastMos.stations)) {
+            const periods = station.periods ?? station.data ?? [];
+            if (!periods.length) continue;
+            // Find period nearest to departureTime
+            let best = periods[0];
+            let bestDelta = Infinity;
+            for (const p of periods) {
+                const t = new Date(p.valid_time ?? p.validTime ?? p.time ?? 0).getTime();
+                const delta = Math.abs(t - refTime);
+                if (delta < bestDelta) { bestDelta = delta; best = p; }
+            }
+            const mh = best.mix_ht ?? best.mixHt ?? null;
+            if (mh != null && mh > 0) heights.push(mh);
+        }
+        return heights.length ? Math.round(heights.reduce((a, b) => a + b, 0) / heights.length) : null;
+    }
+
     _renderOptTable() {
         if (!this._optTableEl) return;
         const rows = this._computeAltComparison();
@@ -593,7 +644,7 @@ class RoutePlannerPanel {
 
         let html = '<div class="rpp-opt-header">';
         html += '<span>ALT</span><span>ETE</span><span>GS</span><span>GAL</span>';
-        if (hasMix) html += '<span>MIX</span>';
+        if (hasMix) html += '<span>MIX HT</span>';
         html += '</div>';
 
         const validRows = rows.filter(r => !r.aboveCeiling);
@@ -858,6 +909,8 @@ class RoutePlannerPanel {
         const ssCheck = this._popupOverlay?.querySelector('#rppSelfServe');
         if (ssCheck) ssCheck.checked = this._selfServeOnly;
         this._popupOverlay?.classList.add('open');
+        const mosAge = this._lastMos ? (Date.now() - this._lastMos.fetched_at) : Infinity;
+        if (this._lastPlan && mosAge > 60 * 60 * 1000) this._fetchMos();
         this._renderOptTable();
     }
 
