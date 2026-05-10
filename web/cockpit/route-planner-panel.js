@@ -834,6 +834,7 @@ class RoutePlannerPanel {
             this._saveOpts();
             this._updateSummaryBar();
             this._renderOptTable();
+            this._reRenderPillsInPlace();
             if (this._lastPlan) this._windsPromise = (this._windsPromise || Promise.resolve()).then(() => this._applyWindsToLastPlan());
         });
         popup.appendChild(mkRow('Altitude', this._altSel));
@@ -1234,6 +1235,7 @@ class RoutePlannerPanel {
     _render() {
         this._renderAvoidStrip();
         this._renderPills();
+        this._fetchRouteMea();
         this._renderRouteStr();
     }
 
@@ -1346,6 +1348,19 @@ class RoutePlannerPanel {
         this._statsEl.style.display = '';
     }
 
+    /** Re-renders all pills in place without triggering a new MEA fetch.
+     *  Used when cruise altitude changes — mea_ft values are already populated. */
+    _reRenderPillsInPlace() {
+        if (!this._pillsEl) return;
+        this._pillsEl.innerHTML = '';
+        const view = this._compactView
+            ? this._collapseSameAirway(this._route)
+            : this._route.map((item, i) => ({ item, originalIdx: i }));
+        view.forEach(({ item, originalIdx }) => {
+            this._pillsEl.appendChild(this._buildPill(item, originalIdx));
+        });
+    }
+
     _renderPills() {
         if (!this._pillsEl) return;
         this._renderEpoch++;
@@ -1421,6 +1436,7 @@ class RoutePlannerPanel {
             this._compactBtn.classList.toggle('rpp-tbtn-active', this._compactView);
         }
         this._renderPills();
+        this._fetchRouteMea();
     }
 
     _pillClass(type) {
@@ -1468,6 +1484,14 @@ class RoutePlannerPanel {
             altBadge.className = 'rpp-alt-badge';
             altBadge.textContent = String(Math.round(item.altFt / 100) * 100);
             pill.insertBefore(altBadge, del);
+        }
+        if (item.type === 'awy' && item.mea_ft != null) {
+            const meaOk = this._cruiseAltFt >= item.mea_ft;
+            const meaSpan = document.createElement('span');
+            meaSpan.className = `rpp-pill-mea${meaOk ? '' : ' rpp-pill-mea-warn'}`;
+            meaSpan.textContent = `MEA ${item.mea_ft.toLocaleString()} ${meaOk ? '✓' : '▲'}`;
+            pill.appendChild(meaSpan);
+            if (!meaOk) pill.classList.add('rpp-pill-mea-warn');
         }
         pill.appendChild(del);
 
