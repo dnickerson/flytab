@@ -106,6 +106,7 @@ class RoutePlannerPanel {
         // stats bar. We synthesize a fresh _lastPlan below.
         this._lastPlan    = null;
         this._currentPlan = null;
+        this._lastMos     = null;
 
         // Synthesize _lastPlan from the loaded plan's waypoints so
         // _applyWindsToLastPlan can compute stats without needing the user to
@@ -569,7 +570,7 @@ class RoutePlannerPanel {
     async _fetchMos() {
         if (!this._lastPlan?.waypoints) return;
         const ids = this._lastPlan.waypoints
-            .filter(wp => /^[A-Z]{3,4}$/.test(wp.icao ?? ''))
+            .filter(wp => /^[A-Z]{4}$/.test(wp.icao ?? ''))
             .map(wp => wp.icao)
             .filter((v, i, a) => a.indexOf(v) === i)  // dedupe
             .join(',');
@@ -578,20 +579,31 @@ class RoutePlannerPanel {
             ? Settings.workerBase : 'https://www.flywhere.app/api';
         const url = `${base}/mos?ids=${ids}`;
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 45000);
+        let timeout = setTimeout(() => controller.abort(), 45000);
         try {
             let resp = await fetch(url, { signal: controller.signal });
             if (resp.status === 503) {
+                clearTimeout(timeout);
+                timeout = null;
                 await new Promise(r => setTimeout(r, 2000));
-                resp = await fetch(url, { signal: controller.signal });
+                const ctrl2 = new AbortController();
+                const t2 = setTimeout(() => ctrl2.abort(), 45000);
+                try {
+                    resp = await fetch(url, { signal: ctrl2.signal });
+                } finally {
+                    clearTimeout(t2);
+                }
             }
-            if (!resp.ok) { this._lastMos = null; return; }
-            const data = await resp.json();
-            this._lastMos = { fetched_at: Date.now(), stations: data.stations ?? data };
+            if (resp.ok) {
+                const data = await resp.json();
+                this._lastMos = { fetched_at: Date.now(), stations: data.stations };
+            } else {
+                this._lastMos = null;
+            }
         } catch (_) {
             this._lastMos = null;
         } finally {
-            clearTimeout(timeout);
+            if (timeout !== null) clearTimeout(timeout);
         }
         if (this._popupOverlay?.classList.contains('open')) this._renderOptTable();
     }
@@ -626,7 +638,7 @@ class RoutePlannerPanel {
             return;
         }
 
-        const mixHt = this._getMixHt ? this._getMixHt(this._departureTime ?? new Date()) : null;
+        const mixHt = this._getMixHt(this._departureTime ?? new Date());
         const hasMix = mixHt !== null;
         this._optTableEl.classList.toggle('rpp-opt-has-mix', hasMix);
 
@@ -683,7 +695,7 @@ class RoutePlannerPanel {
             const stations = Object.keys(this._lastMos.stations ?? {}).join(', ');
             noteParts.push(`mix ht ~${mixHt.toLocaleString()} ft (${stations})`);
         } else if (this._lastMos !== null) {
-            noteParts.push('MOS unavailable');
+            noteParts.push('mix ht not reported');
         }
         if (noteParts.length) {
             html += `<div class="rpp-opt-note">${noteParts.join(' \xb7 ')}</div>`;
