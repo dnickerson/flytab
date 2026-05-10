@@ -24,6 +24,7 @@ import java.util.Map;
 public class ThresholdAdapter {
     private static final String TAG = "ThresholdAdapter";
     private static final String PREFS_NAME = "threshold_adapter";
+    private static final String KEY_FINGERPRINT = "model_threshold_fingerprint";
 
     // Minimum normal samples per phase before adapting
     private static final int MIN_SAMPLES = 300;
@@ -60,7 +61,15 @@ public class ThresholdAdapter {
     public ThresholdAdapter(Context context, Map<String, Float> trainedThresholds) {
         this.trainedThresholds = trainedThresholds;
         this.prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-        loadState();
+
+        String currentFingerprint = computeThresholdFingerprint(trainedThresholds);
+        String storedFingerprint = prefs.getString(KEY_FINGERPRINT, "");
+        if (!currentFingerprint.equals(storedFingerprint)) {
+            Log.i(TAG, "Model thresholds changed — clearing adaptive state");
+            prefs.edit().clear().putString(KEY_FINGERPRINT, currentFingerprint).apply();
+        } else {
+            loadState();
+        }
     }
 
     /**
@@ -161,6 +170,16 @@ public class ThresholdAdapter {
         editor.remove(phase + "_count");
         editor.apply();
         Log.i(TAG, "Adapted threshold reset for phase: " + phase);
+    }
+
+    private String computeThresholdFingerprint(Map<String, Float> thresholds) {
+        StringBuilder sb = new StringBuilder();
+        for (Map.Entry<String, Float> e : new java.util.TreeMap<>(thresholds).entrySet()) {
+            sb.append(e.getKey()).append(':')
+              .append(String.format(Locale.US, "%.4f", e.getValue()))
+              .append(';');
+        }
+        return sb.toString();
     }
 
     // ── Internal ────────────────────────────────────────────

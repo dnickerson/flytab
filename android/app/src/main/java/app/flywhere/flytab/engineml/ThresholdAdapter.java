@@ -24,6 +24,7 @@ import java.util.Map;
 public class ThresholdAdapter {
     private static final String TAG = "ThresholdAdapter";
     private static final String PREFS_NAME = "threshold_adapter";
+    private static final String KEY_FINGERPRINT = "model_threshold_fingerprint";
 
     // Minimum normal samples per phase before adapting
     private static final int MIN_SAMPLES = 300;
@@ -60,7 +61,20 @@ public class ThresholdAdapter {
     public ThresholdAdapter(Context context, Map<String, Float> trainedThresholds) {
         this.trainedThresholds = trainedThresholds;
         this.prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-        loadState();
+
+        // If the model's trained thresholds have changed, discard any stored adaptive
+        // state — it was calibrated against different phase thresholds and would
+        // produce incorrect effective thresholds until enough new samples converge.
+        String currentFingerprint = computeThresholdFingerprint(trainedThresholds);
+        String storedFingerprint = prefs.getString(KEY_FINGERPRINT, "");
+        if (!currentFingerprint.equals(storedFingerprint)) {
+            Log.i(TAG, "Model thresholds changed — clearing adaptive state");
+            prefs.edit().clear().putString(KEY_FINGERPRINT, currentFingerprint).apply();
+            // phaseStats remains empty; getThreshold() falls back to trained values
+            // until MIN_SAMPLES are collected on the new model.
+        } else {
+            loadState();
+        }
     }
 
     /**
@@ -164,6 +178,19 @@ public class ThresholdAdapter {
     }
 
     // ── Internal ────────────────────────────────────────────
+
+    /** Stable fingerprint of the trained thresholds. Uses sorted phase:value pairs so
+     *  map insertion order doesn't matter. Rounded to 4dp — enough to detect any real
+     *  retrain while ignoring floating-point noise from serialisation. */
+    private String computeThresholdFingerprint(Map<String, Float> thresholds) {
+        StringBuilder sb = new StringBuilder();
+        for (Map.Entry<String, Float> e : new java.util.TreeMap<>(thresholds).entrySet()) {
+            sb.append(e.getKey()).append(':')
+              .append(String.format(Locale.US, "%.4f", e.getValue()))
+              .append(';');
+        }
+        return sb.toString();
+    }
 
     private float getTrainedThreshold(String phase) {
         Float t = trainedThresholds.get(phase);
