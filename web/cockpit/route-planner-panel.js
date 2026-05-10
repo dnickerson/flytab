@@ -83,6 +83,9 @@ class RoutePlannerPanel {
         this._windsPromise  = null;     // pending _applyWindsToLastPlan() call
         this._lastWinds     = null;     // most recently fetched winds data
         this._windWarnings  = [];
+        this._optTableEl    = null;     // optimizer table container div
+        this._lastMos       = null;     // MOS data for mixing height (Feature C)
+        this._meaEpoch      = 0;        // stale-fetch guard for _fetchRouteMea (Feature B)
     }
 
     /** Build DOM, wire events, start building airway graph. */
@@ -536,6 +539,100 @@ class RoutePlannerPanel {
         wireTap(this._summaryEl, () => this._openSettingsPopup());
     }
 
+    _computeAltComparison() {
+        const ALTS = [3000, 6000, 9000, 12000, 18000];
+        const O2_REQUIRED_FT = 14000; // FAR 91.211: supplemental O2 required above this altitude
+        if (!this._lastPlan || !this._lastPlan.waypoints || this._lastPlan.waypoints.length < 2) return [];
+        const rows = [];
+        for (const altFt of ALTS) {
+            if (altFt > O2_REQUIRED_FT) {
+                rows.push({ altFt, aboveCeiling: true });
+                continue;
+            }
+            const result = this._planner.recomputeLegs(this._lastPlan, null, {
+                cruiseAltFt: altFt,
+                winds:       this._lastWinds ?? undefined,
+                pctPower:    this._pctPower,
+            });
+            const s = result.summary;
+            const gsKt = s.totalEteHrs > 0 ? Math.round(s.totalDistNm / s.totalEteHrs) : 0;
+            rows.push({ altFt, eteHrs: s.totalEteHrs, gsKt, fuelGal: s.totalFuelGal, aboveCeiling: false });
+        }
+        const validRows = rows.filter(r => !r.aboveCeiling);
+        if (validRows.length) {
+            const best = validRows.reduce((a, b) => a.eteHrs < b.eteHrs ? a : b);
+            best.isOptimal = true;
+        }
+        return rows;
+    }
+
+    _renderOptTable() {
+        if (!this._optTableEl) return;
+        const rows = this._computeAltComparison();
+        if (!rows.length) {
+            this._optTableEl.innerHTML = '<div class="rpp-opt-empty">Plan a route to see altitude comparison</div>';
+            return;
+        }
+
+        const mixHt = this._getMixHt ? this._getMixHt(this._departureTime ?? new Date()) : null;
+        const hasMix = mixHt !== null;
+        this._optTableEl.classList.toggle('rpp-opt-has-mix', hasMix);
+
+        const windsOk = !!this._lastWinds;
+        const calNote = windsOk ? null
+            : this._fetchingWinds ? 'calm-air \xb7 winds loading…'
+            : 'calm-air \xb7 no wind data';
+
+        const fmtEte = (hrs) => {
+            let h = Math.floor(hrs);
+            let m = Math.round((hrs - h) * 60);
+            if (m === 60) { h += 1; m = 0; }
+            return `${h}:${String(m).padStart(2, '0')}`;
+        };
+
+        let html = '<div class="rpp-opt-header">';
+        html += '<span>ALT</span><span>ETE</span><span>GS</span><span>GAL</span>';
+        if (hasMix) html += '<span>MIX</span>';
+        html += '</div>';
+
+        for (const row of rows) {
+            const isSel = this._cruiseAltFt === row.altFt;
+            let cls = 'rpp-opt-row';
+            if (isSel)         cls += ' rpp-opt-selected';
+            if (row.aboveCeiling) cls += ' rpp-opt-dim';
+            html += `<div class="${cls}" data-alt="${row.altFt}">`;
+            html += `<span class="rpp-opt-alt">${row.altFt.toLocaleString()}</span>`;
+            if (row.aboveCeiling) {
+                html += '<span>—</span><span>—</span><span>—</span>';
+                if (hasMix) html += '<span>—</span>';
+            } else {
+                html += `<span class="rpp-opt-ete">${fmtEte(row.eteHrs)}${row.isOptimal ? ' ★' : ''}</span>`;
+                html += `<span class="rpp-opt-gs">${row.gsKt}</span>`;
+                html += `<span class="rpp-opt-gal">${row.fuelGal.toFixed(1)}</span>`;
+                if (hasMix) {
+                    if (row.altFt > mixHt) {
+                        html += '<span class="rpp-opt-mix-ok">✓ above</span>';
+                    } else {
+                        html += '<span class="rpp-opt-mix-warn">⚠ in BL</span>';
+                    }
+                }
+            }
+            html += '</div>';
+        }
+
+        const noteParts = [];
+        if (calNote) noteParts.push(calNote);
+        if (hasMix && this._lastMos?.fetched_at) {
+            const stations = Object.keys(this._lastMos.stations ?? {}).slice(0, 3).join(', ');
+            noteParts.push(`mix ht ~${mixHt.toLocaleString()} ft (${stations})`);
+        }
+        if (noteParts.length) {
+            html += `<div class="rpp-opt-note">${noteParts.join(' \xb7 ')}</div>`;
+        }
+
+        this._optTableEl.innerHTML = html;
+    }
+
     _buildSettingsPopup() {
         this._popupOverlay = document.createElement('div');
         this._popupOverlay.className = 'rpp-popup-overlay';
@@ -618,6 +715,7 @@ class RoutePlannerPanel {
             this._cruiseAltFt = this._altSel.value ? parseInt(this._altSel.value, 10) : null;
             this._saveOpts();
             this._updateSummaryBar();
+            this._renderOptTable();
             if (this._lastPlan) this._windsPromise = (this._windsPromise || Promise.resolve()).then(() => this._applyWindsToLastPlan());
         });
         popup.appendChild(mkRow('Altitude', this._altSel));
@@ -632,6 +730,10 @@ class RoutePlannerPanel {
             if (this._lastPlan) this._windsPromise = (this._windsPromise || Promise.resolve()).then(() => this._applyWindsToLastPlan());
         });
         popup.appendChild(mkRow('Power', this._pwrSel));
+
+        this._optTableEl = document.createElement('div');
+        this._optTableEl.className = 'rpp-opt-table';
+        popup.appendChild(this._optTableEl);
 
         // ── Auto-routing ──
         popup.appendChild(mkSection('Auto-routing'));
@@ -749,6 +851,7 @@ class RoutePlannerPanel {
         const ssCheck = this._popupOverlay?.querySelector('#rppSelfServe');
         if (ssCheck) ssCheck.checked = this._selfServeOnly;
         this._popupOverlay?.classList.add('open');
+        this._renderOptTable();
     }
 
     _closeSettingsPopup() {
@@ -1729,6 +1832,7 @@ class RoutePlannerPanel {
             );
         }
         this._renderWindWarnings();
+        if (this._popupOverlay?.classList.contains('open')) this._renderOptTable();
     }
 
     _waitForPlanner(timeoutMs) {
