@@ -680,8 +680,10 @@ class RoutePlannerPanel {
         const noteParts = [];
         if (calNote) noteParts.push(calNote);
         if (hasMix && this._lastMos?.fetched_at) {
-            const stations = Object.keys(this._lastMos.stations ?? {}).slice(0, 3).join(', ');
+            const stations = Object.keys(this._lastMos.stations ?? {}).join(', ');
             noteParts.push(`mix ht ~${mixHt.toLocaleString()} ft (${stations})`);
+        } else if (this._lastMos !== null) {
+            noteParts.push('MOS unavailable');
         }
         if (noteParts.length) {
             html += `<div class="rpp-opt-note">${noteParts.join(' \xb7 ')}</div>`;
