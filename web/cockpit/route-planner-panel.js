@@ -540,17 +540,42 @@ class RoutePlannerPanel {
         wireTap(this._summaryEl, () => this._openSettingsPopup());
     }
 
+    // Build a profile override with measured TAS/GPH for the selected power setting.
+    // Uses cruise_ktas (no cruise_ias) so tasAtAltitude() scales TAS with altitude.
+    _profileForPower(pctPower) {
+        const powerSettings = CockpitConfig.aircraftRaw?.performance?.power_settings;
+        if (!powerSettings?.length) return null;
+        const entry = powerSettings.find(s => s.pct === pctPower)
+            || powerSettings.reduce((best, s) =>
+                Math.abs(s.pct - pctPower) < Math.abs(best.pct - pctPower) ? s : best);
+        if (!entry) return null;
+        return {
+            id: 'rv9a-default', model: 'RV-9A',
+            cruise_ktas:               entry.tas_kt,
+            fuel_burn_gph:             entry.gph,
+            fuel_capacity_gal:         36,
+            reserve_gal:               10,
+            climb_rate_fpm:            750,
+            service_ceiling_ft:        17500,
+            taxi_burn_gal:             1.5,
+            max_hp:                    180,
+            alt_power_loss_pct_per_kft: 3.0,
+            equipment: { vAirways: true, tAirways: false, jAirways: false, gpsApproach: true },
+        };
+    }
+
     _computeAltComparison() {
         const ALTS = [3000, 6000, 9000, 12000, 18000];
         const O2_REQUIRED_FT = 14000; // FAR 91.211: supplemental O2 required above this altitude
         if (!this._lastPlan || !this._lastPlan.waypoints || this._lastPlan.waypoints.length < 2) return [];
+        const profileOverride = this._profileForPower(this._pctPower);
         const rows = [];
         for (const altFt of ALTS) {
             if (altFt > O2_REQUIRED_FT) {
                 rows.push({ altFt, aboveCeiling: true });
                 continue;
             }
-            const result = this._planner.recomputeLegs(this._lastPlan, null, {
+            const result = this._planner.recomputeLegs(this._lastPlan, profileOverride, {
                 cruiseAltFt: altFt,
                 winds:       this._lastWinds ?? undefined,
                 pctPower:    this._pctPower,
