@@ -10238,6 +10238,18 @@ body.route-editing-mode #cockpitView {
 .rpp-stat-fetching { color: #888; font-style: italic; }
 .rpp-stat-fuel { font-weight: 700; }
 
+/* ── Altitude Optimizer Table ── */
+/* ── Altitude Optimizer Table ── */
+.rpp-opt-table { margin-top: 10px; background: #f0f4f8; border-radius: 6px; padding: 8px 10px; font-family: monospace; font-size: 0.85em; color: #1a2a3a; }
+.rpp-opt-header, .rpp-opt-row { display: grid; grid-template-columns: 70px 1fr 48px 48px; gap: 0 4px; }
+.rpp-opt-has-mix .rpp-opt-header, .rpp-opt-has-mix .rpp-opt-row { grid-template-columns: 68px 1fr 44px 44px 62px; }
+.rpp-opt-header { color: #556; font-size: 0.8em; border-bottom: 1px solid #c0c8d0; padding-bottom: 4px; margin-bottom: 4px; }
+.rpp-opt-row { padding: 5px 6px; border-radius: 4px; border-left: 3px solid transparent; }
+.rpp-opt-row.rpp-opt-selected { background: #ddeeff; border-left-color: #1a6fbb; color: #0a2050; font-weight: 600; }
+.rpp-opt-row.rpp-opt-dim { color: #9aabbf; }
+.rpp-opt-mix-ok { color: #1a8040; } .rpp-opt-mix-warn { color: #b85000; }
+.rpp-opt-empty, .rpp-opt-note { color: #667; font-size: 0.8em; text-align: center; padding: 6px 0 2px; }
+
 /* ── Route Planner Redesign ─────────────────────────────────────────────── */
 
 /* Panel header — title + close ✕ */

@@ -570,6 +570,7 @@ class RoutePlannerPanel {
         if (!this._optTableEl) return;
         const rows = this._computeAltComparison();
         if (!rows.length) {
+            this._optTableEl.classList.remove('rpp-opt-has-mix');
             this._optTableEl.innerHTML = '<div class="rpp-opt-empty">Plan a route to see altitude comparison</div>';
             return;
         }
@@ -595,8 +596,13 @@ class RoutePlannerPanel {
         if (hasMix) html += '<span>MIX</span>';
         html += '</div>';
 
+        const validRows = rows.filter(r => !r.aboveCeiling);
+        const nearestFd = validRows.length > 0 ? validRows.reduce((best, r) =>
+            Math.abs(r.altFt - this._cruiseAltFt) < Math.abs(best.altFt - this._cruiseAltFt) ? r : best
+        ).altFt : -1;
+
         for (const row of rows) {
-            const isSel = this._cruiseAltFt === row.altFt;
+            const isSel = row.altFt === nearestFd;
             let cls = 'rpp-opt-row';
             if (isSel)         cls += ' rpp-opt-selected';
             if (row.aboveCeiling) cls += ' rpp-opt-dim';
@@ -727,6 +733,7 @@ class RoutePlannerPanel {
             this._pctPower = parseInt(this._pwrSel.value, 10);
             this._saveOpts();
             this._updateSummaryBar();
+            this._renderOptTable();
             if (this._lastPlan) this._windsPromise = (this._windsPromise || Promise.resolve()).then(() => this._applyWindsToLastPlan());
         });
         popup.appendChild(mkRow('Power', this._pwrSel));
