@@ -571,6 +571,16 @@ class RoutePlannerPanel {
         if (!this._lastPlan || !this._lastPlan.waypoints || this._lastPlan.waypoints.length < 2) return [];
         const profileOverride = this._profileForPower(this._pctPower);
         const tasAtAlt = window.FlyTabPlanning?.tasAtAltitude;
+
+        // Nearest FD station to route midpoint for actual wind dir/spd per altitude
+        let fdStation = null;
+        if (this._lastWinds && window.FlyTabPlanning?.findNearestFdStation) {
+            const wps = this._lastPlan.waypoints;
+            const midLat = wps.reduce((s, w) => s + w.lat, 0) / wps.length;
+            const midLon = wps.reduce((s, w) => s + w.lon, 0) / wps.length;
+            fdStation = window.FlyTabPlanning.findNearestFdStation(this._lastWinds, midLat, midLon);
+        }
+
         const rows = [];
         for (const altFt of ALTS) {
             if (altFt > O2_REQUIRED_FT) {
@@ -586,7 +596,12 @@ class RoutePlannerPanel {
             const gsKt = s.totalEteHrs > 0 ? Math.round(s.totalDistNm / s.totalEteHrs) : 0;
             const tasKt = tasAtAlt ? Math.round(tasAtAlt(profileOverride, altFt)) : 0;
             const windKt = tasKt > 0 ? gsKt - tasKt : null;
-            rows.push({ altFt, eteHrs: s.totalEteHrs, gsKt, windKt, fuelGal: s.totalFuelGal, aboveCeiling: false });
+            let windDir = null, windSpd = null;
+            if (fdStation && this._lastWinds?.[fdStation] && window.FlyTabPlanning?.getWindAtAlt) {
+                const entry = window.FlyTabPlanning.getWindAtAlt(this._lastWinds[fdStation], altFt);
+                if (entry && !entry.variable) { windDir = entry.dir; windSpd = entry.spd; }
+            }
+            rows.push({ altFt, eteHrs: s.totalEteHrs, gsKt, windKt, windDir, windSpd, fuelGal: s.totalFuelGal, aboveCeiling: false });
         }
         const validRows = rows.filter(r => !r.aboveCeiling);
         if (validRows.length) {
@@ -732,7 +747,7 @@ class RoutePlannerPanel {
 
         let html = '<div class="rpp-opt-header">';
         html += '<span>ALT</span><span>ETE</span><span>WIND</span><span>GS</span><span>GAL</span>';
-        if (hasMix) html += '<span>MIX HT</span>';
+        if (hasMix) html += '<span>BOUNDARY</span>';
         html += '</div>';
 
         const validRows = rows.filter(r => !r.aboveCeiling);
@@ -751,19 +766,22 @@ class RoutePlannerPanel {
                 html += '<span>—</span><span>—</span><span>—</span><span>—</span>';
                 if (hasMix) html += '<span>—</span>';
             } else {
-                const windStr = row.windKt == null ? '—'
+                const cmpStr = row.windKt == null ? '—'
                     : row.windKt > 0 ? `+${row.windKt}`
                     : String(row.windKt);
-                const windCls = row.windKt == null ? '' : row.windKt >= 0 ? ' rpp-opt-wind-tail' : ' rpp-opt-wind-head';
+                const cmpCls = row.windKt == null ? '' : row.windKt >= 0 ? ' rpp-opt-wind-tail' : ' rpp-opt-wind-head';
+                const rawWind = (row.windDir != null && row.windSpd != null)
+                    ? `<span class="rpp-opt-wind-raw">${row.windDir}/${row.windSpd}</span>`
+                    : '';
                 html += `<span class="rpp-opt-ete">${fmtEte(row.eteHrs)}${row.isOptimal ? ' ★' : ''}</span>`;
-                html += `<span class="rpp-opt-wind${windCls}">${windStr}</span>`;
+                html += `<span class="rpp-opt-wind-cell">${rawWind}<span class="rpp-opt-wind-cmp${cmpCls}">${cmpStr}</span></span>`;
                 html += `<span class="rpp-opt-gs">${row.gsKt}</span>`;
                 html += `<span class="rpp-opt-gal">${row.fuelGal.toFixed(1)}</span>`;
                 if (hasMix) {
                     if (row.altFt > mixHt) {
-                        html += '<span class="rpp-opt-mix-ok">✓ above</span>';
+                        html += '<span class="rpp-opt-mix-ok">smooth</span>';
                     } else {
-                        html += '<span class="rpp-opt-mix-warn">⚠ in BL</span>';
+                        html += '<span class="rpp-opt-mix-warn">bumpy</span>';
                     }
                 }
             }
