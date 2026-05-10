@@ -52,7 +52,7 @@ class RoutePlannerPanel {
         this._summaryEl   = null;   // summary bar element
         this._popupOverlay= null;   // settings popup overlay
         this._legBtnsEl   = null;   // leg-button container (for active-state sync)
-        this._altInput    = null;
+
         this._reserveInput = null;
         this._modeSel      = null;
         this._statsEl      = null;
@@ -569,6 +569,7 @@ class RoutePlannerPanel {
         const O2_REQUIRED_FT = 14000; // FAR 91.211: supplemental O2 required above this altitude
         if (!this._lastPlan || !this._lastPlan.waypoints || this._lastPlan.waypoints.length < 2) return [];
         const profileOverride = this._profileForPower(this._pctPower);
+        const baseTasKt = profileOverride.cruise_ktas ?? 0;
         const rows = [];
         for (const altFt of ALTS) {
             if (altFt > O2_REQUIRED_FT) {
@@ -582,7 +583,8 @@ class RoutePlannerPanel {
             });
             const s = result.summary;
             const gsKt = s.totalEteHrs > 0 ? Math.round(s.totalDistNm / s.totalEteHrs) : 0;
-            rows.push({ altFt, eteHrs: s.totalEteHrs, gsKt, fuelGal: s.totalFuelGal, aboveCeiling: false });
+            const windKt = baseTasKt > 0 ? gsKt - Math.round(baseTasKt) : null;
+            rows.push({ altFt, eteHrs: s.totalEteHrs, gsKt, windKt, fuelGal: s.totalFuelGal, aboveCeiling: false });
         }
         const validRows = rows.filter(r => !r.aboveCeiling);
         if (validRows.length) {
@@ -727,7 +729,7 @@ class RoutePlannerPanel {
         };
 
         let html = '<div class="rpp-opt-header">';
-        html += '<span>ALT</span><span>ETE</span><span>GS</span><span>GAL</span>';
+        html += '<span>ALT</span><span>ETE</span><span>WIND</span><span>GS</span><span>GAL</span>';
         if (hasMix) html += '<span>MIX HT</span>';
         html += '</div>';
 
@@ -744,10 +746,15 @@ class RoutePlannerPanel {
             html += `<div class="${cls}" data-alt="${row.altFt}">`;
             html += `<span class="rpp-opt-alt">${row.altFt.toLocaleString()}</span>`;
             if (row.aboveCeiling) {
-                html += '<span>—</span><span>—</span><span>—</span>';
+                html += '<span>—</span><span>—</span><span>—</span><span>—</span>';
                 if (hasMix) html += '<span>—</span>';
             } else {
+                const windStr = row.windKt == null ? '—'
+                    : row.windKt > 0 ? `+${row.windKt}`
+                    : String(row.windKt);
+                const windCls = row.windKt == null ? '' : row.windKt >= 0 ? ' rpp-opt-wind-tail' : ' rpp-opt-wind-head';
                 html += `<span class="rpp-opt-ete">${fmtEte(row.eteHrs)}${row.isOptimal ? ' ★' : ''}</span>`;
+                html += `<span class="rpp-opt-wind${windCls}">${windStr}</span>`;
                 html += `<span class="rpp-opt-gs">${row.gsKt}</span>`;
                 html += `<span class="rpp-opt-gal">${row.fuelGal.toFixed(1)}</span>`;
                 if (hasMix) {
@@ -842,20 +849,42 @@ class RoutePlannerPanel {
         });
         popup.appendChild(mkRow('Depart', this._depTimeSel));
 
-        this._altSel = mkSel([
-            ['',     'Auto (VFR)'],
-            ['3500', '3,500 ft'],
-            ['4500', '4,500 ft'],
-            ['5500', '5,500 ft'],
-            ['6500', '6,500 ft'],
-            ['7500', '7,500 ft'],
-            ['8500', '8,500 ft'],
-            ['9500', '9,500 ft'],
-            ['10500','10,500 ft'],
-            ['11500','11,500 ft'],
-        ], this._cruiseAltFt ? String(this._cruiseAltFt) : '');
+        this._altSel = document.createElement('select');
+        this._altSel.className = 'rpp-popup-sel';
+        {
+            const addOpt = (val, label) => {
+                const o = document.createElement('option');
+                o.value = val; o.textContent = label;
+                this._altSel.appendChild(o);
+            };
+            const addGroup = (label, pairs) => {
+                const grp = document.createElement('optgroup');
+                grp.label = label;
+                for (const [v, l] of pairs) {
+                    const o = document.createElement('option');
+                    o.value = v; o.textContent = l;
+                    grp.appendChild(o);
+                }
+                this._altSel.appendChild(grp);
+            };
+            addOpt('', 'Auto');
+            addGroup('IFR (thousands)', [
+                ['3000','3,000 ft'],['4000','4,000 ft'],['5000','5,000 ft'],
+                ['6000','6,000 ft'],['7000','7,000 ft'],['8000','8,000 ft'],
+                ['9000','9,000 ft'],['10000','10,000 ft'],['11000','11,000 ft'],
+                ['12000','12,000 ft'],['13000','13,000 ft'],
+            ]);
+            addGroup('VFR (thousands+500)', [
+                ['3500','3,500 ft'],['4500','4,500 ft'],['5500','5,500 ft'],
+                ['6500','6,500 ft'],['7500','7,500 ft'],['8500','8,500 ft'],
+                ['9500','9,500 ft'],['10500','10,500 ft'],['11500','11,500 ft'],
+                ['12500','12,500 ft'],
+            ]);
+            this._altSel.value = this._cruiseAltFt ? String(this._cruiseAltFt) : '';
+        }
         this._altSel.addEventListener('change', () => {
             this._cruiseAltFt = this._altSel.value ? parseInt(this._altSel.value, 10) : null;
+            this._altitude    = this._cruiseAltFt ?? 5500;
             this._saveOpts();
             this._updateSummaryBar();
             this._renderOptTable();
@@ -897,25 +926,6 @@ class RoutePlannerPanel {
         });
         popup.appendChild(mkRow('Routing', this._modeSel));
 
-        this._altInput = document.createElement('input');
-        this._altInput.className = 'rpp-popup-inp-num';
-        this._altInput.type = 'number';
-        this._altInput.min = '500';
-        this._altInput.max = '17500';
-        this._altInput.step = '500';
-        this._altInput.value = this._altitude;
-        this._altInput.addEventListener('change', () => {
-            this._altitude = parseInt(this._altInput.value, 10) || 5500;
-            this._saveOpts();
-        });
-        const altNumRow = document.createElement('div');
-        altNumRow.className = 'rpp-popup-num-row';
-        altNumRow.appendChild(this._altInput);
-        const altUnit = document.createElement('span');
-        altUnit.className = 'rpp-popup-unit';
-        altUnit.textContent = 'ft';
-        altNumRow.appendChild(altUnit);
-        popup.appendChild(mkRow('A* Alt', altNumRow));
 
         // ── Fuel Planning ──
         popup.appendChild(mkSection('Fuel Planning'));
@@ -991,7 +1001,6 @@ class RoutePlannerPanel {
         if (this._altSel) this._altSel.value = this._cruiseAltFt ? String(this._cruiseAltFt) : '';
         if (this._pwrSel) this._pwrSel.value = String(this._pctPower);
         if (this._modeSel) this._modeSel.value = this._routingMode;
-        if (this._altInput) this._altInput.value = this._altitude;
         if (this._reserveInput) this._reserveInput.value = this._reserveGal;
         const ssCheck = this._popupOverlay?.querySelector('#rppSelfServe');
         if (ssCheck) ssCheck.checked = this._selfServeOnly;
@@ -1508,7 +1517,7 @@ class RoutePlannerPanel {
             const altBadge = document.createElement('span');
             altBadge.className = 'rpp-alt-badge';
             altBadge.textContent = String(Math.round(item.altFt / 100) * 100);
-            pill.insertBefore(altBadge, del);
+            pill.appendChild(altBadge);
         }
         if (item.type === 'awy' && item.mea_ft != null && this._cruiseAltFt != null) {
             const meaOk = this._cruiseAltFt >= item.mea_ft;
