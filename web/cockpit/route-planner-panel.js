@@ -1942,13 +1942,28 @@ class RoutePlannerPanel {
                   </div>`;
                 row.addEventListener('touchstart', () => { row.style.background = '#243040'; }, { passive: true });
                 row.addEventListener('touchend',   () => { row.style.background = ''; }, { passive: true });
-                row.addEventListener('click', () => { overlay.remove(); resolve(apt); });
+                wireTap(row, () => { overlay.remove(); resolve(apt); });
                 list.appendChild(row);
             }
 
-            overlay.querySelector('.rpp-fs-skip').addEventListener('click', () => {
+            wireTap(overlay.querySelector('.rpp-fs-skip'), () => { overlay.remove(); resolve(null); });
+
+            // Backdrop: tap on the dim background (not on any child) dismisses.
+            // Must track touchstart ourselves because e.target is the original touch target
+            // even when the event bubbles up to overlay.
+            let _bgTapStart = null;
+            overlay.addEventListener('touchstart', e => {
+                _bgTapStart = (e.target === overlay && e.touches.length === 1)
+                    ? { x: e.touches[0].clientX, y: e.touches[0].clientY, t: Date.now() } : null;
+            }, { passive: true });
+            overlay.addEventListener('touchend', e => {
+                if (!_bgTapStart || e.target !== overlay) { _bgTapStart = null; return; }
+                const ts = _bgTapStart; _bgTapStart = null;
+                const dx = e.changedTouches[0].clientX - ts.x;
+                const dy = e.changedTouches[0].clientY - ts.y;
+                if (dx * dx + dy * dy > 400 || Date.now() - ts.t > 500) return;
                 overlay.remove(); resolve(null);
-            });
+            }, { passive: true });
             overlay.addEventListener('click', e => {
                 if (e.target === overlay) { overlay.remove(); resolve(null); }
             });
