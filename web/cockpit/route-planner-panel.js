@@ -1819,6 +1819,7 @@ class RoutePlannerPanel {
             this._depInput.value  = dep;
             this._destInput.value = dest;
             this._lastPlan = result;
+            this._lastMos = null;  // reset so _fetchMos re-fetches for new route's stations
             this._updateStats(result);
             this._render();
             this._toast(`Route planned · ${result.waypoints?.length || 0} waypoints`, 2500);
@@ -1864,6 +1865,7 @@ class RoutePlannerPanel {
 
         if (fuelStops.length > 0) {
             this._lastPlan = { ...result, waypoints: currentWaypoints, fuelStops };
+            this._lastMos = null;  // reset so _fetchMos re-fetches for new route's stations
         }
         this._render();
         this._windsPromise = this._applyWindsToLastPlan();
