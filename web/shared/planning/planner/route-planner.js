@@ -219,13 +219,16 @@ export class RoutePlanner {
             globalCruiseAltFt = vfrAltitude(magCourse, dep, dest);
         }
         globalCruiseAltFt = globalCruiseAltFt ?? 6000;
+        let lastAltFt = globalCruiseAltFt;
 
         for (let i = 0; i < wps.length - 1; i++) {
             const a = wps[i];
             const b = wps[i + 1];
 
-            // Per-leg altitude: use destination waypoint altFt override, else global cruise
-            const legAltFt = b.altFt ?? globalCruiseAltFt;
+            // Per-leg altitude: use destination altFt if set, else carry forward the last
+            // explicitly-set altitude (step-down/step-up persists until next override).
+            const legAltFt = b.altFt ?? lastAltFt;
+            lastAltFt = legAltFt;
 
             const distNm = haversine(a.lat, a.lon, b.lat, b.lon);
             const brgTrue = bearing(a.lat, a.lon, b.lat, b.lon);
