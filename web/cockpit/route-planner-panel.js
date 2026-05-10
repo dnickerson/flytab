@@ -608,6 +608,50 @@ class RoutePlannerPanel {
         if (this._popupOverlay?.classList.contains('open')) this._renderOptTable();
     }
 
+    async _fetchRouteMea() {
+        if (!this._route) return;
+        const epoch = ++this._meaEpoch;
+
+        for (let i = 0; i < this._route.length; i++) {
+            const pill = this._route[i];
+            if (pill.type !== 'awy') { pill.mea_ft = null; continue; }
+
+            // Find adjacent fix pills (before and after this airway pill)
+            const fromPill = this._route.slice(0, i).reverse().find(p => p.type !== 'awy');
+            const toPill   = this._route.slice(i + 1).find(p => p.type !== 'awy');
+            if (!fromPill || !toPill) { pill.mea_ft = null; continue; }
+
+            try {
+                const awy = await this._nasrDb.getAirway(pill.id);
+                if (!awy || !awy.waypoints || !awy.segments) { pill.mea_ft = null; continue; }
+
+                // Match waypoints by id, fallback to name
+                const findWp = (fix) => {
+                    const byId = awy.waypoints.find(w => w.id === fix.id);
+                    if (byId) return byId;
+                    const nameUp = (fix.id ?? fix.name ?? '').toUpperCase();
+                    return awy.waypoints.find(w => (w.name ?? '').toUpperCase() === nameUp) ?? null;
+                };
+
+                const fromWp = findWp(fromPill);
+                const toWp   = findWp(toPill);
+                if (!fromWp || !toWp) { pill.mea_ft = null; continue; }
+
+                // Find segment — direction-agnostic: match by from_seq or to_seq
+                const seg = awy.segments.find(s =>
+                    s.from_seq === fromWp.seq || s.to_seq === fromWp.seq
+                );
+                pill.mea_ft = seg ? (seg.mea_gnss_ft ?? seg.mea_ft ?? null) : null;
+            } catch (_) {
+                pill.mea_ft = null;
+            }
+        }
+
+        // If a newer fetch started while we were awaiting, discard this result
+        if (epoch !== this._meaEpoch) return;
+        this._renderPills();
+    }
+
     _getMixHt(departureTime) {
         if (!this._lastMos?.stations) return null;
         const refTime = departureTime instanceof Date ? departureTime.getTime() : Date.now();
