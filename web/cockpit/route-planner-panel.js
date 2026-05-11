@@ -51,6 +51,7 @@ class RoutePlannerPanel {
         this._typeSubMenu = null;
         this._summaryEl   = null;   // summary bar element
         this._popupOverlay= null;   // settings popup overlay
+        this._popupEl     = null;   // popup inner element (for JS height sizing)
         this._legBtnsEl   = null;   // leg-button container (for active-state sync)
 
         this._reserveInput = null;
@@ -247,6 +248,19 @@ class RoutePlannerPanel {
             const id = wp.icao || wp.name || wp.fix;
             if (id && wp.lat != null && wp.lon != null)
                 this._coords[id] = { lat: wp.lat, lon: wp.lon };
+        }
+
+        // Restore per-waypoint altFt onto pills — both load paths build pills
+        // from IDs only and lose altFt stored on the saved waypoints.
+        const altByWpId = new Map(
+            wps.filter(wp => wp.altFt != null)
+               .map(wp => [wp.icao || wp.name || wp.fix, wp.altFt])
+        );
+        if (altByWpId.size > 0) {
+            for (const pill of this._route) {
+                const alt = altByWpId.get(pill.id);
+                if (alt != null) pill.altFt = alt;
+            }
         }
 
         // Sync DEP/DEST inputs from the first/last non-airway pill
@@ -809,6 +823,7 @@ class RoutePlannerPanel {
 
         const popup = document.createElement('div');
         popup.className = 'rpp-popup';
+        this._popupEl = popup;
 
         // Header
         const hdr = document.createElement('div');
@@ -929,8 +944,8 @@ class RoutePlannerPanel {
         this._optTableEl.className = 'rpp-opt-table';
         body.appendChild(this._optTableEl);
 
-        // ── Auto-routing ──
-        body.appendChild(mkSection('Auto-routing'));
+        // ── Routing & Fuel (single compact row) ──
+        body.appendChild(mkSection('Routing & Fuel'));
 
         this._modeSel = mkSel([
             ['v-airways',  'V-airways (default)'],
@@ -944,11 +959,6 @@ class RoutePlannerPanel {
             this._saveOpts();
             this._updateSummaryBar();
         });
-        body.appendChild(mkRow('Routing', this._modeSel));
-
-
-        // ── Fuel Planning ──
-        body.appendChild(mkSection('Fuel Planning'));
 
         this._reserveInput = document.createElement('input');
         this._reserveInput.className = 'rpp-popup-inp-num';
@@ -961,14 +971,30 @@ class RoutePlannerPanel {
             this._saveOpts();
             this._updateSummaryBar();
         });
-        const rsvNumRow = document.createElement('div');
-        rsvNumRow.className = 'rpp-popup-num-row';
-        rsvNumRow.appendChild(this._reserveInput);
         const rsvUnit = document.createElement('span');
         rsvUnit.className = 'rpp-popup-unit';
         rsvUnit.textContent = 'gal';
-        rsvNumRow.appendChild(rsvUnit);
-        body.appendChild(mkRow('Reserve', rsvNumRow));
+
+        const pairRow = document.createElement('div');
+        pairRow.className = 'rpp-popup-pair-row';
+        const leftCell = document.createElement('div');
+        leftCell.className = 'rpp-popup-pair-cell';
+        const leftLbl = document.createElement('div');
+        leftLbl.className = 'rpp-popup-lbl';
+        leftLbl.textContent = 'Routing';
+        leftCell.appendChild(leftLbl);
+        leftCell.appendChild(this._modeSel);
+        const rightCell = document.createElement('div');
+        rightCell.className = 'rpp-popup-pair-cell rpp-popup-pair-rsv';
+        const rightLbl = document.createElement('div');
+        rightLbl.className = 'rpp-popup-lbl';
+        rightLbl.textContent = 'Rsv';
+        rightCell.appendChild(rightLbl);
+        rightCell.appendChild(this._reserveInput);
+        rightCell.appendChild(rsvUnit);
+        pairRow.appendChild(leftCell);
+        pairRow.appendChild(rightCell);
+        body.appendChild(pairRow);
 
         const ssRow = document.createElement('div');
         ssRow.className = 'rpp-popup-check-row';
@@ -1025,6 +1051,7 @@ class RoutePlannerPanel {
         if (this._reserveInput) this._reserveInput.value = this._reserveGal;
         const ssCheck = this._popupOverlay?.querySelector('#rppSelfServe');
         if (ssCheck) ssCheck.checked = this._selfServeOnly;
+        if (this._popupEl) this._popupEl.style.height = (window.innerHeight - 24) + 'px';
         this._popupOverlay?.classList.add('open');
         const mosAge = this._lastMos ? (Date.now() - this._lastMos.fetched_at) : Infinity;
         if (this._lastPlan && mosAge > 60 * 60 * 1000) this._fetchMos();

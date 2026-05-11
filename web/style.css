@@ -10420,7 +10420,7 @@ body.route-editing-mode #cockpitView {
     border-radius: 8px;
     width: 100%;
     max-width: min(560px, calc(100vw - 32px));
-    height: calc(100vh - 24px);
+    /* height set via JS from window.innerHeight — 100vh is unreliable in Capacitor WebView */
     box-shadow: 0 12px 48px rgba(0,10,40,.28);
     display: flex;
     flex-direction: column;
@@ -10471,6 +10471,24 @@ body.route-editing-mode #cockpitView {
     align-items: center;
     padding: 6px 14px;
     gap: 10px;
+}
+.rpp-popup-pair-row {
+    display: flex;
+    align-items: center;
+    padding: 4px 14px;
+    gap: 10px;
+}
+.rpp-popup-pair-cell {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1 1 0;
+    min-width: 0;
+}
+.rpp-popup-pair-cell .rpp-popup-sel { flex: 1; min-width: 0; }
+.rpp-popup-pair-rsv {
+    flex: 0 0 auto;
+    gap: 5px;
 }
 .rpp-popup-lbl {
     font-size: 12px;
