@@ -51,7 +51,7 @@ class RoutePlannerPanel {
         this._typeSubMenu = null;
         this._summaryEl   = null;   // summary bar element
         this._popupOverlay= null;   // settings popup overlay
-        this._popupEl     = null;   // popup inner element (for JS height sizing)
+        this._popupEl     = null;
         this._legBtnsEl   = null;   // leg-button container (for active-state sync)
 
         this._reserveInput = null;
@@ -744,7 +744,7 @@ class RoutePlannerPanel {
         }
 
         const mixHt = this._getMixHt(this._departureTime ?? new Date());
-        const hasMix = mixHt !== null;
+        const hasMix = mixHt !== null && mixHt > 0;
         this._optTableEl.classList.toggle('rpp-opt-has-mix', hasMix);
 
         const windsOk = !!this._lastWinds;
@@ -823,7 +823,6 @@ class RoutePlannerPanel {
 
         const popup = document.createElement('div');
         popup.className = 'rpp-popup';
-        this._popupEl = popup;
 
         // Header
         const hdr = document.createElement('div');
@@ -996,22 +995,6 @@ class RoutePlannerPanel {
         pairRow.appendChild(rightCell);
         body.appendChild(pairRow);
 
-        const ssRow = document.createElement('div');
-        ssRow.className = 'rpp-popup-check-row';
-        const ssCheck = document.createElement('input');
-        ssCheck.type = 'checkbox';
-        ssCheck.id = 'rppSelfServe';
-        ssCheck.checked = this._selfServeOnly;
-        ssCheck.addEventListener('change', () => {
-            this._selfServeOnly = ssCheck.checked;
-            this._saveOpts();
-        });
-        const ssLabel = document.createElement('label');
-        ssLabel.htmlFor = 'rppSelfServe';
-        ssLabel.textContent = 'Self-serve fuel only';
-        ssRow.appendChild(ssCheck);
-        ssRow.appendChild(ssLabel);
-        body.appendChild(ssRow);
         popup.appendChild(body);
 
         // Footer: Plan Route | Done
@@ -1049,9 +1032,6 @@ class RoutePlannerPanel {
         if (this._pwrSel) this._pwrSel.value = String(this._pctPower);
         if (this._modeSel) this._modeSel.value = this._routingMode;
         if (this._reserveInput) this._reserveInput.value = this._reserveGal;
-        const ssCheck = this._popupOverlay?.querySelector('#rppSelfServe');
-        if (ssCheck) ssCheck.checked = this._selfServeOnly;
-        if (this._popupEl) this._popupEl.style.height = (window.innerHeight - 24) + 'px';
         this._popupOverlay?.classList.add('open');
         const mosAge = this._lastMos ? (Date.now() - this._lastMos.fetched_at) : Infinity;
         if (this._lastPlan && mosAge > 60 * 60 * 1000) this._fetchMos();
