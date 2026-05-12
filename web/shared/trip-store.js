@@ -19,7 +19,12 @@ const TripStore = (() => {
                     store.createIndex('created_at', 'created_at', { unique: false });
                 }
             };
-            req.onsuccess = () => { _db = req.result; resolve(_db); };
+            req.onsuccess = () => {
+                _db = req.result;
+                // Release cached connection on version change to prevent IDB upgrade hangs
+                _db.onversionchange = () => { _db.close(); _db = null; _ready = null; };
+                resolve(_db);
+            };
             req.onerror = () => reject(req.error);
         });
         return _ready;
@@ -27,11 +32,11 @@ const TripStore = (() => {
 
     async function save(trip) {
         const db = await _open();
-        trip.updated_at = new Date().toISOString();
+        const record = { ...trip, updated_at: new Date().toISOString() };
         return new Promise((resolve, reject) => {
             const tx = db.transaction(STORE, 'readwrite');
-            tx.objectStore(STORE).put(trip);
-            tx.oncomplete = () => resolve(trip);
+            tx.objectStore(STORE).put(record);
+            tx.oncomplete = () => resolve(record);
             tx.onerror = () => reject(tx.error);
         });
     }
