@@ -854,7 +854,10 @@ class AirportPopup {
                 }
             }
 
-            const entry = plateIndex?.[icao];
+            // Plate index uses FAA identifiers: real ICAO airports keep their K
+            // prefix (KATL, KMCO) but small airports are indexed without it
+            // (X60, 75J, 15J). Try direct lookup first, then strip leading K.
+            const entry = plateIndex?.[icao] ?? plateIndex?.[icao.replace(/^K/, '')];
             const allPlates = entry?.plates || (Array.isArray(entry) ? entry : []);
 
             // Filter and group by type
@@ -951,7 +954,7 @@ class AirportPopup {
             // Try to get plates from index
             let plate = null;
             if (plateIndex) {
-                const entry = plateIndex[icao];
+                const entry = plateIndex[icao] ?? plateIndex[icao.replace(/^K/, '')];
                 const plates = entry?.plates || (Array.isArray(entry) ? entry : []);
                 // APD = airport diagram, MIN = minimums/airport info page
                 plate = plates.find(p => {
