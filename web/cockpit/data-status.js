@@ -1218,8 +1218,13 @@ class DataStatus {
                 }
                 localStorage.setItem('flypi_plates_synced_states', JSON.stringify(newlySynced));
                 localStorage.setItem('flypi_plates_cached_at', Date.now().toString());
+                // Prefer the cycle_code from manifest.json (what _render() compares
+                // against via sPlates.cycle_code) over the one in plates_cycle_info.json.
+                // If they diverge the device manifest would never match the render check.
                 this._saveDeviceSection('plates', {
-                    cycle_code: serverCycle.cycle_code || serverCycle.effective_date,
+                    cycle_code: this._serverManifest?.plates?.cycle_code
+                                || serverCycle.cycle_code
+                                || serverCycle.effective_date,
                     synced_states: newlySynced,
                 });
                 setStep('plates', 'ok', `${done} states downloaded — cycle ${serverDate}`);
