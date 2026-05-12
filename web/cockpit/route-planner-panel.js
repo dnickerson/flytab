@@ -2337,6 +2337,9 @@ class RoutePlannerPanel {
         if (typeof app === 'undefined') return false;
         await app.applyRouteEdit(plan);
 
+        // Auto-save the trip so it appears in the Plans list.
+        this._saveCurrentTrip().catch(e => console.error('auto-save failed', e));
+
         // Update stats bar to reflect exactly what was applied, not the stale
         // A*-planned route which may have a different waypoint count/distance.
         if (appliedPlan) {
@@ -2345,6 +2348,76 @@ class RoutePlannerPanel {
         }
 
         return true;
+    }
+
+    async _saveCurrentTrip() {
+        const plan = this._lastPlan;
+        if (!plan || !plan.waypoints || plan.waypoints.length < 2) return;
+
+        const waypoints = plan.waypoints;
+        const fuelStopIndices = [];
+        waypoints.forEach((wp, i) => { if (wp.fuelStop) fuelStopIndices.push(i); });
+        const boundaries = [0, ...fuelStopIndices, waypoints.length - 1];
+
+        const fullRouteStr = this._buildField15String(this._route);
+
+        const tripLegs = [];
+        for (let i = 0; i < boundaries.length - 1; i++) {
+            const start = boundaries[i];
+            const end   = boundaries[i + 1];
+            const legWps = waypoints.slice(start, end + 1);
+            const allLegs = plan.legs || [];
+            const legWpIds = new Set(legWps.map(w => w.icao || w.id || w.name));
+            const filteredLegs = allLegs.filter(l =>
+                legWpIds.has(l.from) || legWpIds.has(l.to)
+            );
+            tripLegs.push({
+                dep:  legWps[0].icao || legWps[0].id || legWps[0].name,
+                dest: legWps[legWps.length - 1].icao || legWps[legWps.length - 1].id || legWps[legWps.length - 1].name,
+                flight_plan: {
+                    departure:   legWps[0].icao || legWps[0].id || legWps[0].name,
+                    destination: legWps[legWps.length - 1].icao || legWps[legWps.length - 1].id || legWps[legWps.length - 1].name,
+                    route:       fullRouteStr,
+                    altitude:    this._altitude || 0,
+                    legs:        filteredLegs,
+                },
+                waypoints: legWps,
+            });
+        }
+
+        const dep  = waypoints[0].icao || waypoints[0].id || waypoints[0].name;
+        const dest = waypoints[waypoints.length - 1].icao || waypoints[waypoints.length - 1].id || waypoints[waypoints.length - 1].name;
+        const now = new Date();
+        const monthDay = now.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        const autoName = `${dep} → ${dest} · ${monthDay}`;
+
+        // Check for existing trip with same dep+dest saved today (upsert)
+        let tripId = crypto.randomUUID();
+        const today = now.toISOString().slice(0, 10);
+        try {
+            const existing = await TripStore.list();
+            const match = existing.find(t =>
+                t.dep === dep && t.dest === dest &&
+                t.created_at && t.created_at.slice(0, 10) === today
+            );
+            if (match) tripId = match.id;
+        } catch (_) {}
+
+        const trip = {
+            id:         tripId,
+            name:       autoName,
+            dep,
+            dest,
+            created_at: now.toISOString(),
+            legs:       tripLegs,
+        };
+
+        try {
+            await TripStore.save(trip);
+            this._toast('Plan saved.');
+        } catch (e) {
+            console.error('TripStore.save failed', e);
+        }
     }
 
     _buildLegsFromWaypoints(wps) {
