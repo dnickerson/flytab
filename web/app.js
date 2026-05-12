@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v7.92';
+const FLYTAB_VERSION = 'v7.96';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -1085,6 +1085,64 @@ class FlyTabApp {
         document.body.classList.remove('route-editing-mode');
         this.routePlannerPanel?.close();
         setTimeout(() => this.cockpitMap?.map?.invalidateSize(), 300);
+    }
+
+    async saveCurrentPlan() {
+        if (this.routePlannerPanel?._lastPlan && this.routePlannerPanel._saveCurrentTrip) {
+            try {
+                await this.routePlannerPanel._saveCurrentTrip();
+            } catch (err) {
+                this.showToast('Save failed: ' + (err?.message || err));
+            }
+            return;
+        }
+        if (this._currentTrip?.waypoints?.length >= 2) {
+            const wps = this._currentTrip.waypoints;
+            const dep  = wps[0].icao || wps[0].id;
+            const dest = wps[wps.length - 1].icao || wps[wps.length - 1].id;
+            const now  = new Date();
+            const today = now.toISOString().slice(0, 10);
+            const monthDay = now.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+            // Upsert: reuse the existing trip if one with the same dep+dest was
+            // saved today, to avoid creating duplicates on repeated taps.
+            let tripId = null;
+            let existingCreatedAt = null;
+            try {
+                const existing = await TripStore.list();
+                const match = existing.find(t =>
+                    t.dep === dep && t.dest === dest &&
+                    t.created_at && t.created_at.startsWith(today)
+                );
+                if (match) {
+                    tripId = match.id;
+                    existingCreatedAt = match.created_at;
+                }
+            } catch (e) { console.warn('TripStore.list failed, will create new record', e); }
+
+            const trip = {
+                id:         tripId || crypto.randomUUID(),
+                name:       `${dep} → ${dest} · ${monthDay}`,
+                dep,
+                dest,
+                created_at: existingCreatedAt ?? now.toISOString(),
+                updated_at: now.toISOString(),
+                legs: [{
+                    dep,
+                    dest,
+                    flight_plan: this._currentTrip.flight_plan || { departure: dep, destination: dest, route: '', altitude: 0, legs: [] },
+                    waypoints:   wps,
+                }],
+            };
+            try {
+                await TripStore.save(trip);
+                this.showToast('Plan saved.');
+            } catch (err) {
+                this.showToast('Save failed: ' + (err?.message || err));
+            }
+            return;
+        }
+        this.showToast('No plan to save.');
     }
 
     async applyRouteEdit(plan, { fromRouteTable = false } = {}) {

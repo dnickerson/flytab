@@ -53,6 +53,8 @@ class RoutePlannerPanel {
         this._popupOverlay= null;   // settings popup overlay
         this._popupEl     = null;
         this._legBtnsEl   = null;   // leg-button container (for active-state sync)
+        this._saveBtn     = null;   // enabled when _lastPlan is set
+        this._plansBtn    = null;
 
         this._reserveInput = null;
         this._modeSel      = null;
@@ -108,6 +110,7 @@ class RoutePlannerPanel {
         this._lastPlan    = null;
         this._currentPlan = null;
         this._lastMos     = null;
+        this._syncSaveBtnState();
 
         // Synthesize _lastPlan from the loaded plan's waypoints so
         // _applyWindsToLastPlan can compute stats without needing the user to
@@ -123,6 +126,7 @@ class RoutePlannerPanel {
                     id: wp.icao || wp.name || wp.fix || wp.id,
                 })),
             };
+            this._syncSaveBtnState();
         }
 
         if (this._lastPlan) {
@@ -1015,7 +1019,12 @@ class RoutePlannerPanel {
         this._popupOverlay.appendChild(popup);
         document.body.appendChild(this._popupOverlay);
 
+        // Suppress synthetic click fired ~300ms after the touchend that opened
+        // the popup — on Android the click dispatches to whichever element is at
+        // the finger's final position, which in portrait mode is the overlay
+        // backdrop (the popup content box doesn't reach the panel at bottom 40%).
         this._popupOverlay.addEventListener('click', e => {
+            if (Date.now() - (this._popupOpenedAt || 0) < 400) return;
             if (e.target === this._popupOverlay) this._closeSettingsPopup();
         });
     }
@@ -1032,6 +1041,7 @@ class RoutePlannerPanel {
         if (this._pwrSel) this._pwrSel.value = String(this._pctPower);
         if (this._modeSel) this._modeSel.value = this._routingMode;
         if (this._reserveInput) this._reserveInput.value = this._reserveGal;
+        this._popupOpenedAt = Date.now();
         this._popupOverlay?.classList.add('open');
         const mosAge = this._lastMos ? (Date.now() - this._lastMos.fetched_at) : Infinity;
         if (this._lastPlan && mosAge > 60 * 60 * 1000) this._fetchMos();
@@ -1101,9 +1111,42 @@ class RoutePlannerPanel {
             this._compactView ? 'rpp-tbtn-active' : '');
         bar.appendChild(this._compactBtn);
 
+        // Plans — opens PlanSync Device tab
+        this._plansBtn = mkBtn('Plans', () => this._onPlansTap());
+        bar.appendChild(this._plansBtn);
+
+        // Save — disabled until _lastPlan is set
+        this._saveBtn = mkBtn('Save', () => this._onSaveTap(), 'rpp-tbtn-save');
+        this._saveBtn.disabled = true;
+        bar.appendChild(this._saveBtn);
+
         bar.appendChild(mkBtn('Apply', () => this._onApplyKeepOpenTap(), 'rpp-tbtn-apply'));
 
         return bar;
+    }
+
+    async _onSaveTap() {
+        if (!this._lastPlan) return;
+        try {
+            await this._saveCurrentTrip();
+            this._toast('Plan saved.');
+        } catch (err) {
+            this._toast('Save failed: ' + (err?.message || err), 4000);
+        }
+    }
+
+    _onPlansTap() {
+        if (typeof planSync !== 'undefined' && planSync?.showDeviceTab) {
+            planSync.showDeviceTab();
+        } else if (typeof planSync !== 'undefined' && planSync?.show) {
+            planSync.show();
+        } else {
+            window.app?.planSync?.showDeviceTab?.() || window.app?.planSync?.show?.();
+        }
+    }
+
+    _syncSaveBtnState() {
+        if (this._saveBtn) this._saveBtn.disabled = !this._lastPlan;
     }
 
     async _onRecomputeTap() {
@@ -1881,6 +1924,7 @@ class RoutePlannerPanel {
             this._depInput.value  = dep;
             this._destInput.value = dest;
             this._lastPlan = result;
+            this._syncSaveBtnState();
             this._lastMos = null;  // reset so _fetchMos re-fetches for new route's stations
             this._updateStats(result);
             this._render();
@@ -1927,6 +1971,7 @@ class RoutePlannerPanel {
 
         if (fuelStops.length > 0) {
             this._lastPlan = { ...result, waypoints: currentWaypoints, fuelStops };
+            this._syncSaveBtnState();
             this._lastMos = null;  // reset so _fetchMos re-fetches for new route's stations
         }
         this._render();
@@ -2337,6 +2382,11 @@ class RoutePlannerPanel {
         if (typeof app === 'undefined') return false;
         await app.applyRouteEdit(plan);
 
+        // Auto-save the trip so it appears in the Plans list.
+        // Pass appliedPlan so _saveCurrentTrip uses the freshly-built plan, not
+        // the potentially-stale _lastPlan (which is set by _plan(), not here).
+        this._saveCurrentTrip(appliedPlan || plan).catch(e => console.error('auto-save failed', e));
+
         // Update stats bar to reflect exactly what was applied, not the stale
         // A*-planned route which may have a different waypoint count/distance.
         if (appliedPlan) {
@@ -2345,6 +2395,83 @@ class RoutePlannerPanel {
         }
 
         return true;
+    }
+
+    async _saveCurrentTrip(plan) {
+        // plan is passed from _doApply() so it reflects the freshly-applied
+        // waypoints rather than the potentially-stale _lastPlan (which is set by
+        // _plan(), not by _doApply()).  Fall back to _lastPlan only if not provided.
+        plan = plan || this._lastPlan;
+        if (!plan || !plan.waypoints || plan.waypoints.length < 2) return;
+
+        const waypoints = plan.waypoints;
+        const fuelStopIndices = [];
+        waypoints.forEach((wp, i) => { if (wp.fuelStop) fuelStopIndices.push(i); });
+        // Deduplicate boundaries to avoid a degenerate single-waypoint leg when a
+        // fuel stop happens to fall on the last waypoint (indices [0, n-1, n-1]).
+        const boundaries = [...new Set([0, ...fuelStopIndices, waypoints.length - 1])];
+
+        const fullRouteStr = this._buildField15String(this._route);
+
+        const tripLegs = [];
+        for (let i = 0; i < boundaries.length - 1; i++) {
+            const start = boundaries[i];
+            const end   = boundaries[i + 1];
+            const legWps = waypoints.slice(start, end + 1);
+            tripLegs.push({
+                dep:  legWps[0].icao || legWps[0].id || legWps[0].name,
+                dest: legWps[legWps.length - 1].icao || legWps[legWps.length - 1].id || legWps[legWps.length - 1].name,
+                flight_plan: {
+                    departure:   legWps[0].icao || legWps[0].id || legWps[0].name,
+                    destination: legWps[legWps.length - 1].icao || legWps[legWps.length - 1].id || legWps[legWps.length - 1].name,
+                    route:       fullRouteStr,
+                    altitude:    this._altitude || 0,
+                    // Use all plan legs — per-trip-leg filtering was fragile and
+                    // legs are used for display only, not re-planning.
+                    legs:        plan.legs || [],
+                },
+                waypoints: legWps,
+            });
+        }
+
+        const dep  = waypoints[0].icao || waypoints[0].id || waypoints[0].name;
+        const dest = waypoints[waypoints.length - 1].icao || waypoints[waypoints.length - 1].id || waypoints[waypoints.length - 1].name;
+        const now = new Date();
+        const monthDay = now.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        const autoName = `${dep} → ${dest} · ${monthDay}`;
+
+        // Check for existing trip with same dep+dest saved today (upsert).
+        // Preserve the original created_at so sort order is stable across
+        // repeated Apply taps.
+        let tripId = crypto.randomUUID();
+        let existingCreatedAt = null;
+        const today = now.toISOString().slice(0, 10);
+        try {
+            const existing = await TripStore.list();
+            const match = existing.find(t =>
+                t.dep === dep && t.dest === dest &&
+                t.created_at && t.created_at.slice(0, 10) === today
+            );
+            if (match) {
+                tripId = match.id;
+                existingCreatedAt = match.created_at;
+            }
+        } catch (e) { console.warn('TripStore.list failed, will create new record', e); }
+
+        const trip = {
+            id:         tripId,
+            name:       autoName,
+            dep,
+            dest,
+            created_at: existingCreatedAt ?? now.toISOString(),
+            legs:       tripLegs,
+        };
+
+        try {
+            await TripStore.save(trip);
+        } catch (e) {
+            console.error('TripStore.save failed', e);
+        }
     }
 
     _buildLegsFromWaypoints(wps) {

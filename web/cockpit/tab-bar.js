@@ -95,7 +95,7 @@ class TabBar {
         } else if (tabId === 'chk') {
             if (c.checklist?.show) c.checklist.show();
         } else if (tabId === 'clr') {
-            if (c.ifrClearance) c.ifrClearance.show();
+            if (c.ifrClearance) c.ifrClearance.show(null, null, window.app?.stratuxClient?.situation);
         } else if (tabId === 'apt') {
             if (c.airportPopup?.showRouteAirports) c.airportPopup.showRouteAirports();
         } else if (tabId === 'more') {
@@ -128,6 +128,10 @@ class TabBar {
             { icon: '🗺', label: 'New Route', action: () => {
                 this._closeMoreDrawer();
                 this._showNewRouteConfirm();
+            }},
+            { icon: '💾', label: 'Save Plan', action: () => {
+                this._closeMoreDrawer();
+                (c.app || window.app)?.saveCurrentPlan?.();
             }},
             { icon: '✈', label: 'Load Plan', action: () => {
                 if (c.planSync?.show) c.planSync.show();

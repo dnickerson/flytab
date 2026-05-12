@@ -18,8 +18,25 @@ const TripStore = (() => {
                     const store = db.createObjectStore(STORE, { keyPath: 'id' });
                     store.createIndex('created_at', 'created_at', { unique: false });
                 }
+                // Defensive: create logbook stores if upgrading from v0 (fresh install).
+                // Logbook normally creates these via _openIdb(), but TripStore may win
+                // the v5 upgrade race if the user saves a plan before logging a flight.
+                if (!db.objectStoreNames.contains('flypi_logbook')) {
+                    const lb = db.createObjectStore('flypi_logbook', { keyPath: 'id' });
+                    lb.createIndex('date',       'date',       { unique: false });
+                    lb.createIndex('created_at', 'created_at', { unique: false });
+                    lb.createIndex('synced',     'synced',     { unique: false });
+                }
+                if (!db.objectStoreNames.contains('flypi_ml_logs')) {
+                    db.createObjectStore('flypi_ml_logs', { keyPath: 'id' });
+                }
             };
-            req.onsuccess = () => { _db = req.result; resolve(_db); };
+            req.onsuccess = () => {
+                _db = req.result;
+                // Release cached connection on version change to prevent IDB upgrade hangs
+                _db.onversionchange = () => { _db.close(); _db = null; _ready = null; };
+                resolve(_db);
+            };
             req.onerror = () => reject(req.error);
         });
         return _ready;
@@ -27,11 +44,11 @@ const TripStore = (() => {
 
     async function save(trip) {
         const db = await _open();
-        trip.updated_at = new Date().toISOString();
+        const record = { ...trip, updated_at: new Date().toISOString() };
         return new Promise((resolve, reject) => {
             const tx = db.transaction(STORE, 'readwrite');
-            tx.objectStore(STORE).put(trip);
-            tx.oncomplete = () => resolve(trip);
+            tx.objectStore(STORE).put(record);
+            tx.oncomplete = () => resolve(record);
             tx.onerror = () => reject(tx.error);
         });
     }

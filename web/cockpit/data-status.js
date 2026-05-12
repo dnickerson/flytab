@@ -13,35 +13,6 @@ class DataStatus {
     // ── Constants ─────────────────────────────────────────────────────────────
     static LOCAL_BASE  = 'http://localhost:9090';
     static CONCURRENCY = 6;
-    static SEC_ZOOMS      = [5, 6, 7, 8, 9, 10, 11];
-    static IFR_ZOOMS      = [4, 5, 6, 7, 8, 9, 10];
-    static IFR_AREA_ZOOMS = [10, 11, 12];
-    static REGIONS = [
-        { id: 'southeast',    label: 'Southeast',     sub: 'FL GA SC NC TN(e) VA(s)', latMin: 24.0, latMax: 36.5, lonMin: -88.5, lonMax: -74.5, mb: 188 },
-        { id: 'midatlantic',  label: 'Mid-Atlantic',  sub: 'VA MD DC DE NJ NY',       latMin: 36.5, latMax: 42.5, lonMin: -82.0, lonMax: -71.0, mb: 120 },
-        { id: 'northeast',    label: 'Northeast',     sub: 'NY CT RI MA VT NH ME',    latMin: 41.0, latMax: 47.5, lonMin: -80.0, lonMax: -66.0, mb: 124 },
-        { id: 'gulfcoast',    label: 'Gulf Coast',    sub: 'LA MS AL TX coast',       latMin: 25.0, latMax: 33.0, lonMin: -97.5, lonMax: -83.0, mb: 122 },
-        { id: 'southcentral', label: 'South Central', sub: 'TX OK AR LA TN(w) KY(w)', latMin: 29.0, latMax: 37.0, lonMin: -97.5, lonMax: -88.5, mb: 120 },
-        { id: 'midwest',      label: 'Midwest',       sub: 'OH IN IL MI WI MN IA MO KY(e)', latMin: 36.0, latMax: 49.5, lonMin: -98.0, lonMax: -80.0, mb: 346 },
-        { id: 'greatplains',  label: 'Great Plains',  sub: 'ND SD NE KS CO east',    latMin: 36.0, latMax: 49.5, lonMin: -111.0, lonMax: -96.0, mb: 259 },
-        { id: 'mountain',     label: 'Mountain',      sub: 'MT ID WY UT CO NV',      latMin: 36.0, latMax: 49.5, lonMin: -117.5, lonMax: -109.0, mb: 171 },
-        { id: 'southwest',    label: 'Southwest',     sub: 'CA south AZ NM',         latMin: 31.0, latMax: 37.5, lonMin: -121.0, lonMax: -108.0, mb: 117 },
-        { id: 'pacificnw',    label: 'Pacific NW',    sub: 'WA OR CA north',         latMin: 37.0, latMax: 49.5, lonMin: -125.5, lonMax: -116.0, mb: 150 },
-        { id: 'alaska',       label: 'Alaska',        sub: 'AK',                     latMin: 54.0, latMax: 72.0, lonMin: -169.0, lonMax: -130.0, mb: 407 },
-    ];
-    static TERRAIN_REGIONS = [
-        { id: 'southeast',    states: ['FL','GA','SC','NC','TN','VA'] },
-        { id: 'midatlantic',  states: ['VA','MD','DC','DE','NJ','NY'] },
-        { id: 'northeast',    states: ['NY','CT','RI','MA','VT','NH','ME'] },
-        { id: 'gulfcoast',    states: ['LA','MS','AL','TX'] },
-        { id: 'southcentral', states: ['TX','OK','AR','LA','TN','KY'] },
-        { id: 'midwest',      states: ['OH','IN','IL','MI','WI','MN','IA','MO','KY'] },
-        { id: 'greatplains',  states: ['ND','SD','NE','KS','CO'] },
-        { id: 'mountain',     states: ['MT','ID','WY','UT','CO','NV'] },
-        { id: 'southwest',    states: ['CA','AZ','NM'] },
-        { id: 'pacificnw',    states: ['WA','OR','CA'] },
-        { id: 'alaska',       states: ['AK'] },
-    ];
 
     constructor(parentEl) {
         this._parentEl = parentEl;
@@ -104,12 +75,11 @@ class DataStatus {
         return (typeof CockpitConfig !== 'undefined' && CockpitConfig.homeBase) || null;
     }
 
-    /** Legacy helper for _wireCacheSection() — returns tileBase/plateBase/nasrBase URLs. */
+    /** Returns plateBase/nasrBase URLs for manual plate downloads. */
     _homeServerUrls() {
         const hs  = (typeof CockpitConfig !== 'undefined' && CockpitConfig.raw?.homeServer) || {};
         const base = this._homeBase();
         return {
-            tileBase:  hs.tileBase  || `${base}/tiles`,
             plateBase: hs.plateBase || `${base}/plates`,
             nasrBase:  hs.nasrBase  || `${base}/nasr`,
         };
@@ -233,78 +203,58 @@ class DataStatus {
             bannerText  = '&#9675; Home server not reachable &mdash; connect to home Wi-Fi or Tailscale';
         }
 
-        // ── NASR section ─────────────────────────────────────────────────────
+        // ── Aeronautical Database (NASR + CIFP merged) ───────────────────────
         const nasrServerDate = sNasr?.effective_date || null;
         const nasrDevDate    = dNasr?.effective_date || null;
-        let nasrServerLine, nasrDevLine, nasrBadge, nasrPrimary = '', nasrSecondary = '';
+        const cifpSCode      = sCifp?.cycle_code || sCifp?.effective_date || null;
+        const cifpDCode      = dCifp?.cycle_code || dCifp?.effective_date || null;
 
-        if (!base) {
-            nasrServerLine = '<span class="ds-muted">Server not reachable</span>';
-        } else if (nasrServerDate) {
-            const expStr = sNasr?.expiration_date ? ` &rarr; exp ${sNasr.expiration_date}` : '';
-            nasrServerLine = `Cycle ${nasrServerDate}${expStr}`;
-        } else {
-            nasrServerLine = '<span class="ds-muted">Unavailable</span>';
-        }
-
-        if (nasrDevDate) {
-            nasrDevLine = `Cycle ${nasrDevDate}`;
-        } else {
-            nasrDevLine = '<span class="ds-muted">Not on tablet</span>';
-        }
-
-        const nasrUpdateAvail = base && nasrServerDate && (
+        const nasrUpdateAvail = !!(base && nasrServerDate && (
             nasrDevDate !== nasrServerDate ||
             (sNasr?.bundle_version != null && sNasr.bundle_version !== dNasr?.bundle_version)
-        );
+        ));
+        const cifpUpdateAvail = !!(base && cifpSCode && cifpDCode && cifpDCode !== cifpSCode);
+        const aeroUpdateAvail = nasrUpdateAvail || cifpUpdateAvail;
+        const aeroOnDevice    = !!(nasrDevDate || cifpDCode);
 
-        if (!nasrDevDate) {
-            nasrBadge = this._badge('NOT DOWNLOADED', 'gray');
-            if (base && nasrServerDate) nasrPrimary = `<button class="ds-action-btn" id="dsNasrBtn">DOWNLOAD</button>`;
-        } else if (nasrUpdateAvail) {
-            nasrBadge = this._badge('UPDATE AVAILABLE', 'yellow');
-            nasrPrimary   = `<button class="ds-action-btn ds-update" id="dsNasrBtn">SYNC</button>`;
-            nasrSecondary = `<button class="ds-action-btn ds-secondary" id="dsNasrRedownloadBtn">RE-DOWNLOAD</button>`;
+        let aeroServerLine, aeroDevLine, aeroBadge, aeroPrimary = '', aeroSecondary = '';
+
+        if (!base) {
+            aeroServerLine = '<span class="ds-muted">Server not reachable</span>';
+        } else if (nasrServerDate) {
+            const expStr = sNasr?.expiration_date ? ` &rarr; exp ${sNasr.expiration_date}` : '';
+            aeroServerLine = `Cycle ${nasrServerDate}${expStr} &middot; NASR + CIFP`;
+        } else {
+            aeroServerLine = '<span class="ds-muted">Unavailable</span>';
+        }
+
+        if (aeroOnDevice) {
+            const parts = [];
+            if (nasrDevDate) parts.push(`NASR cycle ${nasrDevDate}`);
+            if (cifpDCode)   parts.push(`CIFP cycle ${cifpDCode}`);
+            aeroDevLine = parts.join(' &middot; ');
+        } else {
+            aeroDevLine = '<span class="ds-muted">Not on tablet</span>';
+        }
+
+        const reimportBtn = aeroOnDevice
+            ? `<button class="ds-action-btn ds-secondary" id="dsAeroReimportBtn">&#8635; Force reimport</button>`
+            : '';
+
+        if (!aeroOnDevice) {
+            aeroBadge = this._badge('NOT DOWNLOADED', 'gray');
+            if (base && nasrServerDate) aeroPrimary = `<button class="ds-action-btn" id="dsAeroBtn">DOWNLOAD</button>`;
+        } else if (aeroUpdateAvail) {
+            aeroBadge     = this._badge('UPDATE AVAILABLE', 'yellow');
+            aeroPrimary   = `<button class="ds-action-btn ds-update" id="dsAeroBtn">SYNC</button>`;
+            aeroSecondary = `<button class="ds-action-btn ds-secondary" id="dsAeroRedownloadBtn">RE-DOWNLOAD</button>${reimportBtn}`;
         } else {
             const expDate = sNasr?.expiration_date ? new Date(sNasr.expiration_date)
                           : dNasr?.expiration_date ? new Date(dNasr.expiration_date)
                           : null;
-            nasrBadge     = expDate ? this._cycleStatus(expDate, now) : this._badge('ON DEVICE', 'green');
-            nasrPrimary   = `<button class="ds-action-btn ds-secondary" id="dsNasrBtn">SYNC</button>`;
-            nasrSecondary = `<button class="ds-action-btn ds-secondary" id="dsNasrRedownloadBtn">RE-DOWNLOAD</button>`;
-        }
-
-        // ── CIFP section ─────────────────────────────────────────────────────
-        const cifpSCode = sCifp?.cycle_code || sCifp?.effective_date || null;
-        const cifpDCode = dCifp?.cycle_code || dCifp?.effective_date || null;
-        let cifpServerLine, cifpDevLine, cifpBadge, cifpPrimary = '', cifpSecondary = '';
-
-        if (!base) {
-            cifpServerLine = '<span class="ds-muted">Server not reachable</span>';
-        } else if (cifpSCode) {
-            cifpServerLine = `Cycle ${cifpSCode}`;
-        } else {
-            cifpServerLine = '<span class="ds-muted">Unavailable</span>';
-        }
-
-        if (cifpDCode) {
-            cifpDevLine = `Cycle ${cifpDCode}`;
-        } else {
-            cifpDevLine = '<span class="ds-muted">Not on tablet</span>';
-        }
-
-        if (!cifpDCode) {
-            cifpBadge = this._badge('NOT DOWNLOADED', 'gray');
-            if (base && cifpSCode) cifpPrimary = `<button class="ds-action-btn" id="dsCifpBtn">DOWNLOAD</button>`;
-        } else if (base && cifpSCode && cifpDCode !== cifpSCode) {
-            cifpBadge     = this._badge('UPDATE AVAILABLE', 'yellow');
-            cifpPrimary   = `<button class="ds-action-btn ds-update" id="dsCifpBtn">SYNC</button>`;
-            cifpSecondary = `<button class="ds-action-btn ds-secondary" id="dsCifpRedownloadBtn">RE-DOWNLOAD</button>`;
-        } else {
-            const expDate = sNasr?.expiration_date ? new Date(sNasr.expiration_date) : null;
-            cifpBadge     = expDate ? this._cycleStatus(expDate, now) : this._badge('CURRENT', 'green');
-            cifpPrimary   = `<button class="ds-action-btn ds-secondary" id="dsCifpBtn">SYNC</button>`;
-            cifpSecondary = `<button class="ds-action-btn ds-secondary" id="dsCifpRedownloadBtn">RE-DOWNLOAD</button>`;
+            aeroBadge     = expDate ? this._cycleStatus(expDate, now) : this._badge('ON DEVICE', 'green');
+            aeroPrimary   = `<button class="ds-action-btn ds-secondary" id="dsAeroBtn">SYNC</button>`;
+            aeroSecondary = `<button class="ds-action-btn ds-secondary" id="dsAeroRedownloadBtn">RE-DOWNLOAD</button>${reimportBtn}`;
         }
 
         // ── Plates section ───────────────────────────────────────────────────
@@ -409,8 +359,7 @@ class DataStatus {
 
         // ── Need Sync? ────────────────────────────────────────────────────────
         const needsSync = !!base && (
-            nasrUpdateAvail  ||
-            (cifpSCode && cifpDCode !== cifpSCode) ||
+            aeroUpdateAvail ||
             (serverHasPlates && (!cycleOkForStates || serverStates.some(s => !syncedStates.includes(s)))) ||
             !mbt.find(l => l.layer === 'sectional')?.exists ||
             !mbt.find(l => l.layer === 'ifr-low')?.exists
@@ -445,34 +394,15 @@ class DataStatus {
             }
         }
 
-        // Build Route Area card (promoted to main section)
-        const bbox = (() => { try { return JSON.parse(localStorage.getItem('flypi_route_bbox') || 'null'); } catch { return null; } })();
-        const routeAreaHtml = `
-            <div class="ds-section-title">Route Area</div>
-            <div class="ds-card">
-                <div class="ds-card-detail" style="margin-bottom:8px;font-size:12px;color:var(--text-muted)">Cache map tiles and weather for the active route corridor.</div>
-                ${bbox
-                    ? `<div class="ds-cache-row">
-                            <span class="ds-cache-info"><span class="ds-cache-name">${bbox.label}</span><span class="ds-cache-sub">+60 nm buffer</span></span>
-                            <button class="ds-cache-btn" id="dsCacheRouteBtn">Cache Maps</button>
-                       </div>`
-                    : `<div class="ds-cache-row"><span class="ds-cache-info"><span class="ds-cache-name" style="color:var(--text-muted)">No flight plan loaded</span></span></div>`
-                }
-                <div class="ds-cache-actions" style="margin-top:8px">
-                    <button class="ds-action-btn" id="dsCacheRouteWxBtn">⛅ Fetch Route Weather</button>
-                </div>
-            </div>`;
-
         body.innerHTML = `
             <div class="ds-banner" style="color:${bannerColor}">${bannerText}</div>
             <div class="ds-section-title">Aviation Data</div>
-            ${this._section('NASR Aeronautical Data',  nasrServerLine,   nasrDevLine,   nasrBadge,   nasrPrimary,    nasrSecondary)}
-            ${this._section('CIFP Procedures',          cifpServerLine,   cifpDevLine,   cifpBadge,   cifpPrimary,    cifpSecondary)}
+            ${this._section('Aeronautical Database',    aeroServerLine,    aeroDevLine,    aeroBadge,    aeroPrimary,    aeroSecondary)}
             ${this._section('Terrain Elevation (SRTM)', terrainServerLine, terrainDevLine, terrainBadge, terrainPrimary, terrainSecondary)}
-            ${this._section('Approach Plates',          platesServerLine, platesDevLine, platesBadge, platesPrimary,  platesSecondary, true)}
+            ${this._section('Approach Plates',          platesServerLine,  platesDevLine,  platesBadge,  platesPrimary,  platesSecondary, true)}
             <div class="ds-section-title">Offline Maps</div>
             ${mbtilesHtml}
-            ${routeAreaHtml}
+            <div id="dsWeatherCacheSection"></div>
             <div class="ds-footer">Checked: ${ts}</div>
             <div class="ds-section-title" style="cursor:pointer;user-select:none" id="dsSuppToggle">
                 Supplemental &amp; Advanced
@@ -481,7 +411,6 @@ class DataStatus {
             <div id="dsSuppContent" style="display:none">
                 ${this._buildCacheSectionHtml(null, mbt)}
             </div>
-            <div id="dsWeatherCacheSection"></div>
         `;
 
         // Load weather cache asynchronously and inject after main render
@@ -660,60 +589,54 @@ class DataStatus {
             wireTap(syncAllBtn, () => this._syncAll(syncAllBtn, showProg, updateProg, doneProg));
         }
 
-        // Reload App Data button (in sticky footer)
-        const reloadBtn = stickyFooter ? stickyFooter.querySelector('#dsReloadAppBtn') : body.querySelector('#dsReloadAppBtn');
-        if (reloadBtn) {
-            wireTap(reloadBtn, async () => {
-                reloadBtn.disabled = true;
-                reloadBtn.textContent = 'Reloading…';
-                showProg('Reloading app data…', '');
+        // Aeronautical Database SYNC/DOWNLOAD button
+        const aeroBtn = body.querySelector('#dsAeroBtn');
+        if (aeroBtn) wireTap(aeroBtn, () => this._syncAll(null, showProg, updateProg, doneProg));
+
+        // Aeronautical Database RE-DOWNLOAD — clear both NASR and CIFP local cycle stamps
+        const aeroRedlBtn = body.querySelector('#dsAeroRedownloadBtn');
+        if (aeroRedlBtn) {
+            wireTap(aeroRedlBtn, async () => {
+                await Promise.all([
+                    fetch(`${DataStatus.LOCAL_BASE}/nasr/cycle_info.json`, {
+                        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ _force: true }),
+                    }).catch(() => {}),
+                    fetch(`${DataStatus.LOCAL_BASE}/cifp/cifp_cycle_info.json`, {
+                        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ _force: true }),
+                    }).catch(() => {}),
+                ]);
+                this._syncAll(null, showProg, updateProg, doneProg);
+            });
+        }
+
+        // Aeronautical Database Force reimport — reimports NASR bundle into IDB without re-downloading
+        const aeroReimportBtn = body.querySelector('#dsAeroReimportBtn');
+        if (aeroReimportBtn) {
+            wireTap(aeroReimportBtn, async () => {
+                aeroReimportBtn.disabled = true;
+                aeroReimportBtn.textContent = 'Reimporting…';
+                showProg('Reimporting NASR data…');
                 try {
                     const count = await DataStatus._reimportNasr();
-                    // Android path swallows errors and returns undefined — preserve original UI message.
-                    // Browser path returns the import count or throws.
                     if (typeof count === 'number') {
                         doneProg(`NASR imported: ${count.toLocaleString()} records`, 'var(--status-ok)');
-                        await this._refresh();
                     } else {
                         doneProg('App data reloaded', 'var(--status-ok)');
                     }
+                    await this._refresh();
                 } catch (e) {
-                    doneProg(`Reload failed: ${e.message}`, 'var(--status-danger)');
+                    doneProg(`Reimport failed: ${e.message}`, 'var(--status-danger)');
                 }
-                reloadBtn.disabled = false;
-                reloadBtn.innerHTML = '&#8635; Reload App Data';
+                aeroReimportBtn.disabled = false;
+                aeroReimportBtn.innerHTML = '&#8635; Force reimport';
             });
         }
 
-        // Per-section SYNC/DOWNLOAD buttons all trigger _syncAll (skips already-current items)
-        for (const id of ['dsNasrBtn', 'dsCifpBtn', 'dsPlatesBtn']) {
-            const btn = body.querySelector(`#${id}`);
-            if (btn) wireTap(btn, () => this._syncAll(null, showProg, updateProg, doneProg));
-        }
-
-        // NASR RE-DOWNLOAD — force re-download by clearing local cycle stamp
-        const nasrRedlBtn = body.querySelector('#dsNasrRedownloadBtn');
-        if (nasrRedlBtn) {
-            wireTap(nasrRedlBtn, async () => {
-                await fetch(`${DataStatus.LOCAL_BASE}/nasr/cycle_info.json`, {
-                    method: 'PUT', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ _force: true }),
-                }).catch(() => {});
-                this._syncAll(null, showProg, updateProg, doneProg);
-            });
-        }
-
-        // CIFP RE-DOWNLOAD — force re-download by clearing local cycle stamp
-        const cifpRedlBtn = body.querySelector('#dsCifpRedownloadBtn');
-        if (cifpRedlBtn) {
-            wireTap(cifpRedlBtn, async () => {
-                await fetch(`${DataStatus.LOCAL_BASE}/cifp/cifp_cycle_info.json`, {
-                    method: 'PUT', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ _force: true }),
-                }).catch(() => {});
-                this._syncAll(null, showProg, updateProg, doneProg);
-            });
-        }
+        // Plates SYNC/DOWNLOAD button triggers _syncAll
+        const platesBtn = body.querySelector('#dsPlatesBtn');
+        if (platesBtn) wireTap(platesBtn, () => this._syncAll(null, showProg, updateProg, doneProg));
 
         // Plates RE-DOWNLOAD — clear sync state then run full sync
         const platesRedlBtn = body.querySelector('#dsPlatesRedownloadBtn');
@@ -813,57 +736,14 @@ class DataStatus {
     // ── Supplemental Tile Cache Section ───────────────────────────────────────
 
     _buildCacheSectionHtml(tileCount, mbtiles) {
-        const mbt = mbtiles || [];
-        const mbtSec = mbt.find(l => l.layer === 'sectional');
-        const mbtIfr = mbt.find(l => l.layer === 'ifr-low');
-        const bothPresent = mbtSec?.exists && mbtIfr?.exists;
-
-        // Legacy supplemental tile cache — route area
-        const bbox = (() => { try { return JSON.parse(localStorage.getItem('flypi_route_bbox') || 'null'); } catch { return null; } })();
-        const routeRow = bbox
-            ? `<div class="ds-cache-row">
-                    <span class="ds-cache-info"><span class="ds-cache-name">${bbox.label}</span><span class="ds-cache-sub">+60 nm buffer</span></span>
-                    <button class="ds-cache-btn" id="dsCacheRouteBtn">Cache</button>
-               </div>`
-            : `<div class="ds-cache-row">
-                    <span class="ds-cache-info"><span class="ds-cache-name" style="color:var(--text-muted)">No flight plan loaded</span></span>
-               </div>`;
-
-        const regionRows = DataStatus.REGIONS.map(r =>
-            `<div class="ds-cache-row">
-                <span class="ds-cache-info">
-                    <span class="ds-cache-name">${r.label}</span>
-                    <span class="ds-cache-sub">${r.sub}</span>
-                    <span class="ds-cache-sub">SEC z5–11 + IFR z7–11 &middot; ~${r.mb} MB</span>
-                </span>
-                <button class="ds-cache-btn" data-region="${r.id}">Cache</button>
-            </div>`
-        ).join('');
-
-        const suppNote = bothPresent
-            ? `<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">MBTiles provides full coverage. Individual tile caching only needed for areas outside the packed region.</div>`
-            : `<div style="font-size:12px;color:var(--status-caution);margin-bottom:8px">No MBTiles on device. Cache tiles by region to use maps offline.</div>`;
-
         return `
         <div class="ds-card">
-            <div class="ds-card-title">Reload App Data</div>
-            <div class="ds-card-detail" style="margin-bottom:10px;font-size:12px;color:var(--text-muted)">Re-imports NASR bundle from Pi into the app — use if the NASR badge shows ?? after a sync.</div>
-            <button class="ds-action-btn" id="dsReloadAppBtn">&#8635; Reload App Data</button>
-        </div>
-        <div class="ds-card">
             <div class="ds-card-title">Individual Tile Cache</div>
-            <div class="ds-card-detail" style="margin-bottom:8px">Load tiles from home server or import a ZIP package.</div>
-            ${suppNote}
+            <div class="ds-card-detail" style="margin-bottom:8px">Import a ZIP tile package from local files.</div>
             <div class="ds-cache-actions">
-                <button class="ds-action-btn" id="dsLoadServerBtn">Browse ZIPs on Server</button>
                 <button class="ds-action-btn" id="dsImportZipBtn">Import ZIP from Files</button>
                 <input type="file" id="dsZipInput" accept=".zip" style="display:none">
             </div>
-            <div id="dsServerZips"></div>
-        </div>
-        <div class="ds-card">
-            <div class="ds-card-title">CONUS Regions <span style="font-weight:400;font-size:13px;color:var(--text-muted)">(SEC + IFR tiles)</span></div>
-            ${regionRows}
         </div>
         <div class="ds-section-title">Approach Plates — Manual</div>
         ${this._platesAgeCard()}
@@ -907,50 +787,6 @@ class DataStatus {
 
         if (cancelEl) cancelEl.addEventListener('click', () => { this._cacheCancelled = true; });
 
-        // Load from Home Server
-        const loadBtn = body.querySelector('#dsLoadServerBtn');
-        const serverZips = body.querySelector('#dsServerZips');
-        if (loadBtn) {
-            wireTap(loadBtn, async () => {
-                loadBtn.disabled = true; loadBtn.textContent = '…';
-                serverZips.innerHTML = '';
-                try {
-                    const urls = this._homeServerUrls();
-                    const r = await fetch(`${urls.tileBase.replace(/\/tiles\/?$/, '')}/offline-maps/index.json`, { cache: 'no-store', signal: AbortSignal.timeout(5000) });
-                    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-                    const pkgs = await r.json();
-                    if (!pkgs.length) {
-                        serverZips.innerHTML = '<div style="padding:6px 0;color:var(--text-muted);font-size:13px">No ZIPs on server — run build_offline_zip.py</div>';
-                    } else {
-                        pkgs.forEach(p => {
-                            const row = document.createElement('div');
-                            row.className = 'ds-cache-row';
-                            row.style.marginTop = '6px';
-                            row.innerHTML = `<span class="ds-cache-info"><span class="ds-cache-name">${p.id}</span><span class="ds-cache-sub">${p.size_mb} MB</span></span><button class="ds-cache-btn">Import</button>`;
-                            const btn = row.querySelector('button');
-                            wireTap(btn, async () => {
-                                if (this._cacheRunning) return;
-                                btn.disabled = true; btn.textContent = 'Downloading…';
-                                showProg('Downloading ' + p.id + '.zip…');
-                                try {
-                                    const zipUrl = p.url.startsWith('http') ? p.url : (urls.tileBase.replace(/\/tiles\/?$/, '') + p.url);
-                                    const resp = await fetch(zipUrl);
-                                    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-                                    const blob = await resp.blob();
-                                    await this._importZip(new File([blob], p.id + '.zip'), showProg, updateProg, doneProg);
-                                } catch (err) { doneProg('Download failed: ' + err.message, 'var(--status-danger)'); }
-                                btn.disabled = false; btn.textContent = 'Import';
-                            });
-                            serverZips.appendChild(row);
-                        });
-                    }
-                } catch (err) {
-                    serverZips.innerHTML = `<div style="padding:6px 0;color:var(--status-danger);font-size:13px">Not reachable: ${err.message}</div>`;
-                }
-                loadBtn.disabled = false; loadBtn.textContent = 'Browse ZIPs on Server';
-            });
-        }
-
         // Import ZIP from Files
         const zipInput = body.querySelector('#dsZipInput');
         const importBtn = body.querySelector('#dsImportZipBtn');
@@ -960,50 +796,6 @@ class DataStatus {
                 if (zipInput.files[0]) { this._importZip(zipInput.files[0], showProg, updateProg, doneProg); zipInput.value = ''; }
             });
         }
-
-        // Route cache button
-        const routeBtn = body.querySelector('#dsCacheRouteBtn');
-        if (routeBtn) {
-            const bbox = (() => { try { return JSON.parse(localStorage.getItem('flypi_route_bbox') || 'null'); } catch { return null; } })();
-            if (bbox) wireTap(routeBtn, () => this._cacheRegion(bbox, routeBtn, showProg, updateProg, doneProg));
-        }
-
-        // Route Weather button — triggers flywhere.app weather fetch for active plan
-        const routeWxBtn = body.querySelector('#dsCacheRouteWxBtn');
-        if (routeWxBtn) {
-            wireTap(routeWxBtn, async () => {
-                const app = window.app;
-                if (!app) return;
-                const plan = app.routeTable?._waypoints?.length
-                    ? { departure: app.routeTable._waypoints[0]?.icao, destination: app.routeTable._waypoints[app.routeTable._waypoints.length - 1]?.icao }
-                    : null;
-                if (!plan?.departure && !plan?.destination) {
-                    routeWxBtn.textContent = 'No route loaded';
-                    setTimeout(() => { routeWxBtn.innerHTML = '⛅ Fetch Route Weather'; }, 2000);
-                    return;
-                }
-                routeWxBtn.disabled = true;
-                routeWxBtn.textContent = 'Fetching…';
-                try {
-                    // Trigger weather fetch via flywhere.app plan weather step if available,
-                    // or notify user to use the Weather Briefing for now
-                    await app.wxBriefing?.show?.();
-                    routeWxBtn.innerHTML = '⛅ Fetch Route Weather';
-                    this.hide();
-                } catch {
-                    routeWxBtn.innerHTML = '⛅ Fetch Route Weather';
-                } finally {
-                    routeWxBtn.disabled = false;
-                }
-            });
-        }
-
-        // Region buttons
-        body.querySelectorAll('.ds-cache-btn[data-region]').forEach(btn => {
-            const region = DataStatus.REGIONS.find(r => r.id === btn.dataset.region);
-            if (!region) return;
-            wireTap(btn, () => this._cacheRegion(region, btn, showProg, updateProg, doneProg));
-        });
 
         // Approach Plates — Download from home server
         const platesStatus = body.querySelector('#dsPlatesStatus');
@@ -1077,64 +869,6 @@ class DataStatus {
         }
     }
 
-    // ── Tile Math ─────────────────────────────────────────────────────────────
-    _lon2tile(lon, z) { return Math.floor((lon + 180) / 360 * Math.pow(2, z)); }
-    _lat2tile(lat, z) {
-        const r = lat * Math.PI / 180;
-        return Math.floor((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * Math.pow(2, z));
-    }
-    _buildTileUrls(region) {
-        const urls = [];
-        const add = (prefix, zooms) => {
-            for (const z of zooms) {
-                const xMin = this._lon2tile(region.lonMin, z), xMax = this._lon2tile(region.lonMax, z);
-                const yMin = this._lat2tile(region.latMax, z), yMax = this._lat2tile(region.latMin, z);
-                for (let x = xMin; x <= xMax; x++)
-                    for (let y = yMin; y <= yMax; y++)
-                        urls.push(`/${prefix}/${z}/${x}/${y}.webp`);
-            }
-        };
-        add('sectional', DataStatus.SEC_ZOOMS);
-        add('ifr-low',   DataStatus.IFR_ZOOMS);
-        add('ifr-area',  DataStatus.IFR_AREA_ZOOMS);
-        return urls;
-    }
-
-    async _cacheRegion(region, btn, showProg, updateProg, doneProg) {
-        if (this._cacheRunning) return;
-        this._cacheRunning = true; this._cacheCancelled = false;
-        if (btn) { btn.disabled = true; btn.textContent = 'Downloading…'; }
-
-        // Ensure resolved base (Tailscale fallback if local IP unreachable)
-        if (!this._resolvedBase) {
-            const { base } = await this._resolveHomeBase();
-            this._resolvedBase = base;
-        }
-        const homeBase = this._resolvedBase || this._homeServerUrls().tileBase.replace(/\/tiles\/?$/, '');
-        const zipUrl = `${homeBase}/offline-maps/${region.id}.zip`;
-
-        try {
-            showProg(`Downloading ${region.id}.zip (${region.mb} MB)…`);
-            const resp = await fetch(zipUrl, { signal: AbortSignal.timeout(300000) });
-            if (!resp.ok) throw new Error(`ZIP not found (HTTP ${resp.status}) — run build_offline_zip.py ${region.id}`);
-            const blob = await resp.blob();
-            showProg(`Extracting ${(blob.size / 1024 / 1024).toFixed(0)} MB to device…`);
-            const unzipResp = await fetch(`${DataStatus.LOCAL_BASE}/unzip`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/zip' },
-                body: blob,
-                signal: AbortSignal.timeout(300000),
-            });
-            if (!unzipResp.ok) throw new Error(`Extraction failed: ${await unzipResp.text()}`);
-            const result = await unzipResp.json();
-            this._cacheRunning = false;
-            doneProg(`\u2713 ${result.extracted.toLocaleString()} tiles extracted`, 'var(--status-ok)');
-        } catch (err) {
-            this._cacheRunning = false;
-            doneProg(`Failed: ${err.message}`, 'var(--status-danger)');
-        }
-        if (btn) { btn.disabled = false; btn.textContent = 'Cache'; }
-    }
 
     async _importZip(file, showProg, updateProg, doneProg) {
         if (this._cacheRunning) return;
@@ -1273,10 +1007,9 @@ class DataStatus {
         const LOCAL    = DataStatus.LOCAL_BASE;
 
         const body = this._el.querySelector('.data-status-body');
-        const stepIds    = ['nasr', 'cifp', 'sec', 'ifr', 'plates'];
+        const stepIds    = ['aero', 'sec', 'ifr', 'plates'];
         const stepLabels = {
-            nasr:   'NASR Aeronautical Data',
-            cifp:   'CIFP Procedures',
+            aero:   'Aeronautical Database',
             sec:    'Sectional MBTiles',
             ifr:    'IFR Low MBTiles',
             plates: 'Approach Plates',
@@ -1299,7 +1032,7 @@ class DataStatus {
                 `</div><button class="ds-sync-btn" id="dsSyncDoneBtn" style="margin-top:12px">Done — Refresh</button>`;
         };
 
-        const states = { nasr: { status: 'pending' }, cifp: { status: 'pending' }, sec: { status: 'pending' }, ifr: { status: 'pending' }, plates: { status: 'pending' } };
+        const states = { aero: { status: 'pending' }, sec: { status: 'pending' }, ifr: { status: 'pending' }, plates: { status: 'pending' } };
         const setStep   = (id, status, msg) => { states[id] = { status, msg }; body.innerHTML = renderSteps(states); this._wireDoneBtn(); };
         const failStep  = (id, err)         => setStep(id, 'fail', err?.message || String(err));
 
@@ -1315,74 +1048,63 @@ class DataStatus {
             return blob.size;
         };
 
-        // ── NASR ─────────────────────────────────────────────────────────────
-        setStep('nasr', 'running', 'Checking cycle…');
+                // ── Aeronautical Database (NASR + CIFP) ──────────────────────────────
+        setStep('aero', 'running', 'Checking NASR cycle…');
         try {
-            const [serverResp, localResp] = await Promise.all([
+            const [nasrServer, nasrLocal] = await Promise.all([
                 fetch(`${homeBase}/nasr/cycle_info.json`, { signal: AbortSignal.timeout(8000) }).then(r => r.ok ? r.json() : null),
                 fetch(`${LOCAL}/nasr/cycle_info.json`, { cache: 'no-store', signal: AbortSignal.timeout(2000) }).then(r => r.ok ? r.json() : null).catch(() => null),
             ]);
-            if (!serverResp) throw new Error('Home server not reachable');
-            const serverDate    = serverResp.effective_date;
-            const localDate     = localResp?.effective_date;
-            const serverSuaCnt  = serverResp.sua_count ?? null;
-            const localSuaCnt   = localResp?.sua_count  ?? null;
-            const suaUpToDate   = serverSuaCnt === null || (localSuaCnt !== null && serverSuaCnt === localSuaCnt);
-            if (localDate === serverDate && suaUpToDate) {
-                setStep('nasr', 'skip', `Current — cycle ${serverDate}`);
+            if (!nasrServer) throw new Error('Home server not reachable');
+            const nasrServerDate = nasrServer.effective_date;
+            const nasrLocalDate  = nasrLocal?.effective_date;
+            const suaUpToDate    = (nasrServer.sua_count ?? null) === null || ((nasrLocal?.sua_count ?? null) !== null && nasrServer.sua_count === nasrLocal.sua_count);
+
+            if (nasrLocalDate === nasrServerDate && suaUpToDate) {
+                setStep('aero', 'running', `NASR current (cycle ${nasrServerDate}) — checking CIFP…`);
             } else {
-                setStep('nasr', 'running', `Downloading NASR bundle${localDate ? ' (' + localDate + ' → ' + serverDate + ')' : ''}…`);
-                // Use fetch-zip (Java download) — avoids loading 18MB blob into WebView memory
-                // nasr.zip extracts to nasr/bundle.json + nasr/cycle_info.json + nasr/geo_context.json
+                setStep('aero', 'running', `Downloading NASR${nasrLocalDate ? ' (' + nasrLocalDate + ' → ' + nasrServerDate + ')' : ''}…`);
                 const nasrZipUrl = encodeURIComponent(`${homeBase}/nasr/nasr.zip`);
                 const zipResp = await fetch(`${LOCAL}/fetch-zip?url=${nasrZipUrl}`, {
-                    method: 'POST',
-                    signal: AbortSignal.timeout(120000), // 2 min for zip download + extract
+                    method: 'POST', signal: AbortSignal.timeout(120000),
                 });
                 if (!zipResp.ok) {
                     const msg = await zipResp.text().catch(() => `HTTP ${zipResp.status}`);
                     throw new Error(`fetch-zip failed: ${msg}`);
                 }
-                setStep('nasr', 'ok', `Updated to cycle ${serverDate} — loading into app…`);
-                // Force reimport into IndexedDB so the app reflects the new data immediately
+                setStep('aero', 'running', `NASR updated — reimporting into app…`);
                 try { await DataStatus._reimportNasr(); }
                 catch (e) { console.warn('[DataStatus] post-sync NASR reimport failed:', e?.message); }
                 this._saveDeviceSection('nasr', {
-                    effective_date: serverResp.effective_date,
-                    bundle_version: serverResp.bundle_version,
+                    effective_date: nasrServer.effective_date,
+                    bundle_version: nasrServer.bundle_version,
                 });
-                setStep('nasr', 'ok', `Updated to cycle ${serverDate}`);
             }
-        } catch (e) { failStep('nasr', e); }
 
-        // ── CIFP ─────────────────────────────────────────────────────────────
-        setStep('cifp', 'running', 'Checking cycle…');
-        try {
-            const [serverResp, localResp] = await Promise.all([
+            // CIFP — runs within the same aero step
+            setStep('aero', 'running', 'Checking CIFP cycle…');
+            const [cifpServer, cifpLocal] = await Promise.all([
                 fetch(`${homeBase}/cifp/cifp_cycle_info.json`, { signal: AbortSignal.timeout(8000) }).then(r => r.ok ? r.json() : null),
                 fetch(`${LOCAL}/cifp/cifp_cycle_info.json`, { cache: 'no-store', signal: AbortSignal.timeout(2000) }).then(r => r.ok ? r.json() : null).catch(() => null),
             ]);
-            if (!serverResp) throw new Error('CIFP cycle info not available');
-            const serverCode = serverResp.cycle_code || serverResp.effective_date;
-            const localCode  = localResp?.cycle_code  || localResp?.effective_date;
-            if (localCode && localCode === serverCode) {
-                setStep('cifp', 'skip', `Current — cycle ${serverCode}`);
+            const cifpServerCode = cifpServer?.cycle_code || cifpServer?.effective_date;
+            const cifpLocalCode  = cifpLocal?.cycle_code  || cifpLocal?.effective_date;
+            if (!cifpServerCode || (cifpLocalCode && cifpLocalCode === cifpServerCode)) {
+                setStep('aero', 'ok', `Cycle ${nasrServerDate} — NASR + CIFP current`);
             } else {
-                setStep('cifp', 'running', 'Downloading CIFP bundle…');
-                // Use Java-side fetch-zip (same as NASR) to avoid loading 30 MB blob into WebView
+                setStep('aero', 'running', 'Downloading CIFP bundle…');
                 const cifpZipUrl = encodeURIComponent(`${homeBase}/cifp/cifp.zip`);
                 const cifpResp = await fetch(`${LOCAL}/fetch-zip?url=${cifpZipUrl}`, {
-                    method: 'POST',
-                    signal: AbortSignal.timeout(120000),
+                    method: 'POST', signal: AbortSignal.timeout(120000),
                 });
                 if (!cifpResp.ok) {
                     const msg = await cifpResp.text().catch(() => `HTTP ${cifpResp.status}`);
-                    throw new Error(`fetch-zip failed: ${msg}`);
+                    throw new Error(`CIFP fetch-zip failed: ${msg}`);
                 }
-                this._saveDeviceSection('cifp', { cycle_code: serverCode });
-                setStep('cifp', 'ok', `Updated to cycle ${serverCode}`);
+                this._saveDeviceSection('cifp', { cycle_code: cifpServerCode });
+                setStep('aero', 'ok', `Updated to cycle ${nasrServerDate} — NASR + CIFP`);
             }
-        } catch (e) { failStep('cifp', e); }
+        } catch (e) { failStep('aero', e); }
 
         // ── MBTiles ───────────────────────────────────────────────────────────
         let mbStatus = [];
