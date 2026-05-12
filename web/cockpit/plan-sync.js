@@ -226,6 +226,9 @@ class PlanSync {
             return;
         }
 
+        // Fix 4: guard against stale async continuation if user switched tabs
+        if (this._activeTab !== 'device') return;
+
         if (!trips.length) {
             body.innerHTML = '<div class="ps-empty">No saved plans yet.<br>Use the Save button in the route planner, or "Save Plan" from the menu.</div>';
             return;
@@ -280,6 +283,23 @@ class PlanSync {
         const esc = (s) => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
         const legs = trip.legs || [];
+
+        // Fix 2: guard against empty legs list before rendering buttons
+        if (!legs.length) {
+            overlay.innerHTML = `
+                <div class="ps-sheet">
+                    <div class="ps-sheet-title">${esc(trip.name)}</div>
+                    <div class="ps-sheet-empty">No legs stored in this plan.</div>
+                    <button class="ps-sheet-btn ps-sheet-cancel" data-action="cancel">Close</button>
+                </div>`;
+            overlay.addEventListener('touchstart', (e) => { e.stopPropagation(); }, { passive: true });
+            overlay.addEventListener('click', (e) => {
+                if (e.target.closest('[data-action="cancel"]')) overlay.remove();
+            });
+            document.body.appendChild(overlay);
+            return;
+        }
+
         let buttonsHtml = '';
         if (legs.length <= 1) {
             buttonsHtml = `
@@ -318,20 +338,27 @@ class PlanSync {
                 flight_plan: leg.flight_plan,
             };
 
-            this.hide();
-            await window.app?.applyRouteEdit(planToLoad);
+            // Fix 3: wrap async operations in try/catch
+            try {
+                this.hide();
+                await window.app?.applyRouteEdit(planToLoad);
 
-            // Pass full trip to CLR page so leg toggle works for all legs
-            if (window.app?.ifrClearance) {
-                window.app.ifrClearance._flightPlan = trip;
+                // Pass full trip to CLR page so leg toggle works for all legs
+                if (window.app?.ifrClearance) {
+                    window.app.ifrClearance._flightPlan = trip;
+                }
+
+                if (action === 'replan') {
+                    window.app?.routePlannerPanel?.open(planToLoad);
+                    setTimeout(() => window.app?.routePlannerPanel?._onRecomputeTap(), 100);
+                }
+
+                // Fix 1: escape trip.name to prevent XSS
+                window.app?.showToast?.(`Loaded: ${esc(trip.name)}`);
+            } catch (err) {
+                console.error('[PlanSync] load trip failed:', err);
+                window.app?.showToast?.('Failed to load plan');
             }
-
-            if (action === 'replan') {
-                window.app?.routePlannerPanel?.open(planToLoad);
-                setTimeout(() => window.app?.routePlannerPanel?._onRecomputeTap(), 100);
-            }
-
-            window.app?.showToast?.(`Loaded: ${trip.name}`);
         });
 
         document.body.appendChild(overlay);
