@@ -2463,7 +2463,6 @@ class RoutePlannerPanel {
 
         try {
             await TripStore.save(trip);
-            this._toast('Plan saved.');
         } catch (e) {
             console.error('TripStore.save failed', e);
         }

@@ -18,6 +18,18 @@ const TripStore = (() => {
                     const store = db.createObjectStore(STORE, { keyPath: 'id' });
                     store.createIndex('created_at', 'created_at', { unique: false });
                 }
+                // Defensive: create logbook stores if upgrading from v0 (fresh install).
+                // Logbook normally creates these via _openIdb(), but TripStore may win
+                // the v5 upgrade race if the user saves a plan before logging a flight.
+                if (!db.objectStoreNames.contains('flypi_logbook')) {
+                    const lb = db.createObjectStore('flypi_logbook', { keyPath: 'id' });
+                    lb.createIndex('date',       'date',       { unique: false });
+                    lb.createIndex('created_at', 'created_at', { unique: false });
+                    lb.createIndex('synced',     'synced',     { unique: false });
+                }
+                if (!db.objectStoreNames.contains('flypi_ml_logs')) {
+                    db.createObjectStore('flypi_ml_logs', { keyPath: 'id' });
+                }
             };
             req.onsuccess = () => {
                 _db = req.result;

@@ -1101,13 +1101,31 @@ class FlyTabApp {
             const dep  = wps[0].icao || wps[0].id;
             const dest = wps[wps.length - 1].icao || wps[wps.length - 1].id;
             const now  = new Date();
+            const today = now.toISOString().slice(0, 10);
             const monthDay = now.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+            // Upsert: reuse the existing trip if one with the same dep+dest was
+            // saved today, to avoid creating duplicates on repeated taps.
+            let tripId = null;
+            let existingCreatedAt = null;
+            try {
+                const existing = await TripStore.list();
+                const match = existing.find(t =>
+                    t.dep === dep && t.dest === dest &&
+                    t.created_at && t.created_at.startsWith(today)
+                );
+                if (match) {
+                    tripId = match.id;
+                    existingCreatedAt = match.created_at;
+                }
+            } catch (e) { console.warn('TripStore.list failed, will create new record', e); }
+
             const trip = {
-                id:         crypto.randomUUID(),
+                id:         tripId || crypto.randomUUID(),
                 name:       `${dep} → ${dest} · ${monthDay}`,
                 dep,
                 dest,
-                created_at: now.toISOString(),
+                created_at: existingCreatedAt ?? now.toISOString(),
                 updated_at: now.toISOString(),
                 legs: [{
                     dep,
