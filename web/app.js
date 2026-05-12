@@ -1087,6 +1087,47 @@ class FlyTabApp {
         setTimeout(() => this.cockpitMap?.map?.invalidateSize(), 300);
     }
 
+    async saveCurrentPlan() {
+        if (this.routePlannerPanel?._lastPlan && this.routePlannerPanel._saveCurrentTrip) {
+            try {
+                await this.routePlannerPanel._saveCurrentTrip();
+                this.showToast('Plan saved.');
+            } catch (err) {
+                this.showToast('Save failed: ' + (err?.message || err));
+            }
+            return;
+        }
+        if (this._currentTrip?.waypoints?.length >= 2) {
+            const wps = this._currentTrip.waypoints;
+            const dep  = wps[0].icao || wps[0].id;
+            const dest = wps[wps.length - 1].icao || wps[wps.length - 1].id;
+            const now  = new Date();
+            const monthDay = now.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            const trip = {
+                id:         crypto.randomUUID(),
+                name:       `${dep} → ${dest} · ${monthDay}`,
+                dep,
+                dest,
+                created_at: now.toISOString(),
+                updated_at: now.toISOString(),
+                legs: [{
+                    dep,
+                    dest,
+                    flight_plan: this._currentTrip.flight_plan || { departure: dep, destination: dest, route: '', altitude: 0, legs: [] },
+                    waypoints:   wps,
+                }],
+            };
+            try {
+                await TripStore.save(trip);
+                this.showToast('Plan saved.');
+            } catch (err) {
+                this.showToast('Save failed: ' + (err?.message || err));
+            }
+            return;
+        }
+        this.showToast('No plan to save.');
+    }
+
     async applyRouteEdit(plan, { fromRouteTable = false } = {}) {
         if (!plan) return;
         plan.edited_at = new Date().toISOString();
