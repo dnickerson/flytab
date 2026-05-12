@@ -2340,7 +2340,7 @@ class RoutePlannerPanel {
         // Auto-save the trip so it appears in the Plans list.
         // Pass appliedPlan so _saveCurrentTrip uses the freshly-built plan, not
         // the potentially-stale _lastPlan (which is set by _plan(), not here).
-        this._saveCurrentTrip(appliedPlan || this._lastPlan).catch(e => console.error('auto-save failed', e));
+        this._saveCurrentTrip(appliedPlan || plan).catch(e => console.error('auto-save failed', e));
 
         // Update stats bar to reflect exactly what was applied, not the stale
         // A*-planned route which may have a different waypoint count/distance.
