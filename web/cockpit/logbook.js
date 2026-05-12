@@ -8,7 +8,7 @@
 class Logbook {
     static IDB_STORE = 'flypi_logbook';
     static IDB_NAME = 'flypi-flights';
-    static IDB_VERSION = 4;
+    static IDB_VERSION = 5;
     static IDB_ML_STORE = 'flypi_ml_logs';
 
     /**
@@ -1585,6 +1585,10 @@ class Logbook {
                 }
                 if (oldVersion < 4 && !db.objectStoreNames.contains(Logbook.IDB_ML_STORE)) {
                     db.createObjectStore(Logbook.IDB_ML_STORE, { keyPath: 'id' });
+                }
+                if (!db.objectStoreNames.contains('trips')) {
+                    const store = db.createObjectStore('trips', { keyPath: 'id' });
+                    store.createIndex('created_at', 'created_at', { unique: false });
                 }
                 for (const name of db.objectStoreNames) {
                     if (name === 'flight_recordings' || name === 'flight_csvs') {
