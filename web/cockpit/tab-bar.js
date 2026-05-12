@@ -131,7 +131,7 @@ class TabBar {
             }},
             { icon: '💾', label: 'Save Plan', action: () => {
                 this._closeMoreDrawer();
-                c.app?.saveCurrentPlan?.() || window.app?.saveCurrentPlan?.();
+                (c.app || window.app)?.saveCurrentPlan?.();
             }},
             { icon: '✈', label: 'Load Plan', action: () => {
                 if (c.planSync?.show) c.planSync.show();

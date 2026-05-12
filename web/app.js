@@ -1091,7 +1091,6 @@ class FlyTabApp {
         if (this.routePlannerPanel?._lastPlan && this.routePlannerPanel._saveCurrentTrip) {
             try {
                 await this.routePlannerPanel._saveCurrentTrip();
-                this.showToast('Plan saved.');
             } catch (err) {
                 this.showToast('Save failed: ' + (err?.message || err));
             }
