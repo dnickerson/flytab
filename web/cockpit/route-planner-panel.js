@@ -2338,7 +2338,9 @@ class RoutePlannerPanel {
         await app.applyRouteEdit(plan);
 
         // Auto-save the trip so it appears in the Plans list.
-        this._saveCurrentTrip().catch(e => console.error('auto-save failed', e));
+        // Pass appliedPlan so _saveCurrentTrip uses the freshly-built plan, not
+        // the potentially-stale _lastPlan (which is set by _plan(), not here).
+        this._saveCurrentTrip(appliedPlan || this._lastPlan).catch(e => console.error('auto-save failed', e));
 
         // Update stats bar to reflect exactly what was applied, not the stale
         // A*-planned route which may have a different waypoint count/distance.
@@ -2350,14 +2352,19 @@ class RoutePlannerPanel {
         return true;
     }
 
-    async _saveCurrentTrip() {
-        const plan = this._lastPlan;
+    async _saveCurrentTrip(plan) {
+        // plan is passed from _doApply() so it reflects the freshly-applied
+        // waypoints rather than the potentially-stale _lastPlan (which is set by
+        // _plan(), not by _doApply()).  Fall back to _lastPlan only if not provided.
+        plan = plan || this._lastPlan;
         if (!plan || !plan.waypoints || plan.waypoints.length < 2) return;
 
         const waypoints = plan.waypoints;
         const fuelStopIndices = [];
         waypoints.forEach((wp, i) => { if (wp.fuelStop) fuelStopIndices.push(i); });
-        const boundaries = [0, ...fuelStopIndices, waypoints.length - 1];
+        // Deduplicate boundaries to avoid a degenerate single-waypoint leg when a
+        // fuel stop happens to fall on the last waypoint (indices [0, n-1, n-1]).
+        const boundaries = [...new Set([0, ...fuelStopIndices, waypoints.length - 1])];
 
         const fullRouteStr = this._buildField15String(this._route);
 
@@ -2366,11 +2373,6 @@ class RoutePlannerPanel {
             const start = boundaries[i];
             const end   = boundaries[i + 1];
             const legWps = waypoints.slice(start, end + 1);
-            const allLegs = plan.legs || [];
-            const legWpIds = new Set(legWps.map(w => w.icao || w.id || w.name));
-            const filteredLegs = allLegs.filter(l =>
-                legWpIds.has(l.from) || legWpIds.has(l.to)
-            );
             tripLegs.push({
                 dep:  legWps[0].icao || legWps[0].id || legWps[0].name,
                 dest: legWps[legWps.length - 1].icao || legWps[legWps.length - 1].id || legWps[legWps.length - 1].name,
@@ -2379,7 +2381,9 @@ class RoutePlannerPanel {
                     destination: legWps[legWps.length - 1].icao || legWps[legWps.length - 1].id || legWps[legWps.length - 1].name,
                     route:       fullRouteStr,
                     altitude:    this._altitude || 0,
-                    legs:        filteredLegs,
+                    // Use all plan legs — per-trip-leg filtering was fragile and
+                    // legs are used for display only, not re-planning.
+                    legs:        plan.legs || [],
                 },
                 waypoints: legWps,
             });
@@ -2391,8 +2395,11 @@ class RoutePlannerPanel {
         const monthDay = now.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
         const autoName = `${dep} → ${dest} · ${monthDay}`;
 
-        // Check for existing trip with same dep+dest saved today (upsert)
+        // Check for existing trip with same dep+dest saved today (upsert).
+        // Preserve the original created_at so sort order is stable across
+        // repeated Apply taps.
         let tripId = crypto.randomUUID();
+        let existingCreatedAt = null;
         const today = now.toISOString().slice(0, 10);
         try {
             const existing = await TripStore.list();
@@ -2400,15 +2407,18 @@ class RoutePlannerPanel {
                 t.dep === dep && t.dest === dest &&
                 t.created_at && t.created_at.slice(0, 10) === today
             );
-            if (match) tripId = match.id;
-        } catch (_) {}
+            if (match) {
+                tripId = match.id;
+                existingCreatedAt = match.created_at;
+            }
+        } catch (e) { console.warn('TripStore.list failed, will create new record', e); }
 
         const trip = {
             id:         tripId,
             name:       autoName,
             dep,
             dest,
-            created_at: now.toISOString(),
+            created_at: existingCreatedAt ?? now.toISOString(),
             legs:       tripLegs,
         };
 
