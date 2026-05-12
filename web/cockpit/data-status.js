@@ -16,32 +16,6 @@ class DataStatus {
     static SEC_ZOOMS      = [5, 6, 7, 8, 9, 10, 11];
     static IFR_ZOOMS      = [4, 5, 6, 7, 8, 9, 10];
     static IFR_AREA_ZOOMS = [10, 11, 12];
-    static REGIONS = [
-        { id: 'southeast',    label: 'Southeast',     sub: 'FL GA SC NC TN(e) VA(s)', latMin: 24.0, latMax: 36.5, lonMin: -88.5, lonMax: -74.5, mb: 188 },
-        { id: 'midatlantic',  label: 'Mid-Atlantic',  sub: 'VA MD DC DE NJ NY',       latMin: 36.5, latMax: 42.5, lonMin: -82.0, lonMax: -71.0, mb: 120 },
-        { id: 'northeast',    label: 'Northeast',     sub: 'NY CT RI MA VT NH ME',    latMin: 41.0, latMax: 47.5, lonMin: -80.0, lonMax: -66.0, mb: 124 },
-        { id: 'gulfcoast',    label: 'Gulf Coast',    sub: 'LA MS AL TX coast',       latMin: 25.0, latMax: 33.0, lonMin: -97.5, lonMax: -83.0, mb: 122 },
-        { id: 'southcentral', label: 'South Central', sub: 'TX OK AR LA TN(w) KY(w)', latMin: 29.0, latMax: 37.0, lonMin: -97.5, lonMax: -88.5, mb: 120 },
-        { id: 'midwest',      label: 'Midwest',       sub: 'OH IN IL MI WI MN IA MO KY(e)', latMin: 36.0, latMax: 49.5, lonMin: -98.0, lonMax: -80.0, mb: 346 },
-        { id: 'greatplains',  label: 'Great Plains',  sub: 'ND SD NE KS CO east',    latMin: 36.0, latMax: 49.5, lonMin: -111.0, lonMax: -96.0, mb: 259 },
-        { id: 'mountain',     label: 'Mountain',      sub: 'MT ID WY UT CO NV',      latMin: 36.0, latMax: 49.5, lonMin: -117.5, lonMax: -109.0, mb: 171 },
-        { id: 'southwest',    label: 'Southwest',     sub: 'CA south AZ NM',         latMin: 31.0, latMax: 37.5, lonMin: -121.0, lonMax: -108.0, mb: 117 },
-        { id: 'pacificnw',    label: 'Pacific NW',    sub: 'WA OR CA north',         latMin: 37.0, latMax: 49.5, lonMin: -125.5, lonMax: -116.0, mb: 150 },
-        { id: 'alaska',       label: 'Alaska',        sub: 'AK',                     latMin: 54.0, latMax: 72.0, lonMin: -169.0, lonMax: -130.0, mb: 407 },
-    ];
-    static TERRAIN_REGIONS = [
-        { id: 'southeast',    states: ['FL','GA','SC','NC','TN','VA'] },
-        { id: 'midatlantic',  states: ['VA','MD','DC','DE','NJ','NY'] },
-        { id: 'northeast',    states: ['NY','CT','RI','MA','VT','NH','ME'] },
-        { id: 'gulfcoast',    states: ['LA','MS','AL','TX'] },
-        { id: 'southcentral', states: ['TX','OK','AR','LA','TN','KY'] },
-        { id: 'midwest',      states: ['OH','IN','IL','MI','WI','MN','IA','MO','KY'] },
-        { id: 'greatplains',  states: ['ND','SD','NE','KS','CO'] },
-        { id: 'mountain',     states: ['MT','ID','WY','UT','CO','NV'] },
-        { id: 'southwest',    states: ['CA','AZ','NM'] },
-        { id: 'pacificnw',    states: ['WA','OR','CA'] },
-        { id: 'alaska',       states: ['AK'] },
-    ];
 
     constructor(parentEl) {
         this._parentEl = parentEl;
@@ -450,14 +424,9 @@ class DataStatus {
         const routeAreaHtml = `
             <div class="ds-section-title">Route Area</div>
             <div class="ds-card">
-                <div class="ds-card-detail" style="margin-bottom:8px;font-size:12px;color:var(--text-muted)">Cache map tiles and weather for the active route corridor.</div>
-                ${bbox
-                    ? `<div class="ds-cache-row">
-                            <span class="ds-cache-info"><span class="ds-cache-name">${bbox.label}</span><span class="ds-cache-sub">+60 nm buffer</span></span>
-                            <button class="ds-cache-btn" id="dsCacheRouteBtn">Cache Maps</button>
-                       </div>`
-                    : `<div class="ds-cache-row"><span class="ds-cache-info"><span class="ds-cache-name" style="color:var(--text-muted)">No flight plan loaded</span></span></div>`
-                }
+                <div class="ds-cache-row">
+                    <span class="ds-cache-info"><span class="ds-cache-name">${bbox ? bbox.label : '<span style="color:var(--text-muted)">No flight plan loaded</span>'}</span>${bbox ? '<span class="ds-cache-sub">+60 nm buffer</span>' : ''}</span>
+                </div>
                 <div class="ds-cache-actions" style="margin-top:8px">
                     <button class="ds-action-btn" id="dsCacheRouteWxBtn">⛅ Fetch Route Weather</button>
                 </div>
@@ -818,32 +787,6 @@ class DataStatus {
         const mbtIfr = mbt.find(l => l.layer === 'ifr-low');
         const bothPresent = mbtSec?.exists && mbtIfr?.exists;
 
-        // Legacy supplemental tile cache — route area
-        const bbox = (() => { try { return JSON.parse(localStorage.getItem('flypi_route_bbox') || 'null'); } catch { return null; } })();
-        const routeRow = bbox
-            ? `<div class="ds-cache-row">
-                    <span class="ds-cache-info"><span class="ds-cache-name">${bbox.label}</span><span class="ds-cache-sub">+60 nm buffer</span></span>
-                    <button class="ds-cache-btn" id="dsCacheRouteBtn">Cache</button>
-               </div>`
-            : `<div class="ds-cache-row">
-                    <span class="ds-cache-info"><span class="ds-cache-name" style="color:var(--text-muted)">No flight plan loaded</span></span>
-               </div>`;
-
-        const regionRows = DataStatus.REGIONS.map(r =>
-            `<div class="ds-cache-row">
-                <span class="ds-cache-info">
-                    <span class="ds-cache-name">${r.label}</span>
-                    <span class="ds-cache-sub">${r.sub}</span>
-                    <span class="ds-cache-sub">SEC z5–11 + IFR z7–11 &middot; ~${r.mb} MB</span>
-                </span>
-                <button class="ds-cache-btn" data-region="${r.id}">Cache</button>
-            </div>`
-        ).join('');
-
-        const suppNote = bothPresent
-            ? `<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">MBTiles provides full coverage. Individual tile caching only needed for areas outside the packed region.</div>`
-            : `<div style="font-size:12px;color:var(--status-caution);margin-bottom:8px">No MBTiles on device. Cache tiles by region to use maps offline.</div>`;
-
         return `
         <div class="ds-card">
             <div class="ds-card-title">Reload App Data</div>
@@ -852,18 +795,11 @@ class DataStatus {
         </div>
         <div class="ds-card">
             <div class="ds-card-title">Individual Tile Cache</div>
-            <div class="ds-card-detail" style="margin-bottom:8px">Load tiles from home server or import a ZIP package.</div>
-            ${suppNote}
+            <div class="ds-card-detail" style="margin-bottom:8px">Import a ZIP tile package from local files.</div>
             <div class="ds-cache-actions">
-                <button class="ds-action-btn" id="dsLoadServerBtn">Browse ZIPs on Server</button>
                 <button class="ds-action-btn" id="dsImportZipBtn">Import ZIP from Files</button>
                 <input type="file" id="dsZipInput" accept=".zip" style="display:none">
             </div>
-            <div id="dsServerZips"></div>
-        </div>
-        <div class="ds-card">
-            <div class="ds-card-title">CONUS Regions <span style="font-weight:400;font-size:13px;color:var(--text-muted)">(SEC + IFR tiles)</span></div>
-            ${regionRows}
         </div>
         <div class="ds-section-title">Approach Plates — Manual</div>
         ${this._platesAgeCard()}
@@ -907,50 +843,6 @@ class DataStatus {
 
         if (cancelEl) cancelEl.addEventListener('click', () => { this._cacheCancelled = true; });
 
-        // Load from Home Server
-        const loadBtn = body.querySelector('#dsLoadServerBtn');
-        const serverZips = body.querySelector('#dsServerZips');
-        if (loadBtn) {
-            wireTap(loadBtn, async () => {
-                loadBtn.disabled = true; loadBtn.textContent = '…';
-                serverZips.innerHTML = '';
-                try {
-                    const urls = this._homeServerUrls();
-                    const r = await fetch(`${urls.tileBase.replace(/\/tiles\/?$/, '')}/offline-maps/index.json`, { cache: 'no-store', signal: AbortSignal.timeout(5000) });
-                    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-                    const pkgs = await r.json();
-                    if (!pkgs.length) {
-                        serverZips.innerHTML = '<div style="padding:6px 0;color:var(--text-muted);font-size:13px">No ZIPs on server — run build_offline_zip.py</div>';
-                    } else {
-                        pkgs.forEach(p => {
-                            const row = document.createElement('div');
-                            row.className = 'ds-cache-row';
-                            row.style.marginTop = '6px';
-                            row.innerHTML = `<span class="ds-cache-info"><span class="ds-cache-name">${p.id}</span><span class="ds-cache-sub">${p.size_mb} MB</span></span><button class="ds-cache-btn">Import</button>`;
-                            const btn = row.querySelector('button');
-                            wireTap(btn, async () => {
-                                if (this._cacheRunning) return;
-                                btn.disabled = true; btn.textContent = 'Downloading…';
-                                showProg('Downloading ' + p.id + '.zip…');
-                                try {
-                                    const zipUrl = p.url.startsWith('http') ? p.url : (urls.tileBase.replace(/\/tiles\/?$/, '') + p.url);
-                                    const resp = await fetch(zipUrl);
-                                    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-                                    const blob = await resp.blob();
-                                    await this._importZip(new File([blob], p.id + '.zip'), showProg, updateProg, doneProg);
-                                } catch (err) { doneProg('Download failed: ' + err.message, 'var(--status-danger)'); }
-                                btn.disabled = false; btn.textContent = 'Import';
-                            });
-                            serverZips.appendChild(row);
-                        });
-                    }
-                } catch (err) {
-                    serverZips.innerHTML = `<div style="padding:6px 0;color:var(--status-danger);font-size:13px">Not reachable: ${err.message}</div>`;
-                }
-                loadBtn.disabled = false; loadBtn.textContent = 'Browse ZIPs on Server';
-            });
-        }
-
         // Import ZIP from Files
         const zipInput = body.querySelector('#dsZipInput');
         const importBtn = body.querySelector('#dsImportZipBtn');
@@ -959,13 +851,6 @@ class DataStatus {
             zipInput.addEventListener('change', () => {
                 if (zipInput.files[0]) { this._importZip(zipInput.files[0], showProg, updateProg, doneProg); zipInput.value = ''; }
             });
-        }
-
-        // Route cache button
-        const routeBtn = body.querySelector('#dsCacheRouteBtn');
-        if (routeBtn) {
-            const bbox = (() => { try { return JSON.parse(localStorage.getItem('flypi_route_bbox') || 'null'); } catch { return null; } })();
-            if (bbox) wireTap(routeBtn, () => this._cacheRegion(bbox, routeBtn, showProg, updateProg, doneProg));
         }
 
         // Route Weather button — triggers flywhere.app weather fetch for active plan
@@ -997,13 +882,6 @@ class DataStatus {
                 }
             });
         }
-
-        // Region buttons
-        body.querySelectorAll('.ds-cache-btn[data-region]').forEach(btn => {
-            const region = DataStatus.REGIONS.find(r => r.id === btn.dataset.region);
-            if (!region) return;
-            wireTap(btn, () => this._cacheRegion(region, btn, showProg, updateProg, doneProg));
-        });
 
         // Approach Plates — Download from home server
         const platesStatus = body.querySelector('#dsPlatesStatus');
@@ -1077,64 +955,6 @@ class DataStatus {
         }
     }
 
-    // ── Tile Math ─────────────────────────────────────────────────────────────
-    _lon2tile(lon, z) { return Math.floor((lon + 180) / 360 * Math.pow(2, z)); }
-    _lat2tile(lat, z) {
-        const r = lat * Math.PI / 180;
-        return Math.floor((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * Math.pow(2, z));
-    }
-    _buildTileUrls(region) {
-        const urls = [];
-        const add = (prefix, zooms) => {
-            for (const z of zooms) {
-                const xMin = this._lon2tile(region.lonMin, z), xMax = this._lon2tile(region.lonMax, z);
-                const yMin = this._lat2tile(region.latMax, z), yMax = this._lat2tile(region.latMin, z);
-                for (let x = xMin; x <= xMax; x++)
-                    for (let y = yMin; y <= yMax; y++)
-                        urls.push(`/${prefix}/${z}/${x}/${y}.webp`);
-            }
-        };
-        add('sectional', DataStatus.SEC_ZOOMS);
-        add('ifr-low',   DataStatus.IFR_ZOOMS);
-        add('ifr-area',  DataStatus.IFR_AREA_ZOOMS);
-        return urls;
-    }
-
-    async _cacheRegion(region, btn, showProg, updateProg, doneProg) {
-        if (this._cacheRunning) return;
-        this._cacheRunning = true; this._cacheCancelled = false;
-        if (btn) { btn.disabled = true; btn.textContent = 'Downloading…'; }
-
-        // Ensure resolved base (Tailscale fallback if local IP unreachable)
-        if (!this._resolvedBase) {
-            const { base } = await this._resolveHomeBase();
-            this._resolvedBase = base;
-        }
-        const homeBase = this._resolvedBase || this._homeServerUrls().tileBase.replace(/\/tiles\/?$/, '');
-        const zipUrl = `${homeBase}/offline-maps/${region.id}.zip`;
-
-        try {
-            showProg(`Downloading ${region.id}.zip (${region.mb} MB)…`);
-            const resp = await fetch(zipUrl, { signal: AbortSignal.timeout(300000) });
-            if (!resp.ok) throw new Error(`ZIP not found (HTTP ${resp.status}) — run build_offline_zip.py ${region.id}`);
-            const blob = await resp.blob();
-            showProg(`Extracting ${(blob.size / 1024 / 1024).toFixed(0)} MB to device…`);
-            const unzipResp = await fetch(`${DataStatus.LOCAL_BASE}/unzip`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/zip' },
-                body: blob,
-                signal: AbortSignal.timeout(300000),
-            });
-            if (!unzipResp.ok) throw new Error(`Extraction failed: ${await unzipResp.text()}`);
-            const result = await unzipResp.json();
-            this._cacheRunning = false;
-            doneProg(`\u2713 ${result.extracted.toLocaleString()} tiles extracted`, 'var(--status-ok)');
-        } catch (err) {
-            this._cacheRunning = false;
-            doneProg(`Failed: ${err.message}`, 'var(--status-danger)');
-        }
-        if (btn) { btn.disabled = false; btn.textContent = 'Cache'; }
-    }
 
     async _importZip(file, showProg, updateProg, doneProg) {
         if (this._cacheRunning) return;
