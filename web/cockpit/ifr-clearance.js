@@ -13,6 +13,8 @@ class IfrClearance {
         this._mode = 'dep'; // 'dep' | 'apch'
         this._flightPlan = null;
         this._departureAirport = null;
+        this._activeLegIdx = 0;
+        this._legToggleEl  = null;
 
         // DEP (CRAFT) state
         this._craft = {
@@ -48,11 +50,28 @@ class IfrClearance {
 
     // ========== Public API ==========
 
-    async show(flightPlan, departureAirport) {
+    async show(flightPlan, departureAirport, currentPos) {
         if (flightPlan) this._flightPlan = flightPlan;
         if (departureAirport) this._departureAirport = departureAirport;
+
+        // Auto-select leg based on GPS proximity to fuel stop
+        if (this._flightPlan?.legs?.length > 1) {
+            const leg1 = this._flightPlan.legs[0];
+            const fuelStopWp = leg1.waypoints?.[leg1.waypoints.length - 1];
+            if (currentPos?.lat != null && fuelStopWp?.lat != null &&
+                (currentPos.gps_fix_quality == null || currentPos.gps_fix_quality >= 1)) {
+                const distNm = this._haversineNm(currentPos.lat, currentPos.lon, fuelStopWp.lat, fuelStopWp.lon);
+                this._activeLegIdx = distNm <= 5 ? 1 : 0;
+            } else {
+                this._activeLegIdx = 0;
+            }
+        } else {
+            this._activeLegIdx = 0;
+        }
+
         this._visible = true;
         this._el.style.display = 'flex';
+        this._renderLegToggle();
         if (this._mode === 'dep') {
             await this._prefillDep();
         }
@@ -63,6 +82,13 @@ class IfrClearance {
         this._visible = false;
         this._el.style.display = 'none';
         this._hideNumpad();
+    }
+
+    _getActiveLeg() {
+        const fp = this._flightPlan;
+        if (!fp) return null;
+        if (fp.legs) return fp.legs[this._activeLegIdx] || fp.legs[0]; // trip object
+        return fp; // legacy single-plan — unchanged behavior
     }
 
     get visible() { return this._visible; }
@@ -82,6 +108,15 @@ class IfrClearance {
         };
     }
 
+    _haversineNm(lat1, lon1, lat2, lon2) {
+        const R = 3440.065; // Earth radius in nautical miles
+        const dLat = (lat2 - lat1) * Math.PI / 180;
+        const dLon = (lon2 - lon1) * Math.PI / 180;
+        const a = Math.sin(dLat/2)**2 +
+                  Math.cos(lat1 * Math.PI/180) * Math.cos(lat2 * Math.PI/180) * Math.sin(dLon/2)**2;
+        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+
     // ========== DOM construction ==========
 
     _buildDom() {
@@ -95,6 +130,7 @@ class IfrClearance {
                 <button class="clr-mode-tab active" data-mode="dep">DEP</button>
                 <button class="clr-mode-tab" data-mode="apch">APCH</button>
             </div>
+            <div class="clr-leg-toggle" id="clr-leg-toggle" style="display:none"></div>
             <button class="ep-close clr-close">✕</button>
         </div>
         <div class="clr-body">
@@ -323,6 +359,7 @@ class IfrClearance {
         this._container.appendChild(el);
         this._el = el;
         this._numpadEl = el.querySelector('#clr-numpad-sheet');
+        this._legToggleEl = this._el.querySelector('#clr-leg-toggle');
 
         this._wireEvents();
     }
@@ -474,12 +511,12 @@ class IfrClearance {
     // ========== DEP (CRAFT) ==========
 
     async _prefillDep() {
-        const fp = this._flightPlan;
-        if (!fp) return;
-        const plan = fp.flight_plan || fp;
+        const leg = this._getActiveLeg();
+        if (!leg) return;
+        const plan = leg.flight_plan || leg;
 
         // C — destination
-        const destIcao = plan.destination || '';
+        const destIcao = leg.dest || plan.destination || '';
         if (destIcao) {
             let name = '';
             if (this._nasrDb) {
@@ -495,15 +532,15 @@ class IfrClearance {
             const routeStr = plan.route || '';
             if (routeStr) {
                 routeInp.value = routeStr;
-            } else if (fp.waypoints?.length > 0) {
-                routeInp.value = fp.waypoints.map(w => w.icao || w.name).filter(Boolean).join(' ');
+            } else if (leg.waypoints?.length > 0) {
+                routeInp.value = leg.waypoints.map(w => w.icao || w.name).filter(Boolean).join(' ');
             }
         }
 
         // A — filed altitude
         const altInp = this._el.querySelector('#clr-a');
-        if (altInp && !altInp.value && plan.cruise_altitude) {
-            altInp.value = String(plan.cruise_altitude);
+        if (altInp && !altInp.value && (plan.altitude || plan.cruise_altitude)) {
+            altInp.value = String(plan.altitude || plan.cruise_altitude);
         }
 
         // F — departure frequency from airport
@@ -519,14 +556,14 @@ class IfrClearance {
     }
 
     _fillAsFiledRoute() {
-        const fp = this._flightPlan;
-        const plan = fp ? (fp.flight_plan || fp) : null;
-        const inp = this._el.querySelector('#clr-r');
+        const leg  = this._getActiveLeg();
+        const plan = leg ? (leg.flight_plan || leg) : null;
+        const inp  = this._el.querySelector('#clr-r');
         if (!inp) return;
         if (plan?.route) {
             inp.value = plan.route;
-        } else if (fp?.waypoints?.length > 0) {
-            inp.value = fp.waypoints.map(w => w.icao || w.name).filter(Boolean).join(' ');
+        } else if (leg?.waypoints?.length > 0) {
+            inp.value = leg.waypoints.map(w => w.icao || w.name).filter(Boolean).join(' ');
         } else {
             inp.value = 'AS FILED';
         }
@@ -685,6 +722,28 @@ class IfrClearance {
 
     _renderActiveMode() {
         // nothing extra — fields are persistent DOM, state lives in inputs
+    }
+
+    _renderLegToggle() {
+        if (!this._legToggleEl) return;
+        const legs = this._flightPlan?.legs;
+        if (!legs || legs.length <= 1) {
+            this._legToggleEl.style.display = 'none';
+            this._legToggleEl.innerHTML = '';
+            return;
+        }
+        this._legToggleEl.style.display = 'flex';
+        this._legToggleEl.innerHTML = legs.map((_, i) =>
+            `<button class="clr-leg-btn${i === this._activeLegIdx ? ' clr-leg-active' : ''}" data-leg="${i}">Leg ${i + 1}</button>`
+        ).join('');
+        this._legToggleEl.querySelectorAll('.clr-leg-btn').forEach(btn => {
+            btn.addEventListener('touchstart', (e) => { e.stopPropagation(); }, { passive: true });
+            btn.addEventListener('click', () => {
+                this._activeLegIdx = Number(btn.dataset.leg);
+                this._renderLegToggle();
+                if (this._mode === 'dep') this._prefillDep();
+            });
+        });
     }
 
     // ========== Tap helper ==========
