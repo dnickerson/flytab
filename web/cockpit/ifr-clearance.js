@@ -510,7 +510,7 @@ class IfrClearance {
 
     // ========== DEP (CRAFT) ==========
 
-    async _prefillDep() {
+    async _prefillDep(force = false) {
         const leg = this._getActiveLeg();
         if (!leg) return;
         const plan = leg.flight_plan || leg;
@@ -523,11 +523,13 @@ class IfrClearance {
                 try { const apt = await this._nasrDb.getAirport(destIcao); name = apt?.name || ''; } catch { /**/ }
             }
             const inp = this._el.querySelector('#clr-c');
+            if (force) inp.value = '';
             if (inp && !inp.value) inp.value = name ? `${destIcao} — ${name}` : destIcao;
         }
 
         // R — route (raw identifiers, not expanded — pilot reads it from here)
         const routeInp = this._el.querySelector('#clr-r');
+        if (force) routeInp.value = '';
         if (routeInp && !routeInp.value) {
             const routeStr = plan.route || '';
             if (routeStr) {
@@ -539,6 +541,7 @@ class IfrClearance {
 
         // A — filed altitude
         const altInp = this._el.querySelector('#clr-a');
+        if (force) altInp.value = '';
         if (altInp && !altInp.value && (plan.altitude || plan.cruise_altitude)) {
             altInp.value = String(plan.altitude || plan.cruise_altitude);
         }
@@ -741,7 +744,7 @@ class IfrClearance {
             btn.addEventListener('click', () => {
                 this._activeLegIdx = Number(btn.dataset.leg);
                 this._renderLegToggle();
-                if (this._mode === 'dep') this._prefillDep();
+                if (this._mode === 'dep') this._prefillDep(true);  // force-clear on leg switch
             });
         });
     }

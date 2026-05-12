@@ -160,7 +160,7 @@ class AirportPopup {
                     console.log('[FlyTab] Add to Route — Stage 2 feature');
                     this.close();
                 } else if (action === 'craft' && this._ifrClearance) {
-                    this._ifrClearance.show(null, airport);
+                    this._ifrClearance.show(null, airport, window.app?.stratuxClient?.situation);
                     this.close();
                 }
             });
@@ -1436,7 +1436,7 @@ class AirportPopup {
                     this.close();
                 }
                 if (action === 'craft' && this._ifrClearance) {
-                    this._ifrClearance.show(null, airport);
+                    this._ifrClearance.show(null, airport, window.app?.stratuxClient?.situation);
                     this.close();
                 }
                 if (action === 'close') {
