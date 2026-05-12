@@ -1019,7 +1019,12 @@ class RoutePlannerPanel {
         this._popupOverlay.appendChild(popup);
         document.body.appendChild(this._popupOverlay);
 
+        // Suppress synthetic click fired ~300ms after the touchend that opened
+        // the popup — on Android the click dispatches to whichever element is at
+        // the finger's final position, which in portrait mode is the overlay
+        // backdrop (the popup content box doesn't reach the panel at bottom 40%).
         this._popupOverlay.addEventListener('click', e => {
+            if (Date.now() - (this._popupOpenedAt || 0) < 400) return;
             if (e.target === this._popupOverlay) this._closeSettingsPopup();
         });
     }
@@ -1036,6 +1041,7 @@ class RoutePlannerPanel {
         if (this._pwrSel) this._pwrSel.value = String(this._pctPower);
         if (this._modeSel) this._modeSel.value = this._routingMode;
         if (this._reserveInput) this._reserveInput.value = this._reserveGal;
+        this._popupOpenedAt = Date.now();
         this._popupOverlay?.classList.add('open');
         const mosAge = this._lastMos ? (Date.now() - this._lastMos.fetched_at) : Infinity;
         if (this._lastPlan && mosAge > 60 * 60 * 1000) this._fetchMos();
