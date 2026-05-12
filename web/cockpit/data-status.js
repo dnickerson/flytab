@@ -1020,21 +1020,31 @@ class DataStatus {
             const colors = { pending: 'var(--text-muted)', running: 'var(--status-caution)', ok: 'var(--status-ok)', skip: 'var(--text-muted)', fail: 'var(--status-danger)' };
             return `<div style="padding:8px 0">` +
                 stepIds.map(id => {
-                    const s = states[id] || { status: 'pending', msg: '' };
-                    return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border-light)">
-                        <span style="font-size:18px;color:${colors[s.status]};width:20px;text-align:center">${icons[s.status]}</span>
-                        <span style="flex:1">
-                            <span style="font-weight:600">${stepLabels[id]}</span>
-                            ${s.msg ? `<span style="color:var(--text-muted);font-size:13px;display:block">${s.msg}</span>` : ''}
-                        </span>
+                    const s = states[id] || { status: 'pending', msg: '', pct: null };
+                    const active = s.status === 'running' || s.status === 'ok' || s.status === 'fail';
+                    const barPct = s.status === 'ok' ? 100 : s.status === 'fail' ? 100 : (s.pct ?? null);
+                    const barColor = s.status === 'ok' ? 'var(--status-ok)' : s.status === 'fail' ? 'var(--status-danger)' : 'var(--status-caution)';
+                    const pulse = s.status === 'running' && barPct === null;
+                    const bar = active
+                        ? `<div class="ds-step-bar"><div class="ds-step-bar-fill${pulse ? ' ds-step-bar-pulse' : ''}" style="width:${barPct ?? 30}%;background:${barColor}"></div></div>`
+                        : '';
+                    return `<div style="padding:6px 0;border-bottom:1px solid var(--border-light)">
+                        <div style="display:flex;align-items:center;gap:8px">
+                            <span style="font-size:18px;color:${colors[s.status]};width:20px;text-align:center">${icons[s.status]}</span>
+                            <span style="flex:1">
+                                <span style="font-weight:600">${stepLabels[id]}</span>
+                                ${s.msg ? `<span style="color:var(--text-muted);font-size:13px;display:block">${s.msg}</span>` : ''}
+                            </span>
+                        </div>
+                        ${bar}
                     </div>`;
                 }).join('') +
                 `</div><button class="ds-sync-btn" id="dsSyncDoneBtn" style="margin-top:12px">Done — Refresh</button>`;
         };
 
         const states = { aero: { status: 'pending' }, sec: { status: 'pending' }, ifr: { status: 'pending' }, plates: { status: 'pending' } };
-        const setStep   = (id, status, msg) => { states[id] = { status, msg }; body.innerHTML = renderSteps(states); this._wireDoneBtn(); };
-        const failStep  = (id, err)         => setStep(id, 'fail', err?.message || String(err));
+        const setStep   = (id, status, msg, pct = null) => { states[id] = { status, msg, pct }; body.innerHTML = renderSteps(states); this._wireDoneBtn(); };
+        const failStep  = (id, err)                     => setStep(id, 'fail', err?.message || String(err));
 
         body.innerHTML = renderSteps(states);
         this._wireDoneBtn();
@@ -1163,20 +1173,21 @@ class DataStatus {
                 const statesToSync = statesResp;
                 const totalMb = statesToSync.reduce((s, r) => s + r.size_mb, 0);
                 const stateList = statesToSync.map(s => s.state).join(', ');
-                setStep('plates', 'running', `Downloading ${statesToSync.length} states (${stateList}) — ~${totalMb.toLocaleString()} MB…`);
+                setStep('plates', 'running', `Downloading ${statesToSync.length} states (${stateList}) — ~${totalMb.toLocaleString()} MB…`, 0);
 
                 let done = 0;
                 const newlySynced = [...syncedStates];
                 for (const stateInfo of statesToSync) {
                     const st = stateInfo.state;
                     const mb = stateInfo.size_mb;
-                    setStep('plates', 'running', `↓ ${st} (${mb} MB) — ${done}/${statesToSync.length} done…`);
+                    const pctNow = () => Math.round(done / statesToSync.length * 100);
+                    setStep('plates', 'running', `↓ ${st} (${mb} MB) — ${done}/${statesToSync.length} done…`, pctNow());
 
                     // Tick elapsed time every 5s so pilot can see it's still working
                     const startTs = Date.now();
                     const ticker = setInterval(() => {
                         const elapsed = Math.round((Date.now() - startTs) / 1000);
-                        setStep('plates', 'running', `↓ ${st} (${mb} MB) — ${elapsed}s — ${done}/${statesToSync.length} done…`);
+                        setStep('plates', 'running', `↓ ${st} (${mb} MB) — ${elapsed}s — ${done}/${statesToSync.length} done…`, pctNow());
                     }, 5000);
 
                     try {
@@ -1192,11 +1203,11 @@ class DataStatus {
                         const result = await resp.json();
                         done++;
                         if (!newlySynced.includes(st)) newlySynced.push(st);
-                        setStep('plates', 'running', `✓ ${st} done (${result.extracted?.toLocaleString() ?? '?'} files) — ${done}/${statesToSync.length} complete`);
+                        setStep('plates', 'running', `✓ ${st} done (${result.extracted?.toLocaleString() ?? '?'} files) — ${done}/${statesToSync.length} complete`, pctNow());
                     } catch (e) {
                         clearInterval(ticker);
-                        setStep('plates', 'running', `✗ ${st} failed: ${e.message} — continuing…`);
                         done++;
+                        setStep('plates', 'running', `✗ ${st} failed: ${e.message} — continuing…`, pctNow());
                     }
                 }
                 if (serverCycle) {
