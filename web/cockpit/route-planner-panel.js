@@ -53,6 +53,8 @@ class RoutePlannerPanel {
         this._popupOverlay= null;   // settings popup overlay
         this._popupEl     = null;
         this._legBtnsEl   = null;   // leg-button container (for active-state sync)
+        this._saveBtn     = null;   // enabled when _lastPlan is set
+        this._plansBtn    = null;
 
         this._reserveInput = null;
         this._modeSel      = null;
@@ -108,6 +110,7 @@ class RoutePlannerPanel {
         this._lastPlan    = null;
         this._currentPlan = null;
         this._lastMos     = null;
+        this._syncSaveBtnState();
 
         // Synthesize _lastPlan from the loaded plan's waypoints so
         // _applyWindsToLastPlan can compute stats without needing the user to
@@ -123,6 +126,7 @@ class RoutePlannerPanel {
                     id: wp.icao || wp.name || wp.fix || wp.id,
                 })),
             };
+            this._syncSaveBtnState();
         }
 
         if (this._lastPlan) {
@@ -1101,9 +1105,42 @@ class RoutePlannerPanel {
             this._compactView ? 'rpp-tbtn-active' : '');
         bar.appendChild(this._compactBtn);
 
+        // Plans — opens PlanSync Device tab
+        this._plansBtn = mkBtn('Plans', () => this._onPlansTap());
+        bar.appendChild(this._plansBtn);
+
+        // Save — disabled until _lastPlan is set
+        this._saveBtn = mkBtn('Save', () => this._onSaveTap(), 'rpp-tbtn-save');
+        this._saveBtn.disabled = true;
+        bar.appendChild(this._saveBtn);
+
         bar.appendChild(mkBtn('Apply', () => this._onApplyKeepOpenTap(), 'rpp-tbtn-apply'));
 
         return bar;
+    }
+
+    async _onSaveTap() {
+        if (!this._lastPlan) return;
+        try {
+            await this._saveCurrentTrip();
+            this._toast('Plan saved.');
+        } catch (err) {
+            this._toast('Save failed: ' + (err?.message || err), 4000);
+        }
+    }
+
+    _onPlansTap() {
+        if (typeof planSync !== 'undefined' && planSync?.showDeviceTab) {
+            planSync.showDeviceTab();
+        } else if (typeof planSync !== 'undefined' && planSync?.show) {
+            planSync.show();
+        } else {
+            window.app?.planSync?.showDeviceTab?.() || window.app?.planSync?.show?.();
+        }
+    }
+
+    _syncSaveBtnState() {
+        if (this._saveBtn) this._saveBtn.disabled = !this._lastPlan;
     }
 
     async _onRecomputeTap() {
@@ -1881,6 +1918,7 @@ class RoutePlannerPanel {
             this._depInput.value  = dep;
             this._destInput.value = dest;
             this._lastPlan = result;
+            this._syncSaveBtnState();
             this._lastMos = null;  // reset so _fetchMos re-fetches for new route's stations
             this._updateStats(result);
             this._render();
@@ -1927,6 +1965,7 @@ class RoutePlannerPanel {
 
         if (fuelStops.length > 0) {
             this._lastPlan = { ...result, waypoints: currentWaypoints, fuelStops };
+            this._syncSaveBtnState();
             this._lastMos = null;  // reset so _fetchMos re-fetches for new route's stations
         }
         this._render();
