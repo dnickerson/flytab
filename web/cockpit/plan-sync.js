@@ -29,14 +29,20 @@ class PlanSync {
     // ── DOM ──────────────────────────────────────────────────────────────────
 
     _buildDOM() {
+        this._activeTab = 'cloud';  // 'cloud' | 'device'
+
         this._el = document.createElement('div');
         this._el.className = 'ps-overlay';
         this._el.style.display = 'none';
         this._el.innerHTML = `
             <div class="ps-container">
                 <div class="ps-header">
-                    <span class="ps-title">LOAD FLIGHT PLAN</span>
+                    <span class="ps-title">FLIGHT PLANS</span>
                     <button class="ep-close ps-close">✕</button>
+                </div>
+                <div class="ps-tabs">
+                    <button class="ps-tab ps-tab-active" data-tab="cloud">CLOUD</button>
+                    <button class="ps-tab" data-tab="device">DEVICE</button>
                 </div>
                 <div class="ps-body" id="ps-body">
                     <div class="ps-spinner">Loading…</div>
@@ -48,15 +54,39 @@ class PlanSync {
         closeBtn.addEventListener('touchstart', (e) => { e.stopPropagation(); this.hide(); }, { passive: true });
         closeBtn.addEventListener('click', () => this.hide());
 
+        this._el.querySelectorAll('.ps-tab').forEach(tab => {
+            tab.addEventListener('touchstart', (e) => { e.stopPropagation(); }, { passive: true });
+            tab.addEventListener('click', () => this._switchTab(tab.dataset.tab));
+        });
+
         document.body.appendChild(this._el);
     }
 
     // ── Public API ───────────────────────────────────────────────────────────
 
+    _switchTab(tab) {
+        this._activeTab = tab;
+        this._el.querySelectorAll('.ps-tab').forEach(t => {
+            t.classList.toggle('ps-tab-active', t.dataset.tab === tab);
+        });
+        const body = document.getElementById('ps-body');
+        if (tab === 'cloud') {
+            this._fetchAndRender();
+        } else {
+            this._renderDeviceTab(body);
+        }
+    }
+
     show() {
         this._el.style.display = 'flex';
         this._visible = true;
-        this._fetchAndRender();
+        this._switchTab(this._activeTab || 'cloud');
+    }
+
+    showDeviceTab() {
+        this._el.style.display = 'flex';
+        this._visible = true;
+        this._switchTab('device');
     }
 
     hide() {
@@ -184,6 +214,127 @@ class PlanSync {
             row.addEventListener('touchstart', (e) => { e.stopPropagation(); }, { passive: true });
             row.addEventListener('click', () => this._loadPlan(row.dataset.id));
         });
+    }
+
+    async _renderDeviceTab(body) {
+        body.innerHTML = '<div class="ps-spinner">Loading…</div>';
+        let trips = [];
+        try {
+            if (typeof TripStore !== 'undefined') trips = await TripStore.list();
+        } catch (err) {
+            body.innerHTML = `<div class="ps-error">Could not read saved plans: ${err.message}</div>`;
+            return;
+        }
+
+        if (!trips.length) {
+            body.innerHTML = '<div class="ps-empty">No saved plans yet.<br>Use the Save button in the route planner, or "Save Plan" from the menu.</div>';
+            return;
+        }
+
+        const esc = (s) => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        let html = '<div class="ps-list">';
+        for (const t of trips) {
+            const dateStr = t.created_at ? new Date(t.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+            const badge   = t.legs?.length > 1 ? `<span class="ps-legs-badge">${t.legs.length} legs</span>` : '';
+            html += `
+                <div class="ps-row" data-trip-id="${esc(t.id)}">
+                    <div class="ps-row-main">
+                        <span class="ps-row-route">${esc(t.name)}</span>
+                        ${badge}
+                    </div>
+                    <div class="ps-row-sub">
+                        <span class="ps-row-date">${dateStr}</span>
+                        <button class="ps-row-delete" data-trip-id="${esc(t.id)}" title="Delete">✕</button>
+                    </div>
+                </div>`;
+        }
+        html += '</div>';
+        body.innerHTML = html;
+
+        body.querySelectorAll('.ps-row').forEach(row => {
+            row.addEventListener('touchstart', (e) => { e.stopPropagation(); }, { passive: true });
+            row.addEventListener('click', (e) => {
+                if (e.target.closest('.ps-row-delete')) return;
+                const id = row.dataset.tripId;
+                const trip = trips.find(t => t.id === id);
+                if (trip) this._showTripBottomSheet(trip);
+            });
+        });
+
+        body.querySelectorAll('.ps-row-delete').forEach(btn => {
+            btn.addEventListener('touchstart', (e) => { e.stopPropagation(); }, { passive: true });
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const id = btn.dataset.tripId;
+                if (!confirm('Delete this saved plan?')) return;
+                await TripStore.delete(id).catch(() => {});
+                this._renderDeviceTab(body);
+            });
+        });
+    }
+
+    _showTripBottomSheet(trip) {
+        const overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:20000;display:flex;align-items:flex-end;justify-content:center';
+
+        const esc = (s) => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+        const legs = trip.legs || [];
+        let buttonsHtml = '';
+        if (legs.length <= 1) {
+            buttonsHtml = `
+                <button class="ps-sheet-btn" data-action="load" data-leg-idx="0">Load as-is</button>
+                <button class="ps-sheet-btn" data-action="replan" data-leg-idx="0">Replan with current winds</button>`;
+        } else {
+            buttonsHtml = legs.map((leg, i) =>
+                `<button class="ps-sheet-btn" data-action="load" data-leg-idx="${i}">Load Leg ${i + 1}: ${esc(leg.dep)} → ${esc(leg.dest)}</button>`
+            ).join('');
+        }
+
+        overlay.innerHTML = `
+            <div class="ps-sheet">
+                <div class="ps-sheet-title">${esc(trip.name)}</div>
+                ${buttonsHtml}
+                <button class="ps-sheet-btn ps-sheet-cancel" data-action="cancel">Cancel</button>
+            </div>`;
+
+        overlay.addEventListener('touchstart', (e) => { e.stopPropagation(); }, { passive: true });
+        overlay.addEventListener('click', async (e) => {
+            const btn = e.target.closest('[data-action]');
+            if (!btn) return;
+            overlay.remove();
+
+            const action = btn.dataset.action;
+            if (action === 'cancel') return;
+
+            const legIdx = Number(btn.dataset.legIdx ?? 0);
+            const leg = trip.legs?.[legIdx];
+            if (!leg) return;
+
+            const planToLoad = {
+                departure:   leg.dep,
+                destination: leg.dest,
+                waypoints:   leg.waypoints,
+                flight_plan: leg.flight_plan,
+            };
+
+            this.hide();
+            await window.app?.applyRouteEdit(planToLoad);
+
+            // Pass full trip to CLR page so leg toggle works for all legs
+            if (window.app?.ifrClearance) {
+                window.app.ifrClearance._flightPlan = trip;
+            }
+
+            if (action === 'replan') {
+                window.app?.routePlannerPanel?.open(planToLoad);
+                setTimeout(() => window.app?.routePlannerPanel?._onRecomputeTap(), 100);
+            }
+
+            window.app?.showToast?.(`Loaded: ${trip.name}`);
+        });
+
+        document.body.appendChild(overlay);
     }
 
     _renderEmpty(body, msg) {
