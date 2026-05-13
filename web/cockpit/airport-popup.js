@@ -735,7 +735,9 @@ class AirportPopup {
     async _loadAfdPane(containerEl, icao) {
         containerEl.innerHTML = '<div style="padding:16px;color:var(--text-muted);font-size:13px">Loading A/FD…</div>';
         const PLATES_BASE = 'http://localhost:9090/plates';
+        const strippedId = icao.replace(/^K/, '');
         const webpUrl = `${PLATES_BASE}/${icao.toUpperCase()}/AFD_PAGE.webp`;
+        const webpUrlFaa = `${PLATES_BASE}/${strippedId.toUpperCase()}/AFD_PAGE.webp`;
 
         const thumb = document.createElement('img');
         thumb.alt = `${icao} A/FD`;
@@ -756,6 +758,11 @@ class AirportPopup {
         };
 
         thumb.onerror = () => {
+            // Small US airports stored under FAA id (X60) not K-prefixed app id (KX60)
+            if (thumb.src.includes(`/${icao.toUpperCase()}/`) && strippedId !== icao) {
+                thumb.src = webpUrlFaa;
+                return;
+            }
             containerEl.innerHTML = `
                 <div style="padding:16px;color:var(--text-muted);font-size:13px">
                     <div style="font-weight:600;margin-bottom:8px;color:var(--text-primary)">${icao} — Chart Supplement</div>
@@ -856,8 +863,9 @@ class AirportPopup {
 
             // Plate index uses FAA identifiers: real ICAO airports keep their K
             // prefix (KATL, KMCO) but small airports are indexed without it
-            // (X60, 75J, 15J). Try direct lookup first, then strip leading K.
-            const entry = plateIndex?.[icao] ?? plateIndex?.[icao.replace(/^K/, '')];
+            // (X60, 75J, 15J). The index key is also the on-disk directory name.
+            const faaId = (plateIndex?.[icao] ? icao : (plateIndex?.[icao.replace(/^K/, '')] ? icao.replace(/^K/, '') : icao));
+            const entry = plateIndex?.[faaId];
             const allPlates = entry?.plates || (Array.isArray(entry) ? entry : []);
 
             // Filter and group by type
@@ -898,8 +906,8 @@ class AirportPopup {
                 wireTap(row, () => {
                     const file = row.dataset.pdf;
                     const name = row.dataset.name;
-                    const webpUrl = `${PLATES_BASE}/${icao}/${file.replace(/\.pdf$/i, '.webp')}`;
-                    const pdfUrl  = `${PLATES_BASE}/${icao}/${file}`;
+                    const webpUrl = `${PLATES_BASE}/${faaId}/${file.replace(/\.pdf$/i, '.webp')}`;
+                    const pdfUrl  = `${PLATES_BASE}/${faaId}/${file}`;
 
                     containerEl.innerHTML = `
                         <div class="apt-plate-viewer">
@@ -954,8 +962,10 @@ class AirportPopup {
             // Try to get plates from index — strip leading K for small airports
             // whose FAA identifier doesn't carry the K prefix (X60, 75J, etc.)
             let plate = null;
+            let faaId = icao;
             if (plateIndex) {
-                const entry = plateIndex[icao] ?? plateIndex[icao.replace(/^K/, '')];
+                faaId = plateIndex[icao] ? icao : (plateIndex[icao.replace(/^K/, '')] ? icao.replace(/^K/, '') : icao);
+                const entry = plateIndex[faaId];
                 const plates = entry?.plates || (Array.isArray(entry) ? entry : []);
                 // APD = airport diagram, MIN = minimums/airport info page
                 plate = plates.find(p => {
@@ -983,7 +993,7 @@ class AirportPopup {
             }
 
             const file = plate.filename || plate.pdf_name;
-            const icaoDir = icao.toUpperCase();
+            const icaoDir = faaId.toUpperCase();
 
             // Try WebP first (converted by plate pipeline), fallback to PDF in iframe
             const webpUrl = `${PLATES_BASE}/${icaoDir}/${file.replace(/\.pdf$/i, '.webp')}`;

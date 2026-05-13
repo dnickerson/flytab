@@ -1176,11 +1176,11 @@ class DataStatus {
                 setStep('plates', 'running', `Downloading ${statesToSync.length} states (${stateList}) — ~${totalMb.toLocaleString()} MB…`, 0);
 
                 let done = 0;
+                const pctNow = () => Math.round(done / statesToSync.length * 100);
                 const newlySynced = [...syncedStates];
                 for (const stateInfo of statesToSync) {
                     const st = stateInfo.state;
                     const mb = stateInfo.size_mb;
-                    const pctNow = () => Math.round(done / statesToSync.length * 100);
                     setStep('plates', 'running', `↓ ${st} (${mb} MB) — ${done}/${statesToSync.length} done…`, pctNow());
 
                     // Tick elapsed time every 5s so pilot can see it's still working

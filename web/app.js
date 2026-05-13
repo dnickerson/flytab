@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v7.99';
+const FLYTAB_VERSION = 'v8.16';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -726,8 +726,14 @@ class FlyTabApp {
                 }
             });
             document.addEventListener('cifp:load-procedure', (e) => {
-                // Approach procedure insertion via route planner panel not yet implemented (Stage 2).
-                console.log('[FlyTab] cifp:load-procedure received — Stage 2 feature', e.detail?.icao);
+                if (!this.routePlannerPanel || !e.detail) return;
+                // Open BEFORE inserting — openRoutePlanner calls _loadPlan which resets _route,
+                // so the approach fixes must be spliced in after the plan is loaded.
+                if (!document.getElementById('cockpitContainer')?.classList.contains('route-editing')) {
+                    this.openRoutePlanner();
+                }
+                this.routePlannerPanel.insertApproach(e.detail);
+                this.approachCharts?.hide();
             });
         }
 

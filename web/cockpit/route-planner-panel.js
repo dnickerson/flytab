@@ -141,6 +141,60 @@ class RoutePlannerPanel {
         this._insertIndex  = null;
     }
 
+    /**
+     * Insert approach procedure waypoints into the current route.
+     * Called from the cifp:load-procedure custom event fired by ApproachCharts.
+     *
+     * @param {string}  icao          FAA filesystem id of the destination airport (e.g. 'X60', 'KLKR')
+     * @param {Array}   insertBefore  Waypoints to insert before the airport: IAF … RW##
+     * @param {Array}   insertAfter   Waypoints to insert after the airport: MAP, missed approach fixes
+     * @param {Object}  airportWp     Airport waypoint (runway threshold) — used for coord storage only
+     */
+    insertApproach({ icao, insertBefore, insertAfter, airportWp }) {
+        // Cache coordinates so the planner can resolve approach fixes without a NASR lookup
+        const storeCoord = (wp) => {
+            if (!wp || wp.lat == null || wp.lon == null) return;
+            this._coords[wp.icao] = { lat: wp.lat, lon: wp.lon };
+            // Store K-prefixed form too so either ID variant resolves in _buildSegment
+            if (wp.icao.length <= 3) this._coords['K' + wp.icao] = { lat: wp.lat, lon: wp.lon };
+        };
+        insertBefore.forEach(storeCoord);
+        insertAfter.forEach(storeCoord);
+        if (airportWp) storeCoord(airportWp);
+
+        // Find the airport pill — route may use K-prefixed id even if icao is bare (X60 vs KX60)
+        const kId  = icao.length <= 3 ? 'K' + icao : icao;
+        const bare = icao.length === 4 && icao[0] === 'K' ? icao.slice(1) : icao;
+        let airportIdx = -1;
+        for (let i = 0; i < this._route.length; i++) {
+            const id = this._route[i].id;
+            if (id === icao || id === kId || id === bare) { airportIdx = i; break; }
+        }
+
+        const toPill = (wp) => Object.assign(
+            { id: wp.icao, type: 'fix' },
+            wp.alt != null ? { altFt: wp.alt } : {}
+        );
+        const beforePills = insertBefore.map(toPill);
+        const afterPills  = insertAfter.map(toPill);
+
+        if (airportIdx >= 0) {
+            // Airport is in the route — splice approach fixes around it
+            if (afterPills.length > 0) this._route.splice(airportIdx + 1, 0, ...afterPills);
+            if (beforePills.length > 0) this._route.splice(airportIdx, 0, ...beforePills);
+        } else {
+            // Airport not in route — append before the destination pill (or at end)
+            let destIdx = -1;
+            for (let i = this._route.length - 1; i >= 0; i--) {
+                if (this._route[i].type === 'dest') { destIdx = i; break; }
+            }
+            const insertAt = destIdx >= 0 ? destIdx : this._route.length;
+            this._route.splice(insertAt, 0, ...beforePills, ...afterPills);
+        }
+
+        this._render();
+    }
+
     /** Clean up listeners. Call when the panel is permanently removed. */
     destroy() {
         if (this._onDocClick) {
