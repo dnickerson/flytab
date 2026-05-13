@@ -155,6 +155,15 @@ class LayerPanel {
             });
         }
 
+        // Wire Voronoi flight category areas toggle
+        const voronoiInput = this._panel.querySelector('.lp-toggle input[data-action="wx-voronoi"]');
+        if (voronoiInput) {
+            voronoiInput.checked = this._vectorLayers?.voronoiVisible ?? false;
+            voronoiInput.addEventListener('change', () => {
+                this._vectorLayers?.toggleVoronoi();
+            });
+        }
+
         // Wire winds aloft toggle
         const windsInput = this._panel.querySelector('.lp-toggle input[data-action="winds-aloft"]');
         if (windsInput) {
@@ -509,6 +518,10 @@ class LayerPanel {
                     <div class="lp-row">
                         <span class="lp-row-label">Flight Category</span>
                         <label class="lp-toggle"><input type="checkbox" data-action="wx-dots" checked><span class="lp-toggle-track"></span></label>
+                    </div>
+                    <div class="lp-row">
+                        <span class="lp-row-label">Category Areas</span>
+                        <label class="lp-toggle"><input type="checkbox" data-action="wx-voronoi"><span class="lp-toggle-track"></span></label>
                     </div>
                     <div class="lp-row">
                         <span class="lp-row-label">Ceiling / Sky</span>
