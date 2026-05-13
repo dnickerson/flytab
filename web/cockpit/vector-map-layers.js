@@ -22,6 +22,8 @@ class VectorMapLayers {
         this._airwayLayer = L.layerGroup();
         this._wxDotsLayer = L.layerGroup();        // flight category solid dots — on top of airport icons
         this._wxLabelLayer = L.layerGroup();       // weather text labels (ceil/vis/wind)
+        this._wxVoronoiLayer = L.layerGroup();
+        this._showVoronoi = false;
 
         // Canvas renderer for circle markers (performance)
         this._canvasRenderer = L.canvas({ padding: 0.5 });
@@ -152,6 +154,7 @@ class VectorMapLayers {
         if (aptEnabled) this._airportLayer.addTo(this._map);
         // Wx dots and labels added AFTER airport layer — render on top of airport circles.
         // Always add unconditionally; toggleWxDots() handles hide/show during the session.
+        this._wxVoronoiLayer.addTo(this._map);
         this._wxDotsLayer.addTo(this._map);
         this._wxLabelLayer.addTo(this._map);
         const navUserSet = localStorage.getItem('flypi_show_navaids');
@@ -273,6 +276,17 @@ class VectorMapLayers {
     }
     get wxDotsVisible() { return this._map.hasLayer(this._wxDotsLayer); }
 
+    toggleVoronoi() {
+        this._showVoronoi = !this._showVoronoi;
+        if (this._showVoronoi) {
+            this._rebuildVoronoi();
+        } else {
+            this._wxVoronoiLayer.clearLayers();
+        }
+        return this._showVoronoi;
+    }
+    get voronoiVisible() { return this._showVoronoi; }
+
     /**
      * Unified METAR entry lookup: FIS-B takes priority (live), internet is fallback (cached).
      * Returns an object with { raw, decoded: { flight_category, visibility_sm, ceiling_ft,
@@ -363,6 +377,43 @@ class VectorMapLayers {
         } catch { /* offline — silently skip */ }
     }
 
+    _rebuildVoronoi() {
+        this._wxVoronoiLayer.clearLayers();
+        if (!this._showVoronoi) return;
+
+        const sites = [];
+        for (const [icao, pos] of this._aptPositions) {
+            const entry = this._getMetarEntry(icao);
+            const cat = entry?.decoded?.flight_category;
+            if (!cat) continue;
+            sites.push({ lat: pos.lat, lon: pos.lon, cat });
+        }
+        if (sites.length < 2) return;
+
+        const b = this._map.getBounds();
+        const buf = 2;
+        const bounds = {
+            north: b.getNorth() + buf,
+            south: b.getSouth() - buf,
+            west:  b.getWest()  - buf,
+            east:  b.getEast()  + buf,
+        };
+
+        const COLOR = { LIFR: '#cc44ff', IFR: '#ff2222', MVFR: '#0099ff', VFR: '#22bb44' };
+        const cells = VectorMapLayers._computeVoronoiCells(sites, bounds);
+
+        for (const cell of cells) {
+            const color = COLOR[cell.cat] || '#888888';
+            L.polygon(cell.points, {
+                color,
+                weight: 0,
+                fillColor: color,
+                fillOpacity: 0.28,
+                interactive: false,
+            }).addTo(this._wxVoronoiLayer);
+        }
+    }
+
     /** Add or update a solid flight category dot on top of the airport circle. */
     _upsertWxDot(icao, cat) {
         const color = this._catColor(cat);
@@ -417,6 +468,7 @@ class VectorMapLayers {
         for (const [icao] of this._aptPositions) {
             this._upsertWxLabel(icao);
         }
+        this._rebuildVoronoi();
     }
 
     /**
@@ -1150,6 +1202,7 @@ class VectorMapLayers {
                     if (lbl) { this._wxLabelLayer.removeLayer(lbl); this._wxLabelMarkers.delete(id); }
                 }
             }
+            this._rebuildVoronoi();
         } catch (err) {
             console.warn('VectorMapLayers: wx dots query failed', err);
         }
@@ -1484,5 +1537,64 @@ class VectorMapLayers {
         }
         const f = 1 / (6 * area);
         return [cy * f, cx * f];
+    }
+
+    /**
+     * Clip a polygon to the half-plane containing site p = [py, px]
+     * relative to site q = [qy, qx]. Uses Sutherland-Hodgman.
+     * poly is array of [lat, lon] pairs.
+     */
+    static _clipPolygonToHalfPlane(poly, py, px, qy, qx) {
+        if (poly.length === 0) return [];
+        const my = (py + qy) / 2;
+        const mx = (px + qx) / 2;
+        const dy = qy - py;
+        const dx = qx - px;
+        const inside = ([lat, lon]) => (lat - my) * dy + (lon - mx) * dx <= 0;
+        const intersect = ([ay, ax], [by, bx]) => {
+            const da = (ay - my) * dy + (ax - mx) * dx;
+            const db = (by - my) * dy + (bx - mx) * dx;
+            const t = da / (da - db);
+            return [ay + t * (by - ay), ax + t * (bx - ax)];
+        };
+        const out = [];
+        for (let i = 0; i < poly.length; i++) {
+            const cur = poly[i];
+            const nxt = poly[(i + 1) % poly.length];
+            const ci = inside(cur);
+            const ni = inside(nxt);
+            if (ci) out.push(cur);
+            if (ci !== ni) out.push(intersect(cur, nxt));
+        }
+        return out;
+    }
+
+    /**
+     * Compute Voronoi cells using half-plane intersection.
+     * sites: [{lat, lon, cat}]
+     * bounds: {south, west, north, east} — already buffered
+     * Returns [{cat, points}] where points is array of [lat, lon].
+     */
+    static _computeVoronoiCells(sites, bounds) {
+        if (sites.length === 0) return [];
+        const bbox = [
+            [bounds.north, bounds.west],
+            [bounds.north, bounds.east],
+            [bounds.south, bounds.east],
+            [bounds.south, bounds.west],
+        ];
+        const cells = [];
+        for (let i = 0; i < sites.length; i++) {
+            const p = sites[i];
+            let cell = bbox.slice();
+            for (let j = 0; j < sites.length; j++) {
+                if (i === j) continue;
+                const q = sites[j];
+                cell = VectorMapLayers._clipPolygonToHalfPlane(cell, p.lat, p.lon, q.lat, q.lon);
+                if (cell.length === 0) break;
+            }
+            if (cell.length >= 3) cells.push({ cat: p.cat, points: cell });
+        }
+        return cells;
     }
 }
