@@ -3,6 +3,11 @@
 set -e
 
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
+# APK always lands at the main repo root (works whether building from a
+# worktree or the main checkout). --git-common-dir returns the main repo's
+# .git in both cases; its parent is always the main repo root.
+GIT_COMMON="$(git -C "$REPO_ROOT" rev-parse --git-common-dir 2>/dev/null)"
+APK_DEST="$(cd "$REPO_ROOT" && cd "$(dirname "$GIT_COMMON")" && pwd)"
 
 # Extract version from app.js
 VERSION=$(grep -o "FLYTAB_VERSION = 'v[^']*'" "$REPO_ROOT/web/app.js" | grep -o "v[^']*")
@@ -43,10 +48,10 @@ JAVA_HOME=/home/dananickerson/.gradle/jdks/eclipse_adoptium-21-amd64-linux.2 \
 # Copy to repo root with version name
 echo ""
 echo "[3] Copying APK..."
-cp "app/build/outputs/apk/debug/app-debug.apk" "$REPO_ROOT/$APK_NAME"
+cp "app/build/outputs/apk/debug/app-debug.apk" "$APK_DEST/$APK_NAME"
 
 # Remove old versioned APKs (keep only latest)
-find "$REPO_ROOT" -maxdepth 1 -name "flytab-debug-v*.apk" ! -name "$APK_NAME" -delete 2>/dev/null || true
+find "$APK_DEST" -maxdepth 1 -name "flytab-debug-v*.apk" ! -name "$APK_NAME" -delete 2>/dev/null || true
 
 echo ""
 echo "=============================="
