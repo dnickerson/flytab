@@ -520,8 +520,9 @@ class VectorMapLayers {
             const t = decoded?.temp_c ?? decoded?.temperature_c ?? decoded?.temperature ?? null;
             const dew = decoded?.dewpoint_c ?? decoded?.dewpoint ?? null;
             if (t != null) {
-                const dewStr = dew != null ? `/${Math.round(dew)}` : '';
-                html += `<div class="wx-lbl-temp">${Math.round(t)}${dewStr}°C</div>`;
+                const tF = Math.round(t * 9 / 5 + 32);
+                const dewStr = dew != null ? `/${Math.round(dew * 9 / 5 + 32)}` : '';
+                html += `<div class="wx-lbl-temp">${tF}${dewStr}°F</div>`;
             }
         }
 

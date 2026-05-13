@@ -1302,9 +1302,8 @@ class AirportPopup {
             ? (() => {
                 const tF = Math.round(tempC * 9 / 5 + 32);
                 const dF = dewC != null ? Math.round(dewC * 9 / 5 + 32) : null;
-                const c = `${Math.round(tempC)}&deg; / ${dewC != null ? Math.round(dewC) : '&mdash;'}&deg;C`;
                 const f = `${tF}&deg; / ${dF != null ? dF : '&mdash;'}&deg;F`;
-                return `<div class="wx-row"><div class="wx-row-lbl">T / DP</div><div class="wx-row-val">${c} &middot; ${f}</div></div>`;
+                return `<div class="wx-row"><div class="wx-row-lbl">T / DP</div><div class="wx-row-val">${f}</div></div>`;
             })()
             : '';
         const altRow = altim != null
