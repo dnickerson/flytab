@@ -382,24 +382,34 @@ class VectorMapLayers {
         if (!this._showVoronoi) return;
         this._wxVoronoiLayer.clearLayers();
 
-        // Use accumulated positions (not viewport-limited) for stable tessellation across pans.
-        // Skip VFR — absence of color communicates good conditions.
+        // Clip bounds: viewport + 5° buffer.  Sites outside this window won't produce
+        // visible cells, so filtering keeps n small for the O(n²) algorithm.
+        const b = this._map.getBounds();
+        const buf = 5;
+        const bounds = {
+            north: b.getNorth() + buf,
+            south: b.getSouth() - buf,
+            west:  b.getWest()  - buf,
+            east:  b.getEast()  + buf,
+        };
+
+        // Include ALL METAR categories (including VFR) as tessellation sites so that
+        // IFR/MVFR cells are bounded correctly.  Only skip rendering VFR cells.
         const COLOR = { LIFR: '#cc44ff', IFR: '#ff2222', MVFR: '#0099ff' };
         const sites = [];
         for (const [icao, pos] of this._voronoiPositions) {
+            if (pos.lat < bounds.south || pos.lat > bounds.north ||
+                pos.lon < bounds.west  || pos.lon > bounds.east) continue;
             const cat = this._getMetarEntry(icao)?.decoded?.flight_category;
-            if (!cat || cat === 'VFR') continue;
+            if (!cat) continue;
             sites.push({ lat: pos.lat, lon: pos.lon, cat });
         }
         if (sites.length < 2) return;
 
-        // Fixed North America bounding box — cells are geographically stable regardless of viewport pan.
-        const bounds = { north: 75, south: 10, west: -180, east: -50 };
         const cells = VectorMapLayers._computeVoronoiCells(sites, bounds);
-
         for (const cell of cells) {
             const color = COLOR[cell.cat];
-            if (!color) continue;
+            if (!color) continue;  // VFR and unknown are intentionally transparent
             L.polygon(cell.points, {
                 color,
                 weight: 0,
