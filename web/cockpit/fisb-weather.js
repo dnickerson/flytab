@@ -296,14 +296,12 @@ class FisbWeatherDisplay {
         for (const s of (sigmets || [])) {
             const key = (s.raw || '').slice(0, 80);
             if (this._seenAdvisoryKeys.has(key)) continue;
-            this._seenAdvisoryKeys.add(key);
             this._addSigmet(s);
             newCount++;
         }
         for (const a of (airmets || [])) {
             const key = (a.raw || '').slice(0, 80);
             if (this._seenAdvisoryKeys.has(key)) continue;
-            this._seenAdvisoryKeys.add(key);
             this._addAirmet(a);
             newCount++;
         }
@@ -331,33 +329,47 @@ class FisbWeatherDisplay {
      */
     _handleAdvisoryTap(clientX, clientY) {
         // LINE advisories (freezing-level contours) are skipped — they're map
-        // overlays, not tappable weather areas, and a 2px stroke is unreliable
-        // as a touch target on a tablet.
+        // overlays, not tappable weather areas.
         const allPolygons = [
             ...(this._map.hasLayer(this._sigmetLayer) ? this._sigmetPolygons : []),
             ...this._airmetPolygons.filter(e => !e.isLine && e.layer && this._map.hasLayer(e.layer)),
         ];
         if (!allPolygons.length) return;
 
+        // Convert screen tap to geographic coordinates and use ray-casting.
+        // SVG getScreenCTM() is unreliable on Android WebView when Leaflet applies
+        // CSS pan transforms; geographic point-in-polygon on the advisory's own
+        // coordinate data is simpler and has no DOM API dependencies.
+        const rect = this._map.getContainer().getBoundingClientRect();
+        const latlng = this._map.containerPointToLatLng(
+            L.point(clientX - rect.left, clientY - rect.top)
+        );
+
         const hits = [];
         for (const entry of allPolygons) {
-            const svgPath = entry.polygon.getElement();
-            if (!svgPath) continue;
-            const svg = svgPath.ownerSVGElement;
-            if (!svg) continue;
-            try {
-                const pt = svg.createSVGPoint();
-                pt.x = clientX;
-                pt.y = clientY;
-                const local = pt.matrixTransform(svgPath.getScreenCTM().inverse());
-                if (svgPath.isPointInFill(local) || svgPath.isPointInStroke(local)) {
-                    hits.push(entry);
-                }
-            } catch (_) { /* element not in DOM yet */ }
+            const pts = entry.advisory?.points;
+            if (!pts || pts.length < 3) continue;
+            if (FisbWeatherDisplay._pointInPolygon(latlng.lat, latlng.lng, pts)) {
+                hits.push(entry);
+            }
         }
 
         if (!hits.length) return;
         this._openAdvisoryPopup(hits, clientX, clientY);
+    }
+
+    // Ray-casting point-in-polygon for [lat, lon] coordinate arrays.
+    static _pointInPolygon(lat, lon, points) {
+        let inside = false;
+        const n = points.length;
+        for (let i = 0, j = n - 1; i < n; j = i++) {
+            const [yi, xi] = points[i];
+            const [yj, xj] = points[j];
+            if (((yi > lat) !== (yj > lat)) && (lon < (xj - xi) * (lat - yi) / (yj - yi) + xi)) {
+                inside = !inside;
+            }
+        }
+        return inside;
     }
 
     _openAdvisoryPopup(hits, clientX, clientY) {
