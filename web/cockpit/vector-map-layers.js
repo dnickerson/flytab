@@ -34,6 +34,7 @@ class VectorMapLayers {
         this._wxDotMarkers = new Map();    // icao → wx dot marker
         this._wxLabelMarkers = new Map();  // icao → wx label marker
         this._aptPositions = new Map();    // icao → {lat, lon, tower} — drives wx dots, independent of airport layer
+        this._voronoiPositions = new Map(); // icao → {lat, lon} — accumulates across pans for stable Voronoi sites
         this._airportMarkers = new Map();
         this._navaidMarkers = new Map();
         this._fixMarkers = new Map();
@@ -381,29 +382,24 @@ class VectorMapLayers {
         if (!this._showVoronoi) return;
         this._wxVoronoiLayer.clearLayers();
 
+        // Use accumulated positions (not viewport-limited) for stable tessellation across pans.
+        // Skip VFR — absence of color communicates good conditions.
+        const COLOR = { LIFR: '#cc44ff', IFR: '#ff2222', MVFR: '#0099ff' };
         const sites = [];
-        for (const [icao, pos] of this._aptPositions) {
-            const entry = this._getMetarEntry(icao);
-            const cat = entry?.decoded?.flight_category;
-            if (!cat) continue;
+        for (const [icao, pos] of this._voronoiPositions) {
+            const cat = this._getMetarEntry(icao)?.decoded?.flight_category;
+            if (!cat || cat === 'VFR') continue;
             sites.push({ lat: pos.lat, lon: pos.lon, cat });
         }
         if (sites.length < 2) return;
 
-        const b = this._map.getBounds();
-        const buf = 2;
-        const bounds = {
-            north: b.getNorth() + buf,
-            south: b.getSouth() - buf,
-            west:  b.getWest()  - buf,
-            east:  b.getEast()  + buf,
-        };
-
-        const COLOR = { LIFR: '#cc44ff', IFR: '#ff2222', MVFR: '#0099ff', VFR: '#22bb44' };
+        // Fixed North America bounding box — cells are geographically stable regardless of viewport pan.
+        const bounds = { north: 75, south: 10, west: -180, east: -50 };
         const cells = VectorMapLayers._computeVoronoiCells(sites, bounds);
 
         for (const cell of cells) {
-            const color = COLOR[cell.cat] || '#888888';
+            const color = COLOR[cell.cat];
+            if (!color) continue;
             L.polygon(cell.points, {
                 color,
                 weight: 0,
@@ -1173,13 +1169,20 @@ class VectorMapLayers {
      * circle layer is toggled off. Populates _aptPositions and draws wx dots.
      */
     async _updateWxDots(south, west, north, east, zoom, overlays) {
-        const minZoom = overlays.airports?.minZoom || 7;
-        if (zoom < minZoom) {
+        const voronoiMinZoom = 6;
+        const dotsMinZoom = overlays.airports?.minZoom || 7;
+        if (zoom < voronoiMinZoom) {
             this._clearLayer(this._wxDotsLayer, this._wxDotMarkers);
             this._clearLayer(this._wxLabelLayer, this._wxLabelMarkers);
             this._wxVoronoiLayer.clearLayers();
             this._aptPositions.clear();
+            this._voronoiPositions.clear();
             return;
+        }
+        const showDots = zoom >= dotsMinZoom;
+        if (!showDots) {
+            this._clearLayer(this._wxDotsLayer, this._wxDotMarkers);
+            this._clearLayer(this._wxLabelLayer, this._wxLabelMarkers);
         }
         try {
             const airports = await this._nasr.getAirportsInBounds(south, west, north, east);
@@ -1188,9 +1191,10 @@ class VectorMapLayers {
                 if (apt.lat == null || apt.lon == null) continue;
                 currentIds.add(apt.icao);
                 this._aptPositions.set(apt.icao, { lat: apt.lat, lon: apt.lon, tower: apt.tower });
+                this._voronoiPositions.set(apt.icao, { lat: apt.lat, lon: apt.lon });
                 const cat = this._getMetarEntry(apt.icao)?.decoded?.flight_category;
-                if (cat) this._upsertWxDot(apt.icao, cat);
-                this._upsertWxLabel(apt.icao);
+                if (showDots && cat) this._upsertWxDot(apt.icao, cat);
+                if (showDots) this._upsertWxLabel(apt.icao);
             }
             // Remove stale positions and dots for airports that scrolled out of view
             for (const [id] of this._aptPositions) {
