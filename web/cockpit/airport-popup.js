@@ -1234,8 +1234,8 @@ class AirportPopup {
         }
 
         // Temp / dewpoint / visibility / altimeter (field names differ by source — use fallbacks)
-        const tempC  = d.temp_c    ?? d.temperature    ?? null;
-        const dewC   = d.dewpoint_c ?? d.dewpoint      ?? null;
+        const tempC  = d.temp_c ?? d.temperature_c ?? d.temperature ?? null;
+        const dewC   = d.dewpoint_c ?? d.dewpoint ?? null;
         const visSm  = d.visibility_sm ?? d.visibility ?? null;
         const visPlus = d.visibility_plus ?? false;
         const altim  = d.altimeter ?? null;
