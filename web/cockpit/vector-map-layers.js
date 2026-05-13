@@ -1177,6 +1177,7 @@ class VectorMapLayers {
         if (zoom < minZoom) {
             this._clearLayer(this._wxDotsLayer, this._wxDotMarkers);
             this._clearLayer(this._wxLabelLayer, this._wxLabelMarkers);
+            this._wxVoronoiLayer.clearLayers();
             this._aptPositions.clear();
             return;
         }
