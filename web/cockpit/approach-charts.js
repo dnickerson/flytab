@@ -170,20 +170,32 @@ class ApproachCharts {
         }
     }
 
+    /**
+     * Resolve the FAA filesystem id used in the plate index and on-disk paths.
+     * Small US airports (X60, 75J) are indexed without K prefix; proper 4-letter
+     * ICAO airports (KATL, KMCO) keep it. Try the app's id first, then K-stripped.
+     */
+    _faaId(icao) {
+        if (this._plateIndex?.[icao]) return icao;
+        if (icao.length === 4 && icao[0] === 'K') {
+            const s = icao.slice(1);
+            if (this._plateIndex?.[s]) return s;
+        }
+        return icao;
+    }
+
     async showForAirport(icao) {
         if (this._loadPromise) {
             this._showMessage('Loading plates…');
             await this._loadPromise;
         }
-        // Small US airports are indexed under their 3-char FAA id (X60) but
-        // the NASR bundle uses a K-prefixed app id (KX60). Derive the filesystem
-        // id so all three fallbacks below search the right key/path.
-        const faaId = (!this._plateIndex?.[icao] && icao.length === 4 && icao[0] === 'K')
-                      ? icao.slice(1) : icao;
+
+        let faaId = this._faaId(icao);
 
         if (!this._plateIndex?.[faaId]) {
             this._showMessage('Loading plates…');
             await this._fetchSingleAirportIndex(faaId);
+            faaId = this._faaId(icao); // re-resolve after fetch
         }
         if (!this._plateIndex?.[faaId]) {
             const geoPlates = this._buildPlatesFromGeoIndex(faaId);
@@ -200,12 +212,10 @@ class ApproachCharts {
             return;
         }
 
-        // Alias faaId → icao so _buildPicker and other callers using the app's
-        // icao (KX60) find the entry without needing their own K-strip logic.
-        if (faaId !== icao) this._plateIndex[icao] = this._plateIndex[faaId];
-
         this._viewerEl.style.display = 'none';
-        this._buildPicker(icao);
+        // Pass faaId (not icao) so plate.icao in _buildPicker matches filesystem paths
+        // and geo index keys (e.g. 'X60' not 'KX60').
+        this._buildPicker(faaId);
         this._pickerShownAt = Date.now();
         this._pickerEl.style.display = 'flex';
     }
@@ -218,13 +228,11 @@ class ApproachCharts {
         // No index loaded — fetch per-airport from local filesystem
         if (!this._plateIndex && this._routeAirports.length > 0) {
             this._showMessage('Loading plates…');
+            // K-strip manually here because _plateIndex is null so _faaId() can't help yet.
+            // Do NOT alias faaId back to icao — _buildPicker will resolve via _faaId() after fetch.
             await Promise.all(this._routeAirports.map(icao => {
-                const faaId = (!this._plateIndex?.[icao] && icao.length === 4 && icao[0] === 'K')
-                              ? icao.slice(1) : icao;
-                return this._fetchSingleAirportIndex(faaId).then(() => {
-                    if (faaId !== icao && this._plateIndex?.[faaId])
-                        this._plateIndex[icao] = this._plateIndex[faaId];
-                });
+                const faaId = (icao.length === 4 && icao[0] === 'K') ? icao.slice(1) : icao;
+                return this._fetchSingleAirportIndex(faaId);
             }));
         }
         this._viewerEl.style.display = 'none';
@@ -607,9 +615,11 @@ class ApproachCharts {
             seen.add(focusIcao);
         }
         for (const icao of this._routeAirports) {
-            if (!seen.has(icao) && this._plateIndex?.[icao]) {
-                airports.push(icao);
-                seen.add(icao);
+            const faaId = this._faaId(icao);
+            if (!seen.has(faaId) && this._plateIndex?.[faaId]) {
+                airports.push(faaId);
+                seen.add(faaId);
+                seen.add(icao); // guard against duplicate if both KX60 and X60 appear in route
             }
         }
 
