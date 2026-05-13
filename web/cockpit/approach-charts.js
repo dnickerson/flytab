@@ -175,26 +175,34 @@ class ApproachCharts {
             this._showMessage('Loading plates…');
             await this._loadPromise;
         }
-        // icao missing from index — try fetching per-airport from local filesystem
-        if (!this._plateIndex?.[icao]) {
+        // Small US airports are indexed under their 3-char FAA id (X60) but
+        // the NASR bundle uses a K-prefixed app id (KX60). Derive the filesystem
+        // id so all three fallbacks below search the right key/path.
+        const faaId = (!this._plateIndex?.[icao] && icao.length === 4 && icao[0] === 'K')
+                      ? icao.slice(1) : icao;
+
+        if (!this._plateIndex?.[faaId]) {
             this._showMessage('Loading plates…');
-            await this._fetchSingleAirportIndex(icao);
+            await this._fetchSingleAirportIndex(faaId);
         }
-        if (!this._plateIndex?.[icao]) {
-            // Last resort: build plate list from georef index (always present on device)
-            const geoPlates = this._buildPlatesFromGeoIndex(icao);
+        if (!this._plateIndex?.[faaId]) {
+            const geoPlates = this._buildPlatesFromGeoIndex(faaId);
             if (geoPlates) {
                 if (!this._plateIndex) this._plateIndex = {};
-                this._plateIndex[icao] = geoPlates;
+                this._plateIndex[faaId] = geoPlates;
                 console.log(`[ApproachCharts] Built ${geoPlates.plates.length} plates for ${icao} from geo index`);
             }
         }
-        if (!this._plateIndex?.[icao]) {
+        if (!this._plateIndex?.[faaId]) {
             this._showMessage(`No plates for ${icao} — download plates via Pre-Flight Refresh`);
             this._pickerShownAt = Date.now();
             this._pickerEl.style.display = 'flex';
             return;
         }
+
+        // Alias faaId → icao so _buildPicker and other callers using the app's
+        // icao (KX60) find the entry without needing their own K-strip logic.
+        if (faaId !== icao) this._plateIndex[icao] = this._plateIndex[faaId];
 
         this._viewerEl.style.display = 'none';
         this._buildPicker(icao);
@@ -210,7 +218,14 @@ class ApproachCharts {
         // No index loaded — fetch per-airport from local filesystem
         if (!this._plateIndex && this._routeAirports.length > 0) {
             this._showMessage('Loading plates…');
-            await Promise.all(this._routeAirports.map(icao => this._fetchSingleAirportIndex(icao)));
+            await Promise.all(this._routeAirports.map(icao => {
+                const faaId = (!this._plateIndex?.[icao] && icao.length === 4 && icao[0] === 'K')
+                              ? icao.slice(1) : icao;
+                return this._fetchSingleAirportIndex(faaId).then(() => {
+                    if (faaId !== icao && this._plateIndex?.[faaId])
+                        this._plateIndex[icao] = this._plateIndex[faaId];
+                });
+            }));
         }
         this._viewerEl.style.display = 'none';
         this._buildPicker(null);
