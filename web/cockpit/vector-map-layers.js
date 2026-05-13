@@ -378,8 +378,8 @@ class VectorMapLayers {
     }
 
     _rebuildVoronoi() {
-        this._wxVoronoiLayer.clearLayers();
         if (!this._showVoronoi) return;
+        this._wxVoronoiLayer.clearLayers();
 
         const sites = [];
         for (const [icao, pos] of this._aptPositions) {
@@ -468,7 +468,6 @@ class VectorMapLayers {
         for (const [icao] of this._aptPositions) {
             this._upsertWxLabel(icao);
         }
-        this._rebuildVoronoi();
     }
 
     /**
