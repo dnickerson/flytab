@@ -444,7 +444,7 @@ class VectorMapLayers {
             if (skyLabel) {
                 const cat = decoded?.flight_category;
                 const color = this._catColor(cat) || '#ffffff';
-                html += `<div class="wx-lbl-ceil" style="color:${color}">${skyLabel}</div>`;
+                html += `<div class="wx-lbl-ceil">${skyLabel}</div>`;
             }
         }
 
