@@ -464,17 +464,45 @@ class WxBriefing {
 
         if (airportLoading) {
             body.insertAdjacentHTML('beforeend', '<div class="wx-section-loading">Fetching airport NOTAMs…</div>');
-        } else if (!filteredApt.length) {
-            body.insertAdjacentHTML('beforeend', '<div class="wx-section-empty">No active NOTAMs for route airports.</div>');
         } else {
-            for (const notam of filteredApt) {
-                const typeClass = (notam.type === 'RWY' || notam.type === 'NAVAID') ? 'rwy'
-                    : notam.type === 'OBST_LGT' ? 'obst'
-                    : notam.type.toLowerCase();
+            const priorityNotams = filteredApt.filter(n => n.type !== 'OBST_LGT');
+            const lightNotams    = filteredApt.filter(n => n.type === 'OBST_LGT');
+
+            if (!priorityNotams.length && !lightNotams.length) {
+                body.insertAdjacentHTML('beforeend', '<div class="wx-section-empty">No active NOTAMs for route airports.</div>');
+            }
+
+            for (const notam of priorityNotams) {
+                const typeClass = (notam.type === 'RWY' || notam.type === 'NAVAID') ? 'rwy' : notam.type.toLowerCase();
                 const validStr = notam.validTo
                     ? `Valid to <b>${new Date(notam.validTo).toLocaleDateString([], {weekday:'short',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})} L</b>`
                     : '';
                 body.appendChild(this._buildAdvCard(notam.type, typeClass, `${notam.airport} · ${notam.summary}`, notam.airport, notam.raw, validStr));
+            }
+
+            if (lightNotams.length > 0) {
+                const count = lightNotams.length;
+                const toggle = document.createElement('div');
+                toggle.className = 'wx-notam-lights-toggle';
+                toggle.innerHTML = `<span>${count} obstacle light outage${count > 1 ? 's' : ''}</span><span>▶</span>`;
+
+                const lightsBody = document.createElement('div');
+                lightsBody.style.display = 'none';
+                for (const notam of lightNotams) {
+                    const validStr = notam.validTo
+                        ? `Valid to <b>${new Date(notam.validTo).toLocaleDateString([], {weekday:'short',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})} L</b>`
+                        : '';
+                    lightsBody.appendChild(this._buildAdvCard('OBST', 'obst', `${notam.airport} · ${notam.summary}`, notam.airport, notam.raw, validStr));
+                }
+
+                wireTap(toggle, () => {
+                    const open = lightsBody.style.display !== 'none';
+                    lightsBody.style.display = open ? 'none' : 'block';
+                    toggle.querySelector('span:last-child').textContent = open ? '▶' : '▼';
+                });
+
+                body.appendChild(toggle);
+                body.appendChild(lightsBody);
             }
         }
 

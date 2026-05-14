@@ -8266,6 +8266,19 @@ body {
     margin-top: 4px;
 }
 .wx-notam-group-hdr:first-child { border-top: none; margin-top: 0; }
+.wx-notam-lights-toggle {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+    cursor: pointer;
+    border-top: 1px solid var(--border);
+    user-select: none;
+}
+.wx-notam-lights-toggle:active { background: var(--hover-bg, rgba(0,0,0,0.05)); }
 
 /* ── Loading / empty / error states ── */
 .wx-section-loading,
