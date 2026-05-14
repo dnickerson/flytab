@@ -134,10 +134,12 @@ class CockpitMap {
         this._showPireps = false;        // off by default
         this._fisbClient = null;
 
-        // TFR overlay (FIS-B NOTAMs product_id=8)
-        this._tfrLayer = null;           // L.LayerGroup
-        this._tfrShapes = new Map();     // raw → L.layer
-        this._showTfrs = false;
+        // TFR overlay — FIS-B (via setFisbClient) + NOTAM (via notam:tfrs event)
+        this._tfrLayer = null;           // L.LayerGroup (FIS-B TFRs, created in setFisbClient)
+        this._tfrShapes = new Map();     // raw → L.layer (FIS-B)
+        this._notamTfrGroup = null;      // L.LayerGroup (NOTAM TFRs, created in init)
+        this._notamTfrShapes = new Map(); // raw → L.layer (NOTAM)
+        this._showTfrs = true;           // default ON
 
         // Runway extension centerlines
         this._rwyExtLayer = null;
@@ -228,6 +230,19 @@ class CockpitMap {
                 if (typeof _wireTapLastTouchAt !== 'undefined') _wireTapLastTouchAt = Date.now();
             }
         });
+
+        // NOTAM TFR layer — independent of FIS-B
+        this._notamTfrGroup = L.layerGroup().addTo(this.map);
+        this._onNotamTfrs = (e) => {
+            if (!this._notamTfrGroup) return;
+            // Always update shapes regardless of toggle state so they're ready when toggled on
+            this._notamTfrShapes.clear();
+            this._notamTfrGroup.clearLayers();
+            for (const shape of (e.detail?.shapes || [])) {
+                this._addNotamTfrShape(shape);
+            }
+        };
+        document.addEventListener('notam:tfrs', this._onNotamTfrs);
     }
 
     /** Provide a NasrDB instance for fix/navaid queries */
@@ -244,6 +259,10 @@ class CockpitMap {
     }
 
     destroy() {
+        if (this._onNotamTfrs) {
+            document.removeEventListener('notam:tfrs', this._onNotamTfrs);
+            this._onNotamTfrs = null;
+        }
         if (this._trafficTimer) { clearInterval(this._trafficTimer); this._trafficTimer = null; }
         if (this._fixUpdateTimer) { clearTimeout(this._fixUpdateTimer); this._fixUpdateTimer = null; }
         if (this._zoomBadgeHandler && this.map) { this.map.off('zoomend', this._zoomBadgeHandler); this._zoomBadgeHandler = null; }
@@ -431,7 +450,8 @@ class CockpitMap {
 
         // Layer groups
         this._pirepLayer = L.layerGroup();
-        this._tfrLayer   = L.layerGroup();
+        this._tfrLayer = L.layerGroup();
+        if (this._showTfrs && this.map) this._tfrLayer.addTo(this.map);
 
         // New PIREP received
         this._onFisbPirep = (e) => {
@@ -488,19 +508,22 @@ class CockpitMap {
 
     toggleTfrs(on) {
         this._showTfrs = on;
-        if (!this._tfrLayer || !this.map) return;
+        if (!this.map) return;
         if (on) {
-            this._tfrLayer.addTo(this.map);
-            // Render any TFRs already in memory
-            if (this._fisbClient) {
-                this._tfrShapes.clear();
-                this._tfrLayer.clearLayers();
-                for (const n of this._fisbClient.notams) {
-                    if (n.is_tfr) this._addTfrShape(n);
+            if (this._tfrLayer) {
+                this._tfrLayer.addTo(this.map);
+                if (this._fisbClient) {
+                    this._tfrShapes.clear();
+                    this._tfrLayer.clearLayers();
+                    for (const n of this._fisbClient.notams) {
+                        if (n.is_tfr) this._addTfrShape(n);
+                    }
                 }
             }
+            if (this._notamTfrGroup) this._notamTfrGroup.addTo(this.map);
         } else {
-            this.map.removeLayer(this._tfrLayer);
+            if (this._tfrLayer) this.map.removeLayer(this._tfrLayer);
+            if (this._notamTfrGroup) this.map.removeLayer(this._notamTfrGroup);
         }
     }
 
@@ -511,6 +534,47 @@ class CockpitMap {
         } else {
             this.map.removeLayer(this._ifrAreaLayer);
         }
+    }
+
+    _addNotamTfrShape(shape) {
+        if (this._notamTfrShapes.has(shape.raw)) return;
+
+        const fill   = 'rgba(220,38,38,0.15)';
+        const stroke = '#dc2626';
+        const weight = 2.5;
+
+        let layer = null;
+
+        if (shape.points?.length >= 3) {
+            layer = L.polygon(shape.points, {
+                color: stroke, fillColor: fill,
+                weight, opacity: 1, fillOpacity: 0.2,
+                dashArray: '6,4',
+            });
+        } else if (shape.radiusNm != null && shape.lat != null && shape.lon != null) {
+            layer = L.circle([shape.lat, shape.lon], {
+                radius: shape.radiusNm * 1852,
+                color: stroke, fillColor: fill,
+                weight, opacity: 1, fillOpacity: 0.2,
+                dashArray: '6,4',
+            });
+        }
+
+        if (!layer) return;
+
+        const validStr = shape.validTo
+            ? `Exp: ${new Date(shape.validTo).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})} L`
+            : '';
+        const popupHtml = `
+            <div style="max-width:280px;font-family:monospace">
+                <div style="font-weight:700;font-size:13px;color:#dc2626;margin-bottom:4px">
+                    ⛔ TFR <span style="font-size:10px;color:#888">${validStr}</span>
+                </div>
+                <div style="font-size:11px;color:#444;word-break:break-all;white-space:pre-wrap">${shape.summary}</div>
+            </div>`;
+        layer.bindPopup(popupHtml, { maxWidth: 300 });
+        layer.addTo(this._notamTfrGroup);
+        this._notamTfrShapes.set(shape.raw, layer);
     }
 
     _addTfrShape(notam) {
