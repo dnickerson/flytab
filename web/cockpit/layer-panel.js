@@ -223,7 +223,7 @@ class LayerPanel {
         // Wire TFR toggle
         const tfrInput = this._panel.querySelector('.lp-toggle input[data-action="tfrs"]');
         if (tfrInput) {
-            tfrInput.checked = false;
+            tfrInput.checked = true;
             tfrInput.addEventListener('change', () => {
                 window.app?.cockpitMap?.toggleTfrs(tfrInput.checked);
             });
@@ -484,7 +484,7 @@ class LayerPanel {
                         <label class="lp-toggle"><input type="checkbox" data-action="ifr-area"><span class="lp-toggle-track"></span></label>
                     </div>
                     <div class="lp-row">
-                        <span class="lp-row-label">TFRs (FIS-B)</span>
+                        <span class="lp-row-label">TFR</span>
                         <label class="lp-toggle"><input type="checkbox" data-action="tfrs"><span class="lp-toggle-track"></span></label>
                     </div>
                     <div class="lp-row">
