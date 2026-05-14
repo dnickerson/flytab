@@ -1884,7 +1884,12 @@ class WxBriefing {
         this._renderNotamSection();
 
         const bbox = await this._getRouteBbox(0);
-        if (!bbox) { this._enrouteNotams = []; this._renderNotamSection(); return; }
+        if (!bbox) {
+            this._enrouteNotams = [];
+            document.dispatchEvent(new CustomEvent('notam:tfrs', { detail: { shapes: [] } }));
+            this._renderNotamSection();
+            return;
+        }
 
         // Pick the 2 nearest ARTCCs to the route center + national ZZZ
         const centerLat = (bbox.n + bbox.s) / 2;
@@ -1941,10 +1946,22 @@ class WxBriefing {
 
             this._enrouteNotams = notams;
             this._enrouteNotamFetchedAt = Date.now();
+
+            // Dispatch parsed TFR shapes to map layer
+            const tfrShapes = notams
+                .filter(n => n.type === 'TFR')
+                .map(n => {
+                    const geo = this._parseTfrGeometry(n.raw);
+                    if (!geo) return null;
+                    return { raw: n.raw, summary: n.summary, validFrom: n.validFrom, validTo: n.validTo, ...geo };
+                })
+                .filter(Boolean);
+            document.dispatchEvent(new CustomEvent('notam:tfrs', { detail: { shapes: tfrShapes } }));
         } catch (err) {
             console.error('En-route NOTAM fetch failed:', err);
             this._enrouteNotamFetchError = err.message;
             this._enrouteNotams = [];
+            document.dispatchEvent(new CustomEvent('notam:tfrs', { detail: { shapes: [] } }));
         }
 
         this._renderNotamSection();
@@ -1969,6 +1986,36 @@ class WxBriefing {
             .sort((a, b) => a.d - b.d)
             .slice(0, count)
             .map(a => a.id);
+    }
+
+    _parseTfrGeometry(raw) {
+        // Polygon: DDMM(N|S)/DDDMM(W|E) coordinate pairs (same pattern as fisb-client.js)
+        const points = [];
+        const polyPat = /(\d{2})(\d{2})(N|S)\s*[\/]?\s*(\d{2,3})(\d{2})(W|E)/g;
+        let m;
+        while ((m = polyPat.exec(raw)) !== null) {
+            let lat = parseInt(m[1], 10) + parseInt(m[2], 10) / 60;
+            if (m[3] === 'S') lat = -lat;
+            let lon = parseInt(m[4], 10) + parseInt(m[5], 10) / 60;
+            if (m[6] === 'W') lon = -lon;
+            points.push([lat, lon]);
+        }
+        if (points.length >= 3) return { points };
+
+        // Circle: "WITHIN n NM OF DDMM(N|S) DDDMM(W|E)" or "n-NM RADIUS OF ..."
+        const circleMatch =
+            raw.match(/WITHIN\s+(\d+(?:\.\d+)?)\s*NM\s+OF\s+(\d{2})(\d{2})(N|S)\s*[\/]?\s*(\d{2,3})(\d{2})(W|E)/i) ||
+            raw.match(/(\d+(?:\.\d+)?)-NM\s+RADIUS.*?(\d{2})(\d{2})(N|S)\s*[\/]?\s*(\d{2,3})(\d{2})(W|E)/i);
+        if (circleMatch) {
+            const radiusNm = parseFloat(circleMatch[1]);
+            let lat = parseInt(circleMatch[2], 10) + parseInt(circleMatch[3], 10) / 60;
+            if (circleMatch[4] === 'S') lat = -lat;
+            let lon = parseInt(circleMatch[5], 10) + parseInt(circleMatch[6], 10) / 60;
+            if (circleMatch[7] === 'W') lon = -lon;
+            return { lat, lon, radiusNm };
+        }
+
+        return null;
     }
 
     _isEnrouteRelevant(raw) {
