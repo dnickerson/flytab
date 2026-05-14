@@ -8270,6 +8270,7 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    min-height: 44px;
     padding: 8px 14px;
     font-size: 12px;
     font-weight: 600;

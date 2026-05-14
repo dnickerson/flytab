@@ -42,6 +42,7 @@ class WxBriefing {
         this._corridorMi    = [10, 25, 50].includes(savedCorridor) ? savedCorridor : 25;
         this._notamFetchError = null;
         this._enrouteNotamFetchError = null;
+        this._lightsExpanded = false;
     }
 
     init() {
@@ -484,10 +485,10 @@ class WxBriefing {
                 const count = lightNotams.length;
                 const toggle = document.createElement('div');
                 toggle.className = 'wx-notam-lights-toggle';
-                toggle.innerHTML = `<span>${count} obstacle light outage${count > 1 ? 's' : ''}</span><span>▶</span>`;
+                toggle.innerHTML = `<span>${count} obstacle light outage${count > 1 ? 's' : ''}</span><span>${this._lightsExpanded ? '▼' : '▶'}</span>`;
 
                 const lightsBody = document.createElement('div');
-                lightsBody.style.display = 'none';
+                lightsBody.style.display = this._lightsExpanded ? 'block' : 'none';
                 for (const notam of lightNotams) {
                     const validStr = notam.validTo
                         ? `Valid to <b>${new Date(notam.validTo).toLocaleDateString([], {weekday:'short',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})} L</b>`
@@ -496,9 +497,9 @@ class WxBriefing {
                 }
 
                 wireTap(toggle, () => {
-                    const open = lightsBody.style.display !== 'none';
-                    lightsBody.style.display = open ? 'none' : 'block';
-                    toggle.querySelector('span:last-child').textContent = open ? '▶' : '▼';
+                    this._lightsExpanded = !this._lightsExpanded;
+                    lightsBody.style.display = this._lightsExpanded ? 'block' : 'none';
+                    toggle.querySelector('span:last-child').textContent = this._lightsExpanded ? '▼' : '▶';
                 });
 
                 body.appendChild(toggle);
