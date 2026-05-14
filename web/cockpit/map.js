@@ -232,7 +232,8 @@ class CockpitMap {
         });
 
         // NOTAM TFR layer — independent of FIS-B
-        this._notamTfrGroup = L.layerGroup().addTo(this.map);
+        this._notamTfrGroup = L.layerGroup();
+        if (this._showTfrs) this._notamTfrGroup.addTo(this.map);
         this._onNotamTfrs = (e) => {
             if (!this._notamTfrGroup) return;
             // Always update shapes regardless of toggle state so they're ready when toggled on
