@@ -8289,15 +8289,15 @@ body {
     font-size: 10px;
     font-weight: 700;
     letter-spacing: 0.04em;
-    line-height: 18px;
+    line-height: 16px;
     cursor: pointer;
     user-select: none;
     min-height: 20px;
     vertical-align: middle;
     margin-left: 4px;
 }
-.wx-pill-taf { background: #1a6bbf; color: #fff; }
-.wx-pill-mos { background: #0f8a6e; color: #fff; }
+.wx-pill-taf { background: #0d4a8a; color: #fff; }
+.wx-pill-mos { background: #0a6050; color: #fff; }
 .wx-pill:active { opacity: 0.75; }
 
 .wx-taf-panel, .wx-mos-panel {
