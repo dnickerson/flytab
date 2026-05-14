@@ -8305,7 +8305,7 @@ body {
     padding: 6px 14px 10px;
     border-top: 1px solid var(--border);
     font-size: 12px;
-    background: var(--bg, #fff);
+    background: var(--bg-surface, #fff);
 }
 .wx-taf-panel.open, .wx-mos-panel.open { display: block; }
 
@@ -8319,7 +8319,7 @@ body {
 .wx-mos-panel-row:last-child { border-bottom: none; }
 .wx-mos-panel-time {
     min-width: 90px;
-    color: var(--text-muted);
+    color: var(--text-secondary, #444);
     font-size: 11px;
 }
 .wx-mos-panel-cat {

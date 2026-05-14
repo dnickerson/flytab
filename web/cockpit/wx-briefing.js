@@ -1606,16 +1606,7 @@ class WxBriefing {
         const hasTafPill = !!(this._tafData?.[icao]?.fcsts?.length);
         if (!hasTafPill) {
             const taf = this._tafData?.[icao];
-            if (taf?.fcsts?.length) {
-                const issued = taf.issued ? new Date(taf.issued).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) + ' L' : '—';
-                const vFrom  = taf.valid_from ? new Date(taf.valid_from * 1000).toLocaleDateString([], {weekday:'short',month:'short',day:'numeric'}) : '—';
-                const vTo    = taf.valid_to   ? new Date(taf.valid_to   * 1000).toLocaleDateString([], {weekday:'short',month:'short',day:'numeric'}) : '—';
-                bodyHtml += `<div class="wx-taf-hdr">TAF</div>`;
-                bodyHtml += `<div class="wx-taf-issued">Issued ${issued} · Valid ${vFrom} → ${vTo}</div>`;
-                for (const f of taf.fcsts) {
-                    bodyHtml += this._buildTafRow(f);
-                }
-            } else if (taf) {
+            if (taf) {
                 bodyHtml += `<div class="wx-taf-no">TAF: no structured forecast periods</div>`;
             } else {
                 bodyHtml += `<div class="wx-taf-no">No TAF available</div>`;
