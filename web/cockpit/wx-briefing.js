@@ -43,6 +43,8 @@ class WxBriefing {
         this._notamFetchError = null;
         this._enrouteNotamFetchError = null;
         this._lightsExpanded = false;
+        this._tafPillOpen = new Set();
+        this._mosPillOpen = new Set();
     }
 
     init() {
@@ -65,6 +67,8 @@ class WxBriefing {
     hide() {
         this._el?.classList.remove('visible');
         this.visible = false;
+        this._tafPillOpen.clear();
+        this._mosPillOpen.clear();
     }
 
     setFlightPlan(plan) {
@@ -1445,15 +1449,22 @@ class WxBriefing {
             proxLabel = this._distLabelToRoute(metar.lat, metar.lon);
         }
 
+        const hasTaf = !!(this._tafData?.[icao]?.fcsts?.length);
+        const hasMos = !!(this._mosData?.stations?.[icao]?.periods?.length);
+
         card.innerHTML = `
             <div class="wx-card-hdr">
                 <span class="wx-card-icao">${icao}</span>
                 <span class="wx-card-prox${proxLabel === 'DEPARTURE' ? ' departure' : proxLabel === 'DEST' ? ' dest' : isOnRoute ? ' on-route' : ''}">${proxLabel}</span>
                 <span class="wx-card-obs">${obsTime}</span>
                 <span class="wx-card-cat ${cat}">${d.flight_category || '—'}</span>
+                ${hasTaf ? '<span class="wx-pill wx-pill-taf" data-action="taf-pill">TAF</span>' : ''}
+                ${hasMos ? '<span class="wx-pill wx-pill-mos" data-action="mos-pill">MOS</span>' : ''}
                 <span class="wx-card-chevron">›</span>
             </div>
             <div class="wx-card-body"></div>
+            ${hasTaf ? `<div class="wx-taf-panel${this._tafPillOpen.has(icao) ? ' open' : ''}"></div>` : ''}
+            ${hasMos ? `<div class="wx-mos-panel${this._mosPillOpen.has(icao) ? ' open' : ''}"></div>` : ''}
         `;
 
         const hdr = card.querySelector('.wx-card-hdr');
@@ -1474,7 +1485,92 @@ class WxBriefing {
             }
         });
 
+        // TAF pill toggle
+        const tafPill = card.querySelector('[data-action="taf-pill"]');
+        const tafPanel = card.querySelector('.wx-taf-panel');
+        if (tafPill && tafPanel) {
+            tafPill.addEventListener('click', (e) => e.stopPropagation());
+            wireTap(tafPill, () => {
+                const open = tafPanel.classList.toggle('open');
+                if (open) {
+                    this._tafPillOpen.add(icao);
+                    if (!tafPanel.innerHTML.trim()) this._populateTafPanel(tafPanel, icao);
+                } else {
+                    this._tafPillOpen.delete(icao);
+                }
+            });
+            // Restore open state across re-renders
+            if (tafPanel.classList.contains('open') && !tafPanel.innerHTML.trim()) {
+                this._populateTafPanel(tafPanel, icao);
+            }
+        }
+
+        // MOS pill toggle
+        const mosPill = card.querySelector('[data-action="mos-pill"]');
+        const mosPanel = card.querySelector('.wx-mos-panel');
+        if (mosPill && mosPanel) {
+            mosPill.addEventListener('click', (e) => e.stopPropagation());
+            wireTap(mosPill, () => {
+                const open = mosPanel.classList.toggle('open');
+                if (open) {
+                    this._mosPillOpen.add(icao);
+                    if (!mosPanel.innerHTML.trim()) this._populateMosPanel(mosPanel, icao);
+                } else {
+                    this._mosPillOpen.delete(icao);
+                }
+            });
+            // Restore open state across re-renders
+            if (mosPanel.classList.contains('open') && !mosPanel.innerHTML.trim()) {
+                this._populateMosPanel(mosPanel, icao);
+            }
+        }
+
         return card;
+    }
+
+    _populateTafPanel(panel, icao) {
+        const taf = this._tafData?.[icao];
+        if (!taf?.fcsts?.length) { panel.innerHTML = '<div class="wx-taf-no">No TAF periods available.</div>'; return; }
+        const issued = taf.issued
+            ? new Date(taf.issued).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' L'
+            : '—';
+        const vFrom = taf.valid_from
+            ? new Date(taf.valid_from * 1000).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })
+            : '—';
+        const vTo = taf.valid_to
+            ? new Date(taf.valid_to * 1000).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })
+            : '—';
+        let html = `<div class="wx-taf-issued">TAF · Issued ${issued} · Valid ${vFrom} → ${vTo}</div>`;
+        for (const f of taf.fcsts) html += this._buildTafRow(f);
+        panel.innerHTML = html;
+    }
+
+    _populateMosPanel(panel, icao) {
+        const sd = this._mosData?.stations?.[icao];
+        if (!sd?.periods?.length) { panel.innerHTML = '<div class="wx-taf-no">No MOS data.</div>'; return; }
+        const now = new Date();
+        const future = sd.periods.filter(p => p.valid_time && new Date(p.valid_time) >= now);
+        const shown = future.slice(0, 4);
+        if (!shown.length) { panel.innerHTML = '<div class="wx-taf-no">No upcoming MOS periods.</div>'; return; }
+        let html = '';
+        for (const p of shown) {
+            const vt = new Date(p.valid_time);
+            const timeStr = vt.toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' }) + ' L';
+            const cat = p.flight_cat || '—';
+            const catClass = (cat || 'unknown').toLowerCase();
+            const cig = p.cig_label ?? (p.cld === 'BK' ? 'BKN' : p.cld === 'OV' ? 'OVC' : '—');
+            const vis = p.vis_label || '—';
+            const wdStr = p.wdr != null ? String(Math.round(p.wdr / 10) * 10).padStart(3, '0') : null;
+            const wind = (wdStr != null && p.wsp != null) ? `${wdStr}/${p.wsp}kt` : '—';
+            const tmp = p.tmp != null ? `${p.tmp}°F` : '—';
+            html += `
+                <div class="wx-mos-panel-row">
+                    <span class="wx-mos-panel-time">${timeStr}</span>
+                    <span class="wx-mos-panel-cat wx-cat-${catClass}">${cat}</span>
+                    <span class="wx-mos-panel-detail">${cig} · ${vis} · ${wind} · ${tmp}</span>
+                </div>`;
+        }
+        panel.innerHTML = html;
     }
 
     _populateStationCardBody(body, icao, metar) {
