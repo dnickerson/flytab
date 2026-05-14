@@ -423,7 +423,9 @@ class WxBriefing {
         const enrouteLoading = this._enrouteNotams === null;
         const loading = airportLoading || enrouteLoading;
 
-        const allNotams = [...(this._notams || []), ...(this._enrouteNotams || [])];
+        const filteredApt = airportLoading  ? [] : this._filterByFlightWindow(this._notams);
+        const filteredEnr = enrouteLoading  ? [] : this._filterByFlightWindow(this._enrouteNotams);
+        const allNotams = [...filteredApt, ...filteredEnr];
         const critical = allNotams.filter(n => ['RWY', 'NAVAID', 'TFR', 'RESTR'].includes(n.type));
         const fetchErr = !loading && this._notamFetchError && !allNotams.length;
         const fetchErrWithCache = !loading && this._notamFetchError && allNotams.length > 0;
@@ -462,10 +464,10 @@ class WxBriefing {
 
         if (airportLoading) {
             body.insertAdjacentHTML('beforeend', '<div class="wx-section-loading">Fetching airport NOTAMs…</div>');
-        } else if (!this._notams.length) {
+        } else if (!filteredApt.length) {
             body.insertAdjacentHTML('beforeend', '<div class="wx-section-empty">No active NOTAMs for route airports.</div>');
         } else {
-            for (const notam of this._notams) {
+            for (const notam of filteredApt) {
                 const typeClass = (notam.type === 'RWY' || notam.type === 'NAVAID') ? 'rwy'
                     : notam.type === 'OBST_LGT' ? 'obst'
                     : notam.type.toLowerCase();
@@ -487,10 +489,10 @@ class WxBriefing {
         } else if (this._enrouteNotamFetchError) {
             body.insertAdjacentHTML('beforeend',
                 `<div class="wx-section-error">⚠ ${this._escHtml(this._enrouteNotamFetchError)} · tap ↻ to retry</div>`);
-        } else if (!this._enrouteNotams.length) {
+        } else if (!filteredEnr.length) {
             body.insertAdjacentHTML('beforeend', '<div class="wx-section-empty">No TFRs, MOAs, or restricted areas on route.</div>');
         } else {
-            for (const notam of this._enrouteNotams) {
+            for (const notam of filteredEnr) {
                 const typeClass = { TFR: 'rwy', RESTR: 'restr', MOA: 'moa', WARN: 'warn',
                     ATCAA: 'atcaa', UAS: 'uas', LASER: 'laser' }[notam.type] || 'sua';
                 const validStr = notam.validTo
@@ -1028,6 +1030,27 @@ class WxBriefing {
         if (dep) list.push(dep);
         if (dest && dest !== dep) list.push(dest);
         return list;
+    }
+
+    _getFlightWindow() {
+        const plan = this._flightPlan;
+        if (!plan) return null;
+        const proposed = plan.filed_plan?.proposed_departure;
+        const etdMs = proposed ? new Date(proposed).getTime() : Date.now();
+        const legs = plan.flight_plan?.legs || [];
+        const eteTotalMin = legs.reduce((s, l) => s + (l.ete_min || 0), 0);
+        const etaMs = etdMs + (eteTotalMin > 0 ? eteTotalMin : 240) * 60000;
+        return { etd: etdMs, eta: etaMs };
+    }
+
+    _filterByFlightWindow(notams) {
+        const win = this._getFlightWindow();
+        if (!win) return notams;
+        return notams.filter(n => {
+            const from = n.validFrom ? new Date(n.validFrom).getTime() : 0;
+            const to   = n.validTo   ? new Date(n.validTo).getTime()   : Infinity;
+            return from <= win.eta && to >= win.etd;
+        });
     }
 
     /**
