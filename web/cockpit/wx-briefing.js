@@ -1036,7 +1036,7 @@ class WxBriefing {
         const plan = this._flightPlan;
         if (!plan) return null;
         const proposed = plan.filed_plan?.proposed_departure;
-        const etdMs = proposed ? new Date(proposed).getTime() : Date.now();
+        const etdMs = proposed ? Math.max(new Date(proposed).getTime(), Date.now()) : Date.now();
         const legs = plan.flight_plan?.legs || [];
         const eteTotalMin = legs.reduce((s, l) => s + (l.ete_min || 0), 0);
         const etaMs = etdMs + (eteTotalMin > 0 ? eteTotalMin : 240) * 60000;
@@ -1048,7 +1048,7 @@ class WxBriefing {
         if (!win) return notams;
         return notams.filter(n => {
             const from = n.validFrom ? new Date(n.validFrom).getTime() : 0;
-            const to   = n.validTo   ? new Date(n.validTo).getTime()   : Infinity;
+            const to   = n.validTo   ? (new Date(n.validTo).getTime() || Infinity) : Infinity;
             return from <= win.eta && to >= win.etd;
         });
     }
