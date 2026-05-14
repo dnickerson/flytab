@@ -466,7 +466,9 @@ class WxBriefing {
             body.insertAdjacentHTML('beforeend', '<div class="wx-section-empty">No active NOTAMs for route airports.</div>');
         } else {
             for (const notam of this._notams) {
-                const typeClass = (notam.type === 'RWY' || notam.type === 'NAVAID') ? 'rwy' : notam.type.toLowerCase();
+                const typeClass = (notam.type === 'RWY' || notam.type === 'NAVAID') ? 'rwy'
+                    : notam.type === 'OBST_LGT' ? 'obst'
+                    : notam.type.toLowerCase();
                 const validStr = notam.validTo
                     ? `Valid to <b>${new Date(notam.validTo).toLocaleDateString([], {weekday:'short',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})} L</b>`
                     : '';
@@ -1771,7 +1773,7 @@ class WxBriefing {
         if (!stations.length) { this._notams = []; this._renderNotamSection(); return; }
 
         try {
-            const base = Settings.workerBase || 'https://www.flywhere.app/api';
+            const base = CockpitConfig.notamBase || Settings.workerBase || 'https://www.flywhere.app/api';
             const url  = `${base}/notams?location=${stations.join(',')}`;
             const resp = await fetch(url, { signal: AbortSignal.timeout(30000) });
             if (!resp.ok) {
@@ -1795,7 +1797,7 @@ class WxBriefing {
                 notams.push(this._parseNotam(feature, loc));
             }
 
-            const order = ['RWY', 'NAVAID', 'OBST', 'TWY', 'AD', 'SVC'];
+            const order = ['RWY', 'NAVAID', 'OBST', 'TWY', 'AD', 'SVC', 'OBST_LGT'];
             notams.sort((a, b) => {
                 const ai = order.indexOf(a.type);
                 const bi = order.indexOf(b.type);
@@ -1839,7 +1841,7 @@ class WxBriefing {
         const locations = [...artccs, 'ZZZ'].join(',');
 
         try {
-            const base = Settings.workerBase || 'https://www.flywhere.app/api';
+            const base = CockpitConfig.notamBase || Settings.workerBase || 'https://www.flywhere.app/api';
             const resp = await fetch(`${base}/notams?location=${locations}`, { signal: AbortSignal.timeout(30000) });
             if (!resp.ok) {
                 let errMsg = `En-route NOTAM fetch failed (${resp.status})`;
@@ -1955,9 +1957,21 @@ class WxBriefing {
         const translations = feature.properties?.coreNOTAMData?.notamTranslation || [];
         const localFmt = translations.find(t => t.type === 'LOCAL_FORMAT');
         const raw = localFmt?.simpleText || localFmt?.domestic_message || n.text || '';
-        const type = this._classifyNotam(raw);
+        const type = this._classifyByQcode(n.selectionCode) || this._classifyNotam(raw);
         const summary = this._summarizeNotam(raw);
         return { airport, type, summary, raw, validFrom: n.effectiveStart || null, validTo: n.effectiveEnd || null };
+    }
+
+    _classifyByQcode(q) {
+        if (!q) return null;
+        q = q.toUpperCase();
+        if (q.startsWith('QMR')) return 'RWY';
+        if (q.startsWith('QNV') || q.startsWith('QPI')) return 'NAVAID';
+        if (q.startsWith('QOL')) return 'OBST_LGT';
+        if (q.startsWith('QOB')) return 'OBST';
+        if (q.startsWith('QTW')) return 'TWY';
+        if (q.startsWith('QFA') || q.startsWith('QAP')) return 'AD';
+        return null;
     }
 
     _classifyNotam(raw) {
