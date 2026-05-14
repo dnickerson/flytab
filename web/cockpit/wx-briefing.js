@@ -1557,7 +1557,7 @@ class WxBriefing {
             const vt = new Date(p.valid_time);
             const timeStr = vt.toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' }) + ' L';
             const cat = p.flight_cat || '—';
-            const catClass = (cat || 'unknown').toLowerCase();
+            const catClass = (p.flight_cat || 'unknown').toLowerCase();
             const cig = p.cig_label ?? (p.cld === 'BK' ? 'BKN' : p.cld === 'OV' ? 'OVC' : '—');
             const vis = p.vis_label || '—';
             const wdStr = p.wdr != null ? String(Math.round(p.wdr / 10) * 10).padStart(3, '0') : null;
@@ -1603,20 +1603,23 @@ class WxBriefing {
             </div>
         `;
 
-        const taf = this._tafData?.[icao];
-        if (taf?.fcsts?.length) {
-            const issued = taf.issued ? new Date(taf.issued).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) + ' L' : '—';
-            const vFrom  = taf.valid_from ? new Date(taf.valid_from * 1000).toLocaleDateString([], {weekday:'short',month:'short',day:'numeric'}) : '—';
-            const vTo    = taf.valid_to   ? new Date(taf.valid_to   * 1000).toLocaleDateString([], {weekday:'short',month:'short',day:'numeric'}) : '—';
-            bodyHtml += `<div class="wx-taf-hdr">TAF</div>`;
-            bodyHtml += `<div class="wx-taf-issued">Issued ${issued} · Valid ${vFrom} → ${vTo}</div>`;
-            for (const f of taf.fcsts) {
-                bodyHtml += this._buildTafRow(f);
+        const hasTafPill = !!(this._tafData?.[icao]?.fcsts?.length);
+        if (!hasTafPill) {
+            const taf = this._tafData?.[icao];
+            if (taf?.fcsts?.length) {
+                const issued = taf.issued ? new Date(taf.issued).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) + ' L' : '—';
+                const vFrom  = taf.valid_from ? new Date(taf.valid_from * 1000).toLocaleDateString([], {weekday:'short',month:'short',day:'numeric'}) : '—';
+                const vTo    = taf.valid_to   ? new Date(taf.valid_to   * 1000).toLocaleDateString([], {weekday:'short',month:'short',day:'numeric'}) : '—';
+                bodyHtml += `<div class="wx-taf-hdr">TAF</div>`;
+                bodyHtml += `<div class="wx-taf-issued">Issued ${issued} · Valid ${vFrom} → ${vTo}</div>`;
+                for (const f of taf.fcsts) {
+                    bodyHtml += this._buildTafRow(f);
+                }
+            } else if (taf) {
+                bodyHtml += `<div class="wx-taf-no">TAF: no structured forecast periods</div>`;
+            } else {
+                bodyHtml += `<div class="wx-taf-no">No TAF available</div>`;
             }
-        } else if (taf) {
-            bodyHtml += `<div class="wx-taf-no">TAF: no structured forecast periods</div>`;
-        } else {
-            bodyHtml += `<div class="wx-taf-no">No TAF available</div>`;
         }
 
         body.innerHTML = bodyHtml;
