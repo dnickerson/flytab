@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v8.40';
+const FLYTAB_VERSION = 'v8.41';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -1832,8 +1832,11 @@ class FlyTabApp {
         // Serve stale cache instantly (works offline)
         const cached = this._advisoryClient.loadCachedAdvisories();
         if (cached) {
-            console.log(`[Advisory] Loaded from cache: ${cached.sigmets.length} sigmets, ${cached.airmets.length} airmets`);
+            const cacheIds = cached.sigmets.map(s => s.sigmetId || s.raw?.match(/\b(?:CONVECTIVE SIGMET|SIGMET)\s+([A-Z0-9]+)/i)?.[1] || '?');
+            console.log(`[Advisory] Cache: ${cached.sigmets.length} sigmets [${cacheIds.join(',')}], ${cached.airmets.length} airmets`);
             this.fisbWeather?.injectAdvisories(cached.sigmets, cached.airmets);
+        } else {
+            console.log('[Advisory] No cache (missing or >15 min old)');
         }
 
         this._fetchAdvisories();
@@ -1845,7 +1848,8 @@ class FlyTabApp {
         if (!this.fisbWeather || !this._advisoryClient) return;
         try {
             const fresh = await this._advisoryClient.fetchAndCacheAdvisories();
-            console.log(`[Advisory] Fetched: ${fresh.sigmets.length} sigmets, ${fresh.airmets.length} airmets`);
+            const freshIds = fresh.sigmets.map(s => s.sigmetId || '?');
+            console.log(`[Advisory] Fetched: ${fresh.sigmets.length} sigmets [${freshIds.join(',')}], ${fresh.airmets.length} airmets`);
             this.fisbWeather.injectAdvisories(fresh.sigmets, fresh.airmets);
         } catch (e) {
             console.warn(`[Advisory] Fetch failed: ${e.message}`);

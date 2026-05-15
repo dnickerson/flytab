@@ -50,7 +50,11 @@ class FisbWeatherDisplay {
 
         // Bind event handlers
         this._onPirep  = (e) => this._addPirep(e.detail);
-        this._onSigmet = (e) => this._addSigmet(e.detail);
+        this._onSigmet = (e) => {
+            const d = e.detail;
+            console.log(`[SIGMET-DBG] FIS-B event: id="${FisbWeatherDisplay._extractSigmetId(d?.raw)||'none'}" raw="${(d?.raw||'').slice(0,50).replace(/\n/g,'↵')}"`);
+            this._addSigmet(d);
+        };
         this._onAirmet = (e) => this._addAirmet(e.detail);
         this._onCwa    = (e) => this._showCwaAlert(e.detail);
         this._onWinds  = ()  => this._refreshWindBarbs();
@@ -292,6 +296,9 @@ class FisbWeatherDisplay {
      * Safe to call repeatedly — deduplicates on the seen-keys set.
      */
     injectAdvisories(sigmets, airmets) {
+        const sigIds = (sigmets || []).map(s => s.sigmetId || FisbWeatherDisplay._extractSigmetId(s.raw) || '?');
+        console.log(`[SIGMET-DBG] injectAdvisories: ${(sigmets||[]).length} sigmets [${sigIds.join(',')}], ${(airmets||[]).length} airmets`);
+
         let newCount = 0;
         // SIGMETs: let _addSigmet handle all dedup/replace logic (ID-based key may replace stale polygons)
         for (const s of (sigmets || [])) {
@@ -564,20 +571,30 @@ class FisbWeatherDisplay {
         const existingIdx = this._sigmetPolygons.findIndex(e => e.rawKey === key);
         if (existingIdx >= 0) {
             const existingRaw = this._sigmetPolygons[existingIdx].advisory?.raw;
-            if (existingRaw === sigmet.raw) return false; // identical rebroadcast — skip
+            if (existingRaw === sigmet.raw) {
+                console.log(`[SIGMET-DBG] _addSigmet SKIP-identical key="${key}" total=${this._sigmetPolygons.length}`);
+                return false; // identical rebroadcast — skip
+            }
+            console.log(`[SIGMET-DBG] _addSigmet REPLACE key="${key}" total=${this._sigmetPolygons.length}`);
             // Reissuance: swap out stale polygon for updated one
             this._sigmetLayer.removeLayer(this._sigmetPolygons[existingIdx].polygon);
             this._sigmetPolygons.splice(existingIdx, 1);
             this._seenAdvisoryKeys.delete(key);
             // Fall through to add updated polygon (net count unchanged → return false below)
         } else if (this._seenAdvisoryKeys.has(key)) {
+            console.log(`[SIGMET-DBG] _addSigmet SKIP-seen key="${key}" total=${this._sigmetPolygons.length}`);
             return false; // key in seen-set but no polygon — shouldn't happen; skip
+        } else {
+            console.log(`[SIGMET-DBG] _addSigmet NEW key="${key}" total=${this._sigmetPolygons.length}`);
         }
 
         const isNew = existingIdx < 0; // true = genuinely new advisory (not a replacement)
 
         this._seenAdvisoryKeys.add(key);
-        if (!sigmet.points || sigmet.points.length < 3) return false;
+        if (!sigmet.points || sigmet.points.length < 3) {
+            console.log(`[SIGMET-DBG] _addSigmet NO-POLYGON key="${key}" pts=${sigmet.points?.length}`);
+            return false;
+        }
 
         const isConvective = sigmet.type === 'convective';
         const style = {
@@ -653,6 +670,11 @@ class FisbWeatherDisplay {
     _showAdvisoryToast() {
         const sigmetCount = this._sigmetPolygons.length;
         const airmetCount = this._airmetPolygons.length;
+        const now = Date.now();
+        const activeKeys   = this._sigmetPolygons.filter(e => !e.expires_at || e.expires_at > now).map(e => e.rawKey);
+        const expiredKeys  = this._sigmetPolygons.filter(e => e.expires_at && e.expires_at <= now).map(e => e.rawKey);
+        console.log(`[SIGMET-DBG] toast: total=${sigmetCount} active=${activeKeys.length} expired=${expiredKeys.length}`);
+        console.log(`[SIGMET-DBG] toast keys: ${this._sigmetPolygons.map(e => e.rawKey).join(' | ')}`);
         if (sigmetCount === 0 && airmetCount === 0) return;
 
         // Dismiss any existing toast before creating a fresh one
