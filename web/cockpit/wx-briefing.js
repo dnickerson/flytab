@@ -1550,26 +1550,70 @@ class WxBriefing {
         if (!sd?.periods?.length) { panel.innerHTML = '<div class="wx-taf-no">No MOS data.</div>'; return; }
         const now = new Date();
         const future = sd.periods.filter(p => p.valid_time && new Date(p.valid_time) >= now);
-        const shown = future.slice(0, 4);
-        if (!shown.length) { panel.innerHTML = '<div class="wx-taf-no">No upcoming MOS periods.</div>'; return; }
-        let html = '';
-        for (const p of shown) {
+        if (!future.length) { panel.innerHTML = '<div class="wx-taf-no">No upcoming MOS periods.</div>'; return; }
+
+        // Compact grid: one row per period.
+        // Columns: Time | Cat | Wind | Ceil | Vis | P% | ⛈% | Mix | T/D
+        let html = `<div class="wx-mos-pg">
+            <div class="wx-mos-pg-hdr">
+                <span>Time</span><span>Cat</span><span>Wind</span>
+                <span>Ceil</span><span>Vis</span>
+                <span title="Prob. precip">P%</span>
+                <span title="Thunderstorm prob">⛈%</span>
+                <span title="Mixing height">Mix</span>
+                <span>T/D</span>
+            </div>`;
+
+        let lastDate = null;
+        for (const p of future) {
             const vt = new Date(p.valid_time);
-            const timeStr = vt.toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' }) + ' L';
+
+            const localDate = `${vt.getFullYear()}/${vt.getMonth()}/${vt.getDate()}`;
+            if (lastDate !== null && localDate !== lastDate) {
+                const dayStr = vt.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+                html += `<div class="wx-mos-pg-day">${dayStr}</div>`;
+            }
+            lastDate = localDate;
+
+            const timeStr = vt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) + 'L';
             const cat = p.flight_cat || '—';
             const catClass = (p.flight_cat || 'unknown').toLowerCase();
-            const cig = p.cig_label ?? (p.cld === 'BK' ? 'BKN' : p.cld === 'OV' ? 'OVC' : '—');
+            const cig = p.cig_label ?? (p.cld === 'BK' ? 'BKN' : p.cld === 'OV' ? 'OVC' : 'CLR');
             const vis = p.vis_label || '—';
+
             const wdStr = p.wdr != null ? String(Math.round(p.wdr / 10) * 10).padStart(3, '0') : null;
-            const wind = (wdStr != null && p.wsp != null) ? `${wdStr}/${p.wsp}kt` : '—';
-            const tmp = p.tmp != null ? `${p.tmp}°F` : '—';
+            let wind = '—';
+            if (wdStr != null && p.wsp != null) {
+                wind = (p.wgst && p.wgst > p.wsp)
+                    ? `${wdStr}/${p.wsp}G${p.wgst}`
+                    : `${wdStr}/${p.wsp}`;
+            }
+
+            const pop   = p.pop != null ? `${p.pop}` : '—';
+            const tp    = p.tp6 ?? p.tp12;
+            const tstm  = tp != null ? `${tp}` : '—';
+            const mixHt = p.mix_ht != null ? `${(p.mix_ht / 1000).toFixed(1)}k` : '—';
+            const tmp   = p.tmp != null ? `${p.tmp}` : '—';
+            const dpt   = p.dpt != null ? `/${p.dpt}` : '';
+
+            const popClass = (p.pop != null && p.pop >= 50) ? ' wx-val-caution' : '';
+            const tpClass  = (tp != null && tp >= 40) ? ' wx-val-danger' : ((tp != null && tp >= 20) ? ' wx-val-caution' : '');
+            const mexClass = p.reliable === false ? ' wx-mos-pg-mex' : '';
+
             html += `
-                <div class="wx-mos-panel-row">
-                    <span class="wx-mos-panel-time">${timeStr}</span>
-                    <span class="wx-mos-panel-cat wx-cat-${catClass}">${cat}</span>
-                    <span class="wx-mos-panel-detail">${cig} · ${vis} · ${wind} · ${tmp}</span>
+                <div class="wx-mos-pg-row${mexClass}">
+                    <span class="wx-mos-pg-time">${timeStr}</span>
+                    <span class="wx-mos-pg-cat wx-cat-${catClass}">${cat}</span>
+                    <span>${wind}</span>
+                    <span>${cig}</span>
+                    <span>${vis}</span>
+                    <span class="${popClass}">${pop}</span>
+                    <span class="${tpClass}">${tstm}</span>
+                    <span>${mixHt}</span>
+                    <span class="wx-mos-pg-td">${tmp}${dpt}</span>
                 </div>`;
         }
+        html += '</div>';
         panel.innerHTML = html;
     }
 
@@ -1629,7 +1673,13 @@ class WxBriefing {
     _buildTafRow(f) {
         const tf = new Date(f.timeFrom * 1000);
         const tt = new Date(f.timeTo   * 1000);
-        const timeStr = `${tf.toLocaleDateString([], {weekday:'short'})} ${tf.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}–${tt.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})} L`;
+        // Compact 24h time — omit ":00" for whole hours so "Mon 10–14L" fits on one line.
+        const fmtHH = (d) => {
+            const h = String(d.getHours()).padStart(2, '0');
+            const m = d.getMinutes();
+            return m ? `${h}:${String(m).padStart(2, '0')}` : h;
+        };
+        const timeStr = `${tf.toLocaleDateString([], {weekday:'short'})} ${fmtHH(tf)}–${fmtHH(tt)}L`;
 
         // Period change type — distinguishes FM (change at time), BECMG (transition),
         // TEMPO (intermittent), PROB30/40 (probability). Empty = initial period.
@@ -1675,8 +1725,7 @@ class WxBriefing {
 
         return `
             <div class="wx-taf-row${changeKind ? ' wx-taf-' + changeKind : ''}">
-                <span class="wx-taf-change">${this._escHtml(change)}</span>
-                <span class="wx-taf-time">${this._escHtml(timeStr)}</span>
+                <span class="wx-taf-when">${change ? `<span class="wx-taf-change">${this._escHtml(change)}</span> ` : ''}${this._escHtml(timeStr)}</span>
                 <span class="wx-taf-cat wx-cat-${catClass}">${cat}</span>
                 <span class="wx-taf-wind">${this._escHtml(windStr)}</span>
                 <span class="wx-taf-ceil">${this._escHtml(ceilStr)}</span>
