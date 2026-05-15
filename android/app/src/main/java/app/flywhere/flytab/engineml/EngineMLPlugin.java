@@ -24,7 +24,7 @@ import java.util.List;
 public class EngineMLPlugin extends Plugin {
     private static final String TAG = "EngineML";
     private static final int WINDOW_SIZE = 60;
-    private static final int N_FEATURES = 13;
+    private static final int N_FEATURES = 12;
 
     private InferenceEngine inferenceEngine;
     private ThresholdAdapter thresholdAdapter;
@@ -82,9 +82,10 @@ public class EngineMLPlugin extends Plugin {
      * Expected JS call:
      *   EngineML.processSample({
      *     rpm, egt1, egt2, egt3, egt4, cht1, cht2, cht3, cht4,
-     *     oil_temp, oil_press, fuel_flow, altitude,
-     *     mp, carb_temp, fuel_remaining, ground_speed, distance_nm
+     *     oil_temp, oil_press, fuel_flow,
+     *     altitude, mp, carb_temp, fuel_remaining, ground_speed, distance_nm
      *   })
+     * altitude is used for phase detection only, not as an ML feature.
      */
     @PluginMethod
     public void processSample(PluginCall call) {
@@ -94,7 +95,7 @@ public class EngineMLPlugin extends Plugin {
         }
 
         try {
-            // Extract 13 features for ML inference
+            // Extract 12 ML features (altitude excluded — used for phase detection only)
             float rpm = f(call, "rpm");
             float egt1 = f(call, "egt1");
             float egt2 = f(call, "egt2");
@@ -107,9 +108,9 @@ public class EngineMLPlugin extends Plugin {
             float oilTemp = f(call, "oil_temp");
             float oilPress = f(call, "oil_press");
             float fuelFlow = f(call, "fuel_flow");
-            float altitude = f(call, "altitude");
 
-            // Extra fields for advisor (not in ML features)
+            // Extra fields for phase detection and advisor (not ML features)
+            float altitude = f(call, "altitude");
             float mp = f(call, "mp");
             float carbTemp = f(call, "carb_temp");
             float fuelRemaining = f(call, "fuel_remaining");
@@ -117,7 +118,7 @@ public class EngineMLPlugin extends Plugin {
             float distanceNm = f(call, "distance_nm");
 
             float[] features = { rpm, egt1, egt2, egt3, egt4, cht1, cht2, cht3, cht4,
-                                 oilTemp, oilPress, fuelFlow, altitude };
+                                 oilTemp, oilPress, fuelFlow };
 
             // Add to rolling window
             System.arraycopy(features, 0, window[windowPos], 0, N_FEATURES);
