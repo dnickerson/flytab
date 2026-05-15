@@ -142,6 +142,22 @@ class RoutePlannerPanel {
     }
 
     /**
+     * Set destination for a direct-to from present position.
+     * Keeps the existing departure pill; clears all intermediates.
+     * Called after openRoutePlanner() so _loadPlan has already run.
+     */
+    setDirectTo(apt) {
+        const icao = apt.icao || apt.id || apt.name || '?';
+        const dep  = this._route.find(p => p.type === 'dep');
+        this._route       = dep ? [dep, { id: icao, type: 'dest' }] : [{ id: icao, type: 'dest' }];
+        this._insertIndex = null;
+        if (apt.lat != null && apt.lon != null) this._coords[icao] = { lat: apt.lat, lon: apt.lon };
+        if (this._destInput) this._destInput.value = icao;
+        if (this._depInput && dep) this._depInput.value = dep.id;
+        this._render();
+    }
+
+    /**
      * Insert approach procedure waypoints into the current route.
      * Called from the cifp:load-procedure custom event fired by ApproachCharts.
      *
