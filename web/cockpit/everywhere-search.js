@@ -318,7 +318,11 @@ class EverywhereSearch {
         row.appendChild(middle);
         row.appendChild(right);
 
-        wireTap(row, () => this._showDetail(entity, type));
+        if (type === 'APT' || type === 'NAV') {
+            wireTap(row, () => { this._showOnMap(entity, type); this.hide(); });
+        } else {
+            wireTap(row, () => this._showDetail(entity, type));
+        }
 
         return row;
     }
