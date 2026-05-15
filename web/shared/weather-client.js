@@ -248,6 +248,7 @@ class WeatherClient {
 
         return {
             raw,
+            sigmetId: item.seriesId || null,   // stable AWC series ID, e.g. "84C", "TANGO 3"
             type: isConvective ? 'convective' : (isSigmet ? 'sigmet' : 'airmet'),
             hazard,
             points,

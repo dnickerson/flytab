@@ -293,11 +293,9 @@ class FisbWeatherDisplay {
      */
     injectAdvisories(sigmets, airmets) {
         let newCount = 0;
+        // SIGMETs: let _addSigmet handle all dedup/replace logic (ID-based key may replace stale polygons)
         for (const s of (sigmets || [])) {
-            const key = FisbWeatherDisplay._normKey(s.raw);
-            if (this._seenAdvisoryKeys.has(key)) continue;
-            this._addSigmet(s);
-            newCount++;
+            if (this._addSigmet(s)) newCount++;
         }
         for (const a of (airmets || [])) {
             const key = FisbWeatherDisplay._normKey(a.raw);
@@ -405,12 +403,26 @@ class FisbWeatherDisplay {
      * AWC API prepends a WMO teletype header (e.g. "WSUS32 KKCI 151748\nBOST WS 151748\n")
      * that FIS-B broadcasts omit.  Skip to the first SIGMET/AIRMET keyword so both
      * sources produce the same 80-char key for the same physical advisory.
+     * Used only for G-AIRMETs and FIS-B AIRMETs — SIGMETs prefer _sigmetKey().
      */
     static _normKey(raw) {
         const s = raw || '';
         const m = s.match(/\b(?:CONVECTIVE SIGMET|SIGMET|AIRMET)\b/i);
         if (!m || m.index === 0) return s.slice(0, 80);
         return s.slice(m.index, m.index + 80);
+    }
+
+    /**
+     * Extract the stable SIGMET series ID from raw text ("84C", "TANGO 3").
+     * Stable across reissuances — valid-until time in raw text changes every 55 min
+     * for convective SIGMETs, but the series ID stays constant.
+     */
+    static _extractSigmetId(raw) {
+        const s = raw || '';
+        let m = s.match(/\bCONVECTIVE SIGMET\s+([A-Z0-9]+)/i);
+        if (!m) m = s.match(/\bSIGMET\s+([A-Z]+\s+\d+)\b/i);   // "TANGO 3"
+        if (!m) m = s.match(/\bSIGMET\s+([A-Z0-9]+)/i);         // "TANGO" fallback
+        return m ? m[1].trim() : null;
     }
 
     static _fmtLocalHM(ts) {
@@ -541,13 +553,31 @@ class FisbWeatherDisplay {
 
     // ========== SIGMET/AIRMET Polygons ==========
 
+    // Returns true if a net-new polygon was added (not a replacement or skip).
     _addSigmet(sigmet) {
-        // Dedup: FIS-B re-broadcasts the same SIGMET every few minutes; without
-        // this check the toast count multiplied by the broadcast count.
-        const key = FisbWeatherDisplay._normKey(sigmet.raw);
-        if (this._seenAdvisoryKeys.has(key)) return;
+        // Build the dedup key from the stable series ID when available so reissuances
+        // (new WMO timestamp, updated valid-until) replace the stale polygon rather
+        // than stacking a duplicate alongside it.
+        const id  = sigmet.sigmetId || FisbWeatherDisplay._extractSigmetId(sigmet.raw);
+        const key = id ? `SIG:${id}` : FisbWeatherDisplay._normKey(sigmet.raw);
+
+        const existingIdx = this._sigmetPolygons.findIndex(e => e.rawKey === key);
+        if (existingIdx >= 0) {
+            const existingRaw = this._sigmetPolygons[existingIdx].advisory?.raw;
+            if (existingRaw === sigmet.raw) return false; // identical rebroadcast — skip
+            // Reissuance: swap out stale polygon for updated one
+            this._sigmetLayer.removeLayer(this._sigmetPolygons[existingIdx].polygon);
+            this._sigmetPolygons.splice(existingIdx, 1);
+            this._seenAdvisoryKeys.delete(key);
+            // Fall through to add updated polygon (net count unchanged → return false below)
+        } else if (this._seenAdvisoryKeys.has(key)) {
+            return false; // key in seen-set but no polygon — shouldn't happen; skip
+        }
+
+        const isNew = existingIdx < 0; // true = genuinely new advisory (not a replacement)
+
         this._seenAdvisoryKeys.add(key);
-        if (!sigmet.points || sigmet.points.length < 3) return;
+        if (!sigmet.points || sigmet.points.length < 3) return false;
 
         const isConvective = sigmet.type === 'convective';
         const style = {
@@ -566,6 +596,7 @@ class FisbWeatherDisplay {
             rawKey: key,
             advisory: sigmet,
         });
+        return isNew;
     }
 
     _addAirmet(airmet) {
