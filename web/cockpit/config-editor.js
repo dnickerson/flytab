@@ -149,6 +149,15 @@ class ConfigEditor {
                 <div class="ce-field-row" style="font-size:14px;color:var(--text-secondary)">
                     Tiles, plates, and NASR paths are appended automatically.
                 </div>
+                <div class="ce-field-row">
+                    <label class="ce-label" for="ce-notam-base">NOTAM Server</label>
+                    <input type="text" id="ce-notam-base" class="ce-input" style="width:250px"
+                        placeholder="https://hostname.ts.net"
+                        value="${this._cockpitConfig.notamBase || ''}">
+                </div>
+                <div class="ce-field-row" style="font-size:14px;color:var(--text-secondary)">
+                    FitPC NOTAM proxy URL (Tailscale Funnel). Leave blank to use flywhere.app.
+                </div>
             </div>
         </div>`);
         sections.push(`<div class="ds-card">
@@ -325,6 +334,8 @@ class ConfigEditor {
                 const fb = fallbackEl.value.trim();
                 if (fb) this._cockpitConfig.homeServer.fallbackBase = fb;
             }
+            const notamBaseEl = body.querySelector('#ce-notam-base');
+            if (notamBaseEl) this._cockpitConfig.notamBase = notamBaseEl.value.trim().replace(/\/$/, '');
 
             // Collect cockpit config values
             this._collectValues('cockpit');

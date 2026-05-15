@@ -316,6 +316,16 @@ class CockpitConfig {
     }
 
     /**
+     * Returns the NOTAM proxy base URL (no trailing slash).
+     * When set, NOTAMs are fetched from this server (e.g. FitPC via Tailscale Funnel)
+     * instead of the flywhere worker. Falls back to null so callers use workerBase.
+     */
+    static get notamBase() {
+        const nb = CockpitConfig.raw?.notamBase;
+        return (nb && nb.trim()) ? nb.replace(/\/$/, '') : null;
+    }
+
+    /**
      * Returns [primaryBase, fallbackBase] as an array, filtering out nulls.
      * Use to try home server then Tailscale in order.
      */

@@ -294,13 +294,13 @@ class FisbWeatherDisplay {
     injectAdvisories(sigmets, airmets) {
         let newCount = 0;
         for (const s of (sigmets || [])) {
-            const key = (s.raw || '').slice(0, 80);
+            const key = FisbWeatherDisplay._normKey(s.raw);
             if (this._seenAdvisoryKeys.has(key)) continue;
             this._addSigmet(s);
             newCount++;
         }
         for (const a of (airmets || [])) {
-            const key = (a.raw || '').slice(0, 80);
+            const key = FisbWeatherDisplay._normKey(a.raw);
             if (this._seenAdvisoryKeys.has(key)) continue;
             this._addAirmet(a);
             newCount++;
@@ -399,6 +399,19 @@ class FisbWeatherDisplay {
     }
 
     static _isSigmetType(t) { return t === 'sigmet' || t === 'convective'; }
+
+    /**
+     * Dedup key for a SIGMET/AIRMET raw text string.
+     * AWC API prepends a WMO teletype header (e.g. "WSUS32 KKCI 151748\nBOST WS 151748\n")
+     * that FIS-B broadcasts omit.  Skip to the first SIGMET/AIRMET keyword so both
+     * sources produce the same 80-char key for the same physical advisory.
+     */
+    static _normKey(raw) {
+        const s = raw || '';
+        const m = s.match(/\b(?:CONVECTIVE SIGMET|SIGMET|AIRMET)\b/i);
+        if (!m || m.index === 0) return s.slice(0, 80);
+        return s.slice(m.index, m.index + 80);
+    }
 
     static _fmtLocalHM(ts) {
         return ts
@@ -531,7 +544,7 @@ class FisbWeatherDisplay {
     _addSigmet(sigmet) {
         // Dedup: FIS-B re-broadcasts the same SIGMET every few minutes; without
         // this check the toast count multiplied by the broadcast count.
-        const key = (sigmet.raw || '').slice(0, 80);
+        const key = FisbWeatherDisplay._normKey(sigmet.raw);
         if (this._seenAdvisoryKeys.has(key)) return;
         this._seenAdvisoryKeys.add(key);
         if (!sigmet.points || sigmet.points.length < 3) return;
@@ -549,15 +562,14 @@ class FisbWeatherDisplay {
         polygon.addTo(this._sigmetLayer);
         this._sigmetPolygons.push({
             polygon, received_at: sigmet.received_at,
-            expires_at: sigmet.expires_at, type: 'sigmet',
-            rawKey: (sigmet.raw || '').slice(0, 80),
+            expires_at: sigmet.expires_at, type: sigmet.type || 'sigmet',
+            rawKey: key,
             advisory: sigmet,
         });
-
     }
 
     _addAirmet(airmet) {
-        const key = (airmet.raw || '').slice(0, 80);
+        const key = FisbWeatherDisplay._normKey(airmet.raw);
         if (this._seenAdvisoryKeys.has(key)) return;
         this._seenAdvisoryKeys.add(key);
         // FZLVL G-AIRMETs are LINEs (freezing-level contours, often only 2 points
@@ -597,7 +609,7 @@ class FisbWeatherDisplay {
         this._airmetPolygons.push({
             polygon: shape, received_at: airmet.received_at,
             expires_at: airmet.expires_at,
-            rawKey: (airmet.raw || '').slice(0, 80),
+            rawKey: key,
             advisory: airmet,
             layer,
             isLine,

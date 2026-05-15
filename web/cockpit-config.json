@@ -137,5 +137,6 @@
     "water": { "fillColor": "#1a2a44", "fillOpacity": 0.6 }
   },
   "notam_api_key": "",
-  "notam_api_base": "https://api-staging.cgifederal-aim.com/nmsapi/v1"
+  "notam_api_base": "https://api-staging.cgifederal-aim.com/nmsapi/v1",
+  "notamBase": ""
 }
