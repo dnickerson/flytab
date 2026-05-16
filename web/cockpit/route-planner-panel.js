@@ -1835,7 +1835,7 @@ class RoutePlannerPanel {
                 let coord = this._coords[v];
                 if (!coord) {
                     const rec = await this._nasrDb.getAirport(v).catch(() => null);
-                    if (rec?.lat != null) {
+                    if (Number.isFinite(rec?.lat) && Number.isFinite(rec?.lon)) {
                         coord = { lat: rec.lat, lon: rec.lon };
                         this._coords[v] = coord;
                     }
@@ -1851,7 +1851,7 @@ class RoutePlannerPanel {
                     let rec = await this._nasrDb.getAirport(v).catch(() => null);
                     if (!rec) rec = await this._nasrDb.getNavaid(v).catch(() => null);
                     if (!rec) rec = await this._nasrDb.getFix(v).catch(() => null);
-                    if (rec?.lat != null) {
+                    if (Number.isFinite(rec?.lat) && Number.isFinite(rec?.lon)) {
                         coord = { lat: rec.lat, lon: rec.lon };
                         this._coords[v] = coord;
                     }

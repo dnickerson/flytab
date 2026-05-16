@@ -1145,7 +1145,6 @@ class CockpitMap {
         if (this._wpZoomHandler) { this.map.off('zoomend', this._wpZoomHandler); this._wpZoomHandler = null; }
         this._wpMarkers = [];
         this._legLines = [];
-        this._routeWaypoints = waypoints || [];
         this._activeWpIdx = 0;
 
         // Clear previous runway extensions
@@ -1161,8 +1160,10 @@ class CockpitMap {
 
         // Guard: drop any waypoint with non-finite coordinates before touching Leaflet.
         // NaN lat/lon causes L.polyline / L.circleMarker to throw and leaves the map blank.
+        // _routeWaypoints is assigned after filtering so _updateActiveLeg never sees NaN coords.
         waypoints = waypoints.filter(wp => Number.isFinite(wp.lat) && Number.isFinite(wp.lon));
         if (waypoints.length < 2) return;
+        this._routeWaypoints = waypoints;
 
         const latlngs = waypoints.map(wp => [wp.lat, wp.lon]);
         this.routeLayer = L.layerGroup();

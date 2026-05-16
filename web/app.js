@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v8.50';
+const FLYTAB_VERSION = 'v8.51';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -1045,8 +1045,8 @@ class FlyTabApp {
     _getRouteBbox() {
         const wps = this._currentTrip?.waypoints;
         if (!wps?.length) return null;
-        const lats = wps.map(w => w.lat).filter(v => v != null);
-        const lons = wps.map(w => w.lon).filter(v => v != null);
+        const lats = wps.map(w => w.lat).filter(v => Number.isFinite(v));
+        const lons = wps.map(w => w.lon).filter(v => Number.isFinite(v));
         if (!lats.length) return null;
         const PAD = 1.0; // ~60 nm buffer
         const latMin = Math.min(...lats) - PAD;
@@ -1245,13 +1245,13 @@ class FlyTabApp {
                         wp.elev_ft = wp.elev_ft ?? apt.elev_ft ?? null;
                         wp.name = wp.name || apt.name;
                         wp.type = 'APT'; // authoritative — NASR confirmed this is an airport
-                    } else if (wp.lat == null || wp.lon == null) {
-                        // Coords missing — try navaid then fix in local NASR
+                    } else if (!Number.isFinite(wp.lat) || !Number.isFinite(wp.lon)) {
+                        // Coords missing or non-finite — try navaid then fix in local NASR
                         let found = await nasr.getNavaid(wp.icao);
                         if (!found) found = await nasr.getFix(wp.icao);
                         if (found) {
-                            wp.lat = wp.lat ?? found.lat;
-                            wp.lon = wp.lon ?? found.lon;
+                            if (!Number.isFinite(wp.lat)) wp.lat = found.lat;
+                            if (!Number.isFinite(wp.lon)) wp.lon = found.lon;
                             wp.elev_ft = wp.elev_ft ?? found.elev_ft ?? null;
                             wp.name = wp.name || found.name;
                         } else {
@@ -1262,7 +1262,7 @@ class FlyTabApp {
                                 if (awcResp.ok) {
                                     const awcData = await awcResp.json();
                                     const awcNav = Array.isArray(awcData) ? awcData[0] : awcData;
-                                    if (awcNav?.lat != null) {
+                                    if (Number.isFinite(awcNav?.lat) && Number.isFinite(awcNav?.lon)) {
                                         wp.lat = awcNav.lat;
                                         wp.lon = awcNav.lon;
                                         wp.elev_ft = awcNav.elev ?? null;
