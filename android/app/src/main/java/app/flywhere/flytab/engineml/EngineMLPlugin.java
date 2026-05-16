@@ -12,6 +12,7 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 import org.json.JSONArray;
 
 import java.util.List;
+import java.util.concurrent.TimeoutException;
 
 /**
  * Capacitor plugin exposing EngineML inference to the FlyTab WebView.
@@ -129,7 +130,7 @@ public class EngineMLPlugin extends Plugin {
             String phase = phaseDetector.detect(rpm, altitude, groundSpeed);
 
             // Feed advisor
-            engineAdvisor.addSample(features, mp, carbTemp, fuelRemaining);
+            engineAdvisor.addSample(features, mp, carbTemp, fuelRemaining, altitude);
 
             JSObject ret = new JSObject();
             ret.put("phase", phase);
@@ -143,50 +144,59 @@ public class EngineMLPlugin extends Plugin {
                     System.arraycopy(window[idx], 0, orderedWindow[i], 0, N_FEATURES);
                 }
 
-                // Run inference
-                float score = inferenceEngine.runInference(orderedWindow);
-                float threshold = thresholdAdapter.getThreshold(phase);
-                boolean anomaly = score > threshold;
+                try {
+                    // Run inference — throws TimeoutException if interpreter.run() hangs
+                    float score = inferenceEngine.runInference(orderedWindow);
+                    float threshold = thresholdAdapter.getThreshold(phase);
+                    boolean anomaly = score > threshold;
 
-                // Adapt threshold with normal scores
-                if (!anomaly) {
-                    thresholdAdapter.recordNormalScore(phase, score);
-                }
-
-                // Get advisories
-                List<EngineAdvisor.Advisory> advisories = engineAdvisor.advise(
-                    features, phase, score, anomaly, distanceNm, groundSpeed);
-
-                ret.put("score", score);
-                ret.put("threshold", threshold);
-                ret.put("anomaly", anomaly);
-                ret.put("latencyMs", inferenceEngine.getLastLatencyMs());
-                ret.put("thresholdAdapted", thresholdAdapter.isAdapted(phase));
-
-                // Feature errors (which component is anomalous)
-                float[] errors = inferenceEngine.getLastFeatureErrors();
-                if (errors != null) {
-                    JSArray errArr = new JSArray();
-                    String[] featureNames = inferenceEngine.getFeatureCols();
-                    for (int i = 0; i < errors.length && i < featureNames.length; i++) {
-                        JSObject fe = new JSObject();
-                        fe.put("name", featureNames[i]);
-                        fe.put("error", errors[i]);
-                        errArr.put(fe);
+                    // Adapt threshold with normal scores
+                    if (!anomaly) {
+                        thresholdAdapter.recordNormalScore(phase, score);
                     }
-                    ret.put("featureErrors", errArr);
-                }
 
-                // Advisories
-                JSArray advArr = new JSArray();
-                for (EngineAdvisor.Advisory adv : advisories) {
-                    JSObject a = new JSObject();
-                    a.put("message", adv.message);
-                    a.put("severity", adv.severity);
-                    a.put("category", adv.category);
-                    advArr.put(a);
+                    // Get advisories
+                    List<EngineAdvisor.Advisory> advisories = engineAdvisor.advise(
+                        features, phase, score, anomaly, distanceNm, groundSpeed);
+
+                    ret.put("score", score);
+                    ret.put("threshold", threshold);
+                    ret.put("anomaly", anomaly);
+                    ret.put("latencyMs", inferenceEngine.getLastLatencyMs());
+                    ret.put("thresholdAdapted", thresholdAdapter.isAdapted(phase));
+
+                    // Feature errors (which component is anomalous)
+                    float[] errors = inferenceEngine.getLastFeatureErrors();
+                    if (errors != null) {
+                        JSArray errArr = new JSArray();
+                        String[] featureNames = inferenceEngine.getFeatureCols();
+                        for (int i = 0; i < errors.length && i < featureNames.length; i++) {
+                            JSObject fe = new JSObject();
+                            fe.put("name", featureNames[i]);
+                            fe.put("error", errors[i]);
+                            errArr.put(fe);
+                        }
+                        ret.put("featureErrors", errArr);
+                    }
+
+                    // Advisories
+                    JSArray advArr = new JSArray();
+                    for (EngineAdvisor.Advisory adv : advisories) {
+                        JSObject a = new JSObject();
+                        a.put("message", adv.message);
+                        a.put("severity", adv.severity);
+                        a.put("category", adv.category);
+                        advArr.put(a);
+                    }
+                    ret.put("advisories", advArr);
+
+                } catch (TimeoutException te) {
+                    // Inference hung — resolve without score so the plugin stays responsive.
+                    // The JS side will see phase+windowReady but no score for this sample.
+                    Log.w(TAG, "Inference timed out — resolving without score");
+                } catch (Exception ie) {
+                    Log.w(TAG, "Inference error — resolving without score", ie);
                 }
-                ret.put("advisories", advArr);
             }
 
             call.resolve(ret);

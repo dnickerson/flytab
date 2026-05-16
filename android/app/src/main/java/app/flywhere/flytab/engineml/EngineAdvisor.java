@@ -41,15 +41,15 @@ public class EngineAdvisor {
     private static final int HISTORY_SIZE = 120; // 2 minutes at 1Hz
     private static final int TREND_WINDOW = 60;  // 1 minute for rate calc
 
-    // ── Feature indices (in the 13-feature model array) ──────
-    // 0:RPM, 1-4:EGT1-4, 5-8:CHT1-4, 9:OilTemp, 10:OilPress, 11:FuelFlow, 12:Alt
+    // ── Feature indices (12-feature v2 model array) ──────────
+    // 0:RPM, 1-4:EGT1-4, 5-8:CHT1-4, 9:OilTemp, 10:OilPress, 11:FuelFlow
     private static final int IDX_RPM = 0;
     private static final int IDX_EGT1 = 1;
     private static final int IDX_CHT1 = 5;
     private static final int IDX_OIL_TEMP = 9;
     private static final int IDX_OIL_PRESS = 10;
     private static final int IDX_FUEL_FLOW = 11;
-    private static final int IDX_ALT = 12;
+    // Altitude is no longer a model feature — passed separately via addSample()
 
     // ── History buffers ──────────────────────────────────────
     private final float[][] history;  // [HISTORY_SIZE][13]
@@ -64,6 +64,7 @@ public class EngineAdvisor {
     private float currentMP = 0;
     private float currentCarbTemp = 0;
     private float currentFuelRemaining = 0;
+    private float currentAltitude = 0;
 
     // ── Message output ──────────────────────────────────────
     public static final int SEVERITY_INFO = 0;
@@ -83,7 +84,7 @@ public class EngineAdvisor {
     }
 
     public EngineAdvisor() {
-        history = new float[HISTORY_SIZE][13];
+        history = new float[HISTORY_SIZE][12];
         mpHistory = new float[HISTORY_SIZE];
         carbTempHistory = new float[HISTORY_SIZE];
     }
@@ -91,8 +92,8 @@ public class EngineAdvisor {
     /**
      * Record a new sample. Call once per second.
      */
-    public void addSample(float[] features, float mp, float carbTemp, float fuelRemaining) {
-        System.arraycopy(features, 0, history[historyHead], 0, Math.min(features.length, 13));
+    public void addSample(float[] features, float mp, float carbTemp, float fuelRemaining, float altitude) {
+        System.arraycopy(features, 0, history[historyHead], 0, Math.min(features.length, 12));
         mpHistory[historyHead] = mp;
         carbTempHistory[historyHead] = carbTemp;
         historyHead = (historyHead + 1) % HISTORY_SIZE;
@@ -101,12 +102,13 @@ public class EngineAdvisor {
         currentMP = mp;
         currentCarbTemp = carbTemp;
         currentFuelRemaining = fuelRemaining;
+        currentAltitude = altitude;
     }
 
     /**
      * Generate advisories based on current engine state.
      *
-     * @param features     Current 13-feature array
+     * @param features     Current 12-feature array (RPM, EGT1-4, CHT1-4, OilTemp, OilPress, FuelFlow)
      * @param phase        Current flight phase
      * @param anomalyScore ML anomaly score
      * @param isAnomaly    Whether ML flagged anomaly
@@ -120,7 +122,7 @@ public class EngineAdvisor {
 
         float rpm = features[IDX_RPM];
         float fuelFlow = features[IDX_FUEL_FLOW];
-        float alt = features[IDX_ALT];
+        float alt = currentAltitude;
 
         // Only generate optimization advisories in cruise/climb/descent with engine running
         boolean engineRunning = rpm > 500;
@@ -381,7 +383,7 @@ public class EngineAdvisor {
     private void addMixtureAdvisory(float[] features, List<Advisory> out) {
         float rpm = features[IDX_RPM];
         float fuelFlow = features[IDX_FUEL_FLOW];
-        float alt = features[IDX_ALT];
+        float alt = currentAltitude;
         float pctPower = computePercentPower(rpm, currentMP, alt);
 
         String mode = detectMixtureMode(features, pctPower);
@@ -411,7 +413,7 @@ public class EngineAdvisor {
     private void addRouteAdvisory(float[] features, float distNm, float gsKts,
                                    List<Advisory> out) {
         float rpm = features[IDX_RPM];
-        float alt = features[IDX_ALT];
+        float alt = currentAltitude;
         float currentGPH = features[IDX_FUEL_FLOW];
         float fuelRemaining = currentFuelRemaining > 0 ? currentFuelRemaining : TANK_CAPACITY_GAL;
         float pctPower = currentMP > 0 ? computePercentPower(rpm, currentMP, alt) : 65f;

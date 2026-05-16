@@ -89,5 +89,5 @@
   },
   "model_file": "anomaly_v2.tflite",
   "architecture": "Conv1D(64,5)x3 \u2192 Dense(8) \u2192 Decoder",
-  "quantization": "INT8"
+  "quantization": "FLOAT32"
 }
