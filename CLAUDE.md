@@ -203,6 +203,76 @@ Apply these rules to any spec or plan that touches more than one file:
 
 **State lifecycle** — For any async state or modal state, note what exists and when it's cleared. (`_lastPlan` is set by `plan()`, cleared on `open()`, never cleared by a leg-limit change.)
 
+## EngineML Plugin
+
+The `EngineML` Capacitor plugin runs a TFLite Conv1D autoencoder on 60-second rolling windows of engine data and produces anomaly scores, per-feature reconstruction errors, and rule-based advisories.
+
+### Files
+
+| File | Purpose |
+|------|---------|
+| `android/app/src/main/assets/anomaly_v2.tflite` | TFLite model (currently float32, ~379K) |
+| `android/app/src/main/assets/anomaly_v2_metadata.json` | Normalization stats, per-phase thresholds, feature list |
+| `android/app/src/main/java/.../engineml/InferenceEngine.java` | TFLite wrapper — dtype detection, inference, MSE |
+| `android/app/src/main/java/.../engineml/EngineMLPlugin.java` | Capacitor bridge — rolling window, calls InferenceEngine + EngineAdvisor |
+| `android/app/src/main/java/.../engineml/EngineAdvisor.java` | Rule-based advisories — trends, mixture, carb ice, fuel |
+| `android/app/src/main/java/.../engineml/PhaseDetector.java` | Flight phase from RPM + altitude + ground speed |
+| `web/cockpit/engine-ml.js` | JS bridge — calls plugin at 1Hz, exposes `window.engineML.lastResult` |
+
+### Feature Array — 12 Features, No Altitude
+
+The v2 model takes **12 features**: `[RPM, EGT1, EGT2, EGT3, EGT4, CHT1, CHT2, CHT3, CHT4, OilTemp, OilPress, FuelFlow]` (indices 0–11).
+
+**Altitude is NOT a model feature.** It is extracted from the JS call separately and passed only to `PhaseDetector.detect()` and `EngineAdvisor.addSample()`. If the training model is retrained with altitude as a feature (index 12 like v1), `EngineAdvisor.java` and `EngineMLPlugin.java` both need updating — they currently expect 12-element feature arrays.
+
+### Dtype — Detect at Runtime, Never Assume
+
+The `anomaly_v2_metadata.json` `"quantization"` field is documentation only and has been wrong before. `InferenceEngine.java` always calls `interpreter.getInputTensor(0).dataType()` after loading and branches on `isFloat32`. **Never hard-code INT8 or float32 assumptions in the inference path.**
+
+**What breaks when dtype is wrong:**
+- INT8 code on a float32 model: allocates 1/4 the required buffer → `interpreter.run()` hangs indefinitely, blocking the Capacitor main thread and all subsequent plugin calls
+- Float32 code with XNNPACK partial delegation: `ByteBuffer` input/output is incompatible → `ArrayIndexOutOfBoundsException` inside the interpreter
+
+**Always use Java arrays for float32** (`float[1][windowSize][nFeatures]`), not `ByteBuffer`. XNNPACK replaces 20 of 55 ops on this device and does not accept raw ByteBuffer for float32 models.
+
+### Delegate Selection on Snapdragon 8 Gen 3 (TB520FU)
+
+NNAPI and GPU delegates are rejected at load time (`"static-sized tensors only, graph has dynamic tensors"`). CPU with XNNPACK is the active delegate. Inference latency: **~2.5ms** per 60-sample window.
+
+If a new model eliminates dynamic-shaped tensors, NNAPI may work — the warmup in `tryQnnDelegate()` handles it automatically. Check logcat on first launch after any model change:
+```
+InferenceEngine: NNAPI delegate loaded (warmup: 1ms → NPU (NNAPI))  ← NPU active
+InferenceEngine: Using CPU delegate                                   ← NNAPI rejected
+```
+
+### Deploying a New Model
+
+1. Replace `anomaly_v2.tflite` and `anomaly_v2_metadata.json` in `android/app/src/main/assets/`
+2. Verify `n_features` in metadata matches what `EngineMLPlugin.N_FEATURES` sends (currently 12)
+3. **Before building**, confirm the model dtype with Python:
+   ```python
+   import tensorflow as tf
+   interp = tf.lite.Interpreter('anomaly_v2.tflite')
+   interp.allocate_tensors()
+   print(interp.get_input_details()[0]['dtype'])   # must match InferenceEngine path
+   print(interp.get_input_details()[0]['shape'])   # must be [1, 60, 12]
+   ```
+4. After installing, run the on-device CDP test to confirm a score is returned:
+   ```bash
+   adb forward tcp:9223 localabstract:webview_devtools_remote_<PID>
+   node /tmp/cdp-fill-window.js   # fills 60-sample window then checks for score
+   ```
+   A working result includes `"score"`, `"threshold"`, and `"featureErrors"` in the JSON.
+
+### CDP Debugging
+
+The FlyTab WebView inspector uses a PID-specific socket — not the default `chrome_devtools_remote`:
+```bash
+adb forward tcp:9223 localabstract:webview_devtools_remote_$(adb shell pidof app.flywhere.flytab)
+curl http://localhost:9223/json   # should show title: "FlyTab", url: "http://localhost/"
+```
+Port 9222 is Chrome browser's DevTools — do not use it for FlyTab.
+
 ## Key Conventions
 
 - **Versioning**: The app version lives at the top of `web/app.js`. `build.sh` reads it and sets `versionCode`/`versionName` in `build.gradle` automatically.
