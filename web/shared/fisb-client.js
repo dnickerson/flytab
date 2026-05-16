@@ -29,7 +29,8 @@ class FisbClient extends EventTarget {
         this.notamCount = 0;
 
         // NEXRAD blocks forwarded to FisbNexrad
-        this._nexradBlocks = new Map(); // "lat,lon" → { ...block, received_at }
+        this._nexradBlocks = new Map(); // "lat,lon" → { received_at }
+        this._nexradNewestAt = 0;
 
         // Purge timer
         this._purgeTimer = null;
@@ -44,6 +45,7 @@ class FisbClient extends EventTarget {
     }
 
     get nexradBlockCount() { return this._nexradBlocks?.size || 0; }
+    get nexradNewestAt()   { return this._nexradNewestAt; }
 
     start() {
         this._stratux.addEventListener('stratux:weather', this._onWeather);
@@ -331,6 +333,18 @@ class FisbClient extends EventTarget {
     // ========== NEXRAD Handling ==========
 
     _handleNexrad(msg) {
+        // Track blocks for status page (lightweight — no intensity data, just presence)
+        if (msg?.NEXRADBlock) {
+            const now = Date.now();
+            const arr = Array.isArray(msg.NEXRADBlock) ? msg.NEXRADBlock : [msg.NEXRADBlock];
+            let stored = 0;
+            for (const b of arr) {
+                if (!b.Intensity || b.Intensity.length === 0) continue;
+                this._nexradBlocks.set(`${b.LatNorth},${b.LonWest}`, { received_at: now });
+                stored++;
+            }
+            if (stored > 0) this._nexradNewestAt = now;
+        }
         // Forward to FisbNexrad renderer via event
         this.dispatchEvent(new CustomEvent('fisb:nexrad', { detail: msg }));
     }
@@ -473,6 +487,12 @@ class FisbClient extends EventTarget {
 
         // CWAs older than 2 hours
         this.cwas = this.cwas.filter(c => now - c.received_at < 2 * 3600000);
+
+        // NEXRAD blocks older than 15 minutes (matches FisbNexrad purge interval)
+        for (const [key, b] of this._nexradBlocks) {
+            if (now - b.received_at > 15 * 60000) this._nexradBlocks.delete(key);
+        }
+        if (this._nexradBlocks.size === 0) this._nexradNewestAt = 0;
 
         // NOTAMs: remove expired
         this.notams = this.notams.filter(n =>

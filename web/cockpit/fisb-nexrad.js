@@ -27,6 +27,10 @@ class FisbNexrad {
         // Loop mode: when true, suppress live _draw() so RadarLoop playback isn't overwritten
         this._loopMode = false;
 
+        // Whether we've already notified the map to switch from internet to FIS-B this session.
+        // Reset on addTo() so the notification fires again after radar is re-enabled.
+        this._notifiedMap = false;
+
         // Bind
         this._onNexrad = (e) => this._handleNexrad(e.detail);
         this._onMove = () => { if (!this._loopMode) this._draw(); };
@@ -56,8 +60,10 @@ class FisbNexrad {
 
     /** Add the NEXRAD overlay to a Leaflet map */
     addTo(map) {
+        if (this._active) return; // already attached
         this._map = map;
         this._active = true;
+        this._notifiedMap = false; // reset so notification fires for this radar session
 
         // Create canvas in Leaflet's overlay pane so it pans/zooms with the map
         this._canvas = document.createElement('canvas');
@@ -76,7 +82,9 @@ class FisbNexrad {
 
     /** Remove overlay from map */
     remove() {
+        if (!this._active) return; // already detached
         this._active = false;
+        this._notifiedMap = false;
         if (this._canvas && this._canvas.parentNode) {
             this._canvas.parentNode.removeChild(this._canvas);
         }
@@ -85,6 +93,7 @@ class FisbNexrad {
             this._map.off('resize', this._onResize);
         }
         this._blocks.clear();
+        this._frameHistory = [];
         this._canvas = null;
         this._ctx = null;
         this._map = null;
@@ -142,8 +151,9 @@ class FisbNexrad {
         // Redraw
         if (this._active) this._draw();
 
-        // If this is the first block received, notify the map to switch from inet → FIS-B
-        if (this._blocks.size === blocks.length && this._map) {
+        // Notify map to switch from internet → FIS-B on first blocks of each radar session
+        if (!this._notifiedMap && this._blocks.size > 0 && this._map) {
+            this._notifiedMap = true;
             window.app?.cockpitMap?.onFisbNexradData?.();
         }
     }

@@ -632,7 +632,8 @@ class RoutePlannerPanel {
     // Build a profile override with measured TAS/GPH for the selected power setting.
     // Uses cruise_ktas (no cruise_ias) so tasAtAltitude() scales TAS with altitude.
     _profileForPower(pctPower) {
-        const powerSettings = CockpitConfig.aircraftRaw?.performance?.power_settings;
+        const perf = CockpitConfig.aircraftRaw?.performance;
+        const powerSettings = perf?.power_settings;
         if (!powerSettings?.length) return null;
         const entry = powerSettings.find(s => s.pct === pctPower)
             || powerSettings.reduce((best, s) =>
@@ -640,16 +641,26 @@ class RoutePlannerPanel {
         if (!entry) return null;
         return {
             id: 'rv9a-default', model: 'RV-9A',
-            cruise_ktas:               entry.tas_kt,
-            fuel_burn_gph:             entry.gph,
-            fuel_capacity_gal:         36,
-            reserve_gal:               10,
-            climb_rate_fpm:            750,
-            service_ceiling_ft:        17500,
-            taxi_burn_gal:             1.5,
-            max_hp:                    180,
+            cruise_ktas:                entry.tas_kt,
+            fuel_burn_gph:              entry.gph,
+            fuel_capacity_gal:          perf?.fuel_capacity_gal ?? 36,
+            reserve_gal:                10,
+            climb_rate_fpm:             perf?.climb_fpm ?? 1500,
+            service_ceiling_ft:         17500,
+            taxi_burn_gal:              1.5,
+            max_hp:                     perf?.max_hp ?? 180,
             alt_power_loss_pct_per_kft: 3.0,
             equipment: { vAirways: true, tAirways: false, jAirways: false, gpsApproach: true },
+            fuelPhases: {
+                climb: {
+                    rate_fpm: perf?.climb_fpm  ?? 1500,
+                    gph:      perf?.climb_gph  ?? 15,
+                },
+                descent: {
+                    rate_fpm: perf?.descent_fpm ?? 700,
+                    gph:      perf?.descent_gph ?? 4,
+                },
+            },
         };
     }
 

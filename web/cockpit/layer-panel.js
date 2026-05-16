@@ -623,19 +623,11 @@ class LayerPanel {
         const cm = this._cockpitMap;
         if (!cm) return;
         if (enabled) {
-            // Always create the internet tile layer + InetRadarSource (fallback when no FIS-B)
-            cm.toggleRadar(true);
-            // Also activate FIS-B canvas overlay if available
-            if (cm._fisbNexrad && !cm._fisbNexrad._active) {
-                cm._fisbNexrad.addTo(cm.map);
-            }
-            if (cm._radarLoop) {
-                cm._radarLoop.show(cm.map);
-            }
+            cm.toggleRadar(true); // activates FIS-B canvas + internet tile + InetRadarSource
+            if (cm._radarLoop) cm._radarLoop.show(cm.map);
         } else {
             if (cm._radarLoop) cm._radarLoop.hide();
-            if (cm._fisbNexrad?._active) cm._fisbNexrad.remove();
-            cm.toggleRadar(false);
+            cm.toggleRadar(false); // deactivates FIS-B canvas + internet tile
         }
     }
 

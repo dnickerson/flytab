@@ -721,12 +721,15 @@ class CockpitMap {
 
     toggleRadar(on) {
         if (on && !this.radarLayer) {
-            // Live current-frame tile (always visible when radar is on but loop is not playing)
-            const fisbActive = this._fisbNexrad?._active;
+            // Activate FIS-B NEXRAD canvas overlay first so _active is correct below
+            if (this._fisbNexrad) this._fisbNexrad.addTo(this.map);
+
+            // Internet tile — background when FIS-B active, primary when not
+            const fisbHasBlocks = (this._fisbNexrad?.blockCount ?? 0) > 0;
             this.radarLayer = L.tileLayer(
                 'https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913/{z}/{x}/{y}.png',
                 {
-                    opacity: fisbActive ? 0.3 : (Settings.radarOpacity || 0.5),
+                    opacity: fisbHasBlocks ? 0.3 : (Settings.radarOpacity || 0.5),
                     maxZoom: 14,
                     updateWhenZooming: false,
                     attribution: 'NEXRAD © Iowa State Mesonet',
@@ -735,12 +738,12 @@ class CockpitMap {
             this.radarLayer.addTo(this.map);
             // IEM historical frames — drives RadarLoop when FIS-B has no data
             this._inetRadarSource = new InetRadarSource(this.map, this.radarLayer);
-            // Use FIS-B if it has actual blocks; otherwise fall back to internet
+            // Use FIS-B if it already has blocks; otherwise fall back to internet
             if (this._radarLoop) {
-                const fisbHasData = this._fisbNexrad?._active && (this._fisbNexrad?.blockCount ?? 0) > 0;
-                this._radarLoop.setNexrad(fisbHasData ? this._fisbNexrad : this._inetRadarSource);
+                this._radarLoop.setNexrad(fisbHasBlocks ? this._fisbNexrad : this._inetRadarSource);
             }
         } else if (!on && this.radarLayer) {
+            if (this._fisbNexrad) this._fisbNexrad.remove();
             if (this._inetRadarSource) {
                 this._inetRadarSource.cleanup();
                 this._inetRadarSource = null;

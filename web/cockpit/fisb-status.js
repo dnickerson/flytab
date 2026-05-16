@@ -230,7 +230,9 @@ class FisbStatus {
     _getProductStats(product) {
         if (product.type === 'nexrad') {
             const count = this._fisb.nexradBlockCount || 0;
-            return { count, newestAge: Infinity, stations: [] };
+            const newestAt = this._fisb.nexradNewestAt || 0;
+            const newestAge = newestAt > 0 ? (Date.now() - newestAt) / 1000 : Infinity;
+            return { count, newestAge, stations: [] };
         }
 
         const store = this._fisb[product.store];

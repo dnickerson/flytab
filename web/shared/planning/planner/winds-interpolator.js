@@ -92,8 +92,28 @@ export async function fetchWinds(departureTime) {
         }
     } catch (_) {}
 
-    // 2. FIS-B winds from Stratux — format investigation required before implementing
-    //    When fisb-client.js exposes winds in canonical shape, wire here.
+    // 2. FIS-B winds from Stratux (live, available in-flight without internet)
+    //    fisb-client.winds is Map{ "STATION:altFt" → {dir,spd,temp} }
+    //    Convert to canonical { station: { altFt: {dir,spd,temp} } } shape.
+    try {
+        const fisbWinds = window.app?.fisbClient?.winds;
+        if (fisbWinds && fisbWinds.size > 0) {
+            const canonical = {};
+            for (const [key, wind] of fisbWinds) {
+                if (wind.dir == null || wind.spd == null) continue;
+                const sep = key.lastIndexOf(':');
+                if (sep < 0) continue;
+                const station = key.slice(0, sep);
+                const alt = parseInt(key.slice(sep + 1), 10);
+                if (!canonical[station]) canonical[station] = {};
+                canonical[station][alt] = {
+                    dir: wind.dir, spd: wind.spd,
+                    temp: wind.temp != null ? wind.temp : undefined,
+                };
+            }
+            if (Object.keys(canonical).length > 0) return canonical;
+        }
+    } catch (_) {}
 
     // 3. Try localStorage cache
     try {

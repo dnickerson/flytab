@@ -36,7 +36,7 @@ const RV9A_FALLBACK = {
     fuel_burn_gph: 8.0,
     fuel_capacity_gal: 36,
     reserve_gal: 10,
-    climb_rate_fpm: 750,
+    climb_rate_fpm: 1500,
     service_ceiling_ft: 17500,
     taxi_burn_gal: 1.5,
     max_hp: 180,           // Lycoming O-360-A1A
