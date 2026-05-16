@@ -7226,8 +7226,8 @@ body {
     position: absolute;
     top: 0;
     right: 0;
-    /* Stop above the collapsed route bar: engine card (~32px) + handle (48px) + instrument strip (64px) */
-    bottom: 144px;
+    /* Stop above the collapsed route bar: engine card (32px) + handle (64px) + instrument strip (64px) */
+    bottom: 164px;
     width: 300px;
     z-index: 600;
     background: var(--bg-surface);
@@ -8309,32 +8309,37 @@ body {
     background: var(--bg-surface, #fff);
 }
 .wx-taf-panel.open, .wx-mos-panel.open { display: block; }
+.wx-mos-panel.open {
+    max-height: 320px;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+}
 
 /* Compact MOS pill grid — one row per period */
-.wx-mos-pg { font-size: 10px; }
+.wx-mos-pg { font-size: 12px; }
 .wx-mos-pg-hdr, .wx-mos-pg-row {
     display: grid;
     /* Time  Cat   Wind  Ceil  Vis   P%   ⛈%   Mix   T/D */
-    grid-template-columns: 38px 34px 58px 40px 30px 20px 20px 32px 1fr;
-    gap: 3px;
+    grid-template-columns: 44px 36px 68px 44px 34px 24px 24px 36px 1fr;
+    gap: 4px;
     align-items: center;
 }
 .wx-mos-pg-hdr {
-    font-size: 9px; font-weight: 700; color: var(--text-secondary);
+    font-size: 11px; font-weight: 700; color: var(--text-secondary);
     text-transform: uppercase; letter-spacing: 0.3px;
-    padding-bottom: 3px; margin-bottom: 1px;
+    padding-bottom: 4px; margin-bottom: 2px;
     border-bottom: 1px solid var(--border);
 }
 .wx-mos-pg-row {
-    padding: 2px 0;
+    padding: 3px 0;
     border-bottom: 1px dotted rgba(0,0,0,.06);
 }
 .wx-mos-pg-row:last-child { border-bottom: none; }
 .wx-mos-pg-mex { opacity: 0.65; }
 .wx-mos-pg-day {
-    font-size: 9px; font-weight: 700; color: var(--text-secondary);
+    font-size: 11px; font-weight: 700; color: var(--text-secondary);
     text-transform: uppercase; letter-spacing: 0.4px;
-    padding: 4px 0 2px; margin-top: 2px;
+    padding: 5px 0 3px; margin-top: 2px;
     border-top: 1px solid var(--border);
 }
 .wx-mos-pg-time { color: var(--text-secondary, #444); white-space: nowrap; }

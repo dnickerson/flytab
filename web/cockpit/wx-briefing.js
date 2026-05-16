@@ -630,6 +630,7 @@ class WxBriefing {
             this._renderSummaryBar();
             this._renderAgeGroup();
             this._renderMos();
+            this._renderMetarSection(); // refresh METAR cards so MOS pills appear
             this._renderPlanningSection();
         }
     }
