@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v8.49';
+const FLYTAB_VERSION = 'v8.50';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -1240,8 +1240,8 @@ class FlyTabApp {
                     // already resolved, the type may be missing on pre-existing waypoints.
                     const apt = await nasr.getAirport(wp.icao);
                     if (apt) {
-                        wp.lat = wp.lat ?? apt.lat;
-                        wp.lon = wp.lon ?? apt.lon;
+                        if (!Number.isFinite(wp.lat)) wp.lat = apt.lat;
+                        if (!Number.isFinite(wp.lon)) wp.lon = apt.lon;
                         wp.elev_ft = wp.elev_ft ?? apt.elev_ft ?? null;
                         wp.name = wp.name || apt.name;
                         wp.type = 'APT'; // authoritative — NASR confirmed this is an airport
@@ -1290,7 +1290,7 @@ class FlyTabApp {
 
         // Filter out unresolved waypoints so the route polyline doesn't break
         const _wpsBeforeFilter = wps;
-        wps = wps.filter(w => w.lat != null && w.lon != null);
+        wps = wps.filter(w => Number.isFinite(w.lat) && Number.isFinite(w.lon));
 
         // Warn if any waypoints were dropped (unresolved)
         const droppedCount = _wpsBeforeFilter.length - wps.length;

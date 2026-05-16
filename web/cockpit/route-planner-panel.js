@@ -151,7 +151,7 @@ class RoutePlannerPanel {
         const dep  = this._route.find(p => p.type === 'dep');
         this._route       = dep ? [dep, { id: icao, type: 'dest' }] : [{ id: icao, type: 'dest' }];
         this._insertIndex = null;
-        if (apt.lat != null && apt.lon != null) this._coords[icao] = { lat: apt.lat, lon: apt.lon };
+        if (Number.isFinite(apt.lat) && Number.isFinite(apt.lon)) this._coords[icao] = { lat: apt.lat, lon: apt.lon };
         if (this._destInput) this._destInput.value = icao;
         if (this._depInput && dep) this._depInput.value = dep.id;
         this._render();
@@ -169,7 +169,7 @@ class RoutePlannerPanel {
     insertApproach({ icao, insertBefore, insertAfter, airportWp }) {
         // Cache coordinates so the planner can resolve approach fixes without a NASR lookup
         const storeCoord = (wp) => {
-            if (!wp || wp.lat == null || wp.lon == null) return;
+            if (!wp || !Number.isFinite(wp.lat) || !Number.isFinite(wp.lon)) return;
             this._coords[wp.icao] = { lat: wp.lat, lon: wp.lon };
             // Store K-prefixed form too so either ID variant resolves in _buildSegment
             if (wp.icao.length <= 3) this._coords['K' + wp.icao] = { lat: wp.lat, lon: wp.lon };
@@ -320,7 +320,7 @@ class RoutePlannerPanel {
         const wps = plan.waypoints || [];
         for (const wp of wps) {
             const id = wp.icao || wp.name || wp.fix;
-            if (id && wp.lat != null && wp.lon != null)
+            if (id && Number.isFinite(wp.lat) && Number.isFinite(wp.lon))
                 this._coords[id] = { lat: wp.lat, lon: wp.lon };
         }
 
@@ -1975,7 +1975,7 @@ class RoutePlannerPanel {
             // Cache all fix coordinates returned by the planner
             if (result.waypoints) {
                 for (const wp of result.waypoints) {
-                    if (wp.fix && wp.lat != null)
+                    if (wp.fix && Number.isFinite(wp.lat) && Number.isFinite(wp.lon))
                         this._coords[wp.fix] = { lat: wp.lat, lon: wp.lon };
                 }
             }
@@ -2292,7 +2292,7 @@ class RoutePlannerPanel {
         let lastAirway = null;
         for (let i = 0; i < waypoints.length; i++) {
             const w = waypoints[i];
-            if (w.lat != null && w.lon != null) this._coords[w.id] = { lat: w.lat, lon: w.lon };
+            if (Number.isFinite(w.lat) && Number.isFinite(w.lon)) this._coords[w.id] = { lat: w.lat, lon: w.lon };
 
             const aw = w.airway || null;
             if (aw && aw !== lastAirway) {
@@ -2611,13 +2611,15 @@ class RoutePlannerPanel {
 
             const id = pill.id;
             let coord = this._coords[id] || coordsCi[id.toUpperCase()];
+            // Discard any cached coord that has non-finite values so the NASR fallback runs
+            if (coord && (!Number.isFinite(coord.lat) || !Number.isFinite(coord.lon))) coord = null;
 
             if (!coord && this._nasrDb) {
                 // Try IDB: airport → navaid → fix
                 let rec = await this._nasrDb.getAirport(id).catch(() => null);
                 if (!rec) rec = await this._nasrDb.getNavaid(id).catch(() => null);
                 if (!rec) rec = await this._nasrDb.getFix(id).catch(() => null);
-                if (rec?.lat != null) {
+                if (Number.isFinite(rec?.lat) && Number.isFinite(rec?.lon)) {
                     coord = { lat: rec.lat, lon: rec.lon };
                     this._coords[id] = coord;
                 }

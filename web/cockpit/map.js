@@ -1159,6 +1159,11 @@ class CockpitMap {
 
         if (!waypoints || waypoints.length < 2) return;
 
+        // Guard: drop any waypoint with non-finite coordinates before touching Leaflet.
+        // NaN lat/lon causes L.polyline / L.circleMarker to throw and leaves the map blank.
+        waypoints = waypoints.filter(wp => Number.isFinite(wp.lat) && Number.isFinite(wp.lon));
+        if (waypoints.length < 2) return;
+
         const latlngs = waypoints.map(wp => [wp.lat, wp.lon]);
         this.routeLayer = L.layerGroup();
 
