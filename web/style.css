@@ -7226,7 +7226,7 @@ body {
     position: absolute;
     top: 0;
     right: 0;
-    /* Stop above the collapsed route bar: engine card (32px) + handle (64px) + instrument strip (64px) */
+    /* Stop above the collapsed route bar: engine card (32px) + handle (48px) + strip (64px) + 20px buffer */
     bottom: 164px;
     width: 300px;
     z-index: 600;

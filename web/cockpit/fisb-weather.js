@@ -614,8 +614,8 @@ class FisbWeatherDisplay {
 
         const isNew = existingIdx < 0; // true = genuinely new advisory (not a replacement)
 
-        this._seenAdvisoryKeys.add(key);
         if (!sigmet.points || sigmet.points.length < 3) return false;
+        this._seenAdvisoryKeys.add(key);
 
         const isConvective = sigmet.type === 'convective';
         const style = {
