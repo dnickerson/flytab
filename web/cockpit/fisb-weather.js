@@ -38,6 +38,9 @@ class FisbWeatherDisplay {
         this._notamMarkers = [];   // { marker, received_at, expires_at }
         // De-dup internet advisories by raw text to avoid FIS-B double-show
         this._seenAdvisoryKeys = new Set();
+        // Track keys of internet-sourced polygons so injectAdvisories can evict stale ones
+        this._internetSigmetKeys = new Set();
+        this._internetAirmetKeys = new Set();
 
         // Alert state
         this._activeAlerts = new Map(); // key → DOM element
@@ -165,6 +168,8 @@ class FisbWeatherDisplay {
         this._airmetPolygons = [];
         this._windMarkers.clear();
         this._notamMarkers = [];
+        this._internetSigmetKeys.clear();
+        this._internetAirmetKeys.clear();
         this._seenAdvisoryKeys.clear();
         this._activeAlerts.clear();
         this._toastSeen.clear();
@@ -296,11 +301,43 @@ class FisbWeatherDisplay {
      * Safe to call repeatedly — deduplicates on the seen-keys set.
      */
     injectAdvisories(sigmets, airmets) {
+        // Build the full set of keys the internet is reporting right now
+        const newSigKeys = new Set((sigmets || []).map(s => {
+            const id = s.sigmetId || FisbWeatherDisplay._extractSigmetId(s.raw);
+            return id ? `SIG:${id}` : FisbWeatherDisplay._normKey(s.raw);
+        }));
+        const newAirKeys = new Set((airmets || []).map(a => FisbWeatherDisplay._normKey(a.raw)));
+
+        // Evict internet-sourced polygons no longer in the current batch.
+        // This handles AWC going from 45 → 8 SIGMETs: the 37 dropped entries are
+        // removed immediately rather than waiting for their expiry time.
+        for (const key of this._internetSigmetKeys) {
+            if (newSigKeys.has(key)) continue;
+            const idx = this._sigmetPolygons.findIndex(e => e.rawKey === key);
+            if (idx >= 0) {
+                console.log(`[SIGMET-DBG] injectAdvisories EVICT-stale key="${key}"`);
+                this._sigmetLayer.removeLayer(this._sigmetPolygons[idx].polygon);
+                this._sigmetPolygons.splice(idx, 1);
+                this._seenAdvisoryKeys.delete(key);
+            }
+        }
+        this._internetSigmetKeys = newSigKeys;
+
+        for (const key of this._internetAirmetKeys) {
+            if (newAirKeys.has(key)) continue;
+            const idx = this._airmetPolygons.findIndex(e => e.rawKey === key);
+            if (idx >= 0) {
+                this._airmetPolygons[idx].layer?.removeLayer(this._airmetPolygons[idx].polygon);
+                this._airmetPolygons.splice(idx, 1);
+                this._seenAdvisoryKeys.delete(key);
+            }
+        }
+        this._internetAirmetKeys = newAirKeys;
+
         const sigIds = (sigmets || []).map(s => s.sigmetId || FisbWeatherDisplay._extractSigmetId(s.raw) || '?');
         console.log(`[SIGMET-DBG] injectAdvisories: ${(sigmets||[]).length} sigmets [${sigIds.join(',')}], ${(airmets||[]).length} airmets`);
 
         let newCount = 0;
-        // SIGMETs: let _addSigmet handle all dedup/replace logic (ID-based key may replace stale polygons)
         for (const s of (sigmets || [])) {
             if (this._addSigmet(s)) newCount++;
         }
