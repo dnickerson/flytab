@@ -5,124 +5,47 @@
 
 /**
  * Internet NEXRAD radar source for RadarLoop.
- * Fetches the RainViewer manifest for real scan timestamps and tile paths,
- * then builds one Leaflet tile layer per frame (added at opacity 0 to preload).
- *
- * Live display: once RainViewer loads, drawLive() shows the last frame layer and
- * hides _radarLayer (IEM). _radarLayer is only visible before the first successful
- * manifest fetch — it acts as a loading placeholder, not a setUrl() target.
- * This avoids the race where setUrl() triggers a Leaflet redraw that shows IEM
- * "Zoom Level Not Supported" tiles while the map is in loop mode.
- *
- * Falls back gracefully — if the manifest fetch fails, _frames stays empty,
- * RadarLoop shows "NO RADAR DATA", and _radarLayer (IEM current frame) remains visible.
+ * Wraps the IEM (Iowa State Mesonet) NEXRAD composite tile layer.
+ * IEM always shows the current composite — no loop animation.
+ * Loop animation is FIS-B NEXRAD only; RadarLoop shows "NO DATA" for internet.
  * Implements the same interface as FisbNexrad so RadarLoop drives both transparently.
  */
 class InetRadarSource {
     constructor(map, radarLayer) {
         this._map = map;
-        this._radarLayer = radarLayer;  // IEM placeholder — visible only before RainViewer loads
-        this._frames = [];
-        this._layers = [];
+        this._radarLayer = radarLayer;
         this._loopActive = false;
-        this._loadGen = 0;          // incremented on each _load() call and on cleanup()
-        this._onFirstFrames = null; // callback fired once when first RainViewer frames arrive
         this.sourceType = 'inet';
-        this._load();
     }
 
-    /** Called by RadarLoop: invoke fn once when RainViewer frames become available */
-    setOnReady(fn) { this._onFirstFrames = fn; }
-
     get isActive() { return true; }
-    get hasData() { return this._frames.length > 0; }
+    get hasData() { return !!this._radarLayer; }
     get blockCount() { return 0; }
-    get frameHistory() { return this._frames; }
+    get frameHistory() { return []; }  // no loop for internet radar
 
     addTo() {}  // no-op — map already stored in constructor
 
     drawLive() {
-        if (this._loopActive) return;
-        const opacity = Settings.radarOpacity || 0.5;
-        if (this._layers.length > 0) {
-            // RainViewer loaded — show most recent frame, hide IEM placeholder
-            this._layers.forEach((l, i) => l.setOpacity(i === this._layers.length - 1 ? opacity : 0));
-            if (this._radarLayer) this._radarLayer.setOpacity(0);
-        } else {
-            // RainViewer not yet loaded — show IEM placeholder
-            if (this._radarLayer) this._radarLayer.setOpacity(opacity);
-        }
+        if (this._loopActive || !this._radarLayer) return;
+        this._radarLayer.setOpacity(Settings.radarOpacity || 0.5);
     }
 
     enterLoopMode() {
         this._loopActive = true;
-        this._layers.forEach(l => l.setOpacity(0));
         if (this._radarLayer) this._radarLayer.setOpacity(0);
     }
 
     exitLoopMode() {
         this._loopActive = false;
-        // RadarLoop.hide() calls drawLive() immediately after — no need to restore here
+        // RadarLoop.hide() calls drawLive() immediately after
     }
 
-    drawFrame(index) {
-        if (index < 0 || index >= this._layers.length) return;
-        const opacity = Settings.radarOpacity || 0.5;
-        this._layers.forEach((l, i) => l.setOpacity(i === index ? opacity : 0));
-        if (this._radarLayer) this._radarLayer.setOpacity(0);
-    }
+    drawFrame() {}  // no-op — no historical frames
 
-    async refresh() {
-        await this._load();
-    }
-
-    async _load() {
-        const gen = ++this._loadGen;
-        try {
-            const r = await fetch('https://api.rainviewer.com/public/weather-maps.json',
-                { cache: 'no-store' });
-            if (!r.ok || gen !== this._loadGen) return;
-            const data = await r.json();
-            if (gen !== this._loadGen || !this._map) return;
-            const host = data.host || 'https://tilecache.rainviewer.com';
-            const past = data.radar?.past;
-            if (!past || past.length === 0) return;
-
-            // Remove old loop layers before rebuilding
-            this._layers.forEach(l => { if (this._map?.hasLayer(l)) this._map.removeLayer(l); });
-            this._layers = [];
-            this._frames = [];
-
-            for (const frame of past) {
-                if (gen !== this._loadGen) return; // cleanup() called mid-loop
-                const url = `${host}${frame.path}/256/{z}/{x}/{y}/2/1_1.png`;
-                const layer = L.tileLayer(url, {
-                    opacity: 0,
-                    maxZoom: 14,
-                    updateWhenZooming: false,
-                    attribution: 'NEXRAD © RainViewer',
-                });
-                layer.addTo(this._map);
-                this._layers.push(layer);
-                this._frames.push({ time: frame.time * 1000 }); // RainViewer seconds → JS ms
-            }
-
-            if (gen !== this._loadGen) return;
-
-            // Switch live display to newest RainViewer frame (unless loop is playing)
-            if (!this._loopActive) this.drawLive();
-
-            // Notify RadarLoop that frames are now available (fires only once per setOnReady call)
-            if (this._onFirstFrames) { this._onFirstFrames(); this._onFirstFrames = null; }
-        } catch { /* offline or manifest unavailable — IEM placeholder stays visible */ }
-    }
+    async refresh() {}  // no-op
 
     cleanup() {
-        this._loadGen++;            // invalidate any in-flight _load()
-        this._onFirstFrames = null;
-        this._layers.forEach(l => { if (this._map?.hasLayer(l)) this._map.removeLayer(l); });
-        this._layers = [];
-        this._frames = [];
+        this._radarLayer = null;
         this._map = null;
     }
 }
@@ -760,13 +683,14 @@ class CockpitMap {
                 'https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913/{z}/{x}/{y}.png',
                 {
                     opacity: fisbHasBlocks ? 0.3 : (Settings.radarOpacity || 0.5),
+                    minNativeZoom: 6,   // IEM returns "Zoom Level Not Supported" below z6
                     maxZoom: 14,
                     updateWhenZooming: false,
                     attribution: 'NEXRAD © Iowa State Mesonet',
                 }
             );
             this.radarLayer.addTo(this.map);
-            // IEM historical frames — drives RadarLoop when FIS-B has no data
+            // Internet radar source — RadarLoop falls back to this when FIS-B has no data
             this._inetRadarSource = new InetRadarSource(this.map, this.radarLayer);
             // Use FIS-B if it already has blocks; otherwise fall back to internet
             if (this._radarLoop) {
