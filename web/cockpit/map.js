@@ -25,9 +25,14 @@ class InetRadarSource {
         this._frames = [];
         this._layers = [];
         this._loopActive = false;
+        this._loadGen = 0;          // incremented on each _load() call and on cleanup()
+        this._onFirstFrames = null; // callback fired once when first RainViewer frames arrive
         this.sourceType = 'inet';
         this._load();
     }
+
+    /** Called by RadarLoop: invoke fn once when RainViewer frames become available */
+    setOnReady(fn) { this._onFirstFrames = fn; }
 
     get isActive() { return true; }
     get hasData() { return this._frames.length > 0; }
@@ -72,21 +77,24 @@ class InetRadarSource {
     }
 
     async _load() {
+        const gen = ++this._loadGen;
         try {
             const r = await fetch('https://api.rainviewer.com/public/weather-maps.json',
                 { cache: 'no-store' });
-            if (!r.ok) return;
+            if (!r.ok || gen !== this._loadGen) return;
             const data = await r.json();
+            if (gen !== this._loadGen || !this._map) return;
             const host = data.host || 'https://tilecache.rainviewer.com';
             const past = data.radar?.past;
             if (!past || past.length === 0) return;
 
             // Remove old loop layers before rebuilding
-            this._layers.forEach(l => { if (this._map.hasLayer(l)) this._map.removeLayer(l); });
+            this._layers.forEach(l => { if (this._map?.hasLayer(l)) this._map.removeLayer(l); });
             this._layers = [];
             this._frames = [];
 
             for (const frame of past) {
+                if (gen !== this._loadGen) return; // cleanup() called mid-loop
                 const url = `${host}${frame.path}/256/{z}/{x}/{y}/2/1_1.png`;
                 const layer = L.tileLayer(url, {
                     opacity: 0,
@@ -99,15 +107,23 @@ class InetRadarSource {
                 this._frames.push({ time: frame.time * 1000 }); // RainViewer seconds → JS ms
             }
 
+            if (gen !== this._loadGen) return;
+
             // Switch live display to newest RainViewer frame (unless loop is playing)
             if (!this._loopActive) this.drawLive();
+
+            // Notify RadarLoop that frames are now available (fires only once per setOnReady call)
+            if (this._onFirstFrames) { this._onFirstFrames(); this._onFirstFrames = null; }
         } catch { /* offline or manifest unavailable — IEM placeholder stays visible */ }
     }
 
     cleanup() {
-        this._layers.forEach(l => { if (this._map.hasLayer(l)) this._map.removeLayer(l); });
+        this._loadGen++;            // invalidate any in-flight _load()
+        this._onFirstFrames = null;
+        this._layers.forEach(l => { if (this._map?.hasLayer(l)) this._map.removeLayer(l); });
         this._layers = [];
         this._frames = [];
+        this._map = null;
     }
 }
 

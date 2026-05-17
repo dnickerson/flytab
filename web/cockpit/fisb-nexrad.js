@@ -65,6 +65,14 @@ class FisbNexrad {
         this._active = true;
         this._notifiedMap = false; // reset so notification fires for this radar session
 
+        // Re-register listener — remove first to prevent double-registration on re-enable
+        this._fisb.removeEventListener('fisb:nexrad', this._onNexrad);
+        this._fisb.addEventListener('fisb:nexrad', this._onNexrad);
+
+        // Restart purge timer for this session
+        if (this._purgeTimer) clearInterval(this._purgeTimer);
+        this._purgeTimer = setInterval(() => this._purgeOld(), 30000);
+
         // Create canvas in Leaflet's overlay pane so it pans/zooms with the map
         this._canvas = document.createElement('canvas');
         this._canvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;';
@@ -86,6 +94,7 @@ class FisbNexrad {
         this._active = false;
         this._notifiedMap = false;
         if (this._purgeTimer) { clearInterval(this._purgeTimer); this._purgeTimer = null; }
+        this._fisb.removeEventListener('fisb:nexrad', this._onNexrad);
         if (this._canvas && this._canvas.parentNode) {
             this._canvas.parentNode.removeChild(this._canvas);
         }

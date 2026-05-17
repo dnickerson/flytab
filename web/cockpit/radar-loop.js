@@ -26,6 +26,7 @@ class RadarLoop {
 
     /** Wire the FisbNexrad renderer for frame data */
     setNexrad(nexrad) {
+        if (this._nexrad?.setOnReady) this._nexrad.setOnReady(null); // cancel any pending callback
         this._nexrad = nexrad;
     }
 
@@ -52,11 +53,23 @@ class RadarLoop {
             this.play();
         } else {
             // No snapshots yet — show live NEXRAD blocks if any, "NO DATA" if none
+            if (this._nexrad) this._nexrad.enterLoopMode();
             this._showControls();
             this._showNoData();
             if (this._nexrad?.hasData) {
-                // Live blocks are available — draw them immediately
                 this._nexrad.drawLive();
+            }
+            // Self-heal: if frames arrive asynchronously (e.g. RainViewer finishes loading
+            // after show() returns), start playback automatically.
+            if (this._nexrad?.setOnReady) {
+                this._nexrad.setOnReady(() => {
+                    if (!this._active) return;
+                    const f = this._nexrad.frameHistory;
+                    if (f.length === 0) return;
+                    this._updateFrameCount();
+                    this._goToFrame(f.length - 1);
+                    this.play();
+                });
             }
         }
     }
@@ -64,6 +77,7 @@ class RadarLoop {
     hide() {
         this.pause();
         this._hideControls();
+        if (this._nexrad?.setOnReady) this._nexrad.setOnReady(null); // cancel pending self-heal
         // Resume live NEXRAD draws and restore current data
         if (this._nexrad) {
             this._nexrad.exitLoopMode(); // safe to call even if never entered
@@ -85,13 +99,18 @@ class RadarLoop {
 
     async refresh() {
         if (!this._active) return;
-        await this._nexrad?.refresh?.();
+        try {
+            await this._nexrad?.refresh?.();
+        } catch { /* network error — leave current frames in place */ }
         this.pause();
         const frames = this._nexrad ? this._nexrad.frameHistory : [];
         if (frames.length > 0) {
             this._updateFrameCount();
-            this._goToFrame(frames.length - 1);
+            // Clamp frameIndex so a rebuilt (shorter) frame array doesn't leave us out of range
+            this._goToFrame(Math.min(this._frameIndex, frames.length - 1));
             this.play();
+        } else {
+            this._showNoData();
         }
         if (this._refreshBtn) {
             this._refreshBtn.style.color = 'var(--status-ok, #00c864)';
@@ -136,7 +155,8 @@ class RadarLoop {
 
     _goToFrame(index) {
         const frames = this._nexrad ? this._nexrad.frameHistory : [];
-        if (index < 0 || index >= frames.length) return;
+        if (frames.length === 0) return;
+        index = Math.max(0, Math.min(index, frames.length - 1));
 
         this._frameIndex = index;
 
