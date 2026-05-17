@@ -460,8 +460,10 @@ class StratuxClient extends EventTarget {
         this._jsonioWs.onmessage = (e) => {
             try {
                 const msg = JSON.parse(e.data);
-                const pid = msg.Product_id;
-                if (((pid >= 51 && pid <= 54) || pid === 63) && msg.NEXRADBlock) {
+                // Stratux only sets NEXRADBlock on NEXRAD frames (PIDs 63, 64, 51-54).
+                // Use presence of NEXRADBlock as discriminator — PID-based filter silently
+                // dropped PID 64 (NEXRAD Regional), the most common in-flight product.
+                if (msg.NEXRADBlock) {
                     this.dispatchEvent(new CustomEvent('stratux:nexrad', { detail: msg }));
                 } else {
                     this.dispatchEvent(new CustomEvent('stratux:fisb-frame', { detail: msg }));
