@@ -85,6 +85,7 @@ class FisbNexrad {
         if (!this._active) return; // already detached
         this._active = false;
         this._notifiedMap = false;
+        if (this._purgeTimer) { clearInterval(this._purgeTimer); this._purgeTimer = null; }
         if (this._canvas && this._canvas.parentNode) {
             this._canvas.parentNode.removeChild(this._canvas);
         }

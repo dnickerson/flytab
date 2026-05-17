@@ -362,25 +362,32 @@ class FisbClient extends EventTarget {
         }
 
         // Graphical SIGMETs/AIRMETs from /jsonio may include Points arrays
-        if (msg.Points && msg.Points.length > 0) {
+        // PID 9-10 = graphical AIRMET, PID 13 = graphical SIGMET
+        if (msg.Points && msg.Points.length > 0 && pid >= 9 && pid <= 13) {
             const points = msg.Points.map(p => [p.Lat, p.Lon]);
-            // Product IDs 9-13 are graphical AIRMETs (9-10) and SIGMETs (13)
-            if (pid >= 9 && pid <= 13) {
-                const entry = {
-                    raw: msg.Text || JSON.stringify(msg),
-                    type: pid <= 10 ? 'airmet' : 'sigmet',
-                    points,
-                    received_at: now,
-                    expires_at: now + 3600000,
-                };
-                if (entry.type === 'sigmet') {
-                    this.sigmets.push(entry);
-                    this.sigmetCount = this.sigmets.length;
-                    this.dispatchEvent(new CustomEvent('fisb:sigmet', { detail: entry }));
-                } else {
-                    this.airmets.push(entry);
-                    this.dispatchEvent(new CustomEvent('fisb:airmet', { detail: entry }));
-                }
+            const entry = {
+                raw: msg.Text || JSON.stringify(msg),
+                type: pid <= 10 ? 'airmet' : 'sigmet',
+                points,
+                received_at: now,
+                expires_at: now + 3600000,
+            };
+            if (entry.type === 'sigmet') {
+                this.sigmets.push(entry);
+                this.sigmetCount = this.sigmets.length;
+                this.dispatchEvent(new CustomEvent('fisb:sigmet', { detail: entry }));
+            } else {
+                this.airmets.push(entry);
+                this.dispatchEvent(new CustomEvent('fisb:airmet', { detail: entry }));
+            }
+            return;
+        }
+
+        if (typeof DiagLog !== 'undefined') {
+            if (!this._unknownPids) this._unknownPids = new Set();
+            if (!this._unknownPids.has(pid)) {
+                this._unknownPids.add(pid);
+                DiagLog.log('fisb', `Unhandled FIS-B frame PID=${pid}`);
             }
         }
     }

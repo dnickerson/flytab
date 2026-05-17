@@ -464,6 +464,11 @@ class StratuxClient extends EventTarget {
                 // Use presence of NEXRADBlock as discriminator — PID-based filter silently
                 // dropped PID 64 (NEXRAD Regional), the most common in-flight product.
                 if (msg.NEXRADBlock) {
+                    if (typeof DiagLog !== 'undefined' && !this._nexradLogged) {
+                        this._nexradLogged = true;
+                        const n = Array.isArray(msg.NEXRADBlock) ? msg.NEXRADBlock.length : 1;
+                        DiagLog.log('stratux', `First NEXRAD block: PID=${msg.Product_id} blocks=${n}`);
+                    }
                     this.dispatchEvent(new CustomEvent('stratux:nexrad', { detail: msg }));
                 } else {
                     this.dispatchEvent(new CustomEvent('stratux:fisb-frame', { detail: msg }));
