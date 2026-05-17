@@ -111,6 +111,9 @@ class FisbNexrad {
         }
     }
 
+    /** Whether the canvas overlay is currently attached to a map */
+    get isActive() { return this._active; }
+
     /** Check if NEXRAD data is available */
     get hasData() { return this._blocks.size > 0; }
 
@@ -119,6 +122,9 @@ class FisbNexrad {
 
     /** Get current block count */
     get blockCount() { return this._blocks.size; }
+
+    /** Draw the live (current) radar view — for use by RadarLoop when exiting loop mode */
+    drawLive() { this._draw(); }
 
     // ========== NEXRAD Block Handling ==========
 

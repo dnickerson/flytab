@@ -37,7 +37,7 @@ class RadarLoop {
         this._active = true;
 
         // Enable the NEXRAD canvas overlay if not already active
-        if (this._nexrad && !this._nexrad._active) {
+        if (this._nexrad && !this._nexrad.isActive) {
             this._nexrad.addTo(map);
         }
 
@@ -56,7 +56,7 @@ class RadarLoop {
             this._showNoData();
             if (this._nexrad?.hasData) {
                 // Live blocks are available — draw them immediately
-                this._nexrad._draw();
+                this._nexrad.drawLive();
             }
         }
     }
@@ -67,7 +67,7 @@ class RadarLoop {
         // Resume live NEXRAD draws and restore current data
         if (this._nexrad) {
             this._nexrad.exitLoopMode(); // safe to call even if never entered
-            if (this._nexrad._active) this._nexrad._draw();
+            if (this._nexrad.isActive) this._nexrad.drawLive();
         }
         this._frameIndex = 0;
         this._active = false;

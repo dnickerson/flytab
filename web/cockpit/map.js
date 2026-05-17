@@ -36,14 +36,14 @@ class InetRadarSource {
         this._buildLayers();
     }
 
-    get _active() { return true; }
+    get isActive() { return true; }
     get hasData() { return this._frames.length > 0; }
     get blockCount() { return 0; }
     get frameHistory() { return this._frames; }
 
     addTo() {}  // no-op — map already stored in constructor
 
-    _draw() {
+    drawLive() {
         if (!this._loopActive && this._radarLayer) {
             this._radarLayer.setOpacity(Settings.radarOpacity || 0.5);
         }
