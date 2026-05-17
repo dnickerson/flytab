@@ -365,8 +365,8 @@ class EngineMLBridge {
             }
         }
 
-        // MAP sudden drop >3" Hg (unexplained power loss)
-        if (this._prevSample && mp > 0) {
+        // MAP sudden drop >3" Hg (unexplained power loss) — airborne only
+        if (this._hasLaunched && this._prevSample && mp > 0) {
             const prevMp = num(this._prevSample.manifold_pressure ?? this._prevSample.mp ?? this._prevSample.MAP ?? 0);
             const delta = prevMp - mp;
             if (prevMp > 0 && delta > 3) {
@@ -378,8 +378,8 @@ class EngineMLBridge {
             }
         }
 
-        // RPM sudden drop >200 RPM
-        if (this._prevSample && rpm > 500) {
+        // RPM sudden drop >200 RPM — airborne only
+        if (this._hasLaunched && this._prevSample && rpm > 500) {
             const prevRpm = num(this._prevSample.rpm ?? this._prevSample.RPM ?? 0);
             const delta = prevRpm - rpm;
             if (prevRpm > 500 && delta > 200) {
@@ -778,8 +778,10 @@ class EngineMLBridge {
 
         this._physicsAlarm = physicsAlarm;
 
-        // Joint trigger: physics AND ML must both confirm
-        if (physicsAlarm && result.anomaly === true) {
+        // Joint trigger: physics AND ML must both confirm — airborne only.
+        // Runup→idle drops >300 RPM on the ground and the 60-sample ML window
+        // flags the transition as anomalous once ThresholdAdapter tightens.
+        if (physicsAlarm && result.anomaly === true && this._hasLaunched) {
             console.warn('[EngineML] EMERGENCY: physics + ML joint confirmation — power loss');
             if (typeof EmergencyGlide !== 'undefined' && window.emergencyGlide) {
                 window.emergencyGlide.trigger({ engineRaw: d, sit, mlResult: result });
