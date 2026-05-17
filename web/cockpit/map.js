@@ -14,7 +14,6 @@ class InetRadarSource {
     constructor(map, radarLayer) {
         this._map = map;
         this._radarLayer = radarLayer;
-        this._loopActive = false;
         this.sourceType = 'inet';
     }
 
@@ -26,19 +25,13 @@ class InetRadarSource {
     addTo() {}  // no-op — map already stored in constructor
 
     drawLive() {
-        if (this._loopActive || !this._radarLayer) return;
+        if (!this._radarLayer) return;
         this._radarLayer.setOpacity(Settings.radarOpacity || 0.5);
     }
 
-    enterLoopMode() {
-        this._loopActive = true;
-        if (this._radarLayer) this._radarLayer.setOpacity(0);
-    }
-
-    exitLoopMode() {
-        this._loopActive = false;
-        // RadarLoop.hide() calls drawLive() immediately after
-    }
+    // IEM has no historical frames, so loop mode is a no-op — tile stays visible.
+    enterLoopMode() {}
+    exitLoopMode() {}
 
     drawFrame() {}  // no-op — no historical frames
 
