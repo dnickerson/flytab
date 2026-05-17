@@ -5,39 +5,96 @@
 
 /**
  * Internet NEXRAD radar source for RadarLoop.
- * Wraps the IEM (Iowa State Mesonet) NEXRAD composite tile layer.
- * IEM always shows the current composite — no loop animation.
- * Loop animation is FIS-B NEXRAD only; RadarLoop shows "NO DATA" for internet.
+ * Uses IEM (Iowa State Mesonet) fixed-offset composite products:
+ *   nexrad-n0q-m55m … nexrad-n0q-m05m (past 55 min), nexrad-n0q-900913 (current)
+ * One tile layer per frame, all added at opacity 0 so tiles preload immediately.
  * Implements the same interface as FisbNexrad so RadarLoop drives both transparently.
  */
 class InetRadarSource {
+    static PRODUCTS = [
+        { offset: -55, product: 'nexrad-n0q-m55m' },
+        { offset: -50, product: 'nexrad-n0q-m50m' },
+        { offset: -45, product: 'nexrad-n0q-m45m' },
+        { offset: -40, product: 'nexrad-n0q-m40m' },
+        { offset: -35, product: 'nexrad-n0q-m35m' },
+        { offset: -30, product: 'nexrad-n0q-m30m' },
+        { offset: -25, product: 'nexrad-n0q-m25m' },
+        { offset: -20, product: 'nexrad-n0q-m20m' },
+        { offset: -15, product: 'nexrad-n0q-m15m' },
+        { offset: -10, product: 'nexrad-n0q-m10m' },
+        { offset:  -5, product: 'nexrad-n0q-m05m' },
+        { offset:   0, product: 'nexrad-n0q-900913' },
+    ];
+
     constructor(map, radarLayer) {
         this._map = map;
-        this._radarLayer = radarLayer;
+        this._radarLayer = radarLayer;  // live current tile — hidden while loop plays
+        this._frames = [];
+        this._layers = [];
+        this._loopActive = false;
         this.sourceType = 'inet';
+        this._buildLayers();
     }
 
     get isActive() { return true; }
-    get hasData() { return !!this._radarLayer; }
+    get hasData() { return this._frames.length > 0; }
     get blockCount() { return 0; }
-    get frameHistory() { return []; }  // no loop for internet radar
+    get frameHistory() { return this._frames; }
 
     addTo() {}  // no-op — map already stored in constructor
 
     drawLive() {
-        if (!this._radarLayer) return;
-        this._radarLayer.setOpacity(Settings.radarOpacity || 0.5);
+        if (!this._loopActive && this._radarLayer) {
+            this._radarLayer.setOpacity(Settings.radarOpacity || 0.5);
+        }
     }
 
-    // IEM has no historical frames, so loop mode is a no-op — tile stays visible.
-    enterLoopMode() {}
-    exitLoopMode() {}
+    enterLoopMode() {
+        this._loopActive = true;
+        if (this._radarLayer) this._radarLayer.setOpacity(0);
+    }
 
-    drawFrame() {}  // no-op — no historical frames
+    exitLoopMode() {
+        this._loopActive = false;
+        this._layers.forEach(l => l.setOpacity(0));
+        if (this._radarLayer) this._radarLayer.setOpacity(Settings.radarOpacity || 0.5);
+    }
 
-    async refresh() {}  // no-op
+    drawFrame(index) {
+        if (index < 0 || index >= this._layers.length) return;
+        const opacity = Settings.radarOpacity || 0.5;
+        this._layers.forEach((l, i) => l.setOpacity(i === index ? opacity : 0));
+    }
+
+    _buildLayers() {
+        const now = Date.now();
+        InetRadarSource.PRODUCTS.forEach(({ offset, product }) => {
+            const url = `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/${product}/{z}/{x}/{y}.png`;
+            const layer = L.tileLayer(url, {
+                opacity: 0,
+                minNativeZoom: 6,   // IEM returns "Zoom Level Not Supported" below z6
+                maxZoom: 14,
+                updateWhenZooming: false,
+                attribution: 'NEXRAD © Iowa State Mesonet',
+            });
+            layer.addTo(this._map);
+            this._layers.push(layer);
+            this._frames.push({ time: now + offset * 60 * 1000 });
+        });
+    }
+
+    refresh() {
+        const now = Date.now();
+        this._layers.forEach(l => l.redraw());
+        this._frames = InetRadarSource.PRODUCTS.map(({ offset }) => ({
+            time: now + offset * 60 * 1000,
+        }));
+    }
 
     cleanup() {
+        this._layers.forEach(l => { if (this._map?.hasLayer(l)) this._map.removeLayer(l); });
+        this._layers = [];
+        this._frames = [];
         this._radarLayer = null;
         this._map = null;
     }
