@@ -7,14 +7,21 @@
  * Internet NEXRAD radar source for RadarLoop.
  * Fetches the RainViewer manifest for real scan timestamps and tile paths,
  * then builds one Leaflet tile layer per frame (added at opacity 0 to preload).
- * Falls back gracefully — if the manifest fetch fails, _frames stays empty
- * and RadarLoop shows "NO RADAR DATA" while the live IEM tile remains visible.
+ *
+ * Live display: once RainViewer loads, drawLive() shows the last frame layer and
+ * hides _radarLayer (IEM). _radarLayer is only visible before the first successful
+ * manifest fetch — it acts as a loading placeholder, not a setUrl() target.
+ * This avoids the race where setUrl() triggers a Leaflet redraw that shows IEM
+ * "Zoom Level Not Supported" tiles while the map is in loop mode.
+ *
+ * Falls back gracefully — if the manifest fetch fails, _frames stays empty,
+ * RadarLoop shows "NO RADAR DATA", and _radarLayer (IEM current frame) remains visible.
  * Implements the same interface as FisbNexrad so RadarLoop drives both transparently.
  */
 class InetRadarSource {
     constructor(map, radarLayer) {
         this._map = map;
-        this._radarLayer = radarLayer;  // live current tile — hidden while loop plays
+        this._radarLayer = radarLayer;  // IEM placeholder — visible only before RainViewer loads
         this._frames = [];
         this._layers = [];
         this._loopActive = false;
@@ -30,26 +37,34 @@ class InetRadarSource {
     addTo() {}  // no-op — map already stored in constructor
 
     drawLive() {
-        if (!this._loopActive && this._radarLayer) {
-            this._radarLayer.setOpacity(Settings.radarOpacity || 0.5);
+        if (this._loopActive) return;
+        const opacity = Settings.radarOpacity || 0.5;
+        if (this._layers.length > 0) {
+            // RainViewer loaded — show most recent frame, hide IEM placeholder
+            this._layers.forEach((l, i) => l.setOpacity(i === this._layers.length - 1 ? opacity : 0));
+            if (this._radarLayer) this._radarLayer.setOpacity(0);
+        } else {
+            // RainViewer not yet loaded — show IEM placeholder
+            if (this._radarLayer) this._radarLayer.setOpacity(opacity);
         }
     }
 
     enterLoopMode() {
         this._loopActive = true;
+        this._layers.forEach(l => l.setOpacity(0));
         if (this._radarLayer) this._radarLayer.setOpacity(0);
     }
 
     exitLoopMode() {
         this._loopActive = false;
-        this._layers.forEach(l => l.setOpacity(0));
-        if (this._radarLayer) this._radarLayer.setOpacity(Settings.radarOpacity || 0.5);
+        // RadarLoop.hide() calls drawLive() immediately after — no need to restore here
     }
 
     drawFrame(index) {
         if (index < 0 || index >= this._layers.length) return;
         const opacity = Settings.radarOpacity || 0.5;
         this._layers.forEach((l, i) => l.setOpacity(i === index ? opacity : 0));
+        if (this._radarLayer) this._radarLayer.setOpacity(0);
     }
 
     async refresh() {
@@ -84,12 +99,9 @@ class InetRadarSource {
                 this._frames.push({ time: frame.time * 1000 }); // RainViewer seconds → JS ms
             }
 
-            // Update the live tile to the most recent frame
-            const latest = past[past.length - 1];
-            if (this._radarLayer) {
-                this._radarLayer.setUrl(`${host}${latest.path}/256/{z}/{x}/{y}/2/1_1.png`);
-            }
-        } catch { /* offline or manifest unavailable — existing tile remains visible */ }
+            // Switch live display to newest RainViewer frame (unless loop is playing)
+            if (!this._loopActive) this.drawLive();
+        } catch { /* offline or manifest unavailable — IEM placeholder stays visible */ }
     }
 
     cleanup() {
