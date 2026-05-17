@@ -25,23 +25,24 @@ const RV9A_DEFAULT = {
     id: 'rv9a-default',
     tailNumber: 'N194JT',
     model: 'RV-9A',
-    cruise_ktas: 155,
-    fuel_burn_gph: 8.0,
+    cruise_ktas: 153,
+    cruise_ias: 140,
+    fuel_burn_gph: 8.1,
     fuel_capacity_gal: 36,
     reserve_gal: 10,
-    climb_rate_fpm: 700,
+    climb_rate_fpm: 1500,
     service_ceiling_ft: 17500,
     taxi_burn_gal: 0.33,
+    max_hp: 180,
+    alt_power_loss_pct_per_kft: 3.0,
     equipment: { vAirways: true, tAirways: false, jAirways: false, gpsApproach: true },
-    // Per-phase performance from Lycoming O-360-A1A POH (validated against EDM data)
     fuelPhases: {
-        taxi:    { gph: 2.0, time_min: 10 },
-        climb:   { gph: 16.5, ias_kt: 100, rate_fpm: 700, percent_power: 98,
-                   mixture: 'FULL_RICH', rpm: 2650, mp: 29 },
-        cruise:  { gph: 8.0, ias_kt: 148, percent_power: 65,
+        climb:   { gph: 15,  ias_kt: 120, rate_fpm: 1500, percent_power: 100,
+                   mixture: 'FULL_RICH', rpm: 2700, mp: 28 },
+        cruise:  { gph: 8.1, ias_kt: 140, percent_power: 65,
                    mixture: 'LOP', rpm: 2400, mp: 22 },
-        descent: { gph: 6.2, ias_kt: 140, rate_fpm: 500, percent_power: 50,
-                   mixture: 'LOP', rpm: 2400, mp: 17 },
+        descent: { gph: 4.0, ias_kt: 170, rate_fpm: 700, percent_power: 50,
+                   mixture: 'LOP', rpm: 2400, mp: 14 },
     },
 };
 
@@ -75,12 +76,13 @@ export class IdbProfileStore {
             await this._setActiveId(RV9A_DEFAULT.id);
             return RV9A_DEFAULT;
         }
-        // Migrate rv9a-default: add fuelPhases if missing (added v7.52)
+        // Migrate rv9a-default: overwrite stale profiles with correct values
         const rv9a = all.find(p => p.id === 'rv9a-default');
-        if (rv9a && !rv9a.fuelPhases) {
-            const migrated = { ...rv9a, fuelPhases: RV9A_DEFAULT.fuelPhases,
-                               climb_rate_fpm: RV9A_DEFAULT.climb_rate_fpm,
-                               taxi_burn_gal:  RV9A_DEFAULT.taxi_burn_gal };
+        if (rv9a && (rv9a.climb_rate_fpm !== RV9A_DEFAULT.climb_rate_fpm ||
+                     rv9a.taxi_burn_gal  !== RV9A_DEFAULT.taxi_burn_gal  ||
+                     rv9a.fuelPhases?.climb?.rate_fpm !== RV9A_DEFAULT.fuelPhases.climb.rate_fpm ||
+                     rv9a.fuelPhases?.descent?.gph    !== RV9A_DEFAULT.fuelPhases.descent.gph)) {
+            const migrated = { ...RV9A_DEFAULT, id: 'rv9a-default' };
             await this.put(migrated);
             const idx = all.indexOf(rv9a);
             all[idx] = migrated;

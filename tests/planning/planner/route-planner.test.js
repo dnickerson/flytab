@@ -106,6 +106,11 @@ describe('recomputeLegs with winds and altitude', () => {
         climb_rate_fpm: 750, service_ceiling_ft: 17500, taxi_burn_gal: 1.5,
         max_hp: 180,
         equipment: { vAirways: true, tAirways: false, jAirways: false, gpsApproach: true },
+        fuelPhases: {
+            climb:   { gph: 15,  ias_kt: 90,  rate_fpm: 750 },
+            cruise:  { gph: 8.0, ias_kt: 148 },
+            descent: { gph: 4.0, ias_kt: 70,  rate_fpm: 700 },
+        },
     };
     const simplePlan = {
         departure: 'KLKR', destination: 'KCLT',

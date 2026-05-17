@@ -68,7 +68,7 @@ export function decomposeLeg(profile, leg) {
         phases.climb = {
             timeHrs: climbHrs,
             fuelGal: climbGph * climbHrs,
-            distNm:  Math.min(climbDist, leg.distNm * 0.4),
+            distNm:  Math.min(climbDist, leg.distNm * 0.6),
             altFt:   leg.altFt,
         };
     }
@@ -86,7 +86,7 @@ export function decomposeLeg(profile, leg) {
         phases.descent = {
             timeHrs: descHrs,
             fuelGal: descGph * descHrs,
-            distNm:  Math.min(descDist, leg.distNm * 0.3),
+            distNm:  Math.min(descDist, Math.max(0, leg.distNm - phases.climb.distNm)),
             altFt:   leg.altFt,
         };
     }

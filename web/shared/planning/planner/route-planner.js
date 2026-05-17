@@ -31,17 +31,25 @@ const RV9A_FALLBACK = {
     id: 'rv9a-default',
     tailNumber: '',
     model: 'RV-9A',
-    cruise_ktas: 155,
-    cruise_ias: 148,       // 155 KTAS at 8000 ft ISA ≈ 148 KIAS
-    fuel_burn_gph: 8.0,
+    cruise_ktas: 153,
+    cruise_ias: 140,
+    fuel_burn_gph: 8.1,
     fuel_capacity_gal: 36,
     reserve_gal: 10,
     climb_rate_fpm: 1500,
     service_ceiling_ft: 17500,
-    taxi_burn_gal: 1.5,
+    taxi_burn_gal: 0.33,
     max_hp: 180,           // Lycoming O-360-A1A
     alt_power_loss_pct_per_kft: 3.0,
     equipment: { vAirways: true, tAirways: false, jAirways: false, gpsApproach: true },
+    fuelPhases: {
+        climb:   { gph: 15,  ias_kt: 120, rate_fpm: 1500, percent_power: 100,
+                   mixture: 'FULL_RICH', rpm: 2700, mp: 28 },
+        cruise:  { gph: 8.1, ias_kt: 140, percent_power: 65,
+                   mixture: 'LOP', rpm: 2400, mp: 22 },
+        descent: { gph: 4.0, ias_kt: 170, rate_fpm: 700, percent_power: 50,
+                   mixture: 'LOP', rpm: 2400, mp: 14 },
+    },
 };
 
 export class RoutePlanner {

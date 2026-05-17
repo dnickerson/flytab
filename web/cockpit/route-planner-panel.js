@@ -629,8 +629,7 @@ class RoutePlannerPanel {
         wireTap(this._summaryEl, () => this._openSettingsPopup());
     }
 
-    // Build a profile override with measured TAS/GPH for the selected power setting.
-    // Uses cruise_ktas (no cruise_ias) so tasAtAltitude() scales TAS with altitude.
+    // Build a profile override from measured power-setting data and aircraft-config IAS values.
     _profileForPower(pctPower) {
         const perf = CockpitConfig.aircraftRaw?.performance;
         const powerSettings = perf?.power_settings;
@@ -642,24 +641,31 @@ class RoutePlannerPanel {
         return {
             id: 'rv9a-default', model: 'RV-9A',
             cruise_ktas:                entry.tas_kt,
+            cruise_ias:                 perf?.cruise_speed_kt ?? 140,
             fuel_burn_gph:              entry.gph,
             fuel_capacity_gal:          perf?.fuel_capacity_gal ?? 36,
             reserve_gal:                10,
             climb_rate_fpm:             perf?.climb_fpm ?? 1500,
             service_ceiling_ft:         17500,
-            taxi_burn_gal:              1.5,
+            taxi_burn_gal:              0.33,
             max_hp:                     perf?.max_hp ?? 180,
             alt_power_loss_pct_per_kft: 3.0,
             equipment: { vAirways: true, tAirways: false, jAirways: false, gpsApproach: true },
             fuelPhases: {
-                climb: {
-                    rate_fpm: perf?.climb_fpm  ?? 1500,
-                    gph:      perf?.climb_gph  ?? 15,
-                },
-                descent: {
-                    rate_fpm: perf?.descent_fpm ?? 700,
-                    gph:      perf?.descent_gph ?? 4,
-                },
+                climb:   { rate_fpm: perf?.climb_fpm   ?? 1500,
+                           gph:      perf?.climb_gph   ?? 15,
+                           ias_kt:   perf?.climb_speed_kt ?? 120,
+                           rpm: perf?.climb_rpm, mp: perf?.climb_mp,
+                           percent_power: perf?.climb_pwr_pct },
+                cruise:  { ias_kt:   perf?.cruise_speed_kt ?? 140,
+                           gph:      entry.gph,
+                           rpm:      entry.rpm,  mp: entry.mp,
+                           percent_power: entry.pct },
+                descent: { rate_fpm: perf?.descent_fpm ?? 700,
+                           gph:      perf?.descent_gph ?? 4,
+                           ias_kt:   perf?.descent_speed_kt ?? 170,
+                           rpm: perf?.descent_rpm, mp: perf?.descent_mp,
+                           percent_power: perf?.descent_pwr_pct },
             },
         };
     }
@@ -669,7 +675,6 @@ class RoutePlannerPanel {
         const O2_REQUIRED_FT = 14000; // FAR 91.211: supplemental O2 required above this altitude
         if (!this._lastPlan || !this._lastPlan.waypoints || this._lastPlan.waypoints.length < 2) return [];
         const profileOverride = this._profileForPower(this._pctPower);
-        const tasAtAlt = window.FlyTabPlanning?.tasAtAltitude;
 
         // Nearest FD station to route midpoint for actual wind dir/spd per altitude
         let fdStation = null;
@@ -693,14 +698,24 @@ class RoutePlannerPanel {
             });
             const s = result.summary;
             const gsKt = s.totalEteHrs > 0 ? Math.round(s.totalDistNm / s.totalEteHrs) : 0;
-            const tasKt = tasAtAlt ? Math.round(tasAtAlt(profileOverride, altFt)) : 0;
-            const windKt = tasKt > 0 ? gsKt - tasKt : null;
-            let windDir = null, windSpd = null;
+            // Use per-leg windKt from recomputeLegs (gs−tas with actual wind applied).
+            // This avoids the spurious headwind that appears when subtracting cruise-only
+            // TAS from a trip-average GS that includes slower climb/descent phases.
+            // When winds are variable, legs have windKt=undefined → null → shows '—'.
+            const legWinds = result.legs?.filter(l => l.windKt !== undefined) ?? [];
+            const windKt = legWinds.length === (result.legs?.length ?? 0) && legWinds.length > 0
+                ? Math.round(legWinds.reduce((sum, l) => sum + l.windKt * l.distNm, 0) /
+                             legWinds.reduce((sum, l) => sum + l.distNm, 0))
+                : null;
+            let windDir = null, windSpd = null, windVariable = false;
             if (fdStation && this._lastWinds?.[fdStation] && window.FlyTabPlanning?.getWindAtAlt) {
                 const entry = window.FlyTabPlanning.getWindAtAlt(this._lastWinds[fdStation], altFt);
-                if (entry && !entry.variable) { windDir = entry.dir; windSpd = entry.spd; }
+                if (entry) {
+                    if (entry.variable) { windVariable = true; }
+                    else { windDir = entry.dir; windSpd = entry.spd; }
+                }
             }
-            rows.push({ altFt, eteHrs: s.totalEteHrs, gsKt, windKt, windDir, windSpd, fuelGal: s.totalFuelGal, aboveCeiling: false });
+            rows.push({ altFt, eteHrs: s.totalEteHrs, gsKt, windKt, windDir, windSpd, windVariable, fuelGal: s.totalFuelGal, aboveCeiling: false });
         }
         const validRows = rows.filter(r => !r.aboveCeiling);
         if (validRows.length) {
@@ -869,9 +884,11 @@ class RoutePlannerPanel {
                     : row.windKt > 0 ? `+${row.windKt}`
                     : String(row.windKt);
                 const cmpCls = row.windKt == null ? '' : row.windKt >= 0 ? ' rpp-opt-wind-tail' : ' rpp-opt-wind-head';
-                const rawWind = (row.windDir != null && row.windSpd != null)
-                    ? `<span class="rpp-opt-wind-raw">${row.windDir}/${row.windSpd}</span>`
-                    : '';
+                const rawWind = row.windVariable
+                    ? `<span class="rpp-opt-wind-raw">VRB</span>`
+                    : (row.windDir != null && row.windSpd != null)
+                        ? `<span class="rpp-opt-wind-raw">${row.windDir}/${row.windSpd}</span>`
+                        : '';
                 html += `<span class="rpp-opt-ete">${fmtEte(row.eteHrs)}${row.isOptimal ? ' ★' : ''}</span>`;
                 html += `<span class="rpp-opt-wind-cell">${rawWind}<span class="rpp-opt-wind-cmp${cmpCls}">${cmpStr}</span></span>`;
                 html += `<span class="rpp-opt-gs">${row.gsKt}</span>`;
@@ -2168,7 +2185,7 @@ class RoutePlannerPanel {
                 }),
               }
             : this._lastPlan;
-        this._currentPlan = this._planner.recomputeLegs(plan, null, opts);
+        this._currentPlan = this._planner.recomputeLegs(plan, this._profileForPower(this._pctPower), opts);
         if (this._statsEl) this._updateStats(this._currentPlan);
         this._windWarnings = [];
         if (!opts.winds) {
@@ -2434,7 +2451,7 @@ class RoutePlannerPanel {
                     cruiseAltFt: this._cruiseAltFt ?? undefined,
                     winds:       this._lastWinds ?? undefined,
                 };
-                appliedPlan = this._planner.recomputeLegs({ waypoints: wps }, null, recomputeOpts);
+                appliedPlan = this._planner.recomputeLegs({ waypoints: wps }, this._profileForPower(this._pctPower), recomputeOpts);
                 legs = appliedPlan.legs;
             } catch (err) {
                 console.warn('[RoutePlannerPanel] recomputeLegs failed, using bare legs:', err);
@@ -2589,7 +2606,7 @@ class RoutePlannerPanel {
                 selfServeOnly: this._selfServeOnly,
             },
         };
-        const computed = this._planner.recomputeLegs(plan, null, { winds: this._lastWinds ?? undefined });
+        const computed = this._planner.recomputeLegs(plan, this._profileForPower(this._pctPower), { winds: this._lastWinds ?? undefined });
         this._updateStats(computed);
         const result = await this._planner.insertFuelStops(computed);
         if (result.fuelStopCandidates?.length > 0) {
