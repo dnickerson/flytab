@@ -83,9 +83,9 @@ class RadarLoop {
         return this._active;
     }
 
-    refresh() {
+    async refresh() {
         if (!this._active) return;
-        this._nexrad?.refresh?.();
+        await this._nexrad?.refresh?.();
         this.pause();
         const frames = this._nexrad ? this._nexrad.frameHistory : [];
         if (frames.length > 0) {

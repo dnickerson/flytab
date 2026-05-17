@@ -5,27 +5,13 @@
 
 /**
  * Internet NEXRAD radar source for RadarLoop.
- * Uses Iowa State IEM's pre-built fixed-offset products:
- *   nexrad-n0q-900913 (current), nexrad-n0q-m05m … nexrad-n0q-m55m
- * One tile layer per frame, all added at opacity 0 so tiles preload immediately.
- * Implements the same interface as FisbNexrad so RadarLoop drives it transparently.
+ * Fetches the RainViewer manifest for real scan timestamps and tile paths,
+ * then builds one Leaflet tile layer per frame (added at opacity 0 to preload).
+ * Falls back gracefully — if the manifest fetch fails, _frames stays empty
+ * and RadarLoop shows "NO RADAR DATA" while the live IEM tile remains visible.
+ * Implements the same interface as FisbNexrad so RadarLoop drives both transparently.
  */
 class InetRadarSource {
-    static PRODUCTS = [
-        { offset: -55, product: 'nexrad-n0q-m55m' },
-        { offset: -50, product: 'nexrad-n0q-m50m' },
-        { offset: -45, product: 'nexrad-n0q-m45m' },
-        { offset: -40, product: 'nexrad-n0q-m40m' },
-        { offset: -35, product: 'nexrad-n0q-m35m' },
-        { offset: -30, product: 'nexrad-n0q-m30m' },
-        { offset: -25, product: 'nexrad-n0q-m25m' },
-        { offset: -20, product: 'nexrad-n0q-m20m' },
-        { offset: -15, product: 'nexrad-n0q-m15m' },
-        { offset: -10, product: 'nexrad-n0q-m10m' },
-        { offset:  -5, product: 'nexrad-n0q-m05m' },
-        { offset:   0, product: 'nexrad-n0q-900913' },
-    ];
-
     constructor(map, radarLayer) {
         this._map = map;
         this._radarLayer = radarLayer;  // live current tile — hidden while loop plays
@@ -33,7 +19,7 @@ class InetRadarSource {
         this._layers = [];
         this._loopActive = false;
         this.sourceType = 'inet';
-        this._buildLayers();
+        this._load();
     }
 
     get isActive() { return true; }
@@ -66,28 +52,44 @@ class InetRadarSource {
         this._layers.forEach((l, i) => l.setOpacity(i === index ? opacity : 0));
     }
 
-    _buildLayers() {
-        const now = Date.now();
-        InetRadarSource.PRODUCTS.forEach(({ offset, product }) => {
-            const url = `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/${product}/{z}/{x}/{y}.png`;
-            const layer = L.tileLayer(url, {
-                opacity: 0,
-                maxZoom: 14,
-                updateWhenZooming: false,
-                attribution: 'NEXRAD © Iowa State Mesonet',
-            });
-            layer.addTo(this._map);
-            this._layers.push(layer);
-            this._frames.push({ time: now + offset * 60 * 1000 });
-        });
+    async refresh() {
+        await this._load();
     }
 
-    refresh() {
-        const now = Date.now();
-        this._layers.forEach(l => l.redraw());
-        this._frames = InetRadarSource.PRODUCTS.map(({ offset }) => ({
-            time: now + offset * 60 * 1000,
-        }));
+    async _load() {
+        try {
+            const r = await fetch('https://api.rainviewer.com/public/weather-maps.json',
+                { cache: 'no-store' });
+            if (!r.ok) return;
+            const data = await r.json();
+            const host = data.host || 'https://tilecache.rainviewer.com';
+            const past = data.radar?.past;
+            if (!past || past.length === 0) return;
+
+            // Remove old loop layers before rebuilding
+            this._layers.forEach(l => { if (this._map.hasLayer(l)) this._map.removeLayer(l); });
+            this._layers = [];
+            this._frames = [];
+
+            for (const frame of past) {
+                const url = `${host}${frame.path}/256/{z}/{x}/{y}/2/1_1.png`;
+                const layer = L.tileLayer(url, {
+                    opacity: 0,
+                    maxZoom: 14,
+                    updateWhenZooming: false,
+                    attribution: 'NEXRAD © RainViewer',
+                });
+                layer.addTo(this._map);
+                this._layers.push(layer);
+                this._frames.push({ time: frame.time * 1000 }); // RainViewer seconds → JS ms
+            }
+
+            // Update the live tile to the most recent frame
+            const latest = past[past.length - 1];
+            if (this._radarLayer) {
+                this._radarLayer.setUrl(`${host}${latest.path}/256/{z}/{x}/{y}/2/1_1.png`);
+            }
+        } catch { /* offline or manifest unavailable — existing tile remains visible */ }
     }
 
     cleanup() {
