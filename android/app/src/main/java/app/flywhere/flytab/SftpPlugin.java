@@ -93,9 +93,10 @@ public class SftpPlugin extends Plugin {
                 channel = (ChannelSftp) session.openChannel("sftp");
                 channel.connect(10000);
 
+                String expandedPath = expandHome(finalRemotePath, channel);
                 // Create remote directory if it doesn't exist (ignore error if it does)
-                try { channel.mkdir(finalRemotePath); } catch (Exception ignored) {}
-                channel.cd(finalRemotePath);
+                try { channel.mkdir(expandedPath); } catch (Exception ignored) {}
+                channel.cd(expandedPath);
 
                 try (FileInputStream fis = new FileInputStream(localFile)) {
                     channel.put(fis, filename);
@@ -161,7 +162,7 @@ public class SftpPlugin extends Plugin {
 
                 channel = (ChannelSftp) session.openChannel("sftp");
                 channel.connect(10000);
-                channel.get(finalRemoteFile, localFile.getAbsolutePath());
+                channel.get(expandHome(finalRemoteFile, channel), localFile.getAbsolutePath());
 
                 JSObject result = new JSObject();
                 result.put("ok", true);
@@ -344,6 +345,18 @@ public class SftpPlugin extends Plugin {
             result.put("hasKey", false);
             call.resolve(result);
         }
+    }
+
+    /** Expand a leading ~ or ~/ in an SFTP path using the channel's home directory. */
+    private String expandHome(String path, ChannelSftp channel) {
+        if (path == null) return path;
+        if (path.equals("~")) {
+            try { return channel.getHome(); } catch (Exception e) { return path; }
+        }
+        if (path.startsWith("~/")) {
+            try { return channel.getHome() + path.substring(1); } catch (Exception e) { return path; }
+        }
+        return path;
     }
 
     private byte[] loadStoredKey() {
