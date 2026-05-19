@@ -62,6 +62,11 @@ class ConfigEditor {
         const body = this._el.querySelector('.config-editor-body');
         const sections = [];
 
+        sections.push(`<div class="ce-update-bar">
+            <button class="ce-update-btn">&#11015; Download &amp; Install Update</button>
+            <span class="ce-update-status"></span>
+        </div>`);
+
         // Cockpit config sections
         sections.push(this._sectionHeader('Cockpit Configuration'));
         sections.push(this._renderSection('map', 'Map Settings', this._cockpitConfig.map || {}, {
@@ -263,6 +268,7 @@ class ConfigEditor {
         // Bind save/reload — touchstart + click for iPad
         wireTap(body.querySelector('.ce-save-btn'), () => this._save());
         wireTap(body.querySelector('.ce-reload-btn'), () => this._load());
+        wireTap(body.querySelector('.ce-update-btn'), () => this._downloadAndInstall());
 
         // Track changes
         body.querySelectorAll('input, select').forEach(el => {
@@ -514,6 +520,117 @@ class ConfigEditor {
         this._parentEl.appendChild(this._el);
     }
 
+    async _getOrPromptPassword() {
+        try {
+            const stored = await Capacitor.Plugins.Sftp.getPassword();
+            if (stored.password) return stored.password;
+        } catch (_) {}
+
+        return new Promise((resolve) => {
+            const modal = document.createElement('div');
+            modal.style.cssText = [
+                'position:fixed', 'inset:0', 'z-index:300000',
+                'background:rgba(0,0,0,0.75)',
+                'display:flex', 'align-items:center', 'justify-content:center',
+                'font-family:-apple-system,system-ui,sans-serif'
+            ].join(';');
+            modal.innerHTML = `
+                <div style="background:#1a2540;border-radius:12px;padding:24px;max-width:340px;width:90%;">
+                    <div style="color:#e8ecf0;font-size:17px;font-weight:600;margin-bottom:16px;">SFTP Password</div>
+                    <input type="password" id="_ce-pw" placeholder="Password" autocomplete="current-password"
+                        style="width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;
+                               border:1px solid #3a4a6a;background:#0e1628;color:#e8ecf0;
+                               font-size:16px;margin-bottom:12px;">
+                    <label style="display:flex;align-items:center;gap:8px;color:#a0b0c8;font-size:14px;margin-bottom:20px;cursor:pointer;">
+                        <input type="checkbox" id="_ce-save" checked style="width:18px;height:18px;">
+                        Save password on device (encrypted)
+                    </label>
+                    <div style="display:flex;gap:12px;">
+                        <button id="_ce-cancel" style="flex:1;padding:12px;border:none;border-radius:8px;
+                                background:#2a3a5c;color:#e8ecf0;font-size:16px;cursor:pointer;touch-action:manipulation;">
+                            Cancel
+                        </button>
+                        <button id="_ce-ok" style="flex:1;padding:12px;border:none;border-radius:8px;
+                                background:#1e5caa;color:#fff;font-size:16px;font-weight:600;cursor:pointer;touch-action:manipulation;">
+                            OK
+                        </button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+
+            const pwEl  = modal.querySelector('#_ce-pw');
+            const saveEl = modal.querySelector('#_ce-save');
+            setTimeout(() => pwEl.focus(), 100);
+
+            const doOk = async () => {
+                const pw = pwEl.value;
+                if (!pw) { pwEl.focus(); return; }
+                if (saveEl.checked) {
+                    try { await Capacitor.Plugins.Sftp.savePassword({ password: pw }); } catch (_) {}
+                }
+                modal.remove();
+                resolve(pw);
+            };
+
+            wireTap(modal.querySelector('#_ce-cancel'), () => { modal.remove(); resolve(null); });
+            wireTap(modal.querySelector('#_ce-ok'), doOk);
+            pwEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') doOk(); });
+        });
+    }
+
+    async _downloadAndInstall() {
+        const body = this._el.querySelector('.config-editor-body');
+        const btn = body.querySelector('.ce-update-btn');
+        const statusEl = body.querySelector('.ce-update-status');
+
+        // Read directly from DOM so unsaved form edits are honoured without a Save first.
+        const host       = body.querySelector('#ce-fu-host')?.value.trim() || '';
+        const port       = parseInt(body.querySelector('#ce-fu-port')?.value || '22', 10) || 22;
+        const username   = body.querySelector('#ce-fu-user')?.value.trim() || '';
+        const apkRemote  = body.querySelector('#ce-fu-apk')?.value.trim() || '';
+
+        if (!host || !username || !apkRemote) {
+            statusEl.textContent = 'Set Host, Username, and APK Remote Path in Flight Upload (SFTP) below.';
+            statusEl.style.color = 'var(--status-danger, #c0392b)';
+            return;
+        }
+
+        const password = await this._getOrPromptPassword();
+        if (password === null) return;
+
+        btn.disabled = true;
+        statusEl.textContent = 'Downloading…';
+        statusEl.style.color = 'var(--text-secondary, #a0b8d0)';
+
+        try {
+            const result = await Capacitor.Plugins.Sftp.download({
+                host,
+                port,
+                username,
+                password,
+                remoteFile: apkRemote,
+            });
+
+            if (!result.ok) {
+                statusEl.textContent = `Download failed: ${result.error}`;
+                statusEl.style.color = 'var(--status-danger, #c0392b)';
+                btn.disabled = false;
+                return;
+            }
+
+            statusEl.textContent = 'Download complete. Launching installer…';
+            statusEl.style.color = 'var(--status-ok, #1e8c3a)';
+            await Capacitor.Plugins.Sftp.installApk();
+            statusEl.textContent = '';
+            btn.disabled = false;
+        } catch (err) {
+            statusEl.textContent = `Error: ${err.message}`;
+            statusEl.style.color = 'var(--status-danger, #c0392b)';
+            btn.disabled = false;
+        }
+    }
+
     _applySearch(query) {
         const body = this._el.querySelector('.config-editor-body');
         const q = query.trim().toLowerCase();
@@ -530,7 +647,7 @@ class ConfigEditor {
                 headerHasVisibleCard = false;
                 return;
             }
-            if (child.classList.contains('ce-actions')) {
+            if (child.classList.contains('ce-actions') || child.classList.contains('ce-update-bar')) {
                 child.style.display = '';
                 return;
             }
