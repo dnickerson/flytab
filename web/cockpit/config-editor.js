@@ -205,6 +205,24 @@ class ConfigEditor {
                         value="${fu.remotePath || '~/flights'}">
                 </div>
                 <div class="ce-field-row">
+                    <label class="ce-label">SSH Key</label>
+                    <div style="display:flex;align-items:center;gap:10px;">
+                        <span id="ce-fu-key-status" style="color:var(--text-secondary,#a0b8d0);font-size:14px;">checking…</span>
+                        <button id="ce-fu-import-btn" class="ce-key-btn" style="display:none;">Import Key</button>
+                        <button id="ce-fu-clear-btn" class="ce-key-btn" style="display:none;">Clear Key</button>
+                    </div>
+                </div>
+                <div id="ce-fu-key-import-row" style="display:none;" class="ce-field-row">
+                    <label class="ce-label"></label>
+                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                        <input type="text" id="ce-fu-key-path" class="ce-input" style="width:200px"
+                               placeholder="Documents/id_rsa">
+                        <button id="ce-fu-key-do-import" class="ce-key-btn">Import</button>
+                        <button id="ce-fu-key-cancel" class="ce-key-btn ce-key-btn--cancel">Cancel</button>
+                        <span id="ce-fu-key-error" style="color:var(--status-danger,#c0392b);font-size:13px;width:100%;display:none;"></span>
+                    </div>
+                </div>
+                <div class="ce-field-row">
                     <label class="ce-label" for="ce-fu-apk">APK Remote Path</label>
                     <input type="text" id="ce-fu-apk" class="ce-input" style="width:220px"
                         placeholder="~/flytab/flytab-latest.apk"
@@ -269,6 +287,41 @@ class ConfigEditor {
         wireTap(body.querySelector('.ce-save-btn'), () => this._save());
         wireTap(body.querySelector('.ce-reload-btn'), () => this._load());
         wireTap(body.querySelector('.ce-update-btn'), () => this._downloadAndInstall());
+
+        // SSH key management
+        if (typeof Capacitor !== 'undefined' && Capacitor.Plugins?.Sftp) {
+            Capacitor.Plugins.Sftp.getKeyStatus()
+                .then(({hasKey}) => this._updateKeyStatus(hasKey))
+                .catch(() => this._updateKeyStatus(false));
+        }
+        wireTap(body.querySelector('#ce-fu-import-btn'), () => {
+            body.querySelector('#ce-fu-key-import-row').style.display = '';
+            body.querySelector('#ce-fu-key-path').value = '';
+            const errEl = body.querySelector('#ce-fu-key-error');
+            errEl.textContent = '';
+            errEl.style.display = 'none';
+        });
+        wireTap(body.querySelector('#ce-fu-key-cancel'), () => {
+            body.querySelector('#ce-fu-key-import-row').style.display = 'none';
+        });
+        wireTap(body.querySelector('#ce-fu-key-do-import'), async () => {
+            const pathEl = body.querySelector('#ce-fu-key-path');
+            const errEl = body.querySelector('#ce-fu-key-error');
+            const keyPath = pathEl.value.trim();
+            if (!keyPath) { pathEl.focus(); return; }
+            const result = await Capacitor.Plugins.Sftp.importKey({ keyPath });
+            if (result.ok) {
+                body.querySelector('#ce-fu-key-import-row').style.display = 'none';
+                this._updateKeyStatus(true);
+            } else {
+                errEl.textContent = result.error || 'Import failed';
+                errEl.style.display = '';
+            }
+        });
+        wireTap(body.querySelector('#ce-fu-clear-btn'), async () => {
+            await Capacitor.Plugins.Sftp.clearKey();
+            this._updateKeyStatus(false);
+        });
 
         // Track changes
         body.querySelectorAll('input, select').forEach(el => {
@@ -664,5 +717,25 @@ class ConfigEditor {
         });
         // Flush last header
         if (lastHeader) lastHeader.style.display = (!q || headerHasVisibleCard) ? '' : 'none';
+    }
+
+    _updateKeyStatus(hasKey) {
+        const body = this._el.querySelector('.config-editor-body');
+        if (!body) return;
+        const statusEl = body.querySelector('#ce-fu-key-status');
+        const importBtn = body.querySelector('#ce-fu-import-btn');
+        const clearBtn = body.querySelector('#ce-fu-clear-btn');
+        if (!statusEl) return;
+        if (hasKey) {
+            statusEl.textContent = 'imported ✓';
+            statusEl.style.color = '#1a8c35';
+            if (importBtn) importBtn.style.display = 'none';
+            if (clearBtn) clearBtn.style.display = '';
+        } else {
+            statusEl.textContent = 'not imported';
+            statusEl.style.color = 'var(--text-secondary, #a0b8d0)';
+            if (importBtn) importBtn.style.display = '';
+            if (clearBtn) clearBtn.style.display = 'none';
+        }
     }
 }

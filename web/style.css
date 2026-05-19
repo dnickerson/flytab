@@ -2611,6 +2611,23 @@ body {
 .ce-overlay-group { display: flex; align-items: center; gap: 10px; font-size: 14px; }
 .ce-toggle-label { display: flex; align-items: center; gap: 4px; color: var(--text-secondary); }
 .ce-mini-label { display: flex; align-items: center; gap: 4px; color: var(--text-secondary); font-size: 14px; }
+.ce-key-btn {
+    padding: 6px 14px;
+    border: none;
+    border-radius: 6px;
+    background: var(--bg-surface-raised, #2a3a5c);
+    color: var(--text-primary, #e8ecf0);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    touch-action: manipulation;
+    white-space: nowrap;
+}
+.ce-key-btn--cancel {
+    background: transparent;
+    border: 1px solid var(--border, #3a4a6a);
+    color: var(--text-secondary, #a0b8d0);
+}
 .ce-update-bar {
     display: flex;
     align-items: center;
