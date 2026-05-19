@@ -88,7 +88,7 @@
     "port": 22,
     "username": "",
     "remotePath": "~/flights",
-    "apkRemotePath": ""
+    "apkRemotePath": "~/flytab/flytab-latest.apk"
   },
   "logbook": {
     "autoCreate": true,

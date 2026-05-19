@@ -620,7 +620,7 @@ class ConfigEditor {
             }
 
             statusEl.textContent = 'Download complete. Launching installer…';
-            statusEl.style.color = 'var(--status-ok, #1e8c3a)';
+            statusEl.style.color = '#1a8c35';
             await Capacitor.Plugins.Sftp.installApk();
             statusEl.textContent = '';
             btn.disabled = false;
