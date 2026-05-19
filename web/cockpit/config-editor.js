@@ -173,6 +173,37 @@ class ConfigEditor {
                 </div>
             </div>
         </div>`);
+        const fu = this._cockpitConfig.flightUpload || {};
+        sections.push(`<div class="ds-card">
+            <div class="ds-card-title">Flight Upload (SFTP)</div>
+            <div class="ce-fields">
+                <div class="ce-field-row">
+                    <label class="ce-label" for="ce-fu-host">Host</label>
+                    <input type="text" id="ce-fu-host" class="ce-input" style="width:220px"
+                        placeholder="192.168.1.81 or hostname.ts.net"
+                        value="${fu.host || ''}">
+                </div>
+                <div class="ce-field-row">
+                    <label class="ce-label" for="ce-fu-port">Port</label>
+                    <input type="number" id="ce-fu-port" class="ce-input" style="width:80px"
+                        min="1" max="65535" value="${fu.port || 22}">
+                </div>
+                <div class="ce-field-row">
+                    <label class="ce-label" for="ce-fu-user">Username</label>
+                    <input type="text" id="ce-fu-user" class="ce-input" style="width:150px"
+                        value="${fu.username || ''}">
+                </div>
+                <div class="ce-field-row">
+                    <label class="ce-label" for="ce-fu-path">Remote Path</label>
+                    <input type="text" id="ce-fu-path" class="ce-input" style="width:220px"
+                        placeholder="~/flights"
+                        value="${fu.remotePath || '~/flights'}">
+                </div>
+                <div class="ce-field-row" style="font-size:14px;color:var(--text-secondary)">
+                    Password is stored encrypted on device. Use More → Flight Upload to manage it.
+                </div>
+            </div>
+        </div>`);
 
         const currentGps = typeof Settings !== 'undefined' ? (Settings.get('gps_source') || 'auto') : 'auto';
         sections.push(`<div class="ds-card">
@@ -317,6 +348,19 @@ class ConfigEditor {
                         app.stratuxClient.connect();
                     }
                 }
+            }
+
+            // Flight Upload settings
+            const fuHost = body.querySelector('#ce-fu-host');
+            const fuPort = body.querySelector('#ce-fu-port');
+            const fuUser = body.querySelector('#ce-fu-user');
+            const fuPath = body.querySelector('#ce-fu-path');
+            if (fuHost) {
+                if (!this._cockpitConfig.flightUpload) this._cockpitConfig.flightUpload = {};
+                this._cockpitConfig.flightUpload.host = fuHost.value.trim();
+                this._cockpitConfig.flightUpload.port = parseInt(fuPort?.value || '22', 10) || 22;
+                this._cockpitConfig.flightUpload.username = fuUser?.value.trim() || '';
+                this._cockpitConfig.flightUpload.remotePath = fuPath?.value.trim() || '~/flights';
             }
 
             // Save GPS source
