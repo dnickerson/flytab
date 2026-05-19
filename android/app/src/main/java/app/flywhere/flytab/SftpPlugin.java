@@ -3,6 +3,7 @@ package app.flywhere.flytab;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Environment;
+import android.util.Base64;
 import android.util.Log;
 
 import androidx.core.content.FileProvider;
@@ -18,6 +19,7 @@ import com.jcraft.jsch.ChannelSftp;
 import com.jcraft.jsch.JSch;
 import com.jcraft.jsch.Session;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.nio.charset.StandardCharsets;
@@ -251,6 +253,23 @@ public class SftpPlugin extends Plugin {
             ? new File(keyPath)
             : new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS), keyPath);
 
+        // Canonical-path guard: absolute paths must resolve within Documents or app storage
+        if (keyPath.startsWith("/")) {
+            try {
+                String canonical = keyFile.getCanonicalPath();
+                String docsRoot = Environment.getExternalStoragePublicDirectory(
+                    Environment.DIRECTORY_DOCUMENTS).getCanonicalPath();
+                String appRoot = getContext().getFilesDir().getCanonicalPath();
+                if (!canonical.startsWith(docsRoot) && !canonical.startsWith(appRoot)) {
+                    call.reject("Invalid keyPath");
+                    return;
+                }
+            } catch (java.io.IOException e) {
+                call.reject("Invalid keyPath");
+                return;
+            }
+        }
+
         if (!keyFile.exists()) {
             JSObject result = new JSObject();
             result.put("ok", false);
@@ -259,14 +278,22 @@ public class SftpPlugin extends Plugin {
             return;
         }
 
+        if (keyFile.length() > 65536) {
+            JSObject result = new JSObject();
+            result.put("ok", false);
+            result.put("error", "Key file too large");
+            call.resolve(result);
+            return;
+        }
+
         try {
-            java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
             byte[] buf = new byte[4096];
             int n;
             try (FileInputStream fis = new FileInputStream(keyFile)) {
                 while ((n = fis.read(buf)) != -1) baos.write(buf, 0, n);
             }
-            String encoded = android.util.Base64.encodeToString(baos.toByteArray(), android.util.Base64.DEFAULT);
+            String encoded = Base64.encodeToString(baos.toByteArray(), Base64.DEFAULT);
             getEncryptedPrefs().edit().putString(KEY_PRIVATE_KEY, encoded).apply();
             JSObject result = new JSObject();
             result.put("ok", true);
@@ -298,6 +325,7 @@ public class SftpPlugin extends Plugin {
             result.put("hasKey", encoded != null);
             call.resolve(result);
         } catch (Exception e) {
+            Log.e(TAG, "Failed to read key status", e);
             JSObject result = new JSObject();
             result.put("hasKey", false);
             call.resolve(result);
@@ -308,7 +336,7 @@ public class SftpPlugin extends Plugin {
         try {
             String encoded = getEncryptedPrefs().getString(KEY_PRIVATE_KEY, null);
             if (encoded == null) return null;
-            return android.util.Base64.decode(encoded, android.util.Base64.DEFAULT);
+            return Base64.decode(encoded, Base64.DEFAULT);
         } catch (Exception e) {
             Log.e(TAG, "Failed to load stored key", e);
             return null;
