@@ -642,11 +642,12 @@ class ConfigEditor {
         const btn = body.querySelector('.ce-update-btn');
         const statusEl = body.querySelector('.ce-update-status');
 
-        // Read directly from DOM so unsaved form edits are honoured without a Save first.
-        const host       = body.querySelector('#ce-fu-host')?.value.trim() || '';
-        const port       = parseInt(body.querySelector('#ce-fu-port')?.value || '22', 10) || 22;
-        const username   = body.querySelector('#ce-fu-user')?.value.trim() || '';
-        const apkRemote  = body.querySelector('#ce-fu-apk')?.value.trim() || '';
+        // Prefer DOM values (honours unsaved edits); fall back to saved config when editor not rendered.
+        const fu = this._cockpitConfig?.flightUpload || CockpitConfig._config?.flightUpload || {};
+        const host      = body.querySelector('#ce-fu-host')?.value.trim()  || fu.host        || '';
+        const port      = parseInt(body.querySelector('#ce-fu-port')?.value, 10) || fu.port  || 22;
+        const username  = body.querySelector('#ce-fu-user')?.value.trim()  || fu.username    || '';
+        const apkRemote = body.querySelector('#ce-fu-apk')?.value.trim()   || fu.apkRemotePath || '';
 
         if (!host || !username || !apkRemote) {
             statusEl.textContent = 'Set Host, Username, and APK Remote Path in Flight Upload (SFTP) below.';
