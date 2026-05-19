@@ -309,12 +309,17 @@ class ConfigEditor {
             const errEl = body.querySelector('#ce-fu-key-error');
             const keyPath = pathEl.value.trim();
             if (!keyPath) { pathEl.focus(); return; }
-            const result = await Capacitor.Plugins.Sftp.importKey({ keyPath });
-            if (result.ok) {
-                body.querySelector('#ce-fu-key-import-row').style.display = 'none';
-                this._updateKeyStatus(true);
-            } else {
-                errEl.textContent = result.error || 'Import failed';
+            try {
+                const result = await Capacitor.Plugins.Sftp.importKey({ keyPath });
+                if (result.ok) {
+                    body.querySelector('#ce-fu-key-import-row').style.display = 'none';
+                    this._updateKeyStatus(true);
+                } else {
+                    errEl.textContent = result.error || 'Import failed';
+                    errEl.style.display = '';
+                }
+            } catch (e) {
+                errEl.textContent = 'Import failed';
                 errEl.style.display = '';
             }
         });
