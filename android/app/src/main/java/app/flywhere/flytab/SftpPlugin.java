@@ -79,8 +79,15 @@ public class SftpPlugin extends Plugin {
             try {
                 JSch jsch = new JSch();
                 session = jsch.getSession(finalUsername, finalHost, finalPort);
-                session.setPassword(finalPassword);
                 session.setConfig("StrictHostKeyChecking", "no");
+                byte[] keyBytes = loadStoredKey();
+                if (keyBytes != null) {
+                    byte[] passphrase = finalPassword != null
+                        ? finalPassword.getBytes(StandardCharsets.UTF_8) : null;
+                    jsch.addIdentity("flytab", keyBytes, null, passphrase);
+                }
+                session.setConfig("PreferredAuthentications", "publickey,password");
+                session.setPassword(finalPassword);
                 session.connect(30000);
 
                 channel = (ChannelSftp) session.openChannel("sftp");
@@ -141,8 +148,15 @@ public class SftpPlugin extends Plugin {
             try {
                 JSch jsch = new JSch();
                 session = jsch.getSession(finalUsername, finalHost, finalPort);
-                session.setPassword(finalPassword);
                 session.setConfig("StrictHostKeyChecking", "no");
+                byte[] keyBytes = loadStoredKey();
+                if (keyBytes != null) {
+                    byte[] passphrase = finalPassword != null
+                        ? finalPassword.getBytes(StandardCharsets.UTF_8) : null;
+                    jsch.addIdentity("flytab", keyBytes, null, passphrase);
+                }
+                session.setConfig("PreferredAuthentications", "publickey,password");
+                session.setPassword(finalPassword);
                 session.connect(30000);
 
                 channel = (ChannelSftp) session.openChannel("sftp");
