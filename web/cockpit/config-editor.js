@@ -199,6 +199,12 @@ class ConfigEditor {
                         placeholder="~/flights"
                         value="${fu.remotePath || '~/flights'}">
                 </div>
+                <div class="ce-field-row">
+                    <label class="ce-label" for="ce-fu-apk">APK Remote Path</label>
+                    <input type="text" id="ce-fu-apk" class="ce-input" style="width:220px"
+                        placeholder="~/flytab/flytab-latest.apk"
+                        value="${fu.apkRemotePath || ''}">
+                </div>
                 <div class="ce-field-row" style="font-size:14px;color:var(--text-secondary)">
                     Password is stored encrypted on device. Use More → Flight Upload to manage it.
                 </div>
@@ -355,12 +361,14 @@ class ConfigEditor {
             const fuPort = body.querySelector('#ce-fu-port');
             const fuUser = body.querySelector('#ce-fu-user');
             const fuPath = body.querySelector('#ce-fu-path');
+            const fuApk  = body.querySelector('#ce-fu-apk');
             if (fuHost) {
                 if (!this._cockpitConfig.flightUpload) this._cockpitConfig.flightUpload = {};
                 this._cockpitConfig.flightUpload.host = fuHost.value.trim();
                 this._cockpitConfig.flightUpload.port = parseInt(fuPort?.value || '22', 10) || 22;
                 this._cockpitConfig.flightUpload.username = fuUser?.value.trim() || '';
                 this._cockpitConfig.flightUpload.remotePath = fuPath?.value.trim() || '~/flights';
+                this._cockpitConfig.flightUpload.apkRemotePath = fuApk?.value.trim() || '';
             }
 
             // Save GPS source

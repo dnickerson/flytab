@@ -87,7 +87,8 @@
     "host": "",
     "port": 22,
     "username": "",
-    "remotePath": "~/flights"
+    "remotePath": "~/flights",
+    "apkRemotePath": ""
   },
   "logbook": {
     "autoCreate": true,
