@@ -68,6 +68,7 @@ class TabBar {
         if (c.fuelOverlay?.hide) c.fuelOverlay.hide();
         if (c.planSync?.hide) c.planSync.hide();
         if (c.fisbStatus?.hide) c.fisbStatus.hide();
+        if (c.flightUpload?.hide) c.flightUpload.hide();
         if (c.airportPopup?.close) c.airportPopup.close();
 
         // Hide radar loop controls when leaving map — they bleed through
@@ -145,6 +146,11 @@ class TabBar {
             }},
             { icon: '📋', label: 'Logbook', action: () => {
                 if (c.logbook?.show) c.logbook.show();
+                this._hideRadarControls();
+                this._closeMoreDrawer();
+            }},
+            { icon: '📤', label: 'Flight Upload', action: () => {
+                if (c.flightUpload?.show) c.flightUpload.show();
                 this._hideRadarControls();
                 this._closeMoreDrawer();
             }},

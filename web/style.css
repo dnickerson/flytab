@@ -4647,6 +4647,83 @@ body {
 }
 .logbook-export-btn:active { opacity: 0.8; }
 
+/* Flight Upload panel */
+.fu-toolbar {
+    display: flex;
+    gap: 10px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border-color, #2a3a5c);
+    flex-shrink: 0;
+}
+.fu-upload-all-btn,
+.fu-change-pw-btn {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    touch-action: manipulation;
+    color: #fff;
+}
+.fu-upload-all-btn { background: var(--status-ok, #1e8c3a); }
+.fu-change-pw-btn  { background: var(--bg-surface-raised, #2a3a5c); }
+.fu-list { flex: 1; overflow-y: auto; }
+.fu-row {
+    display: flex;
+    align-items: center;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border-color, #2a3a5c);
+    gap: 12px;
+}
+.fu-row-info { flex: 1; min-width: 0; }
+.fu-filename {
+    color: var(--text-primary, #e8ecf0);
+    font-size: 15px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.fu-meta {
+    color: var(--text-secondary, #6a8aaa);
+    font-size: 13px;
+    margin-top: 2px;
+}
+.fu-row-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+.fu-badge {
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 7px;
+    border-radius: 4px;
+    letter-spacing: 0.5px;
+}
+.fu-badge--uploaded { background: #1e4a1e; color: #4cdd6a; }
+.fu-badge--pending  { background: #2a2a2a; color: #8090a8; }
+.fu-upload-btn {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 8px;
+    background: var(--status-ok, #1e8c3a);
+    color: #fff;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    touch-action: manipulation;
+    min-width: 72px;
+}
+.fu-upload-btn--done {
+    background: var(--bg-surface-raised, #2a3a5c);
+    color: #4cdd6a;
+    cursor: default;
+}
+.fu-upload-btn:disabled { opacity: 0.6; cursor: default; }
+
 /* Logbook Form Overlay */
 .logbook-form-overlay {
     position: absolute; top: 0; left: 0; right: 0; bottom: 0;

@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v8.68';
+const FLYTAB_VERSION = 'v8.69';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -68,6 +68,7 @@ class FlyTabApp {
         this.enginePage = null;
         this.flightSync = null;
         this.logbook = null;
+        this.flightUpload = null;
         this.radarLoop = null;
         this.approachCharts = null;
         this.ifrClearance = null;
@@ -635,6 +636,11 @@ class FlyTabApp {
             this.cockpitMap.setLogbook(this.logbook);
         }
 
+        // Flight Upload panel
+        if (typeof FlightUpload !== 'undefined') {
+            this.flightUpload = new FlightUpload();
+        }
+
         // Route table (bottom sheet, replaces navlog)
         if (typeof RouteTable !== 'undefined') {
             this.routeTable = new RouteTable(primaryView, this.cockpitMap.map);
@@ -877,6 +883,7 @@ class FlyTabApp {
                 stratuxIp: Settings.stratuxIp || '192.168.10.1',
                 planSync: this.planSync,
                 radarLoop: this.radarLoop,
+                flightUpload: this.flightUpload,
             });
             this.tabBar.init();
         }
