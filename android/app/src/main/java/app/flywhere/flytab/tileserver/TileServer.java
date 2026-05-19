@@ -506,7 +506,8 @@ public class TileServer extends NanoHTTPD {
 
     /**
      * GET /flights/list
-     * Returns JSON array of flight CSV filenames sorted newest-first.
+     * Returns JSON array of flight CSV metadata sorted newest-first.
+     * [{name: "20260519_KLKR-KAVL.csv", size_bytes: 12340, modified_ms: 1747689600000}, ...]
      */
     private Response handleFlightsList() {
         File flightsDir = new File(baseDir, "flights");
@@ -517,18 +518,23 @@ public class TileServer extends NanoHTTPD {
         if (files == null || files.length == 0) {
             return newFixedLengthResponse(Response.Status.OK, "application/json", "[]");
         }
-        java.util.List<String> csvs = new java.util.ArrayList<>();
+        java.util.List<File> csvs = new java.util.ArrayList<>();
         for (File f : files) {
             if (f.isFile() && f.getName().toLowerCase().endsWith(".csv")) {
-                csvs.add(f.getName());
+                csvs.add(f);
             }
         }
-        java.util.Collections.sort(csvs, java.util.Collections.reverseOrder());
+        csvs.sort((a, b) -> b.getName().compareTo(a.getName()));
         StringBuilder sb = new StringBuilder("[");
         for (int i = 0; i < csvs.size(); i++) {
+            File f = csvs.get(i);
             if (i > 0) sb.append(",");
-            String escaped = csvs.get(i).replace("\\", "\\\\").replace("\"", "\\\"");
-            sb.append("\"").append(escaped).append("\"");
+            String escaped = f.getName().replace("\\", "\\\\").replace("\"", "\\\"");
+            sb.append("{")
+              .append("\"name\":\"").append(escaped).append("\",")
+              .append("\"size_bytes\":").append(f.length()).append(",")
+              .append("\"modified_ms\":").append(f.lastModified())
+              .append("}");
         }
         sb.append("]");
         return newFixedLengthResponse(Response.Status.OK, "application/json", sb.toString());
