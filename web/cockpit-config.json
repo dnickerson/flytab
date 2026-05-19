@@ -83,6 +83,12 @@
     "maxFlightsIdb": 5,
     "autoSyncWhenOnline": true
   },
+  "flightUpload": {
+    "host": "",
+    "port": 22,
+    "username": "",
+    "remotePath": "~/flights"
+  },
   "logbook": {
     "autoCreate": true,
     "defaultConditions": "VFR",
