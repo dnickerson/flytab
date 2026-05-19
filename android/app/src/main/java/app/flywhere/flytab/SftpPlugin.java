@@ -20,6 +20,7 @@ import com.jcraft.jsch.Session;
 
 import java.io.File;
 import java.io.FileInputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -28,6 +29,7 @@ public class SftpPlugin extends Plugin {
     private static final String TAG = "SftpPlugin";
     private static final String PREFS_NAME = "flytab_sftp_prefs";
     private static final String KEY_PASSWORD = "sftp_password";
+    private static final String KEY_PRIVATE_KEY = "sftp_private_key";
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
 
@@ -230,6 +232,86 @@ public class SftpPlugin extends Plugin {
         } catch (Exception e) {
             Log.e(TAG, "Failed to clear password", e);
             call.reject("Failed to clear password: " + e.getMessage());
+        }
+    }
+
+    @PluginMethod
+    public void importKey(PluginCall call) {
+        String keyPath = call.getString("keyPath");
+        if (keyPath == null || keyPath.isEmpty()) {
+            call.reject("Missing keyPath");
+            return;
+        }
+        if (keyPath.contains("..")) {
+            call.reject("Invalid keyPath");
+            return;
+        }
+
+        File keyFile = keyPath.startsWith("/")
+            ? new File(keyPath)
+            : new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS), keyPath);
+
+        if (!keyFile.exists()) {
+            JSObject result = new JSObject();
+            result.put("ok", false);
+            result.put("error", "File not found: " + keyFile.getAbsolutePath());
+            call.resolve(result);
+            return;
+        }
+
+        try {
+            java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[4096];
+            int n;
+            try (FileInputStream fis = new FileInputStream(keyFile)) {
+                while ((n = fis.read(buf)) != -1) baos.write(buf, 0, n);
+            }
+            String encoded = android.util.Base64.encodeToString(baos.toByteArray(), android.util.Base64.DEFAULT);
+            getEncryptedPrefs().edit().putString(KEY_PRIVATE_KEY, encoded).apply();
+            JSObject result = new JSObject();
+            result.put("ok", true);
+            call.resolve(result);
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to import key", e);
+            JSObject result = new JSObject();
+            result.put("ok", false);
+            result.put("error", e.getMessage() != null ? e.getMessage() : "Unknown error");
+            call.resolve(result);
+        }
+    }
+
+    @PluginMethod
+    public void clearKey(PluginCall call) {
+        try {
+            getEncryptedPrefs().edit().remove(KEY_PRIVATE_KEY).apply();
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to clear key", e);
+        }
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void getKeyStatus(PluginCall call) {
+        try {
+            String encoded = getEncryptedPrefs().getString(KEY_PRIVATE_KEY, null);
+            JSObject result = new JSObject();
+            result.put("hasKey", encoded != null);
+            call.resolve(result);
+        } catch (Exception e) {
+            JSObject result = new JSObject();
+            result.put("hasKey", false);
+            call.resolve(result);
+        }
+    }
+
+    private byte[] loadStoredKey() {
+        try {
+            String encoded = getEncryptedPrefs().getString(KEY_PRIVATE_KEY, null);
+            if (encoded == null) return null;
+            return android.util.Base64.decode(encoded, android.util.Base64.DEFAULT);
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to load stored key", e);
+            return null;
         }
     }
 
