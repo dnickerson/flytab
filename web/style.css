@@ -4686,7 +4686,7 @@ body {
     text-overflow: ellipsis;
 }
 .fu-meta {
-    color: var(--text-secondary, #6a8aaa);
+    color: var(--text-secondary, #a0b8d0);
     font-size: 13px;
     margin-top: 2px;
 }
@@ -4704,7 +4704,7 @@ body {
     letter-spacing: 0.5px;
 }
 .fu-badge--uploaded { background: #1e4a1e; color: #4cdd6a; }
-.fu-badge--pending  { background: #2a2a2a; color: #8090a8; }
+.fu-badge--pending  { background: #2a2a2a; color: #b0c8e0; }
 .fu-upload-btn {
     padding: 8px 16px;
     border: none;

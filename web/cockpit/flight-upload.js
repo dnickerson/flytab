@@ -244,11 +244,6 @@ class FlightUpload {
             const saveEl = modal.querySelector('#_fu-save');
             setTimeout(() => pwEl.focus(), 100);
 
-            modal.querySelector('#_fu-cancel').addEventListener('click', () => {
-                modal.remove();
-                resolve(null);
-            });
-
             const doOk = async () => {
                 const pw = pwEl.value;
                 if (!pw) { pwEl.focus(); return; }
@@ -259,7 +254,8 @@ class FlightUpload {
                 resolve(pw);
             };
 
-            modal.querySelector('#_fu-ok').addEventListener('click', doOk);
+            wireTap(modal.querySelector('#_fu-cancel'), () => { modal.remove(); resolve(null); });
+            wireTap(modal.querySelector('#_fu-ok'), doOk);
             pwEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') doOk(); });
         });
     }
