@@ -16,6 +16,7 @@ import androidx.core.view.WindowInsetsCompat;
 import com.getcapacitor.BridgeActivity;
 import app.flywhere.flytab.tileserver.TileServerPlugin;
 import app.flywhere.flytab.engineml.EngineMLPlugin;
+import app.flywhere.flytab.SftpPlugin;
 
 public class MainActivity extends BridgeActivity {
     private static final String TAG = "FlyTab";
@@ -25,6 +26,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(TileServerPlugin.class);
         registerPlugin(ThermalMonitorPlugin.class);
         registerPlugin(EngineMLPlugin.class);
+        registerPlugin(SftpPlugin.class);
         registerPlugin(StratuxWsPlugin.class);
         registerPlugin(StratuxUdpPlugin.class);
         super.onCreate(savedInstanceState);
