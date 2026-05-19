@@ -149,6 +149,7 @@ public class SftpPlugin extends Plugin {
                 result.put("ok", true);
                 call.resolve(result);
             } catch (Exception e) {
+                localFile.delete(); // remove partial file so installApk() can't pick it up
                 Log.e(TAG, "SFTP download failed", e);
                 JSObject result = new JSObject();
                 result.put("ok", false);
