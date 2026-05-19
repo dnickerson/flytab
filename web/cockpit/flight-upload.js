@@ -54,8 +54,9 @@ class FlightUpload {
             listEl.innerHTML = '<div style="padding:24px;color:var(--text-secondary);text-align:center;">No flight files found.</div>';
             return;
         }
+        const sorted = [...this._flights].sort((a, b) => this._sortKey(b) - this._sortKey(a));
         listEl.innerHTML = '';
-        for (const flight of this._flights) {
+        for (const flight of sorted) {
             const name = flight.name;
             const date = this._parseDate(name, flight.modified_ms);
             const size = this._formatSize(flight.size_bytes);
@@ -64,10 +65,8 @@ class FlightUpload {
             const row = document.createElement('div');
             row.className = 'fu-row';
             row.innerHTML = `
-                <div class="fu-row-info">
-                    <div class="fu-filename">${name}</div>
-                    <div class="fu-meta">${date}${size ? ' · ' + size : ''}</div>
-                </div>
+                <span class="fu-filename">${name}</span>
+                <span class="fu-meta">${date}${size ? ' · ' + size : ''}</span>
                 <div class="fu-row-actions">
                     <span class="fu-badge ${uploaded ? 'fu-badge--uploaded' : 'fu-badge--pending'}">
                         ${uploaded ? 'UPLOADED' : 'PENDING'}
@@ -85,6 +84,12 @@ class FlightUpload {
             }
             listEl.appendChild(row);
         }
+    }
+
+    _sortKey(flight) {
+        const m = flight.name.match(/^(\d{4})(\d{2})(\d{2})/);
+        if (m) return Date.parse(`${m[1]}-${m[2]}-${m[3]}`);
+        return flight.modified_ms || 0;
     }
 
     _parseDate(name, modifiedMs) {

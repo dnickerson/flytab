@@ -4722,8 +4722,9 @@ body {
     border-bottom: 1px solid var(--border-color, #2a3a5c);
     gap: 12px;
 }
-.fu-row-info { flex: 1; min-width: 0; }
 .fu-filename {
+    flex: 1;
+    min-width: 0;
     color: var(--text-primary, #e8ecf0);
     font-size: 15px;
     font-weight: 600;
@@ -4734,7 +4735,8 @@ body {
 .fu-meta {
     color: var(--text-secondary, #a0b8d0);
     font-size: 13px;
-    margin-top: 2px;
+    white-space: nowrap;
+    flex-shrink: 0;
 }
 .fu-row-actions {
     display: flex;
