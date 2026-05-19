@@ -53,8 +53,12 @@ cp "app/build/outputs/apk/debug/app-debug.apk" "$APK_DEST/$APK_NAME"
 # Remove old versioned APKs (keep only latest)
 find "$APK_DEST" -maxdepth 1 -name "flytab-debug-v*.apk" ! -name "$APK_NAME" -delete 2>/dev/null || true
 
+# Update flytab-latest.apk symlink for SFTP self-update
+ln -sf "$APK_DEST/$APK_NAME" "$APK_DEST/flytab-latest.apk"
+
 echo ""
 echo "=============================="
 echo " Done!"
 echo " APK: $APK_NAME"
+echo " Latest: $APK_DEST/flytab-latest.apk → $APK_NAME"
 echo "=============================="
