@@ -1,8 +1,11 @@
 package app.flywhere.flytab;
 
+import android.content.Intent;
+import android.net.Uri;
 import android.os.Environment;
 import android.util.Log;
 
+import androidx.core.content.FileProvider;
 import androidx.security.crypto.EncryptedSharedPreferences;
 import androidx.security.crypto.MasterKeys;
 
@@ -102,6 +105,89 @@ public class SftpPlugin extends Plugin {
                 if (session != null) { try { session.disconnect(); } catch (Exception ignored) {} }
             }
         });
+    }
+
+    /**
+     * Download a file from the SFTP server to the app's cache dir as flytab-update.apk.
+     * Runs on background thread; resolves with {ok, error?}.
+     */
+    @PluginMethod
+    public void download(PluginCall call) {
+        String host = call.getString("host");
+        int port = call.getInt("port", 22);
+        String username = call.getString("username");
+        String password = call.getString("password");
+        String remoteFile = call.getString("remoteFile");
+
+        if (host == null || username == null || password == null || remoteFile == null) {
+            call.reject("Missing required parameters: host, username, password, remoteFile");
+            return;
+        }
+
+        final File localFile = new File(getContext().getCacheDir(), "flytab-update.apk");
+        final String finalHost = host;
+        final int finalPort = port;
+        final String finalUsername = username;
+        final String finalPassword = password;
+        final String finalRemoteFile = remoteFile;
+
+        executor.execute(() -> {
+            Session session = null;
+            ChannelSftp channel = null;
+            try {
+                JSch jsch = new JSch();
+                session = jsch.getSession(finalUsername, finalHost, finalPort);
+                session.setPassword(finalPassword);
+                session.setConfig("StrictHostKeyChecking", "no");
+                session.connect(30000);
+
+                channel = (ChannelSftp) session.openChannel("sftp");
+                channel.connect(10000);
+                channel.get(finalRemoteFile, localFile.getAbsolutePath());
+
+                JSObject result = new JSObject();
+                result.put("ok", true);
+                call.resolve(result);
+            } catch (Exception e) {
+                Log.e(TAG, "SFTP download failed", e);
+                JSObject result = new JSObject();
+                result.put("ok", false);
+                result.put("error", e.getMessage() != null ? e.getMessage() : "Unknown error");
+                call.resolve(result);
+            } finally {
+                if (channel != null) { try { channel.disconnect(); } catch (Exception ignored) {} }
+                if (session != null) { try { session.disconnect(); } catch (Exception ignored) {} }
+            }
+        });
+    }
+
+    /**
+     * Launch the system installer for flytab-update.apk in the app cache dir.
+     * The user must tap Install in the system dialog — Android enforces this.
+     */
+    @PluginMethod
+    public void installApk(PluginCall call) {
+        File apkFile = new File(getContext().getCacheDir(), "flytab-update.apk");
+        if (!apkFile.exists()) {
+            call.reject("APK not found — call download() first");
+            return;
+        }
+        try {
+            Uri uri = FileProvider.getUriForFile(
+                getContext(),
+                getContext().getPackageName() + ".fileprovider",
+                apkFile
+            );
+            Intent intent = new Intent(Intent.ACTION_VIEW);
+            intent.setDataAndType(uri, "application/vnd.android.package-archive");
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(intent);
+            call.resolve();
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to launch installer", e);
+            call.reject("Failed to launch installer: " + e.getMessage());
+        }
     }
 
     /** Encrypt and persist the SFTP password using Android Keystore-backed AES-256. */
