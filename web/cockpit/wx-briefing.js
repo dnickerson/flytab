@@ -2129,33 +2129,66 @@ class WxBriefing {
     }
 
     _parseTfrGeometry(raw) {
-        // Polygon: DDMM(N|S)/DDDMM(W|E) coordinate pairs (same pattern as fisb-client.js)
-        const points = [];
-        const polyPat = /(\d{2})(\d{2})(N|S)\s*[\/]?\s*(\d{2,3})(\d{2})(W|E)/g;
-        let m;
-        while ((m = polyPat.exec(raw)) !== null) {
-            let lat = parseInt(m[1], 10) + parseInt(m[2], 10) / 60;
-            if (m[3] === 'S') lat = -lat;
-            let lon = parseInt(m[4], 10) + parseInt(m[5], 10) / 60;
-            if (m[6] === 'W') lon = -lon;
-            points.push([lat, lon]);
-        }
-        if (points.length >= 3) return { points };
+        const pts = [];
 
-        // Circle: "WITHIN n NM OF DDMM(N|S) DDDMM(W|E)" or "n-NM RADIUS OF ..."
-        const circleMatch =
-            raw.match(/WITHIN\s+(\d+(?:\.\d+)?)\s*NM\s+OF\s+(\d{2})(\d{2})(N|S)\s*[\/]?\s*(\d{2,3})(\d{2})(W|E)/i) ||
-            raw.match(/(\d+(?:\.\d+)?)-NM\s+RADIUS.*?(\d{2})(\d{2})(N|S)\s*[\/]?\s*(\d{2,3})(\d{2})(W|E)/i);
-        if (circleMatch) {
-            const radiusNm = parseFloat(circleMatch[1]);
-            let lat = parseInt(circleMatch[2], 10) + parseInt(circleMatch[3], 10) / 60;
-            if (circleMatch[4] === 'S') lat = -lat;
-            let lon = parseInt(circleMatch[5], 10) + parseInt(circleMatch[6], 10) / 60;
-            if (circleMatch[7] === 'W') lon = -lon;
-            return { lat, lon, radiusNm };
+        const pat1 = /(\d{2})(\d{2})(N|S)\s*\/?(\d{2,3})(\d{2})(W|E)/gi;
+        let m;
+        while ((m = pat1.exec(raw)) !== null) {
+            let lat = parseInt(m[1]) + parseInt(m[2]) / 60;
+            if (m[3].toUpperCase() === 'S') lat = -lat;
+            let lon = parseInt(m[4]) + parseInt(m[5]) / 60;
+            if (m[6].toUpperCase() === 'W') lon = -lon;
+            pts.push([lat, lon]);
+        }
+
+        if (!pts.length) {
+            const pat2 = /(\d{2})(\d{2})(\d{2})(N|S)\s*\/?(\d{2,3})(\d{2})(\d{2})(W|E)/gi;
+            while ((m = pat2.exec(raw)) !== null) {
+                let lat = parseInt(m[1]) + parseInt(m[2]) / 60 + parseInt(m[3]) / 3600;
+                if (m[4].toUpperCase() === 'S') lat = -lat;
+                let lon = parseInt(m[5]) + parseInt(m[6]) / 60 + parseInt(m[7]) / 3600;
+                if (m[8].toUpperCase() === 'W') lon = -lon;
+                pts.push([lat, lon]);
+            }
+        }
+
+        if (pts.length >= 3) {
+            const clat = pts.reduce((s, p) => s + p[0], 0) / pts.length;
+            const clon = pts.reduce((s, p) => s + p[1], 0) / pts.length;
+            return { points: pts, center: { lat: clat, lon: clon } };
+        }
+
+        const circlePats = [
+            /WITHIN\s+A\s+(\d+(?:\.\d+)?)\s*NM\s+RADIUS\s+OF\s+(\d{2})(\d{2})(N|S)\s*[\/]?\s*(\d{2,3})(\d{2})(W|E)/i,
+            /WITHIN\s+(\d+(?:\.\d+)?)\s*NM\s+(?:RADIUS\s+)?OF\s+(\d{2})(\d{2})(N|S)\s*[\/]?\s*(\d{2,3})(\d{2})(W|E)/i,
+            /(\d+(?:\.\d+)?)-NM\s+RADIUS.*?(\d{2})(\d{2})(N|S)\s*[\/]?\s*(\d{2,3})(\d{2})(W|E)/i,
+            /(\d+(?:\.\d+)?)\s*NM\s+RADIUS\s+OF\s+(\d{2})(\d{2})(N|S)\s*[\/]?\s*(\d{2,3})(\d{2})(W|E)/i,
+        ];
+        for (const pat of circlePats) {
+            const c = raw.match(pat);
+            if (c) {
+                const radiusNm = parseFloat(c[1]);
+                let lat = parseInt(c[2]) + parseInt(c[3]) / 60;
+                const latDir = c[4];
+                let lon = parseInt(c[5]) + parseInt(c[6]) / 60;
+                const lonDir = c[7];
+                if (latDir.toUpperCase() === 'S') lat = -lat;
+                if (lonDir.toUpperCase() === 'W') lon = -lon;
+                return { lat, lon, radiusNm, center: { lat, lon } };
+            }
         }
 
         return null;
+    }
+
+    _parseCoordFromText(raw) {
+        const m = (raw || '').match(/(\d{2})(\d{2})(N|S)\s*\/?(\d{2,3})(\d{2})(W|E)/i);
+        if (!m) return null;
+        let lat = parseInt(m[1]) + parseInt(m[2]) / 60;
+        if (m[3].toUpperCase() === 'S') lat = -lat;
+        let lon = parseInt(m[4]) + parseInt(m[5]) / 60;
+        if (m[6].toUpperCase() === 'W') lon = -lon;
+        return { lat, lon };
     }
 
     _isEnrouteRelevant(raw) {
