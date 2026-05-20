@@ -2259,7 +2259,7 @@ class WxBriefing {
         if (/\bRWY\b/.test(r)) return 'RWY';
         if (/\bMDA\b|\bDA\s+\d{3}|\bDECISION ALTITUDE\b|\bMINIMUMS\b|\bINSTRUMENT APPROACH\b|\bILS CAT\b/.test(r))
             return 'APCH';
-        if (/\bNAVAID\b|ILS|VOR|NDB|LOC\b|PAPI|VASI/.test(r)) return 'NAVAID';
+        if (/\bNAVAID\b|\bILS\b|\bVOR\b|\bNDB\b|\bLOC\b|\bPAPI\b|\bVASI\b/.test(r)) return 'NAVAID';
         if (/\bOBST\b|CRANE|TOWER|ANTENNA/.test(r)) return 'OBST';
         if (/\bTWY\b/.test(r)) return 'TWY';
         if (/\bAD\b|\bAPRON\b|\bRAMP\b/.test(r)) return 'AD';
