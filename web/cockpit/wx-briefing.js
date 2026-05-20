@@ -1087,6 +1087,39 @@ class WxBriefing {
         });
     }
 
+    _notamTier(n) {
+        if (['TFR','RESTR','RWY','FISB','GPS','APCH','MEA'].includes(n.type)) return 0;
+        if (n.type === 'OBST_LGT') return 3;
+        if (n.isEnroute) return 2;
+        return 1;
+    }
+
+    _sortedNotams() {
+        const apt = Array.isArray(this._notams)
+            ? this._filterByFlightWindow(this._notams) : [];
+        const enr = Array.isArray(this._enrouteNotams)
+            ? this._filterByFlightWindow(this._enrouteNotams) : [];
+
+        const stations = this._getStationList();
+        const stationIdx = new Map(stations.map((id, i) => [id, i]));
+        const T0 = ['TFR','RESTR','RWY','FISB','GPS','APCH','MEA'];
+
+        return [...apt, ...enr].sort((a, b) => {
+            const ta = this._notamTier(a), tb = this._notamTier(b);
+            if (ta !== tb) return ta - tb;
+            if (ta === 0) {
+                const ai = T0.indexOf(a.type), bi = T0.indexOf(b.type);
+                if (ai !== bi) return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
+            }
+            if (ta === 1) {
+                const ai = stationIdx.get(a.airport) ?? 999;
+                const bi = stationIdx.get(b.airport) ?? 999;
+                if (ai !== bi) return ai - bi;
+            }
+            return 0;
+        });
+    }
+
     /**
      * Worst flight category for a station on a given UTC day,
      * considering only prime flying hours (15Z–03Z, ~11AM–11PM Eastern).
