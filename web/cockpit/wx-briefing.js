@@ -1944,7 +1944,8 @@ class WxBriefing {
         const TYPE_CLASS = {
             TFR: 'rwy', RESTR: 'restr', RWY: 'rwy', FISB: 'fisb', GPS: 'gps',
             APCH: 'apch', MEA: 'mea', NAVAID: 'rwy', TWY: 'twy', AD: 'ad',
-            OBST: 'obst', SVC: 'svc', MOA: 'moa', ATCAA: 'atcaa', UAS: 'uas', LASER: 'laser',
+            OBST: 'obst', SVC: 'svc', MOA: 'moa', WARN: 'warn', ATCAA: 'atcaa',
+            UAS: 'uas', LASER: 'laser', SUA: 'sua',
         };
         const typeClass = TYPE_CLASS[notam.type] || 'sua';
         const label = notam.airport ? `${notam.airport} · ${notam.summary}` : notam.summary;
