@@ -25,6 +25,7 @@ class CockpitConfig {
                 navaids: { enabled: true, minZoom: 7, labelsMinZoom: 9 },
                 fixes: { enabled: false, minZoom: 10 },
                 airways: { enabled: false, minZoom: 8 },
+                sua:     { enabled: true  },
             },
         },
         // Airport display filter — persisted per-device, user-adjustable via layer panel
