@@ -2134,9 +2134,9 @@ class WxBriefing {
         const pat1 = /(\d{2})(\d{2})(N|S)\s*\/?(\d{2,3})(\d{2})(W|E)/gi;
         let m;
         while ((m = pat1.exec(raw)) !== null) {
-            let lat = parseInt(m[1]) + parseInt(m[2]) / 60;
+            let lat = parseInt(m[1], 10) + parseInt(m[2], 10) / 60;
             if (m[3].toUpperCase() === 'S') lat = -lat;
-            let lon = parseInt(m[4]) + parseInt(m[5]) / 60;
+            let lon = parseInt(m[4], 10) + parseInt(m[5], 10) / 60;
             if (m[6].toUpperCase() === 'W') lon = -lon;
             pts.push([lat, lon]);
         }
@@ -2144,9 +2144,9 @@ class WxBriefing {
         if (!pts.length) {
             const pat2 = /(\d{2})(\d{2})(\d{2})(N|S)\s*\/?(\d{2,3})(\d{2})(\d{2})(W|E)/gi;
             while ((m = pat2.exec(raw)) !== null) {
-                let lat = parseInt(m[1]) + parseInt(m[2]) / 60 + parseInt(m[3]) / 3600;
+                let lat = parseInt(m[1], 10) + parseInt(m[2], 10) / 60 + parseInt(m[3], 10) / 3600;
                 if (m[4].toUpperCase() === 'S') lat = -lat;
-                let lon = parseInt(m[5]) + parseInt(m[6]) / 60 + parseInt(m[7]) / 3600;
+                let lon = parseInt(m[5], 10) + parseInt(m[6], 10) / 60 + parseInt(m[7], 10) / 3600;
                 if (m[8].toUpperCase() === 'W') lon = -lon;
                 pts.push([lat, lon]);
             }
@@ -2168,9 +2168,9 @@ class WxBriefing {
             const c = raw.match(pat);
             if (c) {
                 const radiusNm = parseFloat(c[1]);
-                let lat = parseInt(c[2]) + parseInt(c[3]) / 60;
+                let lat = parseInt(c[2], 10) + parseInt(c[3], 10) / 60;
                 const latDir = c[4];
-                let lon = parseInt(c[5]) + parseInt(c[6]) / 60;
+                let lon = parseInt(c[5], 10) + parseInt(c[6], 10) / 60;
                 const lonDir = c[7];
                 if (latDir.toUpperCase() === 'S') lat = -lat;
                 if (lonDir.toUpperCase() === 'W') lon = -lon;
@@ -2184,9 +2184,9 @@ class WxBriefing {
     _parseCoordFromText(raw) {
         const m = (raw || '').match(/(\d{2})(\d{2})(N|S)\s*\/?(\d{2,3})(\d{2})(W|E)/i);
         if (!m) return null;
-        let lat = parseInt(m[1]) + parseInt(m[2]) / 60;
+        let lat = parseInt(m[1], 10) + parseInt(m[2], 10) / 60;
         if (m[3].toUpperCase() === 'S') lat = -lat;
-        let lon = parseInt(m[4]) + parseInt(m[5]) / 60;
+        let lon = parseInt(m[4], 10) + parseInt(m[5], 10) / 60;
         if (m[6].toUpperCase() === 'W') lon = -lon;
         return { lat, lon };
     }
