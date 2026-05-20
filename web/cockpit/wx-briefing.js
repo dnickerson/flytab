@@ -1977,7 +1977,7 @@ class WxBriefing {
         const query = this._notamSearch.trim().toLowerCase();
         const all = this._sortedNotams();
         const visible = query
-            ? all.filter(n => (n.raw + ' ' + n.summary).toLowerCase().includes(query))
+            ? all.filter(n => (n.airport + ' ' + n.raw + ' ' + n.summary).toLowerCase().includes(query))
             : all;
 
         const mainItems = visible.filter(n => this._notamTier(n) < 3);
