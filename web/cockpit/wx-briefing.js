@@ -1976,6 +1976,13 @@ class WxBriefing {
             const data = await resp.json();
             const features = data.features || [];
 
+            const wpGeoMap = new Map();
+            for (const wp of this._flightPlan?.waypoints || []) {
+                const key = (wp.icao || wp.id || '').toUpperCase();
+                if (key && wp.lat != null && wp.lon != null)
+                    wpGeoMap.set(key, { lat: wp.lat, lon: wp.lon });
+            }
+
             const notams = [];
             const seen = new Set();
             for (const feature of features) {
@@ -1986,7 +1993,7 @@ class WxBriefing {
                 // n.location is the 3-letter FAA id (e.g. LKR); map back to ICAO
                 const nLoc = (n.location || '').toUpperCase();
                 const loc = stations.find(s => s === nLoc || s === 'K' + nLoc) || stations[0];
-                notams.push(this._parseNotam(feature, loc));
+                notams.push(this._parseNotam(feature, loc, wpGeoMap));
             }
 
             const order = ['RWY', 'NAVAID', 'OBST', 'TWY', 'AD', 'SVC', 'OBST_LGT'];
@@ -2005,6 +2012,18 @@ class WxBriefing {
             try {
                 localStorage.setItem('flytab_notam_cache', JSON.stringify({ fetched_at: Date.now(), data: notams }));
             } catch (_) {}
+
+            const airportTfrShapes = notams
+                .filter(n => n.type === 'TFR')
+                .map(n => {
+                    const geo = this._parseTfrGeometry(n.raw);
+                    if (!geo) return null;
+                    return { raw: n.raw, summary: n.summary, validFrom: n.validFrom, validTo: n.validTo, ...geo };
+                })
+                .filter(Boolean);
+            if (airportTfrShapes.length) {
+                document.dispatchEvent(new CustomEvent('notam:tfrs-apt', { detail: { shapes: airportTfrShapes } }));
+            }
         } catch (err) {
             console.error('NOTAM fetch failed:', err);
             this._notamFetchError = err.message;
@@ -2066,14 +2085,20 @@ class WxBriefing {
 
                 if (!this._isEnrouteRelevant(raw)) continue;
 
+                const enrType = this._classifyEnrouteNotam(raw);
+                const geo = enrType === 'TFR'
+                    ? (this._parseTfrGeometry(raw)?.center ?? null)
+                    : this._parseCoordFromText(raw);
+
                 notams.push({
                     airport: n.location || '',
-                    type: this._classifyEnrouteNotam(raw),
+                    type: enrType,
                     summary: this._summarizeEnrouteNotam(raw),
                     raw,
                     validFrom: n.effectiveStart || null,
                     validTo:   n.effectiveEnd   || null,
                     isEnroute: true,
+                    geo,
                 });
             }
 
@@ -2230,14 +2255,15 @@ class WxBriefing {
             .slice(0, 120);
     }
 
-    _parseNotam(feature, airport) {
+    _parseNotam(feature, airport, wpGeoMap = new Map()) {
         const n = feature.properties?.coreNOTAMData?.notam || {};
         const translations = feature.properties?.coreNOTAMData?.notamTranslation || [];
         const localFmt = translations.find(t => t.type === 'LOCAL_FORMAT');
         const raw = localFmt?.simpleText || localFmt?.domestic_message || n.text || '';
         const type = this._classifyByQcode(n.selectionCode) || this._classifyNotam(raw);
         const summary = this._summarizeNotam(raw);
-        return { airport, type, summary, raw, validFrom: n.effectiveStart || null, validTo: n.effectiveEnd || null };
+        const geo = wpGeoMap.get(airport.toUpperCase()) ?? null;
+        return { airport, type, summary, raw, validFrom: n.effectiveStart || null, validTo: n.effectiveEnd || null, geo };
     }
 
     _classifyByQcode(q) {
