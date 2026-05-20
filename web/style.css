@@ -8449,10 +8449,10 @@ body {
 }
 
 /* New NOTAM type badge colors */
-.wx-adv-type.fisb  { background: #6633aa; }
-.wx-adv-type.gps   { background: #cc5500; }
-.wx-adv-type.apch  { background: #1a5c9a; }
-.wx-adv-type.mea   { background: #2e7d32; }
+.wx-adv-type.fisb  { color: #6633aa; border-color: rgba(102,51,170,.4); background: rgba(102,51,170,.08); }
+.wx-adv-type.gps   { color: #cc5500; border-color: rgba(204,85,0,.4);  background: rgba(204,85,0,.08); }
+.wx-adv-type.apch  { color: #1a5c9a; border-color: rgba(26,92,154,.4); background: rgba(26,92,154,.08); }
+.wx-adv-type.mea   { color: #2e7d32; border-color: rgba(46,125,50,.4); background: rgba(46,125,50,.08); }
 
 .wx-notam-lights-toggle {
     display: flex;
