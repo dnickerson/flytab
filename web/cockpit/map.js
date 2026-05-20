@@ -239,9 +239,11 @@ class CockpitMap {
         if (this._showTfrs) this._notamTfrGroup.addTo(this.map);
         this._onNotamTfrs = (e) => {
             if (!this._notamTfrGroup) return;
-            // Always update shapes regardless of toggle state so they're ready when toggled on
-            this._notamTfrShapes.clear();
-            this._notamTfrGroup.clearLayers();
+            if (e.type !== 'notam:tfrs-apt') {
+                // En-route refresh: clear all and rebuild
+                this._notamTfrShapes.clear();
+                this._notamTfrGroup.clearLayers();
+            }
             for (const shape of (e.detail?.shapes || [])) {
                 this._addNotamTfrShape(shape);
             }

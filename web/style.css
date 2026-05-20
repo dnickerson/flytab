@@ -8381,17 +8381,6 @@ body {
     font-style: italic;
 }
 
-/* ── NOTAM group sub-headers ── */
-.wx-notam-group-hdr {
-    padding: 6px 14px 4px;
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    color: var(--text-muted);
-    border-top: 1px solid var(--border);
-    margin-top: 4px;
-}
-.wx-notam-group-hdr:first-child { border-top: none; margin-top: 0; }
 
 /* NOTAM search bar */
 .wx-notam-search-row {

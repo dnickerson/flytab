@@ -2352,6 +2352,7 @@ class WxBriefing {
 
     _classifyNotam(raw) {
         const r = raw.toUpperCase();
+        if (/\bTFR\b|TEMPORARY FLIGHT RESTRICTION/.test(r)) return 'TFR';
         if (/\bRWY\b/.test(r)) return 'RWY';
         if (/\bMDA\b|\bDA\s+\d{3}|\bDECISION ALTITUDE\b|\bMINIMUMS\b|\bINSTRUMENT APPROACH\b|\bILS CAT\b/.test(r))
             return 'APCH';
