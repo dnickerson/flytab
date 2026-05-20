@@ -8394,9 +8394,9 @@ body {
     flex: 1;
     padding: 8px 10px;
     border-radius: 8px;
-    border: 1px solid var(--border-color);
-    background: var(--bg-secondary, #0e1628);
-    color: var(--text-primary, #e8ecf0);
+    border: 1px solid #ccc;
+    background: #fff;
+    color: #111;
     font-size: 15px;
 }
 .wx-notam-search-clear {
