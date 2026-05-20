@@ -8392,6 +8392,68 @@ body {
     margin-top: 4px;
 }
 .wx-notam-group-hdr:first-child { border-top: none; margin-top: 0; }
+
+/* NOTAM search bar */
+.wx-notam-search-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-color);
+}
+.wx-notam-search {
+    flex: 1;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary, #0e1628);
+    color: var(--text-primary, #e8ecf0);
+    font-size: 15px;
+}
+.wx-notam-search-clear {
+    padding: 6px 10px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary, #a0b8d0);
+    font-size: 18px;
+    cursor: pointer;
+    touch-action: manipulation;
+}
+
+/* NOTAM tier section headers */
+.wx-notam-tier-hdr {
+    padding: 4px 12px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: var(--text-secondary, #a0b8d0);
+    border-top: 1px solid var(--border-color);
+    margin-top: 4px;
+}
+.wx-notam-tier-0 { color: #d0330a; }
+
+/* Map pill button on NOTAM cards */
+.wx-notam-map-pill {
+    padding: 4px 10px;
+    border-radius: 12px;
+    border: 1px solid #2266cc;
+    background: transparent;
+    color: #4488ee;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    touch-action: manipulation;
+    white-space: nowrap;
+    flex-shrink: 0;
+    margin-left: 6px;
+}
+
+/* New NOTAM type badge colors */
+.wx-adv-type.fisb  { background: #6633aa; }
+.wx-adv-type.gps   { background: #cc5500; }
+.wx-adv-type.apch  { background: #1a5c9a; }
+.wx-adv-type.mea   { background: #2e7d32; }
+
 .wx-notam-lights-toggle {
     display: flex;
     justify-content: space-between;
