@@ -2200,7 +2200,10 @@ class WxBriefing {
                / R-\d+|\bRESTRICTED AREA\b/.test(r) ||
                /\bMOA\b/.test(r) ||
                /\bWARNING AREA\b| W-\d+/.test(r) ||
-               /\bATCAA\b/.test(r);
+               /\bATCAA\b/.test(r) ||
+               /\bFIS-?B\b|\bNBCAP\b/.test(r) ||
+               /\bGPS\s+(INTERFERENCE|UNRELIABLE|UNREL|OUTAGE)\b/.test(r) ||
+               /\bMEA\b|\bMOCA\b|\bMINIMUM EN.?ROUTE\b/.test(r);
     }
 
     _classifyEnrouteNotam(raw) {
@@ -2213,6 +2216,9 @@ class WxBriefing {
         if (/\bATCAA\b/.test(r)) return 'ATCAA';
         if (/\bUAS\b|\bDRONE\b/.test(r)) return 'UAS';
         if (/\bLASER\b/.test(r)) return 'LASER';
+        if (/\bFIS-?B\b|\bNBCAP\b/.test(r)) return 'FISB';
+        if (/\bGPS\s+(INTERFERENCE|UNRELIABLE|UNREL|OUTAGE)\b/.test(r)) return 'GPS';
+        if (/\bMEA\b|\bMOCA\b|\bMINIMUM EN.?ROUTE\b/.test(r)) return 'MEA';
         return 'SUA';
     }
 
@@ -2238,7 +2244,9 @@ class WxBriefing {
         if (!q) return null;
         q = q.toUpperCase();
         if (q.startsWith('QMR')) return 'RWY';
-        if (q.startsWith('QNV') || q.startsWith('QPI')) return 'NAVAID';
+        if (q.startsWith('QPI') || q.startsWith('QIL') || q.startsWith('QIC') || q.startsWith('QAL'))
+            return 'APCH';
+        if (q.startsWith('QNV')) return 'NAVAID';
         if (q.startsWith('QOL')) return 'OBST_LGT';
         if (q.startsWith('QOB')) return 'OBST';
         if (q.startsWith('QTW')) return 'TWY';
@@ -2249,6 +2257,8 @@ class WxBriefing {
     _classifyNotam(raw) {
         const r = raw.toUpperCase();
         if (/\bRWY\b/.test(r)) return 'RWY';
+        if (/\bMDA\b|\bDA\s+\d{3}|\bDECISION ALTITUDE\b|\bMINIMUMS\b|\bINSTRUMENT APPROACH\b|\bILS CAT\b/.test(r))
+            return 'APCH';
         if (/\bNAVAID\b|ILS|VOR|NDB|LOC\b|PAPI|VASI/.test(r)) return 'NAVAID';
         if (/\bOBST\b|CRANE|TOWER|ANTENNA/.test(r)) return 'OBST';
         if (/\bTWY\b/.test(r)) return 'TWY';
