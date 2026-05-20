@@ -784,6 +784,11 @@ class FlyTabApp {
             const wxCfg = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.raw : {};
             this.wxBriefing = new WxBriefing(nasrDb, wxCfg);
             this.wxBriefing.init();
+            document.addEventListener('notam:goto', (e) => {
+                const { lat, lon, zoom } = e.detail;
+                this.wxBriefing?.hide();
+                this.cockpitMap?.map?.flyTo([lat, lon], zoom ?? 9, { animate: true, duration: 0.8 });
+            });
         }
 
         // Track log

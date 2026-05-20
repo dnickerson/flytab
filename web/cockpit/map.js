@@ -247,6 +247,7 @@ class CockpitMap {
             }
         };
         document.addEventListener('notam:tfrs', this._onNotamTfrs);
+        document.addEventListener('notam:tfrs-apt', this._onNotamTfrs);
     }
 
     /** Provide a NasrDB instance for fix/navaid queries */
@@ -265,6 +266,7 @@ class CockpitMap {
     destroy() {
         if (this._onNotamTfrs) {
             document.removeEventListener('notam:tfrs', this._onNotamTfrs);
+            document.removeEventListener('notam:tfrs-apt', this._onNotamTfrs);
             this._onNotamTfrs = null;
         }
         if (this._trafficTimer) { clearInterval(this._trafficTimer); this._trafficTimer = null; }
@@ -327,10 +329,12 @@ class CockpitMap {
             errorTileUrl: '',
         });
 
-        // IFR Area Charts — ArcGIS IFR_AreaLow z10-z12, explicit toggle overlay only.
+        // IFR Area Charts — FAA GeoTIFF source (ENR_A series), 512px retina z10-z12.
         // Terminal area detail near major airports. Separate from IFR Low Enroute layer.
+        // minZoom:11 — avoids the jarring scale mismatch with IFR Low at zoom 10
+        // (IFR Area source charts are printed at ~2x the scale of IFR Low).
         this._ifrAreaLayer = L.tileLayer(`${tileBase}/ifr-area/{z}/{x}/{y}.webp`, {
-            minZoom: 10,
+            minZoom: 11,
             minNativeZoom: 10,
             maxNativeZoom: 12,
             maxZoom: 14,
