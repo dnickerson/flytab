@@ -43,6 +43,7 @@ class WxBriefing {
         this._notamFetchError = null;
         this._enrouteNotamFetchError = null;
         this._lightsExpanded = false;
+        this._notamSearch = '';
         this._tafPillOpen = new Set();
         this._mosPillOpen = new Set();
     }
@@ -424,23 +425,19 @@ class WxBriefing {
         const sec = this._section('wx-notam-section');
         if (!sec) return;
 
-        const airportLoading = this._notams === null;
-        const enrouteLoading = this._enrouteNotams === null;
-        const loading = airportLoading || enrouteLoading;
+        const loading = this._notams === null || this._enrouteNotams === null;
+        const all = loading ? [] : this._sortedNotams();
+        const critical = all.filter(n => this._notamTier(n) === 0);
+        const fetchErr = !loading && this._notamFetchError && !this._notams?.length;
+        const anyErr = fetchErr || (!loading && (this._notamFetchError || this._enrouteNotamFetchError));
 
-        const filteredApt = airportLoading  ? [] : this._filterByFlightWindow(this._notams);
-        const filteredEnr = enrouteLoading  ? [] : this._filterByFlightWindow(this._enrouteNotams);
-        const allNotams = [...filteredApt, ...filteredEnr];
-        const critical = allNotams.filter(n => ['RWY', 'NAVAID', 'TFR', 'RESTR'].includes(n.type));
-        const fetchErr = !loading && this._notamFetchError && !allNotams.length;
-        const fetchErrWithCache = !loading && this._notamFetchError && allNotams.length > 0;
-        const anyErr = fetchErr || fetchErrWithCache || (!loading && this._enrouteNotamFetchError);
-        const badgeClass = loading ? null : (fetchErr ? 'warn' : anyErr ? 'warn' : critical.length > 0 ? 'warn' : allNotams.length > 0 ? 'info' : 'ok');
-        const badgeText  = loading
-            ? 'Fetching…'
-            : (anyErr && !allNotams.length)
-            ? 'UNAVAIL'
-            : (critical.length > 0 ? `${critical.length} CRITICAL` : allNotams.length > 0 ? `${allNotams.length} ACTIVE` : 'NONE');
+        const badgeClass = loading ? null
+            : (fetchErr ? 'warn' : critical.length ? 'warn' : all.length ? 'info' : 'ok');
+        const badgeText = loading ? 'Fetching…'
+            : (anyErr && !all.length) ? 'UNAVAIL'
+            : critical.length ? `${critical.length} CRITICAL`
+            : all.length ? `${all.length} ACTIVE`
+            : 'NONE';
 
         const hdr = this._buildRhsHeader('NOTAMs', badgeClass, badgeText);
         sec.innerHTML = '';
@@ -455,87 +452,46 @@ class WxBriefing {
             sec.appendChild(body);
             return;
         }
-
-        if (fetchErrWithCache) {
+        if (!loading && this._notamFetchError && this._notams?.length) {
             body.insertAdjacentHTML('beforeend',
-                `<div class="wx-section-error">⚠ Refresh failed — showing cached airport NOTAMs · tap ↻ to retry</div>`);
+                `<div class="wx-section-error">⚠ Refresh failed — showing cached data · tap ↻ to retry</div>`);
         }
 
-        // ── Airport NOTAMs ────────────────────────────────────────────────────
-        const aptGrpHdr = document.createElement('div');
-        aptGrpHdr.className = 'wx-notam-group-hdr';
-        aptGrpHdr.textContent = 'AIRPORT';
-        body.appendChild(aptGrpHdr);
+        // Search bar
+        const searchRow = document.createElement('div');
+        searchRow.className = 'wx-notam-search-row';
+        const searchInput = document.createElement('input');
+        searchInput.className = 'wx-notam-search';
+        searchInput.type = 'text';
+        searchInput.placeholder = 'Search NOTAMs…';
+        searchInput.value = this._notamSearch;
+        searchRow.appendChild(searchInput);
 
-        if (airportLoading) {
-            body.insertAdjacentHTML('beforeend', '<div class="wx-section-loading">Fetching airport NOTAMs…</div>');
-        } else {
-            const priorityNotams = filteredApt.filter(n => n.type !== 'OBST_LGT');
-            const lightNotams    = filteredApt.filter(n => n.type === 'OBST_LGT');
-
-            if (!priorityNotams.length && !lightNotams.length) {
-                body.insertAdjacentHTML('beforeend', '<div class="wx-section-empty">No active NOTAMs for route airports.</div>');
-            }
-
-            for (const notam of priorityNotams) {
-                const typeClass = (notam.type === 'RWY' || notam.type === 'NAVAID') ? 'rwy' : notam.type.toLowerCase();
-                const validStr = notam.validTo
-                    ? `Valid to <b>${new Date(notam.validTo).toLocaleDateString([], {weekday:'short',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})} L</b>`
-                    : '';
-                body.appendChild(this._buildAdvCard(notam.type, typeClass, `${notam.airport} · ${notam.summary}`, notam.airport, notam.raw, validStr));
-            }
-
-            if (lightNotams.length > 0) {
-                const count = lightNotams.length;
-                const toggle = document.createElement('div');
-                toggle.className = 'wx-notam-lights-toggle';
-                toggle.innerHTML = `<span>${count} obstacle light outage${count > 1 ? 's' : ''}</span><span>${this._lightsExpanded ? '▼' : '▶'}</span>`;
-
-                const lightsBody = document.createElement('div');
-                lightsBody.style.display = this._lightsExpanded ? 'block' : 'none';
-                for (const notam of lightNotams) {
-                    const validStr = notam.validTo
-                        ? `Valid to <b>${new Date(notam.validTo).toLocaleDateString([], {weekday:'short',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})} L</b>`
-                        : '';
-                    lightsBody.appendChild(this._buildAdvCard('OBST', 'obst', `${notam.airport} · ${notam.summary}`, notam.airport, notam.raw, validStr));
-                }
-
-                wireTap(toggle, () => {
-                    this._lightsExpanded = !this._lightsExpanded;
-                    lightsBody.style.display = this._lightsExpanded ? 'block' : 'none';
-                    toggle.querySelector('span:last-child').textContent = this._lightsExpanded ? '▼' : '▶';
-                });
-
-                body.appendChild(toggle);
-                body.appendChild(lightsBody);
-            }
+        if (this._notamSearch) {
+            const clearBtn = document.createElement('button');
+            clearBtn.className = 'wx-notam-search-clear';
+            clearBtn.textContent = '✕';
+            wireTap(clearBtn, () => {
+                this._notamSearch = '';
+                this._renderNotamSection();
+            });
+            searchRow.appendChild(clearBtn);
         }
 
-        // ── En-Route Airspace NOTAMs ──────────────────────────────────────────
-        const enrGrpHdr = document.createElement('div');
-        enrGrpHdr.className = 'wx-notam-group-hdr';
-        enrGrpHdr.textContent = 'EN-ROUTE AIRSPACE';
-        body.appendChild(enrGrpHdr);
+        searchInput.addEventListener('input', () => {
+            this._notamSearch = searchInput.value;
+            const list = body.querySelector('#wx-notam-list');
+            if (list) this._renderNotamList(list);
+        });
+        body.appendChild(searchRow);
 
-        if (enrouteLoading) {
-            body.insertAdjacentHTML('beforeend', '<div class="wx-section-loading">Fetching en-route NOTAMs…</div>');
-        } else if (this._enrouteNotamFetchError) {
-            body.insertAdjacentHTML('beforeend',
-                `<div class="wx-section-error">⚠ ${this._escHtml(this._enrouteNotamFetchError)} · tap ↻ to retry</div>`);
-        } else if (!filteredEnr.length) {
-            body.insertAdjacentHTML('beforeend', '<div class="wx-section-empty">No TFRs, MOAs, or restricted areas on route.</div>');
-        } else {
-            for (const notam of filteredEnr) {
-                const typeClass = { TFR: 'rwy', RESTR: 'restr', MOA: 'moa', WARN: 'warn',
-                    ATCAA: 'atcaa', UAS: 'uas', LASER: 'laser' }[notam.type] || 'sua';
-                const validStr = notam.validTo
-                    ? `Valid to <b>${new Date(notam.validTo).toLocaleDateString([], {weekday:'short',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})} L</b>`
-                    : '';
-                body.appendChild(this._buildAdvCard(notam.type, typeClass, `${notam.airport} · ${notam.summary}`, notam.airport, notam.raw, validStr));
-            }
-        }
-
+        // Sorted/filtered NOTAM list
+        const listContainer = document.createElement('div');
+        listContainer.id = 'wx-notam-list';
+        body.appendChild(listContainer);
         sec.appendChild(body);
+
+        this._renderNotamList(listContainer);
     }
 
     // ── Panel construction ────────────────────────────────────────────────────
@@ -1982,6 +1938,86 @@ class WxBriefing {
             card.querySelector('.wx-adv-body').classList.toggle('open');
         });
         return card;
+    }
+
+    _buildNotamCard(notam) {
+        const TYPE_CLASS = {
+            TFR: 'rwy', RESTR: 'restr', RWY: 'rwy', FISB: 'fisb', GPS: 'gps',
+            APCH: 'apch', MEA: 'mea', NAVAID: 'rwy', TWY: 'twy', AD: 'ad',
+            OBST: 'obst', SVC: 'svc', MOA: 'moa', ATCAA: 'atcaa', UAS: 'uas', LASER: 'laser',
+        };
+        const typeClass = TYPE_CLASS[notam.type] || 'sua';
+        const label = notam.airport ? `${notam.airport} · ${notam.summary}` : notam.summary;
+        const validStr = notam.validTo
+            ? `Valid to <b>${new Date(notam.validTo).toLocaleDateString([],
+                { weekday:'short', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' })} L</b>`
+            : '';
+        const card = this._buildAdvCard(notam.type, typeClass, label, notam.airport || '', notam.raw, validStr);
+        if (notam.geo) {
+            const pill = document.createElement('button');
+            pill.className = 'wx-notam-map-pill';
+            pill.textContent = '▶ Map';
+            const { lat, lon } = notam.geo;
+            const zoom = (['RWY','NAVAID','APCH'].includes(notam.type)) ? 12 : 9;
+            wireTap(pill, () => {
+                document.dispatchEvent(new CustomEvent('notam:goto', { detail: { lat, lon, zoom } }));
+            });
+            card.querySelector('.wx-adv-hdr').insertBefore(pill, card.querySelector('.wx-adv-chevron'));
+        }
+        return card;
+    }
+
+    _renderNotamList(container) {
+        container.innerHTML = '';
+        if (this._notams === null || this._enrouteNotams === null) {
+            container.insertAdjacentHTML('beforeend', '<div class="wx-section-loading">Fetching NOTAMs…</div>');
+            return;
+        }
+        const query = this._notamSearch.trim().toLowerCase();
+        const all = this._sortedNotams();
+        const visible = query
+            ? all.filter(n => (n.raw + ' ' + n.summary).toLowerCase().includes(query))
+            : all;
+
+        const mainItems = visible.filter(n => this._notamTier(n) < 3);
+        const lights    = visible.filter(n => this._notamTier(n) === 3);
+
+        if (!mainItems.length && !lights.length) {
+            container.insertAdjacentHTML('beforeend',
+                `<div class="wx-section-empty">${query ? 'No NOTAMs match your search.' : 'No active NOTAMs.'}</div>`);
+            return;
+        }
+
+        const TIER_LABELS = ['CRITICAL', 'ROUTE', 'AREA'];
+        let lastTier = -1;
+        for (const notam of mainItems) {
+            const tier = this._notamTier(notam);
+            if (tier !== lastTier) {
+                const hdr = document.createElement('div');
+                hdr.className = `wx-notam-tier-hdr wx-notam-tier-${tier}`;
+                hdr.textContent = TIER_LABELS[tier];
+                container.appendChild(hdr);
+                lastTier = tier;
+            }
+            container.appendChild(this._buildNotamCard(notam));
+        }
+
+        if (lights.length) {
+            const toggle = document.createElement('div');
+            toggle.className = 'wx-notam-lights-toggle';
+            toggle.innerHTML = `<span>${lights.length} obstacle light outage${lights.length !== 1 ? 's' : ''}</span>`
+                + `<span>${this._lightsExpanded ? '▼' : '▶'}</span>`;
+            const lightsBody = document.createElement('div');
+            lightsBody.style.display = this._lightsExpanded ? 'block' : 'none';
+            for (const n of lights) lightsBody.appendChild(this._buildNotamCard(n));
+            wireTap(toggle, () => {
+                this._lightsExpanded = !this._lightsExpanded;
+                lightsBody.style.display = this._lightsExpanded ? 'block' : 'none';
+                toggle.querySelector('span:last-child').textContent = this._lightsExpanded ? '▼' : '▶';
+            });
+            container.appendChild(toggle);
+            container.appendChild(lightsBody);
+        }
     }
 
     _escHtml(str) {
