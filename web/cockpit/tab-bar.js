@@ -225,6 +225,10 @@ class TabBar {
                     }},
                 ]);
             }},
+            { icon: '📖', label: 'User Manual', action: () => {
+                this._closeMoreDrawer();
+                this._showManual();
+            }},
             { icon: '❓', label: 'Help', action: () => {
                 this._closeMoreDrawer();
                 this._hideRadarControls();
@@ -562,6 +566,146 @@ class TabBar {
             document.addEventListener('mousemove', move);
             document.addEventListener('mouseup', up, { once: true });
         });
+    }
+
+    /** Show the user manual in a scrollable full-screen overlay. */
+    async _showManual() {
+        document.getElementById('flytabManualOverlay')?.remove();
+
+        const overlay = document.createElement('div');
+        overlay.id = 'flytabManualOverlay';
+        overlay.style.cssText = `
+            position: fixed; top: 0; left: 0; right: 0;
+            bottom: var(--tab-bar-height, 72px);
+            z-index: 100000;
+            background: #fff; color: #111;
+            display: flex; flex-direction: column;
+            font-family: -apple-system, 'SF Pro Text', system-ui, sans-serif;
+            font-size: 15px; line-height: 1.65;
+        `;
+
+        const header = document.createElement('div');
+        header.style.cssText = `
+            display: flex; align-items: center; gap: 12px;
+            padding: 12px 16px; background: #1a3a6b; color: #fff;
+            flex-shrink: 0;
+        `;
+        header.innerHTML = `
+            <span style="font-size:18px;font-weight:700;flex:1">FlyTab User Manual</span>
+            <button id="_manualClose" style="background:#0055cc;color:#fff;border:none;border-radius:6px;padding:8px 16px;font-size:14px;font-weight:600;cursor:pointer;touch-action:manipulation;">✕ Close</button>
+        `;
+        overlay.appendChild(header);
+
+        const body = document.createElement('div');
+        body.style.cssText = `flex:1; overflow-y:scroll; -webkit-overflow-scrolling:touch; touch-action:pan-y; overscroll-behavior:contain; padding:16px 20px 40px;`;
+        body.innerHTML = '<p style="color:#888">Loading…</p>';
+        overlay.appendChild(body);
+
+        document.body.appendChild(overlay);
+        overlay.querySelector('#_manualClose').addEventListener('click', () => overlay.remove());
+
+        // Fetch and render
+        try {
+            const resp = await fetch('/user-manual.md', { cache: 'no-store' });
+            if (!resp.ok) throw new Error(resp.status);
+            const md = await resp.text();
+            body.innerHTML = TabBar._mdToHtml(md);
+        } catch {
+            body.innerHTML = '<p style="color:#c00">Could not load user-manual.md</p>';
+        }
+    }
+
+    /** Minimal markdown → HTML renderer for the user manual. */
+    static _mdToHtml(md) {
+        const lines = md.split('\n');
+        let html = '';
+        let inList = false;
+        let inCode = false;
+        let codeBuf = '';
+        let i = 0;
+
+        const endList = () => { if (inList) { html += '</ul>'; inList = false; } };
+
+        while (i < lines.length) {
+            const line = lines[i];
+
+            // Fenced code block
+            if (line.startsWith('```')) {
+                endList();
+                inCode = !inCode;
+                if (!inCode) {
+                    html += `<pre style="background:#f4f4f4;border-radius:6px;padding:10px 12px;overflow-x:auto;font-size:12px;line-height:1.5;margin:10px 0;white-space:pre-wrap">${codeBuf.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</pre>`;
+                    codeBuf = '';
+                }
+                i++; continue;
+            }
+            if (inCode) { codeBuf += line + '\n'; i++; continue; }
+
+            // Table: consume all consecutive | lines at once
+            if (line.startsWith('|')) {
+                endList();
+                const tableLines = [];
+                while (i < lines.length && lines[i].startsWith('|')) {
+                    tableLines.push(lines[i]);
+                    i++;
+                }
+                // row 0 = header, row 1 = separator (skip), rows 2+ = body
+                const parseCells = r => r.split('|').slice(1, -1).map(c => c.trim());
+                html += `<table style="border-collapse:collapse;width:100%;margin:12px 0;font-size:13px;display:block;overflow-x:auto">`;
+                html += `<thead style="background:#1a3a6b;color:#fff"><tr>`;
+                for (const c of parseCells(tableLines[0])) {
+                    html += `<th style="padding:6px 10px;text-align:left;border:1px solid #355;white-space:nowrap">${TabBar._inlineMd(c)}</th>`;
+                }
+                html += `</tr></thead><tbody>`;
+                for (let r = 2; r < tableLines.length; r++) {
+                    if (/^\|[-| :]+\|$/.test(tableLines[r])) continue;
+                    html += `<tr style="${r % 2 === 0 ? 'background:#f8f8ff' : ''}">`;
+                    for (const c of parseCells(tableLines[r])) {
+                        html += `<td style="padding:6px 10px;border:1px solid #ddd;vertical-align:top">${TabBar._inlineMd(c)}</td>`;
+                    }
+                    html += `</tr>`;
+                }
+                html += `</tbody></table>`;
+                continue;
+            }
+
+            // Horizontal rule
+            if (/^---+$/.test(line.trim())) { endList(); html += `<hr style="border:none;border-top:2px solid #ddd;margin:20px 0">`; i++; continue; }
+
+            // Headings
+            const h1 = line.match(/^# (.+)/);
+            const h2 = line.match(/^## (.+)/);
+            const h3 = line.match(/^### (.+)/);
+            if (h1) { endList(); html += `<h1 style="font-size:20px;font-weight:800;margin:24px 0 8px;color:#1a3a6b;border-bottom:2px solid #1a3a6b;padding-bottom:4px">${TabBar._inlineMd(h1[1])}</h1>`; i++; continue; }
+            if (h2) { endList(); html += `<h2 style="font-size:17px;font-weight:700;margin:22px 0 8px;color:#1a3a6b;border-bottom:1px solid #cce">${TabBar._inlineMd(h2[1])}</h2>`; i++; continue; }
+            if (h3) { endList(); html += `<h3 style="font-size:15px;font-weight:700;margin:16px 0 6px;color:#2a4a8b">${TabBar._inlineMd(h3[1])}</h3>`; i++; continue; }
+
+            // List item
+            if (/^[-*] /.test(line)) {
+                if (!inList) { html += `<ul style="margin:6px 0 6px 20px;padding:0">`; inList = true; }
+                html += `<li style="margin:3px 0">${TabBar._inlineMd(line.slice(2))}</li>`;
+                i++; continue;
+            }
+
+            // Blank line
+            if (!line.trim()) { endList(); i++; continue; }
+
+            // Paragraph
+            endList();
+            html += `<p style="margin:6px 0">${TabBar._inlineMd(line)}</p>`;
+            i++;
+        }
+        endList();
+        return html;
+    }
+
+    static _inlineMd(text) {
+        return text
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+            .replace(/`([^`]+)`/g, '<code style="background:#f0f0f0;border-radius:3px;padding:1px 4px;font-size:12px;font-family:monospace">$1</code>')
+            .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
     }
 
     /** Show help overlay in-app (no external browser) */
