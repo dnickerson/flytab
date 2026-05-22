@@ -185,7 +185,24 @@ class CockpitMap {
             zoomSnap: 0.25,
             zoomDelta: 0.5,
             wheelDebounceTime: 80,
+            wheelPxPerZoomLevel: 120,  // default 60 causes 2-level jumps on standard mice; 120 = 1 level per tick
         });
+
+        // Guard against Infinity zoom from Leaflet's touch-zoom handler:
+        // when keyboard cover closes and fires two touch points at identical coordinates,
+        // _startDist=0 → distance/0=NaN → getScaleZoom returns 1/0=Infinity.
+        // During the switchBaseLayer('vector') init window, maxZoom=Infinity so
+        // _limitZoom(Infinity)=Infinity and the map enters a permanently broken state.
+        const _guardedSetZoom = this.map.setZoom.bind(this.map);
+        this.map.setZoom = (zoom, opts) => {
+            if (!isFinite(zoom)) return this.map;
+            return _guardedSetZoom(zoom, opts);
+        };
+        const _guardedSetView = this.map.setView.bind(this.map);
+        this.map.setView = (center, zoom, opts) => {
+            if (zoom !== undefined && !isFinite(zoom)) zoom = 8;
+            return _guardedSetView(center, zoom, opts);
+        };
 
         // Tile layers
         this._setupLayers();
@@ -746,6 +763,8 @@ class CockpitMap {
                 }
             );
             this.radarLayer.addTo(this.map);
+            // Tell FisbNexrad about the internet tile layer so CB building can sample it
+            if (this._fisbNexrad) this._fisbNexrad.setCbInternetLayer(this.radarLayer);
             // Internet radar source — RadarLoop falls back to this when FIS-B has no data
             this._inetRadarSource = new InetRadarSource(this.map, this.radarLayer);
             // Use FIS-B if it already has blocks; otherwise fall back to internet
@@ -753,7 +772,10 @@ class CockpitMap {
                 this._radarLoop.setNexrad(fisbHasBlocks ? this._fisbNexrad : this._inetRadarSource);
             }
         } else if (!on && this.radarLayer) {
-            if (this._fisbNexrad) this._fisbNexrad.remove();
+            if (this._fisbNexrad) {
+                this._fisbNexrad.setCbInternetLayer(null);
+                this._fisbNexrad.remove();
+            }
             if (this._inetRadarSource) {
                 this._inetRadarSource.cleanup();
                 this._inetRadarSource = null;
@@ -773,6 +795,10 @@ class CockpitMap {
             // Dim the background tile now that FIS-B is the primary source
             if (this.radarLayer) this.radarLayer.setOpacity(0.3);
         }
+    }
+
+    toggleCbBuilding(on) {
+        this._fisbNexrad?.setCbBuilding(on);
     }
 
     /** Adjust internet radar tile opacity (dim when FIS-B active, full when sole source) */

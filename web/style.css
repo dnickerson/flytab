@@ -1132,6 +1132,10 @@ body {
 .traffic-icon { background: none !important; border: none !important; overflow: visible !important; }
 .pirep-icon   { background: none !important; border: none !important; overflow: visible !important; cursor: pointer; }
 .tfr-icon     { background: none !important; border: none !important; overflow: visible !important; cursor: pointer; }
+.cb-build-label { background: none !important; border: none !important; overflow: visible !important; pointer-events: none; }
+.cb-build-text  { font-size: 12px; font-weight: 800; white-space: nowrap; text-shadow: 0 0 3px #fff, 0 0 3px #fff; }
+.cb-tcu-label   { background: none !important; border: none !important; overflow: visible !important; pointer-events: none; }
+.cb-tcu-text    { font-size: 13px; font-weight: 900; white-space: nowrap; text-shadow: 0 0 4px #fff, 0 0 4px #fff; padding: 1px 4px; border-radius: 3px; border: 2px solid currentColor; background: rgba(255,255,255,0.85); }
 .traffic-icon-wrap { display: flex; flex-direction: column; align-items: center; }
 .traffic-alt {
     font-size: 14px;
@@ -7104,13 +7108,13 @@ body {
 
 /* ── Weather map labels (ceil / vis / wind) ─────────────────────────────────── */
 .wx-label-stack {
-    background: transparent;
-    border: none;
+    background: none !important;
+    border: none !important;
+    overflow: visible !important;
     pointer-events: none;
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    margin-left: 12px;
     gap: 2px;
 }
 
@@ -7123,9 +7127,7 @@ body {
     color: #000;
     line-height: 1;
     white-space: nowrap;
-    background: rgba(255,255,255,0.92);
-    border-radius: 3px;
-    padding: 1px 4px;
+    text-shadow: 0 0 3px #fff, 0 0 3px #fff;
 }
 
 /* Offline Maps — package list + import button + progress bar */

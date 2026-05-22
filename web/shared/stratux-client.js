@@ -460,14 +460,12 @@ class StratuxClient extends EventTarget {
         this._jsonioWs.onmessage = (e) => {
             try {
                 const msg = JSON.parse(e.data);
-                // Stratux only sets NEXRADBlock on NEXRAD frames (PIDs 63, 64, 51-54).
-                // Use presence of NEXRADBlock as discriminator — PID-based filter silently
-                // dropped PID 64 (NEXRAD Regional), the most common in-flight product.
-                if (msg.NEXRADBlock) {
+                // Stratux UATFrame JSON uses field name "NEXRAD" ([]NEXRADBlock struct).
+                // Discriminate by presence of NEXRAD array — covers all PIDs 51-64.
+                if (msg.NEXRAD && msg.NEXRAD.length > 0) {
                     if (typeof DiagLog !== 'undefined' && !this._nexradLogged) {
                         this._nexradLogged = true;
-                        const n = Array.isArray(msg.NEXRADBlock) ? msg.NEXRADBlock.length : 1;
-                        DiagLog.log('stratux', `First NEXRAD block: PID=${msg.Product_id} blocks=${n}`);
+                        DiagLog.log('stratux', `First NEXRAD block: PID=${msg.Product_id} blocks=${msg.NEXRAD.length}`);
                     }
                     this.dispatchEvent(new CustomEvent('stratux:nexrad', { detail: msg }));
                 } else {

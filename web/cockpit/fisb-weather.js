@@ -86,6 +86,11 @@ class FisbWeatherDisplay {
             if (dx*dx + dy*dy > 400) return; // > 20px = pan, not tap
             this._handleAdvisoryTap(e.changedTouches[0].clientX, e.changedTouches[0].clientY);
         };
+        // Desktop-only mouse click handler — only registered on non-touch devices so tablet is unaffected
+        const isTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+        this._onMapClick = isTouch ? null : (e) => {
+            this._handleAdvisoryTap(e.clientX, e.clientY);
+        };
     }
 
     // ========== Public API ==========
@@ -120,10 +125,11 @@ class FisbWeatherDisplay {
         // Build advisory list panel (hidden until opened)
         this._buildAdvisoryPanel();
 
-        // Register touch handlers on map container for reliable SIGMET/AIRMET tap detection
+        // Register tap/click handlers on map container for SIGMET/AIRMET hit detection
         const container = this._map.getContainer();
         container.addEventListener('touchstart', this._onTapStart, { capture: true, passive: true });
         container.addEventListener('touchend',   this._onTapEnd,   { passive: true });
+        if (this._onMapClick) container.addEventListener('click', this._onMapClick);
     }
 
     /** Set route airports (kept for API compatibility) */
@@ -143,6 +149,7 @@ class FisbWeatherDisplay {
         const container = this._map.getContainer();
         container.removeEventListener('touchstart', this._onTapStart, { capture: true });
         container.removeEventListener('touchend',   this._onTapEnd);
+        if (this._onMapClick) container.removeEventListener('click', this._onMapClick);
         this._pirepLayer.clearLayers();
         this._sigmetLayer.clearLayers();
         this._airmetTangoLayer.clearLayers();

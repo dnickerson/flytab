@@ -23,6 +23,7 @@ class VectorMapLayers {
         this._wxDotsLayer = L.layerGroup();        // flight category solid dots — on top of airport icons
         this._wxLabelLayer = L.layerGroup();       // weather text labels (ceil/vis/wind)
         this._wxVoronoiLayer = L.layerGroup();
+        this._cbTcuLayer = L.layerGroup();         // CB/TCU report markers from METARs
         this._showVoronoi = false;
 
         // Canvas renderer for circle markers (performance)
@@ -33,6 +34,7 @@ class VectorMapLayers {
         this._suaPolygons = new Map();
         this._wxDotMarkers = new Map();    // icao → wx dot marker
         this._wxLabelMarkers = new Map();  // icao → wx label marker
+        this._cbTcuMarkers = new Map();    // icao → [L.marker|L.polyline, ...]
         this._aptPositions = new Map();    // icao → {lat, lon, tower} — drives wx dots, independent of airport layer
         this._voronoiPositions = new Map(); // icao → {lat, lon} — accumulates across pans for stable Voronoi sites
         this._airportMarkers = new Map();
@@ -71,6 +73,7 @@ class VectorMapLayers {
         this._showVis  = false;
         this._showWind = false;
         this._showTemp = false;
+        this._showCbTcu = false;
 
         // Debounced update on map movement
         this._map.on('moveend zoomend', () => this._scheduleUpdate());
@@ -158,6 +161,7 @@ class VectorMapLayers {
         this._wxVoronoiLayer.addTo(this._map);
         this._wxDotsLayer.addTo(this._map);
         this._wxLabelLayer.addTo(this._map);
+        this._cbTcuLayer.addTo(this._map);
         const navUserSet = localStorage.getItem('flypi_show_navaids');
         const navEnabled = navUserSet !== null ? JSON.parse(navUserSet) : (overlays.navaids?.enabled !== false);
         if (navEnabled) this._navaidLayer.addTo(this._map);
@@ -253,6 +257,7 @@ class VectorMapLayers {
             const { icao, decoded } = e.detail;
             this._upsertWxDot(icao, decoded?.flight_category);
             this._upsertWxLabel(icao);
+            this._upsertCbTcuMarker(icao);
         });
     }
 
@@ -464,10 +469,23 @@ class VectorMapLayers {
     /** Toggle temperature/dewpoint label layer. Returns new state. */
     toggleTemp() { this._showTemp = !this._showTemp; this._refreshWxLabels(); return this._showTemp; }
 
-    get ceilVisible() { return this._showCeil; }
-    get visVisible()  { return this._showVis; }
-    get windVisible() { return this._showWind; }
-    get tempVisible() { return this._showTemp; }
+    /** Toggle CB/TCU METAR report markers on map. Returns new state. */
+    toggleCbTcu() {
+        this._showCbTcu = !this._showCbTcu;
+        if (!this._showCbTcu) {
+            this._cbTcuLayer.clearLayers();
+            this._cbTcuMarkers.clear();
+        } else {
+            for (const [icao] of this._aptPositions) this._upsertCbTcuMarker(icao);
+        }
+        return this._showCbTcu;
+    }
+
+    get ceilVisible()  { return this._showCeil; }
+    get visVisible()   { return this._showVis; }
+    get windVisible()  { return this._showWind; }
+    get tempVisible()  { return this._showTemp; }
+    get cbTcuVisible() { return this._showCbTcu; }
 
     /** Re-render all wx label markers (called when a label layer is toggled). */
     _refreshWxLabels() {
@@ -531,12 +549,90 @@ class VectorMapLayers {
         const icon = L.divIcon({
             className: 'wx-label-stack',
             html,
-            iconAnchor: [0, 8],   // left edge at airport, vertically centered
+            iconSize:   [0, 0],    // zero footprint — all content overflows; avoids clip in Chrome GPU transform context
+            iconAnchor: [-12, 8],  // Leaflet margin-left = -(-12) = 12px; positions label 12px right of dot
         });
 
         const marker = L.marker([pos.lat, pos.lon], { icon, interactive: false, zIndexOffset: 50 });
         marker.addTo(this._wxLabelLayer);
         this._wxLabelMarkers.set(icao, marker);
+    }
+
+    /**
+     * Add or update CB/TCU map markers for an airport based on decoded METAR.
+     * Plots a badge at the projected position (20nm nearby, 50nm DSNT) and a
+     * dashed storm-motion arrow using FIS-B winds aloft at FL180.
+     */
+    _upsertCbTcuMarker(icao) {
+        const existing = this._cbTcuMarkers.get(icao);
+        if (existing) {
+            for (const m of existing) this._cbTcuLayer.removeLayer(m);
+            this._cbTcuMarkers.delete(icao);
+        }
+        if (!this._showCbTcu) return;
+
+        const pos = this._aptPositions.get(icao);
+        if (!pos) return;
+
+        const entry = this._getMetarEntry(icao);
+        const decoded = entry?.decoded;
+        if (!decoded) return;
+
+        const cbDirs = decoded.cb_directions || [];
+        const cbSkies = decoded.cb_skies || [];
+        if (cbDirs.length === 0 && cbSkies.length === 0) return;
+
+        const newMarkers = [];
+
+        const plotAt = (lat, lon, type) => {
+            const color = type === 'CB' ? '#ff4400' : '#ff9900';
+            const m = L.marker([lat, lon], {
+                icon: L.divIcon({
+                    className: 'cb-tcu-label',
+                    html: `<div class="cb-tcu-text" style="color:${color}">${type}</div>`,
+                    iconSize: [0, 0],
+                    iconAnchor: [0, 8],
+                }),
+                interactive: false,
+                zIndexOffset: 60,
+            });
+            m.addTo(this._cbTcuLayer);
+            newMarkers.push(m);
+
+            // Storm motion arrow — 15-min at 75% of FL180 wind
+            const wind = this._fisbClient?.getNearestWind(lat, lon, 18000);
+            if (wind && wind.speed > 5) {
+                const stormDir = (wind.dir + 180) % 360;
+                const distNm = wind.speed * 0.75 * (15 / 60);
+                const tip = FisbClient._destPoint(lat, lon, stormDir, distNm);
+                const arrow = L.polyline([[lat, lon], [tip.lat, tip.lon]], {
+                    color, weight: 2.5, opacity: 0.8, dashArray: '5,3', interactive: false,
+                });
+                arrow.addTo(this._cbTcuLayer);
+                newMarkers.push(arrow);
+            }
+        };
+
+        if (cbDirs.length > 0) {
+            for (const d of cbDirs) {
+                if (d.direction === 'ALQDS') {
+                    // All quadrants — plot at the reporting airport
+                    plotAt(pos.lat, pos.lon, d.type);
+                } else {
+                    const bearing = FisbClient._compassToDeg(d.direction);
+                    if (bearing == null) continue;
+                    const distNm = d.distant ? 50 : 20;
+                    const pt = FisbClient._destPoint(pos.lat, pos.lon, bearing, distNm);
+                    plotAt(pt.lat, pt.lon, d.type);
+                }
+            }
+        } else {
+            // Sky-group CB/TCU only (no direction remark) — plot at airport = overhead
+            const types = [...new Set(cbSkies.map(s => s.type))];
+            for (const type of types) plotAt(pos.lat, pos.lon, type);
+        }
+
+        if (newMarkers.length > 0) this._cbTcuMarkers.set(icao, newMarkers);
     }
 
     /**

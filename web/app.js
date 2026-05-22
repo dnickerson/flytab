@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v8.79';
+const FLYTAB_VERSION = 'v8.89';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -1601,13 +1601,12 @@ class FlyTabApp {
                 }
             }
 
-            // FIS-B: green ONLY when receiving data from ground towers.
-            // UAT_messages_last_minute includes aircraft traffic — not sufficient alone.
-            // UAT_Towers > 0 is the authoritative signal for ground station reception.
+            // FIS-B: green when the 978 MHz UAT radio is present and receiving UAT messages.
+            // UATRadio_connected = hardware detected; UAT_messages_last_minute = data flowing.
             // Guard: only evaluate when Stratux is connected.
             if (this.dom.statusFisb) {
-                const towers = (status?.UAT_Towers ?? 0) > 0;
-                const receiving = (status?.UAT_messages_last_minute > 0) && towers;
+                const uatRadio = !!status?.UATRadio_connected;
+                const receiving = uatRadio && (status?.UAT_messages_last_minute > 0);
                 this.dom.statusFisb.classList.toggle('active', receiving);
                 if (receiving && this.fisbClient) {
                     const mc = this.fisbClient.metarCount;

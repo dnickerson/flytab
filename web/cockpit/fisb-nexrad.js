@@ -42,6 +42,13 @@ class FisbNexrad {
         // Start listening for NEXRAD frames immediately (before addTo) so that
         // blocks and frame history accumulate even before the overlay is drawn.
         this._fisb.addEventListener('fisb:nexrad', this._onNexrad);
+
+        // CB building detection
+        this._cbActive = false;
+        this._cbOverlays = [];       // L.polygon[] on the map
+        this._cbLabelMarkers = [];   // L.marker[] for CB↑ labels
+        this._cbInetLayer = null;    // L.tileLayer ref (internet radar) for ground-mode sampling
+        this._cbInetTimer = null;    // interval for periodic internet re-sampling
     }
 
     // Standard NEXRAD intensity → color map (0-7+)
@@ -106,6 +113,8 @@ class FisbNexrad {
         this._frameHistory = [];
         this._canvas = null;
         this._ctx = null;
+        this._clearCbOverlays();
+        this._stopInetSampling();
         this._map = null;
     }
 
@@ -138,10 +147,10 @@ class FisbNexrad {
     // ========== NEXRAD Block Handling ==========
 
     _handleNexrad(msg) {
-        if (!msg.NEXRADBlock) return;
+        if (!msg.NEXRAD?.length) return;
 
         const now = Date.now();
-        const blocks = Array.isArray(msg.NEXRADBlock) ? msg.NEXRADBlock : [msg.NEXRADBlock];
+        const blocks = msg.NEXRAD;
 
         for (const block of blocks) {
             if (!block.Intensity || block.Intensity.length === 0) continue;
@@ -166,6 +175,13 @@ class FisbNexrad {
 
         // Redraw
         if (this._active) this._draw();
+
+        // CB building overlay — once we have a historical snapshot to compare against,
+        // switch from internet sampling (if active) to FIS-B mode
+        if (this._cbActive && this._frameHistory.length >= 1 && !this._loopMode) {
+            this._stopInetSampling();
+            this._updateCbFromFisb();
+        }
 
         // Notify map to switch from internet → FIS-B on first blocks of each radar session
         if (!this._notifiedMap && this._blocks.size > 0 && this._map) {
@@ -318,4 +334,498 @@ class FisbNexrad {
 
     /** Exit loop mode (resume live draws) */
     exitLoopMode() { this._loopMode = false; }
+
+    // ========== CB Building Detection ==========
+
+    get cbBuildingActive() { return this._cbActive; }
+
+    /**
+     * Enable or disable the CB building overlay.
+     * When on=true, uses FIS-B block history if available; falls back to internet tile sampling.
+     */
+    setCbBuilding(on) {
+        if (on === this._cbActive) return;
+        this._cbActive = on;
+        if (on) {
+            if (this._frameHistory.length >= 1 && this._blocks.size > 0) {
+                this._updateCbFromFisb();
+            } else if (this._cbInetLayer) {
+                this._startInetSampling();
+            }
+        } else {
+            this._clearCbOverlays();
+            this._stopInetSampling();
+        }
+    }
+
+    /**
+     * Called by map.js when the internet radar tile layer is enabled (layer) or disabled (null).
+     * When FIS-B has no data, internet tiles are sampled periodically for CB growth detection.
+     */
+    setCbInternetLayer(layer) {
+        this._cbInetLayer = layer;
+        if (!layer) {
+            this._stopInetSampling();
+        } else if (this._cbActive && this._blocks.size === 0) {
+            this._startInetSampling();
+        }
+    }
+
+    _startInetSampling() {
+        if (this._cbInetTimer) return;
+        this._sampleInternetTiles();
+        this._cbInetTimer = setInterval(() => this._sampleInternetTiles(), 5 * 60 * 1000);
+    }
+
+    _stopInetSampling() {
+        if (this._cbInetTimer) { clearInterval(this._cbInetTimer); this._cbInetTimer = null; }
+    }
+
+    /** Update CB overlays from FIS-B block data (current blocks vs most recent snapshot). */
+    _updateCbFromFisb() {
+        if (!this._cbActive || !this._map || this._loopMode) return;
+        if (this._blocks.size === 0 || this._frameHistory.length < 1) return;
+
+        const prev = this._clusterBlocks(this._frameHistory[this._frameHistory.length - 1].blocks);
+        const curr = this._clusterBlocks(this._blocks);
+        const lightGrid = this._buildLightGrid(this._blocks);
+        this._renderCbOverlays(this._findBuildingCells(prev, curr), lightGrid);
+    }
+
+    /** Build a 0.25° grid of all FIS-B bins with level ≥ 1 (light echo and above). */
+    _buildLightGrid(blockMap) {
+        const GRID = 0.25;
+        const gridCells = new Map();
+        for (const [, block] of blockMap) {
+            const cols = 32;
+            const rows = Math.ceil(block.intensity.length / cols);
+            const binH = block.height / rows;
+            const binW = block.width / cols;
+            for (let r = 0; r < rows; r++) {
+                for (let c = 0; c < cols; c++) {
+                    const idx = r * cols + c;
+                    if (idx >= block.intensity.length) break;
+                    if (block.intensity[idx] < 1) continue;
+                    const lat = block.latN - (r + 0.5) * binH;
+                    const lon = block.lonW + (c + 0.5) * binW;
+                    const key = `${Math.round(lat / GRID)},${Math.round(lon / GRID)}`;
+                    if (!gridCells.has(key)) {
+                        gridCells.set(key, {
+                            gLat: Math.round(lat / GRID),
+                            gLon: Math.round(lon / GRID),
+                        });
+                    }
+                }
+            }
+        }
+        return gridCells;
+    }
+
+    /**
+     * BFS outward from a building cluster's core cells into adjacent light-echo (≥1) cells.
+     * Returns extra corner points (for hull expansion) for all newly reached cells.
+     */
+    _expandToLightEchoes(cluster, lightGrid) {
+        const GRID = 0.25;
+        const coreSet = new Set(cluster.cells.map(c => `${c.gLat},${c.gLon}`));
+        const expanded = new Set(coreSet);
+        const frontier = [...coreSet];
+        const extraPoints = [];
+
+        while (frontier.length > 0) {
+            const k = frontier.pop();
+            const [gLat, gLon] = k.split(',').map(Number);
+            for (let dl = -1; dl <= 1; dl++) {
+                for (let dm = -1; dm <= 1; dm++) {
+                    if (dl === 0 && dm === 0) continue;
+                    const nk = `${gLat + dl},${gLon + dm}`;
+                    if (!expanded.has(nk) && lightGrid.has(nk)) {
+                        expanded.add(nk);
+                        frontier.push(nk);
+                        const nlat = (gLat + dl) * GRID;
+                        const nlon = (gLon + dm) * GRID;
+                        extraPoints.push(
+                            [nlat + GRID / 2, nlon - GRID / 2],
+                            [nlat + GRID / 2, nlon + GRID / 2],
+                            [nlat - GRID / 2, nlon - GRID / 2],
+                            [nlat - GRID / 2, nlon + GRID / 2],
+                        );
+                    }
+                }
+            }
+        }
+        return extraPoints;
+    }
+
+    /**
+     * Sample two IEM NEXRAD products (10 min ago vs current) for the visible viewport
+     * and compare for growing storm cells.  Both fetches happen in parallel so results
+     * appear within a few seconds of enabling the toggle — no accumulation wait needed.
+     */
+    async _sampleInternetTiles() {
+        if (!this._map || !this._cbInetLayer || this._blocks.size > 0) return;
+
+        const zoom = Math.max(6, Math.min(Math.floor(this._map.getZoom()), 7));
+        const bounds = this._map.getBounds();
+        const x0 = FisbNexrad._lon2tile(bounds.getWest(), zoom);
+        const x1 = FisbNexrad._lon2tile(bounds.getEast(), zoom);
+        const y0 = FisbNexrad._lat2tile(bounds.getNorth(), zoom);
+        const y1 = FisbNexrad._lat2tile(bounds.getSouth(), zoom);
+
+        if ((x1 - x0 + 1) * (y1 - y0 + 1) > 25) return;
+
+        // Fetch 10-min-ago and current in parallel — instant growth comparison
+        const [prevGrid, currGrid] = await Promise.all([
+            this._sampleProduct('nexrad-n0q-m10m',   x0, x1, y0, y1, zoom),
+            this._sampleProduct('nexrad-n0q-900913',  x0, x1, y0, y1, zoom),
+        ]);
+
+        if (prevGrid.size === 0 || currGrid.size === 0) return;
+
+        // Split full-echo grids into core (≥3) for growth comparison and light (≥1) for hull expansion
+        const prevCore = new Map([...prevGrid].filter(([, v]) => v.maxIntensity >= 3));
+        const currCore = new Map([...currGrid].filter(([, v]) => v.maxIntensity >= 3));
+        if (prevCore.size === 0 || currCore.size === 0) return;
+
+        const prev = this._bfsClusters(prevCore);
+        const curr = this._bfsClusters(currCore);
+        this._renderCbOverlays(this._findBuildingCells(prev, curr), currGrid);
+    }
+
+    /** Fetch one IEM product for the given tile range and return an intensity grid. */
+    async _sampleProduct(product, x0, x1, y0, y1, zoom) {
+        const TSIZE = 256, STEP = 4, GRID = 0.25;
+        const grid = new Map();
+
+        const fetchTile = async (tx, ty) => {
+            const url = `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/${product}/${zoom}/${tx}/${ty}.png`;
+            const resp = await fetch(url, { mode: 'cors' });
+            if (!resp.ok) return;
+            const bmp = await createImageBitmap(await resp.blob());
+            const oc = new OffscreenCanvas(TSIZE, TSIZE);
+            const ctx2d = oc.getContext('2d');
+            ctx2d.drawImage(bmp, 0, 0);
+            const img = ctx2d.getImageData(0, 0, TSIZE, TSIZE);
+
+            for (let py = 0; py < TSIZE; py += STEP) {
+                for (let px = 0; px < TSIZE; px += STEP) {
+                    const i = (py * TSIZE + px) * 4;
+                    const level = FisbNexrad._rgbToNexradIntensity(
+                        img.data[i], img.data[i + 1], img.data[i + 2], img.data[i + 3]);
+                    if (level < 1) continue;
+                    const lat = FisbNexrad._tile2lat(ty + py / TSIZE, zoom);
+                    const lon = FisbNexrad._tile2lon(tx + px / TSIZE, zoom);
+                    const gLat = Math.round(lat / GRID);
+                    const gLon = Math.round(lon / GRID);
+                    const key = `${gLat},${gLon}`;
+                    const e = grid.get(key);
+                    if (!e) grid.set(key, { gLat, gLon, sumIntensity: level, count: 1, maxIntensity: level });
+                    else { e.sumIntensity += level; e.count++; e.maxIntensity = Math.max(e.maxIntensity, level); }
+                }
+            }
+        };
+
+        const tiles = [];
+        for (let tx = x0; tx <= x1; tx++) {
+            for (let ty = y0; ty <= y1; ty++) {
+                tiles.push(fetchTile(tx, ty).catch(() => {}));
+            }
+        }
+        await Promise.all(tiles);
+        return grid;
+    }
+
+    /**
+     * Cluster FIS-B intensity bins (≥ moderate) into connected components.
+     * Bins are first snapped to a 0.25° grid then flood-filled (8-connectivity).
+     */
+    _clusterBlocks(blockMap) {
+        const GRID = 0.25, MIN_LEVEL = 3;
+        const gridCells = new Map();
+
+        for (const [, block] of blockMap) {
+            const cols = 32;
+            const rows = Math.ceil(block.intensity.length / cols);
+            const binH = block.height / rows;
+            const binW = block.width / cols;
+
+            for (let r = 0; r < rows; r++) {
+                for (let c = 0; c < cols; c++) {
+                    const idx = r * cols + c;
+                    if (idx >= block.intensity.length) break;
+                    const level = block.intensity[idx];
+                    if (level < MIN_LEVEL) continue;
+
+                    const lat = block.latN - (r + 0.5) * binH;
+                    const lon = block.lonW + (c + 0.5) * binW;
+                    const gLat = Math.round(lat / GRID);
+                    const gLon = Math.round(lon / GRID);
+                    const key = `${gLat},${gLon}`;
+                    const e = gridCells.get(key);
+                    if (!e) {
+                        gridCells.set(key, {
+                            gLat, gLon, sumIntensity: level, count: 1, maxIntensity: level,
+                            _corners: [
+                                [block.latN - r * binH,       block.lonW + c * binW],
+                                [block.latN - r * binH,       block.lonW + (c + 1) * binW],
+                                [block.latN - (r + 1) * binH, block.lonW + c * binW],
+                                [block.latN - (r + 1) * binH, block.lonW + (c + 1) * binW],
+                            ],
+                        });
+                    } else {
+                        e.sumIntensity += level; e.count++; e.maxIntensity = Math.max(e.maxIntensity, level);
+                    }
+                }
+            }
+        }
+
+        return this._bfsClusters(gridCells, cell => cell._corners);
+    }
+
+    /**
+     * BFS connected-component clustering over a 0.25° intensity grid.
+     * cornersFn(cell) → [[lat,lon]…] — if omitted, uses the cell's 0.25° tile corners.
+     */
+    _bfsClusters(gridCells, cornersFn) {
+        const GRID = 0.25;
+        const visited = new Set();
+        const clusters = [];
+        const getCorners = cornersFn ?? ((cell) => {
+            const lat = cell.gLat * GRID, lon = cell.gLon * GRID;
+            return [
+                [lat + GRID / 2, lon - GRID / 2], [lat + GRID / 2, lon + GRID / 2],
+                [lat - GRID / 2, lon - GRID / 2], [lat - GRID / 2, lon + GRID / 2],
+            ];
+        });
+
+        for (const key of gridCells.keys()) {
+            if (visited.has(key)) continue;
+            const cluster = { cells: [], totalIntensity: 0, totalCount: 0, maxIntensity: 0, points: [] };
+            const queue = [key];
+            visited.add(key);
+
+            while (queue.length > 0) {
+                const k = queue.shift();
+                const cell = gridCells.get(k);
+                if (!cell) continue;
+                cluster.cells.push(cell);
+                cluster.totalIntensity += cell.sumIntensity;
+                cluster.totalCount += cell.count;
+                cluster.maxIntensity = Math.max(cluster.maxIntensity, cell.maxIntensity);
+                cluster.points.push(...getCorners(cell));
+
+                for (let dl = -1; dl <= 1; dl++) {
+                    for (let dm = -1; dm <= 1; dm++) {
+                        if (dl === 0 && dm === 0) continue;
+                        const nk = `${cell.gLat + dl},${cell.gLon + dm}`;
+                        if (!visited.has(nk) && gridCells.has(nk)) {
+                            visited.add(nk);
+                            queue.push(nk);
+                        }
+                    }
+                }
+            }
+
+            if (cluster.cells.length > 0) {
+                let sL = 0, sM = 0;
+                for (const c of cluster.cells) { sL += c.gLat; sM += c.gLon; }
+                const n = cluster.cells.length;
+                cluster.centroid = [sL / n * GRID, sM / n * GRID];
+                clusters.push(cluster);
+            }
+        }
+        return clusters;
+    }
+
+    /**
+     * Compare two cluster sets and return cells that are growing.
+     * A cell is "building" if: area grew ≥25%, intensity grew ≥25%, gained heavy pixels,
+     * or is a new significant cluster not present in the previous frame.
+     */
+    _findBuildingCells(prevClusters, currClusters) {
+        const MATCH_DEG = 1.5; // ~90 nm max centroid drift between frames
+        const building = [];
+
+        for (const curr of currClusters) {
+            if (curr.cells.length < 2) continue; // ignore single-cell noise
+
+            let bestPrev = null, bestDist = MATCH_DEG;
+            for (const prev of prevClusters) {
+                const dLat = curr.centroid[0] - prev.centroid[0];
+                const dLon = curr.centroid[1] - prev.centroid[1];
+                const dist = Math.sqrt(dLat * dLat + dLon * dLon);
+                if (dist < bestDist) { bestDist = dist; bestPrev = prev; }
+            }
+
+            if (!bestPrev) {
+                // New cluster — flag if large enough to be meaningful
+                if (curr.cells.length >= 3 && curr.maxIntensity >= 3) {
+                    building.push({ ...curr, growthRate: 1.0, gainedHighIntensity: curr.maxIntensity >= 5 });
+                }
+                continue;
+            }
+
+            const areaGrowth = (curr.cells.length - bestPrev.cells.length) / Math.max(bestPrev.cells.length, 1);
+            const intGrowth  = (curr.totalIntensity - bestPrev.totalIntensity) / Math.max(bestPrev.totalIntensity, 1);
+            const gainedHigh = curr.maxIntensity >= 5 && bestPrev.maxIntensity < 5;
+            const growthRate = Math.max(areaGrowth, intGrowth);
+
+            if (growthRate >= 0.25 || gainedHigh) {
+                building.push({ ...curr, growthRate, gainedHighIntensity: gainedHigh });
+            }
+        }
+        return building;
+    }
+
+    /** Draw dashed polygon outlines and CB↑ labels for all building cells. */
+    _renderCbOverlays(building, lightGrid) {
+        if (!this._map) return;
+        this._clearCbOverlays();
+
+        for (const cell of building) {
+            if (cell.points.length < 4) continue;
+
+            // Expand polygon to include surrounding light-echo (≥1) areas — the early green dots
+            const lightPoints = lightGrid ? this._expandToLightEchoes(cell, lightGrid) : [];
+            const hull = this._convexHull([...cell.points, ...lightPoints]);
+            if (hull.length < 3) continue;
+
+            // Orange for moderate growth; red-orange for rapid growth or new heavy echo
+            const isRapid = cell.growthRate >= 0.5 || cell.gainedHighIntensity;
+            const color = isRapid ? '#ff4400' : '#ff9900';
+
+            const poly = L.polygon(hull, {
+                color, weight: 2, fillColor: color, fillOpacity: 0.08,
+                dashArray: '8,5', interactive: false,
+            }).addTo(this._map);
+            this._cbOverlays.push(poly);
+
+            const center = this._centroid(hull);
+            const marker = L.marker(center, {
+                icon: L.divIcon({
+                    className:  'cb-build-label',
+                    html:       `<div class="cb-build-text" style="color:${color}">${isRapid ? 'CB↑↑' : 'CB↑'}</div>`,
+                    iconSize:   [0, 0],
+                    iconAnchor: [0, 8],
+                }),
+                interactive: false,
+            }).addTo(this._map);
+            this._cbLabelMarkers.push(marker);
+
+            // Storm motion arrow — 15-min projected position at ~75% of mid-level wind
+            const wind = this._fisb?.getNearestWind(center[0], center[1], 18000);
+            if (wind && wind.speed > 5) {
+                const stormDir = (wind.dir + 180) % 360;
+                const distNm = wind.speed * 0.75 * (15 / 60);
+                const tip = FisbClient._destPoint(center[0], center[1], stormDir, distNm);
+                const arrow = L.polyline([[center[0], center[1]], [tip.lat, tip.lon]], {
+                    color, weight: 3, opacity: 0.85, interactive: false,
+                }).addTo(this._map);
+                this._cbOverlays.push(arrow);
+            }
+        }
+    }
+
+    _clearCbOverlays() {
+        for (const o of this._cbOverlays)     { if (this._map) this._map.removeLayer(o); }
+        for (const m of this._cbLabelMarkers) { if (this._map) this._map.removeLayer(m); }
+        this._cbOverlays = [];
+        this._cbLabelMarkers = [];
+    }
+
+    /** Andrew's monotone chain convex hull. Points are [lat, lon]. */
+    _convexHull(rawPoints) {
+        if (rawPoints.length < 3) return rawPoints;
+        const seen = new Set();
+        const pts = rawPoints.filter(p => {
+            const k = `${p[0].toFixed(3)},${p[1].toFixed(3)}`;
+            return seen.has(k) ? false : (seen.add(k), true);
+        });
+        if (pts.length < 3) return pts;
+        pts.sort((a, b) => a[0] !== b[0] ? a[0] - b[0] : a[1] - b[1]);
+
+        const cross = (O, A, B) =>
+            (A[0] - O[0]) * (B[1] - O[1]) - (A[1] - O[1]) * (B[0] - O[0]);
+
+        const lower = [];
+        for (const p of pts) {
+            while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
+            lower.push(p);
+        }
+        const upper = [];
+        for (let i = pts.length - 1; i >= 0; i--) {
+            const p = pts[i];
+            while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop();
+            upper.push(p);
+        }
+        lower.pop(); upper.pop();
+        return lower.concat(upper);
+    }
+
+    _centroid(points) {
+        let sL = 0, sM = 0;
+        for (const p of points) { sL += p[0]; sM += p[1]; }
+        return [sL / points.length, sM / points.length];
+    }
+
+    /**
+     * Map an RGBA pixel from an IEM N0Q composite NEXRAD tile to intensity 0–7.
+     * Color values match the NWS standard N0Q palette used by Iowa State Mesonet.
+     * PNG tiles use an indexed palette — colors are exact, no compression artifacts.
+     */
+    static _rgbToNexradIntensity(r, g, b, a) {
+        if (a < 30) return 0;                          // transparent — no echo
+        if (r < 30 && g < 30 && b < 30) return 0;     // near-black — below noise floor
+
+        // Magenta  (248,   0, 253): 65–70 dBZ → 7
+        if (r > 200 && g < 30 && b > 200) return 7;
+        // Purple   (152,  84, 198): 70–75 dBZ → 7
+        if (b > 150 && r > 100 && r < 200 && g > 40 && g < 130) return 7;
+        // White    (255, 255, 255): 75+ dBZ → 7 (rare extreme)
+        if (r > 220 && g > 220 && b > 220) return 7;
+
+        // Bright red (253,  0,  0): 50–55 dBZ → 5
+        if (r > 230 && g < 20 && b < 20) return 5;
+        // Dark red   (188–212, 0, 0): 55–65 dBZ → 6
+        if (r > 160 && r <= 230 && g < 20 && b < 20) return 6;
+
+        // Orange  (253, 149,  0): 45–50 dBZ → 4
+        if (r > 220 && g > 100 && g < 180 && b < 20) return 4;
+        // Amber   (229, 188,  0): 40–45 dBZ → 4
+        if (r > 180 && g > 150 && g < 220 && b < 20) return 4;
+        // Yellow  (253, 248,  2): 35–40 dBZ → 3
+        if (r > 220 && g > 220 && b < 15) return 3;
+
+        // Dark green   (  0, 142, 0): 30–35 dBZ → 3
+        if (g > 100 && g < 170 && r < 20 && b < 20) return 3;
+        // Medium green (  1, 197, 1): 25–30 dBZ → 2
+        if (g >= 170 && g < 220 && r < 20 && b < 20) return 2;
+        // Bright green (  2, 253, 2): 20–25 dBZ → 2
+        if (g >= 220 && r < 20 && b < 20) return 2;
+
+        // Cyan        (  4, 233, 231): 5–10 dBZ → 1
+        if (g > 200 && b > 200 && r < 20) return 1;
+        // Light blue  (  1, 159, 244): 10–15 dBZ → 1
+        if (b > 210 && g > 120 && g < 200 && r < 20) return 1;
+        // Blue        (  3,   0, 244): 15–20 dBZ → 1
+        if (b > 210 && g < 30 && r < 20) return 1;
+
+        return 0;
+    }
+
+    /** Web mercator tile coordinate helpers. */
+    static _lon2tile(lon, z) {
+        return Math.floor((lon + 180) / 360 * Math.pow(2, z));
+    }
+    static _lat2tile(lat, z) {
+        const r = lat * Math.PI / 180;
+        return Math.floor((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * Math.pow(2, z));
+    }
+    static _tile2lat(yf, z) {
+        const n = Math.PI - 2 * Math.PI * yf / Math.pow(2, z);
+        return 180 / Math.PI * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
+    }
+    static _tile2lon(xf, z) {
+        return xf / Math.pow(2, z) * 360 - 180;
+    }
 }

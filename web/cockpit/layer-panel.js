@@ -24,7 +24,7 @@ class LayerPanel {
     // Zoom levels stored on Pi for each layer type
     static SEC_ZOOMS      = [5, 6, 7, 8, 9, 10, 11];
     static IFR_ZOOMS      = [4, 5, 6, 7, 8, 9, 10];
-    static IFR_AREA_ZOOMS = [10, 11, 12];
+    static IFR_AREA_ZOOMS = [11, 12];
     static TILE_CONCURRENCY = 6;  // max concurrent fetches (home server is threaded but keep moderate)
 
     static _lon2tile(lon, z) {
@@ -143,6 +143,24 @@ class LayerPanel {
         if (radarInput) {
             radarInput.addEventListener('change', () => {
                 this._toggleRadar(radarInput.checked);
+            });
+        }
+
+        // Wire CB building toggle
+        const cbBuildInput = this._panel.querySelector('.lp-toggle input[data-action="cb-building"]');
+        if (cbBuildInput) {
+            cbBuildInput.checked = false;
+            cbBuildInput.addEventListener('change', () => {
+                window.app?.cockpitMap?.toggleCbBuilding(cbBuildInput.checked);
+            });
+        }
+
+        // Wire CB/TCU report markers toggle
+        const cbTcuInput = this._panel.querySelector('.lp-toggle input[data-action="cb-tcu"]');
+        if (cbTcuInput) {
+            cbTcuInput.checked = this._vectorLayers?.cbTcuVisible ?? false;
+            cbTcuInput.addEventListener('change', () => {
+                this._vectorLayers?.toggleCbTcu();
             });
         }
 
@@ -514,6 +532,14 @@ class LayerPanel {
                     <div class="lp-row">
                         <span class="lp-row-label">NEXRAD / FIS-B</span>
                         <label class="lp-toggle"><input type="checkbox" data-action="radar"><span class="lp-toggle-track"></span></label>
+                    </div>
+                    <div class="lp-row">
+                        <span class="lp-row-label">CB Building</span>
+                        <label class="lp-toggle"><input type="checkbox" data-action="cb-building"><span class="lp-toggle-track"></span></label>
+                    </div>
+                    <div class="lp-row">
+                        <span class="lp-row-label">CB / TCU Reports</span>
+                        <label class="lp-toggle"><input type="checkbox" data-action="cb-tcu"><span class="lp-toggle-track"></span></label>
                     </div>
                     <div class="lp-row">
                         <span class="lp-row-label">Flight Category</span>

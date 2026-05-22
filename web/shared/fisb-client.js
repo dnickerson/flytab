@@ -334,9 +334,9 @@ class FisbClient extends EventTarget {
 
     _handleNexrad(msg) {
         // Track blocks for status page (lightweight — no intensity data, just presence)
-        if (msg?.NEXRADBlock) {
+        if (msg?.NEXRAD?.length > 0) {
             const now = Date.now();
-            const arr = Array.isArray(msg.NEXRADBlock) ? msg.NEXRADBlock : [msg.NEXRADBlock];
+            const arr = msg.NEXRAD;
             let stored = 0;
             for (const b of arr) {
                 if (!b.Intensity || b.Intensity.length === 0) continue;
@@ -591,6 +591,28 @@ class FisbClient extends EventTarget {
         // Altimeter
         const altMatch = text.match(/\bA(\d{4})\b/);
         if (altMatch) result.altimeter = parseInt(altMatch[1], 10) / 100;
+
+        // CB / TCU in sky groups: FEW030CB, SCT025TCU, OVC015CB
+        const cbSkyPat = /\b(FEW|SCT|BKN|OVC)(\d{3})(CB|TCU)\b/g;
+        let cbSkyM;
+        const cbSkies = [];
+        while ((cbSkyM = cbSkyPat.exec(text)) !== null) {
+            cbSkies.push({ coverage: cbSkyM[1], height_ft: parseInt(cbSkyM[2], 10) * 100, type: cbSkyM[3] });
+        }
+        if (cbSkies.length) result.cb_skies = cbSkies;
+
+        // CB / TCU direction from remarks: "CB NE", "TCU DSNT SW", "CB ALQDS"
+        const rmkPos = text.indexOf(' RMK ');
+        if (rmkPos >= 0) {
+            const rmk = text.slice(rmkPos + 5);
+            const cbDirPat = /\b(CB|TCU)\s+(DSNT\s+)?(N|NE|E|SE|S|SW|W|NW|ALQDS?)\b/g;
+            let cbDirM;
+            const cbDirs = [];
+            while ((cbDirM = cbDirPat.exec(rmk)) !== null) {
+                cbDirs.push({ type: cbDirM[1], distant: !!cbDirM[2], direction: cbDirM[3] === 'ALQD' ? 'ALQDS' : cbDirM[3] });
+            }
+            if (cbDirs.length) result.cb_directions = cbDirs;
+        }
 
         // Flight category
         const vis = result.visibility_sm ?? 10;
