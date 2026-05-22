@@ -12,6 +12,26 @@ Run `bash build.sh` automatically after any code change is complete — no need 
 
 If the change touches any file under `web/shared/planning/`, run `npm test` first and fix failures before building.
 
+## User Manual
+
+`docs/user-manual.md` is the pilot-facing reference for FlyTab. **Update it whenever a user-visible feature is shipped.** This means any change that adds, removes, or meaningfully alters something the pilot sees or interacts with — new layer panel toggles, new map overlays, new tab content, new MORE drawer items, changed behavior of existing controls.
+
+Update the manual as part of the same commit as the feature code. Do not batch manual updates for later.
+
+What counts as user-visible:
+- New or renamed toggle in the layer panel
+- New map overlay or marker type
+- New tab, panel, or drawer item
+- Changed behavior a pilot would notice (e.g. a polygon now expands, an arrow now appears)
+- New status bar badge or changed badge semantics
+- Any new workflow step the pilot must follow
+
+What does not need a manual update:
+- Bug fixes that restore previously correct behavior
+- Internal refactors with no visible effect
+- Performance improvements with no behavioral change
+- Developer tooling (tools/, scripts)
+
 ## Build & Deploy Commands
 
 ```bash
