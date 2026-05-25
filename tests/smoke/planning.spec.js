@@ -5,7 +5,7 @@ const { injectTestConfig } = require('./helpers.js');
 
 const APP = '/web/index.html';
 
-test.describe('route planning smoke @smoke', () => {
+test.describe('route planning smoke @smoke @nasr', () => {
     test('route planner opens and cockpitContainer gets route-editing class', async ({ page }) => {
         await injectTestConfig(page);
         await page.goto(APP, { waitUntil: 'domcontentloaded', timeout: 20_000 });

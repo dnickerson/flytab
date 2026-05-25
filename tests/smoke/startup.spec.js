@@ -35,7 +35,7 @@ function isExpectedError(text) {
     return EXPECTED_ERROR_PATTERNS.some(p => p.test(text));
 }
 
-test.describe('app startup @smoke', () => {
+test.describe('app startup @smoke @nasr', () => {
     // Each test gets a fresh Playwright browser context (clean IDB, localStorage, cookies).
     // injectTestConfig() must be called before page.goto() — it installs a route handler.
 

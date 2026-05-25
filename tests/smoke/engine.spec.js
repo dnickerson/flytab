@@ -5,7 +5,7 @@ const { injectTestConfig } = require('./helpers.js');
 
 const APP = '/web/index.html';
 
-test.describe('engine WebSocket smoke @smoke', () => {
+test.describe('engine panel smoke @smoke @engine', () => {
     test('engine client connects to fake-engine and receives data', async ({ page }) => {
         // The smoke project's launchOptions map 192.168.10.1 → 127.0.0.1 via --host-rules
         // so EngineClient's hardcoded IP connects to fake-engine.js on localhost.
