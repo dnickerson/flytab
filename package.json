@@ -4,9 +4,20 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "test:ui": "vitest --ui"
+    "test":            "vitest run",
+    "test:watch":      "vitest",
+    "test:ui":         "vitest --ui",
+    "test:engine":     "vitest run --reporter=verbose tests/cockpit/engine*.test.js tests/shared/engine*.test.js; npx playwright test --project=components --grep @engine",
+    "test:stratux":    "vitest run tests/shared/stratux*.test.js; npx playwright test --project=components --grep @stratux",
+    "test:map":        "npx playwright test --project=components --grep @map",
+    "test:charts":     "npx playwright test --project=components --grep @charts",
+    "test:nasr":       "vitest run tests/shared/nasr*.test.js; npx playwright test --project=smoke --grep @nasr",
+    "test:weather":    "vitest run tests/shared/altitude*.test.js; npx playwright test --project=components --grep @weather",
+    "test:notam":      "npx playwright test --project=components --grep @notam",
+    "test:planner-ui": "npx playwright test --project=components --grep @planner-ui",
+    "test:smoke":      "npx playwright test --project=smoke",
+    "test:visual":     "npx playwright test --project=smoke --grep @visual",
+    "test:all":        "vitest run && npx playwright test"
   },
   "keywords": [],
   "author": "",
