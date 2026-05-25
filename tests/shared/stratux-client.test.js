@@ -1,7 +1,9 @@
 // tests/shared/stratux-client.test.js
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { readFileSync } from 'fs';
-import { SITUATION, TRAFFIC_TARGET } from '../fixtures/stratux-messages.js';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const { SITUATION, TRAFFIC_TARGET } = require('../fixtures/stratux-messages.js');
 
 // ---------------------------------------------------------------------------
 // Browser globals that stratux-client.js references at module evaluation time.

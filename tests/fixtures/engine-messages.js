@@ -2,7 +2,7 @@
 // Exact engine monitor get_status() wire format — verified from engine_monitor.py.
 // The engine panel flattens via: raw.data ? { ...raw, ...raw.data } : raw
 
-export const ENGINE_FRAME = {
+const ENGINE_FRAME = {
     version:               '3.3.0',
     capturing:             true,
     serial_connected:      true,
@@ -48,6 +48,8 @@ export const ENGINE_FRAME = {
     },
 };
 
-export const ENGINE_FRAME_FLAT = { ...ENGINE_FRAME, ...ENGINE_FRAME.data };
+const ENGINE_FRAME_FLAT = { ...ENGINE_FRAME, ...ENGINE_FRAME.data };
 
-export const ENGINE_STALE_EVENT = { stale: true, ageMs: 6000 };
+const ENGINE_STALE_EVENT = { stale: true, ageMs: 6000 };
+
+module.exports = { ENGINE_FRAME, ENGINE_FRAME_FLAT, ENGINE_STALE_EVENT };

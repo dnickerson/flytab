@@ -1,7 +1,9 @@
 // tests/shared/engine-client.test.js
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { readFileSync } from 'fs';
-import { ENGINE_FRAME } from '../fixtures/engine-messages.js';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const { ENGINE_FRAME } = require('../fixtures/engine-messages.js');
 
 // ---------------------------------------------------------------------------
 // Browser globals that engine-client.js references at evaluation time.

@@ -1,7 +1,7 @@
 // tests/fixtures/stratux-messages.js
 // Exact Stratux WebSocket wire formats — verified from stratux-client.js source.
 
-export const SITUATION = {
+const SITUATION = {
     GPSLatitude:          34.9,
     GPSLongitude:        -81.1,
     GPSAltitudeMSL:       5000.0,
@@ -20,7 +20,7 @@ export const SITUATION = {
 };
 
 // Note: longitude field is Lng, NOT Lon.
-export const TRAFFIC_TARGET = {
+const TRAFFIC_TARGET = {
     Icao_addr:            11256833,
     Tail:                 'N123AB',
     Lat:                   35.25,
@@ -37,9 +37,9 @@ export const TRAFFIC_TARGET = {
     TargetType:              1,
 };
 
-export const SITUATION_NO_FIX = { ...SITUATION, GPSFixQuality: 0, GPSSatellites: 0 };
+const SITUATION_NO_FIX = { ...SITUATION, GPSFixQuality: 0, GPSSatellites: 0 };
 
-export const NEXRAD_FRAME = {
+const NEXRAD_FRAME = {
     Product_id: 63,
     NEXRAD: [{
         LatNorth: 35.0, LonWest: -81.5,
@@ -47,3 +47,5 @@ export const NEXRAD_FRAME = {
         Intensity: [15, 25, 30, 25, 15],
     }],
 };
+
+module.exports = { SITUATION, SITUATION_NO_FIX, TRAFFIC_TARGET, NEXRAD_FRAME };
