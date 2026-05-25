@@ -471,3 +471,115 @@ function detectWindConvergence(situation, forecastWind) {
         convergenceScore,
     };
 }
+
+// ========== ConvectiveIntelligenceEngine ==========
+
+/**
+ * Top-level integration class.
+ * Wire up once in app.js after all clients are ready.
+ *
+ * Usage:
+ *   const engine = new ConvectiveIntelligenceEngine({ fisbNexrad, fisbClient, engineClient, stratuxClient, preflightStore });
+ *   engine.init(display, alerts);
+ *   engine.setActive(true);
+ */
+class ConvectiveIntelligenceEngine {
+    constructor({ fisbNexrad, fisbClient, engineClient, stratuxClient, preflightStore }) {
+        this._nexrad    = fisbNexrad;
+        this._fisb      = fisbClient;
+        this._engine    = engineClient;
+        this._stratux   = stratuxClient;
+        this._preflight = preflightStore;
+
+        this._analyzer   = new NexradSectorAnalyzer(fisbNexrad, preflightStore);
+        this._oatMonitor = new OATTrendMonitor();
+        this._display    = null;
+        this._alerts     = null;
+        this._active     = false;
+        this._lastAnalysis = [];
+        this._route      = null;
+
+        this._onNexrad     = () => this._runAnalysis();
+        this._onEngineData = (e) => {
+            const oat = e.detail?.oat;
+            if (oat != null) this._oatMonitor.ingest(oat, Date.now());
+        };
+    }
+
+    init(display, alerts) {
+        this._display = display;
+        this._alerts  = alerts;
+    }
+
+    setActive(on) {
+        if (on === this._active) return;
+        this._active = on;
+        if (on) {
+            this._fisb.addEventListener('fisb:nexrad', this._onNexrad);
+            this._engine.addEventListener('engine:data', this._onEngineData);
+        } else {
+            this._fisb.removeEventListener('fisb:nexrad', this._onNexrad);
+            this._engine.removeEventListener('engine:data', this._onEngineData);
+        }
+        this._display?.setActive(on);
+        this._alerts?.setActive(on);
+    }
+
+    setRoute(route) { this._route = route; }
+
+    async loadPreflight() {
+        await this._preflight.load();
+        const staleness = this._preflight.getStaleness();
+        if (staleness === 'stale' || staleness === 'expired') {
+            DiagLog.log('convective', `Preflight HRRR data is ${staleness}: ${this._preflight.getAgeLabel()}`);
+        }
+        return staleness;
+    }
+
+    async fetchPreflight(bbox) {
+        return this._preflight.fetchAndStore(bbox);
+    }
+
+    get lastAnalysis() { return this._lastAnalysis; }
+    get preflightStaleness() { return this._preflight.getStaleness(); }
+
+    _runAnalysis() {
+        const analysis = this._analyzer.analyze();
+        this._lastAnalysis = analysis;
+
+        const sit = this._stratux.situation;
+        const aircraft = sit ? { lat: sit.lat, lon: sit.lon, groundspeedKts: sit.ground_speed } : null;
+
+        if (this._display) {
+            this._display.setAgeMs(this._nexrad.getDataAgeMs());
+            this._display.update(analysis, aircraft);
+        }
+
+        if (this._alerts) {
+            const routeAlerts = this._route && aircraft
+                ? evaluateRouteAlerts(this._route, analysis, aircraft)
+                : [];
+
+            let convergenceSignal = null;
+            if (aircraft && this._preflight.getStaleness() !== 'none') {
+                const forecastWind = this._fisb.getNearestWind(
+                    aircraft.lat, aircraft.lon,
+                    sit?.altitude_barometric ?? 3000
+                );
+                convergenceSignal = detectWindConvergence(sit, forecastWind);
+            }
+
+            const oatResult = this._oatMonitor.analyze();
+
+            if (convergenceSignal?.convergenceScore > 0.7) {
+                routeAlerts.push({
+                    level: 2,
+                    message: `Wind deviation ${Math.round(convergenceSignal.speedDeltaKts)}kt/${Math.round(convergenceSignal.directionDeltaDeg)}° — possible convergence boundary`,
+                    voice: false,
+                });
+            }
+
+            this._alerts.showAlerts(routeAlerts, oatResult?.signals ?? null);
+        }
+    }
+}

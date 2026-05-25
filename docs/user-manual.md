@@ -285,6 +285,45 @@ Enable **CB / TCU Reports** to see markers where METAR observers have reported c
 
 These markers are sourced from FIS-B METARs when airborne. They complement the radar overlay — METAR observers may report CB/TCU in VMC conditions before radar returns are strong enough to trigger CB Building detection.
 
+### Convective Intelligence (Experimental)
+
+**Convective Intelligence** is an experimental decision-support overlay that scores NEXRAD returns for convective potential and displays probabilistic hazard boundaries. Enable it from the Layer Panel.
+
+**EXPERIMENTAL — NOT FOR NAVIGATION.** This tool does not replace ATC advisories, certified weather avoidance equipment, or pilot judgment. Always obtain a standard weather briefing.
+
+#### What it shows
+
+| Badge | Meaning |
+|-------|---------|
+| (no badge) | Stratiform precipitation — standard radar display |
+| `?CONV` | Possible convective — monitor closely |
+| `CONV` | Likely convective — deviation recommended |
+| `⚠CONV` | Confirmed convective — deviate now |
+
+Convective returns are surrounded by **probabilistic hazard rings** (4 concentric rings, 80%/60%/40%/20% probability contours) instead of hard polygon boundaries. The outermost ring is the recommended avoidance boundary.
+
+#### Data age indicator
+
+The radar loop controls show a color-coded data age badge:
+- **Green** — data < 5 minutes old
+- **Yellow** — 5–10 minutes (monitor closely)
+- **Red** — > 10 minutes (may not reflect current conditions)
+
+#### Beam height warning
+
+When a radar return is far from the nearest NEXRAD site, a ⚡ annotation shows the estimated radar beam height. Hazards may extend well below this altitude.
+
+#### Preflight HRRR data
+
+For best convective scoring, fetch preflight HRRR instability data from the Wx Briefing tab before departure while on WiFi. The data is stored on-device and used during flight with no internet required. Data older than 3 hours shows a staleness warning; data older than 6 hours disables the instability overlay.
+
+#### OAT alerts
+
+When the engine monitor is connected, rapid OAT changes trigger additional alerts:
+- **OAT DROP** — rapid cooling indicates storm outflow boundary; evaluate immediately
+- **Wind shear signature** — high OAT variance with high preflight instability
+- **Approaching heating maximum** — sustained OAT rise in unstable airmass
+
 ### Weather Briefing
 
 **MORE → Weather Briefing** opens a full briefing panel that pulls weather along the active route.

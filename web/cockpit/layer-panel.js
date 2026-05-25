@@ -155,6 +155,17 @@ class LayerPanel {
             });
         }
 
+        // Wire Conv Intel toggle
+        const convIntelInput = this._panel.querySelector('.lp-toggle input[data-action="conv-intel"]');
+        if (convIntelInput) {
+            convIntelInput.checked = CockpitConfig.get('convective.enabled') || false;
+            convIntelInput.addEventListener('change', () => {
+                const on = convIntelInput.checked;
+                CockpitConfig.set('convective.enabled', on);
+                window.app?.convectiveEngine?.setActive(on);
+            });
+        }
+
         // Wire CB/TCU report markers toggle
         const cbTcuInput = this._panel.querySelector('.lp-toggle input[data-action="cb-tcu"]');
         if (cbTcuInput) {
@@ -536,6 +547,10 @@ class LayerPanel {
                     <div class="lp-row">
                         <span class="lp-row-label">CB Building</span>
                         <label class="lp-toggle"><input type="checkbox" data-action="cb-building"><span class="lp-toggle-track"></span></label>
+                    </div>
+                    <div class="lp-row">
+                        <span class="lp-row-label">Conv Intel</span>
+                        <label class="lp-toggle"><input type="checkbox" data-action="conv-intel"><span class="lp-toggle-track"></span></label>
                     </div>
                     <div class="lp-row">
                         <span class="lp-row-label">CB / TCU Reports</span>

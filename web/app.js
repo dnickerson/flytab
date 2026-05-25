@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v8.92';
+const FLYTAB_VERSION = 'v8.93';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -85,6 +85,7 @@ class FlyTabApp {
 
         this.thermalMonitor = null;
         this.engineML = null;
+        this.convectiveEngine = null;
         this._cockpitInitialized = false;
         this._currentTrip = null;     // trip — top-level plan object (was _currentPlan)
         this._applyingPlan = false;   // re-entrancy guard for applyRouteEdit
@@ -548,6 +549,29 @@ class FlyTabApp {
         window.addEventListener('flightsync:stopped', () => {
             window.engineML?.stopLogging();
         });
+
+        // Convective Intelligence Engine
+        if (typeof ConvectiveIntelligenceEngine !== 'undefined' &&
+            typeof HRRRPreflightStore !== 'undefined') {
+            const preflightStore = new HRRRPreflightStore();
+            this.convectiveEngine = new ConvectiveIntelligenceEngine({
+                fisbNexrad: this.fisbNexrad,
+                fisbClient: this.fisbClient,
+                engineClient: this.engineClient,
+                stratuxClient: this.stratuxClient,
+                preflightStore,
+            });
+            const convDisplay = new ConvectiveDisplay(this.cockpitMap?.map);
+            const convAlerts  = new ConvectiveAlerts();
+            this.convectiveEngine.init(convDisplay, convAlerts);
+            if (this.cockpitMap?.map) {
+                convAlerts.mount(this.cockpitMap.map.getContainer());
+            }
+            this.convectiveEngine.loadPreflight().catch(e => DiagLog.log('convective', `Preflight load error: ${e.message}`));
+            if (CockpitConfig.get('convective.enabled')) {
+                this.convectiveEngine.setActive(true);
+            }
+        }
 
         // Engine overlay (reads from EnginePanel, floats on map)
         if (typeof EngineOverlay !== 'undefined') {
@@ -1370,6 +1394,10 @@ class FlyTabApp {
 
         if (this.wxBriefing) {
             this.wxBriefing.setFlightPlan(normalized);
+        }
+
+        if (this.convectiveEngine && normalized?.route) {
+            this.convectiveEngine.setRoute(normalized.route);
         }
 
         this._updateWeatherAge(plan);
