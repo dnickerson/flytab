@@ -601,15 +601,21 @@ class FisbClient extends EventTarget {
         }
         if (cbSkies.length) result.cb_skies = cbSkies;
 
-        // CB / TCU direction from remarks: "CB NE", "TCU DSNT SW", "CB ALQDS"
+        // CB / TCU / LTG direction from remarks: "CB NE", "TCU DSNT SW", "CB ALQDS",
+        // "LTG DSNT NE", "LTG DSTN ALQDS" — lightning implies CB; handles DSNT and DSTN spellings.
+        // Note: DSNT group is non-capturing so direction is cbDirM[2] (not [3]).
         const rmkPos = text.indexOf(' RMK ');
         if (rmkPos >= 0) {
             const rmk = text.slice(rmkPos + 5);
-            const cbDirPat = /\b(CB|TCU)\s+(DSNT\s+)?(N|NE|E|SE|S|SW|W|NW|ALQDS?)\b/g;
+            const cbDirPat = /\b(CB|TCU|LTG)\s+(?:(?:DSNT|DSTN)\s+)?(N|NE|E|SE|S|SW|W|NW|ALQDS?)\b/g;
             let cbDirM;
             const cbDirs = [];
             while ((cbDirM = cbDirPat.exec(rmk)) !== null) {
-                cbDirs.push({ type: cbDirM[1], distant: !!cbDirM[2], direction: cbDirM[3] === 'ALQD' ? 'ALQDS' : cbDirM[3] });
+                cbDirs.push({
+                    type:      cbDirM[1] === 'LTG' ? 'CB' : cbDirM[1],
+                    distant:   /\b(?:DSNT|DSTN)\b/.test(cbDirM[0]),
+                    direction: cbDirM[2] === 'ALQD' ? 'ALQDS' : cbDirM[2],
+                });
             }
             if (cbDirs.length) result.cb_directions = cbDirs;
         }
