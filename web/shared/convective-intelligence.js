@@ -437,3 +437,37 @@ class OATTrendMonitor {
 
     reset() { this._buffer = []; }
 }
+
+// ========== Wind Convergence Detection ==========
+
+/**
+ * Compare GPS-derived winds to FIS-B winds aloft to detect convergence.
+ * @param {{ ground_speed: number, true_course: number }|null} situation  - Stratux situation
+ * @param {{ dir: number, spd: number }|null} forecastWind  - from fisbClient.getNearestWind()
+ * @returns {{ speedDeltaKts: number, directionDeltaDeg: number, convergenceScore: number } | null}
+ */
+function detectWindConvergence(situation, forecastWind) {
+    if (!situation || situation.ground_speed == null) return null;
+    if (!forecastWind) return null;
+
+    const gpsDir   = situation.true_course ?? 0;
+    const gpsSpeed = situation.ground_speed ?? 0;
+
+    const fDir   = forecastWind.dir  ?? 0;
+    const fSpeed = forecastWind.spd  ?? 0;
+
+    const speedDelta = Math.abs(gpsSpeed - fSpeed);
+
+    let dirDelta = Math.abs(gpsDir - fDir) % 360;
+    if (dirDelta > 180) dirDelta = 360 - dirDelta;
+
+    const speedScore = Math.min(speedDelta / 30, 1);
+    const dirScore   = Math.min(dirDelta   / 60, 1);
+    const convergenceScore = (speedScore * 0.5 + dirScore * 0.5);
+
+    return {
+        speedDeltaKts:    speedDelta,
+        directionDeltaDeg: dirDelta,
+        convergenceScore,
+    };
+}

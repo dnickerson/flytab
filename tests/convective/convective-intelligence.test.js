@@ -384,3 +384,35 @@ describe('OATTrendMonitor', () => {
         expect(m._buffer.length).toBe(1);
     });
 });
+
+function detectWindConvergenceFn(situation, forecastWind) {
+    if (!situation || situation.ground_speed == null) return null;
+    if (!forecastWind) return null;
+    const gpsDir = situation.true_course ?? 0;
+    const gpsSpeed = situation.ground_speed ?? 0;
+    const fDir = forecastWind.dir ?? 0;
+    const fSpeed = forecastWind.spd ?? 0;
+    const speedDelta = Math.abs(gpsSpeed - fSpeed);
+    let dirDelta = Math.abs(gpsDir - fDir) % 360;
+    if (dirDelta > 180) dirDelta = 360 - dirDelta;
+    const speedScore = Math.min(speedDelta / 30, 1);
+    const dirScore = Math.min(dirDelta / 60, 1);
+    return { speedDeltaKts: speedDelta, directionDeltaDeg: dirDelta, convergenceScore: speedScore * 0.5 + dirScore * 0.5 };
+}
+
+describe('detectWindConvergence', () => {
+    it('returns null when situation is null', () => {
+        expect(detectWindConvergenceFn(null, { dir: 270, spd: 20 })).toBeNull();
+    });
+    it('returns null when forecast wind is null', () => {
+        expect(detectWindConvergenceFn({ ground_speed: 130, true_course: 270 }, null)).toBeNull();
+    });
+    it('returns low score when GPS and forecast agree', () => {
+        const r = detectWindConvergenceFn({ ground_speed: 120, true_course: 270 }, { dir: 275, spd: 118 });
+        expect(r.convergenceScore).toBeLessThan(0.3);
+    });
+    it('returns high score for large speed and direction deviation', () => {
+        const r = detectWindConvergenceFn({ ground_speed: 150, true_course: 90 }, { dir: 270, spd: 110 });
+        expect(r.convergenceScore).toBeGreaterThan(0.6);
+    });
+});
