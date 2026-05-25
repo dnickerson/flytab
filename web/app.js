@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v8.93';
+const FLYTAB_VERSION = 'v8.94';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -550,29 +550,6 @@ class FlyTabApp {
             window.engineML?.stopLogging();
         });
 
-        // Convective Intelligence Engine
-        if (typeof ConvectiveIntelligenceEngine !== 'undefined' &&
-            typeof HRRRPreflightStore !== 'undefined') {
-            const preflightStore = new HRRRPreflightStore();
-            this.convectiveEngine = new ConvectiveIntelligenceEngine({
-                fisbNexrad: this.fisbNexrad,
-                fisbClient: this.fisbClient,
-                engineClient: this.engineClient,
-                stratuxClient: this.stratuxClient,
-                preflightStore,
-            });
-            const convDisplay = new ConvectiveDisplay(this.cockpitMap?.map);
-            const convAlerts  = new ConvectiveAlerts();
-            this.convectiveEngine.init(convDisplay, convAlerts);
-            if (this.cockpitMap?.map) {
-                convAlerts.mount(this.cockpitMap.map.getContainer());
-            }
-            this.convectiveEngine.loadPreflight().catch(e => DiagLog.log('convective', `Preflight load error: ${e.message}`));
-            if (CockpitConfig.get('convective.enabled')) {
-                this.convectiveEngine.setActive(true);
-            }
-        }
-
         // Engine overlay (reads from EnginePanel, floats on map)
         if (typeof EngineOverlay !== 'undefined') {
             this.engineOverlay = new EngineOverlay(primaryView);
@@ -720,6 +697,29 @@ class FlyTabApp {
         if (typeof FisbNexrad !== 'undefined' && this.fisbClient) {
             this.fisbNexrad = new FisbNexrad(this.fisbClient);
             this.cockpitMap.setFisbNexrad(this.fisbNexrad);
+        }
+
+        // Convective Intelligence Engine — must be after fisbClient and fisbNexrad are assigned
+        if (typeof ConvectiveIntelligenceEngine !== 'undefined' &&
+            typeof HRRRPreflightStore !== 'undefined') {
+            const preflightStore = new HRRRPreflightStore();
+            this.convectiveEngine = new ConvectiveIntelligenceEngine({
+                fisbNexrad: this.fisbNexrad,
+                fisbClient: this.fisbClient,
+                engineClient: this.engineClient,
+                stratuxClient: this.stratuxClient,
+                preflightStore,
+            });
+            const convDisplay = new ConvectiveDisplay(this.cockpitMap?.map);
+            const convAlerts  = new ConvectiveAlerts();
+            this.convectiveEngine.init(convDisplay, convAlerts);
+            if (this.cockpitMap?.map) {
+                convAlerts.mount(this.cockpitMap.map.getContainer());
+            }
+            this.convectiveEngine.loadPreflight().catch(e => DiagLog.log('convective', `Preflight load error: ${e.message}`));
+            if (CockpitConfig.get('convective.enabled')) {
+                this.convectiveEngine.setActive(true);
+            }
         }
 
         // Radar loop (animated NEXRAD — uses FIS-B frames)

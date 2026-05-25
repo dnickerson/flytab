@@ -294,7 +294,7 @@ function computeHazardBoundary(cluster, convectiveScore, ageMinutes, preflightCe
 
     if      (convectiveScore > 0.80) bufferNm = 25;
     else if (convectiveScore > 0.60) bufferNm = 22;
-    else if (convectiveScore > 0.30) bufferNm = 18;
+    // AMBIGUOUS (0.30–0.60) keeps the 20nm base — lower confidence still warrants full buffer
 
     bufferNm += Math.min((ageMinutes || 0) * 0.5, 8);
 
@@ -325,7 +325,7 @@ function computeHazardBoundary(cluster, convectiveScore, ageMinutes, preflightCe
  * @param {{ lat, lon, groundspeedKts?: number }|null} aircraft
  * @returns {Array<{ level:1|2|3|4, message:string, voice:boolean, minutesToBoundary?:number }>}
  */
-function evaluateRouteAlerts(route, results, aircraft) {
+function evaluateRouteAlerts(results, aircraft) {
     if (!aircraft) return [];
 
     const alerts = [];
@@ -557,16 +557,16 @@ class ConvectiveIntelligenceEngine {
 
         if (this._alerts) {
             const routeAlerts = this._route && aircraft
-                ? evaluateRouteAlerts(this._route, analysis, aircraft)
+                ? evaluateRouteAlerts(analysis, aircraft)
                 : [];
 
             let convergenceSignal = null;
-            if (aircraft && this._preflight.getStaleness() !== 'none') {
+            if (aircraft) {
                 const forecastWind = this._fisb.getNearestWind(
                     aircraft.lat, aircraft.lon,
                     sit?.altitude_barometric ?? 3000
                 );
-                convergenceSignal = detectWindConvergence(sit, forecastWind);
+                if (forecastWind) convergenceSignal = detectWindConvergence(sit, forecastWind);
             }
 
             const oatResult = this._oatMonitor.analyze();
