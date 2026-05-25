@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <link rel="stylesheet" href="/web/style.css">
+    <link rel="stylesheet" href="/web/lib/leaflet/leaflet.css">
+    <style>
+        body { background: #fff; }
+        #map { width: 800px; height: 600px; }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+
+    <script>
+        // Globals that layer-panel.js checks with typeof guards.
+        const CockpitConfig = {
+            raw: { homeServer: { base: 'http://localhost:8090' } },
+            get: () => null,
+            patch: () => {},
+        };
+        const Settings = {};
+        const DiagLog  = { log: () => {} };
+        // wireTap is used in init() for accordion and button wiring.
+        const wireTap  = (el, fn) => el.addEventListener('click', fn);
+    </script>
+
+    <script src="/web/lib/leaflet/leaflet.js"></script>
+
+    <!-- VectorMapLayers has benign side effects (setInterval, window online listener)
+         but does not make HTTP requests at construction time. Use a minimal stub
+         to keep the harness fast and side-effect-free. -->
+    <script>
+        class VectorMapLayers {
+            constructor(map, nasrDb) {
+                this._map = map;
+            }
+            init()          {}
+            destroy()       {}
+            show(name)      {}
+            hide(name)      {}
+        }
+    </script>
+
+    <script src="/web/cockpit/layer-panel.js"></script>
+
+    <script>
+        const map = L.map('map').setView([34.9, -81.1], 10);
+
+        const vectorLayers = new VectorMapLayers(map, null);
+
+        // Minimal cockpitMap stub: open() reads _activeBaseLayer to sync radio buttons.
+        const cockpitMap = { _activeBaseLayer: 'vector' };
+
+        const panel = new LayerPanel(map, vectorLayers, cockpitMap);
+        panel.init();
+
+        window.__harness = {
+            open()  { panel.open(); },
+            close() { panel.close(); },
+        };
+    </script>
+</body>
+</html>

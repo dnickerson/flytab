@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <link rel="stylesheet" href="/web/style.css">
+    <style>
+        body { background: #fff; }
+        #rp-mount { width: 400px; min-height: 100px; }
+    </style>
+</head>
+<body>
+    <div id="rp-mount"></div>
+
+    <script>
+        // Globals required by route-planner-panel.js at parse/build time.
+        // CockpitConfig.aircraftRaw is accessed in _profileForPower() — no typeof guard.
+        const CockpitConfig = {
+            raw:        {},
+            aircraftRaw: { performance: { power_settings: [], cruise_speed_kt: 140 } },
+            get:        () => null,
+            patch:      () => {},
+        };
+        const Settings = { workerBase: 'http://localhost:8090' };
+        const DiagLog  = { log: () => {} };
+        // wireTap is used extensively in _buildDOM — must be present at init time.
+        const wireTap  = (el, fn) => el.addEventListener('click', fn);
+        // planSync is referenced in _showPlanSyncUI — optional, guard with typeof.
+        // FlyTabPlanning is attempted in _startBuildPlanner — optional, guard is built in.
+    </script>
+
+    <!-- route-planner-panel uses NasrDb only in async IDB lookups (not at init).
+         Load the real nasr-db.js so the constructor's DB_NAME is available if needed.
+         NasrDb does not open IDB at construction time — safe to include. -->
+    <script src="/web/shared/nasr-db.js"></script>
+    <script src="/web/cockpit/route-planner-panel.js"></script>
+
+    <script>
+        const panelEl = document.getElementById('rp-mount');
+
+        // nasrDb: pass a stub — only async IDB methods are called, never at init.
+        const nasrDb = {
+            constructor: { DB_NAME: 'flypi' },
+            getAirport: () => Promise.resolve(null),
+            getNavaid:  () => Promise.resolve(null),
+            getFix:     () => Promise.resolve(null),
+            getAirway:  () => Promise.resolve(null),
+        };
+
+        const panel = new RoutePlannerPanel(panelEl, nasrDb, null);
+        panel.init();
+
+        window.__harness = {
+            /** Call open() with a minimal plan stub. */
+            open(plan) {
+                panel.open(plan || null);
+            },
+            /** Call close() and report the route array length (should be 0). */
+            close() {
+                panel.close();
+                return panel._route.length;
+            },
+            /** Return true if the panel's inner DOM has been built. */
+            isBuilt() {
+                return !!panelEl.querySelector('.rpp-inner');
+            },
+        };
+    </script>
+</body>
+</html>

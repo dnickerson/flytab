@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <link rel="stylesheet" href="/web/style.css">
+    <style>
+        body { background: #fff; }
+    </style>
+</head>
+<body>
+    <!-- WxBriefing._buildPanel() appends to mainContent || body -->
+    <div id="mainContent"></div>
+
+    <script>
+        // Minimal globals required by wx-briefing.js at parse/runtime.
+        // All Settings/CockpitConfig usages are either in event handlers or
+        // inside conditionals — returning safe defaults keeps the harness clean.
+        const CockpitConfig = {
+            raw: { notam: {} },
+            get: () => null,
+            notamBase: null,
+        };
+        const Settings = { workerBase: 'http://localhost:8090' };
+        const DiagLog  = { log: () => {} };
+        const wireTap  = (el, fn) => el.addEventListener('click', fn);
+    </script>
+
+    <script src="/web/cockpit/wx-briefing.js"></script>
+
+    <script>
+        // WxBriefing(db, config): db is used only for IDB lookups in async paths.
+        // Passing null is safe — no IDB access happens during init() or NOTAM injection.
+        const wx = new WxBriefing(null, {});
+        wx.init();
+
+        window.__harness = {
+            /**
+             * Inject NOTAM arrays directly into the instance, then call
+             * _renderNotamSection() to update the DOM. Both arrays must be
+             * non-null for _sortedNotams() to return results.
+             */
+            injectNotams(notams) {
+                wx._notams        = notams;
+                wx._enrouteNotams = [];   // empty, not null — satisfies the null-check
+                if (typeof wx._renderNotamSection === 'function') {
+                    wx._renderNotamSection();
+                }
+            },
+            /**
+             * Returns the count of NOTAMs from _sortedNotams().
+             * _filterByFlightWindow() returns all items when there is no flight
+             * plan (_getFlightWindow() → null), so count equals inject count.
+             */
+            getNotamCount() {
+                return wx._sortedNotams().length;
+            },
+            /**
+             * Returns the sorted NOTAM type array — lets the spec verify tier ordering
+             * without reaching into the instance directly.
+             */
+            getSortedTypes() {
+                return wx._sortedNotams().map(n => n.type);
+            },
+        };
+    </script>
+</body>
+</html>
