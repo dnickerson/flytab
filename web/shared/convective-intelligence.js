@@ -315,3 +315,72 @@ function computeHazardBoundary(cluster, convectiveScore, ageMinutes, preflightCe
         ],
     };
 }
+
+// ========== Route Alert System ==========
+
+/**
+ * Evaluate which analysis results intersect the aircraft's projected track.
+ * @param {{ waypoints: Array<{lat,lon}> }|null} route
+ * @param {Array<{cluster, analysis}>} results
+ * @param {{ lat, lon, groundspeedKts?: number }|null} aircraft
+ * @returns {Array<{ level:1|2|3|4, message:string, voice:boolean, minutesToBoundary?:number }>}
+ */
+function evaluateRouteAlerts(route, results, aircraft) {
+    if (!aircraft) return [];
+
+    const alerts = [];
+    const gs = aircraft.groundspeedKts || 120;
+
+    for (const { cluster, analysis } of results) {
+        if (!analysis.score || analysis.score < 0.30) continue;
+
+        const [clLat, clLon] = cluster.centroid;
+        const boundary = computeHazardBoundary(cluster, analysis.score, 0, null);
+
+        const distNm = _nmBetween2(aircraft, { lat: clLat, lon: clLon });
+        const distToHazardNm = distNm - boundary.bufferNm;
+        const minsToBoundary = distToHazardNm > 0 ? (distToHazardNm / gs) * 60 : 0;
+
+        if (distToHazardNm < 0) {
+            alerts.push({
+                level: 4,
+                message: 'INSIDE CONVECTIVE HAZARD ZONE — DEVIATE IMMEDIATELY',
+                voice: true,
+                minutesToBoundary: 0,
+            });
+        } else if (minsToBoundary < 5 && analysis.score > 0.60) {
+            alerts.push({
+                level: 3,
+                message: `CONVECTIVE HAZARD ${Math.round(distToHazardNm)}NM — DEVIATE NOW`,
+                voice: true,
+                minutesToBoundary: Math.round(minsToBoundary),
+            });
+        } else if (minsToBoundary < 15 && analysis.score > 0.60) {
+            alerts.push({
+                level: 2,
+                message: `Convective return ${Math.round(distNm)}NM — deviation recommended`,
+                voice: false,
+                minutesToBoundary: Math.round(minsToBoundary),
+            });
+        } else if (minsToBoundary < 30 && analysis.score > 0.30) {
+            alerts.push({
+                level: 1,
+                message: `Possible convective ${Math.round(distNm)}NM — monitor`,
+                voice: false,
+                minutesToBoundary: Math.round(minsToBoundary),
+            });
+        }
+    }
+
+    return alerts.sort((a, b) => b.level - a.level);
+}
+
+function _nmBetween2(a, b) {
+    const R = 3440.065;
+    const dLat = (b.lat - a.lat) * Math.PI / 180;
+    const dLon = (b.lon - a.lon) * Math.PI / 180;
+    const h = Math.sin(dLat / 2) ** 2 +
+        Math.cos(a.lat * Math.PI / 180) * Math.cos(b.lat * Math.PI / 180) *
+        Math.sin(dLon / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}

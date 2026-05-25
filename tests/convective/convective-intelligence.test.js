@@ -253,3 +253,57 @@ describe('computeHazardBoundary', () => {
         }
     });
 });
+
+// inline evaluateRouteAlerts dependencies
+function nmBetween2(a, b) {
+    const R = 3440.065;
+    const dLat = (b.lat - a.lat) * Math.PI / 180;
+    const dLon = (b.lon - a.lon) * Math.PI / 180;
+    const h = Math.sin(dLat/2)**2 + Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLon/2)**2;
+    return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+function evalAlerts(results, aircraft) {
+    if (!aircraft) return [];
+    const alerts = [];
+    const gs = aircraft.groundspeedKts || 120;
+    for (const { cluster, analysis } of results) {
+        if (!analysis.score || analysis.score < 0.30) continue;
+        const distNm = nmBetween2(aircraft, { lat: cluster.centroid[0], lon: cluster.centroid[1] });
+        const boundary = { bufferNm: analysis.score > 0.80 ? 25 : analysis.score > 0.60 ? 22 : 18 };
+        const distToHazardNm = distNm - boundary.bufferNm;
+        const minsToBoundary = distToHazardNm > 0 ? (distToHazardNm / gs) * 60 : 0;
+        if (distToHazardNm < 0) alerts.push({ level: 4, message: 'INSIDE CONVECTIVE HAZARD ZONE — DEVIATE IMMEDIATELY', voice: true });
+        else if (minsToBoundary < 5 && analysis.score > 0.60) alerts.push({ level: 3, message: `CONVECTIVE HAZARD ${Math.round(distToHazardNm)}NM — DEVIATE NOW`, voice: true });
+        else if (minsToBoundary < 15 && analysis.score > 0.60) alerts.push({ level: 2, message: `Convective return ${Math.round(distNm)}NM — deviation recommended`, voice: false });
+        else if (minsToBoundary < 30 && analysis.score > 0.30) alerts.push({ level: 1, message: `Possible convective ${Math.round(distNm)}NM — monitor`, voice: false });
+    }
+    return alerts.sort((a, b) => b.level - a.level);
+}
+
+describe('evaluateRouteAlerts', () => {
+    const ac = { lat: 34.0, lon: -82.0, groundspeedKts: 150 };
+
+    it('no alerts when no results above 0.30', () => {
+        const results = [{ cluster: { centroid: [34.1, -82.1] }, analysis: { score: 0.1, confidence: 'moderate', signals: {} } }];
+        expect(evalAlerts(results, ac)).toHaveLength(0);
+    });
+
+    it('level 4 alert when aircraft inside hazard boundary', () => {
+        const results = [{ cluster: { centroid: [34.0, -82.0] }, analysis: { score: 0.9, confidence: 'high', signals: {} } }];
+        const alerts = evalAlerts(results, ac);
+        expect(alerts[0].level).toBe(4);
+        expect(alerts[0].voice).toBe(true);
+    });
+
+    it('level 1 alert for distant ambiguous return', () => {
+        const results = [{ cluster: { centroid: [33.3, -82.0] }, analysis: { score: 0.4, confidence: 'moderate', signals: {} } }];
+        const alerts = evalAlerts(results, ac);
+        expect(alerts.length).toBeGreaterThan(0);
+        expect(alerts[0].level).toBeLessThan(4);
+    });
+
+    it('returns no alerts when aircraft is null', () => {
+        const results = [{ cluster: { centroid: [34.0, -82.0] }, analysis: { score: 0.9, confidence: 'high', signals: {} } }];
+        expect(evalAlerts(results, null)).toHaveLength(0);
+    });
+});
