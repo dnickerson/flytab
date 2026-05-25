@@ -140,3 +140,70 @@ describe('computeCellInstabilityScore', () => {
         expect(score).toBeLessThanOrEqual(1.0);
     });
 });
+
+// ---- NexradSectorAnalyzer helpers ----
+
+function makeCluster(gLat, gLon, size, intensity) {
+    const cells = [];
+    for (let i = 0; i < size; i++) cells.push({ gLat: gLat + Math.floor(i / 4), gLon: gLon + (i % 4) });
+    return { cells, maxIntensity: intensity, centroid: [gLat * 0.25, gLon * 0.25] };
+}
+
+// inline _analyzeCluster logic for unit testing
+function runAnalysis(matched) {
+    if (matched.length < 3) return { score: null, confidence: 'insufficient_data', signals: { framesAnalyzed: matched.length } };
+    const areas    = matched.map(c => c.cells.length);
+    const peakDbzs = matched.map(c => c.maxIntensity);
+    const cents    = matched.map(c => c.centroid);
+    const areaGrowthRate  = fitExponentialSlope(areas);
+    const dbzGrowthRate   = fitLinearSlope(peakDbzs);
+    const first = cents[0], last = cents[cents.length - 1];
+    const motionDeg = Math.sqrt((last[0]-first[0])**2+(last[1]-first[1])**2) / matched.length;
+    const areaVsMotionRatio = areaGrowthRate / (motionDeg + 0.01);
+    const instabilityScore = 0.5;
+    const timeOfDayFactor = 0.5;
+    const rawScore =
+        Math.min(Math.max((areaGrowthRate <= 0.05 ? 0 : areaGrowthRate >= 0.5 ? 1 : (areaGrowthRate - 0.05) / 0.45), 0), 1) * 0.35 +
+        Math.min(Math.max((dbzGrowthRate <= 2 ? 0 : dbzGrowthRate >= 8 ? 1 : (dbzGrowthRate - 2) / 6), 0), 1) * 0.25 +
+        0 * 0.10 +
+        Math.min(Math.max(areaVsMotionRatio / 5, 0), 1) * 0.10 +
+        instabilityScore * 0.15 +
+        timeOfDayFactor * 0.05;
+    return {
+        score: Math.min(rawScore, 1.0),
+        confidence: matched.length >= 5 ? 'high' : 'moderate',
+        signals: { areaGrowthRate, dbzGrowthRate, framesAnalyzed: matched.length },
+    };
+}
+
+describe('NexradSectorAnalyzer score model', () => {
+    it('insufficient_data when < 3 matched frames', () => {
+        const r = runAnalysis([makeCluster(100, -330, 5, 3), makeCluster(100, -330, 6, 3)]);
+        expect(r.confidence).toBe('insufficient_data');
+        expect(r.score).toBeNull();
+    });
+
+    it('low score for stationary stratiform (no growth)', () => {
+        const matched = [5, 5, 5, 5, 5].map((size, i) => makeCluster(100 + i * 0.01, -330, size, 3));
+        const r = runAnalysis(matched);
+        expect(r.score).toBeLessThan(0.5);
+    });
+
+    it('high score for explosive convective growth', () => {
+        const matched = [
+            makeCluster(100, -330, 2, 3),
+            makeCluster(100, -330, 4, 4),
+            makeCluster(100, -330, 8, 5),
+            makeCluster(100, -330, 16, 6),
+            makeCluster(100, -330, 32, 7),
+        ];
+        const r = runAnalysis(matched);
+        expect(r.score).toBeGreaterThan(0.5);
+    });
+
+    it('confidence is high with >= 5 matched frames', () => {
+        const matched = Array(5).fill(0).map((_, i) => makeCluster(100, -330 + i * 0.001, 5, 3));
+        const r = runAnalysis(matched);
+        expect(r.confidence).toBe('high');
+    });
+});

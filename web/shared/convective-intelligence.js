@@ -165,3 +165,116 @@ function lookupNearestCell(grid, lat, lon) {
     }
     return best;
 }
+
+// ========== Convective Discrimination Thresholds ==========
+
+const CONVECTIVE_THRESHOLDS = {
+    STRATIFORM:  { min: 0.00, max: 0.30, color: '#4488CC', label: 'Stratiform precipitation' },
+    AMBIGUOUS:   { min: 0.30, max: 0.60, color: '#FFAA00', label: 'Possible convective — monitor' },
+    LIKELY_CONV: { min: 0.60, max: 0.80, color: '#FF6600', label: 'Likely convective — deviate' },
+    CONFIRMED:   { min: 0.80, max: 1.00, color: '#FF0000', label: 'Convective — immediate deviation' },
+};
+
+function getConvectiveCategory(score) {
+    if (score >= 0.80) return 'CONFIRMED';
+    if (score >= 0.60) return 'LIKELY_CONV';
+    if (score >= 0.30) return 'AMBIGUOUS';
+    return 'STRATIFORM';
+}
+
+// ========== NexradSectorAnalyzer ==========
+
+/**
+ * Wraps FisbNexrad frame history to perform multi-frame convective scoring.
+ * Call analyze() after each new NEXRAD frame; result is an array of
+ * { cluster, analysis } for all current clusters.
+ */
+class NexradSectorAnalyzer {
+    /**
+     * @param {FisbNexrad} fisbNexrad
+     * @param {HRRRPreflightStore} preflightStore
+     */
+    constructor(fisbNexrad, preflightStore) {
+        this._nexrad    = fisbNexrad;
+        this._preflight = preflightStore;
+    }
+
+    /**
+     * Run analysis against current frame history.
+     * @returns {Array<{ cluster, analysis }>}
+     */
+    analyze() {
+        const frames = this._nexrad.frameHistory;
+        if (frames.length < 2) return [];
+
+        const frameClusters = frames.map((_, i) => this._nexrad.clustersForFrame(i));
+        const currentClusters = frameClusters[frameClusters.length - 1];
+
+        return currentClusters.map(cluster => ({
+            cluster,
+            analysis: this._analyzeCluster(cluster, frameClusters),
+        }));
+    }
+
+    _analyzeCluster(current, frameClusters) {
+        const MATCH_DEG = 1.5;  // ~90nm max centroid drift between frames
+
+        const matched = frameClusters.map(clusters => {
+            let best = null, bestD = MATCH_DEG;
+            for (const c of clusters) {
+                const d = Math.sqrt(
+                    (current.centroid[0] - c.centroid[0]) ** 2 +
+                    (current.centroid[1] - c.centroid[1]) ** 2
+                );
+                if (d < bestD) { bestD = d; best = c; }
+            }
+            return best;
+        }).filter(Boolean);
+
+        if (matched.length < 3) {
+            return { score: null, confidence: 'insufficient_data', signals: { framesAnalyzed: matched.length } };
+        }
+
+        const areas      = matched.map(c => c.cells.length);
+        const peakDbzs   = matched.map(c => c.maxIntensity);
+        const centroids  = matched.map(c => c.centroid);
+
+        const areaGrowthRate   = fitExponentialSlope(areas);
+        const dbzGrowthRate    = fitLinearSlope(peakDbzs);
+        const edgeIrregularity = computeEdgeIrregularity(current);
+
+        const first = centroids[0], last = centroids[centroids.length - 1];
+        const motionDeg = Math.sqrt(
+            (last[0] - first[0]) ** 2 + (last[1] - first[1]) ** 2
+        ) / matched.length;
+        const areaVsMotionRatio = areaGrowthRate / (motionDeg + 0.01);
+
+        const preflightGrid = this._preflight?.getGrid() ?? null;
+        const preflightCell = preflightGrid
+            ? lookupNearestCell(preflightGrid, current.centroid[0], current.centroid[1])
+            : null;
+        const instabilityScore = preflightCell?.instabilityScore ?? 0.5;
+
+        const timeOfDayFactor = computeSolarHeatingMultiplier(new Date());
+
+        const rawScore =
+            _normAreaGrowth(areaGrowthRate)    * 0.35 +
+            _normDbzGrowth(dbzGrowthRate)      * 0.25 +
+            edgeIrregularity                    * 0.10 +
+            _normMotionRatio(areaVsMotionRatio) * 0.10 +
+            instabilityScore                    * 0.15 +
+            timeOfDayFactor                     * 0.05;
+
+        return {
+            score: Math.min(rawScore, 1.0),
+            confidence: matched.length >= 5 ? 'high' : 'moderate',
+            signals: {
+                areaGrowthRate,
+                dbzGrowthRate,
+                edgeIrregularity,
+                instabilityScore,
+                framesAnalyzed: matched.length,
+            },
+        };
+    }
+}
