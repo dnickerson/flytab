@@ -8,11 +8,13 @@ const TILES_DIR  = path.join(__dirname, 'tiles');
 const PLATES_DIR = path.join(__dirname, 'plates');
 
 const CYCLE_INFO = JSON.stringify({
-    cycle: '20260424', sua_count: 100, airports: 19823, navaids: 4521,
+    effective_date: '2026-05-14', expiration_date: '2026-06-11',
+    sua_count: 0, bundle_version: 4,
 });
 
 const NASR_BUNDLE = JSON.stringify({
-    cycle_info: { cycle: '20260424', sua_count: 100 },
+    cycle_info: { effective_date: '2026-05-14', expiration_date: '2026-06-11',
+                  bundle_version: 4, sua_count: 0 },
     airports: {
         KLKR: { icao: 'KLKR', lat: 34.9, lon: -81.1, name: 'Lancaster', state: 'SC', elevation_ft: 573 },
         KCLT: { icao: 'KCLT', lat: 35.2, lon: -80.9, name: 'Charlotte Douglas', state: 'NC', elevation_ft: 748 },
@@ -32,14 +34,17 @@ const NASR_BUNDLE = JSON.stringify({
 });
 
 const MANIFEST = JSON.stringify({
-    nasr:   { cycle: '20260424', sua_count: 100 },
-    cifp:   { cycle: '20260424' },
-    plates: { cycle_code: '2604' },
+    nasr:   { effective_date: '2026-05-14', expiration_date: '2026-06-11',
+              bundle_version: 4, built_at: '2026-05-14T00:00:00Z' },
+    cifp:   { cycle_code: '260514', effective_date: '2026-05-14',
+              expiration_date: '2026-06-11', built_at: '2026-05-14T00:00:00Z' },
+    plates: { cycle_code: '260514' },
 });
 
-const CIFP_BUNDLE  = JSON.stringify({ procedures: {}, cycle: '20260424' });
-const CIFP_CYCLE   = JSON.stringify({ cycle: '20260424' });
-const PLATE_INDEX  = JSON.stringify({ KLKR: [{ icao: 'KLKR', chart_name: 'ILS OR LOC RWY 9', filename: 'klkr-ils-9.pdf', state: 'SC' }] });
+const CIFP_BUNDLE  = JSON.stringify({ procedures: {}, cycle_code: '260514' });
+const CIFP_CYCLE   = JSON.stringify({ cycle_code: '260514', effective_date: '2026-05-14',
+                                      expiration_date: '2026-06-11' });
+const PLATE_INDEX  = JSON.stringify({ KLKR: [{ icao: 'KLKR', chart_name: 'ILS OR LOC RWY 9', filename: 'klkr-ils-9.pdf', state: 'SC', cycle_code: '260514' }] });
 const TERRAIN_STATUS = JSON.stringify({ exists: false, sizeMb: 0, builtAt: null });
 
 function startMockHomeServer(port) {
