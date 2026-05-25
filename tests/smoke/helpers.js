@@ -8,23 +8,23 @@ const MINIMAL_NASR_BUNDLE = JSON.stringify({
         effective_date: '2026-05-14', expiration_date: '2026-06-11',
         bundle_version: 4, sua_count: 0,
     },
-    airports: {
-        KLKR: { icao: 'KLKR', lat: 34.9, lon: -81.1, name: 'Lancaster', state: 'SC', elevation_ft: 573 },
-        KCLT: { icao: 'KCLT', lat: 35.2, lon: -80.9, name: 'Charlotte Douglas', state: 'NC', elevation_ft: 748 },
-        KJFK: { icao: 'KJFK', lat: 40.6, lon: -73.8, name: 'John F Kennedy Intl', state: 'NY', elevation_ft: 13 },
-    },
-    navaids: {
-        MRB: { id: 'MRB', lat: 39.4, lon: -77.9, type: 'VOR', freq: 117.0, name: 'Martinsburg' },
-    },
-    airways: {
-        V143: { name: 'V143', waypoints: [{ id: 'MRB' }, { id: 'ETX' }] },
-    },
+    airports: [
+        { icao: 'KLKR', lat: 34.9, lon: -81.1, name: 'Lancaster', state: 'SC', elevation_ft: 573 },
+        { icao: 'KCLT', lat: 35.2, lon: -80.9, name: 'Charlotte Douglas', state: 'NC', elevation_ft: 748 },
+        { icao: 'KJFK', lat: 40.6, lon: -73.8, name: 'John F Kennedy Intl', state: 'NY', elevation_ft: 13 },
+    ],
+    navaids: [
+        { id: 'MRB', lat: 39.4, lon: -77.9, type: 'VOR', freq: 117.0, name: 'Martinsburg' },
+    ],
+    airways: [
+        { name: 'V143', waypoints: [{ id: 'MRB' }, { id: 'ETX' }] },
+    ],
     airspace: [
         { id: 'CLT-C', type: 'C', lat: 35.21, lon: -80.95, floor: 0, ceiling: 4100,
           coords: [[35.3, -81.1], [35.3, -80.7], [35.1, -80.7], [35.1, -81.1], [35.3, -81.1]] },
     ],
     sua: [],
-    fixes: {},
+    fixes: [],
 });
 
 const MINIMAL_CYCLE_INFO = JSON.stringify({

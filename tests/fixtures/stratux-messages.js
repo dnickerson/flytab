@@ -41,7 +41,9 @@ export const SITUATION_NO_FIX = { ...SITUATION, GPSFixQuality: 0, GPSSatellites:
 
 export const NEXRAD_FRAME = {
     Product_id: 63,
-    NEXRAD: [
-        { lat: 34.9, lon: -81.1, intensity: 25, range: 50 },
-    ],
+    NEXRAD: [{
+        LatNorth: 35.0, LonWest: -81.5,
+        Height: 0.5, Width: 0.5,
+        Intensity: [15, 25, 30, 25, 15],
+    }],
 };
