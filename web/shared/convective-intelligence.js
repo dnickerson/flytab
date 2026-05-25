@@ -384,3 +384,56 @@ function _nmBetween2(a, b) {
         Math.sin(dLon / 2) ** 2;
     return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 }
+
+// ========== OAT Trend Monitor ==========
+
+/**
+ * 5-minute rolling OAT trend detector.
+ * Wire to engine:data events: monitor.ingest(data.oat, Date.now())
+ */
+class OATTrendMonitor {
+    constructor() {
+        this._buffer    = [];
+        this._maxMs     = 300000;     // 5-minute window
+    }
+
+    /**
+     * Ingest a new OAT reading.
+     * @param {number} oatC       - outside air temp in °C
+     * @param {number} timestamp  - Date.now()
+     */
+    ingest(oatC, timestamp) {
+        if (oatC == null || isNaN(oatC)) return;
+        this._buffer.push({ oatC, timestamp });
+        const cutoff = timestamp - this._maxMs;
+        this._buffer = this._buffer.filter(r => r.timestamp >= cutoff);
+    }
+
+    /**
+     * Analyze current buffer.
+     * @returns {{ trendCPerMin, varianceC, signals } | null}
+     *   null if insufficient data (< 30 readings)
+     */
+    analyze() {
+        if (this._buffer.length < 30) return null;
+
+        const temps  = this._buffer.map(r => r.oatC);
+        const slope  = fitLinearSlope(temps);
+        const trendCPerMin = slope * 60;
+
+        const last60 = this._buffer.slice(-60).map(r => r.oatC);
+        const varianceC = computeVariance(last60);
+
+        return {
+            trendCPerMin,
+            varianceC,
+            signals: {
+                rapidWarming:        trendCPerMin > 0.3,
+                convergenceBoundary: varianceC > 1.5,
+                outflowBoundary:     trendCPerMin < -0.5,
+            },
+        };
+    }
+
+    reset() { this._buffer = []; }
+}

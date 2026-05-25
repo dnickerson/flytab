@@ -307,3 +307,80 @@ describe('evaluateRouteAlerts', () => {
         expect(evalAlerts(results, null)).toHaveLength(0);
     });
 });
+
+// inline OATTrendMonitor
+function computeVarianceFn(values) {
+    const n = values.length; if (n < 2) return 0;
+    const mean = values.reduce((s, v) => s + v, 0) / n;
+    return values.reduce((s, v) => s + (v - mean) ** 2, 0) / (n - 1);
+}
+function fitLinearSlopeFn(values) {
+    const n = values.length; if (n < 2) return 0;
+    const xMean = (n-1)/2, yMean = values.reduce((s,v)=>s+v,0)/n;
+    let num=0,den=0;
+    for (let i=0;i<n;i++){num+=(i-xMean)*(values[i]-yMean);den+=(i-xMean)**2;}
+    return den===0?0:num/den;
+}
+class OATTrendMonitorTest {
+    constructor() { this._buffer=[]; this._maxMs=300000; }
+    ingest(oatC, timestamp) {
+        if (oatC==null||isNaN(oatC)) return;
+        this._buffer.push({oatC,timestamp});
+        const cutoff=timestamp-this._maxMs;
+        this._buffer=this._buffer.filter(r=>r.timestamp>=cutoff);
+    }
+    analyze() {
+        if (this._buffer.length<30) return null;
+        const temps=this._buffer.map(r=>r.oatC);
+        const slope=fitLinearSlopeFn(temps);
+        const trendCPerMin=slope*60;
+        const last60=this._buffer.slice(-60).map(r=>r.oatC);
+        const varianceC=computeVarianceFn(last60);
+        return { trendCPerMin, varianceC, signals:{
+            rapidWarming: trendCPerMin>0.3,
+            convergenceBoundary: varianceC>1.5,
+            outflowBoundary: trendCPerMin<-0.5,
+        }};
+    }
+    reset() { this._buffer=[]; }
+}
+
+describe('OATTrendMonitor', () => {
+    it('returns null with fewer than 30 readings', () => {
+        const m = new OATTrendMonitorTest();
+        for (let i=0;i<20;i++) m.ingest(20, Date.now() + i * 1000);
+        expect(m.analyze()).toBeNull();
+    });
+
+    it('detects outflowBoundary on rapid cooling', () => {
+        const m = new OATTrendMonitorTest();
+        const t0 = Date.now();
+        for (let i=0;i<60;i++) m.ingest(25 - i * (10/59), t0 + i * 1000);
+        const r = m.analyze();
+        expect(r.signals.outflowBoundary).toBe(true);
+    });
+
+    it('detects rapidWarming on sustained heating trend', () => {
+        const m = new OATTrendMonitorTest();
+        const t0 = Date.now();
+        for (let i=0;i<60;i++) m.ingest(20 + i * (10/59), t0 + i * 1000);
+        const r = m.analyze();
+        expect(r.signals.rapidWarming).toBe(true);
+    });
+
+    it('detects convergenceBoundary on high variance', () => {
+        const m = new OATTrendMonitorTest();
+        const t0 = Date.now();
+        for (let i=0;i<60;i++) m.ingest(20 + (i % 2 === 0 ? 3 : -3), t0 + i * 1000);
+        const r = m.analyze();
+        expect(r.signals.convergenceBoundary).toBe(true);
+    });
+
+    it('prunes readings older than 5 minutes', () => {
+        const m = new OATTrendMonitorTest();
+        const t0 = Date.now() - 400000;
+        m.ingest(20, t0);
+        m.ingest(20, Date.now());
+        expect(m._buffer.length).toBe(1);
+    });
+});
