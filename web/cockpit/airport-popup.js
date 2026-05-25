@@ -1277,6 +1277,14 @@ class AirportPopup {
             }
         }
 
+        // Thunderstorm plain-language row — parses raw text so it works for all METAR sources
+        const tstmLines = typeof FisbClient !== 'undefined' ? FisbClient.formatThunderstormActivity(raw) : [];
+        const tstmRowHtml = tstmLines.length
+            ? `<div class="wx-row"><div class="wx-row-lbl">TSTM</div><div class="wx-sky-stack">${
+                tstmLines.map(l => `<div class="wx-tstm-line">${l}</div>`).join('')
+            }</div></div>`
+            : '';
+
         // Weather phenomena — parse from raw text (TS, RA, SN, FZRA, FG, etc.)
         const wxPhenomena = [];
         const wxGroupMatch = rawNoRmk.match(/\b([-+]?(VC)?(MI|PR|BC|DR|BL|SH|TS|FZ)*(RA|DZ|SN|SG|IC|PL|GR|GS|UP|FG|BR|SA|DU|HZ|VA|PO|SQ|FC|SS|DS)+)\b/g);
@@ -1337,6 +1345,7 @@ class AirportPopup {
             <div class="wx-rows">
                 ${windRow}
                 ${skyRowHtml}
+                ${tstmRowHtml}
                 ${visRow}
                 ${tdRow}
                 ${altRow}

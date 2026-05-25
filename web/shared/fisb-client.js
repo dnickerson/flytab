@@ -601,22 +601,44 @@ class FisbClient extends EventTarget {
         }
         if (cbSkies.length) result.cb_skies = cbSkies;
 
-        // CB / TCU / LTG direction from remarks: "CB NE", "TCU DSNT SW", "CB ALQDS",
-        // "LTG DSNT NE", "LTG DSTN ALQDS" — lightning implies CB; handles DSNT and DSTN spellings.
-        // Note: DSNT group is non-capturing so direction is cbDirM[2] (not [3]).
-        const rmkPos = text.indexOf(' RMK ');
+        // TS/VCTS in body (before RMK) — thunderstorm at or near station
+        const bodyEnd = text.indexOf(' RMK ');
+        const body = bodyEnd >= 0 ? text.slice(0, bodyEnd) : text;
+        if (/\bVCTS\b/.test(body)) result.at_station_ts = 'VC';
+        else if (/\bTS/.test(body)) result.at_station_ts = true;
+
+        // CB/TCU/LTG remarks: [FREQ] (CB|TCU|LTG) [TYPE*] [PROX] [DIR[-DIR]]
+        // Handles: OCNL/FRQ/CONS frequency, IC/CC/CG/CA type qualifiers, DSNT/DSTN/VC
+        // proximity, OHD/OVHD overhead, N-NE range directions, ALQDS.
+        // Multi-char compass points come before single-char to avoid partial matches.
+        const rmkPos = bodyEnd;
         if (rmkPos >= 0) {
             const rmk = text.slice(rmkPos + 5);
-            const cbDirPat = /\b(CB|TCU|LTG)\s+(?:(?:DSNT|DSTN)\s+)?(N|NE|E|SE|S|SW|W|NW|ALQDS?)\b/g;
-            let cbDirM;
+            const tsTokenPat = /\b(?:(?:OCNL|FRQ|CONS)\s+)?(?:CB|TCU|LTG)(?:\s+(?:IC|CC|CG|CA))*(?:\s+(?:DSNT|DSTN|VC))?(?:\s+(?:NE|NW|SE|SW|N|E|S|W|ALQDS?|OHD|OVHD)(?:-(?:NE|NW|SE|SW|N|E|S|W))?)?\b/g;
+            const tsActivity = [];
             const cbDirs = [];
-            while ((cbDirM = cbDirPat.exec(rmk)) !== null) {
-                cbDirs.push({
-                    type:      cbDirM[1] === 'LTG' ? 'CB' : cbDirM[1],
-                    distant:   /\b(?:DSNT|DSTN)\b/.test(cbDirM[0]),
-                    direction: cbDirM[2] === 'ALQD' ? 'ALQDS' : cbDirM[2],
-                });
+            let tsM;
+            while ((tsM = tsTokenPat.exec(rmk)) !== null) {
+                const tok = tsM[0];
+                const keyM = tok.match(/\b(CB|TCU|LTG)\b/);
+                if (!keyM) continue;
+                const freqM  = tok.match(/^(OCNL|FRQ|CONS)\b/);
+                const typeMs = [...tok.matchAll(/\b(IC|CC|CG|CA)\b/g)].map(m => m[1]);
+                const proxM  = tok.match(/\b(DSNT|DSTN|VC)\b/);
+                const dirM   = tok.match(/\b(NE|NW|SE|SW|N|E|S|W|ALQDS?|OHD|OVHD)(?:-(NE|NW|SE|SW|N|E|S|W))?$/);
+                const distant  = proxM ? /DSNT|DSTN/.test(proxM[1]) : false;
+                const vicinity = proxM ? proxM[1] === 'VC' : false;
+                let direction = null, dirRange = null;
+                if (dirM) {
+                    direction = dirM[1] === 'ALQD' ? 'ALQDS' : dirM[1];
+                    dirRange  = dirM[2] || null;
+                }
+                tsActivity.push({ keyword: keyM[1], frequency: freqM ? freqM[1] : null, types: typeMs, distant, vicinity, direction, dirRange });
+                if (direction) {
+                    cbDirs.push({ type: keyM[1] === 'LTG' ? 'CB' : keyM[1], distant, direction });
+                }
             }
+            if (tsActivity.length) result.thunderstorm_activity = tsActivity;
             if (cbDirs.length) result.cb_directions = cbDirs;
         }
 
@@ -629,6 +651,57 @@ class FisbClient extends EventTarget {
         else result.flight_category = 'LIFR';
 
         return result;
+    }
+
+    static formatThunderstormActivity(raw) {
+        if (!raw) return [];
+        const d = FisbClient.decodeMetar(raw);
+        const parts = [];
+
+        if (d.at_station_ts === 'VC') parts.push('Thunderstorm in vicinity');
+        else if (d.at_station_ts) parts.push('Thunderstorm at station');
+
+        if (d.cb_skies) {
+            for (const sky of d.cb_skies) {
+                const alt = sky.height_ft >= 10000
+                    ? `${Math.round(sky.height_ft / 1000)}k`
+                    : sky.height_ft.toLocaleString();
+                parts.push(`${sky.coverage} ${sky.type} ${alt} ft`);
+            }
+        }
+
+        if (d.thunderstorm_activity) {
+            for (const a of d.thunderstorm_activity) {
+                const freqMap = { OCNL: 'Occasional ', FRQ: 'Frequent ', CONS: 'Continuous ' };
+                const freq = a.frequency ? (freqMap[a.frequency] || '') : '';
+                let desc;
+                if (a.keyword === 'LTG' || a.types.length > 0) {
+                    const typeStr = a.types.length > 0 ? ` (${a.types.join('/')})` : '';
+                    desc = `${freq}Lightning${typeStr}`;
+                } else if (a.keyword === 'TCU') {
+                    desc = `${freq}Towering Cu`;
+                } else {
+                    desc = `${freq}Cumulonimbus`;
+                }
+                if (a.direction === 'OHD' || a.direction === 'OVHD') {
+                    desc += ' overhead';
+                } else if (a.direction === 'ALQDS') {
+                    const prox = a.distant ? ' distant' : a.vicinity ? ' in vicinity' : '';
+                    desc += `${prox} all quadrants`;
+                } else if (a.direction) {
+                    const prox = a.distant ? ' distant' : a.vicinity ? ' in vicinity' : '';
+                    const range = a.dirRange ? `${a.direction}-${a.dirRange}` : a.direction;
+                    desc += `${prox} ${range}`;
+                } else if (a.distant) {
+                    desc += ' distant';
+                } else if (a.vicinity) {
+                    desc += ' in vicinity';
+                }
+                parts.push(desc.trim());
+            }
+        }
+
+        return parts;
     }
 
     // ========== PIREP Parsing ==========

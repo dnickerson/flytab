@@ -8632,6 +8632,12 @@ body {
 .wx-tstorm-low  { color: var(--status-caution); }
 .wx-tstorm-med  { color: #ff8800; }
 .wx-tstorm-high { color: var(--status-danger); }
+.wx-tstm-line {
+    font-family: var(--font-instrument);
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--status-danger);
+}
 .wx-detail-section {
     background: var(--bg-surface);
     border-radius: 8px;
