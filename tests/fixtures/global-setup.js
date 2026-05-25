@@ -2,6 +2,7 @@
 'use strict';
 const { spawn }  = require('child_process');
 const http       = require('http');
+const net        = require('net');
 const fs         = require('fs');
 const path       = require('path');
 
@@ -19,6 +20,22 @@ function spawnServer(cmd, args, label, extraEnv = {}) {
     proc.stdout.on('data', d => process.stdout.write(`[${label}] ${d}`));
     proc.stderr.on('data', d => process.stderr.write(`[${label}] ${d}`));
     return proc;
+}
+
+function waitForTcp(port, timeoutMs = 10_000) {
+    return new Promise((resolve, reject) => {
+        const deadline = Date.now() + timeoutMs;
+        function attempt() {
+            const sock = net.createConnection(port, '127.0.0.1');
+            sock.once('connect', () => { sock.destroy(); resolve(); });
+            sock.once('error', () => {
+                sock.destroy();
+                if (Date.now() > deadline) return reject(new Error(`TCP port ${port} not ready after ${timeoutMs}ms`));
+                setTimeout(attempt, 100);
+            });
+        }
+        attempt();
+    });
 }
 
 function waitForHttp(url, timeoutMs = 5000) {
@@ -41,7 +58,9 @@ module.exports = async function globalSetup() {
     const procs = {};
 
     // Start fake-engine.js (HTTP :8081, WS :8082).
-    // Use ENG_HTTP_PORT=8081 to avoid conflict with the dev web server on :8080.
+    // Port 8080 is used by the dev web server (python3 -m http.server 8080), so
+    // ENG_HTTP_PORT=8081 avoids the conflict.  EngineClient is configured to use
+    // httpPort 8081 via engineHttpPort in the injected test cockpit-config (helpers.js).
     const engine = spawnServer(
         'node', ['tools/fake-engine.js', '86400'], 'engine',
         { ENG_HTTP_PORT: '8081' },
@@ -80,6 +99,14 @@ module.exports = async function globalSetup() {
     } catch (e) {
         engine.kill(); stratux.kill();
         throw new Error(`fake-engine did not start: ${e.message}`);
+    }
+
+    try {
+        await waitForTcp(5678);
+        console.log('  [setup] mock-stratux WS port ready');
+    } catch (e) {
+        engine.kill(); stratux.kill();
+        throw new Error(`mock-stratux did not start: ${e.message}`);
     }
 
     if (homeServer) {

@@ -1,17 +1,18 @@
 /**
  * FlyTab — Engine Monitor WebSocket Client
  * Connects to engine monitor at ws://192.168.10.1:8082/
- * Falls back to HTTP polling at :8080/api/status after 3 WS failures.
+ * Falls back to HTTP polling at :httpPort/api/status (default 8080) after 3 WS failures.
  * Periodically retries WebSocket even when in HTTP fallback mode.
  * Fires: engine:data, engine:connect, engine:disconnect, engine:stale
  */
 
 class EngineClient extends EventTarget {
-    constructor(ip = '192.168.10.1', port = 8082) {
+    constructor(ip = '192.168.10.1', port = 8082, httpPort = 8080) {
         super();
         this._ws = null;
         this._ip = ip;
         this._port = port;
+        this._httpPort = httpPort;
         this._connected = false;
         this._reconnectDelay = 2000;
         this._maxDelay = 30000;
@@ -153,7 +154,7 @@ class EngineClient extends EventTarget {
 
     async _pollHttp() {
         try {
-            const resp = await fetch(`http://${this._ip}:8080/api/status`, { signal: AbortSignal.timeout(3000) });
+            const resp = await fetch(`http://${this._ip}:${this._httpPort}/api/status`, { signal: AbortSignal.timeout(3000) });
             if (!resp.ok) throw new Error('bad status');
             const data = await resp.json();
             this._onData(data);

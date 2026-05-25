@@ -504,7 +504,12 @@ class FlyTabApp {
         }
 
         // Engine client (WebSocket to Pi engine monitor)
-        this.engineClient = new EngineClient();
+        const _engCfg = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.raw : {};
+        this.engineClient = new EngineClient(
+            _engCfg.engineIp       ?? '192.168.10.1',
+            _engCfg.engineWsPort   ?? 8082,
+            _engCfg.engineHttpPort ?? 8080,
+        );
         this.engineClient.connect();
         window.engineClient = this.engineClient;
 

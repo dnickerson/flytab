@@ -54,10 +54,14 @@ const MINIMAL_CYCLE_INFO = JSON.stringify({
  */
 async function injectTestConfig(page) {
     const testConfig = {
-        homeServer:    { base: 'http://localhost:8090' },
-        simMode:       true,
-        simBridgeIp:   '127.0.0.1',
-        simBridgePort: 5678,
+        homeServer:      { base: 'http://localhost:8090' },
+        simMode:         true,
+        simBridgeIp:     '127.0.0.1',
+        simBridgePort:   5678,
+        // fake-engine HTTP runs on 8081 (port 8080 is reserved for the dev web server).
+        // EngineClient reads this via CockpitConfig.raw.engineHttpPort so HTTP
+        // fallback reaches fake-engine instead of the dev server.
+        engineHttpPort:  8081,
     };
 
     // cockpit-config.json is fetched relative to the HTML page (/web/index.html),
