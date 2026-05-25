@@ -28,6 +28,11 @@ module.exports = defineConfig({
             use: {
                 ...devices['Desktop Chrome'],
                 viewport: { width: 1280, height: 800 },
+                // Map the Pi's real IP to localhost so EngineClient's hardcoded
+                // 192.168.10.1:8082 resolves to fake-engine.js on 127.0.0.1:8082.
+                launchOptions: {
+                    args: ['--host-rules=MAP 192.168.10.1 127.0.0.1'],
+                },
             },
         },
     ],
