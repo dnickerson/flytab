@@ -26,6 +26,7 @@ class FisbNexrad {
 
         // Loop mode: when true, suppress live _draw() so RadarLoop playback isn't overwritten
         this._loopMode = false;
+        this._latestDataTime = 0;
 
         // Whether we've already notified the map to switch from internet to FIS-B this session.
         // Reset on addTo() so the notification fires again after radar is re-enabled.
@@ -141,6 +142,10 @@ class FisbNexrad {
     /** Get current block count */
     get blockCount() { return this._blocks.size; }
 
+    getDataAgeMs() {
+        return this._latestDataTime ? Date.now() - this._latestDataTime : null;
+    }
+
     /** Draw the live (current) radar view — for use by RadarLoop when exiting loop mode */
     drawLive() { this._draw(); }
 
@@ -150,6 +155,10 @@ class FisbNexrad {
         if (!msg.NEXRAD?.length) return;
 
         const now = Date.now();
+        const dataTime = msg.LocaltimeReceived
+            ? new Date(msg.LocaltimeReceived).getTime() || now
+            : now;
+        this._latestDataTime = dataTime;
         const blocks = msg.NEXRAD;
 
         for (const block of blocks) {
@@ -170,7 +179,7 @@ class FisbNexrad {
         const lastSnap = this._frameHistory.length > 0
             ? this._frameHistory[this._frameHistory.length - 1].time : 0;
         if (now - lastSnap >= 150000) { // 2.5 minutes
-            this._takeSnapshot(now);
+            this._takeSnapshot(now, dataTime);
         }
 
         // Redraw
@@ -191,15 +200,12 @@ class FisbNexrad {
     }
 
     /** Take a snapshot of current NEXRAD state for radar loop */
-    _takeSnapshot(time) {
-        // Deep copy current blocks (slice intensity arrays to prevent mutation)
+    _takeSnapshot(time, dataTime) {
         const snapshot = new Map();
         for (const [key, block] of this._blocks) {
             snapshot.set(key, { ...block, intensity: block.intensity.slice() });
         }
-        this._frameHistory.push({ time, blocks: snapshot });
-
-        // Trim to max frames
+        this._frameHistory.push({ time, dataTime: dataTime || time, blocks: snapshot });
         while (this._frameHistory.length > this._maxFrames) {
             this._frameHistory.shift();
         }
@@ -635,6 +641,13 @@ class FisbNexrad {
             }
         }
         return clusters;
+    }
+
+    clusterBlocks() { return this._clusterBlocks(this._blocks); }
+
+    clustersForFrame(frameIndex) {
+        if (frameIndex < 0 || frameIndex >= this._frameHistory.length) return [];
+        return this._clusterBlocks(this._frameHistory[frameIndex].blocks);
     }
 
     /**

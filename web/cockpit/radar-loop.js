@@ -242,6 +242,7 @@ class RadarLoop {
                     <button class="radar-btn radar-play" title="Play/Pause">&#9654;</button>
                     <button class="radar-btn radar-next" title="Next frame">&raquo;</button>
                     <span class="radar-time-display">--:--Z</span>
+                    <span class="radar-age-display"></span>
                     <span class="radar-frame-count"></span>
                     <button class="radar-btn radar-refresh" title="Refresh">&#8635;</button>
                 </div>
@@ -278,6 +279,16 @@ class RadarLoop {
         this._playBtn = playBtn;
         this._refreshBtn = refreshBtn;
         this._timeDisplay = el.querySelector('.radar-time-display');
+        this._ageDisplay = el.querySelector('.radar-age-display');
+        if (this._ageDisplay) {
+            Object.assign(this._ageDisplay.style, {
+                fontSize: '11px',
+                fontWeight: '700',
+                marginLeft: '6px',
+                padding: '1px 4px',
+                borderRadius: '3px',
+            });
+        }
         this._frameCountEl = el.querySelector('.radar-frame-count');
         this._sourceBadge = el.querySelector('.radar-source-badge');
 
@@ -412,5 +423,23 @@ class RadarLoop {
             this._frameCountEl.textContent = `${this._frameIndex + 1}/${frames.length}`;
         }
         this._updateSourceBadge();
+
+        if (this._ageDisplay && this._nexrad) {
+            const ageMs = this._nexrad.getDataAgeMs();
+            if (ageMs === null) {
+                this._ageDisplay.textContent = '';
+            } else {
+                const ageMin = Math.round(ageMs / 60000);
+                this._ageDisplay.textContent = `${ageMin}min`;
+                this._ageDisplay.style.background =
+                    ageMin < 5  ? 'rgba(0,200,100,0.25)'  :
+                    ageMin < 10 ? 'rgba(255,170,0,0.25)'  :
+                                  'rgba(255,51,0,0.25)';
+                this._ageDisplay.style.color =
+                    ageMin < 5  ? '#00c864' :
+                    ageMin < 10 ? '#ffaa00' :
+                                  '#ff3300';
+            }
+        }
     }
 }
