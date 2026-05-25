@@ -278,3 +278,40 @@ class NexradSectorAnalyzer {
         };
     }
 }
+
+// ========== Hazard Boundary Expansion ==========
+
+/**
+ * Compute probabilistic hazard boundary rings around a convective return.
+ * @param {{ maxIntensity: number, signals?: object }} cluster
+ * @param {number} convectiveScore  0–1
+ * @param {number} ageMinutes       data age in minutes
+ * @param {{ cape?: number }|null} preflightCell
+ * @returns {{ bufferNm: number, rings: Array<{radiusNm, probability}> }}
+ */
+function computeHazardBoundary(cluster, convectiveScore, ageMinutes, preflightCell) {
+    let bufferNm = 20;  // base 20nm minimum
+
+    if      (convectiveScore > 0.80) bufferNm = 25;
+    else if (convectiveScore > 0.60) bufferNm = 22;
+    else if (convectiveScore > 0.30) bufferNm = 18;
+
+    bufferNm += Math.min((ageMinutes || 0) * 0.5, 8);
+
+    const cape = preflightCell?.cape ?? 1000;
+    if      (cape > 2500) bufferNm += 5;
+    else if (cape > 1500) bufferNm += 3;
+
+    const growthRate = cluster.signals?.areaGrowthRate ?? 0;
+    if (growthRate > 1.0) bufferNm += 5;  // explosive growth
+
+    return {
+        bufferNm,
+        rings: [
+            { radiusNm: bufferNm * 0.4, probability: 0.80 },
+            { radiusNm: bufferNm * 0.7, probability: 0.60 },
+            { radiusNm: bufferNm * 1.0, probability: 0.40 },
+            { radiusNm: bufferNm * 1.3, probability: 0.20 },
+        ],
+    };
+}

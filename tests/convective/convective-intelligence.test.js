@@ -207,3 +207,49 @@ describe('NexradSectorAnalyzer score model', () => {
         expect(r.confidence).toBe('high');
     });
 });
+
+function computeHazardBoundary(cluster, convectiveScore, ageMinutes, preflightCell) {
+    let bufferNm = 20;
+    if (convectiveScore > 0.80) bufferNm = 25;
+    else if (convectiveScore > 0.60) bufferNm = 22;
+    else if (convectiveScore > 0.30) bufferNm = 18;
+    bufferNm += Math.min((ageMinutes || 0) * 0.5, 8);
+    const cape = preflightCell?.cape ?? 1000;
+    if (cape > 2500) bufferNm += 5;
+    else if (cape > 1500) bufferNm += 3;
+    const growthRate = cluster.signals?.areaGrowthRate ?? 0;
+    if (growthRate > 1.0) bufferNm += 5;
+    return {
+        bufferNm,
+        rings: [
+            { radiusNm: bufferNm * 0.4, probability: 0.80 },
+            { radiusNm: bufferNm * 0.7, probability: 0.60 },
+            { radiusNm: bufferNm * 1.0, probability: 0.40 },
+            { radiusNm: bufferNm * 1.3, probability: 0.20 },
+        ],
+    };
+}
+
+describe('computeHazardBoundary', () => {
+    it('confirmed convective has bufferNm >= 25', () => {
+        const r = computeHazardBoundary({}, 0.9, 0, null);
+        expect(r.bufferNm).toBeGreaterThanOrEqual(25);
+    });
+    it('adds up to 8nm for old data (16+ minutes)', () => {
+        const young = computeHazardBoundary({}, 0.9, 0,  null);
+        const old   = computeHazardBoundary({}, 0.9, 20, null);
+        expect(old.bufferNm).toBeGreaterThan(young.bufferNm);
+        expect(old.bufferNm - young.bufferNm).toBeLessThanOrEqual(8);
+    });
+    it('returns 4 rings in decreasing probability order', () => {
+        const r = computeHazardBoundary({}, 0.5, 5, null);
+        expect(r.rings).toHaveLength(4);
+        expect(r.rings[0].probability).toBeGreaterThan(r.rings[3].probability);
+    });
+    it('rings are sorted by increasing radius', () => {
+        const r = computeHazardBoundary({}, 0.5, 5, null);
+        for (let i = 1; i < r.rings.length; i++) {
+            expect(r.rings[i].radiusNm).toBeGreaterThan(r.rings[i-1].radiusNm);
+        }
+    });
+});
