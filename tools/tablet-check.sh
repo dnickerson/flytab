@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # FlyTab tablet pre-flight check — runs CDP assertions against the live WebView.
 # Usage: bash tools/tablet-check.sh
-# Requires: adb forward tcp:9222 localabstract:webview_devtools_remote_$(adb shell pidof app.flywhere.flytab)
+# Requires: adb forward tcp:9223 localabstract:webview_devtools_remote_$(adb shell pidof app.flywhere.flytab)
 
 set -u
 
