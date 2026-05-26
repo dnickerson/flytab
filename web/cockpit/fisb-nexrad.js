@@ -350,12 +350,16 @@ class FisbNexrad {
     /** Enter loop mode (suppress live draws) */
     enterLoopMode() {
         this._loopMode = true;
+        DiagLog.log('radar', `FisbNexrad.enterLoopMode: active=${this._active} hasCtx=${!!this._ctx}`);
         // Clear stale canvas so internet tile frames show through unobstructed
         if (this._ctx) this._ctx.clearRect(0, 0, this._canvas.width, this._canvas.height);
     }
 
     /** Exit loop mode (resume live draws) */
-    exitLoopMode() { this._loopMode = false; }
+    exitLoopMode() {
+        DiagLog.log('radar', `FisbNexrad.exitLoopMode`);
+        this._loopMode = false;
+    }
 
     // ========== CB Building Detection ==========
 

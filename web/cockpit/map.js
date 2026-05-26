@@ -40,6 +40,7 @@ class InetRadarSource {
     get hasData() { return this._frames.length > 0; }
     get blockCount() { return 0; }
     get frameHistory() { return this._frames; }
+    getDataAgeMs() { return null; }
 
     addTo() {}  // no-op — map already stored in constructor
 

@@ -69,6 +69,7 @@ class RadarLoop {
         }
 
         const frames = this._nexrad ? this._nexrad.frameHistory : [];
+        DiagLog.log('radar', `show: nexrad=${this._nexrad?.sourceType ?? 'null'} fisbRenderer=${!!this._fisbRenderer} frames=${frames.length}`);
 
         // Always suppress the FIS-B canvas while the loop is open. The canvas sits above
         // tile layers in the overlay pane and would overwrite internet tile frames.
@@ -156,6 +157,7 @@ class RadarLoop {
     }
 
     play() {
+        DiagLog.log('radar', `play: active=${this._active} playing=${this._playing} frames=${this._nexrad?.frameHistory?.length ?? 'null'}`);
         if (!this._active || this._playing) return;
         const frames = this._nexrad ? this._nexrad.frameHistory : [];
         if (frames.length === 0) return;
@@ -163,6 +165,7 @@ class RadarLoop {
         this._playing = true;
         this._updatePlayBtn();
         this._tick();
+        DiagLog.log('radar', `play: started tick, frameIndex=${this._frameIndex}`);
     }
 
     pause() {
@@ -210,7 +213,10 @@ class RadarLoop {
     }
 
     _tick() {
-        if (!this._playing || !this._active) return;
+        if (!this._playing || !this._active) {
+            DiagLog.log('radar', `_tick: aborted playing=${this._playing} active=${this._active}`);
+            return;
+        }
 
         this._timer = setTimeout(() => {
             if (!this._playing) return;
@@ -332,6 +338,7 @@ class RadarLoop {
         prevBtn.addEventListener('click', (e) => { e.stopPropagation(); this.prevFrame(); });
         playBtn.addEventListener('click', (e) => {
             e.stopPropagation();
+            DiagLog.log('radar', `play-btn click: playing=${this._playing} active=${this._active} frames=${this._nexrad?.frameHistory?.length ?? 'null'}`);
             if (this._playing) { this.pause(); } else { this.play(); }
         });
         nextBtn.addEventListener('click', (e) => { e.stopPropagation(); this.nextFrame(); });
@@ -342,6 +349,7 @@ class RadarLoop {
             btn.addEventListener('touchend', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
+                DiagLog.log('radar', `touchend: btn=${btn.className} playing=${this._playing}`);
                 btn.click();
             }, { passive: false });
         });
