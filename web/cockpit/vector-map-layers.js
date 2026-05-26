@@ -338,8 +338,11 @@ class VectorMapLayers {
                 const ceiling_ft = ceilCloud?.base ?? null;
                 // obs.obsTime is Unix seconds from AWC API — convert to ISO for age display
                 const observed_at = obs.obsTime ? new Date(obs.obsTime * 1000).toISOString() : null;
+                const raw = obs.rawOb || '';
+                const cbDecoded = (typeof FisbClient !== 'undefined' && raw)
+                    ? FisbClient.decodeMetar(raw) : {};
                 this._internetMetars.set(icao, {
-                    raw: obs.rawOb || '',
+                    raw,
                     _obsTime: obs.obsTime || 0,  // Unix seconds — used to deduplicate multi-hour response
                     decoded: {
                         flight_category,
@@ -353,6 +356,10 @@ class VectorMapLayers {
                         dewpoint_c: obs.dewp,
                         altimeter: obs.altim ? +(obs.altim / 33.8639).toFixed(2) : null, // AWC altim is hPa → convert to inHg
                         observed_at,  // actual observation time, not fetch time
+                        ...(cbDecoded.cb_skies           && { cb_skies:           cbDecoded.cb_skies }),
+                        ...(cbDecoded.cb_directions      && { cb_directions:      cbDecoded.cb_directions }),
+                        ...(cbDecoded.thunderstorm_activity && { thunderstorm_activity: cbDecoded.thunderstorm_activity }),
+                        ...(cbDecoded.at_station_ts      && { at_station_ts:      cbDecoded.at_station_ts }),
                     },
                     received_at: now,
                     source: 'internet',
@@ -363,6 +370,7 @@ class VectorMapLayers {
                              || flight_category;
                     this._upsertWxDot(icao, cat);
                     this._upsertWxLabel(icao);
+                    this._upsertCbTcuMarker(icao);
                 }
                 // Notify open popup so it can live-refresh if FIS-B isn't active
                 if (this._onInternetMetar) this._onInternetMetar(icao, this._internetMetars.get(icao));
