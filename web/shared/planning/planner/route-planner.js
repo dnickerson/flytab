@@ -172,6 +172,113 @@ export class RoutePlanner {
     }
 
     /**
+     * Plan a route through an ordered sequence of required waypoints (pins).
+     * Runs A* for each consecutive pin pair and merges the sub-paths.
+     *
+     * @param {Array<{id:string, lat:number, lon:number}>} pins
+     *   Ordered waypoints — first is departure, last is destination.
+     *   All must be pre-resolved (caller supplies lat/lon).
+     * @param {object} [opts]  Same options as plan() except departure/destination.
+     * @returns {Promise<import('../types/flight-plan.js').FlightPlan>}
+     */
+    async planVia(pins, opts = {}) {
+        if (!pins || pins.length < 2) throw new PlanError('planVia requires at least 2 pins');
+
+        const profile = (await this._adapters.profiles.getActive?.()) || RV9A_FALLBACK;
+        const routingModeOrNull = opts.routingMode
+            || (profile.equipment?.tAirways ? 'any' : 'v-airways');
+        const routingMode = /** @type {import('./airway-graph.js').RoutingMode} */ (routingModeOrNull);
+
+        const graph = await this._getGraph(routingMode);
+
+        const AIRWAY_RE = /^[VTJQ]\d+[A-Z]?$/;
+        const excludeFixIds  = new Set();
+        const excludeAirways = new Set();
+        const avoidanceConstraints = [];
+        for (const a of (opts.avoidance || [])) {
+            const id = typeof a === 'string' ? a : a.id;
+            if (typeof a !== 'string' && a.polygon?.length) {
+                avoidanceConstraints.push(/** @type {import('./avoidance.js').AvoidanceConstraint} */ (a));
+            } else if (AIRWAY_RE.test(id)) {
+                excludeAirways.add(id);
+            } else {
+                excludeFixIds.add(id);
+            }
+        }
+        const penalty = buildAvoidancePenalty(avoidanceConstraints);
+        const excl = { excludeFixIds, excludeAirways };
+
+        /** @type {Array<{id:string, lat:number, lon:number, airway?:string}>} */
+        const mergedWaypoints = [];
+
+        for (let i = 0; i < pins.length - 1; i++) {
+            const a = pins[i];
+            const b = pins[i + 1];
+
+            graph.clearDirectEdges();
+
+            // Inject pin coordinates so A* can start/end at non-airway points
+            graph.coords[a.id] = graph.coords[a.id] || { lat: a.lat, lon: a.lon };
+            graph.coords[b.id] = graph.coords[b.id] || { lat: b.lat, lon: b.lon };
+
+            // Fan out from both pin endpoints onto the airway network
+            for (const f of graph.nearestFixes(a.lat, a.lon, 60, 5)) {
+                const c = graph.coords[f.id];
+                graph.addDirectEdge(a.id, a.lat, a.lon, f.id, c.lat, c.lon);
+            }
+            for (const f of graph.nearestFixes(b.lat, b.lon, 60, 5)) {
+                const c = graph.coords[f.id];
+                graph.addDirectEdge(b.id, b.lat, b.lon, f.id, c.lat, c.lon);
+            }
+
+            let subPath = this._aStar(graph, a.id, b.id, penalty, excl);
+            if (!subPath) {
+                subPath = this._aStar(graph, a.id, b.id, penalty, { corridorNm: 300, ...excl });
+            }
+            if (!subPath) {
+                subPath = this._aStar(graph, a.id, b.id, penalty, { corridorNm: Infinity, ...excl });
+            }
+
+            if (!subPath) {
+                graph.clearDirectEdges();
+                throw new DestinationUnreachableError(`No route from ${a.id} to ${b.id}`);
+            }
+
+            // Append segment — skip first node on i>0 to dedup the shared junction
+            const startIdx = i === 0 ? 0 : 1;
+            for (let j = startIdx; j < subPath.length; j++) {
+                const node = subPath[j];
+                const c = graph.coords[node.id] || { lat: a.lat, lon: a.lon };
+                mergedWaypoints.push({
+                    id:  node.id,
+                    lat: c.lat,
+                    lon: c.lon,
+                    ...(node.airway ? { airway: node.airway } : {}),
+                });
+            }
+        }
+
+        graph.clearDirectEdges();
+
+        const flightPlan = {
+            departure:   pins[0].id,
+            destination: pins[pins.length - 1].id,
+            cruiseAltFt: opts.cruiseAltFt ?? 6000,
+            reserveGal:  opts.reserveGal ?? profile.reserve_gal ?? 10,
+            waypoints:   mergedWaypoints,
+            options: {
+                routingMode,
+                maxLegHrs:    opts.maxLegHrs    ?? 2.0,
+                selfServeOnly: !!opts.selfServeOnly,
+                avoidance: (opts.avoidance || []).map(a => typeof a === 'string' ? a : a.id),
+            },
+        };
+
+        const computed = this.recomputeLegs(flightPlan, profile, { winds: opts.winds });
+        return this._insertFuelStops(computed, profile);
+    }
+
+    /**
      * Parse a route string. Returns a fully-expanded plan with all interior
      * airway fixes resolved.
      * @param {string} str
