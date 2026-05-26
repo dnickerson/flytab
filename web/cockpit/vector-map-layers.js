@@ -568,8 +568,8 @@ class VectorMapLayers {
 
     /**
      * Add or update CB/TCU map markers for an airport based on decoded METAR.
-     * Plots a badge at the projected position (20nm nearby, 50nm DSNT) and a
-     * dashed storm-motion arrow using FIS-B winds aloft at FL180.
+     * One label per keyword type (CB/TCU/LTG) placed at the reporting airport,
+     * with directions appended: "LTG SE·S", "CB NE", "TCU OHD".
      */
     _upsertCbTcuMarker(icao) {
         const existing = this._cbTcuMarkers.get(icao);
@@ -586,58 +586,52 @@ class VectorMapLayers {
         const decoded = entry?.decoded;
         if (!decoded) return;
 
-        const cbDirs = decoded.cb_directions || [];
-        const cbSkies = decoded.cb_skies || [];
-        if (cbDirs.length === 0 && cbSkies.length === 0) return;
+        const tsActivity = decoded.thunderstorm_activity || [];
+        const cbSkies   = decoded.cb_skies || [];
+        if (tsActivity.length === 0 && cbSkies.length === 0) return;
 
         const newMarkers = [];
 
-        const plotAt = (lat, lon, type, reason) => {
-            const color = type === 'CB' ? '#ff4400' : '#ff9900';
-            const m = L.marker([lat, lon], {
+        const addMarker = (label, colorType, reason) => {
+            const color = colorType === 'TCU' ? '#ff9900' : '#ff4400';
+            const m = L.marker([pos.lat, pos.lon], {
                 icon: L.divIcon({
                     className: 'cb-tcu-label',
-                    html: `<div class="cb-tcu-text" style="color:${color}">${type}</div>`,
+                    html: `<div class="cb-tcu-text" style="color:${color}">${label}</div>`,
                     iconSize: [0, 0],
                     iconAnchor: [0, 8],
                 }),
                 interactive: false,
                 zIndexOffset: 60,
             });
-            m._cbData = { icao, type, reason, raw: entry?.raw, observed_at: decoded?.observed_at };
+            m._cbData = { icao, type: colorType, reason, raw: entry?.raw, observed_at: decoded?.observed_at };
             m.addTo(this._cbTcuLayer);
             newMarkers.push(m);
-
-            // Storm motion arrow — 15-min at 75% of FL180 wind
-            const wind = this._fisbClient?.getNearestWind(lat, lon, 18000);
-            if (wind && wind.spd > 5) {
-                const stormDir = (wind.dir + 180) % 360;
-                const distNm = wind.spd * 0.75 * (15 / 60);
-                const tip = FisbClient._destPoint(lat, lon, stormDir, distNm);
-                const arrow = L.polyline([[lat, lon], [tip.lat, tip.lon]], {
-                    color, weight: 2.5, opacity: 0.8, dashArray: '5,3', interactive: false,
-                });
-                arrow.addTo(this._cbTcuLayer);
-                newMarkers.push(arrow);
-            }
         };
 
-        if (cbDirs.length > 0) {
-            for (const d of cbDirs) {
-                if (d.direction === 'ALQDS') {
-                    plotAt(pos.lat, pos.lon, d.type, { keyword: d.type, direction: 'ALQDS', distant: false, vicinity: false });
-                } else {
-                    const bearing = FisbClient._compassToDeg(d.direction);
-                    if (bearing == null) continue;
-                    const distNm = d.distant ? 50 : 20;
-                    const pt = FisbClient._destPoint(pos.lat, pos.lon, bearing, distNm);
-                    plotAt(pt.lat, pt.lon, d.type, { keyword: d.type, direction: d.direction, distant: d.distant, vicinity: false });
-                }
+        if (tsActivity.length > 0) {
+            // Group by keyword (CB / TCU / LTG), one label per group
+            const byKeyword = new Map();
+            for (const a of tsActivity) {
+                if (!byKeyword.has(a.keyword)) byKeyword.set(a.keyword, []);
+                byKeyword.get(a.keyword).push(a);
+            }
+            for (const [keyword, activities] of byKeyword) {
+                const colorType = keyword === 'TCU' ? 'TCU' : 'CB';
+                const dirs = [...new Set(activities.map(a => a.direction).filter(Boolean))];
+                const dirStr = dirs.join('·');
+                const label = dirStr ? `${keyword} ${dirStr}` : keyword;
+                addMarker(label, colorType, {
+                    keyword, directions: dirs,
+                    distant:  activities.some(a => a.distant),
+                    vicinity: activities.some(a => a.vicinity),
+                });
             }
         } else {
-            // Sky-group CB/TCU only (no direction remark) — plot at airport = overhead
-            const types = [...new Set(cbSkies.map(s => s.type))];
-            for (const type of types) plotAt(pos.lat, pos.lon, type, { keyword: type, fromSkyGroup: true });
+            // Sky-group only (no remark direction) — show type at airport
+            for (const type of [...new Set(cbSkies.map(s => s.type))]) {
+                addMarker(type, type, { keyword: type, fromSkyGroup: true });
+            }
         }
 
         if (newMarkers.length > 0) this._cbTcuMarkers.set(icao, newMarkers);
@@ -1566,14 +1560,17 @@ class VectorMapLayers {
         let where = '';
         if (reason?.fromSkyGroup) {
             where = 'Overhead (sky group)';
-        } else if (reason?.direction === 'ALQDS') {
-            where = 'All quadrants';
-        } else if (reason?.direction === 'OHD' || reason?.direction === 'OVHD') {
-            where = 'Overhead';
         } else {
-            const prox = reason?.distant ? 'Distant' : reason?.vicinity ? 'In vicinity' : 'Nearby';
-            const dir = reason?.direction || '';
-            where = dir ? `${prox} · ${dir}` : prox;
+            const dirs = reason?.directions || (reason?.direction ? [reason.direction] : []);
+            const overhead = dirs.some(d => d === 'OHD' || d === 'OVHD');
+            const allQuads = dirs.includes('ALQDS');
+            if (overhead)  where = 'Overhead';
+            else if (allQuads) where = 'All quadrants';
+            else {
+                const prox = reason?.distant ? 'Distant' : reason?.vicinity ? 'In vicinity' : 'Nearby';
+                const dirStr = dirs.join(' and ');
+                where = dirStr ? `${prox} · ${dirStr}` : prox;
+            }
         }
 
         const time = observed_at
