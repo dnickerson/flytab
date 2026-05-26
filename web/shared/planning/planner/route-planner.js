@@ -27,6 +27,8 @@ import { PlanError, DestinationUnreachableError } from './route-planner-errors.j
  * @property {Clock}          clock
  */
 
+const AIRWAY_RE = /^[VTJQ]\d+[A-Z]?$/;
+
 const RV9A_FALLBACK = {
     id: 'rv9a-default',
     tailNumber: '',
@@ -118,7 +120,6 @@ export class RoutePlanner {
         // Normalize avoidance: accept both string[] and {id:string}[]
         // Airway IDs (V/T/J/Q + digits) go into the hard-exclusion set; everything
         // else is treated as a fix ID to skip during A* neighbour expansion.
-        const AIRWAY_RE = /^[VTJQ]\d+[A-Z]?$/;
         const avoidanceConstraints = [];
         const excludeFixIds   = new Set();
         const excludeAirways  = new Set();
@@ -191,7 +192,6 @@ export class RoutePlanner {
 
         const graph = await this._getGraph(routingMode);
 
-        const AIRWAY_RE = /^[VTJQ]\d+[A-Z]?$/;
         const excludeFixIds  = new Set();
         const excludeAirways = new Set();
         const avoidanceConstraints = [];
@@ -231,6 +231,13 @@ export class RoutePlanner {
                 graph.addDirectEdge(b.id, b.lat, b.lon, f.id, c.lat, c.lon);
             }
 
+            // For direct-only modes the airway graph is empty — add an explicit
+            // a→b direct edge or A* has no path.
+            const directOnly = routingMode === 'gps-direct' || routingMode === 'vors-direct';
+            if (directOnly) {
+                graph.addDirectEdge(a.id, a.lat, a.lon, b.id, b.lat, b.lon);
+            }
+
             let subPath = this._aStar(graph, a.id, b.id, penalty, excl);
             if (!subPath) {
                 subPath = this._aStar(graph, a.id, b.id, penalty, { corridorNm: 300, ...excl });
@@ -248,7 +255,8 @@ export class RoutePlanner {
             const startIdx = i === 0 ? 0 : 1;
             for (let j = startIdx; j < subPath.length; j++) {
                 const node = subPath[j];
-                const c = graph.coords[node.id] || { lat: a.lat, lon: a.lon };
+                const c = graph.coords[node.id];
+                if (!c) continue;   // should never happen — coords injected above
                 mergedWaypoints.push({
                     id:  node.id,
                     lat: c.lat,
