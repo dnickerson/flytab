@@ -17,14 +17,25 @@ class ConvectiveDisplay {
         this._beamAnnotations = [];
         this._active = false;
         this._ageMs  = null;
+        this._frameCount = 0;
+        this._statusEl   = null;
     }
 
     setActive(on) {
         this._active = on;
-        if (!on) this._clear();
+        if (on) {
+            this._mountStatus();
+            if (this._statusEl) this._statusEl.style.display = '';
+            this._updateStatus(0);
+        } else {
+            this._clear();
+            if (this._statusEl) this._statusEl.style.display = 'none';
+        }
     }
 
     setAgeMs(ageMs) { this._ageMs = ageMs; }
+
+    setFrameCount(n) { this._frameCount = n; }
 
     /**
      * Re-render all convective returns on the map.
@@ -36,6 +47,7 @@ class ConvectiveDisplay {
         if (!this._active || !this._map) return;
 
         const ageMinutes = this._ageMs != null ? this._ageMs / 60000 : 0;
+        let qualifiedCount = 0;
 
         for (const { cluster, analysis } of results) {
             if (analysis.score === null) continue;
@@ -43,6 +55,7 @@ class ConvectiveDisplay {
             const category = getConvectiveCategory(analysis.score);
             if (category === 'STRATIFORM') continue;
 
+            qualifiedCount++;
             const [lat, lon] = cluster.centroid;
             const boundary = computeHazardBoundary(cluster, analysis.score, ageMinutes, null);
 
@@ -55,6 +68,43 @@ class ConvectiveDisplay {
                 if (warning) this._renderBeamAnnotation(lat, lon, warning);
             }
         }
+
+        this._updateStatus(qualifiedCount);
+    }
+
+    _mountStatus() {
+        if (this._statusEl || !this._map) return;
+        const container = this._map.getContainer();
+        this._statusEl = document.createElement('div');
+        this._statusEl.className = 'conv-intel-status';
+        Object.assign(this._statusEl.style, {
+            position:      'absolute',
+            bottom:        '72px',
+            left:          '8px',
+            zIndex:        '950',
+            display:       'none',
+            pointerEvents: 'none',
+        });
+        container.appendChild(this._statusEl);
+    }
+
+    _updateStatus(qualifiedCount) {
+        if (!this._statusEl) return;
+        let text, color;
+        if (this._frameCount < 2) {
+            text  = `CONV INTEL — COLLECTING (${this._frameCount} frame${this._frameCount !== 1 ? 's' : ''}, need 2)`;
+            color = '#999999';
+        } else if (qualifiedCount === 0) {
+            text  = `CONV INTEL — NO CONVECTION (${this._frameCount} frames)`;
+            color = '#4488CC';
+        } else {
+            text  = `CONV INTEL — ${qualifiedCount} CLUSTER${qualifiedCount !== 1 ? 'S' : ''} (${this._frameCount} frames)`;
+            color = '#FF6600';
+        }
+        this._statusEl.innerHTML =
+            `<div style="background:rgba(0,0,0,0.72);color:${color};` +
+            `font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:700;` +
+            `padding:3px 7px;border-radius:3px;white-space:nowrap">&#x26A1; ${text}</div>`;
     }
 
     _renderRings(lat, lon, boundary, category) {

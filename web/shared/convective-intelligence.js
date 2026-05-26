@@ -231,7 +231,7 @@ class NexradSectorAnalyzer {
             return best;
         }).filter(Boolean);
 
-        if (matched.length < 3) {
+        if (matched.length < 2) {
             return { score: null, confidence: 'insufficient_data', signals: { framesAnalyzed: matched.length } };
         }
 
@@ -267,7 +267,7 @@ class NexradSectorAnalyzer {
 
         return {
             score: Math.min(rawScore, 1.0),
-            confidence: matched.length >= 5 ? 'high' : 'moderate',
+            confidence: matched.length >= 5 ? 'high' : matched.length >= 3 ? 'moderate' : 'low',
             signals: {
                 areaGrowthRate,
                 dbzGrowthRate,
@@ -544,13 +544,20 @@ class ConvectiveIntelligenceEngine {
     get preflightStaleness() { return this._preflight.getStaleness(); }
 
     _runAnalysis() {
-        const analysis = this._analyzer.analyze();
+        const frameCount = this._nexrad.frameHistory.length;
+        const analysis   = this._analyzer.analyze();
         this._lastAnalysis = analysis;
+
+        const qualified = analysis.filter(({ analysis: a }) => (a.score ?? 0) >= 0.30).length;
+        const maxScore  = analysis.reduce((mx, { analysis: a }) => Math.max(mx, a.score ?? 0), 0);
+        DiagLog.log('convective',
+            `frames=${frameCount} clusters=${analysis.length} maxScore=${maxScore.toFixed(2)} qualified=${qualified}`);
 
         const sit = this._stratux.situation;
         const aircraft = sit ? { lat: sit.lat, lon: sit.lon, groundspeedKts: sit.ground_speed } : null;
 
         if (this._display) {
+            this._display.setFrameCount(frameCount);
             this._display.setAgeMs(this._nexrad.getDataAgeMs());
             this._display.update(analysis, aircraft);
         }
