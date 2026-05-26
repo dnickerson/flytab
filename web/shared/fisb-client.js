@@ -637,6 +637,17 @@ class FisbClient extends EventTarget {
                 if (direction) {
                     cbDirs.push({ type: keyM[1] === 'LTG' ? 'CB' : keyM[1], distant, direction });
                 }
+                // Capture additional "AND <dir>" directions on the same remark token
+                // e.g. "LTG DSNT SE AND S" — SE is matched above, AND S is captured here
+                let andRem = rmk.slice(tsM.index + tsM[0].length);
+                const andDirPat = /^\s+AND\s+(NE|NW|SE|SW|N|E|S|W)\b/;
+                let andM;
+                while ((andM = andDirPat.exec(andRem)) !== null) {
+                    const addDir = andM[1];
+                    tsActivity.push({ keyword: keyM[1], frequency: freqM ? freqM[1] : null, types: typeMs, distant, vicinity, direction: addDir, dirRange: null });
+                    cbDirs.push({ type: keyM[1] === 'LTG' ? 'CB' : keyM[1], distant, direction: addDir });
+                    andRem = andRem.slice(andM[0].length);
+                }
             }
             if (tsActivity.length) result.thunderstorm_activity = tsActivity;
             if (cbDirs.length) result.cb_directions = cbDirs;
