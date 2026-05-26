@@ -723,12 +723,13 @@ class FisbNexrad {
             const hull = this._convexHull([...cell.points, ...lightPoints]);
             if (hull.length < 3) continue;
 
-            // Orange for moderate growth; red-orange for rapid growth or new heavy echo
+            // Cyan outline stands out against red/orange NEXRAD blobs and convective rings.
+            // Label retains warm-color severity coding; polygon stroke is purely "find me on the map."
             const isRapid = cell.growthRate >= 0.5 || cell.gainedHighIntensity;
-            const color = isRapid ? '#ff4400' : '#ff9900';
+            const labelColor = isRapid ? '#ff4400' : '#ff9900';
 
             const poly = L.polygon(hull, {
-                color, weight: 2, fillColor: color, fillOpacity: 0.08,
+                color: '#00e5ff', weight: 4, fillColor: '#00e5ff', fillOpacity: 0.08,
                 dashArray: '8,5', interactive: false,
             }).addTo(this._map);
             this._cbOverlays.push(poly);
@@ -737,7 +738,7 @@ class FisbNexrad {
             const marker = L.marker(center, {
                 icon: L.divIcon({
                     className:  'cb-build-label',
-                    html:       `<div class="cb-build-text" style="color:${color}">${isRapid ? 'CB↑↑' : 'CB↑'}</div>`,
+                    html:       `<div class="cb-build-text" style="color:${labelColor}">${isRapid ? 'CB↑↑' : 'CB↑'}</div>`,
                     iconSize:   [0, 0],
                     iconAnchor: [0, 8],
                 }),
@@ -752,7 +753,7 @@ class FisbNexrad {
                 const distNm = wind.speed * 0.75 * (15 / 60);
                 const tip = FisbClient._destPoint(center[0], center[1], stormDir, distNm);
                 const arrow = L.polyline([[center[0], center[1]], [tip.lat, tip.lon]], {
-                    color, weight: 3, opacity: 0.85, interactive: false,
+                    color: '#00e5ff', weight: 3, opacity: 0.85, interactive: false,
                 }).addTo(this._map);
                 this._cbOverlays.push(arrow);
             }
