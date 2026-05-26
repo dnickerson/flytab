@@ -1637,24 +1637,25 @@ class VectorMapLayers {
             }
         };
 
-        // We need the original data objects. Store them on the markers.
-        // Check airports (highest priority, check first)
-        for (const [id, marker] of this._airportMarkers) {
-            const markerPt = this._map.latLngToContainerPoint(marker.getLatLng());
-            const dist = containerPt.distanceTo(markerPt);
-            if (dist < bestDist) {
-                bestDist = dist;
-                best = { type: 'airport', data: marker._aptData, marker, dist };
-            }
-        }
-
-        // Check navaids
+        // Navaids (VOR/VORTAC/VOR-DME) checked first — highest priority for routing.
+        // An airport that is strictly closer will still win, but co-located VORs
+        // beat their associated airport on any tie.
         for (const [id, marker] of this._navaidMarkers) {
             const markerPt = this._map.latLngToContainerPoint(marker.getLatLng());
             const dist = containerPt.distanceTo(markerPt);
             if (dist < bestDist) {
                 bestDist = dist;
                 best = { type: 'navaid', data: marker._navData, marker, dist };
+            }
+        }
+
+        // Airports — only win if strictly closer than any navaid found above.
+        for (const [id, marker] of this._airportMarkers) {
+            const markerPt = this._map.latLngToContainerPoint(marker.getLatLng());
+            const dist = containerPt.distanceTo(markerPt);
+            if (dist < bestDist) {
+                bestDist = dist;
+                best = { type: 'airport', data: marker._aptData, marker, dist };
             }
         }
 
