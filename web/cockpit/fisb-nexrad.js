@@ -32,6 +32,10 @@ class FisbNexrad {
         // Reset on addTo() so the notification fires again after radar is re-enabled.
         this._notifiedMap = false;
 
+        // Tracks whether we've fired the "loop ready" notification for this session.
+        // Reset when radar is toggled so the switch fires again after re-enable.
+        this._loopReadyFired = false;
+
         // Bind
         this._onNexrad = (e) => this._handleNexrad(e.detail);
         this._onMove = () => { if (!this._loopMode) this._draw(); };
@@ -71,7 +75,8 @@ class FisbNexrad {
         if (this._active) return; // already attached
         this._map = map;
         this._active = true;
-        this._notifiedMap = false; // reset so notification fires for this radar session
+        this._notifiedMap   = false; // reset so notification fires for this radar session
+        this._loopReadyFired = false; // reset so loop-ready switch fires again
 
         // Re-register listener — remove first to prevent double-registration on re-enable
         this._fisb.removeEventListener('fisb:nexrad', this._onNexrad);
@@ -99,8 +104,9 @@ class FisbNexrad {
     /** Remove overlay from map */
     remove() {
         if (!this._active) return; // already detached
-        this._active = false;
-        this._notifiedMap = false;
+        this._active         = false;
+        this._notifiedMap    = false;
+        this._loopReadyFired = false;
         if (this._purgeTimer) { clearInterval(this._purgeTimer); this._purgeTimer = null; }
         this._fisb.removeEventListener('fisb:nexrad', this._onNexrad);
         if (this._canvas && this._canvas.parentNode) {
@@ -180,10 +186,16 @@ class FisbNexrad {
             ? this._frameHistory[this._frameHistory.length - 1].time : 0;
         if (now - lastSnap >= 150000) { // 2.5 minutes
             this._takeSnapshot(now, dataTime);
+            // Notify map to switch the loop source to FIS-B once we have enough frames to animate.
+            // Two frames = minimum for visible animation. Fire once per radar session.
+            if (!this._loopReadyFired && this._frameHistory.length >= 2 && this._map) {
+                this._loopReadyFired = true;
+                window.app?.cockpitMap?.onFisbNexradLoopReady?.();
+            }
         }
 
-        // Redraw
-        if (this._active) this._draw();
+        // Redraw live view — suppressed in loop mode so historical frames aren't overwritten
+        if (this._active && !this._loopMode) this._draw();
 
         // CB building overlay — once we have a historical snapshot to compare against,
         // switch from internet sampling (if active) to FIS-B mode
@@ -192,7 +204,7 @@ class FisbNexrad {
             this._updateCbFromFisb();
         }
 
-        // Notify map to switch from internet → FIS-B on first blocks of each radar session
+        // Notify map to dim the internet tile once FIS-B has live data
         if (!this._notifiedMap && this._blocks.size > 0 && this._map) {
             this._notifiedMap = true;
             window.app?.cockpitMap?.onFisbNexradData?.();

@@ -750,8 +750,8 @@ class CockpitMap {
             // Activate FIS-B NEXRAD canvas overlay first so _active is correct below
             if (this._fisbNexrad) this._fisbNexrad.addTo(this.map);
 
-            // Internet tile — background when FIS-B active, primary when not
             const fisbHasBlocks = (this._fisbNexrad?.blockCount ?? 0) > 0;
+            // Internet tile — dimmed when FIS-B has live data, full opacity otherwise
             this.radarLayer = L.tileLayer(
                 'https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913/{z}/{x}/{y}.png',
                 {
@@ -765,11 +765,18 @@ class CockpitMap {
             this.radarLayer.addTo(this.map);
             // Tell FisbNexrad about the internet tile layer so CB building can sample it
             if (this._fisbNexrad) this._fisbNexrad.setCbInternetLayer(this.radarLayer);
-            // Internet radar source — RadarLoop falls back to this when FIS-B has no data
+            // Internet source — always used as the initial loop source so playback works
+            // immediately (12 IEM frames) regardless of FIS-B frame history.
             this._inetRadarSource = new InetRadarSource(this.map, this.radarLayer);
-            // Use FIS-B if it already has blocks; otherwise fall back to internet
             if (this._radarLoop) {
-                this._radarLoop.setNexrad(fisbHasBlocks ? this._fisbNexrad : this._inetRadarSource);
+                // Start with internet tiles — works right away with 12 frames.
+                // onFisbNexradLoopReady() will switch to FIS-B once it has 2+ frames.
+                this._radarLoop.setNexrad(this._inetRadarSource);
+                // If FIS-B was running before radar was enabled and already has enough frames,
+                // switch immediately rather than waiting for the next snapshot event.
+                if ((this._fisbNexrad?.frameHistory.length ?? 0) >= 2) {
+                    this.onFisbNexradLoopReady();
+                }
             }
         } else if (!on && this.radarLayer) {
             if (this._fisbNexrad) {
@@ -786,14 +793,22 @@ class CockpitMap {
     }
 
     /**
-     * Called by FisbNexrad when it receives its first data block.
-     * Switches the radar loop source from internet to FIS-B.
+     * Called by FisbNexrad when it receives its first live data block.
+     * Dims the background internet tile — loop source stays on internet until
+     * onFisbNexradLoopReady() fires (2+ historical frames available).
      */
     onFisbNexradData() {
-        if (this._radarLoop && this._fisbNexrad && this._inetRadarSource) {
+        if (this.radarLayer) this.radarLayer.setOpacity(0.3);
+    }
+
+    /**
+     * Called by FisbNexrad when it has accumulated 2+ historical frames —
+     * enough for visible animation.  Switches the radar loop source from the
+     * internet tile fallback to the FIS-B canvas renderer.
+     */
+    onFisbNexradLoopReady() {
+        if (this._radarLoop && this._fisbNexrad) {
             this._radarLoop.setNexrad(this._fisbNexrad);
-            // Dim the background tile now that FIS-B is the primary source
-            if (this.radarLayer) this.radarLayer.setOpacity(0.3);
         }
     }
 
