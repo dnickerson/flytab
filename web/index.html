@@ -148,6 +148,18 @@
     <!-- Core -->
     <script src="./app.js"></script>
 
+    <!-- Via-waypoint confirmation overlay -->
+    <div id="viaConfirmOverlay" hidden>
+        <div class="via-confirm-card">
+            <div id="viaConfirmTitle" class="via-confirm-title"></div>
+            <div id="viaConfirmSub" class="via-confirm-sub"></div>
+            <div class="via-confirm-btns">
+                <button id="viaConfirmCancel">Cancel</button>
+                <button id="viaConfirmAdd">Add</button>
+            </div>
+        </div>
+    </div>
+
     <!-- No service worker — Capacitor native app uses filesystem storage -->
 </body>
 </html>
