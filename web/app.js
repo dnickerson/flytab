@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v9.16';
+const FLYTAB_VERSION = 'v9.17';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -1240,7 +1240,6 @@ class FlyTabApp {
             ...plan,
             waypoints: plan.waypoints.map(wp => ({
                 icao: wp.id,
-                name: wp.id,
                 lat:  wp.lat,
                 lon:  wp.lon,
                 ...(wp.airway ? { airway: wp.airway } : {}),
@@ -1265,9 +1264,9 @@ class FlyTabApp {
         let bestCost = Infinity;
         for (let i = 0; i < pins.length - 1; i++) {
             const a = pins[i], b = pins[i + 1];
-            const cost = FlyTabPlanning.haversine(a.lat, a.lon, fix.lat, fix.lon)
-                       + FlyTabPlanning.haversine(fix.lat, fix.lon, b.lat, b.lon)
-                       - FlyTabPlanning.haversine(a.lat, a.lon, b.lat, b.lon);
+            const cost = window.FlyTabPlanning.haversine(a.lat, a.lon, fix.lat, fix.lon)
+                       + window.FlyTabPlanning.haversine(fix.lat, fix.lon, b.lat, b.lon)
+                       - window.FlyTabPlanning.haversine(a.lat, a.lon, b.lat, b.lon);
             if (cost < bestCost) { bestCost = cost; bestIdx = i + 1; }
         }
         return bestIdx;
@@ -1301,7 +1300,7 @@ class FlyTabApp {
             if (!overlay.contains(e.target)) this._dismissViaConfirm();
         };
         this._viaConfirmOutside = onOutside;
-        setTimeout(() => document.addEventListener('touchstart', onOutside, { capture: true }), 0);
+        document.addEventListener('touchstart', onOutside, { capture: true });
     }
 
     /** Hide the via-confirm popup and clean up listeners. */
@@ -1375,7 +1374,7 @@ class FlyTabApp {
 
     async applyRouteEdit(plan, { fromRouteTable = false, keepPins = false } = {}) {
         if (!plan) return;
-        if (!keepPins) this._pinnedIds = null;
+        if (!keepPins && !fromRouteTable) this._pinnedIds = null;
         plan.edited_at = new Date().toISOString();
 
         // Latest-wins guard: if a plan apply is already in progress, store the latest
