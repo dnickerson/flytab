@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v9.18';
+const FLYTAB_VERSION = 'v9.19';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -88,9 +88,6 @@ class FlyTabApp {
         this.convectiveEngine = null;
         this._cockpitInitialized = false;
         this._currentTrip = null;     // trip — top-level plan object (was _currentPlan)
-        this._pinnedIds    = null;    // Set<string> of pilot-added via waypoint IDs
-        this._viaConfirmFix     = null;
-        this._viaConfirmOutside = null;
         this._applyingPlan = false;   // re-entrancy guard for applyRouteEdit
         this._pendingPlanEdit = null; // latest-wins queuing for rapid calls
         this._shownFuelStopOverlays = new Set(); // tracks shown overlays by "ICAO_index" key
@@ -472,10 +469,6 @@ class FlyTabApp {
                         this.routeTable.addWaypointSmart({ icao: apt.icao, name: apt.name || apt.icao, lat: apt.lat, lon: apt.lon });
                         return;
                     }
-                    if (this._currentTrip?.waypoints?.length >= 2) {
-                        this._offerAddViaWaypoint({ id: apt.icao, name: apt.name || apt.icao, lat: apt.lat, lon: apt.lon });
-                        return;
-                    }
                     this.airportPopup.show(apt);
                 });
 
@@ -485,10 +478,6 @@ class FlyTabApp {
                         this.routeTable.addWaypointSmart({ icao: nav.id, name: nav.name || nav.id, lat: nav.lat, lon: nav.lon });
                         return;
                     }
-                    if (this._currentTrip?.waypoints?.length >= 2) {
-                        this._offerAddViaWaypoint({ id: nav.id, name: nav.name || nav.id, lat: nav.lat, lon: nav.lon });
-                        return;
-                    }
                     this.airportPopup.showNavaid(nav);
                 });
 
@@ -496,10 +485,6 @@ class FlyTabApp {
                     if (typeof _wireTapLastTouchAt !== 'undefined' && Date.now() - _wireTapLastTouchAt < 500) return;
                     if (this.routeTable?.isEditing()) {
                         this.routeTable.addWaypointSmart({ icao: fix.id, name: fix.id, lat: fix.lat, lon: fix.lon });
-                        return;
-                    }
-                    if (this._currentTrip?.waypoints?.length >= 2) {
-                        this._offerAddViaWaypoint({ id: fix.id, name: fix.id, lat: fix.lat, lon: fix.lon });
                     }
                 });
 
@@ -939,16 +924,6 @@ class FlyTabApp {
             setTimeout(() => this.preflightCheck.autoTrigger(), 1500);
         }
 
-        // Via-confirm overlay buttons
-        document.getElementById('viaConfirmCancel')?.addEventListener('click', () => {
-            this._dismissViaConfirm();
-        });
-        document.getElementById('viaConfirmAdd')?.addEventListener('click', async () => {
-            const fix = this._viaConfirmFix;
-            this._dismissViaConfirm();
-            if (fix) await this._addViaAndReplan(fix);
-        });
-
         // Load active plan
         await this._loadActivePlan();
 
@@ -1158,162 +1133,6 @@ class FlyTabApp {
         setTimeout(() => this.cockpitMap?.map?.invalidateSize(), 300);
     }
 
-    /**
-     * Extract the ordered pin waypoints from the active trip.
-     * Pins are: departure, destination, and any IDs in this._pinnedIds.
-     * Interior A* hops between pins are excluded.
-     * @returns {Array<{id:string, lat:number, lon:number}>}
-     */
-    _getCurrentPins() {
-        const wps = this._currentTrip?.waypoints;
-        if (!wps || wps.length < 2) return [];
-        const pinned = this._pinnedIds || new Set();
-        return wps
-            .filter((wp, idx) =>
-                idx === 0 ||
-                idx === wps.length - 1 ||
-                pinned.has(wp.icao || wp.id || '')
-            )
-            .map(wp => ({
-                id:  wp.icao || wp.id || '',
-                lat: wp.lat,
-                lon: wp.lon,
-            }))
-            .filter(p => p.id && Number.isFinite(p.lat) && Number.isFinite(p.lon));
-    }
-
-    /**
-     * Extract planning options from the active trip to pass to planVia().
-     * @returns {object}
-     */
-    _currentPlanOpts() {
-        const opts = this._currentTrip?.options || {};
-        return {
-            routingMode:   opts.routingMode   || 'v-airways',
-            cruiseAltFt:   this._currentTrip?.cruiseAltFt || opts.cruiseAltFt || 6000,
-            reserveGal:    this._currentTrip?.reserveGal  || opts.reserveGal  || 10,
-            maxLegHrs:     opts.maxLegHrs     || 2.0,
-            selfServeOnly: !!opts.selfServeOnly,
-            avoidance:     opts.avoidance     || [],
-            winds:         this.routePlannerPanel?._lastWinds || undefined,
-        };
-    }
-
-    /**
-     * Insert a new via waypoint and re-plan the entire route end-to-end via A*.
-     * @param {{id:string, name:string, lat:number, lon:number}} fix
-     */
-    async _addViaAndReplan(fix) {
-        const pins = this._getCurrentPins();
-        if (pins.length < 2) return;
-        if (!window.FlyTabPlanning?.haversine) {
-            this.showToast('Route planner not ready — try again');
-            return;
-        }
-
-        // Minimum-detour insertion: find which gap in the pin sequence costs least
-        const bestIdx = this._bestInsertionIdx(pins, fix);
-        const newPins = [...pins];
-        newPins.splice(bestIdx, 0, { id: fix.id, lat: fix.lat, lon: fix.lon });
-
-        // Get or create a planner instance
-        let planner = this.routePlannerPanel?._planner;
-        if (!planner && window.FlyTabPlanning?.RoutePlanner) {
-            planner = new window.FlyTabPlanning.RoutePlanner(this._planningAdapters);
-        }
-        if (!planner) {
-            this.showToast('Route planner not ready — try again');
-            return;
-        }
-
-        this.showToast('Re-routing…');
-        let plan;
-        try {
-            plan = await planner.planVia(newPins, this._currentPlanOpts());
-        } catch (e) {
-            this.showToast(`No airway path through ${fix.id} — try a different fix`);
-            return;
-        }
-
-        // Normalise planVia waypoints (id→icao) for _applyPlan's NASR resolver
-        const normalised = {
-            ...plan,
-            waypoints: plan.waypoints.map(wp => ({
-                icao: wp.id,
-                lat:  wp.lat,
-                lon:  wp.lon,
-                ...(wp.airway ? { airway: wp.airway } : {}),
-            })),
-        };
-
-        if (!this._pinnedIds) this._pinnedIds = new Set();
-        this._pinnedIds.add(fix.id);
-
-        await this.applyRouteEdit(normalised, { keepPins: true });
-        this.showToast(`${fix.id} added — route updated`);
-    }
-
-    /**
-     * Find the index in pins[] at which inserting fix minimises route detour.
-     * @param {Array<{lat:number,lon:number}>} pins
-     * @param {{lat:number,lon:number}} fix
-     * @returns {number}
-     */
-    _bestInsertionIdx(pins, fix) {
-        let bestIdx  = 1;
-        let bestCost = Infinity;
-        for (let i = 0; i < pins.length - 1; i++) {
-            const a = pins[i], b = pins[i + 1];
-            const cost = window.FlyTabPlanning.haversine(a.lat, a.lon, fix.lat, fix.lon)
-                       + window.FlyTabPlanning.haversine(fix.lat, fix.lon, b.lat, b.lon)
-                       - window.FlyTabPlanning.haversine(a.lat, a.lon, b.lat, b.lon);
-            if (cost < bestCost) { bestCost = cost; bestIdx = i + 1; }
-        }
-        return bestIdx;
-    }
-
-    /**
-     * Show the via-waypoint confirmation popup for a tapped fix.
-     * @param {{id:string, name:string, lat:number, lon:number}} fix
-     */
-    _offerAddViaWaypoint(fix) {
-        if (!window.FlyTabPlanning?.haversine) return;
-        this._dismissViaConfirm();
-        const pins = this._getCurrentPins();
-        if (pins.length < 2) return;
-
-        // Compute insertion neighbours for the subtext label
-        const bestIdx = this._bestInsertionIdx(pins, fix);
-        const before = pins[bestIdx - 1].id;
-        const after  = pins[bestIdx].id;
-
-        const overlay = document.getElementById('viaConfirmOverlay');
-        if (!overlay) return;
-        document.getElementById('viaConfirmTitle').textContent = `Add ${fix.id} to route?`;
-        document.getElementById('viaConfirmSub').textContent   = `Between ${before} and ${after}`;
-
-        this._viaConfirmFix = fix;
-        overlay.hidden = false;
-
-        // Auto-dismiss on next map touch outside the card
-        const onOutside = (e) => {
-            if (!overlay.contains(e.target)) this._dismissViaConfirm();
-        };
-        this._viaConfirmOutside = onOutside;
-        document.addEventListener('touchstart', onOutside, { capture: true });
-    }
-
-    /** Hide the via-confirm popup and clean up listeners. */
-    _dismissViaConfirm() {
-        const overlay = document.getElementById('viaConfirmOverlay');
-        if (overlay) overlay.hidden = true;
-        if (this._viaConfirmOutside) {
-            document.removeEventListener('touchstart', this._viaConfirmOutside, { capture: true });
-            this._viaConfirmOutside = null;
-        }
-        this._viaConfirmFix = null;
-    }
-
     async saveCurrentPlan() {
         if (this.routePlannerPanel?._lastPlan && this.routePlannerPanel._saveCurrentTrip) {
             try {
@@ -1372,9 +1191,8 @@ class FlyTabApp {
         this.showToast('No plan to save.');
     }
 
-    async applyRouteEdit(plan, { fromRouteTable = false, keepPins = false } = {}) {
+    async applyRouteEdit(plan, { fromRouteTable = false } = {}) {
         if (!plan) return;
-        if (!keepPins && !fromRouteTable) this._pinnedIds = null;
         plan.edited_at = new Date().toISOString();
 
         // Latest-wins guard: if a plan apply is already in progress, store the latest

@@ -791,7 +791,17 @@ class RouteTable {
                 destination: this._waypoints[this._waypoints.length - 1]?.icao || '',
                 // Clear stale legs — they were for the original route, not the edited one
                 legs: [],
-                route: this._waypoints.map(wp => wp.icao).filter(Boolean),
+                // Preserve the original airway route array when waypoints are structurally
+                // unchanged — route table edits (altitude, fuel stops) must not strip airways.
+                // If waypoints were added/removed, fall back to the current waypoint list.
+                route: (() => {
+                    const curr = this._waypoints.map(wp => wp.icao).filter(Boolean);
+                    const orig = Array.isArray(this._trip?.flight_plan?.route) ? this._trip.flight_plan.route : null;
+                    if (!orig) return curr;
+                    const origFixes = orig.filter(id => !/^[VTJQ]\d/.test(id) && id !== 'DIRECT');
+                    if (origFixes.length === curr.length && origFixes.every((id, i) => id === curr[i])) return orig;
+                    return curr;
+                })(),
             },
         };
         try {
