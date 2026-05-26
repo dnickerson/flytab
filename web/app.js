@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v9.11';
+const FLYTAB_VERSION = 'v9.12';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -728,6 +728,7 @@ class FlyTabApp {
             this.radarLoop = new RadarLoop();
             if (this.fisbNexrad) {
                 this.radarLoop.setNexrad(this.fisbNexrad);
+                this.radarLoop.setFisbRenderer(this.fisbNexrad);
             }
             this.cockpitMap.setRadarLoop(this.radarLoop);
         }

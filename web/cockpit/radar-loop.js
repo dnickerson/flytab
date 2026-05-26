@@ -12,8 +12,11 @@ class RadarLoop {
         this._frameIndex = 0;
         this._timer = null;
 
-        // FIS-B NEXRAD renderer reference (set via setNexrad())
+        // Primary frame source (FisbNexrad or InetRadarSource, set via setNexrad())
         this._nexrad = null;
+        // FIS-B canvas renderer — always suppressed during loop so it doesn't overdraw
+        // internet tile frames. Same as _nexrad when FIS-B is the active source.
+        this._fisbRenderer = null;
 
         // Config
         this._speedMs = CockpitConfig.get('radar.playbackSpeedMs') || 500;
@@ -24,10 +27,33 @@ class RadarLoop {
         this._controlEl.style.display = 'none';
     }
 
+    /** Wire the FIS-B canvas renderer. Called once at startup; suppressed during all loop sessions. */
+    setFisbRenderer(nexrad) {
+        this._fisbRenderer = nexrad;
+    }
+
     /** Wire the FisbNexrad renderer for frame data */
     setNexrad(nexrad) {
         if (this._nexrad?.setOnReady) this._nexrad.setOnReady(null); // cancel any pending callback
+        if (nexrad === this._nexrad) return;
+
+        const prev = this._nexrad;
         this._nexrad = nexrad;
+
+        // If the loop panel is open, transition cleanly so no stale tile layers are left
+        // visible and the new source's loop-mode suppression is correctly activated.
+        if (this._active && prev) {
+            prev.exitLoopMode?.();     // hide old source's tile layers, restore its live view
+            nexrad.enterLoopMode?.();  // tell new source to suppress live _draw() calls
+            // Restart playback from the latest frame of the new source
+            this.pause();
+            const frames = nexrad?.frameHistory ?? [];
+            if (frames.length > 0) {
+                this._updateFrameCount();
+                this._goToFrame(frames.length - 1);
+                this.play();
+            }
+        }
     }
 
     // ========== Public API ==========
@@ -43,9 +69,15 @@ class RadarLoop {
         }
 
         const frames = this._nexrad ? this._nexrad.frameHistory : [];
+
+        // Always suppress the FIS-B canvas while the loop is open. The canvas sits above
+        // tile layers in the overlay pane and would overwrite internet tile frames.
+        // enterLoopMode() also clears the stale canvas so tiles show through cleanly.
+        if (this._fisbRenderer) this._fisbRenderer.enterLoopMode();
+
         if (frames.length > 0) {
-            // Suppress live draws while playing historical frames
-            if (this._nexrad) this._nexrad.enterLoopMode();
+            // Suppress live draws on the frame source too (no-op if same as _fisbRenderer)
+            if (this._nexrad && this._nexrad !== this._fisbRenderer) this._nexrad.enterLoopMode();
             this._showControls();
             this._updateSourceBadge();
             this._updateFrameCount();
@@ -53,7 +85,7 @@ class RadarLoop {
             this.play();
         } else {
             // No snapshots yet — show live NEXRAD blocks if any, "NO DATA" if none
-            if (this._nexrad) this._nexrad.enterLoopMode();
+            if (this._nexrad && this._nexrad !== this._fisbRenderer) this._nexrad.enterLoopMode();
             this._showControls();
             this._showNoData();
             if (this._nexrad?.hasData) {
@@ -78,9 +110,14 @@ class RadarLoop {
         this.pause();
         this._hideControls();
         if (this._nexrad?.setOnReady) this._nexrad.setOnReady(null); // cancel pending self-heal
-        // Resume live NEXRAD draws and restore current data
-        if (this._nexrad) {
-            this._nexrad.exitLoopMode(); // safe to call even if never entered
+        // Restore FIS-B live draws first (exits loop mode, resumes _draw())
+        if (this._fisbRenderer) {
+            this._fisbRenderer.exitLoopMode();
+            if (this._fisbRenderer.isActive) this._fisbRenderer.drawLive();
+        }
+        // Restore primary frame source if it's different (e.g. InetRadarSource)
+        if (this._nexrad && this._nexrad !== this._fisbRenderer) {
+            this._nexrad.exitLoopMode();
             if (this._nexrad.isActive) this._nexrad.drawLive();
         }
         this._frameIndex = 0;
