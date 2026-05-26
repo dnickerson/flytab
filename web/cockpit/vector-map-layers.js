@@ -592,7 +592,7 @@ class VectorMapLayers {
 
         const newMarkers = [];
 
-        const plotAt = (lat, lon, type) => {
+        const plotAt = (lat, lon, type, reason) => {
             const color = type === 'CB' ? '#ff4400' : '#ff9900';
             const m = L.marker([lat, lon], {
                 icon: L.divIcon({
@@ -604,14 +604,15 @@ class VectorMapLayers {
                 interactive: false,
                 zIndexOffset: 60,
             });
+            m._cbData = { icao, type, reason, raw: entry?.raw, observed_at: decoded?.observed_at };
             m.addTo(this._cbTcuLayer);
             newMarkers.push(m);
 
             // Storm motion arrow — 15-min at 75% of FL180 wind
             const wind = this._fisbClient?.getNearestWind(lat, lon, 18000);
-            if (wind && wind.speed > 5) {
+            if (wind && wind.spd > 5) {
                 const stormDir = (wind.dir + 180) % 360;
-                const distNm = wind.speed * 0.75 * (15 / 60);
+                const distNm = wind.spd * 0.75 * (15 / 60);
                 const tip = FisbClient._destPoint(lat, lon, stormDir, distNm);
                 const arrow = L.polyline([[lat, lon], [tip.lat, tip.lon]], {
                     color, weight: 2.5, opacity: 0.8, dashArray: '5,3', interactive: false,
@@ -624,20 +625,19 @@ class VectorMapLayers {
         if (cbDirs.length > 0) {
             for (const d of cbDirs) {
                 if (d.direction === 'ALQDS') {
-                    // All quadrants — plot at the reporting airport
-                    plotAt(pos.lat, pos.lon, d.type);
+                    plotAt(pos.lat, pos.lon, d.type, { keyword: d.type, direction: 'ALQDS', distant: false, vicinity: false });
                 } else {
                     const bearing = FisbClient._compassToDeg(d.direction);
                     if (bearing == null) continue;
                     const distNm = d.distant ? 50 : 20;
                     const pt = FisbClient._destPoint(pos.lat, pos.lon, bearing, distNm);
-                    plotAt(pt.lat, pt.lon, d.type);
+                    plotAt(pt.lat, pt.lon, d.type, { keyword: d.type, direction: d.direction, distant: d.distant, vicinity: false });
                 }
             }
         } else {
             // Sky-group CB/TCU only (no direction remark) — plot at airport = overhead
             const types = [...new Set(cbSkies.map(s => s.type))];
-            for (const type of types) plotAt(pos.lat, pos.lon, type);
+            for (const type of types) plotAt(pos.lat, pos.lon, type, { keyword: type, fromSkyGroup: true });
         }
 
         if (newMarkers.length > 0) this._cbTcuMarkers.set(icao, newMarkers);
@@ -1559,6 +1559,40 @@ class VectorMapLayers {
      * Uses Leaflet's map click event which fires reliably on both
      * mouse and touch (unlike individual circleMarker click events).
      */
+    _buildCbPopupHtml({ icao, type, reason, raw, observed_at }) {
+        const keyword = reason?.keyword || type;
+        const typeLabel = keyword === 'LTG' ? 'Lightning' : keyword;
+
+        let where = '';
+        if (reason?.fromSkyGroup) {
+            where = 'Overhead (sky group)';
+        } else if (reason?.direction === 'ALQDS') {
+            where = 'All quadrants';
+        } else if (reason?.direction === 'OHD' || reason?.direction === 'OVHD') {
+            where = 'Overhead';
+        } else {
+            const prox = reason?.distant ? 'Distant' : reason?.vicinity ? 'In vicinity' : 'Nearby';
+            const dir = reason?.direction || '';
+            where = dir ? `${prox} · ${dir}` : prox;
+        }
+
+        const time = observed_at
+            ? new Date(observed_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short', timeZone: 'UTC' }).replace('UTC', 'Z')
+            : '';
+
+        const rmk = raw ? (() => {
+            const i = raw.indexOf(' RMK ');
+            return i >= 0 ? raw.slice(i + 1) : '';
+        })() : '';
+
+        return `<div class="cb-popup">
+            <div class="cb-popup-header">${typeLabel} · ${icao}</div>
+            <div class="cb-popup-where">${where}</div>
+            ${rmk ? `<div class="cb-popup-raw">${rmk}</div>` : ''}
+            ${time ? `<div class="cb-popup-time">${time}</div>` : ''}
+        </div>`;
+    }
+
     _onMapClick(e) {
         const HIT_PX = 30; // generous tap target for fingers
         const pt = this._map.latLngToContainerPoint(e.latlng);
@@ -1571,6 +1605,11 @@ class VectorMapLayers {
                 this._onNavaidClick(hit.data);
             } else if (hit.type === 'fix' && this._onFixClick) {
                 this._onFixClick(hit.data);
+            } else if (hit.type === 'cb') {
+                L.popup({ minWidth: 260, maxWidth: 380, className: 'cb-popup-container' })
+                    .setLatLng(hit.marker.getLatLng())
+                    .setContent(this._buildCbPopupHtml(hit.data))
+                    .openOn(this._map);
             }
             return;
         }
@@ -1629,6 +1668,21 @@ class VectorMapLayers {
             if (dist < bestDist) {
                 bestDist = dist;
                 best = { type: 'fix', data: marker._fixData, marker, dist };
+            }
+        }
+
+        // Check CB/TCU text markers (lower priority — only if no aviation marker hit)
+        if (!best) {
+            for (const [, markers] of this._cbTcuMarkers) {
+                for (const m of markers) {
+                    if (!m._cbData || !m.getLatLng) continue;
+                    const markerPt = this._map.latLngToContainerPoint(m.getLatLng());
+                    const dist = containerPt.distanceTo(markerPt);
+                    if (dist < bestDist) {
+                        bestDist = dist;
+                        best = { type: 'cb', data: m._cbData, marker: m, dist };
+                    }
+                }
             }
         }
 
