@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v8.94';
+const FLYTAB_VERSION = 'v8.95';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -701,7 +701,8 @@ class FlyTabApp {
 
         // Convective Intelligence Engine — must be after fisbClient and fisbNexrad are assigned
         if (typeof ConvectiveIntelligenceEngine !== 'undefined' &&
-            typeof HRRRPreflightStore !== 'undefined') {
+            typeof HRRRPreflightStore !== 'undefined' &&
+            this.fisbNexrad && this.fisbClient) {
             const preflightStore = new HRRRPreflightStore();
             this.convectiveEngine = new ConvectiveIntelligenceEngine({
                 fisbNexrad: this.fisbNexrad,
@@ -1396,8 +1397,8 @@ class FlyTabApp {
             this.wxBriefing.setFlightPlan(normalized);
         }
 
-        if (this.convectiveEngine && normalized?.route) {
-            this.convectiveEngine.setRoute(normalized.route);
+        if (this.convectiveEngine && normalized?.waypoints) {
+            this.convectiveEngine.setRoute(normalized.waypoints);
         }
 
         this._updateWeatherAge(plan);

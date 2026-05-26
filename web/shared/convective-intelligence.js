@@ -515,11 +515,11 @@ class ConvectiveIntelligenceEngine {
         if (on === this._active) return;
         this._active = on;
         if (on) {
-            this._fisb.addEventListener('fisb:nexrad', this._onNexrad);
-            this._engine.addEventListener('engine:data', this._onEngineData);
+            this._fisb?.addEventListener('fisb:nexrad', this._onNexrad);
+            this._engine?.addEventListener('engine:data', this._onEngineData);
         } else {
-            this._fisb.removeEventListener('fisb:nexrad', this._onNexrad);
-            this._engine.removeEventListener('engine:data', this._onEngineData);
+            this._fisb?.removeEventListener('fisb:nexrad', this._onNexrad);
+            this._engine?.removeEventListener('engine:data', this._onEngineData);
         }
         this._display?.setActive(on);
         this._alerts?.setActive(on);
@@ -564,7 +564,7 @@ class ConvectiveIntelligenceEngine {
             if (aircraft) {
                 const forecastWind = this._fisb.getNearestWind(
                     aircraft.lat, aircraft.lon,
-                    sit?.altitude_barometric ?? 3000
+                    sit?.alt_baro ?? 3000
                 );
                 if (forecastWind) convergenceSignal = detectWindConvergence(sit, forecastWind);
             }
