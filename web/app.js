@@ -89,6 +89,8 @@ class FlyTabApp {
         this._cockpitInitialized = false;
         this._currentTrip = null;     // trip — top-level plan object (was _currentPlan)
         this._pinnedIds    = null;    // Set<string> of pilot-added via waypoint IDs
+        this._viaConfirmFix     = null;
+        this._viaConfirmOutside = null;
         this._applyingPlan = false;   // re-entrancy guard for applyRouteEdit
         this._pendingPlanEdit = null; // latest-wins queuing for rapid calls
         this._shownFuelStopOverlays = new Set(); // tracks shown overlays by "ICAO_index" key
@@ -466,6 +468,10 @@ class FlyTabApp {
                 this.vectorLayers._onInternetMetarsFetched = () => this._updateWeatherAge(this._currentTrip);
                 this.vectorLayers.onAirportClick((apt) => {
                     if (typeof _wireTapLastTouchAt !== 'undefined' && Date.now() - _wireTapLastTouchAt < 500) return;
+                    if (this.routeTable?.isEditing()) {
+                        this.routeTable.addWaypointSmart({ icao: apt.icao, name: apt.name || apt.icao, lat: apt.lat, lon: apt.lon });
+                        return;
+                    }
                     if (this._currentTrip?.waypoints?.length >= 2) {
                         this._offerAddViaWaypoint({ id: apt.icao, name: apt.name || apt.icao, lat: apt.lat, lon: apt.lon });
                         return;
@@ -475,6 +481,10 @@ class FlyTabApp {
 
                 this.vectorLayers.onNavaidClick((nav) => {
                     if (typeof _wireTapLastTouchAt !== 'undefined' && Date.now() - _wireTapLastTouchAt < 500) return;
+                    if (this.routeTable?.isEditing()) {
+                        this.routeTable.addWaypointSmart({ icao: nav.id, name: nav.name || nav.id, lat: nav.lat, lon: nav.lon });
+                        return;
+                    }
                     if (this._currentTrip?.waypoints?.length >= 2) {
                         this._offerAddViaWaypoint({ id: nav.id, name: nav.name || nav.id, lat: nav.lat, lon: nav.lon });
                         return;
@@ -484,6 +494,10 @@ class FlyTabApp {
 
                 this.vectorLayers.onFixClick((fix) => {
                     if (typeof _wireTapLastTouchAt !== 'undefined' && Date.now() - _wireTapLastTouchAt < 500) return;
+                    if (this.routeTable?.isEditing()) {
+                        this.routeTable.addWaypointSmart({ icao: fix.id, name: fix.id, lat: fix.lat, lon: fix.lon });
+                        return;
+                    }
                     if (this._currentTrip?.waypoints?.length >= 2) {
                         this._offerAddViaWaypoint({ id: fix.id, name: fix.id, lat: fix.lat, lon: fix.lon });
                     }
@@ -1192,17 +1206,13 @@ class FlyTabApp {
     async _addViaAndReplan(fix) {
         const pins = this._getCurrentPins();
         if (pins.length < 2) return;
+        if (!window.FlyTabPlanning?.haversine) {
+            this.showToast('Route planner not ready — try again');
+            return;
+        }
 
         // Minimum-detour insertion: find which gap in the pin sequence costs least
-        let bestIdx  = 1;
-        let bestCost = Infinity;
-        for (let i = 0; i < pins.length - 1; i++) {
-            const a = pins[i], b = pins[i + 1];
-            const cost = FlyTabPlanning.haversine(a.lat, a.lon, fix.lat, fix.lon)
-                       + FlyTabPlanning.haversine(fix.lat, fix.lon, b.lat, b.lon)
-                       - FlyTabPlanning.haversine(a.lat, a.lon, b.lat, b.lon);
-            if (cost < bestCost) { bestCost = cost; bestIdx = i + 1; }
-        }
+        const bestIdx = this._bestInsertionIdx(pins, fix);
         const newPins = [...pins];
         newPins.splice(bestIdx, 0, { id: fix.id, lat: fix.lat, lon: fix.lon });
 
@@ -1245,14 +1255,12 @@ class FlyTabApp {
     }
 
     /**
-     * Show the via-waypoint confirmation popup for a tapped fix.
-     * @param {{id:string, name:string, lat:number, lon:number}} fix
+     * Find the index in pins[] at which inserting fix minimises route detour.
+     * @param {Array<{lat:number,lon:number}>} pins
+     * @param {{lat:number,lon:number}} fix
+     * @returns {number}
      */
-    _offerAddViaWaypoint(fix) {
-        const pins = this._getCurrentPins();
-        if (pins.length < 2) return;
-
-        // Compute insertion neighbours for the subtext label
+    _bestInsertionIdx(pins, fix) {
         let bestIdx  = 1;
         let bestCost = Infinity;
         for (let i = 0; i < pins.length - 1; i++) {
@@ -1262,6 +1270,21 @@ class FlyTabApp {
                        - FlyTabPlanning.haversine(a.lat, a.lon, b.lat, b.lon);
             if (cost < bestCost) { bestCost = cost; bestIdx = i + 1; }
         }
+        return bestIdx;
+    }
+
+    /**
+     * Show the via-waypoint confirmation popup for a tapped fix.
+     * @param {{id:string, name:string, lat:number, lon:number}} fix
+     */
+    _offerAddViaWaypoint(fix) {
+        if (!window.FlyTabPlanning?.haversine) return;
+        this._dismissViaConfirm();
+        const pins = this._getCurrentPins();
+        if (pins.length < 2) return;
+
+        // Compute insertion neighbours for the subtext label
+        const bestIdx = this._bestInsertionIdx(pins, fix);
         const before = pins[bestIdx - 1].id;
         const after  = pins[bestIdx].id;
 
