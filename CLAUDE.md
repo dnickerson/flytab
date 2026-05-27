@@ -12,6 +12,10 @@ Run `bash build.sh` automatically after any code change is complete — no need 
 
 If the change touches any file under `web/shared/planning/`, run `npm test` first and fix failures before building.
 
+## Tap Handler Regression Rule
+
+Any change to the three map tap handlers (`onAirportClick`, `onNavaidClick`, `onFixClick` in `app.js`) **must** verify that the airport info popup still opens on a normal tap before the work is considered complete. Tapping an airport to see its popup is a primary cockpit interaction — breaking it is a critical regression. This cannot be verified by the test suite; it requires manual confirmation or explicit acknowledgment that UI testing was not performed.
+
 ## User Manual
 
 `docs/user-manual.md` is the pilot-facing reference for FlyTab. **Update it whenever a user-visible feature is shipped.** This means any change that adds, removes, or meaningfully alters something the pilot sees or interacts with — new layer panel toggles, new map overlays, new tab content, new MORE drawer items, changed behavior of existing controls.
