@@ -89,6 +89,10 @@ class RoutePlannerPanel {
         this._optTableEl    = null;     // optimizer table container div
         this._lastMos       = null;     // MOS data for mixing height (Feature C)
         this._meaEpoch      = 0;        // stale-fetch guard for _fetchRouteMea (Feature B)
+
+        // Cache: Map<"FIXA|FIXB", airwayId> for airway inference on paste/load.
+        // Populated lazily by _getAirwayPairCache().
+        this._airwayPairCache = null;
     }
 
     /** Build DOM, wire events, start building airway graph. */
@@ -99,9 +103,10 @@ class RoutePlannerPanel {
     }
 
     /** Load plan into pill editor and show. Called by app.openRoutePlanner(plan). */
-    open(plan) {
+    async open(plan) {
         this._applyAborted = false;
         this._loadPlan(plan);
+        await this._inferAirwaysIntoRoute();
         this._render();
 
         // Always reset computed-plan state so a different trip doesn't inherit
@@ -2304,13 +2309,78 @@ class RoutePlannerPanel {
         this._route = pills;
         this._depInput.value  = pills[0].id;
         this._destInput.value = pills[pills.length - 1].id;
-        // Cache coords from the expanded waypoints so Apply can resolve them
-        // without going back to IDB.
-        if (this._planner?.parseRoute) {
-            // `pills` came from parseRoute; coords are on the waypoint objects
-            // we already produced. Re-walk them here.
-        }
+        // Infer airways if the pasted string had no explicit airway tokens.
+        await this._inferAirwaysIntoRoute();
         this._render();
+    }
+
+    /**
+     * Build (and cache) a Map from "FIXA|FIXB" → airway ID for all adjacent
+     * fix pairs on V/T/J/Q airways. Used by _inferAirwaysIntoRoute().
+     * @returns {Promise<Map<string, string>>}
+     */
+    async _getAirwayPairCache() {
+        if (this._airwayPairCache) return this._airwayPairCache;
+        this._airwayPairCache = new Map();
+        try {
+            const airways = await this._nasrDb?.listAirways?.();
+            if (!airways) return this._airwayPairCache;
+            for (const a of airways) {
+                if (!a.name) continue;
+                const ids = (a.waypoints || []).map(w => ((w.id || w.name) || '').toUpperCase());
+                for (let i = 0; i < ids.length - 1; i++) {
+                    if (!ids[i] || !ids[i + 1]) continue;
+                    const fwd = ids[i] + '|' + ids[i + 1];
+                    const rev = ids[i + 1] + '|' + ids[i];
+                    if (!this._airwayPairCache.has(fwd)) this._airwayPairCache.set(fwd, a.name);
+                    if (!this._airwayPairCache.has(rev)) this._airwayPairCache.set(rev, a.name);
+                }
+            }
+        } catch (e) {
+            console.warn('[RoutePlannerPanel] airway pair cache build failed:', e);
+        }
+        return this._airwayPairCache;
+    }
+
+    /**
+     * Infer Victor/RNAV airway labels for routes that have no explicit 'awy'
+     * pills — e.g. routes pasted without airway tokens ("KLKR CIBOB CLT ...")
+     * or routes loaded from saves created before the airway-pill fix.
+     *
+     * For each pair of consecutive fixes, looks up whether they are adjacent
+     * on any published airway. If found, inserts 'awy' pills at each transition
+     * and tags the fix pills with their airway. No-ops when airways are already
+     * present.
+     */
+    async _inferAirwaysIntoRoute() {
+        if (this._route.some(p => p.type === 'awy')) return;
+
+        const cache = await this._getAirwayPairCache();
+        if (!cache.size) return;
+
+        // Tag each fix with the airway of the incoming edge (prev→curr).
+        for (let i = 1; i < this._route.length; i++) {
+            const prev = this._route[i - 1];
+            const curr = this._route[i];
+            if (curr.type === 'awy' || curr.type === 'direct') continue;
+            const airway = cache.get(prev.id + '|' + curr.id);
+            if (airway) curr.airway = airway;
+        }
+
+        if (!this._route.some(p => p.airway)) return;  // nothing to do
+
+        // Rebuild route inserting 'awy' pills at each airway transition.
+        const newRoute = [];
+        let lastAirway = null;
+        for (const pill of this._route) {
+            const aw = pill.airway || null;
+            if (aw && aw !== lastAirway) {
+                newRoute.push({ id: aw, type: 'awy' });
+            }
+            lastAirway = aw;
+            newRoute.push(pill);
+        }
+        this._route = newRoute;
     }
 
     /**
