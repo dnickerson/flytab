@@ -37,22 +37,40 @@
     <script>
         const panelEl = document.getElementById('rp-mount');
 
-        // nasrDb: pass a stub — only async IDB methods are called, never at init.
+        // Test airways used by airway-retention tests.
+        // V311: FLO → CRE (Florence VORTAC → Myrtle Beach Intl / Grand Strand)
+        const TEST_AIRWAYS = [
+            {
+                name: 'V311',
+                type: 'V',
+                waypoints: [
+                    { id: 'FLO', name: 'Florence',    lat: 34.185, lon: -79.724, type: 'VORTAC' },
+                    { id: 'CRE', name: 'Grand Strand', lat: 33.812, lon: -78.724, type: 'VORTAC' },
+                ],
+            },
+        ];
+
+        // nasrDb: pass a stub that supports listAirways() for airway inference.
         const nasrDb = {
             constructor: { DB_NAME: 'flypi' },
             getAirport: () => Promise.resolve(null),
-            getNavaid:  () => Promise.resolve(null),
-            getFix:     () => Promise.resolve(null),
-            getAirway:  () => Promise.resolve(null),
+            getNavaid:  (id) => {
+                // Resolve test airway navaids so _pillsToWaypoints can get coords.
+                const nav = TEST_AIRWAYS.flatMap(a => a.waypoints).find(w => w.id === id);
+                return Promise.resolve(nav ? { lat: nav.lat, lon: nav.lon } : null);
+            },
+            getFix:    () => Promise.resolve(null),
+            getAirway: () => Promise.resolve(null),
+            listAirways: () => Promise.resolve(TEST_AIRWAYS),
         };
 
         const panel = new RoutePlannerPanel(panelEl, nasrDb, null);
         panel.init();
 
         window.__harness = {
-            /** Call open() with a minimal plan stub. */
+            /** Call open() with a minimal plan stub. Returns a Promise. */
             open(plan) {
-                panel.open(plan || null);
+                return panel.open(plan || null);
             },
             /** Call close() and report the route array length (should be 0). */
             close() {
@@ -62,6 +80,36 @@
             /** Return true if the panel's inner DOM has been built. */
             isBuilt() {
                 return !!panelEl.querySelector('.rpp-inner');
+            },
+            /** Return the current route pill array (for assertions). */
+            getRoute() {
+                return panel._route.map(p => ({ id: p.id, type: p.type }));
+            },
+            /**
+             * Inject a route with airway pills directly (simulates what
+             * _resultToPills produces after an A* plan with Victor airways),
+             * then render.
+             */
+            setPlannedRoute(route) {
+                panel._route = route;
+                panel._render();
+            },
+            /**
+             * Extract the route array that _doApply would write to flight_plan.route,
+             * packaged as a minimal plan object that open() / _loadPlan() can consume.
+             */
+            getAppliedPlan(dep, dest, waypoints) {
+                return {
+                    departure:   dep,
+                    destination: dest,
+                    waypoints,
+                    flight_plan: {
+                        departure:   dep,
+                        destination: dest,
+                        route: panel._route.map(r => r.id),
+                        legs:  [],
+                    },
+                };
             },
         };
     </script>
