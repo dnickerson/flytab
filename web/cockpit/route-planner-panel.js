@@ -284,11 +284,17 @@ class RoutePlannerPanel {
         // Process the array directly — joining with spaces would split multi-word
         // fix names like 'La Guardia' into two pills (LA + GUARDIA).
         const routeIds = plan.flight_plan?.route;
-        if (Array.isArray(routeIds) && routeIds.length >= 2) {
-            this._route = routeIds.map((id, i) => {
+        // Normalize: if routeIds is a Field 15 string (older saves), split into array.
+        const routeArr = Array.isArray(routeIds)
+            ? (routeIds.length >= 2 ? routeIds : null)
+            : (typeof routeIds === 'string' && routeIds.trim()
+                ? routeIds.trim().split(/\s+/).filter(Boolean)
+                : null);
+        if (routeArr && routeArr.length >= 2) {
+            this._route = routeArr.map((id, i) => {
                 let type;
                 if (i === 0)                          type = 'dep';
-                else if (i === routeIds.length - 1)   type = 'dest';
+                else if (i === routeArr.length - 1)   type = 'dest';
                 else if (/^[VTJQ]\d/.test(id))        type = 'awy';
                 else if (id === 'DIRECT')             type = 'direct';
                 else                                   type = 'fix';
@@ -2509,7 +2515,9 @@ class RoutePlannerPanel {
         // fuel stop happens to fall on the last waypoint (indices [0, n-1, n-1]).
         const boundaries = [...new Set([0, ...fuelStopIndices, waypoints.length - 1])];
 
-        const fullRouteStr = this._buildField15String(this._route);
+        // Save route as array so _loadPlan can reconstruct airway pills on reload.
+        // (A string route falls through to fix-only waypoints and loses airways.)
+        const routeArr = this._route.map(r => r.id);
 
         const tripLegs = [];
         for (let i = 0; i < boundaries.length - 1; i++) {
@@ -2522,7 +2530,7 @@ class RoutePlannerPanel {
                 flight_plan: {
                     departure:   legWps[0].icao || legWps[0].id || legWps[0].name,
                     destination: legWps[legWps.length - 1].icao || legWps[legWps.length - 1].id || legWps[legWps.length - 1].name,
-                    route:       fullRouteStr,
+                    route:       routeArr,
                     altitude:    this._altitude || 0,
                     // Use all plan legs — per-trip-leg filtering was fragile and
                     // legs are used for display only, not re-planning.
