@@ -2515,22 +2515,32 @@ class RoutePlannerPanel {
         // fuel stop happens to fall on the last waypoint (indices [0, n-1, n-1]).
         const boundaries = [...new Set([0, ...fuelStopIndices, waypoints.length - 1])];
 
-        // Save route as array so _loadPlan can reconstruct airway pills on reload.
-        // (A string route falls through to fix-only waypoints and loses airways.)
-        const routeArr = this._route.map(r => r.id);
+        // Full route array (used as fallback for single-leg trips)
+        const fullRouteArr = this._route.map(r => r.id);
 
         const tripLegs = [];
         for (let i = 0; i < boundaries.length - 1; i++) {
             const start = boundaries[i];
             const end   = boundaries[i + 1];
             const legWps = waypoints.slice(start, end + 1);
+            const legDepId  = legWps[0].icao || legWps[0].id || legWps[0].name;
+            const legDestId = legWps[legWps.length - 1].icao || legWps[legWps.length - 1].id || legWps[legWps.length - 1].name;
+
+            // Slice route pills to just this leg's segment so fuel-stop legs don't
+            // inherit the full multi-leg route (which causes wrong dest on reload).
+            const depPillIdx  = this._route.findIndex(p => p.id === legDepId);
+            const destPillIdx = this._route.findIndex((p, j) => j >= Math.max(depPillIdx, 0) && p.id === legDestId);
+            const legRouteArr = (depPillIdx >= 0 && destPillIdx >= depPillIdx)
+                ? this._route.slice(depPillIdx, destPillIdx + 1).map(r => r.id)
+                : fullRouteArr;
+
             tripLegs.push({
-                dep:  legWps[0].icao || legWps[0].id || legWps[0].name,
-                dest: legWps[legWps.length - 1].icao || legWps[legWps.length - 1].id || legWps[legWps.length - 1].name,
+                dep:  legDepId,
+                dest: legDestId,
                 flight_plan: {
-                    departure:   legWps[0].icao || legWps[0].id || legWps[0].name,
-                    destination: legWps[legWps.length - 1].icao || legWps[legWps.length - 1].id || legWps[legWps.length - 1].name,
-                    route:       routeArr,
+                    departure:   legDepId,
+                    destination: legDestId,
+                    route:       legRouteArr,
                     altitude:    this._altitude || 0,
                     // Use all plan legs — per-trip-leg filtering was fragile and
                     // legs are used for display only, not re-planning.

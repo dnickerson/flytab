@@ -100,7 +100,7 @@ class ConvectiveAlerts {
             }
         }
 
-        this._lastLevel = allAlerts[0]?.level ?? 0;
+        this._lastLevel = allAlerts.reduce((max, a) => Math.max(max, a.level ?? 0), 0);
     }
 
     setActive(on) {

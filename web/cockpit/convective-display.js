@@ -57,7 +57,7 @@ class ConvectiveDisplay {
 
             qualifiedCount++;
             const [lat, lon] = cluster.centroid;
-            const boundary = computeHazardBoundary(cluster, analysis.score, ageMinutes, null);
+            const boundary = computeHazardBoundary(cluster, analysis.score, ageMinutes, null, analysis.signals);
 
             this._renderRings(lat, lon, boundary, category);
             this._renderBadge(lat, lon, category, analysis.score);

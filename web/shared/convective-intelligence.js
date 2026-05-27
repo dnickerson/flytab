@@ -289,7 +289,7 @@ class NexradSectorAnalyzer {
  * @param {{ cape?: number }|null} preflightCell
  * @returns {{ bufferNm: number, rings: Array<{radiusNm, probability}> }}
  */
-function computeHazardBoundary(cluster, convectiveScore, ageMinutes, preflightCell) {
+function computeHazardBoundary(cluster, convectiveScore, ageMinutes, preflightCell, signals) {
     let bufferNm = 20;  // base 20nm minimum
 
     if      (convectiveScore > 0.80) bufferNm = 25;
@@ -302,7 +302,7 @@ function computeHazardBoundary(cluster, convectiveScore, ageMinutes, preflightCe
     if      (cape > 2500) bufferNm += 5;
     else if (cape > 1500) bufferNm += 3;
 
-    const growthRate = cluster.signals?.areaGrowthRate ?? 0;
+    const growthRate = signals?.areaGrowthRate ?? 0;
     if (growthRate > 1.0) bufferNm += 5;  // explosive growth
 
     return {
@@ -335,7 +335,7 @@ function evaluateRouteAlerts(results, aircraft) {
         if (!analysis.score || analysis.score < 0.30) continue;
 
         const [clLat, clLon] = cluster.centroid;
-        const boundary = computeHazardBoundary(cluster, analysis.score, 0, null);
+        const boundary = computeHazardBoundary(cluster, analysis.score, 0, null, analysis.signals);
 
         const distNm = _nmBetween2(aircraft, { lat: clLat, lon: clLon });
         const distToHazardNm = distNm - boundary.bufferNm;
@@ -417,9 +417,14 @@ class OATTrendMonitor {
     analyze() {
         if (this._buffer.length < 30) return null;
 
+        const spanMs = this._buffer[this._buffer.length - 1].timestamp - this._buffer[0].timestamp;
+        if (spanMs < 30000) return null;  // need at least 30s of real elapsed time
+
         const temps  = this._buffer.map(r => r.oatC);
         const slope  = fitLinearSlope(temps);
-        const trendCPerMin = slope * 60;
+        // Convert slope from °C/sample-index to °C/minute using actual elapsed time,
+        // not a fixed 1Hz assumption — frame drops inflate the sample-index rate.
+        const trendCPerMin = slope * (temps.length - 1) / (spanMs / 60000);
 
         const last60 = this._buffer.slice(-60).map(r => r.oatC);
         const varianceC = computeVariance(last60);
