@@ -2365,6 +2365,7 @@ body {
     padding: 6px;
     border-bottom: 1px solid var(--border-light);
     white-space: nowrap;
+    overflow: hidden;
 }
 
 .route-table-content .rt-row.active {

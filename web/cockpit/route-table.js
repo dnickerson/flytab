@@ -2650,8 +2650,8 @@ class RouteTable {
 
         // ── Colgroup: pin column widths so WPT doesn't expand into fuel-stop spans ──
         const COL_WIDTHS = {
-            wpt: '52px', alt: '7%', hdg: '7%', brg: '7%',
-            dist: '8%',  ete: '8%', gs:  '7%', fuel: '8%',
+            wpt: '52px', alt: '10%', hdg: '7%', brg: '7%',
+            dist: '8%',  ete: '8%',  gs:  '7%', fuel: '8%',
         };
 
         let colgroupHtml = '<colgroup>';
@@ -3037,7 +3037,13 @@ class RouteTable {
         switch (key) {
             case 'wpt': return wp.icao || wp.name || '?';
             case 'phase': return wp._phase || '\u2014';
-            case 'alt': return wp.alt ?? wp.altitude ?? '\u2014';
+            case 'alt': {
+                // Use segment data when present (even a single CRZ segment has altitude)
+                const singleSeg = wp._segments?.[0];
+                if (singleSeg) return this._formatSegAlt(singleSeg);
+                const a = wp.alt ?? wp.altitude;
+                return a != null ? (a >= 1000 ? a.toLocaleString() : String(a)) : '\u2014';
+            }
             case 'hdg':
                 return wp._hdg != null ? Math.round(wp._hdg) + '\u00b0' : '\u2014';
             case 'brg':
