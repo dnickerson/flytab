@@ -16,24 +16,28 @@ Free-drag with an X close button. No fixed snap stops.
 
 #### Handle bar layout (Option 2 — center pill)
 ```
-┌─────────────────────────────────────────────┐
-│              ────  (drag pill)               │
-│ KLKR → KCHS   142nm  1:12  8.4gal  [EDIT][✕]│
-└─────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────┐
+│                 ────  (drag pill)                  │
+│ KLKR → KCHS   142nm  1:12  8.4gal  [⛰][EDIT][✕] │
+└──────────────────────────────────────────────────┘
 ```
 - A centered 40×4px pill at the very top of the handle signals the drag target
 - The entire `.route-table-handle` area is draggable (not just the pill)
+- `[⛰]` terrain profile button remains in the handle (unchanged from current)
 - `[EDIT]` button opens the route planner panel (unchanged)
-- `[✕]` is a bordered button that closes the table body (sets height to 0)
+- `[✕]` is a bordered button that closes the table body (sets height to 0); `min-width: 44px; min-height: 44px` for gloved-hand tap target
 - The existing `[▲]` toggle button is removed
-- When body height is 0, a faint `↑` hint text appears in the handle to indicate drag-to-open
+- When body height is 0, a faint `↑` hint appears right-aligned in the handle: color `#999`, font-size 18px, minimum tap area 44×44px. It disappears once the body is open.
 
 #### Drag mechanics
 - `touchstart` / `touchmove` / `touchend` on `.route-table-handle`
 - `touch-action: none` on the handle element to prevent Leaflet scroll conflict
-- During drag: `_bodyEl.style.height = computedPx + 'px'` set live on each `touchmove`
-- Height bounded: `min = 0`, `max = min(window.innerHeight * 0.65, window.innerHeight - 200)`
-- On `touchend`: save final height to `localStorage('flypi_route_table_height')` if > 0
+- During drag: `_bodyEl.style.height = computedPx + 'px'` set live on each `touchmove`; call `_broadcastHeight()` immediately after to keep `--route-table-height` current (sidebars track it live)
+- Height bounded: `min = 0`, `max` is orientation-aware:
+  - Portrait (`window.innerWidth ≤ window.innerHeight`): `min(window.innerHeight * 0.40, window.innerHeight - 200)`
+  - Landscape: `min(window.innerHeight * 0.65, window.innerHeight - 200)`
+- On `touchend`: if downward swipe velocity > 300 px/s, close regardless of final height position (fast-flick to dismiss)
+- On `touchend`: save final height to `localStorage('flypi_route_table_height')` if > 0; call `this._map.invalidateSize()` once
 - Drag down to 0 closes the body (same effect as ✕)
 
 #### Re-open after close
@@ -103,10 +107,53 @@ flex-shrink: 0;
 - `_broadcastHeight()` and `--route-table-height` can be kept for any other consumers (fuel overlay positioning, etc.) but are no longer the mechanism driving map shrinkage
 
 #### Compact mode interaction
-When `body.compact-strips .route-table-sheet { display: none }` the flex column naturally gives all space back to `#mapContainer`. Call `invalidateSize()` after toggling compact mode.
+When `body.compact-strips .route-table-sheet { display: none }` the flex column naturally gives all space back to `#mapContainer`. After toggling compact mode: call `invalidateSize()` and `_broadcastHeight()`. When the sheet is hidden, `offsetHeight` returns 0, so `--route-table-height` resets to `0px` — the layer panel expands to fill the full available height.
 
-#### Existing fixed-position users to audit
-Search for anything that positions itself relative to the bottom of the screen using `--route-table-height` or `bottom: var(--tab-bar-height)` — these may need adjustment once the sheet is no longer fixed. Known: fuel overlay, alt picker.
+#### Sidebar CSS fixes
+
+**`.airport-panel`** (inside `#mapContainer`, `position: absolute`):
+```css
+/* Remove */
+bottom: 164px;   /* was: engine card + handle + strip + buffer */
+
+/* Add */
+bottom: 0;
+```
+With in-flow layout, `#mapContainer` physically shrinks as the route table grows; its bottom edge is always the top of the route table. `bottom: 0` stops the panel flush with the map's lower edge — the route table area is below and is never covered.
+
+**`.layer-panel`** (fixed, full-height slide-in from left):
+```css
+/* Change from */
+bottom: 0;
+
+/* To */
+bottom: calc(var(--bottom-chrome) + var(--route-table-height));
+```
+`--bottom-chrome` is already defined as `calc(var(--tab-bar-height) + 64px)` (tab bar + instrument strip). Adding `--route-table-height` keeps the panel above the route table at all heights, live during drag.
+
+**Real-time `--route-table-height` updates**: `_broadcastHeight()` must be called on every `touchmove` (not only `touchend`) so sidebar CSS variables track the drag continuously. The existing `_broadcastHeight()` reads `this._el.offsetHeight` (the whole sheet: handle + body) — this is the correct value.
+
+#### Auto-pan to keep ownship visible
+
+When the table is opened or resized, the ownship marker must remain in the visible map area. On `touchend` (after `invalidateSize()`), if GPS position is known:
+
+```javascript
+const pos = this._lastGpsPosition;  // {lat, lng} updated by GPS callback
+if (pos) {
+    const mapHeight = this._map.getSize().y;
+    const tableH   = this._el.offsetHeight;
+    // if ownship is in lower 1/3 of the visible map, pan up
+    const pt = this._map.latLngToContainerPoint([pos.lat, pos.lng]);
+    if (pt.y > mapHeight * 0.66) {
+        this._map.panBy([0, -(tableH / 2)], { animate: true, duration: 0.3 });
+    }
+}
+```
+
+Same pan on `toggle()` open. GPS position is available via the existing `onGpsUpdate` callback; store `this._lastGpsPosition` there.
+
+#### Other fixed-position users to audit
+Search for anything using `--route-table-height` or hardcoded bottom offsets that assumed the fixed-position sheet: fuel overlay, alt picker. These should be re-verified after the layout change and updated if they still rely on the old geometry.
 
 ---
 
@@ -147,11 +194,14 @@ The **TMR** tab (index 5) is replaced by **CMPCT**:
 { id: 'cmpct', icon: '⊟', label: 'CMPCT' }
 ```
 
-- Icon flips to `⊞` when strips are hidden
+- When strips are hidden the tab label changes to **MAP** and icon to `⊞` so the pilot sees what tapping it will do ("show MAP" vs "go CMPCT")
 - Tapping toggles `body.compact-strips` class
 - State saved to `localStorage('flypi_compact_strips')`; restored on app load
 - Works in any orientation (most useful in landscape)
 - The tab bar itself always stays visible — CMPCT is always reachable
+
+#### Restore height after compact mode
+Before hiding, save current route table body height to `this._preCompactHeight`. When compact mode is turned off, restore `_bodyEl.style.height` to `_preCompactHeight` (or to `localStorage('flypi_route_table_height')` if `_preCompactHeight` is not set). Pilot expectation: table returns to exactly where it was before compact was activated.
 
 ### CSS
 ```css
