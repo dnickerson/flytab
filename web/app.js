@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v9.23';
+const FLYTAB_VERSION = 'v9.24';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -912,6 +912,7 @@ class FlyTabApp {
                 radarLoop: this.radarLoop,
                 flightUpload: this.flightUpload,
                 routeTable: this.routeTable,
+                layerPanel: this.layerPanel,
             });
             this.tabBar.init();
         }
@@ -963,13 +964,6 @@ class FlyTabApp {
             s.className = 'left-rail-sep';
             return s;
         };
-
-        // ≡ Layers
-        rail.appendChild(makeBtn('&#x2630;', 'Layer panel', () => {
-            if (this.layerPanel) this.layerPanel.toggle();
-        }));
-
-        rail.appendChild(sep());
 
         // 🔍 Zoom in / out — use map zoom buttons
         rail.appendChild(makeBtn('+', 'Zoom in', () => {
