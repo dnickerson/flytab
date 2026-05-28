@@ -67,8 +67,8 @@ class RouteTable {
         this._waypoints = [];   // trip.waypoints[] — all waypoints across all flights
         this._flights = [];     // trip.flights[]   — computed by _buildFlights()
         this._activeIndex = -1;
-        this._expanded = false;   // kept for back-compat checks
-        this._expandState = 0;    // 0=closed, 1=partial(~25%), 2=full(~50%)
+        this._lastGpsPosition = null;  // for auto-pan after drag
+        this._preCompactHeight = null; // for compact-mode height restore
         this._dragging = false;
         this._editMode = false;
 
@@ -215,7 +215,7 @@ class RouteTable {
                 this._editMode = true;
                 this._el?.classList.add('route-table-editing');
                 if (this._searchRowEl) this._searchRowEl.hidden = false;
-                if (this._expandState === 0) this.toggle?.();
+                if ((this._bodyEl?.offsetHeight || 0) === 0) this.toggle?.();
             }
             return;
         }
@@ -399,6 +399,10 @@ class RouteTable {
         if (!situation || this._waypoints.length === 0) return;
         this._lastSituation = situation;
 
+        if (situation.lat && situation.lon) {
+            this._lastGpsPosition = { lat: situation.lat, lng: situation.lon };
+        }
+
         const lat = situation.lat;
         const lon = situation.lon;
         const gs = situation.ground_speed || 0;
@@ -511,7 +515,7 @@ class RouteTable {
 
         if (this._editMode) {
             // Auto-expand when entering edit mode
-            if (this._expandState === 0) this.toggle();
+            if ((this._bodyEl?.offsetHeight || 0) === 0) this.toggle();
             this._searchRowEl.hidden = false;
         } else {
             this._searchRowEl.hidden = true;
