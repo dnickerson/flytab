@@ -16,6 +16,11 @@ class TabBar {
         this._buildTabBar();
         this._buildMoreDrawer();
 
+        // Layer panel close → restore MAP tab highlight
+        if (this._comps.layerPanel) {
+            this._comps.layerPanel.onClose = () => this._closeLayersPanel();
+        }
+
         if (localStorage.getItem('flypi_compact_strips') === '1') {
             document.body.classList.add('compact-strips');
             const btn = this._tabBar?.querySelector('.tab-btn[data-tab="cmpct"]');
@@ -32,13 +37,14 @@ class TabBar {
         this._tabBar = tabBar;
 
         const tabs = [
-            { id: 'map',  icon: '🗺', label: 'MAP'  },
-            { id: 'apt',  icon: '✈',  label: 'APT'  },
-            { id: 'eng',  icon: '⚙️',  label: 'ENG'  },
-            { id: 'chk',  icon: '✅', label: 'CHK'  },
-            { id: 'clr',  icon: '📻', label: 'CLR'  },
+            { id: 'layers', icon: '≡', label: 'LAYERS' },
+            { id: 'map',   icon: '🗺', label: 'MAP'   },
+            { id: 'apt',   icon: '✈',  label: 'APT'   },
+            { id: 'eng',   icon: '⚙️',  label: 'ENG'   },
+            { id: 'chk',   icon: '✅', label: 'CHK'   },
+            { id: 'clr',   icon: '📻', label: 'CLR'   },
             { id: 'cmpct', icon: '⊟', label: 'CMPCT' },
-            { id: 'more', icon: '⋯',  label: 'MORE' },
+            { id: 'more',  icon: '⋯',  label: 'MORE'  },
         ];
 
         for (const tab of tabs) {
@@ -66,6 +72,7 @@ class TabBar {
 
         // Always close all full-screen overlays first, then open the requested one
         if (tabId !== 'more') this._closeMoreDrawer();
+        if (tabId !== 'layers') this._comps.layerPanel?.close();
         if (c.enginePage?.visible) c.enginePage.hide();
         if (c.checklist?.hide) c.checklist.hide();
         if (c.logbook?.hide) c.logbook.hide();
@@ -82,7 +89,7 @@ class TabBar {
 
         // Hide radar loop controls when leaving map — they bleed through
         // full-screen panels in Android WebView despite lower z-index.
-        if (tabId !== 'map' && tabId !== 'cmpct' && tabId !== 'more') {
+        if (tabId !== 'map' && tabId !== 'cmpct' && tabId !== 'more' && tabId !== 'layers') {
             this._hideRadarControls();
         } else if (tabId === 'map') {
             this._restoreRadarControls();
@@ -98,7 +105,9 @@ class TabBar {
             return;
         }
 
-        if (tabId === 'map') {
+        if (tabId === 'layers') {
+            this._openLayersPanel();
+        } else if (tabId === 'map') {
             // Already closed everything above — just return to map
         } else if (tabId === 'eng') {
             if (c.enginePage) c.enginePage.show();
@@ -253,6 +262,19 @@ class TabBar {
         this._moreBackdrop.classList.remove('open');
         // If more tab is still highlighted, switch back to map visually
         const activeBtn = this._tabBar?.querySelector('.tab-btn.active[data-tab="more"]');
+        if (activeBtn) {
+            this._tabBar.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            this._tabBar.querySelector('[data-tab="map"]')?.classList.add('active');
+        }
+    }
+
+    _openLayersPanel() {
+        this._comps.layerPanel?.open();
+    }
+
+    _closeLayersPanel() {
+        // Called when layer panel closes (backdrop tap or ✕) — restore MAP highlight
+        const activeBtn = this._tabBar?.querySelector('.tab-btn.active[data-tab="layers"]');
         if (activeBtn) {
             this._tabBar.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
             this._tabBar.querySelector('[data-tab="map"]')?.classList.add('active');
