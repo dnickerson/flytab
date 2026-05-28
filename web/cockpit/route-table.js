@@ -1755,29 +1755,105 @@ class RouteTable {
         }
     }
 
-    /**
-     * Expand or collapse the bottom sheet.
-     */
+    /** Open/close the route table body. Called externally by app.js (left rail ≡ button). */
     toggle() {
-        this._expandState = (this._expandState + 1) % 3;
-        this._expanded = this._expandState > 0;
-        this._el.classList.toggle('route-table-expanded', this._expandState === 2);
-        this._el.classList.toggle('route-table-partial',  this._expandState === 1);
-        if (this._expandState === 0)      this._bodyEl.style.maxHeight = '0';
-        else if (this._expandState === 1) this._bodyEl.style.maxHeight = '25vh';
-        else                              this._bodyEl.style.maxHeight = '50vh';
-        if (this._toggleBtn) this._toggleBtn.innerHTML =
-            this._expandState === 0 ? '&#9650;' :
-            this._expandState === 1 ? '&#9650;&#9650;' : '&#9660;';
-        setTimeout(() => {
+        const h = this._bodyEl?.offsetHeight ?? 0;
+        if (h > 0) {
+            this._closeBody();
+        } else {
+            const saved = parseInt(localStorage.getItem('flypi_route_table_height'), 10) || 120;
+            if (this._bodyEl) {
+                this._bodyEl.style.height = saved + 'px';
+                this._broadcastHeight();
+                this._updateOpenHint(saved);
+            }
             this._map?.invalidateSize();
-            this._broadcastHeight();
-        }, 300);
+            this._autoPanOwnship();
+        }
     }
 
     _broadcastHeight() {
         const h = this._el ? this._el.offsetHeight : 0;
         document.documentElement.style.setProperty('--route-table-height', h + 'px');
+    }
+
+    _closeBody() {
+        if (!this._bodyEl) return;
+        this._bodyEl.style.height = '0px';
+        this._broadcastHeight();
+        this._updateOpenHint(0);
+        this._map?.invalidateSize();
+    }
+
+    _updateOpenHint(heightPx) {
+        if (!this._openHintEl) return;
+        this._openHintEl.hidden = heightPx > 0;
+    }
+
+    _autoPanOwnship() {
+        if (!this._lastGpsPosition || !this._map) return;
+        const mapHeight = this._map.getSize().y;
+        const tableH   = this._el?.offsetHeight || 0;
+        const pt = this._map.latLngToContainerPoint([
+            this._lastGpsPosition.lat, this._lastGpsPosition.lng
+        ]);
+        if (pt.y > mapHeight * 0.66) {
+            this._map.panBy([0, -(tableH / 2)], { animate: true, duration: 0.3 });
+        }
+    }
+
+    _initDragHandlers() {
+        let dragStartY  = 0;
+        let dragStartH  = 0;
+        let dragStartT  = 0;
+        let lastClientY = 0;
+
+        this._handleEl.addEventListener('touchstart', (e) => {
+            if (e.touches.length !== 1) return;
+            dragStartY  = e.touches[0].clientY;
+            dragStartH  = this._bodyEl?.offsetHeight || 0;
+            dragStartT  = Date.now();
+            lastClientY = dragStartY;
+        }, { passive: true });
+
+        this._handleEl.addEventListener('touchmove', (e) => {
+            if (e.touches.length !== 1) return;
+            const clientY = e.touches[0].clientY;
+            lastClientY   = clientY;
+
+            const dy      = dragStartY - clientY;
+            const isPortrait = window.innerWidth <= window.innerHeight;
+            const maxH = isPortrait
+                ? Math.min(window.innerHeight * 0.40, window.innerHeight - 200)
+                : Math.min(window.innerHeight * 0.65, window.innerHeight - 200);
+            const newH = Math.max(0, Math.min(maxH, dragStartH + dy));
+
+            this._bodyEl.style.height = newH + 'px';
+            this._broadcastHeight();
+            this._updateOpenHint(newH);
+        }, { passive: false });
+
+        this._handleEl.addEventListener('touchend', (e) => {
+            const elapsed = Math.max(1, Date.now() - dragStartT);
+            const totalDy = dragStartY - (e.changedTouches[0]?.clientY ?? lastClientY);
+            const velocity = (totalDy / elapsed) * 1000;
+
+            if (velocity < -300) {
+                this._closeBody();
+                return;
+            }
+
+            const h = this._bodyEl?.offsetHeight || 0;
+            if (h === 0) {
+                this._closeBody();
+                return;
+            }
+
+            localStorage.setItem('flypi_route_table_height', String(h));
+            this._map?.invalidateSize();
+            this._broadcastHeight();
+            this._autoPanOwnship();
+        }, { passive: true });
     }
 
     // ========== Save Route ==========
