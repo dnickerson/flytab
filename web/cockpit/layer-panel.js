@@ -687,6 +687,7 @@ class LayerPanel {
         if (!this._panel.classList.contains('open')) return;
         this._panel.classList.remove('open');
         this._backdrop.classList.remove('open');
+        if (typeof this.onClose === 'function') this.onClose();
     }
 
     toggle() {
