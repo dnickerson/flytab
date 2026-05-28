@@ -1772,6 +1772,24 @@ class RouteTable {
         }
     }
 
+    setCompact(compact) {
+        if (compact) {
+            this._preCompactHeight = this._bodyEl?.offsetHeight || 0;
+        } else {
+            const restoreH = this._preCompactHeight ??
+                (parseInt(localStorage.getItem('flypi_route_table_height'), 10) || 0);
+            this._preCompactHeight = null;
+            if (this._bodyEl) {
+                this._bodyEl.style.height = restoreH + 'px';
+                this._updateOpenHint(restoreH);
+            }
+        }
+        setTimeout(() => {
+            this._map?.invalidateSize();
+            this._broadcastHeight();
+        }, 0);
+    }
+
     _broadcastHeight() {
         const h = this._el ? this._el.offsetHeight : 0;
         document.documentElement.style.setProperty('--route-table-height', h + 'px');

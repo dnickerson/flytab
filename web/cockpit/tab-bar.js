@@ -15,6 +15,15 @@ class TabBar {
     init() {
         this._buildTabBar();
         this._buildMoreDrawer();
+
+        if (localStorage.getItem('flypi_compact_strips') === '1') {
+            document.body.classList.add('compact-strips');
+            const btn = this._tabBar?.querySelector('.tab-btn[data-tab="cmpct"]');
+            if (btn) {
+                btn.querySelector('.tab-btn-icon').textContent = '⊞';
+                btn.lastChild.textContent = 'MAP';
+            }
+        }
     }
 
     _buildTabBar() {
@@ -28,7 +37,7 @@ class TabBar {
             { id: 'eng',  icon: '⚙️',  label: 'ENG'  },
             { id: 'chk',  icon: '✅', label: 'CHK'  },
             { id: 'clr',  icon: '📻', label: 'CLR'  },
-            { id: 'tmr',  icon: '⏱', label: 'TMR'  },
+            { id: 'cmpct', icon: '⊟', label: 'CMPCT' },
             { id: 'more', icon: '⋯',  label: 'MORE' },
         ];
 
@@ -73,15 +82,15 @@ class TabBar {
 
         // Hide radar loop controls when leaving map — they bleed through
         // full-screen panels in Android WebView despite lower z-index.
-        if (tabId !== 'map' && tabId !== 'tmr' && tabId !== 'more') {
+        if (tabId !== 'map' && tabId !== 'cmpct' && tabId !== 'more') {
             this._hideRadarControls();
         } else if (tabId === 'map') {
             this._restoreRadarControls();
         }
 
-        if (tabId === 'tmr') {
-            // Timer is a floating popup — toggle without closing other views
-            this._toggleTimer();
+        if (tabId === 'cmpct') {
+            // Compact toggle — toggle without closing other views
+            this._toggleCompactStrips();
             // Restore previous tab highlight
             this._tabBar.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
             const prev = this._tabBar.querySelector('.tab-btn[data-tab="map"]');
@@ -464,6 +473,21 @@ class TabBar {
             return;
         }
         this._buildTimer();
+    }
+
+    _toggleCompactStrips() {
+        const isNowCompact = !document.body.classList.contains('compact-strips');
+        document.body.classList.toggle('compact-strips', isNowCompact);
+
+        const btn = this._tabBar?.querySelector('.tab-btn[data-tab="cmpct"]');
+        if (btn) {
+            btn.querySelector('.tab-btn-icon').textContent = isNowCompact ? '⊞' : '⊟';
+            btn.lastChild.textContent = isNowCompact ? 'MAP' : 'CMPCT';
+        }
+
+        this._comps.routeTable?.setCompact(isNowCompact);
+
+        localStorage.setItem('flypi_compact_strips', isNowCompact ? '1' : '0');
     }
 
     _buildTimer() {

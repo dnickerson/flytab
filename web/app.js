@@ -911,6 +911,7 @@ class FlyTabApp {
                 planSync: this.planSync,
                 radarLoop: this.radarLoop,
                 flightUpload: this.flightUpload,
+                routeTable: this.routeTable,
             });
             this.tabBar.init();
         }
