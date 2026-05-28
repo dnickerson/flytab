@@ -6925,13 +6925,13 @@ body {
 .layer-panel {
     position: fixed;
     top: 0;
-    left: 0;
-    bottom: calc(var(--bottom-chrome) + var(--route-table-height));
+    right: 0;
+    bottom: var(--tab-bar-height);
     width: 280px;
-    z-index: 1010;
+    z-index: 9500;
     background: var(--bg-surface);
-    border-right: 1px solid var(--border-strong);
-    transform: translateX(-100%);
+    border-left: 1px solid var(--border-strong);
+    transform: translateX(100%);
     transition: transform 0.2s ease;
     display: flex;
     flex-direction: column;

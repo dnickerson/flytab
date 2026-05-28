@@ -76,7 +76,7 @@ The **advisory** badge appears between GPS and FIS-B when a weather advisory is 
 
 The primary cockpit view. Shows position, route, weather, traffic, and airspace overlays.
 
-**Base chart** — Switch between Vector (clean low-clutter), Sectional, IFR Low, and TAC using the Layers panel (≡ button, top-left corner).
+**Base chart** — Switch between Vector (clean low-clutter), Sectional, IFR Low, and TAC using the **LAYERS tab** (far left of the tab bar).
 
 **Airspace** — Class B (solid blue), C (magenta), D (blue dashed) drawn at correct altitude limits. Tap an airspace boundary for the name and altitudes.
 
@@ -179,7 +179,7 @@ Opens a right-side drawer with infrequently used actions, organized in three sec
 
 ## Layer Panel
 
-Tap the **≡ button** (top-left corner of the map) to open the layer panel. Close it by tapping the backdrop or the ✕ button.
+Tap the **LAYERS tab** (far left of the tab bar) to open the layer panel. Close it by tapping the backdrop or the ✕ button.
 
 The panel has four accordion sections: **Base Chart**, **Map Overlays**, **Traffic**, and **Weather**.
 
@@ -441,7 +441,7 @@ If Stratux is not found within about 30 seconds of launch, a banner appears: "SI
 2. Launch FlyTab — it will auto-download any updated NASR data.
 3. **MORE → Plan on flywhere.app** — build the route.
 4. **MORE → Load Plan** — import the route.
-5. **≡ → Cache Route Area** — download tiles for the route corridor.
+5. **LAYERS → Cache Route Area** — download tiles for the route corridor.
 6. **MORE → Weather Briefing** — review METARs, TAFs, G-AIRMETs, NOTAMs.
 7. **MORE → Fuel Entry** — set fuel quantities if you know them.
 
@@ -459,7 +459,7 @@ If Stratux is not found within about 30 seconds of launch, a banner appears: "SI
 
 **Departure:**
 - Switch to auto-pan (⊙ button) if not already active.
-- **≡ → Weather → NEXRAD** on if convective weather is a concern.
+- **LAYERS → Weather → NEXRAD** on if convective weather is a concern.
 - Nav strip shows GS, ALT, and ETE to first waypoint automatically.
 
 **En route:**
@@ -497,7 +497,7 @@ The feature requires the NEXRAD / FIS-B radar overlay to be enabled first. The i
 Check that the Pi is powered and the tablet is on the same network segment. Pi usually assigned to 192.168.1.x. More → Data Status shows the last-connected time for the engine monitor.
 
 **Tiles are missing / grey squares:**
-Charts for this area are not downloaded. Either download the region (≡ → Base Chart → Region Download) or use the Vector base layer, which requires no tile data.
+Charts for this area are not downloaded. Either download the region (LAYERS → Base Chart → Region Download) or use the Vector base layer, which requires no tile data.
 
 **NASR badge is red:**
 Airport/navaid database is stale. Connect to home Wi-Fi with home server running and restart FlyTab — it auto-downloads fresh NASR data on startup.
@@ -511,11 +511,11 @@ The NASR import writes ~100,000 records to IndexedDB. If this happens during sta
 
 | Task | How |
 |---|---|
-| Switch base chart | ≡ → Base Chart section |
-| Enable weather radar | ≡ → Weather → NEXRAD / FIS-B |
-| See CB building polygons | ≡ → Weather → CB Building (radar must be on) |
-| See METAR dots | ≡ → Weather → Flight Category |
-| Download tiles offline | ≡ → Region Download |
+| Switch base chart | LAYERS → Base Chart section |
+| Enable weather radar | LAYERS → Weather → NEXRAD / FIS-B |
+| See CB building polygons | LAYERS → Weather → CB Building (radar must be on) |
+| See METAR dots | LAYERS → Weather → Flight Category |
+| Download tiles offline | LAYERS → Region Download |
 | Add airport to route | Tap airport on map → Add to Route |
 | Direct-to an airport | Tap airport on map → → (corner button) |
 | Start approach briefing | CLR tab → APCH |

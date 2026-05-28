@@ -1,7 +1,7 @@
 /**
  * FlyPi v5 — Layer Panel
- * Slide-in panel (from left) for base chart selection and overlay toggles.
- * Triggered by ≡ button in the left rail.
+ * Right-side slide-in drawer for base chart selection and overlay toggles.
+ * Triggered by LAYERS tab in the tab bar.
  */
 
 class LayerPanel {
@@ -687,6 +687,7 @@ class LayerPanel {
         if (!this._panel.classList.contains('open')) return;
         this._panel.classList.remove('open');
         this._backdrop.classList.remove('open');
+        if (typeof this.onClose === 'function') this.onClose();
     }
 
     toggle() {
