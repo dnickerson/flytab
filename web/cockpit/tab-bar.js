@@ -43,6 +43,7 @@ class TabBar {
             { id: 'eng',   icon: '⚙️',  label: 'ENG'   },
             { id: 'chk',   icon: '✅', label: 'CHK'   },
             { id: 'clr',   icon: '📻', label: 'CLR'   },
+            { id: 'src',   icon: '🔍', label: 'SRC'   },
             { id: 'cmpct', icon: '⊟', label: 'CMPCT' },
             { id: 'more',  icon: '⋯',  label: 'MORE'  },
         ];
@@ -89,7 +90,7 @@ class TabBar {
 
         // Hide radar loop controls when leaving map — they bleed through
         // full-screen panels in Android WebView despite lower z-index.
-        if (tabId !== 'map' && tabId !== 'cmpct' && tabId !== 'more' && tabId !== 'layers') {
+        if (tabId !== 'map' && tabId !== 'cmpct' && tabId !== 'src' && tabId !== 'more' && tabId !== 'layers') {
             this._hideRadarControls();
         } else if (tabId === 'map') {
             this._restoreRadarControls();
@@ -102,6 +103,14 @@ class TabBar {
             this._tabBar.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
             const prev = this._tabBar.querySelector('.tab-btn[data-tab="map"]');
             if (prev) prev.classList.add('active');
+            return;
+        }
+
+        if (tabId === 'src') {
+            // Search toggle — opens overlay, then restores MAP highlight
+            c.everywhereSearch?.toggle();
+            this._tabBar.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            this._tabBar.querySelector('.tab-btn[data-tab="map"]')?.classList.add('active');
             return;
         }
 

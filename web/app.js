@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v9.24';
+const FLYTAB_VERSION = 'v9.25';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -913,6 +913,7 @@ class FlyTabApp {
                 flightUpload: this.flightUpload,
                 routeTable: this.routeTable,
                 layerPanel: this.layerPanel,
+                everywhereSearch: this.everywhereSearch,
             });
             this.tabBar.init();
         }
@@ -933,71 +934,8 @@ class FlyTabApp {
         setTimeout(() => this.cockpitMap.resize(), 200);
     }
 
-    /** Build left rail icon buttons */
-    _buildLeftRail() {
-        const rail = document.getElementById('leftRail');
-        if (!rail) return;
-
-        // Helper: create a rail button with _fastTap
-        const makeBtn = (icon, title, handler, activeDefault = false) => {
-            const btn = document.createElement('button');
-            btn.className = 'left-rail-btn' + (activeDefault ? ' active' : '');
-            btn.title = title;
-            btn.innerHTML = icon;
-            let touchFired = false;
-            btn.addEventListener('touchstart', (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                touchFired = true;
-                handler(btn, e);
-            }, { passive: false });
-            btn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                if (touchFired) { touchFired = false; return; }
-                handler(btn, e);
-            });
-            return btn;
-        };
-
-        const sep = () => {
-            const s = document.createElement('div');
-            s.className = 'left-rail-sep';
-            return s;
-        };
-
-        // 🔍 Zoom in / out — use map zoom buttons
-        rail.appendChild(makeBtn('+', 'Zoom in', () => {
-            if (this.cockpitMap?.map) this.cockpitMap.map.zoomIn();
-        }));
-        rail.appendChild(makeBtn('−', 'Zoom out', () => {
-            if (this.cockpitMap?.map) this.cockpitMap.map.zoomOut();
-        }));
-
-        rail.appendChild(sep());
-
-        // Search
-        rail.appendChild(makeBtn('SRC', 'Search', () => {
-            if (this.everywhereSearch) this.everywhereSearch.toggle();
-        }));
-
-        rail.appendChild(sep());
-
-        // Route table toggle
-        rail.appendChild(makeBtn('&#x2261;', 'Route table', () => {
-            if (this.routeTable) this.routeTable.toggle();
-        }));
-
-        // Spacer to push version to bottom
-        const spacer = document.createElement('div');
-        spacer.className = 'left-rail-spacer';
-        rail.appendChild(spacer);
-
-        // Version label
-        const ver = document.createElement('div');
-        ver.className = 'left-rail-version';
-        ver.textContent = FLYTAB_VERSION;
-        rail.appendChild(ver);
-    }
+    /** Left rail removed — controls now in tab bar */
+    _buildLeftRail() {}
 
     async _ensureNasrData(nasrDb) {
         // NanoHTTPD (localhost:9090) is the sole local data source.
