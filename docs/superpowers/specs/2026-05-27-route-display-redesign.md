@@ -1,7 +1,7 @@
 # Route Display Redesign
 
 **Date:** 2026-05-27  
-**Scope:** Route table UX (draggable sheet, WPT column), landscape compact mode, MORE drawer cleanup  
+**Scope:** Route table UX (draggable sheet, WPT column), map/table layout separation, landscape compact mode, MORE drawer cleanup  
 **Files primarily affected:** `web/cockpit/route-table.js`, `web/style.css`, `web/cockpit/tab-bar.js`, `web/app.js`, `web/cockpit/track-log.js`
 
 ---
@@ -48,7 +48,69 @@ Dragging upward on the handle when body height is 0 restores to `localStorage('f
 
 ---
 
-## 2. WPT Column Width Fix
+## 2. Route Table Layout — Remove Fixed Positioning
+
+### Problem
+`.route-table-sheet` is `position: fixed`, which takes it out of the document flow. The Leaflet map container (`#primaryView`) fills 100% of its parent regardless of table height, so the map renders behind the table. Touch events intended for map elements (airports, navaids) in the covered area land on the table instead.
+
+`--route-table-height` and `invalidateSize()` are already wired but don't help: `invalidateSize()` re-reads the container size, which hasn't changed because the fixed sheet doesn't affect layout.
+
+### Fix — in-flow layout
+
+Change `#cockpitContainer` to a flex column that contains both the map area and the route table sheet. The map grows and shrinks naturally as the table changes height.
+
+#### Layout restructure
+
+**HTML** — move `.route-table-sheet` inside `#cockpitContainer` (currently it's appended directly to the container in `_buildDOM`; it must instead be appended inside `#cockpitContainer` after `#mapContainer`):
+
+```
+#cockpitContainer  (flex column, height: 100%)
+  #mapContainer    (flex: 1, min-height: 0)
+    #primaryView   (height: 100%)  ← Leaflet map
+  .route-table-sheet  (flex shrink 0, height = handle + body)
+```
+
+**CSS changes to `.route-table-sheet`:**
+```css
+/* Remove */
+position: fixed;
+bottom: var(--tab-bar-height);
+left: 0;
+right: 0;
+z-index: 500;
+
+/* Add */
+position: relative;   /* in-flow */
+width: 100%;
+flex-shrink: 0;
+```
+
+**CSS changes to `#cockpitContainer` / `.map-area`:**
+```css
+#cockpitContainer {
+    display: flex;
+    flex-direction: column;
+}
+#mapContainer {
+    flex: 1;
+    min-height: 0;   /* required for flex children to shrink below content size */
+}
+```
+
+#### Drag mechanics update
+- During `touchmove`: set `_bodyEl.style.height` as before; no `invalidateSize()` needed mid-drag
+- On `touchend`: call `this._map.invalidateSize()` once so Leaflet redraws tile seams at the new boundary
+- `_broadcastHeight()` and `--route-table-height` can be kept for any other consumers (fuel overlay positioning, etc.) but are no longer the mechanism driving map shrinkage
+
+#### Compact mode interaction
+When `body.compact-strips .route-table-sheet { display: none }` the flex column naturally gives all space back to `#mapContainer`. Call `invalidateSize()` after toggling compact mode.
+
+#### Existing fixed-position users to audit
+Search for anything that positions itself relative to the bottom of the screen using `--route-table-height` or `bottom: var(--tab-bar-height)` — these may need adjustment once the sheet is no longer fixed. Known: fuel overlay, alt picker.
+
+---
+
+## 3. WPT Column Width Fix
 
 ### Problem
 With `table-layout: auto`, the fuel-stop row's long `colspan` text inflates the table minimum width, which causes the WPT column to be sized wider than the waypoint identifiers require.
@@ -76,7 +138,7 @@ The `<colgroup>` must be regenerated in `_renderTable()` to match the active col
 
 ---
 
-## 3. Landscape Compact Mode
+## 4. Landscape Compact Mode
 
 ### Tab bar change
 The **TMR** tab (index 5) is replaced by **CMPCT**:
@@ -100,11 +162,11 @@ body.compact-strips .route-table-sheet {
 ```
 
 ### Timer
-TMR timer functionality moves to the MORE drawer (see §4 — added as first In-flight item).
+TMR timer functionality moves to the MORE drawer (see §5 — added as first In-flight item).
 
 ---
 
-## 4. MORE Drawer Cleanup
+## 5. MORE Drawer Cleanup
 
 ### Removed items (7)
 These rows are deleted from the `rows` array in `_buildMoreDrawer()`:
