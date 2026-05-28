@@ -2629,6 +2629,21 @@ class RouteTable {
         const numCols  = columns.length + (this._editMode ? 2 : 0);
         const hasMultipleFlights = this._flights.length > 1;
 
+        // ── Colgroup: pin column widths so WPT doesn't expand into fuel-stop spans ──
+        const COL_WIDTHS = {
+            wpt: '52px', alt: '7%', hdg: '7%', brg: '7%',
+            dist: '8%',  ete: '8%', gs:  '7%', fuel: '8%',
+        };
+
+        let colgroupHtml = '<colgroup>';
+        if (this._editMode) colgroupHtml += '<col style="width:36px">';   // reorder handle
+        for (const col of columns) {
+            const w = COL_WIDTHS[col.key];
+            colgroupHtml += w ? `<col style="width:${w}">` : '<col>';
+        }
+        if (this._editMode) colgroupHtml += '<col style="width:36px">';   // delete button
+        colgroupHtml += '</colgroup>';
+
         // ── Column headers ────────────────────────────────────────────────────
         let html = '<thead><tr>';
         if (this._editMode) html += '<th style="width:32px"></th>'; // reorder
@@ -2765,7 +2780,7 @@ class RouteTable {
             html += '</tr></tfoot>';
         }
 
-        this._tableEl.innerHTML = html;
+        this._tableEl.innerHTML = colgroupHtml + html;
 
         // Scroll active row into view within the table body
         const activeRow = this._tableEl.querySelector('.rt-row.active');
