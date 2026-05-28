@@ -69,7 +69,7 @@ class RouteTable {
         this._activeIndex = -1;
         this._lastGpsPosition = null;  // for auto-pan after drag
         this._preCompactHeight = null; // for compact-mode height restore
-        this._dragging = false;
+
         this._editMode = false;
 
         this._el = null;
@@ -1828,6 +1828,7 @@ class RouteTable {
 
         this._handleEl.addEventListener('touchstart', (e) => {
             if (e.touches.length !== 1) return;
+            if (e.target.closest('button')) return;   // let button taps through without drag
             dragStartY  = e.touches[0].clientY;
             dragStartH  = this._bodyEl?.offsetHeight || 0;
             dragStartT  = Date.now();
@@ -2202,7 +2203,7 @@ class RouteTable {
         // Body
         this._bodyEl = document.createElement('div');
         this._bodyEl.className = 'route-table-body';
-        this._bodyEl.style.maxHeight = '0';
+        this._bodyEl.style.height = '0px';
 
         this._tableEl = document.createElement('table');
         this._tableEl.className = 'route-table-content';
@@ -2320,8 +2321,8 @@ class RouteTable {
                 return;
             }
         });
-        // Close picker on outside click (scoped to container, not document)
-        this._container.addEventListener('click', (e) => {
+        // Close picker on outside click — scoped to cockpitContainer (picker lives there now)
+        document.getElementById('cockpitContainer').addEventListener('click', (e) => {
             if (!this._altPicker.hidden && !this._altPicker.contains(e.target) && !e.target.closest('.rt-alt-cell')) {
                 this._hideAltPicker();
             }
