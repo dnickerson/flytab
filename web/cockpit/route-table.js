@@ -677,7 +677,7 @@ class RouteTable {
 
         // Position: prefer below anchor, flip above if it would go off screen
         const rect = anchorEl.getBoundingClientRect();
-        const containerRect = this._container.getBoundingClientRect();
+        const containerRect = document.getElementById('cockpitContainer').getBoundingClientRect();
         const pickerH = 160; // increased for constraint row
         const spaceBelow = containerRect.bottom - rect.bottom;
         if (spaceBelow < pickerH) {
@@ -2070,28 +2070,15 @@ class RouteTable {
         this._handleEl = document.createElement('div');
         this._handleEl.className = 'route-table-handle';
         this._handleEl.innerHTML = `
-            <span class="handle-summary"></span>
-            <button class="rt-profile-btn" title="Terrain profile" style="min-width:44px;min-height:44px;font-size:18px;background:none;border:none;color:inherit;cursor:pointer;padding:0 8px">\u26F0</button>
-            <button class="route-table-edit-btn">EDIT</button>
-            <button class="rt-toggle-btn" title="Expand/collapse plan">&#9650;</button>
-        `;
-        // Tap to toggle — no drag, just two states
-        let touchStartY = 0;
-        this._handleEl.addEventListener('touchstart', (e) => {
-            touchStartY = e.touches[0].clientY;
-        }, { passive: true });
-        this._handleEl.addEventListener('touchend', (e) => {
-            if (e.target.tagName === 'BUTTON') return;
-            const dy = Math.abs(e.changedTouches[0].clientY - touchStartY);
-            if (dy < 10) {
-                e.preventDefault();
-                this.toggle();
-            }
-        });
-        this._handleEl.addEventListener('click', (e) => {
-            if (e.target.tagName === 'BUTTON') return;
-            this.toggle();
-        });
+    <div class="rt-drag-pill"></div>
+    <div class="rt-handle-row">
+        <span class="handle-summary"></span>
+        <button class="rt-profile-btn" title="Terrain profile" style="min-width:44px;min-height:44px;font-size:18px;background:none;border:none;color:inherit;cursor:pointer;padding:0 8px">&#x26F0;</button>
+        <button class="route-table-edit-btn">EDIT</button>
+        <button class="rt-close-btn" title="Close route table">&#x2715;</button>
+        <span class="rt-open-hint" hidden>&#x2191;</span>
+    </div>
+`;
 
         // EDIT button opens the route planner panel
         this._editBtn = this._handleEl.querySelector('.route-table-edit-btn');
@@ -2104,8 +2091,10 @@ class RouteTable {
         this._profileBtn = this._handleEl.querySelector('.rt-profile-btn');
         wireTap(this._profileBtn, () => this._openProfileView());
 
-        this._toggleBtn = this._handleEl.querySelector('.rt-toggle-btn');
-        wireTap(this._toggleBtn, () => this.toggle());
+        this._closeBtn = this._handleEl.querySelector('.rt-close-btn');
+        wireTap(this._closeBtn, () => this._closeBody());
+
+        this._openHintEl = this._handleEl.querySelector('.rt-open-hint');
 
         // Terrain profile panel (created once, floats above the sheet)
         this._profileView = (typeof RouteProfileView !== 'undefined')
@@ -2244,11 +2233,13 @@ class RouteTable {
 
         this._el.appendChild(this._handleEl);
         this._el.appendChild(this._bodyEl);
-        this._container.appendChild(this._el);
-        // Append altitude picker to container (needs to float above table)
-        this._container.appendChild(this._altPicker);
+        const cockpitContainer = document.getElementById('cockpitContainer');
+        cockpitContainer.appendChild(this._el);
+        // Alt picker floats above the table — append to cockpitContainer too
+        cockpitContainer.appendChild(this._altPicker);
 
         this._buildEngineStatusCard();
+        if (this._initDragHandlers) this._initDragHandlers();
     }
 
     // ── Terrain Profile View ──────────────────────────────────────────────────
