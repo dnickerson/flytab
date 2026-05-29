@@ -24,8 +24,17 @@ class RadarPage {
         this._defaultZoom = (typeof CockpitConfig !== 'undefined' && CockpitConfig.get)
             ? (CockpitConfig.get('radar.conusDefaultZoom') || 6) : 6;
 
+        this._looping = false;
+        this._loopIdx = 0;
+        this._loopTimer = null;
+        this._speedMs = (typeof CockpitConfig !== 'undefined' && CockpitConfig.get('radar.playbackSpeedMs')) || 500;
+
         this._onSituation = (e) => this._updateOwnship(e.detail);
-        this._onNexrad = () => { if (this._visible) { this._drawConus(); this._updateBadge(); } };
+        this._onNexrad = () => {
+            if (!this._visible) return;
+            if (!this._looping) this._drawConus();   // live view only when not looping
+            this._updateBadge();
+        };
         this._buildDom();
     }
 
@@ -41,12 +50,19 @@ class RadarPage {
             </div>
             <div class="radar-page-map">
                 <button class="radar-page-recenter">Recenter on me</button>
+                <div class="radar-page-loop">
+                    <button class="radar-page-loop-btn" aria-label="Play/pause loop">&#x25B6;</button>
+                    <span class="radar-page-loop-time"></span>
+                    <input type="range" class="radar-page-loop-scrubber" min="0" max="0" value="0" aria-label="Radar frame">
+                </div>
             </div>`;
         document.body.appendChild(this._el);
         this._mapEl = this._el.querySelector('.radar-page-map');
         this._badge = this._el.querySelector('.radar-page-badge');
         this._el.querySelector('.radar-page-close').addEventListener('click', () => this.hide());
         this._el.querySelector('.radar-page-recenter').addEventListener('click', () => this._recenter());
+        this._el.querySelector('.radar-page-loop-btn').addEventListener('click', () => this._toggleLoop());
+        this._el.querySelector('.radar-page-loop-scrubber').addEventListener('input', (e) => this._scrubTo(+e.target.value));
     }
 
     _ensureMap() {
@@ -109,6 +125,64 @@ class RadarPage {
             : `FIS-B · CONUS · ${Math.round(ageMs / 60000)} min`;
     }
 
+    _frames() { return this._fisb.frameHistory || []; }
+
+    _toggleLoop() {
+        if (this._looping) { this._pauseLoop(); return; }
+        const n = this._frames().length;
+        if (n < 2) return;               // need ≥2 frames to animate
+        this._looping = true;
+        this._updateLoopBtn();
+        this._loopTick();
+    }
+
+    _pauseLoop() {
+        this._looping = false;
+        if (this._loopTimer) { clearTimeout(this._loopTimer); this._loopTimer = null; }
+        this._updateLoopBtn();
+    }
+
+    _loopTick() {
+        const n = this._frames().length;
+        if (n === 0) { this._pauseLoop(); return; }
+        this._showFrame(this._loopIdx);
+        this._loopIdx = (this._loopIdx + 1) % n;
+        this._loopTimer = setTimeout(() => { if (this._looping) this._loopTick(); }, this._speedMs);
+    }
+
+    _scrubTo(i) {
+        this._pauseLoop();
+        this._loopIdx = i;
+        this._showFrame(i);
+    }
+
+    /** Draw one historical CONUS frame to the page canvas + sync the controls. */
+    _showFrame(i) {
+        const frames = this._frames();
+        if (i < 0 || i >= frames.length) return;
+        this._fisb.drawFrame(this._target, 'conus', i);
+        const scr = this._el.querySelector('.radar-page-loop-scrubber');
+        if (scr) { scr.max = String(frames.length - 1); scr.value = String(i); }
+        const t = this._el.querySelector('.radar-page-loop-time');
+        if (t) {
+            const f = frames[i];
+            const d = new Date(f.dataTime || f.time);
+            t.textContent = isNaN(d) ? '' : d.toISOString().slice(11, 16) + 'Z';
+        }
+    }
+
+    _updateLoopBtn() {
+        const b = this._el.querySelector('.radar-page-loop-btn');
+        if (b) b.textContent = this._looping ? '⏸' : '▶';
+    }
+
+    /** Refresh the scrubber range/label from current frame count without drawing. */
+    _refreshScrubber() {
+        const frames = this._frames();
+        const scr = this._el.querySelector('.radar-page-loop-scrubber');
+        if (scr) scr.max = String(Math.max(0, frames.length - 1));
+    }
+
     isVisible() { return this._visible; }
 
     show() {
@@ -116,11 +190,15 @@ class RadarPage {
         this._visible = true;
         this._el.style.display = 'flex';
         this._ensureMap();
+        // Start in LIVE mode — pilot presses play to animate.
+        this._looping = false;
+        this._updateLoopBtn();
         setTimeout(() => {
             if (!this._visible) return;   // hide() fired before this microtask
             this._map.invalidateSize();
             this._recenter();
             this._drawConus();
+            this._refreshScrubber();
         }, 0);
         this._stratux.addEventListener('stratux:situation', this._onSituation);
         this._stratux.addEventListener('stratux:nexrad', this._onNexrad);
@@ -133,6 +211,7 @@ class RadarPage {
 
     hide() {
         this._visible = false;
+        this._pauseLoop();
         this._el.style.display = 'none';
         this._stratux.removeEventListener('stratux:situation', this._onSituation);
         this._stratux.removeEventListener('stratux:nexrad', this._onNexrad);

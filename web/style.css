@@ -5310,8 +5310,12 @@ body {
 .radar-page-title { font-family: var(--font-ui); font-weight: 800; font-size: 18px; color: var(--text-primary); }
 .radar-page-close { margin-left: auto; min-width: var(--touch-min, 56px); min-height: var(--touch-min, 56px); font-size: 24px; font-weight: 800; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; color: var(--text-primary); }
 .radar-page-map { flex: 1; position: relative; }
-.radar-page-recenter { position: absolute; bottom: 16px; right: 16px; z-index: 500; min-height: var(--touch-preferred, 64px); padding: 0 18px; font-family: var(--font-ui); font-weight: 800; font-size: 16px; color: #fff; background: var(--accent); border: none; border-radius: 10px; }
+.radar-page-recenter { position: absolute; bottom: 92px; right: 16px; z-index: 500; min-height: var(--touch-preferred, 64px); padding: 0 18px; font-family: var(--font-ui); font-weight: 800; font-size: 16px; color: #fff; background: var(--accent); border: none; border-radius: 10px; }
 .radar-page-badge { position: static; }
+.radar-page-loop { position: absolute; left: 16px; right: 16px; bottom: 16px; z-index: 500; display: flex; align-items: center; gap: 12px; padding: 8px 12px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px; }
+.radar-page-loop-btn { min-width: var(--touch-min, 56px); min-height: var(--touch-min, 56px); font-size: 24px; font-weight: 800; color: #fff; background: var(--accent); border: none; border-radius: 8px; }
+.radar-page-loop-time { font-family: var(--font-instrument); font-weight: 700; font-size: 18px; color: var(--text-primary); min-width: 64px; }
+.radar-page-loop-scrubber { flex: 1; min-height: var(--touch-min, 56px); accent-color: var(--accent); }
 
 /* ========== Checklist Overlay ========== */
 .checklist-page {
