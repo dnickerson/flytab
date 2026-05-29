@@ -179,6 +179,7 @@ class WbOverlay {
 
     _compute() {
         if (!this._profile) return;
+        if (typeof WbCalculator === 'undefined') return;
         const stationWeights = this._getStationWeights();
         const fuelGal = this._getFuelGal();
         const result = WbCalculator.calculate(this._profile, stationWeights, fuelGal);
@@ -209,7 +210,7 @@ class WbOverlay {
                 <div class="wb-result-value wb-result-secondary">${fwdLimit ? fwdLimit.toFixed(2) : '--'}–${aftLimit ? aftLimit.toFixed(2) : '--'}<span class="wb-result-unit">"</span></div>
             </div>
             <div class="wb-envelope-badge ${r.inEnvelope ? 'in-envelope' : 'out-of-envelope'}">
-                ${r.inEnvelope ? '✅ IN ENVELOPE' : '❌ OUT OF ENVELOPE' + (r.envelopeReason ? ' — ' + r.envelopeReason : '')}
+                ${r.inEnvelope ? 'IN ENVELOPE' : 'OUT OF ENVELOPE' + (r.envelopeReason ? ' — ' + r.envelopeReason : '')}
             </div>
         `;
     }
