@@ -127,11 +127,13 @@ Append the following block near the bottom of `web/style.css`, before the `body.
 }
 
 .wb-title {
-    font-size: 18px;
-    font-weight: 700;
+    font-size: 16px;
+    font-weight: 900;
     text-transform: uppercase;
     color: var(--text-primary);
-    letter-spacing: 0.5px;
+    letter-spacing: 1px;
+    flex: 1;
+    text-align: center;
 }
 
 .wb-body {
@@ -162,10 +164,10 @@ Append the following block near the bottom of `web/style.css`, before the `body.
 }
 
 .wb-station-name {
-    font-size: 12px;
-    font-weight: 700;
+    font-size: 14px;
+    font-weight: 800;
     text-transform: uppercase;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     letter-spacing: 0.5px;
 }
 
@@ -178,14 +180,15 @@ Append the following block near the bottom of `web/style.css`, before the `body.
 .wb-station-input {
     flex: 1;
     font-size: 26px;
-    font-weight: 700;
+    font-weight: 900;
+    font-family: var(--font-instrument, monospace);
     color: var(--text-primary);
     background: transparent;
     border: none;
     border-bottom: 2px solid var(--border-strong);
     padding: 4px 0;
     width: 100%;
-    min-height: 48px;
+    min-height: var(--touch-min, 56px);
     text-align: right;
     outline: none;
     -webkit-appearance: none;
@@ -193,8 +196,9 @@ Append the following block near the bottom of `web/style.css`, before the `body.
 
 .wb-station-unit {
     font-size: 14px;
-    font-weight: 600;
-    color: var(--text-muted);
+    font-weight: 700;
+    color: var(--text-label);
+    font-family: var(--font-ui, sans-serif);
     flex-shrink: 0;
     min-width: 28px;
 }
@@ -221,22 +225,34 @@ Append the following block near the bottom of `web/style.css`, before the `body.
 }
 
 .wb-result-label {
-    font-size: 11px;
-    font-weight: 700;
+    font-size: 14px;
+    font-weight: 800;
     text-transform: uppercase;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     letter-spacing: 0.5px;
 }
 
 .wb-result-value {
     font-size: 24px;
-    font-weight: 700;
+    font-weight: 900;
     color: var(--text-primary);
     font-family: var(--font-instrument, monospace);
 }
 
 .wb-result-value.wb-over-gross {
-    color: var(--warn-red, #e53e3e);
+    color: var(--color-danger);
+}
+
+.wb-result-value.wb-result-secondary {
+    font-size: 18px;
+    color: var(--text-secondary);
+}
+
+.wb-result-unit {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text-label);
+    font-family: var(--font-ui, sans-serif);
 }
 
 .wb-envelope-badge {
@@ -244,21 +260,20 @@ Append the following block near the bottom of `web/style.css`, before the `body.
     padding: 10px 14px;
     border-radius: 8px;
     font-size: 16px;
-    font-weight: 700;
+    font-weight: 900;
     text-align: center;
     letter-spacing: 0.5px;
 }
 
+/* Solid filled badges matching fo-grade-excellent / fo-grade-check pattern */
 .wb-envelope-badge.in-envelope {
-    background: rgba(56, 161, 105, 0.15);
-    color: #276749;
-    border: 2px solid rgba(56, 161, 105, 0.4);
+    background: var(--color-success);
+    color: #000;
 }
 
 .wb-envelope-badge.out-of-envelope {
-    background: rgba(229, 62, 62, 0.15);
-    color: #c53030;
-    border: 2px solid rgba(229, 62, 62, 0.4);
+    background: var(--color-danger);
+    color: #fff;
 }
 
 .wb-chart-container {
@@ -290,10 +305,10 @@ Append the following block near the bottom of `web/style.css`, before the `body.
 .wb-moment-table th {
     padding: 8px 12px;
     text-align: left;
-    font-size: 11px;
-    font-weight: 700;
+    font-size: 14px;
+    font-weight: 800;
     text-transform: uppercase;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     letter-spacing: 0.5px;
     border-bottom: 1px solid var(--border);
     background: var(--bg-primary);
@@ -316,7 +331,7 @@ Append the following block near the bottom of `web/style.css`, before the `body.
 
 .wb-moment-table tr:last-child td {
     border-bottom: none;
-    font-weight: 700;
+    font-weight: 900;
     background: var(--bg-primary);
 }
 ```
@@ -541,19 +556,19 @@ class WbOverlay {
         this._resultsEl.innerHTML = `
             <div class="wb-result-item">
                 <div class="wb-result-label">Total Weight</div>
-                <div class="wb-result-value${overGross ? ' wb-over-gross' : ''}">${r.totalWeight.toLocaleString()} <span style="font-size:14px;font-weight:600">lb</span></div>
+                <div class="wb-result-value${overGross ? ' wb-over-gross' : ''}">${r.totalWeight.toLocaleString()} <span class="wb-result-unit">lb</span></div>
             </div>
             <div class="wb-result-item">
                 <div class="wb-result-label">CG</div>
-                <div class="wb-result-value">${r.cg.toFixed(2)}<span style="font-size:14px;font-weight:600">"</span></div>
+                <div class="wb-result-value">${r.cg.toFixed(2)}<span class="wb-result-unit">"</span></div>
             </div>
             <div class="wb-result-item">
                 <div class="wb-result-label">Max Gross</div>
-                <div class="wb-result-value" style="font-size:18px">${maxGross.toLocaleString()} lb</div>
+                <div class="wb-result-value wb-result-secondary">${maxGross.toLocaleString()} <span class="wb-result-unit">lb</span></div>
             </div>
             <div class="wb-result-item">
                 <div class="wb-result-label">CG Limits</div>
-                <div class="wb-result-value" style="font-size:16px">${fwdLimit ? fwdLimit.toFixed(2) : '--'}–${aftLimit ? aftLimit.toFixed(2) : '--'}"</div>
+                <div class="wb-result-value wb-result-secondary">${fwdLimit ? fwdLimit.toFixed(2) : '--'}–${aftLimit ? aftLimit.toFixed(2) : '--'}<span class="wb-result-unit">"</span></div>
             </div>
             <div class="wb-envelope-badge ${r.inEnvelope ? 'in-envelope' : 'out-of-envelope'}">
                 ${r.inEnvelope ? '✅ IN ENVELOPE' : '❌ OUT OF ENVELOPE' + (r.envelopeReason ? ' — ' + r.envelopeReason : '')}
@@ -614,7 +629,9 @@ class WbOverlay {
         );
 
         const currentPoint = [{ x: r.cg, y: r.totalWeight }];
-        const pointColor = r.inEnvelope ? '#38a169' : '#e53e3e';
+        // Chart.js can't read CSS vars; use the design-system values directly:
+        // --color-success: #1a8c35 (light theme)  --color-danger: #cc2222 (light theme)
+        const pointColor = r.inEnvelope ? '#1a8c35' : '#cc2222';
 
         if (this._chart) {
             // Update existing chart datasets
