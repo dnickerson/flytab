@@ -88,8 +88,11 @@ class RadarPage {
             this._canvas.height = s.y * 2;
         };
         size();
-        this._map.on('resize', () => { size(); this._drawConus(); });
-        this._map.on('move zoom moveend zoomend', () => this._drawConus());
+        // While looping/scrubbing, a map nudge must re-draw the CURRENT historical frame,
+        // not the live composite — otherwise panning wipes the frame the pilot is reading.
+        const redraw = () => { if (this._looping) this._showFrame(this._loopIdx); else this._drawConus(); };
+        this._map.on('resize', () => { size(); redraw(); });
+        this._map.on('move zoom moveend zoomend', redraw);
     }
 
     _drawConus() { if (this._target) this._fisb.draw(this._target, 'conus'); }
@@ -192,6 +195,7 @@ class RadarPage {
         this._ensureMap();
         // Start in LIVE mode — pilot presses play to animate.
         this._looping = false;
+        this._loopIdx = 0;
         this._updateLoopBtn();
         setTimeout(() => {
             if (!this._visible) return;   // hide() fired before this microtask
