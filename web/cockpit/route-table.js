@@ -399,7 +399,7 @@ class RouteTable {
         if (!situation || this._waypoints.length === 0) return;
         this._lastSituation = situation;
 
-        if (situation.lat && situation.lon) {
+        if (situation.lat != null && situation.lon != null) {
             this._lastGpsPosition = { lat: situation.lat, lng: situation.lon };
         }
 
@@ -1774,10 +1774,13 @@ class RouteTable {
 
     setCompact(compact) {
         if (compact) {
+            // Called BEFORE class is added so offsetHeight is still valid
             this._preCompactHeight = this._bodyEl?.offsetHeight || 0;
         } else {
-            const restoreH = this._preCompactHeight ??
-                (parseInt(localStorage.getItem('flypi_route_table_height'), 10) || 0);
+            // Restore to pre-compact height; fall through to localStorage when
+            // the table was closed (height 0) before compact was activated
+            const saved = parseInt(localStorage.getItem('flypi_route_table_height'), 10) || 120;
+            const restoreH = (this._preCompactHeight > 0) ? this._preCompactHeight : saved;
             this._preCompactHeight = null;
             if (this._bodyEl) {
                 this._bodyEl.style.height = restoreH + 'px';
@@ -1821,30 +1824,35 @@ class RouteTable {
     }
 
     _initDragHandlers() {
+        let dragActive  = false;
         let dragStartY  = 0;
         let dragStartH  = 0;
         let dragStartT  = 0;
+        let dragMaxH    = 0;
         let lastClientY = 0;
 
         this._handleEl.addEventListener('touchstart', (e) => {
             if (e.touches.length !== 1) return;
-            if (e.target.closest('button')) return;   // let button taps through without drag
+            if (e.target.closest('button')) { dragActive = false; return; }
+            dragActive  = true;
             dragStartY  = e.touches[0].clientY;
             dragStartH  = this._bodyEl?.offsetHeight || 0;
             dragStartT  = Date.now();
             lastClientY = dragStartY;
+            // Sample orientation once per gesture — it can't change mid-drag
+            const isPortrait = window.innerWidth <= window.innerHeight;
+            dragMaxH = isPortrait
+                ? Math.min(window.innerHeight * 0.40, window.innerHeight - 200)
+                : Math.min(window.innerHeight * 0.65, window.innerHeight - 200);
         }, { passive: true });
 
         this._handleEl.addEventListener('touchmove', (e) => {
-            if (e.touches.length !== 1) return;
+            if (!dragActive || e.touches.length !== 1) return;
             const clientY = e.touches[0].clientY;
             lastClientY   = clientY;
 
-            const dy      = dragStartY - clientY;
-            const isPortrait = window.innerWidth <= window.innerHeight;
-            const maxH = isPortrait
-                ? Math.min(window.innerHeight * 0.40, window.innerHeight - 200)
-                : Math.min(window.innerHeight * 0.65, window.innerHeight - 200);
+            const dy   = dragStartY - clientY;
+            const maxH = dragMaxH;
             const newH = Math.max(0, Math.min(maxH, dragStartH + dy));
 
             this._bodyEl.style.height = newH + 'px';
@@ -1853,6 +1861,8 @@ class RouteTable {
         }, { passive: false });
 
         this._handleEl.addEventListener('touchend', (e) => {
+            if (!dragActive) return;
+            dragActive = false;
             const elapsed = Math.max(1, Date.now() - dragStartT);
             const totalDy = dragStartY - (e.changedTouches[0]?.clientY ?? lastClientY);
             const velocity = (totalDy / elapsed) * 1000;

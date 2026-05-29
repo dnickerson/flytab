@@ -22,6 +22,8 @@ class TabBar {
         }
 
         if (localStorage.getItem('flypi_compact_strips') === '1') {
+            // Save height before adding class (same ordering as _toggleCompactStrips)
+            this._comps.routeTable?.setCompact(true);
             document.body.classList.add('compact-strips');
             const btn = this._tabBar?.querySelector('.tab-btn[data-tab="cmpct"]');
             if (btn) {
@@ -65,13 +67,26 @@ class TabBar {
     }
 
     _selectTab(tabId, btn) {
+        // cmpct and src are stateless toggles — skip the close-everything prologue
+        // so they never accidentally tear down an open fuel overlay or approach chart
+        if (tabId === 'cmpct') {
+            this._toggleCompactStrips();
+            this._setActiveTab('map');
+            return;
+        }
+        if (tabId === 'src') {
+            this._comps.everywhereSearch?.toggle();
+            this._setActiveTab('map');
+            return;
+        }
+
         // Update active state
         this._tabBar.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
         if (btn) btn.classList.add('active');
 
         const c = this._comps;
 
-        // Always close all full-screen overlays first, then open the requested one
+        // Close all full-screen overlays first, then open the requested one
         if (tabId !== 'more') this._closeMoreDrawer();
         if (tabId !== 'layers') this._comps.layerPanel?.close();
         if (c.enginePage?.visible) c.enginePage.hide();
@@ -90,28 +105,10 @@ class TabBar {
 
         // Hide radar loop controls when leaving map — they bleed through
         // full-screen panels in Android WebView despite lower z-index.
-        if (tabId !== 'map' && tabId !== 'cmpct' && tabId !== 'src' && tabId !== 'more' && tabId !== 'layers') {
+        if (tabId !== 'map' && tabId !== 'more' && tabId !== 'layers') {
             this._hideRadarControls();
         } else if (tabId === 'map') {
             this._restoreRadarControls();
-        }
-
-        if (tabId === 'cmpct') {
-            // Compact toggle — toggle without closing other views
-            this._toggleCompactStrips();
-            // Restore previous tab highlight
-            this._tabBar.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-            const prev = this._tabBar.querySelector('.tab-btn[data-tab="map"]');
-            if (prev) prev.classList.add('active');
-            return;
-        }
-
-        if (tabId === 'src') {
-            // Search toggle — opens overlay, then restores MAP highlight
-            c.everywhereSearch?.toggle();
-            this._tabBar.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-            this._tabBar.querySelector('.tab-btn[data-tab="map"]')?.classList.add('active');
-            return;
         }
 
         if (tabId === 'layers') {
@@ -269,12 +266,14 @@ class TabBar {
     _closeMoreDrawer() {
         this._moreDrawer.classList.remove('open');
         this._moreBackdrop.classList.remove('open');
-        // If more tab is still highlighted, switch back to map visually
         const activeBtn = this._tabBar?.querySelector('.tab-btn.active[data-tab="more"]');
-        if (activeBtn) {
-            this._tabBar.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-            this._tabBar.querySelector('[data-tab="map"]')?.classList.add('active');
-        }
+        if (activeBtn) this._setActiveTab('map');
+    }
+
+    /** Highlight one tab by id, deactivating all others. */
+    _setActiveTab(tabId) {
+        this._tabBar?.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        this._tabBar?.querySelector(`.tab-btn[data-tab="${tabId}"]`)?.classList.add('active');
     }
 
     _openLayersPanel() {
@@ -284,10 +283,7 @@ class TabBar {
     _closeLayersPanel() {
         // Called when layer panel closes (backdrop tap or ✕) — restore MAP highlight
         const activeBtn = this._tabBar?.querySelector('.tab-btn.active[data-tab="layers"]');
-        if (activeBtn) {
-            this._tabBar.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-            this._tabBar.querySelector('[data-tab="map"]')?.classList.add('active');
-        }
+        if (activeBtn) this._setActiveTab('map');
     }
 
     // ========== Radar Loop Visibility ==========
@@ -449,6 +445,8 @@ class TabBar {
 
     _toggleCompactStrips() {
         const isNowCompact = !document.body.classList.contains('compact-strips');
+        // Save height BEFORE adding the class — display:none makes offsetHeight 0
+        if (isNowCompact) this._comps.routeTable?.setCompact(true);
         document.body.classList.toggle('compact-strips', isNowCompact);
 
         const btn = this._tabBar?.querySelector('.tab-btn[data-tab="cmpct"]');
@@ -457,7 +455,8 @@ class TabBar {
             btn.lastChild.textContent = isNowCompact ? 'MAP' : 'CMPCT';
         }
 
-        this._comps.routeTable?.setCompact(isNowCompact);
+        // Restore height AFTER removing the class (sheet is visible again)
+        if (!isNowCompact) this._comps.routeTable?.setCompact(false);
 
         localStorage.setItem('flypi_compact_strips', isNowCompact ? '1' : '0');
     }
