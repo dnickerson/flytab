@@ -244,6 +244,50 @@ class FisbNexrad {
         while (this._frameHistory.length > this._maxFrames) {
             this._frameHistory.shift();
         }
+        this._persistFrame(this._frameHistory[this._frameHistory.length - 1]);
+    }
+
+    _openDb() {
+        if (this._dbPromise) return this._dbPromise;
+        this._dbPromise = new Promise((resolve, reject) => {
+            const req = indexedDB.open('flytab_radar', 1);
+            req.onupgradeneeded = (e) => {
+                const db = e.target.result;
+                if (!db.objectStoreNames.contains('nexradFrames'))
+                    db.createObjectStore('nexradFrames', { keyPath: 'dataTime' });
+            };
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+        });
+        return this._dbPromise;
+    }
+
+    async _persistFrame(snap) {
+        try {
+            const db = await this._openDb();
+            const blocks = [];
+            for (const [, b] of snap.blocks) blocks.push({ ...b, intensity: Array.from(b.intensity) });
+            const rec = { dataTime: snap.dataTime, time: snap.time, blocks };
+            const tx = db.transaction('nexradFrames', 'readwrite');
+            tx.objectStore('nexradFrames').put(rec);
+            await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+            await this._purgeDb();
+        } catch (err) {
+            if (typeof DiagLog !== 'undefined') DiagLog.log('error', `radar persist failed: ${err.message}`);
+        }
+    }
+
+    async _purgeDb() {
+        const db = await this._openDb();
+        const cutoff = Date.now() - this._cacheHours * 3600000;
+        const tx = db.transaction('nexradFrames', 'readwrite');
+        const store = tx.objectStore('nexradFrames');
+        store.openCursor().onsuccess = (e) => {
+            const cur = e.target.result;
+            if (!cur) return;
+            if ((cur.value.time || 0) < cutoff) cur.delete();
+            cur.continue();
+        };
     }
 
     _purgeOld() {
