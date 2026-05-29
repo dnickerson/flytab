@@ -54,6 +54,7 @@ class FlyTabApp {
         this.engineGpsBridge = null;
         this._gpsDiagPanel = null;
         this.cockpitMap = null;
+        this.radarPage = null;
         this.enginePanel = null;
         this.trackLog = null;
         this.deviceStatus = null;
@@ -691,6 +692,11 @@ class FlyTabApp {
         if (typeof FisbNexrad !== 'undefined' && this.fisbClient) {
             this.fisbNexrad = new FisbNexrad(this.fisbClient);
             this.cockpitMap.setFisbNexrad(this.fisbNexrad);
+
+            // Dedicated full-screen CONUS radar page (own map). Drawer entry wired in a later task.
+            if (typeof RadarPage !== 'undefined') {
+                this.radarPage = new RadarPage(this.fisbNexrad, this.stratuxClient);
+            }
         }
 
         // Convective Intelligence Engine — must be after fisbClient and fisbNexrad are assigned

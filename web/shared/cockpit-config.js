@@ -87,6 +87,7 @@ class CockpitConfig {
             opacity: 0.5,
             autoLoop: true,
             cacheHours: 3,
+            conusDefaultZoom: 6,
         },
         approachCharts: {
             georefEnabled: true,

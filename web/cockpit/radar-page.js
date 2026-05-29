@@ -1,0 +1,138 @@
+/**
+ * FlyTab — CONUS Radar Page
+ * Full-screen dedicated FIS-B CONUS NEXRAD view: own Leaflet map, ownship icon,
+ * SE-wide default zoom, pan/zoom + recenter, product/age badge.
+ * Reuses the shared FisbNexrad data layer (renders product 'conus' to its own target).
+ *
+ * Independent of the main CockpitMap: owns its own L.map instance, its own overlay
+ * canvas, and its own ownship marker. Does NOT touch the main map, the route editor,
+ * or the main map's tap handlers.
+ */
+class RadarPage {
+    constructor(fisbNexrad, stratuxClient) {
+        this._fisb = fisbNexrad;
+        this._stratux = stratuxClient;
+        this._visible = false;
+        this._map = null;
+        this._canvas = null;
+        this._ctx = null;
+        this._target = null;
+        this._ownship = null;
+        this._ownPos = null;
+        this._badge = null;
+        this._ageTimer = null;
+        this._defaultZoom = (typeof CockpitConfig !== 'undefined' && CockpitConfig.get)
+            ? (CockpitConfig.get('radar.conusDefaultZoom') || 6) : 6;
+
+        this._onSituation = (e) => this._updateOwnship(e.detail);
+        this._onNexrad = () => { if (this._visible) { this._drawConus(); this._updateBadge(); } };
+        this._buildDom();
+    }
+
+    _buildDom() {
+        this._el = document.createElement('div');
+        this._el.className = 'radar-page';
+        this._el.style.display = 'none';
+        this._el.innerHTML = `
+            <div class="radar-page-header">
+                <span class="radar-page-title">CONUS Radar</span>
+                <span class="radar-badge radar-page-badge"></span>
+                <button class="radar-page-close" aria-label="Close">&#x2715;</button>
+            </div>
+            <div class="radar-page-map"></div>
+            <button class="radar-page-recenter">Recenter on me</button>`;
+        document.body.appendChild(this._el);
+        this._mapEl = this._el.querySelector('.radar-page-map');
+        this._badge = this._el.querySelector('.radar-page-badge');
+        this._el.querySelector('.radar-page-close').addEventListener('click', () => this.hide());
+        this._el.querySelector('.radar-page-recenter').addEventListener('click', () => this._recenter());
+    }
+
+    _ensureMap() {
+        if (this._map) return;
+        const tileBase = 'http://localhost:9090/tiles';
+        this._map = L.map(this._mapEl, { zoomControl: true, attributionControl: false });
+        L.tileLayer(`${tileBase}/sectional/{z}/{x}/{y}.webp`, { minZoom: 4, maxZoom: 14 }).addTo(this._map);
+        this._map.setView([35.0, -80.0], this._defaultZoom); // initial; recentre on first fix
+
+        // Overlay canvas lives in the map's overlay pane so it pans/zooms with the map.
+        // Oversized (2x container) to cover the pan-offset translate the FisbNexrad
+        // renderer applies — matches the main-map convention in fisb-nexrad.js.
+        this._canvas = document.createElement('canvas');
+        this._canvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;';
+        this._canvas.className = 'fisb-nexrad-canvas';
+        this._map.getPanes().overlayPane.appendChild(this._canvas);
+        this._ctx = this._canvas.getContext('2d');
+        this._target = { map: this._map, canvas: this._canvas, ctx: this._ctx };
+
+        const size = () => {
+            const s = this._map.getSize();
+            this._canvas.width = s.x * 2;
+            this._canvas.height = s.y * 2;
+        };
+        size();
+        this._map.on('resize', () => { size(); this._drawConus(); });
+        this._map.on('move zoom moveend zoomend', () => this._drawConus());
+    }
+
+    _drawConus() { if (this._target) this._fisb.draw(this._target, 'conus'); }
+
+    _updateOwnship(sit) {
+        if (!sit || sit.lat == null || sit.lon == null) return;
+        this._ownPos = { lat: sit.lat, lon: sit.lon, course: sit.true_course || 0 };
+        if (!this._visible || !this._map) return;
+        const pos = [sit.lat, sit.lon];
+        if (!this._ownship) {
+            const icon = L.divIcon({
+                className: 'ownship-icon',
+                html: CockpitMap._ownshipSvg(this._ownPos.course),
+                iconSize: [48, 48],
+                iconAnchor: [24, 24],
+            });
+            this._ownship = L.marker(pos, { icon, zIndexOffset: 1000 }).addTo(this._map);
+        } else {
+            this._ownship.setLatLng(pos);
+            const g = this._ownship.getElement()?.querySelector('svg g');
+            if (g) g.setAttribute('transform', `rotate(${this._ownPos.course}, 24, 24)`);
+        }
+    }
+
+    _recenter() {
+        if (this._ownPos && this._map) this._map.setView([this._ownPos.lat, this._ownPos.lon], this._defaultZoom);
+    }
+
+    _updateBadge() {
+        const ageMs = this._fisb.getDataAgeMs('conus');
+        this._badge.textContent = ageMs == null
+            ? 'FIS-B · CONUS · no data'
+            : `FIS-B · CONUS · ${Math.round(ageMs / 60000)} min`;
+    }
+
+    isVisible() { return this._visible; }
+
+    show() {
+        this._visible = true;
+        this._el.style.display = 'flex';
+        this._ensureMap();
+        setTimeout(() => {
+            this._map.invalidateSize();
+            this._recenter();
+            this._drawConus();
+        }, 0);
+        this._stratux.addEventListener('stratux:situation', this._onSituation);
+        this._stratux.addEventListener('stratux:nexrad', this._onNexrad);
+        if (this._ownPos) {
+            this._updateOwnship({ lat: this._ownPos.lat, lon: this._ownPos.lon, true_course: this._ownPos.course });
+        }
+        this._updateBadge();
+        this._ageTimer = setInterval(() => this._updateBadge(), 30000);
+    }
+
+    hide() {
+        this._visible = false;
+        this._el.style.display = 'none';
+        this._stratux.removeEventListener('stratux:situation', this._onSituation);
+        this._stratux.removeEventListener('stratux:nexrad', this._onNexrad);
+        if (this._ageTimer) { clearInterval(this._ageTimer); this._ageTimer = null; }
+    }
+}

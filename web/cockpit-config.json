@@ -102,7 +102,8 @@
     "playbackSpeedMs": 500,
     "opacity": 0.5,
     "autoLoop": true,
-    "cacheHours": 3
+    "cacheHours": 3,
+    "conusDefaultZoom": 6
   },
   "approachCharts": {
     "georefEnabled": true,
