@@ -60,7 +60,7 @@ class RadarPage {
         document.body.appendChild(this._el);
         this._mapEl = this._el.querySelector('.radar-page-map');
         this._badge = this._el.querySelector('.radar-page-badge');
-        this._el.querySelector('.radar-page-export').addEventListener('click', () => this._fisb.exportFrames());
+        this._el.querySelector('.radar-page-export').addEventListener('click', (e) => this._onExport(e.target));
         this._el.querySelector('.radar-page-close').addEventListener('click', () => this.hide());
         this._el.querySelector('.radar-page-recenter').addEventListener('click', () => this._recenter());
         this._el.querySelector('.radar-page-loop-btn').addEventListener('click', () => this._toggleLoop());
@@ -128,6 +128,16 @@ class RadarPage {
         this._badge.textContent = ageMs == null
             ? 'FIS-B · CONUS · no data'
             : `FIS-B · CONUS · ${Math.round(ageMs / 60000)} min`;
+    }
+
+    /** Export cached frames to NDJSON with brief button feedback (cockpit needs confirmation). */
+    async _onExport(btn) {
+        const orig = btn.textContent;
+        btn.textContent = 'Saving…'; btn.disabled = true;
+        let r;
+        try { r = await this._fisb.exportFrames(); } catch { r = { ok: false }; }
+        btn.textContent = r.ok ? (r.frames ? `Saved ${r.frames}` : 'No frames') : 'Failed';
+        setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2000);
     }
 
     _frames() { return this._fisb.frameHistory || []; }

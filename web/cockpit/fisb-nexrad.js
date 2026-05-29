@@ -952,6 +952,10 @@ class FisbNexrad {
 
     /** Export cached frames as NDJSON to the on-device server (next to flight CSVs). */
     async exportFrames() {
+        if (!this._frameHistory.length) {
+            if (typeof DiagLog !== 'undefined') DiagLog.log('radar', 'exportFrames: no frames to export');
+            return { ok: true, path: null, frames: 0 };
+        }
         const lines = this._frameHistory.map(snap => {
             const NEXRAD = [];
             for (const [, b] of snap.blocks) NEXRAD.push({
@@ -959,7 +963,11 @@ class FisbNexrad {
                 LatNorth: b.latN, LonWest: b.lonW, Height: b.height, Width: b.width,
                 Intensity: Array.from(b.intensity),
             });
-            return JSON.stringify({ Product_id: 63, NEXRAD,
+            // A snapshot bundles whatever was in _blocks (often BOTH products), so there is no
+            // single true message PID; stamp it from the first block. The app's replay keys off
+            // each block's Radar_Type via _productOf(), so the message PID is informational only.
+            const pid = NEXRAD[0]?.Radar_Type ?? 63;
+            return JSON.stringify({ Product_id: pid, NEXRAD,
                 LocaltimeReceived: new Date(snap.dataTime).toISOString() });
         });
         const iso = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
