@@ -116,6 +116,13 @@ class FisbNexrad {
 
         // Redraw on any map movement (including during panning)
         map.on('move zoom moveend zoomend', this._onMove);
+
+        // If hydrated frames already exist from a prior session, switch the loop source to
+        // FIS-B now instead of waiting for the next live snapshot (up to frameIntervalMinutes).
+        if (!this._loopReadyFired && this._frameHistory.length >= 2) {
+            this._loopReadyFired = true;
+            window.app?.cockpitMap?.onFisbNexradLoopReady?.();
+        }
     }
 
     /** Remove overlay from map */
@@ -325,6 +332,9 @@ class FisbNexrad {
             while (this._frameHistory.length > this._maxFrames) this._frameHistory.shift();
             // Seed live blocks + per-product age from the newest frame so the map/page
             // show SOMETHING immediately on reopen; a live frame will overwrite by key.
+            // NOTE: these seeded blocks keep their original received_at, so _purgeOld() may
+            // sweep them within ~15 min if the cache is old — that's intended. The durable
+            // benefit of hydration is _frameHistory (the loop); the live-view seed is a bonus.
             const last = this._frameHistory[this._frameHistory.length - 1];
             if (last) {
                 for (const [, b] of last.blocks) {
