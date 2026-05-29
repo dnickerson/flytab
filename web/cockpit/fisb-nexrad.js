@@ -257,7 +257,10 @@ class FisbNexrad {
                     db.createObjectStore('nexradFrames', { keyPath: 'dataTime' });
             };
             req.onsuccess = () => resolve(req.result);
-            req.onerror = () => reject(req.error);
+            // Clear the cached promise on failure so the next call retries instead of
+            // returning a permanently-rejected promise (a transient IDB open error on
+            // Android would otherwise silently disable persistence for the whole session).
+            req.onerror = () => { this._dbPromise = null; reject(req.error); };
         });
         return this._dbPromise;
     }
@@ -288,6 +291,9 @@ class FisbNexrad {
             if ((cur.value.time || 0) < cutoff) cur.delete();
             cur.continue();
         };
+        // Resolve only when the deletes have actually committed, so callers that await
+        // _purgeDb() (and the try/catch around them) see cursor/tx errors.
+        await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
     }
 
     _purgeOld() {
