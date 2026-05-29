@@ -69,6 +69,13 @@ class ConfigEditor {
 
         // Cockpit config sections
         sections.push(this._sectionHeader('Cockpit Configuration'));
+        // Simulation (top-level keys) — drives the mock-stratux bridge for ground testing.
+        // Takes effect on next app reload.
+        sections.push(this._renderSection('root', 'Simulation (reload to apply)', this._cockpitConfig || {}, {
+            'simMode': { type: 'bool', label: 'Sim Mode (mock bridge)' },
+            'simBridgeIp': { type: 'text', label: 'Sim Bridge IP', wide: true },
+            'simBridgePort': { type: 'number', label: 'Sim Bridge Port', min: 1, max: 65535 },
+        }));
         sections.push(this._renderSection('map', 'Map Settings', this._cockpitConfig.map || {}, {
             'defaultBaseLayer': { type: 'select', options: ['vector', 'sectional', 'osm'], label: 'Base Layer' },
             'defaultZoom': { type: 'number', label: 'Default Zoom', min: 4, max: 14 },
@@ -511,6 +518,11 @@ class ConfigEditor {
                     this._cockpitConfig[section][key] = val;
                 });
             }
+
+            // Collect top-level keys (Simulation section) — written to config root, not nested.
+            body.querySelectorAll('[data-section="root"]').forEach(el => {
+                this._cockpitConfig[el.dataset.key] = this._getInputValue(el);
+            });
 
             // Collect overlay fields (nested: overlays.fixes.minZoom)
             if (!this._cockpitConfig.map) this._cockpitConfig.map = {};

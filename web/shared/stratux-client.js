@@ -174,9 +174,14 @@ class StratuxClient extends EventTarget {
         }
         this._connectTraffic();
         this._connectSituation();
+        // FIS-B weather channels connect in BOTH real and sim mode. Real Stratux always
+        // served these; the sim bridge (mock-stratux.py) now emits NEXRAD on /jsonio, so
+        // sim mode must subscribe too or FIS-B/NEXRAD can never be exercised on the ground.
+        this._connectWeather();
+        this._connectJsonio();
         if (!this._simMode) {
-            this._connectWeather();
-            this._connectJsonio();
+            // HTTP status/towers polling targets the real Stratux REST API (the sim bridge
+            // doesn't serve it), so keep these real-mode only.
             this._pollStatus();
             this._pollTowers();
         }
