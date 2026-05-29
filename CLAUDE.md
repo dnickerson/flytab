@@ -301,7 +301,87 @@ Port 9222 is Chrome browser's DevTools — do not use it for FlyTab.
 
 - **Versioning**: The app version lives at the top of `web/app.js`. `build.sh` reads it and sets `versionCode`/`versionName` in `build.gradle` automatically.
 - **No bundler**: Add new JS modules as `<script>` tags in `web/index.html`. Load order matters — shared modules must come before cockpit components.
-- **Styling**: All CSS is in `web/style.css` (monolithic). High-contrast cockpit design is intentional for sunlight readability.
+- **Styling**: All CSS is in `web/style.css` (monolithic). High-contrast cockpit design is intentional for sunlight readability. Always use the design token system — never hardcode hex colors or raw px font sizes in component CSS or inline styles. See **Design Token Standards** below.
+
+## Design Token Standards
+
+All new UI must use CSS custom properties from `web/style.css`. Never use hardcoded hex colors, raw font-weight integers below 700, or brand-specific sizing constants.
+
+### Color tokens
+
+| Token | Role | Light value |
+|-------|------|-------------|
+| `var(--bg-primary)` | Page / overlay background | `#ffffff` |
+| `var(--bg-surface)` | Card, section, input backgrounds | `#f5f5f5` |
+| `var(--text-primary)` | Headings, primary values | `#1a1a2e` |
+| `var(--text-secondary)` | Body text, field values, section labels | `#444444` |
+| `var(--text-label)` | Column headers, field labels | `#666666` |
+| `var(--text-muted)` | Hints, arm display, timestamps | `#888888` |
+| `var(--accent)` | Accent buttons, active tabs | `#0066cc` |
+| `var(--border)` | Card borders | `#e0e0e0` |
+| `var(--border-light)` | Table row dividers | `#f0f0f0` |
+| `var(--border-strong)` | Header borders, input underlines | `#b0b0b0` |
+| `var(--color-success)` | In-limits, OK badges | `#1a8c35` |
+| `var(--color-caution)` | Caution (non-urgent) | `#b87000` |
+| `var(--color-danger)` | Out-of-limits, warnings, over-gross | `#cc2222` |
+| `var(--color-info)` | Informational | `#0055bb` |
+
+**Status badge pattern** (solid fill, matches `fo-grade-*`):
+```css
+/* OK / in-limits */
+background: var(--color-success); color: #000;
+
+/* Warning / out-of-limits */
+background: var(--color-danger);  color: #fff;
+
+/* Caution */
+background: var(--color-caution); color: #000;
+```
+
+Never use semi-transparent rgba approximations of these colors for badges — use the solid token.
+
+### Font tokens
+
+| Token | Use case |
+|-------|----------|
+| `var(--font-instrument)` | All numeric instrument values (weights, altitudes, speeds, CG) |
+| `var(--font-ui)` | Labels, section titles, button text, unit suffixes |
+
+**Font weight rules** — minimum 700 for anything the pilot reads:
+- Section titles, column headers: `font-weight: 800`
+- Instrument / data values: `font-weight: 900`
+- Unit suffixes, secondary labels: `font-weight: 700`
+- Never use `font-weight: 600` or lower in cockpit UI
+
+### Touch target
+
+```css
+min-height: var(--touch-min, 56px);   /* all interactive elements */
+min-height: var(--touch-preferred, 64px);  /* primary actions */
+```
+
+Never hardcode `48px` as a touch target — use `var(--touch-min, 56px)`.
+
+### Chart.js colors
+
+Chart.js cannot read CSS custom properties at runtime. Use the light-theme design-system values directly (they are stable):
+
+| Semantic | Hex to use |
+|----------|------------|
+| Success / in-envelope | `#1a8c35` |
+| Danger / out-of-envelope | `#cc2222` |
+| Accent / highlight | `#0066cc` |
+| Muted / grid lines | `#b0b0b0` |
+
+### New panel checklist
+
+When writing a new cockpit overlay or panel, verify:
+- [ ] All colors use `var(--…)` tokens — no hardcoded hex
+- [ ] All numeric displays use `var(--font-instrument)` with `font-weight: 900`
+- [ ] All section labels use `font-weight: 800; color: var(--text-secondary)`
+- [ ] Status badges use solid `background: var(--color-success/danger/caution)` fill
+- [ ] Touch targets use `min-height: var(--touch-min, 56px)` or larger
+- [ ] The panel works in the light theme (do NOT set `data-mode="cockpit"` — see memory)
 - **Storage**: App state uses `localStorage` and `IndexedDB` on the client. No cloud storage.
 - **`wireTap` double-fire guard**: `tap-utils.js` uses a module-level `_wireTapLastTouchAt` timestamp to suppress synthetic clicks for 350ms after any touch. This is required because DOM rebuilds in `_renderWaypoints()` / `_onEdited()` replace the original element before the browser fires its synthetic click — a per-element flag doesn't survive the rebuild. Do not revert to per-closure `touchHandled` flags. `route-table.js` touchend delegation also updates this global.
 - **Route editor map lock**: `app.js` `onAirportClick` / `onNavaidClick` / `onFixClick` each guard with `if (this.routeEditor?.isVisible()) return;`. This is intentional — the map is read-only while the route editor panel is open. Do not remove these guards during refactoring.
