@@ -764,6 +764,11 @@ class CockpitMap {
                 }
             );
             this.radarLayer.addTo(this.map);
+            // Badge — show immediately on enable, then refresh every 30 s
+            this._updateRadarBadge();
+            if (!this._radarBadgeTimer) {
+                this._radarBadgeTimer = setInterval(() => this._updateRadarBadge(), 30000);
+            }
             // Tell FisbNexrad about the internet tile layer so CB building can sample it
             if (this._fisbNexrad) this._fisbNexrad.setCbInternetLayer(this.radarLayer);
             // Internet source — always used as the initial loop source so playback works
@@ -790,6 +795,9 @@ class CockpitMap {
             }
             this.map.removeLayer(this.radarLayer);
             this.radarLayer = null;
+            // Hide badge and stop refresh timer
+            if (this._radarBadge) this._radarBadge.style.display = 'none';
+            clearInterval(this._radarBadgeTimer); this._radarBadgeTimer = null;
         }
     }
 
@@ -800,6 +808,7 @@ class CockpitMap {
      */
     onFisbNexradData() {
         if (this.radarLayer) this.radarLayer.setOpacity(0.3);
+        this._updateRadarBadge();
     }
 
     /**
@@ -811,6 +820,21 @@ class CockpitMap {
         if (this._radarLoop && this._fisbNexrad) {
             this._radarLoop.setNexrad(this._fisbNexrad);
         }
+    }
+
+    _updateRadarBadge() {
+        if (!this._fisbNexrad) return;
+        const el = this._radarBadge || (this._radarBadge = (() => {
+            const d = document.createElement('div');
+            d.className = 'radar-badge';
+            this.container.appendChild(d);
+            return d;
+        })());
+        const ageMs = this._fisbNexrad.getDataAgeMs('regional');
+        if (ageMs == null) { el.style.display = 'none'; return; }
+        const min = Math.round(ageMs / 60000);
+        el.style.display = 'block';
+        el.textContent = `FIS-B · Regional · ${min} min`;
     }
 
     toggleCbBuilding(on) {

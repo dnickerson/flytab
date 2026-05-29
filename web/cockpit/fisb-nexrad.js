@@ -158,7 +158,11 @@ class FisbNexrad {
     /** Get current block count */
     get blockCount() { return this._blocks.size; }
 
-    getDataAgeMs() {
+    getDataAgeMs(product) {
+        if (product) {
+            const t = this._newestAt[product];
+            return t ? Date.now() - t : null;
+        }
         return this._latestDataTime ? Date.now() - this._latestDataTime : null;
     }
 

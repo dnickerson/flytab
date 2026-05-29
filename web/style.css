@@ -5296,6 +5296,14 @@ body {
     mix-blend-mode: screen;
 }
 
+.radar-badge {
+    position: absolute; bottom: 8px; left: 8px; z-index: 500;
+    background: var(--bg-surface); color: var(--text-secondary);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 4px 8px; font-family: var(--font-ui); font-weight: 700;
+    font-size: 13px; pointer-events: none;
+}
+
 /* ========== Checklist Overlay ========== */
 .checklist-page {
     position: fixed;
