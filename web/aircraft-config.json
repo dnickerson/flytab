@@ -108,7 +108,7 @@
     ],
     "cg_envelope": [
       { "weight": 1034, "fwd_cg": 77.95, "aft_cg": 84.84 },
-      { "weight": 1750, "fwd_cg": 77.95, "aft_cg": 84.84 }
+      { "weight": 1800, "fwd_cg": 77.95, "aft_cg": 84.84 }
     ]
   },
   "engine_type": "Lycoming",

@@ -5,21 +5,23 @@
  */
 class WbOverlay {
     constructor(container) {
-        this._container = container;
-        this._el       = null;
-        this._chart    = null;
-        this._profile  = null;
-        this._inputs   = {};   // { stationName: <input element> }
-        this._fuelInput = null;
-        this._modal    = null;
+        this._container     = container;
+        this._el            = null;
+        this._chart         = null;
+        this._profile       = null;
+        this._inputs        = {};   // { stationName: <input element> }
+        this._fuelInput     = null;
+        this._envelopePoints = null; // cached once — envelope never changes at runtime
 
         this._buildDOM();
     }
 
     show() {
         this._syncFuelFromState();
-        this._compute();
+        // Make overlay visible BEFORE computing so Chart.js measures a real container
         this._el.classList.add('visible');
+        this._compute();
+        if (this._chart) this._chart.resize();
     }
 
     hide() {
@@ -93,10 +95,17 @@ class WbOverlay {
         chartWrap.appendChild(this._canvas);
         body.appendChild(chartWrap);
 
+        // Cache envelope polygon — derived from static config, never changes at runtime
+        if (this._profile && typeof WbCalculator !== 'undefined') {
+            this._envelopePoints = WbCalculator.getEnvelopePoints(
+                this._profile.cg_envelope || this._profile.envelope
+            );
+        }
+
         el.appendChild(body);
         this._container.appendChild(el);
-
-        this._compute();
+        // Do NOT call _compute() here — the overlay is display:none at construction;
+        // Chart.js would measure a 0×0 container. Defer to show().
     }
 
     _buildStationInputs(grid) {
@@ -108,9 +117,10 @@ class WbOverlay {
                 station.name,
                 station.arm,
                 'lb',
-                '',
+                station.max_weight ? `max ${station.max_weight}` : '',
                 (input) => {
                     this._inputs[station.name] = input;
+                    if (station.max_weight) input.max = station.max_weight;
                     input.value = '';
                     input.placeholder = '0';
                 }
@@ -127,6 +137,8 @@ class WbOverlay {
                 `max ${maxGal}`,
                 (input) => {
                     this._fuelInput = input;
+                    input.max  = maxGal;
+                    input.step = '0.1';  // decimal gallons (overrides the step="1" default)
                     input.value = '';
                     input.placeholder = '0';
                 }
@@ -190,7 +202,15 @@ class WbOverlay {
 
     _renderResults(r) {
         const maxGross = this._profile.max_gross_weight || 0;
-        const { fwdLimit, aftLimit } = this._getEnvelopeLimitsAt(r.totalWeight);
+        const limits = this._getEnvelopeLimitsAt(r.totalWeight);
+        const fwdStr = limits ? limits.fwdLimit.toFixed(2) : '--';
+        const aftStr = limits ? limits.aftLimit.toFixed(2) : '--';
+
+        // Suppress envelope badge when no payload has been entered (empty aircraft state).
+        // The empty CG legitimately sits outside the operating envelope — only show status
+        // once the pilot has entered at least one non-zero station weight or fuel.
+        const hasPayload = Object.values(this._inputs).some(inp => parseFloat(inp?.value) > 0)
+            || this._getFuelGal() > 0;
 
         this._resultsEl.innerHTML = `
             <div class="wb-result-item">
@@ -207,27 +227,33 @@ class WbOverlay {
             </div>
             <div class="wb-result-item">
                 <div class="wb-result-label">CG Limits</div>
-                <div class="wb-result-value wb-result-secondary">${fwdLimit ? fwdLimit.toFixed(2) : '--'}–${aftLimit ? aftLimit.toFixed(2) : '--'}<span class="wb-result-unit">"</span></div>
+                <div class="wb-result-value wb-result-secondary">${fwdStr}–${aftStr}<span class="wb-result-unit">"</span></div>
             </div>
+            ${hasPayload ? `
             <div class="wb-envelope-badge ${r.inEnvelope ? 'in-envelope' : 'out-of-envelope'}">
                 ${r.inEnvelope ? 'IN ENVELOPE' : 'OUT OF ENVELOPE' + (r.envelopeReason ? ' — ' + r.envelopeReason : '')}
-            </div>
+            </div>` : `
+            <div class="wb-envelope-badge" style="background:var(--bg-surface);color:var(--text-muted);border:1px solid var(--border)">
+                Enter weights to compute
+            </div>`}
         `;
     }
 
+    // Returns interpolated {fwdLimit, aftLimit} at weight, or null if weight is
+    // outside the envelope range (caller shows "--" rather than misleading in-range values).
     _getEnvelopeLimitsAt(weight) {
         const envelope = this._profile.cg_envelope || this._profile.envelope;
-        if (!envelope || !Array.isArray(envelope) || envelope.length < 1) return {};
+        if (!envelope || !Array.isArray(envelope) || envelope.length < 1) return null;
         const sorted = [...envelope].sort((a, b) => a.weight - b.weight);
-        const clamped = Math.max(sorted[0].weight, Math.min(sorted[sorted.length - 1].weight, weight));
+        if (weight < sorted[0].weight || weight > sorted[sorted.length - 1].weight) return null;
         let lower = sorted[0], upper = sorted[sorted.length - 1];
         for (let i = 0; i < sorted.length - 1; i++) {
-            if (clamped >= sorted[i].weight && clamped <= sorted[i + 1].weight) {
+            if (weight >= sorted[i].weight && weight <= sorted[i + 1].weight) {
                 lower = sorted[i]; upper = sorted[i + 1]; break;
             }
         }
         const range = upper.weight - lower.weight;
-        const t = range > 0 ? (clamped - lower.weight) / range : 0;
+        const t = range > 0 ? (weight - lower.weight) / range : 0;
         return {
             fwdLimit: lower.fwd_cg + t * (upper.fwd_cg - lower.fwd_cg),
             aftLimit: lower.aft_cg + t * (upper.aft_cg - lower.aft_cg),
@@ -263,16 +289,14 @@ class WbOverlay {
     _renderChart(r) {
         if (!window.Chart) return;
 
-        const envelopePoints = WbCalculator.getEnvelopePoints(
-            this._profile.cg_envelope || this._profile.envelope
-        );
-
+        // Use cached envelope polygon — computed once at init, never changes at runtime
+        const envelopePoints = this._envelopePoints || [];
         const currentPoint = [{ x: r.cg, y: r.totalWeight }];
         // Chart.js can't read CSS vars; use design-system light-theme values directly
         const pointColor = r.inEnvelope ? '#1a8c35' : '#cc2222';
 
         if (this._chart) {
-            this._chart.data.datasets[0].data = envelopePoints;
+            // Envelope polygon is static — only update the moving CG point
             this._chart.data.datasets[1].data = currentPoint;
             this._chart.data.datasets[1].borderColor = pointColor;
             this._chart.data.datasets[1].backgroundColor = pointColor;
