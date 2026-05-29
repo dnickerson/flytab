@@ -100,6 +100,7 @@ class FisbNexrad {
         this._canvas.className = 'fisb-nexrad-canvas';
         map.getPanes().overlayPane.appendChild(this._canvas);
         this._ctx = this._canvas.getContext('2d');
+        this._mainTarget = { map, canvas: this._canvas, ctx: this._ctx };
 
         // Size canvas
         this._resizeCanvas();
@@ -255,38 +256,40 @@ class FisbNexrad {
         if (!this._loopMode) this._draw();
     }
 
-    /** Draw all NEXRAD blocks onto canvas */
-    _draw() {
-        if (!this._ctx || !this._map || !this._active) return;
+    /** Public: draw current blocks of one product to a target. */
+    draw(target, product) {
+        this._drawToTarget(target, product, this._blocks);
+    }
 
-        const ctx = this._ctx;
-        const map = this._map;
+    /** Draw a block map (live or snapshot) of one product onto a target's canvas. */
+    _drawToTarget(target, product, blockMap) {
+        const { map, canvas, ctx } = target;
+        if (!ctx || !map) return;
 
-        // Position canvas at the map's pixel origin so it aligns with panning
         const topLeft = map.containerPointToLayerPoint([0, 0]);
-        this._canvas.style.transform = `translate(${topLeft.x}px, ${topLeft.y}px)`;
+        canvas.style.transform = `translate(${topLeft.x}px, ${topLeft.y}px)`;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (blockMap.size === 0) return;
 
-        ctx.clearRect(0, 0, this._canvas.width, this._canvas.height);
-
-        if (this._blocks.size === 0) return;
-
-        // Apply configured opacity
         ctx.globalAlpha = this._opacity;
-
         const bounds = map.getBounds();
         const zoom = map.getZoom();
 
-        for (const [, block] of this._blocks) {
-            // Quick bounds check — skip blocks outside viewport
+        for (const [, block] of blockMap) {
+            if (FisbNexrad._productOf(block) !== product) continue;
             const blockS = block.latN - block.height;
             const blockE = block.lonW + block.width;
             if (block.latN < bounds.getSouth() || blockS > bounds.getNorth()) continue;
             if (blockE < bounds.getWest() || block.lonW > bounds.getEast()) continue;
-
             this._drawBlock(ctx, map, block, zoom);
         }
-
         ctx.globalAlpha = 1.0;
+    }
+
+    /** Draw the main-map live view — Regional product only. */
+    _draw() {
+        if (!this._active || !this._mainTarget) return;
+        this._drawToTarget(this._mainTarget, 'regional', this._blocks);
     }
 
     /** Draw a single NEXRAD block */
@@ -328,36 +331,12 @@ class FisbNexrad {
         }
     }
 
-    /** Draw a specific historical frame (for radar loop) */
-    drawFrame(frameIndex) {
-        if (!this._ctx || !this._map) return;
+    /** Draw a specific historical frame of one product onto a target (radar loop). */
+    drawFrame(target, product, frameIndex) {
         if (frameIndex < 0 || frameIndex >= this._frameHistory.length) return;
-
-        const ctx = this._ctx;
-        const map = this._map;
-
-        // Sync canvas position with map pane
-        const topLeft = map.containerPointToLayerPoint([0, 0]);
-        this._canvas.style.transform = `translate(${topLeft.x}px, ${topLeft.y}px)`;
-
-        ctx.clearRect(0, 0, this._canvas.width, this._canvas.height);
-        ctx.globalAlpha = this._opacity;
-
-        const snapshot = this._frameHistory[frameIndex];
-        if (!snapshot) return;
-
-        const bounds = map.getBounds();
-        const zoom = map.getZoom();
-
-        for (const [, block] of snapshot.blocks) {
-            const blockS = block.latN - block.height;
-            const blockE = block.lonW + block.width;
-            if (block.latN < bounds.getSouth() || blockS > bounds.getNorth()) continue;
-            if (blockE < bounds.getWest() || block.lonW > bounds.getEast()) continue;
-            this._drawBlock(ctx, map, block, zoom);
-        }
-
-        ctx.globalAlpha = 1.0;
+        const snap = this._frameHistory[frameIndex];
+        if (!snap) return;
+        this._drawToTarget(target, product, snap.blocks);
     }
 
     /** Enter loop mode (suppress live draws) */
