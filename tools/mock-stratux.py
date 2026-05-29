@@ -62,6 +62,10 @@ for t in _traffic:
 
 _start_time = time.time()
 
+# Path to a NEXRAD NDJSON capture to replay on /jsonio (set in __main__).
+_REPLAY_PATH  = None
+_replay_frames = None   # loaded lazily on first use in _jsonio_loop()
+
 # --- Synthetic FIS-B NEXRAD ---------------------------------------------
 BLOCK_H = 4.0 / 60.0          # 0.0667 deg lat  (matches Stratux BLOCK_HEIGHT)
 BLOCK_W = 48.0 / 60.0         # 0.8 deg lon      (matches Stratux BLOCK_WIDTH)
@@ -213,11 +217,29 @@ async def _situation_loop():
 
 
 async def _jsonio_loop():
-    """Emit a synthetic NEXRAD frame to /jsonio clients every 5 seconds."""
+    """Emit NEXRAD frames to /jsonio clients every 5 seconds.
+
+    If --replay-nexrad was given, replay the captured NDJSON frames (looping at
+    EOF); otherwise emit synthetic frames from _nexrad_frame(tick).
+    """
+    global _replay_frames
+    # Load the replay file once, if configured.
+    if _REPLAY_PATH and _replay_frames is None:
+        try:
+            with open(_REPLAY_PATH) as f:
+                _replay_frames = [json.loads(l) for l in f if l.strip()]
+            print(f"  [replay] loaded {len(_replay_frames)} NEXRAD frames from {_REPLAY_PATH}")
+        except Exception as e:
+            print(f"  [replay] failed to load {_REPLAY_PATH}: {e}; using synthetic")
+            _replay_frames = []
+
     tick = 0
     while True:
         if _jsonio_clients:
-            await _broadcast(_jsonio_clients, _nexrad_frame(tick))
+            if _replay_frames:
+                await _broadcast(_jsonio_clients, _replay_frames[tick % len(_replay_frames)])
+            else:
+                await _broadcast(_jsonio_clients, _nexrad_frame(tick))
         tick += 1
         await asyncio.sleep(5.0)
 
@@ -255,10 +277,12 @@ async def handler(websocket):
 
     elif path == "/jsonio":
         _jsonio_clients.add(websocket)
+        print(f"  [+] jsonio client   ({len(_jsonio_clients)} connected)")
         try:
             await websocket.wait_closed()
         finally:
             _jsonio_clients.discard(websocket)
+            print(f"  [-] jsonio client   ({len(_jsonio_clients)} connected)")
 
     else:
         await websocket.close(1008, f"unknown path: {path}")
@@ -289,10 +313,12 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=5678, help="Port (default: 5678)")
     parser.add_argument("--lat",  type=float, default=OWN_LAT)
     parser.add_argument("--lon",  type=float, default=OWN_LON)
+    parser.add_argument("--replay-nexrad", help="Path to a NEXRAD NDJSON capture to replay on /jsonio (loops at EOF)")
     args = parser.parse_args()
 
     OWN_LAT = args.lat
     OWN_LON = args.lon
+    _REPLAY_PATH = args.replay_nexrad
 
     try:
         asyncio.run(main(args.host, args.port))
