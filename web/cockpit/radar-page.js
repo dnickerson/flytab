@@ -39,8 +39,9 @@ class RadarPage {
                 <span class="radar-badge radar-page-badge"></span>
                 <button class="radar-page-close" aria-label="Close">&#x2715;</button>
             </div>
-            <div class="radar-page-map"></div>
-            <button class="radar-page-recenter">Recenter on me</button>`;
+            <div class="radar-page-map">
+                <button class="radar-page-recenter">Recenter on me</button>
+            </div>`;
         document.body.appendChild(this._el);
         this._mapEl = this._el.querySelector('.radar-page-map');
         this._badge = this._el.querySelector('.radar-page-badge');
@@ -111,10 +112,12 @@ class RadarPage {
     isVisible() { return this._visible; }
 
     show() {
+        if (this._visible) return;   // idempotent — avoid double listeners / orphaned badge timer
         this._visible = true;
         this._el.style.display = 'flex';
         this._ensureMap();
         setTimeout(() => {
+            if (!this._visible) return;   // hide() fired before this microtask
             this._map.invalidateSize();
             this._recenter();
             this._drawConus();
