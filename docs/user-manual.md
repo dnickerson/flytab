@@ -153,6 +153,7 @@ Opens a right-side drawer with infrequently used actions, organized in three sec
 |---|---|
 | **Timer** | Floating countdown/count-up overlay — stays visible over any tab. Use for holding, approach timing, or any en-route interval. Tap again to dismiss without losing state. |
 | **Fuel Entry** | Manually enter fuel quantity after a fuel stop |
+| **Weight & Balance** | Enter station weights and fuel; shows total weight, CG, and envelope status with a CG diagram |
 | **Approach Charts** | Georeferenced approach plates overlaid on the map |
 | **Engine ML** | Opens the real-time ML anomaly monitor |
 | **Stratux Status** | Opens the Stratux web interface in a browser |
@@ -163,7 +164,6 @@ Opens a right-side drawer with infrequently used actions, organized in three sec
 |---|---|
 | **Plan on flywhere.app** | Opens the web route planner in a browser for pre-flight planning |
 | **Weather Briefing** | Full weather briefing panel (see below) |
-| **Weight & Balance** | Enter station weights and fuel; shows total weight, CG, and envelope status with a CG diagram |
 | **Logbook** | View and edit flight log entries |
 | **Flight Upload** | Sync flight logs to the cloud |
 | **User Manual** | This document |

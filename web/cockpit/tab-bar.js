@@ -157,6 +157,11 @@ class TabBar {
                 this._hideRadarControls();
                 this._closeMoreDrawer();
             }},
+            { icon: '⚖️', label: 'Weight & Balance', action: () => {
+                if (c.wbOverlay?.show) c.wbOverlay.show();
+                this._hideRadarControls();
+                this._closeMoreDrawer();
+            }},
             { icon: '📊', label: 'Approach Charts', action: () => {
                 if (c.approachCharts) {
                     c.approachCharts._currentPlate
@@ -184,11 +189,6 @@ class TabBar {
             }},
             { icon: '⛅', label: 'Weather Briefing', action: () => {
                 if (c.wxBriefing?.show) c.wxBriefing.show();
-                this._hideRadarControls();
-                this._closeMoreDrawer();
-            }},
-            { icon: '⚖️', label: 'Weight & Balance', action: () => {
-                if (c.wbOverlay?.show) c.wbOverlay.show();
                 this._hideRadarControls();
                 this._closeMoreDrawer();
             }},
