@@ -61,6 +61,10 @@ class FisbNexrad {
         this._cbLabelMarkers = [];   // L.marker[] for CB↑ labels
         this._cbInetLayer = null;    // L.tileLayer ref (internet radar) for ground-mode sampling
         this._cbInetTimer = null;    // interval for periodic internet re-sampling
+
+        // Restore persisted frame history so the loop and map show data immediately
+        // on reopen (fire-and-forget; live frames augment _blocks/_frameHistory as they arrive).
+        this._hydrate();
     }
 
     // Standard NEXRAD intensity → color map (0-7+)
@@ -294,6 +298,44 @@ class FisbNexrad {
         // Resolve only when the deletes have actually committed, so callers that await
         // _purgeDb() (and the try/catch around them) see cursor/tx errors.
         await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+    }
+
+    async _hydrate() {
+        try {
+            const db = await this._openDb();
+            const cutoff = Date.now() - this._cacheHours * 3600000;
+            const tx = db.transaction('nexradFrames', 'readonly');
+            const recs = await new Promise((res, rej) => {
+                const r = tx.objectStore('nexradFrames').getAll();
+                r.onsuccess = () => res(r.result || []); r.onerror = () => rej(r.error);
+            });
+            // Skip dataTimes already present from live frames that arrived during the
+            // async open, so hydration never duplicates or interleaves with live data.
+            const seen = new Set(this._frameHistory.map(f => f.dataTime));
+            const fresh = recs.filter(r => (r.time || 0) >= cutoff && !seen.has(r.dataTime))
+                              .sort((a, b) => a.dataTime - b.dataTime)
+                              .slice(-this._maxFrames);
+            for (const r of fresh) {
+                const m = new Map();
+                for (const b of r.blocks) m.set(`${b.latN},${b.lonW}`, b);
+                this._frameHistory.push({ time: r.time, dataTime: r.dataTime, blocks: m });
+            }
+            // Keep newest-last ordering and the ring cap even if a live frame raced in.
+            this._frameHistory.sort((a, b) => a.dataTime - b.dataTime);
+            while (this._frameHistory.length > this._maxFrames) this._frameHistory.shift();
+            // Seed live blocks + per-product age from the newest frame so the map/page
+            // show SOMETHING immediately on reopen; a live frame will overwrite by key.
+            const last = this._frameHistory[this._frameHistory.length - 1];
+            if (last) {
+                for (const [, b] of last.blocks) {
+                    this._blocks.set(`${b.latN},${b.lonW}`, b);
+                    const p = FisbNexrad._productOf(b);
+                    this._newestAt[p] = Math.max(this._newestAt[p], last.time);
+                }
+            }
+        } catch (err) {
+            if (typeof DiagLog !== 'undefined') DiagLog.log('error', `radar hydrate failed: ${err.message}`);
+        }
     }
 
     _purgeOld() {
