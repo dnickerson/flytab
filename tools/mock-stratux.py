@@ -62,6 +62,53 @@ for t in _traffic:
 
 _start_time = time.time()
 
+# --- Synthetic FIS-B NEXRAD ---------------------------------------------
+BLOCK_H = 4.0 / 60.0          # 0.0667 deg lat  (matches Stratux BLOCK_HEIGHT)
+BLOCK_W = 48.0 / 60.0         # 0.8 deg lon      (matches Stratux BLOCK_WIDTH)
+
+
+def _nexrad_block(lat_n, lon_w, scale, intensities):
+    """One NEXRADBlock in Stratux /jsonio shape."""
+    real = {0: 1.0, 1: 5.0, 2: 9.0}[scale]
+    return {
+        "Radar_Type": 63 if scale == 0 else 64,
+        "Scale":      scale,
+        "LatNorth":   round(lat_n, 4),
+        "LonWest":    round(lon_w, 4),
+        "Height":     round(BLOCK_H * real, 4),
+        "Width":      round(BLOCK_W * real, 4),
+        "Intensity":  intensities,      # list[int] length 128 (32 cols × 4 rows)
+    }
+
+
+def _gradient_cell(seed):
+    """128-bin (32×4) intensity grid: a moving blob of levels 1–6."""
+    out = []
+    for r in range(4):
+        for c in range(32):
+            d = abs(c - (seed % 32)) + abs(r - 2)
+            out.append(max(0, 6 - d) if d <= 6 else 0)
+    return out
+
+
+def _nexrad_frame(tick):
+    """Stratux UATFrame-shaped dict with Regional + CONUS blocks; cells drift east with tick."""
+    seed = tick % 32
+    regional = [
+        _nexrad_block(OWN_LAT + 0.50, OWN_LON - 0.4 + 0.05 * seed, 0, _gradient_cell(seed)),
+        _nexrad_block(OWN_LAT + 0.43, OWN_LON - 0.4 + 0.05 * seed, 0, _gradient_cell(seed + 4)),
+    ]
+    conus = []
+    for i in range(3):
+        conus.append(_nexrad_block(35.0 + 0.33 * i, -84.0 + 4.0 + 0.2 * seed, 1,
+                                   _gradient_cell(seed + i * 3)))
+    return {
+        "Product_id":        63,
+        "NEXRAD":            regional + conus,
+        "LocaltimeReceived": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+
+
 # Connected client sets for each endpoint
 _traffic_clients   = set()
 _situation_clients = set()
@@ -165,6 +212,16 @@ async def _situation_loop():
         await asyncio.sleep(1.0)
 
 
+async def _jsonio_loop():
+    """Emit a synthetic NEXRAD frame to /jsonio clients every 5 seconds."""
+    tick = 0
+    while True:
+        if _jsonio_clients:
+            await _broadcast(_jsonio_clients, _nexrad_frame(tick))
+        tick += 1
+        await asyncio.sleep(5.0)
+
+
 async def handler(websocket):
     try:
         path = websocket.request.path
@@ -222,6 +279,7 @@ async def main(host, port):
         await asyncio.gather(
             _traffic_loop(),
             _situation_loop(),
+            _jsonio_loop(),
         )
 
 
