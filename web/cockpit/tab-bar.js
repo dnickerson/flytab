@@ -171,6 +171,11 @@ class TabBar {
                 this._hideRadarControls();
                 this._closeMoreDrawer();
             }},
+            { icon: '🌧', label: 'Radar', action: () => {
+                c.radarPage?.show();
+                this._hideRadarControls();
+                this._closeMoreDrawer();
+            }},
             { icon: '🧠', label: 'Engine ML', action: () => {
                 this._closeMoreDrawer();
                 this._hideRadarControls();

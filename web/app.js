@@ -919,6 +919,7 @@ class FlyTabApp {
                 stratuxIp: Settings.stratuxIp || '192.168.10.1',
                 planSync: this.planSync,
                 radarLoop: this.radarLoop,
+                radarPage: this.radarPage,
                 flightUpload: this.flightUpload,
                 routeTable: this.routeTable,
                 layerPanel: this.layerPanel,
