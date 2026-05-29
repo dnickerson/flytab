@@ -163,6 +163,7 @@ Opens a right-side drawer with infrequently used actions, organized in three sec
 |---|---|
 | **Plan on flywhere.app** | Opens the web route planner in a browser for pre-flight planning |
 | **Weather Briefing** | Full weather briefing panel (see below) |
+| **Weight & Balance** | Enter station weights and fuel; shows total weight, CG, and envelope status with a CG diagram |
 | **Logbook** | View and edit flight log entries |
 | **Flight Upload** | Sync flight logs to the cloud |
 | **User Manual** | This document |
