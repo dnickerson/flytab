@@ -291,6 +291,7 @@ class CockpitMap {
         }
         if (this._trafficTimer) { clearInterval(this._trafficTimer); this._trafficTimer = null; }
         if (this._fixUpdateTimer) { clearTimeout(this._fixUpdateTimer); this._fixUpdateTimer = null; }
+        if (this._radarBadgeTimer) { clearInterval(this._radarBadgeTimer); this._radarBadgeTimer = null; }
         if (this._zoomBadgeHandler && this.map) { this.map.off('zoomend', this._zoomBadgeHandler); this._zoomBadgeHandler = null; }
         if (this._viewportResizeHandler && window.visualViewport) {
             window.visualViewport.removeEventListener('resize', this._viewportResizeHandler);
@@ -808,7 +809,7 @@ class CockpitMap {
      */
     onFisbNexradData() {
         if (this.radarLayer) this.radarLayer.setOpacity(0.3);
-        this._updateRadarBadge();
+        if (this.radarLayer) this._updateRadarBadge();
     }
 
     /**
