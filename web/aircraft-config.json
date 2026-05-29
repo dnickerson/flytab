@@ -96,6 +96,21 @@
     ],
     "power_settings_source": "data-derived from 33 EDM+GPS flight logs, N194JT O-360-A1A"
   },
+  "weight_balance": {
+    "empty_weight": 1034,
+    "empty_cg": 76.34,
+    "max_gross_weight": 1800,
+    "stations": [
+      { "name": "Pilot",     "arm": 92.7,  "max_weight": 400 },
+      { "name": "Passenger", "arm": 92.7,  "max_weight": 400 },
+      { "name": "Baggage",   "arm": 122.0, "max_weight": 50  },
+      { "name": "Fuel",      "arm": 76.75, "fuel": true, "gal_to_lbs": 6, "max_gal": 36 }
+    ],
+    "cg_envelope": [
+      { "weight": 1034, "fwd_cg": 77.95, "aft_cg": 84.84 },
+      { "weight": 1750, "fwd_cg": 77.95, "aft_cg": 84.84 }
+    ]
+  },
   "engine_type": "Lycoming",
   "engine_model": "O-360-A1A",
   "synced_from_supabase_at": "2026-03-10T18:03:11.030Z"
