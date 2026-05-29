@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v9.25';
+const FLYTAB_VERSION = 'v9.26';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -578,6 +578,9 @@ class FlyTabApp {
                 if (this.routeTable) this.routeTable.refresh();
             });
         }
+        if (typeof WbOverlay !== 'undefined') {
+            this.wbOverlay = new WbOverlay(document.body);
+        }
 
         // Synthetic per-tank fuel gauges — mounted inside map-area so position:absolute
         // is relative to the map, not the viewport (avoids overlapping top rail)
@@ -914,6 +917,7 @@ class FlyTabApp {
                 routeTable: this.routeTable,
                 layerPanel: this.layerPanel,
                 everywhereSearch: this.everywhereSearch,
+                wbOverlay: this.wbOverlay,
             });
             this.tabBar.init();
         }

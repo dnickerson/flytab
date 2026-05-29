@@ -153,6 +153,7 @@ Opens a right-side drawer with infrequently used actions, organized in three sec
 |---|---|
 | **Timer** | Floating countdown/count-up overlay — stays visible over any tab. Use for holding, approach timing, or any en-route interval. Tap again to dismiss without losing state. |
 | **Fuel Entry** | Manually enter fuel quantity after a fuel stop |
+| **Weight & Balance** | Enter station weights and fuel; shows total weight, CG, and envelope status with a CG diagram |
 | **Approach Charts** | Georeferenced approach plates overlaid on the map |
 | **Engine ML** | Opens the real-time ML anomaly monitor |
 | **Stratux Status** | Opens the Stratux web interface in a browser |
