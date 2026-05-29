@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v9.22';
+const FLYTAB_VERSION = 'v9.25';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -911,6 +911,9 @@ class FlyTabApp {
                 planSync: this.planSync,
                 radarLoop: this.radarLoop,
                 flightUpload: this.flightUpload,
+                routeTable: this.routeTable,
+                layerPanel: this.layerPanel,
+                everywhereSearch: this.everywhereSearch,
             });
             this.tabBar.init();
         }
@@ -931,78 +934,8 @@ class FlyTabApp {
         setTimeout(() => this.cockpitMap.resize(), 200);
     }
 
-    /** Build left rail icon buttons */
-    _buildLeftRail() {
-        const rail = document.getElementById('leftRail');
-        if (!rail) return;
-
-        // Helper: create a rail button with _fastTap
-        const makeBtn = (icon, title, handler, activeDefault = false) => {
-            const btn = document.createElement('button');
-            btn.className = 'left-rail-btn' + (activeDefault ? ' active' : '');
-            btn.title = title;
-            btn.innerHTML = icon;
-            let touchFired = false;
-            btn.addEventListener('touchstart', (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                touchFired = true;
-                handler(btn, e);
-            }, { passive: false });
-            btn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                if (touchFired) { touchFired = false; return; }
-                handler(btn, e);
-            });
-            return btn;
-        };
-
-        const sep = () => {
-            const s = document.createElement('div');
-            s.className = 'left-rail-sep';
-            return s;
-        };
-
-        // ≡ Layers
-        rail.appendChild(makeBtn('&#x2630;', 'Layer panel', () => {
-            if (this.layerPanel) this.layerPanel.toggle();
-        }));
-
-        rail.appendChild(sep());
-
-        // 🔍 Zoom in / out — use map zoom buttons
-        rail.appendChild(makeBtn('+', 'Zoom in', () => {
-            if (this.cockpitMap?.map) this.cockpitMap.map.zoomIn();
-        }));
-        rail.appendChild(makeBtn('−', 'Zoom out', () => {
-            if (this.cockpitMap?.map) this.cockpitMap.map.zoomOut();
-        }));
-
-        rail.appendChild(sep());
-
-        // Search
-        rail.appendChild(makeBtn('SRC', 'Search', () => {
-            if (this.everywhereSearch) this.everywhereSearch.toggle();
-        }));
-
-        rail.appendChild(sep());
-
-        // Route table toggle
-        rail.appendChild(makeBtn('&#x2261;', 'Route table', () => {
-            if (this.routeTable) this.routeTable.toggle();
-        }));
-
-        // Spacer to push version to bottom
-        const spacer = document.createElement('div');
-        spacer.className = 'left-rail-spacer';
-        rail.appendChild(spacer);
-
-        // Version label
-        const ver = document.createElement('div');
-        ver.className = 'left-rail-version';
-        ver.textContent = FLYTAB_VERSION;
-        rail.appendChild(ver);
-    }
+    /** Left rail removed — controls now in tab bar */
+    _buildLeftRail() {}
 
     async _ensureNasrData(nasrDb) {
         // NanoHTTPD (localhost:9090) is the sole local data source.
@@ -1131,64 +1064,6 @@ class FlyTabApp {
         document.body.classList.remove('route-editing-mode');
         this.routePlannerPanel?.close();
         setTimeout(() => this.cockpitMap?.map?.invalidateSize(), 300);
-    }
-
-    async saveCurrentPlan() {
-        if (this.routePlannerPanel?._lastPlan && this.routePlannerPanel._saveCurrentTrip) {
-            try {
-                await this.routePlannerPanel._saveCurrentTrip();
-            } catch (err) {
-                this.showToast('Save failed: ' + (err?.message || err));
-            }
-            return;
-        }
-        if (this._currentTrip?.waypoints?.length >= 2) {
-            const wps = this._currentTrip.waypoints;
-            const dep  = wps[0].icao || wps[0].id;
-            const dest = wps[wps.length - 1].icao || wps[wps.length - 1].id;
-            const now  = new Date();
-            const today = now.toISOString().slice(0, 10);
-            const monthDay = now.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-
-            // Upsert: reuse the existing trip if one with the same dep+dest was
-            // saved today, to avoid creating duplicates on repeated taps.
-            let tripId = null;
-            let existingCreatedAt = null;
-            try {
-                const existing = await TripStore.list();
-                const match = existing.find(t =>
-                    t.dep === dep && t.dest === dest &&
-                    t.created_at && t.created_at.startsWith(today)
-                );
-                if (match) {
-                    tripId = match.id;
-                    existingCreatedAt = match.created_at;
-                }
-            } catch (e) { console.warn('TripStore.list failed, will create new record', e); }
-
-            const trip = {
-                id:         tripId || crypto.randomUUID(),
-                name:       `${dep} → ${dest} · ${monthDay}`,
-                dep,
-                dest,
-                created_at: existingCreatedAt ?? now.toISOString(),
-                updated_at: now.toISOString(),
-                legs: [{
-                    dep,
-                    dest,
-                    flight_plan: this._currentTrip.flight_plan || { departure: dep, destination: dest, route: '', altitude: 0, legs: [] },
-                    waypoints:   wps,
-                }],
-            };
-            try {
-                await TripStore.save(trip);
-                this.showToast('Plan saved.');
-            } catch (err) {
-                this.showToast('Save failed: ' + (err?.message || err));
-            }
-            return;
-        }
-        this.showToast('No plan to save.');
     }
 
     async applyRouteEdit(plan, { fromRouteTable = false } = {}) {

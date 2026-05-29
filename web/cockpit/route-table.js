@@ -67,9 +67,9 @@ class RouteTable {
         this._waypoints = [];   // trip.waypoints[] — all waypoints across all flights
         this._flights = [];     // trip.flights[]   — computed by _buildFlights()
         this._activeIndex = -1;
-        this._expanded = false;   // kept for back-compat checks
-        this._expandState = 0;    // 0=closed, 1=partial(~25%), 2=full(~50%)
-        this._dragging = false;
+        this._lastGpsPosition = null;  // for auto-pan after drag
+        this._preCompactHeight = null; // for compact-mode height restore
+
         this._editMode = false;
 
         this._el = null;
@@ -215,7 +215,7 @@ class RouteTable {
                 this._editMode = true;
                 this._el?.classList.add('route-table-editing');
                 if (this._searchRowEl) this._searchRowEl.hidden = false;
-                if (this._expandState === 0) this.toggle?.();
+                if ((this._bodyEl?.offsetHeight || 0) === 0) this.toggle?.();
             }
             return;
         }
@@ -399,6 +399,10 @@ class RouteTable {
         if (!situation || this._waypoints.length === 0) return;
         this._lastSituation = situation;
 
+        if (situation.lat != null && situation.lon != null) {
+            this._lastGpsPosition = { lat: situation.lat, lng: situation.lon };
+        }
+
         const lat = situation.lat;
         const lon = situation.lon;
         const gs = situation.ground_speed || 0;
@@ -511,7 +515,7 @@ class RouteTable {
 
         if (this._editMode) {
             // Auto-expand when entering edit mode
-            if (this._expandState === 0) this.toggle();
+            if ((this._bodyEl?.offsetHeight || 0) === 0) this.toggle();
             this._searchRowEl.hidden = false;
         } else {
             this._searchRowEl.hidden = true;
@@ -677,7 +681,7 @@ class RouteTable {
 
         // Position: prefer below anchor, flip above if it would go off screen
         const rect = anchorEl.getBoundingClientRect();
-        const containerRect = this._container.getBoundingClientRect();
+        const containerRect = document.getElementById('cockpitContainer').getBoundingClientRect();
         const pickerH = 160; // increased for constraint row
         const spaceBelow = containerRect.bottom - rect.bottom;
         if (spaceBelow < pickerH) {
@@ -1751,29 +1755,134 @@ class RouteTable {
         }
     }
 
-    /**
-     * Expand or collapse the bottom sheet.
-     */
+    /** Open/close the route table body. Called externally by app.js (left rail ≡ button). */
     toggle() {
-        this._expandState = (this._expandState + 1) % 3;
-        this._expanded = this._expandState > 0;
-        this._el.classList.toggle('route-table-expanded', this._expandState === 2);
-        this._el.classList.toggle('route-table-partial',  this._expandState === 1);
-        if (this._expandState === 0)      this._bodyEl.style.maxHeight = '0';
-        else if (this._expandState === 1) this._bodyEl.style.maxHeight = '25vh';
-        else                              this._bodyEl.style.maxHeight = '50vh';
-        if (this._toggleBtn) this._toggleBtn.innerHTML =
-            this._expandState === 0 ? '&#9650;' :
-            this._expandState === 1 ? '&#9650;&#9650;' : '&#9660;';
+        const h = this._bodyEl?.offsetHeight ?? 0;
+        if (h > 0) {
+            this._closeBody();
+        } else {
+            const saved = parseInt(localStorage.getItem('flypi_route_table_height'), 10) || 120;
+            if (this._bodyEl) {
+                this._bodyEl.style.height = saved + 'px';
+                this._broadcastHeight();
+                this._updateOpenHint(saved);
+            }
+            this._map?.invalidateSize();
+            this._autoPanOwnship();
+        }
+    }
+
+    setCompact(compact) {
+        if (compact) {
+            // Called BEFORE class is added so offsetHeight is still valid
+            this._preCompactHeight = this._bodyEl?.offsetHeight || 0;
+        } else {
+            // Restore to pre-compact height; fall through to localStorage when
+            // the table was closed (height 0) before compact was activated
+            const saved = parseInt(localStorage.getItem('flypi_route_table_height'), 10) || 120;
+            const restoreH = (this._preCompactHeight > 0) ? this._preCompactHeight : saved;
+            this._preCompactHeight = null;
+            if (this._bodyEl) {
+                this._bodyEl.style.height = restoreH + 'px';
+                this._updateOpenHint(restoreH);
+            }
+        }
         setTimeout(() => {
             this._map?.invalidateSize();
             this._broadcastHeight();
-        }, 300);
+        }, 0);
     }
 
     _broadcastHeight() {
         const h = this._el ? this._el.offsetHeight : 0;
         document.documentElement.style.setProperty('--route-table-height', h + 'px');
+    }
+
+    _closeBody() {
+        if (!this._bodyEl) return;
+        this._bodyEl.style.height = '0px';
+        this._broadcastHeight();
+        this._updateOpenHint(0);
+        this._map?.invalidateSize();
+    }
+
+    _updateOpenHint(heightPx) {
+        if (!this._openHintEl) return;
+        this._openHintEl.hidden = heightPx > 0;
+    }
+
+    _autoPanOwnship() {
+        if (!this._lastGpsPosition || !this._map) return;
+        const mapHeight = this._map.getSize().y;
+        const tableH   = this._el?.offsetHeight || 0;
+        const pt = this._map.latLngToContainerPoint([
+            this._lastGpsPosition.lat, this._lastGpsPosition.lng
+        ]);
+        if (pt.y > mapHeight * 0.66) {
+            this._map.panBy([0, -(tableH / 2)], { animate: true, duration: 0.3 });
+        }
+    }
+
+    _initDragHandlers() {
+        let dragActive  = false;
+        let dragStartY  = 0;
+        let dragStartH  = 0;
+        let dragStartT  = 0;
+        let dragMaxH    = 0;
+        let lastClientY = 0;
+
+        this._handleEl.addEventListener('touchstart', (e) => {
+            if (e.touches.length !== 1) return;
+            if (e.target.closest('button')) { dragActive = false; return; }
+            dragActive  = true;
+            dragStartY  = e.touches[0].clientY;
+            dragStartH  = this._bodyEl?.offsetHeight || 0;
+            dragStartT  = Date.now();
+            lastClientY = dragStartY;
+            // Sample orientation once per gesture — it can't change mid-drag
+            const isPortrait = window.innerWidth <= window.innerHeight;
+            dragMaxH = isPortrait
+                ? Math.min(window.innerHeight * 0.40, window.innerHeight - 200)
+                : Math.min(window.innerHeight * 0.65, window.innerHeight - 200);
+        }, { passive: true });
+
+        this._handleEl.addEventListener('touchmove', (e) => {
+            if (!dragActive || e.touches.length !== 1) return;
+            const clientY = e.touches[0].clientY;
+            lastClientY   = clientY;
+
+            const dy   = dragStartY - clientY;
+            const maxH = dragMaxH;
+            const newH = Math.max(0, Math.min(maxH, dragStartH + dy));
+
+            this._bodyEl.style.height = newH + 'px';
+            this._broadcastHeight();
+            this._updateOpenHint(newH);
+        }, { passive: false });
+
+        this._handleEl.addEventListener('touchend', (e) => {
+            if (!dragActive) return;
+            dragActive = false;
+            const elapsed = Math.max(1, Date.now() - dragStartT);
+            const totalDy = dragStartY - (e.changedTouches[0]?.clientY ?? lastClientY);
+            const velocity = (totalDy / elapsed) * 1000;
+
+            if (velocity < -300) {
+                this._closeBody();
+                return;
+            }
+
+            const h = this._bodyEl?.offsetHeight || 0;
+            if (h === 0) {
+                this._closeBody();
+                return;
+            }
+
+            localStorage.setItem('flypi_route_table_height', String(h));
+            this._map?.invalidateSize();
+            this._broadcastHeight();
+            this._autoPanOwnship();
+        }, { passive: true });
     }
 
     // ========== Save Route ==========
@@ -2070,28 +2179,15 @@ class RouteTable {
         this._handleEl = document.createElement('div');
         this._handleEl.className = 'route-table-handle';
         this._handleEl.innerHTML = `
-            <span class="handle-summary"></span>
-            <button class="rt-profile-btn" title="Terrain profile" style="min-width:44px;min-height:44px;font-size:18px;background:none;border:none;color:inherit;cursor:pointer;padding:0 8px">\u26F0</button>
-            <button class="route-table-edit-btn">EDIT</button>
-            <button class="rt-toggle-btn" title="Expand/collapse plan">&#9650;</button>
-        `;
-        // Tap to toggle — no drag, just two states
-        let touchStartY = 0;
-        this._handleEl.addEventListener('touchstart', (e) => {
-            touchStartY = e.touches[0].clientY;
-        }, { passive: true });
-        this._handleEl.addEventListener('touchend', (e) => {
-            if (e.target.tagName === 'BUTTON') return;
-            const dy = Math.abs(e.changedTouches[0].clientY - touchStartY);
-            if (dy < 10) {
-                e.preventDefault();
-                this.toggle();
-            }
-        });
-        this._handleEl.addEventListener('click', (e) => {
-            if (e.target.tagName === 'BUTTON') return;
-            this.toggle();
-        });
+    <div class="rt-drag-pill"></div>
+    <div class="rt-handle-row">
+        <span class="handle-summary"></span>
+        <button class="rt-profile-btn" title="Terrain profile" style="min-width:44px;min-height:44px;font-size:18px;background:none;border:none;color:inherit;cursor:pointer;padding:0 8px">&#x26F0;</button>
+        <button class="route-table-edit-btn">EDIT</button>
+        <button class="rt-close-btn" title="Close route table">&#x2715;</button>
+        <span class="rt-open-hint" hidden>&#x2191;</span>
+    </div>
+`;
 
         // EDIT button opens the route planner panel
         this._editBtn = this._handleEl.querySelector('.route-table-edit-btn');
@@ -2104,8 +2200,10 @@ class RouteTable {
         this._profileBtn = this._handleEl.querySelector('.rt-profile-btn');
         wireTap(this._profileBtn, () => this._openProfileView());
 
-        this._toggleBtn = this._handleEl.querySelector('.rt-toggle-btn');
-        wireTap(this._toggleBtn, () => this.toggle());
+        this._closeBtn = this._handleEl.querySelector('.rt-close-btn');
+        wireTap(this._closeBtn, () => this._closeBody());
+
+        this._openHintEl = this._handleEl.querySelector('.rt-open-hint');
 
         // Terrain profile panel (created once, floats above the sheet)
         this._profileView = (typeof RouteProfileView !== 'undefined')
@@ -2115,7 +2213,7 @@ class RouteTable {
         // Body
         this._bodyEl = document.createElement('div');
         this._bodyEl.className = 'route-table-body';
-        this._bodyEl.style.maxHeight = '0';
+        this._bodyEl.style.height = '0px';
 
         this._tableEl = document.createElement('table');
         this._tableEl.className = 'route-table-content';
@@ -2233,8 +2331,8 @@ class RouteTable {
                 return;
             }
         });
-        // Close picker on outside click (scoped to container, not document)
-        this._container.addEventListener('click', (e) => {
+        // Close picker on outside click — scoped to cockpitContainer (picker lives there now)
+        document.getElementById('cockpitContainer').addEventListener('click', (e) => {
             if (!this._altPicker.hidden && !this._altPicker.contains(e.target) && !e.target.closest('.rt-alt-cell')) {
                 this._hideAltPicker();
             }
@@ -2244,11 +2342,13 @@ class RouteTable {
 
         this._el.appendChild(this._handleEl);
         this._el.appendChild(this._bodyEl);
-        this._container.appendChild(this._el);
-        // Append altitude picker to container (needs to float above table)
-        this._container.appendChild(this._altPicker);
+        const cockpitContainer = document.getElementById('cockpitContainer');
+        cockpitContainer.appendChild(this._el);
+        // Alt picker floats above the table — append to cockpitContainer too
+        cockpitContainer.appendChild(this._altPicker);
 
         this._buildEngineStatusCard();
+        if (this._initDragHandlers) this._initDragHandlers();
     }
 
     // ── Terrain Profile View ──────────────────────────────────────────────────
@@ -2558,6 +2658,21 @@ class RouteTable {
         const numCols  = columns.length + (this._editMode ? 2 : 0);
         const hasMultipleFlights = this._flights.length > 1;
 
+        // ── Colgroup: pin column widths so WPT doesn't expand into fuel-stop spans ──
+        const COL_WIDTHS = {
+            wpt: '52px', alt: '10%', hdg: '7%', brg: '7%',
+            dist: '8%',  ete: '8%',  gs:  '7%', fuel: '8%',
+        };
+
+        let colgroupHtml = '<colgroup>';
+        if (this._editMode) colgroupHtml += '<col style="width:36px">';   // reorder handle
+        for (const col of columns) {
+            const w = COL_WIDTHS[col.key];
+            colgroupHtml += w ? `<col style="width:${w}">` : '<col>';
+        }
+        if (this._editMode) colgroupHtml += '<col style="width:36px">';   // delete button
+        colgroupHtml += '</colgroup>';
+
         // ── Column headers ────────────────────────────────────────────────────
         let html = '<thead><tr>';
         if (this._editMode) html += '<th style="width:32px"></th>'; // reorder
@@ -2694,7 +2809,7 @@ class RouteTable {
             html += '</tr></tfoot>';
         }
 
-        this._tableEl.innerHTML = html;
+        this._tableEl.innerHTML = colgroupHtml + html;
 
         // Scroll active row into view within the table body
         const activeRow = this._tableEl.querySelector('.rt-row.active');
@@ -2932,7 +3047,13 @@ class RouteTable {
         switch (key) {
             case 'wpt': return wp.icao || wp.name || '?';
             case 'phase': return wp._phase || '\u2014';
-            case 'alt': return wp.alt ?? wp.altitude ?? '\u2014';
+            case 'alt': {
+                // Use segment data when present (even a single CRZ segment has altitude)
+                const singleSeg = wp._segments?.[0];
+                if (singleSeg) return this._formatSegAlt(singleSeg);
+                const a = wp.alt ?? wp.altitude;
+                return a != null ? (a >= 1000 ? a.toLocaleString() : String(a)) : '\u2014';
+            }
             case 'hdg':
                 return wp._hdg != null ? Math.round(wp._hdg) + '\u00b0' : '\u2014';
             case 'brg':

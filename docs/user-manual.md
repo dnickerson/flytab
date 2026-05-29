@@ -38,7 +38,7 @@ FlyTab connects automatically on app launch. The status bar at the top shows con
 ├──────────────────────────────────────────────────┤
 │ NEXT  ——  DEST  ——  GS  —kt  ALT  ——  FUEL  —gal│  ← Nav Strip
 ├──────────────────────────────────────────────────┤
-│  🗺 MAP  ✈ APT  ⚙ ENG  ✅ CHK  📻 CLR  ⏱ TMR  ⋯ │  ← Tab Bar
+│  🗺 MAP  ✈ APT  ⚙ ENG  ✅ CHK  📻 CLR  ⊟ CMPCT ⋯ │  ← Tab Bar
 └──────────────────────────────────────────────────┘
 ```
 
@@ -76,7 +76,7 @@ The **advisory** badge appears between GPS and FIS-B when a weather advisory is 
 
 The primary cockpit view. Shows position, route, weather, traffic, and airspace overlays.
 
-**Base chart** — Switch between Vector (clean low-clutter), Sectional, IFR Low, and TAC using the Layers panel (≡ button, top-left corner).
+**Base chart** — Switch between Vector (clean low-clutter), Sectional, IFR Low, and TAC using the **LAYERS tab** (far left of the tab bar).
 
 **Airspace** — Class B (solid blue), C (magenta), D (blue dashed) drawn at correct altitude limits. Tap an airspace boundary for the name and altitudes.
 
@@ -137,41 +137,49 @@ Two modes: **DEP** (departure) and **APCH** (approach).
 
 ---
 
-### TMR — Timer
+### CMPCT — Compact Mode
 
-A floating countdown/count-up timer overlay that stays visible over any other tab. Use for holding, approach timing, or any en-route interval. Tap TMR again to dismiss it without losing the timer state.
+Hides the instrument strip and route table so the map fills the full screen. Useful in landscape orientation or any time you need maximum map visibility. The tab label changes to **MAP** while strips are hidden — tap MAP to restore them. The route table returns to exactly the height it was at before compact was activated.
 
 ---
 
 ### MORE — Secondary Functions
 
-Opens a right-side drawer with infrequently used actions.
+Opens a right-side drawer with infrequently used actions, organized in three sections.
+
+**In-flight**
+
+| Item | What it does |
+|---|---|
+| **Timer** | Floating countdown/count-up overlay — stays visible over any tab. Use for holding, approach timing, or any en-route interval. Tap again to dismiss without losing state. |
+| **Fuel Entry** | Manually enter fuel quantity after a fuel stop |
+| **Approach Charts** | Georeferenced approach plates overlaid on the map |
+| **Engine ML** | Opens the real-time ML anomaly monitor |
+| **Stratux Status** | Opens the Stratux web interface in a browser |
+
+**Pre / Post flight**
 
 | Item | What it does |
 |---|---|
 | **Plan on flywhere.app** | Opens the web route planner in a browser for pre-flight planning |
-| **New Route** | Clears the current route (asks for confirmation) |
-| **Save Plan** | Saves the current route to local storage |
-| **Load Plan** | Loads a previously saved route |
-| **Engine ML** | Opens the real-time ML anomaly monitor |
+| **Weather Briefing** | Full weather briefing panel (see below) |
 | **Logbook** | View and edit flight log entries |
 | **Flight Upload** | Sync flight logs to the cloud |
-| **Weather Briefing** | Full weather briefing panel (see below) |
-| **Approach Charts** | Georeferenced approach plates overlaid on the map |
-| **Fuel Entry** | Manually enter fuel quantity after a fuel stop |
-| **Stratux Status** | Opens the Stratux web interface |
-| **FIS-B Status** | Shows FIS-B reception detail and weather product ages |
+| **User Manual** | This document |
+
+**Admin**
+
+| Item | What it does |
+|---|---|
 | **Data Status** | Shows local database age, tile cache status |
 | **Configuration** | Aircraft, engine, and system settings |
-| **Export Track GPX/CSV** | Exports the GPS breadcrumb track for the current flight |
 | **Reset NASR Data** | Forces a full re-download of the airport/navaid database |
-| **Help** | In-app quick reference |
 
 ---
 
 ## Layer Panel
 
-Tap the **≡ button** (top-left corner of the map) to open the layer panel. Close it by tapping the backdrop or the ✕ button.
+Tap the **LAYERS tab** (far left of the tab bar) to open the layer panel. Close it by tapping the backdrop or the ✕ button.
 
 The panel has four accordion sections: **Base Chart**, **Map Overlays**, **Traffic**, and **Weather**.
 
@@ -352,7 +360,9 @@ FlyTab uses two planning modes: **building a route on the tablet** and **loading
 
 Tap the map at any airport or navaid to open its popup, then tap **Add to Route**. The waypoint appears in the route strip at the bottom. Continue tapping to add waypoints. The route line draws in real time.
 
-To edit the route, tap the route strip to expand it. From there you can:
+The route strip at the bottom is a draggable sheet. Drag the handle upward to expand it; drag down or tap **✕** to close it. The map resizes automatically as you drag so tap targets are never covered.
+
+To edit the route, expand the strip and tap **EDIT**. From there you can:
 - Tap any waypoint pill to view details
 - Long-press a waypoint pill to delete or move it
 - Tap the **+** button to add a waypoint by identifier
@@ -362,7 +372,7 @@ To edit the route, tap the route strip to expand it. From there you can:
 
 1. Open **MORE → Plan on flywhere.app** on a device with internet access.
 2. Build and save the route in the web planner.
-3. Return to FlyTab, tap **MORE → Load Plan**.
+3. Return to FlyTab, open the Route Planner (tap ✎ in the route strip handle), then tap **Plans**.
 4. Select the saved plan from the list.
 
 The route imports with all waypoints, planned altitude, and cruise speed. The nav strip activates immediately.
@@ -431,7 +441,7 @@ If Stratux is not found within about 30 seconds of launch, a banner appears: "SI
 2. Launch FlyTab — it will auto-download any updated NASR data.
 3. **MORE → Plan on flywhere.app** — build the route.
 4. **MORE → Load Plan** — import the route.
-5. **≡ → Cache Route Area** — download tiles for the route corridor.
+5. **LAYERS → Cache Route Area** — download tiles for the route corridor.
 6. **MORE → Weather Briefing** — review METARs, TAFs, G-AIRMETs, NOTAMs.
 7. **MORE → Fuel Entry** — set fuel quantities if you know them.
 
@@ -449,7 +459,7 @@ If Stratux is not found within about 30 seconds of launch, a banner appears: "SI
 
 **Departure:**
 - Switch to auto-pan (⊙ button) if not already active.
-- **≡ → Weather → NEXRAD** on if convective weather is a concern.
+- **LAYERS → Weather → NEXRAD** on if convective weather is a concern.
 - Nav strip shows GS, ALT, and ETE to first waypoint automatically.
 
 **En route:**
@@ -468,7 +478,7 @@ If Stratux is not found within about 30 seconds of launch, a banner appears: "SI
 - Flight recording stops automatically when engine data ceases.
 - **MORE → Logbook** — review and edit the auto-generated entry.
 - **MORE → Flight Upload** to sync.
-- **MORE → Export Track GPX** if you want to import the track into another app.
+- **MORE → Flight Upload** to sync the track to the cloud.
 
 ---
 
@@ -478,7 +488,7 @@ If Stratux is not found within about 30 seconds of launch, a banner appears: "SI
 Stratux is not connected. Check that the tablet Wi-Fi is on the Stratux network (not home Wi-Fi). The SIM banner will be visible.
 
 **No NEXRAD data (FIS-B):**
-You need to be within range of a UAT ground station. Check FIS-B Status (MORE → FIS-B Status) for last-received ages. FIS-B status badge green = connected. Internet NEXRAD is the fallback when FIS-B is not available.
+You need to be within range of a UAT ground station. Tap the FIS-B badge in the status bar for last-received ages. FIS-B status badge green = connected. Internet NEXRAD is the fallback when FIS-B is not available.
 
 **CB Building shows no polygons:**
 The feature requires the NEXRAD / FIS-B radar overlay to be enabled first. The internet mode also requires internet connectivity. If there are no growing cells in the viewport, no polygons appear — that is correct behavior, not a failure.
@@ -487,7 +497,7 @@ The feature requires the NEXRAD / FIS-B radar overlay to be enabled first. The i
 Check that the Pi is powered and the tablet is on the same network segment. Pi usually assigned to 192.168.1.x. More → Data Status shows the last-connected time for the engine monitor.
 
 **Tiles are missing / grey squares:**
-Charts for this area are not downloaded. Either download the region (≡ → Base Chart → Region Download) or use the Vector base layer, which requires no tile data.
+Charts for this area are not downloaded. Either download the region (LAYERS → Base Chart → Region Download) or use the Vector base layer, which requires no tile data.
 
 **NASR badge is red:**
 Airport/navaid database is stale. Connect to home Wi-Fi with home server running and restart FlyTab — it auto-downloads fresh NASR data on startup.
@@ -501,18 +511,18 @@ The NASR import writes ~100,000 records to IndexedDB. If this happens during sta
 
 | Task | How |
 |---|---|
-| Switch base chart | ≡ → Base Chart section |
-| Enable weather radar | ≡ → Weather → NEXRAD / FIS-B |
-| See CB building polygons | ≡ → Weather → CB Building (radar must be on) |
-| See METAR dots | ≡ → Weather → Flight Category |
-| Download tiles offline | ≡ → Region Download |
+| Switch base chart | LAYERS → Base Chart section |
+| Enable weather radar | LAYERS → Weather → NEXRAD / FIS-B |
+| See CB building polygons | LAYERS → Weather → CB Building (radar must be on) |
+| See METAR dots | LAYERS → Weather → Flight Category |
+| Download tiles offline | LAYERS → Region Download |
 | Add airport to route | Tap airport on map → Add to Route |
 | Direct-to an airport | Tap airport on map → → (corner button) |
 | Start approach briefing | CLR tab → APCH |
 | Open approach plate | APT tab → tap airport → Approaches |
 | Check engine trends | ENG tab |
 | Log fuel stop | MORE → Fuel Entry |
-| Export GPS track | MORE → Export Track GPX |
+| Export / sync GPS track | MORE → Flight Upload |
 | Check NOTAM for airport | MORE → Weather Briefing → NOTAMs |
 | Reload airport database | MORE → Reset NASR Data |
 

@@ -58,9 +58,17 @@ class EverywhereSearch {
     // ── Search overlay ───────────────────────────────────────────────────────
 
     _buildOverlay() {
+        // Full-screen semi-transparent backdrop — tap outside modal to dismiss
         const overlay = document.createElement('div');
         overlay.className = 'esearch-overlay';
-        overlay.style.cssText = 'position:fixed;inset:0;z-index:99990;background:var(--bg-primary);display:none;flex-direction:column;';
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:99990;background:rgba(0,0,0,0.55);display:none;align-items:center;justify-content:center;padding:20px;box-sizing:border-box;';
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) this.hide(); });
+        overlay.addEventListener('touchstart', (e) => { if (e.target === overlay) { e.preventDefault(); this.hide(); } }, { passive: false });
+
+        // Centered modal panel
+        const modal = document.createElement('div');
+        modal.style.cssText = 'position:relative;width:min(540px,94vw);height:min(66vh,620px);background:var(--bg-surface);border-radius:14px;border:2px solid var(--border-strong);box-shadow:0 12px 40px rgba(0,0,0,0.5);display:flex;flex-direction:column;overflow:hidden;';
+        this._modal = modal;
 
         const header = document.createElement('div');
         header.style.cssText = 'display:flex;align-items:center;padding:8px 10px;gap:8px;border-bottom:2px solid var(--border-strong);flex-shrink:0;';
@@ -86,13 +94,14 @@ class EverywhereSearch {
 
         header.appendChild(input);
         header.appendChild(closeBtn);
-        overlay.appendChild(header);
+        modal.appendChild(header);
 
         const list = document.createElement('div');
         list.style.cssText = 'flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;';
         this._resultsList = list;
-        overlay.appendChild(list);
+        modal.appendChild(list);
 
+        overlay.appendChild(modal);
         document.body.appendChild(overlay);
         this._overlay = overlay;
     }
@@ -333,7 +342,7 @@ class EverywhereSearch {
         this._hideDetail();
 
         const overlay = document.createElement('div');
-        overlay.style.cssText = 'position:fixed;inset:0;z-index:99991;background:var(--bg-primary);display:flex;flex-direction:column;';
+        overlay.style.cssText = 'position:absolute;inset:0;z-index:10;background:var(--bg-surface);display:flex;flex-direction:column;border-radius:12px;overflow:hidden;';
 
         // Header: back + badge + title on left, ✕ on right
         const header = document.createElement('div');
@@ -385,7 +394,7 @@ class EverywhereSearch {
         for (const btn of this._buildDetailActions(entity, type)) actionBar.appendChild(btn);
         overlay.appendChild(actionBar);
 
-        document.body.appendChild(overlay);
+        (this._modal || document.body).appendChild(overlay);
         this._detailOverlay = overlay;
     }
 
