@@ -950,6 +950,36 @@ class FisbNexrad {
         return 0;
     }
 
+    /** Export cached frames as NDJSON to the on-device server (next to flight CSVs). */
+    async exportFrames() {
+        const lines = this._frameHistory.map(snap => {
+            const NEXRAD = [];
+            for (const [, b] of snap.blocks) NEXRAD.push({
+                Radar_Type: b.radarType, Scale: b.scale,
+                LatNorth: b.latN, LonWest: b.lonW, Height: b.height, Width: b.width,
+                Intensity: Array.from(b.intensity),
+            });
+            return JSON.stringify({ Product_id: 63, NEXRAD,
+                LocaltimeReceived: new Date(snap.dataTime).toISOString() });
+        });
+        const iso = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        const path = `flights/nexrad-${iso}.ndjson`;
+        const base = (typeof FlightRecorder !== 'undefined' && FlightRecorder.LOCAL_BASE)
+            ? FlightRecorder.LOCAL_BASE : 'http://localhost:9090';
+        try {
+            const resp = await fetch(`${base}/${path}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/x-ndjson' },
+                body: lines.join('\n'),
+            });
+            if (typeof DiagLog !== 'undefined') DiagLog.log('radar', `exportFrames → ${path} (${lines.length} frames, ok=${resp.ok})`);
+            return { ok: resp.ok, path, frames: lines.length };
+        } catch (err) {
+            if (typeof DiagLog !== 'undefined') DiagLog.log('error', `exportFrames failed: ${err.message}`);
+            return { ok: false, path, frames: lines.length, error: err.message };
+        }
+    }
+
     /** Web mercator tile coordinate helpers. */
     static _lon2tile(lon, z) {
         return Math.floor((lon + 180) / 360 * Math.pow(2, z));

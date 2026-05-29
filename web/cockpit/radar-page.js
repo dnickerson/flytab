@@ -46,6 +46,7 @@ class RadarPage {
             <div class="radar-page-header">
                 <span class="radar-page-title">CONUS Radar</span>
                 <span class="radar-badge radar-page-badge"></span>
+                <button class="radar-page-export">Export</button>
                 <button class="radar-page-close" aria-label="Close">&#x2715;</button>
             </div>
             <div class="radar-page-map">
@@ -59,6 +60,7 @@ class RadarPage {
         document.body.appendChild(this._el);
         this._mapEl = this._el.querySelector('.radar-page-map');
         this._badge = this._el.querySelector('.radar-page-badge');
+        this._el.querySelector('.radar-page-export').addEventListener('click', () => this._fisb.exportFrames());
         this._el.querySelector('.radar-page-close').addEventListener('click', () => this.hide());
         this._el.querySelector('.radar-page-recenter').addEventListener('click', () => this._recenter());
         this._el.querySelector('.radar-page-loop-btn').addEventListener('click', () => this._toggleLoop());

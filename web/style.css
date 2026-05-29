@@ -5308,7 +5308,8 @@ body {
 .radar-page { position: fixed; top: 0; left: 0; right: 0; bottom: var(--tab-bar-height); z-index: 4000; background: var(--bg-primary); display: flex; flex-direction: column; }
 .radar-page-header { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-bottom: 2px solid var(--border-strong); }
 .radar-page-title { font-family: var(--font-ui); font-weight: 800; font-size: 18px; color: var(--text-primary); }
-.radar-page-close { margin-left: auto; min-width: var(--touch-min, 56px); min-height: var(--touch-min, 56px); font-size: 24px; font-weight: 800; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; color: var(--text-primary); }
+.radar-page-export { margin-left: auto; min-width: var(--touch-min, 56px); min-height: var(--touch-min, 56px); padding: 0 16px; font-family: var(--font-ui); font-size: 16px; font-weight: 700; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; color: var(--text-secondary); }
+.radar-page-close { min-width: var(--touch-min, 56px); min-height: var(--touch-min, 56px); font-size: 24px; font-weight: 800; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; color: var(--text-primary); }
 .radar-page-map { flex: 1; position: relative; }
 .radar-page-recenter { position: absolute; bottom: 92px; right: 16px; z-index: 500; min-height: var(--touch-preferred, 64px); padding: 0 18px; font-family: var(--font-ui); font-weight: 800; font-size: 16px; color: #fff; background: var(--accent); border: none; border-radius: 10px; }
 .radar-page-badge { position: static; }
