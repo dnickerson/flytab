@@ -200,7 +200,10 @@ class RadarLoop {
 
         this._frameIndex = index;
 
-        // Tell FisbNexrad to render this historical frame
+        // Tell FisbNexrad to render this historical frame.
+        // NOTE: drawFrame signature is now (target, product, frameIndex). This single-arg
+        // call is a safe no-op until Task 5 makes RadarLoop target-aware. Do not "fix" by
+        // guessing args here — Task 5 rewires this call site.
         if (this._nexrad) {
             this._nexrad.drawFrame(index);
         }

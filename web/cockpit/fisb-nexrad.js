@@ -129,6 +129,7 @@ class FisbNexrad {
         this._frameHistory = [];
         this._canvas = null;
         this._ctx = null;
+        this._mainTarget = null;   // drop stale canvas/ctx ref so _draw()'s guard fires after teardown
         this._clearCbOverlays();
         this._stopInetSampling();
         this._map = null;
