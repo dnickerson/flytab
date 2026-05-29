@@ -5305,7 +5305,7 @@ body {
 }
 
 /* ========== CONUS Radar Page (full-screen, own map) ========== */
-.radar-page { position: fixed; inset: 0; z-index: 4000; background: var(--bg-primary); display: flex; flex-direction: column; }
+.radar-page { position: fixed; top: 0; left: 0; right: 0; bottom: var(--tab-bar-height); z-index: 4000; background: var(--bg-primary); display: flex; flex-direction: column; }
 .radar-page-header { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-bottom: 2px solid var(--border-strong); }
 .radar-page-title { font-family: var(--font-ui); font-weight: 800; font-size: 18px; color: var(--text-primary); }
 .radar-page-close { margin-left: auto; min-width: var(--touch-min, 56px); min-height: var(--touch-min, 56px); font-size: 24px; font-weight: 800; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; color: var(--text-primary); }
