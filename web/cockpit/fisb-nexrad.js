@@ -12,8 +12,11 @@ class FisbNexrad {
         this._ctx = null;
         this._active = false;
 
-        // NEXRAD block store: "latN,lonW" → { latN, lonW, height, width, intensity[], received_at }
+        // NEXRAD block store: "latN,lonW" → { latN, lonW, height, width, intensity[], radarType, scale, received_at }
         this._blocks = new Map();
+
+        // Per-product freshness: tracks the most recent received_at for each product type
+        this._newestAt = { regional: 0, conus: 0 };
 
         // Frame history for radar loop playback (ring buffer of snapshots)
         this._frameHistory = [];
@@ -67,6 +70,11 @@ class FisbNexrad {
         'rgba(255, 0, 255, 0.8)',     // 6: very heavy
         'rgba(255, 255, 255, 0.9)',   // 7+: extreme
     ];
+
+    /** Classify a stored block by FIS-B product. */
+    static _productOf(block) {
+        return (block.radarType === 64 || block.scale > 0) ? 'conus' : 'regional';
+    }
 
     // ========== Public API ==========
 
@@ -171,14 +179,19 @@ class FisbNexrad {
             if (!block.Intensity || block.Intensity.length === 0) continue;
 
             const key = `${block.LatNorth},${block.LonWest}`;
-            this._blocks.set(key, {
+            const stored = {
                 latN: block.LatNorth,
                 lonW: block.LonWest,
                 height: block.Height,
                 width: block.Width,
                 intensity: block.Intensity,
+                radarType: block.Radar_Type,   // 63 Regional | 64 CONUS
+                scale: block.Scale,             // 0 | 1 | 2
                 received_at: now,
-            });
+            };
+            this._blocks.set(key, stored);
+            const p = FisbNexrad._productOf(stored);
+            if (now > this._newestAt[p]) this._newestAt[p] = now;
         }
 
         // Snapshot for radar loop (throttled to every 2.5 minutes)
