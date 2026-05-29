@@ -98,6 +98,7 @@ class TabBar {
         if (c.configEditor?.hide) c.configEditor.hide();
         if (c.approachCharts?.closeViewer) c.approachCharts.closeViewer();
         if (c.fuelOverlay?.hide) c.fuelOverlay.hide();
+        if (c.wbOverlay?.hide) c.wbOverlay.hide();
         if (c.planSync?.hide) c.planSync.hide();
         if (c.fisbStatus?.hide) c.fisbStatus.hide();
         if (c.flightUpload?.hide) c.flightUpload.hide();
@@ -183,6 +184,11 @@ class TabBar {
             }},
             { icon: '⛅', label: 'Weather Briefing', action: () => {
                 if (c.wxBriefing?.show) c.wxBriefing.show();
+                this._hideRadarControls();
+                this._closeMoreDrawer();
+            }},
+            { icon: '⚖️', label: 'Weight & Balance', action: () => {
+                if (c.wbOverlay?.show) c.wbOverlay.show();
                 this._hideRadarControls();
                 this._closeMoreDrawer();
             }},
