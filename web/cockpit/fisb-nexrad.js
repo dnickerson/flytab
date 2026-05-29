@@ -20,7 +20,11 @@ class FisbNexrad {
 
         // Frame history for radar loop playback (ring buffer of snapshots)
         this._frameHistory = [];
-        this._maxFrames = 24; // ~60 min at 2.5 min intervals
+        const intervalMin = CockpitConfig.get('radar.frameIntervalMinutes') || 10;
+        const durationHr  = CockpitConfig.get('radar.loopDurationHours') || 2;
+        this._cacheHours  = CockpitConfig.get('radar.cacheHours') || 3;
+        this._snapIntervalMs = intervalMin * 60000;
+        this._maxFrames = Math.max(2, Math.ceil(durationHr * 60 / intervalMin));
 
         // Config
         this._opacity = CockpitConfig.get('radar.opacity') || 0.5;
@@ -203,7 +207,7 @@ class FisbNexrad {
         // Snapshot for radar loop (throttled to every 2.5 minutes)
         const lastSnap = this._frameHistory.length > 0
             ? this._frameHistory[this._frameHistory.length - 1].time : 0;
-        if (now - lastSnap >= 150000) { // 2.5 minutes
+        if (now - lastSnap >= this._snapIntervalMs) {
             this._takeSnapshot(now, dataTime);
             // Notify map to switch the loop source to FIS-B once we have enough frames to animate.
             // Two frames = minimum for visible animation. Fire once per radar session.
