@@ -153,16 +153,6 @@ class TabBar {
                 this._closeMoreDrawer();
                 this._toggleTimer();
             }},
-            { icon: '⛽', label: 'Fuel Entry', action: () => {
-                if (c.fuelOverlay?.show) c.fuelOverlay.show();
-                this._hideRadarControls();
-                this._closeMoreDrawer();
-            }},
-            { icon: '⚖️', label: 'Weight & Balance', action: () => {
-                if (c.wbOverlay?.show) c.wbOverlay.show();
-                this._hideRadarControls();
-                this._closeMoreDrawer();
-            }},
             { icon: '📊', label: 'Approach Charts', action: () => {
                 if (c.approachCharts) {
                     c.approachCharts._currentPlate
@@ -189,6 +179,11 @@ class TabBar {
             }},
 
             { type: 'section', label: 'Pre / Post flight' },
+            { icon: '⛽', label: 'Fuel Entry', action: () => {
+                if (c.fuelOverlay?.show) c.fuelOverlay.show();
+                this._hideRadarControls();
+                this._closeMoreDrawer();
+            }},
             { icon: '✈️', label: 'Plan on flywhere.app', action: () => {
                 window.open('https://flywhere.app/plan', '_blank');
                 this._closeMoreDrawer();

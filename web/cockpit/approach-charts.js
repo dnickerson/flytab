@@ -10,6 +10,8 @@
 const PLATES_BASE = 'http://localhost:9090/plates';
 const CIFP_BUNDLE_URL = 'http://localhost:9090/cifp/cifp_bundle.json';
 const PLATES_FETCH_TIMEOUT = 3000; // 3s timeout for NanoHTTPD requests
+// v2: pipeline corrected altitude field offset (col 84:89 not 83:88); stale caches show altitudes 10× too small
+const CIFP_BUNDLE_CACHE_KEY = 'cifp_bundle_v2';
 
 /** Fetch with a timeout (AbortController). Rejects on timeout. */
 function _fetchWithTimeout(url, opts = {}, timeoutMs = PLATES_FETCH_TIMEOUT) {
@@ -74,7 +76,7 @@ class ApproachCharts {
         // Try CIFP bundle from IndexedDB cache
         if (this._nasrDb) {
             try {
-                const cachedCifp = await this._nasrDb.getAppCache('cifp_bundle');
+                const cachedCifp = await this._nasrDb.getAppCache(CIFP_BUNDLE_CACHE_KEY);
                 if (cachedCifp) {
                     this._cifpBundle = cachedCifp;
                     console.log('[ApproachCharts] CIFP bundle from cache:', Object.keys(cachedCifp).length, 'airports');
@@ -128,7 +130,7 @@ class ApproachCharts {
                     const data = await resp.json();
                     this._cifpBundle = data;
                     console.log('[ApproachCharts] CIFP bundle loaded:', Object.keys(data).length, 'airports');
-                    if (this._nasrDb) this._nasrDb.putAppCache('cifp_bundle', data).catch(() => {});
+                    if (this._nasrDb) this._nasrDb.putAppCache(CIFP_BUNDLE_CACHE_KEY, data).catch(() => {});
                 }
             } catch (err) {
                 console.warn('[ApproachCharts] CIFP bundle not available:', err.message);
@@ -997,7 +999,7 @@ class ApproachCharts {
                     const resp = await _fetchWithTimeout(CIFP_BUNDLE_URL, {}, 30000);
                     if (resp.ok) {
                         this._cifpBundle = await resp.json();
-                        if (this._nasrDb) this._nasrDb.putAppCache('cifp_bundle', this._cifpBundle).catch(() => {});
+                        if (this._nasrDb) this._nasrDb.putAppCache(CIFP_BUNDLE_CACHE_KEY, this._cifpBundle).catch(() => {});
                     }
                 } catch { /* will fall through to error below */ }
             }
