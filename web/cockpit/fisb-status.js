@@ -206,19 +206,28 @@ class FisbStatus {
             return;
         }
 
-        entries.sort((a, b) => (b[1].Signal_strength_last_minute || 0) - (a[1].Signal_strength_last_minute || 0));
+        // Sort active towers first (≥ -100), then silent towers last.
+        // -999 is Stratux's sentinel for "tower seen but no signal measured"; treat as 0 for sort.
+        entries.sort((a, b) => {
+            const sa = a[1].Signal_strength_last_minute ?? -999;
+            const sb = b[1].Signal_strength_last_minute ?? -999;
+            const sortA = sa <= -100 ? -9999 : sa;
+            const sortB = sb <= -100 ? -9999 : sb;
+            return sortB - sortA;
+        });
 
         container.innerHTML = `<table class="fisb-tower-table">
             <thead><tr><th>LOCATION</th><th>SIGNAL</th><th>MSG/MIN</th></tr></thead>
             <tbody>${entries.map(([coords, t]) => {
-                const sig = t.Signal_strength_last_minute != null ? t.Signal_strength_last_minute.toFixed(0) : '?';
-                const sigNum = parseFloat(sig);
-                const cls = sigNum >= -10 ? 'ok' : sigNum >= -15 ? 'warn' : 'bad';
+                const rawSig = t.Signal_strength_last_minute;
+                const noSignal = rawSig == null || rawSig <= -100; // -999 = Stratux sentinel
+                const sig = noSignal ? '—' : rawSig.toFixed(0);
+                const cls = noSignal ? 'bad' : rawSig >= -10 ? 'ok' : rawSig >= -15 ? 'warn' : 'bad';
                 const lat = t.Lat != null ? t.Lat.toFixed(2) : '?';
                 const lng = t.Lng != null ? t.Lng.toFixed(2) : '?';
                 return `<tr>
                     <td>${lat}, ${lng}</td>
-                    <td class="fisb-tower-sig ${cls}">${sig} dB</td>
+                    <td class="fisb-tower-sig ${cls}">${sig}${noSignal ? '' : ' dB'}</td>
                     <td>${t.Messages_last_minute || 0}</td>
                 </tr>`;
             }).join('')}</tbody>
