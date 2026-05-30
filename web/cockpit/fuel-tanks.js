@@ -121,8 +121,13 @@ class FuelTanksDisplay {
                     <div class="ftw-sender" id="ftw-sender-l"></div>
                 </div>
                 <div class="ftw-center">
-                    <div class="ftw-total-lbl">TOT</div>
+                    <div class="ftw-center-label">T</div>
+                    <div class="ftw-bar-wrap ftw-bar-wrap-center">
+                        <div class="ftw-bar-fill" id="ftw-bar-total"></div>
+                    </div>
                     <div class="ftw-total" id="ftw-total">--</div>
+                    <div class="ftw-flow-lbl">GPH</div>
+                    <div class="ftw-flow" id="ftw-flow">--</div>
                     <div class="ftw-end" id="ftw-end">--</div>
                     <div class="ftw-imbal" id="ftw-imbal" style="display:none">⚠</div>
                 </div>
@@ -180,7 +185,9 @@ class FuelTanksDisplay {
             badgeR:        this._el.querySelector('#ftw-badge-r'),
             senderL:       this._el.querySelector('#ftw-sender-l'),
             senderR:       this._el.querySelector('#ftw-sender-r'),
+            barTotal:      this._el.querySelector('#ftw-bar-total'),
             total:         this._el.querySelector('#ftw-total'),
+            flow:          this._el.querySelector('#ftw-flow'),
             end:           this._el.querySelector('#ftw-end'),
             imbal:         this._el.querySelector('#ftw-imbal'),
             initPanel:     this._el.querySelector('#ftw-init-panel'),
@@ -359,6 +366,10 @@ class FuelTanksDisplay {
         const total = state.left_gal + state.right_gal;
         this._dom.total.textContent = total.toFixed(1) + 'g';
 
+        const pctTotal = Math.min(1, Math.max(0, total / (this._tankCapacity * 2)));
+        this._dom.barTotal.style.height = (pctTotal * 100).toFixed(1) + '%';
+        this._dom.barTotal.className = barCls(total / 2);
+
         this._dom.imbal.style.display = state.imbalance ? '' : 'none';
 
         this._updateTimers();
@@ -371,11 +382,14 @@ class FuelTanksDisplay {
         this._dom.timerL.textContent = '';
         this._dom.timerR.textContent = '';
         this._dom.total.textContent = '--';
+        this._dom.flow.textContent = '--';
         this._dom.end.textContent = '--';
         this._dom.barL.style.height = '0%';
         this._dom.barR.style.height = '0%';
+        this._dom.barTotal.style.height = '0%';
         this._dom.barL.className = 'ftw-bar-fill';
         this._dom.barR.className = 'ftw-bar-fill';
+        this._dom.barTotal.className = 'ftw-bar-fill';
         this._dom.tankL.classList.remove('ftw-tank-active');
         this._dom.tankR.classList.remove('ftw-tank-active');
         this._dom.imbal.style.display = 'none';
@@ -386,9 +400,11 @@ class FuelTanksDisplay {
         if (!state || FuelTankState.needsConfirmation()) return;
         const total = state.left_gal + state.right_gal;
         if (this._lastGph > 0) {
+            this._dom.flow.textContent = this._lastGph.toFixed(1);
             const { hours, minutes } = FuelEngine.endurance(total, this._lastGph);
             this._dom.end.textContent = `${hours}:${String(minutes).padStart(2, '0')}`;
         } else {
+            this._dom.flow.textContent = '--';
             this._dom.end.textContent = '--';
         }
     }

@@ -6134,7 +6134,7 @@ body {
 .ftw-gauges {
     display: flex;
     flex-direction: row;
-    align-items: flex-end;
+    align-items: flex-start;
     gap: 6px;
 }
 
@@ -6142,13 +6142,13 @@ body {
     display: flex;
     flex-direction: column;
     align-items: center;
-    width: 52px;
+    width: 64px;
 }
 
 /* Tank label above bar */
 .ftw-tank::before {
     content: attr(data-label);
-    font-size: 11px;
+    font-size: 14px;
     font-weight: 700;
     letter-spacing: 0.1em;
     color: #546e7a;
@@ -6212,14 +6212,14 @@ body {
 
 /* Gallons readout */
 .ftw-gal {
-    font-size: 17px;
-    font-weight: 700;
+    font-size: 24px;
+    font-weight: 900;
     font-family: "Roboto Mono", "Courier New", monospace;
     color: #0d1b2a;
     margin-top: 4px;
     line-height: 1;
     letter-spacing: -0.02em;
-    min-width: 44px;
+    min-width: 56px;
     text-align: center;
 }
 
@@ -6229,23 +6229,23 @@ body {
 
 /* Tank timer */
 .ftw-timer {
-    font-size: 11px;
+    font-size: 14px;
     font-family: "Roboto Mono", "Courier New", monospace;
     color: #607d8b;
     line-height: 1.2;
-    min-height: 14px;
+    min-height: 17px;
     text-align: center;
 }
 
 /* Tank-select badge (tap to switch) */
 .ftw-badge {
     margin-top: 4px;
-    width: 44px;
-    height: 36px;
+    width: 52px;
+    height: 48px;
     border-radius: 4px;
     border: 2px solid #8a9ab0;
     background: #e8ecf0;
-    font-size: 14px;
+    font-size: 18px;
     font-weight: 700;
     letter-spacing: 0.06em;
     color: #546e7a;
@@ -6275,38 +6275,68 @@ body {
     text-align: center;
 }
 
-/* ── Center column (total + endurance + imbalance) ─────────────────── */
+/* ── Center column (total bar + totals + GPH + endurance) ──────────── */
 .ftw-center {
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
-    min-width: 36px;
-    padding-bottom: 40px;   /* aligns visually with bar mid-point */
+    min-width: 44px;
     gap: 2px;
 }
 
+.ftw-center-label {
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    color: #546e7a;
+    margin-bottom: 3px;
+    line-height: 1;
+}
+
+.ftw-bar-wrap-center {
+    width: 44px;
+}
+
 .ftw-total-lbl {
-    font-size: 9px;
+    font-size: 11px;
     font-weight: 700;
     letter-spacing: 0.1em;
     color: #78909c;
     line-height: 1;
+    margin-top: 4px;
 }
 
 .ftw-total {
-    font-size: 14px;
+    font-size: 22px;
+    font-weight: 900;
+    font-family: "Roboto Mono", "Courier New", monospace;
+    color: #0d1b2a;
+    line-height: 1.2;
+}
+
+.ftw-flow-lbl {
+    font-size: 11px;
     font-weight: 700;
+    letter-spacing: 0.1em;
+    color: #78909c;
+    line-height: 1;
+    margin-top: 4px;
+}
+
+.ftw-flow {
+    font-size: 20px;
+    font-weight: 900;
     font-family: "Roboto Mono", "Courier New", monospace;
     color: #0d1b2a;
     line-height: 1.2;
 }
 
 .ftw-end {
-    font-size: 13px;
+    font-size: 18px;
     font-family: "Roboto Mono", "Courier New", monospace;
     color: #37474f;
     line-height: 1.2;
+    margin-top: 2px;
 }
 
 .ftw-imbal {
