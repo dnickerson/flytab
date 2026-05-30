@@ -102,6 +102,7 @@ class TabBar {
         if (c.planSync?.hide) c.planSync.hide();
         if (c.fisbStatus?.hide) c.fisbStatus.hide();
         if (c.flightUpload?.hide) c.flightUpload.hide();
+        if (c.radarPage?.hide) c.radarPage.hide();
         if (c.airportPopup?.close) c.airportPopup.close();
 
         // Hide radar loop controls when leaving map — they bleed through
