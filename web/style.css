@@ -7290,6 +7290,7 @@ body {
 .lp-defaults-reset--no-saved {
     opacity: 0.4;
     cursor: default;
+    pointer-events: none;
 }
 .lp-defaults-confirm {
     text-align: center;
