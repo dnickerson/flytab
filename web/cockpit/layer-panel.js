@@ -665,6 +665,117 @@ class LayerPanel {
         }
     }
 
+    _updateResetBtnState() {
+        const btn = this._panel?.querySelector('#lpResetDefaults');
+        if (!btn) return;
+        const hasSaved = !!localStorage.getItem('flypi_layer_defaults');
+        btn.classList.toggle('lp-defaults-reset--no-saved', !hasSaved);
+    }
+
+    _saveAsDefaults() {
+        const snapshot = {
+            baseLayer: this._cockpitMap._activeBaseLayer || 'vector',
+            overlays: {},
+            actions: {}
+        };
+
+        this._panel.querySelectorAll('input[data-overlay]').forEach(input => {
+            snapshot.overlays[input.dataset.overlay] = input.checked;
+        });
+
+        this._panel.querySelectorAll('input[data-action]').forEach(input => {
+            snapshot.actions[input.dataset.action] = input.checked;
+        });
+
+        this._panel.querySelectorAll('[data-aptfilter]').forEach(el => {
+            const key = 'aptfilter-' + el.dataset.aptfilter;
+            if (el.type === 'checkbox') snapshot.actions[key] = el.checked;
+            else snapshot.actions[key] = parseInt(el.value, 10) || 0;
+        });
+
+        localStorage.setItem('flypi_layer_defaults', JSON.stringify(snapshot));
+
+        const confirm = this._panel.querySelector('#lpDefaultsConfirm');
+        if (confirm) {
+            confirm.textContent = 'Defaults saved';
+            confirm.classList.add('lp-defaults-confirm--visible');
+            setTimeout(() => confirm.classList.remove('lp-defaults-confirm--visible'), 2000);
+        }
+
+        this._updateResetBtnState();
+    }
+
+    _resetToDefaults() {
+        const raw = localStorage.getItem('flypi_layer_defaults');
+        if (!raw) return;
+        const saved = JSON.parse(raw);
+        const act = saved.actions || {};
+
+        // Base layer
+        if (saved.baseLayer) {
+            this._cockpitMap.switchBaseLayer(saved.baseLayer);
+            this._panel.querySelectorAll('.lp-radio-btn[data-layer]').forEach(b => {
+                b.classList.toggle('active', b.dataset.layer === saved.baseLayer);
+            });
+        }
+
+        // Overlay layers (airports, navaids, fixes, airways, airspace, sua)
+        this._panel.querySelectorAll('input[data-overlay]').forEach(input => {
+            const key = input.dataset.overlay;
+            if (key in (saved.overlays || {})) {
+                input.checked = saved.overlays[key];
+                this._toggleOverlay(key, saved.overlays[key]);
+            }
+        });
+
+        // Actions whose handlers read input.checked — dispatch change to reuse existing logic
+        const dispatchable = [
+            'traffic-alt-bypass', 'traffic-alt', 'rwy-ext', 'radar',
+            'cb-building', 'conv-intel', 'pireps', 'sigmets',
+            'airmets-tango', 'airmets-zulu', 'airmets-sierra', 'airmets-other',
+            'ifr-area', 'tfrs', 'lightning', 'fuel-gauges'
+        ];
+        for (const key of dispatchable) {
+            if (key in act) {
+                const input = this._panel.querySelector(`input[data-action="${key}"]`);
+                if (input) {
+                    input.checked = act[key];
+                    input.dispatchEvent(new Event('change'));
+                }
+            }
+        }
+
+        // Toggle-style layers — only call toggle if current state differs from desired
+        const toggleLayers = [
+            { key: 'cb-tcu',     getV: () => this._vectorLayers?.cbTcuVisible ?? false,         toggle: () => this._vectorLayers?.toggleCbTcu()          },
+            { key: 'wx-dots',    getV: () => this._vectorLayers?.wxDotsVisible ?? true,          toggle: () => this._vectorLayers?.toggleWxDots()          },
+            { key: 'wx-voronoi', getV: () => this._vectorLayers?.voronoiVisible ?? false,        toggle: () => this._vectorLayers?.toggleVoronoi()         },
+            { key: 'wx-ceil',    getV: () => this._vectorLayers?.ceilVisible ?? false,           toggle: () => this._vectorLayers?.toggleCeil()            },
+            { key: 'wx-vis',     getV: () => this._vectorLayers?.visVisible ?? false,            toggle: () => this._vectorLayers?.toggleVis()             },
+            { key: 'wx-wind',    getV: () => this._vectorLayers?.windVisible ?? false,           toggle: () => this._vectorLayers?.toggleWind()            },
+            { key: 'wx-temp',    getV: () => this._vectorLayers?.tempVisible ?? false,           toggle: () => this._vectorLayers?.toggleTemp()            },
+            { key: 'winds-aloft',getV: () => window.app?.fisbWeather?.windsVisible ?? false,    toggle: () => window.app?.fisbWeather?.toggleWinds()      },
+        ];
+        for (const { key, getV, toggle } of toggleLayers) {
+            if (key in act) {
+                const input = this._panel.querySelector(`input[data-action="${key}"]`);
+                const desired = act[key];
+                if (input) input.checked = desired;
+                if (getV() !== desired) toggle();
+            }
+        }
+
+        // Airport filters
+        this._panel.querySelectorAll('[data-aptfilter]').forEach(el => {
+            const key = 'aptfilter-' + el.dataset.aptfilter;
+            if (key in act) {
+                if (el.type === 'checkbox') el.checked = act[key];
+                else el.value = String(act[key]);
+                el.dispatchEvent(new Event('change'));
+            }
+        });
+    }
+
     open() {
         if (this._panel.classList.contains('open')) return;
         // Sync base layer button to current state
