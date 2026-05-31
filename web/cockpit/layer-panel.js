@@ -7,6 +7,8 @@
 class LayerPanel {
     // Predefined CONUS regions — bounds verified against actual Pi tile set
     // mb values are precomputed (SEC z5-11 + IFR z7-11) to avoid runtime counting
+    static DEFAULTS_KEY = 'flypi_layer_defaults';
+
     static REGIONS = [
         { id: 'southeast',     label: 'Southeast',     sub: 'FL GA SC NC TN(e) VA(s)', latMin: 24.0, latMax: 36.5, lonMin: -88.5, lonMax: -74.5, mb: 188 },
         { id: 'midatlantic',   label: 'Mid-Atlantic',  sub: 'VA MD DC DE NJ NY',       latMin: 36.5, latMax: 42.5, lonMin: -82.0, lonMax: -71.0, mb: 120 },
@@ -64,7 +66,7 @@ class LayerPanel {
         document.body.appendChild(this._panel);
 
         let saved = null;
-        try { saved = JSON.parse(localStorage.getItem('flypi_layer_defaults') || 'null'); } catch { /* ignore corrupt data */ }
+        try { saved = JSON.parse(localStorage.getItem(LayerPanel.DEFAULTS_KEY) || 'null'); } catch { /* ignore corrupt data */ }
 
         // Wire backdrop close
         this._backdrop.addEventListener('click', () => this.close());
@@ -97,9 +99,8 @@ class LayerPanel {
             });
         });
 
-        // Apply saved or current base layer
-        const baseLayerToApply = saved?.baseLayer || this._cockpitMap._activeBaseLayer || 'vector';
-        if (saved?.baseLayer) this._cockpitMap.switchBaseLayer(saved.baseLayer);
+        // Sync initial base layer button state (_resetToDefaults handles the actual switch)
+        const baseLayerToApply = this._cockpitMap._activeBaseLayer || 'vector';
         this._panel.querySelectorAll('.lp-radio-btn[data-layer]').forEach(b => {
             b.classList.toggle('active', b.dataset.layer === baseLayerToApply);
         });
@@ -697,7 +698,7 @@ class LayerPanel {
     _updateResetBtnState() {
         const btn = this._panel?.querySelector('#lpResetDefaults');
         if (!btn) return;
-        const hasSaved = !!localStorage.getItem('flypi_layer_defaults');
+        const hasSaved = !!localStorage.getItem(LayerPanel.DEFAULTS_KEY);
         btn.classList.toggle('lp-defaults-reset--no-saved', !hasSaved);
     }
 
@@ -722,7 +723,7 @@ class LayerPanel {
             else snapshot.actions[key] = parseInt(el.value, 10) || 0;
         });
 
-        localStorage.setItem('flypi_layer_defaults', JSON.stringify(snapshot));
+        localStorage.setItem(LayerPanel.DEFAULTS_KEY, JSON.stringify(snapshot));
 
         const confirmEl = this._panel.querySelector('#lpDefaultsConfirm');
         if (confirmEl) {
@@ -735,14 +736,15 @@ class LayerPanel {
     }
 
     _resetToDefaults() {
-        const raw = localStorage.getItem('flypi_layer_defaults');
+        const raw = localStorage.getItem(LayerPanel.DEFAULTS_KEY);
         if (!raw) return;
         let saved;
         try { saved = JSON.parse(raw); } catch { return; }
         const act = saved.actions || {};
 
-        // Base layer
-        if (saved.baseLayer) {
+        // Base layer — only switch if value is recognized; guards against stale/corrupt saved data
+        const knownLayers = ['vector', 'sectional', 'ifr', 'tac'];
+        if (saved.baseLayer && knownLayers.includes(saved.baseLayer)) {
             this._cockpitMap.switchBaseLayer(saved.baseLayer);
             this._panel.querySelectorAll('.lp-radio-btn[data-layer]').forEach(b => {
                 b.classList.toggle('active', b.dataset.layer === saved.baseLayer);
@@ -758,34 +760,18 @@ class LayerPanel {
             }
         });
 
-        // Actions whose handlers read input.checked — dispatch change to reuse existing logic
-        const dispatchable = [
-            'traffic-alt-bypass', 'traffic-alt', 'rwy-ext', 'radar',
-            'cb-building', 'conv-intel', 'pireps', 'sigmets',
-            'airmets-tango', 'airmets-zulu', 'airmets-sierra', 'airmets-other',
-            'ifr-area', 'tfrs', 'lightning', 'fuel-gauges'
-        ];
-        for (const key of dispatchable) {
-            if (key in act) {
-                const input = this._panel.querySelector(`input[data-action="${key}"]`);
-                if (input) {
-                    input.checked = act[key];
-                    input.dispatchEvent(new Event('change'));
-                }
-            }
-        }
-
         // Toggle-style layers — only call toggle if current state differs from desired
         const toggleLayers = [
-            { key: 'cb-tcu',     getV: () => this._vectorLayers?.cbTcuVisible ?? false,         toggle: () => this._vectorLayers?.toggleCbTcu()          },
-            { key: 'wx-dots',    getV: () => this._vectorLayers?.wxDotsVisible ?? true,          toggle: () => this._vectorLayers?.toggleWxDots()          },
-            { key: 'wx-voronoi', getV: () => this._vectorLayers?.voronoiVisible ?? false,        toggle: () => this._vectorLayers?.toggleVoronoi()         },
-            { key: 'wx-ceil',    getV: () => this._vectorLayers?.ceilVisible ?? false,           toggle: () => this._vectorLayers?.toggleCeil()            },
-            { key: 'wx-vis',     getV: () => this._vectorLayers?.visVisible ?? false,            toggle: () => this._vectorLayers?.toggleVis()             },
-            { key: 'wx-wind',    getV: () => this._vectorLayers?.windVisible ?? false,           toggle: () => this._vectorLayers?.toggleWind()            },
-            { key: 'wx-temp',    getV: () => this._vectorLayers?.tempVisible ?? false,           toggle: () => this._vectorLayers?.toggleTemp()            },
-            { key: 'winds-aloft',getV: () => window.app?.fisbWeather?.windsVisible ?? false,    toggle: () => window.app?.fisbWeather?.toggleWinds()      },
+            { key: 'cb-tcu',     getV: () => this._vectorLayers?.cbTcuVisible ?? false,      toggle: () => this._vectorLayers?.toggleCbTcu()       },
+            { key: 'wx-dots',    getV: () => this._vectorLayers?.wxDotsVisible ?? false,      toggle: () => this._vectorLayers?.toggleWxDots()       },
+            { key: 'wx-voronoi', getV: () => this._vectorLayers?.voronoiVisible ?? false,     toggle: () => this._vectorLayers?.toggleVoronoi()      },
+            { key: 'wx-ceil',    getV: () => this._vectorLayers?.ceilVisible ?? false,        toggle: () => this._vectorLayers?.toggleCeil()         },
+            { key: 'wx-vis',     getV: () => this._vectorLayers?.visVisible ?? false,         toggle: () => this._vectorLayers?.toggleVis()          },
+            { key: 'wx-wind',    getV: () => this._vectorLayers?.windVisible ?? false,        toggle: () => this._vectorLayers?.toggleWind()         },
+            { key: 'wx-temp',    getV: () => this._vectorLayers?.tempVisible ?? false,        toggle: () => this._vectorLayers?.toggleTemp()         },
+            { key: 'winds-aloft',getV: () => window.app?.fisbWeather?.windsVisible ?? false, toggle: () => window.app?.fisbWeather?.toggleWinds()   },
         ];
+        const toggleKeys = new Set(toggleLayers.map(t => t.key));
         for (const { key, getV, toggle } of toggleLayers) {
             if (key in act) {
                 const input = this._panel.querySelector(`input[data-action="${key}"]`);
@@ -794,6 +780,17 @@ class LayerPanel {
                 if (getV() !== desired) toggle();
             }
         }
+
+        // All other action inputs — dispatch change only when the value actually changes,
+        // so handlers that are non-idempotent (tfrs clearLayers, fuelTanksDisplay.show/hide)
+        // don't fire unnecessarily on startup when the state is already correct.
+        this._panel.querySelectorAll('input[data-action]').forEach(input => {
+            const key = input.dataset.action;
+            if (toggleKeys.has(key) || !(key in act)) return;
+            const prev = input.checked;
+            input.checked = act[key];
+            if (prev !== act[key]) input.dispatchEvent(new Event('change'));
+        });
 
         // Airport filters
         this._panel.querySelectorAll('[data-aptfilter]').forEach(el => {
