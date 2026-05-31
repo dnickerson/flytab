@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v9.26';
+const FLYTAB_VERSION = 'v9.39';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -54,6 +54,7 @@ class FlyTabApp {
         this.engineGpsBridge = null;
         this._gpsDiagPanel = null;
         this.cockpitMap = null;
+        this.radarPage = null;
         this.enginePanel = null;
         this.trackLog = null;
         this.deviceStatus = null;
@@ -691,6 +692,11 @@ class FlyTabApp {
         if (typeof FisbNexrad !== 'undefined' && this.fisbClient) {
             this.fisbNexrad = new FisbNexrad(this.fisbClient);
             this.cockpitMap.setFisbNexrad(this.fisbNexrad);
+
+            // Dedicated full-screen CONUS radar page (own map). Drawer entry wired in a later task.
+            if (typeof RadarPage !== 'undefined') {
+                this.radarPage = new RadarPage(this.fisbNexrad, this.stratuxClient);
+            }
         }
 
         // Convective Intelligence Engine — must be after fisbClient and fisbNexrad are assigned
@@ -913,6 +919,7 @@ class FlyTabApp {
                 stratuxIp: Settings.stratuxIp || '192.168.10.1',
                 planSync: this.planSync,
                 radarLoop: this.radarLoop,
+                radarPage: this.radarPage,
                 flightUpload: this.flightUpload,
                 routeTable: this.routeTable,
                 layerPanel: this.layerPanel,

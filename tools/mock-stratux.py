@@ -62,6 +62,57 @@ for t in _traffic:
 
 _start_time = time.time()
 
+# Path to a NEXRAD NDJSON capture to replay on /jsonio (set in __main__).
+_REPLAY_PATH  = None
+_replay_frames = None   # loaded lazily on first use in _jsonio_loop()
+
+# --- Synthetic FIS-B NEXRAD ---------------------------------------------
+BLOCK_H = 4.0 / 60.0          # 0.0667 deg lat  (matches Stratux BLOCK_HEIGHT)
+BLOCK_W = 48.0 / 60.0         # 0.8 deg lon      (matches Stratux BLOCK_WIDTH)
+
+
+def _nexrad_block(lat_n, lon_w, scale, intensities):
+    """One NEXRADBlock in Stratux /jsonio shape."""
+    real = {0: 1.0, 1: 5.0, 2: 9.0}[scale]
+    return {
+        "Radar_Type": 63 if scale == 0 else 64,
+        "Scale":      scale,
+        "LatNorth":   round(lat_n, 4),
+        "LonWest":    round(lon_w, 4),
+        "Height":     round(BLOCK_H * real, 4),
+        "Width":      round(BLOCK_W * real, 4),
+        "Intensity":  intensities,      # list[int] length 128 (32 cols × 4 rows)
+    }
+
+
+def _gradient_cell(seed):
+    """128-bin (32×4) intensity grid: a moving blob of levels 1–6."""
+    out = []
+    for r in range(4):
+        for c in range(32):
+            d = abs(c - (seed % 32)) + abs(r - 2)
+            out.append(max(0, 6 - d) if d <= 6 else 0)
+    return out
+
+
+def _nexrad_frame(tick):
+    """Stratux UATFrame-shaped dict with Regional + CONUS blocks; cells drift east with tick."""
+    seed = tick % 32
+    regional = [
+        _nexrad_block(OWN_LAT + 0.50, OWN_LON - 0.4 + 0.05 * seed, 0, _gradient_cell(seed)),
+        _nexrad_block(OWN_LAT + 0.43, OWN_LON - 0.4 + 0.05 * seed, 0, _gradient_cell(seed + 4)),
+    ]
+    conus = []
+    for i in range(3):
+        conus.append(_nexrad_block(35.0 + 0.33 * i, -84.0 + 4.0 + 0.2 * seed, 1,
+                                   _gradient_cell(seed + i * 3)))
+    return {
+        "Product_id":        63,
+        "NEXRAD":            regional + conus,
+        "LocaltimeReceived": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+
+
 # Connected client sets for each endpoint
 _traffic_clients   = set()
 _situation_clients = set()
@@ -165,6 +216,34 @@ async def _situation_loop():
         await asyncio.sleep(1.0)
 
 
+async def _jsonio_loop():
+    """Emit NEXRAD frames to /jsonio clients every 5 seconds.
+
+    If --replay-nexrad was given, replay the captured NDJSON frames (looping at
+    EOF); otherwise emit synthetic frames from _nexrad_frame(tick).
+    """
+    global _replay_frames
+    # Load the replay file once, if configured.
+    if _REPLAY_PATH and _replay_frames is None:
+        try:
+            with open(_REPLAY_PATH) as f:
+                _replay_frames = [json.loads(l) for l in f if l.strip()]
+            print(f"  [replay] loaded {len(_replay_frames)} NEXRAD frames from {_REPLAY_PATH}")
+        except Exception as e:
+            print(f"  [replay] failed to load {_REPLAY_PATH}: {e}; using synthetic")
+            _replay_frames = []
+
+    tick = 0
+    while True:
+        if _jsonio_clients:
+            if _replay_frames:
+                await _broadcast(_jsonio_clients, _replay_frames[tick % len(_replay_frames)])
+            else:
+                await _broadcast(_jsonio_clients, _nexrad_frame(tick))
+        tick += 1
+        await asyncio.sleep(5.0)
+
+
 async def handler(websocket):
     try:
         path = websocket.request.path
@@ -198,10 +277,12 @@ async def handler(websocket):
 
     elif path == "/jsonio":
         _jsonio_clients.add(websocket)
+        print(f"  [+] jsonio client   ({len(_jsonio_clients)} connected)")
         try:
             await websocket.wait_closed()
         finally:
             _jsonio_clients.discard(websocket)
+            print(f"  [-] jsonio client   ({len(_jsonio_clients)} connected)")
 
     else:
         await websocket.close(1008, f"unknown path: {path}")
@@ -222,6 +303,7 @@ async def main(host, port):
         await asyncio.gather(
             _traffic_loop(),
             _situation_loop(),
+            _jsonio_loop(),
         )
 
 
@@ -231,10 +313,12 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=5678, help="Port (default: 5678)")
     parser.add_argument("--lat",  type=float, default=OWN_LAT)
     parser.add_argument("--lon",  type=float, default=OWN_LON)
+    parser.add_argument("--replay-nexrad", help="Path to a NEXRAD NDJSON capture to replay on /jsonio (loops at EOF)")
     args = parser.parse_args()
 
     OWN_LAT = args.lat
     OWN_LON = args.lon
+    _REPLAY_PATH = args.replay_nexrad
 
     try:
         asyncio.run(main(args.host, args.port))

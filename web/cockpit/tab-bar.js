@@ -102,6 +102,7 @@ class TabBar {
         if (c.planSync?.hide) c.planSync.hide();
         if (c.fisbStatus?.hide) c.fisbStatus.hide();
         if (c.flightUpload?.hide) c.flightUpload.hide();
+        if (c.radarPage?.hide) c.radarPage.hide();
         if (c.airportPopup?.close) c.airportPopup.close();
 
         // Hide radar loop controls when leaving map — they bleed through
@@ -152,22 +153,17 @@ class TabBar {
                 this._closeMoreDrawer();
                 this._toggleTimer();
             }},
-            { icon: '⛽', label: 'Fuel Entry', action: () => {
-                if (c.fuelOverlay?.show) c.fuelOverlay.show();
-                this._hideRadarControls();
-                this._closeMoreDrawer();
-            }},
-            { icon: '⚖️', label: 'Weight & Balance', action: () => {
-                if (c.wbOverlay?.show) c.wbOverlay.show();
-                this._hideRadarControls();
-                this._closeMoreDrawer();
-            }},
             { icon: '📊', label: 'Approach Charts', action: () => {
                 if (c.approachCharts) {
                     c.approachCharts._currentPlate
                         ? c.approachCharts._showPlate(c.approachCharts._plateIdx)
                         : c.approachCharts.showForRoute();
                 }
+                this._hideRadarControls();
+                this._closeMoreDrawer();
+            }},
+            { icon: '🌧', label: 'Radar', action: () => {
+                c.radarPage?.show();
                 this._hideRadarControls();
                 this._closeMoreDrawer();
             }},
@@ -183,6 +179,11 @@ class TabBar {
             }},
 
             { type: 'section', label: 'Pre / Post flight' },
+            { icon: '⛽', label: 'Fuel Entry', action: () => {
+                if (c.fuelOverlay?.show) c.fuelOverlay.show();
+                this._hideRadarControls();
+                this._closeMoreDrawer();
+            }},
             { icon: '✈️', label: 'Plan on flywhere.app', action: () => {
                 window.open('https://flywhere.app/plan', '_blank');
                 this._closeMoreDrawer();

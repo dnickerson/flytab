@@ -297,6 +297,25 @@ curl http://localhost:9223/json   # should show title: "FlyTab", url: "http://lo
 ```
 Port 9222 is Chrome browser's DevTools — do not use it for FlyTab.
 
+### ADB — use the SDK binary, not the distro one
+
+There are two `adb` installs on this machine:
+
+| Path | Version | Use? |
+|------|---------|------|
+| `~/Android/Sdk/platform-tools/adb` | **36.x** | ✅ Always use this one |
+| `/usr/bin/adb` → `/usr/lib/android-sdk/...` | 34.0.4-debian | ❌ Stale, breaks wireless pairing |
+
+Whichever binary starts the server on port 5037 owns it. If the old **v34** server answers the v36 client, `adb pair` fails with `error: protocol fault (couldn't read status message): Success` — every time, instantly. This is NOT a bad code/port/IP; it's the version mismatch.
+
+**Before wireless pairing, force a clean v36 server:**
+```bash
+pkill -9 adb; sleep 1
+~/Android/Sdk/platform-tools/adb start-server
+~/Android/Sdk/platform-tools/adb pair <ip>:<pairing_port> <code>
+```
+Wireless-debugging pairing windows are single-use and short-lived — the code/port change every time the "Pair device with pairing code" dialog is reopened, and the pairing port closes after one attempt (success or fail). Have the fresh code/port ready and run `pair` immediately. After a successful pair, mDNS auto-connects (`adb devices` shows the device as `device`); no separate `adb connect` needed. The tablet (TB520FU) is on DHCP — its IP drifts (seen at .62/.63), so confirm the current IP rather than assuming.
+
 ## Key Conventions
 
 - **Versioning**: The app version lives at the top of `web/app.js`. `build.sh` reads it and sets `versionCode`/`versionName` in `build.gradle` automatically.

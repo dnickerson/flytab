@@ -155,6 +155,7 @@ Opens a right-side drawer with infrequently used actions, organized in three sec
 | **Fuel Entry** | Manually enter fuel quantity after a fuel stop |
 | **Weight & Balance** | Enter station weights and fuel; shows total weight, CG, and envelope status with a CG diagram |
 | **Approach Charts** | Georeferenced approach plates overlaid on the map |
+| **Radar (CONUS)** | Full-screen CONUS NEXRAD view centered on ownship. Tap **Recenter on me** to return to ownship position after panning. A badge shows the data source and age (e.g. *FIS-B · CONUS · 4 min*). Use the play/scrub loop at the bottom to animate up to ~55 minutes of history and gauge storm movement. The main map shows the higher-resolution Regional product; this page shows the full CONUS mosaic for situational awareness at a wider scale. |
 | **Engine ML** | Opens the real-time ML anomaly monitor |
 | **Stratux Status** | Opens the Stratux web interface in a browser |
 

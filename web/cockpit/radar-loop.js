@@ -5,7 +5,7 @@
  */
 
 class RadarLoop {
-    constructor() {
+    constructor(opts = {}) {
         this._map = null;
         this._active = false;
         this._playing = false;
@@ -17,6 +17,10 @@ class RadarLoop {
         // FIS-B canvas renderer — always suppressed during loop so it doesn't overdraw
         // internet tile frames. Same as _nexrad when FIS-B is the active source.
         this._fisbRenderer = null;
+
+        // Target + product for FIS-B canvas rendering. null target → use renderer's _mainTarget.
+        this._target  = opts.target  || null;     // {map,canvas,ctx}; null → renderer's main target
+        this._product = opts.product || 'regional';
 
         // Config
         this._speedMs = CockpitConfig.get('radar.playbackSpeedMs') || 500;
@@ -200,9 +204,16 @@ class RadarLoop {
 
         this._frameIndex = index;
 
-        // Tell FisbNexrad to render this historical frame
+        // Render this historical frame.
         if (this._nexrad) {
-            this._nexrad.drawFrame(index);
+            if (this._nexrad === this._fisbRenderer) {
+                // FIS-B canvas renderer: needs an explicit target + product filter
+                const target = this._target || this._fisbRenderer._mainTarget;
+                if (target) this._fisbRenderer.drawFrame(target, this._product, index);
+            } else {
+                // Internet tile source: original signature (toggles tile-layer opacity)
+                this._nexrad.drawFrame(index);
+            }
         }
 
         this._updateTimeDisplay();

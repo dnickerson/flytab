@@ -12,12 +12,19 @@ class FisbNexrad {
         this._ctx = null;
         this._active = false;
 
-        // NEXRAD block store: "latN,lonW" → { latN, lonW, height, width, intensity[], received_at }
+        // NEXRAD block store: "product,latN,lonW" → { latN, lonW, height, width, intensity[], radarType, scale, received_at }
         this._blocks = new Map();
+
+        // Per-product freshness: tracks the most recent received_at for each product type
+        this._newestAt = { regional: 0, conus: 0 };
 
         // Frame history for radar loop playback (ring buffer of snapshots)
         this._frameHistory = [];
-        this._maxFrames = 24; // ~60 min at 2.5 min intervals
+        const intervalMin = CockpitConfig.get('radar.frameIntervalMinutes') || 10;
+        const durationHr  = CockpitConfig.get('radar.loopDurationHours') || 2;
+        this._cacheHours  = CockpitConfig.get('radar.cacheHours') || 3;
+        this._snapIntervalMs = intervalMin * 60000;
+        this._maxFrames = Math.max(2, Math.ceil(durationHr * 60 / intervalMin));
 
         // Config
         this._opacity = CockpitConfig.get('radar.opacity') || 0.5;
@@ -54,6 +61,10 @@ class FisbNexrad {
         this._cbLabelMarkers = [];   // L.marker[] for CB↑ labels
         this._cbInetLayer = null;    // L.tileLayer ref (internet radar) for ground-mode sampling
         this._cbInetTimer = null;    // interval for periodic internet re-sampling
+
+        // Restore persisted frame history so the loop and map show data immediately
+        // on reopen (fire-and-forget; live frames augment _blocks/_frameHistory as they arrive).
+        this._hydrate();
     }
 
     // Standard NEXRAD intensity → color map (0-7+)
@@ -67,6 +78,11 @@ class FisbNexrad {
         'rgba(255, 0, 255, 0.8)',     // 6: very heavy
         'rgba(255, 255, 255, 0.9)',   // 7+: extreme
     ];
+
+    /** Classify a stored block by FIS-B product. */
+    static _productOf(block) {
+        return (block.radarType === 64 || block.scale > 0) ? 'conus' : 'regional';
+    }
 
     // ========== Public API ==========
 
@@ -92,6 +108,7 @@ class FisbNexrad {
         this._canvas.className = 'fisb-nexrad-canvas';
         map.getPanes().overlayPane.appendChild(this._canvas);
         this._ctx = this._canvas.getContext('2d');
+        this._mainTarget = { map, canvas: this._canvas, ctx: this._ctx };
 
         // Size canvas
         this._resizeCanvas();
@@ -99,6 +116,17 @@ class FisbNexrad {
 
         // Redraw on any map movement (including during panning)
         map.on('move zoom moveend zoomend', this._onMove);
+
+        // Re-hydrate frame history from IDB (cleared by remove() on the prior toggle).
+        // Fire-and-forget; after hydration completes _checkLoopReady() notifies the map.
+        if (this._frameHistory.length === 0) this._hydrate();
+
+        // If hydrated frames already exist (prior addTo that was never removed), switch the
+        // loop source to FIS-B now instead of waiting for the next live snapshot.
+        if (!this._loopReadyFired && this._frameHistory.length >= 2) {
+            this._loopReadyFired = true;
+            window.app?.cockpitMap?.onFisbNexradLoopReady?.();
+        }
     }
 
     /** Remove overlay from map */
@@ -120,6 +148,7 @@ class FisbNexrad {
         this._frameHistory = [];
         this._canvas = null;
         this._ctx = null;
+        this._mainTarget = null;   // drop stale canvas/ctx ref so _draw()'s guard fires after teardown
         this._clearCbOverlays();
         this._stopInetSampling();
         this._map = null;
@@ -148,7 +177,11 @@ class FisbNexrad {
     /** Get current block count */
     get blockCount() { return this._blocks.size; }
 
-    getDataAgeMs() {
+    getDataAgeMs(product) {
+        if (product) {
+            const t = this._newestAt[product];
+            return t ? Date.now() - t : null;
+        }
         return this._latestDataTime ? Date.now() - this._latestDataTime : null;
     }
 
@@ -170,21 +203,29 @@ class FisbNexrad {
         for (const block of blocks) {
             if (!block.Intensity || block.Intensity.length === 0) continue;
 
-            const key = `${block.LatNorth},${block.LonWest}`;
-            this._blocks.set(key, {
+            const stored = {
                 latN: block.LatNorth,
                 lonW: block.LonWest,
                 height: block.Height,
                 width: block.Width,
                 intensity: block.Intensity,
+                radarType: block.Radar_Type,   // 63 Regional | 64 CONUS
+                scale: block.Scale,             // 0 | 1 | 2
                 received_at: now,
-            });
+            };
+            // Include product in key so Regional and CONUS blocks at the same lat/lon
+            // origin don't overwrite each other (CONUS grid is 5× coarser but shares
+            // some northwest-corner coordinates with the Regional grid).
+            const key = `${FisbNexrad._productOf(stored)},${block.LatNorth},${block.LonWest}`;
+            this._blocks.set(key, stored);
+            const p = FisbNexrad._productOf(stored);
+            if (now > this._newestAt[p]) this._newestAt[p] = now;
         }
 
         // Snapshot for radar loop (throttled to every 2.5 minutes)
         const lastSnap = this._frameHistory.length > 0
             ? this._frameHistory[this._frameHistory.length - 1].time : 0;
-        if (now - lastSnap >= 150000) { // 2.5 minutes
+        if (now - lastSnap >= this._snapIntervalMs) {
             this._takeSnapshot(now, dataTime);
             // Notify map to switch the loop source to FIS-B once we have enough frames to animate.
             // Two frames = minimum for visible animation. Fire once per radar session.
@@ -221,6 +262,103 @@ class FisbNexrad {
         while (this._frameHistory.length > this._maxFrames) {
             this._frameHistory.shift();
         }
+        this._persistFrame(this._frameHistory[this._frameHistory.length - 1]);
+    }
+
+    _openDb() {
+        if (this._dbPromise) return this._dbPromise;
+        this._dbPromise = new Promise((resolve, reject) => {
+            const req = indexedDB.open('flytab_radar', 1);
+            req.onupgradeneeded = (e) => {
+                const db = e.target.result;
+                if (!db.objectStoreNames.contains('nexradFrames'))
+                    db.createObjectStore('nexradFrames', { keyPath: 'dataTime' });
+            };
+            req.onsuccess = () => resolve(req.result);
+            // Clear the cached promise on failure so the next call retries instead of
+            // returning a permanently-rejected promise (a transient IDB open error on
+            // Android would otherwise silently disable persistence for the whole session).
+            req.onerror = () => { this._dbPromise = null; reject(req.error); };
+        });
+        return this._dbPromise;
+    }
+
+    async _persistFrame(snap) {
+        try {
+            const db = await this._openDb();
+            const blocks = [];
+            for (const [, b] of snap.blocks) blocks.push({ ...b, intensity: Array.from(b.intensity) });
+            const rec = { dataTime: snap.dataTime, time: snap.time, blocks };
+            const tx = db.transaction('nexradFrames', 'readwrite');
+            tx.objectStore('nexradFrames').put(rec);
+            await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+            await this._purgeDb();
+        } catch (err) {
+            if (typeof DiagLog !== 'undefined') DiagLog.log('error', `radar persist failed: ${err.message}`);
+        }
+    }
+
+    async _purgeDb() {
+        const db = await this._openDb();
+        const cutoff = Date.now() - this._cacheHours * 3600000;
+        const tx = db.transaction('nexradFrames', 'readwrite');
+        const store = tx.objectStore('nexradFrames');
+        store.openCursor().onsuccess = (e) => {
+            const cur = e.target.result;
+            if (!cur) return;
+            if ((cur.value.time || 0) < cutoff) cur.delete();
+            cur.continue();
+        };
+        // Resolve only when the deletes have actually committed, so callers that await
+        // _purgeDb() (and the try/catch around them) see cursor/tx errors.
+        await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+    }
+
+    async _hydrate() {
+        try {
+            const db = await this._openDb();
+            const cutoff = Date.now() - this._cacheHours * 3600000;
+            const tx = db.transaction('nexradFrames', 'readonly');
+            const recs = await new Promise((res, rej) => {
+                const r = tx.objectStore('nexradFrames').getAll();
+                r.onsuccess = () => res(r.result || []); r.onerror = () => rej(r.error);
+            });
+            // Skip dataTimes already present from live frames that arrived during the
+            // async open, so hydration never duplicates or interleaves with live data.
+            const seen = new Set(this._frameHistory.map(f => f.dataTime));
+            const fresh = recs.filter(r => (r.time || 0) >= cutoff && !seen.has(r.dataTime))
+                              .sort((a, b) => a.dataTime - b.dataTime)
+                              .slice(-this._maxFrames);
+            for (const r of fresh) {
+                const m = new Map();
+                for (const b of r.blocks) m.set(`${FisbNexrad._productOf(b)},${b.latN},${b.lonW}`, b);
+                this._frameHistory.push({ time: r.time, dataTime: r.dataTime, blocks: m });
+            }
+            // Keep newest-last ordering and the ring cap even if a live frame raced in.
+            this._frameHistory.sort((a, b) => a.dataTime - b.dataTime);
+            while (this._frameHistory.length > this._maxFrames) this._frameHistory.shift();
+            // Seed live blocks + per-product age from the newest frame so the map/page
+            // show SOMETHING immediately on reopen; a live frame will overwrite by key.
+            // NOTE: these seeded blocks keep their original received_at, so _purgeOld() may
+            // sweep them within ~15 min if the cache is old — that's intended. The durable
+            // benefit of hydration is _frameHistory (the loop); the live-view seed is a bonus.
+            const last = this._frameHistory[this._frameHistory.length - 1];
+            if (last) {
+                for (const [, b] of last.blocks) {
+                    this._blocks.set(`${FisbNexrad._productOf(b)},${b.latN},${b.lonW}`, b);
+                    const p = FisbNexrad._productOf(b);
+                    this._newestAt[p] = Math.max(this._newestAt[p], last.time);
+                }
+            }
+            // Notify the map to switch to FIS-B loop source if enough frames were loaded.
+            // Covers the toggle path (addTo re-calls _hydrate after remove() cleared history).
+            if (this._active && !this._loopReadyFired && this._frameHistory.length >= 2) {
+                this._loopReadyFired = true;
+                window.app?.cockpitMap?.onFisbNexradLoopReady?.();
+            }
+        } catch (err) {
+            if (typeof DiagLog !== 'undefined') DiagLog.log('error', `radar hydrate failed: ${err.message}`);
+        }
     }
 
     _purgeOld() {
@@ -242,38 +380,40 @@ class FisbNexrad {
         if (!this._loopMode) this._draw();
     }
 
-    /** Draw all NEXRAD blocks onto canvas */
-    _draw() {
-        if (!this._ctx || !this._map || !this._active) return;
+    /** Public: draw current blocks of one product to a target. */
+    draw(target, product) {
+        this._drawToTarget(target, product, this._blocks);
+    }
 
-        const ctx = this._ctx;
-        const map = this._map;
+    /** Draw a block map (live or snapshot) of one product onto a target's canvas. */
+    _drawToTarget(target, product, blockMap) {
+        const { map, canvas, ctx } = target;
+        if (!ctx || !map) return;
 
-        // Position canvas at the map's pixel origin so it aligns with panning
         const topLeft = map.containerPointToLayerPoint([0, 0]);
-        this._canvas.style.transform = `translate(${topLeft.x}px, ${topLeft.y}px)`;
+        canvas.style.transform = `translate(${topLeft.x}px, ${topLeft.y}px)`;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (blockMap.size === 0) return;
 
-        ctx.clearRect(0, 0, this._canvas.width, this._canvas.height);
-
-        if (this._blocks.size === 0) return;
-
-        // Apply configured opacity
         ctx.globalAlpha = this._opacity;
-
         const bounds = map.getBounds();
         const zoom = map.getZoom();
 
-        for (const [, block] of this._blocks) {
-            // Quick bounds check — skip blocks outside viewport
+        for (const [, block] of blockMap) {
+            if (FisbNexrad._productOf(block) !== product) continue;
             const blockS = block.latN - block.height;
             const blockE = block.lonW + block.width;
             if (block.latN < bounds.getSouth() || blockS > bounds.getNorth()) continue;
             if (blockE < bounds.getWest() || block.lonW > bounds.getEast()) continue;
-
             this._drawBlock(ctx, map, block, zoom);
         }
-
         ctx.globalAlpha = 1.0;
+    }
+
+    /** Draw the main-map live view — Regional product only. */
+    _draw() {
+        if (!this._active || !this._mainTarget) return;
+        this._drawToTarget(this._mainTarget, 'regional', this._blocks);
     }
 
     /** Draw a single NEXRAD block */
@@ -315,36 +455,12 @@ class FisbNexrad {
         }
     }
 
-    /** Draw a specific historical frame (for radar loop) */
-    drawFrame(frameIndex) {
-        if (!this._ctx || !this._map) return;
+    /** Draw a specific historical frame of one product onto a target (radar loop). */
+    drawFrame(target, product, frameIndex) {
         if (frameIndex < 0 || frameIndex >= this._frameHistory.length) return;
-
-        const ctx = this._ctx;
-        const map = this._map;
-
-        // Sync canvas position with map pane
-        const topLeft = map.containerPointToLayerPoint([0, 0]);
-        this._canvas.style.transform = `translate(${topLeft.x}px, ${topLeft.y}px)`;
-
-        ctx.clearRect(0, 0, this._canvas.width, this._canvas.height);
-        ctx.globalAlpha = this._opacity;
-
-        const snapshot = this._frameHistory[frameIndex];
-        if (!snapshot) return;
-
-        const bounds = map.getBounds();
-        const zoom = map.getZoom();
-
-        for (const [, block] of snapshot.blocks) {
-            const blockS = block.latN - block.height;
-            const blockE = block.lonW + block.width;
-            if (block.latN < bounds.getSouth() || blockS > bounds.getNorth()) continue;
-            if (blockE < bounds.getWest() || block.lonW > bounds.getEast()) continue;
-            this._drawBlock(ctx, map, block, zoom);
-        }
-
-        ctx.globalAlpha = 1.0;
+        const snap = this._frameHistory[frameIndex];
+        if (!snap) return;
+        this._drawToTarget(target, product, snap.blocks);
     }
 
     /** Enter loop mode (suppress live draws) */
@@ -845,6 +961,44 @@ class FisbNexrad {
         if (b > 210 && g < 30 && r < 20) return 1;
 
         return 0;
+    }
+
+    /** Export cached frames as NDJSON to the on-device server (next to flight CSVs). */
+    async exportFrames() {
+        if (!this._frameHistory.length) {
+            if (typeof DiagLog !== 'undefined') DiagLog.log('radar', 'exportFrames: no frames to export');
+            return { ok: true, path: null, frames: 0 };
+        }
+        const lines = this._frameHistory.map(snap => {
+            const NEXRAD = [];
+            for (const [, b] of snap.blocks) NEXRAD.push({
+                Radar_Type: b.radarType, Scale: b.scale,
+                LatNorth: b.latN, LonWest: b.lonW, Height: b.height, Width: b.width,
+                Intensity: Array.from(b.intensity),
+            });
+            // A snapshot bundles whatever was in _blocks (often BOTH products), so there is no
+            // single true message PID; stamp it from the first block. The app's replay keys off
+            // each block's Radar_Type via _productOf(), so the message PID is informational only.
+            const pid = NEXRAD[0]?.Radar_Type ?? 63;
+            return JSON.stringify({ Product_id: pid, NEXRAD,
+                LocaltimeReceived: new Date(snap.dataTime).toISOString() });
+        });
+        const iso = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        const path = `flights/nexrad-${iso}.ndjson`;
+        const base = (typeof FlightRecorder !== 'undefined' && FlightRecorder.LOCAL_BASE)
+            ? FlightRecorder.LOCAL_BASE : 'http://localhost:9090';
+        try {
+            const resp = await fetch(`${base}/${path}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/x-ndjson' },
+                body: lines.join('\n'),
+            });
+            if (typeof DiagLog !== 'undefined') DiagLog.log('radar', `exportFrames → ${path} (${lines.length} frames, ok=${resp.ok})`);
+            return { ok: resp.ok, path, frames: lines.length };
+        } catch (err) {
+            if (typeof DiagLog !== 'undefined') DiagLog.log('error', `exportFrames failed: ${err.message}`);
+            return { ok: false, path, frames: lines.length, error: err.message };
+        }
     }
 
     /** Web mercator tile coordinate helpers. */

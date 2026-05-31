@@ -5296,6 +5296,28 @@ body {
     mix-blend-mode: screen;
 }
 
+.radar-badge {
+    position: absolute; bottom: 8px; left: 8px; z-index: 500;
+    background: var(--bg-surface); color: var(--text-secondary);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 4px 8px; font-family: var(--font-ui); font-weight: 700;
+    font-size: 13px; pointer-events: none;
+}
+
+/* ========== CONUS Radar Page (full-screen, own map) ========== */
+.radar-page { position: fixed; top: 0; left: 0; right: 0; bottom: var(--tab-bar-height); z-index: 4000; background: var(--bg-primary); display: flex; flex-direction: column; }
+.radar-page-header { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-bottom: 2px solid var(--border-strong); }
+.radar-page-title { font-family: var(--font-ui); font-weight: 800; font-size: 18px; color: var(--text-primary); }
+.radar-page-export { margin-left: auto; min-width: var(--touch-min, 56px); min-height: var(--touch-min, 56px); padding: 0 16px; font-family: var(--font-ui); font-size: 16px; font-weight: 700; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; color: var(--text-secondary); }
+.radar-page-close { min-width: var(--touch-min, 56px); min-height: var(--touch-min, 56px); font-size: 24px; font-weight: 800; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; color: var(--text-primary); }
+.radar-page-map { flex: 1; position: relative; }
+.radar-page-recenter { position: absolute; bottom: 92px; right: 16px; z-index: 500; min-height: var(--touch-preferred, 64px); padding: 0 18px; font-family: var(--font-ui); font-weight: 800; font-size: 16px; color: #fff; background: var(--accent); border: none; border-radius: 10px; }
+.radar-page-badge { position: static; }
+.radar-page-loop { position: absolute; left: 16px; right: 16px; bottom: 16px; z-index: 500; display: flex; align-items: center; gap: 12px; padding: 8px 12px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px; }
+.radar-page-loop-btn { min-width: var(--touch-min, 56px); min-height: var(--touch-min, 56px); font-size: 24px; font-weight: 800; color: #fff; background: var(--accent); border: none; border-radius: 8px; }
+.radar-page-loop-time { font-family: var(--font-instrument); font-weight: 700; font-size: 18px; color: var(--text-primary); min-width: 64px; }
+.radar-page-loop-scrubber { flex: 1; min-height: var(--touch-min, 56px); accent-color: var(--accent); }
+
 /* ========== Checklist Overlay ========== */
 .checklist-page {
     position: fixed;
@@ -6112,7 +6134,7 @@ body {
 .ftw-gauges {
     display: flex;
     flex-direction: row;
-    align-items: flex-end;
+    align-items: flex-start;
     gap: 6px;
 }
 
@@ -6120,13 +6142,13 @@ body {
     display: flex;
     flex-direction: column;
     align-items: center;
-    width: 52px;
+    width: 64px;
 }
 
 /* Tank label above bar */
 .ftw-tank::before {
     content: attr(data-label);
-    font-size: 11px;
+    font-size: 14px;
     font-weight: 700;
     letter-spacing: 0.1em;
     color: #546e7a;
@@ -6190,14 +6212,14 @@ body {
 
 /* Gallons readout */
 .ftw-gal {
-    font-size: 17px;
-    font-weight: 700;
+    font-size: 24px;
+    font-weight: 900;
     font-family: "Roboto Mono", "Courier New", monospace;
     color: #0d1b2a;
     margin-top: 4px;
     line-height: 1;
     letter-spacing: -0.02em;
-    min-width: 44px;
+    min-width: 56px;
     text-align: center;
 }
 
@@ -6207,23 +6229,23 @@ body {
 
 /* Tank timer */
 .ftw-timer {
-    font-size: 11px;
+    font-size: 14px;
     font-family: "Roboto Mono", "Courier New", monospace;
     color: #607d8b;
     line-height: 1.2;
-    min-height: 14px;
+    min-height: 17px;
     text-align: center;
 }
 
 /* Tank-select badge (tap to switch) */
 .ftw-badge {
     margin-top: 4px;
-    width: 44px;
-    height: 36px;
+    width: 52px;
+    height: 48px;
     border-radius: 4px;
     border: 2px solid #8a9ab0;
     background: #e8ecf0;
-    font-size: 14px;
+    font-size: 18px;
     font-weight: 700;
     letter-spacing: 0.06em;
     color: #546e7a;
@@ -6253,38 +6275,68 @@ body {
     text-align: center;
 }
 
-/* ── Center column (total + endurance + imbalance) ─────────────────── */
+/* ── Center column (total bar + totals + GPH + endurance) ──────────── */
 .ftw-center {
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
-    min-width: 36px;
-    padding-bottom: 40px;   /* aligns visually with bar mid-point */
+    min-width: 44px;
     gap: 2px;
 }
 
+.ftw-center-label {
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    color: #546e7a;
+    margin-bottom: 3px;
+    line-height: 1;
+}
+
+.ftw-bar-wrap-center {
+    width: 44px;
+}
+
 .ftw-total-lbl {
-    font-size: 9px;
+    font-size: 11px;
     font-weight: 700;
     letter-spacing: 0.1em;
     color: #78909c;
     line-height: 1;
+    margin-top: 4px;
 }
 
 .ftw-total {
-    font-size: 14px;
+    font-size: 22px;
+    font-weight: 900;
+    font-family: "Roboto Mono", "Courier New", monospace;
+    color: #0d1b2a;
+    line-height: 1.2;
+}
+
+.ftw-flow-lbl {
+    font-size: 11px;
     font-weight: 700;
+    letter-spacing: 0.1em;
+    color: #78909c;
+    line-height: 1;
+    margin-top: 4px;
+}
+
+.ftw-flow {
+    font-size: 20px;
+    font-weight: 900;
     font-family: "Roboto Mono", "Courier New", monospace;
     color: #0d1b2a;
     line-height: 1.2;
 }
 
 .ftw-end {
-    font-size: 13px;
+    font-size: 18px;
     font-family: "Roboto Mono", "Courier New", monospace;
     color: #37474f;
     line-height: 1.2;
+    margin-top: 2px;
 }
 
 .ftw-imbal {

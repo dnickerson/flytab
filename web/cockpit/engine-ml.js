@@ -782,6 +782,21 @@ class EngineMLBridge {
         // Runup→idle drops >300 RPM on the ground and the 60-sample ML window
         // flags the transition as anomalous once ThresholdAdapter tightens.
         if (physicsAlarm && result.anomaly === true && this._hasLaunched) {
+            // AGL lower-bound guard: below 500 ft AGL, throttle retard during the landing
+            // flare is indistinguishable from an engine failure by physics rules (same MAP
+            // and RPM drop). _hasLaunched stays true while groundSpeed > 30 kts so the
+            // existing ground guard doesn't catch the flare. Below 500 ft the pilot is
+            // committed to the runway ahead regardless — the emergency overlay adds no
+            // actionable value and a false squawk-7700 alert is dangerous noise.
+            const altMSL = this._altHistory.length > 0
+                ? this._altHistory[this._altHistory.length - 1]
+                : (sit?.alt_msl ?? 0);
+            const agl = this._fieldElev !== null ? (altMSL - this._fieldElev) : altMSL;
+            if (agl < 500) {
+                console.log(`[EngineML] Emergency suppressed — AGL ${Math.round(agl)} ft < 500 ft (landing flare guard)`);
+                return;
+            }
+
             console.warn('[EngineML] EMERGENCY: physics + ML joint confirmation — power loss');
             if (typeof EmergencyGlide !== 'undefined' && window.emergencyGlide) {
                 window.emergencyGlide.trigger({ engineRaw: d, sit, mlResult: result });
