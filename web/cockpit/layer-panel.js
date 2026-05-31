@@ -63,6 +63,8 @@ class LayerPanel {
         this._panel.innerHTML = this._buildHtml();
         document.body.appendChild(this._panel);
 
+        const saved = JSON.parse(localStorage.getItem('flypi_layer_defaults') || 'null');
+
         // Wire backdrop close
         this._backdrop.addEventListener('click', () => this.close());
         this._backdrop.addEventListener('touchstart', (e) => { e.preventDefault(); this.close(); }, { passive: false });
@@ -94,10 +96,12 @@ class LayerPanel {
             });
         });
 
-        // Sync initial base layer state
-        const currentLayer = this._cockpitMap._activeBaseLayer || 'vector';
-        const activeBtn = this._panel.querySelector(`.lp-radio-btn[data-layer="${currentLayer}"]`);
-        if (activeBtn) activeBtn.classList.add('active');
+        // Apply saved or current base layer
+        const baseLayerToApply = saved?.baseLayer || this._cockpitMap._activeBaseLayer || 'vector';
+        if (saved?.baseLayer) this._cockpitMap.switchBaseLayer(saved.baseLayer);
+        this._panel.querySelectorAll('.lp-radio-btn[data-layer]').forEach(b => {
+            b.classList.toggle('active', b.dataset.layer === baseLayerToApply);
+        });
 
         // Wire overlay toggles
         this._panel.querySelectorAll('.lp-toggle input[data-overlay]').forEach(input => {
@@ -110,7 +114,7 @@ class LayerPanel {
         // Wire traffic altitude filter bypass toggle
         const taltBypassInput = this._panel.querySelector('.lp-toggle input[data-action="traffic-alt-bypass"]');
         if (taltBypassInput) {
-            taltBypassInput.checked = this._cockpitMap._trafficAltBypass || false;
+            taltBypassInput.checked = saved?.actions?.['traffic-alt-bypass'] ?? this._cockpitMap._trafficAltBypass ?? false;
             taltBypassInput.addEventListener('change', () => {
                 this._cockpitMap.setTrafficAltBypass?.(taltBypassInput.checked);
             });
@@ -119,7 +123,7 @@ class LayerPanel {
         // Wire traffic alt toggle
         const taltInput = this._panel.querySelector('.lp-toggle input[data-action="traffic-alt"]');
         if (taltInput) {
-            taltInput.checked = this._cockpitMap._showTrafficAlt || false;
+            taltInput.checked = saved?.actions?.['traffic-alt'] ?? this._cockpitMap._showTrafficAlt ?? false;
             taltInput.addEventListener('change', () => {
                 if (this._cockpitMap.setShowTrafficAlt) {
                     this._cockpitMap.setShowTrafficAlt(taltInput.checked);
@@ -130,7 +134,7 @@ class LayerPanel {
         // Wire rwy extensions toggle
         const rwyExtInput = this._panel.querySelector('.lp-toggle input[data-action="rwy-ext"]');
         if (rwyExtInput) {
-            rwyExtInput.checked = true; // default on
+            rwyExtInput.checked = saved?.actions?.['rwy-ext'] ?? true;
             rwyExtInput.addEventListener('change', () => {
                 if (this._cockpitMap?.setRwyExtVisible) {
                     this._cockpitMap.setRwyExtVisible(rwyExtInput.checked);
@@ -149,7 +153,7 @@ class LayerPanel {
         // Wire CB building toggle
         const cbBuildInput = this._panel.querySelector('.lp-toggle input[data-action="cb-building"]');
         if (cbBuildInput) {
-            cbBuildInput.checked = false;
+            cbBuildInput.checked = saved?.actions?.['cb-building'] ?? false;
             cbBuildInput.addEventListener('change', () => {
                 window.app?.cockpitMap?.toggleCbBuilding(cbBuildInput.checked);
             });
@@ -158,7 +162,7 @@ class LayerPanel {
         // Wire Conv Intel toggle
         const convIntelInput = this._panel.querySelector('.lp-toggle input[data-action="conv-intel"]');
         if (convIntelInput) {
-            convIntelInput.checked = CockpitConfig.get('convective.enabled') || false;
+            convIntelInput.checked = saved?.actions?.['conv-intel'] ?? CockpitConfig.get('convective.enabled') ?? false;
             convIntelInput.addEventListener('change', () => {
                 const on = convIntelInput.checked;
                 CockpitConfig.set('convective.enabled', on);
@@ -169,7 +173,7 @@ class LayerPanel {
         // Wire CB/TCU report markers toggle
         const cbTcuInput = this._panel.querySelector('.lp-toggle input[data-action="cb-tcu"]');
         if (cbTcuInput) {
-            cbTcuInput.checked = this._vectorLayers?.cbTcuVisible ?? false;
+            cbTcuInput.checked = saved?.actions?.['cb-tcu'] ?? this._vectorLayers?.cbTcuVisible ?? false;
             cbTcuInput.addEventListener('change', () => {
                 this._vectorLayers?.toggleCbTcu();
             });
@@ -178,7 +182,7 @@ class LayerPanel {
         // Wire flight category dots toggle
         const wxDotsInput = this._panel.querySelector('.lp-toggle input[data-action="wx-dots"]');
         if (wxDotsInput) {
-            wxDotsInput.checked = this._vectorLayers?.wxDotsVisible ?? true;
+            wxDotsInput.checked = saved?.actions?.['wx-dots'] ?? this._vectorLayers?.wxDotsVisible ?? true;
             wxDotsInput.addEventListener('change', () => {
                 this._vectorLayers?.toggleWxDots();
             });
@@ -187,7 +191,7 @@ class LayerPanel {
         // Wire Voronoi flight category areas toggle
         const voronoiInput = this._panel.querySelector('.lp-toggle input[data-action="wx-voronoi"]');
         if (voronoiInput) {
-            voronoiInput.checked = this._vectorLayers?.voronoiVisible ?? false;
+            voronoiInput.checked = saved?.actions?.['wx-voronoi'] ?? this._vectorLayers?.voronoiVisible ?? false;
             voronoiInput.addEventListener('change', () => {
                 this._vectorLayers?.toggleVoronoi();
             });
@@ -196,7 +200,7 @@ class LayerPanel {
         // Wire winds aloft toggle
         const windsInput = this._panel.querySelector('.lp-toggle input[data-action="winds-aloft"]');
         if (windsInput) {
-            windsInput.checked = window.app?.fisbWeather?.windsVisible ?? false;
+            windsInput.checked = saved?.actions?.['winds-aloft'] ?? window.app?.fisbWeather?.windsVisible ?? false;
             windsInput.addEventListener('change', () => {
                 window.app?.fisbWeather?.toggleWinds();
             });
@@ -205,7 +209,7 @@ class LayerPanel {
         // Wire PIREP toggle — controlled by FisbWeatherDisplay layer
         const pirepInput = this._panel.querySelector('.lp-toggle input[data-action="pireps"]');
         if (pirepInput) {
-            pirepInput.checked = false;
+            pirepInput.checked = saved?.actions?.['pireps'] ?? false;
             pirepInput.addEventListener('change', () => {
                 if (pirepInput.checked) window.app?.fisbWeather?.showPireps();
                 else window.app?.fisbWeather?.hidePireps();
@@ -215,7 +219,7 @@ class LayerPanel {
         // Wire SIGMET toggle
         const sigmetInput = this._panel.querySelector('.lp-toggle input[data-action="sigmets"]');
         if (sigmetInput) {
-            sigmetInput.checked = true;
+            sigmetInput.checked = saved?.actions?.['sigmets'] ?? true;
             sigmetInput.addEventListener('change', () => {
                 if (sigmetInput.checked) window.app?.fisbWeather?.showSigmets();
                 else window.app?.fisbWeather?.hideSigmets();
@@ -232,7 +236,7 @@ class LayerPanel {
         for (const { action, show, hide } of airmetTypes) {
             const input = this._panel.querySelector(`.lp-toggle input[data-action="${action}"]`);
             if (input) {
-                input.checked = true;
+                input.checked = saved?.actions?.[action] ?? true;
                 input.addEventListener('change', () => {
                     if (input.checked) window.app?.fisbWeather?.[show]?.();
                     else               window.app?.fisbWeather?.[hide]?.();
@@ -243,7 +247,7 @@ class LayerPanel {
         // Wire IFR Area Charts toggle
         const ifrAreaInput = this._panel.querySelector('.lp-toggle input[data-action="ifr-area"]');
         if (ifrAreaInput) {
-            ifrAreaInput.checked = false;
+            ifrAreaInput.checked = saved?.actions?.['ifr-area'] ?? false;
             ifrAreaInput.addEventListener('change', () => {
                 this._cockpitMap.toggleIfrArea(ifrAreaInput.checked);
             });
@@ -252,7 +256,7 @@ class LayerPanel {
         // Wire TFR toggle
         const tfrInput = this._panel.querySelector('.lp-toggle input[data-action="tfrs"]');
         if (tfrInput) {
-            tfrInput.checked = true;
+            tfrInput.checked = saved?.actions?.['tfrs'] ?? true;
             tfrInput.addEventListener('change', () => {
                 window.app?.cockpitMap?.toggleTfrs(tfrInput.checked);
             });
@@ -261,7 +265,7 @@ class LayerPanel {
         // Wire lightning toggle
         const lightningInput = this._panel.querySelector('.lp-toggle input[data-action="lightning"]');
         if (lightningInput) {
-            lightningInput.checked = false;
+            lightningInput.checked = saved?.actions?.['lightning'] ?? false;
             lightningInput.addEventListener('change', () => {
                 window.app?.cockpitMap?.toggleLightning(lightningInput.checked);
             });
@@ -269,7 +273,7 @@ class LayerPanel {
 
         const fuelGaugesInput = this._panel.querySelector('.lp-toggle input[data-action="fuel-gauges"]');
         if (fuelGaugesInput) {
-            fuelGaugesInput.checked = localStorage.getItem('flypi_fuel_widget_visible') !== 'false';
+            fuelGaugesInput.checked = saved?.actions?.['fuel-gauges'] ?? localStorage.getItem('flypi_fuel_widget_visible') !== 'false';
             fuelGaugesInput.addEventListener('change', () => {
                 if (fuelGaugesInput.checked) window.app?.fuelTanksDisplay?.show();
                 else                         window.app?.fuelTanksDisplay?.hide();
@@ -279,28 +283,28 @@ class LayerPanel {
         // Wire ceiling/sky toggle
         const ceilInput = this._panel.querySelector('.lp-toggle input[data-action="wx-ceil"]');
         if (ceilInput) {
-            ceilInput.checked = this._vectorLayers?.ceilVisible ?? false;
+            ceilInput.checked = saved?.actions?.['wx-ceil'] ?? this._vectorLayers?.ceilVisible ?? false;
             ceilInput.addEventListener('change', () => { this._vectorLayers?.toggleCeil(); });
         }
 
         // Wire visibility toggle
         const visInput = this._panel.querySelector('.lp-toggle input[data-action="wx-vis"]');
         if (visInput) {
-            visInput.checked = this._vectorLayers?.visVisible ?? false;
+            visInput.checked = saved?.actions?.['wx-vis'] ?? this._vectorLayers?.visVisible ?? false;
             visInput.addEventListener('change', () => { this._vectorLayers?.toggleVis(); });
         }
 
         // Wire surface wind toggle
         const windInput = this._panel.querySelector('.lp-toggle input[data-action="wx-wind"]');
         if (windInput) {
-            windInput.checked = this._vectorLayers?.windVisible ?? false;
+            windInput.checked = saved?.actions?.['wx-wind'] ?? this._vectorLayers?.windVisible ?? false;
             windInput.addEventListener('change', () => { this._vectorLayers?.toggleWind(); });
         }
 
         // Wire temp/dew toggle
         const tempInput = this._panel.querySelector('.lp-toggle input[data-action="wx-temp"]');
         if (tempInput) {
-            tempInput.checked = this._vectorLayers?.tempVisible ?? false;
+            tempInput.checked = saved?.actions?.['wx-temp'] ?? this._vectorLayers?.tempVisible ?? false;
             tempInput.addEventListener('change', () => { this._vectorLayers?.toggleTemp(); });
         }
 
@@ -423,8 +427,26 @@ class LayerPanel {
             });
         }
 
+        // Wire Save as Defaults button
+        const saveDefaultsBtn = this._panel.querySelector('#lpSaveDefaults');
+        if (saveDefaultsBtn) {
+            wireTap(saveDefaultsBtn, () => this._saveAsDefaults());
+        }
+
+        // Wire Reset to Defaults button
+        const resetDefaultsBtn = this._panel.querySelector('#lpResetDefaults');
+        if (resetDefaultsBtn) {
+            wireTap(resetDefaultsBtn, () => this._resetToDefaults());
+        }
+
+        // Grey out Reset button if no defaults saved yet
+        this._updateResetBtnState();
+
         // Sync overlay states from config / vector layers
-        this._syncOverlayStates();
+        this._syncOverlayStates(saved);
+
+        // If saved defaults exist, apply live layer state (idempotent for already-correct layers)
+        if (saved) this._resetToDefaults();
     }
 
     _buildHtml() {
@@ -615,13 +637,12 @@ class LayerPanel {
         </div>`;
     }
 
-    _syncOverlayStates() {
-        // Read from cockpit config overlay defaults
+    _syncOverlayStates(saved) {
         const overlays = (typeof CockpitConfig !== 'undefined')
             ? (CockpitConfig.get('map.overlays') || {})
             : {};
 
-        const defaults = {
+        const hardcoded = {
             airports: true,
             navaids: true,
             fixes: false,
@@ -632,7 +653,12 @@ class LayerPanel {
 
         this._panel.querySelectorAll('.lp-toggle input[data-overlay]').forEach(input => {
             const key = input.dataset.overlay;
-            const enabled = overlays[key]?.enabled ?? defaults[key] ?? true;
+            let enabled;
+            if (saved?.overlays && key in saved.overlays) {
+                enabled = saved.overlays[key];
+            } else {
+                enabled = overlays[key]?.enabled ?? hardcoded[key] ?? true;
+            }
             input.checked = enabled;
             this._toggleOverlay(key, enabled);
         });
@@ -708,7 +734,8 @@ class LayerPanel {
     _resetToDefaults() {
         const raw = localStorage.getItem('flypi_layer_defaults');
         if (!raw) return;
-        const saved = JSON.parse(raw);
+        let saved;
+        try { saved = JSON.parse(raw); } catch { return; }
         const act = saved.actions || {};
 
         // Base layer
