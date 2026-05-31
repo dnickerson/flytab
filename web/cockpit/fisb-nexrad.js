@@ -12,7 +12,7 @@ class FisbNexrad {
         this._ctx = null;
         this._active = false;
 
-        // NEXRAD block store: "latN,lonW" → { latN, lonW, height, width, intensity[], radarType, scale, received_at }
+        // NEXRAD block store: "product,latN,lonW" → { latN, lonW, height, width, intensity[], radarType, scale, received_at }
         this._blocks = new Map();
 
         // Per-product freshness: tracks the most recent received_at for each product type
@@ -117,8 +117,12 @@ class FisbNexrad {
         // Redraw on any map movement (including during panning)
         map.on('move zoom moveend zoomend', this._onMove);
 
-        // If hydrated frames already exist from a prior session, switch the loop source to
-        // FIS-B now instead of waiting for the next live snapshot (up to frameIntervalMinutes).
+        // Re-hydrate frame history from IDB (cleared by remove() on the prior toggle).
+        // Fire-and-forget; after hydration completes _checkLoopReady() notifies the map.
+        if (this._frameHistory.length === 0) this._hydrate();
+
+        // If hydrated frames already exist (prior addTo that was never removed), switch the
+        // loop source to FIS-B now instead of waiting for the next live snapshot.
         if (!this._loopReadyFired && this._frameHistory.length >= 2) {
             this._loopReadyFired = true;
             window.app?.cockpitMap?.onFisbNexradLoopReady?.();
@@ -199,7 +203,6 @@ class FisbNexrad {
         for (const block of blocks) {
             if (!block.Intensity || block.Intensity.length === 0) continue;
 
-            const key = `${block.LatNorth},${block.LonWest}`;
             const stored = {
                 latN: block.LatNorth,
                 lonW: block.LonWest,
@@ -210,6 +213,10 @@ class FisbNexrad {
                 scale: block.Scale,             // 0 | 1 | 2
                 received_at: now,
             };
+            // Include product in key so Regional and CONUS blocks at the same lat/lon
+            // origin don't overwrite each other (CONUS grid is 5× coarser but shares
+            // some northwest-corner coordinates with the Regional grid).
+            const key = `${FisbNexrad._productOf(stored)},${block.LatNorth},${block.LonWest}`;
             this._blocks.set(key, stored);
             const p = FisbNexrad._productOf(stored);
             if (now > this._newestAt[p]) this._newestAt[p] = now;
@@ -324,7 +331,7 @@ class FisbNexrad {
                               .slice(-this._maxFrames);
             for (const r of fresh) {
                 const m = new Map();
-                for (const b of r.blocks) m.set(`${b.latN},${b.lonW}`, b);
+                for (const b of r.blocks) m.set(`${FisbNexrad._productOf(b)},${b.latN},${b.lonW}`, b);
                 this._frameHistory.push({ time: r.time, dataTime: r.dataTime, blocks: m });
             }
             // Keep newest-last ordering and the ring cap even if a live frame raced in.
@@ -338,10 +345,16 @@ class FisbNexrad {
             const last = this._frameHistory[this._frameHistory.length - 1];
             if (last) {
                 for (const [, b] of last.blocks) {
-                    this._blocks.set(`${b.latN},${b.lonW}`, b);
+                    this._blocks.set(`${FisbNexrad._productOf(b)},${b.latN},${b.lonW}`, b);
                     const p = FisbNexrad._productOf(b);
                     this._newestAt[p] = Math.max(this._newestAt[p], last.time);
                 }
+            }
+            // Notify the map to switch to FIS-B loop source if enough frames were loaded.
+            // Covers the toggle path (addTo re-calls _hydrate after remove() cleared history).
+            if (this._active && !this._loopReadyFired && this._frameHistory.length >= 2) {
+                this._loopReadyFired = true;
+                window.app?.cockpitMap?.onFisbNexradLoopReady?.();
             }
         } catch (err) {
             if (typeof DiagLog !== 'undefined') DiagLog.log('error', `radar hydrate failed: ${err.message}`);
