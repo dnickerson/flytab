@@ -724,11 +724,11 @@ class LayerPanel {
 
         localStorage.setItem('flypi_layer_defaults', JSON.stringify(snapshot));
 
-        const confirm = this._panel.querySelector('#lpDefaultsConfirm');
-        if (confirm) {
-            confirm.textContent = 'Defaults saved';
-            confirm.classList.add('lp-defaults-confirm--visible');
-            setTimeout(() => confirm.classList.remove('lp-defaults-confirm--visible'), 2000);
+        const confirmEl = this._panel.querySelector('#lpDefaultsConfirm');
+        if (confirmEl) {
+            confirmEl.textContent = 'Defaults saved';
+            confirmEl.classList.add('lp-defaults-confirm--visible');
+            setTimeout(() => confirmEl.classList.remove('lp-defaults-confirm--visible'), 2000);
         }
 
         this._updateResetBtnState();
@@ -804,6 +804,13 @@ class LayerPanel {
                 el.dispatchEvent(new Event('change'));
             }
         });
+
+        const confirmEl = this._panel.querySelector('#lpDefaultsConfirm');
+        if (confirmEl) {
+            confirmEl.textContent = 'Defaults applied';
+            confirmEl.classList.add('lp-defaults-confirm--visible');
+            setTimeout(() => confirmEl.classList.remove('lp-defaults-confirm--visible'), 2000);
+        }
     }
 
     open() {

@@ -244,6 +244,15 @@ All weather data comes from FIS-B via Stratux when airborne, or from the interne
 | **AIRMET Sierra** | IFR/mountain obscuration AIRMETs (grey) |
 | **Lightning** | Real-time lightning strike locations |
 
+### Layer Defaults
+
+At the bottom of the layer panel are two buttons:
+
+- **Save as Defaults** — Saves the current state of every toggle, base chart, and airport filter as the startup default. The next time the app opens, all layers will start in exactly this configuration. A brief "Defaults saved" confirmation appears.
+- **Reset to Defaults** — Immediately applies your saved default state to the map. All layers, the base chart, and airport filters snap back to the saved configuration. The button is greyed out until you have saved defaults at least once.
+
+Defaults are stored on-device and persist across app restarts. To change the defaults, configure the layers however you want and tap **Save as Defaults** again.
+
 ---
 
 ## Weather Features in Detail
