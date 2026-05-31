@@ -449,8 +449,11 @@ class LayerPanel {
         // Sync overlay states from config / vector layers
         this._syncOverlayStates(saved);
 
-        // If saved defaults exist, apply live layer state (idempotent for already-correct layers)
-        if (saved) this._resetToDefaults();
+        // If saved defaults exist, apply live layer state.
+        // fromInit=true so all saved-active layers are started unconditionally —
+        // init() already set the checkboxes so prev===act[key] for everything, meaning
+        // the change-guard used in the user-triggered path would suppress all dispatches.
+        if (saved) this._resetToDefaults(true);
     }
 
     _buildHtml() {
@@ -737,7 +740,7 @@ class LayerPanel {
         this._updateResetBtnState();
     }
 
-    _resetToDefaults() {
+    _resetToDefaults(fromInit = false) {
         const raw = localStorage.getItem(LayerPanel.DEFAULTS_KEY);
         if (!raw) return;
         let saved;
@@ -783,15 +786,17 @@ class LayerPanel {
             }
         }
 
-        // All other action inputs — dispatch change only when the value actually changes,
-        // so handlers that are non-idempotent (tfrs clearLayers, fuelTanksDisplay.show/hide)
-        // don't fire unnecessarily on startup when the state is already correct.
+        // All other action inputs: dispatch change to activate/deactivate layers.
+        // fromInit=true  → always dispatch; init() already set checkboxes so prev===act[key]
+        //                   for everything — the change-guard would suppress all dispatches.
+        // fromInit=false → only dispatch when value differs from current state, so
+        //                   non-idempotent handlers (tfrs clearLayers) don't fire needlessly.
         this._panel.querySelectorAll('input[data-action]').forEach(input => {
             const key = input.dataset.action;
             if (toggleKeys.has(key) || !(key in act)) return;
             const prev = input.checked;
             input.checked = act[key];
-            if (prev !== act[key]) input.dispatchEvent(new Event('change'));
+            if (fromInit || prev !== act[key]) input.dispatchEvent(new Event('change'));
         });
 
         // Airport filters
