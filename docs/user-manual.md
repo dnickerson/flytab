@@ -152,8 +152,6 @@ Opens a right-side drawer with infrequently used actions, organized in three sec
 | Item | What it does |
 |---|---|
 | **Timer** | Floating countdown/count-up overlay — stays visible over any tab. Use for holding, approach timing, or any en-route interval. Tap again to dismiss without losing state. |
-| **Fuel Entry** | Manually enter fuel quantity after a fuel stop |
-| **Weight & Balance** | Enter station weights and fuel; shows total weight, CG, and envelope status with a CG diagram |
 | **Approach Charts** | Georeferenced approach plates overlaid on the map |
 | **Radar (CONUS)** | Full-screen CONUS NEXRAD view centered on ownship. Tap **Recenter on me** to return to ownship position after panning. A badge shows the data source and age (e.g. *FIS-B · CONUS · 4 min*). Use the play/scrub loop at the bottom to animate up to ~55 minutes of history and gauge storm movement. The main map shows the higher-resolution Regional product; this page shows the full CONUS mosaic for situational awareness at a wider scale. |
 | **Engine ML** | Opens the real-time ML anomaly monitor |
@@ -163,8 +161,10 @@ Opens a right-side drawer with infrequently used actions, organized in three sec
 
 | Item | What it does |
 |---|---|
+| **Fuel Entry** | Manually enter fuel quantity after a fuel stop |
 | **Plan on flywhere.app** | Opens the web route planner in a browser for pre-flight planning |
 | **Weather Briefing** | Full weather briefing panel (see below) |
+| **Weight & Balance** | Enter station weights and fuel; shows total weight, CG, and envelope status with a CG diagram |
 | **Logbook** | View and edit flight log entries |
 | **Flight Upload** | Sync flight logs to the cloud |
 | **User Manual** | This document |
@@ -399,7 +399,7 @@ During the approach, tap **APT** tab instead for quick access to all plates for 
 
 **Fuel Entry** (MORE → Fuel Entry) — After refueling, enter the quantity for each tank. FlyTab uses this as the starting fuel for the flight.
 
-The **fuel tanks widget** (floating, top-left corner of the map) shows left/right tank quantities in gallons and the combined endurance in hours. Tap the widget to toggle between left and right tank display. The endurance updates in real time from the engine monitor fuel flow data.
+The **fuel tanks widget** (floating, top-left corner of the map) shows left/right tank quantities in gallons, live fuel flow (GPH), and combined endurance. The center column displays a total-fuel bar gauge, current GPH, and hours:minutes remaining. Tap the widget to toggle between left and right tank display. All values update in real time from the engine monitor.
 
 The **FUEL** field in the nav strip shows total fuel remaining and projected endurance at current burn rate. This is the authoritative fuel-state display.
 
