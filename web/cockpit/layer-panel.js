@@ -145,6 +145,7 @@ class LayerPanel {
         // Wire radar toggle
         const radarInput = this._panel.querySelector('.lp-toggle input[data-action="radar"]');
         if (radarInput) {
+            radarInput.checked = saved?.actions?.['radar'] ?? false;
             radarInput.addEventListener('change', () => {
                 this._toggleRadar(radarInput.checked);
             });
