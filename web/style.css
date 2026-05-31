@@ -7262,6 +7262,49 @@ body {
     text-decoration: none;
     -webkit-tap-highlight-color: transparent;
 }
+.lp-defaults-row {
+    display: flex;
+    gap: 8px;
+    padding: 12px 16px 8px;
+}
+.lp-defaults-save,
+.lp-defaults-reset {
+    flex: 1;
+    min-height: var(--touch-min, 56px);
+    border-radius: 6px;
+    font-family: var(--font-ui);
+    font-weight: 700;
+    font-size: 14px;
+    border: none;
+    cursor: pointer;
+}
+.lp-defaults-save {
+    background: var(--accent);
+    color: #fff;
+}
+.lp-defaults-reset {
+    background: var(--bg-surface);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+}
+.lp-defaults-reset--no-saved {
+    opacity: 0.4;
+    cursor: default;
+}
+.lp-defaults-confirm {
+    text-align: center;
+    font-family: var(--font-ui);
+    font-size: 13px;
+    color: var(--color-success);
+    font-weight: 700;
+    min-height: 20px;
+    padding-bottom: 8px;
+    opacity: 0;
+    transition: opacity 0.3s;
+}
+.lp-defaults-confirm--visible {
+    opacity: 1;
+}
 .lp-route-cache-row {
     background: color-mix(in srgb, var(--accent) 8%, transparent);
     border-bottom: 2px solid var(--border);
