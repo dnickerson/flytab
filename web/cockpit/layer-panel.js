@@ -423,15 +423,6 @@ class LayerPanel {
             });
         }
 
-        // Wire Data & Maps button
-        const dataMapsBtn = this._panel.querySelector('#lpOpenDataMaps');
-        if (dataMapsBtn) {
-            wireTap(dataMapsBtn, () => {
-                this.close();
-                window.app?.dataStatus?.show();
-            });
-        }
-
         // Sync overlay states from config / vector layers
         this._syncOverlayStates();
     }
@@ -615,9 +606,11 @@ class LayerPanel {
                 </div>
             </div>
 
-            <button class="lp-cache-page-btn" id="lpOpenDataMaps">
-                Data &amp; Maps &#9776;
-            </button>
+            <div class="lp-defaults-row">
+                <button class="lp-defaults-save" id="lpSaveDefaults">Save as Defaults</button>
+                <button class="lp-defaults-reset" id="lpResetDefaults">Reset to Defaults</button>
+            </div>
+            <div class="lp-defaults-confirm" id="lpDefaultsConfirm"></div>
 
         </div>`;
     }
