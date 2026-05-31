@@ -63,7 +63,8 @@ class LayerPanel {
         this._panel.innerHTML = this._buildHtml();
         document.body.appendChild(this._panel);
 
-        const saved = JSON.parse(localStorage.getItem('flypi_layer_defaults') || 'null');
+        let saved = null;
+        try { saved = JSON.parse(localStorage.getItem('flypi_layer_defaults') || 'null'); } catch { /* ignore corrupt data */ }
 
         // Wire backdrop close
         this._backdrop.addEventListener('click', () => this.close());
@@ -313,11 +314,12 @@ class LayerPanel {
         this._panel.querySelectorAll('[data-aptfilter]').forEach(el => {
             const key = el.dataset.aptfilter;
             const cfg = (typeof CockpitConfig !== 'undefined') ? (CockpitConfig.get('airportFilter') || {}) : {};
-            // Initialize control state from config
+            const savedKey = 'aptfilter-' + key;
+            // Initialize from saved defaults if present, else CockpitConfig
             if (el.type === 'checkbox') {
-                el.checked = cfg[key] ?? false;
+                el.checked = (saved?.actions && savedKey in saved.actions) ? saved.actions[savedKey] : (cfg[key] ?? false);
             } else if (el.tagName === 'SELECT') {
-                el.value = String(cfg[key] ?? 0);
+                el.value = String((saved?.actions && savedKey in saved.actions) ? saved.actions[savedKey] : (cfg[key] ?? 0));
             }
             el.addEventListener('change', () => {
                 const patch = {};
