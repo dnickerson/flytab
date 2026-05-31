@@ -725,11 +725,13 @@ class LayerPanel {
 
         localStorage.setItem(LayerPanel.DEFAULTS_KEY, JSON.stringify(snapshot));
 
-        const confirmEl = this._panel.querySelector('#lpDefaultsConfirm');
-        if (confirmEl) {
-            confirmEl.textContent = 'Defaults saved';
-            confirmEl.classList.add('lp-defaults-confirm--visible');
-            setTimeout(() => confirmEl.classList.remove('lp-defaults-confirm--visible'), 2000);
+        // Show feedback on the button itself — always visible regardless of scroll position
+        const saveBtn = this._panel.querySelector('#lpSaveDefaults');
+        if (saveBtn) {
+            const orig = saveBtn.textContent;
+            saveBtn.textContent = 'Saved ✓';
+            saveBtn.disabled = true;
+            setTimeout(() => { saveBtn.textContent = orig; saveBtn.disabled = false; }, 2000);
         }
 
         this._updateResetBtnState();
