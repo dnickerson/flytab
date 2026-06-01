@@ -159,10 +159,9 @@ class FlightUpload {
      * Fails silently — traffic companion is supplementary, never blocks CSV upload.
      */
     async _uploadTrafficCompanion(csvFilename, cfg, password) {
-        const trafficFilename = csvFilename.replace(/\.csv$/i, '_traffic.ndjson');
-
         try {
-            await Capacitor.Plugins.Sftp.upload({
+            const trafficFilename = csvFilename.replace(/\.csv$/i, '_traffic.ndjson');
+            const result = await Capacitor.Plugins.Sftp.upload({
                 host: cfg.host,
                 port: cfg.port || 22,
                 username: cfg.username,
@@ -170,6 +169,10 @@ class FlightUpload {
                 remotePath: cfg.remotePath || '~/flights',
                 password,
             });
+            if (result?.ok === false) {
+                if (typeof DiagLog !== 'undefined') DiagLog.log('upload', `Traffic companion upload failed (non-fatal): ${result.error || 'unknown'}`);
+                return;
+            }
             if (typeof DiagLog !== 'undefined') DiagLog.log('upload', `Traffic companion uploaded: ${trafficFilename}`);
         } catch (err) {
             if (typeof DiagLog !== 'undefined') DiagLog.log('upload', `Traffic companion upload failed (non-fatal): ${err.message}`);
