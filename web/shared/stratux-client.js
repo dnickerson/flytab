@@ -260,7 +260,6 @@ class StratuxClient extends EventTarget {
             this._reconnectDelay = 2000;
             this._setConnected(true);
             if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', 'Traffic WS connected');
-            if (typeof TrafficDiag !== 'undefined') TrafficDiag.wsEvent('traffic_open');
         };
 
         this._trafficWs.onmessage = (e) => {
@@ -272,7 +271,6 @@ class StratuxClient extends EventTarget {
 
         this._trafficWs.onclose = () => {
             if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', 'Traffic WS closed, reconnecting traffic only…');
-            if (typeof TrafficDiag !== 'undefined') TrafficDiag.wsEvent('traffic_close');
             this._scheduleTrafficReconnect();
         };
         this._trafficWs.onerror = () => { /* onclose will fire */ };
@@ -319,7 +317,6 @@ class StratuxClient extends EventTarget {
         } catch { return; }
 
         this._situationWs.onopen = () => {
-            if (typeof TrafficDiag !== 'undefined') TrafficDiag.wsEvent('sit_open');
         };
 
         this._situationWs.onmessage = (e) => {
@@ -330,7 +327,6 @@ class StratuxClient extends EventTarget {
         };
 
         this._situationWs.onclose = () => {
-            if (typeof TrafficDiag !== 'undefined') TrafficDiag.wsEvent('sit_close');
             if (this._trafficWs?.readyState === WebSocket.OPEN) {
                 setTimeout(() => {
                     // Guard: don't create a duplicate if already reconnected

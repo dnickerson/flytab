@@ -1055,25 +1055,6 @@ class CockpitMap {
             setTimeout(() => { this._trafficFilterLogged = false; }, 30000);
         }
 
-        // Diagnostic snapshot — does not affect display
-        if (typeof TrafficDiag !== 'undefined') {
-            TrafficDiag.snapshot({
-                ws:        this.stratux._trafficWs?.readyState ?? -1,
-                sit_ws:    this.stratux._situationWs?.readyState ?? -1,
-                conn:      this.stratux._connected ?? false,
-                total:     this.stratux.traffic.size,
-                stale:     _nStale,
-                no_pos:    _nNoPos,
-                alt_filt:  _nAltFilt,
-                shown:     _nShown,
-                own_alt:   this.stratux.situation?.alt_msl != null ? Math.round(this.stratux.situation.alt_msl) : null,
-                own_fix:   this.stratux.situation?.gps_fix_quality ?? null,
-                own_sats:  this.stratux.situation?.satellites ?? null,
-                band_above: maxAboveAlt,
-                band_below: maxBelowAlt,
-            });
-        }
-
         // Remove stale markers
         for (const [icao, marker] of this.trafficMarkers) {
             if (!seen.has(icao)) {
