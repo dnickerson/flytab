@@ -267,7 +267,7 @@ class FlightRecorder {
                 altFt: tgt.alt || 0,
                 spdKts: tgt.speed || 0,
                 hdg:  tgt.track || 0,
-                squawk: String(tgt.squawk || 0).padStart(4, '0'),
+                squawk: tgt.squawk ? String(tgt.squawk).padStart(4, '0') : '',
             });
         }
         if (!targets.length) return;

@@ -160,8 +160,6 @@ class FlightUpload {
      */
     async _uploadTrafficCompanion(csvFilename, cfg, password) {
         const trafficFilename = csvFilename.replace(/\.csv$/i, '_traffic.ndjson');
-        const exists = this._flights.some(f => f.name === trafficFilename);
-        if (!exists) return;
 
         try {
             await Capacitor.Plugins.Sftp.upload({
