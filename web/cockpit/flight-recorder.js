@@ -73,6 +73,7 @@ class FlightRecorder {
 
     destroy() {
         if (this._autoMonitorInterval) clearInterval(this._autoMonitorInterval);
+        if (this._trafficInterval) { clearInterval(this._trafficInterval); this._trafficInterval = null; }
         if (this._recording) this.stop();
     }
 
@@ -252,9 +253,12 @@ class FlightRecorder {
         if (!traffic || traffic.size === 0) return;
 
         const t = this._rowCount;
+        const MAX_TRAFFIC_AGE_MS = 30000;
+        const now = Date.now();
         const targets = [];
         for (const tgt of traffic.values()) {
             if (!tgt.lat || !tgt.lon) continue;
+            if (now - (tgt.last_seen || 0) > MAX_TRAFFIC_AGE_MS) continue;
             targets.push({
                 icao: tgt.hex,
                 cs:   tgt.callsign || '',
@@ -268,7 +272,7 @@ class FlightRecorder {
         }
         if (!targets.length) return;
 
-        this._trafficBuffer.push(JSON.stringify({ t, targets }));
+        this._trafficBuffer.push(JSON.stringify({ t, ts: now, targets }));
     }
 
     /** Flush buffered rows to NanoHTTPD filesystem */
