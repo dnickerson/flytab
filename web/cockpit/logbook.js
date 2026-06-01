@@ -208,7 +208,12 @@ class Logbook {
         this._body.querySelectorAll('.logbook-debrief-btn').forEach(btn => {
             wireTap(btn, () => {
                 const url = btn.dataset.url;
-                if (url) window.open(url, '_system');
+                if (!url) return;
+                if (typeof Capacitor !== 'undefined' && Capacitor.Plugins?.App?.openUrl) {
+                    Capacitor.Plugins.App.openUrl({ url });
+                } else {
+                    window.open(url, '_blank');
+                }
             });
         });
 
