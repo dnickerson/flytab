@@ -39,6 +39,7 @@ class FlightRecorder {
         this._trafficFileName = null;
         this._trafficBuffer = [];
         this._trafficInterval = null;
+        this._activeTrafficFlush = null;
 
         // Auto-start/stop counters
         this._rpmAboveCount = 0;
@@ -100,7 +101,7 @@ class FlightRecorder {
         // Flush to disk every 5 seconds (reduces worst-case data loss on crash)
         this._flushInterval = setInterval(() => {
             this._flush();
-            this._flushTraffic();
+            this._activeTrafficFlush = this._flushTraffic();
         }, 5000);
         this._trafficInterval = setInterval(() => this._recordTrafficSnapshot(), 5000);
 
@@ -132,6 +133,11 @@ class FlightRecorder {
         } catch (err) {
             flushOk = false;
             if (typeof DiagLog !== 'undefined') DiagLog.log('error', `FlightRecorder final flush failed: ${err.message}`);
+        }
+        // Wait for any interval-triggered flush to complete before the final flush
+        if (this._activeTrafficFlush) {
+            try { await this._activeTrafficFlush; } catch (_) {}
+            this._activeTrafficFlush = null;
         }
         try {
             await this._flushTraffic();
@@ -363,8 +369,8 @@ class FlightRecorder {
                             body: trafficData,
                         });
                         await fetch(`${FlightRecorder.LOCAL_BASE}/${oldTrafficPath}`, { method: 'DELETE' });
-                        this._trafficFileName = newTrafficName;
                     }
+                    this._trafficFileName = newTrafficName;   // always sync with CSV name
                 } catch (err) {
                     if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Traffic rename failed: ${err.message}`);
                 }
