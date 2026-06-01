@@ -295,8 +295,8 @@ class FlightRecorder {
 
     async _flushTraffic() {
         if (!this._trafficBuffer.length || !this._trafficFileName) return;
-        const content = this._trafficBuffer.join('\n') + '\n';
-        this._trafficBuffer = [];
+        const snapshot = this._trafficBuffer.splice(0);  // atomically drain, preserve records
+        const content = snapshot.join('\n') + '\n';
         const path = `${FlightRecorder.FLIGHTS_PATH}/${this._trafficFileName}`;
         try {
             const resp = await fetch(`${FlightRecorder.LOCAL_BASE}/${path}`, {
@@ -306,7 +306,7 @@ class FlightRecorder {
             });
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         } catch (err) {
-            this._trafficBuffer.unshift(content.trim());
+            this._trafficBuffer.unshift(...snapshot);  // restore individual records
             if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Traffic flush failed: ${err.message}`);
         }
     }
