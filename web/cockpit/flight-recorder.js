@@ -36,6 +36,9 @@ class FlightRecorder {
         this._startTime = null;
         this._flushInterval = null;
         this._recordInterval = null;
+        this._trafficFileName = null;
+        this._trafficBuffer = [];
+        this._trafficInterval = null;
 
         // Auto-start/stop counters
         this._rpmAboveCount = 0;
@@ -88,11 +91,17 @@ class FlightRecorder {
         const ymd = now.toISOString().slice(0, 10).replace(/-/g, '');
         const hm = now.toISOString().slice(11, 16).replace(':', '');
         this._fileName = `${ymd}_${hm}Z.csv`;
+        this._trafficFileName = `${ymd}_${hm}Z_traffic.ndjson`;
+        this._trafficBuffer = [];
 
         // Record at 1Hz
         this._recordInterval = setInterval(() => this._recordRow(), 1000);
         // Flush to disk every 5 seconds (reduces worst-case data loss on crash)
-        this._flushInterval = setInterval(() => this._flush(), 5000);
+        this._flushInterval = setInterval(() => {
+            this._flush();
+            this._flushTraffic();
+        }, 5000);
+        this._trafficInterval = setInterval(() => this._recordTrafficSnapshot(), 5000);
 
         this._emitStatus();
         window.dispatchEvent(new CustomEvent('flightsync:started'));
@@ -106,6 +115,7 @@ class FlightRecorder {
 
         if (this._recordInterval) { clearInterval(this._recordInterval); this._recordInterval = null; }
         if (this._flushInterval) { clearInterval(this._flushInterval); this._flushInterval = null; }
+        if (this._trafficInterval) { clearInterval(this._trafficInterval); this._trafficInterval = null; }
 
         const startTime = this._startTime ? new Date(this._startTime).toISOString() : null;
         const endMs = Date.now();
@@ -121,6 +131,11 @@ class FlightRecorder {
         } catch (err) {
             flushOk = false;
             if (typeof DiagLog !== 'undefined') DiagLog.log('error', `FlightRecorder final flush failed: ${err.message}`);
+        }
+        try {
+            await this._flushTraffic();
+        } catch (err) {
+            if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Traffic flush failed: ${err.message}`);
         }
 
         // Try to rename with dep/dest from NASR — returns { depIcao, destIcao } or null
@@ -231,6 +246,31 @@ class FlightRecorder {
         this._rowCount++;
     }
 
+    _recordTrafficSnapshot() {
+        if (!this._recording || !this._trafficFileName) return;
+        const traffic = this._stratux?.traffic;
+        if (!traffic || traffic.size === 0) return;
+
+        const t = this._rowCount;
+        const targets = [];
+        for (const tgt of traffic.values()) {
+            if (!tgt.lat || !tgt.lon) continue;
+            targets.push({
+                icao: tgt.hex,
+                cs:   tgt.callsign || '',
+                lat:  tgt.lat,
+                lon:  tgt.lon,
+                altFt: tgt.alt || 0,
+                spdKts: tgt.speed || 0,
+                hdg:  tgt.track || 0,
+                squawk: String(tgt.squawk || 0).padStart(4, '0'),
+            });
+        }
+        if (!targets.length) return;
+
+        this._trafficBuffer.push(JSON.stringify({ t, targets }));
+    }
+
     /** Flush buffered rows to NanoHTTPD filesystem */
     async _flush() {
         if (this._csvBuffer.length === 0) return;
@@ -250,6 +290,24 @@ class FlightRecorder {
             // Re-buffer on failure so data isn't lost
             this._csvBuffer.unshift(content.trim());
             if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Flush failed: ${err.message}`);
+        }
+    }
+
+    async _flushTraffic() {
+        if (!this._trafficBuffer.length || !this._trafficFileName) return;
+        const content = this._trafficBuffer.join('\n') + '\n';
+        this._trafficBuffer = [];
+        const path = `${FlightRecorder.FLIGHTS_PATH}/${this._trafficFileName}`;
+        try {
+            const resp = await fetch(`${FlightRecorder.LOCAL_BASE}/${path}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/x-ndjson', 'X-Append': 'true' },
+                body: content,
+            });
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        } catch (err) {
+            this._trafficBuffer.unshift(content.trim());
+            if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Traffic flush failed: ${err.message}`);
         }
     }
 
@@ -286,6 +344,28 @@ class FlightRecorder {
             await fetch(`${FlightRecorder.LOCAL_BASE}/${oldPath}`, { method: 'DELETE' });
 
             this._fileName = newName;
+
+            if (this._trafficFileName) {
+                const oldTrafficPath = `${FlightRecorder.FLIGHTS_PATH}/${this._trafficFileName}`;
+                const newTrafficName = newName.replace(/\.csv$/, '_traffic.ndjson');
+                const newTrafficPath = `${FlightRecorder.FLIGHTS_PATH}/${newTrafficName}`;
+                try {
+                    const tr = await fetch(`${FlightRecorder.LOCAL_BASE}/${oldTrafficPath}`);
+                    if (tr.ok) {
+                        const trafficData = await tr.text();
+                        await fetch(`${FlightRecorder.LOCAL_BASE}/${newTrafficPath}`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/x-ndjson' },
+                            body: trafficData,
+                        });
+                        await fetch(`${FlightRecorder.LOCAL_BASE}/${oldTrafficPath}`, { method: 'DELETE' });
+                        this._trafficFileName = newTrafficName;
+                    }
+                } catch (err) {
+                    if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Traffic rename failed: ${err.message}`);
+                }
+            }
+
             if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Renamed to ${newName}`);
             return { depIcao: dep, destIcao: dest };
         } catch (err) {
