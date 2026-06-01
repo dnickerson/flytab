@@ -64,6 +64,13 @@ class Logbook {
             .forEach(c => c.style.display = visible ? '' : 'none');
     }
 
+    _debriefUrl(entry) {
+        const cfg = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.get('debriefServer') : {};
+        const base = cfg?.base;
+        if (!base || !entry.csvFilename) return null;
+        return `${base}/?file=${encodeURIComponent(entry.csvFilename)}`;
+    }
+
     _buildDOM() {
         this._el = document.createElement('div');
         this._el.className = 'logbook-page';
@@ -172,6 +179,7 @@ class Logbook {
             const sourceLabel = isDraft ? 'DRAFT' : (e.source === 'flypi' ? 'AUTO' : '');
             const syncDot = e.synced ? '' : '<span class="logbook-unsync-dot"></span>';
 
+            const debriefUrl = this._debriefUrl(e);
             return `<div class="logbook-entry ${isDraft ? 'logbook-draft' : ''}" data-id="${e.id}">
                 <span class="logbook-date">${e.date}</span>${syncDot}
                 <span class="logbook-route">${dep}\u2192${dest}</span>
@@ -180,6 +188,7 @@ class Logbook {
                 ${cond ? `<span class="logbook-detail">${cond}</span>` : ''}
                 ${sourceLabel ? `<span class="logbook-source ${isDraft ? 'logbook-source-draft' : ''}">${sourceLabel}</span>` : ''}
                 <span class="logbook-entry-spacer"></span>
+                ${debriefUrl ? `<button class="logbook-btn logbook-debrief-btn" data-id="${e.id}" data-url="${debriefUrl}">DEBRIEF</button>` : ''}
                 <button class="logbook-btn logbook-edit-btn" data-id="${e.id}">${isDraft ? 'REVIEW' : 'EDIT'}</button>
                 <button class="logbook-btn logbook-delete-btn" data-id="${e.id}">DEL</button>
             </div>`;
@@ -192,6 +201,14 @@ class Logbook {
             wireTap(btn, () => {
                 const entry = entries.find(e => e.id === btn.dataset.id);
                 if (entry) this._showForm(entry);
+            });
+        });
+
+        // Wire debrief buttons
+        this._body.querySelectorAll('.logbook-debrief-btn').forEach(btn => {
+            wireTap(btn, () => {
+                const url = btn.dataset.url;
+                if (url) window.open(url, '_system');
             });
         });
 
