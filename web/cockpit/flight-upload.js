@@ -141,6 +141,7 @@ class FlightUpload {
 
             if (result.ok) {
                 this._markUploaded(filename, rowEl);
+                await this._uploadTrafficCompanion(filename, cfg, password);
             } else {
                 btn.textContent = 'Retry';
                 btn.disabled = false;
@@ -150,6 +151,30 @@ class FlightUpload {
             btn.textContent = 'Retry';
             btn.disabled = false;
             window.app?.showToast(`Upload error: ${err.message}`, null, 4000);
+        }
+    }
+
+    /**
+     * Upload the _traffic.ndjson companion file for a CSV, if it exists.
+     * Fails silently — traffic companion is supplementary, never blocks CSV upload.
+     */
+    async _uploadTrafficCompanion(csvFilename, cfg, password) {
+        const trafficFilename = csvFilename.replace(/\.csv$/i, '_traffic.ndjson');
+        const exists = this._flights.some(f => f.name === trafficFilename);
+        if (!exists) return;
+
+        try {
+            await Capacitor.Plugins.Sftp.upload({
+                host: cfg.host,
+                port: cfg.port || 22,
+                username: cfg.username,
+                filename: trafficFilename,
+                remotePath: cfg.remotePath || '~/flights',
+                password,
+            });
+            if (typeof DiagLog !== 'undefined') DiagLog.log('upload', `Traffic companion uploaded: ${trafficFilename}`);
+        } catch (err) {
+            if (typeof DiagLog !== 'undefined') DiagLog.log('upload', `Traffic companion upload failed (non-fatal): ${err.message}`);
         }
     }
 
@@ -189,6 +214,7 @@ class FlightUpload {
                     this._markUploaded(flight.name, rowEl);
                     uploaded++;
                     btn.textContent = `Uploading ${uploaded} / ${pending.length}...`;
+                    await this._uploadTrafficCompanion(flight.name, cfg, password);
                 } else {
                     window.app?.showToast(`Stopped: ${flight.name} — ${result.error}`, null, 4000);
                     break;
