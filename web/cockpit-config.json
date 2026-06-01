@@ -90,6 +90,9 @@
     "remotePath": "~/flights",
     "apkRemotePath": "~/flytab/flytab-latest.apk"
   },
+  "debriefServer": {
+    "base": "http://100.x.x.x:8092"
+  },
   "logbook": {
     "autoCreate": true,
     "defaultConditions": "VFR",
