@@ -1611,10 +1611,37 @@ class VectorMapLayers {
             return;
         }
 
+        // No aviation marker within normal range — give airports a wider hit zone before
+        // falling through to traffic. Traffic clusters at airports can push the airport
+        // marker just outside 30px even though it was the intended tap target.
+        const aptFallback = this._findNearestAirport(pt, 60);
+        if (aptFallback && this._onAirportClick) {
+            this._onAirportClick(aptFallback.data);
+            return;
+        }
+
         // No aviation marker hit — check traffic markers
         if (this._onTrafficTap) {
             this._onTrafficTap(pt);
         }
+    }
+
+    /**
+     * Find the nearest airport marker within maxPx pixels of containerPt.
+     * Used as a wider-radius fallback before checking traffic markers.
+     */
+    _findNearestAirport(containerPt, maxPx) {
+        let best = null;
+        let bestDist = maxPx;
+        for (const [, marker] of this._airportMarkers) {
+            const markerPt = this._map.latLngToContainerPoint(marker.getLatLng());
+            const dist = containerPt.distanceTo(markerPt);
+            if (dist < bestDist) {
+                bestDist = dist;
+                best = { type: 'airport', data: marker._aptData, marker };
+            }
+        }
+        return best;
     }
 
     /**

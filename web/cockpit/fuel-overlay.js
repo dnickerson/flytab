@@ -453,6 +453,9 @@ class FuelOverlay {
             if (typeof FuelTankState !== 'undefined') {
                 const existing = FuelTankState.getState();
                 FuelTankState.init(m.left_gal, m.right_gal, existing?.active_tank ?? 'L');
+                // Belt-and-suspenders: re-dispatch so the gauge widget re-renders even
+                // if the synchronous dispatch inside init() was swallowed by the WebView.
+                window.dispatchEvent(new CustomEvent('fueltankstate:changed'));
             }
             window.dispatchEvent(new CustomEvent('fuelstate:changed'));
             this._updateSourceDisplay();
