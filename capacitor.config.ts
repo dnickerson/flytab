@@ -5,8 +5,8 @@ const config: CapacitorConfig = {
   appName: 'FlyTab',
   webDir: 'web',
   server: {
-    androidScheme: 'http',  // Use http://localhost — avoids mixed content blocking HTTP to home server/NanoHTTPD
-    cleartext: true,
+    androidScheme: 'http',  // Use http://localhost — WebViewAssetLoader intercepts internally, no network cleartext needed
+    cleartext: false,       // Cleartext scoped to LAN addresses via network_security_config.xml
   },
   plugins: {
     CapacitorHttp: {
