@@ -283,7 +283,10 @@ class DataStatus {
         const serverHasPlates  = !!(base && plateSCode && serverStates.length > 0);
         const serverStateSet   = new Set(serverStates);
         const serverStateSizes = Object.fromEntries((sPlates?.state_sizes || []).map(s => [s.state, s.size_mb]));
-        const cycleOkForStates = !plateSCode || plateDCode === plateSCode;
+        const serverBuiltAt = sPlates?.built_at || null;
+        const deviceBuiltAt = dPlates?.built_at || null;
+        const builtAtOk     = !serverBuiltAt || (deviceBuiltAt && deviceBuiltAt >= serverBuiltAt);
+        const cycleOkForStates = (!plateSCode || plateDCode === plateSCode) && builtAtOk;
         const allDisplayStates = serverHasPlates
             ? [...serverStates, ...syncedStates.filter(s => !serverStateSet.has(s))]
             : syncedStates;
@@ -1163,7 +1166,10 @@ class DataStatus {
             const cycleMatch = localDate && localDate === serverDate;
             const syncedStates = this._readDeviceManifest().plates?.synced_states || [];
             const allStatesSynced = statesResp.length > 0 && statesResp.every(s => syncedStates.includes(s.state));
-            const needsUpdate = !cycleMatch || !allStatesSynced;
+            const sBuiltAt = this._serverManifest?.plates?.built_at || null;
+            const dBuiltAt = this._readDeviceManifest().plates?.built_at || null;
+            const builtAtMatch = !sBuiltAt || (dBuiltAt && dBuiltAt >= sBuiltAt);
+            const needsUpdate = !cycleMatch || !allStatesSynced || !builtAtMatch;
 
             if (!needsUpdate) {
                 setStep('plates', 'skip', `Current — cycle ${serverDate}`);
@@ -1225,6 +1231,7 @@ class DataStatus {
                     cycle_code: this._serverManifest?.plates?.cycle_code
                                 || serverCycle.cycle_code
                                 || serverCycle.effective_date,
+                    built_at: this._serverManifest?.plates?.built_at || null,
                     synced_states: newlySynced,
                 });
                 setStep('plates', 'ok', `${done} states downloaded — cycle ${serverDate}`);
