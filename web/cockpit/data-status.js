@@ -399,7 +399,7 @@ class DataStatus {
             <div class="ds-section-title">Aviation Data</div>
             ${this._section('Aeronautical Database',    aeroServerLine,    aeroDevLine,    aeroBadge,    aeroPrimary,    aeroSecondary)}
             ${this._section('Terrain Elevation (SRTM)', terrainServerLine, terrainDevLine, terrainBadge, terrainPrimary, terrainSecondary)}
-            ${this._section('Approach Plates',          platesServerLine,  platesDevLine,  platesBadge,  platesPrimary,  platesSecondary, true)}
+            ${this._section('Approach Plates & A/FD',   platesServerLine,  platesDevLine,  platesBadge,  platesPrimary,  platesSecondary, true)}
             <div class="ds-section-title">Offline Maps</div>
             ${mbtilesHtml}
             <div id="dsWeatherCacheSection"></div>
@@ -745,7 +745,7 @@ class DataStatus {
                 <input type="file" id="dsZipInput" accept=".zip" style="display:none">
             </div>
         </div>
-        <div class="ds-section-title">Approach Plates — Manual</div>
+        <div class="ds-section-title">Approach Plates & A/FD — Manual</div>
         ${this._platesAgeCard()}
         <div class="ds-card">
             <div class="ds-card-title">Download by Airport</div>

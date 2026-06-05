@@ -208,7 +208,7 @@ class ApproachCharts {
             }
         }
         if (!this._plateIndex?.[faaId]) {
-            this._showMessage(`No plates for ${icao} — download plates via Pre-Flight Refresh`);
+            this._showMessage(`No plates for ${icao} — sync approach plates from the home server`);
             this._pickerShownAt = Date.now();
             this._pickerEl.style.display = 'flex';
             return;
