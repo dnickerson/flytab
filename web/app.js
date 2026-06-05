@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v9.47';
+const FLYTAB_VERSION = 'v9.49';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -1860,10 +1860,11 @@ class FlyTabApp {
         overlay.innerHTML = `
             <div style="padding:16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;background:var(--bg-surface);flex-shrink:0;">
                 <span style="font-size:28px;">\u26fd</span>
-                <div>
+                <div style="flex:1;">
                     <div style="font-size:20px;font-weight:700;color:var(--text-primary);">Fuel Stop \u2014 ${icao}</div>
                     ${aptName ? `<div style="font-size:14px;color:var(--text-secondary);">${aptName}</div>` : ''}
                 </div>
+                <button id="fso-close-btn" style="min-width:44px;min-height:44px;background:none;border:none;font-size:24px;color:var(--text-secondary);cursor:pointer;padding:8px;">\u2715</button>
             </div>
             <div style="padding:16px;flex:1;">
                 ${prevFlight ? flightCard(prevFlight, `Flight ${prevFlight.index + 1} \u2014 ${prevFlight.dep} \u2192 ${prevFlight.dest}`) : ''}
@@ -1887,6 +1888,14 @@ class FlyTabApp {
         `;
 
         document.body.appendChild(overlay);
+
+        // ✕ clears the proximity guard so the overlay can re-appear if the pilot
+        // circles back to the same fuel stop with fuel genuinely critical.
+        const proximityKey = `${wp.icao || wp.name}_${wpIndex}`;
+        overlay.querySelector('#fso-close-btn').addEventListener('click', () => {
+            this._shownFuelStopOverlays.delete(proximityKey);
+            overlay.remove();
+        });
 
         overlay.querySelector('#fso-continue-btn').addEventListener('click', () => {
             let gallonsAdded = 0;
