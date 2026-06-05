@@ -341,8 +341,10 @@ class EngineMLBridge {
         const oilP = num(d.oil_pressure ?? d.oil_press_psi ?? d.Oil_Press ?? 0);
         const fuelFlow = num(d.fuel_flow_gph ?? d.gph ?? d.Fuel_Flow ?? 0);
 
-        // Oil pressure critically low — only when engine is running (rpm > 300)
-        if (rpm > 300 && oilP > 0 && oilP < 25) {
+        // Oil pressure critically low — only when engine is at idle or above (~600 RPM).
+        // Below 600 RPM the oil sensor reads residual pressure on the ground even with
+        // the engine off; 600 RPM aligns with Lycoming minimum idle and avoids startup noise.
+        if (rpm > 600 && oilP > 0 && oilP < 25) {
             advisories.push({
                 type: 'oil_pressure_critical',
                 message: `Oil pressure critically low — ${Math.round(oilP)} PSI. Reduce power. Land as soon as practical.`,

@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v9.48';
+const FLYTAB_VERSION = 'v9.49';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -1889,7 +1889,13 @@ class FlyTabApp {
 
         document.body.appendChild(overlay);
 
-        overlay.querySelector('#fso-close-btn').addEventListener('click', () => overlay.remove());
+        // ✕ clears the proximity guard so the overlay can re-appear if the pilot
+        // circles back to the same fuel stop with fuel genuinely critical.
+        const proximityKey = `${wp.icao || wp.name}_${wpIndex}`;
+        overlay.querySelector('#fso-close-btn').addEventListener('click', () => {
+            this._shownFuelStopOverlays.delete(proximityKey);
+            overlay.remove();
+        });
 
         overlay.querySelector('#fso-continue-btn').addEventListener('click', () => {
             let gallonsAdded = 0;

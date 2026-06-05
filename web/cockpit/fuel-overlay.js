@@ -464,7 +464,7 @@ class FuelOverlay {
             // Sync authoritative tic measurement to Pi so both systems agree
             this._syncFuelSetToEngine(m.total_gal, 'Preflight tic mark measurement');
             this.hide();
-        });
+        }).catch(err => console.error('[FuelOverlay] applyMeasurement failed:', err));
     }
 
     /**

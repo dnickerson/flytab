@@ -1611,12 +1611,23 @@ class VectorMapLayers {
             return;
         }
 
-        // No aviation marker within normal range — give airports a wider hit zone before
-        // falling through to traffic. Traffic clusters at airports can push the airport
-        // marker just outside 30px even though it was the intended tap target.
-        const aptFallback = this._findNearestAirport(pt, 60);
-        if (aptFallback && this._onAirportClick) {
-            this._onAirportClick(aptFallback.data);
+        // Widen to 60px for all aviation markers before falling through to traffic.
+        // Preserves navaid > airport > fix priority from _findNearestMarker while
+        // ensuring any aviation feature beats a traffic marker in the 31–60px range.
+        const fallback = this._findNearestMarker(pt, 60);
+        if (fallback) {
+            if (fallback.type === 'airport' && this._onAirportClick) {
+                this._onAirportClick(fallback.data);
+            } else if (fallback.type === 'navaid' && this._onNavaidClick) {
+                this._onNavaidClick(fallback.data);
+            } else if (fallback.type === 'fix' && this._onFixClick) {
+                this._onFixClick(fallback.data);
+            } else if (fallback.type === 'cb') {
+                L.popup({ minWidth: 260, maxWidth: 380, className: 'cb-popup-container' })
+                    .setLatLng(fallback.marker.getLatLng())
+                    .setContent(this._buildCbPopupHtml(fallback.data))
+                    .openOn(this._map);
+            }
             return;
         }
 
@@ -1624,24 +1635,6 @@ class VectorMapLayers {
         if (this._onTrafficTap) {
             this._onTrafficTap(pt);
         }
-    }
-
-    /**
-     * Find the nearest airport marker within maxPx pixels of containerPt.
-     * Used as a wider-radius fallback before checking traffic markers.
-     */
-    _findNearestAirport(containerPt, maxPx) {
-        let best = null;
-        let bestDist = maxPx;
-        for (const [, marker] of this._airportMarkers) {
-            const markerPt = this._map.latLngToContainerPoint(marker.getLatLng());
-            const dist = containerPt.distanceTo(markerPt);
-            if (dist < bestDist) {
-                bestDist = dist;
-                best = { type: 'airport', data: marker._aptData, marker };
-            }
-        }
-        return best;
     }
 
     /**
