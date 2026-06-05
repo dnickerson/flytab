@@ -272,7 +272,7 @@ class DataStatus {
         if (!base) {
             platesServerLine = '<span class="ds-muted">Server not reachable</span>';
         } else if (plateSCode) {
-            platesServerLine = `Cycle ${plateSCode} &mdash; ${serverStates.length} states &mdash; IAP, DP, STAR, DIAG, A/FD${configureLink}`;
+            platesServerLine = `Cycle ${plateSCode} &mdash; ${serverStates.length} states &mdash; IAP, DP, STAR, DIAG, A/FD pages${configureLink}`;
         } else {
             platesServerLine = `<span class="ds-muted">Unavailable</span>${configureLink}`;
         }
@@ -1012,7 +1012,7 @@ class DataStatus {
             aero:   'Aeronautical Database',
             sec:    'Sectional MBTiles',
             ifr:    'IFR Low MBTiles',
-            plates: 'Approach Plates',
+            plates: 'Approach Plates & A/FD',
         };
 
         const renderSteps = (states) => {

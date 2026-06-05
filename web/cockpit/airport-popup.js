@@ -766,10 +766,9 @@ class AirportPopup {
             containerEl.innerHTML = `
                 <div style="padding:16px;color:var(--text-muted);font-size:13px">
                     <div style="font-weight:600;margin-bottom:8px;color:var(--text-primary)">${icao} — Chart Supplement</div>
-                    <div>A/FD page not yet downloaded for this airport.</div>
+                    <div>A/FD page not available for this airport.</div>
                     <div style="margin-top:8px;font-size:11px;color:var(--text-dim)">
-                        Download via Pre-Flight Refresh when connected to the Pi.<br>
-                        Coverage: NC, SC, VA, GA, TN and surrounding states.
+                        Sync approach plates from the home server to download A/FD pages.
                     </div>
                 </div>`;
         };
@@ -876,7 +875,7 @@ class AirportPopup {
             if (!plates.length) {
                 containerEl.innerHTML = `<div style="padding:16px;color:var(--text-muted);font-size:13px">
                     No instrument procedures found for ${icao}.<br>
-                    <span style="font-size:11px;color:var(--text-dim)">Download plates via Pre-Flight Refresh to enable this tab.</span>
+                    <span style="font-size:11px;color:var(--text-dim)">Sync approach plates from the home server to enable this tab.</span>
                 </div>`;
                 return;
             }
@@ -984,7 +983,7 @@ class AirportPopup {
                 const typeLabel = plateType === 'APD' ? 'Airport Diagram' : 'Airport Information';
                 const hint = plateType === 'APD'
                     ? 'Not all airports have FAA-published diagrams. Diagrams are typically published for towered and busier airports.'
-                    : 'Download plates via Pre-Flight Refresh to enable this tab.';
+                    : 'Sync approach plates from the home server to enable this tab.';
                 containerEl.innerHTML = `<div style="padding:16px;color:var(--text-muted);font-size:13px">
                     No ${typeLabel} available for ${icao}.<br>
                     <span style="font-size:11px;color:var(--text-dim)">${hint}</span>
