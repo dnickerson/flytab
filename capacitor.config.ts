@@ -6,7 +6,7 @@ const config: CapacitorConfig = {
   webDir: 'web',
   server: {
     androidScheme: 'http',  // Use http://localhost — WebViewAssetLoader intercepts internally, no network cleartext needed
-    cleartext: false,       // Cleartext scoped to LAN addresses via network_security_config.xml
+    cleartext: true,
   },
   plugins: {
     CapacitorHttp: {
