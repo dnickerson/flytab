@@ -22,6 +22,7 @@ class RoutePlannerPanel {
 
         // RoutePlanner instance — built once, reused across plan() calls
         this._planner = null;
+        this._terminalAnalyzer = null;
         this._nasrVersion = '';  // localStorage version at graph-build time
 
         // Planning options (persisted to localStorage)
@@ -368,6 +369,10 @@ class RoutePlannerPanel {
         const start = () => {
             try {
                 this._planner = new window.FlyTabPlanning.RoutePlanner(this._adapters);
+                if (window.FlyTabPlanning.TerminalAnalyzer) {
+                    this._terminalAnalyzer = new window.FlyTabPlanning.TerminalAnalyzer(
+                        this._adapters.aero);
+                }
             } catch (err) {
                 console.warn('[RoutePlannerPanel] planner init failed:', err);
             }
