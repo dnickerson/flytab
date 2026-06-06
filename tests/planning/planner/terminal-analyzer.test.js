@@ -122,3 +122,92 @@ describe('TerminalAnalyzer.analyzeRoute', () => {
         expect(clt.options[clt.options.length - 1].type).toBe('ATC_DIRECT');
     });
 });
+
+describe('TerminalAnalyzer.resolveViaPins', () => {
+    it('returns null when all selections are ATC_DIRECT', async () => {
+        const aero = makeAero({ KLKR, KMHT });
+        const analyzer = new TerminalAnalyzer(aero);
+        const selections = new Map([
+            ['KCLT', { type: 'ATC_DIRECT', waypoints: [] }],
+        ]);
+        const pins = await analyzer.resolveViaPins('KLKR', 'KMHT', selections);
+        expect(pins).toBeNull();
+    });
+
+    it('returns dep pin first and dest pin last', async () => {
+        const aero = makeAero({ KLKR, KMHT });
+        const analyzer = new TerminalAnalyzer(aero);
+        const selections = new Map([
+            ['KCLT', {
+                type: 'T_ROUTE',
+                waypoints: [{ id: 'SHIPP', lat: 35.05, lon: -81.20 }],
+            }],
+        ]);
+        const pins = await analyzer.resolveViaPins('KLKR', 'KMHT', selections);
+        expect(pins[0].id).toBe('KLKR');
+        expect(pins[0].lat).toBeCloseTo(35.18, 2);
+        expect(pins[pins.length - 1].id).toBe('KMHT');
+    });
+
+    it('includes all T-route waypoints in order between dep and dest', async () => {
+        const aero = makeAero({ KLKR, KMHT });
+        const analyzer = new TerminalAnalyzer(aero);
+        const selections = new Map([
+            ['KCLT', {
+                type: 'T_ROUTE',
+                waypoints: [
+                    { id: 'SHIPP', lat: 35.05, lon: -81.20 },
+                    { id: 'CLT',   lat: 35.21, lon: -80.94 },
+                    { id: 'KILNS', lat: 35.37, lon: -80.68 },
+                ],
+            }],
+        ]);
+        const pins = await analyzer.resolveViaPins('KLKR', 'KMHT', selections);
+        const ids = pins.map(p => p.id);
+        expect(ids).toEqual(['KLKR', 'SHIPP', 'CLT', 'KILNS', 'KMHT']);
+    });
+
+    it('deduplicates adjacent identical pin IDs', async () => {
+        const aero = makeAero({ KLKR, KMHT });
+        const analyzer = new TerminalAnalyzer(aero);
+        const selections = new Map([
+            ['KCLT', {
+                type: 'AVOIDANCE',
+                waypoints: [
+                    { id: 'ESN', lat: 38.80, lon: -76.07 },
+                    { id: 'ESN', lat: 38.80, lon: -76.07 },
+                ],
+            }],
+        ]);
+        const pins = await analyzer.resolveViaPins('KLKR', 'KMHT', selections);
+        const esnPins = pins.filter(p => p.id === 'ESN');
+        expect(esnPins).toHaveLength(1);
+    });
+
+    it('skips ATC_DIRECT selection but uses T_ROUTE from another terminal area', async () => {
+        const aero = makeAero({ KLKR, KMHT });
+        const analyzer = new TerminalAnalyzer(aero);
+        const selections = new Map([
+            ['KCLT', { type: 'T_ROUTE',   waypoints: [{ id: 'SHIPP', lat: 35.05, lon: -81.20 }] }],
+            ['KBWI', { type: 'ATC_DIRECT', waypoints: [] }],
+        ]);
+        const pins = await analyzer.resolveViaPins('KLKR', 'KMHT', selections);
+        expect(pins).not.toBeNull();
+        const ids = pins.map(p => p.id);
+        expect(ids).toContain('SHIPP');
+        expect(ids).not.toContain('KBWI');
+    });
+
+    it('sorts via-pins in dep→dest along-track order', async () => {
+        // ESN (BWI avoidance, lat≈38.8) should come after SHIPP (CLT T-route, lat≈35.05)
+        const aero = makeAero({ KLKR, KMHT });
+        const analyzer = new TerminalAnalyzer(aero);
+        const selections = new Map([
+            ['KBWI', { type: 'AVOIDANCE', waypoints: [{ id: 'ESN',   lat: 38.80, lon: -76.07 }] }],
+            ['KCLT', { type: 'T_ROUTE',   waypoints: [{ id: 'SHIPP', lat: 35.05, lon: -81.20 }] }],
+        ]);
+        const pins = await analyzer.resolveViaPins('KLKR', 'KMHT', selections);
+        const ids = pins.map(p => p.id);
+        expect(ids.indexOf('SHIPP')).toBeLessThan(ids.indexOf('ESN'));
+    });
+});

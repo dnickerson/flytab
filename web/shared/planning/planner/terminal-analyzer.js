@@ -249,4 +249,54 @@ export class TerminalAnalyzer {
 
         return options;
     }
+
+    /**
+     * Convert pilot selections into an ordered pin array for planVia().
+     * Skips ATC_DIRECT selections. Returns null if all selections are ATC_DIRECT.
+     *
+     * @param {string} depId
+     * @param {string} destId
+     * @param {Map<string, {type:string, waypoints:Array<{id:string,lat:number,lon:number}>}>} selections
+     * @returns {Promise<Array<{id:string,lat:number,lon:number}>|null>}
+     */
+    async resolveViaPins(depId, destId, selections) {
+        const [dep, dest] = await Promise.all([
+            this._aero.getAirport(depId),
+            this._aero.getAirport(destId),
+        ]);
+
+        // Collect groups of waypoints from non-ATC_DIRECT selections, preserving
+        // intra-group order. Each group is sorted by distance of its first fix from
+        // departure so that groups from different terminal areas appear in dep→dest order.
+        const groups = [];
+        for (const [, option] of selections) {
+            if (option.type === 'ATC_DIRECT') continue;
+            const wpts = option.waypoints ?? [];
+            if (wpts.length === 0) continue;
+            const anchorDist = haversine(dep.lat, dep.lon, wpts[0].lat, wpts[0].lon);
+            groups.push({ anchorDist, wpts });
+        }
+
+        if (groups.length === 0) return null;
+
+        // Sort groups by distance of their first waypoint from departure
+        groups.sort((a, b) => a.anchorDist - b.anchorDist);
+
+        // Flatten groups into a single sequence
+        const rawPins = groups.flatMap(g => g.wpts);
+
+        // Deduplicate adjacent identical fix IDs
+        const deduped = [rawPins[0]];
+        for (let i = 1; i < rawPins.length; i++) {
+            if (rawPins[i].id !== deduped[deduped.length - 1].id) {
+                deduped.push(rawPins[i]);
+            }
+        }
+
+        return [
+            { id: depId,  lat: dep.lat,  lon: dep.lon  },
+            ...deduped,
+            { id: destId, lat: dest.lat, lon: dest.lon },
+        ];
+    }
 }
