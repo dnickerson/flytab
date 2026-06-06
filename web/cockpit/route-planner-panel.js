@@ -1181,6 +1181,127 @@ class RoutePlannerPanel {
         this._popupOverlay?.classList.remove('open');
     }
 
+    /**
+     * Show the terminal area routing wizard.
+     * Returns a Map<icao, option> of pilot selections, or null if cancelled.
+     * @param {object[]} terminalAreas
+     * @returns {Promise<Map<string,object>|null>}
+     */
+    _showTerminalWizard(terminalAreas) {
+        return new Promise((resolve) => {
+            let pageIdx = 0;
+
+            // Pre-select recommended option for each terminal area
+            const selections = {};
+            for (const ta of terminalAreas) {
+                selections[ta.icao] = ta.options.find(o => o.recommended) || ta.options[0];
+            }
+
+            const overlay = document.createElement('div');
+            overlay.className = 'rpp-wizard-overlay';
+
+            const card = document.createElement('div');
+            card.className = 'rpp-wizard-card';
+            overlay.appendChild(card);
+
+            const done = (result) => {
+                overlay.remove();
+                resolve(result);
+            };
+
+            const render = () => {
+                card.innerHTML = '';
+                const ta    = terminalAreas[pageIdx];
+                const total = terminalAreas.length;
+                const isLast = pageIdx === total - 1;
+
+                // Header
+                const hdr = document.createElement('div');
+                hdr.className = 'rpp-wizard-hdr';
+                const hdrTitle = document.createElement('div');
+                hdrTitle.className = 'rpp-wizard-title';
+                hdrTitle.textContent = `CLASS B: ${ta.name}`;
+                const hdrPage = document.createElement('div');
+                hdrPage.className = 'rpp-wizard-pager';
+                hdrPage.textContent = total > 1 ? `${pageIdx + 1} of ${total}` : '';
+                hdr.appendChild(hdrTitle);
+                hdr.appendChild(hdrPage);
+                card.appendChild(hdr);
+
+                // Subtitle
+                const sub = document.createElement('div');
+                sub.className = 'rpp-wizard-sub';
+                sub.textContent = `Route passes ${ta.distFromTrack}nm from track`;
+                card.appendChild(sub);
+
+                // Options
+                const optList = document.createElement('div');
+                optList.className = 'rpp-wizard-opts';
+
+                for (const opt of ta.options) {
+                    const isSelected = (opt === selections[ta.icao]);
+                    const row = document.createElement('div');
+                    row.className = 'rpp-wizard-opt-row' + (isSelected ? ' rpp-wizard-opt-selected' : '');
+
+                    const radio = document.createElement('div');
+                    radio.className = 'rpp-wizard-radio';
+                    radio.textContent = isSelected ? '◉' : '○';
+
+                    const text = document.createElement('div');
+                    text.className = 'rpp-wizard-opt-text';
+
+                    const lbl = document.createElement('div');
+                    lbl.className = 'rpp-wizard-opt-label';
+                    lbl.textContent = opt.label + (opt.recommended ? ' ★' : '');
+
+                    const desc = document.createElement('div');
+                    desc.className = 'rpp-wizard-opt-desc';
+                    desc.textContent = opt.description;
+
+                    text.appendChild(lbl);
+                    text.appendChild(desc);
+                    row.appendChild(radio);
+                    row.appendChild(text);
+                    optList.appendChild(row);
+
+                    wireTap(row, () => {
+                        selections[ta.icao] = opt;
+                        render();
+                    });
+                }
+                card.appendChild(optList);
+
+                // Footer
+                const footer = document.createElement('div');
+                footer.className = 'rpp-wizard-footer';
+
+                const cancelBtn = document.createElement('button');
+                cancelBtn.className = 'rpp-wizard-btn rpp-wizard-btn-cancel';
+                cancelBtn.textContent = 'Cancel';
+                wireTap(cancelBtn, () => done(null));
+
+                const continueBtn = document.createElement('button');
+                continueBtn.className = 'rpp-wizard-btn rpp-wizard-btn-primary';
+                continueBtn.textContent = isLast ? 'Plan Route' : 'Continue →';
+                wireTap(continueBtn, () => {
+                    if (isLast) {
+                        done(new Map(Object.entries(selections)));
+                    } else {
+                        pageIdx++;
+                        render();
+                    }
+                });
+
+                footer.appendChild(cancelBtn);
+                footer.appendChild(continueBtn);
+                card.appendChild(footer);
+            };
+
+            render();
+            this._el.appendChild(overlay);
+        });
+    }
+
     _buildAddRow() {
         const row = document.createElement('div');
         row.className = 'rpp-add-row';
