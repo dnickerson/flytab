@@ -58,6 +58,8 @@ class RoutePlannerPanel {
 
         this._reserveInput = null;
         this._modeSel      = null;
+        this._terminalRouting = 'off';
+        this._terminalSel     = null;
         this._statsEl      = null;
         this._warnStripEl  = null;
 
@@ -247,6 +249,7 @@ class RoutePlannerPanel {
             if (saved.reserveGal    != null) this._reserveGal    = saved.reserveGal;
             if (saved.compactView   != null) this._compactView   = saved.compactView;
             if (saved.routingMode   != null) this._routingMode   = saved.routingMode;
+            if (saved.terminalRouting != null) this._terminalRouting = saved.terminalRouting;
             if (Array.isArray(saved.avoidList)) this._avoidList  = saved.avoidList;
             if (saved.departureTime) this._departureTime = new Date(saved.departureTime);
             if (saved.cruiseAltFt  != null) {
@@ -271,6 +274,7 @@ class RoutePlannerPanel {
                 reserveGal:    this._reserveGal,
                 compactView:   this._compactView,
                 routingMode:   this._routingMode,
+                terminalRouting: this._terminalRouting,
                 avoidList:     this._avoidList,
                 departureTime: this._departureTime ? this._departureTime.toISOString() : null,
                 cruiseAltFt:   this._cruiseAltFt,
@@ -1108,6 +1112,16 @@ class RoutePlannerPanel {
         pairRow.appendChild(rightCell);
         body.appendChild(pairRow);
 
+        this._terminalSel = mkSel([
+            ['off',      'Off'],
+            ['t-routes', 'T-routes'],
+        ], this._terminalRouting);
+        this._terminalSel.addEventListener('change', () => {
+            this._terminalRouting = this._terminalSel.value;
+            this._saveOpts();
+        });
+        body.appendChild(mkRow('Terminal areas', this._terminalSel));
+
         popup.appendChild(body);
 
         // Footer: Plan Route | Done
@@ -1149,6 +1163,7 @@ class RoutePlannerPanel {
         if (this._altSel) this._altSel.value = this._cruiseAltFt ? String(this._cruiseAltFt) : '';
         if (this._pwrSel) this._pwrSel.value = String(this._pctPower);
         if (this._modeSel) this._modeSel.value = this._routingMode;
+        if (this._terminalSel) this._terminalSel.value = this._terminalRouting;
         if (this._reserveInput) this._reserveInput.value = this._reserveGal;
         this._popupOpenedAt = Date.now();
         this._popupOverlay?.classList.add('open');
