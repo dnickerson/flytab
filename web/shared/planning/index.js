@@ -8,6 +8,7 @@ if (typeof window !== 'undefined') {
 }
 
 export { RoutePlanner } from './planner/route-planner.js';
+export { TerminalAnalyzer } from './planner/terminal-analyzer.js';
 export { Optimizer }    from './planner/optimizer.js';
 export { AirwayGraph }  from './planner/airway-graph.js';
 export { parseRouteString } from './planner/parser.js';
@@ -37,13 +38,15 @@ if (typeof window !== 'undefined') {
         import('./math/engine-data.js'),
         import('./math/fuel-phases.js'),
         import('./planner/winds-interpolator.js'),
-    ]).then(([rp, op, ag, ps, errs, av, rm, ed, fp, wi]) => {
+        import('./planner/terminal-analyzer.js'),
+    ]).then(([rp, op, ag, ps, errs, av, rm, ed, fp, wi, ta]) => {
         // @ts-ignore - augment window
         window.FlyTabPlanning = {
             VERSION,
-            RoutePlanner: rp.RoutePlanner,
-            Optimizer:    op.Optimizer,
-            AirwayGraph:  ag.AirwayGraph,
+            RoutePlanner:     rp.RoutePlanner,
+            Optimizer:        op.Optimizer,
+            AirwayGraph:      ag.AirwayGraph,
+            TerminalAnalyzer: ta.TerminalAnalyzer,
             parseRouteString: ps.parseRouteString,
             ...errs, ...av, ...rm, ...ed, ...fp, ...wi,
         };
