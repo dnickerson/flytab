@@ -2138,19 +2138,46 @@ class RoutePlannerPanel {
             return;
         }
 
+        // Terminal area pre-step — only when opt-in enabled and analyzer ready
+        let viaPins = null;
+        if (this._terminalRouting === 't-routes' && this._terminalAnalyzer) {
+            let analysis = { hasTerminalAreas: false };
+            try {
+                analysis = await this._terminalAnalyzer.analyzeRoute(dep, dest);
+            } catch (err) {
+                console.warn('[RoutePlannerPanel] terminal analysis failed, falling back to plan():', err);
+            }
+            if (analysis.hasTerminalAreas) {
+                const sel = await this._showTerminalWizard(analysis.terminalAreas);
+                if (sel !== null) {
+                    viaPins = await this._terminalAnalyzer.resolveViaPins(dep, dest, sel);
+                }
+            }
+        }
+
         this._toast('Planning route…', 0);
         try {
-            const result = await this._planner.plan({
-                departure:     dep,
-                destination:   dest,
-                cruiseAltFt:   this._altitude,
-                reserveGal:    this._reserveGal,
-                maxLegHrs:     this._maxLegHrs,
-                selfServeOnly: this._selfServeOnly,
-                avoidance:     this._avoidList.slice(),
-                routingMode:   this._routingMode,
-                winds:         this._lastWinds ?? undefined,
-            });
+            const result = viaPins
+                ? await this._planner.planVia(viaPins, {
+                    cruiseAltFt:   this._altitude,
+                    reserveGal:    this._reserveGal,
+                    maxLegHrs:     this._maxLegHrs,
+                    selfServeOnly: this._selfServeOnly,
+                    avoidance:     this._avoidList.slice(),
+                    routingMode:   this._routingMode,
+                    winds:         this._lastWinds ?? undefined,
+                })
+                : await this._planner.plan({
+                    departure:     dep,
+                    destination:   dest,
+                    cruiseAltFt:   this._altitude,
+                    reserveGal:    this._reserveGal,
+                    maxLegHrs:     this._maxLegHrs,
+                    selfServeOnly: this._selfServeOnly,
+                    avoidance:     this._avoidList.slice(),
+                    routingMode:   this._routingMode,
+                    winds:         this._lastWinds ?? undefined,
+                });
 
             // Cache all fix coordinates returned by the planner
             if (result.waypoints) {
