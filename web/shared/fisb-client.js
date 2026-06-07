@@ -325,7 +325,8 @@ class FisbClient extends EventTarget {
     }
 
     _handleCwa(raw, now) {
-        const entry = { raw, received_at: now };
+        const points = this._extractPolygonPoints(raw);
+        const entry = { raw, points, received_at: now };
         this.cwas.push(entry);
         this.dispatchEvent(new CustomEvent('fisb:cwa', { detail: entry }));
     }

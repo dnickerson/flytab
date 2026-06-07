@@ -11497,3 +11497,8 @@ body.route-editing-mode #cockpitView {
     color: #fff;
 }
 
+.cwa-popup .leaflet-popup-close-button {
+    width: 44px !important; height: 44px !important;
+    font-size: 28px !important; line-height: 44px !important;
+}
+

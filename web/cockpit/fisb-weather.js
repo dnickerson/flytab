@@ -31,6 +31,8 @@ class FisbWeatherDisplay {
         this._airmetOtherLayer  = L.layerGroup(); // Unclassified
         this._windsLayer = L.layerGroup();
         this._notamLayer = L.layerGroup();
+        this._cwaLayer    = L.layerGroup();
+        this._cwaPolygons = [];  // { polygon, advisory, received_at }
         this._pirepMarkers = [];   // { marker, received_at }
         this._sigmetPolygons = []; // { polygon, received_at, expires_at, type }
         this._airmetPolygons = []; // { polygon, received_at, expires_at }
@@ -111,6 +113,7 @@ class FisbWeatherDisplay {
         document.body.appendChild(this._alertContainer);
 
         this._notamLayer.addTo(this._map);
+        this._cwaLayer.addTo(this._map);
 
         this._fisb.addEventListener('fisb:pirep',  this._onPirep);
         this._fisb.addEventListener('fisb:sigmet', this._onSigmet);
@@ -166,6 +169,8 @@ class FisbWeatherDisplay {
         if (this._map.hasLayer(this._airmetOtherLayer))  this._map.removeLayer(this._airmetOtherLayer);
         if (this._map.hasLayer(this._windsLayer)) this._map.removeLayer(this._windsLayer);
         if (this._map.hasLayer(this._notamLayer)) this._map.removeLayer(this._notamLayer);
+        if (this._map && this._cwaLayer) this._map.removeLayer(this._cwaLayer);
+        this._cwaPolygons = [];
         this._pirepMarkers = [];
         this._sigmetPolygons = [];
         this._airmetPolygons = [];
@@ -374,6 +379,7 @@ class FisbWeatherDisplay {
         const allPolygons = [
             ...(this._map.hasLayer(this._sigmetLayer) ? this._sigmetPolygons : []),
             ...this._airmetPolygons.filter(e => !e.isLine && e.layer && this._map.hasLayer(e.layer)),
+            ...(this._map.hasLayer(this._cwaLayer) ? this._cwaPolygons : []),
         ];
         if (!allPolygons.length) return;
 
@@ -863,6 +869,25 @@ class FisbWeatherDisplay {
 
     _showCwaAlert(cwa) {
         this._showAlert(`CWA: ${cwa.raw.slice(0, 100)}`, 'amber', 30000);
+
+        if (!cwa.points || cwa.points.length < 3) return;
+
+        const polygon = L.polygon(cwa.points, {
+            color: '#ff6600',
+            weight: 2,
+            fillColor: '#ff6600',
+            fillOpacity: 0.18,
+        });
+        polygon.bindPopup(
+            `<div style="font-family:var(--font-ui);max-width:320px">
+                <div style="font-weight:800;color:var(--text-secondary);margin-bottom:4px">CWA</div>
+                <div style="font-size:0.85rem;color:var(--text-primary);white-space:pre-wrap">${FisbWeatherDisplay._esc(cwa.raw)}</div>
+                <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">Rcvd ${new Date(cwa.received_at).toISOString().slice(11, 16)}Z</div>
+            </div>`,
+            { minWidth: 300, maxWidth: 380, className: 'cwa-popup' }
+        );
+        polygon.addTo(this._cwaLayer);
+        this._cwaPolygons.push({ polygon, advisory: cwa, received_at: cwa.received_at });
     }
 
     /** Toast with 30-minute de-duplication. rawKey is the raw text used for dedup (key = first 40 chars). */
@@ -949,6 +974,15 @@ class FisbWeatherDisplay {
             if (expired || tooOld) {
                 entry.layer?.removeLayer(entry.polygon);
                 if (entry.rawKey) this._seenAdvisoryKeys.delete(entry.rawKey);
+                return false;
+            }
+            return true;
+        });
+
+        // Expired CWAs (2-hour window)
+        this._cwaPolygons = this._cwaPolygons.filter(entry => {
+            if (now - entry.received_at > 2 * 3600000) {
+                this._cwaLayer.removeLayer(entry.polygon);
                 return false;
             }
             return true;
