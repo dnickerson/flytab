@@ -81,19 +81,35 @@ class FisbLogger {
     }
 
     async _stop(detail) {
-        if (!this._recording) return;
+        const csvFilename = detail?.csvFilename;
+
+        if (!this._recording) {
+            // Already stopped — but if we still have a temp file and now get the real csvFilename, rename it.
+            if (csvFilename && this._fileName) {
+                const newName = csvFilename.replace(/\.csv$/, '_weather.ndjson');
+                if (newName !== this._fileName) await this._rename(newName);
+                if (typeof DiagLog !== 'undefined') DiagLog.log('fisb-logger', `Renamed (deferred): ${newName}`);
+                this._fileName = null;
+                this._t0 = null;
+            }
+            return;
+        }
+
         this._recording = false;
         if (this._flushInterval) { clearInterval(this._flushInterval); this._flushInterval = null; }
         this._stopListeners();
         await this._flush();
-        const csvFilename = detail?.csvFilename;
+
         if (csvFilename && this._fileName) {
             const newName = csvFilename.replace(/\.csv$/, '_weather.ndjson');
             if (newName !== this._fileName) await this._rename(newName);
+            this._fileName = null;
+            this._t0 = null;
         }
-        if (typeof DiagLog !== 'undefined') DiagLog.log('fisb-logger', `Stopped: ${this._fileName}`);
-        this._fileName = null;
-        this._t0 = null;
+        // If no csvFilename: _fileName stays alive so the deferred rename can happen
+        // when flight-recorder.js fires the second stop with the real filename.
+        // _start() overwrites _fileName on the next flight start regardless.
+        if (typeof DiagLog !== 'undefined') DiagLog.log('fisb-logger', `Stopped: ${this._fileName ?? 'pending rename'}`);
     }
 
     _t(now) { return Math.floor(((now || Date.now()) - this._t0) / 1000); }
