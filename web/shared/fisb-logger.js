@@ -5,6 +5,7 @@
 class FisbLogger {
     static LOCAL_BASE = 'http://localhost:9090';
     static FLIGHTS_PATH = 'flights';
+    static WINDS_BATCH_MS = 3000;  // log only winds received in the last 3s (current FIS-B batch)
 
     constructor(fisbClient) {
         this._fisb = fisbClient;
@@ -197,8 +198,9 @@ class FisbLogger {
 
     _logWindsSnapshot() {
         if (!this._recording) return;
+        if (!this._fisb?.winds) return;
         const now = Date.now();
-        const cutoff = now - 3000; // only log entries updated in the last 3s (current batch)
+        const cutoff = now - FisbLogger.WINDS_BATCH_MS;
         for (const w of this._fisb.winds.values()) {
             if ((w.received_at || 0) < cutoff) continue;
             this._append({
