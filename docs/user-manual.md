@@ -426,6 +426,14 @@ Entries are created automatically at the end of each flight when recording is ac
 
 Recording stops automatically 60 seconds after engine shutdown (RPM ≤ 100). If the tablet screen turns off or the app is backgrounded while the engine is already off, the recording finalizes immediately so no data is lost.
 
+### Weather Recording
+
+When a flight is recorded, FlyTab simultaneously logs all FIS-B weather events to a companion file named `YYYYMMDD_HHMMZ_weather.ndjson` (e.g. `20260607_1430Z_weather.ndjson`). The file captures NEXRAD blocks, METARs, PIREPs, SIGMETs, AIRMETs, winds aloft, and NOTAMs received during the flight. At engine-off, the file is renamed to match the engine CSV (e.g. `20260607_KLKR-KFDK_weather.ndjson`).
+
+This file is available for post-flight review in fly-debrief as a weather replay layer — scrub through the flight to see what weather looked like at each point in time.
+
+**CWA polygons** — Center Weather Advisories issued during the flight appear as orange polygons on the map when the SIGMETs/AIRMETs overlay is enabled.
+
 **MORE → Flight Upload** syncs entries to the cloud.
 
 ---

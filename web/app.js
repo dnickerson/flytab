@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v9.59';
+const FLYTAB_VERSION = 'v9.60';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -77,6 +77,7 @@ class FlyTabApp {
         this.fisbClient = null;
         this.fisbNexrad = null;
         this.fisbWeather = null;
+        this.fisbLogger = null;
 
         // v5 UI components
         this.instrumentStrip = null;
@@ -746,6 +747,12 @@ class FlyTabApp {
             this.fisbStatus = new FisbStatus(this.stratuxClient, this.fisbClient);
         }
 
+        // FIS-B Logger — persists weather events to _weather.ndjson alongside engine CSV
+        if (typeof FisbLogger !== 'undefined' && this.fisbClient) {
+            this.fisbLogger = new FisbLogger(this.fisbClient);
+            this.fisbLogger.init();
+        }
+
         // Lightning strikes (Blitzortung WebSocket)
         if (typeof LightningLayer !== 'undefined') {
             this.lightning = new LightningLayer();
@@ -1397,7 +1404,10 @@ class FlyTabApp {
         };
         updateClock();
         this._clockInterval = setInterval(updateClock, 10000);
-        window.addEventListener('beforeunload', () => clearInterval(this._clockInterval));
+        window.addEventListener('beforeunload', () => {
+            clearInterval(this._clockInterval);
+            if (this.fisbLogger) { this.fisbLogger.destroy(); this.fisbLogger = null; }
+        });
     }
 
     // === Aircraft Config Sync ==========
