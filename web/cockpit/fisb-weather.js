@@ -169,6 +169,7 @@ class FisbWeatherDisplay {
         if (this._map.hasLayer(this._airmetOtherLayer))  this._map.removeLayer(this._airmetOtherLayer);
         if (this._map.hasLayer(this._windsLayer)) this._map.removeLayer(this._windsLayer);
         if (this._map.hasLayer(this._notamLayer)) this._map.removeLayer(this._notamLayer);
+        this._cwaLayer.clearLayers();
         if (this._map && this._cwaLayer) this._map.removeLayer(this._cwaLayer);
         this._cwaPolygons = [];
         this._pirepMarkers = [];
@@ -485,6 +486,18 @@ class FisbWeatherDisplay {
         const esc = FisbWeatherDisplay._esc;
         const until = FisbWeatherDisplay._fmtLocalHM(adv.expires_at);
 
+        if (entry.type === 'cwa') {
+            const preview = esc((adv.raw || '').slice(0, 80));
+            const rcvd = FisbWeatherDisplay._fmtLocalHM(entry.received_at || adv.received_at);
+            return `<div class="adv-tap-row">
+                <span class="adv-tap-badge cwa">CWA</span>
+                <div class="adv-tap-detail">
+                    <div class="adv-tap-raw">${preview}</div>
+                    <div class="adv-tap-valid">Rcvd ${esc(rcvd)}</div>
+                </div>
+            </div>`;
+        }
+
         if (FisbWeatherDisplay._isSigmetType(entry.type)) {
             const badge = entry.type === 'convective' ? 'CONV SIGMET' : 'SIGMET';
             return `<div class="adv-tap-row sigmet-row">
@@ -768,7 +781,7 @@ class FisbWeatherDisplay {
     _updateAdvisoryBadge() {
         const el = document.getElementById('statusAdvisory');
         if (!el) return;
-        const count = this._sigmetPolygons.length + this._airmetPolygons.length;
+        const count = this._sigmetPolygons.length + this._airmetPolygons.length + this._cwaPolygons.length;
         if (count === 0) {
             el.hidden = true;
         } else {
@@ -887,7 +900,7 @@ class FisbWeatherDisplay {
             { minWidth: 300, maxWidth: 380, className: 'cwa-popup' }
         );
         polygon.addTo(this._cwaLayer);
-        this._cwaPolygons.push({ polygon, advisory: cwa, received_at: cwa.received_at });
+        this._cwaPolygons.push({ polygon, advisory: cwa, received_at: cwa.received_at, type: 'cwa' });
     }
 
     /** Toast with 30-minute de-duplication. rawKey is the raw text used for dedup (key = first 40 chars). */
