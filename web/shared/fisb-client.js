@@ -99,7 +99,7 @@ class FisbClient extends EventTarget {
 
     // ========== Weather Message Handling ==========
 
-    _handleWeather(msg) {
+    async _handleWeather(msg) {
         if (!msg || !msg.Type || !msg.Data) return;
 
         const type = msg.Type.toUpperCase();
@@ -112,7 +112,7 @@ class FisbClient extends EventTarget {
         } else if (type === 'TAF') {
             this._handleTaf(data, location, now);
         } else if (type === 'PIREP' || type === 'UA' || type === 'UUA') {
-            this._handlePirep(data, location, now, type === 'UUA');
+            await this._handlePirep(data, location, now, type === 'UUA');
         } else if (type === 'SIGMET' || type === 'CONVECTIVE SIGMET') {
             this._handleSigmet(data, location, now, type);
         } else if (type === 'AIRMET') {
