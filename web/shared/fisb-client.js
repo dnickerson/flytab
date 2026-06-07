@@ -114,9 +114,9 @@ class FisbClient extends EventTarget {
         } else if (type === 'PIREP' || type === 'UA' || type === 'UUA') {
             await this._handlePirep(data, location, now, type === 'UUA');
         } else if (type === 'SIGMET' || type === 'CONVECTIVE SIGMET') {
-            this._handleSigmet(data, location, now, type);
+            await this._handleSigmet(data, location, now, type);
         } else if (type === 'AIRMET') {
-            this._handleAirmet(data, location, now);
+            await this._handleAirmet(data, location, now);
         } else if (type === 'WINDS' || type === 'FD') {
             this._handleWinds(data, now);
         } else if (type === 'CWA') {
