@@ -254,6 +254,7 @@ class FisbNexrad {
 
     /** Take a snapshot of current NEXRAD state for radar loop */
     _takeSnapshot(time, dataTime) {
+        if (this._blocks.size === 0) return;    // skip empty snapshots
         const snapshot = new Map();
         for (const [key, block] of this._blocks) {
             snapshot.set(key, { ...block, intensity: block.intensity.slice() });
@@ -363,6 +364,12 @@ class FisbNexrad {
 
     _purgeOld() {
         const cutoff = Date.now() - 15 * 60000; // 15 minutes
+        const now = Date.now();
+        // If every block is about to be purged and we have some, snapshot first
+        // so the IDB always has at least one non-empty frame from each reception window.
+        const allExpired = this._blocks.size > 0 &&
+            [...this._blocks.values()].every(b => b.received_at < cutoff);
+        if (allExpired) this._takeSnapshot(now, now);
         for (const [key, block] of this._blocks) {
             if (block.received_at < cutoff) this._blocks.delete(key);
         }
