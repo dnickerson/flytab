@@ -424,6 +424,8 @@ The **FUEL** field in the nav strip shows total fuel remaining and projected end
 
 Entries are created automatically at the end of each flight when recording is active. The **REC** badge in the status bar shows recording state. You can edit any entry after the fact.
 
+Recording stops automatically 60 seconds after engine shutdown (RPM ≤ 100). If the tablet screen turns off or the app is backgrounded while the engine is already off, the recording finalizes immediately so no data is lost.
+
 **MORE → Flight Upload** syncs entries to the cloud.
 
 ---

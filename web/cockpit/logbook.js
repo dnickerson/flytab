@@ -45,8 +45,14 @@ class Logbook {
         this._el.classList.add('visible');
         this._visible = true;
         this._setMapControlsVisible(false);
-        // Fetch from server in background, then render
-        this._fetchFromServer().finally(() => this._showActiveTab());
+        // Fetch from server in background, then render.
+        // Guard: if a sync is already in progress, skip the fetch to avoid two
+        // concurrent reconciliation passes writing against the same IDB store.
+        if (this._syncInProgress) {
+            this._showActiveTab();
+        } else {
+            this._fetchFromServer().finally(() => this._showActiveTab());
+        }
     }
 
     hide() {
@@ -62,13 +68,6 @@ class Logbook {
     _setMapControlsVisible(visible) {
         document.querySelectorAll('.leaflet-control-container')
             .forEach(c => c.style.display = visible ? '' : 'none');
-    }
-
-    _debriefUrl(entry) {
-        const cfg = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.get('debriefServer') : {};
-        const base = cfg?.base;
-        if (!base || !entry.csvFilename) return null;
-        return `${base}/?file=${encodeURIComponent(entry.csvFilename)}`;
     }
 
     _buildDOM() {
@@ -179,7 +178,6 @@ class Logbook {
             const sourceLabel = isDraft ? 'DRAFT' : (e.source === 'flypi' ? 'AUTO' : '');
             const syncDot = e.synced ? '' : '<span class="logbook-unsync-dot"></span>';
 
-            const debriefUrl = this._debriefUrl(e);
             return `<div class="logbook-entry ${isDraft ? 'logbook-draft' : ''}" data-id="${e.id}">
                 <span class="logbook-date">${e.date}</span>${syncDot}
                 <span class="logbook-route">${dep}\u2192${dest}</span>
@@ -188,7 +186,6 @@ class Logbook {
                 ${cond ? `<span class="logbook-detail">${cond}</span>` : ''}
                 ${sourceLabel ? `<span class="logbook-source ${isDraft ? 'logbook-source-draft' : ''}">${sourceLabel}</span>` : ''}
                 <span class="logbook-entry-spacer"></span>
-                ${debriefUrl ? `<button class="logbook-btn logbook-debrief-btn" data-id="${e.id}" data-url="${debriefUrl}">DEBRIEF</button>` : ''}
                 <button class="logbook-btn logbook-edit-btn" data-id="${e.id}">${isDraft ? 'REVIEW' : 'EDIT'}</button>
                 <button class="logbook-btn logbook-delete-btn" data-id="${e.id}">DEL</button>
             </div>`;
@@ -201,19 +198,6 @@ class Logbook {
             wireTap(btn, () => {
                 const entry = entries.find(e => e.id === btn.dataset.id);
                 if (entry) this._showForm(entry);
-            });
-        });
-
-        // Wire debrief buttons
-        this._body.querySelectorAll('.logbook-debrief-btn').forEach(btn => {
-            wireTap(btn, () => {
-                const url = btn.dataset.url;
-                if (!url) return;
-                if (typeof Capacitor !== 'undefined' && Capacitor.Plugins?.App?.openUrl) {
-                    Capacitor.Plugins.App.openUrl({ url });
-                } else {
-                    window.open(url, '_blank');
-                }
             });
         });
 
@@ -639,6 +623,7 @@ class Logbook {
             const store = tx.objectStore(Logbook.IDB_STORE);
 
             return new Promise((resolve, reject) => {
+                tx.onabort = () => { db.close(); reject(tx.error || new Error('IDB transaction aborted')); };
                 const getReq = store.get(id);
                 getReq.onsuccess = () => {
                     const entry = getReq.result;
@@ -862,7 +847,10 @@ class Logbook {
             // Full-pull reconciliation: remove synced local entries the server no longer has.
             // This catches hard-deleted rows (no tombstone) that would otherwise stay in IDB forever.
             // Only safe on a full pull (since=0) — incremental pulls only see recent changes.
-            if (isFullPull) {
+            // Guard: if the server returned zero entries on a full pull, trust nothing and skip
+            // the reconciliation entirely — an empty response most likely indicates an auth error,
+            // server bug, or network truncation, not that the pilot has no flights.
+            if (isFullPull && entries.length > 0) {
                 for (const local of localAll) {
                     if (local.synced && !local.deleted_at && !serverIdsSeen.has(local.id)) {
                         await this._deleteEntry(local.id);
@@ -1520,7 +1508,8 @@ class Logbook {
 
     _onCaptureStopped(detail = {}) {
         if (typeof DiagLog !== 'undefined') DiagLog.log('logbook', `flightsync:stopped received — csvFilename=${detail.csvFilename}, rows=${detail.rowCount}`);
-        setTimeout(() => {
+
+        const doCreate = () => {
             const csvFilename = detail.csvFilename || null;
             if (!csvFilename) {
                 console.warn('[Logbook] No CSV filename from FlightSync, skipping entry');
@@ -1535,7 +1524,16 @@ class Logbook {
                     console.error('[Logbook] Auto-create failed:', err);
                     if (typeof DiagLog !== 'undefined') DiagLog.log('logbook', `Auto-create FAILED: ${err.message}`);
                 });
-        }, 2000);
+        };
+
+        // When the page is hidden (screen off / app backgrounded), Android throttles
+        // timers — a 2-second setTimeout may be delayed indefinitely before the WebView
+        // is suspended. Skip the delay and write to IDB immediately in that case.
+        if (document.visibilityState === 'hidden') {
+            doCreate();
+        } else {
+            setTimeout(doCreate, 2000);
+        }
     }
 
     // ========== Internal: Helpers ==========
@@ -1612,7 +1610,9 @@ class Logbook {
                     const store = db.createObjectStore('trips', { keyPath: 'id' });
                     store.createIndex('created_at', 'created_at', { unique: false });
                 }
-                for (const name of db.objectStoreNames) {
+                // Snapshot to array first — DOMStringList is a live collection and
+                // deleteObjectStore() shifts indices, causing for...of to skip entries.
+                for (const name of Array.from(db.objectStoreNames)) {
                     if (name === 'flight_recordings' || name === 'flight_csvs') {
                         db.deleteObjectStore(name);
                     }

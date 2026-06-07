@@ -54,6 +54,9 @@ class FlightRecorder {
 
         // Status callback
         this.onStatusChange = null;
+
+        // Visibility-change handler — registered in init(), removed in destroy()
+        this._onVisibilityHidden = null;
     }
 
     get recording() { return this._recording; }
@@ -70,11 +73,38 @@ class FlightRecorder {
     init() {
         // Start auto-monitoring engine RPM
         this._autoMonitorInterval = setInterval(() => this._autoMonitor(), 1000);
+
+        // When the screen turns off or the app is backgrounded, Android throttles
+        // setInterval — the 60-second auto-stop countdown freezes and stop() never
+        // fires. Guard against this: on hide, flush buffered data immediately, and
+        // if the engine-stop countdown is already underway, finalize the recording
+        // now rather than waiting for the throttled timer to complete.
+        this._onVisibilityHidden = () => {
+            if (document.visibilityState !== 'hidden' || !this._recording) return;
+            this._flush().catch(() => {});
+            // Stop immediately if the auto-stop countdown is underway (counter > 0),
+            // OR if the live RPM/GS reading already satisfies the stop condition but
+            // _autoMonitor hasn't fired yet (engine shut down < 1 second ago).
+            const cfg = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.get('flightRecording') : {};
+            const stopThreshold = cfg.rpmStopThreshold ?? 0;
+            const rpm = this._engine?.lastData?.data?.RPM ?? null;
+            const gs  = this._stratux?.situation?.ground_speed ?? null;
+            const engineOff = rpm !== null && rpm <= stopThreshold;
+            const gsStopped = rpm === null && gs !== null && gs < 10;
+            if (this._rpmZeroCount > 0 || this._gsBelowCount > 0 || engineOff || gsStopped) {
+                this.stop();
+            }
+        };
+        document.addEventListener('visibilitychange', this._onVisibilityHidden);
     }
 
     destroy() {
         if (this._autoMonitorInterval) clearInterval(this._autoMonitorInterval);
         if (this._trafficInterval) { clearInterval(this._trafficInterval); this._trafficInterval = null; }
+        if (this._onVisibilityHidden) {
+            document.removeEventListener('visibilitychange', this._onVisibilityHidden);
+            this._onVisibilityHidden = null;
+        }
         if (this._recording) this.stop();
     }
 
@@ -369,8 +399,8 @@ class FlightRecorder {
                             body: trafficData,
                         });
                         await fetch(`${FlightRecorder.LOCAL_BASE}/${oldTrafficPath}`, { method: 'DELETE' });
+                        this._trafficFileName = newTrafficName;
                     }
-                    this._trafficFileName = newTrafficName;   // always sync with CSV name
                 } catch (err) {
                     if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Traffic rename failed: ${err.message}`);
                 }
