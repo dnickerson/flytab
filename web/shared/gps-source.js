@@ -29,6 +29,7 @@ class GpsSource {
         this._onStratuxDisconnect = null;
         this._onStratuxStale = null;
         this._onStratuxConnect = null;
+        this._onStratuxFresh = null;
 
         // If persisted source is 'internal', set suppress flag immediately
         // so no Stratux situation events leak before start() is called.
@@ -96,9 +97,11 @@ class GpsSource {
         this._onStratuxDisconnect = () => this._activateFallback('disconnect');
         this._onStratuxStale      = () => this._activateFallback('stale');
         this._onStratuxConnect    = () => this._deactivateFallback();
+        this._onStratuxFresh      = () => { if (this._inFallback) this._deactivateFallback(); };
         this._stratux.addEventListener('stratux:disconnect', this._onStratuxDisconnect);
         this._stratux.addEventListener('stratux:stale',      this._onStratuxStale);
         this._stratux.addEventListener('stratux:connect',    this._onStratuxConnect);
+        this._stratux.addEventListener('stratux:fresh',      this._onStratuxFresh);
     }
 
     _detachAutoListeners() {
@@ -106,9 +109,11 @@ class GpsSource {
         this._stratux.removeEventListener('stratux:disconnect', this._onStratuxDisconnect);
         this._stratux.removeEventListener('stratux:stale',      this._onStratuxStale);
         this._stratux.removeEventListener('stratux:connect',    this._onStratuxConnect);
+        this._stratux.removeEventListener('stratux:fresh',      this._onStratuxFresh);
         this._onStratuxDisconnect = null;
         this._onStratuxStale      = null;
         this._onStratuxConnect    = null;
+        this._onStratuxFresh      = null;
     }
 
     _activateFallback(reason) {
