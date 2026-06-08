@@ -4,7 +4,7 @@
  * No HTTPS proxy — Android connects directly via HTTP/WS to Stratux.
  * Auto-reconnect with exponential backoff.
  * Fires DOM events: stratux:traffic, stratux:situation, stratux:connect, stratux:disconnect,
- *   stratux:weather, stratux:nexrad, stratux:fisb-frame
+ *   stratux:stale, stratux:fresh, stratux:weather, stratux:nexrad, stratux:fisb-frame
  *
  * Transport: prefers the native StratuxWS Capacitor plugin (OkHttp under the hood,
  * with TCP keepalive and WebSocket protocol-level pings). Falls back to the
@@ -339,6 +339,16 @@ class StratuxClient extends EventTarget {
     }
 
     _handleSituation(msg) {
+        // Always reset stale timer first — even during GPS suppression — so a Stratux
+        // power-off/restart recovers without requiring a full WebSocket connect cycle.
+        const wasStale = this._stale;
+        this._stale = false;
+        clearTimeout(this._staleTimer);
+        this._staleTimer = setTimeout(() => {
+            this._stale = true;
+            this.dispatchEvent(new CustomEvent('stratux:stale', { detail: { ageMs: 5000 } }));
+        }, 5000);
+
         // When internal GPS is active, only extract AHRS data from Stratux —
         // do NOT overwrite situation or dispatch event (GpsSource handles that).
         if (this._suppressGpsSituation) {
@@ -350,6 +360,12 @@ class StratuxClient extends EventTarget {
                 g_load_min: msg.AHRSGLoadMin,
                 g_load_max: msg.AHRSGLoadMax,
             };
+            // Stratux data resumed after a stale period while still connected —
+            // fire stratux:fresh so GpsSource can deactivate the GPS fallback.
+            if (wasStale && this._connected) {
+                if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', 'stratux:fresh — data resumed after stale while connected');
+                this.dispatchEvent(new CustomEvent('stratux:fresh'));
+            }
             return;
         }
 
@@ -372,7 +388,6 @@ class StratuxClient extends EventTarget {
             g_load_max: msg.AHRSGLoadMax,
             timestamp: Date.now(),
         };
-        // Log first situation or fix quality changes
         if (typeof DiagLog !== 'undefined') {
             if (prevQuality === undefined) {
                 DiagLog.log('stratux', `First situation: fix=${msg.GPSFixQuality} lat=${msg.GPSLatitude} lon=${msg.GPSLongitude} sats=${msg.GPSSatellites}/${msg.GPSSatellitesSeen}`);
@@ -381,14 +396,7 @@ class StratuxClient extends EventTarget {
             }
         }
         this.dispatchEvent(new CustomEvent('stratux:situation', { detail: this.situation }));
-
-        // Reset stale timer — data is fresh
-        this._stale = false;
-        clearTimeout(this._staleTimer);
-        this._staleTimer = setTimeout(() => {
-            this._stale = true;
-            this.dispatchEvent(new CustomEvent('stratux:stale', { detail: { ageMs: 5000 } }));
-        }, 5000);
+        // stale timer already reset at top of this function
     }
 
     // ========== Device Status Polling ==========
@@ -488,10 +496,7 @@ class StratuxClient extends EventTarget {
 
     /** Reconnect only the traffic WS — don't tear down situation/weather/jsonio */
     _scheduleTrafficReconnect() {
-        // Only mark disconnected if situation WS is also down
-        if (!this._situationWs || this._situationWs.readyState !== WebSocket.OPEN) {
-            this._setConnected(false);
-        }
+        this._setConnected(false);
         if (this._reconnectTimer) return;
         this._reconnectTimer = setTimeout(() => {
             this._reconnectTimer = null;
