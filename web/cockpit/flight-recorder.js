@@ -204,9 +204,13 @@ class FlightRecorder {
         const sit = this._stratux?.situation;
         const d = eng?.data || {};
 
-        // Require at least a GPS fix or engine data to write a row
-        const hasGps = sit?.lat && sit?.lon && (sit?.gps_fix_quality > 0);
-        const hasEngine = !!eng;
+        // Require at least a GPS fix or engine data to write a row.
+        // Use freshness checks — lastData and situation are never nulled on disconnect
+        // (by design, to keep gauges showing last-known values). Stale cached data
+        // must not prevent the gap timer from firing during a fuel stop.
+        const sitAge = sit?.timestamp ? (Date.now() - sit.timestamp) : Infinity;
+        const hasGps = sit?.lat && sit?.lon && (sit?.gps_fix_quality > 0) && sitAge < 10000;
+        const hasEngine = !!eng && (this._engine?.dataAge < 10000);
         if (!hasGps && !hasEngine) {
             // Both data sources absent — start gap timer if not already running.
             // If gap exceeds 2 minutes, auto-stop: the Stratux was likely powered off
