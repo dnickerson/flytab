@@ -92,7 +92,7 @@ class FlightRecorder {
             const gs  = this._stratux?.situation?.ground_speed ?? null;
             const engineOff = rpm !== null && rpm <= stopThreshold;
             const gsStopped = rpm === null && gs !== null && gs < 10;
-            if (this._rpmZeroCount > 0 || this._gsBelowCount > 0 || engineOff || gsStopped) {
+            if (this._rpmZeroCount > 0 || this._gsBelowCount > 0 || engineOff || gsStopped || this._gapTimer) {
                 this.stop();
             }
         };
