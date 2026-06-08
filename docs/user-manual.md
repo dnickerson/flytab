@@ -426,6 +426,8 @@ Entries are created automatically at the end of each flight when recording is ac
 
 Recording stops automatically 60 seconds after engine shutdown (RPM ≤ 100). If the tablet screen turns off or the app is backgrounded while the engine is already off, the recording finalizes immediately so no data is lost.
 
+**Multi-leg flights with a fuel stop:** If you power off the Stratux between legs, FlyTab will automatically stop the current recording after 2 minutes with no GPS or engine data. Each flight leg produces its own CSV file. The second leg's recording starts automatically on the next engine start after Stratux is powered back up.
+
 ### Weather Recording
 
 When a flight is recorded, FlyTab simultaneously logs all FIS-B weather events to a companion file named `YYYYMMDD_HHMMZ_weather.ndjson` (e.g. `20260607_1430Z_weather.ndjson`). The file captures NEXRAD blocks, METARs, PIREPs, SIGMETs, AIRMETs, winds aloft, and NOTAMs received during the flight. At engine-off, the file is renamed to match the engine CSV (e.g. `20260607_KLKR-KFDK_weather.ndjson`).
