@@ -40,6 +40,7 @@ class FlightRecorder {
         this._trafficBuffer = [];
         this._trafficInterval = null;
         this._activeTrafficFlush = null;
+        this._gapTimer = null;
 
         // Auto-start/stop counters
         this._rpmAboveCount = 0;
@@ -148,6 +149,7 @@ class FlightRecorder {
         if (this._recordInterval) { clearInterval(this._recordInterval); this._recordInterval = null; }
         if (this._flushInterval) { clearInterval(this._flushInterval); this._flushInterval = null; }
         if (this._trafficInterval) { clearInterval(this._trafficInterval); this._trafficInterval = null; }
+        if (this._gapTimer) { clearTimeout(this._gapTimer); this._gapTimer = null; }
 
         const startTime = this._startTime ? new Date(this._startTime).toISOString() : null;
         const endMs = Date.now();
@@ -205,7 +207,21 @@ class FlightRecorder {
         // Require at least a GPS fix or engine data to write a row
         const hasGps = sit?.lat && sit?.lon && (sit?.gps_fix_quality > 0);
         const hasEngine = !!eng;
-        if (!hasGps && !hasEngine) return;
+        if (!hasGps && !hasEngine) {
+            // Both data sources absent — start gap timer if not already running.
+            // If gap exceeds 2 minutes, auto-stop: the Stratux was likely powered off
+            // for a fuel stop. Each flight leg gets its own clean recording.
+            if (!this._gapTimer) {
+                this._gapTimer = setTimeout(() => {
+                    this._gapTimer = null;
+                    if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', 'Extended data gap (2 min) — auto-stopping recording');
+                    this.stop();
+                }, 120000);
+            }
+            return;
+        }
+        // Data is flowing — cancel any pending gap auto-stop
+        if (this._gapTimer) { clearTimeout(this._gapTimer); this._gapTimer = null; }
 
         // GPS position for dep/dest naming — always update from Stratux if available
         if (hasGps) {
