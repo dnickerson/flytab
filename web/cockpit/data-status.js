@@ -332,10 +332,17 @@ class DataStatus {
             const entry  = mbt.find(l => l.layer === layer);
             const sTile  = serverManifest?.tiles?.[layer] || null;
             const dTile  = deviceManifest?.tiles?.[layer] || null;
-            const tileUpdateAvail = entry?.exists && sTile && dTile && (
-                sTile.cycle_date !== dTile.cycle_date ||
-                sTile.built_at   !== dTile.built_at
-            );
+            const tileUpdateAvail = (() => {
+                if (!entry?.exists || !sTile || !dTile) return false;
+                // Sectional/TAC/IFR tiles run a 56-day cycle; NASR runs 28-day.
+                // When expiration_date is present use it — avoids false positives
+                // after a NASR-only refresh where cycle_date legitimately differs.
+                if (sTile.expiration_date) {
+                    const today = new Date().toISOString().slice(0, 10);
+                    return today > sTile.expiration_date;
+                }
+                return sTile.cycle_date !== dTile.cycle_date || sTile.built_at !== dTile.built_at;
+            })();
             let serverLine, devLine, badge, action = '';
 
             serverLine = base
