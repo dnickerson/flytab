@@ -33,6 +33,7 @@ class FisbNexrad {
 
         // Loop mode: when true, suppress live _draw() so RadarLoop playback isn't overwritten
         this._loopMode = false;
+        this._visible = true;   // false = canvas hidden for source toggle; _active still true
         this._latestDataTime = 0;
 
         // Whether we've already notified the map to switch from internet to FIS-B this session.
@@ -167,6 +168,19 @@ class FisbNexrad {
 
     /** Whether the canvas overlay is currently attached to a map */
     get isActive() { return this._active; }
+
+    /** Hide canvas without detaching from DOM or stopping data accumulation. */
+    hide() {
+        this._visible = false;
+        if (this._canvas) this._canvas.style.display = 'none';
+    }
+
+    /** Show canvas and redraw current blocks. */
+    show() {
+        this._visible = true;
+        if (this._canvas) this._canvas.style.display = '';
+        if (!this._loopMode) this._draw();
+    }
 
     /** Check if NEXRAD data is available */
     get hasData() { return this._blocks.size > 0; }
@@ -419,7 +433,7 @@ class FisbNexrad {
 
     /** Draw the main-map live view — Regional product only. */
     _draw() {
-        if (!this._active || !this._mainTarget) return;
+        if (!this._active || !this._mainTarget || this._visible === false) return;
         this._drawToTarget(this._mainTarget, 'regional', this._blocks);
     }
 
