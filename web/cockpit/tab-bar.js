@@ -87,6 +87,7 @@ class TabBar {
         const c = this._comps;
 
         // Close all full-screen overlays first, then open the requested one
+        document.getElementById('flytabManualOverlay')?.remove();
         if (tabId !== 'more') this._closeMoreDrawer();
         if (tabId !== 'layers') this._comps.layerPanel?.close();
         if (c.enginePage?.visible) c.enginePage.hide();
@@ -599,7 +600,7 @@ class TabBar {
         `;
         header.innerHTML = `
             <span style="font-size:18px;font-weight:700;flex:1">FlyTab User Manual</span>
-            <button id="_manualClose" style="background:#0055cc;color:#fff;border:none;border-radius:6px;padding:8px 16px;font-size:14px;font-weight:600;cursor:pointer;touch-action:manipulation;">✕ Close</button>
+            <button id="_manualClose" style="background:#0055cc;color:#fff;border:none;border-radius:8px;padding:0 20px;font-size:16px;font-weight:700;cursor:pointer;touch-action:manipulation;min-height:56px;min-width:88px;">✕ Close</button>
         `;
         overlay.appendChild(header);
 
