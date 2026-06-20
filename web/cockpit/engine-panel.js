@@ -195,8 +195,8 @@ class EnginePanel {
         if (this._dom.pwr) this._dom.pwr.textContent = Math.round(pwr) + '%';
         this._setBar(this._dom.pwrBar, pwr);
 
-        // Fuel (EDM field names: Gallons_Rem, Fuel_Flow)
-        const fuel = num(d.fuel_remaining_gal ?? d.fuel_gal ?? d.Gallons_Rem ?? 0);
+        // Pi tracker: d.fuel.fuel_remaining; EDM resistive/computed fallback: d.Fuel_Remaining
+        const fuel = num(d.fuel?.fuel_remaining ?? d.fuel_remaining_gal ?? d.fuel_gal ?? d.Gallons_Rem ?? d.Fuel_Remaining ?? 0);
         if (this._dom.fuel) this._dom.fuel.textContent = fuel.toFixed(1) + ' gal';
         const gph = num(d.fuel_flow_gph ?? d.gph ?? d.Fuel_Flow ?? 0);
         if (this._dom.gph) this._dom.gph.textContent = gph.toFixed(1);
