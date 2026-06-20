@@ -272,7 +272,7 @@ Intensity levels follow NWS N0Q color coding:
 
 **Radar loop** — Once radar is enabled, swipe the bottom slider left to step backward through ~55 minutes of history. Watch the progression to see which direction storms are moving.
 
-When FIS-B data is available (airborne), FlyTab automatically switches from internet NEXRAD to FIS-B blocks. The status bar FIS-B badge turns green.
+**Radar source toggle** — The badge in the lower-left corner of the map shows the active radar source and a `⇄` symbol. Tap it to switch between FIS-B (regional blocks from Stratux) and Internet (IEM tile mosaic). The choice is remembered across sessions. FIS-B gives higher update rates in the air (every 2.5 min); Internet is the default on the ground when Stratux is not connected.
 
 ### CB Building Polygons
 
