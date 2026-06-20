@@ -10,6 +10,7 @@ class VectorMapLayers {
         this._nasr = nasrDb;
         this._geoData = null;
         this._updateTimer = null;
+        this._aptBoundsCache = null; // { south, west, north, east, zoom, airports }
 
         // Layer groups
         this._geoLayer = L.layerGroup();           // static geographic context (lines only)
@@ -142,6 +143,16 @@ class VectorMapLayers {
         }, { passive: true });
     }
 
+    /** True if the cache covers the requested bounds at the same zoom. */
+    _aptBoundsContains(south, west, north, east, zoom) {
+        const c = this._aptBoundsCache;
+        if (!c || c.zoom !== zoom) return false;
+        const latPad = (c.north - c.south) * 0.20;
+        const lonPad = (c.east  - c.west)  * 0.20;
+        return south >= c.south + latPad && north <= c.north - latPad
+            && west  >= c.west  + lonPad  && east  <= c.east  - lonPad;
+    }
+
     /**
      * Initialize: load geo context and add default layers.
      */
@@ -207,6 +218,7 @@ class VectorMapLayers {
      * Called by LayerPanel when airportFilter config changes.
      */
     _forceAirportRefresh() {
+        this._aptBoundsCache = null;
         this._clearLayer(this._airportLayer, this._airportMarkers);
         this._clearLayer(this._wxDotsLayer, this._wxDotMarkers);
         this._clearLayer(this._wxLabelLayer, this._wxLabelMarkers);
@@ -1144,11 +1156,25 @@ class VectorMapLayers {
         const labelsMinZoom = overlays.airports?.labelsMinZoom || 8;
         if (zoom < minZoom) {
             this._clearLayer(this._airportLayer, this._airportMarkers);
+            this._aptBoundsCache = null;
             return;
         }
 
         try {
-            const airports = await this._nasr.getAirportsInBounds(south, west, north, east);
+            let airports;
+            if (this._aptBoundsContains(south, west, north, east, zoom)) {
+                airports = this._aptBoundsCache.airports;
+            } else {
+                // Query IDB and store result with a buffered bounding box
+                const latBuf = (north - south) * 0.5;
+                const lonBuf = (east  - west)  * 0.5;
+                airports = await this._nasr.getAirportsInBounds(
+                    south - latBuf, west - lonBuf, north + latBuf, east + lonBuf
+                );
+                this._aptBoundsCache = { south: south - latBuf, west: west - lonBuf,
+                                         north: north + latBuf, east: east + lonBuf,
+                                         zoom, airports };
+            }
             const currentIds = new Set();
             const showLabels = zoom >= labelsMinZoom;
 
