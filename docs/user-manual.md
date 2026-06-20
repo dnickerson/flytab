@@ -212,7 +212,7 @@ The panel has four accordion sections: **Base Chart**, **Map Overlays**, **Traff
 | **Runway Extensions** | Dashed extended centerlines for route airports |
 | **TFRs** | Temporary Flight Restrictions — red boundaries with type and altitude |
 
-**Airport filter** — Below the Airports toggle: minimum runway length (Any / 1500 / 2000 / 3000 / 4000 ft), paved-only checkbox, heliports, seaplane, ultralight. Changes apply immediately.
+**Airport filter** — Below the Airports toggle: minimum runway length (Any / 1500 / 2000 / 3000 / 4000 ft). Changes apply immediately.
 
 ### Traffic
 

@@ -492,22 +492,6 @@ class LayerPanel {
                             <option value="4000">4,000</option>
                         </select>
                     </div>
-                    <div class="lp-row lp-row-sub">
-                        <span class="lp-row-label lp-sub-label">Paved only</span>
-                        <label class="lp-toggle"><input type="checkbox" data-aptfilter="pavedOnly"><span class="lp-toggle-track"></span></label>
-                    </div>
-                    <div class="lp-row lp-row-sub">
-                        <span class="lp-row-label lp-sub-label">Show heliports</span>
-                        <label class="lp-toggle"><input type="checkbox" data-aptfilter="showHeliports"><span class="lp-toggle-track"></span></label>
-                    </div>
-                    <div class="lp-row lp-row-sub">
-                        <span class="lp-row-label lp-sub-label">Show seaplane bases</span>
-                        <label class="lp-toggle"><input type="checkbox" data-aptfilter="showSeaplaneBases"><span class="lp-toggle-track"></span></label>
-                    </div>
-                    <div class="lp-row lp-row-sub">
-                        <span class="lp-row-label lp-sub-label">Show ultralights</span>
-                        <label class="lp-toggle"><input type="checkbox" data-aptfilter="showUltralight"><span class="lp-toggle-track"></span></label>
-                    </div>
                     <div class="lp-row">
                         <span class="lp-row-label">Navaids</span>
                         <label class="lp-toggle"><input type="checkbox" data-overlay="navaids"><span class="lp-toggle-track"></span></label>
