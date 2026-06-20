@@ -37,6 +37,11 @@ class TrackLog {
         this._renderOnMap();
     }
 
+    /** Re-render the track on the map (used when visibility toggle changes). */
+    redraw() {
+        this._renderOnMap();
+    }
+
     get points() { return this._points; }
 
     _record() {

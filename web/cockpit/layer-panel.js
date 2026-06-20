@@ -37,10 +37,11 @@ class LayerPanel {
         return Math.floor((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * Math.pow(2, z));
     }
 
-    constructor(map, vectorLayers, cockpitMap) {
+    constructor(map, vectorLayers, cockpitMap, trackLog = null) {
         this._map = map;
         this._vectorLayers = vectorLayers;
         this._cockpitMap = cockpitMap;
+        this._trackLog = trackLog;
         this._panel = null;
         this._backdrop = null;
         this._cancelPrefetch = false;
@@ -311,6 +312,16 @@ class LayerPanel {
             tempInput.addEventListener('change', () => { this._vectorLayers?.toggleTemp(); });
         }
 
+        // Wire flight track toggle
+        const trackToggle = this._panel.querySelector('#lpTrackLogToggle');
+        if (trackToggle) {
+            trackToggle.checked = Settings.showTrackLog !== false;
+            trackToggle.addEventListener('change', () => {
+                Settings.showTrackLog = trackToggle.checked;
+                this._trackLog?.redraw();
+            });
+        }
+
         // Wire airport filter controls
         this._panel.querySelectorAll('[data-aptfilter]').forEach(el => {
             const key = el.dataset.aptfilter;
@@ -535,6 +546,10 @@ class LayerPanel {
                     <div class="lp-row">
                         <span class="lp-row-label">Fuel Gauges</span>
                         <label class="lp-toggle"><input type="checkbox" data-action="fuel-gauges" checked><span class="lp-toggle-track"></span></label>
+                    </div>
+                    <div class="lp-row">
+                        <span class="lp-row-label">Flight Track</span>
+                        <label class="lp-toggle"><input type="checkbox" id="lpTrackLogToggle" checked><span class="lp-toggle-track"></span></label>
                     </div>
                 </div>
             </div>

@@ -211,6 +211,8 @@ The panel has four accordion sections: **Base Chart**, **Map Overlays**, **Traff
 | **IFR Area Charts** | High-altitude obstacle/terrain charts |
 | **Runway Extensions** | Dashed extended centerlines for route airports |
 | **TFRs** | Temporary Flight Restrictions — red boundaries with type and altitude |
+| **Fuel Gauges** | On-map fuel quantity bars for each tank |
+| **Flight Track** | Dashed grey polyline showing the GPS track flown this session. Toggling off hides the track on the map; recording continues in the background and the track reappears when re-enabled. |
 
 **Airport filter** — Below the Airports toggle: minimum runway length (Any / 1500 / 2000 / 3000 / 4000 ft). Changes apply immediately.
 

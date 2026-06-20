@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v9.69';
+const FLYTAB_VERSION = 'v9.70';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -902,7 +902,8 @@ class FlyTabApp {
             this.layerPanel = new LayerPanel(
                 this.cockpitMap.map,
                 this.vectorLayers,
-                this.cockpitMap
+                this.cockpitMap,
+                this.trackLog
             );
             this.layerPanel.init();
             this.layerPanel.setGetRouteBbox(() => this._getRouteBbox());
