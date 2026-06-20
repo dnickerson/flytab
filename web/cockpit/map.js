@@ -877,16 +877,14 @@ class CockpitMap {
         this._fisbNexrad?.setCbBuilding(on);
     }
 
-    /** Adjust internet radar tile opacity (dim when FIS-B active, full when sole source) */
-    setRadarTileOpacity(opacity) {
-        if (this.radarLayer) this.radarLayer.setOpacity(opacity);
-    }
-
     _applyRadarSource(source) {
         if (source === 'fisb') {
             if (this._fisbNexrad) this._fisbNexrad.show();
             if (this._inetRadarSource) this._inetRadarSource.setBaseOpacity(0);
             if (this.radarLayer) this.radarLayer.setOpacity(0);
+            // This inline check is load-bearing: once _loopReadyFired is true,
+            // onFisbNexradLoopReady() never re-fires, so toggling back to FIS-B
+            // after a session in internet mode must switch the loop source here.
             if (this._radarLoop && this._fisbNexrad &&
                     (this._fisbNexrad.frameHistory.length ?? 0) >= 2) {
                 this._radarLoop.setNexrad(this._fisbNexrad);
