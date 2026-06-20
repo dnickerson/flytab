@@ -241,7 +241,7 @@ All weather data comes from FIS-B via Stratux when airborne, or from the interne
 | **Winds Aloft** | Upper-level wind barbs from FIS-B winds aloft product |
 | **PIREPs (FIS-B)** | Pilot reports as diamond icons — orange=turbulence, blue=icing |
 | **SIGMETs** | Significant weather advisories (purple outlines) |
-| **AIRMET Tango** | Turbulence AIRMETs (yellow) |
+| **AIRMET Tango** | Turbulence AIRMETs (yellow) — advisories with a base at or above FL200 are not displayed |
 | **AIRMET Zulu** | Icing AIRMETs (cyan) |
 | **AIRMET Sierra** | IFR/mountain obscuration AIRMETs (grey) |
 | **Lightning** | Real-time lightning strike locations |
@@ -410,7 +410,7 @@ During the approach, tap **APT** tab instead for quick access to all plates for 
 
 **Fuel Entry** (MORE → Fuel Entry) — After refueling, enter the quantity for each tank. FlyTab uses this as the starting fuel for the flight.
 
-The **fuel tanks widget** (floating, top-left corner of the map) shows left/right tank quantities in gallons, live fuel flow (GPH), and combined endurance. The center column displays a total-fuel bar gauge, current GPH, and hours:minutes remaining. Tap the widget to toggle between left and right tank display. All values update in real time from the engine monitor.
+The **fuel tanks widget** (floating, top-left corner of the map) shows left/right tank quantities in gallons, live fuel flow (GPH), and combined endurance. The center column displays a total-fuel bar gauge, current GPH, and hours:minutes remaining. Tap the **L** or **R** badge to switch the active tank. Tap the **✎** button in the center column to edit fuel quantities at any time — the dialog pre-fills with your most recent tic measurement if one exists. All values update in real time from the engine monitor.
 
 The **FUEL** field in the nav strip shows total fuel remaining and projected endurance at current burn rate. This is the authoritative fuel-state display.
 
