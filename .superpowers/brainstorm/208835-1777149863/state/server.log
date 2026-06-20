@@ -1,0 +1,3 @@
+{"type":"server-started","port":8081,"host":"127.0.0.1","url_host":"localhost","url":"http://localhost:8081","screen_dir":"/home/dananickerson/flytab/.superpowers/brainstorm/208835-1777149863/content","state_dir":"/home/dananickerson/flytab/.superpowers/brainstorm/208835-1777149863/state"}
+{"type":"screen-added","file":"/home/dananickerson/flytab/.superpowers/brainstorm/208835-1777149863/content/wx-briefing-mcd.html"}
+{"type":"server-stopped","reason":"idle timeout"}

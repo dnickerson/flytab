@@ -1,0 +1,58 @@
+<h2>Route Display Redesign — 3 Approaches</h2>
+<p class="subtitle">Three independent decisions are bundled here: draggable sheet height, WPT column fix, and landscape compact mode. The approaches differ mainly in how the drag behavior works.</p>
+
+<div class="options">
+
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Drag-to-snap (Recommended)</h3>
+      <p>The handle bar is draggable. On release it snaps to the nearest of 3 stops: <strong>closed / 3-row (~80px) / 7-row (~185px)</strong>. Tap the handle to cycle the same 3 stops. Familiar, predictable, no accidental in-between states.</p>
+      <p><strong>WPT column:</strong> <code>table-layout: fixed</code> + <code>&lt;colgroup&gt;</code> with explicit widths pins every column. Fuel-stop row can't stretch WPT.</p>
+      <p><strong>Compact mode:</strong> TMR tab becomes a ⊞/⊟ toggle. When active: hides <code>#instrumentStrip</code> and <code>.route-table-sheet</code>, reclaims ~130px. State saved to localStorage. Auto-restores on portrait rotation.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul><li>Simple mental model — 3 stops, no guessing</li><li>Reliable in turbulence / fat fingers</li><li>Easy to implement</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>Can't show exactly N rows between stops</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Free drag (continuous)</h3>
+      <p>Drag the handle to any height. A small "N rows visible" badge appears during drag. On release, height is remembered. No snap stops — exact height is preserved.</p>
+      <p><strong>WPT column:</strong> Same fixed-layout fix as A.</p>
+      <p><strong>Compact mode:</strong> Same TMR-toggle as A.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul><li>Precise control — show exactly the rows you want</li><li>Pilots with long routes can tune it</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>No "closed" snap — hard to fully dismiss</li><li>Harder to reliably hit closed state one-handed</li><li>Remembering exact px height adds complexity</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Drag-to-snap with more stops</h3>
+      <p>Like A but with <strong>5 stops</strong>: closed / 2 rows / 4 rows / 7 rows / full (~50vh). Tap still cycles. Drag snaps to nearest. Gives finer row control without free-drag complexity.</p>
+      <p><strong>WPT column:</strong> Same fixed-layout fix as A.</p>
+      <p><strong>Compact mode:</strong> Same TMR-toggle as A.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul><li>More granularity than 3-stop</li><li>Still snaps — reliable in cockpit</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>5 tap-cycles is tedious — user would mostly drag</li><li>More height math to get row stops right</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="section" style="margin-top:24px; padding:12px 16px; background:rgba(0,150,255,0.08); border-radius:8px; border-left:3px solid #0096ff;">
+  <span class="label">Common to all approaches</span>
+  <ul style="margin:6px 0 0; padding-left:18px; font-size:14px;">
+    <li>WPT column width fix via <code>table-layout: fixed</code> — same regardless of drag model</li>
+    <li>Compact landscape toggle replaces TMR tab button</li>
+    <li>Compact mode hides both <code>#instrumentStrip</code> and <code>.route-table-sheet</code></li>
+    <li>Compact state persists in <code>localStorage</code>; auto-clears on portrait rotation</li>
+  </ul>
+</div>

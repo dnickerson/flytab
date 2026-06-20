@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>G-AIRMET Prototype</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, 'Helvetica Neue', sans-serif; background: #1a1a1a; color: #fff; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+
+/* ── TOP BAR ── */
+.top-bar { background: #111; border-bottom: 1px solid #333; padding: 6px 10px; display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 600; flex-shrink: 0; }
+.top-bar .title { color: #fff; letter-spacing: 1px; }
+.top-bar .note { color: #aaa; font-weight: 400; font-size: 11px; margin-left: auto; }
+
+/* ── MAIN LAYOUT ── */
+.main { display: flex; flex: 1; overflow: hidden; }
+
+/* ── MAP AREA ── */
+.map-area { flex: 1; position: relative; background: #2a3a2a; overflow: hidden; }
+
+/* Simulated terrain */
+.map-bg { position: absolute; inset: 0; background:
+  radial-gradient(ellipse at 30% 40%, #2d4a2d 0%, transparent 50%),
+  radial-gradient(ellipse at 70% 60%, #3a4a30 0%, transparent 45%),
+  radial-gradient(ellipse at 50% 20%, #253525 0%, transparent 40%),
+  #2a3a2a; }
+
+/* AIRMET polygons */
+.polygon { position: absolute; border-radius: 30% 40% 35% 45%; border: 2px solid; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: opacity 0.2s; }
+.polygon.zulu  { background: rgba(0,180,255,0.15); border-color: rgba(0,180,255,0.7); }
+.polygon.tango { background: rgba(255,200,0,0.15); border-color: rgba(255,200,0,0.7); }
+.polygon.zulu-low  { top: 18%; left: 15%; width: 38%; height: 28%; }
+.polygon.zulu-mid  { top: 35%; left: 30%; width: 45%; height: 30%; }
+.polygon.zulu-high { top: 12%; left: 45%; width: 40%; height: 32%; }
+.polygon.tango-mid { top: 45%; left: 10%; width: 35%; height: 25%; }
+.polygon.hidden { opacity: 0; pointer-events: none; }
+
+.poly-label { font-size: 11px; font-weight: 700; color: #fff; text-shadow: 0 0 4px rgba(0,0,0,0.8); text-align: center; line-height: 1.3; pointer-events: none; }
+
+/* Tap hint */
+.tap-hint { position: absolute; bottom: 90px; left: 50%; transform: translateX(-50%);
+  background: rgba(0,0,0,0.6); border: 1px solid #555; border-radius: 6px;
+  padding: 6px 12px; font-size: 12px; color: #aaa; pointer-events: none; }
+
+/* ── LAYER PANEL OVERLAY (top-right of map) ── */
+.map-controls { position: absolute; top: 10px; right: 10px; display: flex; flex-direction: column; gap: 6px; }
+
+.toggle-group { background: rgba(0,0,0,0.75); border: 1px solid #444; border-radius: 8px; padding: 6px 8px; }
+.toggle-group-label { font-size: 9px; font-weight: 700; color: #888; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 4px; }
+.toggle-chips { display: flex; gap: 4px; flex-wrap: wrap; }
+
+.chip { padding: 4px 9px; border-radius: 12px; font-size: 11px; font-weight: 700; cursor: pointer; border: 1.5px solid; transition: all 0.15s; white-space: nowrap; user-select: none; }
+.chip.zulu   { border-color: #00b4ff; color: #00b4ff; }
+.chip.tango  { border-color: #ffcc00; color: #ffcc00; }
+.chip.sierra { border-color: #ff44cc; color: #ff44cc; }
+.chip.alt-low  { border-color: #7de8b0; color: #7de8b0; }
+.chip.alt-mid  { border-color: #f0b849; color: #f0b849; }
+.chip.alt-high { border-color: #f07849; color: #f07849; }
+
+.chip.active { color: #000 !important; }
+.chip.zulu.active   { background: #00b4ff; }
+.chip.tango.active  { background: #ffcc00; }
+.chip.sierra.active { background: #ff44cc; }
+.chip.alt-low.active  { background: #7de8b0; }
+.chip.alt-mid.active  { background: #f0b849; }
+.chip.alt-high.active { background: #f07849; }
+
+/* ── CONSOLIDATED TAP POPUP ── */
+.adv-popup { position: absolute; background: #1c1c1c; border: 1.5px solid #444; border-radius: 10px;
+  min-width: 300px; max-width: 360px; box-shadow: 0 4px 20px rgba(0,0,0,0.7);
+  display: none; z-index: 100; }
+.adv-popup.visible { display: block; }
+.adv-popup-header { display: flex; align-items: center; justify-content: space-between;
+  padding: 9px 12px 6px; border-bottom: 1px solid #333; }
+.adv-popup-title { font-size: 12px; font-weight: 700; color: #aaa; letter-spacing: 1px; text-transform: uppercase; }
+.adv-popup-close { width: 32px; height: 32px; border-radius: 50%; background: #333; border: none;
+  color: #fff; font-size: 18px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.adv-popup-close:active { background: #555; }
+
+.adv-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-bottom: 1px solid #222; }
+.adv-row:last-child { border-bottom: none; }
+.adv-badge { font-size: 10px; font-weight: 800; padding: 3px 6px; border-radius: 4px; letter-spacing: 0.5px; flex-shrink: 0; }
+.adv-badge.zulu   { background: #00b4ff; color: #000; }
+.adv-badge.tango  { background: #ffcc00; color: #000; }
+.adv-badge.sigmet { background: #ff3333; color: #fff; }
+.adv-detail { flex: 1; min-width: 0; }
+.adv-hazard { font-size: 12px; font-weight: 700; color: #fff; }
+.adv-alt    { font-size: 13px; font-weight: 800; color: #fff; font-family: monospace; }
+.adv-valid  { font-size: 10px; color: #888; margin-top: 1px; }
+.adv-severity { font-size: 11px; }
+.adv-severity.lgt { color: #7de8b0; }
+.adv-severity.mdt { color: #f0b849; }
+.adv-severity.sev { color: #f07849; }
+
+/* ── SIDEBAR ── */
+.sidebar { width: 280px; background: #161616; border-left: 1px solid #333; overflow-y: auto; flex-shrink: 0; }
+.sidebar-section { border-bottom: 1px solid #2a2a2a; }
+.sidebar-header { display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 12px; background: #1e1e1e; cursor: pointer; }
+.sidebar-header-label { font-size: 11px; font-weight: 800; letter-spacing: 1px; color: #ccc; text-transform: uppercase; }
+.sidebar-badge { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 10px; }
+.sidebar-badge.warn { background: #b35a00; color: #fff; }
+.sidebar-badge.ok   { background: #1a4a1a; color: #5f5; }
+
+.adv-card { margin: 6px 8px; background: #222; border-radius: 8px; overflow: hidden; border: 1px solid #2e2e2e; }
+.adv-card-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; }
+.adv-card-badge { font-size: 10px; font-weight: 800; padding: 3px 7px; border-radius: 4px; flex-shrink: 0; }
+.adv-card-badge.zulu   { background: #00b4ff; color: #000; }
+.adv-card-badge.tango  { background: #ffcc00; color: #000; }
+.adv-card-badge.sierra { background: #ff44cc; color: #000; }
+.adv-card-info { flex: 1; min-width: 0; }
+.adv-card-hazard { font-size: 12px; font-weight: 700; color: #eee; }
+.adv-card-alt { font-size: 14px; font-weight: 800; color: #fff; font-family: monospace; margin-top: 1px; }
+.adv-card-meta { display: flex; align-items: center; justify-content: space-between; padding: 0 10px 8px; }
+.adv-card-severity { font-size: 11px; font-weight: 600; }
+.adv-card-severity.lgt { color: #7de8b0; }
+.adv-card-severity.mdt { color: #f0b849; }
+.adv-card-severity.sev { color: #f07849; }
+.adv-card-valid { font-size: 10px; color: #777; }
+
+.sidebar-empty { padding: 12px; font-size: 12px; color: #555; text-align: center; }
+</style>
+</head>
+<body>
+
+<div class="top-bar">
+  <span class="title">FLYTAB · G-AIRMET PROTOTYPE</span>
+  <span class="note">Tap blue/yellow polygons on the map · Toggle altitude bands · See sidebar list</span>
+</div>
+
+<div class="main">
+
+  <!-- MAP -->
+  <div class="map-area" id="mapArea">
+    <div class="map-bg"></div>
+
+    <!-- AIRMET Polygons -->
+    <div class="polygon zulu zulu-low active"   id="p-zulu-low"  data-band="low"  onclick="tapPolygon(event,'zulu-low')">
+      <div class="poly-label">ZULU<br>SFC–5,000</div>
+    </div>
+    <div class="polygon zulu zulu-mid active"   id="p-zulu-mid"  data-band="mid"  onclick="tapPolygon(event,'zulu-mid')">
+      <div class="poly-label">ZULU<br>8,000–FL180</div>
+    </div>
+    <div class="polygon zulu zulu-high active"  id="p-zulu-high" data-band="high" onclick="tapPolygon(event,'zulu-high')">
+      <div class="poly-label">ZULU<br>FL180–FL240</div>
+    </div>
+    <div class="polygon tango tango-mid active" id="p-tango-mid" data-band="mid"  onclick="tapPolygon(event,'tango-mid')">
+      <div class="poly-label">TANGO<br>FL100–FL200</div>
+    </div>
+
+    <div class="tap-hint">↑ Tap any shaded area for consolidated popup</div>
+
+    <!-- MAP CONTROLS (top-right) -->
+    <div class="map-controls">
+      <!-- Type toggles (existing) -->
+      <div class="toggle-group">
+        <div class="toggle-group-label">Type</div>
+        <div class="toggle-chips">
+          <div class="chip zulu active"   onclick="toggleType(this,'zulu')">Icing</div>
+          <div class="chip tango active"  onclick="toggleType(this,'tango')">Turb</div>
+          <div class="chip sierra active" onclick="toggleType(this,'sierra')">IFR</div>
+        </div>
+      </div>
+      <!-- NEW: Altitude band toggles -->
+      <div class="toggle-group">
+        <div class="toggle-group-label">Altitude Band</div>
+        <div class="toggle-chips">
+          <div class="chip alt-low active"  onclick="toggleBand(this,'low')"  title="SFC – 10,000">LOW<br><span style="font-size:9px;font-weight:400">SFC–10K</span></div>
+          <div class="chip alt-mid active"  onclick="toggleBand(this,'mid')"  title="10,000 – FL180">MID<br><span style="font-size:9px;font-weight:400">10K–FL180</span></div>
+          <div class="chip alt-high active" onclick="toggleBand(this,'high')" title="FL180 – FL240">HIGH<br><span style="font-size:9px;font-weight:400">FL180+</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- CONSOLIDATED POPUP -->
+    <div class="adv-popup" id="advPopup">
+      <div class="adv-popup-header">
+        <span class="adv-popup-title">Advisories at Point</span>
+        <button class="adv-popup-close" onclick="closePopup()">×</button>
+      </div>
+      <div id="popupRows"></div>
+    </div>
+  </div>
+
+  <!-- SIDEBAR -->
+  <div class="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-header">
+        <span class="sidebar-header-label">G-AIRMETs</span>
+        <span class="sidebar-badge warn" id="airmetCount">4 ON ROUTE</span>
+      </div>
+      <div id="airmetCards">
+        <!-- Zulu SFC-5000 -->
+        <div class="adv-card" data-type="zulu" data-band="low">
+          <div class="adv-card-head">
+            <span class="adv-card-badge zulu">ZULU</span>
+            <div class="adv-card-info">
+              <div class="adv-card-hazard">MIXED ICING</div>
+              <div class="adv-card-alt">SFC – 5,000</div>
+            </div>
+          </div>
+          <div class="adv-card-meta">
+            <span class="adv-card-severity lgt">LGT</span>
+            <span class="adv-card-valid">Valid until 21:00L · FZL 8,000</span>
+          </div>
+        </div>
+        <!-- Zulu 8000-FL180 -->
+        <div class="adv-card" data-type="zulu" data-band="mid">
+          <div class="adv-card-head">
+            <span class="adv-card-badge zulu">ZULU</span>
+            <div class="adv-card-info">
+              <div class="adv-card-hazard">MIXED ICING</div>
+              <div class="adv-card-alt">8,000 – FL180</div>
+            </div>
+          </div>
+          <div class="adv-card-meta">
+            <span class="adv-card-severity mdt">MDT</span>
+            <span class="adv-card-valid">Valid until 21:00L · FZL 8,000</span>
+          </div>
+        </div>
+        <!-- Zulu FL180-FL240 -->
+        <div class="adv-card" data-type="zulu" data-band="high">
+          <div class="adv-card-head">
+            <span class="adv-card-badge zulu">ZULU</span>
+            <div class="adv-card-info">
+              <div class="adv-card-hazard">RIME ICING</div>
+              <div class="adv-card-alt">FL180 – FL240</div>
+            </div>
+          </div>
+          <div class="adv-card-meta">
+            <span class="adv-card-severity lgt">LGT</span>
+            <span class="adv-card-valid">Valid until 21:00L</span>
+          </div>
+        </div>
+        <!-- Tango -->
+        <div class="adv-card" data-type="tango" data-band="mid">
+          <div class="adv-card-head">
+            <span class="adv-card-badge tango">TANGO</span>
+            <div class="adv-card-info">
+              <div class="adv-card-hazard">TURB</div>
+              <div class="adv-card-alt">FL100 – FL200</div>
+            </div>
+          </div>
+          <div class="adv-card-meta">
+            <span class="adv-card-severity mdt">MDT</span>
+            <span class="adv-card-valid">Valid until 19:00L</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── State ──
+const activeTypes = new Set(['zulu','tango','sierra']);
+const activeBands = new Set(['low','mid','high']);
+
+// Which polygons belong to which type and band
+const polygons = {
+  'zulu-low':  { type: 'zulu',  band: 'low'  },
+  'zulu-mid':  { type: 'zulu',  band: 'mid'  },
+  'zulu-high': { type: 'zulu',  band: 'high' },
+  'tango-mid': { type: 'tango', band: 'mid'  },
+};
+
+// Advisory data for each polygon (for popup)
+const advisoryData = {
+  'zulu-low':  { badge:'zulu',  hazard:'MIXED ICING', alt:'SFC – 5,000',    severity:'LGT', sev_class:'lgt', valid:'21:00L', extra:'FZL 8,000' },
+  'zulu-mid':  { badge:'zulu',  hazard:'MIXED ICING', alt:'8,000 – FL180',  severity:'MDT', sev_class:'mdt', valid:'21:00L', extra:'FZL 8,000' },
+  'zulu-high': { badge:'zulu',  hazard:'RIME ICING',  alt:'FL180 – FL240',  severity:'LGT', sev_class:'lgt', valid:'21:00L', extra:'' },
+  'tango-mid': { badge:'tango', hazard:'TURB',        alt:'FL100 – FL200',  severity:'MDT', sev_class:'mdt', valid:'19:00L', extra:'' },
+};
+
+function isVisible(key) {
+  const p = polygons[key];
+  return activeTypes.has(p.type) && activeBands.has(p.band);
+}
+
+function refreshPolygons() {
+  for (const key of Object.keys(polygons)) {
+    const el = document.getElementById('p-' + key);
+    if (el) el.classList.toggle('hidden', !isVisible(key));
+  }
+  refreshSidebar();
+}
+
+function refreshSidebar() {
+  const cards = document.querySelectorAll('#airmetCards .adv-card');
+  let visible = 0;
+  cards.forEach(card => {
+    const type = card.dataset.type;
+    const band = card.dataset.band;
+    const show = activeTypes.has(type) && activeBands.has(band);
+    card.style.display = show ? '' : 'none';
+    if (show) visible++;
+  });
+  document.getElementById('airmetCount').textContent = visible > 0 ? `${visible} ON ROUTE` : 'NONE ON ROUTE';
+  document.getElementById('airmetCount').className = 'sidebar-badge ' + (visible > 0 ? 'warn' : 'ok');
+}
+
+function toggleType(chip, type) {
+  if (activeTypes.has(type)) {
+    if (activeTypes.size === 1) return; // keep at least one
+    activeTypes.delete(type);
+    chip.classList.remove('active');
+  } else {
+    activeTypes.add(type);
+    chip.classList.add('active');
+  }
+  refreshPolygons();
+}
+
+function toggleBand(chip, band) {
+  if (activeBands.has(band)) {
+    if (activeBands.size === 1) return;
+    activeBands.delete(band);
+    chip.classList.remove('active');
+  } else {
+    activeBands.add(band);
+    chip.classList.add('active');
+  }
+  refreshPolygons();
+}
+
+// ── Tap popup ──
+function tapPolygon(e, key) {
+  e.stopPropagation();
+  if (!isVisible(key)) return;
+
+  // Collect all advisories whose polygon is visible and "at this point"
+  // In prototype: show all visible advisories at the tapped location
+  // (In real app, only those whose SVG path contains the tap point)
+  const hits = Object.keys(polygons).filter(k => {
+    if (!isVisible(k)) return false;
+    // Simulate overlap: zulu-low and zulu-mid overlap in this prototype
+    if (key === 'zulu-low' || key === 'zulu-mid') return k === 'zulu-low' || k === 'zulu-mid';
+    return k === key;
+  });
+
+  const popup = document.getElementById('advPopup');
+  const rows  = document.getElementById('popupRows');
+  rows.innerHTML = '';
+
+  for (const h of hits) {
+    const d = advisoryData[h];
+    rows.innerHTML += `
+      <div class="adv-row">
+        <span class="adv-badge ${d.badge}">${d.badge.toUpperCase()}</span>
+        <div class="adv-detail">
+          <div class="adv-alt">${d.alt}</div>
+          <div class="adv-hazard"><span class="adv-severity ${d.sev_class}">${d.severity}</span> ${d.hazard}${d.extra ? ' · ' + d.extra : ''}</div>
+          <div class="adv-valid">Valid until ${d.valid}</div>
+        </div>
+      </div>`;
+  }
+
+  // Position near tap but keep on screen
+  const mapRect = document.getElementById('mapArea').getBoundingClientRect();
+  const rect = e.target.closest('.polygon').getBoundingClientRect();
+  let top  = rect.top  - mapRect.top  + rect.height / 2 - 20;
+  let left = rect.left - mapRect.left + rect.width  + 8;
+  const popupW = 340, popupH = hits.length * 72 + 50;
+  if (left + popupW > mapRect.width  - 10) left = rect.left - mapRect.left - popupW - 8;
+  if (top  + popupH > mapRect.height - 10) top  = mapRect.height - popupH - 10;
+  if (top < 5) top = 5;
+  popup.style.top  = top  + 'px';
+  popup.style.left = left + 'px';
+  popup.classList.add('visible');
+}
+
+function closePopup() {
+  document.getElementById('advPopup').classList.remove('visible');
+}
+
+document.getElementById('mapArea').addEventListener('click', e => {
+  if (!e.target.closest('.polygon') && !e.target.closest('.adv-popup') && !e.target.closest('.map-controls'))
+    closePopup();
+});
+
+refreshPolygons();
+</script>
+</body>
+</html>

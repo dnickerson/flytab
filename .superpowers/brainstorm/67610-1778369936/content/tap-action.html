@@ -1,0 +1,35 @@
+<h2>Altitude Optimizer — Tap to Select?</h2>
+<p class="subtitle">When the pilot taps an altitude row showing ETE + wind component, what should happen?</p>
+
+<div class="options">
+  <div class="option" data-choice="auto-apply" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Tap Row → Immediately Sets Altitude</h3>
+      <p>Tapping a row sets the cruise altitude and highlights the row. The existing altitude dropdown updates to match. One tap, done — the optimizer table IS the altitude picker.</p>
+      <div style="margin-top:10px;background:#1a1a2e;border-radius:6px;padding:10px;font-family:monospace;font-size:0.85em;color:#eee">
+        <div style="display:flex;justify-content:space-between;padding:6px 8px;background:#2a3a6e;border-radius:4px;color:#7af">
+          <span>✓ 6,000 ft</span><span>2:14</span><span style="color:#4f8">▼ 12 kt</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:6px 8px;color:#aaa">
+          <span>  9,000 ft</span><span>2:22</span><span style="color:#f84">▲ 8 kt</span>
+        </div>
+      </div>
+      <p style="margin-top:8px;color:#666;font-size:0.85em">Fastest interaction · replaces altitude dropdown</p>
+    </div>
+  </div>
+  <div class="option" data-choice="info-only" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Read-Only Table — Pilot Uses Dropdown</h3>
+      <p>The optimizer is informational only. Pilot reads the table, then manually sets the altitude in the dropdown above it. No tap action on rows.</p>
+      <p style="margin-top:8px;color:#666;font-size:0.85em">Simpler to build · keeps dropdown as single source of truth</p>
+    </div>
+  </div>
+</div>
+
+<div style="margin-top:20px;padding:14px;background:#f0f4ff;border-radius:8px;border-left:3px solid #4477cc">
+  <p style="margin:0;font-size:0.9em;color:#334">
+    <strong>Context:</strong> Portrait mode, fat-finger targets. If A, the altitude dropdown can be hidden or removed since the table replaces it. The summary bar already shows the selected altitude as a chip.
+  </p>
+</div>

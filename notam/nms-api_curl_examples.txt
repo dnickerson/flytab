@@ -1,0 +1,157 @@
+## NMS-API cURL Command Examples and Instructions for connecting
+
+This file contains example `curl` commands for each endpoint defined in the NMS-API OpenAPI specification. Available hosts:
+
+
+servers and base host names (used :
+  - url: https://api-fit.cgifederal-aim.com/
+    description: FIT Environment
+  - url: https://api-staging.cgifederal-aim.com/
+    description: Staging (Pre-Prod) Environment
+  - url: https://api-nms.aim.faa.gov/
+    description: Prod Environment
+	
+URL with the end-point of the NMS-API for use ONCE the bearer token is retrieved	
+
+  - url: https://api-fit.cgifederal-aim.com/nmsapi
+    description: FIT Environment
+  - url: https://api-staging.cgifederal-aim.com/nmsapi
+    description: Staging (Pre-Prod) Environment
+  - url: https://api-nms.aim.faa.gov/nmsapi
+    description: Prod Environment
+
+### Step 1 is Authentication
+
+Access to the API endpoints is restricted by bearer token authentication. The bearer token is renewed using the *client_id*, *client_secret*, and *authorization URL* provided during API registration. 
+To renew the token a POST request must be sent to the *authorization URL*.
+
+* As part of the onboarding process, the users will recieve a Excel spreadsheet.  In that spreadsheet, the KEY value = <CLIENT_ID> and the SECRET value = <CLIENT_SECRET>
+---
+***Example:***
+```
+curl -X POST \
+--location "https://api-staging.cgifederal-aim.com/v1/auth/token" \
+-d grant_type=client_credentials \
+-u <CLIENT_ID>:<CLIENT_SECRET>
+```
+
+### Step 2 - Bearer token is returned from the POST call
+
+A return call provides the bearer token.
+
+JSON Response Body:
+{
+  "refresh_token_expires_in": "0",
+  "api_product_list": "[FAA Staging Preprod APIs]",
+  "api_product_list_json": [
+    "FAA Staging Preprod APIs"
+  ],
+  "organization_name": "faa-XXXX",
+  "developer.email": "whoever@email.com",
+  "token_type": "BearerToken values",
+  "issued_at": "1752851243984",
+  "client_id": "KEY provided unique to entity",
+  "access_token": "BEARER TOKEN HERE",
+  "application_name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "scope": "",
+  "expires_in": "1799",
+  "refresh_count": "0",
+  "status": "approved"
+} 
+
+NOTE - The response when retrieving the bearer token, it will give you a "expires in": "1799", value, which is in seconds, so 30 minutes for this environment. 
+
+### Step 3 - Bearer token can now be used in subsequent calls
+
+When testing with CURL, you will need to paste the Bearer token into the calls that hit the /nmsapi/vi 
+curl --location 'https://api-staging.cgifederal-aim.com/nmsapi/v1/ping' \
+--header 'Authorization: Bearer KXXXXXXXXXXXXXXXXXXXXXXXXXXXXXAR'
+
+
+
+
+### Location-Series
+
+#### Get Location-Series Data
+This command retrieves all Location-Series data.
+```bash
+curl -X GET 'https://api-staging.cgifederal-aim.com/nmsapi/v1/locationseries' \
+--header 'Authorization: Bearer <BEARER_TOKEN>'
+```
+
+#### Get Location-Series Data by Last Updated Date
+This command retrieves Location-Series data that has been updated since the specified timestamp.
+```bash
+curl -X GET 'https://api-staging.cgifederal-aim.com/nmsapi/v1/locationseries?lastUpdatedDate=2025-07-01T10:00:00Z' \
+--header 'Authorization: Bearer <BEARER_TOKEN>'
+```
+
+### NOTAMs
+
+#### Get NOTAMs by Filter
+This command retrieves NOTAMs based on various filter criteria. The `nmsResponseFormat` header is required.
+
+*   **Example by `nmsId`:**
+    ```bash
+    curl -X GET 'https://api-staging.cgifederal-aim.com/nmsapi/v1/notams?nmsId=1234567812345678' \
+    --header 'Authorization: Bearer <BEARER_TOKEN>' \
+    --header 'nmsResponseFormat: AIXM'
+    ```
+
+*   **Example by `location` and `notamNumber`:**
+    ```bash
+    curl -X GET 'https://api-staging.cgifederal-aim.com/nmsapi/v1/notams?location=KDFW&notamNumber=10%2F108' \
+    --header 'Authorization: Bearer <BEARER_TOKEN>' \
+    --header 'nmsResponseFormat: AIXM'
+    ```
+
+*   **Example by geospatial search (`latitude`, `longitude`, `radius`):**
+    ```bash
+    curl -X GET 'https://api-staging.cgifederal-aim.com/nmsapi/v1/notams?latitude=32.897&longitude=-97.037&radius=50' \
+    --header 'Authorization: Bearer <BEARER_TOKEN>' \
+    --header 'nmsResponseFormat: AIXM'
+    ```
+
+*   **Example by `lastUpdatedDate`:**
+    ```bash
+    curl -X GET 'https://api-staging.cgifederal-aim.com/nmsapi/v1/notams?lastUpdatedDate=2025-07-01T10:00:00Z' \
+    --header 'Authorization: Bearer <BEARER_TOKEN>' \
+    --header 'nmsResponseFormat: AIXM'
+    ```
+
+### NOTAM Checklist
+
+#### Get NOTAM Checklist Data
+This command retrieves a checklist of NOTAMs. It can be filtered by `accountability`, `classification`, or `location`.
+
+*   **Example retrieving all checklists:**
+    ```bash
+    curl -X GET 'https://api-staging.cgifederal-aim.com/nmsapi/v1/notams/checklist' \
+    --header 'Authorization: Bearer <BEARER_TOKEN>'
+    ```
+
+*   **Example filtering by `location` and `classification`:**
+    ```bash
+    curl -X GET 'https://api-staging.cgifederal-aim.com/nmsapi/v1/notams/checklist?location=KDFW&classification=DOMESTIC' \
+    --header 'Authorization: Bearer <BEARER_TOKEN>'
+    ```
+
+### NOTAM Initial Load
+
+#### Get Initial Load for All Classifications
+This command retrieves a signed URL for a compressed file containing all active NOTAMs. Use the `-L` flag to automatically follow the redirect to the signed URL.
+
+*   **Example with redirect (default behavior):**
+    ```bash
+    curl -X GET -L 'https://api-staging.cgifederal-aim.com/nmsapi/v1/notams/il' \
+    --header 'Authorization: Bearer <BEARER_TOKEN>'
+    ```
+
+#### Get Initial Load by Classification
+This command retrieves a signed URL for a compressed file containing active NOTAMs for a specific classification.
+
+*   **Example for `DOMESTIC` NOTAMs with redirect:**
+    ```bash
+    curl -X GET -L 'https://api-staging.cgifederal-aim.com/nmsapi/v1/notams/il/DOMESTIC' \
+    --header 'Authorization: Bearer <BEARER_TOKEN>'
+    ```

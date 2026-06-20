@@ -1,0 +1,4 @@
+{"type":"server-started","port":8181,"host":"127.0.0.1","url_host":"localhost","url":"http://localhost:8181","screen_dir":"/home/dananickerson/flytab/.superpowers/brainstorm/142153-1777916407/content","state_dir":"/home/dananickerson/flytab/.superpowers/brainstorm/142153-1777916407/state"}
+{"type":"screen-added","file":"/home/dananickerson/flytab/.superpowers/brainstorm/142153-1777916407/content/avoid-preview-layout.html"}
+{"type":"screen-added","file":"/home/dananickerson/flytab/.superpowers/brainstorm/142153-1777916407/content/waiting-2.html"}
+{"type":"server-stopped","reason":"idle timeout"}

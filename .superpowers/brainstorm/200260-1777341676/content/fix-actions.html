@@ -1,0 +1,69 @@
+<h2>What actions appear in the GPS diagnostic panel?</h2>
+<p class="subtitle">Panel opens when pilot taps the red GPS pill. Showing 3 approaches to the fix buttons.</p>
+
+<div class="cards">
+
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="background:#1a0000;border:1px solid #cc2200;border-radius:6px;padding:10px;font-family:monospace;font-size:10px;width:220px;margin:0 auto">
+        <div style="color:#ff4444;font-weight:700;font-size:12px;margin-bottom:8px">⚠ GPS UNAVAILABLE</div>
+        <div style="color:#aaa;margin-bottom:2px">08:42:01  gps_source = internal</div>
+        <div style="color:#ff6666;margin-bottom:2px">08:42:11  TIMEOUT (code 3)</div>
+        <div style="color:#ff6666;margin-bottom:2px">08:42:21  TIMEOUT (code 3)</div>
+        <div style="color:#44cc44;margin-bottom:8px">08:42:21  Stratux fix=2 sats=8/12</div>
+        <div style="background:#0055cc;color:#fff;padding:8px;text-align:center;border-radius:3px;font-weight:700;margin-bottom:4px;font-size:11px">
+          ✓ USE STRATUX GPS (RECOMMENDED)
+        </div>
+        <div style="color:#888;font-size:9px;text-align:center">Stratux is connected with GPS lock</div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A — One Smart Fix Button</h3>
+      <p>Analyzes the situation and shows one recommended action. "Stratux is connected with fix — switch to it." No choices to make under stress.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="background:#1a0000;border:1px solid #cc2200;border-radius:6px;padding:10px;font-family:monospace;font-size:10px;width:220px;margin:0 auto">
+        <div style="color:#ff4444;font-weight:700;font-size:12px;margin-bottom:8px">⚠ GPS UNAVAILABLE</div>
+        <div style="color:#aaa;margin-bottom:2px">08:42:01  gps_source = internal</div>
+        <div style="color:#ff6666;margin-bottom:2px">08:42:11  TIMEOUT (code 3)</div>
+        <div style="color:#44cc44;margin-bottom:8px">08:42:21  Stratux fix=2 sats=8/12</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-bottom:4px">
+          <div style="background:#0055cc;color:#fff;padding:6px;text-align:center;border-radius:3px;font-size:10px;font-weight:700">USE STRATUX GPS</div>
+          <div style="background:#004400;color:#44ff44;padding:6px;text-align:center;border-radius:3px;font-size:10px;font-weight:700">USE DEVICE GPS</div>
+        </div>
+        <div style="background:#222;color:#aaa;padding:5px;text-align:center;border-radius:3px;font-size:10px">AUTO (fallback)</div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B — All GPS Source Buttons</h3>
+      <p>Shows all three GPS source options directly in the panel. Pilot picks without going to Settings. More control, more cognitive load in a stressful moment.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="background:#1a0000;border:1px solid #cc2200;border-radius:6px;padding:10px;font-family:monospace;font-size:10px;width:220px;margin:0 auto">
+        <div style="color:#ff4444;font-weight:700;font-size:12px;margin-bottom:8px">⚠ GPS UNAVAILABLE</div>
+        <div style="color:#aaa;margin-bottom:2px">08:42:01  gps_source = internal</div>
+        <div style="color:#ff6666;margin-bottom:2px">08:42:11  TIMEOUT (code 3)</div>
+        <div style="color:#44cc44;margin-bottom:8px">08:42:21  Stratux fix=2 sats=8/12</div>
+        <div style="color:#ffaa44;font-size:10px;margin-bottom:8px;padding:6px;background:#332200;border-radius:3px">
+          <strong>CAUSE:</strong> GPS source is set to Device GPS but this device has no GPS hardware. Switch source to Stratux.
+        </div>
+        <div style="display:flex;gap:4px">
+          <div style="background:#0055cc;color:#fff;padding:6px;text-align:center;border-radius:3px;font-size:10px;font-weight:700;flex:2">FIX: SWITCH TO STRATUX</div>
+          <div style="background:#333;color:#aaa;padding:6px;text-align:center;border-radius:3px;font-size:10px;flex:1">SETTINGS</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C — Diagnosis + Fix + Settings</h3>
+      <p>Plain-English cause ("GPS source is 'internal' but device has no GPS hardware"), one recommended fix button, and a Settings escape hatch.</p>
+    </div>
+  </div>
+
+</div>
+<p class="subtitle" style="margin-top:12px">All options also auto-collapse the panel and restore ownship when GPS is resolved.</p>

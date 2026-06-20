@@ -493,7 +493,7 @@ class FuelOverlay {
             // files is [{name, size_bytes, modified_ms}, ...] sorted newest-first
             const flightFiles = files
                 .map(f => (typeof f === 'string' ? f : f.name))
-                .filter(name => /^\d{8}_/.test(name));
+                .filter(name => /^flight_\d/.test(name));
             if (!flightFiles.length) return null;
 
             const csvResp = await fetch(`http://localhost:9090/flights/${flightFiles[0]}`,

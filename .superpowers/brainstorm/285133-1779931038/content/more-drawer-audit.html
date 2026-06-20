@@ -1,0 +1,66 @@
+<h2>MORE Drawer — Item Audit</h2>
+<p class="subtitle">19 items currently. Proposed: keep 9 core items, move 4 to a Dev/Admin sub-section, remove 4. Check or uncheck anything you disagree with.</p>
+
+<div class="options" data-multiselect>
+
+  <div class="option selected" data-choice="keep-core" onclick="toggleSelect(this)" style="border-color:#00cc66;">
+    <div class="letter" style="background:#00cc66;">✓</div>
+    <div class="content">
+      <h3>Keep — core in-flight (9 items)</h3>
+      <table style="width:100%; font-size:13px; border-collapse:collapse; margin-top:6px;">
+        <tr style="color:#888; font-size:11px; text-transform:uppercase;"><th style="text-align:left; padding:3px 6px;">Item</th><th style="text-align:left; padding:3px 6px;">Reason</th></tr>
+        <tr style="border-top:1px solid #2a3045;"><td style="padding:5px 6px;">✈️ Plan on flywhere.app</td><td style="padding:5px 6px; color:#aaa;">Pre-flight web planning</td></tr>
+        <tr style="border-top:1px solid #2a3045;"><td style="padding:5px 6px;">🗺 New Route</td><td style="padding:5px 6px; color:#aaa;">Frequent cockpit use</td></tr>
+        <tr style="border-top:1px solid #2a3045;"><td style="padding:5px 6px;">💾 Save Plan</td><td style="padding:5px 6px; color:#aaa;">Frequent cockpit use</td></tr>
+        <tr style="border-top:1px solid #2a3045;"><td style="padding:5px 6px;">✈ Load Plan</td><td style="padding:5px 6px; color:#aaa;">Frequent cockpit use</td></tr>
+        <tr style="border-top:1px solid #2a3045;"><td style="padding:5px 6px;">⛅ Weather Briefing</td><td style="padding:5px 6px; color:#aaa;">Pre-flight, important</td></tr>
+        <tr style="border-top:1px solid #2a3045;"><td style="padding:5px 6px;">📊 Approach Charts</td><td style="padding:5px 6px; color:#aaa;">In-flight reference</td></tr>
+        <tr style="border-top:1px solid #2a3045;"><td style="padding:5px 6px;">⛽ Fuel Entry</td><td style="padding:5px 6px; color:#aaa;">In-flight fuel tracking</td></tr>
+        <tr style="border-top:1px solid #2a3045;"><td style="padding:5px 6px;">🧠 Engine ML</td><td style="padding:5px 6px; color:#aaa;">In-flight monitoring</td></tr>
+        <tr style="border-top:1px solid #2a3045;"><td style="padding:5px 6px;">📋 Logbook</td><td style="padding:5px 6px; color:#aaa;">Post-flight, accessed from cockpit</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="option selected" data-choice="add-tmr" onclick="toggleSelect(this)" style="border-color:#00cc66;">
+    <div class="letter" style="background:#00cc66;">+</div>
+    <div class="content">
+      <h3>Add — TMR (Timer) moves here from tab bar</h3>
+      <p style="font-size:13px; color:#aaa; margin-top:4px;">⏱ Timer / stopwatch — moved from dedicated tab to MORE since it's rarely needed and the tab slot is being reclaimed for CMPCT.</p>
+    </div>
+  </div>
+
+  <div class="option selected" data-choice="move-admin" onclick="toggleSelect(this)" style="border-color:#f0b400;">
+    <div class="letter" style="background:#f0b400; color:#000;">↓</div>
+    <div class="content">
+      <h3>Move to Dev/Admin sub-section (bottom of drawer, visually separated)</h3>
+      <table style="width:100%; font-size:13px; border-collapse:collapse; margin-top:6px;">
+        <tr style="color:#888; font-size:11px; text-transform:uppercase;"><th style="text-align:left; padding:3px 6px;">Item</th><th style="text-align:left; padding:3px 6px;">Reason</th></tr>
+        <tr style="border-top:1px solid #2a3045;"><td style="padding:5px 6px;">🗄 Data Status</td><td style="padding:5px 6px; color:#aaa;">Diagnostic only</td></tr>
+        <tr style="border-top:1px solid #2a3045;"><td style="padding:5px 6px;">⚙ Configuration</td><td style="padding:5px 6px; color:#aaa;">Setup only</td></tr>
+        <tr style="border-top:1px solid #2a3045;"><td style="padding:5px 6px;">🔄 Reset NASR Data</td><td style="padding:5px 6px; color:#aaa;">Admin/destructive — should be buried</td></tr>
+        <tr style="border-top:1px solid #2a3045;"><td style="padding:5px 6px;">📡 Stratux Status</td><td style="padding:5px 6px; color:#aaa;">Setup/debug, not in-flight</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="option selected" data-choice="remove" onclick="toggleSelect(this)" style="border-color:#ff4444;">
+    <div class="letter" style="background:#ff4444;">✕</div>
+    <div class="content">
+      <h3>Remove (5 items)</h3>
+      <table style="width:100%; font-size:13px; border-collapse:collapse; margin-top:6px;">
+        <tr style="color:#888; font-size:11px; text-transform:uppercase;"><th style="text-align:left; padding:3px 6px;">Item</th><th style="text-align:left; padding:3px 6px;">Reason</th></tr>
+        <tr style="border-top:1px solid #2a3045;"><td style="padding:5px 6px;">📤 Flight Upload</td><td style="padding:5px 6px; color:#aaa;">Post-flight desktop workflow; duplicate of Logbook export</td></tr>
+        <tr style="border-top:1px solid #2a3045;"><td style="padding:5px 6px;">📶 FIS-B Status</td><td style="padding:5px 6px; color:#aaa;">Status bar already shows FIS-B icon; rarely opened</td></tr>
+        <tr style="border-top:1px solid #2a3045;"><td style="padding:5px 6px;">🗺 Export Track GPX</td><td style="padding:5px 6px; color:#aaa;">Post-flight only; Logbook covers this</td></tr>
+        <tr style="border-top:1px solid #2a3045;"><td style="padding:5px 6px;">📍 Export Track CSV</td><td style="padding:5px 6px; color:#aaa;">Post-flight only; Logbook covers this</td></tr>
+        <tr style="border-top:1px solid #2a3045;"><td style="padding:5px 6px;">❓ Help</td><td style="padding:5px 6px; color:#aaa;">Duplicate of User Manual; one reference item is enough</td></tr>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<div class="section" style="margin-top:20px; padding:10px 14px; background:rgba(0,150,255,0.07); border-radius:6px; border-left:3px solid #0096ff; font-size:13px;">
+  <strong>Result:</strong> 10 core items + 4 admin items (separated by a divider) = 14 total, down from 19. User Manual stays as-is (1 reference item). Click any row to toggle disagreement.
+</div>

@@ -1,0 +1,40 @@
+<h2>Altitude Optimizer — Which Altitudes to Compare?</h2>
+<p class="subtitle">FD winds data is available at fixed levels: 3000, 6000, 9000, 12000, 18000, 24000 ft. How should we present them?</p>
+
+<div class="options">
+  <div class="option" data-choice="fd-levels" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>FD Reporting Levels Only</h3>
+      <p>Show exactly the altitudes the wind data covers: <strong>3,000 · 6,000 · 9,000 · 12,000 · 18,000</strong></p>
+      <p>Winds are already interpolated to nearest level, so these are the most accurate. Simple and honest about data resolution.</p>
+      <p style="margin-top:8px;color:#666;font-size:0.85em">5 rows · directly matches wind data</p>
+    </div>
+  </div>
+  <div class="option" data-choice="vfr-hemi" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>VFR Hemispheric Rule Altitudes</h3>
+      <p>Odd+500 eastbound, even+500 westbound, auto-picked from route bearing:<br>
+      <strong>3,500 · 5,500 · 7,500 · 9,500</strong> (east) or <strong>4,500 · 6,500 · 8,500</strong> (west)</p>
+      <p>Reminds pilot of legal VFR altitudes. But winds interpolated from nearest FD level — less precise at intermediate altitudes.</p>
+      <p style="margin-top:8px;color:#666;font-size:0.85em">3–4 rows · route-direction aware</p>
+    </div>
+  </div>
+  <div class="option" data-choice="both" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Both — IFR Thousands + VFR +500</h3>
+      <p>Show IFR altitudes (odd/even thousands by direction) plus the VFR +500 variants side by side:<br>
+      <strong>3,000 / 3,500 · 6,000 / 6,500 · 9,000 / 9,500 · 12,000</strong></p>
+      <p>Complete picture but more rows. Useful for IFR-rated pilot flying either ruleset.</p>
+      <p style="margin-top:8px;color:#666;font-size:0.85em">6–8 rows · most complete</p>
+    </div>
+  </div>
+</div>
+
+<div style="margin-top:20px;padding:14px;background:#f0f4ff;border-radius:8px;border-left:3px solid #4477cc">
+  <p style="margin:0;font-size:0.9em;color:#334">
+    <strong>Note:</strong> RV-9A O-360 practical ceiling ~12,000–14,000 ft. Rows above 14,000 ft would be grayed out regardless of choice.
+  </p>
+</div>

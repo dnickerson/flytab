@@ -6,6 +6,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 FlyTab is an Android cockpit app for experimental aircraft. It runs as a Capacitor web app (vanilla JavaScript, no framework) and communicates with a Raspberry Pi running a Python engine monitor and an unmodified Stratux ADS-B/GPS receiver.
 
+## Network Constraint — Tablet Has No Internet During Flight
+
+**The tablet is on Stratux WiFi during every flight. It has no internet access, ever, in the air.**
+
+All real-time data must come from Stratux (ADS-B/FIS-B) or the Pi (engine monitor). Any feature that requires internet data (NMS-API, AWC, tiles, etc.) must pre-fetch on the ground before departure and cache locally. Never design an in-flight feature that requires a live internet call — it will silently fail in the air.
+
+This applies to: NOTAM text (NMS-API), weather advisories (AWC), internet NEXRAD, METARs from internet sources, and any other external API.
+
 ## Build Policy
 
 Run `bash build.sh` automatically after any code change is complete — no need to wait for the user to ask. Always increment `FLYTAB_VERSION` in `web/app.js` before building (build.sh reads it to set versionCode/versionName).

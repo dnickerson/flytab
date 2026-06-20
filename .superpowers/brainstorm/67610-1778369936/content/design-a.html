@@ -1,0 +1,126 @@
+<h2>Feature A Design — Altitude Optimizer</h2>
+<p class="subtitle">Full design for review. Three states: no route, no winds, winds loaded.</p>
+
+<div class="section">
+  <h3>Settings Popup — Winds &amp; Performance Section</h3>
+
+  <div class="split">
+    <div class="mockup">
+      <div class="mockup-header">State 1: No Route Planned</div>
+      <div class="mockup-body" style="font-size:0.82em;padding:12px">
+        <div style="color:#888;font-size:0.8em;letter-spacing:0.05em;margin-bottom:8px">WINDS &amp; PERFORMANCE</div>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
+          <span style="color:#333;min-width:70px">Departure</span>
+          <select style="flex:1;padding:4px"><option>Now</option></select>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
+          <span style="color:#333;min-width:70px">Altitude</span>
+          <select style="flex:1;padding:4px"><option>6,000 ft</option></select>
+        </div>
+        <div style="background:#f0f0f0;border-radius:4px;padding:10px;color:#999;font-size:0.9em;text-align:center">
+          Plan a route to see altitude comparison
+        </div>
+      </div>
+    </div>
+
+    <div class="mockup">
+      <div class="mockup-header">State 2: Route Planned, No Winds</div>
+      <div class="mockup-body" style="font-size:0.82em;padding:12px">
+        <div style="color:#888;font-size:0.8em;letter-spacing:0.05em;margin-bottom:8px">WINDS &amp; PERFORMANCE</div>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
+          <span style="color:#333;min-width:70px">Departure</span>
+          <select style="flex:1;padding:4px"><option>Now</option></select>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
+          <span style="color:#333;min-width:70px">Altitude</span>
+          <select style="flex:1;padding:4px"><option>6,000 ft</option></select>
+        </div>
+        <div style="background:#f0f0f0;border-radius:4px;padding:10px;color:#999;font-size:0.9em;text-align:center">
+          Fetching winds… (or: Wind data unavailable — calm-air estimates shown)
+        </div>
+        <div style="background:#1a1a2e;border-radius:4px;padding:8px;font-family:monospace;color:#777;font-size:0.85em;margin-top:6px">
+          <div style="display:grid;grid-template-columns:68px 1fr 44px 44px;color:#555;font-size:0.8em;margin-bottom:4px">
+            <span>ALT</span><span>ETE</span><span>GS</span><span>GAL</span>
+          </div>
+          <div style="display:grid;grid-template-columns:68px 1fr 44px 44px;padding:3px 0">
+            <span>3,000</span><span>2:51</span><span>120</span><span>21.4</span>
+          </div>
+          <div style="display:grid;grid-template-columns:68px 1fr 44px 44px;padding:3px 0;background:#222;border-radius:3px">
+            <span>6,000</span><span>2:41 ★</span><span>128</span><span>20.5</span>
+          </div>
+          <div style="display:grid;grid-template-columns:68px 1fr 44px 44px;padding:3px 0">
+            <span>9,000</span><span>2:44</span><span>126</span><span>20.9</span>
+          </div>
+          <div style="display:grid;grid-template-columns:68px 1fr 44px 44px;padding:3px 0">
+            <span>12,000</span><span>2:48</span><span>123</span><span>21.3</span>
+          </div>
+          <div style="display:grid;grid-template-columns:68px 1fr 44px 44px;padding:3px 0;color:#444">
+            <span>18,000</span><span>—</span><span>—</span><span>—</span>
+          </div>
+        </div>
+        <div style="color:#888;font-size:0.78em;margin-top:4px;text-align:center">calm-air estimates · no wind data</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="mockup" style="margin-top:16px">
+    <div class="mockup-header">State 3: Route Planned + Winds Loaded ← Primary State</div>
+    <div class="mockup-body" style="font-size:0.85em;padding:14px">
+      <div style="color:#888;font-size:0.8em;letter-spacing:0.05em;margin-bottom:8px">WINDS &amp; PERFORMANCE</div>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
+        <span style="color:#333;min-width:70px">Departure</span>
+        <select style="flex:1;padding:4px"><option>Now</option></select>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
+        <span style="color:#333;min-width:70px">Altitude</span>
+        <select style="flex:1;padding:4px"><option>6,000 ft</option></select>
+      </div>
+      <div style="background:#1a1a2e;border-radius:6px;padding:10px;font-family:monospace;color:#eee;font-size:0.9em">
+        <div style="display:grid;grid-template-columns:72px 1fr 50px 50px;color:#888;font-size:0.8em;margin-bottom:6px;border-bottom:1px solid #333;padding-bottom:4px">
+          <span>ALT</span><span>ETE</span><span>GS</span><span>GAL</span>
+        </div>
+        <div style="display:grid;grid-template-columns:72px 1fr 50px 50px;padding:5px 0">
+          <span>3,000</span><span>2:41</span><span>138</span><span>20.1</span>
+        </div>
+        <div style="display:grid;grid-template-columns:72px 1fr 50px 50px;padding:5px 6px;background:#1e3a6e;border-radius:4px;border-left:3px solid #7af">
+          <span style="color:#7af;font-weight:bold">6,000</span><span style="color:#7af;font-weight:bold">2:14 ★</span><span style="color:#7af">162</span><span style="color:#7af">19.4</span>
+        </div>
+        <div style="display:grid;grid-template-columns:72px 1fr 50px 50px;padding:5px 0">
+          <span>9,000</span><span>2:28</span><span>150</span><span>20.8</span>
+        </div>
+        <div style="display:grid;grid-template-columns:72px 1fr 50px 50px;padding:5px 0">
+          <span>12,000</span><span>2:35</span><span>145</span><span>21.2</span>
+        </div>
+        <div style="display:grid;grid-template-columns:72px 1fr 50px 50px;padding:5px 0;color:#555">
+          <span>18,000</span><span>—</span><span>—</span><span>above ceiling</span>
+        </div>
+      </div>
+      <div style="color:#888;font-size:0.78em;margin-top:6px">★ fastest · highlighted row = selected altitude · blue bar = current selection · 18,000 grayed (above RV-9A ceiling)</div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>How It Works</h3>
+  <ul style="font-size:0.9em;line-height:1.7">
+    <li><strong>Computation:</strong> Calls <code>recomputeLegs()</code> 5× with the same route and winds, one per altitude level. Pure JS — completes in &lt;5ms.</li>
+    <li><strong>Triggered:</strong> When popup opens (if route + winds exist), and whenever winds or route changes while popup is open.</li>
+    <li><strong>Ceiling cutoff:</strong> 18,000 ft always grayed — O-360 practical ceiling ~14,000 ft. Row shown for completeness but no data.</li>
+    <li><strong>Current selection:</strong> Row matching <code>_cruiseAltFt</code> gets left blue bar + bold. Dropdown change → table re-highlights instantly.</li>
+    <li><strong>MOS column ready:</strong> When Feature C (mixing height) is implemented, a <code>MIX</code> column slots in between GAL and right edge — table stays same structure.</li>
+  </ul>
+</div>
+
+<div class="section">
+  <h3>Does this design look right?</h3>
+  <div class="options">
+    <div class="option" data-choice="approved" onclick="toggleSelect(this)">
+      <div class="letter">✓</div>
+      <div class="content"><h3>Approved — proceed to MEA + MOS design</h3></div>
+    </div>
+    <div class="option" data-choice="changes" onclick="toggleSelect(this)">
+      <div class="letter">✗</div>
+      <div class="content"><h3>Changes needed</h3></div>
+    </div>
+  </div>
+</div>

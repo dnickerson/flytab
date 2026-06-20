@@ -1,0 +1,7 @@
+{"type":"server-started","port":8082,"host":"0.0.0.0","url_host":"192.168.1.77","url":"http://192.168.1.77:8082","screen_dir":"/home/dananickerson/flytab/.superpowers/brainstorm/211929-1777149960/content","state_dir":"/home/dananickerson/flytab/.superpowers/brainstorm/211929-1777149960/state"}
+{"type":"screen-added","file":"/home/dananickerson/flytab/.superpowers/brainstorm/211929-1777149960/content/wx-briefing-mcd.html"}
+{"type":"screen-added","file":"/home/dananickerson/flytab/.superpowers/brainstorm/211929-1777149960/content/wx-briefing-full.html"}
+{"type":"screen-added","file":"/home/dananickerson/flytab/.superpowers/brainstorm/211929-1777149960/content/wx-briefing-v2.html"}
+{"type":"screen-added","file":"/home/dananickerson/flytab/.superpowers/brainstorm/211929-1777149960/content/wx-landscape.html"}
+{"type":"screen-added","file":"/home/dananickerson/flytab/.superpowers/brainstorm/211929-1777149960/content/wx-landscape-v2.html"}
+{"type":"server-stopped","reason":"idle timeout"}

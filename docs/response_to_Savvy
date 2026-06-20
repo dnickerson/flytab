@@ -1,0 +1,42 @@
+Hi Adam,
+
+Thank you — that's genuinely encouraging to hear, especially coming from the team that built GADfly. Knowing it's
+been tested in actual cockpits gives me more confidence in the direction.
+
+I don't have a formal write-up yet, but here's a summary of the implementation:
+
+The system runs entirely on a Lenovo Yoga Tab Plus — no internet required in flight. It's a two-layer design:
+
+Layer 1 (physics rules) fires every second on hard limits: CHT > 420°F, oil pressure < 25 PSI, MAP drop > 3 in
+Hg/sec, RPM drop > 200/sec, fuel flow collapse below 2 GPH at cruise power. No ML involved — these trip immediately
+when something is unambiguously wrong.
+
+Layer 2 (ML inference) runs a TFLite model via a native Capacitor plugin at 1 Hz. The model takes 18 parameters —
+EGTs, CHTs, RPM, MAP, oil pressure, fuel flow, altitude, airspeed — and returns an anomaly score, a flight phase
+estimate, and inference latency. When it flags an anomaly, the system compares current values against a 60-second
+rolling baseline to identify which parameter deviated most and generates a plain-language advisory ("EGT #3 elevated
+ — 1680°F vs baseline 1590°F. Check mixture.") with graduated severity.
+
+The emergency trigger requires both layers to agree. If a physics alarm fires (MAP drop > 5 in Hg, RPM drop > 300,
+or oil pressure < 20 PSI) and the ML model also returns anomaly=true in the same cycle, the EFB activates a glide
+overlay with best glide speed, nearest airports, and a glide ring on the map.
+
+Flight phase is GPS-anchored. The model outputs a phase estimate, but the EFB overrides it with a 60-second smoothed
+ GPS altitude rate — this prevents turbulence from thrashing phase transitions, which would destabilize the CHT
+limits and baseline comparisons.
+
+On false positive rate: honestly, it's been acceptable but not zero. The model occasionally flags anomalies during
+aggressive power changes at altitude (LOP leaning in particular). I rate-limit advisories per type to avoid nuisance
+ chatter. The physics layer has been rock-solid — no false positives there. The ML layer I'd call "worth watching"
+rather than "act now" reliable in isolation, which is exactly why the emergency trigger requires both layers.
+
+On performance: inference latency on the Yoga Tab Plus averages around 8–12 ms at 1 Hz, well within budget. The
+post-flight Savvy CSV includes four appended ML columns (ml_phase, ml_score, ml_anomaly, ml_latency_ms) so your
+analysis tools can correlate on-device flags against raw sensor data after the flight — that's been useful for
+tuning thresholds.
+
+I'd welcome any thoughts from your team on where the thresholds are miscalibrated or where GADfly's post-flight
+analysis sees things my on-device model misses. That kind of cross-validation would be valuable.
+
+Best,
+Dana

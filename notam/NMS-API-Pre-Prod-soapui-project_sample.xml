@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<con:soapui-project id="2b58b684-5a8b-409e-9ea7-cda96b886e76" activeEnvironment="Default" name="NMS-API Pre-Prod" resourceRoot="" soapui-version="5.8.0" xmlns:con="http://eviware.com/soapui/config"><con:settings/><con:interface xsi:type="con:RestService" id="e85fc5f6-6f63-4751-b3e3-6c91784cbaeb" wadlVersion="http://wadl.dev.java.net/2009/02" name="NOTAM Management System API (NMS-API)" type="rest" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><con:description>**Overview**
+
+The NMS-API provides endpoints for requesting NOTAM data. Optional filters
+are provided to request subsets of NOTAM data. Supported filters are:
+accountability, classification, effect start and end date, feature, free 
+text, id, last updated date, latitude, location, longitude, NOTAM number, 
+and radius.
+
+The API also supports requesting initial load data by NOTAM 
+classification.
+
+The API also support requesting NOTAM checklists data. Checklist data is 
+filtered by: accountability, classification, and location.
+
+Additionally, the API provides access to Location-Series data.
+
+**Authentication**
+
+Access to the API endpoints is restricted by bearer token authentication. 
+The bearer token is renewed using the *client_id*, *client_secret*, 
+and *authorization URL* provided during API registration. To renew the 
+token a POST request must be sent to the *authorization URL*.
+---
+***Example:***
+```
+curl -X POST \
+--location "&lt;HOST>" \
+-d grant_type=client_credentials \
+-u &lt;CLIENT_ID>:&lt;CLIENT_SECRET>
+```
+
+**Data Formats**
+
+NMS-API responses are JSON formatted messages. NOTAM data within the 
+response body will be represented as either AIXM 5.1 or GeoJSON format, 
+depending on the user provided *nmsResponseFormat* HTTP header. The 
+*nmsResponseFormat* header is a required parameter, if it is not provided 
+an error will be generated. Acceptable header values are:
+
+*nmsResponseFormat: AIXM | GEOJSON*
+
+**Reference Documentation**
+
+FNS NDS WSDD, FNS NDS WSRD, and AIDAP IRD</con:description><con:settings/><con:definitionCache type="TEXT" rootPart=""/><con:endpoints><con:endpoint>https://api-staging.cgifederal-aim.com/nmsapi</con:endpoint></con:endpoints><con:resource name="/v1/locationseries" path="/v1/locationseries" id="75d8bd79-724c-4769-8b02-7f02c6444d4e"><con:settings/><con:parameters/><con:method name="getLocationSeries" id="40b2a7b1-ce83-4483-b4f5-9f2f2f3ca7c1" method="GET"><con:description>Returns a set of Location-Series data based on the provided 
+last updated date query parameter. If a last update date is not 
+provided the request will assume a one (1) hour request window from 
+current time in UTC. Requests boundaries should not exceed five (5) 
+days in the past. Data is returned in JSON format.
+&#13;
+Returns a set of Location-Series data.
+</con:description><con:settings/><con:parameters><con:parameter><con:name>lastUpdatedDate</con:name><con:style>QUERY</con:style><con:description>Filters all Location-Series data by the provided  last modification time criteria, generating a set of  Location-Series mappings which have been modified between the  provided *lastUpdatedDate* and current UTC time.
+</con:description></con:parameter></con:parameters><con:representation type="RESPONSE"><con:mediaType>application/json</con:mediaType><con:status>200</con:status><con:params/></con:representation><con:representation type="RESPONSE"><con:mediaType>application/json</con:mediaType><con:status>400</con:status><con:params/></con:representation><con:representation type="RESPONSE"><con:mediaType>application/json</con:mediaType><con:status>401</con:status><con:params/></con:representation><con:representation type="RESPONSE"><con:mediaType>application/json</con:mediaType><con:status>408</con:status><con:params/></con:representation><con:representation type="RESPONSE"><con:mediaType>application/json</con:mediaType><con:status>500</con:status><con:params/></con:representation><con:representation type="RESPONSE"><con:mediaType>application/json</con:mediaType><con:status/><con:params/></con:representation><con:representation type="FAULT"><con:mediaType>application/json</con:mediaType><con:status>400 404</con:status><con:params/><con:element xmlns:loc="https://api-staging.cgifederal-aim.com/nmsapi/v1/locationseries">loc:Fault</con:element></con:representation><con:request name="Request 1" id="69adbb44-825d-40d5-924c-36474769724a" mediaType="application/json"><con:settings><con:setting id="com.eviware.soapui.impl.wsdl.WsdlRequest@request-headers">&lt;xml-fragment/></con:setting></con:settings><con:endpoint>https://api-staging.cgifederal-aim.com/nmsapi</con:endpoint><con:request/><con:originalUri>https://api-staging.cgifederal-aim.com/nmsapi/v1/locationseries</con:originalUri><con:credentials><con:selectedAuthProfile>PreProd</con:selectedAuthProfile><con:authType>OAuth 2.0</con:authType></con:credentials><con:jmsConfig JMSDeliveryMode="PERSISTENT"/><con:jmsPropertyConfig/><con:parameters><entry key="lastUpdatedDate" value="2025-07-29T00:00:00Z" xmlns="http://eviware.com/soapui/config"/></con:parameters></con:request></con:method></con:resource><con:resource name="/v1/notams" path="/v1/notams" id="53f81218-4fc6-478b-9cff-6eb262cdf5cc"><con:settings/><con:parameters/><con:method name="getFilteredNotams" id="e2d1fa6a-9be1-4494-806a-6a264255bbe4" method="GET"><con:description>Returns a partial set of NOTAM data based on the provided query 
+parameters. NOTAM data may be returned in either AIXM or GeoJSON 
+formats as determined by the *nmsResponseFormat* header parameter.
+
+Query parameters are evaluated using logical 'AND' conditions. Some 
+parameters may require supporting parameters also be provided. Query 
+parameter relationships are defined in the individual parameter 
+descriptions.
+
+If no query parameters are provided an error will be returned.
+&#13;
+Returns a partial set of NOTAM data based on the provided query  parameters.
+</con:description><con:settings/><con:parameters><con:parameter required="true"><con:name>nmsResponseFormat</con:name><con:style>HEADER</con:style><con:description>The NOTAM format to be provided in the response body.
+</con:description></con:parameter><con:parameter><con:name>accountability</con:name><con:style>QUERY</con:style><con:description>Filters active NOTAM data by the provided accountability criteria.
+</con:description></con:parameter><con:parameter><con:name>classification</con:name><con:style>QUERY</con:style><con:description>Filters active NOTAM data by the provided classification criteria.
+</con:description></con:parameter><con:parameter><con:name>effectiveEndDate</con:name><con:style>QUERY</con:style><con:description>Filters active NOTAM data based on the provided start and end time  criteria. This parameter must be used together with the  *effectiveStartDate* parameter.
+</con:description></con:parameter><con:parameter><con:name>effectiveStartDate</con:name><con:style>QUERY</con:style><con:description>Filters active NOTAM data based on the provided start and end time  criteria. This parameter must be used together with the  *effectiveEndDate* parameter.
+</con:description></con:parameter><con:parameter><con:name>feature</con:name><con:style>QUERY</con:style><con:description>Filters active NOTAM data by the provided feature criteria.
+</con:description></con:parameter><con:parameter><con:name>freeText</con:name><con:style>QUERY</con:style><con:description>Filters active NOTAM data by the provided free text criteria.
+</con:description></con:parameter><con:parameter><con:name>nmsId</con:name><con:style>QUERY</con:style><con:description>Filters all NOTAM data by the provided unique identifier criteria.  Returns a single NOTAM, whether active or inactive.
+</con:description></con:parameter><con:parameter><con:name>lastUpdatedDate</con:name><con:style>QUERY</con:style><con:description>Filters all NOTAM data by the provided last modification time  criteria, generating a set of NOTAMs which have been modified  (created, updated, canceled) between the provided  *lastUpdatedDate* and current UTC time. This parameter is  limited to a 72 hour window prior to current time. Returned data  will include both active and inactive NOTAMs.
+</con:description></con:parameter><con:parameter><con:name>latitude</con:name><con:style>QUERY</con:style><con:description>Filters active NOTAM data by the provided geospatial criteria.  The latitude is provided in decimal degrees (ex. 32.897),  ranging between [-90, 90]. This parameter must be used  together with the *longitude* and *radius* parameters.
+</con:description></con:parameter><con:parameter><con:name>location</con:name><con:style>QUERY</con:style><con:description>Filters active NOTAM data by the provided location criteria. The  location may be represented in either domestic or ICAO formats.
+</con:description></con:parameter><con:parameter><con:name>longitude</con:name><con:style>QUERY</con:style><con:description>Filters active NOTAM data by the provided geospatial criteria.  The longitude is provided in decimal degrees (ex. -97.037),  ranging between [-180, 180]. This parameter must be used  together with the *latitude* and *radius* parameters.
+</con:description></con:parameter><con:parameter><con:name>notamNumber</con:name><con:style>QUERY</con:style><con:description>Filters active NOTAM data by the provided NOTAM number. This  parameter must be used together with the *location* parameter.
+</con:description></con:parameter><con:parameter><con:name>radius</con:name><con:style>QUERY</con:style><con:description>Filters active NOTAM data by the provided geospatial criteria.  The radius is presented in nautical miles ranging between  [0, 100]. This parameter must be used together with the  *longitude* and *latitude* parameters.
+</con:description></con:parameter></con:parameters><con:representation type="RESPONSE"><con:mediaType>application/json</con:mediaType><con:status>200</con:status><con:params/></con:representation><con:representation type="RESPONSE"><con:mediaType>application/json</con:mediaType><con:status>400</con:status><con:params/></con:representation><con:representation type="RESPONSE"><con:mediaType>application/json</con:mediaType><con:status>401</con:status><con:params/></con:representation><con:representation type="RESPONSE"><con:mediaType>application/json</con:mediaType><con:status>408</con:status><con:params/></con:representation><con:representation type="RESPONSE"><con:mediaType>application/json</con:mediaType><con:status>500</con:status><con:params/></con:representation><con:representation type="RESPONSE"><con:mediaType>application/json</con:mediaType><con:status/><con:params/></con:representation><con:representation type="FAULT"><con:mediaType>application/json</con:mediaType><con:status>401 400 502</con:status><con:params/><con:element xmlns:not="https://api-staging.cgifederal-aim.com/nmsapi/v1/notams">not:Fault</con:element></con:representation><con:request name="Request 1" id="ba88d6e3-467e-412e-95d4-7c14ff148149" mediaType="application/json"><con:settings><con:setting id="com.eviware.soapui.impl.wsdl.WsdlRequest@request-headers">&lt;xml-fragment/></con:setting></con:settings><con:endpoint>https://api-staging.cgifederal-aim.com/nmsapi</con:endpoint><con:request/><con:originalUri>https://api-staging.cgifederal-aim.com/nmsapi/v1/notams</con:originalUri><con:credentials><con:selectedAuthProfile>PreProd</con:selectedAuthProfile><con:authType>OAuth 2.0</con:authType></con:credentials><con:jmsConfig JMSDeliveryMode="PERSISTENT"/><con:jmsPropertyConfig/><con:parameters>
+  <con:entry key="latitude" value="32"/>
+  <con:entry key="nmsResponseFormat" value="AIXM"/>
+  <con:entry key="radius" value="10"/>
+  <con:entry key="longitude" value="-97"/>
+</con:parameters></con:request></con:method></con:resource><con:resource name="/v1/notams/checklist" path="/v1/notams/checklist" id="322d0e49-ba9e-45b2-aac6-6798aa3f1cc1"><con:settings/><con:parameters/><con:method name="getNotamsChecklist" id="a386fba8-6564-4fa1-8aa5-522c325d8e5e" method="GET"><con:description>Returns a set of NOTAM Checklist data as constrained by provided filter criteria. 
+If no filter criteria are provided checklist details for all active NOTAMs will be 
+returned.
+&#13;
+Returns checklist formatted subset of NOTAM  data based on the provided query parameters.
+</con:description><con:settings/><con:parameters><con:parameter><con:name>accountability</con:name><con:style>QUERY</con:style><con:description>Filters NOTAM checklist by the provided accountability criteria.
+</con:description></con:parameter><con:parameter><con:name>classification</con:name><con:style>QUERY</con:style><con:description>Filters NOTAM checklist data by the provided classification  criteria.
+</con:description></con:parameter><con:parameter><con:name>location</con:name><con:style>QUERY</con:style><con:description>Filters NOTAM checklist data by the provided location criteria.  The location may be provided in either domestic or ICAO formats.
+</con:description></con:parameter></con:parameters><con:representation type="RESPONSE"><con:mediaType>application/json</con:mediaType><con:status>200</con:status><con:params/></con:representation><con:representation type="RESPONSE"><con:mediaType>application/json</con:mediaType><con:status>400</con:status><con:params/></con:representation><con:representation type="RESPONSE"><con:mediaType>application/json</con:mediaType><con:status>401</con:status><con:params/></con:representation><con:representation type="RESPONSE"><con:mediaType>application/json</con:mediaType><con:status>408</con:status><con:params/></con:representation><con:representation type="RESPONSE"><con:mediaType>application/json</con:mediaType><con:status>500</con:status><con:params/></con:representation><con:representation type="RESPONSE"><con:mediaType>application/json</con:mediaType><con:status/><con:params/></con:representation><con:representation type="FAULT"><con:mediaType>application/json</con:mediaType><con:status>400</con:status><con:params/><con:element xmlns:chec="https://api-staging.cgifederal-aim.com/nmsapi/v1/notams/checklist">chec:Fault</con:element></con:representation><con:request name="Request 1" id="3eba5e33-a9b9-47bb-ba47-65ce892b39d7" mediaType="application/json"><con:settings><con:setting id="com.eviware.soapui.impl.wsdl.WsdlRequest@request-headers">&lt;xml-fragment/></con:setting></con:settings><con:endpoint>https://api-staging.cgifederal-aim.com/nmsapi</con:endpoint><con:request/><con:originalUri>https://api-staging.cgifederal-aim.com/nmsapi/v1/notams/checklist</con:originalUri><con:credentials><con:selectedAuthProfile>PreProd</con:selectedAuthProfile><con:authType>OAuth 2.0</con:authType></con:credentials><con:jmsConfig JMSDeliveryMode="PERSISTENT"/><con:jmsPropertyConfig/><con:parameters>
+  <con:entry key="classification" value="DOMESTIC"/>
+  <con:entry key="accountability" value="ATL"/>
+</con:parameters></con:request></con:method></con:resource><con:resource name="/v1/notams/il" path="/v1/notams/il" id="2aa3338b-a2a0-4a7e-8dc7-5364cbc329f1"><con:settings/><con:parameters/><con:method name="getInitialLoad" id="6b692dc4-07a3-42d3-8323-1e6ca0785b1e" method="GET"><con:description>Returns a signed URL representing the location of compressed 
+initial load files containing the set of active NOTAMs across all 
+classification types. The signed URL will expire after 5 minutes.
+&#13;
+Returns a signed URL representing the location of compressed  initial load files.
+</con:description><con:settings/><con:parameters><con:parameter><con:name>allowRedirect</con:name><con:style>QUERY</con:style><con:description>Toggles whether to allow temporary redirects. If not provided then  temporary redirects will be enabled by default.
+</con:description></con:parameter></con:parameters><con:representation type="RESPONSE"><con:mediaType>application/json</con:mediaType><con:status>200</con:status><con:params/></con:representation><con:representation type="RESPONSE"><con:mediaType>application/json</con:mediaType><con:status>307</con:status><con:params/></con:representation><con:representation type="RESPONSE"><con:mediaType>application/json</con:mediaType><con:status>400</con:status><con:params/></con:representation><con:representation type="RESPONSE"><con:mediaType>application/json</con:mediaType><con:status>401</con:status><con:params/></con:representation><con:representation type="RESPONSE"><con:mediaType>application/json</con:mediaType><con:status>408</con:status><con:params/></con:representation><con:representation type="RESPONSE"><con:mediaType>application/json</con:mediaType><con:status>500</con:status><con:params/></con:representation><con:representation type="RESPONSE"><con:mediaType>application/json</con:mediaType><con:status/><con:params/></con:representation><con:request name="Request 1" id="d242a8af-e06c-4885-a862-a1daa6af04df" mediaType="application/json"><con:settings><con:setting id="com.eviware.soapui.impl.wsdl.WsdlRequest@request-headers">&lt;xml-fragment/></con:setting></con:settings><con:endpoint>https://api-staging.cgifederal-aim.com/nmsapi</con:endpoint><con:request/><con:originalUri>https://api-staging.cgifederal-aim.com/nmsapi/v1/notams/il</con:originalUri><con:credentials><con:selectedAuthProfile>PreProd</con:selectedAuthProfile><con:authType>OAuth 2.0</con:authType></con:credentials><con:jmsConfig JMSDeliveryMode="PERSISTENT"/><con:jmsPropertyConfig/><con:parameters><entry key="allowRedirect" value="false" xmlns="http://eviware.com/soapui/config"/></con:parameters></con:request></con:method></con:resource><con:resource name="/v1/notams/il/{classification}" path="/v1/notams/il/{classification}" id="3de63fd3-1bf1-461a-92e7-8c5b7ab32291"><con:settings/><con:parameters><con:parameter required="true"><con:name>classification</con:name><con:style>TEMPLATE</con:style><con:description>Filters active NOTAM data by the provided classification criteria.
+</con:description></con:parameter></con:parameters><con:method name="getInitialLoadByClassification" id="7adbc5b2-e457-482d-aa4a-eb5dee7bf794" method="GET"><con:description>Returns a signed URL representing the location of compressed 
+initial load files partitioned by the provided classification. The 
+signed URL will expire after 5 minutes.
+&#13;
+Returns a signed URL representing the location of compressed  initial load files partitioned by the provided classification.
+</con:description><con:settings/><con:parameters><con:parameter><con:name>allowRedirect</con:name><con:style>QUERY</con:style><con:description>Toggles whether to allow temporary redirects. If not provided then  temporary redirects will be enabled by default.
+</con:description></con:parameter></con:parameters><con:representation type="RESPONSE"><con:mediaType>application/json</con:mediaType><con:status>200</con:status><con:params/></con:representation><con:representation type="RESPONSE"><con:mediaType>application/json</con:mediaType><con:status>307</con:status><con:params/></con:representation><con:representation type="RESPONSE"><con:mediaType>application/json</con:mediaType><con:status>400</con:status><con:params/></con:representation><con:representation type="RESPONSE"><con:mediaType>application/json</con:mediaType><con:status>401</con:status><con:params/></con:representation><con:representation type="RESPONSE"><con:mediaType>application/json</con:mediaType><con:status>408</con:status><con:params/></con:representation><con:representation type="RESPONSE"><con:mediaType>application/json</con:mediaType><con:status>500</con:status><con:params/></con:representation><con:representation type="RESPONSE"><con:mediaType>application/json</con:mediaType><con:status/><con:params/></con:representation><con:request name="Request 1" id="dee829bc-6a07-46ba-8114-91d41ebe226c" mediaType="application/json"><con:settings><con:setting id="com.eviware.soapui.impl.wsdl.WsdlRequest@request-headers">&lt;xml-fragment/></con:setting></con:settings><con:endpoint>https://api-staging.cgifederal-aim.com/nmsapi</con:endpoint><con:request/><con:originalUri>https://api-staging.cgifederal-aim.com/nmsapi/v1/notams/il/DOMESTIC</con:originalUri><con:credentials><con:selectedAuthProfile>PreProd</con:selectedAuthProfile><con:authType>OAuth 2.0</con:authType></con:credentials><con:jmsConfig JMSDeliveryMode="PERSISTENT"/><con:jmsPropertyConfig/><con:parameters>
+  <con:entry key="allowRedirect" value="false"/>
+  <con:entry key="classification" value="DOMESTIC"/>
+</con:parameters></con:request></con:method></con:resource></con:interface><con:properties/><con:wssContainer/><con:oAuth2ProfileContainer><con:oAuth2Profile><con:name>PreProd</con:name><con:clientID>nEOBbhbk0ODE58cLAGIEEzYNnNQ4VOQp2UGW5py1RtyOax1G</con:clientID><con:clientSecret>P7L5c5RtacvrukwAllyUkEPB5tfGcKQjA98o2Wuc4KXMLKQIYZbpRS1C3ybURhTi</con:clientSecret><con:accessTokenURI>https://api-staging.cgifederal-aim.com/v1/auth/token</con:accessTokenURI><con:accessToken>r1xbCepLw6AfjufvbfexcD38d6vB</con:accessToken><con:accessTokenPosition>HEADER</con:accessTokenPosition><con:oAuth2Flow>CLIENT_CREDENTIALS_GRANT</con:oAuth2Flow><con:refreshAccessTokenMethod>AUTOMATIC</con:refreshAccessTokenMethod><con:accessTokenStatus>RETRIEVED_FROM_SERVER</con:accessTokenStatus><con:accessTokenStartingStatus>RETRIEVED_FROM_SERVER</con:accessTokenStartingStatus><con:accessTokenExpirationTime>1799</con:accessTokenExpirationTime><con:accessTokenIssuedTime>1753817691</con:accessTokenIssuedTime></con:oAuth2Profile></con:oAuth2ProfileContainer><con:oAuth1ProfileContainer/><con:sensitiveInformation/></con:soapui-project>

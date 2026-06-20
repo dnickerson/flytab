@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Root Cause — GPS Ownship Missing</title>
+<style>
+  body { background: #0d1b2a; color: #c8d8e8; font-family: monospace; margin: 0; padding: 20px; }
+  h1 { color: #ff4444; font-size: 18px; margin-bottom: 4px; }
+  h2 { color: #ffaa44; font-size: 14px; margin: 16px 0 6px; }
+  .timeline { border-left: 3px solid #334455; padding-left: 16px; margin: 12px 0; }
+  .step { margin: 8px 0; padding: 6px 10px; border-radius: 4px; font-size: 12px; }
+  .ok    { background: #0a2a0a; border-left: 3px solid #44cc44; color: #88dd88; }
+  .fail  { background: #2a0a0a; border-left: 3px solid #cc4444; color: #ff8888; }
+  .stuck { background: #2a1a0a; border-left: 3px solid #ffaa44; color: #ffcc88; }
+  .data-row { display: flex; gap: 16px; margin: 4px 0; font-size: 11px; }
+  .label { color: #667788; min-width: 120px; }
+  .val-ok   { color: #44cc44; font-weight: bold; }
+  .val-fail { color: #ff4444; font-weight: bold; }
+  .val-warn { color: #ffaa44; font-weight: bold; }
+  .box { background: #111e2e; border: 1px solid #223344; border-radius: 6px; padding: 12px; margin: 10px 0; }
+  .fix-box { background: #0a1e0a; border: 2px solid #44cc44; border-radius: 6px; padding: 12px; margin: 10px 0; }
+  .divider { border-top: 1px solid #223344; margin: 16px 0; }
+  code { background: #1a2a3a; padding: 1px 5px; border-radius: 3px; color: #88aacc; }
+</style>
+</head>
+<body>
+
+<h1>⚠ ROOT CAUSE CONFIRMED — Flight Data Analysis</h1>
+<p style="color:#aaa;font-size:11px;margin-top:0">Source: 20260427_2116Z_traffic.csv — 173,575 rows, full flight</p>
+
+<div class="box">
+  <h2>Flight Data Evidence</h2>
+  <div class="data-row"><span class="label">ws_traffic</span><span class="val-ok">OPEN — entire flight (traffic received, 136 targets)</span></div>
+  <div class="data-row"><span class="label">ws_sit</span><span class="val-fail">CLOSED — entire flight, never opened once</span></div>
+  <div class="data-row"><span class="label">own_fix</span><span class="val-fail">empty — situation never delivered GPS data</span></div>
+  <div class="data-row"><span class="label">ForeFlight</span><span class="val-ok">working — GDL90 UDP (different path, unaffected)</span></div>
+  <div class="data-row"><span class="label">Pi GPS (CSV)</span><span class="val-ok">working — engine monitor GPS tracked full flight</span></div>
+</div>
+
+<h2>The Bug — Startup Race Condition</h2>
+<div class="timeline">
+  <div class="step ok">App starts → traffic WS connecting, situation WS connecting simultaneously</div>
+  <div class="step fail">Situation WS closes first (server hiccup, timeout, or fast rejection) → <code>onclose</code> fires</div>
+  <div class="step fail"><code>onclose</code> checks: <em>"is traffic WS open?"</em> — NO, still CONNECTING → <strong>reconnect NOT scheduled</strong></div>
+  <div class="step ok">Traffic WS opens successfully → <code>_setConnected(true)</code> → app shows "connected"</div>
+  <div class="step stuck">Situation WS is dead and <strong>nobody reschedules it</strong> — the only reconnect trigger is situation's own onclose, which already fired and was ignored</div>
+  <div class="step fail">Result: no situation data → no GPS → no ownship — for the entire flight</div>
+</div>
+
+<div class="divider"></div>
+
+<h2>The Code — One Missed Case</h2>
+<div class="box">
+  <div style="color:#88aacc;font-size:11px;margin-bottom:6px">stratux-client.js — _connectSituation()</div>
+  <pre style="color:#aaa;font-size:11px;margin:0">this._situationWs.onclose = () => {
+    if (this._trafficWs?.readyState === <span style="color:#44cc44">WebSocket.OPEN</span>) {
+        setTimeout(() => reconnect(), 2000);
+    }
+    <span style="color:#ff4444">// ← if traffic not yet OPEN: silent failure, no reconnect ever</span>
+};</pre>
+  <div style="margin-top:8px;color:#ffaa44;font-size:11px">
+    When situation closes before traffic opens → reconnect guard blocks → traffic opens later → situation never recovers.
+  </div>
+</div>
+
+<div class="fix-box">
+  <h2 style="color:#44cc44;margin-top:0">The Fix — 2 Lines in _setConnected(true)</h2>
+  <pre style="color:#aaa;font-size:11px;margin:0">_setConnected(state) {
+    // ... existing code ...
+    if (state) {
+        this._resetStaleTimer();
+        <span style="color:#44ff44">// When traffic connects, rescue situation WS if it lost the race</span>
+        <span style="color:#44ff44">if (!this._situationWs || this._situationWs.readyState === WebSocket.CLOSED) {</span>
+        <span style="color:#44ff44">    this._connectSituation();</span>
+        <span style="color:#44ff44">}</span>
+    }
+}</pre>
+</div>
+
+<div class="divider"></div>
+
+<h2>Why ForeFlight Was Unaffected</h2>
+<div class="box" style="font-size:12px">
+  ForeFlight receives <strong>GDL90 UDP broadcast</strong> from Stratux on port 4000 — a completely separate protocol from FlyTab's WebSocket connections. The Stratux's <code>/situation</code> WS endpoint can fail while GDL90 continues broadcasting. These share no code path.
+</div>
+
+</body>
+</html>

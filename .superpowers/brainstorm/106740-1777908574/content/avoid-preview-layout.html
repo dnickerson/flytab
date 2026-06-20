@@ -1,0 +1,183 @@
+<h2>Smart-suggest avoidance — preview state</h2>
+<p class="subtitle">After tapping the NY Class B polygon on the map. Planner has auto-picked RBV as the branch point and computed the new tail.</p>
+
+<div class="mockup">
+  <div class="mockup-header">FlyTab cockpit — KLKR → K44N · avoidance preview</div>
+  <div class="mockup-body" style="position:relative; padding:0; height: 620px; background: #f4f5f6; overflow:hidden;">
+
+    <!-- Simulated sectional map background -->
+    <div style="position:absolute; inset:0;
+                background:
+                  linear-gradient(#dde0e3 1px, transparent 1px) 0 0/40px 40px,
+                  linear-gradient(90deg, #dde0e3 1px, transparent 1px) 0 0/40px 40px,
+                  #fafbfc;">
+    </div>
+
+    <!-- NY Class B polygon (the avoidance target, highlighted as selected) -->
+    <div style="position:absolute; left:520px; top:130px; width:200px; height:155px;
+                background: repeating-linear-gradient(45deg, rgba(201,42,42,0.15), rgba(201,42,42,0.15) 10px, transparent 10px, transparent 20px);
+                border: 4px solid #c92a2a; border-radius: 10px;
+                display:flex; align-items:center; justify-content:center;
+                font-weight:900; color:#7a1010; font-size:15px; letter-spacing:0.5px;
+                box-shadow: 0 0 0 3px rgba(201,42,42,0.25);">
+      NY CLASS B
+    </div>
+
+    <!-- Departure / Destination markers -->
+    <div style="position:absolute; left:78px; top:495px; width:18px; height:18px; background:#0d3a72; border:3px solid white; border-radius:50%; box-shadow:0 0 0 2px #0d3a72;"></div>
+    <div style="position:absolute; left:60px; top:520px; font-weight:800; color:#0d3a72; font-size:13px;">KLKR</div>
+
+    <div style="position:absolute; left:798px; top:75px; width:18px; height:18px; background:#0d3a72; border:3px solid white; border-radius:50%; box-shadow:0 0 0 2px #0d3a72;"></div>
+    <div style="position:absolute; left:780px; top:55px; font-weight:800; color:#0d3a72; font-size:13px;">K44N</div>
+
+    <!-- Other plain fixes along the route (small dots) -->
+    <div style="position:absolute; left:170px; top:475px; width:6px; height:6px; background:#0d3a72; border-radius:50%; opacity:0.5;"></div>
+    <div style="position:absolute; left:255px; top:445px; width:6px; height:6px; background:#0d3a72; border-radius:50%; opacity:0.5;"></div>
+    <div style="position:absolute; left:340px; top:410px; width:6px; height:6px; background:#0d3a72; border-radius:50%; opacity:0.5;"></div>
+    <div style="position:absolute; left:415px; top:375px; width:6px; height:6px; background:#0d3a72; border-radius:50%; opacity:0.5;"></div>
+    <div style="position:absolute; left:580px; top:380px; width:6px; height:6px; background:#0d3a72; border-radius:50%; opacity:0.5;"></div>
+    <div style="position:absolute; left:680px; top:340px; width:6px; height:6px; background:#0d3a72; border-radius:50%; opacity:0.5;"></div>
+
+    <!-- RBV branch point — orange ring -->
+    <div style="position:absolute; left:480px; top:332px; width:22px; height:22px; background:#ef6c00; border:4px solid white; border-radius:50%; box-shadow:0 0 0 3px #ef6c00, 0 0 0 7px rgba(239,108,0,0.25);"></div>
+    <div style="position:absolute; left:430px; top:362px; background:#ef6c00; color:white; font-weight:900; font-size:12px; padding:4px 9px; border-radius:4px; white-space:nowrap; letter-spacing:0.5px;">▶ BRANCH: RBV</div>
+
+    <!-- Route lines -->
+    <svg style="position:absolute; inset:0; width:100%; height:100%; pointer-events:none;">
+      <!-- Pre-RBV (kept) — solid magenta -->
+      <path d="M 87 503 L 173 478 L 258 448 L 343 413 L 418 378 L 489 343"
+            stroke="#c01060" stroke-width="4" fill="none" stroke-linejoin="round" stroke-linecap="round"/>
+      <!-- Old post-RBV through NY Bravo — gray dashed -->
+      <path d="M 489 343 Q 560 290 615 235 T 805 84"
+            stroke="#888" stroke-width="3" fill="none" stroke-dasharray="7 5" stroke-linecap="round"/>
+      <!-- New post-RBV around NY Bravo — solid magenta -->
+      <path d="M 489 343 Q 540 395 583 383 T 683 343 Q 740 280 760 200 T 805 84"
+            stroke="#c01060" stroke-width="4" fill="none" stroke-linejoin="round" stroke-linecap="round"/>
+    </svg>
+
+    <!-- ─── Right-side panel ────────────────────────────────────────── -->
+    <div style="position:absolute; right:16px; top:16px; width:344px; background:white;
+                border:2px solid #0d3a72; border-radius:6px; box-shadow:0 4px 16px rgba(0,0,0,0.18);">
+
+      <div style="background:#0d3a72; color:white; padding:11px 14px; font-weight:900; font-size:14px;
+                  display:flex; justify-content:space-between; align-items:center; letter-spacing:0.5px;">
+        <span>AVOID: NY CLASS B</span>
+        <span style="cursor:pointer; font-size:20px; line-height:1; font-weight:700;">×</span>
+      </div>
+
+      <div style="padding:14px;">
+        <!-- Branch point card (overridable) -->
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;
+                    padding:10px 12px; background:#fff7e6; border-left:5px solid #ef6c00; border-radius:3px;">
+          <div>
+            <div style="font-size:10px; font-weight:800; color:#7a3e00; letter-spacing:1px;">BRANCH AT</div>
+            <div style="font-size:20px; font-weight:900; color:#7a3e00; line-height:1.1; margin-top:2px;">RBV</div>
+            <div style="font-size:11px; color:#7a3e00; margin-top:2px; font-weight:600;">auto-picked · fix 51 of 100</div>
+          </div>
+          <button style="background:white; border:2px solid #ef6c00; color:#7a3e00; font-weight:800;
+                         font-size:12px; padding:8px 12px; border-radius:4px; letter-spacing:0.5px;">CHANGE…</button>
+        </div>
+
+        <!-- Comparison table -->
+        <div style="display:grid; grid-template-columns:80px 1fr 1fr; gap:8px 12px; font-size:14px; margin-bottom:14px;">
+          <div></div>
+          <div style="font-weight:900; font-size:10px; color:#555; letter-spacing:1px;">OLD TAIL</div>
+          <div style="font-weight:900; font-size:10px; color:#0d3a72; letter-spacing:1px;">NEW TAIL</div>
+
+          <div style="font-weight:700; color:#222;">Fixes</div>
+          <div style="font-weight:700; color:#444;">49</div>
+          <div style="font-weight:800; color:#0d3a72;">23 <span style="color:#1e7c2c; font-size:11px; font-weight:800;">−26</span></div>
+
+          <div style="font-weight:700; color:#222;">Dist</div>
+          <div style="font-weight:700; color:#444;">287 nm</div>
+          <div style="font-weight:800; color:#0d3a72;">312 nm <span style="color:#a14400; font-size:11px; font-weight:800;">+25</span></div>
+
+          <div style="font-weight:700; color:#222;">ETE</div>
+          <div style="font-weight:700; color:#444;">1:55</div>
+          <div style="font-weight:800; color:#0d3a72;">2:01 <span style="color:#a14400; font-size:11px; font-weight:800;">+0:06</span></div>
+
+          <div style="font-weight:700; color:#222;">Fuel</div>
+          <div style="font-weight:700; color:#444;">19.2 gal</div>
+          <div style="font-weight:800; color:#0d3a72;">20.4 gal <span style="color:#a14400; font-size:11px; font-weight:800;">+1.2</span></div>
+        </div>
+
+        <div style="font-size:10px; font-weight:700; color:#555; margin-top:-10px; margin-bottom:12px; letter-spacing:0.5px;">
+          ETE/FUEL include forecast winds aloft @ 6000ft
+        </div>
+
+        <!-- Airspace status -->
+        <div style="background:#e8f5e9; border-left:5px solid #1e7c2c; padding:10px 12px; border-radius:3px; margin-bottom:14px;">
+          <div style="font-size:10px; font-weight:900; color:#1e4d20; letter-spacing:1px;">AIRSPACE STATUS</div>
+          <div style="font-size:14px; font-weight:800; color:#1e4d20; margin-top:3px;">
+            ✓ Clear of NY Class B
+          </div>
+          <div style="font-size:11px; color:#1e4d20; margin-top:3px; font-weight:600;">
+            Was: 9 nm intrusion at 5500 ft &middot; No active TFRs on new tail
+          </div>
+        </div>
+
+        <!-- Action buttons — fat fingers -->
+        <div style="display:flex; gap:8px;">
+          <button style="flex:1; background:#0d3a72; color:white; border:none; font-weight:900;
+                         font-size:16px; padding:16px; border-radius:5px; letter-spacing:1px;">
+            ACCEPT
+          </button>
+          <button style="background:white; color:#7a1010; border:2px solid #7a1010; font-weight:800;
+                         font-size:13px; padding:16px 18px; border-radius:5px; letter-spacing:0.5px;">
+            REJECT
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── Bottom strip: avoidance controls ────────────────────────── -->
+    <div style="position:absolute; left:16px; bottom:16px; right:384px; background:white; border:2px solid #0d3a72;
+                border-radius:6px; padding:10px 14px; display:flex; gap:10px; align-items:center; box-shadow:0 2px 8px rgba(0,0,0,0.15);">
+      <span style="font-weight:900; color:#0d3a72; font-size:12px; letter-spacing:1px;">AVOIDANCE:</span>
+      <span style="background:#c92a2a; color:white; padding:5px 12px; border-radius:14px;
+                   font-weight:800; font-size:12px; display:inline-flex; align-items:center; gap:8px; letter-spacing:0.5px;">
+        NY Class B <span style="opacity:0.85; font-weight:900;">×</span>
+      </span>
+      <button style="background:white; border:2px solid #0d3a72; color:#0d3a72; font-weight:800;
+                     font-size:12px; padding:6px 14px; border-radius:14px; letter-spacing:0.5px;">
+        + ADD AIRSPACE
+      </button>
+    </div>
+
+  </div>
+</div>
+
+<p class="subtitle" style="margin-top:18px; line-height:1.55;">
+<b>Key flows shown:</b><br>
+&middot; <b>A primary entry:</b> the NY Class B chip in the bottom strip arrived from the user tapping the polygon on the map (highlighted red, shadow ring).<br>
+&middot; <b>B fallback entry:</b> "+ ADD AIRSPACE" opens a chip-list picker sorted by proximity (mockup not shown — would be a slide-up sheet).<br>
+&middot; <b>Branch point override:</b> orange RBV ring on the map and the orange "BRANCH AT RBV" card are linked. "Change…" lets the pilot tap a different fix on the map or in the route list to move it; planner re-runs.<br>
+&middot; <b>Old vs new comparison:</b> wind-corrected ETE/fuel (best-practice #4 bundled in), distance delta in NM, fix-count delta. Old tail rendered gray-dashed; new tail solid magenta.<br>
+&middot; <b>Airspace status:</b> green confirms new tail clears the constraint; recalls the old intrusion for context. TFR conflict check is included (best-practice from #9).<br>
+&middot; <b>Fat-finger action area:</b> ACCEPT is the wide primary button; REJECT is narrower and outlined to discourage mis-taps.
+</p>
+
+<h3 style="margin-top:30px;">Does this layout work?</h3>
+<div class="options">
+  <div class="option" data-choice="ship-this" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Ship it</h3>
+      <p>Layout matches what I want — proceed to design doc.</p>
+    </div>
+  </div>
+  <div class="option" data-choice="iterate" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Iterate</h3>
+      <p>Mostly right, but a few changes (I'll describe in the terminal).</p>
+    </div>
+  </div>
+  <div class="option" data-choice="rethink" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Rethink</h3>
+      <p>Wrong shape — let me show you a different layout.</p>
+    </div>
+  </div>
+</div>

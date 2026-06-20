@@ -1,0 +1,91 @@
+<h2>Landscape Compact Mode — Before / After</h2>
+<p class="subtitle">TMR tab becomes the compact toggle. Tap it to hide both strips; tap again to restore.</p>
+
+<div class="split">
+
+  <div class="mockup">
+    <div class="mockup-header">Normal (strips visible)</div>
+    <div class="mockup-body" style="padding:0; background:#0d1117; font-family:monospace; font-size:12px;">
+      <!-- Status bar -->
+      <div style="background:#111827; color:#aaa; padding:2px 8px; font-size:10px; display:flex; justify-content:space-between;">
+        <span>GPS ● FIS-B</span><span>14:32Z</span><span>v7.4</span>
+      </div>
+      <!-- Map area -->
+      <div style="background:#1a2535; height:160px; display:flex; align-items:center; justify-content:center; color:#3a5a80; font-size:11px; position:relative;">
+        <span>MAP</span>
+        <!-- Route table handle overlaid at bottom -->
+        <div style="position:absolute; bottom:0; left:0; right:0; background:#1a1f2e; border-top:2px solid #00d4ff;">
+          <div style="display:flex; justify-content:center; padding-top:4px;"><div style="width:30px; height:3px; background:#444; border-radius:2px;"></div></div>
+          <div style="display:flex; align-items:center; padding:3px 8px; gap:6px;">
+            <span style="color:#00d4ff; font-weight:700; font-size:11px;">KLKR→KCHS</span>
+            <span style="color:#888; font-size:10px;">142nm · 1:12 · 8.4gal</span>
+            <div style="flex:1;"></div>
+            <button style="border:1px solid #00d4ff; background:transparent; color:#00d4ff; padding:1px 6px; border-radius:3px; font-size:10px;">EDIT</button>
+            <button style="border:1px solid #555; background:transparent; color:#888; font-size:12px; padding:1px 6px; border-radius:3px;">✕</button>
+          </div>
+        </div>
+      </div>
+      <!-- Instrument strip -->
+      <div style="background:#1a1f2e; border-top:1px solid #2a3045; display:flex; height:40px;">
+        <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; border-right:1px solid #2a3045;">
+          <span style="color:#888; font-size:9px;">GS</span><span style="color:#e0e8ff; font-size:14px; font-weight:700;">112</span>
+        </div>
+        <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; border-right:1px solid #2a3045;">
+          <span style="color:#888; font-size:9px;">ALT</span><span style="color:#e0e8ff; font-size:14px; font-weight:700;">5500</span>
+        </div>
+        <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; border-right:1px solid #2a3045;">
+          <span style="color:#888; font-size:9px;">FUEL</span><span style="color:#00cc44; font-size:14px; font-weight:700;">22.1</span>
+        </div>
+        <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center;">
+          <span style="color:#888; font-size:9px;">TAS</span><span style="color:#e0e8ff; font-size:14px; font-weight:700;">128</span>
+        </div>
+      </div>
+      <!-- Tab bar -->
+      <div style="background:#111827; border-top:1px solid #2a3045; display:flex; height:36px;">
+        <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; color:#00d4ff; font-size:9px; font-weight:700; border-right:1px solid #2a3045;">🗺<br>MAP</div>
+        <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; color:#888; font-size:9px; border-right:1px solid #2a3045;">✈<br>APT</div>
+        <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; color:#888; font-size:9px; border-right:1px solid #2a3045;">⚙️<br>ENG</div>
+        <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; color:#888; font-size:9px; border-right:1px solid #2a3045;">✅<br>CHK</div>
+        <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; color:#888; font-size:9px; border-right:1px solid #2a3045;">📻<br>CLR</div>
+        <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; color:#888; font-size:9px; border-right:1px solid #2a3045; opacity:0.4;">⏱<br>TMR</div>
+        <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; color:#aaa; font-size:11px; font-weight:900; border-left:1px solid #2a3045; background:rgba(0,212,255,0.05);">⊟<br><span style="font-size:9px;">CMPCT</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="mockup">
+    <div class="mockup-header">Compact (strips hidden) — ~130px reclaimed</div>
+    <div class="mockup-body" style="padding:0; background:#0d1117; font-family:monospace; font-size:12px;">
+      <!-- Status bar -->
+      <div style="background:#111827; color:#aaa; padding:2px 8px; font-size:10px; display:flex; justify-content:space-between;">
+        <span>GPS ● FIS-B</span><span>14:32Z</span><span>v7.4</span>
+      </div>
+      <!-- Map area — TALLER, fills where strips were -->
+      <div style="background:#1a2535; height:213px; display:flex; align-items:center; justify-content:center; color:#3a5a80; font-size:11px;">
+        <span>MAP (130px more)</span>
+      </div>
+      <!-- Tab bar only -->
+      <div style="background:#111827; border-top:1px solid #2a3045; display:flex; height:36px;">
+        <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; color:#00d4ff; font-size:9px; font-weight:700; border-right:1px solid #2a3045;">🗺<br>MAP</div>
+        <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; color:#888; font-size:9px; border-right:1px solid #2a3045;">✈<br>APT</div>
+        <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; color:#888; font-size:9px; border-right:1px solid #2a3045;">⚙️<br>ENG</div>
+        <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; color:#888; font-size:9px; border-right:1px solid #2a3045;">✅<br>CHK</div>
+        <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; color:#888; font-size:9px; border-right:1px solid #2a3045;">📻<br>CLR</div>
+        <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; color:#888; font-size:9px; border-right:1px solid #2a3045; opacity:0.4;">⏱<br>TMR</div>
+        <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; color:#00d4ff; font-size:11px; font-weight:900; border-left:1px solid #2a3045; background:rgba(0,212,255,0.12);">⊞<br><span style="font-size:9px; color:#00d4ff;">CMPCT</span></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="section" style="margin-top:20px; padding:10px 14px; background:rgba(0,200,100,0.07); border-radius:6px; border-left:3px solid #00cc66; font-size:13px;">
+  <strong>Notes:</strong>
+  <ul style="margin:6px 0 0; padding-left:18px;">
+    <li>TMR tab is kept but dimmed (still functional via MORE menu) — the <strong>7th slot becomes CMPCT</strong></li>
+    <li>⊟ = strips visible, ⊞ = strips hidden (icon flips on toggle)</li>
+    <li>State saved to <code>localStorage('flypi_compact_strips')</code></li>
+    <li>Works in any orientation; most useful in landscape</li>
+    <li>Tab bar always stays visible — CMPCT is always reachable</li>
+  </ul>
+</div>

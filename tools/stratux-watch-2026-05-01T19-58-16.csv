@@ -1,0 +1,9 @@
+iso,elapsed_s,traffic_state,sit_state,traffic_msgs_total,sit_msgs_total,traffic_silent_s,sit_silent_s,es_last_min,es_targets,uat_last_min,connected_users,event
+2026-05-01T19:58:16.607Z,0.0,OPEN,CONNECTING,0,0,0.0,,,,,,traffic_open
+2026-05-01T19:58:16.611Z,0.0,OPEN,CONNECTING,9,0,0.0,,1448,10,0,9,poll
+2026-05-01T19:58:16.612Z,0.0,OPEN,OPEN,9,0,0.0,0.0,,,,,sit_open
+2026-05-01T19:58:26.600Z,10.0,OPEN,OPEN,304,100,0.0,0.1,1432,10,0,9,poll
+2026-05-01T19:58:36.601Z,20.0,OPEN,OPEN,653,200,0.0,0.1,1508,10,0,9,poll
+2026-05-01T19:58:41.592Z,25.0,OPEN,OPEN,813,250,0.1,0.1,,,,,shutdown
+2026-05-01T19:58:41.596Z,25.0,CLOSED,CLOSING,813,250,0.1,0.1,,,,,traffic_error
+2026-05-01T19:58:41.596Z,25.0,CLOSED,CLOSING,813,250,0.1,0.1,,,,,traffic_close_code=1006

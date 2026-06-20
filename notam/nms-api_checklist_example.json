@@ -1,0 +1,41 @@
+{
+   "status": "Success",
+   "data": {"checklist":    [
+            {
+         "id": "1757616312849974",
+         "classification": "DOMESTIC",
+         "accountId": "ATL",
+         "number": "09/186",
+         "location": "ATL",
+         "icaoLocation": "KATL",
+         "lastUpdated": "2025-09-12T10:21:00Z"
+      },
+            {
+         "id": "1757617034473413",
+         "classification": "DOMESTIC",
+         "accountId": "ATL",
+         "number": "09/193",
+         "location": "ATL",
+         "icaoLocation": "KATL",
+         "lastUpdated": "2025-09-12T10:21:00Z"
+      },
+            {
+         "id": "1757616991582748",
+         "classification": "DOMESTIC",
+         "accountId": "ATL",
+         "number": "09/192",
+         "location": "ATL",
+         "icaoLocation": "KATL",
+         "lastUpdated": "2025-09-12T10:21:00Z"
+      },
+            {
+         "id": "1757616950513096",
+         "classification": "DOMESTIC",
+         "accountId": "ATL",
+         "number": "09/191",
+         "location": "ATL",
+         "icaoLocation": "KATL",
+         "lastUpdated": "2025-09-12T10:21:00Z"
+      }
+   ]}
+}

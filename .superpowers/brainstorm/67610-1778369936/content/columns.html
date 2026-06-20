@@ -1,0 +1,64 @@
+<h2>Altitude Optimizer — Table Columns</h2>
+<p class="subtitle">Each row is one altitude. What data should appear? (Route: KABE → KORF, 350 nm SE, sample winds)</p>
+
+<div class="options">
+  <div class="option" data-choice="ete-wind" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>ETE + Wind Component</h3>
+      <div style="margin:10px 0;background:#1a1a2e;border-radius:6px;padding:10px;font-family:monospace;font-size:0.85em;color:#eee">
+        <div style="display:grid;grid-template-columns:70px 1fr 1fr;gap:4px">
+          <span style="color:#888;font-size:0.8em">ALT</span>
+          <span style="color:#888;font-size:0.8em">ETE</span>
+          <span style="color:#888;font-size:0.8em">WIND</span>
+          <span>3,000</span><span>2:41</span><span style="color:#4f8">▼ TW 18 kt</span>
+          <span style="color:#7af;font-weight:bold">6,000</span><span style="color:#7af">2:14 ★</span><span style="color:#4f8">▼ TW 24 kt</span>
+          <span>9,000</span><span>2:28</span><span style="color:#f84">▲ HW 8 kt</span>
+          <span>12,000</span><span>2:35</span><span style="color:#f84">▲ HW 14 kt</span>
+          <span style="color:#555">18,000</span><span style="color:#555">—</span><span style="color:#555">above ceiling</span>
+        </div>
+      </div>
+      <p style="color:#666;font-size:0.85em">Fastest is marked ★ · Wind as tailwind/headwind component on route bearing</p>
+    </div>
+  </div>
+  <div class="option" data-choice="ete-gs-wind" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>ETE + GS + Wind Component</h3>
+      <div style="margin:10px 0;background:#1a1a2e;border-radius:6px;padding:10px;font-family:monospace;font-size:0.85em;color:#eee">
+        <div style="display:grid;grid-template-columns:65px 1fr 55px 1fr;gap:4px">
+          <span style="color:#888;font-size:0.8em">ALT</span>
+          <span style="color:#888;font-size:0.8em">ETE</span>
+          <span style="color:#888;font-size:0.8em">GS</span>
+          <span style="color:#888;font-size:0.8em">WIND</span>
+          <span>3,000</span><span>2:41</span><span>138</span><span style="color:#4f8">+18</span>
+          <span style="color:#7af;font-weight:bold">6,000</span><span style="color:#7af">2:14 ★</span><span style="color:#7af">162</span><span style="color:#4f8">+24</span>
+          <span>9,000</span><span>2:28</span><span>150</span><span style="color:#f84">−8</span>
+          <span>12,000</span><span>2:35</span><span>145</span><span style="color:#f84">−14</span>
+          <span style="color:#555">18,000</span><span style="color:#555" colspan="3">above ceiling</span>
+        </div>
+      </div>
+      <p style="color:#666;font-size:0.85em">GS in knots · Wind component as signed kt (+ tailwind, − headwind)</p>
+    </div>
+  </div>
+  <div class="option" data-choice="ete-gs-fuel" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>ETE + GS + Fuel</h3>
+      <div style="margin:10px 0;background:#1a1a2e;border-radius:6px;padding:10px;font-family:monospace;font-size:0.85em;color:#eee">
+        <div style="display:grid;grid-template-columns:65px 1fr 55px 55px;gap:4px">
+          <span style="color:#888;font-size:0.8em">ALT</span>
+          <span style="color:#888;font-size:0.8em">ETE</span>
+          <span style="color:#888;font-size:0.8em">GS</span>
+          <span style="color:#888;font-size:0.8em">GAL</span>
+          <span>3,000</span><span>2:41</span><span>138</span><span>20.1</span>
+          <span style="color:#7af;font-weight:bold">6,000</span><span style="color:#7af">2:14 ★</span><span style="color:#7af">162</span><span>19.4</span>
+          <span>9,000</span><span>2:28</span><span>150</span><span>20.8</span>
+          <span>12,000</span><span>2:35</span><span>145</span><span>21.2</span>
+          <span style="color:#555">18,000</span><span style="color:#555" colspan="3">above ceiling</span>
+        </div>
+      </div>
+      <p style="color:#666;font-size:0.85em">Full picture: least time doesn't always mean least fuel</p>
+    </div>
+  </div>
+</div>

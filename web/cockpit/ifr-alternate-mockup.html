@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IFR Alternate Finder — FlyTab Mockup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@600;700&family=IBM+Plex+Mono:wght@500;600;700&family=Barlow+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    /* Saturated deep darks — not mid-grey, survive glare */
+    --bg:        #07111e;
+    --surface:   #0c1b2e;
+    --surface2:  #0f2038;
+    --border:    #1e3550;
+    --border2:   #2a4668;
+
+    /* Text: pure white primary, no washed-out mid-grey */
+    --text:      #ffffff;
+    --text-mid:  #99c0dc;   /* readable secondary — ~6:1 on --bg */
+    --text-dim:  #5a8aaa;   /* used sparingly for labels only */
+
+    /* Status colors — saturated, high brightness */
+    --green:     #00f07c;
+    --green-bg:  rgba(0,240,124,.14);
+    --amber:     #ffb520;
+    --amber-bg:  rgba(255,181,32,.14);
+    --red:       #ff3b3b;
+    --red-bg:    rgba(255,59,59,.14);
+    --magenta:   #f050ff;
+    --magenta-bg:rgba(240,80,255,.15);
+    --blue:      #40bfff;
+
+    --mono:      'IBM Plex Mono', monospace;
+    --display:   'Rajdhani', sans-serif;
+    --label:     'Barlow Condensed', sans-serif;
+  }
+
+  body {
+    background: #030912;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 32px 16px;
+    min-height: 100vh;
+    font-family: var(--label);
+  }
+
+  /* ── Panel shell ───────────────────────────────────────────── */
+  .panel {
+    width: 420px;
+    background: var(--bg);
+    border: 1px solid var(--border2);
+    border-radius: 4px;
+    overflow: hidden;
+    box-shadow: 0 0 0 1px #000, 0 24px 64px rgba(0,0,0,.9);
+  }
+
+  /* ── Header ────────────────────────────────────────────────── */
+  .panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px 12px 16px;
+    background: var(--surface2);
+    border-bottom: 3px solid var(--magenta);
+  }
+  .panel-title {
+    font-family: var(--display);
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: 3px;
+    color: var(--text);
+    text-transform: uppercase;
+  }
+  .panel-title span { color: var(--magenta); margin-right: 8px; }
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .eta-tag {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-mid);
+    letter-spacing: 1px;
+  }
+  .eta-tag b { color: var(--blue); font-weight: 700; font-size: 14px; }
+  .close-btn {
+    width: 34px; height: 34px;
+    background: none;
+    border: 2px solid var(--border2);
+    border-radius: 3px;
+    color: var(--text-mid);
+    font-size: 16px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: border-color .15s, color .15s;
+  }
+  .close-btn:hover { border-color: var(--text); color: var(--text); }
+
+  /* ── Criteria bar ──────────────────────────────────────────── */
+  .criteria {
+    padding: 12px 16px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    display: grid;
+    grid-template-columns: 1fr 1px 1fr;
+    gap: 0 16px;
+    align-items: start;
+  }
+  .crit-divider { background: var(--border2); align-self: stretch; }
+  .crit-group { display: flex; flex-direction: column; gap: 5px; }
+  .crit-label {
+    font-family: var(--label);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    margin-bottom: 2px;
+  }
+  .crit-row {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+  }
+  .crit-val {
+    font-family: var(--mono);
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--text);
+    letter-spacing: -.5px;
+  }
+  .crit-unit {
+    font-family: var(--label);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-mid);
+    letter-spacing: .5px;
+  }
+  .crit-note {
+    font-family: var(--label);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-mid);
+    letter-spacing: .2px;
+    margin-top: 1px;
+  }
+
+  /* ── Summary row ───────────────────────────────────────────── */
+  .summary {
+    padding: 8px 16px;
+    background: var(--surface2);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .summary-stat {
+    font-family: var(--label);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-mid);
+    letter-spacing: .5px;
+  }
+  .summary-stat b { color: var(--text); font-weight: 700; }
+  .summary-qual {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--green);
+    letter-spacing: 1px;
+    background: var(--green-bg);
+    padding: 3px 8px;
+    border-radius: 2px;
+    border: 1px solid rgba(0,240,124,.3);
+  }
+
+  /* ── Airport list ──────────────────────────────────────────── */
+  .apt-list { display: flex; flex-direction: column; }
+
+  .apt-row {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    transition: background .12s;
+    position: relative;
+    overflow: hidden;
+  }
+  .apt-row::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 4px;
+    background: transparent;
+    transition: background .12s;
+  }
+  .apt-row:hover { background: rgba(255,255,255,.025); }
+
+  .apt-row.pass::before     { background: var(--green); }
+  .apt-row.marginal::before { background: var(--amber); }
+  .apt-row.fail::before     { background: var(--red); }
+  .apt-row.selected {
+    background: var(--magenta-bg) !important;
+    border-bottom-color: rgba(240,80,255,.25);
+  }
+  .apt-row.selected::before { background: var(--magenta) !important; }
+
+  /* Row top: ICAO + name + badge */
+  .apt-top {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+  .apt-icao {
+    font-family: var(--display);
+    font-size: 24px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    color: var(--text);
+    min-width: 60px;
+    line-height: 1;
+  }
+  .apt-row.selected .apt-icao { color: var(--magenta); }
+  .apt-name {
+    font-family: var(--label);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-mid);
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .badge {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    padding: 3px 8px;
+    border-radius: 2px;
+    border: 1px solid;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .badge-pass     { color: var(--green);   border-color: rgba(0,240,124,.45);  background: var(--green-bg); }
+  .badge-marginal { color: var(--amber);   border-color: rgba(255,181,32,.45); background: var(--amber-bg); }
+  .badge-fail     { color: var(--red);     border-color: rgba(255,59,59,.45);  background: var(--red-bg); }
+  .badge-sel      { color: var(--magenta); border-color: rgba(240,80,255,.5);  background: var(--magenta-bg); }
+
+  /* Data grid */
+  .apt-data {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+  }
+  .data-cell { display: flex; flex-direction: column; gap: 2px; }
+  .data-cell + .data-cell {
+    padding-left: 12px;
+    border-left: 1px solid var(--border2);
+  }
+  .d-label {
+    font-family: var(--label);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+  }
+  .d-val {
+    font-family: var(--mono);
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--text);
+    letter-spacing: -.5px;
+    line-height: 1.1;
+  }
+  .d-unit {
+    font-family: var(--label);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-mid);
+    letter-spacing: .3px;
+  }
+  .d-val.warn { color: var(--amber); }
+  .d-val.fail { color: var(--red); }
+  .d-val.sel  { color: var(--magenta); }
+
+  /* ── Selected detail strip ─────────────────────────────────── */
+  .apt-detail {
+    display: none;
+    padding: 10px 0 2px;
+    gap: 10px;
+    flex-direction: column;
+  }
+  .apt-row.selected .apt-detail { display: flex; }
+
+  .detail-meta {
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-mid);
+    letter-spacing: .3px;
+    background: rgba(255,255,255,.04);
+    padding: 6px 10px;
+    border-radius: 3px;
+    border: 1px solid var(--border2);
+  }
+  .detail-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .detail-btn {
+    flex: 1;
+    padding: 10px 12px;
+    border-radius: 3px;
+    border: 2px solid;
+    font-family: var(--label);
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    cursor: pointer;
+    text-align: center;
+    transition: opacity .15s;
+  }
+  .detail-btn:hover { opacity: .85; }
+  .btn-primary {
+    background: var(--magenta);
+    border-color: var(--magenta);
+    color: #000;
+  }
+  .btn-outline {
+    background: rgba(240,80,255,.08);
+    border-color: rgba(240,80,255,.55);
+    color: var(--magenta);
+  }
+
+  /* ── Footer ────────────────────────────────────────────────── */
+  .panel-footer {
+    padding: 10px 16px;
+    background: var(--surface2);
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .footer-note {
+    font-family: var(--label);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-mid);
+    letter-spacing: .5px;
+    text-transform: uppercase;
+  }
+  .footer-note b { color: var(--text); }
+  .refresh-btn {
+    font-family: var(--label);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--blue);
+    background: rgba(64,191,255,.08);
+    border: 2px solid rgba(64,191,255,.4);
+    border-radius: 3px;
+    padding: 5px 12px;
+    cursor: pointer;
+    transition: border-color .15s;
+  }
+  .refresh-btn:hover { border-color: var(--blue); }
+
+  /* ── Scrollable list ───────────────────────────────────────── */
+  .apt-scroll { max-height: 560px; overflow-y: auto; }
+  .apt-scroll::-webkit-scrollbar { width: 5px; }
+  .apt-scroll::-webkit-scrollbar-track { background: var(--bg); }
+  .apt-scroll::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<div class="panel">
+
+  <!-- Header -->
+  <div class="panel-header">
+    <div class="panel-title"><span>◈</span>IFR ALTERNATE</div>
+    <div class="header-right">
+      <div class="eta-tag">ETA <b>18:43Z</b></div>
+      <button class="close-btn">✕</button>
+    </div>
+  </div>
+
+  <!-- Criteria -->
+  <div class="criteria">
+    <div class="crit-group">
+      <div class="crit-label">Range · 45 min RSV</div>
+      <div class="crit-row">
+        <div class="crit-val">≤ 182</div>
+        <div class="crit-unit">NM</div>
+      </div>
+      <div class="crit-note">18.4 GAL avail · 8.1 GPH</div>
+    </div>
+    <div class="crit-divider"></div>
+    <div class="crit-group">
+      <div class="crit-label">1–2–3 Rule · ±1 HR ETA</div>
+      <div class="crit-row">
+        <div class="crit-val">≥ 2000</div>
+        <div class="crit-unit">FT CEIL</div>
+      </div>
+      <div class="crit-row">
+        <div class="crit-val">≥ 3</div>
+        <div class="crit-unit">SM VIS</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Summary -->
+  <div class="summary">
+    <div class="summary-stat"><b>7</b> in range &nbsp;·&nbsp; <b>3</b> qualify</div>
+    <div class="summary-qual">▲ BY DISTANCE</div>
+  </div>
+
+  <!-- Airport list -->
+  <div class="apt-scroll">
+  <div class="apt-list">
+
+    <!-- KCLW — PASS, selected -->
+    <div class="apt-row pass selected" onclick="selectApt(this)">
+      <div class="apt-top">
+        <div class="apt-icao">KCLW</div>
+        <div class="apt-name">Clearwater Air Park</div>
+        <div class="badge badge-sel">SELECTED</div>
+      </div>
+      <div class="apt-data">
+        <div class="data-cell">
+          <div class="d-label">DIST</div>
+          <div class="d-val sel">28</div>
+          <div class="d-unit">NM</div>
+        </div>
+        <div class="data-cell">
+          <div class="d-label">FUEL</div>
+          <div class="d-val sel">3.4</div>
+          <div class="d-unit">GAL</div>
+        </div>
+        <div class="data-cell">
+          <div class="d-label">CEILING</div>
+          <div class="d-val">2400</div>
+          <div class="d-unit">FT</div>
+        </div>
+        <div class="data-cell">
+          <div class="d-label">VIS</div>
+          <div class="d-val">7</div>
+          <div class="d-unit">SM</div>
+        </div>
+      </div>
+      <div class="apt-detail">
+        <div class="detail-meta">METAR 18:55Z · IFR · OVC024 · 7SM · 12/10°C · 29.92</div>
+        <div class="detail-row">
+          <button class="detail-btn btn-primary">→ Set as Alternate</button>
+          <button class="detail-btn btn-outline">⊕ Show on Map</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- KTPA — PASS -->
+    <div class="apt-row pass" onclick="selectApt(this)">
+      <div class="apt-top">
+        <div class="apt-icao">KTPA</div>
+        <div class="apt-name">Tampa International</div>
+        <div class="badge badge-pass">QUALIFIES</div>
+      </div>
+      <div class="apt-data">
+        <div class="data-cell">
+          <div class="d-label">DIST</div>
+          <div class="d-val">35</div>
+          <div class="d-unit">NM</div>
+        </div>
+        <div class="data-cell">
+          <div class="d-label">FUEL</div>
+          <div class="d-val">4.3</div>
+          <div class="d-unit">GAL</div>
+        </div>
+        <div class="data-cell">
+          <div class="d-label">CEILING</div>
+          <div class="d-val">3100</div>
+          <div class="d-unit">FT</div>
+        </div>
+        <div class="data-cell">
+          <div class="d-label">VIS</div>
+          <div class="d-val">10</div>
+          <div class="d-unit">SM</div>
+        </div>
+      </div>
+      <div class="apt-detail">
+        <div class="detail-meta">METAR 18:53Z · MVFR · BKN031 · 10SM · 14/11°C · 29.94</div>
+        <div class="detail-row">
+          <button class="detail-btn btn-primary">→ Set as Alternate</button>
+          <button class="detail-btn btn-outline">⊕ Show on Map</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- KPIE — MARGINAL -->
+    <div class="apt-row marginal" onclick="selectApt(this)">
+      <div class="apt-top">
+        <div class="apt-icao">KPIE</div>
+        <div class="apt-name">St Pete–Clearwater Intl</div>
+        <div class="badge badge-marginal">MARGINAL</div>
+      </div>
+      <div class="apt-data">
+        <div class="data-cell">
+          <div class="d-label">DIST</div>
+          <div class="d-val">42</div>
+          <div class="d-unit">NM</div>
+        </div>
+        <div class="data-cell">
+          <div class="d-label">FUEL</div>
+          <div class="d-val">5.2</div>
+          <div class="d-unit">GAL</div>
+        </div>
+        <div class="data-cell">
+          <div class="d-label">CEILING</div>
+          <div class="d-val warn">2000</div>
+          <div class="d-unit">FT</div>
+        </div>
+        <div class="data-cell">
+          <div class="d-label">VIS</div>
+          <div class="d-val warn">3</div>
+          <div class="d-unit">SM</div>
+        </div>
+      </div>
+      <div class="apt-detail">
+        <div class="detail-meta">METAR 18:51Z · IFR · OVC020 · 3SM BR · 11/10°C · 29.90</div>
+        <div class="detail-row">
+          <button class="detail-btn btn-primary">→ Set as Alternate</button>
+          <button class="detail-btn btn-outline">⊕ Show on Map</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- KVDF — PASS -->
+    <div class="apt-row pass" onclick="selectApt(this)">
+      <div class="apt-top">
+        <div class="apt-icao">KVDF</div>
+        <div class="apt-name">Tampa Executive</div>
+        <div class="badge badge-pass">QUALIFIES</div>
+      </div>
+      <div class="apt-data">
+        <div class="data-cell">
+          <div class="d-label">DIST</div>
+          <div class="d-val">51</div>
+          <div class="d-unit">NM</div>
+        </div>
+        <div class="data-cell">
+          <div class="d-label">FUEL</div>
+          <div class="d-val">6.3</div>
+          <div class="d-unit">GAL</div>
+        </div>
+        <div class="data-cell">
+          <div class="d-label">CEILING</div>
+          <div class="d-val">2800</div>
+          <div class="d-unit">FT</div>
+        </div>
+        <div class="data-cell">
+          <div class="d-label">VIS</div>
+          <div class="d-val">8</div>
+          <div class="d-unit">SM</div>
+        </div>
+      </div>
+      <div class="apt-detail">
+        <div class="detail-meta">METAR 18:52Z · MVFR · BKN028 · 8SM · 13/10°C · 29.93</div>
+        <div class="detail-row">
+          <button class="detail-btn btn-primary">→ Set as Alternate</button>
+          <button class="detail-btn btn-outline">⊕ Show on Map</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- KLAL — FAIL -->
+    <div class="apt-row fail" onclick="selectApt(this)">
+      <div class="apt-top">
+        <div class="apt-icao">KLAL</div>
+        <div class="apt-name">Lakeland Linder Regional</div>
+        <div class="badge badge-fail">FAILS 1-2-3</div>
+      </div>
+      <div class="apt-data">
+        <div class="data-cell">
+          <div class="d-label">DIST</div>
+          <div class="d-val">64</div>
+          <div class="d-unit">NM</div>
+        </div>
+        <div class="data-cell">
+          <div class="d-label">FUEL</div>
+          <div class="d-val">7.9</div>
+          <div class="d-unit">GAL</div>
+        </div>
+        <div class="data-cell">
+          <div class="d-label">CEILING</div>
+          <div class="d-val fail">900</div>
+          <div class="d-unit">FT</div>
+        </div>
+        <div class="data-cell">
+          <div class="d-label">VIS</div>
+          <div class="d-val fail">1</div>
+          <div class="d-unit">SM</div>
+        </div>
+      </div>
+      <div class="apt-detail">
+        <div class="detail-meta">METAR 18:50Z · IFR · OVC009 · 1SM FG · 10/10°C · 29.88</div>
+        <div class="detail-row">
+          <button class="detail-btn btn-primary">→ Set Anyway</button>
+          <button class="detail-btn btn-outline">⊕ Show on Map</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- KSPG — OUT OF RANGE -->
+    <div class="apt-row fail" onclick="selectApt(this)" style="opacity:.5;">
+      <div class="apt-top">
+        <div class="apt-icao">KSPG</div>
+        <div class="apt-name">Albert Whitted</div>
+        <div class="badge badge-fail">OUT OF RANGE</div>
+      </div>
+      <div class="apt-data">
+        <div class="data-cell">
+          <div class="d-label">DIST</div>
+          <div class="d-val fail">208</div>
+          <div class="d-unit">NM</div>
+        </div>
+        <div class="data-cell">
+          <div class="d-label">FUEL</div>
+          <div class="d-val fail">25.7</div>
+          <div class="d-unit">GAL</div>
+        </div>
+        <div class="data-cell">
+          <div class="d-label">CEILING</div>
+          <div class="d-val">3500</div>
+          <div class="d-unit">FT</div>
+        </div>
+        <div class="data-cell">
+          <div class="d-label">VIS</div>
+          <div class="d-val">10</div>
+          <div class="d-unit">SM</div>
+        </div>
+      </div>
+      <div class="apt-detail">
+        <div class="detail-meta">METAR 18:54Z · VFR · FEW035 · 10SM · 15/9°C · 29.95</div>
+        <div class="detail-row">
+          <button class="detail-btn btn-primary">→ Set Anyway</button>
+          <button class="detail-btn btn-outline">⊕ Show on Map</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+  </div>
+
+  <!-- Footer -->
+  <div class="panel-footer">
+    <div class="footer-note">WX via FIS-B · Updated <b>18:55Z</b></div>
+    <button class="refresh-btn">↺ REFRESH</button>
+  </div>
+
+</div>
+
+<script>
+function selectApt(row) {
+  document.querySelectorAll('.apt-row').forEach(r => {
+    r.classList.remove('selected');
+    const badge = r.querySelector('.badge');
+    if (badge && badge.classList.contains('badge-sel')) {
+      const status = r.classList.contains('pass') ? 'QUALIFIES' :
+                     r.classList.contains('marginal') ? 'MARGINAL' : 'FAILS 1-2-3';
+      badge.textContent = status;
+      badge.className = 'badge ' + (r.classList.contains('pass') ? 'badge-pass' :
+                        r.classList.contains('marginal') ? 'badge-marginal' : 'badge-fail');
+    }
+    r.querySelectorAll('.d-val').forEach(v => v.classList.remove('sel'));
+  });
+  row.classList.add('selected');
+  const badge = row.querySelector('.badge');
+  badge.textContent = 'SELECTED';
+  badge.className = 'badge badge-sel';
+  row.querySelectorAll('.d-val').forEach(v => {
+    if (!v.classList.contains('warn') && !v.classList.contains('fail')) v.classList.add('sel');
+  });
+}
+</script>
+</body>
+</html>

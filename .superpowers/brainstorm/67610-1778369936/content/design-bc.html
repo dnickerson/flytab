@@ -1,0 +1,120 @@
+<h2>Features B + C Design</h2>
+<p class="subtitle">MEA on airway pills · Mixing height column in altitude optimizer</p>
+
+<div class="section">
+  <h3>Feature B — MEA on Airway Pills</h3>
+  <p class="subtitle" style="font-size:0.85em">MEA from NASR bundle (mea_ft / mea_gnss_ft). Only airway pills show MEA — DIRECT legs have none. Async lookup runs after any route change.</p>
+
+  <div class="mockup">
+    <div class="mockup-header">Route Pill Row — V-airway legs with MEA</div>
+    <div class="mockup-body" style="padding:14px">
+      <!-- Pill row mockup -->
+      <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:0.85em">
+
+        <!-- DEP pill -->
+        <div style="background:#2255aa;color:#fff;border-radius:6px;padding:6px 10px;font-weight:700;font-family:monospace">
+          KABE<br><span style="font-size:0.7em;color:#aac;font-weight:400">DEP</span>
+        </div>
+
+        <!-- Airway pill V39 — planned alt BELOW MEA → warning -->
+        <div style="background:#7a3300;color:#fff;border-radius:6px;padding:6px 10px;font-family:monospace;border:2px solid #f84">
+          V39<br>
+          <span style="font-size:0.75em;color:#f84;font-weight:600">MEA 6,000 ▲</span>
+        </div>
+
+        <!-- FIX pill -->
+        <div style="background:#333;color:#eee;border-radius:6px;padding:6px 10px;font-family:monospace">
+          PSK<br><span style="font-size:0.7em;color:#888">FIX</span>
+        </div>
+
+        <!-- Airway pill V143 — planned alt ABOVE MEA → ok -->
+        <div style="background:#1a3a1a;color:#eee;border-radius:6px;padding:6px 10px;font-family:monospace;border:2px solid #4a4">
+          V143<br>
+          <span style="font-size:0.75em;color:#4f8;font-weight:600">MEA 3,000 ✓</span>
+        </div>
+
+        <!-- FIX pill -->
+        <div style="background:#333;color:#eee;border-radius:6px;padding:6px 10px;font-family:monospace">
+          ORF<br><span style="font-size:0.7em;color:#888">FIX</span>
+        </div>
+
+        <!-- DIRECT pill — no MEA -->
+        <div style="background:#222244;color:#aaa;border-radius:6px;padding:6px 10px;font-family:monospace;border:1px solid #446">
+          GPS<br>
+          <span style="font-size:0.75em;color:#666">no MEA</span>
+        </div>
+
+        <!-- DEST pill -->
+        <div style="background:#225522;color:#fff;border-radius:6px;padding:6px 10px;font-weight:700;font-family:monospace">
+          KORF<br><span style="font-size:0.7em;color:#8d8;font-weight:400">DEST</span>
+        </div>
+      </div>
+
+      <div style="margin-top:14px;background:#1a1a2e;border-radius:6px;padding:10px;font-size:0.82em;color:#ccc">
+        <p style="margin:0 0 6px 0"><strong style="color:#f84">▲ Orange border + warning</strong> = planned altitude (6,000) is below MEA (6,000). Pilot must climb or choose different airway.</p>
+        <p style="margin:0"><strong style="color:#4f8">✓ Green border</strong> = planned altitude is above MEA. Safe.</p>
+        <p style="margin:6px 0 0 0;color:#888">DIRECT/GPS legs: no MEA label (no published value). GNSS MEA shown when available (mea_gnss_ft), else conventional MEA (mea_ft).</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Feature C — Mixing Height in Altitude Optimizer</h3>
+  <p class="subtitle" style="font-size:0.85em">MOS data already fetched by wx-briefing via <code>flywhere.app/mos?ids=…</code>. Reuse the same endpoint. mix_ht field in MOS periods → show average mixing height along route at departure time. Retry once on 503.</p>
+
+  <div class="mockup">
+    <div class="mockup-header">Settings Popup — Altitude Optimizer with MIX column</div>
+    <div class="mockup-body" style="padding:14px">
+      <div style="background:#1a1a2e;border-radius:6px;padding:12px;font-family:monospace;font-size:0.88em;color:#eee">
+        <div style="display:grid;grid-template-columns:72px 1fr 50px 50px 80px;color:#888;font-size:0.78em;margin-bottom:6px;border-bottom:1px solid #333;padding-bottom:4px">
+          <span>ALT</span><span>ETE</span><span>GS</span><span>GAL</span><span>MIX HT</span>
+        </div>
+        <div style="display:grid;grid-template-columns:72px 1fr 50px 50px 80px;padding:5px 0">
+          <span>3,000</span><span>2:41</span><span>138</span><span>20.1</span>
+          <span style="color:#f84">⚠ in BL</span>
+        </div>
+        <div style="display:grid;grid-template-columns:72px 1fr 50px 50px 80px;padding:5px 6px;background:#1e3a6e;border-radius:4px;border-left:3px solid #7af">
+          <span style="color:#7af;font-weight:bold">6,000</span>
+          <span style="color:#7af;font-weight:bold">2:14 ★</span>
+          <span style="color:#7af">162</span><span style="color:#7af">19.4</span>
+          <span style="color:#4f8">✓ above</span>
+        </div>
+        <div style="display:grid;grid-template-columns:72px 1fr 50px 50px 80px;padding:5px 0">
+          <span>9,000</span><span>2:28</span><span>150</span><span>20.8</span>
+          <span style="color:#4f8">✓ above</span>
+        </div>
+        <div style="display:grid;grid-template-columns:72px 1fr 50px 50px 80px;padding:5px 0">
+          <span>12,000</span><span>2:35</span><span>145</span><span>21.2</span>
+          <span style="color:#4f8">✓ above</span>
+        </div>
+        <div style="display:grid;grid-template-columns:72px 1fr 50px 50px 80px;padding:5px 0;color:#555">
+          <span>18,000</span><span>—</span><span>—</span><span>—</span><span>—</span>
+        </div>
+        <div style="color:#666;font-size:0.78em;margin-top:8px;border-top:1px solid #333;padding-top:6px">
+          Mix ht ~4,800 ft avg (KABE, PSK, KORF) · MOS 06Z cycle
+        </div>
+      </div>
+
+      <div style="margin-top:12px;background:#222;border-radius:6px;padding:10px;font-size:0.82em;color:#ccc">
+        <p style="margin:0 0 6px 0"><strong>Data source:</strong> Same MOS endpoint as wx-briefing. Fetch on popup open if not already cached. Retry once after 2s on 503 (server cold start).</p>
+        <p style="margin:0 0 6px 0"><strong>Mixing height:</strong> Average of <code>mix_ht</code> from each airport's MOS period nearest to departure time. If MOS unavailable, column shows "—" with note "MOS unavailable".</p>
+        <p style="margin:0"><strong>Labels:</strong> "⚠ in BL" (boundary layer, orange) if altitude ≤ mix_ht. "✓ above" (green) if altitude > mix_ht. No label if MOS not loaded.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Do both designs look right?</h3>
+  <div class="options">
+    <div class="option" data-choice="approved" onclick="toggleSelect(this)">
+      <div class="letter">✓</div>
+      <div class="content"><h3>Approved — write the spec</h3></div>
+    </div>
+    <div class="option" data-choice="changes" onclick="toggleSelect(this)">
+      <div class="letter">✗</div>
+      <div class="content"><h3>Changes needed</h3></div>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,100 @@
+<h2>Altitude Optimizer — Layout Approaches</h2>
+<p class="subtitle">Three ways to fit the optimizer table into the settings popup (portrait mode, ~430px wide)</p>
+
+<div class="options">
+  <div class="option" data-choice="always-visible" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Always Visible — Table Below Altitude Dropdown</h3>
+      <div style="margin:10px 0;background:#f8f8f8;border:1px solid #ccc;border-radius:6px;padding:10px;font-size:0.82em">
+        <div style="color:#666;font-size:0.85em;margin-bottom:4px">WINDS &amp; PERFORMANCE</div>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+          <span style="color:#333">Altitude</span>
+          <select style="flex:1;padding:4px"><option>6,000 ft</option></select>
+        </div>
+        <div style="background:#1a1a2e;border-radius:4px;padding:8px;font-family:monospace;color:#eee;font-size:0.9em">
+          <div style="display:grid;grid-template-columns:65px 1fr 48px 48px;color:#888;font-size:0.8em;margin-bottom:4px">
+            <span>ALT</span><span>ETE</span><span>GS</span><span>GAL</span>
+          </div>
+          <div style="display:grid;grid-template-columns:65px 1fr 48px 48px;padding:3px 0">
+            <span>3,000</span><span>2:41</span><span>138</span><span>20.1</span>
+          </div>
+          <div style="display:grid;grid-template-columns:65px 1fr 48px 48px;padding:3px 0;background:#2a3a6e;border-radius:3px">
+            <span style="color:#7af">6,000</span><span style="color:#7af">2:14 ★</span><span style="color:#7af">162</span><span style="color:#7af">19.4</span>
+          </div>
+          <div style="display:grid;grid-template-columns:65px 1fr 48px 48px;padding:3px 0">
+            <span>9,000</span><span>2:28</span><span>150</span><span>20.8</span>
+          </div>
+          <div style="display:grid;grid-template-columns:65px 1fr 48px 48px;padding:3px 0">
+            <span>12,000</span><span>2:35</span><span>145</span><span>21.2</span>
+          </div>
+          <div style="display:grid;grid-template-columns:65px 1fr 48px 48px;padding:3px 0;color:#555">
+            <span>18,000</span><span colspan="3">above ceiling</span>
+          </div>
+        </div>
+      </div>
+      <p style="color:#666;font-size:0.85em">Opens with winds loaded → instant data. Empty state shows "Load winds to see optimizer." Highlighted row = currently selected altitude.</p>
+    </div>
+  </div>
+
+  <div class="option" data-choice="optimize-button" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Optimize Button — Expands on Tap</h3>
+      <div style="margin:10px 0;background:#f8f8f8;border:1px solid #ccc;border-radius:6px;padding:10px;font-size:0.82em">
+        <div style="color:#666;font-size:0.85em;margin-bottom:4px">WINDS &amp; PERFORMANCE</div>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+          <span style="color:#333">Altitude</span>
+          <select style="flex:1;padding:4px"><option>6,000 ft</option></select>
+          <button style="padding:4px 10px;background:#3366cc;color:#fff;border:none;border-radius:4px;font-size:0.9em">Optimize ▶</button>
+        </div>
+        <div style="background:#1a1a2e;border-radius:4px;padding:8px;font-family:monospace;color:#eee;font-size:0.9em">
+          <div style="display:grid;grid-template-columns:65px 1fr 48px 48px;color:#888;font-size:0.8em;margin-bottom:4px">
+            <span>ALT</span><span>ETE</span><span>GS</span><span>GAL</span>
+          </div>
+          <div style="display:grid;grid-template-columns:65px 1fr 48px 48px;padding:3px 0;background:#2a3a6e;border-radius:3px">
+            <span style="color:#7af">6,000</span><span style="color:#7af">2:14 ★</span><span style="color:#7af">162</span><span style="color:#7af">19.4</span>
+          </div>
+          <div style="display:grid;grid-template-columns:65px 1fr 48px 48px;padding:3px 0">
+            <span>9,000</span><span>2:28</span><span>150</span><span>20.8</span>
+          </div>
+          <div style="color:#555;font-size:0.85em;margin-top:4px">▲ tap Optimize to see all</div>
+        </div>
+      </div>
+      <p style="color:#666;font-size:0.85em">Less visual noise by default. Extra tap required to see comparison. Table collapses when Optimize tapped again.</p>
+    </div>
+  </div>
+
+  <div class="option" data-choice="own-section" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Own Collapsible Section</h3>
+      <div style="margin:10px 0;background:#f8f8f8;border:1px solid #ccc;border-radius:6px;padding:10px;font-size:0.82em">
+        <div style="color:#666;font-size:0.85em;margin-bottom:4px">WINDS &amp; PERFORMANCE</div>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
+          <span style="color:#333">Altitude</span>
+          <select style="flex:1;padding:4px"><option>6,000 ft</option></select>
+        </div>
+        <div style="border-top:1px solid #ddd;padding-top:8px">
+          <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer">
+            <span style="color:#3366cc;font-weight:600">⚡ Altitude Optimizer</span>
+            <span style="color:#888">▼</span>
+          </div>
+          <div style="margin-top:8px;background:#1a1a2e;border-radius:4px;padding:8px;font-family:monospace;color:#eee;font-size:0.9em">
+            <div style="display:grid;grid-template-columns:65px 1fr 48px 48px;color:#888;font-size:0.8em;margin-bottom:4px">
+              <span>ALT</span><span>ETE</span><span>GS</span><span>GAL</span>
+            </div>
+            <div style="display:grid;grid-template-columns:65px 1fr 48px 48px;padding:3px 0;background:#2a3a6e;border-radius:3px">
+              <span style="color:#7af">6,000</span><span style="color:#7af">2:14 ★</span><span style="color:#7af">162</span><span style="color:#7af">19.4</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p style="color:#666;font-size:0.85em">Clearly labeled separate section. Collapsed by default, expands on tap. Remembers open/closed state via localStorage.</p>
+    </div>
+  </div>
+</div>
+
+<div style="margin-top:16px;padding:12px;background:#f0f4ff;border-radius:8px;border-left:3px solid #4477cc">
+  <p style="margin:0;font-size:0.9em;color:#334"><strong>Recommendation: A</strong> — always visible once winds are loaded. The settings popup is opened intentionally; extra taps in a cockpit cost attention. The highlighted row also makes the current selection obvious.</p>
+</div>

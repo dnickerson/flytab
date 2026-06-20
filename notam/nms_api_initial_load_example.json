@@ -1,0 +1,6 @@
+{
+   "status": "Success",
+   "data": {
+   	"url": "https://storage.googleapis.com/faa-nms-cfn-nms-initial-load-preprod/INITIAL_LOAD/DOM/initial_load_aixm_20250912T172401Z.gz?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=nms-api-sa%40faa-staging-preprod-main-0.iam.gserviceaccount.com%2F20250912%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20250912T172504Z&X-Goog-Expires=300&X-Goog-SignedHeaders=host&X-Goog-Signature=42155e3239e7079817d92dd56a86631f8bc1a605f7eb9f7067af54f3cf40db0efb83323c2f43172bccbba0349cf1157deb344a0246729b0e15d7380b6583723bbe467fe94cdbba6dad8335d7d4c14d1cb685e25de7bcd53f9965fed6016ee5dad2e5cf0a1a6bf729a4d9ffb06b0eddb41de4c09c9eb2967d3a1d5256eb21e4b83814367c307cfd9ab926364ef80e6786326e684dc581b98b1fd1dd9c5a5331f364a87487153784b27af457d97819d023c49594b2315c753fee695f876e10a20cffa8d33542c0668f8fe602577e123a646127998bb88e5f8fc5129621a66081e838604bfad23577eaf95461b32ca5adc8b30383cdccb7c5464318078121a2b30a"
+   }
+}

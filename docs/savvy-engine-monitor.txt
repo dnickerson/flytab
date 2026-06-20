@@ -1,0 +1,19 @@
+I'm a big fan of your AOPA Podcast and the following may make an interesting segment for your audience and/or the boss and AI team. I have developed a real-time engine anomaly detection application integrated in my personal EFB app. The app also records engine and flight data automatically during every flight and is how I upload to Savvy Aviation's analysis tools. Much of this work is inspired by learning from the podcast. For example,in one segment Mike explains that there are only two ways to calculate % power, LOP or ROP. One is fuel limited, the other is air limited. That was a key insight for me.
+
+Here is how it works:
+
+A Raspberry Pi which is also runs the Stratux software for my EFB, receives engine data from Dynon D-180 over serial to usb converter and sends it to to a Lenovo Yoga Tab plus via wifi. The Pi-side monitor also performs local analysis in real time: it detects lean-of-peak vs. rich-of-peak operation, tracks specific fuel consumption, monitors for sticky valves (I added this because you mentioned it in one of the podcasts), and records peak EGT per cylinder during the leaning process. These derived fields appear as extra columns in the Savvy CSV for use in trend analysis.
+
+What is really unique and the reason for the Lenovo tablet, is ML anomaly detection. The application runs a two-layer anomaly detection system in real time, entirely on the tablet — no internet connection required. The Lenovo has an 
+
+Here is the technical detail: 
+
+Layer 1: Physics rules run every second without any machine learning. These are hard-limit checks fire immediately when something is unambiguously wrong: oil pressure below 25 PSI, any CHT above 420°F, a manifold pressure drop greater than 3 inches in a single second, RPM dropping more than 200 in a second, or fuel flow collapsing below 2 GPH at cruise power. Advisories appear as a banner on the EFB.
+
+Layer 2: ML inference runs a TFLite model via a native Capacitor plugin. The model receives 18 parameters per sample — EGTs, CHTs, RPM, MAP, oil pressure, fuel flow, altitude, airspeed, and others — and returns an anomaly score, a flight phase classification (ground/takeoff/climb/cruise/descent), and an inference latency measurement. When the model flags an anomaly, the system compares the current values against a rolling 60-second baseline to identify which parameter deviated most, then maps that deviation to a plain-language advisory ("EGT #3 elevated — 1680°F vs baseline 1590°F. Check mixture."). The advisory severity is graduated: parameters that can't wait ("act now") vs. ones to watch ("monitor").
+
+There is an emergency trigger and requires both layers to agree. A sudden MAP drop greater than 5 inches, RPM drop greater than 300, or oil pressure below 20 PSI will trip the physics alarm; if the ML model also returns anomaly=true in the same cycle, the EFB activates an emergency glide overlay — with best glide speed, closest airports, and an automatically drawn glide ring on the map.
+
+Flight phase is GPS-anchored. The model outputs a phase estimate, but the EFB overrides it with a 60-second smoothed GPS altitude rate when airborne. This prevents turbulence and GPS jitter from causing the model to thrash between phases, which would destabilize the CHT limits and baseline comparisons that depend on knowing whether the aircraft is climbing or in cruise.
+
+In the Savvy CSV, four ML columns are appended to every row: ml_phase, ml_score, ml_anomaly, and ml_latency_ms. This lets Savvy's analysis tools correlate the on-device anomaly flags against the raw sensor data after the flight. A post-flight summary — total anomaly count, anomaly percentage, average inference latency, phase distribution, and number of advisories issued — is also stored in the flight logbook entry.

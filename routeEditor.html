@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FlyTab Route Editor</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#f0f2f4;font-family:'SF Mono','Fira Code','Consolas',monospace;font-size:13px;padding:14px;color:#0a0c0f}
+
+  .dep-row{display:grid;grid-template-columns:1fr 28px 1fr;gap:6px;align-items:center;margin-bottom:12px}
+  .icao-field{background:#fff;border:1.5px solid #b0bac6;border-radius:8px;padding:8px 10px}
+  .icao-field label{display:block;font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#6b7a8d;margin-bottom:3px}
+  .icao-field input{background:transparent;border:none;outline:none;font-family:inherit;font-size:17px;font-weight:700;color:#0a0c0f;width:100%;text-transform:uppercase;letter-spacing:.06em}
+  .icao-field input::placeholder{color:#b0bac6}
+  .arrow-sep{text-align:center;font-size:16px;color:#6b7a8d}
+
+  .route-box{background:#fff;border:1.5px solid #b0bac6;border-radius:10px;padding:12px;min-height:72px;margin-bottom:10px}
+  .route-box.drag-active{border-color:#1a6fbb;background:#f0f6ff}
+
+  .pills{display:flex;flex-wrap:wrap;gap:5px;align-items:center;min-height:38px}
+
+  .pill{position:relative;display:inline-flex;align-items:center;height:32px;border-radius:16px;font-family:inherit;font-weight:600;font-size:12px;letter-spacing:.04em;cursor:grab;transition:transform .1s,box-shadow .1s;touch-action:none;padding:0 11px}
+  .pill:active{cursor:grabbing;transform:scale(1.04);box-shadow:0 3px 10px rgba(0,0,0,.18)}
+  .pill.dragging{opacity:.35;transform:scale(.96)}
+  .pill.drag-over-left{box-shadow:-3px 0 0 2px #1a6fbb}
+  .pill.drag-over-right{box-shadow:3px 0 0 2px #1a6fbb}
+
+  .pill-fix{background:#dbeffe;border:1.5px solid #5aaee8;color:#0a4a7c}
+  .pill-dep,.pill-dest{background:#e8e2ff;border:1.5px solid #7c62d4;color:#3a1e8a}
+  .pill-awy{background:#d4f5e2;border:1.5px solid #3fb86a;color:#0e4a26}
+  .pill-direct{background:#fff3d0;border:1.5px solid #d4a017;color:#5a3a00;font-style:italic}
+
+  .pill-handle{display:inline-flex;align-items:center;margin-right:5px;opacity:.35;font-size:10px}
+  .pill-del{display:none;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;background:rgba(0,0,0,.12);margin-left:6px;font-size:11px;cursor:pointer;color:inherit;flex-shrink:0}
+  .pill:hover .pill-del{display:inline-flex}
+  .type-badge{font-size:9px;background:rgba(0,0,0,.09);border-radius:6px;padding:1px 5px;margin-left:5px;letter-spacing:.04em}
+
+  .pending-note{font-size:10px;color:#7a5200;background:#fffbe6;border:1px solid #e8c84a;border-radius:6px;padding:6px 10px;margin-bottom:10px;line-height:1.6}
+
+  .menu{position:fixed;background:#fff;border:1.5px solid #b0bac6;border-radius:10px;box-shadow:0 4px 18px rgba(0,0,0,.16);z-index:999;min-width:170px;padding:4px 0;display:none}
+  .menu.open{display:block}
+  .menu-item{padding:9px 14px;font-family:inherit;font-size:12px;cursor:pointer;color:#0a0c0f;display:flex;align-items:center;gap:8px;white-space:nowrap}
+  .menu-item:hover{background:#f0f6ff}
+  .menu-item.danger{color:#c0231f}
+  .menu-item.danger:hover{background:#fff0f0}
+  .menu-sep{height:.5px;background:#e0e5ea;margin:3px 0}
+  .menu-label{padding:5px 14px 2px;font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#6b7a8d}
+
+  .add-input-row{display:flex;gap:6px;margin-bottom:10px}
+  .add-input{flex:1;background:#fff;border:1.5px solid #b0bac6;border-radius:8px;padding:7px 10px;font-family:inherit;font-size:13px;color:#0a0c0f;outline:none;text-transform:uppercase}
+  .add-input:focus{border-color:#1a6fbb}
+  .add-input::placeholder{text-transform:none;color:#b0bac6}
+  .add-sel{flex:0 0 86px;background:#fff;border:1.5px solid #b0bac6;border-radius:8px;padding:7px 8px;font-family:inherit;font-size:12px;color:#0a0c0f;outline:none}
+  .add-sel:focus{border-color:#1a6fbb}
+  .add-btn{background:#1a6fbb;color:#fff;border:none;border-radius:8px;padding:7px 12px;font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap}
+  .add-btn:active{background:#155fa0}
+
+  .toolbar{display:flex;gap:6px;margin-bottom:10px}
+  .tbtn{background:#fff;border:1.5px solid #b0bac6;border-radius:7px;padding:6px 10px;font-family:inherit;font-size:11px;color:#0a0c0f;cursor:pointer;flex:1;text-align:center}
+  .tbtn:active{background:#e8f0fb;border-color:#1a6fbb}
+
+  .route-str-label{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#6b7a8d;margin-bottom:4px}
+  .route-str{background:#fff;border:1.5px solid #b0bac6;border-radius:8px;padding:9px 11px;font-family:inherit;font-size:11px;color:#0a4a7c;letter-spacing:.04em;word-break:break-all;line-height:1.8}
+</style>
+</head>
+<body>
+
+<div class="dep-row">
+  <div class="icao-field">
+    <label>Departure</label>
+    <input id="dep" value="KLKR" maxlength="5" placeholder="ICAO">
+  </div>
+  <div class="arrow-sep">→</div>
+  <div class="icao-field">
+    <label>Destination</label>
+    <input id="dest" value="KMHT" maxlength="5" placeholder="ICAO">
+  </div>
+</div>
+
+<div class="pending-note">
+  V225 and V20 (GSO→RIC), V268 (RIC→ESN), V3 (SBJ→HFD), V16 (HFD→KMHT) from chart/preferred routes.<br>
+  ESN→SBJ remains DIRECT pending AWY_BASE.csv validation.
+</div>
+
+<div class="route-box" id="routeBox">
+  <div class="pills" id="pills"></div>
+</div>
+
+<div class="add-input-row">
+  <input class="add-input" id="addInput" placeholder="Fix or airway (e.g. RIC, V3)">
+  <select class="add-sel" id="addType">
+    <option value="fix">Fix</option>
+    <option value="awy">Airway</option>
+    <option value="direct">Direct</option>
+  </select>
+  <button class="add-btn" id="addBtn">+ Add</button>
+</div>
+
+<div class="toolbar">
+  <button class="tbtn" id="btnClear">Clear</button>
+  <button class="tbtn" id="btnSample">Sample</button>
+  <button class="tbtn" id="btnCopy">Copy string</button>
+</div>
+
+<div class="route-str-label">Route string</div>
+<div class="route-str" id="routeStr"></div>
+
+<div class="menu" id="ctxMenu">
+  <div class="menu-label" id="menuTitle">Waypoint</div>
+  <div class="menu-sep"></div>
+  <div class="menu-item" id="mInsertBefore">Insert before</div>
+  <div class="menu-item" id="mInsertAfter">Insert after</div>
+  <div class="menu-sep"></div>
+  <div class="menu-item" id="mChangeType">Change type</div>
+  <div class="menu-sep"></div>
+  <div class="menu-item danger" id="mDelete">Remove</div>
+</div>
+
+<script>
+const SAMPLE = [
+  {id:'KLKR',   type:'dep'},
+  {id:'GSO',    type:'fix'},
+  {id:'V225',   type:'awy'},
+  {id:'RIC',    type:'fix'},
+  {id:'DIRECT', type:'direct'},
+  {id:'ESN',    type:'fix'},
+  {id:'DIRECT', type:'direct'},
+  {id:'SBJ',    type:'fix'},
+  {id:'V3',     type:'awy'},
+  {id:'PUT',    type:'fix'},
+  {id:'V3',     type:'awy'},
+  {id:'HFD',    type:'fix'},
+  {id:'V16',    type:'awy'},
+  {id:'KMHT',   type:'dest'},
+];
+
+let route = JSON.parse(JSON.stringify(SAMPLE));
+let dragIdx = null, menuIdx = null;
+
+const pillsEl   = document.getElementById('pills');
+const routeStr  = document.getElementById('routeStr');
+const ctxMenu   = document.getElementById('ctxMenu');
+const addInput  = document.getElementById('addInput');
+const addType   = document.getElementById('addType');
+const depInput  = document.getElementById('dep');
+const destInput = document.getElementById('dest');
+const menuTitle = document.getElementById('menuTitle');
+
+function pillClass(t) {
+  return {fix:'pill-fix',awy:'pill-awy',direct:'pill-direct',dep:'pill-dep',dest:'pill-dest'}[t] || 'pill-fix';
+}
+function typeLabel(t) {
+  return {fix:'FIX',awy:'AWY',direct:'GPS',dep:'DEP',dest:'DEST'}[t] || '';
+}
+
+function render() {
+  pillsEl.innerHTML = '';
+  route.forEach((item, i) => {
+    const p = document.createElement('div');
+    p.className = 'pill ' + pillClass(item.type);
+    p.dataset.idx = i;
+    p.draggable = true;
+    p.innerHTML = `<span class="pill-handle">⠿</span>${item.id}<span class="type-badge">${typeLabel(item.type)}</span><span class="pill-del" title="Remove">✕</span>`;
+
+    p.querySelector('.pill-del').addEventListener('click', e => {
+      e.stopPropagation();
+      route.splice(i, 1);
+      render();
+    });
+
+    p.addEventListener('contextmenu', e => { e.preventDefault(); openMenu(e, i); });
+
+    let lpt = null;
+    p.addEventListener('touchstart', e => {
+      lpt = setTimeout(() => openMenu(e.touches[0], i), 500);
+    }, {passive: true});
+    p.addEventListener('touchend',  () => clearTimeout(lpt));
+    p.addEventListener('touchmove', () => clearTimeout(lpt));
+
+    p.addEventListener('dragstart', e => {
+      dragIdx = i;
+      setTimeout(() => p.classList.add('dragging'), 0);
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    p.addEventListener('dragend', () => {
+      p.classList.remove('dragging');
+      pillsEl.querySelectorAll('.pill').forEach(x => x.classList.remove('drag-over-left','drag-over-right'));
+      dragIdx = null;
+    });
+    p.addEventListener('dragover', e => {
+      e.preventDefault();
+      if (dragIdx === null || dragIdx === i) return;
+      pillsEl.querySelectorAll('.pill').forEach(x => x.classList.remove('drag-over-left','drag-over-right'));
+      const r = p.getBoundingClientRect();
+      p.classList.add(e.clientX < r.left + r.width/2 ? 'drag-over-left' : 'drag-over-right');
+    });
+    p.addEventListener('drop', e => {
+      e.preventDefault();
+      if (dragIdx === null || dragIdx === i) return;
+      const r = p.getBoundingClientRect();
+      const before = e.clientX < r.left + r.width/2;
+      const moved = route.splice(dragIdx, 1)[0];
+      const insertAt = before ? (dragIdx < i ? i-1 : i) : (dragIdx < i ? i : i+1);
+      route.splice(insertAt, 0, moved);
+      render();
+    });
+
+    pillsEl.appendChild(p);
+  });
+  routeStr.textContent = route.map(r => r.id).join(' ');
+}
+
+depInput.addEventListener('change', () => {
+  const v = depInput.value.trim().toUpperCase();
+  if (!v) return;
+  if (route.length > 0) route[0] = {id:v, type:'dep'};
+  else route.unshift({id:v, type:'dep'});
+  render();
+});
+destInput.addEventListener('change', () => {
+  const v = destInput.value.trim().toUpperCase();
+  if (!v) return;
+  if (route.length > 1) route[route.length-1] = {id:v, type:'dest'};
+  else route.push({id:v, type:'dest'});
+  render();
+});
+
+function openMenu(e, i) {
+  menuIdx = i;
+  menuTitle.textContent = route[i].id + ' · ' + typeLabel(route[i].type);
+  ctxMenu.classList.add('open');
+  const x = Math.min((e.clientX||e.pageX||0), window.innerWidth - 180);
+  const y = Math.min((e.clientY||e.pageY||0) + 8, window.innerHeight - 180);
+  ctxMenu.style.left = x + 'px';
+  ctxMenu.style.top  = y + 'px';
+}
+function closeMenu() { ctxMenu.classList.remove('open'); menuIdx = null; }
+document.addEventListener('click', closeMenu);
+ctxMenu.addEventListener('click', e => e.stopPropagation());
+
+document.getElementById('mDelete').addEventListener('click', () => {
+  if (menuIdx !== null) { route.splice(menuIdx, 1); render(); }
+  closeMenu();
+});
+
+function promptInsert(idx) {
+  const val = prompt('Enter fix or airway ID:');
+  if (!val) return;
+  const v = val.trim().toUpperCase();
+  const t = v.match(/^[VTQJ]\d+$/) ? 'awy' : v === 'DIRECT' ? 'direct' : 'fix';
+  route.splice(idx, 0, {id:v, type:t});
+  render();
+}
+document.getElementById('mInsertBefore').addEventListener('click', () => { const i=menuIdx; closeMenu(); if(i!==null) promptInsert(i); });
+document.getElementById('mInsertAfter').addEventListener('click',  () => { const i=menuIdx; closeMenu(); if(i!==null) promptInsert(i+1); });
+
+document.getElementById('mChangeType').addEventListener('click', () => {
+  if (menuIdx === null) { closeMenu(); return; }
+  const types = ['fix','awy','direct','dep','dest'];
+  const cur = route[menuIdx].type;
+  route[menuIdx].type = types[(types.indexOf(cur)+1) % types.length];
+  render(); closeMenu();
+});
+
+document.getElementById('addBtn').addEventListener('click', () => {
+  const v = addInput.value.trim().toUpperCase();
+  if (!v) return;
+  route.splice(Math.max(0, route.length-1), 0, {id:v, type:addType.value});
+  addInput.value = '';
+  render();
+});
+addInput.addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('addBtn').click(); });
+
+document.getElementById('btnClear').addEventListener('click', () => {
+  const d   = depInput.value.trim().toUpperCase()  || 'KLKR';
+  const dst = destInput.value.trim().toUpperCase() || 'KMHT';
+  route = [{id:d, type:'dep'}, {id:dst, type:'dest'}];
+  render();
+});
+document.getElementById('btnSample').addEventListener('click', () => {
+  route = JSON.parse(JSON.stringify(SAMPLE));
+  depInput.value = 'KLKR'; destInput.value = 'KMHT';
+  render();
+});
+document.getElementById('btnCopy').addEventListener('click', () => {
+  navigator.clipboard?.writeText(routeStr.textContent).then(() => {
+    const btn = document.getElementById('btnCopy');
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = 'Copy string', 1400);
+  });
+});
+
+render();
+</script>
+</body>
+</html>

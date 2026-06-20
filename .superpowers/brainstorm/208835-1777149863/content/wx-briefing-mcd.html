@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WxBriefing — MCD Section Mockup</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, 'Helvetica Neue', sans-serif;
+    background: #f0f0f0;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 24px;
+  }
+
+  h2 {
+    font-size: 16px;
+    color: #333;
+    text-align: center;
+    margin-bottom: 4px;
+  }
+  .subtitle {
+    font-size: 13px;
+    color: #666;
+    text-align: center;
+    margin-bottom: 20px;
+  }
+
+  /* ── WxBriefing panel ── */
+  .wx-panel {
+    background: #fff;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    width: 100%;
+    max-width: 480px;
+    overflow: hidden;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+  }
+
+  .wx-header {
+    background: #1a2744;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+  }
+  .wx-title {
+    font-size: 15px;
+    font-weight: 700;
+    flex: 1;
+    letter-spacing: 0.5px;
+  }
+  .wx-mode-toggle {
+    display: flex;
+    gap: 4px;
+  }
+  .wx-mode-btn {
+    background: rgba(255,255,255,0.15);
+    border: 1px solid rgba(255,255,255,0.3);
+    color: #fff;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .wx-mode-btn.active {
+    background: #fff;
+    color: #1a2744;
+  }
+  .wx-refresh-btn {
+    background: none;
+    border: 1px solid rgba(255,255,255,0.4);
+    color: #fff;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 16px;
+    cursor: pointer;
+  }
+
+  /* ── Summary bar ── */
+  .wx-summary-bar {
+    background: #e8f4e8;
+    border-bottom: 1px solid #c8e6c8;
+    padding: 8px 12px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .wx-summary-route { font-size: 13px; font-weight: 700; color: #1a2744; flex: 1; }
+  .wx-status-vfr { font-size: 12px; font-weight: 700; color: #1a7a1a; background: #d0f0d0; padding: 2px 8px; border-radius: 10px; }
+
+  /* ── Age notice ── */
+  .wx-age-notice {
+    background: #f8f8f0;
+    border-bottom: 1px solid #e8e8d0;
+    padding: 5px 12px;
+    font-size: 11px;
+    color: #666;
+  }
+
+  /* ── Day grid ── */
+  .wx-grid-wrapper { overflow-x: auto; padding: 8px; }
+  .wx-grid {
+    display: grid;
+    grid-template-columns: 72px repeat(7, 1fr);
+    gap: 2px;
+    min-width: 360px;
+  }
+  .wx-grid-corner { }
+  .wx-grid-header {
+    text-align: center;
+    font-size: 10px;
+    font-weight: 700;
+    color: #555;
+    padding: 3px 0;
+    white-space: pre-line;
+    line-height: 1.2;
+  }
+  .wx-grid-header.wx-today { color: #1a2744; }
+  .wx-grid-label {
+    font-size: 12px;
+    font-weight: 700;
+    color: #1a2744;
+    padding: 6px 4px;
+    display: flex;
+    align-items: center;
+  }
+  .wx-grid-cell {
+    text-align: center;
+    padding: 6px 2px;
+    font-size: 11px;
+    font-weight: 700;
+    border-radius: 3px;
+    cursor: pointer;
+  }
+  .wx-cat-vfr    { background: #2ecc40; color: #fff; }
+  .wx-cat-mvfr   { background: #0074d9; color: #fff; }
+  .wx-cat-ifr    { background: #e74c3c; color: #fff; }
+  .wx-cat-lifr   { background: #9b59b6; color: #fff; }
+  .wx-cat-unknown{ background: #ddd; color: #999; }
+  .wx-today-col  { outline: 2px solid #1a2744; outline-offset: -2px; }
+
+  /* ── MCD section ── */
+  .wx-mcd-section {
+    border-top: 2px solid #e0e0e0;
+    padding: 0;
+  }
+  .wx-mcd-header {
+    background: #f5f5f5;
+    border-bottom: 1px solid #e0e0e0;
+    padding: 8px 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .wx-mcd-title {
+    font-size: 12px;
+    font-weight: 800;
+    color: #1a2744;
+    letter-spacing: 0.8px;
+    flex: 1;
+  }
+  .wx-mcd-count {
+    font-size: 11px;
+    font-weight: 700;
+    color: #fff;
+    background: #e74c3c;
+    border-radius: 10px;
+    padding: 1px 7px;
+  }
+  .wx-mcd-count.zero { background: #999; }
+
+  /* MCD cards */
+  .wx-mcd-card {
+    border-bottom: 1px solid #e8e8e8;
+  }
+  .wx-mcd-card-header {
+    display: flex;
+    align-items: center;
+    padding: 10px 12px;
+    cursor: pointer;
+    gap: 8px;
+    background: #fff;
+  }
+  .wx-mcd-card-header:active { background: #f0f0f0; }
+  .wx-mcd-num {
+    font-size: 13px;
+    font-weight: 800;
+    color: #1a2744;
+    min-width: 64px;
+  }
+  .wx-mcd-time {
+    font-size: 12px;
+    color: #555;
+    flex: 1;
+  }
+  .wx-mcd-valid {
+    font-size: 11px;
+    color: #888;
+    margin-right: 4px;
+  }
+  .wx-mcd-chevron {
+    font-size: 14px;
+    color: #aaa;
+    transition: transform 0.15s;
+  }
+  .wx-mcd-chevron.open { transform: rotate(90deg); }
+
+  /* Expanded text */
+  .wx-mcd-body {
+    background: #fafafa;
+    padding: 10px 12px;
+    border-top: 1px solid #eee;
+    display: none;
+  }
+  .wx-mcd-body.open { display: block; }
+  .wx-mcd-text {
+    font-family: 'Courier New', monospace;
+    font-size: 11px;
+    color: #222;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 220px;
+    overflow-y: auto;
+  }
+
+  /* Empty / loading states */
+  .wx-mcd-empty {
+    padding: 14px 12px;
+    font-size: 12px;
+    color: #888;
+    text-align: center;
+  }
+
+  /* ── Note below ── */
+  .note {
+    font-size: 12px;
+    color: #555;
+    text-align: center;
+    max-width: 480px;
+    line-height: 1.5;
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    padding: 12px 16px;
+  }
+</style>
+</head>
+<body>
+
+<h2>WxBriefing — MCD Section Mockup</h2>
+<p class="subtitle">Scroll down to see the new MESOSCALE DISCUSSIONS section below the day grid</p>
+
+<div class="wx-panel">
+
+  <!-- Header -->
+  <div class="wx-header">
+    <span class="wx-title">⛅ Weather</span>
+    <div class="wx-mode-toggle">
+      <button class="wx-mode-btn active">7-DAY</button>
+      <button class="wx-mode-btn">24H</button>
+    </div>
+    <button class="wx-refresh-btn" title="Refresh MOS + MCDs">↻</button>
+  </div>
+
+  <!-- Summary bar -->
+  <div class="wx-summary-bar">
+    <span class="wx-summary-route">KLKR → KCLT</span>
+    <span class="wx-status-vfr">Today: VFR</span>
+  </div>
+
+  <!-- Age notice -->
+  <div class="wx-age-notice">NWS forecast 22m old · Days 6–8 trend only</div>
+
+  <!-- Day grid (abbreviated mockup) -->
+  <div class="wx-grid-wrapper">
+    <div class="wx-grid">
+      <!-- Corner -->
+      <div class="wx-grid-corner"></div>
+      <!-- Day headers -->
+      <div class="wx-grid-header wx-today">Sat&#10;25</div>
+      <div class="wx-grid-header">Sun&#10;26</div>
+      <div class="wx-grid-header">Mon&#10;27</div>
+      <div class="wx-grid-header">Tue&#10;28</div>
+      <div class="wx-grid-header">Wed&#10;29</div>
+      <div class="wx-grid-header">Thu&#10;30</div>
+      <div class="wx-grid-header">Fri&#10;1</div>
+
+      <!-- KLKR row -->
+      <div class="wx-grid-label">KLKR</div>
+      <div class="wx-grid-cell wx-cat-vfr wx-today-col">VFR</div>
+      <div class="wx-grid-cell wx-cat-mvfr">MVF</div>
+      <div class="wx-grid-cell wx-cat-ifr">IFR</div>
+      <div class="wx-grid-cell wx-cat-vfr">VFR</div>
+      <div class="wx-grid-cell wx-cat-vfr">VFR</div>
+      <div class="wx-grid-cell wx-cat-mvfr">MVF</div>
+      <div class="wx-grid-cell wx-cat-vfr">VFR</div>
+
+      <!-- KCLT row -->
+      <div class="wx-grid-label">KCLT</div>
+      <div class="wx-grid-cell wx-cat-vfr wx-today-col">VFR</div>
+      <div class="wx-grid-cell wx-cat-ifr">IFR</div>
+      <div class="wx-grid-cell wx-cat-lifr">LIFR</div>
+      <div class="wx-grid-cell wx-cat-vfr">VFR</div>
+      <div class="wx-grid-cell wx-cat-vfr">VFR</div>
+      <div class="wx-grid-cell wx-cat-vfr">VFR</div>
+      <div class="wx-grid-cell wx-cat-vfr">VFR</div>
+    </div>
+  </div>
+
+  <!-- ════ NEW: MESOSCALE DISCUSSIONS section ════ -->
+  <div class="wx-mcd-section">
+    <div class="wx-mcd-header">
+      <span class="wx-mcd-title">MESOSCALE DISCUSSIONS</span>
+      <span class="wx-mcd-count">2</span>
+    </div>
+
+    <!-- Card 1 — expanded -->
+    <div class="wx-mcd-card">
+      <div class="wx-mcd-card-header" onclick="this.nextElementSibling.classList.toggle('open'); this.querySelector('.wx-mcd-chevron').classList.toggle('open')">
+        <span class="wx-mcd-num">MD 0483</span>
+        <span class="wx-mcd-time">Issued 2355Z</span>
+        <span class="wx-mcd-valid">Valid until 0330Z</span>
+        <span class="wx-mcd-chevron open">›</span>
+      </div>
+      <div class="wx-mcd-body open">
+        <div class="wx-mcd-text">ACUS01 KWNS 251955
+SPC MCD 0483
+
+AREAS AFFECTED...PORTIONS OF SW VIRGINIA...NC...SC...GA
+
+CONCERNING...SEVERE THUNDERSTORM...TORNADO WATCH POSSIBILITY...
+
+VALID 252355Z - 260330Z
+
+SUMMARY...
+Scattered convective development expected along and ahead of
+surface cold front crossing the Carolinas. Supercell potential
+exists with brief tornado possible. Watch issuance likely for
+portions of NC and SC by 0100Z.
+
+LAT...LON 3689 7854 3612 7706 3506 7836 3501 7969 3552 8033 3689 7854</div>
+      </div>
+    </div>
+
+    <!-- Card 2 — collapsed -->
+    <div class="wx-mcd-card">
+      <div class="wx-mcd-card-header" onclick="this.nextElementSibling.classList.toggle('open'); this.querySelector('.wx-mcd-chevron').classList.toggle('open')">
+        <span class="wx-mcd-num">MD 0481</span>
+        <span class="wx-mcd-time">Issued 2115Z</span>
+        <span class="wx-mcd-valid">Valid until 0115Z</span>
+        <span class="wx-mcd-chevron">›</span>
+      </div>
+      <div class="wx-mcd-body">
+        <div class="wx-mcd-text">ACUS01 KWNS 251715
+SPC MCD 0481
+
+AREAS AFFECTED...PORTIONS OF SC...COASTAL GA...
+
+CONCERNING...HEAVY RAINFALL...FLASH FLOOD WATCH POSSIBLE...
+
+VALID 252115Z - 260115Z
+
+SUMMARY...
+Training convective cells producing 1-2 inch per hour rainfall
+rates along the SC/GA coast. Flash flood watch issuance possible
+for Beaufort, Colleton, and Jasper counties.
+
+LAT...LON 3288 8001 3195 8050 3134 8124 3203 8201 3310 8105 3288 8001</div>
+      </div>
+    </div>
+
+  </div>
+  <!-- end MCD section -->
+
+</div><!-- end wx-panel -->
+
+<div class="note">
+  <strong>Notes:</strong><br>
+  · MCDs filtered to route corridor (50 nm buffer) — nationwide MCDs not affecting KLKR→KCLT are hidden<br>
+  · Tap a card header to expand/collapse the full MCD text<br>
+  · Red badge shows count; grey badge when zero matches<br>
+  · ↻ refreshes both MOS data and MCDs together
+</div>
+
+</body>
+</html>

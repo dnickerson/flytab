@@ -1,0 +1,1320 @@
+openapi: 3.0.4
+info:
+  title: NOTAM Management System API (NMS-API)
+  version: '1.0.17 - Revised: 2025-10-24'
+  description: |-
+    **Overview**
+
+    The NMS-API provides endpoints for requesting NOTAM data. Optional filters
+    are provided to request subsets of NOTAM data. Supported filters are:
+    accountability, classification, effect start and end date, feature, free 
+    text, id, last updated date, latitude, location, longitude, NOTAM number, 
+    and radius.
+
+    The API also supports requesting initial load data by NOTAM 
+    classification.
+
+    The API also support requesting NOTAM checklists data. Checklist data is 
+    filtered by: accountability, classification, and location.
+
+    Additionally, the API provides access to Location-Series data.
+
+    **Authentication**
+
+    Access to the API endpoints is restricted by bearer token authentication. 
+    The bearer token is renewed using the *client_id*, *client_secret*, 
+    and *authorization URL* provided during API registration. To renew the 
+    token a POST request must be sent to the *authorization URL*.
+    ---
+    ***Example:***
+    ```
+    curl -X POST \
+    --location "https://<HOST_NAME>/v1/auth/token" \
+    --header "Content-Type: application/x-www-form-urlencoded" \
+    -d grant_type=client_credentials \
+    -u <CLIENT_ID>:<CLIENT_SECRET>
+    ```
+
+    **Data Formats**
+
+    NMS-API responses are JSON formatted messages. NOTAM data within the 
+    response body will be represented as either AIXM 5.1 or GeoJSON format, 
+    depending on the user provided *nmsResponseFormat* HTTP header. The 
+    *nmsResponseFormat* header is a required parameter, if it is not provided 
+    an error will be generated. Acceptable header values are:
+
+    *nmsResponseFormat: AIXM | GEOJSON*
+
+    **Reference Documentation**
+
+    FNS NDS WSDD, FNS NDS WSRD, and AIDAP IRD
+
+servers:
+  - url: https://api-fit.cgifederal-aim.com/nmsapi
+    description: FIT Environment
+  - url: https://api-staging.cgifederal-aim.com/nmsapi
+    description: Staging (Pre-Prod) Environment
+  - url: https://api-nms.aim.faa.gov/nmsapi
+    description: Prod Environment
+tags:
+  - name: NMS
+    description: >
+      Endpoints for distributing NOTAM information. NOTAM data is optionally returned
+      in AIXM 5.1 or GeoJSON formats.
+      
+paths:
+
+  /v1/content/{token}:
+    get:
+      tags:
+        - NMS
+      operationId: getContent
+      summary: >
+        Proxies access to binary data to support a streamed data response.
+      description: |
+        Proxies access to binary data to support a streamed data response.
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+            example: 'aHR0cHM6Ly9zdG9yYWdlLmdvb2dsZWFwaXMuY29tL2J1Y2tldC9maWxlP1NpZ25hdHVyZT1YWFgmRXhwaXJlcz0xMjM0NTY3ODkw'
+          description: Unique token referencing content to be returned.
+      responses:
+        '200':
+          description: >
+            A stream of binary data correlating to the provided token.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: >
+            Bad request due to invalid request parameters.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NmsError'
+              example:
+                timestamp: '2025-04-08T12:00:00Z'
+                status: '400'
+                message: 'Bad Request'
+        '401':
+          description: >
+            Unauthorized request error caused by invalid user credentials.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NmsError'
+              example:
+                timestamp: '2025-04-08T12:00:00Z'
+                status: '401'
+                message: 'Unauthorized'
+        '404':
+          description: >
+            Request content is not found.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NmsError'
+              example:
+                timestamp: '2025-04-08T12:00:00Z'
+                status: '404'
+                message: 'Token not found: a1b2c3d4-e5f6-7890-1234-567890abcdef'
+        '500':
+          description: >
+            Internal server error caused by error conditions while processing 
+            requests.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NmsError'
+              example:
+                timestamp: '2025-04-08T12:00:00Z'
+                status: '500'
+                message: 'Internal Server Error'
+        default:
+          description: Unexpected error
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NmsError"
+  
+  /v1/locationseries:
+    get:
+      tags:
+        - NMS
+      operationId: getLocationSeries
+      parameters:
+        - name: lastUpdatedDate
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/NmsTime'
+          description: >
+            Provides either an initial load or delta change set of all Location-Series 
+            data based on the last modification time. The *lastUpdatedDate* query 
+            parameter defines the UTC delta time range. If the *lastUpdatedDate* is 
+            not provided all active Location-Series will be returned.
+      summary: >
+        Returns a set of Location-Series data.
+      description: |
+        Returns a delta of Location-Series data based on the provided last 
+        updated date query parameter. The delta will return Location-Series 
+        where the status is either New (N), Updated (U), or Deleted (D) based 
+        on the last modification time of the Location-Series. The last updated 
+        date boundary should not exceed five (5) days in the past or extend 
+        beyond the current UTC time.
+        
+        If the last updated date is not provided the request will return an 
+        initial load of all active Location-Series data with a status of either 
+        New (N) or Updated (U). Location-Series with a status of Deleted (D) 
+        will be exclude.
+        
+        Data is returned in JSON format.
+      responses:
+        '200':
+          description: >
+            Successful operation returns a Location-Series response set of all 
+            found Location-Series mappings.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NmsLocationSeriesResponse'
+        '400':
+          description: >
+            Bad request due to invalid request parameters.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NmsError'
+              example:
+                timestamp: '2025-04-08T12:00:00Z'
+                status: '400'
+                message: 'Bad Request'
+        '401':
+          description: >
+            Unauthorized request error caused by invalid user credentials.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NmsError'
+              example:
+                timestamp: '2025-04-08T12:00:00Z'
+                status: '401'
+                message: 'Unauthorized'
+        '408':
+          description: >
+            Request timeout error triggered if request takes longer than 
+            30 seconds to process.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NmsError'
+              example:
+                timestamp: '2025-04-08T12:00:00Z'
+                status: '408'
+                message: 'Request Timeout'
+        '500':
+          description: >
+            Internal server error caused by error conditions while processing 
+            requests.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NmsError'
+              example:
+                timestamp: '2025-04-08T12:00:00Z'
+                status: '500'
+                message: 'Internal Server Error'
+        default:
+          description: Unexpected error
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NmsError"
+
+  /v1/notams:
+    get:
+      tags:
+        - NMS
+      operationId: getFilteredNotams
+      parameters:
+        - name: nmsResponseFormat
+          in: header
+          required: true
+          schema:
+            $ref: '#/components/schemas/NmsResponseFormat'
+          description: >
+            The NOTAM format to be provided in the response body.
+        - name: accountability
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/Accountability'
+          description: >
+            Filters active NOTAM data by the provided accountability criteria.
+        - name: allowRedirect
+          in: query
+          required: false
+          schema:
+            type: boolean
+          description: >
+            Toggles whether to allow temporary redirects when requesting content 
+            URLs. Should only be used with the ***classification*** parameter.If not 
+            provided then temporary redirects will be enabled by default.
+        - name: classification
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/NotamClassification'
+          description: >
+            Filters active NOTAM data by the provided classification criteria. When 
+            provided as the sole query parameter, the request will return a relative 
+            content path referencing a file containing the complete set of NOTAMs for the 
+            provided classification in either AIXM or GeoJSON formats as defined by 
+            the *nmsResponseFormat* request header. The resulting relative content path 
+            will expire after 5 minutes. When coupled with any other query parameter the 
+            request will return either AIXM or GeoJSON formatted data directly in 
+            the response body.
+        - name: effectiveEndDate
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/NmsTime'
+          description: >
+            Filters active NOTAM data based on the provided start and end time 
+            criteria. This parameter must be used together with the 
+            *effectiveStartDate* parameter.
+        - name: effectiveStartDate
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/NmsTime'
+          description: >
+            Filters active NOTAM data based on the provided start and end time 
+            criteria. This parameter must be used together with the 
+            *effectiveEndDate* parameter.
+        - name: feature
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/NotamFeature'
+          description: >
+            Filters active NOTAM data by the provided feature criteria.
+        - name: freeText
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/FreeText'
+          description: >
+            Filters active NOTAM data by the provided free text criteria.
+        - name: nmsId
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/NmsId'
+          description: >
+            Filters all NOTAM data by the provided unique identifier criteria. 
+            Returns a single NOTAM, whether active or inactive.
+        - name: lastUpdatedDate
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/NmsTime'
+          description: >
+            Filters all NOTAM data by the provided last modification time 
+            criteria, generating a set of NOTAMs which have been modified 
+            (created, updated, canceled) between the provided 
+            *lastUpdatedDate* and current UTC time. This parameter is 
+            limited to a 24 hour window prior to current time. Returned data 
+            will include both active and inactive NOTAMs.
+        - name: latitude
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/LatitudeDegrees'
+          description: >
+            Filters active NOTAM data by the provided geospatial criteria. 
+            The latitude is provided in decimal degrees (ex. 32.897), 
+            ranging between [-90, 90]. This parameter must be used 
+            together with the *longitude* and *radius* parameters.
+        - name: location
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/Location'
+          description: >
+            Filters active NOTAM data by the provided location criteria. The 
+            location may be represented in either domestic or ICAO formats.
+        - name: longitude
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/LongitudeDegrees'
+          description: >
+            Filters active NOTAM data by the provided geospatial criteria. 
+            The longitude is provided in decimal degrees (ex. -97.037), 
+            ranging between [-180, 180]. This parameter must be used 
+            together with the *latitude* and *radius* parameters.
+        - name: notamNumber
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/NotamNumber'
+          description: >
+            Filters active NOTAM data by the provided NOTAM number. This 
+            parameter must be used together with either the *location* or 
+            *accountability* parameters.
+        - name: radius
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/RadiusNauticalMiles'
+          description: >
+            Filters active NOTAM data by the provided geospatial criteria. 
+            The radius is presented in nautical miles ranging between 
+            [0, 100]. This parameter must be used together with the 
+            *longitude* and *latitude* parameters.
+      summary: >
+        Returns a partial set of NOTAM data based on the provided query 
+        parameters.
+      description: |
+        Returns a partial set of NOTAM data based on the provided query 
+        parameters. NOTAM data may be returned in either AIXM or GeoJSON 
+        formats as determined by the *nmsResponseFormat* header parameter.
+        
+        Query parameters are evaluated using logical 'AND' conditions. Some 
+        parameters may require supporting parameters also be provided. Query 
+        parameter relationships are defined in the individual parameter 
+        descriptions.
+
+        If no query parameters are provided an error will be returned.
+      responses:
+        '200':
+          description: >
+            Successful operations returns a JSON formatted response describing 
+            the response status, error messages, and dataset represented in 
+            either an AIXM or GeoJSON format.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NmsNotamResponse'
+        '307':
+          description: >
+            ***To be used with classification only.***
+            If the 'allowRedirect' query parameter is not present or enabled, 
+            then successful requests will be redirected to a relative content 
+            path granting temporary access to a compressed file.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+            Location: 
+              description: >
+                Contains a relative content path which references the classification file 
+                found in the response body. The *Location* header allows for 
+                automatic redirects to the defined path. If redirects are not 
+                permitted the response body will contain the relative content path.
+              schema:
+                $ref: '#/components/schemas/ContentURL'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NmsInitialLoadResponse'
+        '400':
+          description: >
+            Bad request due to invalid request parameters.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NmsError'
+              example:
+                timestamp: '2025-04-08T12:00:00Z'
+                status: '400'
+                message: 'Bad Request'
+        '401':
+          description: >
+            Unauthorized request error caused by invalid user credentials.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NmsError'
+              example:
+                timestamp: '2025-04-08T12:00:00Z'
+                status: '401'
+                message: 'Unauthorized'
+        '408':
+          description: >
+            Request timeout error triggered if request takes longer than 
+            30 seconds to process.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NmsError'
+              example:
+                timestamp: '2025-04-08T12:00:00Z'
+                status: '408'
+                message: 'Request Timeout'
+        '500':
+          description: >
+            Internal server error caused by error conditions while processing 
+            requests.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NmsError'
+              example:
+                timestamp: '2025-04-08T12:00:00Z'
+                status: '500'
+                message: 'Internal Server Error'
+        default:
+          description: Unexpected error
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NmsError"
+
+  /v1/notams/checklist:
+    get:
+      tags:
+        - NMS
+      operationId: getNotamsChecklist
+      parameters:
+        - name: accountability
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/Accountability'
+          description: >
+            Filters NOTAM checklist by the provided accountability criteria.
+        - name: classification
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/NotamClassification'
+          description: >
+            Filters NOTAM checklist data by the provided classification 
+            criteria.
+        - name: location
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/Location'
+          description: >
+            Filters NOTAM checklist data by the provided location criteria. 
+            The location may be provided in either domestic or ICAO formats.
+      summary: >
+        Returns checklist formatted subset of NOTAM 
+        data based on the provided query parameters.
+      description: |
+        Returns a set of NOTAM Checklist data as constrained by provided filter criteria. 
+        If no filter criteria are provided checklist details for all active NOTAMs will be 
+        returned.
+      responses:
+        '200':
+          description: >
+            Successful operations returns a JSON formatted response describing 
+            the response status, error messages, and dataset represented as a
+            list checklist data items of each NOTAM.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NmsChecklistResponse'
+        '400':
+          description: >
+            Bad request due to invalid request parameters.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NmsError'
+              example:
+                timestamp: '2025-04-08T12:00:00Z'
+                status: '400'
+                message: 'Bad Request'
+        '401':
+          description: >
+            Unauthorized request error caused by invalid user credentials.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NmsError'
+              example:
+                timestamp: '2025-04-08T12:00:00Z'
+                status: '401'
+                message: 'Unauthorized'
+        '408':
+          description: >
+            Request timeout error triggered if request takes longer than 
+            30 seconds to process.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NmsError'
+              example:
+                timestamp: '2025-04-08T12:00:00Z'
+                status: '408'
+                message: 'Request Timeout'
+        '500':
+          description: >
+            Internal server error caused by error conditions while processing 
+            requests.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NmsError'
+              example:
+                timestamp: '2025-04-08T12:00:00Z'
+                status: '500'
+                message: 'Internal Server Error'
+        default:
+          description: Unexpected error
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NmsError"
+
+  /v1/notams/il:
+    get:
+      tags:
+        - NMS
+      operationId: getInitialLoad
+      parameters:
+        - name: allowRedirect
+          in: query
+          required: false
+          schema:
+            type: boolean
+          description: >
+            Toggles whether to allow temporary redirects. If not provided then 
+            temporary redirects will be enabled by default.
+      summary: >
+        Returns either a binary file or relative content path referencing a compressed 
+        initial load file.
+      description: |
+        Default behavior will trigger an automatic redirect to the relative content 
+        path which will automatically download of the compressed file. The 
+        *allowRedirect* flag controls whether automatic redirects are allowed. 
+        When disabled, the request will return a relative content path referencing the 
+        location of the compressed initial load file. The initial load file 
+        contains the set of active NOTAMs across all classification types. The 
+        initial load file will only represent NOTAMs in AIXM format wrapped 
+        within a SOAP formatted envelope to maintain backwards compatibility. 
+        The relative content path will expire after 5 minutes.
+      responses:
+        '200':
+          description: >
+            Successful operations returns a relative content path granting temporary 
+            access to a compressed initial load file.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NmsInitialLoadResponse'
+        '307':
+          description: >
+            If the 'allowRedirect' query parameter is not present or enabled, 
+            then successful requests will be redirected to a relative content path 
+            granting temporary access to a compressed initial load file.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+            Location: 
+              description: >
+                Contains a relative content path which references the initial load file 
+                found in the response body. The *Location* header allows for 
+                automatic redirects to the defined URL. If redirects are not 
+                permitted the response body will contain the relative content path.
+              schema:
+                $ref: '#/components/schemas/ContentURL'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NmsInitialLoadResponse'
+        '400':
+          description: >
+            Bad request due to invalid request parameters.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NmsError'
+              example:
+                timestamp: '2025-04-08T12:00:00Z'
+                status: '400'
+                message: 'Bad Request'
+        '401':
+          description: >
+            Unauthorized request error caused by invalid user credentials.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NmsError'
+              example:
+                timestamp: '2025-04-08T12:00:00Z'
+                status: '401'
+                message: 'Unauthorized'
+        '408':
+          description: >
+            Request timeout error triggered if request takes longer than 
+            30 seconds to process.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NmsError'
+              example:
+                timestamp: '2025-04-08T12:00:00Z'
+                status: '408'
+                message: 'Request Timeout'
+        '500':
+          description: >
+            Internal server error caused by error conditions while processing 
+            requests.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NmsError'
+              example:
+                timestamp: '2025-04-08T12:00:00Z'
+                status: '500'
+                message: 'Internal Server Error'
+        default:
+          description: Unexpected error
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NmsError"
+
+  /v1/notams/il/{classification}:
+    get:
+      tags:
+        - NMS
+      operationId: getInitialLoadByClassification
+      parameters:
+        - name: classification
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/NotamClassification'
+          description: >
+            Filters active NOTAM data by the provided classification criteria.
+        - name: allowRedirect
+          in: query
+          required: false
+          schema:
+            type: boolean
+          description: >
+            Toggles whether to allow temporary redirects. If not provided then 
+            temporary redirects will be enabled by default.
+      summary: >
+        Returns either a binary file or relative content path referencing a compressed 
+        initial load file.
+      description: |
+        Default behavior will trigger an automatic redirect to the relative content 
+        path which will automatically download of the compressed file. The 
+        *allowRedirect* flag controls whether automatic redirects are allowed. 
+        When disabled, the request will return a relative content path referencing the 
+        location of the compressed initial load file. The initial load file 
+        contains the set of active NOTAMs for the provided classification. The 
+        initial load file will only represent NOTAMs in AIXM format wrapped 
+        within a SOAP formatted envelope to maintain backwards compatibility. 
+        The relative content path will expire after 5 minutes.
+      responses:
+        '200':
+          description: >
+            Successful operations returns a relative content path granting temporary 
+            access to a compressed initial load file.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NmsInitialLoadResponse'
+        '307':
+          description: >
+            If the 'allowRedirect' query parameter is not present or enabled, 
+            then successful requests will be redirected to a relative content path 
+            granting temporary access to a compressed initial load file.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+            Location: 
+              description: >
+                Contains a relative content path which references the initial load file 
+                found in the response body. The *Location* header allows for 
+                automatic redirects to the defined URL. If redirects are not 
+                permitted the response body will contain the relative content path.
+              schema:
+                $ref: '#/components/schemas/ContentURL'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NmsInitialLoadResponse'
+        '400':
+          description: >
+            Bad request due to invalid request parameters.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NmsError'
+              example:
+                timestamp: '2025-04-08T12:00:00Z'
+                status: '400'
+                message: 'Bad Request'
+        '401':
+          description: >
+            Unauthorized request error caused by invalid user credentials.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NmsError'
+              example:
+                timestamp: '2025-04-08T12:00:00Z'
+                status: '401'
+                message: 'Unauthorized'
+        '408':
+          description: >
+            Request timeout error triggered if request takes longer than 
+            30 seconds to process.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NmsError'
+              example:
+                timestamp: '2025-04-08T12:00:00Z'
+                status: '408'
+                message: 'Request Timeout'
+        '500':
+          description: >
+            Internal server error caused by error conditions while processing 
+            requests.
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NmsError'
+              example:
+                timestamp: '2025-04-08T12:00:00Z'
+                status: '500'
+                message: 'Internal Server Error'
+        default:
+          description: Unexpected error
+          headers:
+            x-request-id:
+              $ref: '#/components/headers/x-request-id'
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NmsError"
+    
+components:
+  headers:
+    x-request-id:
+      description: A unique identifier for the request, used for correlation in logs and for tracking issues.
+      schema:
+        type: string
+        format: uuid
+        example: 'a1b2c3d4-e5f6-7890-1234-567890abcdef'
+  schemas:
+
+    Accountability:
+      type: string
+      example: '01A or 01AA or EGGNYNYX'
+      pattern: '^([a-zA-Z0-9]{3,4}|[a-zA-Z0-9]{8})$'
+
+    FreeText:
+      type: string
+      pattern: '^[ /\.\-\(\)\w]{1,80}$'
+      example: 'Free Text Search'
+      description: >
+        Exact text search criteria.
+
+    LatitudeDegrees:
+      type: number
+      format: double
+      minimum: -90.0
+      maximum: +90.0
+      example: 32.896801
+      description: Latitude in decimal degrees.
+
+    Location:
+      type: string
+      example: '01A or 01AA'
+      pattern: '^[a-zA-Z0-9]{3,4}$'
+
+    LongitudeDegrees:
+      type: number
+      format: double
+      minimum: -180.0
+      maximum: 180.0
+      example: -97.038002
+      description: Longitude in decimal degrees.
+
+    NmsError:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          description: Timestamp when error was generated
+          example: 2025-04-08T12:00:00Z
+        status:
+          type: string
+          description: Status of Success or Failure
+          example: 'Success'
+        message:
+          type: string
+          description: HTTP error messages
+          example: 'Service unavailable'
+      required: [status, message]
+
+    NmsResponseFormat:
+      type: string
+      enum: [AIXM, GEOJSON]
+
+    NmsChecklistData:
+      type: object
+      properties:
+        checklist:
+          type: array
+          items:
+            $ref: '#/components/schemas/NmsChecklistDataItem'
+      description: >
+        Checklist data represented as a list of Checklist data items
+
+    NmsChecklistDataItem:
+      type: object
+      properties:
+        id:
+          $ref: '#/components/schemas/NmsId'
+        classification:
+          $ref: '#/components/schemas/NotamClassification'
+        accountId:
+          $ref: '#/components/schemas/Accountability'
+          example: AUS
+        number:
+          $ref: '#/components/schemas/NotamNumber'
+          example: '05/074'
+        location:
+          $ref: '#/components/schemas/Location'
+          example: 'DFW'
+        icaoLocation:
+          $ref: '#/components/schemas/Location'
+          example: 'KDFW'
+        lastUpdated:
+          $ref: '#/components/schemas/NmsTime'
+        
+        
+    NmsChecklistResponse:
+      allOf:
+        - $ref: '#/components/schemas/NmsResponse'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/NmsChecklistData'
+          required: [data]
+
+    NmsInternalError:
+      type: object
+      properties:
+        code:
+          type: string
+          example: 1
+          description: >
+            Unique error code which maps to a specific error condition incurred 
+            while processing a request.
+        message:
+          type: string
+          example: Encountered unexpected query parameter format
+          description: >
+            Message explaining a specific error condition
+      required: [code, message]
+
+    NmsLocationSeriesData:
+      type: object
+      properties:
+        locationSeries:
+          type: array
+          items:
+            type: object
+            example: 
+              {
+                "locationId": "JFK",
+                "icaoId": "KJFK",
+                "status": "U",
+                "internationalSeries": {
+                  "A": {
+                    "accountId": "FSIA", 
+                    "lastUpdate": "2004-12-07T00:00:00Z", 
+                    "aftnAddress": "FSIAYNYX" 
+                  },
+                  "B": {
+                    "accountId": "FSIA",
+                    "lastUpdate": "2005-08-04T00:00:00Z",
+                    "aftnAddress": "FSIAYNYX"
+                  }, 
+                  "C": {
+                    "accountId": "FSIA", 
+                    "lastUpdate": "2005-08-04T00:00:00Z",
+                    "aftnAddress": "FSIAYNYX"
+                  }
+                },
+                "militarySeries": {
+                  "W": {
+                    "accountId": "KQZC", 
+                    "lastUpdate": "2016-08-01T00:00:00",
+                    'aftnAddress': "null",
+                  }
+                },
+                "description": "JOHN F KENNEDY INT",
+                "xoverLocation": "KJFK",
+                "xoverSeries": "A",
+                "stateText": "NEW YORK",
+                "centerText": "ZNY",
+                "domesticAccountId": "JFK",
+                "updateSource": "NASR",
+                "startDate": "2025-08-15T16:31:12Z",
+                "updateTs": "2013-06-12T04:00:00Z",
+                "createUserId": "SYSTEM",
+                "lastModUserId": "SYSTEM"
+              }
+          description: >
+            Location-Series data is represented as a JSON object with the 
+            set of location attributes at the top level. The international 
+            and military series associated with the location are child 
+            elements to the location, with each series representing a map 
+            of ICAO series keys to account, last update, and AFTN address.
+      description: >
+        Dataset containing an array of Location-Series data elements.
+
+    NmsLocationSeriesResponse:
+      allOf:
+        - $ref: '#/components/schemas/NmsResponse'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/NmsLocationSeriesData'
+          required: [data]
+
+    NmsResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: Success
+          description: A status message of Success or Failure
+        errors:
+          type: array
+          description: >
+            Collection of internal error messages incurred during request 
+            processing.
+          items:
+            $ref: '#/components/schemas/NmsInternalError'
+      required: [status]
+
+    NmsNotamData:
+      type: object
+      properties:
+        aixm:
+          type: array
+          items:
+            type: string
+          description: Collection of AIXM formatted NOTAMs
+          example: ['<AIXMBasicMessage />']
+        geojson:
+          type: array
+          items:
+            type: object
+          description: Collection of GeoJSON formatted NOTAMs
+          example: [
+            {
+              "type": "Feature",
+              "properties":
+              {
+                "coreNOTAMData":
+                {
+                  "notamEvent":
+                  {
+                    "encoding": "ANNOTATION",
+                    "scenario": "123"
+                  },
+                  "notam":
+                  {
+                    "id": "NMS_ID_1234567812345678",
+                    "series": "A",
+                    "number": "01/123",
+                    "year": "2025",
+                    "type": "N",
+                    "issued": "2025-03-17T17:08:00.000Z",
+                    "affectedFir": "ZTL",
+                    "selectionCode": "QXXX",
+                    "traffic": "IV",
+                    "purpose": "BO",
+                    "scope": "A",
+                    "minimumFl": "000",
+                    "maximumFl": "999",
+                    "location": "CLT",
+                    "effectiveStart": "2025-03-17T17:02:00.000Z",
+                    "effectiveEnd": "2025-09-18T21:11:00.000Z",
+                    "estimated": "true",
+                    "text": "27 RWY END ID LGT U/S",
+                    "classification": "DOM",
+                    "cancelationDate": "2025-09-18T21:11:00.000Z",
+                    "accountId": "XYZ",
+                    "lastUpdated": "2025-03-17T17:08:00.000Z",
+                    "icaoLocation": "KCLT",
+                    "schedule": "Daily:1200-1230~DLY 1200-1230",
+                    "lowerLimit": "SFC",
+                    "upperLimit": "280M",
+                    "coordinates": "3939N04302E",
+                    "radius": "5"
+                  },
+                  "notamTranslation":
+                  [
+                    {
+                      "type": "LOCAL_FORMAT", 
+                      "domestic_message": "!CLT 01/123 SAMPLE NOTAM"
+                    },
+                    {
+                      "type": "ICAO",
+                      "icao_message": "01/123 NOTAMR \nQ) Q_CODE \nA) CLT \nB) 2503171702 \nC) 2509182111EST \n\nE) SAMPLE NOTAM \n U/S"
+                    }
+                  ]
+                }
+              },
+              "geometry":
+              {
+                "type": "GeometryCollection",
+                "geometries":
+                [
+                  {
+                    "type": "Point",
+                    "coordinates": [-81.1918244444444,40.0024157777778]
+                  },
+                  {
+                    "type": "Polygon",
+                    "coordinates": [[[-81.198961471121,40.0021595400093],[-81.1989468623111,40.0019815155841]]]
+                  }
+                ]
+              }
+            }
+          ]
+        url:
+          $ref: '#/components/schemas/ContentURL'
+      description: >
+        NOTAM data represented as either AIXM or GeoJSON dependent on the 
+        response format provided in the request
+
+    NmsNotamResponse:
+      allOf:
+        - $ref: '#/components/schemas/NmsResponse'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/NmsNotamData'
+          required: [data]
+
+    NmsInitialLoadData:
+      type: object
+      properties:
+        url:
+          $ref: '#/components/schemas/ContentURL'
+      description: >
+        Relative content path providing temporary access to a initial load file.
+
+    NmsInitialLoadResponse:
+      allOf:
+        - $ref: '#/components/schemas/NmsResponse'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/NmsInitialLoadData'
+          required: [data]
+
+    NmsTime:
+      type: string
+      format: date-time
+      example: 2025-03-28T12:00:00Z
+      description: >
+        Time represented as yyyy-MM-ddTHH:mm:ssZ.
+
+    NotamClassification:
+      type: string
+      enum: [INTERNATIONAL, MILITARY, LOCAL_MILITARY, DOMESTIC, FDC]
+      example: FDC
+      description: >
+        Enumeration of NOTAM classifications representing the sub groups of 
+        NOTAM messages.
+
+    NotamFeature:
+      type: string
+      enum: [RWY,TWY,APRON,AD,OBST,NAV,COM,SVC,AIRSPACE,ODP,SID,STAR,
+              CHART,DATA,DVA,IAP,VFP,ROUTE,SPECIAL,SECURITY]
+      example: RWY
+      description: >
+        Enumeration of NOTAM airspace features.
+
+    NmsId:
+      type: string
+      example: '1234567812345678'
+      pattern: '^\d{16}$'
+      description: >
+        The unique NOTAM identifier.
+
+    NotamNumber:
+      type: string
+      example: '10/108'
+      pattern: '^\d{2}/\d{3}|[a-zA-Z]{1}\d{4}/\d{2}|\d{1}/\d{4}$'
+      description: >
+        The NOTAM number represents either the Domestic, ICAO, FDC, Military, 
+        or Checklist numbering formats.
+
+    RadiusNauticalMiles:
+      type: number
+      format: double
+      minimum: 0.0
+      maximum: 100.0
+      example: 5.6
+      description: Radius in nautical miles.
+
+    Series:
+      type: string
+      enum: [A,B,C,D,E,G,H,I,J,K,N,R,V,Z]
+      example: A
+      description: >
+        The NOTAM series identification code.
+
+    ContentURL:
+      type: string
+      example: >
+        /v1/content/54cd2043-c7ba-4e2a-95d4-82d07ff0d931
+      description: >
+        Content URL provides time-limited access to a specific cloud stage resource.
+            
+  securitySchemes:
+    Authorization:
+      type: http
+      scheme: bearer
+      description: | 
+        The bearer token is renewed using the *client_id*, *client_secret*, 
+        and *authorization URL* provided during API registration. To renew the 
+        token a POST request must be sent to the *authorization URL*.
+        ---
+        ***Example:***
+        ```
+          curl -X POST \
+          --location "https://<HOST_NAME>/v1/auth/token" \
+          --header "Content-Type: application/x-www-form-urlencoded" \
+          -d grant_type=client_credentials \
+          -u <CLIENT_ID>:<CLIENT_SECRET>
+        ```
+            
+security:
+  - Authorization: []
+
+    
+    
+    
+    
+    

@@ -1,0 +1,54 @@
+<h2>UX Gaps — What's Missing From the Spec</h2>
+<p class="subtitle">Things a UX designer would flag. Some need decisions; some are spec gaps that need filling before implementation.</p>
+
+<div class="section">
+  <h3>🔴 Spec gaps — need decisions now</h3>
+
+  <div style="border:1px solid #e0e0e0; border-radius:8px; margin-bottom:12px; overflow:hidden;">
+    <div style="background:#fff3f3; padding:10px 14px; font-weight:700; border-bottom:1px solid #e0e0e0;">1. Terrain profile button ⛰ is missing from the new handle</div>
+    <div style="padding:10px 14px; font-size:13px;">The current handle has: summary · ⛰ · EDIT · ▲. The spec removes ▲ and adds X but never mentions ⛰. It will be orphaned or accidentally deleted. Decision needed: does ⛰ stay in the handle, move to the table body header, or go to MORE?</div>
+  </div>
+
+  <div style="border:1px solid #e0e0e0; border-radius:8px; margin-bottom:12px; overflow:hidden;">
+    <div style="background:#fff3f3; padding:10px 14px; font-weight:700; border-bottom:1px solid #e0e0e0;">2. Aircraft position hidden behind table when flying</div>
+    <div style="padding:10px 14px; font-size:13px;">When the table is open, the in-flow layout pushes the map up — but the aircraft's position (ownship marker) may now be at the vertical center of a shorter map, visually close to or behind the table edge. Leaflet supports <code>map.panBy([0, tableHeight/2])</code> or <code>paddingBottomRight</code> on fitBounds to keep ownship in the upper portion. Needs a decision: offset the map center or leave it to the pilot.</div>
+  </div>
+
+  <div style="border:1px solid #e0e0e0; border-radius:8px; margin-bottom:12px; overflow:hidden;">
+    <div style="background:#fff3f3; padding:10px 14px; font-weight:700; border-bottom:1px solid #e0e0e0;">3. Compact mode — what height restores to?</div>
+    <div style="padding:10px 14px; font-size:13px;">If the table is open at 200px and the pilot taps CMPCT, both strips hide. When CMPCT is tapped again, should the table restore to 200px (pre-compact height) or start closed (0px)? Pilots would expect it to restore to what it was. The spec doesn't say.</div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>🟡 Cockpit usability — recommend addressing</h3>
+
+  <div style="border:1px solid #e0e0e0; border-radius:8px; margin-bottom:12px; overflow:hidden;">
+    <div style="background:#fffbf0; padding:10px 14px; font-weight:700; border-bottom:1px solid #e0e0e0;">4. Fast swipe down should close the table</div>
+    <div style="padding:10px 14px; font-size:13px;">With free drag, a slow drag to 0 closes the table. But pilots expect a quick flick downward to dismiss it instantly — without dragging precisely to 0. Add velocity detection on touchend: if swipe speed > ~300px/s downward, close regardless of final position.</div>
+  </div>
+
+  <div style="border:1px solid #e0e0e0; border-radius:8px; margin-bottom:12px; overflow:hidden;">
+    <div style="background:#fffbf0; padding:10px 14px; font-weight:700; border-bottom:1px solid #e0e0e0;">5. CMPCT icon (⊟/⊞) may be unrecognisable</div>
+    <div style="padding:10px 14px; font-size:13px;">⊟ and ⊞ are mathematical symbols that pilots won't immediately understand. Consider a more recognisable icon: ⤢ (expand arrows), or simply toggle between "CMPCT" (strips visible) and "MAP" (full map). The label alone may be enough.</div>
+  </div>
+
+  <div style="border:1px solid #e0e0e0; border-radius:8px; margin-bottom:12px; overflow:hidden;">
+    <div style="background:#fffbf0; padding:10px 14px; font-weight:700; border-bottom:1px solid #e0e0e0;">6. Portrait max-height cap may be too tall</div>
+    <div style="padding:10px 14px; font-size:13px;">The spec caps table height at 65vh. In portrait on the Yoga Tab Plus, that's ~650px — almost the full map area. A lower portrait cap (e.g. 40vh) ensures the map stays meaningfully visible. Or make the cap orientation-aware.</div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>🟢 Small — easy to add to spec</h3>
+
+  <div style="border:1px solid #e0e0e0; border-radius:8px; margin-bottom:12px; overflow:hidden;">
+    <div style="background:#f0fff4; padding:10px 14px; font-weight:700; border-bottom:1px solid #e0e0e0;">7. X button touch target must be ≥44px</div>
+    <div style="padding:10px 14px; font-size:13px;">The spec says "bordered button" but doesn't call out size. In turbulence with gloves, the X needs <code>min-width: 44px; min-height: 44px</code> explicitly. Same for the ↑ re-open affordance.</div>
+  </div>
+
+  <div style="border:1px solid #e0e0e0; border-radius:8px; margin-bottom:12px; overflow:hidden;">
+    <div style="background:#f0fff4; padding:10px 14px; font-weight:700; border-bottom:1px solid #e0e0e0;">8. ↑ hint is underspecified</div>
+    <div style="padding:10px 14px; font-size:13px;">The spec says "a faint ↑ hint appears when closed" but doesn't say where, how large, or what color. Without this, two implementors will build it differently.</div>
+  </div>
+</div>

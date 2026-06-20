@@ -1,0 +1,1066 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <title>Route Editor – Redesign Preview</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=B612:ital,wght@0,400;0,700;1,400&family=B612+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'B612', 'Helvetica Neue', sans-serif;
+      background: #c8d4e0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px 16px;
+      gap: 20px;
+    }
+
+    .preview-label {
+      font-family: 'B612', sans-serif;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: #506070;
+      text-align: center;
+    }
+
+    /* ── PANEL SHELL ─────────────────────────────────────────────────────── */
+    .rpp {
+      width: 440px;
+      height: 760px;
+      background: #f4f7fb;
+      border: 1px solid #b0beca;
+      box-shadow: 0 6px 32px rgba(0,20,50,.18);
+      display: flex;
+      flex-direction: column;
+      border-radius: 2px;
+    }
+
+    /* ── PANEL HEADER ────────────────────────────────────────────────────── */
+    .rpp-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 8px 0 12px;
+      background: #fff;
+      border-bottom: 1px solid #d8e2ee;
+      flex-shrink: 0;
+      min-height: 52px;
+    }
+
+    .rpp-header-title {
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: #1756C5;
+    }
+
+    .rpp-close-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 52px;
+      min-width: 52px;
+      background: none;
+      border: none;
+      color: #6a7e94;
+      font-size: 22px;
+      font-weight: 400;
+      cursor: pointer;
+      transition: background .1s, color .1s;
+      border-radius: 2px;
+    }
+
+    .rpp-close-btn:hover { background: #f0f4f8; color: #0a2040; }
+    .rpp-close-btn:active { background: #e0e8f4; }
+
+    /* ── TOP ROW: DEP / DEST / LEG BTNS / SETTINGS ──────────────────────── */
+    .rpp-top {
+      display: flex;
+      align-items: flex-end;
+      gap: 6px;
+      padding: 9px 10px 8px;
+      background: #fff;
+      border-bottom: 2px solid #c8d4e0;
+      flex-shrink: 0;
+    }
+
+    .rpp-icao-wrap {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .rpp-icao-lbl {
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      color: #7a8a9e;
+      padding-left: 2px;
+    }
+
+    .rpp-icao-inp {
+      font-family: 'B612 Mono', monospace;
+      font-size: 17px;
+      font-weight: 700;
+      color: #0a2040;
+      width: 72px;
+      padding: 6px 8px;
+      border: 2px solid #b8c8d8;
+      border-radius: 3px;
+      text-align: center;
+      text-transform: uppercase;
+      background: #fff;
+      letter-spacing: .04em;
+      outline: none;
+      transition: border-color .12s;
+    }
+
+    .rpp-icao-inp:focus { border-color: #1756C5; }
+
+    .rpp-arrow {
+      font-size: 16px;
+      color: #8a9ab0;
+      flex-shrink: 0;
+      margin-bottom: 8px;
+    }
+
+    /* fuel-stop (max-leg) buttons — right of dep/dest */
+    .rpp-leg-group {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      margin-left: 2px;
+    }
+
+    .rpp-leg-lbl {
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      color: #7a8a9e;
+      padding-left: 2px;
+    }
+
+    .rpp-leg-btns {
+      display: flex;
+      gap: 3px;
+    }
+
+    .rpp-leg-btn {
+      font-family: 'B612', sans-serif;
+      font-size: 13px;
+      font-weight: 700;
+      padding: 6px 9px;
+      border: 2px solid #b8c8d8;
+      border-radius: 3px;
+      background: #fff;
+      color: #2a4060;
+      cursor: pointer;
+      transition: background .1s, border-color .1s, color .1s;
+      line-height: 1;
+    }
+
+    .rpp-leg-btn:active { background: #e8f0fb; }
+    .rpp-leg-btn.active { background: #1756C5; border-color: #1756C5; color: #fff; }
+
+    .rpp-top-spacer { flex: 1; }
+
+    /* Settings gear button */
+    .rpp-settings-btn {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 6px 10px;
+      background: #fff;
+      border: 2px solid #b8c8d8;
+      border-radius: 3px;
+      cursor: pointer;
+      color: #0a2040;
+      font-family: 'B612', sans-serif;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .01em;
+      transition: background .1s, border-color .1s;
+      white-space: nowrap;
+    }
+
+    .rpp-settings-btn:hover { border-color: #1756C5; }
+    .rpp-settings-btn:active { background: #edf2fa; }
+
+    /* ── SUMMARY BAR ─────────────────────────────────────────────────────── */
+    .rpp-summary {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0 10px;
+      padding: 5px 10px;
+      background: #E8F0FD;
+      border-bottom: 1.5px solid #B8CCF0;
+      font-size: 12px;
+      font-weight: 400;
+      color: #0a2040;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+
+    .rpp-summary:hover { background: #DDE8FA; }
+
+    .rpp-sum-chip {
+      display: flex;
+      align-items: baseline;
+      gap: 3px;
+      white-space: nowrap;
+    }
+
+    .rpp-sum-lbl {
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: #6080B0;
+    }
+
+    .rpp-sum-val {
+      font-family: 'B612 Mono', monospace;
+      font-size: 11px;
+      font-weight: 700;
+      color: #0D2B55;
+    }
+
+    .rpp-sum-sep { color: #90A8C8; font-size: 10px; }
+
+    .rpp-sum-edit-hint {
+      margin-left: auto;
+      font-size: 9px;
+      color: #90A8C8;
+      font-style: italic;
+    }
+
+    /* ── STATS BAR ───────────────────────────────────────────────────────── */
+    .rpp-stats {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 2px 8px;
+      padding: 5px 10px;
+      background: #fff;
+      border-bottom: 1px solid #dce6f0;
+      font-size: 12px;
+      color: #2a3a50;
+      flex-shrink: 0;
+    }
+
+    .rpp-stat-num {
+      font-family: 'B612 Mono', monospace;
+      font-weight: 700;
+      font-size: 12px;
+    }
+
+    .rpp-stat-lbl { color: #7a8a9e; font-size: 10px; }
+    .rpp-stat-sep { color: #b0c0d0; }
+    .rpp-stat-wind { color: #0D2B55; font-weight: 700; font-family: 'B612 Mono', monospace; }
+    .rpp-stat-hdw  { color: #8B0000; font-weight: 700; font-family: 'B612 Mono', monospace; }
+    .rpp-stat-delta { color: #7a4500; }
+    .rpp-stat-fuel { color: #1A7040; font-weight: 700; font-family: 'B612 Mono', monospace; }
+
+    /* ── AVOID / WARN STRIPS ─────────────────────────────────────────────── */
+    .rpp-warn-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      padding: 5px 10px;
+      background: #FFF8E0;
+      border-bottom: 1.5px solid #E8C840;
+      font-size: 11px;
+      color: #5A3800;
+    }
+
+    .rpp-avoid-strip {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 4px;
+      padding: 5px 10px;
+      background: #fff4f0;
+      border-bottom: 1.5px solid #e0a090;
+      font-size: 11px;
+    }
+
+    /* ── PILL BOX ────────────────────────────────────────────────────────── */
+    .rpp-pill-box {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px;
+      background: #f4f7fb;
+    }
+
+    .rpp-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      align-content: flex-start;
+    }
+
+    .rpp-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 6px 10px 6px 7px;
+      border-radius: 20px;
+      font-family: 'B612 Mono', monospace;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: .02em;
+      border: 2px solid;
+      user-select: none;
+    }
+
+    .rpp-pill-handle {
+      font-size: 13px;
+      opacity: .45;
+      cursor: grab;
+    }
+
+    .rpp-type-badge {
+      font-family: 'B612', sans-serif;
+      font-size: 8px;
+      font-weight: 700;
+      letter-spacing: .07em;
+      padding: 1px 4px;
+      border-radius: 2px;
+      opacity: .8;
+    }
+
+    .rpp-pill-del {
+      font-size: 10px;
+      opacity: .45;
+      cursor: pointer;
+      padding: 0 2px;
+    }
+
+    .rpp-alt-badge {
+      font-family: 'B612 Mono', monospace;
+      font-size: 9px;
+      background: #0066cc;
+      color: #fff;
+      border-radius: 2px;
+      padding: 1px 4px;
+    }
+
+    /* pill color variants */
+    .pill-dep, .pill-dest {
+      background: #EBE4FF; border-color: #7C62D4; color: #2A0E8A;
+    }
+    .pill-dep .rpp-type-badge, .pill-dest .rpp-type-badge { background: #7C62D4; color: #fff; }
+
+    .pill-fix {
+      background: #DBF0FF; border-color: #4499D8; color: #082A5E;
+    }
+    .pill-fix .rpp-type-badge { background: #4499D8; color: #fff; }
+
+    .pill-awy {
+      background: #D4F5E2; border-color: #3FAA6A; color: #0A3A20;
+    }
+    .pill-awy .rpp-type-badge { background: #3FAA6A; color: #fff; }
+
+    .pill-fuel {
+      background: #FFE4CC; border-color: #D86020; color: #6A2000;
+    }
+    .pill-fuel .rpp-type-badge { background: #D86020; color: #fff; }
+
+    .pill-direct {
+      background: #FFF3D0; border-color: #C89010; color: #503000;
+    }
+    .pill-direct .rpp-type-badge { background: #C89010; color: #fff; }
+
+    /* ── ADD ROW ─────────────────────────────────────────────────────────── */
+    .rpp-add-row {
+      display: flex;
+      gap: 5px;
+      padding: 8px 10px;
+      background: #fff;
+      border-top: 2px solid #c8d4e0;
+      flex-shrink: 0;
+    }
+
+    .rpp-add-inp {
+      flex: 1;
+      font-family: 'B612 Mono', monospace;
+      font-size: 14px;
+      font-weight: 700;
+      padding: 8px 10px;
+      border: 2px solid #b8c8d8;
+      border-radius: 3px;
+      text-transform: uppercase;
+      color: #0a2040;
+      outline: none;
+    }
+
+    .rpp-add-inp:focus { border-color: #1756C5; }
+    .rpp-add-inp::placeholder { font-family: 'B612', sans-serif; font-size: 12px; font-weight: 400; text-transform: none; color: #9ab0c8; }
+
+    .rpp-add-sel {
+      font-family: 'B612', sans-serif;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 8px 6px;
+      border: 2px solid #b8c8d8;
+      border-radius: 3px;
+      background: #fff;
+      color: #2a4060;
+      outline: none;
+    }
+
+    .rpp-add-btn {
+      font-family: 'B612', sans-serif;
+      font-size: 13px;
+      font-weight: 700;
+      padding: 8px 16px;
+      border: none;
+      border-radius: 3px;
+      background: #1756C5;
+      color: #fff;
+      cursor: pointer;
+    }
+
+    .rpp-add-btn:active { background: #0e42a0; }
+
+    /* ── TOOLBAR ─────────────────────────────────────────────────────────── */
+    .rpp-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      padding: 8px 10px;
+      background: #e8edf4;
+      border-top: 1.5px solid #c8d4e0;
+      flex-shrink: 0;
+    }
+
+    .rpp-tbtn {
+      font-family: 'B612', sans-serif;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 8px 14px;
+      border: 2px solid #b0c0d0;
+      border-radius: 3px;
+      background: #fff;
+      color: #2a3a50;
+      cursor: pointer;
+      transition: background .1s;
+    }
+
+    .rpp-tbtn:active { background: #dce8f8; }
+    .rpp-tbtn.active { background: #1756C5; border-color: #1756C5; color: #fff; }
+
+    .rpp-tbtn-plan {
+      background: #0D2B55; border-color: #0D2B55; color: #fff;
+    }
+
+    .rpp-tbtn-plan:active { background: #06182e; }
+
+    .rpp-tbtn-apply {
+      background: #1756C5; border-color: #1756C5; color: #fff;
+    }
+
+    .rpp-tbtn-apply:active { background: #0e42a0; }
+
+    /* ── SETTINGS OVERLAY ────────────────────────────────────────────────── */
+    .rpp-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,10,30,.52);
+      z-index: 9999;
+      display: none;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 48px 20px 20px;
+      backdrop-filter: blur(2px);
+    }
+
+    .rpp-overlay.open { display: flex; }
+
+    .rpp-popup {
+      background: #fff;
+      border-radius: 4px;
+      width: 100%;
+      max-width: 400px;
+      box-shadow: 0 16px 64px rgba(0,10,40,.3);
+      overflow: hidden;
+      animation: popIn .15s ease-out;
+    }
+
+    @keyframes popIn {
+      from { opacity: 0; transform: translateY(-10px) scale(.98); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    .rpp-popup-hdr {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 13px 16px;
+      background: #0D2B55;
+      color: #fff;
+    }
+
+    .rpp-popup-title {
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #fff;
+    }
+
+    .rpp-popup-close {
+      font-size: 20px;
+      background: none;
+      border: none;
+      color: rgba(255,255,255,.6);
+      cursor: pointer;
+      padding: 0 4px;
+      line-height: 1;
+      transition: color .1s;
+    }
+
+    .rpp-popup-close:hover { color: #fff; }
+
+    .rpp-popup-section {
+      padding: 10px 16px 6px;
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: #90A8C0;
+      border-top: 1px solid #eaf0f8;
+    }
+
+    .rpp-popup-section:first-of-type { border-top: none; }
+
+    .rpp-popup-body {
+      padding: 4px 0 2px;
+    }
+
+    .rpp-popup-row {
+      display: flex;
+      align-items: center;
+      padding: 7px 16px;
+      gap: 12px;
+    }
+
+    .rpp-popup-lbl {
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .03em;
+      color: #3a5070;
+      width: 64px;
+      flex-shrink: 0;
+    }
+
+    .rpp-popup-ctrl { flex: 1; }
+
+    .rpp-popup-sel, .rpp-popup-inp-dt {
+      font-family: 'B612', sans-serif;
+      font-size: 14px;
+      font-weight: 700;
+      width: 100%;
+      padding: 8px 10px;
+      border: 2px solid #c0d0e0;
+      border-radius: 3px;
+      color: #0a2040;
+      background: #fff;
+      outline: none;
+      transition: border-color .12s;
+    }
+
+    .rpp-popup-sel:focus, .rpp-popup-inp-dt:focus { border-color: #1756C5; }
+
+    .rpp-popup-num-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .rpp-popup-inp-num {
+      font-family: 'B612 Mono', monospace;
+      font-size: 15px;
+      font-weight: 700;
+      width: 72px;
+      padding: 7px 10px;
+      border: 2px solid #c0d0e0;
+      border-radius: 3px;
+      color: #0a2040;
+      text-align: center;
+      outline: none;
+    }
+
+    .rpp-popup-inp-num:focus { border-color: #1756C5; }
+
+    .rpp-popup-unit {
+      font-size: 12px;
+      font-weight: 700;
+      color: #6080A0;
+    }
+
+    .rpp-popup-check-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 6px 16px;
+      cursor: pointer;
+    }
+
+    .rpp-popup-check-row input[type=checkbox] {
+      width: 20px;
+      height: 20px;
+      cursor: pointer;
+      accent-color: #1756C5;
+    }
+
+    .rpp-popup-check-row label {
+      font-size: 13px;
+      font-weight: 700;
+      color: #2a3a50;
+      cursor: pointer;
+    }
+
+    .rpp-popup-footer {
+      padding: 10px 16px 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-top: 1.5px solid #e0eaf4;
+      gap: 8px;
+    }
+
+    .rpp-popup-plan {
+      font-family: 'B612', sans-serif;
+      font-size: 14px;
+      font-weight: 700;
+      padding: 10px 20px;
+      background: #0D2B55;
+      color: #fff;
+      border: none;
+      border-radius: 3px;
+      cursor: pointer;
+      letter-spacing: .02em;
+      transition: background .1s;
+    }
+
+    .rpp-popup-plan:active { background: #060f20; }
+
+    .rpp-popup-done {
+      font-family: 'B612', sans-serif;
+      font-size: 14px;
+      font-weight: 700;
+      padding: 10px 32px;
+      background: #1756C5;
+      color: #fff;
+      border: none;
+      border-radius: 3px;
+      cursor: pointer;
+      letter-spacing: .02em;
+      transition: background .1s;
+    }
+
+    .rpp-popup-done:active { background: #0e42a0; }
+
+    /* ── ANNOTATION CALLOUTS ─────────────────────────────────────────────── */
+    .annotations {
+      width: 440px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .ann {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      background: #fff;
+      border-left: 3px solid #1756C5;
+      padding: 6px 10px;
+      border-radius: 0 2px 2px 0;
+      font-size: 11px;
+      color: #2a3a50;
+      line-height: 1.4;
+    }
+
+    .ann-num {
+      font-family: 'B612 Mono', monospace;
+      font-size: 10px;
+      font-weight: 700;
+      background: #1756C5;
+      color: #fff;
+      border-radius: 50%;
+      width: 18px;
+      height: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+  </style>
+</head>
+<body>
+
+<div class="preview-label">Route Editor – Proposed Redesign · Click ⚙ Settings or Summary bar to open popup</div>
+
+<!-- ══ PANEL PREVIEW ══════════════════════════════════════════════════════ -->
+<div class="rpp">
+
+  <!-- PANEL HEADER -->
+  <div class="rpp-header">
+    <div class="rpp-header-title">Route Planner</div>
+    <button class="rpp-close-btn" title="Close">✕</button>
+  </div>
+
+  <!-- TOP ROW -->
+  <div class="rpp-top">
+
+    <!-- Departure -->
+    <div class="rpp-icao-wrap">
+      <div class="rpp-icao-lbl">Departure</div>
+      <input class="rpp-icao-inp" id="depInp" value="KLKR" maxlength="5" autocomplete="off" spellcheck="false">
+    </div>
+
+    <div class="rpp-arrow">→</div>
+
+    <!-- Destination -->
+    <div class="rpp-icao-wrap">
+      <div class="rpp-icao-lbl">Destination</div>
+      <input class="rpp-icao-inp" id="destInp" value="KMHT" maxlength="5" autocomplete="off" spellcheck="false">
+    </div>
+
+    <!-- Fuel-stop / max-leg buttons -->
+    <div class="rpp-leg-group">
+      <div class="rpp-leg-lbl">Fuel stop</div>
+      <div class="rpp-leg-btns">
+        <button class="rpp-leg-btn active" data-hrs="2.0">2h</button>
+        <button class="rpp-leg-btn" data-hrs="2.5">2.5h</button>
+        <button class="rpp-leg-btn" data-hrs="3.0">3h</button>
+      </div>
+    </div>
+
+    <div class="rpp-top-spacer"></div>
+
+    <!-- Settings gear -->
+    <button class="rpp-settings-btn" id="openSettings" title="Flight settings">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+      </svg>
+      Settings
+    </button>
+  </div>
+
+  <!-- SUMMARY BAR — tap to reopen settings -->
+  <div class="rpp-summary" id="summaryBar" title="Tap to edit settings">
+    <div class="rpp-sum-chip">
+      <span class="rpp-sum-lbl">Alt</span>
+      <span class="rpp-sum-val" id="sumAlt">5,500 ft</span>
+    </div>
+    <span class="rpp-sum-sep">·</span>
+    <div class="rpp-sum-chip">
+      <span class="rpp-sum-lbl">Pwr</span>
+      <span class="rpp-sum-val" id="sumPwr">65% LOP</span>
+    </div>
+    <span class="rpp-sum-sep">·</span>
+    <div class="rpp-sum-chip">
+      <span class="rpp-sum-val" id="sumRoute">V-airways</span>
+    </div>
+    <span class="rpp-sum-sep">·</span>
+    <div class="rpp-sum-chip">
+      <span class="rpp-sum-lbl">Dep</span>
+      <span class="rpp-sum-val" id="sumDep">14:30Z</span>
+    </div>
+    <span class="rpp-sum-sep">·</span>
+    <div class="rpp-sum-chip">
+      <span class="rpp-sum-lbl">Rsv</span>
+      <span class="rpp-sum-val" id="sumRsv">10 gal</span>
+    </div>
+    <span class="rpp-sum-edit-hint">tap to edit ›</span>
+  </div>
+
+  <!-- STATS BAR (shown after Plan runs) -->
+  <div class="rpp-stats">
+    <span class="rpp-stat-wind">TW 12kt</span>
+    <span class="rpp-stat-sep">·</span>
+    <span class="rpp-stat-lbl">5,500 ft</span>
+    <span class="rpp-stat-sep">·</span>
+    <span><span class="rpp-stat-lbl">Route </span><span class="rpp-stat-num">342</span> nm</span>
+    <span class="rpp-stat-sep">·</span>
+    <span class="rpp-stat-delta">+18 nm (+6%)</span>
+    <span class="rpp-stat-sep">·</span>
+    <span><span class="rpp-stat-num">2h 14m</span> · ETA <span class="rpp-stat-num">16:44</span></span>
+    <span class="rpp-stat-sep">·</span>
+    <span class="rpp-stat-fuel">13.2 gal</span>
+  </div>
+
+  <!-- WARN STRIP (example — hidden by default) -->
+  <div class="rpp-warn-strip" id="warnStrip">
+    ⚠ Wind data unavailable — time and fuel use calm-air estimates
+  </div>
+
+  <!-- PILL BOX -->
+  <div class="rpp-pill-box">
+    <div class="rpp-pills">
+      <div class="rpp-pill pill-dep"><span class="rpp-pill-handle">⠿</span>KLKR<span class="rpp-type-badge">DEP</span><span class="rpp-pill-del">✕</span></div>
+      <div class="rpp-pill pill-awy"><span class="rpp-pill-handle">⠿</span>V271<span class="rpp-type-badge">AWY</span><span class="rpp-pill-del">✕</span></div>
+      <div class="rpp-pill pill-fix"><span class="rpp-pill-handle">⠿</span>SHD<span class="rpp-type-badge">FIX</span><span class="rpp-pill-del">✕</span></div>
+      <div class="rpp-pill pill-awy"><span class="rpp-pill-handle">⠿</span>V3<span class="rpp-type-badge">AWY</span><span class="rpp-pill-del">✕</span></div>
+      <div class="rpp-pill pill-fix"><span class="rpp-pill-handle">⠿</span>RIC<span class="rpp-type-badge">FIX</span><span class="rpp-pill-del">✕</span></div>
+      <div class="rpp-pill pill-fuel"><span class="rpp-pill-handle">⠿</span>KORF<span class="rpp-type-badge">⛽</span><span class="rpp-pill-del">✕</span></div>
+      <div class="rpp-pill pill-awy"><span class="rpp-pill-handle">⠿</span>V268<span class="rpp-type-badge">AWY</span><span class="rpp-pill-del">✕</span></div>
+      <div class="rpp-pill pill-fix"><span class="rpp-pill-handle">⠿</span>ESN<span class="rpp-type-badge">FIX</span><span class="rpp-pill-del">✕</span></div>
+      <div class="rpp-pill pill-direct"><span class="rpp-pill-handle">⠿</span>DIRECT<span class="rpp-type-badge">GPS</span><span class="rpp-pill-del">✕</span></div>
+      <div class="rpp-pill pill-fix"><span class="rpp-pill-handle">⠿</span>MAZIE<span class="rpp-type-badge">FIX</span><span class="rpp-alt-badge">6500</span><span class="rpp-pill-del">✕</span></div>
+      <div class="rpp-pill pill-dest"><span class="rpp-pill-handle">⠿</span>KMHT<span class="rpp-type-badge">DEST</span><span class="rpp-pill-del">✕</span></div>
+    </div>
+  </div>
+
+  <!-- ADD ROW -->
+  <div class="rpp-add-row">
+    <input class="rpp-add-inp" placeholder="Fix or airway (e.g. RIC, V3)">
+    <select class="rpp-add-sel">
+      <option>Fix</option>
+      <option>Airport</option>
+      <option>Fuel Stop</option>
+      <option>Airway</option>
+      <option>Direct</option>
+    </select>
+    <button class="rpp-add-btn">+ Add</button>
+  </div>
+
+  <!-- TOOLBAR -->
+  <div class="rpp-toolbar">
+    <button class="rpp-tbtn">Paste</button>
+    <button class="rpp-tbtn">Copy</button>
+    <button class="rpp-tbtn rpp-tbtn-plan">Plan</button>
+    <button class="rpp-tbtn">Clear</button>
+    <button class="rpp-tbtn active">Compact</button>
+    <button class="rpp-tbtn rpp-tbtn-apply">Apply</button>
+  </div>
+
+</div>
+
+<!-- ══ SETTINGS POPUP ══════════════════════════════════════════════════════ -->
+<div class="rpp-overlay" id="overlay">
+  <div class="rpp-popup" id="popup">
+
+    <div class="rpp-popup-hdr">
+      <div class="rpp-popup-title">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+        Flight Settings
+      </div>
+      <button class="rpp-popup-close" id="closeSettings">✕</button>
+    </div>
+
+    <div class="rpp-popup-body">
+
+      <!-- Winds & Performance -->
+      <div class="rpp-popup-section">Winds &amp; Performance</div>
+
+      <div class="rpp-popup-row">
+        <div class="rpp-popup-lbl">Depart</div>
+        <div class="rpp-popup-ctrl">
+          <input class="rpp-popup-inp-dt" type="datetime-local" id="popDepTime">
+        </div>
+      </div>
+
+      <div class="rpp-popup-row">
+        <div class="rpp-popup-lbl">Altitude</div>
+        <div class="rpp-popup-ctrl">
+          <select class="rpp-popup-sel" id="popAlt">
+            <option value="">Auto (VFR)</option>
+            <option value="3500">3,500 ft</option>
+            <option value="4500">4,500 ft</option>
+            <option value="5500" selected>5,500 ft</option>
+            <option value="6500">6,500 ft</option>
+            <option value="7500">7,500 ft</option>
+            <option value="8500">8,500 ft</option>
+            <option value="9500">9,500 ft</option>
+            <option value="10500">10,500 ft</option>
+            <option value="11500">11,500 ft</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="rpp-popup-row">
+        <div class="rpp-popup-lbl">Power</div>
+        <div class="rpp-popup-ctrl">
+          <select class="rpp-popup-sel" id="popPwr">
+            <option value="55">55% LOP</option>
+            <option value="60">60% LOP</option>
+            <option value="65" selected>65% LOP</option>
+            <option value="70">70% LOP</option>
+            <option value="75">75% LOP</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Auto-routing -->
+      <div class="rpp-popup-section">Auto-routing</div>
+
+      <div class="rpp-popup-row">
+        <div class="rpp-popup-lbl">Routing</div>
+        <div class="rpp-popup-ctrl">
+          <select class="rpp-popup-sel" id="popRouting">
+            <option value="v-airways" selected>V-airways (default)</option>
+            <option value="t-airways">T-airways (RNAV)</option>
+            <option value="any">Any airway</option>
+            <option value="gps-direct">GPS Direct</option>
+            <option value="vors-direct">VORs Direct</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="rpp-popup-row">
+        <div class="rpp-popup-lbl">A* Alt</div>
+        <div class="rpp-popup-ctrl">
+          <div class="rpp-popup-num-row">
+            <input class="rpp-popup-inp-num" type="number" id="popPlanAlt" value="5500" min="500" max="17500" step="500">
+            <span class="rpp-popup-unit">ft</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Fuel Planning -->
+      <div class="rpp-popup-section">Fuel Planning</div>
+
+      <div class="rpp-popup-row">
+        <div class="rpp-popup-lbl">Reserve</div>
+        <div class="rpp-popup-ctrl">
+          <div class="rpp-popup-num-row">
+            <input class="rpp-popup-inp-num" type="number" id="popRsv" value="10" min="1" max="30">
+            <span class="rpp-popup-unit">gal</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="rpp-popup-check-row">
+        <input type="checkbox" id="popSelfServe">
+        <label for="popSelfServe">Self-serve fuel only</label>
+      </div>
+
+    </div>
+
+    <div class="rpp-popup-footer">
+      <button class="rpp-popup-plan" id="planRoute">Plan Route</button>
+      <button class="rpp-popup-done" id="doneSettings">Done</button>
+    </div>
+
+  </div>
+</div>
+
+<!-- ══ ANNOTATIONS ════════════════════════════════════════════════════════ -->
+<div class="annotations">
+  <div class="ann">
+    <div class="ann-num">1</div>
+    <div><b>Compact top row:</b> dep/dest boxes are smaller; fuel-stop (max-leg) buttons move here, right of the airports. Settings gear replaces the entire opts-row.</div>
+  </div>
+  <div class="ann">
+    <div class="ann-num">2</div>
+    <div><b>Summary bar:</b> shows current altitude, power, routing mode, departure time, and reserve at a glance. Tapping it reopens the settings popup to edit.</div>
+  </div>
+  <div class="ann">
+    <div class="ann-num">3</div>
+    <div><b>Settings popup — two exit paths:</b> <b>Plan Route</b> (dark navy) runs A* auto-routing and populates the pills from scratch. <b>Done</b> saves settings without routing — use this when you already have pills and just want to update winds/perf values.</div>
+  </div>
+  <div class="ann">
+    <div class="ann-num">4</div>
+    <div><b>Toolbar Plan button:</b> always recomputes the existing pills with current winds and performance settings. Never replaces the route — that only happens from inside the popup.</div>
+  </div>
+</div>
+
+<script>
+  const overlay  = document.getElementById('overlay');
+  const openBtn  = document.getElementById('openSettings');
+  const closeBtn = document.getElementById('closeSettings');
+  const doneBtn  = document.getElementById('doneSettings');
+  const summary  = document.getElementById('summaryBar');
+
+  function openPopup() { overlay.classList.add('open'); }
+  function closePopup() { overlay.classList.remove('open'); }
+
+  openBtn.addEventListener('click', openPopup);
+  summary.addEventListener('click', openPopup);
+  closeBtn.addEventListener('click', closePopup);
+  overlay.addEventListener('click', e => { if (e.target === overlay) closePopup(); });
+
+  const routeLabels = {
+    'v-airways':  'V-airways',
+    't-airways':  'T-airways',
+    'any':        'Any airway',
+    'gps-direct': 'GPS Direct',
+    'vors-direct':'VORs Direct',
+  };
+
+  function updateSummary() {
+    const altVal   = document.getElementById('popAlt').value;
+    const pwrVal   = document.getElementById('popPwr').value;
+    const routeVal = document.getElementById('popRouting').value;
+    const depVal   = document.getElementById('popDepTime').value;
+    const rsvVal   = document.getElementById('popRsv').value;
+
+    document.getElementById('sumAlt').textContent =
+      altVal ? parseInt(altVal).toLocaleString() + ' ft' : 'Auto VFR';
+    document.getElementById('sumPwr').textContent   = pwrVal + '% LOP';
+    document.getElementById('sumRoute').textContent = routeLabels[routeVal] || routeVal;
+    document.getElementById('sumRsv').textContent   = rsvVal + ' gal';
+
+    if (depVal) {
+      const d = new Date(depVal);
+      const hh = String(d.getHours()).padStart(2,'0');
+      const mm = String(d.getMinutes()).padStart(2,'0');
+      document.getElementById('sumDep').textContent = hh + ':' + mm + 'Z';
+    } else {
+      document.getElementById('sumDep').textContent = 'Now';
+    }
+  }
+
+  doneBtn.addEventListener('click', () => { updateSummary(); closePopup(); });
+
+  document.getElementById('planRoute').addEventListener('click', () => {
+    updateSummary();
+    closePopup();
+    // In the real app this triggers A* auto-routing and populates pills
+  });
+
+  // Leg-button toggle
+  document.querySelectorAll('.rpp-leg-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.rpp-leg-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+    });
+  });
+
+  // Pre-fill departure time with current local time
+  (function() {
+    const now = new Date();
+    const pad = n => String(n).padStart(2,'0');
+    document.getElementById('popDepTime').value =
+      `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}` +
+      `T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+    updateSummary();
+  })();
+</script>
+
+</body>
+</html>

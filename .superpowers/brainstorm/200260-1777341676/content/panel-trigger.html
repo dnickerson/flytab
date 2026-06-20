@@ -1,0 +1,69 @@
+<h2>When does the diagnostic panel appear?</h2>
+<p class="subtitle">Showing how each approach looks with real GPS log data in the panel.</p>
+
+<div class="split">
+
+  <div class="mockup">
+    <div class="mockup-header">A — Auto-expands on GPS failure</div>
+    <div class="mockup-body" style="padding:0">
+      <div style="background:#1a2a3a;font-family:monospace;font-size:11px;border-radius:4px;overflow:hidden">
+        <!-- Status bar -->
+        <div style="background:#0d1b2a;color:#aaa;padding:5px 10px;display:flex;justify-content:space-between;align-items:center">
+          <span style="background:#cc2200;color:#fff;padding:2px 8px;border-radius:3px;font-weight:700;font-size:12px;animation:pulse 1s infinite">⚠ GPS</span>
+          <span style="color:#666;font-size:10px">STX · v6.12</span>
+        </div>
+        <!-- Map -->
+        <div style="background:#1a3055;height:90px;display:flex;align-items:center;justify-content:center;color:#4488aa;font-size:10px">MAP (still visible)</div>
+        <!-- Auto-expanded panel -->
+        <div style="background:#1a0000;border-top:2px solid #cc2200;padding:8px 10px">
+          <div style="color:#ff4444;font-weight:700;font-size:12px;margin-bottom:6px">GPS UNAVAILABLE</div>
+          <div style="color:#ff8888;font-size:10px;margin-bottom:2px">08:42:01 · GPS source: internal</div>
+          <div style="color:#ff6666;font-size:10px;margin-bottom:2px">08:42:11 · watchPosition error: code=3 TIMEOUT</div>
+          <div style="color:#ff6666;font-size:10px;margin-bottom:2px">08:42:21 · watchPosition error: code=3 TIMEOUT</div>
+          <div style="color:#44aa44;font-size:10px;margin-bottom:6px">08:42:21 · Stratux: connected, fix=2, sats=8</div>
+          <div style="display:flex;gap:6px">
+            <button style="background:#0055cc;color:#fff;border:none;padding:5px 10px;border-radius:3px;font-size:11px;font-weight:700;flex:1">FIX: USE STRATUX GPS</button>
+            <button style="background:#333;color:#aaa;border:none;padding:5px 10px;border-radius:3px;font-size:10px">SETTINGS</button>
+          </div>
+        </div>
+        <!-- Tab bar -->
+        <div style="background:#0d1b2a;color:#888;padding:5px 8px;font-size:10px;text-align:center">MAP · ENGINE · PLAN · WX</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="mockup">
+    <div class="mockup-header">B — Tap the red pill to expand</div>
+    <div class="mockup-body" style="padding:0">
+      <div style="background:#1a2a3a;font-family:monospace;font-size:11px;border-radius:4px;overflow:hidden">
+        <!-- Status bar with prominent pulsing pill -->
+        <div style="background:#0d1b2a;padding:5px 10px;display:flex;justify-content:space-between;align-items:center">
+          <span style="background:#cc2200;color:#fff;padding:3px 10px;border-radius:3px;font-weight:700;font-size:13px;letter-spacing:0.5px;box-shadow:0 0 8px #cc440088">⚠ GPS — TAP ▼</span>
+          <span style="color:#666;font-size:10px">STX · v6.12</span>
+        </div>
+        <!-- Map full height -->
+        <div style="background:#1a3055;height:140px;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#4488aa;font-size:10px;gap:4px">
+          <span>MAP (full height)</span>
+          <span style="color:#666;font-size:9px">No ownship shown until GPS resolved</span>
+        </div>
+        <!-- Tab bar -->
+        <div style="background:#0d1b2a;color:#888;padding:5px 8px;font-size:10px;text-align:center">MAP · ENGINE · PLAN · WX</div>
+      </div>
+      <div style="margin-top:8px;padding:6px;background:#222;border-radius:4px;color:#888;font-size:10px;text-align:center">
+        Pilot taps red pill → panel slides in from top
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="options" style="margin-top:16px">
+  <div class="option" data-choice="auto" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content"><h3>Auto-expand</h3><p>Panel opens automatically. Pilot must see it. One-tap fix button visible immediately.</p></div>
+  </div>
+  <div class="option" data-choice="tap" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content"><h3>Tap to expand</h3><p>Full map preserved. Pilot decides when to look at diagnostics. Red pill persists.</p></div>
+  </div>
+</div>

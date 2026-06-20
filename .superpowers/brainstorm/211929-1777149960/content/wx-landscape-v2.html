@@ -1,0 +1,741 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WxBriefing — KLKR → KDKX</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, 'Helvetica Neue', sans-serif;
+  background: #d8d8d8;
+  padding: 12px;
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+}
+h2 { font-size: 16px; color: #333; text-align: center; font-weight: 800; }
+.subtitle { font-size: 13px; color: #666; text-align: center; }
+
+.wx-panel {
+  width: 100%; max-width: 1150px;
+  background: #fff; border: 1px solid #bbb; border-radius: 6px;
+  overflow: hidden; box-shadow: 0 2px 12px rgba(0,0,0,0.15);
+  display: flex; flex-direction: column; max-height: 800px;
+}
+
+/* ── Header ── */
+.wx-header {
+  background: #1a2744; color: #fff;
+  display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+  flex-shrink: 0;
+}
+.wx-title { font-size: 16px; font-weight: 800; letter-spacing: 0.5px; }
+.wx-route-hdr { font-size: 14px; color: rgba(255,255,255,0.75); flex: 1; margin-left: 4px; }
+.wx-age-hdr { font-size: 11px; color: rgba(255,255,255,0.55); }
+.wx-mode-btn {
+  background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.3);
+  color: #fff; border-radius: 4px; padding: 5px 11px; font-size: 12px; font-weight: 700; cursor: pointer;
+}
+.wx-mode-btn.active { background: #fff; color: #1a2744; }
+.wx-refresh-btn {
+  background: none; border: 1px solid rgba(255,255,255,0.4);
+  color: #fff; border-radius: 4px; padding: 5px 10px; font-size: 16px; cursor: pointer;
+}
+
+/* ── Two-column body ── */
+.wx-body { display: flex; flex: 1; overflow: hidden; min-height: 0; }
+
+/* ══ LEFT 52% ══ */
+.wx-left {
+  width: 52%;
+  border-right: 2px solid #d0d0d0;
+  display: flex; flex-direction: column;
+  overflow-y: auto;
+  background: #fafafa;
+}
+
+/* Summary bar */
+.wx-summary-bar {
+  background: #e8f0fb; border-bottom: 2px solid #b8ccee;
+  padding: 7px 10px; display: flex; align-items: center; gap: 10px;
+  position: sticky; top: 0; z-index: 2; flex-shrink: 0;
+}
+.wx-best { font-size: 13px; font-weight: 800; color: #1a2744; flex: 1; }
+.wx-best span { font-weight: 600; color: #555; font-size: 12px; margin-left: 6px; }
+.badge-vfr  { font-size: 12px; font-weight: 800; color: #fff; background: #1a8a1a; padding: 3px 9px; border-radius: 10px; }
+.badge-mvfr { font-size: 12px; font-weight: 800; color: #fff; background: #0060bb; padding: 3px 9px; border-radius: 10px; }
+.badge-caution { font-size: 12px; font-weight: 800; color: #fff; background: #cc5500; padding: 3px 9px; border-radius: 10px; }
+
+/* Grid views */
+.grid-view { display: none; flex-shrink: 0; }
+.grid-view.active { display: block; }
+.wx-grid-wrap { overflow-x: auto; padding: 6px 8px; }
+.wx-grid {
+  display: grid;
+  grid-template-columns: 60px repeat(7, 1fr);
+  gap: 2px; min-width: 340px;
+}
+.wx-grid-hdr {
+  text-align: center; font-size: 11px; font-weight: 700; color: #444;
+  padding: 3px 0; white-space: pre-line; line-height: 1.3;
+}
+.wx-grid-hdr.today { color: #1a2744; font-weight: 900; }
+.wx-grid-hdr.flight-day { color: #880000; font-weight: 900; background: #fff3f3; border-radius: 3px; }
+.wx-grid-lbl { font-size: 12px; font-weight: 800; color: #1a2744; padding: 5px 3px; display: flex; align-items: center; }
+.wx-cell {
+  text-align: center; padding: 6px 1px; font-size: 11px; font-weight: 800;
+  border-radius: 3px; cursor: pointer; line-height: 1.3;
+}
+.wx-cell:active { opacity: 0.7; }
+.c-vfr  { background: #2ecc40; color: #fff; }
+.c-mvfr { background: #0074d9; color: #fff; }
+.c-ifr  { background: #e74c3c; color: #fff; }
+.c-lifr { background: #9b59b6; color: #fff; }
+.c-unk  { background: #ddd; color: #999; }
+.today-col { outline: 2px solid #1a2744; outline-offset: -2px; }
+.flight-col { outline: 2px solid #cc0000; outline-offset: -2px; }
+
+/* 24H grid */
+.wx-24h-wrap { overflow-x: auto; padding: 6px 8px; }
+.wx-24h-grid { display: grid; grid-template-columns: 60px repeat(9, 60px); gap: 2px; min-width: 420px; }
+.wx-24h-hdr { text-align: center; font-size: 11px; font-weight: 700; color: #444; padding: 2px 1px; white-space: pre-line; line-height: 1.3; }
+.wx-24h-hdr.highlight { color: #880000; font-weight: 900; }
+.wx-24h-cell { border-radius: 3px; padding: 5px 2px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 1px; }
+.cell-cat { font-size: 11px; font-weight: 800; }
+.cell-det { font-size: 10px; font-weight: 600; opacity: 0.92; text-align: center; line-height: 1.3; }
+
+/* Hourly drill-down */
+.hourly-popup {
+  background: #f0f4ff; border-top: 2px solid #1a2744; border-bottom: 1px solid #c0c8e0;
+  padding: 8px 10px; flex-shrink: 0;
+}
+.hourly-title { font-size: 12px; font-weight: 800; color: #1a2744; margin-bottom: 6px; display: flex; justify-content: space-between; }
+.hourly-close { font-size: 11px; color: #888; cursor: pointer; border: none; background: none; }
+.hourly-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.hourly-table th { font-size: 11px; font-weight: 700; color: #555; border-bottom: 1px solid #c0c8e0; padding: 3px 5px 4px; text-align: left; }
+.hourly-table td { padding: 4px 5px; border-bottom: 1px solid #e0e4f0; color: #222; font-weight: 600; }
+.hourly-table tr:last-child td { border-bottom: none; }
+.ht-cat { border-radius: 2px; padding: 1px 5px; font-weight: 800; display: inline-block; font-size: 11px; }
+.hourly-note { font-size: 11px; color: #665500; background: #fffbe6; border: 1px solid #e8d870; border-radius: 3px; padding: 4px 8px; margin-top: 6px; }
+
+/* METAR/TAF section divider */
+.station-section-hdr {
+  background: #eef0f6; border-top: 1px solid #d8dce8; border-bottom: 1px solid #d8dce8;
+  padding: 6px 10px; font-size: 12px; font-weight: 800; color: #1a2744;
+  letter-spacing: 0.7px; position: sticky; top: 42px; z-index: 2;
+  display: flex; align-items: center; gap: 6px;
+}
+.station-badge { font-size: 11px; font-weight: 700; color: #fff; background: #0074d9; border-radius: 8px; padding: 2px 7px; }
+
+.metar-card { border-bottom: 1px solid #eee; background: #fff; }
+.metar-card-hdr {
+  display: flex; align-items: center; padding: 9px 10px;
+  cursor: pointer; gap: 7px; user-select: none;
+}
+.metar-card-hdr:active { background: #f5f5f5; }
+.metar-apt { font-size: 14px; font-weight: 800; color: #1a2744; min-width: 52px; }
+.metar-dist { font-size: 11px; color: #fff; background: #555; border-radius: 8px; padding: 2px 7px; font-weight: 700; }
+.metar-dist.on-route { background: #1a2744; }
+.metar-obs { font-size: 12px; color: #666; flex: 1; }
+.metar-cat { font-size: 12px; font-weight: 800; color: #fff; border-radius: 3px; padding: 3px 8px; }
+.metar-chevron { font-size: 14px; color: #aaa; transition: transform 0.15s; margin-left: 4px; }
+.metar-chevron.open { transform: rotate(90deg); }
+
+.metar-body { background: #f8f8fc; padding: 10px; border-top: 1px solid #e8e8f4; display: none; }
+.metar-body.open { display: block; }
+.metar-raw { font-family: 'Courier New', monospace; font-size: 11px; color: #333; background: #efefef; padding: 6px 8px; border-radius: 3px; word-break: break-all; margin-bottom: 8px; line-height: 1.5; }
+.metar-fields { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; margin-bottom: 8px; }
+.metar-field { background: #fff; border: 1px solid #e0e0e0; border-radius: 4px; padding: 5px 7px; }
+.metar-field-lbl { font-size: 10px; font-weight: 700; color: #888; text-transform: uppercase; margin-bottom: 1px; }
+.metar-field-val { font-size: 14px; font-weight: 800; color: #1a2744; }
+.metar-field-val.warn { color: #cc4400; }
+.metar-field-val.bad  { color: #cc0000; }
+.taf-lbl { font-size: 11px; font-weight: 800; color: #555; margin-bottom: 5px; padding-top: 7px; border-top: 1px solid #e8e8e8; }
+.taf-period { display: flex; gap: 8px; align-items: center; padding: 4px 0; border-bottom: 1px solid #f0f0f0; }
+.taf-period:last-child { border-bottom: none; }
+.taf-time { color: #555; font-weight: 600; font-size: 11px; min-width: 130px; }
+.taf-detail { color: #222; font-weight: 700; font-size: 12px; flex: 1; }
+.taf-period.highlight { background: #fffbe6; border-radius: 3px; padding: 4px 5px; margin: 1px -5px; border-bottom: none; }
+
+/* ══ RIGHT 48% ══ */
+.wx-right { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
+
+.wx-section { border-bottom: 1px solid #e8e8e8; }
+.wx-section-hdr {
+  background: #f2f4f8; border-bottom: 1px solid #dde0e8;
+  padding: 8px 12px; display: flex; align-items: center; gap: 8px;
+  cursor: pointer; user-select: none; position: sticky; top: 0; z-index: 1;
+}
+.wx-section-hdr:active { background: #e8eaf0; }
+.wx-section-title { font-size: 12px; font-weight: 800; color: #1a2744; letter-spacing: 0.7px; flex: 1; }
+.wx-section-badge { font-size: 11px; font-weight: 800; color: #fff; background: #1a2744; border-radius: 10px; padding: 2px 8px; }
+.wx-section-badge.warn { background: #cc3300; }
+.wx-section-badge.ok   { background: #1a8a1a; }
+.wx-section-badge.info { background: #0074d9; }
+.wx-chevron { font-size: 13px; color: #888; transition: transform 0.15s; }
+.wx-chevron.open { transform: rotate(90deg); }
+.wx-section-body { display: none; }
+.wx-section-body.open { display: block; }
+
+.adv-card { border-bottom: 1px solid #f0f0f0; }
+.adv-card-hdr { display: flex; align-items: flex-start; padding: 9px 12px; cursor: pointer; gap: 8px; background: #fff; user-select: none; }
+.adv-card-hdr:active { background: #f5f5f5; }
+.adv-id { font-size: 13px; font-weight: 800; color: #1a2744; min-width: 70px; padding-top: 1px; }
+.adv-hazard { font-size: 12px; font-weight: 700; color: #cc3300; flex: 1; line-height: 1.4; }
+.adv-time { font-size: 11px; color: #666; white-space: nowrap; padding-top: 1px; }
+.adv-body { background: #fafafa; padding: 10px 12px; border-top: 1px solid #eee; display: none; }
+.adv-body.open { display: block; }
+.adv-text { font-family: 'Courier New', monospace; font-size: 11px; color: #222; line-height: 1.6; white-space: pre-wrap; word-break: break-word; max-height: 200px; overflow-y: auto; }
+
+.no-adv { padding: 12px 14px; font-size: 12px; color: #888; font-style: italic; }
+
+.notam-card { border-bottom: 1px solid #f0f0f0; padding: 9px 12px; cursor: pointer; user-select: none; }
+.notam-card:active { background: #f5f5f5; }
+.notam-card-hdr { display: flex; align-items: center; gap: 7px; margin-bottom: 4px; }
+.notam-apt { font-size: 13px; font-weight: 800; color: #1a2744; min-width: 46px; }
+.notam-type { font-size: 10px; font-weight: 700; color: #fff; background: #555; border-radius: 3px; padding: 2px 6px; }
+.notam-type.critical { background: #cc2200; }
+.notam-num { font-size: 10px; color: #aaa; margin-left: auto; }
+.notam-summary { font-size: 12px; color: #222; font-weight: 700; line-height: 1.4; }
+.notam-valid { font-size: 11px; color: #888; margin-top: 3px; }
+.notam-full { font-family: 'Courier New', monospace; font-size: 11px; color: #333; background: #f0f0f0; padding: 7px; border-radius: 3px; margin-top: 6px; display: none; word-break: break-all; line-height: 1.5; }
+.notam-full.open { display: block; }
+
+/* Mountain warning banner */
+.mountain-warn {
+  background: #fff8e8; border-bottom: 2px solid #e8c840;
+  padding: 7px 12px; font-size: 12px; color: #665500; font-weight: 700;
+  display: flex; align-items: center; gap: 8px;
+}
+</style>
+</head>
+<body>
+
+<h2>WxBriefing — KLKR → KDKX</h2>
+<p class="subtitle">Flight planning: Mon Apr 27 morning departure · Lancaster SC → Knoxville Downtown Island TN</p>
+
+<div class="wx-panel">
+
+  <!-- Header -->
+  <div class="wx-header">
+    <span class="wx-title">⛅ Weather</span>
+    <span class="wx-route-hdr">KLKR → KDKX &nbsp;·&nbsp; ~270 nm via KAVL</span>
+    <span class="wx-age-hdr">METARs 9:15 AM EDT · TAFs current</span>
+    <button class="wx-mode-btn active" id="btn-7day" onclick="setMode('day')">7-DAY</button>
+    <button class="wx-mode-btn" id="btn-24h" onclick="setMode('hour')">24H MON</button>
+    <button class="wx-refresh-btn">↻</button>
+  </div>
+
+  <div class="wx-body">
+
+    <!-- ══ LEFT ══ -->
+    <div class="wx-left">
+
+      <!-- Summary bar -->
+      <div class="wx-summary-bar">
+        <span class="wx-best">Mon Apr 27 departure<span>— VFR after front clears. KDKX valley fog watch early AM.</span></span>
+        <span class="badge-caution">KDKX FOG AM</span>
+      </div>
+
+      <!-- 7-day grid -->
+      <div class="grid-view active" id="view-day">
+        <div class="wx-grid-wrap">
+          <div class="wx-grid">
+            <!-- Headers: today=Sun Apr 26, flight day=Mon Apr 27 -->
+            <div></div>
+            <div class="wx-grid-hdr today">SUN&#10;APR 26&#10;today</div>
+            <div class="wx-grid-hdr flight-day">MON&#10;APR 27&#10;✈ fly</div>
+            <div class="wx-grid-hdr">TUE&#10;APR 28</div>
+            <div class="wx-grid-hdr">WED&#10;APR 29</div>
+            <div class="wx-grid-hdr">THU&#10;APR 30</div>
+            <div class="wx-grid-hdr">FRI&#10;MAY 1</div>
+            <div class="wx-grid-hdr">SAT&#10;MAY 2</div>
+
+            <!-- KLKR -->
+            <div class="wx-grid-lbl">KLKR</div>
+            <div class="wx-cell c-ifr today-col" onclick="showHourly('h-klkr-today')">IFR<br><small style="font-size:9px">800ft</small></div>
+            <div class="wx-cell c-vfr flight-col" onclick="showHourly('h-klkr-mon')">VFR<br><small style="font-size:9px">SKC</small></div>
+            <div class="wx-cell c-vfr">VFR</div>
+            <div class="wx-cell c-vfr">VFR</div>
+            <div class="wx-cell c-vfr">VFR</div>
+            <div class="wx-cell c-vfr">VFR</div>
+            <div class="wx-cell c-vfr">VFR</div>
+
+            <!-- KAVL (Asheville — mountain crossing) -->
+            <div class="wx-grid-lbl">KAVL</div>
+            <div class="wx-cell c-mvfr today-col" onclick="showHourly('h-kavl-today')">MVFR<br><small style="font-size:9px">clrg</small></div>
+            <div class="wx-cell c-vfr flight-col">VFR<br><small style="font-size:9px">SCT120</small></div>
+            <div class="wx-cell c-vfr">VFR</div>
+            <div class="wx-cell c-vfr">VFR</div>
+            <div class="wx-cell c-vfr">VFR</div>
+            <div class="wx-cell c-vfr">VFR</div>
+            <div class="wx-cell c-vfr">VFR</div>
+
+            <!-- KDKX (destination) -->
+            <div class="wx-grid-lbl">KDKX</div>
+            <div class="wx-cell c-lifr today-col" onclick="showHourly('h-kdkx-today')">LIFR<br><small style="font-size:9px">300ft</small></div>
+            <div class="wx-cell c-mvfr flight-col" onclick="showHourly('h-kdkx-mon')">MVFR?<br><small style="font-size:9px">fog AM</small></div>
+            <div class="wx-cell c-vfr">VFR</div>
+            <div class="wx-cell c-vfr">VFR</div>
+            <div class="wx-cell c-vfr">VFR</div>
+            <div class="wx-cell c-vfr">VFR</div>
+            <div class="wx-cell c-vfr">VFR</div>
+          </div>
+        </div>
+        <div style="padding:2px 10px 5px;font-size:11px;color:#666">
+          Tap cell for hourly · <span style="color:#880000;font-weight:700">▌MON = flight day</span> ·
+          Today: front moving through. Tomorrow: VFR behind front, except KDKX valley fog possible before 10 AM.
+        </div>
+      </div>
+
+      <!-- 24H grid — tomorrow Mon Apr 27 -->
+      <div class="grid-view" id="view-hour">
+        <div style="padding:5px 10px 2px;font-size:11px;font-weight:700;color:#880000">
+          MON APR 27 — Planned departure day
+        </div>
+        <div class="wx-24h-wrap">
+          <div class="wx-24h-grid">
+            <div></div>
+            <div class="wx-24h-hdr highlight">6 AM&#10;L</div>
+            <div class="wx-24h-hdr highlight">8 AM&#10;L</div>
+            <div class="wx-24h-hdr highlight">10 AM&#10;L</div>
+            <div class="wx-24h-hdr highlight">12 PM&#10;L</div>
+            <div class="wx-24h-hdr">2 PM&#10;L</div>
+            <div class="wx-24h-hdr">4 PM&#10;L</div>
+            <div class="wx-24h-hdr">6 PM&#10;L</div>
+            <div class="wx-24h-hdr">8 PM&#10;L</div>
+            <div class="wx-24h-hdr">10 PM&#10;L</div>
+
+            <!-- KLKR Mon -->
+            <div class="wx-grid-lbl">KLKR</div>
+            <div class="wx-24h-cell c-vfr"><span class="cell-cat">VFR</span><span class="cell-det">SKC</span><span class="cell-det">060/06</span></div>
+            <div class="wx-24h-cell c-vfr"><span class="cell-cat">VFR</span><span class="cell-det">SKC</span><span class="cell-det">060/06</span></div>
+            <div class="wx-24h-cell c-vfr"><span class="cell-cat">VFR</span><span class="cell-det">SKC</span><span class="cell-det">070/08</span></div>
+            <div class="wx-24h-cell c-vfr"><span class="cell-cat">VFR</span><span class="cell-det">FEW050</span><span class="cell-det">080/10</span></div>
+            <div class="wx-24h-cell c-vfr"><span class="cell-cat">VFR</span><span class="cell-det">FEW050</span><span class="cell-det">090/10</span></div>
+            <div class="wx-24h-cell c-vfr"><span class="cell-cat">VFR</span><span class="cell-det">SCT060</span><span class="cell-det">090/09</span></div>
+            <div class="wx-24h-cell c-vfr"><span class="cell-cat">VFR</span><span class="cell-det">SCT060</span><span class="cell-det">080/08</span></div>
+            <div class="wx-24h-cell c-vfr"><span class="cell-cat">VFR</span><span class="cell-det">FEW060</span><span class="cell-det">070/07</span></div>
+            <div class="wx-24h-cell c-vfr"><span class="cell-cat">VFR</span><span class="cell-det">CLR</span><span class="cell-det">060/06</span></div>
+
+            <!-- KAVL Mon -->
+            <div class="wx-grid-lbl">KAVL</div>
+            <div class="wx-24h-cell c-vfr"><span class="cell-cat">VFR</span><span class="cell-det">SCT120</span><span class="cell-det">130/06</span></div>
+            <div class="wx-24h-cell c-vfr"><span class="cell-cat">VFR</span><span class="cell-det">SCT120</span><span class="cell-det">120/07</span></div>
+            <div class="wx-24h-cell c-vfr"><span class="cell-cat">VFR</span><span class="cell-det">FEW100</span><span class="cell-det">090/08</span></div>
+            <div class="wx-24h-cell c-vfr"><span class="cell-cat">VFR</span><span class="cell-det">FEW080</span><span class="cell-det">080/09</span></div>
+            <div class="wx-24h-cell c-vfr"><span class="cell-cat">VFR</span><span class="cell-det">FEW080</span><span class="cell-det">090/10</span></div>
+            <div class="wx-24h-cell c-vfr"><span class="cell-cat">VFR</span><span class="cell-det">SCT080</span><span class="cell-det">090/09</span></div>
+            <div class="wx-24h-cell c-vfr"><span class="cell-cat">VFR</span><span class="cell-det">SCT080</span><span class="cell-det">080/08</span></div>
+            <div class="wx-24h-cell c-vfr"><span class="cell-cat">VFR</span><span class="cell-det">FEW080</span><span class="cell-det">070/07</span></div>
+            <div class="wx-24h-cell c-vfr"><span class="cell-cat">VFR</span><span class="cell-det">FEW060</span><span class="cell-det">060/06</span></div>
+
+            <!-- KDKX Mon — fog early, clearing -->
+            <div class="wx-grid-lbl">KDKX</div>
+            <div class="wx-24h-cell c-lifr"><span class="cell-cat">LIFR?</span><span class="cell-det">OVC003</span><span class="cell-det">BR</span></div>
+            <div class="wx-24h-cell c-ifr"><span class="cell-cat">IFR?</span><span class="cell-det">OVC008</span><span class="cell-det">BR</span></div>
+            <div class="wx-24h-cell c-mvfr"><span class="cell-cat">MVFR?</span><span class="cell-det">BKN020</span><span class="cell-det">5SM</span></div>
+            <div class="wx-24h-cell c-vfr"><span class="cell-cat">VFR</span><span class="cell-det">SCT040</span><span class="cell-det">P6SM</span></div>
+            <div class="wx-24h-cell c-vfr"><span class="cell-cat">VFR</span><span class="cell-det">SCT050</span><span class="cell-det">P6SM</span></div>
+            <div class="wx-24h-cell c-vfr"><span class="cell-cat">VFR</span><span class="cell-det">FEW060</span><span class="cell-det">P6SM</span></div>
+            <div class="wx-24h-cell c-vfr"><span class="cell-cat">VFR</span><span class="cell-det">FEW060</span><span class="cell-det">P6SM</span></div>
+            <div class="wx-24h-cell c-vfr"><span class="cell-cat">VFR</span><span class="cell-det">FEW050</span><span class="cell-det">P6SM</span></div>
+            <div class="wx-24h-cell c-vfr"><span class="cell-cat">VFR</span><span class="cell-det">CLR</span><span class="cell-det">P6SM</span></div>
+          </div>
+        </div>
+        <div style="padding:3px 10px 6px;font-size:11px;color:#665500;font-weight:700">
+          ⚠ KDKX 6–10 AM: estimated from trend — no TAF available. Valley fog typical after frontal passage. Verify day-of.
+        </div>
+      </div>
+
+      <!-- Hourly drill-downs -->
+      <div class="hourly-popup" id="h-klkr-today" style="display:none">
+        <div class="hourly-title">KLKR — Today Sun Apr 26 (front clearing)
+          <button class="hourly-close" onclick="hideHourly('h-klkr-today')">✕ Close</button>
+        </div>
+        <table class="hourly-table">
+          <thead><tr><th>Time (L)</th><th>Cat</th><th>Ceiling</th><th>Vis</th><th>Wind</th><th>Wx</th></tr></thead>
+          <tbody>
+            <tr><td>9 AM</td><td><span class="ht-cat c-ifr">IFR</span></td><td>BKN008</td><td>10SM</td><td>Calm</td><td>—</td></tr>
+            <tr style="background:#fff8e8"><td>10 AM</td><td><span class="ht-cat c-mvfr">MVFR</span></td><td>BKN015</td><td>P6SM</td><td>030/08</td><td>—</td></tr>
+            <tr><td>12 PM</td><td><span class="ht-cat c-vfr">VFR</span></td><td>FEW024</td><td>P6SM</td><td>030/08</td><td>—</td></tr>
+            <tr><td>3 PM</td><td><span class="ht-cat c-vfr">VFR</span></td><td>FEW040</td><td>P6SM</td><td>060/09</td><td>—</td></tr>
+            <tr><td>6 PM</td><td><span class="ht-cat c-vfr">VFR</span></td><td>FEW040</td><td>P6SM</td><td>060/08</td><td>—</td></tr>
+            <tr><td>9 PM</td><td><span class="ht-cat c-vfr">VFR</span></td><td>FEW250</td><td>P6SM</td><td>050/08</td><td>—</td></tr>
+          </tbody>
+        </table>
+        <div class="hourly-note">From KCLT TAF (nearest with TAF). IFR clears by 10 AM, VFR by noon.</div>
+      </div>
+
+      <div class="hourly-popup" id="h-klkr-mon" style="display:none">
+        <div class="hourly-title">KLKR — Mon Apr 27 ✈ flight day
+          <button class="hourly-close" onclick="hideHourly('h-klkr-mon')">✕ Close</button>
+        </div>
+        <table class="hourly-table">
+          <thead><tr><th>Time (L)</th><th>Cat</th><th>Ceiling</th><th>Vis</th><th>Wind</th></tr></thead>
+          <tbody>
+            <tr><td>6 AM</td><td><span class="ht-cat c-vfr">VFR</span></td><td>SKC</td><td>P6SM</td><td>060/06</td></tr>
+            <tr><td>8 AM</td><td><span class="ht-cat c-vfr">VFR</span></td><td>SKC</td><td>P6SM</td><td>060/06</td></tr>
+            <tr><td>10 AM</td><td><span class="ht-cat c-vfr">VFR</span></td><td>SKC</td><td>P6SM</td><td>070/08</td></tr>
+            <tr><td>12 PM</td><td><span class="ht-cat c-vfr">VFR</span></td><td>FEW050</td><td>P6SM</td><td>080/10</td></tr>
+          </tbody>
+        </table>
+        <div class="hourly-note">From KCLT TAF FM271200Z: SKC, P6SM — KLKR departure looks clean all morning.</div>
+      </div>
+
+      <div class="hourly-popup" id="h-kavl-today" style="display:none">
+        <div class="hourly-title">KAVL — Today Sun Apr 26 (TAF)
+          <button class="hourly-close" onclick="hideHourly('h-kavl-today')">✕ Close</button>
+        </div>
+        <table class="hourly-table">
+          <thead><tr><th>Time (L)</th><th>Cat</th><th>Ceiling</th><th>Vis</th><th>Wind</th></tr></thead>
+          <tbody>
+            <tr style="background:#fff8e8"><td>8–9 AM</td><td><span class="ht-cat c-ifr">IFR</span></td><td>BKN007</td><td>3SM BR</td><td>Calm</td></tr>
+            <tr style="background:#ffe8e8"><td>TEMPO 8–9AM</td><td><span class="ht-cat c-lifr">LIFR</span></td><td>OVC002</td><td>1SM BR</td><td>Calm</td></tr>
+            <tr style="background:#fff8e8"><td>9–11 AM</td><td><span class="ht-cat c-mvfr">MVFR</span></td><td>BKN022</td><td>P6SM</td><td>350/02</td></tr>
+            <tr><td>11 AM–5 PM</td><td><span class="ht-cat c-vfr">VFR</span></td><td>FEW040</td><td>P6SM</td><td>010/04</td></tr>
+            <tr><td>5 PM–midnight</td><td><span class="ht-cat c-vfr">VFR</span></td><td>FEW200</td><td>P6SM</td><td>070/05</td></tr>
+          </tbody>
+        </table>
+        <div class="hourly-note">KAVL TAF: mountain IFR this morning, clears by 11 AM. Tomorrow VFR.</div>
+      </div>
+
+      <div class="hourly-popup" id="h-kdkx-today" style="display:none">
+        <div class="hourly-title">KDKX — Today current (no TAF)
+          <button class="hourly-close" onclick="hideHourly('h-kdkx-today')">✕ Close</button>
+        </div>
+        <table class="hourly-table">
+          <thead><tr><th>Time (L)</th><th>Cat</th><th>Ceiling</th><th>Vis</th><th>Wind</th></tr></thead>
+          <tbody>
+            <tr style="background:#ffe8e8"><td>9 AM now</td><td><span class="ht-cat c-lifr">LIFR</span></td><td>OVC003</td><td>1.25SM BR</td><td>Calm</td></tr>
+          </tbody>
+        </table>
+        <div class="hourly-note">No TAF at KDKX. Based on KTRI (30nm NE) clearing by noon today — KDKX likely follows similar pattern.</div>
+      </div>
+
+      <div class="hourly-popup" id="h-kdkx-mon" style="display:none">
+        <div class="hourly-title">KDKX — Mon Apr 27 ⚠ estimated (no TAF)
+          <button class="hourly-close" onclick="hideHourly('h-kdkx-mon')">✕ Close</button>
+        </div>
+        <table class="hourly-table">
+          <thead><tr><th>Time (L)</th><th>Cat</th><th>Ceiling</th><th>Vis</th><th>Wind</th></tr></thead>
+          <tbody>
+            <tr style="background:#ffe8e8"><td>6 AM</td><td><span class="ht-cat c-lifr">LIFR?</span></td><td>OVC003</td><td>1–2SM BR</td><td>Calm</td></tr>
+            <tr style="background:#ffe8e8"><td>8 AM</td><td><span class="ht-cat c-ifr">IFR?</span></td><td>OVC008</td><td>3SM BR</td><td>Calm</td></tr>
+            <tr style="background:#fff8e8"><td>10 AM</td><td><span class="ht-cat c-mvfr">MVFR?</span></td><td>BKN020</td><td>5SM</td><td>080/05</td></tr>
+            <tr><td>12 PM</td><td><span class="ht-cat c-vfr">VFR</span></td><td>SCT040</td><td>P6SM</td><td>090/08</td></tr>
+            <tr><td>2 PM+</td><td><span class="ht-cat c-vfr">VFR</span></td><td>FEW060</td><td>P6SM</td><td>090/10</td></tr>
+          </tbody>
+        </table>
+        <div class="hourly-note">⚠ ESTIMATED — no TAF for KDKX. Valley fog common after frontal passage. IFR/MVFR possible until 10–11 AM. Plan for VFR arrival after noon or hold IFR alternate.</div>
+      </div>
+
+      <!-- METARs & TAFs section header -->
+      <div class="station-section-hdr">
+        METARs &amp; TAFs
+        <span class="station-badge">5 stations</span>
+        <span style="font-size:11px;color:#888;font-weight:600;margin-left:4px">Current — Sun Apr 26 9:15 AM EDT</span>
+      </div>
+
+      <!-- KLKR -->
+      <div class="metar-card">
+        <div class="metar-card-hdr" onclick="toggleMet('mk', this)">
+          <span class="metar-apt">KLKR</span>
+          <span class="metar-dist on-route">DEPARTURE</span>
+          <span class="metar-obs">9:15 AM EDT</span>
+          <span class="metar-cat c-ifr">IFR</span>
+          <span class="metar-chevron open">›</span>
+        </div>
+        <div class="metar-body open" id="mk">
+          <div class="metar-raw">METAR KLKR 261315Z AUTO 00000KT 10SM BKN008 BKN012 OVC036 18/16 A2992 RMK AO2</div>
+          <div class="metar-fields">
+            <div class="metar-field"><div class="metar-field-lbl">Wind</div><div class="metar-field-val">Calm</div></div>
+            <div class="metar-field"><div class="metar-field-lbl">Visibility</div><div class="metar-field-val">10 SM</div></div>
+            <div class="metar-field"><div class="metar-field-lbl">Ceiling</div><div class="metar-field-val warn">BKN 800ft</div></div>
+            <div class="metar-field"><div class="metar-field-lbl">Temp / Dew</div><div class="metar-field-val">18° / 16°</div></div>
+            <div class="metar-field"><div class="metar-field-lbl">Altimeter</div><div class="metar-field-val">29.92</div></div>
+            <div class="metar-field"><div class="metar-field-lbl">Clouds</div><div class="metar-field-val warn">BKN008 BKN012</div></div>
+          </div>
+          <div class="taf-lbl">No TAF (non-towered) · Using KCLT TAF for area forecast</div>
+          <div class="taf-period"><span class="taf-time">Sun 8–10 AM L (now)</span><span class="taf-detail"><span class="ht-cat c-mvfr" style="margin-right:5px">MVFR</span>360/03 · P6SM · SCT007 BKN015</span></div>
+          <div class="taf-period"><span class="taf-time">Sun 10 AM–3 PM L</span><span class="taf-detail"><span class="ht-cat c-vfr" style="margin-right:5px">VFR</span>030/08 · P6SM · FEW024</span></div>
+          <div class="taf-period"><span class="taf-time">Sun 3 PM–Mon 9 PM L</span><span class="taf-detail"><span class="ht-cat c-vfr" style="margin-right:5px">VFR</span>050–060/06–09 · P6SM · FEW040–FEW250</span></div>
+          <div class="taf-period highlight"><span class="taf-time">✈ Mon 8 AM L onward</span><span class="taf-detail"><span class="ht-cat c-vfr" style="margin-right:5px">VFR</span>060/06 · P6SM · SKC — clear departure</span></div>
+        </div>
+      </div>
+
+      <!-- KHKY -->
+      <div class="metar-card">
+        <div class="metar-card-hdr" onclick="toggleMet('mh', this)">
+          <span class="metar-apt">KHKY</span>
+          <span class="metar-dist on-route">EN ROUTE</span>
+          <span class="metar-obs">9:04 AM EDT</span>
+          <span class="metar-cat c-vfr">VFR</span>
+          <span class="metar-chevron">›</span>
+        </div>
+        <div class="metar-body" id="mh">
+          <div class="metar-raw">SPECI KHKY 261304Z 00000KT 10SM FEW004 16/14 A2994 RMK AO2 T01610144 $</div>
+          <div class="metar-fields">
+            <div class="metar-field"><div class="metar-field-lbl">Wind</div><div class="metar-field-val">Calm</div></div>
+            <div class="metar-field"><div class="metar-field-lbl">Visibility</div><div class="metar-field-val">10 SM</div></div>
+            <div class="metar-field"><div class="metar-field-lbl">Ceiling</div><div class="metar-field-val">FEW 400ft</div></div>
+            <div class="metar-field"><div class="metar-field-lbl">Temp / Dew</div><div class="metar-field-val">16° / 14°</div></div>
+            <div class="metar-field"><div class="metar-field-lbl">Altimeter</div><div class="metar-field-val">29.94</div></div>
+            <div class="metar-field"><div class="metar-field-lbl">Note</div><div class="metar-field-val" style="font-size:11px">$ = sensor fail</div></div>
+          </div>
+          <div class="taf-lbl">TAF KHKY — Issued 7:24 AM EDT · Valid 8AM Sun → 8AM Mon</div>
+          <div class="taf-period"><span class="taf-time">Sun 8–9 AM L</span><span class="taf-detail"><span class="ht-cat c-ifr" style="margin-right:5px">IFR</span>340/02 · 5SM BR · FEW002 BKN007</span></div>
+          <div class="taf-period"><span class="taf-time">Sun 9 AM–1 PM L</span><span class="taf-detail"><span class="ht-cat c-vfr" style="margin-right:5px">VFR</span>040/05 · P6SM · FEW019 FEW050</span></div>
+          <div class="taf-period"><span class="taf-time">Sun 1–7 PM L</span><span class="taf-detail"><span class="ht-cat c-vfr" style="margin-right:5px">VFR</span>070/08 · P6SM · FEW040</span></div>
+          <div class="taf-period highlight"><span class="taf-time">✈ Sun 7 PM → Mon 8AM L</span><span class="taf-detail"><span class="ht-cat c-vfr" style="margin-right:5px">VFR</span>070/08 · P6SM · FEW170 — clear overnight, VFR Mon AM</span></div>
+        </div>
+      </div>
+
+      <!-- KAVL -->
+      <div class="metar-card">
+        <div class="metar-card-hdr" onclick="toggleMet('ma', this)">
+          <span class="metar-apt">KAVL</span>
+          <span class="metar-dist on-route">MTN XING</span>
+          <span class="metar-obs">9:29 AM EDT</span>
+          <span class="metar-cat c-vfr">VFR</span>
+          <span class="metar-chevron">›</span>
+        </div>
+        <div class="metar-body" id="ma">
+          <div class="metar-raw">SPECI KAVL 261329Z VRB05KT 10SM FEW009 16/13 A2997 RMK AO2 T01610128</div>
+          <div class="metar-fields">
+            <div class="metar-field"><div class="metar-field-lbl">Wind</div><div class="metar-field-val">VRB / 5kt</div></div>
+            <div class="metar-field"><div class="metar-field-lbl">Visibility</div><div class="metar-field-val">10 SM</div></div>
+            <div class="metar-field"><div class="metar-field-lbl">Ceiling</div><div class="metar-field-val">FEW 900ft</div></div>
+            <div class="metar-field"><div class="metar-field-lbl">Temp / Dew</div><div class="metar-field-val">16° / 13°</div></div>
+            <div class="metar-field"><div class="metar-field-lbl">Altimeter</div><div class="metar-field-val">29.97</div></div>
+            <div class="metar-field"><div class="metar-field-lbl">Elev</div><div class="metar-field-val">2165 ft MSL</div></div>
+          </div>
+          <div class="taf-lbl">TAF KAVL — Issued 7:24 AM EDT · Valid 8AM Sun → 8AM Mon</div>
+          <div class="taf-period"><span class="taf-time">Sun 8–9 AM L</span><span class="taf-detail"><span class="ht-cat c-ifr" style="margin-right:5px">IFR</span>Calm · 3SM BR · FEW002 BKN007 — TEMPO LIFR</span></div>
+          <div class="taf-period"><span class="taf-time">Sun 9–11 AM L</span><span class="taf-detail"><span class="ht-cat c-mvfr" style="margin-right:5px">MVFR</span>350/02 · P6SM · FEW008 BKN022</span></div>
+          <div class="taf-period"><span class="taf-time">Sun 11 AM–5 PM L</span><span class="taf-detail"><span class="ht-cat c-vfr" style="margin-right:5px">VFR</span>010/04 · P6SM · FEW040 SCT210</span></div>
+          <div class="taf-period"><span class="taf-time">Sun 5 PM–midnight</span><span class="taf-detail"><span class="ht-cat c-vfr" style="margin-right:5px">VFR</span>070/05 · P6SM · FEW200</span></div>
+          <div class="taf-period highlight"><span class="taf-time">✈ Mon 8 PM Sun → 8AM Mon L</span><span class="taf-detail"><span class="ht-cat c-vfr" style="margin-right:5px">VFR</span>130/05G12 · P6SM · SCT120 — VFR at mountain crossing</span></div>
+        </div>
+      </div>
+
+      <!-- KTRI -->
+      <div class="metar-card">
+        <div class="metar-card-hdr" onclick="toggleMet('mt', this)">
+          <span class="metar-apt">KTRI</span>
+          <span class="metar-dist">30 nm NE</span>
+          <span class="metar-obs">9:13 AM EDT</span>
+          <span class="metar-cat c-ifr">IFR</span>
+          <span class="metar-chevron">›</span>
+        </div>
+        <div class="metar-body" id="mt">
+          <div class="metar-raw">METAR KTRI 261253Z 07004KT 3SM BR OVC005 14/13 A2998 RMK AO2 CIG 004V008 SLP135 T01440133 $</div>
+          <div class="metar-fields">
+            <div class="metar-field"><div class="metar-field-lbl">Wind</div><div class="metar-field-val">070° / 4kt</div></div>
+            <div class="metar-field"><div class="metar-field-lbl">Visibility</div><div class="metar-field-val warn">3 SM BR</div></div>
+            <div class="metar-field"><div class="metar-field-lbl">Ceiling</div><div class="metar-field-val bad">OVC 500ft</div></div>
+            <div class="metar-field"><div class="metar-field-lbl">Temp / Dew</div><div class="metar-field-val">14° / 13°</div></div>
+            <div class="metar-field"><div class="metar-field-lbl">Altimeter</div><div class="metar-field-val">29.98</div></div>
+            <div class="metar-field"><div class="metar-field-lbl">Note</div><div class="metar-field-val" style="font-size:11px">CIG var 400–800</div></div>
+          </div>
+          <div class="taf-lbl">TAF KTRI — Issued 9:08 AM EDT · Valid 9AM–Mon 12PM</div>
+          <div class="taf-period"><span class="taf-time">Sun 9–11 AM L (now)</span><span class="taf-detail"><span class="ht-cat c-ifr" style="margin-right:5px">IFR</span>060/04 · 3SM BR · OVC005</span></div>
+          <div class="taf-period"><span class="taf-time">Sun 11 AM–12 PM L</span><span class="taf-detail"><span class="ht-cat c-mvfr" style="margin-right:5px">MVFR</span>050/05 · P6SM · BKN010</span></div>
+          <div class="taf-period highlight"><span class="taf-time">✈ Sun 12 PM → Mon 12PM L</span><span class="taf-detail"><span class="ht-cat c-vfr" style="margin-right:5px">VFR</span>010/07 · P6SM · FEW050 — VFR all Mon AM</span></div>
+        </div>
+      </div>
+
+      <!-- KDKX -->
+      <div class="metar-card">
+        <div class="metar-card-hdr" onclick="toggleMet('md', this)">
+          <span class="metar-apt">KDKX</span>
+          <span class="metar-dist on-route">DEST</span>
+          <span class="metar-obs">9:10 AM EDT</span>
+          <span class="metar-cat c-lifr">LIFR</span>
+          <span class="metar-chevron open">›</span>
+        </div>
+        <div class="metar-body open" id="md">
+          <div class="metar-raw">METAR KDKX 261310Z AUTO 00000KT 1 1/4SM BR OVC003 16/15 A2996 RMK A01</div>
+          <div class="metar-fields">
+            <div class="metar-field"><div class="metar-field-lbl">Wind</div><div class="metar-field-val">Calm</div></div>
+            <div class="metar-field"><div class="metar-field-lbl">Visibility</div><div class="metar-field-val bad">1¼ SM BR</div></div>
+            <div class="metar-field"><div class="metar-field-lbl">Ceiling</div><div class="metar-field-val bad">OVC 300ft</div></div>
+            <div class="metar-field"><div class="metar-field-lbl">Temp / Dew</div><div class="metar-field-val">16° / 15°</div></div>
+            <div class="metar-field"><div class="metar-field-lbl">Altimeter</div><div class="metar-field-val">29.96</div></div>
+            <div class="metar-field"><div class="metar-field-lbl">Elev</div><div class="metar-field-val">836 ft MSL</div></div>
+          </div>
+          <div class="taf-lbl">⚠ No TAF at KDKX — Valley airport, fog-prone after frontal passage</div>
+          <div class="taf-period" style="background:#fff3f3;border-radius:3px;padding:5px;"><span class="taf-time">Tomorrow Mon AM</span><span class="taf-detail" style="color:#990000">Valley fog expected. KTRI (30nm NE) clears today by noon — similar pattern expected. Plan IFR alternate if early departure.</span></div>
+        </div>
+      </div>
+
+    </div><!-- end wx-left -->
+
+    <!-- ══ RIGHT ══ -->
+    <div class="wx-right">
+
+      <!-- Mountain warning -->
+      <div class="mountain-warn">
+        ⛰ Route crosses Appalachians via KAVL (2165 ft MSL). Min en route altitude ~9500 ft MSL over Blue Ridge.
+        TAF shows SCT120 Monday — VMC at altitude. IFR capability recommended.
+      </div>
+
+      <!-- AIRMETs -->
+      <div class="wx-section">
+        <div class="wx-section-hdr" onclick="toggleSection('ab', this)">
+          <span class="wx-section-title">AIRMETs</span>
+          <span class="wx-section-badge ok">NONE ON ROUTE</span>
+          <span class="wx-chevron">›</span>
+        </div>
+        <div class="wx-section-body" id="ab">
+          <div class="no-adv">No active AIRMETs affecting the KLKR → KDKX corridor at this time. Active SIGMETs are in LA/TX/OK/IA — well west of route.</div>
+        </div>
+      </div>
+
+      <!-- MCDs -->
+      <div class="wx-section">
+        <div class="wx-section-hdr" onclick="toggleSection('mb', this)">
+          <span class="wx-section-title">MESOSCALE DISCUSSIONS</span>
+          <span class="wx-section-badge ok">NONE ACTIVE</span>
+          <span class="wx-chevron">›</span>
+        </div>
+        <div class="wx-section-body" id="mb">
+          <div class="no-adv">No active MCDs from SPC for the Carolinas / eastern TN region.</div>
+        </div>
+      </div>
+
+      <!-- Forecast Discussions -->
+      <div class="wx-section">
+        <div class="wx-section-hdr" onclick="toggleSection('fb', this)">
+          <span class="wx-section-title">FORECAST DISCUSSIONS</span>
+          <span class="wx-section-badge info">2 offices</span>
+          <span class="wx-chevron open">›</span>
+        </div>
+        <div class="wx-section-body open" id="fb">
+          <div class="adv-card">
+            <div class="adv-card-hdr" onclick="toggleBody('f1', this)">
+              <span class="adv-id">KGSP</span>
+              <span class="adv-hazard" style="color:#333">Greenville-Spartanburg NWS — covers KLKR/KAVL</span>
+              <span class="adv-time">today</span>
+              <span class="wx-chevron open" style="margin-left:6px">›</span>
+            </div>
+            <div class="adv-body open" id="f1"><div class="adv-text">Cold front associated with mid-level shortwave pushing through the Carolinas this morning. Low ceilings and visibility in mist along and ahead of the front, IFR conditions at most Piedmont stations through 14-15Z. Rapid clearing expected behind the front by early afternoon. Monday looks dry and clear with a high-pressure ridge building. SCT-BKN high clouds Mon afternoon, otherwise VFR. No significant aviation hazards Monday.</div></div>
+          </div>
+          <div class="adv-card">
+            <div class="adv-card-hdr" onclick="toggleBody('f2', this)">
+              <span class="adv-id">KMRX</span>
+              <span class="adv-hazard" style="color:#333">Morristown NWS — covers KDKX/KTRI</span>
+              <span class="adv-time">today</span>
+              <span class="wx-chevron" style="margin-left:6px">›</span>
+            </div>
+            <div class="adv-body" id="f2"><div class="adv-text">Dense fog advisory in effect through 11 AM today for the Tennessee Valley including Knox and Anderson counties. Valley fog and low ceilings 100-500 ft AGL with vis 0.25 to 1.5 SM. Clearing expected mid-morning as surface heating begins. Monday forecast: high pressure dominates. Excellent VFR flying conditions afternoon Monday through Wednesday. Minor fog possible Mon morning before 9 AM in lowest valley locations including Downtown Island (KDKX).</div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- NOTAMs -->
+      <div class="wx-section">
+        <div class="wx-section-hdr" onclick="toggleSection('nb', this)">
+          <span class="wx-section-title">NOTAMs</span>
+          <span class="wx-section-badge warn">3 active</span>
+          <span class="wx-chevron open">›</span>
+        </div>
+        <div class="wx-section-body open" id="nb">
+
+          <div class="notam-card" onclick="toggleFull('n1')">
+            <div class="notam-card-hdr">
+              <span class="notam-apt">KDKX</span>
+              <span class="notam-type critical">RWY</span>
+              <span class="notam-num">0/1182</span>
+            </div>
+            <div class="notam-summary">RWY 08/26 — Rwy length 3,508 ft (no change); PAPI RWY 26 U/S</div>
+            <div class="notam-valid">Now until further notice</div>
+            <div class="notam-full" id="n1">!DKX 04/012 KDKX PAPI RWY 26 U/S PERM</div>
+          </div>
+
+          <div class="notam-card" onclick="toggleFull('n2')">
+            <div class="notam-card-hdr">
+              <span class="notam-apt">KDKX</span>
+              <span class="notam-type">AD</span>
+              <span class="notam-num">0/0881</span>
+            </div>
+            <div class="notam-summary">KDKX attended Mon–Fri 0700–2000L only. Unattended overnights.</div>
+            <div class="notam-valid">Permanent</div>
+            <div class="notam-full" id="n2">!DKX 01/001 KDKX AD ATTENDED 1100-0000Z MON-FRI UNATTENDED OTHER TIMES</div>
+          </div>
+
+          <div class="notam-card" onclick="toggleFull('n3')">
+            <div class="notam-card-hdr">
+              <span class="notam-apt">KAVL</span>
+              <span class="notam-type">SVC</span>
+              <span class="notam-num">1/0441</span>
+            </div>
+            <div class="notam-summary">KAVL ILS RWY 35 GP U/S — no glidepath, LOC only</div>
+            <div class="notam-valid">Apr 22 → May 5</div>
+            <div class="notam-full" id="n3">!AVL 04/041 KAVL ILS RWY 35 GP U/S 2604220800-2605051800</div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Planning summary -->
+      <div class="wx-section">
+        <div class="wx-section-hdr" onclick="toggleSection('ps', this)" style="background:#e8f0e8;border-left:4px solid #1a8a1a;">
+          <span class="wx-section-title" style="color:#1a4a1a">PLANNING SUMMARY · MON APR 27</span>
+          <span class="wx-chevron open" style="color:#1a4a1a">›</span>
+        </div>
+        <div class="wx-section-body open" id="ps">
+          <div style="padding:12px 14px;font-size:12px;line-height:1.8;color:#222;">
+            <div style="font-weight:800;font-size:13px;color:#1a2744;margin-bottom:6px;">KLKR → KDKX — ~270 nm · ~2.5 hr</div>
+            <div><b>Departure (KLKR):</b> VFR from 8 AM. SKC by departure time. ✅</div>
+            <div><b>En route / HKY–AVL:</b> VFR all morning, clear behind front. ✅</div>
+            <div><b>Mountain crossing (KAVL area):</b> SCT120 Mon morning — VMC at cruise. Watch for orographic lift. ✅</div>
+            <div><b>Destination (KDKX):</b> <span style="color:#cc4400;font-weight:800">⚠ Valley fog 6–10 AM. Plan for VFR after 10–11 AM or hold IFR alternate (KTYS 12nm).</span></div>
+            <div style="margin-top:8px;padding:7px 10px;background:#fff8e8;border:1px solid #e8d840;border-radius:4px;">
+              <b>Recommendation:</b> Depart KLKR 9–10 AM. ETA KDKX 11:30 AM–12 PM — fog should be clear by arrival.
+              File IFR with KTYS as alternate.
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- end wx-right -->
+  </div><!-- end wx-body -->
+</div><!-- end wx-panel -->
+
+<script>
+function setMode(mode) {
+  document.getElementById('view-day').classList.toggle('active', mode === 'day');
+  document.getElementById('view-hour').classList.toggle('active', mode === 'hour');
+  document.getElementById('btn-7day').classList.toggle('active', mode === 'day');
+  document.getElementById('btn-24h').classList.toggle('active', mode === 'hour');
+  document.querySelectorAll('.hourly-popup').forEach(el => el.style.display = 'none');
+}
+function toggleSection(id, hdr) {
+  const b = document.getElementById(id); if (!b) return;
+  b.classList.toggle('open');
+  hdr.querySelector('.wx-chevron')?.classList.toggle('open');
+}
+function toggleBody(id, hdr) {
+  const b = document.getElementById(id); if (!b) return;
+  b.classList.toggle('open');
+  hdr.querySelector('.wx-chevron')?.classList.toggle('open');
+}
+function toggleMet(id, hdr) {
+  const b = document.getElementById(id); if (!b) return;
+  b.classList.toggle('open');
+  hdr.querySelector('.metar-chevron')?.classList.toggle('open');
+}
+function showHourly(id) {
+  document.querySelectorAll('.hourly-popup').forEach(el => el.style.display = 'none');
+  const el = document.getElementById(id);
+  if (el) el.style.display = 'block';
+}
+function hideHourly(id) {
+  const el = document.getElementById(id); if (el) el.style.display = 'none';
+}
+function toggleFull(id) {
+  document.getElementById(id)?.classList.toggle('open');
+}
+</script>
+</body>
+</html>
