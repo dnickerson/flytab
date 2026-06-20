@@ -686,6 +686,8 @@ class FisbWeatherDisplay {
 
         let color, label, layer;
         if (isTango) {
+            const baseFt = parseAltFt(airmet.base);
+            if (baseFt != null && baseFt >= 20000) return; // above FL200 — irrelevant for RV-9A
             color = '#ffcc00'; label = 'AIRMET TANGO (Turbulence)'; layer = this._airmetTangoLayer;
         } else if (isZulu) {
             color = '#00ccff'; label = 'AIRMET ZULU (Icing)';       layer = this._airmetZuluLayer;
