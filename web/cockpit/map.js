@@ -840,13 +840,37 @@ class CockpitMap {
             const d = document.createElement('div');
             d.className = 'radar-badge';
             this.container.appendChild(d);
+
+            // Tap handler — standard project pattern (touchstart capture + touchend bubble)
+            let _tapStart = null;
+            d.addEventListener('touchstart', (e) => {
+                if (e.touches.length === 1)
+                    _tapStart = { x: e.touches[0].clientX, y: e.touches[0].clientY, t: Date.now() };
+                else _tapStart = null;
+            }, { capture: true, passive: true });
+            d.addEventListener('touchend', (e) => {
+                if (!_tapStart || e.changedTouches.length !== 1) { _tapStart = null; return; }
+                const s = _tapStart; _tapStart = null;
+                const dx = e.changedTouches[0].clientX - s.x;
+                const dy = e.changedTouches[0].clientY - s.y;
+                if (dx * dx + dy * dy > 400) return;   // >20px = drag
+                if (Date.now() - s.t > 500) return;     // >500ms = long-press
+                this._toggleRadarSource();
+            }, { passive: true });
+
             return d;
         })());
+
+        el.style.display = 'block';   // always visible while radar is on
+
+        if (this._radarSource === 'inet') {
+            el.textContent = 'Internet · NEXRAD  ⇄';
+            return;
+        }
+        // FIS-B mode
         const ageMs = this._fisbNexrad.getDataAgeMs('regional');
-        if (ageMs == null) { el.style.display = 'none'; return; }
-        const min = Math.round(ageMs / 60000);
-        el.style.display = 'block';
-        el.textContent = `FIS-B · Regional · ${min} min`;
+        const age = ageMs == null ? '--' : Math.round(ageMs / 60000);
+        el.textContent = `FIS-B · Regional · ${age} min  ⇄`;
     }
 
     toggleCbBuilding(on) {
