@@ -6348,6 +6348,20 @@ body {
     animation: ftw-pulse 1.2s ease-in-out infinite;
 }
 
+.ftw-edit-btn {
+    display: block;
+    margin: 2px auto 0;
+    background: none;
+    border: 1px solid var(--border-strong);
+    border-radius: 4px;
+    color: var(--text-muted);
+    font-size: 14px;
+    line-height: 1;
+    padding: 3px 7px;
+    min-height: var(--touch-min, 56px);
+    cursor: pointer;
+}
+
 /* ── Init / recovery panel ─────────────────────────────────────────── */
 .ftw-init-panel {
     display: flex;

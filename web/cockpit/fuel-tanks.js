@@ -130,6 +130,7 @@ class FuelTanksDisplay {
                     <div class="ftw-flow" id="ftw-flow">--</div>
                     <div class="ftw-end" id="ftw-end">--</div>
                     <div class="ftw-imbal" id="ftw-imbal" style="display:none">⚠</div>
+                    <button class="ftw-edit-btn" id="ftw-edit-btn" title="Edit fuel quantities">✎</button>
                 </div>
                 <div class="ftw-tank" id="ftw-tank-r" data-label="R">
                     <div class="ftw-bar-wrap">
@@ -190,6 +191,7 @@ class FuelTanksDisplay {
             flow:          this._el.querySelector('#ftw-flow'),
             end:           this._el.querySelector('#ftw-end'),
             imbal:         this._el.querySelector('#ftw-imbal'),
+            editBtn:       this._el.querySelector('#ftw-edit-btn'),
             initPanel:     this._el.querySelector('#ftw-init-panel'),
             initTitle:     this._el.querySelector('#ftw-init-title'),
             initL:         this._el.querySelector('#ftw-init-l'),
@@ -207,6 +209,7 @@ class FuelTanksDisplay {
 
         wireTap(this._dom.badgeL, () => this._onBadgeTap('L'));
         wireTap(this._dom.badgeR, () => this._onBadgeTap('R'));
+        wireTap(this._dom.editBtn, () => this._openInitDialog());
 
         this._dom.selRow.querySelectorAll('.ftw-sel-btn').forEach(btn => {
             wireTap(btn, () => {
@@ -245,20 +248,18 @@ class FuelTanksDisplay {
     _openInitDialog() {
         const state = FuelTankState.getState();
         let leftVal = '', rightVal = '';
-        let activeTank = 'L';
+        let activeTank = state?.active_tank ?? 'L';
 
-        if (state) {
+        // Prefer the most recently entered tic measurement (pilot's physical measurement).
+        // Fall back to current FuelTankState quantities if no measurement exists.
+        const m = Settings.fuelMeasurement;
+        const hasTicMeasurement = m && typeof m === 'object' && (m.left_gal > 0 || m.right_gal > 0);
+        if (hasTicMeasurement) {
+            leftVal = (m.left_gal ?? 0).toFixed(1);
+            rightVal = (m.right_gal ?? 0).toFixed(1);
+        } else if (state) {
             leftVal = state.left_gal.toFixed(1);
             rightVal = state.right_gal.toFixed(1);
-            activeTank = state.active_tank;
-        } else {
-            try {
-                const m = Settings.fuelMeasurement;
-                if (m) {
-                    leftVal = (m.left_gal ?? 0).toFixed(1);
-                    rightVal = (m.right_gal ?? 0).toFixed(1);
-                }
-            } catch (_) {}
         }
 
         this._dom.initL.value = leftVal;
