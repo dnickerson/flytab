@@ -58,6 +58,7 @@ class RadarLoop {
                 this.play();
             }
         }
+        this._updateSourceBadge();
     }
 
     // ========== Public API ==========
