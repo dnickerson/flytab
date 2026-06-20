@@ -86,7 +86,15 @@ class FuelEngine {
      */
     static extractEdmFuel(data) {
         if (!data) return 0;
-        return data.fuel_remaining_gal ?? data.fuel_gal ?? data.gallons_rem ?? data.Gallons_Rem ?? data.Fuel_Remaining ?? 0;
+        // data.fuel.fuel_remaining = Pi integrated tracker (primary source)
+        // data.Fuel_Remaining = EDM resistive sender (0 unless aircraft has tank senders)
+        return data.fuel?.fuel_remaining
+            ?? data.fuel_remaining_gal
+            ?? data.fuel_gal
+            ?? data.gallons_rem
+            ?? data.Gallons_Rem
+            ?? data.Fuel_Remaining
+            ?? 0;
     }
 
     /**

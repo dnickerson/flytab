@@ -286,7 +286,7 @@ class FlightRecorder {
         const row = [
             time12, d.MP||0, d.Oil_Temp||0, d.Oil_Press||0,
             d.Fuel_Press||0, d.Volts||0, d.Amps||0,
-            rpm, d.Fuel_Flow||0, d.Fuel_Remaining||0,
+            rpm, d.Fuel_Flow||0, (eng?.fuel?.fuel_remaining || d.Fuel_Remaining || 0),
             d.Fuel_Left||0, d.Fuel_Right||0, d.Carb_Temp||0,
             d.GP2||'', d.GP3||'', d.Thermo||0,
             d.EGT1||0, d.EGT2||0, d.EGT3||0, d.EGT4||0,
