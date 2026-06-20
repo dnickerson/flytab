@@ -1,6 +1,6 @@
 # FlyTab User Manual
 
-**Version 8.89 · RV-9A N194JT**
+**Version 9.75 · RV-9A N194JT**
 
 ---
 
@@ -28,30 +28,37 @@ FlyTab connects automatically on app launch. The status bar at the top shows con
 ## Screen Layout
 
 ```
-┌──────────────────────────────────────────────────┐
-│ GPS  FIS-B  OFFL  NASR  WX  HH:MM  ML  ZOOM  v8 │  ← Status Bar
-├──────────────────────────────────────────────────┤
-│                                                  │
-│              Moving Map                          │  ← Primary View
-│                                                  │
-│  [≡]                          [⊙] [→] [⋮]       │  ← Corner buttons
-├──────────────────────────────────────────────────┤
-│ NEXT  ——  DEST  ——  GS  —kt  ALT  ——  FUEL  —gal│  ← Nav Strip
-├──────────────────────────────────────────────────┤
-│  🗺 MAP  ✈ APT  ⚙ ENG  ✅ CHK  📻 CLR  ⊟ CMPCT ⋯ │  ← Tab Bar
-└──────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────┐
+│  GPS  ⚠  FIS-B  OFFL  NASR  ML  REC  12:34  z9   v9  │ ← Status bar
+├───────────────────────────────────────────────────────┤
+│ ┌──────┐                              │   125 kt      │
+│ │ L  R │                              │   GS          │ ← Instrument
+│ │▐▌ ▐▌ │        Moving Map           │               │   strip
+│ │  ⊷  │                              │  3,500 ft     │   (right edge)
+│ │ 3.2G │                  ✈          │   ALT         │
+│ │ 2:45 │              own-ship       │               │
+│ └──────┘                        ⊙  →  ⋮              │
+│  Fuel widget                                          │
+│  (top-left)      [FIS-B ⇄] radar badge (bottom-left) │
+├───────────────────────────────────────────────────────┤
+│  NEXT  ——   DEST  ——   GS  ——kt  ALT  ——  FUEL  ——    │ ← Nav strip
+├───────────────────────────────────────────────────────┤
+│  ≡  │ 🗺MAP │ ✈APT │ ⚙ENG │ ✅CHK │ 📻CLR │ ⊟CMPCT │ ⋯ │ ← Tab bar
+└───────────────────────────────────────────────────────┘
+       ↑ LAYERS (far left, opens layer panel)        ↑ MORE
 ```
 
-**Status bar** — always visible. Shows connection state, database age, weather fetch time, UTC/local time, and app version.
+**Status bar** — always visible at the top. Badges show connection state and alerts from left to right: GPS fix, weather advisory (⚠, when active), FIS-B, internet, NASR age, engine ML, flight recording, UTC clock, map zoom level, app version.
 
-**Nav strip** — always visible below the map. Shows next waypoint, destination, ground speed, altitude, range, and fuel. Tap any field to change which six fields are displayed.
+**Map area** — fills most of the screen. Key floating elements:
+- **Fuel tanks widget** (top-left) — L/R tank bars, GPH, endurance. Tap **L**/**R** to switch active tank; tap **✎** to edit quantities.
+- **Instrument strip** (right edge) — ground speed and altitude at a glance.
+- **Radar source badge** (bottom-left, when radar is active) — shows active source (FIS-B or INET) with a `⇄` tap target to switch.
+- **Corner buttons** (bottom-right of map): **⊙** auto-pan toggle, **→** direct-to, **⋮** map menu.
 
-**Tab bar** — bottom of screen. Seven tabs.
+**Nav strip** — always visible below the map. Shows six configurable fields (default: next waypoint, destination, ground speed, altitude, range, fuel). Tap any field to change it.
 
-**Corner buttons** (top-right of map):
-- **⊙** — Toggle auto-pan. When lit, map follows own-ship. Tap to unlock and pan freely; tap again to re-center.
-- **→** — Direct-to. Tap an airport on the map, then tap → to set it as a direct destination without creating a full route.
-- **⋮** — Map menu (additional map actions).
+**Tab bar** — seven tabs along the bottom. **≡ LAYERS** at the far left opens the layer and weather toggle panel. **⋯ MORE** at the far right opens the secondary-functions drawer.
 
 ---
 
