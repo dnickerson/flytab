@@ -32,6 +32,7 @@ class InetRadarSource {
         this._frames = [];
         this._layers = [];
         this._loopActive = false;
+        this._baseOpacity = Settings.radarOpacity || 0.5;
         this.sourceType = 'inet';
         this._buildLayers();
     }
@@ -46,7 +47,7 @@ class InetRadarSource {
 
     drawLive() {
         if (!this._loopActive && this._radarLayer) {
-            this._radarLayer.setOpacity(Settings.radarOpacity || 0.5);
+            this._radarLayer.setOpacity(this._baseOpacity ?? Settings.radarOpacity ?? 0.5);
         }
     }
 
@@ -58,7 +59,7 @@ class InetRadarSource {
     exitLoopMode() {
         this._loopActive = false;
         this._layers.forEach(l => l.setOpacity(0));
-        if (this._radarLayer) this._radarLayer.setOpacity(Settings.radarOpacity || 0.5);
+        if (this._radarLayer) this._radarLayer.setOpacity(this._baseOpacity ?? Settings.radarOpacity ?? 0.5);
     }
 
     drawFrame(index) {
@@ -98,6 +99,13 @@ class InetRadarSource {
         this._frames = [];
         this._radarLayer = null;
         this._map = null;
+    }
+
+    setBaseOpacity(opacity) {
+        this._baseOpacity = opacity;
+        if (!this._loopActive && this._radarLayer) {
+            this._radarLayer.setOpacity(opacity);
+        }
     }
 }
 
