@@ -64,7 +64,7 @@ class InetRadarSource {
 
     drawFrame(index) {
         if (index < 0 || index >= this._layers.length) return;
-        const opacity = Settings.radarOpacity || 0.5;
+        const opacity = this._baseOpacity ?? Settings.radarOpacity ?? 0.5;
         this._layers.forEach((l, i) => l.setOpacity(i === index ? opacity : 0));
     }
 
