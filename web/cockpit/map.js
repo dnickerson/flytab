@@ -121,6 +121,8 @@ class CockpitMap {
         this.routeLayer = null;
         this.rangeRings = null;
         this.radarLayer = null;
+        this._radarSource = 'fisb';   // 'fisb' | 'inet'; loaded from localStorage at radar enable
+        this._inetRadarSource = null;
         this.trackLogLine = null;
         this._autoPan = Settings.autoPan;
         this._initialized = false;
@@ -757,41 +759,42 @@ class CockpitMap {
 
     toggleRadar(on) {
         if (on && !this.radarLayer) {
-            // Activate FIS-B NEXRAD canvas overlay first so _active is correct below
+            // Load persisted source preference; default to FIS-B
+            this._radarSource = localStorage.getItem('flytab_radar_source') || 'fisb';
+
+            // Always attach FIS-B canvas to DOM so frame accumulation and CB building work
+            // regardless of which source is currently displayed.
             if (this._fisbNexrad) this._fisbNexrad.addTo(this.map);
 
-            const fisbHasBlocks = (this._fisbNexrad?.blockCount ?? 0) > 0;
-            // Internet tile — dimmed when FIS-B has live data, full opacity otherwise
+            // Internet tile — always added to map; opacity set by _applyRadarSource below
             this.radarLayer = L.tileLayer(
                 'https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913/{z}/{x}/{y}.png',
                 {
-                    opacity: fisbHasBlocks ? 0.3 : (Settings.radarOpacity || 0.5),
-                    minNativeZoom: 6,   // IEM returns "Zoom Level Not Supported" below z6
+                    opacity: 0,   // _applyRadarSource sets correct opacity immediately after
+                    minNativeZoom: 6,
                     maxZoom: 14,
                     updateWhenZooming: false,
                     attribution: 'NEXRAD © Iowa State Mesonet',
                 }
             );
             this.radarLayer.addTo(this.map);
-            // Badge — show immediately on enable, then refresh every 30 s
+
+            // Tell FisbNexrad about the internet tile so CB building can sample it
+            if (this._fisbNexrad) this._fisbNexrad.setCbInternetLayer(this.radarLayer);
+
+            // Internet source — always created; preloads 12 IEM tile layers at opacity 0
+            this._inetRadarSource = new InetRadarSource(this.map, this.radarLayer);
+
+            // Start loop on internet (safe starting point — IEM always has 12 frames)
+            if (this._radarLoop) this._radarLoop.setNexrad(this._inetRadarSource);
+
+            // Apply the correct source immediately (sets opacities, switches loop if FIS-B ready)
+            this._applyRadarSource(this._radarSource);
+
+            // Badge — show immediately, refresh every 30 s
             this._updateRadarBadge();
             if (!this._radarBadgeTimer) {
                 this._radarBadgeTimer = setInterval(() => this._updateRadarBadge(), 30000);
-            }
-            // Tell FisbNexrad about the internet tile layer so CB building can sample it
-            if (this._fisbNexrad) this._fisbNexrad.setCbInternetLayer(this.radarLayer);
-            // Internet source — always used as the initial loop source so playback works
-            // immediately (12 IEM frames) regardless of FIS-B frame history.
-            this._inetRadarSource = new InetRadarSource(this.map, this.radarLayer);
-            if (this._radarLoop) {
-                // Start with internet tiles — works right away with 12 frames.
-                // onFisbNexradLoopReady() will switch to FIS-B once it has 2+ frames.
-                this._radarLoop.setNexrad(this._inetRadarSource);
-                // If FIS-B was running before radar was enabled and already has enough frames,
-                // switch immediately rather than waiting for the next snapshot event.
-                if ((this._fisbNexrad?.frameHistory.length ?? 0) >= 2) {
-                    this.onFisbNexradLoopReady();
-                }
             }
         } else if (!on && this.radarLayer) {
             if (this._fisbNexrad) {
@@ -816,7 +819,6 @@ class CockpitMap {
      * onFisbNexradLoopReady() fires (2+ historical frames available).
      */
     onFisbNexradData() {
-        if (this.radarLayer) this.radarLayer.setOpacity(0.3);
         if (this.radarLayer) this._updateRadarBadge();
     }
 
@@ -826,6 +828,7 @@ class CockpitMap {
      * internet tile fallback to the FIS-B canvas renderer.
      */
     onFisbNexradLoopReady() {
+        if (this._radarSource !== 'fisb') return;
         if (this._radarLoop && this._fisbNexrad) {
             this._radarLoop.setNexrad(this._fisbNexrad);
         }
@@ -853,6 +856,34 @@ class CockpitMap {
     /** Adjust internet radar tile opacity (dim when FIS-B active, full when sole source) */
     setRadarTileOpacity(opacity) {
         if (this.radarLayer) this.radarLayer.setOpacity(opacity);
+    }
+
+    _applyRadarSource(source) {
+        if (source === 'fisb') {
+            if (this._fisbNexrad) this._fisbNexrad.show();
+            if (this._inetRadarSource) this._inetRadarSource.setBaseOpacity(0);
+            if (this.radarLayer) this.radarLayer.setOpacity(0);
+            if (this._radarLoop && this._fisbNexrad &&
+                    (this._fisbNexrad.frameHistory.length ?? 0) >= 2) {
+                this._radarLoop.setNexrad(this._fisbNexrad);
+            }
+            // else: loop stays on _inetRadarSource until onFisbNexradLoopReady() fires
+        } else {
+            if (this._fisbNexrad) this._fisbNexrad.hide();
+            const opacity = Settings.radarOpacity || 0.5;
+            if (this._inetRadarSource) this._inetRadarSource.setBaseOpacity(opacity);
+            if (this.radarLayer) this.radarLayer.setOpacity(opacity);
+            if (this._radarLoop && this._inetRadarSource) {
+                this._radarLoop.setNexrad(this._inetRadarSource);
+            }
+        }
+    }
+
+    _toggleRadarSource() {
+        this._radarSource = (this._radarSource === 'fisb') ? 'inet' : 'fisb';
+        localStorage.setItem('flytab_radar_source', this._radarSource);
+        this._applyRadarSource(this._radarSource);
+        this._updateRadarBadge();
     }
 
     // ========== Own-ship ==========
