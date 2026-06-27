@@ -220,10 +220,13 @@ class LayerPanel {
             });
         }
 
-        // Wire SIGMET toggle
+        // Wire SIGMET toggle — always start ON regardless of saved state.
+        // SIGMETs are safety-critical; a saved "off" pref must not silently hide them
+        // at next startup (the typical failure: user saves defaults while testing the
+        // hide toggle, then forgets, and SIGMETs vanish permanently across sessions).
         const sigmetInput = this._panel.querySelector('.lp-toggle input[data-action="sigmets"]');
         if (sigmetInput) {
-            sigmetInput.checked = saved?.actions?.['sigmets'] ?? true;
+            sigmetInput.checked = true; // always ON at startup
             sigmetInput.addEventListener('change', () => {
                 if (sigmetInput.checked) window.app?.fisbWeather?.showSigmets();
                 else window.app?.fisbWeather?.hideSigmets();
@@ -793,6 +796,9 @@ class LayerPanel {
         this._panel.querySelectorAll('input[data-action]').forEach(input => {
             const key = input.dataset.action;
             if (toggleKeys.has(key) || !(key in act)) return;
+            // Skip sigmets on startup — init() forces them ON unconditionally; a saved
+            // "off" pref must not silently remove the safety layer at next boot.
+            if (key === 'sigmets' && fromInit) return;
             const prev = input.checked;
             input.checked = act[key];
             if (fromInit || prev !== act[key]) input.dispatchEvent(new Event('change'));

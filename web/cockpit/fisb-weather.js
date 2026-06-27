@@ -337,8 +337,10 @@ class FisbWeatherDisplay {
             if (idx >= 0) {
                 this._airmetPolygons[idx].layer?.removeLayer(this._airmetPolygons[idx].polygon);
                 this._airmetPolygons.splice(idx, 1);
-                this._seenAdvisoryKeys.delete(key);
             }
+            // Always remove from seenKeys — FL200-filtered AIRMETs have a key in seenKeys
+            // but no polygon entry; without this delete the key leaks forever.
+            this._seenAdvisoryKeys.delete(key);
         }
         this._internetAirmetKeys = newAirKeys;
 
@@ -349,8 +351,7 @@ class FisbWeatherDisplay {
         for (const a of (airmets || [])) {
             const key = FisbWeatherDisplay._normKey(a.raw);
             if (this._seenAdvisoryKeys.has(key)) continue;
-            this._addAirmet(a);
-            newCount++;
+            if (this._addAirmet(a)) newCount++;
         }
 
         if (newCount > 0) {
@@ -665,14 +666,13 @@ class FisbWeatherDisplay {
 
     _addAirmet(airmet) {
         const key = FisbWeatherDisplay._normKey(airmet.raw);
-        if (this._seenAdvisoryKeys.has(key)) return;
-        this._seenAdvisoryKeys.add(key);
+        if (this._seenAdvisoryKeys.has(key)) return false;
         // FZLVL G-AIRMETs are LINEs (freezing-level contours, often only 2 points
         // for short segments). Other AIRMETs are AREAs and need ≥ 3 points to form
         // a polygon.
         const isLine = airmet.geometryType === 'LINE';
         const minPoints = isLine ? 2 : 3;
-        if (!airmet.points || airmet.points.length < minPoints) return;
+        if (!airmet.points || airmet.points.length < minPoints) return false;
 
         // Classify by hazard field first (G-AIRMET), then fall back to raw text (FIS-B/text AIRMET)
         const hazard = (airmet.hazard || '').toUpperCase();
@@ -687,7 +687,7 @@ class FisbWeatherDisplay {
         let color, label, layer;
         if (isTango) {
             const baseFt = parseAltFt(airmet.base);
-            if (baseFt != null && baseFt >= 20000) return; // above FL200 — irrelevant for RV-9A
+            if (baseFt != null && baseFt >= 20000) return false; // above FL200 — irrelevant for RV-9A
             color = '#ffcc00'; label = 'AIRMET TANGO (Turbulence)'; layer = this._airmetTangoLayer;
         } else if (isZulu) {
             color = '#00ccff'; label = 'AIRMET ZULU (Icing)';       layer = this._airmetZuluLayer;
@@ -696,6 +696,10 @@ class FisbWeatherDisplay {
         } else {
             color = '#ffaa00'; label = 'AIRMET';                     layer = this._airmetOtherLayer;
         }
+
+        // Mark as seen only after all early-return checks — FL200-filtered items are not
+        // marked so the eviction loop can cleanly delete the key when the AIRMET expires.
+        this._seenAdvisoryKeys.add(key);
 
         const shape = isLine
             ? L.polyline(airmet.points, { color, weight: 2, opacity: 0.7, dashArray: '6,4' })
@@ -711,6 +715,7 @@ class FisbWeatherDisplay {
             layer,
             isLine,
         });
+        return true;
     }
 
     // ========== Advisory Toast & Panel ==========
