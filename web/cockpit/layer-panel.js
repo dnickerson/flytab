@@ -8,6 +8,7 @@ class LayerPanel {
     // Predefined CONUS regions — bounds verified against actual Pi tile set
     // mb values are precomputed (SEC z5-11 + IFR z7-11) to avoid runtime counting
     static DEFAULTS_KEY = 'flypi_layer_defaults';
+    static _SAFETY_ON_KEYS = new Set(['sigmets', 'tfrs', 'airmets-tango', 'airmets-zulu', 'airmets-sierra', 'airmets-other']);
 
     static REGIONS = [
         { id: 'southeast',     label: 'Southeast',     sub: 'FL GA SC NC TN(e) VA(s)', latMin: 24.0, latMax: 36.5, lonMin: -88.5, lonMax: -74.5, mb: 188 },
@@ -243,7 +244,7 @@ class LayerPanel {
         for (const { action, show, hide } of airmetTypes) {
             const input = this._panel.querySelector(`.lp-toggle input[data-action="${action}"]`);
             if (input) {
-                input.checked = saved?.actions?.[action] ?? true;
+                input.checked = true; // always ON at startup — safety critical
                 input.addEventListener('change', () => {
                     if (input.checked) window.app?.fisbWeather?.[show]?.();
                     else               window.app?.fisbWeather?.[hide]?.();
@@ -263,7 +264,7 @@ class LayerPanel {
         // Wire TFR toggle
         const tfrInput = this._panel.querySelector('.lp-toggle input[data-action="tfrs"]');
         if (tfrInput) {
-            tfrInput.checked = saved?.actions?.['tfrs'] ?? true;
+            tfrInput.checked = true; // always ON at startup — safety critical
             tfrInput.addEventListener('change', () => {
                 window.app?.cockpitMap?.toggleTfrs(tfrInput.checked);
             });
@@ -796,9 +797,9 @@ class LayerPanel {
         this._panel.querySelectorAll('input[data-action]').forEach(input => {
             const key = input.dataset.action;
             if (toggleKeys.has(key) || !(key in act)) return;
-            // Skip sigmets on startup — init() forces them ON unconditionally; a saved
-            // "off" pref must not silently remove the safety layer at next boot.
-            if (key === 'sigmets' && fromInit) return;
+            // Skip safety-critical weather overlays — always forced ON at init and kept ON
+            // through explicit resets; a saved "off" pref must never silently hide them.
+            if (LayerPanel._SAFETY_ON_KEYS.has(key)) return;
             const prev = input.checked;
             input.checked = act[key];
             if (fromInit || prev !== act[key]) input.dispatchEvent(new Event('change'));

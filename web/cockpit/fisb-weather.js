@@ -326,8 +326,10 @@ class FisbWeatherDisplay {
             if (idx >= 0) {
                 this._sigmetLayer.removeLayer(this._sigmetPolygons[idx].polygon);
                 this._sigmetPolygons.splice(idx, 1);
-                this._seenAdvisoryKeys.delete(key);
             }
+            // Always remove from seenKeys even when no polygon entry exists — same
+            // pattern as AIRMET eviction below.
+            this._seenAdvisoryKeys.delete(key);
         }
         this._internetSigmetKeys = newSigKeys;
 
@@ -338,8 +340,10 @@ class FisbWeatherDisplay {
                 this._airmetPolygons[idx].layer?.removeLayer(this._airmetPolygons[idx].polygon);
                 this._airmetPolygons.splice(idx, 1);
             }
-            // Always remove from seenKeys — FL200-filtered AIRMETs have a key in seenKeys
-            // but no polygon entry; without this delete the key leaks forever.
+            // Always remove from seenKeys even when no polygon entry exists (idx < 0).
+            // FL200-filtered AIRMETs are never added to seenKeys (they return false before
+            // the add), so this delete is a no-op for them — but any future code path that
+            // adds a key before the altitude check would otherwise cause a permanent leak.
             this._seenAdvisoryKeys.delete(key);
         }
         this._internetAirmetKeys = newAirKeys;
