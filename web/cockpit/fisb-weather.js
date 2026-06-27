@@ -341,9 +341,9 @@ class FisbWeatherDisplay {
                 this._airmetPolygons.splice(idx, 1);
             }
             // Always remove from seenKeys even when no polygon entry exists (idx < 0).
-            // FL200-filtered AIRMETs are never added to seenKeys (they return false before
-            // the add), so this delete is a no-op for them — but any future code path that
-            // adds a key before the altitude check would otherwise cause a permanent leak.
+            // Filtered AIRMETs (FL200 Tango, bad geometry) are marked in seenKeys to
+            // dedup FIS-B rebroadcasts but have no polygon — the always-delete here
+            // cleans up their seenKeys entry when they expire from the internet batch.
             this._seenAdvisoryKeys.delete(key);
         }
         this._internetAirmetKeys = newAirKeys;
@@ -371,6 +371,11 @@ class FisbWeatherDisplay {
                 // Mid-session new advisory — show immediately
                 this._showAdvisoryToast();
             }
+        } else if (!this._startupComplete && !this._startupToastTimer) {
+            // First fetch produced no visible advisories (e.g. only FL200-filtered Tango
+            // AIRMETs in the batch). Mark startup done so future mid-flight arrivals show
+            // immediately rather than taking the 3s startup debounce.
+            this._startupComplete = true;
         }
         this._updateAdvisoryBadge();
     }
@@ -676,7 +681,10 @@ class FisbWeatherDisplay {
         // a polygon.
         const isLine = airmet.geometryType === 'LINE';
         const minPoints = isLine ? 2 : 3;
-        if (!airmet.points || airmet.points.length < minPoints) return false;
+        if (!airmet.points || airmet.points.length < minPoints) {
+            this._seenAdvisoryKeys.add(key); // dedup FIS-B rebroadcasts of malformed advisories
+            return false;
+        }
 
         // Classify by hazard field first (G-AIRMET), then fall back to raw text (FIS-B/text AIRMET)
         const hazard = (airmet.hazard || '').toUpperCase();
@@ -691,7 +699,10 @@ class FisbWeatherDisplay {
         let color, label, layer;
         if (isTango) {
             const baseFt = parseAltFt(airmet.base);
-            if (baseFt != null && baseFt >= 20000) return false; // above FL200 — irrelevant for RV-9A
+            if (baseFt != null && baseFt >= 20000) {
+                this._seenAdvisoryKeys.add(key); // dedup FIS-B rebroadcasts of high-altitude advisories
+                return false; // above FL200 — irrelevant for RV-9A
+            }
             color = '#ffcc00'; label = 'AIRMET TANGO (Turbulence)'; layer = this._airmetTangoLayer;
         } else if (isZulu) {
             color = '#00ccff'; label = 'AIRMET ZULU (Icing)';       layer = this._airmetZuluLayer;
@@ -701,8 +712,6 @@ class FisbWeatherDisplay {
             color = '#ffaa00'; label = 'AIRMET';                     layer = this._airmetOtherLayer;
         }
 
-        // Mark as seen only after all early-return checks — FL200-filtered items are not
-        // marked so the eviction loop can cleanly delete the key when the AIRMET expires.
         this._seenAdvisoryKeys.add(key);
 
         const shape = isLine

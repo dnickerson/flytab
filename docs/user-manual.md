@@ -262,6 +262,8 @@ At the bottom of the layer panel are two buttons:
 
 Defaults are stored on-device and persist across app restarts. To change the defaults, configure the layers however you want and tap **Save as Defaults** again.
 
+> **Note:** SIGMETs, TFRs, and all AIRMET types (Tango, Zulu, Sierra) always start ON regardless of saved defaults. These overlays are safety-critical and cannot be permanently disabled through the defaults system — if you turn them off, they will be back on at the next app launch or when you tap **Reset to Defaults**.
+
 ---
 
 ## Weather Features in Detail
