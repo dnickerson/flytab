@@ -5304,6 +5304,13 @@ body {
     font-size: 13px;
 }
 
+/* Radar loop transport/scrubber: hidden while any full-screen overlay is open.
+   body.fs-overlay-open is derived from the DOM by TabBar._initOverlayWatcher()
+   — do not toggle it manually. !important beats RadarLoop's inline display. */
+body.fs-overlay-open .radar-loop-controls {
+    display: none !important;
+}
+
 /* ========== CONUS Radar Page (full-screen, own map) ========== */
 .radar-page { position: fixed; top: 0; left: 0; right: 0; bottom: var(--tab-bar-height); z-index: 4000; background: var(--bg-primary); display: flex; flex-direction: column; }
 .radar-page-header { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-bottom: 2px solid var(--border-strong); }

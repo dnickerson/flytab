@@ -15,6 +15,7 @@ class TabBar {
     init() {
         this._buildTabBar();
         this._buildMoreDrawer();
+        this._initOverlayWatcher();
 
         // Layer panel close → restore MAP tab highlight
         if (this._comps.layerPanel) {
@@ -106,14 +107,6 @@ class TabBar {
         if (c.radarPage?.hide) c.radarPage.hide();
         if (c.airportPopup?.close) c.airportPopup.close();
 
-        // Hide radar loop controls when leaving map — they bleed through
-        // full-screen panels in Android WebView despite lower z-index.
-        if (tabId !== 'map' && tabId !== 'more' && tabId !== 'layers') {
-            this._hideRadarControls();
-        } else if (tabId === 'map') {
-            this._restoreRadarControls();
-        }
-
         if (tabId === 'layers') {
             this._openLayersPanel();
         } else if (tabId === 'map') {
@@ -160,17 +153,14 @@ class TabBar {
                         ? c.approachCharts._showPlate(c.approachCharts._plateIdx)
                         : c.approachCharts.showForRoute();
                 }
-                this._hideRadarControls();
                 this._closeMoreDrawer();
             }},
             { icon: '🌧', label: 'Radar', action: () => {
                 c.radarPage?.show();
-                this._hideRadarControls();
                 this._closeMoreDrawer();
             }},
             { icon: '🧠', label: 'Engine ML', action: () => {
                 this._closeMoreDrawer();
-                this._hideRadarControls();
                 this._showMLMonitor();
             }},
             { icon: '📡', label: 'Stratux Status', action: () => {
@@ -182,7 +172,6 @@ class TabBar {
             { type: 'section', label: 'Pre / Post flight' },
             { icon: '⛽', label: 'Fuel Entry', action: () => {
                 if (c.fuelOverlay?.show) c.fuelOverlay.show();
-                this._hideRadarControls();
                 this._closeMoreDrawer();
             }},
             { icon: '✈️', label: 'Plan on flywhere.app', action: () => {
@@ -191,22 +180,18 @@ class TabBar {
             }},
             { icon: '⛅', label: 'Weather Briefing', action: () => {
                 if (c.wxBriefing?.show) c.wxBriefing.show();
-                this._hideRadarControls();
                 this._closeMoreDrawer();
             }},
             { icon: '⚖️', label: 'Weight & Balance', action: () => {
                 if (c.wbOverlay?.show) c.wbOverlay.show();
-                this._hideRadarControls();
                 this._closeMoreDrawer();
             }},
             { icon: '📋', label: 'Logbook', action: () => {
                 if (c.logbook?.show) c.logbook.show();
-                this._hideRadarControls();
                 this._closeMoreDrawer();
             }},
             { icon: '📤', label: 'Flight Upload', action: () => {
                 if (c.flightUpload?.show) c.flightUpload.show();
-                this._hideRadarControls();
                 this._closeMoreDrawer();
             }},
             { icon: '📖', label: 'User Manual', action: () => {
@@ -217,12 +202,10 @@ class TabBar {
             { type: 'section', label: 'Admin' },
             { icon: '🗄', label: 'Data Status', admin: true, action: () => {
                 if (c.dataStatus?.show) c.dataStatus.show();
-                this._hideRadarControls();
                 this._closeMoreDrawer();
             }},
             { icon: '⚙', label: 'Configuration', admin: true, action: () => {
                 if (c.configEditor?.show) c.configEditor.show();
-                this._hideRadarControls();
                 this._closeMoreDrawer();
             }},
             { icon: '🔄', label: 'Reset NASR Data', admin: true, action: () => {
@@ -301,14 +284,59 @@ class TabBar {
 
     // ========== Radar Loop Visibility ==========
 
-    _hideRadarControls() {
-        const rl = this._comps.radarLoop;
-        if (rl?._active) rl._hideControls();
-    }
+    /**
+     * The radar loop transport/scrubber must be hidden while any full-screen
+     * overlay is open (it bleeds through panels in the Android WebView despite
+     * lower z-index) and must reappear when the pilot lands back on the map —
+     * regardless of HOW the overlay was closed (its own ✕, backdrop tap, tab).
+     *
+     * Visibility is derived from the DOM instead of paired hide/restore calls:
+     * a MutationObserver mirrors "any full-screen overlay visible" onto
+     * body.fs-overlay-open, and style.css hides .radar-loop-controls under
+     * that class. A new full-screen overlay only needs its root selector
+     * added to FS_OVERLAY_SELECTORS.
+     */
+    static FS_OVERLAY_SELECTORS = [
+        '.fuel-overlay', '.wb-overlay', '.wx-briefing-page', '.logbook-page',
+        '.data-status-page', '.config-editor-page', '.approach-picker',
+        '.approach-viewer', '.radar-page', '.engine-page-overlay',
+        '.checklist-page', '.clr-overlay', '.fisb-status-page', '.ps-overlay',
+        '.ml-monitor', '.esearch-overlay', '#flytabManualOverlay',
+    ].join(',');
 
-    _restoreRadarControls() {
-        const rl = this._comps.radarLoop;
-        if (rl?._active) rl._showControls();
+    _initOverlayWatcher() {
+        const SEL = TabBar.FS_OVERLAY_SELECTORS;
+        const isShown = (el) =>
+            el.checkVisibility ? el.checkVisibility() : el.getClientRects().length > 0;
+
+        const apply = () => {
+            const any = [...document.querySelectorAll(SEL)].some(isShown);
+            if (any !== document.body.classList.contains('fs-overlay-open')) {
+                document.body.classList.toggle('fs-overlay-open', any);
+            }
+        };
+
+        const touchesOverlay = (m) => {
+            if (m.type === 'childList') {
+                for (const n of [...m.addedNodes, ...m.removedNodes]) {
+                    if (n.nodeType === 1 &&
+                        (n.matches?.(SEL) || n.querySelector?.(SEL))) return true;
+                }
+                return false;
+            }
+            return m.target.nodeType === 1 && m.target.matches?.(SEL);
+        };
+
+        this._overlayObserver = new MutationObserver((mutations) => {
+            if (mutations.some(touchesOverlay)) apply();
+        });
+        this._overlayObserver.observe(document.body, {
+            subtree: true,
+            childList: true,
+            attributes: true,
+            attributeFilter: ['style', 'class'],
+        });
+        apply();
     }
 
     // ========== ML Monitor ==========
