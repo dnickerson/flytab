@@ -17,6 +17,7 @@ class FuelOverlay {
         this._coefficients = FuelEngine.DEFAULT_COEFFICIENTS;
         this._cachedCsvEdmFuel = 0;
         this._shownAt = 0;
+        this._applying = false;
         this._buildDOM();
     }
 
@@ -395,13 +396,20 @@ class FuelOverlay {
         let isStale = false;
         try {
             const panel = window.enginePanel;
-            if (panel && panel.lastData) {
+            // Freshness only controls the "(LAST)" label here — unlike _resolveEdmFuel()
+            // (a one-shot resolution used when confirming a fuel-state entry, which must
+            // stay strict), this is a passive preview and a momentarily-stale or
+            // post-disconnect panel reading is still better than substituting a CSV
+            // value from a different, earlier flight. Only fall through to the CSV
+            // cache when the panel has never reported anything this session.
+            const panelFresh = panel?.lastPollTime &&
+                (Date.now() - panel.lastPollTime) < FuelState.EDM_FRESHNESS_MS;
+            if (panel?.lastData) {
                 edmFuel = FuelEngine.extractEdmFuel(panel.lastData);
-                if (panel.lastPollTime) {
-                    isStale = (Date.now() - panel.lastPollTime) >= FuelState.EDM_FRESHNESS_MS;
-                }
+                isStale = !panelFresh;
             }
-            // Fallback: cached value from last flight CSV (loaded on show())
+            // Fallback: cached value from last flight CSV (loaded on show()) — only
+            // when the panel has no reading at all.
             if (!edmFuel && this._cachedCsvEdmFuel > 0) {
                 edmFuel = this._cachedCsvEdmFuel;
                 isStale = true;
@@ -443,6 +451,9 @@ class FuelOverlay {
     _applyMeasurement() {
         // Guard against tap-through: ignore if overlay just opened (< 600ms ago)
         if (Date.now() - this._shownAt < 600) return;
+        // Guard against double-tap during the async EDM resolve (can take 3-5s)
+        if (this._applying) return;
+        this._applying = true;
 
         // Resolve EDM fuel async, then complete measurement
         this._resolveEdmFuel().then(edmFuel => {
@@ -464,7 +475,8 @@ class FuelOverlay {
             // Sync authoritative tic measurement to Pi so both systems agree
             this._syncFuelSetToEngine(m.total_gal, 'Preflight tic mark measurement');
             this.hide();
-        }).catch(err => console.error('[FuelOverlay] applyMeasurement failed:', err));
+        }).catch(err => console.error('[FuelOverlay] applyMeasurement failed:', err))
+          .finally(() => { this._applying = false; });
     }
 
     /**
@@ -727,12 +739,19 @@ class FuelOverlay {
             const edmEntries = history.filter(m => m.edm_gal > 0).map(m => ({
                 ts: m.measured_at ? new Date(m.measured_at).getTime() : (m.ts || 0),
                 edm: m.edm_gal,
+                tic: m.total_gal || 0,
             })).sort((a, b) => a.ts - b.ts);
 
             for (let i = 1; i < edmEntries.length; i++) {
-                const drop = edmEntries[i - 1].edm - edmEntries[i].edm;
-                // Only count decreases (fuel was consumed, not added)
-                if (drop > 0) totalUsed += drop;
+                const edmDrop = edmEntries[i - 1].edm - edmEntries[i].edm;
+                const ticDrop = edmEntries[i - 1].tic - edmEntries[i].tic;
+                // Require EDM decreased and tic didn't increase — filters out post-refuel
+                // entries where tic increases (fuel added) but EDM still shows the stale
+                // pre-refuel value, which would produce a false "fuel used" reading.
+                // ticDrop === 0 is kept: the tic scale is quantized to 0.5 gal steps and
+                // can legitimately read flat between two close measurements while EDM
+                // shows real consumption.
+                if (edmDrop > 0 && ticDrop >= 0) totalUsed += edmDrop;
             }
         } catch (_) { /* */ }
 

@@ -68,7 +68,7 @@ class InetRadarSource {
         // _baseOpacity is 0 when FIS-B is the *display* source (live tile hidden).
         // But when the loop drives this source it is the only radar on screen —
         // loop frames must never inherit that 0 or playback is invisible.
-        const opacity = this._baseOpacity > 0 ? this._baseOpacity : (Settings.radarOpacity || 0.5);
+        const opacity = this._baseOpacity > 0 ? this._baseOpacity : (Settings.radarOpacity ?? 0.5);
         this._layers.forEach((l, i) => l.setOpacity(i === index ? opacity : 0));
     }
 

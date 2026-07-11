@@ -744,6 +744,20 @@ class LayerPanel {
     }
 
     _resetToDefaults(fromInit = false) {
+        // Safety-critical weather overlays are forced ON on every explicit reset —
+        // even when the pilot has never tapped "Save as Defaults" — per the user
+        // manual ("back on ... when you tap Reset to Defaults"). This must run
+        // unconditionally, before the no-saved-defaults early return below, or a
+        // fresh install / never-saved session leaves manually-disabled safety
+        // overlays off forever.
+        LayerPanel._SAFETY_ON_KEYS.forEach(key => {
+            const input = this._panel.querySelector(`input[data-action="${key}"]`);
+            if (!input) return;
+            const prev = input.checked;
+            input.checked = true;
+            if (fromInit || !prev) input.dispatchEvent(new Event('change'));
+        });
+
         const raw = localStorage.getItem(LayerPanel.DEFAULTS_KEY);
         if (!raw) return;
         let saved;
@@ -797,9 +811,16 @@ class LayerPanel {
         this._panel.querySelectorAll('input[data-action]').forEach(input => {
             const key = input.dataset.action;
             if (toggleKeys.has(key) || !(key in act)) return;
-            // Skip safety-critical weather overlays — always forced ON at init and kept ON
-            // through explicit resets; a saved "off" pref must never silently hide them.
-            if (LayerPanel._SAFETY_ON_KEYS.has(key)) return;
+            // Safety-critical weather overlays ignore the saved pref and are forced ON —
+            // both at init and on every explicit Reset to Defaults — so a pilot who
+            // turned one off mid-session gets it back the moment they tap reset, per
+            // the user manual ("back on ... when you tap Reset to Defaults").
+            if (LayerPanel._SAFETY_ON_KEYS.has(key)) {
+                const prev = input.checked;
+                input.checked = true;
+                if (fromInit || !prev) input.dispatchEvent(new Event('change'));
+                return;
+            }
             const prev = input.checked;
             input.checked = act[key];
             if (fromInit || prev !== act[key]) input.dispatchEvent(new Event('change'));

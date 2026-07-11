@@ -301,7 +301,8 @@ class TabBar {
         '.data-status-page', '.config-editor-page', '.approach-picker',
         '.approach-viewer', '.radar-page', '.engine-page-overlay',
         '.checklist-page', '.clr-overlay', '.fisb-status-page', '.ps-overlay',
-        '.ml-monitor', '.esearch-overlay', '#flytabManualOverlay',
+        '.ml-monitor', '.esearch-overlay', '#flytabManualOverlay', '.eg-overlay',
+        '.pfb-overlay', '.pfc-overlay', '.plan-picker-overlay', '#thermalDetail',
     ].join(',');
 
     _initOverlayWatcher() {

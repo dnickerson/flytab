@@ -7297,9 +7297,12 @@ body.fs-overlay-open .radar-loop-controls {
     border: 1px solid var(--border);
 }
 .lp-defaults-reset--no-saved {
+    /* Dimmed only as a hint that no custom snapshot is saved — must stay
+       tappable: _resetToDefaults() always restores safety-critical SIGMET/
+       TFR/AIRMET overlays regardless of saved-defaults state, so a real
+       pointer-events:none here would make that recovery path unreachable
+       by touch on a fresh install / never-saved session. */
     opacity: 0.4;
-    cursor: default;
-    pointer-events: none;
 }
 .lp-defaults-confirm {
     text-align: center;

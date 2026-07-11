@@ -39,8 +39,8 @@ class RadarLoop {
 
     /** Wire the FisbNexrad renderer for frame data */
     setNexrad(nexrad) {
-        if (this._nexrad?.setOnReady) this._nexrad.setOnReady(null); // cancel any pending callback
-        if (nexrad === this._nexrad) return;
+        if (nexrad === this._nexrad) return;   // no-op: leave any pending self-heal callback intact
+        if (this._nexrad?.setOnReady) this._nexrad.setOnReady(null); // cancel outgoing source's callback
 
         const prev = this._nexrad;
         this._nexrad = nexrad;

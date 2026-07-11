@@ -465,8 +465,9 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=5678, help="Port (default: 5678)")
     parser.add_argument("--lat",  type=float, default=OWN_LAT)
     parser.add_argument("--lon",  type=float, default=OWN_LON)
-    parser.add_argument("--replay-nexrad", help="Path to a NEXRAD NDJSON capture to replay on /jsonio (loops at EOF)")
-    parser.add_argument("--replay-weather",
+    replay_group = parser.add_mutually_exclusive_group()
+    replay_group.add_argument("--replay-nexrad", help="Path to a NEXRAD NDJSON capture to replay on /jsonio (loops at EOF)")
+    replay_group.add_argument("--replay-weather",
                         help="Path to a *_weather.ndjson flight capture (FisbLogger format); "
                              "replays NEXRAD/NOTAMs on /jsonio and text products on /weather "
                              "with recorded timing")
