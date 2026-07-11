@@ -6,6 +6,10 @@ Serves /traffic, /situation, /weather, /jsonio on a configurable port.
 Usage:
     python3 tools/mock-stratux.py [--port PORT] [--lat LAT] [--lon LON]
 
+    # Replay a recorded flight's FIS-B weather (from FisbLogger *_weather.ndjson)
+    # with true recorded timing — NEXRAD on /jsonio, text products on /weather:
+    python3 tools/mock-stratux.py --replay-weather ~/flights/20260710_KLKR-KLKR_weather.ndjson --rate 10 --loop
+
 Default port: 5678 (matches cockpit-config.json simBridgePort default)
 Default position: 35.0, -80.0 (KLKR area)
 
@@ -65,6 +69,11 @@ _start_time = time.time()
 # Path to a NEXRAD NDJSON capture to replay on /jsonio (set in __main__).
 _REPLAY_PATH  = None
 _replay_frames = None   # loaded lazily on first use in _jsonio_loop()
+
+# Weather-capture replay (FisbLogger *_weather.ndjson format; set in __main__).
+_WX_REPLAY_PATH = None
+_WX_REPLAY_RATE = 1.0
+_WX_REPLAY_LOOP = False
 
 # --- Synthetic FIS-B NEXRAD ---------------------------------------------
 BLOCK_H = 4.0 / 60.0          # 0.0667 deg lat  (matches Stratux BLOCK_HEIGHT)
@@ -216,13 +225,156 @@ async def _situation_loop():
         await asyncio.sleep(1.0)
 
 
+# --- Weather-capture replay (FisbLogger *_weather.ndjson) -------------------
+# File format (written by web/shared/fisb-logger.js during every recorded
+# flight): header line {version, flight, dep_at, t0}, then one event per line
+# with t = seconds since t0. Replay converts each event back to the Stratux
+# wire shape FlyTab consumes:
+#   nexrad          → /jsonio  {Product_id, NEXRAD: [NEXRADBlock…], LocaltimeReceived}
+#   notam           → /jsonio  {Product_id, Text}
+#   metar/pirep/
+#   sigmet/airmet/
+#   cwa             → /weather {Type, Data, Location}
+#   winds           → skipped (logger stores the decoded snapshot, not raw FD text)
+# LocaltimeReceived is stamped at SEND time so data-age badges behave as if live.
+
+def _load_weather_replay(path):
+    header, events, skipped = None, [], {}
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if header is None and "t0" in rec and "t" not in rec:
+                header = rec
+                continue
+            if rec.get("t") is None or not rec.get("type"):
+                continue
+            if rec["type"] == "winds":
+                skipped["winds"] = skipped.get("winds", 0) + 1
+                continue
+            events.append(rec)
+    events.sort(key=lambda r: r["t"])
+    return header, events, skipped
+
+
+def _wx_nexrad_msg(rec):
+    """FisbLogger nexrad event → Stratux /jsonio UATFrame."""
+    blocks = [{
+        "Radar_Type": b.get("radarType", 63),
+        "Scale":      b.get("scale", 0),
+        "LatNorth":   b["lat"],
+        "LonWest":    b["lon"],
+        "Height":     b["h"],
+        "Width":      b["w"],
+        "Intensity":  b["intensity"],
+    } for b in rec.get("blocks", []) if b.get("intensity")]
+    if not blocks:
+        return None
+    return {
+        "Product_id":        blocks[0]["Radar_Type"],
+        "NEXRAD":            blocks,
+        "LocaltimeReceived": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+
+
+def _wx_text_msg(rec):
+    """FisbLogger text-product event → Stratux /weather message, or None."""
+    typ = rec["type"]
+    raw = rec.get("raw", "")
+    if not raw:
+        return None
+    if typ == "metar":
+        wx_type, location = "METAR", rec.get("icao", "")
+    elif typ == "pirep":
+        wx_type, location = ("UUA" if rec.get("urgent") else "PIREP"), ""
+    elif typ == "sigmet":
+        st = (rec.get("sigmetType") or "sigmet").lower()
+        wx_type = "CONVECTIVE SIGMET" if "conv" in st else "SIGMET"
+        location = rec.get("location") or ""
+    elif typ == "airmet":
+        wx_type, location = "AIRMET", rec.get("location") or ""
+    elif typ == "cwa":
+        wx_type, location = "CWA", ""
+    else:
+        return None
+    return {
+        "Type":              wx_type,
+        "Location":          location,
+        "Time":              "",
+        "Data":              raw,
+        "LocaltimeReceived": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+
+
+async def _weather_replay_loop():
+    header, events, skipped = _load_weather_replay(_WX_REPLAY_PATH)
+    if not events:
+        print(f"  [wx-replay] no events in {_WX_REPLAY_PATH} — nothing to replay")
+        return
+
+    by_type = {}
+    for r in events:
+        by_type[r["type"]] = by_type.get(r["type"], 0) + 1
+    dur = events[-1]["t"]
+    print(f"  [wx-replay] {len(events)} events over {dur}s "
+          f"({dur / max(_WX_REPLAY_RATE, 0.001):.0f}s at {_WX_REPLAY_RATE}x): "
+          + ", ".join(f"{k}={v}" for k, v in sorted(by_type.items()))
+          + (f"  [skipped: {skipped}]" if skipped else ""))
+    if header:
+        print(f"  [wx-replay] flight {header.get('flight')} dep {header.get('dep_at')}")
+    if events[0]["t"] > 0:
+        print(f"  [wx-replay] first event at t+{events[0]['t']}s — the pre-reception "
+              f"gap is replayed too (raise --rate to compress)")
+
+    while True:
+        # Start the clock only when FlyTab is actually listening, so t=0 aligns
+        # with app startup — reproduces "loop opened before any frames existed".
+        while not (_jsonio_clients or _weather_clients):
+            await asyncio.sleep(0.5)
+        print(f"  [wx-replay] client connected — replay starting at {_WX_REPLAY_RATE}x")
+        start = time.time()
+        sent = 0
+        for rec in events:
+            delay = start + rec["t"] / _WX_REPLAY_RATE - time.time()
+            if delay > 0:
+                await asyncio.sleep(delay)
+            typ = rec["type"]
+            if typ == "nexrad":
+                msg = _wx_nexrad_msg(rec)
+                if msg:
+                    await _broadcast(_jsonio_clients, msg)
+                    sent += 1
+            elif typ == "notam":
+                if rec.get("raw"):
+                    await _broadcast(_jsonio_clients,
+                                     {"Product_id": rec.get("pid") or 11, "Text": rec["raw"]})
+                    sent += 1
+            else:
+                msg = _wx_text_msg(rec)
+                if msg:
+                    await _broadcast(_weather_clients, msg)
+                    sent += 1
+        print(f"  [wx-replay] finished ({sent} messages sent)")
+        if not _WX_REPLAY_LOOP:
+            return
+        print("  [wx-replay] looping")
+
+
 async def _jsonio_loop():
     """Emit NEXRAD frames to /jsonio clients every 5 seconds.
 
     If --replay-nexrad was given, replay the captured NDJSON frames (looping at
     EOF); otherwise emit synthetic frames from _nexrad_frame(tick).
+    Suppressed entirely when --replay-weather drives /jsonio instead.
     """
     global _replay_frames
+    if _WX_REPLAY_PATH:
+        return
     # Load the replay file once, if configured.
     if _REPLAY_PATH and _replay_frames is None:
         try:
@@ -299,12 +451,12 @@ async def main(host, port):
     print(f'  "simBridgePort": {port}')
     print()
 
+    tasks = [_traffic_loop(), _situation_loop(), _jsonio_loop()]
+    if _WX_REPLAY_PATH:
+        tasks.append(_weather_replay_loop())
+
     async with websockets.serve(handler, host, port):
-        await asyncio.gather(
-            _traffic_loop(),
-            _situation_loop(),
-            _jsonio_loop(),
-        )
+        await asyncio.gather(*tasks)
 
 
 if __name__ == "__main__":
@@ -314,11 +466,22 @@ if __name__ == "__main__":
     parser.add_argument("--lat",  type=float, default=OWN_LAT)
     parser.add_argument("--lon",  type=float, default=OWN_LON)
     parser.add_argument("--replay-nexrad", help="Path to a NEXRAD NDJSON capture to replay on /jsonio (loops at EOF)")
+    parser.add_argument("--replay-weather",
+                        help="Path to a *_weather.ndjson flight capture (FisbLogger format); "
+                             "replays NEXRAD/NOTAMs on /jsonio and text products on /weather "
+                             "with recorded timing")
+    parser.add_argument("--rate", type=float, default=1.0,
+                        help="Replay speed multiplier for --replay-weather (default 1.0)")
+    parser.add_argument("--loop", action="store_true",
+                        help="Restart weather replay at EOF")
     args = parser.parse_args()
 
     OWN_LAT = args.lat
     OWN_LON = args.lon
     _REPLAY_PATH = args.replay_nexrad
+    _WX_REPLAY_PATH = args.replay_weather
+    _WX_REPLAY_RATE = max(args.rate, 0.001)
+    _WX_REPLAY_LOOP = args.loop
 
     try:
         asyncio.run(main(args.host, args.port))
