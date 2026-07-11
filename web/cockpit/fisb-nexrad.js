@@ -188,6 +188,16 @@ class FisbNexrad {
     /** Get frame history for radar loop playback */
     get frameHistory() { return this._frameHistory; }
 
+    /** Register a callback fired whenever new loop frames become available
+     *  (live snapshot or IDB hydration). RadarLoop uses this to self-start
+     *  playback when it opened before any frames existed. Pass null to clear. */
+    setOnReady(cb) { this._onReady = cb; }
+
+    _fireOnReady() {
+        if (!this._onReady) return;
+        try { this._onReady(); } catch (_) {}
+    }
+
     /** Get current block count */
     get blockCount() { return this._blocks.size; }
 
@@ -199,8 +209,12 @@ class FisbNexrad {
         return this._latestDataTime ? Date.now() - this._latestDataTime : null;
     }
 
-    /** Draw the live (current) radar view — for use by RadarLoop when exiting loop mode */
-    drawLive() { this._draw(); }
+    /** Draw the live (current) radar view — for use by RadarLoop when exiting loop mode.
+     *  Bypasses the loop-mode guard: RadarLoop calls this deliberately (no-frames fallback). */
+    drawLive() {
+        if (!this._active || !this._mainTarget || this._visible === false) return;
+        this._drawToTarget(this._mainTarget, ['conus', 'regional'], this._blocks);
+    }
 
     // ========== NEXRAD Block Handling ==========
 
@@ -278,6 +292,7 @@ class FisbNexrad {
             this._frameHistory.shift();
         }
         this._persistFrame(this._frameHistory[this._frameHistory.length - 1]);
+        this._fireOnReady();
     }
 
     _openDb() {
@@ -371,6 +386,7 @@ class FisbNexrad {
                 this._loopReadyFired = true;
                 window.app?.cockpitMap?.onFisbNexradLoopReady?.();
             }
+            if (this._frameHistory.length > 0) this._fireOnReady();
         } catch (err) {
             if (typeof DiagLog !== 'undefined') DiagLog.log('error', `radar hydrate failed: ${err.message}`);
         }
@@ -406,7 +422,10 @@ class FisbNexrad {
         this._drawToTarget(target, product, this._blocks);
     }
 
-    /** Draw a block map (live or snapshot) of one product onto a target's canvas. */
+    /** Draw a block map (live or snapshot) onto a target's canvas.
+     *  product: a single product string or an ordered array — earlier entries are
+     *  drawn first, so ['conus','regional'] renders the coarse CONUS mosaic
+     *  underneath the finer Regional blocks (fills beyond regional coverage). */
     _drawToTarget(target, product, blockMap) {
         const { map, canvas, ctx } = target;
         if (!ctx || !map) return;
@@ -419,22 +438,26 @@ class FisbNexrad {
         ctx.globalAlpha = this._opacity;
         const bounds = map.getBounds();
         const zoom = map.getZoom();
+        const products = Array.isArray(product) ? product : [product];
 
-        for (const [, block] of blockMap) {
-            if (FisbNexrad._productOf(block) !== product) continue;
-            const blockS = block.latN - block.height;
-            const blockE = block.lonW + block.width;
-            if (block.latN < bounds.getSouth() || blockS > bounds.getNorth()) continue;
-            if (blockE < bounds.getWest() || block.lonW > bounds.getEast()) continue;
-            this._drawBlock(ctx, map, block, zoom);
+        for (const p of products) {
+            for (const [, block] of blockMap) {
+                if (FisbNexrad._productOf(block) !== p) continue;
+                const blockS = block.latN - block.height;
+                const blockE = block.lonW + block.width;
+                if (block.latN < bounds.getSouth() || blockS > bounds.getNorth()) continue;
+                if (blockE < bounds.getWest() || block.lonW > bounds.getEast()) continue;
+                this._drawBlock(ctx, map, block, zoom);
+            }
         }
         ctx.globalAlpha = 1.0;
     }
 
-    /** Draw the main-map live view — Regional product only. */
+    /** Draw the main-map live view. Suppressed in loop mode — the purge timer and
+     *  any other periodic caller must never overwrite loop playback frames. */
     _draw() {
-        if (!this._active || !this._mainTarget || this._visible === false) return;
-        this._drawToTarget(this._mainTarget, 'regional', this._blocks);
+        if (this._loopMode) return;
+        this.drawLive();
     }
 
     /** Draw a single NEXRAD block */

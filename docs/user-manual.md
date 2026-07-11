@@ -160,7 +160,7 @@ Opens a right-side drawer with infrequently used actions, organized in three sec
 |---|---|
 | **Timer** | Floating countdown/count-up overlay — stays visible over any tab. Use for holding, approach timing, or any en-route interval. Tap again to dismiss without losing state. |
 | **Approach Charts** | Georeferenced approach plates overlaid on the map |
-| **Radar (CONUS)** | Full-screen CONUS NEXRAD view centered on ownship. Tap **Recenter on me** to return to ownship position after panning. A badge shows the data source and age (e.g. *FIS-B · CONUS · 4 min*). Use the play/scrub loop at the bottom to animate up to ~55 minutes of history and gauge storm movement. The main map shows the higher-resolution Regional product; this page shows the full CONUS mosaic for situational awareness at a wider scale. |
+| **Radar (CONUS)** | Full-screen CONUS NEXRAD view centered on ownship. Tap **Recenter on me** to return to ownship position after panning. A badge shows the data source and age (e.g. *FIS-B · CONUS · 4 min*). Use the play/scrub loop at the bottom to animate up to ~55 minutes of history and gauge storm movement. The main map shows the higher-resolution Regional product (with the CONUS mosaic drawn underneath where Regional coverage ends); this page shows the full CONUS mosaic for situational awareness at a wider scale. |
 | **Engine ML** | Opens the real-time ML anomaly monitor |
 | **Stratux Status** | Opens the Stratux web interface in a browser |
 
@@ -283,7 +283,11 @@ Intensity levels follow NWS N0Q color coding:
 
 **Radar loop** — Once radar is enabled, swipe the bottom slider left to step backward through ~55 minutes of history. Watch the progression to see which direction storms are moving.
 
-**Radar source toggle** — The badge in the lower-left corner of the map shows the active radar source and a `⇄` symbol. Tap it to switch between FIS-B (regional blocks from Stratux) and Internet (IEM tile mosaic). The choice is remembered across sessions. FIS-B gives higher update rates in the air (every 2.5 min); Internet is the default on the ground when Stratux is not connected.
+**Radar source toggle** — The badge in the lower-left corner of the map shows the active radar source and a `⇄` symbol. Tap it to switch your *preferred* source between FIS-B (regional blocks from Stratux) and Internet (IEM tile mosaic). The preference is remembered across sessions.
+
+**Automatic source failover** — FlyTab watches both sources and automatically shows whichever one actually has data. On the ground (no FIS-B towers in range) a FIS-B preference falls back to Internet; in the air (no internet on Stratux WiFi) an Internet preference falls back to FIS-B. When a fallback is active the badge shows the failed source with a ✕, e.g. `Internet ✕ → FIS-B · Regional · 2 min`. When your preferred source becomes available again, FlyTab switches back automatically. You never need to toggle the source manually for a normal ground → air → ground flight.
+
+**CONUS underlay** — The map draws the coarse FIS-B CONUS mosaic underneath the finer Regional blocks, so precipitation beyond Regional coverage (~150 nm from received towers) no longer cuts off at a hard edge. Distant returns look blockier — that is the CONUS product resolution, not a rendering fault.
 
 ### CB Building Polygons
 

@@ -26,9 +26,10 @@ class InetRadarSource {
         { offset:   0, product: 'nexrad-n0q-900913' },
     ];
 
-    constructor(map, radarLayer) {
+    constructor(map, radarLayer, isOnline) {
         this._map = map;
         this._radarLayer = radarLayer;  // live current tile — hidden while loop plays
+        this._isOnline = isOnline || null;  // () => bool; null = assume online
         this._frames = [];
         this._layers = [];
         this._loopActive = false;
@@ -64,7 +65,10 @@ class InetRadarSource {
 
     drawFrame(index) {
         if (index < 0 || index >= this._layers.length) return;
-        const opacity = this._baseOpacity ?? Settings.radarOpacity ?? 0.5;
+        // _baseOpacity is 0 when FIS-B is the *display* source (live tile hidden).
+        // But when the loop drives this source it is the only radar on screen —
+        // loop frames must never inherit that 0 or playback is invisible.
+        const opacity = this._baseOpacity > 0 ? this._baseOpacity : (Settings.radarOpacity || 0.5);
         this._layers.forEach((l, i) => l.setOpacity(i === index ? opacity : 0));
     }
 
@@ -86,6 +90,9 @@ class InetRadarSource {
     }
 
     refresh() {
+        // Offline (in flight): redraw() would discard loaded tiles and the refetch
+        // would fail, blanking every frame. Keep what we have.
+        if (this._isOnline && !this._isOnline()) return;
         const now = Date.now();
         this._layers.forEach(l => l.redraw());
         this._frames = InetRadarSource.PRODUCTS.map(({ offset }) => ({
@@ -121,7 +128,10 @@ class CockpitMap {
         this.routeLayer = null;
         this.rangeRings = null;
         this.radarLayer = null;
-        this._radarSource = 'fisb';   // 'fisb' | 'inet'; loaded from localStorage at radar enable
+        this._radarSource = 'fisb';   // preference: 'fisb' | 'inet'; loaded from localStorage at radar enable
+        this._radarSourceEffective = null;  // what is actually shown after availability failover
+        this._inetOk = null;          // internet reachability from radar tile results
+        this._inetErrCount = 0;
         this._inetRadarSource = null;
         this.trackLogLine = null;
         this._autoPan = Settings.autoPan;
@@ -777,24 +787,46 @@ class CockpitMap {
                     attribution: 'NEXRAD © Iowa State Mesonet',
                 }
             );
+            // Internet reachability from live tile results. navigator.onLine is useless
+            // on Stratux WiFi (connected, but no route to the internet) — tile outcomes
+            // are the only real signal. Drives automatic source failover.
+            this._inetOk = null;   // null = unknown (optimistic), true, false
+            this._inetErrCount = 0;
+            this.radarLayer.on('tileload', () => {
+                this._inetErrCount = 0;
+                if (this._inetOk !== true) {
+                    this._inetOk = true;
+                    this._autoSelectRadarSource();
+                }
+            });
+            this.radarLayer.on('tileerror', () => {
+                if (++this._inetErrCount >= 3 && this._inetOk !== false) {
+                    this._inetOk = false;
+                    this._autoSelectRadarSource();
+                }
+            });
             this.radarLayer.addTo(this.map);
 
             // Tell FisbNexrad about the internet tile so CB building can sample it
             if (this._fisbNexrad) this._fisbNexrad.setCbInternetLayer(this.radarLayer);
 
             // Internet source — always created; preloads 12 IEM tile layers at opacity 0
-            this._inetRadarSource = new InetRadarSource(this.map, this.radarLayer);
+            this._inetRadarSource = new InetRadarSource(this.map, this.radarLayer, () => this._inetOk !== false);
 
             // Start loop on internet (safe starting point — IEM always has 12 frames)
             if (this._radarLoop) this._radarLoop.setNexrad(this._inetRadarSource);
 
-            // Apply the correct source immediately (sets opacities, switches loop if FIS-B ready)
-            this._applyRadarSource(this._radarSource);
+            // Apply the best available source immediately (sets opacities, switches loop)
+            this._radarSourceEffective = null;
+            this._autoSelectRadarSource();
 
-            // Badge — show immediately, refresh every 30 s
+            // Badge — show immediately; re-evaluate source + badge every 30 s
             this._updateRadarBadge();
             if (!this._radarBadgeTimer) {
-                this._radarBadgeTimer = setInterval(() => this._updateRadarBadge(), 30000);
+                this._radarBadgeTimer = setInterval(() => {
+                    this._autoSelectRadarSource();
+                    this._updateRadarBadge();
+                }, 30000);
             }
         } else if (!on && this.radarLayer) {
             if (this._fisbNexrad) {
@@ -807,6 +839,7 @@ class CockpitMap {
             }
             this.map.removeLayer(this.radarLayer);
             this.radarLayer = null;
+            this._radarSourceEffective = null;
             // Hide badge and stop refresh timer
             if (this._radarBadge) this._radarBadge.style.display = 'none';
             clearInterval(this._radarBadgeTimer); this._radarBadgeTimer = null;
@@ -815,11 +848,12 @@ class CockpitMap {
 
     /**
      * Called by FisbNexrad when it receives its first live data block.
-     * Dims the background internet tile — loop source stays on internet until
-     * onFisbNexradLoopReady() fires (2+ historical frames available).
+     * May flip the effective source to FIS-B if it is the preferred source.
      */
     onFisbNexradData() {
-        if (this.radarLayer) this._updateRadarBadge();
+        if (!this.radarLayer) return;
+        this._autoSelectRadarSource();
+        this._updateRadarBadge();
     }
 
     /**
@@ -828,10 +862,46 @@ class CockpitMap {
      * internet tile fallback to the FIS-B canvas renderer.
      */
     onFisbNexradLoopReady() {
-        if (this._radarSource !== 'fisb') return;
+        if ((this._radarSourceEffective ?? this._radarSource) !== 'fisb') return;
         if (this._radarLoop && this._fisbNexrad) {
             this._radarLoop.setNexrad(this._fisbNexrad);
         }
+    }
+
+    /** FIS-B radar considered usable when either product has data fresher than 20 min. */
+    _fisbRadarAvailable() {
+        if (!this._fisbNexrad) return false;
+        const ages = [
+            this._fisbNexrad.getDataAgeMs('regional'),
+            this._fisbNexrad.getDataAgeMs('conus'),
+        ].filter(a => a != null);
+        return ages.length > 0 && Math.min(...ages) < 20 * 60000;
+    }
+
+    /**
+     * Resolve which source can actually show radar right now.
+     * The persisted preference wins when its data is available; otherwise fall
+     * back to the other source if IT has data. Ground: FIS-B pref falls back to
+     * internet (no towers on the ground). Air: internet pref falls back to FIS-B
+     * (Stratux WiFi has no internet). Neither available → preference (blank until
+     * data arrives, badge shows why).
+     */
+    _resolveRadarSource() {
+        const fisbOk = this._fisbRadarAvailable();
+        const inetOk = this._inetOk !== false;   // unknown = optimistic
+        if (this._radarSource === 'fisb') return fisbOk ? 'fisb' : (inetOk ? 'inet' : 'fisb');
+        return inetOk ? 'inet' : (fisbOk ? 'fisb' : 'inet');
+    }
+
+    /** Apply the resolved source if it changed. Idempotent; safe to call from timers. */
+    _autoSelectRadarSource() {
+        if (!this.radarLayer) return;   // radar off
+        const eff = this._resolveRadarSource();
+        if (eff === this._radarSourceEffective) return;
+        this._radarSourceEffective = eff;
+        if (typeof DiagLog !== 'undefined') DiagLog.log('radar', `source auto-select: pref=${this._radarSource} effective=${eff} inetOk=${this._inetOk} fisbOk=${this._fisbRadarAvailable()}`);
+        this._applyRadarSource(eff);
+        this._updateRadarBadge();
     }
 
     _updateRadarBadge() {
@@ -863,14 +933,17 @@ class CockpitMap {
 
         el.style.display = 'block';   // always visible while radar is on
 
-        if (this._radarSource === 'inet') {
-            el.textContent = 'Internet · NEXRAD  ⇄';
+        // Show the EFFECTIVE source; mark auto-fallback when it differs from the preference.
+        const pref = this._radarSource;
+        const eff  = this._radarSourceEffective ?? pref;
+        if (eff === 'inet') {
+            el.textContent = (pref === 'fisb' ? 'FIS-B ✕ → ' : '') + 'Internet · NEXRAD  ⇄';
             return;
         }
         // FIS-B mode
         const ageMs = this._fisbNexrad.getDataAgeMs('regional');
         const age = ageMs == null ? '--' : Math.round(ageMs / 60000);
-        el.textContent = `FIS-B · Regional · ${age} min  ⇄`;
+        el.textContent = (pref === 'inet' ? 'Internet ✕ → ' : '') + `FIS-B · Regional · ${age} min  ⇄`;
     }
 
     toggleCbBuilding(on) {
@@ -885,8 +958,10 @@ class CockpitMap {
             // This inline check is load-bearing: once _loopReadyFired is true,
             // onFisbNexradLoopReady() never re-fires, so toggling back to FIS-B
             // after a session in internet mode must switch the loop source here.
+            // Also switch when the internet is unreachable: blank INET frames are
+            // useless in flight — FIS-B self-starts via setOnReady as frames arrive.
             if (this._radarLoop && this._fisbNexrad &&
-                    (this._fisbNexrad.frameHistory.length ?? 0) >= 2) {
+                    ((this._fisbNexrad.frameHistory.length ?? 0) >= 2 || this._inetOk === false)) {
                 this._radarLoop.setNexrad(this._fisbNexrad);
             }
             // else: loop stays on _inetRadarSource until onFisbNexradLoopReady() fires
@@ -904,7 +979,9 @@ class CockpitMap {
     _toggleRadarSource() {
         this._radarSource = (this._radarSource === 'fisb') ? 'inet' : 'fisb';
         localStorage.setItem('flytab_radar_source', this._radarSource);
-        this._applyRadarSource(this._radarSource);
+        // Re-resolve availability against the new preference (may still fall back)
+        this._radarSourceEffective = null;
+        this._autoSelectRadarSource();
         this._updateRadarBadge();
     }
 

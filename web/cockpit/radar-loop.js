@@ -20,7 +20,8 @@ class RadarLoop {
 
         // Target + product for FIS-B canvas rendering. null target → use renderer's _mainTarget.
         this._target  = opts.target  || null;     // {map,canvas,ctx}; null → renderer's main target
-        this._product = opts.product || 'regional';
+        // CONUS drawn under Regional so playback isn't cut off at regional coverage edge
+        this._product = opts.product || ['conus', 'regional'];
 
         // Config
         this._speedMs = CockpitConfig.get('radar.playbackSpeedMs') || 500;
@@ -56,9 +57,31 @@ class RadarLoop {
                 this._updateFrameCount();
                 this._goToFrame(frames.length - 1);
                 this.play();
+            } else {
+                // New source has no frames yet (e.g. FIS-B just after startup) —
+                // show its live data if any and self-start when frames arrive.
+                this._showNoData();
+                if (nexrad?.hasData) nexrad.drawLive?.();
+                this._wireOnReady();
             }
         }
         this._updateSourceBadge();
+    }
+
+    /** Register the frames-arrived self-heal on the current source (if it supports it). */
+    _wireOnReady() {
+        if (!this._nexrad?.setOnReady) return;
+        this._nexrad.setOnReady(() => {
+            if (!this._active) return;
+            const f = this._nexrad.frameHistory;
+            if (f.length === 0) return;
+            this._updateFrameCount();
+            // Don't yank the scrubber if the pilot is already watching playback
+            if (!this._playing) {
+                this._goToFrame(f.length - 1);
+                this.play();
+            }
+        });
     }
 
     // ========== Public API ==========
@@ -97,18 +120,9 @@ class RadarLoop {
             if (this._nexrad?.hasData) {
                 this._nexrad.drawLive();
             }
-            // Self-heal: if frames arrive asynchronously (e.g. RainViewer finishes loading
-            // after show() returns), start playback automatically.
-            if (this._nexrad?.setOnReady) {
-                this._nexrad.setOnReady(() => {
-                    if (!this._active) return;
-                    const f = this._nexrad.frameHistory;
-                    if (f.length === 0) return;
-                    this._updateFrameCount();
-                    this._goToFrame(f.length - 1);
-                    this.play();
-                });
-            }
+            // Self-heal: if frames arrive asynchronously (FIS-B snapshot or IDB
+            // hydration completing after show() returns), start playback automatically.
+            this._wireOnReady();
         }
     }
 
