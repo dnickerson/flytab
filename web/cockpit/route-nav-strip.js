@@ -82,7 +82,7 @@ class RouteNavStrip {
             <div class="rnav-compact">
                 <div class="rnav-row rnav-active-row">
                     <span class="rnav-wpt" data-field="wpt">---</span>
-                    <span class="rnav-cell" data-field="hdg"><span class="rnav-lbl">HDG</span><span class="rnav-val">---</span></span>
+                    <span class="rnav-cell" data-field="hdg"><span class="rnav-lbl">CRS</span><span class="rnav-val">---</span></span>
                     <span class="rnav-cell" data-field="dist"><span class="rnav-lbl">DIST</span><span class="rnav-val">---</span></span>
                     <span class="rnav-cell" data-field="ete"><span class="rnav-lbl">ETE</span><span class="rnav-val">---</span></span>
                     <span class="rnav-cell" data-field="alt"><span class="rnav-lbl">ALT</span><span class="rnav-val">---</span></span>

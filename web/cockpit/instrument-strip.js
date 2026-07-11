@@ -135,7 +135,7 @@ class InstrumentStrip {
             gs:   { label: 'GS',   unit: 'kt'  },
             alt:  { label: 'ALT',  unit: 'ft'  },
             vs:   { label: 'VS',   unit: 'fpm' },
-            hdg:  { label: 'HDG',  unit: '°'   },
+            hdg:  { label: 'CRS',  unit: '°'   },
             fuel: { label: 'FUEL', unit: 'gal' },
             dist: { label: 'DIST', unit: 'nm'  },
             dest: { label: 'DEST', unit: 'nm'  },
@@ -239,7 +239,7 @@ class InstrumentStrip {
         const d = this._legData;
         if (!d) return;
 
-        // HDG — wind-corrected magnetic heading
+        // CRS — wind-corrected magnetic course to steer to the active waypoint (not current aircraft heading)
         const hdg = d.hdg != null ? Math.round(d.hdg) : null;
         this._set('hdg', hdg != null ? hdg : '—');
 

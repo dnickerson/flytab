@@ -388,7 +388,7 @@ class EmergencyGlide {
                     </div>
                     <div class="eg-apt-detail">
                         ${apt._distNm} nm
-                        &nbsp;·&nbsp; hdg ${String(apt._hdg).padStart(3, '0')}°
+                        &nbsp;·&nbsp; crs ${String(apt._hdg).padStart(3, '0')}°
                         &nbsp;·&nbsp; ${rwyLen} ${surface}${descentStr}
                     </div>
                 </div>
@@ -469,7 +469,7 @@ class EmergencyGlide {
 
                 <div class="eg-approach-strip">
                     <div class="eg-ap-cell">
-                        <div class="eg-approach-label">HDG</div>
+                        <div class="eg-approach-label">CRS</div>
                         <div class="eg-approach-value" id="eg-ap-hdg">—°</div>
                     </div>
                     <div class="eg-ap-cell">
