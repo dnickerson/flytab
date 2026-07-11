@@ -80,6 +80,7 @@ class InetRadarSource {
                 opacity: 0,
                 minNativeZoom: 6,   // IEM returns "Zoom Level Not Supported" below z6
                 maxZoom: 14,
+                zIndex: 195,        // above chart rasters (100/110), below live radar (200)
                 updateWhenZooming: false,
                 attribution: 'NEXRAD © Iowa State Mesonet',
             });
@@ -342,12 +343,20 @@ class CockpitMap {
                        : 'http://localhost:9090/tiles';
         console.log('[FlyTab] Tile base:', tileBase);
 
+        // Tile z-index bands — stacking must NOT depend on addTo() order.
+        // switchBaseLayer() re-adds chart layers at runtime; without explicit
+        // zIndex a re-added chart lands after (above) the radar tile layers in
+        // the tile pane and NEXRAD renders invisibly underneath the chart.
+        // Bands: base charts 100, IFR area inset 110, radar loop frames 195,
+        // live radar 200 (see toggleRadar / InetRadarSource).
+
         // FAA Sectional — 256px tiles, z5-11
         this._sectionalLayer = L.tileLayer(`${tileBase}/sectional/{z}/{x}/{y}.webp`, {
             minZoom: 5,
             minNativeZoom: 5,
             maxNativeZoom: 11,
             maxZoom: 14,
+            zIndex: 100,
             tms: false,
             updateWhenZooming: false,
             keepBuffer: 1,
@@ -363,6 +372,7 @@ class CockpitMap {
             minNativeZoom: 4,
             maxNativeZoom: 10,
             maxZoom: 14,
+            zIndex: 100,
             tms: false,
             updateWhenZooming: false,
             keepBuffer: 1,
@@ -379,6 +389,7 @@ class CockpitMap {
             minNativeZoom: 10,
             maxNativeZoom: 12,
             maxZoom: 14,
+            zIndex: 110,
             tms: false,
             updateWhenZooming: false,
             keepBuffer: 1,
@@ -399,6 +410,7 @@ class CockpitMap {
             minNativeZoom: 8,
             maxNativeZoom: 12,
             maxZoom: 14,
+            zIndex: 100,
             tms: false,
             updateWhenZooming: false,
             keepBuffer: 1,
@@ -783,6 +795,7 @@ class CockpitMap {
                     opacity: 0,   // _applyRadarSource sets correct opacity immediately after
                     minNativeZoom: 6,
                     maxZoom: 14,
+                    zIndex: 200,  // above chart rasters (100/110) — see _setupLayers
                     updateWhenZooming: false,
                     attribution: 'NEXRAD © Iowa State Mesonet',
                 }
