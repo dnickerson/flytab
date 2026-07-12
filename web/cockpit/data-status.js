@@ -323,15 +323,17 @@ class DataStatus {
         }
 
         // ── MBTiles sections ──────────────────────────────────────────────────
-        const mbtilesHtml = [
+        const TILE_LAYERS = [
             { layer: 'sectional', label: 'Sectional Charts (z5–11)',               approxMb: 1800 },
             { layer: 'ifr-low',   label: 'IFR Low Enroute (z4–10, 512px retina)',  approxMb: 600  },
             { layer: 'ifr-area',  label: 'IFR Area Charts (z10–12)',               approxMb: 150  },
             { layer: 'tac',       label: 'Terminal Area Charts (z8–12) — VFR Flyways', approxMb: 250 },
-        ].map(({ layer, label, approxMb }) => {
-            const entry  = mbt.find(l => l.layer === layer);
-            const sTile  = serverManifest?.tiles?.[layer] || null;
-            const dTile  = deviceManifest?.tiles?.[layer] || null;
+        ];
+        const tileStates = []; // captured per-layer so "Sync All" can reuse it below without recomputing
+        const mbtilesHtml = TILE_LAYERS.map(({ layer, label, approxMb }) => {
+            const entry = mbt.find(l => l.layer === layer);
+            const sTile = serverManifest?.tiles?.[layer] || null;
+            const dTile = deviceManifest?.tiles?.[layer] || null;
             const tileUpdateAvail = (() => {
                 if (!entry?.exists || !sTile || !dTile) return false;
                 // Sectional/TAC/IFR tiles run a 56-day cycle; NASR runs 28-day.
@@ -343,36 +345,48 @@ class DataStatus {
                 }
                 return sTile.cycle_date !== dTile.cycle_date || sTile.built_at !== dTile.built_at;
             })();
+            tileStates.push({ layer, exists: !!entry?.exists, updateAvail: tileUpdateAvail });
+
+            const sizeMb = sTile?.size_mb ?? approxMb;
             let serverLine, devLine, badge, action = '';
 
-            serverLine = base
-                ? `~${approxMb.toLocaleString()} MB available`
-                : '<span class="ds-muted">Server not reachable</span>';
+            if (!base) {
+                serverLine = '<span class="ds-muted">Server not reachable</span>';
+            } else if (sTile?.cycle_date) {
+                const expStr = sTile.expiration_date ? ` &rarr; exp ${sTile.expiration_date}` : '';
+                serverLine = `Cycle ${sTile.cycle_date}${expStr}<br><span class="ds-muted">~${sizeMb.toLocaleString()} MB</span>`;
+            } else {
+                serverLine = '<span class="ds-muted">Unavailable</span>';
+            }
 
             if (entry?.exists) {
-                devLine = `${(entry.size_mb || 0).toLocaleString()} MB on tablet`;
+                const cycleStr = dTile?.cycle_date ? `Cycle ${dTile.cycle_date}` : 'On tablet';
+                const builtStr = dTile?.built_at ? ` (built ${dTile.built_at.slice(0, 10)})` : '';
+                devLine = `${cycleStr}${builtStr}<br><span class="ds-muted">${(entry.size_mb || 0).toLocaleString()} MB on tablet</span>`;
+
                 if (tileUpdateAvail) {
                     badge  = this._badge('UPDATE AVAILABLE', 'yellow');
                     action = base ? `<button class="ds-action-btn ds-update ds-mbt-dl-btn" data-layer="${layer}">RE-DOWNLOAD</button>` : '';
                 } else {
-                    badge  = this._badge('ON DEVICE', 'green');
-                    action = base ? `<button class="ds-action-btn ds-mbt-dl-btn" data-layer="${layer}">RE-DOWNLOAD</button>` : '';
+                    const expDate = sTile?.expiration_date ? new Date(sTile.expiration_date)
+                                  : dTile?.expiration_date ? new Date(dTile.expiration_date) : null;
+                    badge  = expDate ? this._cycleStatus(expDate, now) : this._badge('ON DEVICE', 'green');
+                    action = base ? `<button class="ds-action-btn ds-secondary ds-mbt-dl-btn" data-layer="${layer}">SYNC</button>` : '';
                 }
             } else {
                 devLine = '<span class="ds-muted">Not downloaded</span>';
                 badge   = this._badge('NOT DOWNLOADED', 'gray');
-                if (base) action = `<button class="ds-action-btn ds-mbt-dl-btn" data-layer="${layer}">DOWNLOAD (~${approxMb.toLocaleString()} MB)</button>`;
+                if (base) action = `<button class="ds-action-btn ds-mbt-dl-btn" data-layer="${layer}">DOWNLOAD (~${sizeMb.toLocaleString()} MB)</button>`;
             }
 
-            return this._section(label, serverLine, devLine, badge, action);
+            return this._section(label, serverLine, devLine, badge, action, '', true);
         }).join('');
 
         // ── Need Sync? ────────────────────────────────────────────────────────
         const needsSync = !!base && (
             aeroUpdateAvail ||
             (serverHasPlates && (!cycleOkForStates || serverStates.some(s => !syncedStates.includes(s)))) ||
-            !mbt.find(l => l.layer === 'sectional')?.exists ||
-            !mbt.find(l => l.layer === 'ifr-low')?.exists
+            tileStates.some(t => !t.exists || t.updateAvail)
         );
 
         const ts = new Date().toISOString().slice(0, 16).replace('T', ' ') + 'Z';
