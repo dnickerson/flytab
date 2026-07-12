@@ -301,7 +301,7 @@ class DataStatus {
             return `<span class="ds-state-chip ${cls}">${icon} ${st}${sizeTxt}${note}</span>`;
         }).join('');
 
-        const platesIncludesNote = '<span class="ds-muted" style="font-size:10px">Includes: IAP &middot; DP &middot; STAR &middot; Airport Diagrams (DIAG) &middot; Airport Info (A/FD)</span>';
+        const platesIncludesNote = '<span class="ds-muted">Includes: IAP &middot; DP &middot; STAR &middot; Airport Diagrams (DIAG) &middot; Airport Info (A/FD)</span>';
 
         if (!plateDCode && syncedStates.length === 0) {
             platesDevLine = stateChips || '<span class="ds-muted">Not on tablet</span>';

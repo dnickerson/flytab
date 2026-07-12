@@ -157,6 +157,38 @@ const report = (name, ok, detail) => {
         window.app.dataStatus._render(serverManifest, deviceManifest, mbt);
     });
 
+    // ---------- Typography: page-wide token bump (CLAUDE.md Design Token Standards) ----------
+    const typo = await page.evaluate(() => {
+        const body = window.app.dataStatus._el.querySelector('.data-status-body');
+        // _render() draws Aeronautical Database/Terrain/Plates cards too (from the same
+        // call, with mostly-empty fixture data) — the first .ds-section-card in the DOM
+        // is Aeronautical Database, not Sectional. Select by title, same as Task 1.
+        const card = [...body.querySelectorAll('.ds-section-card')]
+            .find(c => c.querySelector('.ds-section-name')?.textContent.includes('Sectional'));
+        const cs = (el) => el ? getComputedStyle(el) : null;
+        const nameEl   = card.querySelector('.ds-section-name');
+        const badgeEl  = card.querySelector('.ds-section-badge .ds-badge');
+        const labelEl  = card.querySelector('.ds-inv-label');
+        const valueEl  = card.querySelector('.ds-inv-row .ds-row-value'); // the primary "Cycle ..." line's span
+        const mutedEl  = card.querySelector('.ds-row-value .ds-muted');  // the "~MB" subline
+        const primaryBtn = card.querySelector('.ds-action-btn:not(.ds-secondary)');
+        return {
+            name:  { size: cs(nameEl).fontSize,  weight: cs(nameEl).fontWeight },
+            badge: { size: cs(badgeEl).fontSize, weight: cs(badgeEl).fontWeight },
+            label: { size: cs(labelEl).fontSize, weight: cs(labelEl).fontWeight },
+            value: { size: cs(valueEl).fontSize, weight: cs(valueEl).fontWeight },
+            muted: { size: cs(mutedEl).fontSize, weight: cs(mutedEl).fontWeight },
+            primaryBtn: primaryBtn ? { size: cs(primaryBtn).fontSize, weight: cs(primaryBtn).fontWeight } : null,
+        };
+    });
+
+    report('.ds-section-name is 17px / weight>=800', typo.name.size === '17px' && parseInt(typo.name.weight) >= 800, JSON.stringify(typo.name));
+    report('.ds-badge is weight>=700 (inherits 15px from .ds-section-badge)', typo.badge.size === '15px' && parseInt(typo.badge.weight) >= 700, JSON.stringify(typo.badge));
+    report('.ds-inv-label is 13px / weight>=700', typo.label.size === '13px' && parseInt(typo.label.weight) >= 700, JSON.stringify(typo.label));
+    report('.ds-row-value is 15px / weight>=700 (was unset/400 — the CLAUDE.md violation)', typo.value.size === '15px' && parseInt(typo.value.weight) >= 700, JSON.stringify(typo.value));
+    report('.ds-muted subline is 13px / weight>=600', typo.muted.size === '13px' && parseInt(typo.muted.weight) >= 600, JSON.stringify(typo.muted));
+    report('.ds-action-btn (primary) is 15px / weight>=700', typo.primaryBtn?.size === '15px' && parseInt(typo.primaryBtn?.weight) >= 700, JSON.stringify(typo.primaryBtn));
+
     const relevant = errors.filter(e => !/favicon|net::|Failed to fetch|NetworkError/i.test(e));
     report('no page JS errors', relevant.length === 0, relevant.slice(0, 3).join(' | '));
 

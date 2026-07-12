@@ -3078,7 +3078,7 @@ body {
     font-weight: 600;
 }
 .ds-badge {
-    font-weight: 600;
+    font-weight: 700;
 }
 .ds-footer {
     text-align: center;
@@ -3119,7 +3119,7 @@ body {
 
 /* Data & Maps — section title */
 .ds-section-title {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     letter-spacing: 0.08em;
     text-transform: uppercase;
@@ -3208,7 +3208,7 @@ body {
     border: 1px solid var(--accent);
     background: var(--accent);
     color: #fff;
-    font-size: 13px;
+    font-size: 15px;
     font-weight: 700;
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
@@ -3217,8 +3217,8 @@ body {
 .ds-action-btn.ds-secondary {
     background: transparent;
     color: var(--accent);
-    font-weight: 600;
-    font-size: 12px;
+    font-weight: 700;
+    font-size: 14px;
     padding: 6px 10px;
 }
 .ds-action-btn.ds-update {
@@ -3313,12 +3313,12 @@ body {
     margin-bottom: 8px;
 }
 .ds-section-name {
-    font-weight: 600;
-    font-size: 15px;
+    font-weight: 800;
+    font-size: 17px;
 }
 .ds-section-badge {
-    font-size: 13px;
-    font-weight: 600;
+    font-size: 15px;
+    font-weight: 700;
     flex-shrink: 0;
     margin-left: 8px;
     text-align: right;
@@ -3328,12 +3328,12 @@ body {
     align-items: flex-start;
     gap: 8px;
     padding: 4px 0;
-    font-size: 13px;
+    font-size: 15px;
     border-top: 1px solid var(--border-light);
 }
 .ds-inv-label {
     color: var(--text-muted);
-    font-size: 11px;
+    font-size: 13px;
     font-weight: 700;
     letter-spacing: 0.05em;
     text-transform: uppercase;
@@ -3345,6 +3345,7 @@ body {
     flex: 1;
     color: var(--text-secondary);
     line-height: 1.4;
+    font-weight: 700;
 }
 .ds-row-multiline {
     flex-wrap: wrap;
@@ -3354,11 +3355,13 @@ body {
 }
 .ds-muted {
     color: var(--text-muted);
+    font-size: 13px;
+    font-weight: 600;
 }
 .ds-state-chip {
     display: inline-block;
-    font-size: 12px;
-    font-weight: 600;
+    font-size: 13px;
+    font-weight: 700;
     padding: 2px 6px;
     border-radius: 4px;
     margin: 2px 2px 2px 0;
