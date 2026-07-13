@@ -156,7 +156,11 @@ and a fixed-window/fixed-timer startup and 10-sample alt-rate buffer (flicker-pr
    dwell-time hysteresis (commit a transition only after N consecutive qualifying
    samples, plus a minimum-hold on the current phase) as the causal analog of the
    batch detector's look-ahead smoothing — no back-filling, since live data has no
-   future to look ahead into.
+   future to look ahead into. Exact per-phase dwell/hysteresis sample counts are a
+   `phase_spec.json` value, not fixed by this doc — they get an initial value derived
+   from the batch detector's existing min-duration constants (`phase_detection_fsm.py`'s
+   `MIN_PHASE_DURATION`) and are tuned during implementation against the golden
+   fixture (§7), not invented here.
 
    **Bridge change:** `phase` becomes an **input** field on `processSample()`,
    computed by the new JS module immediately before the call. `EngineMLPlugin.java`
