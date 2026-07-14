@@ -49,7 +49,23 @@ class PhaseDetector {
             { currentPhase: this._committedPhase, hasTakenOff: this._hasTakenOff, hasLeftRamp: this._hasLeftRamp },
             this._thr,
         );
-        const validated = applyTransition(candidate, this._committedPhase, this._transitions);
+        // Legality is checked against the pending (not-yet-committed)
+        // candidate when one is in progress, falling back to the committed
+        // phase otherwise. Without this, a fast multi-hop signal walk (e.g.
+        // a steep descent crossing descent -> approach -> landing in under
+        // approach's own dwell_seconds) permanently deadlocks the FSM: the
+        // batch detect_phases() commits each graph hop immediately (no
+        // per-hop dwell gate) and only prunes short segments in a
+        // non-causal post-hoc pass, so 'landing' becomes reachable the
+        // instant 'current' has already advanced to 'approach'. This causal
+        // port has no such immediate-commit step, so 'approach' can still
+        // be mid-dwell (not yet committedPhase) when the raw signal moves
+        // on to 'landing' -- checking legality against the pending
+        // candidate as well recognizes that hop as already "in flight" and
+        // lets the FSM continue advancing instead of being stuck rejecting
+        // every future candidate against a stale committedPhase forever.
+        const legalityAnchor = this._pendingCandidate ?? this._committedPhase;
+        const validated = applyTransition(candidate, legalityAnchor, this._transitions);
 
         if (validated === this._committedPhase) {
             this._pendingCandidate = null;
