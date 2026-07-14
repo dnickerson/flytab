@@ -29,7 +29,6 @@ public class EngineMLPlugin extends Plugin {
 
     private InferenceEngine inferenceEngine;
     private ThresholdAdapter thresholdAdapter;
-    private PhaseDetector phaseDetector;
     private EngineAdvisor engineAdvisor;
 
     private float[][] window;
@@ -53,7 +52,6 @@ public class EngineMLPlugin extends Plugin {
             });
 
             thresholdAdapter = new ThresholdAdapter(getContext(), inferenceEngine.getPhaseThresholds());
-            phaseDetector = new PhaseDetector();
             engineAdvisor = new EngineAdvisor();
 
             window = new float[WINDOW_SIZE][N_FEATURES];
@@ -126,8 +124,11 @@ public class EngineMLPlugin extends Plugin {
             windowPos = (windowPos + 1) % WINDOW_SIZE;
             if (windowPos == 0) windowFull = true;
 
-            // Detect phase
-            String phase = phaseDetector.detect(rpm, altitude, groundSpeed);
+            // Read phase from payload (computed in JS by PhaseDetector — see engine-ml.js)
+            String phase = call.getString("phase", "cruise");
+            if (phase == null || phase.isEmpty()) {
+                phase = "cruise";
+            }
 
             // Feed advisor
             engineAdvisor.addSample(features, mp, carbTemp, fuelRemaining, altitude);
