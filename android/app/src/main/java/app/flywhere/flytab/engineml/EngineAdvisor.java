@@ -37,6 +37,15 @@ public class EngineAdvisor {
     private static final float CHT_CAUTION = 400f;
     private static final float CHT_WARNING = 460f;
 
+    // Sticky/stuck-valve check: a cylinder whose EGT hasn't risen with the
+    // others during startup is the cold-cylinder signature (design spec
+    // 2026-06-21-flight-phase-detection-redesign.md §8). THIS THRESHOLD IS
+    // AN UNVALIDATED PLACEHOLDER — no real sticky-valve flight data has been
+    // used to calibrate it. Do not treat an alert from this check as
+    // confirmed until validated against a known-good vs known-sticky
+    // comparison flight.
+    private static final float STICKY_VALVE_LAG_THRESHOLD_F = 150f; // PLACEHOLDER — see comment above
+
     // Trend tracking
     private static final int HISTORY_SIZE = 120; // 2 minutes at 1Hz
     private static final int TREND_WINDOW = 60;  // 1 minute for rate calc
@@ -66,6 +75,10 @@ public class EngineAdvisor {
     private float currentFuelRemaining = 0;
     private float currentAltitude = 0;
 
+    // Sticky-valve check state
+    private float[] startupEntryEgt = null; // EGT1-4 at the moment phase first became "startup" this cycle
+    private String lastPhase = null;
+
     // ── Message output ──────────────────────────────────────
     public static final int SEVERITY_INFO = 0;
     public static final int SEVERITY_CAUTION = 1;
@@ -92,7 +105,7 @@ public class EngineAdvisor {
     /**
      * Record a new sample. Call once per second.
      */
-    public void addSample(float[] features, float mp, float carbTemp, float fuelRemaining, float altitude) {
+    public void addSample(float[] features, String phase, float mp, float carbTemp, float fuelRemaining, float altitude) {
         System.arraycopy(features, 0, history[historyHead], 0, Math.min(features.length, 12));
         mpHistory[historyHead] = mp;
         carbTempHistory[historyHead] = carbTemp;
@@ -103,6 +116,16 @@ public class EngineAdvisor {
         currentCarbTemp = carbTemp;
         currentFuelRemaining = fuelRemaining;
         currentAltitude = altitude;
+
+        // Latch per-cylinder EGT the moment the phase first becomes "startup"
+        // so the sticky-valve check (below) has a baseline to compare rise against.
+        if ("startup".equals(phase) && !"startup".equals(lastPhase)) {
+            startupEntryEgt = new float[4];
+            for (int i = 0; i < 4; i++) {
+                startupEntryEgt[i] = features[IDX_EGT1 + i];
+            }
+        }
+        lastPhase = phase;
     }
 
     /**
@@ -158,7 +181,12 @@ public class EngineAdvisor {
             addCarbIceCheck(advisories);
         }
 
-        // ── 7. Phase-specific normal message if nothing else ──
+        // ── 7. Sticky-valve check (startup phase only, unvalidated threshold) ──
+        if ("startup".equals(phase) && startupEntryEgt != null) {
+            addStickyValveCheck(features, advisories);
+        }
+
+        // ── 8. Phase-specific normal message if nothing else ──
         if (advisories.isEmpty()) {
             if (isAnomaly) {
                 advisories.add(new Advisory("Engine pattern unusual — monitor closely",
@@ -486,6 +514,34 @@ public class EngineAdvisor {
         }
     }
 
+    // ── Sticky-valve check ──────────────────────────────────
+
+    private void addStickyValveCheck(float[] features, List<Advisory> out) {
+        // See STICKY_VALVE_LAG_THRESHOLD_F declaration above for the
+        // unvalidated-placeholder caveat — do not tighten or "fix" this
+        // threshold without real sticky-valve flight data to calibrate against.
+        float[] currentEgt = new float[4];
+        for (int i = 0; i < 4; i++) {
+            currentEgt[i] = features[IDX_EGT1 + i];
+        }
+
+        float maxRise = 0f;
+        for (int i = 0; i < 4; i++) {
+            maxRise = Math.max(maxRise, currentEgt[i] - startupEntryEgt[i]);
+        }
+
+        for (int i = 0; i < 4; i++) {
+            float rise = currentEgt[i] - startupEntryEgt[i];
+            if (maxRise > 100f && (maxRise - rise) > STICKY_VALVE_LAG_THRESHOLD_F) {
+                out.add(new Advisory(
+                        String.format(Locale.US,
+                                "Cylinder %d EGT rise lagging others during startup (possible sticky valve) — UNVALIDATED CHECK, confirm on ground",
+                                i + 1),
+                        SEVERITY_CAUTION, "engine"));
+            }
+        }
+    }
+
     // ── Helpers ─────────────────────────────────────────────
 
     private float egtSpread(float[] features) {
@@ -520,5 +576,7 @@ public class EngineAdvisor {
         currentMP = 0;
         currentCarbTemp = 0;
         currentFuelRemaining = 0;
+        startupEntryEgt = null;
+        lastPhase = null;
     }
 }

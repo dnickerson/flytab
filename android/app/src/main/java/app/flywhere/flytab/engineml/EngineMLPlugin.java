@@ -131,7 +131,7 @@ public class EngineMLPlugin extends Plugin {
             }
 
             // Feed advisor
-            engineAdvisor.addSample(features, mp, carbTemp, fuelRemaining, altitude);
+            engineAdvisor.addSample(features, phase, mp, carbTemp, fuelRemaining, altitude);
 
             JSObject ret = new JSObject();
             ret.put("phase", phase);

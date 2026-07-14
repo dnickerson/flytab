@@ -122,6 +122,8 @@ Live engine data from the Pi. Updates approximately every second.
 
 The **engine advisory banner** (below the status bar, on any tab) appears in red if the ML anomaly detector finds an abnormal pattern in the current engine data. Tap it to see which parameters are outside normal for this phase of flight.
 
+**Sticky-valve caution (startup only)** — During engine start, if one cylinder's EGT rise noticeably lags the other three, you may see "Cylinder N EGT rise lagging others during startup (possible sticky valve) — UNVALIDATED CHECK, confirm on ground." This check is new and its sensitivity has not yet been tuned against a confirmed sticky-valve event — treat an alert as a prompt to inspect on the ground, not a confirmed diagnosis.
+
 The **Engine ML** monitor (MORE → Engine ML) shows the real-time anomaly score, per-feature reconstruction errors, and the current flight phase (ground/climb/cruise/descent). The model was trained on N194JT flight data and knows what this engine normally does in each phase.
 
 ---
