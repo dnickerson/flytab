@@ -70,6 +70,7 @@ A phase may always transition to itself. Legal transitions:
 | `taxi_out → warmup` | Extended stationary hold during taxi (e.g. waiting for traffic) that outlasts the dwell tolerance — reverts to genuine idle rather than staying "taxi." |
 | `taxi_out → shutdown` | Mechanical issue found while taxiing; abort before taking the runway. |
 | `runup → taxi_out` | Runup complete, continuing to the hold-short line / runway. |
+| `taxi_out → takeoff` | **The normal departure path**, not an edge case: real rolling takeoffs start moving (GPS delta exceeds the stationary threshold) several seconds before RPM/MP cross the takeoff threshold — the aircraft is a `taxi_out` candidate for that window. Found missing during offline implementation (Plan 1 Task 4): without this edge the FSM permanently traps in `taxi_out`/`warmup` for the rest of the flight, since no candidate can ever legally leave `taxi_out` except back to `runup`. Isolated fix measured 32.7% → 65.0% agreement against the golden fixture. |
 | `runup → takeoff` | On a small field (e.g. KLKR) the runup pad often sits at the hold-short line — a pilot can roll straight onto the runway with no distinct taxi segment. Disallowing this forces a phantom `taxi_out` blip. |
 | `runup → warmup` | RPM drops back to idle after completing checks, before moving again. |
 | `runup → shutdown` | Mag check (or other runup finding) fails; engine shut down on the pad. |
@@ -88,6 +89,7 @@ A phase may always transition to itself. Legal transitions:
 | `approach → climb` | Go-around / missed approach. Confirmed legal. |
 | `approach → cruise` | Aborted approach that climbs back to cruising flight rather than a tight-pattern go-around (e.g. diverting to another airport). |
 | `approach → descent` | Kept for consistency with the example FSM's transition set — a stabilized approach can still show a distinct sustained-descent segment before `landing`. |
+| `approach → taxi_in` | Defense-in-depth for a slow/mushy landing that never registers a distinct fast-rollout `landing` segment before dropping to taxi speed. Found missing during offline implementation (Plan 1 Task 4) alongside the ground-ops classifier's own gap (§9 below) — without it, a landing that skips straight past the rollout-speed cutoff traps the FSM in `approach`. |
 | `landing → taxi_in` | Normal rollout, clears the runway. |
 | `landing → takeoff` | Touch-and-go — power added again during rollout, back into a takeoff roll without ever reaching `taxi_in`. |
 | `taxi_in → shutdown` | Normal end of flight — taxi to parking, shut down. |
@@ -202,6 +204,19 @@ and asserting matching output.
 | Legal-transition validation | Identical — already causal |
 | Min-duration smoothing (look-ahead) | Dwell time: require N seconds in a candidate before committing; minimum-hold on current phase |
 | Field elevation = median of pre-flight | Running estimate (already implemented in `engine-ml.js`) |
+
+### Ground-ops classifier addendum (found during offline implementation)
+
+The ground-ops branch of the row classifier must distinguish `landing` (post-touchdown,
+still decelerating from touchdown speed) from `taxi_in` (slow enough to be taxiing) —
+not collapse straight from "airborne" into `taxi_in`. `landing` was originally only
+reachable from the airborne branch's near-field/slow check, but actual touchdown happens
+below the airborne-AGL cutoff, where the row classifier had entered ground-ops branch
+logic with no `landing` candidate at all. Fix: in the ground-ops branch, `has_taken_off
+and not stationary and speed > speed_taxi_max_kts` (new threshold, 20kt — derived from
+this flight's own curated taxi-speed distribution, max observed 20.6kt) yields `landing`;
+otherwise `taxi_in`. Both runtime and offline implementations must include this branch —
+see the `approach → taxi_in` transition (§3) added as defense-in-depth for the same gap.
 
 ---
 
