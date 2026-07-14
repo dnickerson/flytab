@@ -293,26 +293,26 @@ describe('FieldElevationEstimate', () => {
         const est = new FieldElevationEstimate(200, 20, 2000);
         let last;
         for (let i = 0; i < 250; i++) {
-            last = est.push(620 + (i % 3), 2, 800, false); // stationary, low RPM, altitude ~620ft, not yet moved
+            last = est.push(620 + (i % 3), 2, 800, true); // stationary (true = not moving), low RPM, altitude ~620ft
         }
         expect(last).toBeCloseTo(621, 0);
     });
 
     it('locks early on first movement if fewer than lockSamples ground samples were seen (does not drift into a later stop at a different field)', () => {
         const est = new FieldElevationEstimate(200, 20, 2000);
-        for (let i = 0; i < 30; i++) est.push(620, 2, 800, false); // only 30 pre-flight ground samples
-        const lockedOnMove = est.push(620, 25, 1200, true); // movement detected — must lock now, not wait for 200
+        for (let i = 0; i < 30; i++) est.push(620, 2, 800, true); // only 30 pre-flight ground samples
+        const lockedOnMove = est.push(620, 25, 1200, false); // stationary=false: movement detected — must lock now, not wait for 200
         expect(lockedOnMove).toBeCloseTo(620, 0);
-        for (let i = 0; i < 50; i++) est.push(450, 2, 800, true); // later ground stop at a DIFFERENT field
-        expect(est.push(450, 2, 800, true)).toBeCloseTo(lockedOnMove, 0);
+        for (let i = 0; i < 50; i++) est.push(450, 2, 800, false); // later ground stop at a DIFFERENT field
+        expect(est.push(450, 2, 800, false)).toBeCloseTo(lockedOnMove, 0);
     });
 
     it('stops updating once locked, even with more pre-flight-looking ground samples fed in', () => {
         const est = new FieldElevationEstimate(200, 20, 2000);
-        for (let i = 0; i < 250; i++) est.push(620, 2, 800, false);
-        const locked = est.push(620, 2, 800, false);
-        for (let i = 0; i < 50; i++) est.push(450, 2, 800, false);
-        expect(est.push(450, 2, 800, false)).toBeCloseTo(locked, 0);
+        for (let i = 0; i < 250; i++) est.push(620, 2, 800, true);
+        const locked = est.push(620, 2, 800, true);
+        for (let i = 0; i < 50; i++) est.push(450, 2, 800, true);
+        expect(est.push(450, 2, 800, true)).toBeCloseTo(locked, 0);
     });
 });
 ```
