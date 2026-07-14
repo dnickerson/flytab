@@ -247,15 +247,27 @@ The `EngineML` Capacitor plugin runs a TFLite Conv1D autoencoder on 60-second ro
 | `android/app/src/main/assets/anomaly_v2_metadata.json` | Normalization stats, per-phase thresholds, feature list |
 | `android/app/src/main/java/.../engineml/InferenceEngine.java` | TFLite wrapper — dtype detection, inference, MSE |
 | `android/app/src/main/java/.../engineml/EngineMLPlugin.java` | Capacitor bridge — rolling window, calls InferenceEngine + EngineAdvisor |
-| `android/app/src/main/java/.../engineml/EngineAdvisor.java` | Rule-based advisories — trends, mixture, carb ice, fuel |
-| `android/app/src/main/java/.../engineml/PhaseDetector.java` | Flight phase from RPM + altitude + ground speed |
+| `android/app/src/main/java/.../engineml/EngineAdvisor.java` | Rule-based advisories — trends, mixture, carb ice, fuel, sticky-valve |
 | `web/cockpit/engine-ml.js` | JS bridge — calls plugin at 1Hz, exposes `window.engineML.lastResult` |
+| `web/phase_spec.json` | Shared 12-phase taxonomy, thresholds, transitions, dwell times — copied verbatim from `~/engine_analysis/phase_spec.json`. Single source of truth for both repos; do not hand-edit divergently. |
+| `web/shared/phase-detector.js` | Causal 12-phase FSM (`PhaseDetector` class) — computes `phase` before the Capacitor `processSample` call. Loaded as a classic script (not `type="module"`), same as `engine-ml.js`. |
+| `web/shared/phase-detector-classify.js`, `web/shared/phase-detector-helpers.js`, `web/shared/phase-spec-loader.js` | Supporting modules for the above — row classifier, causal signal-window helpers, spec loader/validator. |
 
 ### Feature Array — 12 Features, No Altitude
 
 The v2 model takes **12 features**: `[RPM, EGT1, EGT2, EGT3, EGT4, CHT1, CHT2, CHT3, CHT4, OilTemp, OilPress, FuelFlow]` (indices 0–11).
 
-**Altitude is NOT a model feature.** It is extracted from the JS call separately and passed only to `PhaseDetector.detect()` and `EngineAdvisor.addSample()`. If the training model is retrained with altitude as a feature (index 12 like v1), `EngineAdvisor.java` and `EngineMLPlugin.java` both need updating — they currently expect 12-element feature arrays.
+**Altitude is NOT a model feature.** It is extracted from the JS call separately and passed only to `EngineAdvisor.addSample()`. If the training model is retrained with altitude as a feature (index 12 like v1), `EngineAdvisor.java` and `EngineMLPlugin.java` both need updating — they currently expect 12-element feature arrays.
+
+### Phase Detection — Bridge Change (2026-07)
+
+`phase` is computed in JS (`web/shared/phase-detector.js`, a causal port of `~/engine_analysis/train_anomaly_model.detect_phases()`) and sent as an INPUT field on the `processSample` payload. `EngineMLPlugin.java` no longer computes phase — it reads `call.getString("phase", "cruise")` and defaults to `"cruise"` on anything missing/unparseable. `PhaseDetector.java` was deleted in this change; do not re-add Java-side phase computation — see `docs/superpowers/specs/2026-06-21-flight-phase-detection-redesign.md` for the full design rationale, and `docs/superpowers/plans/2026-07-14-flight-phase-detection-runtime.md` for what shipped.
+
+The 12-phase taxonomy (`startup, warmup, taxi_out, runup, takeoff, climb, cruise, descent, approach, landing, taxi_in, shutdown`) replaces the old 8-phase one. `phase_spec.json` (checked into both repos) is the only place any threshold/transition/dwell value should live — never hardcode a phase threshold in JS or Python again.
+
+`engine-ml.js`'s old `_computeGPSPhase` was **not** deleted outright — it was trimmed and renamed to `_updateLaunchState`. The brief's plan assumed the whole function was a "cosmetic GPS phase override" safe to remove once `PhaseDetector` owned phase computation, but it turned out to also drive shared state (`_hasLaunched`, `_fieldElev`, `_altHistory`) that the "airborne only" physics advisories and the emergency-glide joint trigger's landing-flare AGL guard read directly. `_updateLaunchState` keeps computing that state every sample (field-elevation estimate, altitude history, launched/landed detection) — it just no longer returns a phase string, since `phase-detector.js` owns that now. See the comment above `_updateLaunchState` in `engine-ml.js` for the one intentional behavior change (an old `altHistory.length < 10` guard was dropped, which can only make `_hasLaunched` arm sooner, never later).
+
+A new **sticky-valve advisory** was added to `EngineAdvisor.java` (`addStickyValveCheck`, gated on `phase == "startup"`): it flags a cylinder whose EGT rise lags the others by more than `STICKY_VALVE_LAG_THRESHOLD_F` (150°F) during startup, as a possible cold/sticky valve signature. **That threshold is an explicitly unvalidated placeholder** — no real sticky-valve flight data has been used to calibrate it. Do not treat its alert as confirmed, and do not tighten/loosen the threshold without a known-good vs. known-sticky comparison flight.
 
 ### Dtype — Detect at Runtime, Never Assume
 
