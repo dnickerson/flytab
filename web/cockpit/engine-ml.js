@@ -616,6 +616,19 @@ class EngineMLBridge {
         const fieldElev = this._fieldElev ?? altMSL;
         const agl = altMSL - fieldElev;
 
+        // NOTE: the original _computeGPSPhase had `if (this._altHistory.length < 10)
+        // return null;` right here, before evaluating launch state. That guard gated
+        // an altitude-rate-based phase computation that no longer exists in this
+        // trimmed function (phase is now PhaseDetector's job entirely) — it is
+        // intentionally NOT carried over, since there is nothing left for it to gate.
+        // Effect: _hasLaunched can now go true on the very first sample instead of
+        // only after 10 samples of _altHistory accumulate. This only differs from the
+        // old behavior in one edge case — the app/plugin restarting while the
+        // aircraft is already airborne (e.g. after a crash mid-flight) — where it now
+        // arms _hasLaunched (and the airborne-only physics advisories + emergency-glide
+        // trigger) sooner rather than later. That's fail-safe-direction, not a
+        // regression, and was reviewed and accepted as intentional (Dana, task-7 review).
+
         // Not yet airborne / back on the ground and slowed
         if (groundSpeed < 30 && agl < 200) {
             this._hasLaunched = false;
