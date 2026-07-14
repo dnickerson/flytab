@@ -68,21 +68,34 @@ class TrailingAltRate {
 // stable pre-flight ground sample count is reached, then freezes (design
 // spec §5: "Running estimate (already implemented in engine-ml.js)" —
 // this supersedes the old _computeGPSPhase's inline version so there is a
-// single implementation).
+// single implementation). All three thresholds are required constructor
+// arguments sourced from phase_spec.json — no in-file defaults, per this
+// plan's "single numeric source of truth" constraint. The `stationary`
+// argument to push() (the same GPS-delta-window boolean the caller
+// already computes for classifyRow) latches an internal "has ever moved"
+// flag: once true, this forces an early lock using whatever ground
+// samples were seen so far (even under lockSamples), rather than letting
+// a post-movement ground stop (a later taxi, a stop-and-go at a different
+// field) silently keep accumulating into what should be a strictly
+// pre-first-movement baseline.
 class FieldElevationEstimate {
-    constructor({ lockSamples = 200, stationarySpeedKts = 20, maxIdleRpm = 2000 } = {}) {
+    constructor(lockSamples, stationarySpeedKts, maxIdleRpm) {
         this._lockSamples = lockSamples;
         this._stationarySpeedKts = stationarySpeedKts;
         this._maxIdleRpm = maxIdleRpm;
         this._groundSamples = [];
         this._locked = null;
+        this._everMoved = false;
     }
-    push(altitudeFt, speedKts, rpm) {
+    push(altitudeFt, speedKts, rpm, stationary) {
         if (this._locked !== null) return this._locked;
+        if (!stationary) this._everMoved = true;
         if (speedKts < this._stationarySpeedKts && rpm < this._maxIdleRpm) {
             this._groundSamples.push(altitudeFt);
         }
-        if (this._groundSamples.length >= this._lockSamples) {
+        const reachedLockCount = this._groundSamples.length >= this._lockSamples;
+        const shouldLockOnMovement = this._everMoved && this._groundSamples.length > 0;
+        if (reachedLockCount || shouldLockOnMovement) {
             const sorted = [...this._groundSamples].sort((a, b) => a - b);
             this._locked = sorted[Math.floor(sorted.length / 2)];
         }

@@ -83,22 +83,29 @@ describe('TrailingAltRate', () => {
 });
 
 describe('FieldElevationEstimate', () => {
-    it('locks onto the median ground altitude during the pre-flight window', () => {
-        const est = new FieldElevationEstimate();
+    it('locks onto the median ground altitude once lockSamples pre-flight samples accumulate', () => {
+        const est = new FieldElevationEstimate(200, 20, 2000);
         let last;
         for (let i = 0; i < 250; i++) {
-            last = est.push(620 + (i % 3), 2, 800); // stationary, low RPM, altitude ~620ft
+            last = est.push(620 + (i % 3), 2, 800, true); // stationary, low RPM, altitude ~620ft, not yet moved
         }
         expect(last).toBeCloseTo(621, 0);
     });
 
-    it('stops updating once the aircraft has flown (avoids drifting mid-flight)', () => {
-        const est = new FieldElevationEstimate();
-        for (let i = 0; i < 250; i++) est.push(620, 2, 800);
-        const locked = est.push(620, 2, 800);
-        // Simulate a later ground stop at a DIFFERENT field mid-flight (e.g. a stop-and-go) —
-        // must not silently re-baseline.
-        for (let i = 0; i < 50; i++) est.push(450, 2, 800);
-        expect(est.push(450, 2, 800)).toBeCloseTo(locked, 0);
+    it('locks early on first movement if fewer than lockSamples ground samples were seen (does not drift into a later stop at a different field)', () => {
+        const est = new FieldElevationEstimate(200, 20, 2000);
+        for (let i = 0; i < 30; i++) est.push(620, 2, 800, true); // only 30 pre-flight ground samples
+        const lockedOnMove = est.push(620, 25, 1200, false); // movement detected — must lock now, not wait for 200
+        expect(lockedOnMove).toBeCloseTo(620, 0);
+        for (let i = 0; i < 50; i++) est.push(450, 2, 800, false); // later ground stop at a DIFFERENT field
+        expect(est.push(450, 2, 800, false)).toBeCloseTo(lockedOnMove, 0);
+    });
+
+    it('stops updating once locked, even with more pre-flight-looking ground samples fed in', () => {
+        const est = new FieldElevationEstimate(200, 20, 2000);
+        for (let i = 0; i < 250; i++) est.push(620, 2, 800, true);
+        const locked = est.push(620, 2, 800, true);
+        for (let i = 0; i < 50; i++) est.push(450, 2, 800, true);
+        expect(est.push(450, 2, 800, true)).toBeCloseTo(locked, 0);
     });
 });
