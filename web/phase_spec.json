@@ -33,7 +33,9 @@
     "speed_landing_max_kts": 30,
     "speed_taxi_max_kts": 20,
     "startup_rpm_slope_window_s": 15,
-    "startup_rpm_slope_flatten_rpm": 20
+    "startup_rpm_slope_flatten_rpm": 20,
+    "field_elev_lock_samples": 200,
+    "field_elev_max_idle_rpm": 2000
   },
   "dwell_seconds": {
     "startup": 20, "warmup": 10, "taxi_out": 10, "runup": 15, "takeoff": 5,
