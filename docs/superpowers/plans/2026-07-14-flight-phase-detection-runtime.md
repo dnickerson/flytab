@@ -195,7 +195,7 @@ git commit -m "feat: copy phase_spec.json from engine_analysis, add validating l
 
 **Interfaces:**
 - Consumes: nothing from Task 1.
-- Produces: `haversineMeters(lat1, lon1, lat2, lon2)`, `class GpsDeltaWindow { constructor(windowSamples); push(lat, lon) -> deltaMeters }`, `class RpmSlopeWindow { constructor(windowSamples); push(rpm) -> slopeOrInfinity }`, `class TrailingAltRate { constructor(windowSamples); push(altitudeFt) -> fpmOrNull }`, `class FieldElevationEstimate { constructor(); push(altitudeFt, speedKts, rpm) -> currentEstimateFt }`. All consumed by Task 3's `classifyRow` and Task 4's `PhaseDetector`.
+- Produces: `haversineMeters(lat1, lon1, lat2, lon2)`, `class GpsDeltaWindow { constructor(windowSamples); push(lat, lon) -> deltaMeters }`, `class RpmSlopeWindow { constructor(windowSamples); push(rpm) -> slopeOrInfinity }`, `class TrailingAltRate { constructor(windowSamples); push(altitudeFt) -> fpmOrNull }`, `class FieldElevationEstimate { constructor(lockSamples, stationarySpeedKts, maxIdleRpm); push(altitudeFt, speedKts, rpm, stationary) -> currentEstimateFt }`. All four threshold arguments are required (no defaults) — every numeric constant this module needs comes from the caller's loaded `phase_spec.json`, per the plan's "single numeric source of truth" constraint; `phase_spec.json` gained two new `thresholds` keys for this — `field_elev_lock_samples: 200` and `field_elev_max_idle_rpm: 2000` (already landed in both repos: `~/engine_analysis` commit `e179db1`, copied into this repo's `web/phase_spec.json`); `stationarySpeedKts` reuses the existing `speed_taxi_max_kts: 20` key rather than adding a duplicate. All consumed by Task 3's `classifyRow` and Task 4's `PhaseDetector`.
 
 These mirror `_gps_delta_series`, `_rpm_slope_batch` (both already causal in Python — ported near-verbatim), and translate `_rate_of_climb_batch` (centered ±30-row window) and the `detect_phases()` field-elevation baseline (median of first 300 rows) to trailing/running equivalents, per the design spec's §5 causal-translation table.
 
@@ -289,23 +289,30 @@ describe('TrailingAltRate', () => {
 });
 
 describe('FieldElevationEstimate', () => {
-    it('locks onto the median ground altitude during the pre-flight window', () => {
-        const est = new FieldElevationEstimate();
+    it('locks onto the median ground altitude once lockSamples pre-flight samples accumulate', () => {
+        const est = new FieldElevationEstimate(200, 20, 2000);
         let last;
         for (let i = 0; i < 250; i++) {
-            last = est.push(620 + (i % 3), 2, 800); // stationary, low RPM, altitude ~620ft
+            last = est.push(620 + (i % 3), 2, 800, false); // stationary, low RPM, altitude ~620ft, not yet moved
         }
         expect(last).toBeCloseTo(621, 0);
     });
 
-    it('stops updating once the aircraft has flown (avoids drifting mid-flight)', () => {
-        const est = new FieldElevationEstimate();
-        for (let i = 0; i < 250; i++) est.push(620, 2, 800);
-        const locked = est.push(620, 2, 800);
-        // Simulate a later ground stop at a DIFFERENT field mid-flight (e.g. a stop-and-go) —
-        // must not silently re-baseline.
-        for (let i = 0; i < 50; i++) est.push(450, 2, 800);
-        expect(est.push(450, 2, 800)).toBeCloseTo(locked, 0);
+    it('locks early on first movement if fewer than lockSamples ground samples were seen (does not drift into a later stop at a different field)', () => {
+        const est = new FieldElevationEstimate(200, 20, 2000);
+        for (let i = 0; i < 30; i++) est.push(620, 2, 800, false); // only 30 pre-flight ground samples
+        const lockedOnMove = est.push(620, 25, 1200, true); // movement detected — must lock now, not wait for 200
+        expect(lockedOnMove).toBeCloseTo(620, 0);
+        for (let i = 0; i < 50; i++) est.push(450, 2, 800, true); // later ground stop at a DIFFERENT field
+        expect(est.push(450, 2, 800, true)).toBeCloseTo(lockedOnMove, 0);
+    });
+
+    it('stops updating once locked, even with more pre-flight-looking ground samples fed in', () => {
+        const est = new FieldElevationEstimate(200, 20, 2000);
+        for (let i = 0; i < 250; i++) est.push(620, 2, 800, false);
+        const locked = est.push(620, 2, 800, false);
+        for (let i = 0; i < 50; i++) est.push(450, 2, 800, false);
+        expect(est.push(450, 2, 800, false)).toBeCloseTo(locked, 0);
     });
 });
 ```
@@ -390,21 +397,34 @@ class TrailingAltRate {
 // stable pre-flight ground sample count is reached, then freezes (design
 // spec §5: "Running estimate (already implemented in engine-ml.js)" —
 // this supersedes the old _computeGPSPhase's inline version so there is a
-// single implementation).
+// single implementation). All three thresholds are required constructor
+// arguments sourced from phase_spec.json — no in-file defaults, per this
+// plan's "single numeric source of truth" constraint. The `stationary`
+// argument to push() (the same GPS-delta-window boolean the caller
+// already computes for classifyRow) latches an internal "has ever moved"
+// flag: once true, this forces an early lock using whatever ground
+// samples were seen so far (even under lockSamples), rather than letting
+// a post-movement ground stop (a later taxi, a stop-and-go at a different
+// field) silently keep accumulating into what should be a strictly
+// pre-first-movement baseline.
 class FieldElevationEstimate {
-    constructor({ lockSamples = 200, stationarySpeedKts = 20, maxIdleRpm = 2000 } = {}) {
+    constructor(lockSamples, stationarySpeedKts, maxIdleRpm) {
         this._lockSamples = lockSamples;
         this._stationarySpeedKts = stationarySpeedKts;
         this._maxIdleRpm = maxIdleRpm;
         this._groundSamples = [];
         this._locked = null;
+        this._everMoved = false;
     }
-    push(altitudeFt, speedKts, rpm) {
+    push(altitudeFt, speedKts, rpm, stationary) {
         if (this._locked !== null) return this._locked;
+        if (!stationary) this._everMoved = true;
         if (speedKts < this._stationarySpeedKts && rpm < this._maxIdleRpm) {
             this._groundSamples.push(altitudeFt);
         }
-        if (this._groundSamples.length >= this._lockSamples) {
+        const reachedLockCount = this._groundSamples.length >= this._lockSamples;
+        const shouldLockOnMovement = this._everMoved && this._groundSamples.length > 0;
+        if (reachedLockCount || shouldLockOnMovement) {
             const sorted = [...this._groundSamples].sort((a, b) => a - b);
             this._locked = sorted[Math.floor(sorted.length / 2)];
         }
@@ -427,7 +447,7 @@ if (typeof window !== 'undefined') {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npm test -- tests/phase-detection/phase-detector-helpers.test.js`
-Expected: PASS (9 tests). If `FieldElevationEstimate`'s lock value is off by more than the `toBeCloseTo(621, 0)` tolerance, adjust `lockSamples`/rounding — do not loosen the test tolerance to force a pass.
+Expected: PASS (12 tests). If `FieldElevationEstimate`'s lock value is off by more than the `toBeCloseTo(621, 0)` tolerance, adjust `lockSamples`/rounding — do not loosen the test tolerance to force a pass.
 
 - [ ] **Step 5: Commit**
 
@@ -759,7 +779,11 @@ class PhaseDetector {
         this._gpsDelta = new GpsDeltaWindow(this._thr.gps_delta_window_s);
         this._rpmSlope = new RpmSlopeWindow(this._thr.startup_rpm_slope_window_s);
         this._altRate = new TrailingAltRate(30);
-        this._fieldElev = new FieldElevationEstimate();
+        this._fieldElev = new FieldElevationEstimate(
+            this._thr.field_elev_lock_samples,
+            this._thr.speed_taxi_max_kts,
+            this._thr.field_elev_max_idle_rpm,
+        );
 
         this._committedPhase = 'startup';
         this._hasTakenOff = false;
@@ -773,7 +797,7 @@ class PhaseDetector {
         const gpsDeltaM = this._gpsDelta.push(lat, lon);
         const stationary = gpsDeltaM < this._thr.gps_delta_stationary_m;
         const rpmSlope = this._rpmSlope.push(rpm);
-        const fieldElevFt = this._fieldElev.push(altitudeFt, speedKts, rpm);
+        const fieldElevFt = this._fieldElev.push(altitudeFt, speedKts, rpm, stationary);
         const agl = altitudeFt - fieldElevFt;
         const altRateFpm = this._altRate.push(altitudeFt) ?? 0;
 
