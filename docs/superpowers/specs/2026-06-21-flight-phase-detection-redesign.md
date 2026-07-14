@@ -42,7 +42,7 @@ Phase descriptions and the signals that define each:
 
 | Phase | Definition / signal signature |
 |---|---|
-| `startup` | Engine just started. Low RPM. Window for stuck/sticky-valve check (cold cylinder EGT fails to rise). |
+| `startup` | Engine running, stationary, RPM still climbing off a cold-start idle. Purpose: isolate the window where rising RPM should correlate with rising EGT/CHT per cylinder — a cylinder whose EGT fails to rise is the sticky/stuck-valve signature. Bounded by RPM trend flattening, not a fixed timer (see §5a). |
 | `warmup` | Engine running, no movement (GPS position static), oil warming. |
 | `taxi_out` | Low RPM, GPS position changing (creeping). |
 | `runup` | RPM up to ~1800, no GPS movement, mag check (L → both → R → both — RPM dips on each mag). |
@@ -65,6 +65,7 @@ A phase may always transition to itself. Legal transitions:
 |---|---|
 | `startup → warmup` | Only legal exit: engine now running, aircraft still stationary while checklist/avionics/oil-temp settle. |
 | `warmup → taxi_out` | Pilot begins moving toward runup area / runway. |
+| `warmup → runup` | Aircraft stops briefly while taxiing toward the runup pad (a legal `taxi_out → warmup` transition already covers the stop itself), then starts the mag check without resuming a distinct taxi segment first. Found missing during offline implementation (Plan 1 Task 4) — without it, a stop-then-runup sequence traps the FSM in `warmup`, mirroring the same "missing normal-path edge" class of bug as `taxi_out → takeoff` (§3 above). |
 | `warmup → shutdown` | False start — engine started, issue caught during warmup, shut down without ever moving. |
 | `taxi_out → runup` | Reaches the runup pad, holds to do the mag check. |
 | `taxi_out → warmup` | Extended stationary hold during taxi (e.g. waiting for traffic) that outlasts the dwell tolerance — reverts to genuine idle rather than staying "taxi." |
@@ -217,6 +218,38 @@ and not stationary and speed > speed_taxi_max_kts` (new threshold, 20kt — deri
 this flight's own curated taxi-speed distribution, max observed 20.6kt) yields `landing`;
 otherwise `taxi_in`. Both runtime and offline implementations must include this branch —
 see the `approach → taxi_in` transition (§3) added as defense-in-depth for the same gap.
+
+### Startup-boundary redefinition (found during offline implementation)
+
+`startup` and `warmup` share identical per-row signals (engine running, RPM low,
+stationary) — the only real difference is elapsed time since engine start, so a purely
+signal-based classifier can't distinguish them without *some* notion of "how long has
+the engine been idling." The original plan (§2, prior revision) left this as "ends on
+sustained movement, not a fixed timer," which is incomplete: it either never exits
+`startup` until movement (swallowing `warmup` entirely, since both phases look
+identical while stationary) or — when a CSV/recording starts after the engine's
+already idling, with no captured RPM 0→800+ transition to anchor a timer to — defaults
+straight to `warmup` and never detects `startup` at all (this is not a hypothetical:
+the golden fixture, `20260710_KLKR-KLKR.csv`, does exactly this).
+
+Clarified purpose (Dana): `startup`'s real job is to isolate the window where rising
+RPM should correlate with rising EGT/CHT per cylinder, for the sticky/stuck-valve
+check — not "the first N seconds." `detect_phases()` deliberately doesn't consume
+EGT/CHT (reserved as ML features, not phase-detection signals, per §7's verified
+facts) — plumbing them into phase detection to bound `startup` directly was
+considered and rejected: it would expand both implementations' signal set beyond the
+six already scoped (RPM/MP/FuelFlow/GPS-position/altitude/velocity) and ripple into
+the runtime detector's `processSample` bridge, which is a bigger change than this
+bug-fix pass. Instead, `startup` is now bounded by **RPM trend**, a proxy already
+available to phase detection: it persists while a rolling RPM slope (trailing window,
+`startup_rpm_slope_window_s`) is still positive above `startup_rpm_slope_flatten_rpm`
+(RPM still climbing off the cold-start idle), and exits to `warmup` once RPM
+flattens. `detect_phases()` can now always initialize to `startup` (rather than
+gating on a found engine-start transition) and let the slope naturally hand off —
+this is causal-safe (trailing-only), so both offline and runtime implementations use
+the identical rule. The actual per-cylinder EGT/CHT trend comparison remains the
+sticky-valve check's own job (§4, `EngineAdvisor.java`), operating *within* whatever
+window gets labeled `startup`, not `detect_phases()`'s.
 
 ---
 
