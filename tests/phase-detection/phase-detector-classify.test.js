@@ -87,8 +87,8 @@ describe('classifyRow', () => {
 
     it('classifies approach vs landing near the field by speed', () => {
         const airborneState = baseState({ hasTakenOff: true });
-        expect(classifyRow(baseSignals({ agl: 200, speedKts: 60 }), airborneState, THR)).toBe('approach');
-        expect(classifyRow(baseSignals({ agl: 200, speedKts: 20 }), airborneState, THR)).toBe('landing');
+        expect(classifyRow(baseSignals({ agl: 250, speedKts: 60 }), airborneState, THR)).toBe('approach');
+        expect(classifyRow(baseSignals({ agl: 250, speedKts: 20 }), airborneState, THR)).toBe('landing');
     });
 });
 

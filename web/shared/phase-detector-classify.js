@@ -18,7 +18,7 @@ function classifyRow(signals, state, thresholds) {
         return 'startup';
     }
 
-    const airborne = hasTakenOff && agl >= thr.alt_airborne_min_agl_ft;
+    const airborne = hasTakenOff && agl > thr.alt_airborne_min_agl_ft;
 
     if (!airborne) {
         if (rpm >= thr.rpm_takeoff_min && mp >= thr.mp_full_power && !stationary) return 'takeoff';
