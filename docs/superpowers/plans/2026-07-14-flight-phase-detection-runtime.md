@@ -564,8 +564,8 @@ describe('classifyRow', () => {
 
     it('classifies approach vs landing near the field by speed', () => {
         const airborneState = baseState({ hasTakenOff: true });
-        expect(classifyRow(baseSignals({ agl: 200, speedKts: 60 }), airborneState, THR)).toBe('approach');
-        expect(classifyRow(baseSignals({ agl: 200, speedKts: 20 }), airborneState, THR)).toBe('landing');
+        expect(classifyRow(baseSignals({ agl: 250, speedKts: 60 }), airborneState, THR)).toBe('approach');
+        expect(classifyRow(baseSignals({ agl: 250, speedKts: 20 }), airborneState, THR)).toBe('landing');
     });
 });
 
@@ -661,7 +661,7 @@ if (typeof window !== 'undefined') {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npm test -- tests/phase-detection/phase-detector-classify.test.js`
-Expected: PASS (16 tests)
+Expected: PASS (15 tests)
 
 - [ ] **Step 5: Commit**
 
