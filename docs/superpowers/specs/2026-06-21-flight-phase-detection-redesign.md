@@ -43,7 +43,7 @@ Phase descriptions and the signals that define each:
 | Phase | Definition / signal signature |
 |---|---|
 | `startup` | Engine running, stationary, RPM still climbing off a cold-start idle. Purpose: isolate the window where rising RPM should correlate with rising EGT/CHT per cylinder — a cylinder whose EGT fails to rise is the sticky/stuck-valve signature. Bounded by RPM trend flattening, not a fixed timer (see §5a). |
-| `warmup` | Engine running, no movement (GPS position static), oil warming. |
+| `warmup` | Engine running, no movement (GPS position static), oil warming. **Only before the aircraft has moved once this flight** — see §5b. A stationary idle period after that (e.g. holding short after runup) is `taxi_out`/`taxi_in`, not `warmup`. |
 | `taxi_out` | Low RPM, GPS position changing (creeping). |
 | `runup` | RPM up to ~1800, no GPS movement, mag check (L → both → R → both — RPM dips on each mag). |
 | `takeoff` | Maximum power (MP ≈ 26–30", FF ≈ 14–16 GPH here), speed building. |
@@ -250,6 +250,30 @@ this is causal-safe (trailing-only), so both offline and runtime implementations
 the identical rule. The actual per-cylinder EGT/CHT trend comparison remains the
 sticky-valve check's own job (§4, `EngineAdvisor.java`), operating *within* whatever
 window gets labeled `startup`, not `detect_phases()`'s.
+
+### `warmup` is pre-first-movement only (found during offline implementation)
+
+`warmup` and a stationary ground hold *after* the aircraft has moved (e.g. sitting at
+idle for takeoff clearance after runup) are also signal-identical (stationary, low
+RPM) — the same ambiguity class as the startup/warmup boundary above, one level later
+in the sequence. Verified against the golden fixture's curated labels: every `warmup`
+row (88 of them, deduped) falls at indices 53-140, strictly before the first `taxi`
+row (141) — the curator never labels a post-movement stationary hold as `warmup`,
+regardless of how long the aircraft sits still (one observed case: 35 consecutive
+seconds idle after runup, waiting for takeoff clearance, labeled `taxi` throughout).
+This isn't a dwell-time/threshold question — the hold genuinely lasts longer than any
+reasonable `dwell_seconds['warmup']` minimum, so numeric tuning can't merge it away
+without also destroying real standalone `warmup` segments elsewhere.
+
+Fix: a `has_left_ramp` flag (parallel to the existing `has_taken_off` flag), set once
+the aircraft has ever produced a `taxi_out` candidate. Once true, a stationary
+ground-ops candidate that doesn't otherwise qualify as `runup`/`takeoff` returns
+`taxi_out`/`taxi_in` (by the existing `has_taken_off` split) instead of `warmup`. This
+makes `warmup` reachable only in the flag's initial `false` state — before first
+movement — matching the curated data exactly. Both offline and runtime
+implementations need this flag; it composes with `has_taken_off` and doesn't reset
+mid-flight (this fixture has no touch-and-go to test a reset-on-landing case — flag as
+a known gap if one is captured later, same as §3's touch-and-go coverage note).
 
 ---
 
