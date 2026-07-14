@@ -21,7 +21,7 @@ class PhaseDetector {
 
         this._gpsDelta = new GpsDeltaWindow(this._thr.gps_delta_window_s);
         this._rpmSlope = new RpmSlopeWindow(this._thr.startup_rpm_slope_window_s);
-        this._altRate = new TrailingAltRate(30);
+        this._altRate = new TrailingAltRate(this._thr.alt_rate_window_s);
         this._fieldElev = new FieldElevationEstimate(
             this._thr.field_elev_lock_samples,
             this._thr.speed_taxi_max_kts,
