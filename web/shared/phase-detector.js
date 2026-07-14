@@ -32,6 +32,22 @@ class PhaseDetector {
         this._hasTakenOff = false;
         this._hasLeftRamp = false;
 
+        // classify() below anchors transition legality on _pendingCandidate
+        // when one is in progress, not always on _committedPhase -- this
+        // fixes a real deadlock (a fast multi-hop signal walk that outpaces
+        // an intermediate phase's own dwell time; see the comment in
+        // classify()). Accepted tradeoff, confirmed by Dana: a noisy
+        // telemetry sequence could in theory walk through several single-row
+        // hops, each validated only against the immediately preceding
+        // ephemeral candidate rather than the last confirmed phase, before a
+        // final phase's own dwell requirement gates the actual commit. This
+        // mirrors the Python original's own non-dwell-gated hop-by-hop
+        // `current` variable, and committing a final phase still requires
+        // that phase's full dwell of consistent signal, which bounds the
+        // practical risk. Do not add chain-validation against the last
+        // committed phase without care -- that was explicitly declined as
+        // introducing more design risk than it resolves, and could
+        // reintroduce the deadlock if done carelessly.
         this._pendingCandidate = null;
         this._pendingSeconds = 0;
     }
