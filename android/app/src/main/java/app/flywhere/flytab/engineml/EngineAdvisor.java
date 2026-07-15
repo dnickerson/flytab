@@ -134,6 +134,12 @@ public class EngineAdvisor {
     /**
      * Generate advisories based on current engine state.
      *
+     * Note: the sticky-valve check is NOT included here — it lives in
+     * {@link #checkStickyValve(float[], String)} so callers can run it
+     * without needing an ML score/anomaly result (see Task 16: this method
+     * is only invoked once the ML-inference window is full, but the
+     * sticky-valve check must run from the very first "startup" samples).
+     *
      * @param features     Current 12-feature array (RPM, EGT1-4, CHT1-4, OilTemp, OilPress, FuelFlow)
      * @param phase        Current flight phase
      * @param anomalyScore ML anomaly score
@@ -184,12 +190,7 @@ public class EngineAdvisor {
             addCarbIceCheck(advisories);
         }
 
-        // ── 7. Sticky-valve check (startup phase only, unvalidated threshold) ──
-        if ("startup".equals(phase) && startupEntryEgt != null) {
-            addStickyValveCheck(features, advisories);
-        }
-
-        // ── 8. Phase-specific normal message if nothing else ──
+        // ── 7. Phase-specific normal message if nothing else ──
         if (advisories.isEmpty()) {
             if (isAnomaly) {
                 advisories.add(new Advisory("Engine pattern unusual — monitor closely",
@@ -200,6 +201,27 @@ public class EngineAdvisor {
         }
 
         return advisories;
+    }
+
+    /**
+     * Sticky-valve check, callable independently of {@link #advise}.
+     *
+     * This is a pure EGT-delta comparison against the baseline latched in
+     * {@link #addSample} — it does not use ML score/anomaly, so it doesn't
+     * need to wait for a full ML-inference window. Callers should invoke
+     * this every sample (not just when the ML window is full) so it can
+     * actually observe the "startup" phase, which normally ends well
+     * before the window fills.
+     *
+     * @param features Current 12-feature array (RPM, EGT1-4, CHT1-4, OilTemp, OilPress, FuelFlow)
+     * @param phase    Current flight phase
+     */
+    public List<Advisory> checkStickyValve(float[] features, String phase) {
+        List<Advisory> out = new ArrayList<>();
+        if ("startup".equals(phase) && startupEntryEgt != null) {
+            addStickyValveCheck(features, out);
+        }
+        return out;
     }
 
     // ── % Power calculation ─────────────────────────────────

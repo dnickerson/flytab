@@ -133,9 +133,28 @@ public class EngineMLPlugin extends Plugin {
             // Feed advisor
             engineAdvisor.addSample(features, phase, mp, carbTemp, fuelRemaining, altitude);
 
+            // Sticky-valve check is a pure EGT-delta comparison — it doesn't need
+            // ML inference results, so run it unconditionally rather than gating
+            // it on windowFull. A normal engine start typically leaves "startup"
+            // well before the 60-sample ML window fills, so gating this on
+            // windowFull would silently skip the check for the common case.
+            List<EngineAdvisor.Advisory> stickyValveAdvisories =
+                engineAdvisor.checkStickyValve(features, phase);
+
             JSObject ret = new JSObject();
             ret.put("phase", phase);
             ret.put("windowReady", windowFull);
+
+            // Advisories are populated unconditionally (sticky-valve findings first)
+            // so they surface even on samples where the ML window isn't full yet.
+            JSArray advArr = new JSArray();
+            for (EngineAdvisor.Advisory adv : stickyValveAdvisories) {
+                JSObject a = new JSObject();
+                a.put("message", adv.message);
+                a.put("severity", adv.severity);
+                a.put("category", adv.category);
+                advArr.put(a);
+            }
 
             if (windowFull && rpm > 100) {
                 // Build ordered window (oldest to newest)
@@ -180,8 +199,7 @@ public class EngineMLPlugin extends Plugin {
                         ret.put("featureErrors", errArr);
                     }
 
-                    // Advisories
-                    JSArray advArr = new JSArray();
+                    // Advisories from advise() (sticky-valve already merged in above)
                     for (EngineAdvisor.Advisory adv : advisories) {
                         JSObject a = new JSObject();
                         a.put("message", adv.message);
@@ -189,7 +207,6 @@ public class EngineMLPlugin extends Plugin {
                         a.put("category", adv.category);
                         advArr.put(a);
                     }
-                    ret.put("advisories", advArr);
 
                 } catch (TimeoutException te) {
                     // Inference hung — resolve without score so the plugin stays responsive.
@@ -199,6 +216,8 @@ public class EngineMLPlugin extends Plugin {
                     Log.w(TAG, "Inference error — resolving without score", ie);
                 }
             }
+
+            ret.put("advisories", advArr);
 
             call.resolve(ret);
         } catch (Exception e) {
