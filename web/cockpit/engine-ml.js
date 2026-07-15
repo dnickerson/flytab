@@ -231,6 +231,7 @@ class EngineMLBridge {
                     fuel_remaining: num(d.fuel_remaining_gal ?? d.fuel_gal ?? d.Gallons_Rem, 20),
                     ground_speed:   num(sit?.ground_speed, 100),
                     distance_nm:    0,
+                    phase:          (this._lastComputedPhase && this._lastComputedPhase !== 'shutdown') ? this._lastComputedPhase : (this._flightPhase ?? 'cruise'),
                 });
             }
         } catch (err) {
