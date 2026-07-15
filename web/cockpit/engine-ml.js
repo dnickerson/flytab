@@ -25,6 +25,11 @@ class EngineMLBridge {
         this._baselineWindow = [];            // last 60 samples for baseline computation
         this._baselineWindowMax = 60;
         this._flightPhase = 'ground';         // derived phase: ground/climb/cruise/descent
+        // Last phase PhaseDetector.classify() actually produced. Left unset
+        // (not pre-seeded to 'cruise') so the `?? 'cruise'` fallback in
+        // _onEngineData only applies on a genuine cold-start-with-no-GPS-ever
+        // case, not a mid-flight transient GPS gap — see Task 15.
+        this._lastComputedPhase = undefined;
         this._advisoryLog = [];               // ring buffer, last 20 advisories for debrief
         this._advisoryLogMax = 20;
         this._lastAdvisoryTime = {};          // type → timestamp, for per-type rate-limiting
@@ -265,9 +270,16 @@ class EngineMLBridge {
         const sit = this._stratuxClient?.situation;
 
         // Compute the causal flight phase once per sample via the shared PhaseDetector
-        // (Tasks 1-6). Falls back to 'cruise' if the spec hasn't loaded yet or GPS is
-        // unavailable, so physics-rule thresholds below still have a sane phase to key off.
-        let phase = 'cruise';
+        // (Tasks 1-6). If the spec hasn't loaded yet or GPS is momentarily unavailable,
+        // retain the last phase PhaseDetector actually produced instead of resetting to
+        // 'cruise' — a transient GPS dropout mid-climb must not snap phase to 'cruise'
+        // (wrong CHT limit, skipped sticky-valve latch, wrong ML threshold). Only fall
+        // back to 'cruise' when there's genuinely no prior phase yet, e.g. the very
+        // first sample of the app session before GPS has ever been available. The
+        // detector's own internal state (windows/latches) is left undisturbed during
+        // the gap since classify() simply isn't called — it resumes correctly once GPS
+        // returns. See Task 15.
+        let phase = this._lastComputedPhase ?? 'cruise';
         if (this._phaseDetector && sit?.lat != null && sit?.lon != null) {
             phase = this._phaseDetector.classify({
                 rpm: d.rpm ?? d.RPM ?? 0,
@@ -278,6 +290,7 @@ class EngineMLBridge {
                 altitudeFt: sit.alt_msl ?? d.altitude_ft ?? 0,
                 speedKts: sit.ground_speed ?? d.speed_kts ?? 0,
             });
+            this._lastComputedPhase = phase;
         }
         this._flightPhase = phase;
         this._updateLaunchState(sit, d);
