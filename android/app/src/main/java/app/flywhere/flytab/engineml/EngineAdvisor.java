@@ -106,6 +106,9 @@ public class EngineAdvisor {
      * Record a new sample. Call once per second.
      */
     public void addSample(float[] features, String phase, float mp, float carbTemp, float fuelRemaining, float altitude) {
+        if ("shutdown".equals(lastPhase) && !"shutdown".equals(phase)) {
+            reset();
+        }
         System.arraycopy(features, 0, history[historyHead], 0, Math.min(features.length, 12));
         mpHistory[historyHead] = mp;
         carbTempHistory[historyHead] = carbTemp;

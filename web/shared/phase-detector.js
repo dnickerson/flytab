@@ -19,6 +19,20 @@ class PhaseDetector {
         this._dwellSeconds = spec.dwell_seconds;
         this._transitions = spec.transitions;
 
+        this.reset();
+    }
+
+    // Re-initializes all per-flight state, including the accumulated causal
+    // helper windows (a stale GPS-delta/RPM-slope/altitude-rate/field-elevation
+    // history from the flight that just ended must not leak into the new one).
+    // Called by the constructor, and internally by classify() when it detects
+    // a fresh engine-start after a committed 'shutdown' -- phase_spec.json makes
+    // 'shutdown' terminal for the offline batch detector (correct: one CSV per
+    // flight), but this runtime detector runs continuously across an entire
+    // app session, so without this reset a second flight leg in the same
+    // session would report 'shutdown' forever. See the Task 12 note in the
+    // implementation plan for the full incident.
+    reset() {
         this._gpsDelta = new GpsDeltaWindow(this._thr.gps_delta_window_s);
         this._rpmSlope = new RpmSlopeWindow(this._thr.startup_rpm_slope_window_s);
         this._altRate = new TrailingAltRate(this._thr.alt_rate_window_s);
@@ -53,6 +67,19 @@ class PhaseDetector {
     }
 
     classify({ rpm, mp, fuelFlow, lat, lon, altitudeFt, speedKts }) {
+        // A committed 'shutdown' is terminal in phase_spec.json's transition
+        // graph, but this detector runs across an entire app session, not one
+        // flight -- detect a genuine restart (the same rpm/fuelFlow condition
+        // classifyRow itself uses to decide "shutdown") and reset before doing
+        // anything else with this sample, so every downstream computation
+        // (GPS-delta, RPM-slope, field-elevation, the classifier itself) sees
+        // fresh state for the new flight rather than mixing in the old one's
+        // history.
+        if (this._committedPhase === 'shutdown' &&
+            !(rpm < this._thr.rpm_shutdown && fuelFlow < this._thr.ff_shutdown_max)) {
+            this.reset();
+        }
+
         const gpsDeltaM = this._gpsDelta.push(lat, lon);
         const stationary = gpsDeltaM < this._thr.gps_delta_stationary_m;
         const rpmSlope = this._rpmSlope.push(rpm);

@@ -125,3 +125,32 @@ describe('PhaseDetector', () => {
         expect(last).toBe('landing');
     });
 });
+
+describe('PhaseDetector reset on a new engine-start after shutdown', () => {
+    it('recovers into startup instead of staying stuck in shutdown forever', () => {
+        const det = new PhaseDetector(SPEC);
+
+        // Drive the detector all the way to a committed 'shutdown' (engine off).
+        for (let i = 0; i < 205; i++) det.classify(sample()); // -> warmup (per Task 4's existing test)
+        let last;
+        for (let i = 0; i < 10; i++) {
+            last = det.classify(sample({ rpm: 0, fuelFlow: 0 })); // dwell_seconds.shutdown = 5
+        }
+        expect(last).toBe('shutdown');
+
+        // A single sample still showing engine-off must NOT reset (only a genuine
+        // restart signature should) -- guards against reset firing on sensor noise.
+        expect(det.classify(sample({ rpm: 0, fuelFlow: 0 }))).toBe('shutdown');
+
+        // Engine restarts: RPM and fuel flow rise back above the shutdown thresholds.
+        const afterRestart = det.classify(sample({ rpm: 800, fuelFlow: 6 }));
+        expect(afterRestart).toBe('startup');
+
+        // The detector must behave like a genuinely fresh instance from here --
+        // confirm it can reach warmup again via the same path Task 4's own test uses,
+        // not remain wedged in some half-reset state.
+        let last2;
+        for (let i = 0; i < 205; i++) last2 = det.classify(sample({ rpm: 800, fuelFlow: 6 }));
+        expect(last2).toBe('warmup');
+    });
+});
