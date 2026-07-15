@@ -124,6 +124,43 @@ describe('PhaseDetector', () => {
         }
         expect(last).toBe('landing');
     });
+
+    it('commits to shutdown from a committed airborne phase on a genuine in-flight engine failure', () => {
+        // Regression test for Task 14: phase_spec.json's transitions table had
+        // no path from any airborne phase to 'shutdown', so classifyRow's
+        // unconditional 'shutdown' candidate (rpm < rpm_shutdown &&
+        // fuelFlow < ff_shutdown_max) was silently rejected by applyTransition
+        // forever once airborne, freezing the committed phase at whatever it
+        // was when the engine died -- even though this is exactly when a real
+        // engine failure would produce those readings.
+
+        // --- Warm up to a committed airborne phase (climb), reusing the same
+        // sequence as the descent-deadlock test above. ---
+        for (let i = 0; i < 205; i++) det.classify(sample());
+        for (let i = 0; i < 16; i++) det.classify(sample({ rpm: 1800 }));
+        for (let i = 0; i < 6; i++) {
+            det.classify(sample({
+                rpm: 2500, mp: 30, fuelFlow: 12, speedKts: 60,
+                lon: -85.2 - (i + 1) * 0.01,
+            }));
+        }
+        let altitudeFt = 620;
+        let last;
+        for (let i = 0; i < 40; i++) {
+            altitudeFt += 60;
+            last = det.classify(sample({ rpm: 2650, mp: 28, fuelFlow: 14, speedKts: 100, altitudeFt }));
+        }
+        expect(last).toBe('climb');
+
+        // Simulate a genuine in-flight engine failure: rpm and fuel flow both
+        // drop to zero while still airborne. Feed enough samples to satisfy
+        // dwell_seconds.shutdown (5) and confirm the detector actually commits
+        // to 'shutdown' instead of staying wedged in 'climb'.
+        for (let i = 0; i < SPEC.dwell_seconds.shutdown; i++) {
+            last = det.classify(sample({ rpm: 0, fuelFlow: 0, speedKts: 100, altitudeFt }));
+        }
+        expect(last).toBe('shutdown');
+    });
 });
 
 describe('PhaseDetector reset on a new engine-start after shutdown', () => {
