@@ -592,15 +592,19 @@ public class EngineAdvisor {
 
     private String getNormalMessage(String phase) {
         switch (phase) {
-            case "startup": return "Engine starting — monitoring";
-            case "warmup":  return "Warming up — parameters normal";
-            case "runup":   return "Run-up checks — in range";
-            case "takeoff": return "Takeoff power — engine normal";
-            case "climb":   return "Climb — engine normal";
-            case "cruise":  return "Cruise — engine normal";
-            case "descent": return "Descent — engine normal";
-            case "landing": return "Approach — engine normal";
-            default:        return "Engine normal";
+            case "startup":  return "Engine starting — monitoring";
+            case "warmup":   return "Warming up — parameters normal";
+            case "taxi_out": return "Taxiing out — engine normal";
+            case "runup":    return "Run-up checks — in range";
+            case "takeoff":  return "Takeoff power — engine normal";
+            case "climb":    return "Climb — engine normal";
+            case "cruise":   return "Cruise — engine normal";
+            case "descent":  return "Descent — engine normal";
+            case "approach": return "Approach — engine normal";
+            case "landing":  return "Approach — engine normal";
+            case "taxi_in":  return "Taxiing in — engine normal";
+            case "shutdown": return "Engine shutdown";
+            default:         return "Engine normal";
         }
     }
 
