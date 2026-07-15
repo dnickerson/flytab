@@ -1622,6 +1622,196 @@ git commit -m "fix: reset runtime PhaseDetector and EngineAdvisor state on a new
 
 ---
 
+## Tasks 13-22: fixes from the /code-review pass (2026-07-14)
+
+A full 8-angle, verified code review of the branch (base `7ab6609`..`deb1da8`, then re-run through `f45e1f2` after Task 12) found 10 real, verified issues. Dana asked to fix all of them before merging. Each task below follows the same TDD + spec-sourced + independently-reviewed process as Tasks 1-12.
+
+### Task 13: Consolidate field-elevation estimation to one reset-aware implementation
+
+**Why:** `web/cockpit/engine-ml.js`'s `_updateLaunchState` maintains its own field-elevation estimator (`this._fieldElev`/`this._fieldElevSamples`, a running minimum over the first ~300 low-speed/low-RPM samples since `EngineMLBridge` construction), used by `_checkEmergencyTrigger`'s landing-flare AGL guard. This is completely independent of `PhaseDetector`'s own `FieldElevationEstimate`, which Task 12 fixed to reset on every new flight leg. `_fieldElev`/`_fieldElevSamples` are NEVER reset — on a multi-leg flying day, they lock to leg 1's departure-airport elevation and stay locked, so `_checkEmergencyTrigger`'s AGL guard computes AGL against the wrong airport's elevation on leg 2+. Per the review's verification: this can either wrongly suppress a real emergency-glide trigger near the ground (at a higher-elevation leg-2 airport, computed AGL reads too low) or fail to suppress during a normal landing flare, producing a false alarm (at a lower-elevation leg-2 airport, computed AGL reads too high).
+
+**Files:**
+- Modify: `web/shared/phase-detector.js` (expose the internal field-elevation estimate)
+- Modify: `web/cockpit/engine-ml.js` (delete the duplicate estimator, consume the shared one)
+- Test: `tests/phase-detection/phase-detector.test.js`
+
+**Design:**
+
+1. In `web/shared/phase-detector.js`'s `classify()`, store the field-elevation value it already computes each call:
+   ```js
+   const fieldElevFt = this._fieldElev.push(altitudeFt, speedKts, rpm, stationary);
+   this._lastFieldElevationFt = fieldElevFt;
+   ```
+   Add a public getter:
+   ```js
+   getFieldElevationFt() {
+       return this._lastFieldElevationFt ?? null;
+   }
+   ```
+   `reset()` should also clear it: `this._lastFieldElevationFt = null;`
+
+2. In `web/cockpit/engine-ml.js`: delete the `_fieldElev`/`_fieldElevSamples` fields (constructor lines ~40-41) and the running-minimum update block inside `_updateLaunchState` (lines ~604-613). Replace every read of `this._fieldElev` (in `_updateLaunchState`'s own `fieldElev` local, and in `_checkEmergencyTrigger`'s AGL calc at line ~783) with `this._phaseDetector?.getFieldElevationFt() ?? altMSL` (fall back to raw MSL altitude if the detector hasn't produced an estimate yet — e.g. spec not loaded, or GPS unavailable this sample — matching the old code's `?? altMSL` fallback behavior for "no estimate yet").
+
+   Read `_updateLaunchState` and `_checkEmergencyTrigger` in full before editing — confirm there's no other consumer of `_fieldElev`/`_fieldElevSamples` this plan didn't anticipate (this branch has repeatedly found real hidden dependencies in this exact file; don't assume the two call sites named above are the only ones without checking).
+
+- [ ] Write a failing test in `tests/phase-detection/phase-detector.test.js` asserting `PhaseDetector.getFieldElevationFt()` returns `null` before any samples, a numeric estimate after enough ground samples, and — critically — that it resets to `null` again after a confirmed shutdown→restart (reuse Task 12's reset test pattern: drive to `shutdown`, confirm restart, assert `getFieldElevationFt()` is back to `null` before re-locking on the new leg's ground samples).
+- [ ] Implement the getter + `reset()` clearing, confirm the test passes.
+- [ ] Update `engine-ml.js` per the design above.
+- [ ] Run `npm test`, confirm no regressions (274+ tests, golden-parity still ≥85%).
+- [ ] Run `bash build.sh` from the worktree, confirm it succeeds.
+- [ ] Commit.
+
+### Task 14: Add `shutdown` as a legal transition from every phase
+
+**Why:** `phase_spec.json`'s `transitions` table has no path from `climb`, `cruise`, `descent`, `approach`, or `landing` to `shutdown`. `classifyRow` unconditionally proposes `'shutdown'` the instant `rpm < rpm_shutdown && fuelFlow < ff_shutdown_max` — a genuine in-flight engine failure — but `applyTransition` rejects it forever from those phases, freezing the committed phase at whatever it was when the engine died, for the rest of that flight. This is a pre-existing characteristic of `phase_spec.json` (unchanged since it was first copied into this branch), not something Tasks 1-12 introduced, but it's a real, verified gap the review surfaced and Dana asked to fix now. The physics-gated emergency-glide trigger itself doesn't depend on `phase` and still fires correctly — this fix is about the phase display and every OTHER phase-gated threshold/advisory being wrong during an actual emergency.
+
+**Files:**
+- Modify: `~/engine_analysis/phase_spec.json` (canonical source — this change affects the offline batch detector too, since they share this file)
+- Modify: `~/flytab/web/phase_spec.json` (copy)
+- Verify: `~/engine_analysis/tests/test_detect_phases.py` still passes (the Python `detect_phases()` shares this exact transition table)
+- Test: `tests/phase-detection/phase-detector.test.js` (new)
+
+**Design:** add `"shutdown"` to every phase's transition list that doesn't already have it — `startup`, `climb`, `cruise`, `descent`, `approach`, `landing`, `takeoff` (an engine failure can happen during any phase of flight, including immediately after rotation or during an aborted start). `warmup`, `taxi_out`, `runup`, `taxi_in` already have it.
+
+- [ ] In `~/engine_analysis/phase_spec.json`, add `"shutdown"` to the transition lists of `startup`, `takeoff`, `climb`, `cruise`, `descent`, `approach`, `landing`.
+- [ ] Run `cd ~/engine_analysis && python3 -m pytest tests/ -q` — confirm all 37 tests still pass (this transition-table change is shared with the Python batch detector; if any test regresses, investigate before proceeding — do not silently loosen a test to force a pass).
+- [ ] Commit and push in `~/engine_analysis`.
+- [ ] Copy the updated `phase_spec.json` into the flytab worktree's `web/phase_spec.json`, verify byte-identical via `diff`.
+- [ ] Regenerate the golden-parity fixture: `cd ~/flytab/.worktrees/flight-phase-detection-runtime && python3 tools/freeze_phase_parity_fixture.py`, then re-run `npm test -- tests/phase-detection/golden-parity.test.js` — confirm agreement is still ≥85% (the fixture flight doesn't have an in-flight failure, so this change shouldn't move the number, but confirm rather than assume).
+- [ ] Write a new test in `tests/phase-detection/phase-detector.test.js`: drive a `PhaseDetector` to a committed airborne phase (e.g. `cruise`, reusing existing test patterns to get there), then feed samples with `rpm: 0, fuelFlow: 0` for long enough to satisfy `dwell_seconds.shutdown`, and assert the detector actually commits to `'shutdown'` (this is the regression guard for the bug just fixed — it must FAIL against the pre-fix transition table and PASS after, same RED/GREEN discipline as every other task).
+- [ ] Run the full JS suite, confirm no regressions.
+- [ ] Commit in the flytab worktree.
+
+### Task 15: Retain last-known phase during GPS gaps instead of hard-resetting to `cruise`
+
+**Why:** `web/cockpit/engine-ml.js` hard-defaults `phase = 'cruise'` and skips calling `PhaseDetector.classify()` entirely whenever Stratux GPS (`sit?.lat`/`sit?.lon`) is unavailable — no fallback to the last known real phase. A transient GPS dropout (antenna blocked in a turn, Stratux WiFi hiccup) during a genuine climb causes `phase` to snap to `'cruise'` for the duration of the dropout: `_checkPhysicsRules` then applies the tighter 420°F CHT limit instead of 440°F (risking a spurious act-now advisory), the sticky-valve check's startup latch can be skipped entirely if the dropout spans engine start, and `ThresholdAdapter.getThreshold('cruise')` is used instead of the true phase's threshold (risking a false ML anomaly). The OLD, now-deleted `_derivePhase` had a GPS-independent MAP/RPM fallback that avoided this; that fallback wasn't carried over.
+
+**Files:**
+- Modify: `web/cockpit/engine-ml.js`
+
+**Design:** track the last phase `PhaseDetector.classify()` actually produced, and use it (not a hardcoded `'cruise'`) as the value when GPS is unavailable this sample. Only fall back to `'cruise'` when there's genuinely no prior phase yet (e.g. the very first sample of the app session, before GPS has ever been available):
+
+```js
+let phase = this._lastComputedPhase ?? 'cruise';
+if (this._phaseDetector && sit?.lat != null && sit?.lon != null) {
+    phase = this._phaseDetector.classify({...});
+    this._lastComputedPhase = phase;
+}
+this._flightPhase = phase;
+```
+
+(`this._lastComputedPhase` needs to be initialized to `undefined`/unset in the constructor — don't pre-seed it with `'cruise'`, since that would defeat the `?? 'cruise'` fallback's purpose of only applying on a genuine cold-start-with-no-GPS-ever case vs. a mid-flight transient gap.)
+
+- [ ] Read the actual current `_onEngineData` in full before editing, to confirm exact variable names/placement (this branch has repeatedly found the plan's paraphrased description drifting slightly from the real file).
+- [ ] Implement the change.
+- [ ] There's no existing vitest coverage of `engine-ml.js` itself (a pre-existing, out-of-scope gap per Task 7's review) — this fix can't get an automated regression test the same way the `web/shared/*.js` fixes can. Verify manually by reading the code and tracing through: (a) cold start, no GPS ever → phase stays `'cruise'`; (b) real climb established, then a transient GPS gap → phase stays at whatever it last was (e.g. `'climb'`), not `'cruise'`; (c) GPS returns → phase resumes normal computation from `PhaseDetector`'s still-intact internal state (confirm the detector's OWN state isn't affected by the gap — it simply doesn't get called during the gap, so its internal windows/latches are undisturbed, which is correct). Document this trace in the report since it can't be asserted by a test.
+- [ ] Run `npm test`, confirm no regressions.
+- [ ] Run `bash build.sh`, confirm it succeeds.
+- [ ] Commit.
+
+### Task 16: Decouple the sticky-valve check from the ML-inference window-full gate
+
+**Why:** `EngineMLPlugin.java`'s `processSample` only calls `engineAdvisor.advise(...)` (which contains the sticky-valve check) inside `if (windowFull && rpm > 100)` — a gate that exists because ML inference genuinely needs a full 60-sample window. But the sticky-valve check is a pure EGT-delta comparison that doesn't need ML inference results at all. Per the review's verification: both the phase detector's `startup`→`warmup` clock and the plugin's 60-sample window clock start counting from the same first telemetry sample, and a normal engine start commits out of `'startup'` at roughly 25-45 seconds — reliably before the 60-sample window fills. So the sticky-valve check silently never runs for a normal engine start, which is the common case, not a rare edge case.
+
+**Files:**
+- Modify: `android/app/src/main/java/app/flywhere/flytab/engineml/EngineAdvisor.java` (extract the sticky-valve check to be callable independently of the rest of `advise()`)
+- Modify: `android/app/src/main/java/app/flywhere/flytab/engineml/EngineMLPlugin.java` (call it unconditionally, not gated on `windowFull`)
+
+**Design:** Read the actual current `EngineAdvisor.java` and `EngineMLPlugin.java` in full first (both have been touched by several tasks already; confirm current line numbers/structure before editing). `addSample(...)` is already called unconditionally every sample (outside the `windowFull` gate) — that's correct and stays as-is; it's where the sticky-valve EGT baseline latch already correctly happens regardless of window state. The gap is specifically that the CHECK itself (which produces the `Advisory`) lives inside `advise()`, which only runs when `windowFull`.
+
+Extract the sticky-valve check into its own method on `EngineAdvisor` that doesn't require `score`/`anomaly` (it doesn't use them today — confirm this by reading `addStickyValveCheck`'s current body), callable standalone. In `EngineMLPlugin.processSample`, call this new method unconditionally (right after `addSample(...)`, before the `windowFull` branch), and merge its result into `ret`'s `advisories` array regardless of whether the `windowFull` branch runs — meaning `ret.put("advisories", ...)` needs to happen unconditionally now (currently it's only set inside the `windowFull` block), with the sticky-valve findings merged in either way. Do not change the gating for any OTHER check inside `advise()` (trend alerts, mixture/LOP, carb-ice, fuel-range, correlated physics+ML alerts) — those may genuinely need `score`/`anomaly` or a full window and are out of scope for this task; if you're unsure whether a specific other check needs `windowFull`, leave it inside the gated block and only extract the sticky-valve check specifically.
+
+- [ ] Implement the extraction and the unconditional call site.
+- [ ] `bash build.sh` — confirm it succeeds (no Java unit test infra exists for this package, per established precedent this branch — build success plus a careful manual trace is the available verification).
+- [ ] In your report, trace through the exact scenario the review verified: app boots, engine starts within the first ~45s, confirm the sticky-valve check now fires during that window even though `windowFull` is still false at that point.
+- [ ] Commit.
+
+### Task 17: Use pending-or-committed `climb` for the CHT relaxed-limit decision
+
+**Why:** `_checkPhysicsRules`'s CHT limit selection reads `this._flightPhase === 'climb'` for the relaxed 440°F vs. 420°F threshold. The OLD phase logic set `'climb'` the instant `altRateFpm > 300`; the NEW `PhaseDetector` requires `dwell_seconds.climb` (15) consecutive qualifying samples before COMMITTING to `'climb'`. For the first ~15 seconds of a real climb — exactly the highest-CHT-stress phase of flight — `_flightPhase` still reads `'takeoff'`, so the tighter 420°F limit applies and risks a spurious "CHT exceeding limit — act now" advisory.
+
+**Files:**
+- Modify: `web/shared/phase-detector.js` (expose whether a phase is currently pending, not just committed)
+- Modify: `web/cockpit/engine-ml.js` (use pending-or-committed `climb` for the CHT check specifically, not for anything else)
+
+**Design:** relaxing a limit slightly early (while `'climb'` is still just the pending candidate, not yet committed) is safe in the direction of avoiding false alarms — both CHT limits (420/440) sit well below the real 450°F max, so being a little more permissive for a few seconds while a genuine climb is very likely already underway is the conservative choice, unlike delaying relaxation (which is what causes the false alarm). This must NOT change anything about the FSM's actual dwell-commit timing itself (no golden-parity impact) — it only affects which limit the CHT check specifically uses.
+
+In `web/shared/phase-detector.js`, add a public method:
+```js
+isPendingOrCommitted(phaseName) {
+    return this._committedPhase === phaseName || this._pendingCandidate === phaseName;
+}
+```
+In `web/cockpit/engine-ml.js`'s `_checkPhysicsRules`, change the limit selection from `this._flightPhase === 'climb'` to `this._phaseDetector?.isPendingOrCommitted('climb')` (falling back to the existing `this._flightPhase === 'climb'` check if `_phaseDetector` is null, so behavior degrades gracefully rather than losing the relaxation entirely if the detector isn't ready).
+
+- [ ] Write a failing test in `tests/phase-detection/phase-detector.test.js` for `isPendingOrCommitted`: construct a detector, drive it to a state where `'climb'` is the pending-but-not-yet-committed candidate (reuse the existing dwell-timing test patterns from Task 4/5's tests to construct this precisely), and assert `isPendingOrCommitted('climb')` is `true` before the dwell completes and `_flightPhase`-equivalent (`committedPhase`, exposed however the test already reads it) is still NOT `'climb'` yet — proving this method genuinely returns true earlier than a plain committed-phase check would.
+- [ ] Implement `isPendingOrCommitted`, confirm the test passes.
+- [ ] Update `engine-ml.js`'s CHT check per the design above.
+- [ ] Run `npm test`, confirm no regressions.
+- [ ] Run `bash build.sh`, confirm it succeeds.
+- [ ] Commit.
+
+### Task 18: Update `docs/user-manual.md`'s Engine ML phase description
+
+**Why:** The manual still says the Engine ML screen shows "the current flight phase (ground/climb/cruise/descent)" — stale even for the old 8-phase system, and now materially wrong under the 12-phase taxonomy this branch ships. CLAUDE.md requires updating the manual "as part of the same commit as the feature code" for exactly this kind of pilot-visible change.
+
+**Files:**
+- Modify: `docs/user-manual.md`
+
+- [ ] Find the exact sentence (`docs/user-manual.md`, the Engine ML / MORE → Engine ML section) and replace "the current flight phase (ground/climb/cruise/descent)" with an accurate, concise description reflecting the 12-phase taxonomy (`startup, warmup, taxi_out, runup, takeoff, climb, cruise, descent, approach, landing, taxi_in, shutdown`) — doesn't need to list all 12 by name if that's unwieldy for pilot-facing prose, but must not claim only 4 values.
+- [ ] Commit.
+
+### Task 19: Update `logbook.js`'s `phaseBar()` legend for the 12-phase taxonomy
+
+**Why:** `phaseBar()`'s hardcoded 8-entry phase legend (plus an already-stale `'taxi'` key that never matched even the old system) silently drops `warmup`, `taxi_out`, `approach`, `taxi_in`, and `shutdown` from the post-flight phase-distribution bar. Because the bar uses flex-basis styling, the dropped phases' mass isn't shown as missing — the remaining segments stretch to fill the row, producing a visibly skewed (not just incomplete) breakdown of a real flight.
+
+**Files:**
+- Modify: `web/cockpit/logbook.js`
+
+- [ ] Read `phaseBar()` (around line 1252) in full. Replace the 8-entry legend array with all 12 phases from the taxonomy, using sensible 2-letter labels and colors consistent with the file's existing convention (e.g. `taxi_out`/`taxi_in` → `'TO'`/`'TI'` or similar — avoid colliding with the existing `takeoff` label `'TO'`; pick clear, distinct abbreviations for all 12). Decide whether `shutdown` needs a visible segment in this specific debrief chart (it's typically a near-zero-duration phase) — include it for completeness unless there's a clear reason established elsewhere in the file to exclude terminal/zero-duration phases from this specific chart.
+- [ ] Manually verify (no existing test infra for this file) by reading `getFlightSummary()`'s `phase_dist` construction to confirm the new legend's keys match exactly what that function can produce.
+- [ ] Run `npm test`, confirm no regressions (this file has no direct test coverage, so this is just confirming nothing else broke).
+- [ ] Commit.
+
+### Task 20: Extend `EngineAdvisor.getNormalMessage()` for the 4 new phases
+
+**Why:** The switch only has cases for the old 8-phase taxonomy; `taxi_out`, `approach`, `taxi_in`, `shutdown` fall through to the generic "Engine normal" default. No crash, just less-specific messaging during phases that are now reached on every real flight.
+
+**Files:**
+- Modify: `android/app/src/main/java/app/flywhere/flytab/engineml/EngineAdvisor.java`
+
+- [ ] Add `case "taxi_out": return "Taxiing out — engine normal";`, `case "approach": return "Approach — engine normal";` (note: `"landing"` currently returns this same "Approach — engine normal" text per the existing switch — check whether that's already a pre-existing quirk worth leaving alone or worth fixing in the same pass; if unsure, leave `"landing"`'s existing text unchanged and just add the 4 new cases distinctly), `case "taxi_in": return "Taxiing in — engine normal";`, `case "shutdown": return "Engine shutdown";` (or similarly natural, concise phrasing consistent with the existing 8 messages' style).
+- [ ] `bash build.sh`, confirm it succeeds.
+- [ ] Commit.
+
+### Task 21: Add `phase` to `simulateAnomaly()`'s test payload
+
+**Why:** The long-press developer test-mode trigger builds its own `processSample` payload without the `phase` field the real telemetry path now always sends, so `EngineMLPlugin` defaults it to `'cruise'` — manual QA testing of phase-gated behavior (sticky-valve check, per-phase thresholds) during a simulated startup/landing always exercises cruise-phase logic instead. Test-tooling-only; production telemetry is unaffected.
+
+**Files:**
+- Modify: `web/cockpit/engine-ml.js`
+
+- [ ] Read `simulateAnomaly()` (around line 205) in full. Add a `phase` field to its `processSample(...)` payload — use `this._lastComputedPhase ?? this._flightPhase ?? 'cruise'` (whichever the real path uses after Task 15 lands; if Task 15 hasn't landed yet when this task is implemented, use `this._flightPhase` and note the dependency) so the simulated call exercises whatever phase the app is actually currently in, rather than a hardcoded value — this makes the simulate button test "the current real phase" which is the most useful behavior for a QA tool (a developer can put the app in a real startup/landing state and then long-press to simulate an anomaly IN that phase).
+- [ ] Run `npm test`, confirm no regressions.
+- [ ] Commit.
+
+### Task 22: Dedupe `haversineMeters` to reuse the canonical `route-math.js` implementation
+
+**Why:** `web/shared/phase-detector-helpers.js`'s `haversineMeters()` reimplements the same great-circle-distance formula already established as the project's canonical implementation (`haversine()` in `web/shared/planning/math/route-math.js`, which `web/shared/nasr-db.js`'s `NasrDB.haversineNm()` explicitly delegates to via a "prefer `FlyTabPlanning.haversine`, else fall back to an inline duplicate" pattern — necessary because `route-math.js` is an ES module loaded via `type="module"` and deferred, so it may not be on `window` yet when a classic script runs).
+
+**Files:**
+- Modify: `web/shared/phase-detector-helpers.js`
+
+**Design:** mirror `nasr-db.js`'s existing delegate-with-fallback pattern exactly (don't invent a new one) — check `web/shared/nasr-db.js`'s `haversineNm()` for the precise pattern first. `phase-detector-helpers.js`'s `haversineMeters` should delegate to `FlyTabPlanning.haversine(...)` (converting its nm result to meters via `* 1852`) when available, falling back to the existing inline formula (kept as the fallback, not deleted) when it isn't — same reasoning `nasr-db.js` already documents for the same load-order constraint.
+
+- [ ] Read `web/shared/nasr-db.js`'s `haversineNm()` in full to copy its exact delegate/fallback structure.
+- [ ] Update `haversineMeters()` in `web/shared/phase-detector-helpers.js` to match that pattern.
+- [ ] Run the existing `haversineMeters` unit tests (`tests/phase-detection/phase-detector-helpers.test.js`) — they should still pass unchanged, since the fallback path preserves the exact same formula and `FlyTabPlanning` won't be on `window` in the Node/vitest test environment anyway (confirming the fallback path is what those tests actually exercise — note this in your report).
+- [ ] Run `npm test`, confirm no regressions (274+ tests, golden-parity still ≥85% — this change shouldn't affect it, but confirm).
+- [ ] Commit.
+
+---
+
 ## Definition of Done
 
 - All of Tasks 1-5's automated tests pass: `npm test` (flytab) green, including the golden-parity test at ≥85% agreement against the frozen Python output.
@@ -1630,4 +1820,5 @@ git commit -m "fix: reset runtime PhaseDetector and EngineAdvisor state on a new
 - `PhaseDetector.java` is deleted; no remaining reference to it in `android/app/`.
 - Both CLAUDE.md files updated (Task 11).
 - Task 12's reset test passes: a `PhaseDetector` driven to `shutdown` and then a fresh engine-start recovers into `startup` rather than staying wedged.
+- Tasks 13-22's fixes are all applied, tested where feasible, and `bash build.sh` succeeds after the last one.
 - **Not part of this plan's automated Definition of Done, required before flying:** the on-device CDP test (Task 7/8's manual follow-up note) confirming a real `phase` value round-trips correctly through the rebuilt APK, and Dana's empirical calibration of the sticky-valve threshold (Task 9's follow-up note) before that specific advisory is trusted operationally.
