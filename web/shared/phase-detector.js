@@ -166,6 +166,21 @@ class PhaseDetector {
         return this._committedPhase;
     }
 
+    // True when phaseName is either the committed phase or the currently
+    // pending (not-yet-dwelled) candidate. Consumed by engine-ml.js (Task 17)
+    // for the CHT relaxed-climb-limit check specifically: the FSM's own
+    // dwell_seconds gate must not change (no golden-parity impact -- this
+    // does not affect classify()'s return value or _committedPhase at all),
+    // but a physics check that only needs to avoid a false "act now" alarm
+    // can safely treat "climb is very likely already underway" the same as
+    // "climb has committed" -- relaxing a limit a few seconds early is the
+    // conservative direction here (both CHT limits sit well below the real
+    // 450F max), unlike delaying relaxation, which is what causes the false
+    // alarm this task exists to fix.
+    isPendingOrCommitted(phaseName) {
+        return this._committedPhase === phaseName || this._pendingCandidate === phaseName;
+    }
+
     // Public field-elevation estimate, consumed by engine-ml.js (Task 13)
     // instead of its own now-deleted, never-reset duplicate. null before the
     // first classify() call, while accumulating ground samples pre-lock, and

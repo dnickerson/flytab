@@ -125,6 +125,52 @@ describe('PhaseDetector', () => {
         expect(last).toBe('landing');
     });
 
+    it('reports climb as pending-or-committed before its dwell time elapses, via isPendingOrCommitted', () => {
+        // Regression test for Task 17: engine-ml.js's CHT relaxed-limit check
+        // needs to know when 'climb' is the pending (not-yet-committed)
+        // candidate, not just when it has actually committed -- the FSM's own
+        // dwell_seconds.climb (15) gate must NOT change, but the CHT check
+        // should be able to relax its limit a few seconds earlier, during
+        // exactly the highest-CHT-stress window of a real climb.
+
+        // --- Warm up to a committed 'takeoff', same sequence as the
+        // descent-deadlock test above. ---
+        for (let i = 0; i < 205; i++) det.classify(sample());
+        for (let i = 0; i < 16; i++) det.classify(sample({ rpm: 1800 }));
+        for (let i = 0; i < 6; i++) {
+            det.classify(sample({
+                rpm: 2500, mp: 30, fuelFlow: 12, speedKts: 60,
+                lon: -85.2 - (i + 1) * 0.01,
+            }));
+        }
+
+        // Ramp altitude up 60ft/sample, same as the deadlock test's climb
+        // approach. altRateFpm (30s trailing window) crosses the climb
+        // threshold (350 fpm) at ramp sample 4 (confirmed by direct
+        // simulation), making 'climb' the pending candidate from then on --
+        // but dwell_seconds.climb (15) is not satisfied until ramp sample 18,
+        // so the committed phase stays 'takeoff' throughout this loop.
+        let altitudeFt = 620;
+        let last;
+        for (let i = 0; i < 11; i++) {
+            altitudeFt += 60;
+            last = det.classify(sample({ rpm: 2650, mp: 28, fuelFlow: 14, speedKts: 100, altitudeFt }));
+        }
+
+        // Proves isPendingOrCommitted returns true strictly earlier than a
+        // plain committed-phase check would: the committed phase is still
+        // 'takeoff' (climb has not dwelled long enough to commit), yet
+        // isPendingOrCommitted('climb') is already true.
+        expect(last).toBe('takeoff');
+        expect(det.isPendingOrCommitted('climb')).toBe(true);
+        // Sanity check on the method itself: the currently-committed phase
+        // also reads as pending-or-committed...
+        expect(det.isPendingOrCommitted('takeoff')).toBe(true);
+        // ...but an unrelated phase that is neither committed nor pending
+        // does not.
+        expect(det.isPendingOrCommitted('cruise')).toBe(false);
+    });
+
     it('commits to shutdown from a committed airborne phase on a genuine in-flight engine failure', () => {
         // Regression test for Task 14: phase_spec.json's transitions table had
         // no path from any airborne phase to 'shutdown', so classifyRow's

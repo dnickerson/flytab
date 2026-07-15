@@ -403,9 +403,24 @@ class EngineMLBridge {
         // CHT exceedance >420°F — skip during climb (normal CHT rise expected)
         const chtLimit = 420;
         const chtClimbLimit = 440; // relaxed limit during climb
+        // Task 17: use pending-OR-committed 'climb' for this check specifically,
+        // not just the committed phase. PhaseDetector requires dwell_seconds.climb
+        // (15) consecutive qualifying samples before actually COMMITTING to
+        // 'climb', but the first ~15 seconds of a real climb are exactly the
+        // highest-CHT-stress window of flight -- waiting for commit here would
+        // apply the tighter 420°F limit and risk a spurious "act now" advisory.
+        // Relaxing a few seconds early is the safe direction (both limits sit
+        // well below the real 450°F max); this does NOT change the FSM's own
+        // commit timing (no golden-parity impact), only what this check reads.
+        // Falls back to the pre-Task-17 committed-phase check if the detector
+        // isn't ready yet, so the relaxation degrades gracefully instead of
+        // being lost entirely.
+        const isClimb = this._phaseDetector
+            ? this._phaseDetector.isPendingOrCommitted('climb')
+            : this._flightPhase === 'climb';
         for (let i = 1; i <= 4; i++) {
             const cht = num(d[`cht${i}`] ?? d[`CHT${i}`] ?? 0);
-            const limit = this._flightPhase === 'climb' ? chtClimbLimit : chtLimit;
+            const limit = isClimb ? chtClimbLimit : chtLimit;
             if (cht > limit) {
                 advisories.push({
                     type: `cht${i}_exceedance`,
