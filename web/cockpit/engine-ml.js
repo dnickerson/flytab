@@ -37,8 +37,12 @@ class EngineMLBridge {
         // GPS-based phase smoothing — prevents model phase thrashing on turbulence
         this._altHistory = [];      // circular buffer of MSL altitudes, last 60s
         this._altHistoryMax = 60;
-        this._fieldElev = null;     // estimated field elevation (MSL), set on first samples
-        this._fieldElevSamples = 0; // number of ground samples used to estimate field elev
+        // Field elevation (MSL) is no longer tracked here — Task 13 deleted this
+        // file's own never-reset running-minimum estimator (it locked to leg 1's
+        // departure airport and never cleared on a multi-leg day, corrupting the
+        // landing-flare AGL guard below on leg 2+). Both consumers now read
+        // this._phaseDetector.getFieldElevationFt(), the single reset-aware
+        // estimate PhaseDetector already maintains for its own phase classification.
         this._hasLaunched = false;  // true once aircraft has left the ground
 
         // Long-press state for test mode trigger
@@ -600,20 +604,13 @@ class EngineMLBridge {
         this._altHistory.push(altMSL);
         if (this._altHistory.length > this._altHistoryMax) this._altHistory.shift();
 
-        // Build field elevation estimate from the first 5 minutes of low-speed samples.
-        // Only update while on the ground (speed < 20 kts, RPM < 2000) and within
-        // the first 300 samples so a runway run-up can't skew it.
-        if (!this._hasLaunched && groundSpeed < 20 && rpm < 2000 && this._fieldElevSamples < 300) {
-            if (this._fieldElev === null) {
-                this._fieldElev = altMSL;
-            } else {
-                // Running minimum — approach plates report field elev, GPS may read high
-                this._fieldElev = Math.min(this._fieldElev, altMSL);
-            }
-            this._fieldElevSamples++;
-        }
-
-        const fieldElev = this._fieldElev ?? altMSL;
+        // Field elevation estimate now comes from the shared, reset-aware
+        // PhaseDetector (Task 13) instead of a duplicate estimator here — see
+        // the constructor comment. Falls back to raw MSL altitude (agl = 0)
+        // when no estimate exists yet (spec not loaded, GPS unavailable this
+        // sample, or not enough ground samples since the last reset), matching
+        // this function's own prior `?? altMSL` fallback shape exactly.
+        const fieldElev = this._phaseDetector?.getFieldElevationFt() ?? altMSL;
         const agl = altMSL - fieldElev;
 
         // NOTE: the original _computeGPSPhase had `if (this._altHistory.length < 10)
@@ -780,7 +777,17 @@ class EngineMLBridge {
             const altMSL = this._altHistory.length > 0
                 ? this._altHistory[this._altHistory.length - 1]
                 : (sit?.alt_msl ?? 0);
-            const agl = this._fieldElev !== null ? (altMSL - this._fieldElev) : altMSL;
+            // Deliberately NOT `getFieldElevationFt() ?? altMSL` collapsed into a
+            // single fallback-then-subtract (that would silently turn "no estimate
+            // yet" into agl = altMSL - altMSL = 0, which is BELOW the 500ft guard
+            // and would wrongly suppress a real emergency trigger any time the
+            // estimate isn't locked yet). Preserves the original ternary: no
+            // estimate yet -> agl = altMSL (a large number for anyone airborne),
+            // so the guard only suppresses once a real ground-elevation estimate
+            // says the aircraft is genuinely low — never as a side effect of the
+            // estimate simply not existing yet.
+            const fieldElevFt = this._phaseDetector?.getFieldElevationFt() ?? null;
+            const agl = fieldElevFt !== null ? (altMSL - fieldElevFt) : altMSL;
             if (agl < 500) {
                 console.log(`[EngineML] Emergency suppressed — AGL ${Math.round(agl)} ft < 500 ft (landing flare guard)`);
                 return;

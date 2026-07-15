@@ -101,6 +101,17 @@ class FieldElevationEstimate {
         }
         return this._locked ?? altitudeFt;
     }
+    // Exposes whether a real estimate has locked, distinct from push()'s
+    // return value (which falls back to the raw altitudeFt passed in before
+    // locking, for classify()'s own internal AGL calc). Callers that need to
+    // distinguish "no real estimate yet" from "estimate happens to equal
+    // current altitude" -- e.g. PhaseDetector#getFieldElevationFt(), consumed
+    // by engine-ml.js's landing-flare AGL guard -- must use this, not push()'s
+    // return value, or every not-yet-locked sample looks indistinguishable
+    // from a genuine estimate.
+    get locked() {
+        return this._locked;
+    }
 }
 
 if (typeof module !== 'undefined' && module.exports) {

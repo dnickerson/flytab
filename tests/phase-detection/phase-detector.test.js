@@ -165,3 +165,48 @@ describe('PhaseDetector reset on a new engine-start after shutdown', () => {
         expect(last2).toBe('warmup');
     });
 });
+
+describe('PhaseDetector#getFieldElevationFt', () => {
+    it('is null before any samples have been classified', () => {
+        const det = new PhaseDetector(SPEC);
+        expect(det.getFieldElevationFt()).toBeNull();
+    });
+
+    it('is a numeric estimate after enough ground samples lock it', () => {
+        const det = new PhaseDetector(SPEC);
+        for (let i = 0; i < 205; i++) det.classify(sample());
+        expect(det.getFieldElevationFt()).toBe(620);
+    });
+
+    it('resets to null after a confirmed shutdown->restart, before re-locking on the new leg', () => {
+        const det = new PhaseDetector(SPEC);
+
+        // Drive to a locked field elevation and committed 'shutdown', same
+        // path as the reset test above.
+        for (let i = 0; i < 205; i++) det.classify(sample()); // -> warmup, field elev locks @ 620ft
+        expect(det.getFieldElevationFt()).toBe(620);
+
+        let last;
+        for (let i = 0; i < 10; i++) {
+            last = det.classify(sample({ rpm: 0, fuelFlow: 0 })); // dwell_seconds.shutdown = 5
+        }
+        expect(last).toBe('shutdown');
+        expect(det.getFieldElevationFt()).toBe(620); // still locked from leg 1 -- shutdown alone doesn't reset
+
+        // Confirm restart (shutdown_restart_debounce_samples = 3 consecutive
+        // above-threshold samples), matching the pattern in the reset test above.
+        for (let i = 0; i < 2; i++) det.classify(sample({ rpm: 800, fuelFlow: 6 }));
+        const afterRestart = det.classify(sample({ rpm: 800, fuelFlow: 6 }));
+        expect(afterRestart).toBe('startup');
+
+        // Confirmed restart must clear the stale leg-1 estimate immediately --
+        // before any new-leg ground samples have re-locked it -- so a
+        // higher/lower-elevation leg-2 airport doesn't inherit leg 1's value.
+        expect(det.getFieldElevationFt()).toBeNull();
+
+        // Re-locks on the new leg's own ground samples, at a different
+        // altitude, proving it's a fresh estimate and not leg 1's.
+        for (let i = 0; i < 205; i++) det.classify(sample({ rpm: 800, fuelFlow: 6, altitudeFt: 900 }));
+        expect(det.getFieldElevationFt()).toBe(900);
+    });
+});

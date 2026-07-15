@@ -65,6 +65,18 @@ class PhaseDetector {
         this._pendingCandidate = null;
         this._pendingSeconds = 0;
         this._restartDebounceCount = 0;
+
+        // Public field-elevation estimate (Task 13) -- the single
+        // reset-aware source of truth engine-ml.js consumes for its
+        // landing-flare AGL guard, replacing its own never-reset duplicate
+        // estimator. null until FieldElevationEstimate actually locks a
+        // real value (see the `locked` getter's comment in
+        // phase-detector-helpers.js) -- deliberately NOT the raw
+        // push()-return value used below for this detector's own internal
+        // `agl`, which falls back to the current sample's altitude before
+        // locking and would make "not yet estimated" indistinguishable from
+        // "estimate is coincidentally the current altitude" to callers.
+        this._lastFieldElevationFt = null;
     }
 
     classify({ rpm, mp, fuelFlow, lat, lon, altitudeFt, speedKts }) {
@@ -105,6 +117,7 @@ class PhaseDetector {
         const stationary = gpsDeltaM < this._thr.gps_delta_stationary_m;
         const rpmSlope = this._rpmSlope.push(rpm);
         const fieldElevFt = this._fieldElev.push(altitudeFt, speedKts, rpm, stationary);
+        this._lastFieldElevationFt = this._fieldElev.locked;
         const agl = altitudeFt - fieldElevFt;
         const altRateFpm = this._altRate.push(altitudeFt) ?? 0;
 
@@ -151,6 +164,17 @@ class PhaseDetector {
         if (this._committedPhase === 'taxi_out') this._hasLeftRamp = true;
 
         return this._committedPhase;
+    }
+
+    // Public field-elevation estimate, consumed by engine-ml.js (Task 13)
+    // instead of its own now-deleted, never-reset duplicate. null before the
+    // first classify() call, while accumulating ground samples pre-lock, and
+    // immediately after a confirmed shutdown->restart reset() until the new
+    // flight leg's own ground samples re-lock it -- callers must handle null
+    // (typically falling back to raw MSL altitude, matching this detector's
+    // own internal fallback shape for the same not-yet-estimated case).
+    getFieldElevationFt() {
+        return this._lastFieldElevationFt ?? null;
     }
 }
 
