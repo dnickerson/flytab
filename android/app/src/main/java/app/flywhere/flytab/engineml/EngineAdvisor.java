@@ -146,10 +146,16 @@ public class EngineAdvisor {
      * @param isAnomaly    Whether ML flagged anomaly
      * @param distRemainingNm Distance to destination (0 if unknown)
      * @param groundSpeedKts Current ground speed
+     * @param stickyValveAlreadyFired Whether {@link #checkStickyValve(float[], String)} already
+     *                                produced a finding for this same sample. When true, the
+     *                                generic "nothing else fired" fallback below is suppressed
+     *                                so the specific sticky-valve caution isn't diluted by a
+     *                                simultaneous generic "monitoring" info line.
      */
     public List<Advisory> advise(float[] features, String phase,
                                   float anomalyScore, boolean isAnomaly,
-                                  float distRemainingNm, float groundSpeedKts) {
+                                  float distRemainingNm, float groundSpeedKts,
+                                  boolean stickyValveAlreadyFired) {
         List<Advisory> advisories = new ArrayList<>();
 
         float rpm = features[IDX_RPM];
@@ -191,7 +197,10 @@ public class EngineAdvisor {
         }
 
         // ── 7. Phase-specific normal message if nothing else ──
-        if (advisories.isEmpty()) {
+        // Skip when the standalone sticky-valve check already reported something
+        // for this sample — otherwise the generic "monitoring" info line would
+        // appear alongside (and dilute) the specific sticky-valve caution.
+        if (advisories.isEmpty() && !stickyValveAlreadyFired) {
             if (isAnomaly) {
                 advisories.add(new Advisory("Engine pattern unusual — monitor closely",
                         SEVERITY_CAUTION, "engine"));

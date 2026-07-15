@@ -175,9 +175,13 @@ public class EngineMLPlugin extends Plugin {
                         thresholdAdapter.recordNormalScore(phase, score);
                     }
 
-                    // Get advisories
+                    // Get advisories. Tell advise() whether the standalone sticky-valve
+                    // check already produced a finding for this sample so its own
+                    // "nothing else fired" fallback doesn't also append the generic
+                    // "monitoring" info message alongside a specific caution.
                     List<EngineAdvisor.Advisory> advisories = engineAdvisor.advise(
-                        features, phase, score, anomaly, distanceNm, groundSpeed);
+                        features, phase, score, anomaly, distanceNm, groundSpeed,
+                        !stickyValveAdvisories.isEmpty());
 
                     ret.put("score", score);
                     ret.put("threshold", threshold);
