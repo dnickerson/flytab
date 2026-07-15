@@ -1416,12 +1416,23 @@ describe('PhaseDetector reset on a new engine-start after shutdown', () => {
         }
         expect(last).toBe('shutdown');
 
-        // A single sample still showing engine-off must NOT reset (only a genuine
-        // restart signature should) -- guards against reset firing on sensor noise.
-        expect(det.classify(sample({ rpm: 0, fuelFlow: 0 }))).toBe('shutdown');
+        // A single noisy sample above the shutdown thresholds must NOT reset by
+        // itself -- shutdown_restart_debounce_samples (3) requires consecutive
+        // restart-condition samples, guarding against a sensor blip wedging the
+        // detector at 'startup' for the rest of a genuine ground stop.
+        expect(det.classify(sample({ rpm: 800, fuelFlow: 6 }))).toBe('shutdown');
+        expect(det.classify(sample({ rpm: 800, fuelFlow: 6 }))).toBe('shutdown');
 
-        // Engine restarts: RPM and fuel flow rise back above the shutdown thresholds.
-        const afterRestart = det.classify(sample({ rpm: 800, fuelFlow: 6 }));
+        // If the noise stops before the debounce completes, the count resets --
+        // a genuinely-off sample after two "noisy" ones must not carry over
+        // partial progress toward a reset.
+        expect(det.classify(sample({ rpm: 0, fuelFlow: 0 }))).toBe('shutdown');
+        expect(det.classify(sample({ rpm: 800, fuelFlow: 6 }))).toBe('shutdown'); // debounce count = 1 again
+        expect(det.classify(sample({ rpm: 800, fuelFlow: 6 }))).toBe('shutdown'); // debounce count = 2
+
+        // Third consecutive genuine restart sample confirms it -- resets and
+        // classifies this same sample fresh.
+        const afterRestart = det.classify(sample({ rpm: 800, fuelFlow: 6 })); // debounce count = 3
         expect(afterRestart).toBe('startup');
 
         // The detector must behave like a genuinely fresh instance from here --
@@ -1477,6 +1488,7 @@ class PhaseDetector {
         this._hasLeftRamp = false;
         this._pendingCandidate = null;
         this._pendingSeconds = 0;
+        this._restartDebounceCount = 0;
     }
 
     classify({ rpm, mp, fuelFlow, lat, lon, altitudeFt, speedKts }) {
@@ -1487,10 +1499,31 @@ class PhaseDetector {
         // anything else with this sample, so every downstream computation
         // (GPS-delta, RPM-slope, field-elevation, the classifier itself) sees
         // fresh state for the new flight rather than mixing in the old one's
-        // history.
-        if (this._committedPhase === 'shutdown' &&
-            !(rpm < this._thr.rpm_shutdown && fuelFlow < this._thr.ff_shutdown_max)) {
-            this.reset();
+        // history. Debounced over shutdown_restart_debounce_samples consecutive
+        // samples (not a single one): reset() commits _committedPhase back to
+        // 'startup', and phase_spec.json's transitions.startup only permits
+        // 'warmup' -- if a single noisy RPM/fuel-flow sample fired the reset
+        // while the aircraft is genuinely still parked and off, every following
+        // genuinely-off sample's classifyRow candidate ('shutdown') would be an
+        // illegal transition from 'startup' and get silently rejected, wedging
+        // the detector reporting 'startup' for the rest of that ground stop
+        // instead of correctly reporting 'shutdown' again. Requiring the
+        // restart condition to persist for N samples (matching real engine-start
+        // RPM rise, not a transient sensor blip) closes that without
+        // reintroducing the original stuck-in-shutdown bug this task exists to
+        // fix. Found and fixed during this task's own review, not guessed
+        // upfront -- see the Task 12 fix note in the implementation plan.
+        if (this._committedPhase === 'shutdown') {
+            const stillShutdown = rpm < this._thr.rpm_shutdown && fuelFlow < this._thr.ff_shutdown_max;
+            if (stillShutdown) {
+                this._restartDebounceCount = 0;
+                return this._committedPhase;
+            }
+            this._restartDebounceCount += 1;
+            if (this._restartDebounceCount < this._thr.shutdown_restart_debounce_samples) {
+                return this._committedPhase; // not yet confirmed -- stay shutdown
+            }
+            this.reset(); // confirmed restart -- fall through and classify this sample fresh
         }
 
         const gpsDeltaM = this._gpsDelta.push(lat, lon);
