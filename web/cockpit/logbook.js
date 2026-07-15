@@ -1251,13 +1251,17 @@ class Logbook {
             if (!dist) return '';
             const phases = [
                 { key: 'startup',  color: 'var(--text-muted)',     label: 'SU' },
-                { key: 'taxi',     color: 'var(--status-caution)', label: 'TX' },
+                { key: 'warmup',   color: 'var(--text-muted)',     label: 'WM' },
+                { key: 'taxi_out', color: 'var(--status-caution)', label: 'TX' },
                 { key: 'runup',    color: 'var(--accent)',         label: 'RU' },
                 { key: 'takeoff',  color: 'var(--status-ok)',      label: 'TO' },
                 { key: 'climb',    color: 'var(--status-ok)',      label: 'CL' },
                 { key: 'cruise',   color: 'var(--status-ok)',      label: 'CR' },
                 { key: 'descent',  color: 'var(--status-caution)', label: 'DS' },
+                { key: 'approach', color: 'var(--accent)',         label: 'AP' },
                 { key: 'landing',  color: 'var(--accent)',         label: 'LN' },
+                { key: 'taxi_in',  color: 'var(--status-caution)', label: 'TI' },
+                { key: 'shutdown', color: 'var(--text-muted)',     label: 'SD' },
             ];
             const segments = phases.filter(p => dist[p.key] > 0).map(p =>
                 `<div style="flex:${dist[p.key]};background:${p.color};min-width:2px;height:100%" title="${p.label} ${dist[p.key]}%"></div>`
