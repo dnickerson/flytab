@@ -26,9 +26,10 @@ class EngineMLBridge {
         this._baselineWindowMax = 60;
         this._flightPhase = 'ground';         // derived phase: ground/climb/cruise/descent
         // Last phase PhaseDetector.classify() actually produced. Left unset
-        // (not pre-seeded to 'cruise') so the `?? 'cruise'` fallback in
-        // _onEngineData only applies on a genuine cold-start-with-no-GPS-ever
-        // case, not a mid-flight transient GPS gap — see Task 15.
+        // (not pre-seeded to 'cruise') so the 'cruise' fallback in _onEngineData
+        // only applies on a genuine cold-start-with-no-GPS-ever case (or when the
+        // last computed phase was 'shutdown', which has no trained ML threshold),
+        // not a mid-flight transient GPS gap — see Task 15 and its follow-up fix.
         this._lastComputedPhase = undefined;
         this._advisoryLog = [];               // ring buffer, last 20 advisories for debrief
         this._advisoryLogMax = 20;
@@ -279,7 +280,20 @@ class EngineMLBridge {
         // detector's own internal state (windows/latches) is left undisturbed during
         // the gap since classify() simply isn't called — it resumes correctly once GPS
         // returns. See Task 15.
-        let phase = this._lastComputedPhase ?? 'cruise';
+        //
+        // 'shutdown' is excluded from retention: it has no entry in
+        // anomaly_v2_metadata.json's phase_thresholds (the ML model was never trained
+        // on it), so passing phase='shutdown' into the plugin makes ThresholdAdapter
+        // fall back to its hardcoded global default (0.88) — far looser than every
+        // trained phase, including cruise (0.0745). A GPS gap spanning a shutdown→
+        // restart boundary (e.g. leg 2 of a multi-leg day, engine started before
+        // Stratux reacquires a fix) would otherwise silently disable ML anomaly
+        // detection through taxi/runup/takeoff/initial climb. 'cruise' is used as the
+        // safe default bucket here instead, matching EngineMLPlugin.java's own
+        // call.getString("phase", "cruise") convention. See Task 15 follow-up.
+        let phase = (this._lastComputedPhase && this._lastComputedPhase !== 'shutdown')
+            ? this._lastComputedPhase
+            : 'cruise';
         if (this._phaseDetector && sit?.lat != null && sit?.lon != null) {
             phase = this._phaseDetector.classify({
                 rpm: d.rpm ?? d.RPM ?? 0,
