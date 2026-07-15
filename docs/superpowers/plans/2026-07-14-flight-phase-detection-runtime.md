@@ -1387,6 +1387,208 @@ git commit -m "docs: document the 12-phase taxonomy and flytab parity requiremen
 
 ---
 
+### Task 12: Reset the runtime detector's state on a new engine-start after `shutdown`
+
+**Why this task exists:** The final whole-branch review (2026-07-14) found and Dana confirmed observing in practice: `PhaseDetector` is instantiated exactly once in `engine-ml.js`'s `start()` and runs for the app's entire session. `phase_spec.json` makes `shutdown` a terminal state (`transitions.shutdown: []`) — correct for the offline batch detector, which processes one flight's CSV at a time, but wrong for a tablet app that stays open across a multi-leg flying day (land, taxi back, shut down, refuel, restart, fly again). Once the detector commits `shutdown`, `applyTransition` can never legally leave it, so every subsequent leg in the same app session reports `phase='shutdown'` forever — silently gating ML anomaly detection with the engine-off threshold and suppressing every in-flight `EngineAdvisor` message for that entire leg. This is a direct violation of this plan's own Global Constraint ("a malformed sample must degrade gracefully, never silently drop anomaly coverage") — not from a malformed sample, but from a real, previously-untested multi-flight session. The design spec's own §2 anticipated the *concept* ("A later `startup` begins a fresh engine-start cycle rather than a transition out of `shutdown`") but that reset semantics was never ported to the runtime FSM — only the offline batch detector gets a fresh start "for free" because it's invoked once per CSV file.
+
+**Files:**
+- Modify: `web/shared/phase-detector.js` (add `reset()`, detect the shutdown→restart edge in `classify()`)
+- Modify: `android/app/src/main/java/app/flywhere/flytab/engineml/EngineAdvisor.java` (call its existing, currently-unused `reset()` on the same edge)
+- Test: `tests/phase-detection/phase-detector.test.js` (new integration test: full flight into `shutdown`, then a second engine-start, assert recovery)
+
+**Interfaces:**
+- Produces: `PhaseDetector.prototype.reset()` — public method, no arguments, reinitializes all detector state (committed phase back to `'startup'`, latches cleared, helper windows re-created fresh). Called internally by `classify()`; also usable directly by a caller if ever needed (e.g. a future explicit "new flight" UI action), though this task does not add such a caller.
+
+- [ ] **Step 1: Write the failing test**
+
+Add to `tests/phase-detection/phase-detector.test.js` (same file Task 4 created — read it first to match its exact `sample()` helper and `SPEC` loading pattern before adding this):
+
+```js
+describe('PhaseDetector reset on a new engine-start after shutdown', () => {
+    it('recovers into startup instead of staying stuck in shutdown forever', () => {
+        const det = new PhaseDetector(SPEC);
+
+        // Drive the detector all the way to a committed 'shutdown' (engine off).
+        for (let i = 0; i < 205; i++) det.classify(sample()); // -> warmup (per Task 4's existing test)
+        let last;
+        for (let i = 0; i < 10; i++) {
+            last = det.classify(sample({ rpm: 0, fuelFlow: 0 })); // dwell_seconds.shutdown = 5
+        }
+        expect(last).toBe('shutdown');
+
+        // A single sample still showing engine-off must NOT reset (only a genuine
+        // restart signature should) -- guards against reset firing on sensor noise.
+        expect(det.classify(sample({ rpm: 0, fuelFlow: 0 }))).toBe('shutdown');
+
+        // Engine restarts: RPM and fuel flow rise back above the shutdown thresholds.
+        const afterRestart = det.classify(sample({ rpm: 800, fuelFlow: 6 }));
+        expect(afterRestart).toBe('startup');
+
+        // The detector must behave like a genuinely fresh instance from here --
+        // confirm it can reach warmup again via the same path Task 4's own test uses,
+        // not remain wedged in some half-reset state.
+        let last2;
+        for (let i = 0; i < 205; i++) last2 = det.classify(sample({ rpm: 800, fuelFlow: 6 }));
+        expect(last2).toBe('warmup');
+    });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npm test -- tests/phase-detection/phase-detector.test.js`
+Expected: FAIL — `expect(afterRestart).toBe('startup')` fails, actual `'shutdown'` (the pre-fix detector stays wedged).
+
+- [ ] **Step 3: Implement `reset()` and the shutdown→restart detection**
+
+In `web/shared/phase-detector.js`, refactor the constructor to delegate its state initialization to a new `reset()` method (DRY — both need the identical initial state), and add the shutdown→restart check at the top of `classify()`:
+
+```js
+class PhaseDetector {
+    constructor(spec) {
+        this._spec = spec;
+        this._thr = spec.thresholds;
+        this._dwellSeconds = spec.dwell_seconds;
+        this._transitions = spec.transitions;
+        this.reset();
+    }
+
+    // Re-initializes all per-flight state, including the accumulated causal
+    // helper windows (a stale GPS-delta/RPM-slope/altitude-rate/field-elevation
+    // history from the flight that just ended must not leak into the new one).
+    // Called by the constructor, and internally by classify() when it detects
+    // a fresh engine-start after a committed 'shutdown' -- phase_spec.json makes
+    // 'shutdown' terminal for the offline batch detector (correct: one CSV per
+    // flight), but this runtime detector runs continuously across an entire
+    // app session, so without this reset a second flight leg in the same
+    // session would report 'shutdown' forever. See the Task 12 note in the
+    // implementation plan for the full incident.
+    reset() {
+        this._gpsDelta = new GpsDeltaWindow(this._thr.gps_delta_window_s);
+        this._rpmSlope = new RpmSlopeWindow(this._thr.startup_rpm_slope_window_s);
+        this._altRate = new TrailingAltRate(this._thr.alt_rate_window_s);
+        this._fieldElev = new FieldElevationEstimate(
+            this._thr.field_elev_lock_samples,
+            this._thr.speed_taxi_max_kts,
+            this._thr.field_elev_max_idle_rpm,
+        );
+        this._committedPhase = 'startup';
+        this._hasTakenOff = false;
+        this._hasLeftRamp = false;
+        this._pendingCandidate = null;
+        this._pendingSeconds = 0;
+    }
+
+    classify({ rpm, mp, fuelFlow, lat, lon, altitudeFt, speedKts }) {
+        // A committed 'shutdown' is terminal in phase_spec.json's transition
+        // graph, but this detector runs across an entire app session, not one
+        // flight -- detect a genuine restart (the same rpm/fuelFlow condition
+        // classifyRow itself uses to decide "shutdown") and reset before doing
+        // anything else with this sample, so every downstream computation
+        // (GPS-delta, RPM-slope, field-elevation, the classifier itself) sees
+        // fresh state for the new flight rather than mixing in the old one's
+        // history.
+        if (this._committedPhase === 'shutdown' &&
+            !(rpm < this._thr.rpm_shutdown && fuelFlow < this._thr.ff_shutdown_max)) {
+            this.reset();
+        }
+
+        const gpsDeltaM = this._gpsDelta.push(lat, lon);
+        const stationary = gpsDeltaM < this._thr.gps_delta_stationary_m;
+        const rpmSlope = this._rpmSlope.push(rpm);
+        const fieldElevFt = this._fieldElev.push(altitudeFt, speedKts, rpm, stationary);
+        const agl = altitudeFt - fieldElevFt;
+        const altRateFpm = this._altRate.push(altitudeFt) ?? 0;
+
+        const candidate = classifyRow(
+            { rpm, agl, speedKts, mp, fuelFlow, altRateFpm, rpmSlope, stationary },
+            { currentPhase: this._committedPhase, hasTakenOff: this._hasTakenOff, hasLeftRamp: this._hasLeftRamp },
+            this._thr,
+        );
+        const legalityAnchor = this._pendingCandidate ?? this._committedPhase;
+        const validated = applyTransition(candidate, legalityAnchor, this._transitions);
+
+        if (validated === this._committedPhase) {
+            this._pendingCandidate = null;
+            this._pendingSeconds = 0;
+        } else if (validated === this._pendingCandidate) {
+            this._pendingSeconds += 1;
+            const requiredSeconds = this._dwellSeconds[validated] ?? 10;
+            if (this._pendingSeconds >= requiredSeconds) {
+                this._committedPhase = validated;
+                this._pendingCandidate = null;
+                this._pendingSeconds = 0;
+            }
+        } else {
+            this._pendingCandidate = validated;
+            this._pendingSeconds = 1;
+        }
+
+        if (AIRBORNE_PHASES.has(this._committedPhase)) this._hasTakenOff = true;
+        if (this._committedPhase === 'taxi_out') this._hasLeftRamp = true;
+
+        return this._committedPhase;
+    }
+}
+```
+
+(Everything else in the file — the `require`/`window` dual export, `AIRBORNE_PHASES`, the existing deadlock-fix comment block on `_pendingCandidate` — is unchanged; only the constructor/`classify()` shown above and the new `reset()` method change.)
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `npm test -- tests/phase-detection/phase-detector.test.js`
+Expected: PASS (all tests in the file, including the 5 from Task 4 and the new reset test)
+
+- [ ] **Step 5: Wire the same reset on the Java side**
+
+`EngineAdvisor.java` already has a `reset()` method (added inertly by Task 9, never called) that clears `historyCount`, `historyHead`, `currentMP`, `currentCarbTemp`, `currentFuelRemaining`, `startupEntryEgt`, and `lastPhase` — exactly the per-flight state a new leg needs cleared (trend history buffers, the sticky-valve EGT baseline). Call it at the top of `addSample(...)`, detecting the same shutdown→non-shutdown edge via the existing `lastPhase` field (already tracked for the sticky-valve latch), before that sample's data is recorded:
+
+```java
+public void addSample(float[] features, String phase, float mp, float carbTemp, float fuelRemaining, float altitude) {
+    if ("shutdown".equals(lastPhase) && !"shutdown".equals(phase)) {
+        reset();
+    }
+    System.arraycopy(features, 0, history[historyHead], 0, Math.min(features.length, 12));
+    mpHistory[historyHead] = mp;
+    carbTempHistory[historyHead] = carbTemp;
+    historyHead = (historyHead + 1) % HISTORY_SIZE;
+    if (historyCount < HISTORY_SIZE) historyCount++;
+
+    currentMP = mp;
+    currentCarbTemp = carbTemp;
+    currentFuelRemaining = fuelRemaining;
+    currentAltitude = altitude;
+
+    if ("startup".equals(phase) && !"startup".equals(lastPhase)) {
+        startupEntryEgt = new float[4];
+        for (int i = 0; i < 4; i++) {
+            startupEntryEgt[i] = features[IDX_EGT1 + i];
+        }
+    }
+    lastPhase = phase;
+}
+```
+
+`reset()` sets `lastPhase = null`, so the very next line's `!"startup".equals(lastPhase)` still correctly re-latches `startupEntryEgt` on this same call if `phase` is `"startup"` — no double-tracking variable needed, this reuses the existing latch logic as-is.
+
+- [ ] **Step 6: Build**
+
+```bash
+cd ~/flytab/.worktrees/flight-phase-detection-runtime
+bash build.sh
+```
+
+Expected: build succeeds.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add web/shared/phase-detector.js tests/phase-detection/phase-detector.test.js android/app/src/main/java/app/flywhere/flytab/engineml/EngineAdvisor.java
+git commit -m "fix: reset runtime PhaseDetector and EngineAdvisor state on a new engine-start after shutdown"
+```
+
+---
+
 ## Definition of Done
 
 - All of Tasks 1-5's automated tests pass: `npm test` (flytab) green, including the golden-parity test at ≥85% agreement against the frozen Python output.
@@ -1394,4 +1596,5 @@ git commit -m "docs: document the 12-phase taxonomy and flytab parity requiremen
 - `bash build.sh` succeeds after Tasks 7-9.
 - `PhaseDetector.java` is deleted; no remaining reference to it in `android/app/`.
 - Both CLAUDE.md files updated (Task 11).
+- Task 12's reset test passes: a `PhaseDetector` driven to `shutdown` and then a fresh engine-start recovers into `startup` rather than staying wedged.
 - **Not part of this plan's automated Definition of Done, required before flying:** the on-device CDP test (Task 7/8's manual follow-up note) confirming a real `phase` value round-trips correctly through the rebuilt APK, and Dana's empirical calibration of the sticky-valve threshold (Task 9's follow-up note) before that specific advisory is trusted operationally.
