@@ -1,6 +1,11 @@
 'use strict';
 
 function haversineMeters(lat1, lon1, lat2, lon2) {
+    // Delegates to planning/math/route-math.js — prefer haversine() from FlyTabPlanning
+    if (typeof FlyTabPlanning !== 'undefined' && FlyTabPlanning.haversine) {
+        return FlyTabPlanning.haversine(lat1, lon1, lat2, lon2) * 1852;
+    }
+    // Fallback if planning lib not yet ready
     const R = 6371000.0;
     const toRad = (deg) => (deg * Math.PI) / 180;
     const p1 = toRad(lat1);
