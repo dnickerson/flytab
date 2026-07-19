@@ -131,7 +131,7 @@ class IfrClearance {
                 <button class="clr-mode-tab" data-mode="apch">APCH</button>
             </div>
             <div class="clr-leg-toggle" id="clr-leg-toggle" style="display:none"></div>
-            <button class="ep-close clr-close">✕</button>
+            <button class="btn-close ep-close clr-close">✕</button>
         </div>
         <div class="clr-body">
             <!-- DEP panel -->

@@ -166,7 +166,7 @@ class ThermalMonitor {
         header.textContent = 'Thermal Status';
 
         const closeBtn = document.createElement('button');
-        closeBtn.className = 'ep-close';
+        closeBtn.className = 'btn-close ep-close';
         closeBtn.textContent = '✕';
         closeBtn.onclick = () => overlay.remove();
 

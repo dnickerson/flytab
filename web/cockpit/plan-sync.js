@@ -38,7 +38,7 @@ class PlanSync {
             <div class="ps-container">
                 <div class="ps-header">
                     <span class="ps-title">FLIGHT PLANS</span>
-                    <button class="ep-close ps-close">✕</button>
+                    <button class="btn-close ep-close ps-close">✕</button>
                 </div>
                 <div class="ps-tabs">
                     <button class="ps-tab ps-tab-active" data-tab="cloud">CLOUD</button>
