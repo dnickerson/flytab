@@ -157,7 +157,7 @@ class RouteNavStrip {
             const devEl = this._el.querySelector('[data-field="dev"] .rnav-val');
             if (devEl) {
                 devEl.textContent = devText;
-                devEl.className = 'rnav-val' + (absXtk > 2 ? ' rnav-amber' : absXtk > 5 ? ' rnav-red' : '');
+                devEl.className = 'rnav-val' + (absXtk > 5 ? ' rnav-red' : absXtk > 2 ? ' rnav-amber' : '');
             }
         } else {
             this._setVal('dev', '---');
