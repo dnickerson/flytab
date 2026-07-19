@@ -252,7 +252,7 @@ public class StratuxUdpPlugin extends Plugin {
         int altRaw = ((p[11] & 0xFF) << 4) | ((p[12] & 0xF0) >> 4);
         Double altFt = (altRaw == 0xFFF) ? null : (double) (altRaw * 25 - 1000);
         int misc = p[12] & 0x0F;
-        boolean airborne = (misc & 0x02) != 0;
+        boolean airborne = (misc & 0x08) != 0;
 
         // [13] hi nibble = NIC, lo nibble = NACp (we don't surface these)
 

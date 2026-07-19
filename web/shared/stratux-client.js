@@ -269,8 +269,8 @@ class StratuxClient extends EventTarget {
             } catch { /* ignore malformed */ }
         };
 
-        this._trafficWs.onclose = () => {
-            if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', 'Traffic WS closed, reconnecting traffic only…');
+        this._trafficWs.onclose = (e) => {
+            if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', `Traffic WS closed, reconnecting traffic only… code=${e?.code} reason=${e?.reason || ''}`);
             this._scheduleTrafficReconnect();
         };
         this._trafficWs.onerror = () => { /* onclose will fire */ };
@@ -326,7 +326,8 @@ class StratuxClient extends EventTarget {
             } catch { /* ignore */ }
         };
 
-        this._situationWs.onclose = () => {
+        this._situationWs.onclose = (e) => {
+            if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', `Situation WS closed code=${e?.code} reason=${e?.reason || ''}`);
             if (this._trafficWs?.readyState === WebSocket.OPEN) {
                 setTimeout(() => {
                     // Guard: don't create a duplicate if already reconnected
@@ -445,7 +446,8 @@ class StratuxClient extends EventTarget {
             } catch { /* ignore malformed */ }
         };
 
-        this._weatherWs.onclose = () => {
+        this._weatherWs.onclose = (e) => {
+            if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', `Weather WS closed code=${e?.code} reason=${e?.reason || ''}`);
             // Reconnect after 5s if the overall Stratux connection is still alive
             // (covers both WS-mode traffic OPEN and UDP-mode where traffic flows
             // separately).
@@ -469,6 +471,12 @@ class StratuxClient extends EventTarget {
         this._jsonioWs.onmessage = (e) => {
             try {
                 const msg = JSON.parse(e.data);
+                // /jsonio also carries Stratux's trafficUpdate/radarUpdate/situationUpdate
+                // broadcasts (same connection subscribes to all four server-side) — those
+                // are TrafficInfo/Settings/SituationData objects, never uatparse.Frame, so
+                // they never carry a Product_id field (uatparse.Frame always sets it, even
+                // to 0). Drop them here instead of misdispatching as stratux:fisb-frame.
+                if (msg.Product_id === undefined) return;
                 // Stratux UATFrame JSON uses field name "NEXRAD" ([]NEXRADBlock struct).
                 // Discriminate by presence of NEXRAD array — covers all PIDs 51-64.
                 if (msg.NEXRAD && msg.NEXRAD.length > 0) {
@@ -483,7 +491,8 @@ class StratuxClient extends EventTarget {
             } catch { /* ignore malformed */ }
         };
 
-        this._jsonioWs.onclose = () => {
+        this._jsonioWs.onclose = (e) => {
+            if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', `Jsonio WS closed code=${e?.code} reason=${e?.reason || ''}`);
             setTimeout(() => {
                 if (this.udpMode || this._trafficWs?.readyState === WebSocket.OPEN) {
                     this._connectJsonio();
