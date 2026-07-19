@@ -567,6 +567,11 @@ class Logbook {
         // Save full ML ring buffer linked to this entry
         this._saveMLLog(entry.id).catch(() => {});
 
+        // getFullLog() above already copied the ring buffer synchronously, so it's
+        // safe to clear now — otherwise the ML tab's "Current Session (Live)" card
+        // keeps showing this finished flight as in-progress until the next one starts.
+        window.engineML?.clearLog();
+
         // Don't auto-sync drafts — pilot must review first
         return entry;
     }

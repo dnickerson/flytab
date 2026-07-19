@@ -857,6 +857,16 @@ class EngineMLBridge {
         console.log(`[EngineML] Logging stopped — ${this._log.length} samples`);
     }
 
+    /** Clears the in-memory log once it has been persisted to a logbook entry —
+     *  otherwise the "Current Session (Live)" card keeps showing a finished
+     *  flight as in-progress until the next startLogging() call. Must not be
+     *  called from stopLogging(): logbook.js reads getFlightSummary()/getFullLog()
+     *  after awaiting airport lookups, so clearing here first would race and
+     *  silently drop the ML summary for every logged flight. */
+    clearLog() {
+        this._log = [];
+    }
+
     /** Returns compact summary for logbook custom_fields. Returns null if no data. */
     getFlightSummary() {
         if (!this._log.length) return null;
