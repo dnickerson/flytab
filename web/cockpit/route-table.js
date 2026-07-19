@@ -50,12 +50,17 @@ function isFuelStop(wp, index, waypoints) {
 
     if (!isApt) return false;
 
-    // A fuel stop is an airport that has another airport later in the route.
+    const wpId = wp.icao || wp.name || '';
+
+    // A fuel stop is an airport that has a DIFFERENT airport later in the route.
     // The destination is the last APT — approach fixes and MAP points after it
-    // do not make the destination a fuel stop.
+    // do not make the destination a fuel stop. Identity (not just type) must
+    // differ: a missed-approach/MAP fix that resolves back to the destination's
+    // own icao (e.g. mis-typed as APT elsewhere) must not count as a second stop.
     return waypoints.slice(index + 1).some(w => {
-        if (w.type === 'APT') return true;
         const id = w.icao || w.name || '';
+        if (id && id === wpId) return false;
+        if (w.type === 'APT') return true;
         return !w.type && id.length === 4 && id.startsWith('K');
     });
 }
@@ -65,6 +70,7 @@ class RouteTable {
         this._container = container;
         this._map = map;
         this._waypoints = [];   // trip.waypoints[] — all waypoints across all flights
+        this._destIcao = null;  // trip's real destination icao — set by loadPlan()
         this._flights = [];     // trip.flights[]   — computed by _buildFlights()
         this._activeIndex = -1;
         this._lastGpsPosition = null;  // for auto-pan after drag
@@ -235,6 +241,7 @@ class RouteTable {
 
         const planDep  = plan.flight_plan?.departure  || plan.waypoints[0]?.icao;
         const planDest = plan.flight_plan?.destination || plan.waypoints[plan.waypoints.length - 1]?.icao;
+        this._destIcao = planDest; // real destination airport — may not be the last waypoint (missed-approach fixes trail it)
 
         this._waypoints = plan.waypoints.map((wp, i) => {
             // Map leg performance data onto waypoints.
@@ -1231,12 +1238,19 @@ class RouteTable {
         let depIdx = 0;
 
         for (let i = 1; i < wps.length; i++) {
+            const isLast = i === wps.length - 1;
             // Close a flight when we hit a fuel stop or the final destination
-            if (isFuelStop(wps[i], i, wps) || i === wps.length - 1) {
+            if (isFuelStop(wps[i], i, wps) || isLast) {
+                // For the trip's final flight, prefer the plan's actual destination
+                // icao over the last waypoint — a procedure's missed-approach fixes
+                // trail the destination airport in this._waypoints, so wps[i] here
+                // may be a MAP/hold fix rather than the airport itself.
+                const destId = (isLast && this._destIcao) ? this._destIcao
+                    : (wps[i].icao || wps[i].name || '?');
                 flights.push({
                     index:       flights.length,
                     dep:         wps[depIdx].icao || wps[depIdx].name || '?',
-                    dest:        wps[i].icao      || wps[i].name      || '?',
+                    dest:        destId,
                     depWpIndex:  depIdx,
                     destWpIndex: i,
                     // Per-flight computed totals filled by _computeEnroute()

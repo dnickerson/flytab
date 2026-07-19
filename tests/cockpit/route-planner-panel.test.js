@@ -201,3 +201,56 @@ describe('close abort (_applyAborted)', () => {
         expect(panel._applyAborted).toBe(false);
     });
 });
+
+// ── _doApply dep/dest derivation (approach with missed-approach fixes) ─────
+//
+// Regression test for: loading an approach whose procedure has fixes after
+// the runway threshold (missed-approach/MAP fixes) pushed the destination
+// airport out of the last array slot. _doApply used to take dep/dest from
+// wps[0]/wps[last] positionally, so plan.destination silently became the
+// missed-approach fix instead of the airport — which cascaded into a false
+// "Fuel Stop" split in the route table. See web/cockpit/route-table.js
+// isFuelStop()/_buildFlights() for the downstream half of this bug.
+
+describe('_doApply dep/dest derivation', () => {
+    it('derives destination from the dest pill, not the last waypoint', async () => {
+        const panel = makePanel();
+        panel._applyAborted = false;
+        panel._windsPromise = null;
+        panel._planner = null; // force _buildLegsFromWaypoints fallback path
+        panel._pctPower = 65;
+        panel._altitude = 5500;
+
+        // Route after insertApproach() spliced RNAV 06 fixes around the KLKR
+        // dest pill: IAF/FAF/runway fixes go before it, missed-approach fixes
+        // (here a single hold fix) go after it — so KLKR is no longer last.
+        panel._route = [
+            { id: 'KLKR',      type: 'dep'  },
+            { id: 'CORON',     type: 'fix'  },
+            { id: 'RW06',      type: 'fix'  },
+            { id: 'KLKR',      type: 'dest' },
+            { id: 'MISSEDFIX', type: 'fix'  },
+        ];
+
+        panel._pillsToWaypoints = vi.fn().mockResolvedValue([
+            { id: 'KLKR',      icao: 'KLKR',      name: 'KLKR',      lat: 34.72, lon: -80.78, type: 'APT' },
+            { id: 'CORON',     icao: 'CORON',     name: 'CORON',     lat: 34.80, lon: -80.85 },
+            { id: 'RW06',      icao: 'RW06',      name: 'RW06',      lat: 34.72, lon: -80.78 },
+            { id: 'KLKR',      icao: 'KLKR',      name: 'KLKR',      lat: 34.72, lon: -80.78, type: 'APT' },
+            { id: 'MISSEDFIX', icao: 'MISSEDFIX', name: 'MISSEDFIX', lat: 34.90, lon: -80.90 },
+        ]);
+        panel._saveCurrentTrip = vi.fn().mockResolvedValue();
+
+        globalThis.app = { applyRouteEdit: vi.fn().mockResolvedValue() };
+
+        const result = await panel._doApply();
+
+        expect(result).toBe(true);
+        const appliedPlan = globalThis.app.applyRouteEdit.mock.calls[0][0];
+        expect(appliedPlan.departure).toBe('KLKR');
+        expect(appliedPlan.destination).toBe('KLKR');
+        expect(appliedPlan.flight_plan.destination).toBe('KLKR');
+
+        delete globalThis.app;
+    });
+});

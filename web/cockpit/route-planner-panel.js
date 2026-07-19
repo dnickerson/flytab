@@ -2705,8 +2705,14 @@ class RoutePlannerPanel {
             legs = this._buildLegsFromWaypoints(wps);
         }
 
-        const dep  = wps[0].icao  || wps[0].name;
-        const dest = wps[wps.length - 1].icao || wps[wps.length - 1].name;
+        // Derive dep/dest from the 'dep'/'dest' pills, not array position — a
+        // procedure's missed-approach fixes are spliced in *after* the dest
+        // pill (insertApproach), so the destination airport is not reliably
+        // the last waypoint once an approach with a missed segment is loaded.
+        const depPill  = this._route.find(p => p.type === 'dep');
+        const destPill = this._route.find(p => p.type === 'dest');
+        const dep  = depPill?.id  || wps[0].icao || wps[0].name;
+        const dest = destPill?.id || wps[wps.length - 1].icao || wps[wps.length - 1].name;
 
         const plan = {
             departure:       dep,
