@@ -79,6 +79,9 @@ class FuelOverlay {
             <div class="fo-total-row">
                 TOTAL: <span id="fo-total-gal" class="fo-total-val">0.0</span> gal
             </div>
+            <div class="fo-dropped-burn-row" id="fo-dropped-burn-row" style="display:none;">
+                Possible under-tracked burn during a comms gap: <span id="fo-dropped-burn-val">0.0</span> gal
+            </div>
 
             <!-- B) EDM COMPARISON -->
             <div class="fo-edm-section" id="fo-edm-section" style="display:none;">
@@ -202,6 +205,8 @@ class FuelOverlay {
             rightInput: this._el.querySelector('#fo-right-input'),
             rightGal: this._el.querySelector('#fo-right-gal'),
             totalGal: this._el.querySelector('#fo-total-gal'),
+            droppedBurnRow: this._el.querySelector('#fo-dropped-burn-row'),
+            droppedBurnVal: this._el.querySelector('#fo-dropped-burn-val'),
             edmSection: this._el.querySelector('#fo-edm-section'),
             edmTic: this._el.querySelector('#fo-edm-tic'),
             edmEdm: this._el.querySelector('#fo-edm-edm'),
@@ -327,6 +332,18 @@ class FuelOverlay {
         if (manual != null && manual > 0) {
             this._dom.manualInput.value = manual;
         }
+
+        // Surface any dropped-burn estimate from FuelTankState (comms-gap tracking)
+        try {
+            const tankState = (typeof FuelTankState !== 'undefined') ? FuelTankState.getState() : null;
+            const dropped = tankState?.dropped_burn_estimate_gal ?? 0;
+            if (dropped > 0.05) {
+                this._dom.droppedBurnVal.textContent = dropped.toFixed(2);
+                this._dom.droppedBurnRow.style.display = '';
+            } else {
+                this._dom.droppedBurnRow.style.display = 'none';
+            }
+        } catch (_) { /* FuelTankState unavailable */ }
 
         // Auto-fill fuel-add date/time with current local time
         const now = new Date();
@@ -545,23 +562,22 @@ class FuelOverlay {
             stops.push(record);
             localStorage.setItem('flytab_fuel_stops', JSON.stringify(stops));
 
-            // Update current fuel total: previous fuel + gallons added
-            const { gallons: currentFuel } = FuelState.getStartFuel();
-            const newTotal = currentFuel + gallons;
-            FuelState.saveMeasurement({ total_gal: newTotal, source: 'tic' });
-
-            // Update synthetic per-tank state if available
-            if (typeof FuelTankState !== 'undefined') {
-                const galL = parseFloat(this._dom.addGalL?.value);
-                const galR = parseFloat(this._dom.addGalR?.value);
-                if (galL > 0) FuelTankState.topOff('L', galL);
-                if (galR > 0) FuelTankState.topOff('R', galR);
-                if (!(galL > 0) && !(galR > 0)) {
-                    // No per-tank split given — divide evenly
-                    FuelTankState.topOff('L', gallons / 2);
-                    FuelTankState.topOff('R', gallons / 2);
-                }
+            // Reset tracked fuel from the tic-mark reading already entered above (§A),
+            // exactly like _applyMeasurement() does — a fuel stop is always grounded in
+            // a fresh physical measurement, never computed from "previous + added."
+            const leftGal = FuelEngine.ticToGallons(this._leftTic, this._coefficients);
+            const rightGal = FuelEngine.ticToGallons(this._rightTic, this._coefficients);
+            if (leftGal <= 0 && rightGal <= 0) {
+                this._setAddStatus('Enter a tic-mark reading above before recording a fuel stop', 'error');
+                return;
             }
+            const existingTank = (typeof FuelTankState !== 'undefined') ? FuelTankState.getState() : null;
+            if (typeof FuelTankState !== 'undefined') {
+                FuelTankState.init(leftGal, rightGal, existingTank?.active_tank ?? 'L');
+            }
+            const m = FuelEngine.createMeasurement(this._leftTic, this._rightTic, this._coefficients);
+            FuelState.saveMeasurement(m);
+            const newTotal = m.total_gal;
 
             window.dispatchEvent(new CustomEvent('fuelstate:changed'));
             this._updateSourceDisplay();

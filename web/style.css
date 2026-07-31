@@ -5761,6 +5761,14 @@ body.fs-overlay-open .radar-loop-controls {
     font-family: var(--font-instrument);
     color: var(--color-success);
 }
+.fo-dropped-burn-row {
+    text-align: center;
+    font-size: 14px;
+    color: var(--color-caution);
+    font-weight: 700;
+    margin: -4px 0 10px;
+    padding: 6px 8px;
+}
 
 /* EDM comparison */
 .fo-edm-section {

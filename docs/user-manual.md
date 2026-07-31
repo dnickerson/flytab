@@ -425,6 +425,10 @@ During the approach, tap **APT** tab instead for quick access to all plates for 
 
 **Fuel Entry** (MORE → Fuel Entry) — After refueling, enter the quantity for each tank. FlyTab uses this as the starting fuel for the flight.
 
+**Recording a fuel stop:** Set the tic-mark sliders at the top of the Fuel Entry screen to your dipped/observed reading for each tank, then fill in gallons added, airport, date/time, and price in the FUEL ADDED section before tapping **RECORD FUEL STOP**. Tracked fuel is reset from the tic-mark reading itself, not calculated as "previous fuel + gallons added" — a fuel stop must always be grounded in a fresh physical measurement. If you tap RECORD FUEL STOP without entering a tic reading, the entry is rejected.
+
+If FlyTab detects a gap of more than a few seconds in engine data since the last fuel-flow sample (e.g. a Wi-Fi dropout), a caution line reading "Possible under-tracked burn during a comms gap" appears above the tic total when you open the Fuel Entry screen, showing the estimated gallons that may not have been tracked during the gap. This clears automatically once you record a new tic measurement or fuel stop.
+
 The **fuel tanks widget** (floating, top-left corner of the map) shows left/right tank quantities in gallons, live fuel flow (GPH), and combined endurance. The center column displays a total-fuel bar gauge, current GPH, and hours:minutes remaining. Tap the **L** or **R** badge to switch the active tank. Tap the **✎** button in the center column to edit fuel quantities at any time — the dialog pre-fills with your most recent tic measurement if one exists. All values update in real time from the engine monitor.
 
 The **FUEL** field in the nav strip shows total fuel remaining and projected endurance at current burn rate. This is the authoritative fuel-state display.
