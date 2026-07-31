@@ -22,12 +22,15 @@ const RouteTable = new Function(src + '\nreturn RouteTable;')();
 
 const FUEL_CAP = 40;
 
-/** Aircraft config used by _computeEnroute. Only fuel_capacity_gal matters here —
- *  every leg's burn is supplied explicitly via segment gph/ete_min. */
-function installGlobals({ currentFuel, startFuel }) {
+/** Aircraft config used by _computeEnroute. Only fuel_capacity_gal matters for the
+ *  segment-based routes — every leg's burn is supplied explicitly via segment
+ *  gph/ete_min. `perf` supplies extra `performance.*` values for the seg-less
+ *  route, whose burn comes from the config cruise gph/speed fallbacks instead. */
+function installGlobals({ currentFuel, startFuel, perf = {} }) {
     globalThis.CockpitConfig = {
         aircraft(path) {
             if (path === 'performance.fuel_capacity_gal') return FUEL_CAP;
+            if (Object.prototype.hasOwnProperty.call(perf, path)) return perf[path];
             return null;
         },
     };
@@ -61,6 +64,26 @@ function makeRoute(fuelStopOpts = {}) {
         { icao: 'KLWA', type: 'APT', lat: 36.10, lon: -79.94, _legDist: 120, _segments: seg(10) },
     ];
 }
+
+/**
+ * Same route, but with NO `_segments` on any waypoint — every leg therefore falls
+ * through to the seg-less `else` branch of _computeEnroute's per-waypoint chain,
+ * which accumulates fuelBurned from the config gph/speed fallbacks. Used with
+ * SEGLESS_PERF below, each 120 nm leg burns exactly 10 gal (120 nm / 120 kt × 10 gph).
+ */
+function makeSeglessRoute(fuelStopOpts = {}) {
+    return [
+        { icao: 'KLKR', type: 'APT', lat: 34.72, lon: -80.78 },
+        { icao: 'ENO',  type: 'VOR', lat: 35.00, lon: -80.50, _legDist: 120 },
+        { icao: 'KFGX', type: 'APT', lat: 35.50, lon: -80.20, _legDist: 120, ...fuelStopOpts },
+        { icao: 'KLWA', type: 'APT', lat: 36.10, lon: -79.94, _legDist: 120 },
+    ];
+}
+
+const SEGLESS_PERF = {
+    'performance.cruise_gph': 10,
+    'performance.cruise_speed_kt': 120,
+};
 
 function makeTable(waypoints, activeIndex) {
     const rt = Object.create(RouteTable.prototype);
@@ -139,6 +162,45 @@ describe('_computeEnroute — fuel-stop reset ordering', () => {
         expect(wps[2]._fuelRem).toBeCloseTo(10, 6);    // pre-fix: 15
         expect(wps[2]._fuelAdded).toBeCloseTo(5, 6);
         expect(wps[3]._fuelRem).toBeCloseTo(5, 6);     // (10 + 5) − 10
+    });
+
+    // Guards the placement of the reset block itself. The reset sits AFTER the whole
+    // if / else-if / else chain because the seg-less `else` branch also accumulates
+    // fuelBurned. Move it back inside the `segs.length > 0 && i > 0` branch and a
+    // route without _segments never refuels at all — _fuelAdded stays undefined and
+    // the post-stop legs keep draining the original tank.
+    it('refuels at the stop even when no waypoint has _segments', () => {
+        installGlobals({ currentFuel: 30, startFuel: 30, perf: SEGLESS_PERF });
+        const wps = makeSeglessRoute();                // fill to capacity (no fuel_add_gal)
+        const rt = makeTable(wps, 0);
+        rt._computeEnroute();
+
+        // Sanity: these legs really are taking the seg-less path.
+        for (const wp of wps) expect(wp._segments).toBeUndefined();
+        expect(wps[1]._fuel).toBeCloseTo(10, 6);       // 120 nm / 120 kt × 10 gph
+
+        expect(wps[0]._fuelRem).toBeCloseTo(30, 6);
+        expect(wps[1]._fuelRem).toBeCloseTo(20, 6);
+        expect(wps[2]._fuelRem).toBeCloseTo(10, 6);    // arrival: 30 − 20 burned
+        expect(wps[2]._fuelAdded).toBeCloseTo(30, 6);  // topped 10 → 40; undefined if the reset never fires
+        expect(wps[3]._fuelRem).toBeCloseTo(30, 6);    // 40 − 10; 0 if the reset never fires
+    });
+});
+
+// ── Step 5: explicit fill is clamped to remaining tank capacity ─────────────
+
+describe('_computeEnroute — explicit fuel_add_gal over-capacity clamp', () => {
+    it('clamps fuel_add_gal to the headroom left in the tanks', () => {
+        installGlobals({ currentFuel: 30, startFuel: 30 });
+        // 100 gal requested into a 40 gal tank holding 10 on arrival → only 30 fits.
+        const wps = makeRoute({ fuel_add_gal: 100 });
+        const rt = makeTable(wps, 0);
+        rt._computeEnroute();
+
+        expect(wps[2]._fuelRem).toBeCloseTo(10, 6);    // arrival fuel, unchanged by the clamp
+        expect(wps[2]._fuelAdded).toBeCloseTo(30, 6);  // clamped: min(100, 40 − 10), not 100
+        expect(wps[2]._fuelRem + wps[2]._fuelAdded).toBeLessThanOrEqual(FUEL_CAP);
+        expect(wps[3]._fuelRem).toBeCloseTo(30, 6);    // 40 − 10; unclamped would read 100
     });
 });
 
