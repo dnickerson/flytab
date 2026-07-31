@@ -799,7 +799,8 @@ class RouteTable {
             flight_plan: {
                 ...(this._trip?.flight_plan || {}),
                 departure: this._waypoints[0]?.icao || '',
-                destination: this._waypoints[this._waypoints.length - 1]?.icao || '',
+                destination: ([...this._waypoints].reverse().find(wp => wp.type === 'APT')
+                    || this._waypoints[this._waypoints.length - 1])?.icao || '',
                 // Clear stale legs — they were for the original route, not the edited one
                 legs: [],
                 // Preserve the original airway route array when waypoints are structurally
@@ -2612,16 +2613,35 @@ class RouteTable {
         }
         const fuelBurnFmt = totalFuelBurn > 0 ? totalFuelBurn.toFixed(1) : null;
 
-        // Fuel at destination — live engine GPH if available, else planned
+        // Fuel at destination — live canonical fuel if available, else planned figure.
+        // Fuel-stop-aware: uses the ACTIVE FLIGHT's remaining distance to its own
+        // destination (which may be a fuel stop, not the trip's final destination),
+        // not the whole remaining trip distance.
+        const currentFuel = (typeof FuelState !== 'undefined') ? FuelState.getCurrentFuel().gallons : null;
         const engData = window.enginePanel?.lastData;
-        const currentFuel = engData?.fuel_remaining_gal ?? engData?.fuel_gal ?? null;
-        const liveGph = engData?.fuel_flow_gph ?? engData?.gph ?? null;
+        const liveGph = engData?.fuel_flow_gph ?? engData?.gph ?? engData?.Fuel_Flow ?? null;
         const plannedGph = CockpitConfig.aircraft('performance.cruise_gph') ?? 9.0;
-        const destWp = this._waypoints[this._waypoints.length - 1];
+        const activeFlightNum = this._waypoints[this._activeIndex]?._flightIndex ?? 0;
+        const activeFlight = this._flights[activeFlightNum];
+        // Distance remaining to the ACTIVE flight's own destination (fuel stop or final),
+        // not the trip's overall remaining distance — remainDist as computed above already
+        // sums to the final waypoint, so recompute scoped to the active flight's end index.
+        let remainDistToActiveFlightDest = 0;
+        if (activeFlight) {
+            for (let i = this._activeIndex; i <= activeFlight.destWpIndex; i++) {
+                remainDistToActiveFlightDest += (i === this._activeIndex)
+                    ? (this._waypoints[i]._liveDist ?? this._waypoints[i]._legDist ?? 0)
+                    : (this._waypoints[i]._legDist ?? 0);
+            }
+        } else {
+            remainDistToActiveFlightDest = remainDist; // no flight-split data — fall back to trip-wide
+        }
+        const destWp = [...this._waypoints].reverse().find(wp => wp.type === 'APT')
+                    || this._waypoints[this._waypoints.length - 1];
         let fuelAtDest = null;
-        if (currentFuel != null && remainDist > 0 && cruiseSpeed > 0) {
+        if (currentFuel != null && remainDistToActiveFlightDest > 0 && cruiseSpeed > 0) {
             const gph = liveGph ?? plannedGph;
-            fuelAtDest = currentFuel - (remainDist / cruiseSpeed) * gph;
+            fuelAtDest = currentFuel - (remainDistToActiveFlightDest / cruiseSpeed) * gph;
         } else if (destWp?._fuelRem != null) {
             fuelAtDest = destWp._fuelRem;
         }

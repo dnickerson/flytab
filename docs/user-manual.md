@@ -445,6 +445,16 @@ The route table's **FUEL** column shows the fuel burned on each leg; **REM** sho
 
 For fuel stops further ahead on the route that you have not yet reached, REM is a **planning projection**, not a measurement. It assumes you fill to full unless you have entered an explicit gallons-added figure for that stop. Treat those downstream numbers as estimates for planning, and the current flight's REM as the figure to fly by.
 
+### The DEST figure in the route strip handle
+
+The collapsed route strip handle shows departure → destination, distance and time to run, planned burn, and a **DEST:X.X** badge — gallons expected to remain on arrival. The badge turns amber at 8 gallons and red at 4.
+
+**The badge is computed from your tracked fuel** — the same canonical figure the fuel tanks widget and the route table's REM column use — projected forward at your live fuel flow, or at planned cruise GPH if the engine monitor is not reporting flow. It no longer reads a separate engine-panel field that could disagree with the rest of the fuel displays.
+
+**On a trip with a fuel stop, the badge is fuel remaining at the end of the flight you are currently on — normally the fuel stop, not the trip's final airport.** Once you are established on a leg after the stop it re-scopes to the final airport. The airport named in the handle label is always the trip's *final* destination, so on a fuel-stop trip the label and the DEST figure can refer to different airports.
+
+One limitation to know: while you are flying the last leg directly into a fuel stop, the badge still projects across the whole remaining trip and therefore reads **lower** than the fuel you will actually land with. Use the route table's REM column at the fuel-stop waypoint for the arrival figure on that leg.
+
 ---
 
 ## Logbook
