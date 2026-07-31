@@ -1050,24 +1050,46 @@ Read the full loop body (a few more lines past what's quoted here) before removi
 
 - [ ] **Step 4: Implement the forward-looking projection for not-yet-reached flights**
 
+> **CORRECTED 2026-07-31 — the original code in this step computed wrong fuel numbers and was
+> deliberately NOT implemented in Task 8.** Two defects: (1) it seeded `projectedFuel` from
+> `startFuel`, which by that point every in-loop fuel-stop reset has already advanced to the *last*
+> flight's value, not the active flight's; (2) it never subtracted each flight's burn (`_totFuel`),
+> which the back-fill loop it replaces did do. Verified on a 3-flight trip (30 gal aboard, 40 gal
+> capacity, 10 gal burned per leg, explicit `fuel_add_gal: 5`): the old code produced
+> `_projectedStartFuel = [—, 25, 30]` where the true per-flight start fuel is `[30, 25, 20]` — a
+> **10 gal over-report** on the last flight, i.e. showing MORE fuel than exists, which is the exact
+> error class this plan exists to eliminate. Use the corrected code below.
+>
+> This step remains UNIMPLEMENTED. `_projectedStartFuel` and `_isProjection` have zero consumers,
+> so nothing is user-visible today; implement it in whichever future task first renders a projected
+> figure, and give it tests at that point.
+
 Replace the loop identified in Step 3 with:
 
 ```js
         // Forward-looking projection for flights not yet reached (planning estimate only,
         // never the live/authoritative figure — that's Step 2 above once a flight is active).
+        // Seed from the ACTIVE flight's start fuel, then for each subsequent flight subtract the
+        // preceding flight's burn before adding fuel at the stop. Both halves matter: seeding from
+        // the post-loop `startFuel` or skipping the burn subtraction over-reports fuel.
         let projectedFuel = startFuel;
-        for (let fi = 0; fi < this._flights.length; fi++) {
+        for (let fi = activeFlightNum + 1; fi < this._flights.length; fi++) {
             const flight = this._flights[fi];
-            if (fi <= activeFlightNum) continue; // active/past flights use the live source, not a projection
+            const prevBurn = this._flights[fi - 1]?._totFuel ?? 0;
+            const remAtStop = Math.max(0, projectedFuel - prevBurn);
             const stopWp = this._waypoints[flight.depWpIndex];
             const addGal = stopWp?.fuel_add_gal;
             projectedFuel = (addGal != null)
-                ? Math.min(fuelCap, projectedFuel + addGal)
+                ? Math.min(fuelCap, remAtStop + addGal)
                 : fuelCap; // no explicit fuel_add_gal declared — assume fill to capacity
             flight._projectedStartFuel = projectedFuel;
             flight._isProjection = true; // UI hook: render distinctly from a live figure
         }
 ```
+
+Seed `projectedFuel` from the active flight's start fuel (the live `FuelState.getCurrentFuel()`
+value from Step 2), **not** from a `startFuel` variable the per-waypoint loop has already mutated.
+When implementing, assert the 3-flight partial-fill case above yields `[30, 25, 20]`.
 
 - [ ] **Step 5: Fix the reset-ordering bug for the projection path**
 
