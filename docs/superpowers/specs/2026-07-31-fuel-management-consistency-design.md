@@ -69,8 +69,8 @@ Every fuel quantity reset — preflight, an auto-detected in-flight fuel stop, o
 
 **Trigger conditions for this flow (must all lead to the same code path):**
 - Preflight, pilot taps the fuel-tanks widget edit pencil (`fuel-tanks.js` init dialog)
-- In-flight, the app auto-detects proximity to a fuel-stop waypoint and shows the overlay (`app.js:_showFuelStopOverlay`) — **currently asks "gallons added," must change to prompt for a fresh tic reading**, reusing `fuel-overlay.js`'s existing tic-entry UI rather than duplicating it
-- In-flight, pilot manually opens "RECORD FUEL STOP" (`fuel-overlay.js:_recordFuelStop`) — already correct, becomes the reference implementation the other two call sites converge on
+- In-flight, the app auto-detects proximity to a fuel-stop waypoint and shows the overlay (`app.js:_showFuelStopOverlay`) — **currently asks "gallons added," must change to open `fuel-overlay.js` (its tic-mark sliders), instead of prompting for a computed gallons-added figure**
+- In-flight, pilot manually opens "RECORD FUEL STOP" (`fuel-overlay.js:_recordFuelStop`) — **correction after re-reading the actual source**: this is NOT purely a state-reset flow — the "Total gal added"/price/airport fields it already has (§E of the overlay) are also the data source for the existing K-Factor Calculator (§G, see Section 8) and stay exactly as they are, for cost/calibration record-keeping. The only fix here is *how the tank state itself gets reset*: `_recordFuelStop()` currently computes `FuelTankState.topOff()` from additive "estimate + added, clipped" arithmetic (the buggy path). It must instead call `FuelTankState.init()` from the tic-mark sliders already present in the same overlay screen (§A, `this._leftTic`/`this._rightTic` → `FuelEngine.ticToGallons()`) — exactly the same call `_applyMeasurement()` already makes. Recording "gallons added" and resetting tracked state become two independent actions on the same screen, not one computed from the other.
 
 **State lifecycle note:** `wp.fuel_add_gal` (pilot's pre-flight-declared expected refuel amount) is retained ONLY as an input to the *planning-time projection* for legs not yet reached (Section 5). It is never read or written by the actual fuel-stop-execution flow above once the pilot has physically reached and measured at that stop.
 
@@ -117,19 +117,16 @@ Every screen currently reading fuel independently switches to `FuelState.getCurr
 | `engine-page.js` (config keys) | Reads non-existent `enginePage.fuelLowGal`/`fuelCriticalGal` | Reads the real `fuelCautionGal`/`fuelWarningGal` keys, matching every other consumer |
 | `engine-page.js` ("used" gauge) | Reads non-existent `d.flight_fuel_used` | Reads `d.fuel.flight_fuel_used` (the real nested Pi-tracker field) |
 
-### 8. Fuel-used reconciliation (Goal 4)
+### 8. Fuel-used reconciliation (Goal 4) — extends the existing K-Factor Calculator
 
-At every fresh tic measurement (preflight, fuel stop, or an ad hoc mid-flight recheck via the same UI), compute and persist:
+**Correction from the initial version of this design:** `fuel-overlay.js` already has a working K-Factor Calculator (§G in its DOM, `_renderKFactor()`) that is what Goal 4 actually describes — it was missed in the first pass because the file hadn't been read in full yet. It sums `FUEL FILLED (actual)` from recorded fuel stops (`flytab_fuel_stops`, populated by §E's "RECORD FUEL STOP") against `FUEL USED (EDM)` — the sum of drops in `edm_gal` (the raw EDM/Pi-tracker fuel-remaining reading, captured into `flypi_fuel_history` at each tic measurement via `FuelEngine.createMeasurement()`) — and produces a `ratio` with calibration guidance ("increase/decrease K-factor — EDM reads low/high"). This is intentionally sourced from the **raw, uncorrected EDM reading**, not `FuelTankState`/`FuelState`'s canonical resolution — its entire purpose is checking the EDM sensor's own calibration against ground truth, so it must NOT be redirected through the canonical fuel APIs introduced elsewhere in this design.
 
-- `edmUsedSinceLastMeasurement` — cumulative GPH×Δt already integrated by `FuelTankState.onSample()` since the prior `initialized_at`/measurement timestamp (this is exactly what `FuelTankState`'s running total already reflects; the delta is `previousInitTotal − currentTrackedTotalJustBeforeReinit`)
-- `measuredUsed` — previous tic-measured gallons minus new tic-measured gallons (no "added" term needed, since a stop is now a fresh re-init rather than an additive operation — see Section 3)
-- `varianceGal = edmUsedSinceLastMeasurement − measuredUsed`
+This design does not replace or duplicate it. What's needed:
 
-**Interface contract, extends the existing measurement object** (`FuelEngine.createMeasurement()`'s output, already has an unused `variance_gal` field — this design activates it): add `edm_used_gal: number`, `measured_used_gal: number` alongside the existing `variance_gal`.
+- **Verify it keeps working unchanged** through the Section 3 fix: `_recordFuelStop()`'s rewrite only changes how `FuelTankState` gets reset (tic-based `init()` instead of additive `topOff()`) — it must continue writing to `flytab_fuel_stops` exactly as today, since that's `_renderKFactor()`'s `totalFilled` input.
+- **No changes to `_applyMeasurement()`'s `FuelEngine.createMeasurement()` call or its `edm_gal`/`variance_gal` output** — these already flow into `flypi_fuel_history` correctly and feed `_renderKFactor()`'s `totalUsed` input unchanged.
 
-**Display:** shown on the `fuel-overlay.js` measurement-entry screen at the moment the pilot takes the new reading (most actionable point — if the sender/transducer is drifting, they see it immediately). Also appended to `flypi_fuel_history` (already the persisted flight-to-flight log) so a drifting trend across multiple flights is visible, not just a single-flight snapshot.
-
-**Dropped-burn visibility:** `FuelTankState.onSample()` caps `dtMs` at `MAX_SAMPLE_DT_MS` (10s) to avoid over-counting a single large burn on reconnect after a comms gap — this stays as-is (it's the conservative direction: dropping unknown burn rather than guessing it, given a wrong guess could overcount). What changes: each time a sample's raw `dt` exceeds the cap, accumulate the discarded `(dt - MAX_SAMPLE_DT_MS) * gph / 3600` into a running `dropped_burn_estimate_gal` counter on the tank state. This is surfaced alongside the Section 8 variance figure — a pilot who sees a nonzero dropped-burn estimate at their next tic measurement knows some of any observed variance may be attributable to comms gaps rather than sender/transducer drift, instead of the two being indistinguishable as they are today.
+**Dropped-burn visibility (additive, not part of the K-factor calculator):** `FuelTankState.onSample()` caps `dtMs` at `MAX_SAMPLE_DT_MS` (10s) to avoid over-counting a single large burn on reconnect after a comms gap — this stays as-is (the conservative direction: dropping unknown burn rather than guessing it). What's added: each time a sample's raw `dt` exceeds the cap, accumulate the discarded `(dt - MAX_SAMPLE_DT_MS) * gph / 3600` into a running `dropped_burn_estimate_gal` counter on the tank state, surfaced next to the tic-entry fields in `fuel-overlay.js` (§A) whenever nonzero — a pilot taking a fresh measurement that doesn't match `FuelTankState`'s tracked total can see whether some of that gap is attributable to a comms dropout rather than sender/transducer drift. This is a `FuelTankState`-internal accuracy signal, independent of and complementary to the EDM-calibration-focused K-factor calculator.
 
 ### 9. Timing and staleness fixes
 
@@ -145,10 +142,10 @@ At every fresh tic measurement (preflight, fuel stop, or an ad hoc mid-flight re
 | `web/aircraft-config.json` | `performance.power_settings[]` extended to 5%-band coverage; add `performance.fuel_sender_accurate_below_gal`; add `performance.reserve_gal` |
 | `web/shared/fuel-state.js` | New `getCurrentFuel()`; `getStartFuel()` delegates to it; remove independent EDM/tic resolution; fix capacity fallback to match `fuel-tanks.js` |
 | `web/shared/fuel-tank-state.js` | No burn-integration-formula change; add `dropped_burn_estimate_gal` running counter; seed `_lastConfirmPromptAt` to `Date.now()` at init instead of `0`; move 45-min staleness check out of the once-per-load `_load()` guard into `getState()`/`onSample()`; consumers elsewhere point at it instead of duplicating its logic |
-| `web/shared/fuel-engine.js` | `createMeasurement()` gains `edm_used_gal`/`measured_used_gal` computation |
+| `web/shared/fuel-engine.js` | No changes — `createMeasurement()`'s existing `edm_gal`/`variance_gal` output already feeds the K-Factor Calculator correctly |
 | `web/cockpit/fuel-tanks.js` | Sender-display suppression above `fuel_sender_accurate_below_gal` |
-| `web/cockpit/fuel-overlay.js` | Becomes the reference tic-entry flow reused by `app.js`; variance display added to measurement screen |
-| `web/app.js` | In-flight fuel-stop overlay switches from gallons-added input to tic-entry (reuses `fuel-overlay.js` UI) |
+| `web/cockpit/fuel-overlay.js` | `_recordFuelStop()` resets `FuelTankState` via `init()` from the tic sliders instead of additive `topOff()` arithmetic (K-Factor Calculator's `flytab_fuel_stops`/`flypi_fuel_history` inputs untouched); becomes the screen `app.js` opens for in-flight fuel stops; dropped-burn estimate surfaced near the tic fields |
+| `web/app.js` | In-flight fuel-stop overlay opens `fuel-overlay.js` (tic-mark entry) instead of its own gallons-added prompt |
 | `web/cockpit/route-table.js` | Active-flight live-source fix, reset-ordering fix, DEST reserve fuel-stop awareness, passed-leg segment clearing, destination lookup consistency |
 | `web/cockpit/engine-page.js`, `range-calc.js`, `power-tradeoff.js`, `route-nav-strip.js`, `wb-overlay.js` | Migrate to canonical read APIs (Section 7 table) |
 | `web/shared/planning/planner/route-planner.js`, `web/shared/planning-adapters/idb-profile.js` | Remove hardcoded GPH/reserve duplication, read Section 6 table |
