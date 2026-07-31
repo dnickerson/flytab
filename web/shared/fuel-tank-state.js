@@ -29,7 +29,18 @@ class FuelTankState {
         } catch (_) {
             FuelTankState._state = null;
         }
-        // Mark stale if app restarted mid-flight
+        FuelTankState._checkStaleness();
+    }
+
+    /** Re-evaluate staleness against the current clock. Called on every getState()/needsConfirmation(),
+     *  not just once per page load, so a silent mid-session data gap is caught. */
+    static _checkStaleness() {
+        // Reload from storage in case it's been updated externally (e.g., by another tab or mid-session changes)
+        try {
+            const raw = localStorage.getItem(FuelTankState.STORAGE_KEY);
+            if (raw) FuelTankState._state = JSON.parse(raw);
+        } catch (_) { }
+
         if (FuelTankState._state && !FuelTankState._state.requires_confirm) {
             const lastMs = FuelTankState._state.last_sample_at
                 ? new Date(FuelTankState._state.last_sample_at).getTime()
@@ -59,15 +70,24 @@ class FuelTankState {
      */
     static init(leftGal, rightGal, activeTank = 'L') {
         const now = new Date().toISOString();
+        FuelTankState._lastConfirmPromptAt = Date.now();
+        let perSideCap = Infinity;
+        try {
+            if (typeof CockpitConfig !== 'undefined') {
+                const cap = CockpitConfig.aircraft('performance.fuel_capacity_gal');
+                if (cap > 0) perSideCap = cap / 2;
+            }
+        } catch (_) { /* no config available — no clamp */ }
         FuelTankState._state = {
-            left_gal: Math.max(0, leftGal),
-            right_gal: Math.max(0, rightGal),
+            left_gal: Math.min(perSideCap, Math.max(0, leftGal)),
+            right_gal: Math.min(perSideCap, Math.max(0, rightGal)),
             active_tank: activeTank,
             tank_switched_at: now,
             last_sample_at: now,
             requires_confirm: false,
             initialized_at: now,
             imbalance: false,
+            dropped_burn_estimate_gal: 0,
         };
         FuelTankState._loaded = true;
         FuelTankState._save();
@@ -87,8 +107,16 @@ class FuelTankState {
         const lastMs = FuelTankState._state.last_sample_at
             ? new Date(FuelTankState._state.last_sample_at).getTime()
             : nowMs;
-        const dtMs = Math.min(nowMs - lastMs, FuelTankState.MAX_SAMPLE_DT_MS);
+        const rawDtMs = nowMs - lastMs;
+        const dtMs = Math.min(rawDtMs, FuelTankState.MAX_SAMPLE_DT_MS);
         if (dtMs <= 0) return;
+
+        const droppedMs = rawDtMs - dtMs;
+        if (droppedMs > 0) {
+            const droppedGal = gph * (droppedMs / 1000) / 3600;
+            FuelTankState._state.dropped_burn_estimate_gal =
+                (FuelTankState._state.dropped_burn_estimate_gal || 0) + droppedGal;
+        }
 
         const burned = gph * (dtMs / 1000) / 3600;
 
@@ -156,6 +184,7 @@ class FuelTankState {
     /** Returns a copy of current state, or null if not initialized. */
     static getState() {
         FuelTankState._load();
+        FuelTankState._checkStaleness();
         return FuelTankState._state ? { ...FuelTankState._state } : null;
     }
 
@@ -165,6 +194,7 @@ class FuelTankState {
      */
     static needsConfirmation() {
         FuelTankState._load();
+        FuelTankState._checkStaleness();
         if (!FuelTankState._state) return true;
         return !!FuelTankState._state.requires_confirm;
     }
