@@ -1305,19 +1305,19 @@ class RouteTable {
         const cfgGph = CockpitConfig.aircraft('performance.cruise_gph') ?? 9.0;
         const fuelCap = CockpitConfig.aircraft('performance.fuel_capacity_gal') ?? 50;
 
-        // Determine which Flight contains the active waypoint so we can set the
-        // right starting fuel (actual FuelState for flight 0, full tanks for later flights).
+        // Which Flight contains the active waypoint. Currently unreferenced — retained
+        // for the pending per-flight projection block (SDD Task 8 Step 4, held: its
+        // arithmetic double-counts fuel_add_gal across 3+ flight trips).
+        // eslint-disable-next-line no-unused-vars
         const activeFlightNum = this._waypoints[this._activeIndex]?._flightIndex ?? 0;
-        // Starting fuel for the active flight.
-        // For Flight 0: read from FuelState (actual fuel on board).
-        // For Flight N>0: computed after the main loop using per-flight totals,
-        //   then applied via fuelResetIndices during a second pass if needed.
-        // On first entry we don't have _totFuel yet, so start with FuelState/capacity
-        // and let the fuelResetIndices path correct it mid-loop at each fuel stop.
+        // The flight currently being flown always uses the live canonical fuel source —
+        // not just flight 0. A flight becomes "active" the moment the pilot's active
+        // waypoint enters its range; before that, its start fuel is a forward-looking
+        // projection only (produced by the fuel-stop reset later in this loop).
         // `let` — reassigned at each fuel stop boundary during the computation loop below
-        let startFuel = (activeFlightNum === 0)
-            ? ((typeof FuelState !== 'undefined') ? FuelState.getStartFuel().gallons : fuelCap)
-            : (this._flights[activeFlightNum]?._plannedStartFuel ?? fuelCap);
+        let startFuel = (typeof FuelState !== 'undefined')
+            ? FuelState.getCurrentFuel().gallons
+            : fuelCap;
         const cfgCruiseRpm = CockpitConfig.aircraft('performance.cruise_rpm') ?? null;
         const cfgCruiseMp = CockpitConfig.aircraft('performance.cruise_mp') ?? null;
         const cfgCruisePwr = CockpitConfig.aircraft('performance.cruise_pwr_pct') ?? null;
@@ -1396,18 +1396,6 @@ class RouteTable {
             wp._hdg = (wp._brg != null && wp.lat != null && wp.lon != null)
                 ? FlyTabPlanning.windCorrectedMagHdg(wp._brg, wp.lat, wp.lon, wp._tas ?? 0, wp._wind?.dir ?? 0, wp._wind?.spd ?? 0)
                 : null;
-
-            // Multi-flight: reset fuel counter when a new Flight departs from a fuel stop.
-            // This waypoint is the departure of the next Flight — pilot refuelled here.
-            if (fuelResetIndices.has(i) && i > this._activeIndex) {
-                const fuelRemAtStop = startFuel - fuelBurned;
-                const fuelAdded = wp.fuel_add_gal != null
-                    ? Math.min(wp.fuel_add_gal, fuelCap - fuelRemAtStop)  // explicit: add only what was pumped
-                    : (fuelCap - fuelRemAtStop);                           // default: fill to capacity
-                wp._fuelAdded = fuelAdded;   // stash for "Fuel added" row in _renderTable
-                fuelBurned = 0;
-                startFuel  = fuelRemAtStop + fuelAdded;
-            }
 
             // If we have segment data, use it for phase, fuel, and time
             if (segs.length > 0 && i > 0) {
@@ -1547,6 +1535,27 @@ class RouteTable {
                 wp._fuelRem = startFuel - fuelBurned;
             }
 
+            // Multi-flight: reset fuel counter when a new Flight departs from a fuel stop.
+            // This waypoint is the shared boundary — arrival of Flight N and departure of
+            // Flight N+1; the pilot refuels here.
+            //
+            // Placed AFTER the per-waypoint burn computation above (all three branches
+            // accumulate into fuelBurned) so fuelRemAtStop reflects the fuel actually
+            // remaining on arrival, not a pre-arrival snapshot. wp._fuelRem therefore
+            // shows arrival fuel and REM decreases monotonically into the stop.
+            //
+            // This is a PROJECTION only — it never drives the figure for the flight
+            // that's actually being flown, which reads the live source above.
+            if (fuelResetIndices.has(i) && i > this._activeIndex) {
+                const fuelRemAtStop = startFuel - fuelBurned;
+                const fuelAdded = wp.fuel_add_gal != null
+                    ? Math.min(wp.fuel_add_gal, fuelCap - fuelRemAtStop)  // explicit: add only what was pumped
+                    : (fuelCap - fuelRemAtStop);                           // default: fill to capacity
+                wp._fuelAdded = fuelAdded;   // stash for "Fuel added" row in _renderTable
+                fuelBurned = 0;
+                startFuel  = fuelRemAtStop + fuelAdded;
+            }
+
             wp._distRemaining = Math.round(cumulativeDistRemaining);
             cumulativeDistRemaining -= legDist;
         }
@@ -1593,21 +1602,9 @@ class RouteTable {
             flight._totFuel = flightFuel;
         }
 
-        // Back-fill _plannedStartFuel for Flight N+1 now that _totFuel is known.
-        // Used by the next _computeEnroute call so Flight 2+ show correct pre-stop fuel numbers.
-        const depFuel0 = (typeof FuelState !== 'undefined') ? FuelState.getStartFuel().gallons : fuelCap;
-        let rollingFuel = depFuel0;
-        for (let fi = 0; fi < this._flights.length; fi++) {
-            this._flights[fi]._plannedStartFuel = rollingFuel;
-            if (fi + 1 < this._flights.length) {
-                const stopWp  = this._waypoints[this._flights[fi + 1].depWpIndex];
-                const fuelRem = Math.max(0, rollingFuel - (this._flights[fi]._totFuel || 0));
-                const added   = stopWp?.fuel_add_gal != null
-                    ? Math.min(stopWp.fuel_add_gal, fuelCap - fuelRem)
-                    : (fuelCap - fuelRem);
-                rollingFuel = fuelRem + added;
-            }
-        }
+        // (The _plannedStartFuel back-fill that used to live here is gone: the active
+        //  flight now reads the live canonical source, and every later flight's start
+        //  fuel is produced in-loop by the fuel-stop reset above.)
 
         // Emit leg update event so InstrumentStrip and PowerTradeoff can update
         // without polling. Fires after every _computeEnroute() — ~1Hz in flight.
