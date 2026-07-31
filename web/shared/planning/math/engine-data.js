@@ -44,6 +44,39 @@ export function gphAtPower(profile, powerFrac, altFt, mixture) {
 }
 
 /**
+ * Look up GPH for a given %power from a banded power-settings table.
+ *
+ * The bands come from `aircraft-config.json`'s `performance.power_settings[]`,
+ * which is derived from real EDM flight logs — the `gph` figures are MEASURED
+ * fuel flow and are the ground truth. The `pct_mid` label they are indexed by
+ * is MP/RPM-derived (`(RPM/2700) * (MAP/29.92) * 100`, the Lycoming 50°F-ROP
+ * chart convention), NOT the lean-of-peak `HP = GPH * 14.9` definition the
+ * engine monitor uses when the mixture is LEAN. Treat `pct_mid` as a lookup
+ * key, not as a physically-comparable power number.
+ *
+ * Tie-break note: when `pct` is exactly equidistant between two bands the
+ * FIRST band in array order wins (strict `<`). Callers must not assume that
+ * is the higher-GPH / conservative side.
+ *
+ * @param {Array<{pct_mid:number, gph:number}>} powerSettings
+ * @param {number} pct
+ * @returns {number|null} measured GPH for the closest band, or null if the table is empty
+ */
+export function gphForPowerPct(powerSettings, pct) {
+    if (!powerSettings || powerSettings.length === 0) return null;
+    let best = powerSettings[0];
+    let bestDist = Math.abs(pct - best.pct_mid);
+    for (const band of powerSettings) {
+        const dist = Math.abs(pct - band.pct_mid);
+        if (dist < bestDist) {
+            best = band;
+            bestDist = dist;
+        }
+    }
+    return best.gph;
+}
+
+/**
  * TAS at a given altitude, knots.
  * @param {AircraftProfile} profile
  * @param {number} altFt

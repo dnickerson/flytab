@@ -447,6 +447,16 @@ For fuel stops further ahead on the route that you have not yet reached, REM is 
 
 **Legs already behind you show `—` in FUEL and REM, not numbers.** A dash there is correct, not a fault: FlyTab only projects fuel forward from your live tracked figure, so a leg it can no longer recompute is blanked rather than left showing what it last predicted. Legs split into separate climb/cruise/descent rows used to keep those old numbers, and after a heavier-than-planned burn they read *higher* than the fuel actually on board — sitting directly above live rows showing much less. Their TAS and PWR cells now blank for the same reason. The TOTAL and per-flight footer figures count only legs still to fly, so they match the rows still showing numbers.
 
+### Where the planned burn numbers come from
+
+Every planned fuel figure — the route table's FUEL and REM columns, the TOTAL footer, and the DEST badge — is built from three burn rates: **climb 15.0 gph, cruise 8.1 gph at 65%, descent 6.9 gph.**
+
+These are **measured, not book numbers.** They are the 85th-percentile fuel flow recorded by the engine monitor across 53 logged flights in N194JT, split by flight phase. The 85th percentile is deliberate rather than the average: the intent is that planning over-estimates burn, because an under-estimate quietly over-states the fuel you will have left, and that is the error that runs tanks dry.
+
+**Descent now plans at 6.9 gph instead of the old 4.0.** The 4.0 figure was an estimate and it was wrong in the unsafe direction — real descents in this airplane burn nearly 3 gph more than that. Expect route FUEL and REM figures, and the DEST badge, to read **slightly more fuel burned and slightly less remaining than they used to**, on any leg that ends at an airport. On a 150 nm leg the whole-leg planned burn rises by about 0.3 gal from 4,500 ft, 0.45 gal from 6,500 ft, and 0.75 gal from 10,500 ft. Over a three-leg day that is roughly 2 gallons. Nothing is broken — the old numbers were optimistic and the new ones are not.
+
+The cruise figure of 8.1 gph comes from the measured power table in the aircraft configuration: FlyTab picks the recorded power band closest to your selected cruise power. One caveat when comparing to the engine page: the **% power label** on those bands is calculated from RPM and manifold pressure, the way the Lycoming charts do it, while the engine monitor computes power from fuel flow when you are running lean of peak. The **gallons-per-hour figure is the measured ground truth** in both places; the percentage beside it is a label for the band, not a number to compare across the two screens.
+
 ### The DEST figure in the route strip handle
 
 The collapsed route strip handle shows departure → destination, distance and time to run, planned burn, and a **DEST:X.X** badge — gallons expected to remain on arrival. The badge turns amber at 8 gallons and red at 4.

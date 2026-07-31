@@ -21,6 +21,28 @@ function openDb() {
     });
 }
 
+/**
+ * Seed profile for N194JT, persisted into IndexedDB the first time the store is
+ * read and re-applied by the migration check in getActive().
+ *
+ * SEED VALUES MUST MATCH `web/aircraft-config.json` `performance.*` — there is
+ * currently NO automatic config→profile sync (verified 2026-07-31: the only
+ * aircraft-config writer is app.js `_syncAircraftToPi()`, which writes
+ * localStorage + CockpitConfig and never touches the `aircraft_profiles` object
+ * store). Until that sync exists, changing a value here also requires changing
+ * `aircraft-config.json`, and vice versa. `route-planner.js`'s `RV9A_FALLBACK`
+ * is a third copy that must be kept in lockstep with this one.
+ *
+ * Fuel figures are MEASURED, not book values:
+ *  - cruise 8.1 gph  = `power_settings[]` band whose `pct_mid` is closest to
+ *    `performance.cruise_pwr_pct` (65 -> the 61-65 band, pct_mid 63), i.e.
+ *    exactly what `gphForPowerPct(power_settings, 65)` returns.
+ *  - climb 15 / descent 6.9 gph = p85 of EDM fuel flow over 53 phase-labelled
+ *    flight logs, selected by the recorder's `ml_phase` column
+ *    (climb n=9642 p85=15.1; descent n=11819 p85=6.9).
+ *  - p85 (not median) is deliberate: planning must over-estimate burn, because
+ *    under-estimating burn over-states fuel remaining.
+ */
 const RV9A_DEFAULT = {
     id: 'rv9a-default',
     tailNumber: 'N194JT',
@@ -29,7 +51,7 @@ const RV9A_DEFAULT = {
     cruise_ias: 140,
     fuel_burn_gph: 8.1,
     fuel_capacity_gal: 36,
-    reserve_gal: 10,
+    reserve_gal: 10,          // must match aircraft-config.json performance.reserve_gal
     climb_rate_fpm: 1500,
     service_ceiling_ft: 17500,
     taxi_burn_gal: 0.33,
@@ -41,7 +63,9 @@ const RV9A_DEFAULT = {
                    mixture: 'FULL_RICH', rpm: 2700, mp: 28 },
         cruise:  { gph: 8.1, ias_kt: 140, percent_power: 65,
                    mixture: 'LOP', rpm: 2400, mp: 22 },
-        descent: { gph: 4.0, ias_kt: 170, rate_fpm: 700, percent_power: 50,
+        // 6.9 = measured p85, NOT the old 4.0 book guess. 4.0 under-planned
+        // descent burn by ~2.9 gph and therefore over-stated fuel remaining.
+        descent: { gph: 6.9, ias_kt: 170, rate_fpm: 700, percent_power: 50,
                    mixture: 'LOP', rpm: 2400, mp: 14 },
     },
 };

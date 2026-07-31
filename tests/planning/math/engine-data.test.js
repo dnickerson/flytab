@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { tasAtAltitude, gphAtPower, climbRateAtAltitude, maxPowerAtAltitude } from '../../../web/shared/planning/math/engine-data.js';
+import { tasAtAltitude, gphAtPower, climbRateAtAltitude, maxPowerAtAltitude, gphForPowerPct } from '../../../web/shared/planning/math/engine-data.js';
 
 const RV9A = { cruise_ktas: 155, fuel_burn_gph: 8.0, service_ceiling_ft: 17500 };
 
@@ -68,5 +68,26 @@ describe('gphAtPower (extended)', () => {
         const simple = { cruise_ktas: 120, fuel_burn_gph: 8.0 };
         expect(gphAtPower(simple, 0.75)).toBeCloseTo(8.0, 1);
         expect(gphAtPower(simple, 0.65)).toBeCloseTo(8.0 * (0.65 / 0.75), 1);
+    });
+});
+
+describe('gphForPowerPct', () => {
+    const bands = [
+        { band: '51-55', pct_mid: 53, gph: 6.5, samples: 149 },
+        { band: '56-60', pct_mid: 58, gph: 7.3, samples: 329 },
+        { band: '61-65', pct_mid: 63, gph: 8.1, samples: 1120 },
+    ];
+
+    it('picks the exact band when pct matches pct_mid', () => {
+        expect(gphForPowerPct(bands, 63)).toBe(8.1);
+    });
+
+    it('picks the nearest band when pct falls between two bands', () => {
+        // pct=60 is 2 away from band 58 (56-60) and 3 away from band 63 (61-65) -> nearest is 58's 7.3
+        expect(gphForPowerPct(bands, 60)).toBe(7.3);
+    });
+
+    it('returns null for an empty table', () => {
+        expect(gphForPowerPct([], 65)).toBeNull();
     });
 });

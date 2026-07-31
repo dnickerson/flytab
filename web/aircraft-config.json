@@ -35,7 +35,7 @@
     "climb_pwr_pct": 100,
     "climb_rpm": 2700,
     "climb_mp": 28,
-    "descent_gph": 4,
+    "descent_gph": 6.9,
     "descent_pwr_pct": 50,
     "descent_rpm": 2400,
     "descent_mp": 14,

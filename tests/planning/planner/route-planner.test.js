@@ -170,3 +170,66 @@ describe('recomputeLegs with winds and altitude', () => {
         expect([3500, 5500]).toContain(result.legs[0].altFt);
     });
 });
+
+// ---------------------------------------------------------------------------
+// RV9A_FALLBACK is the profile used when no `profiles` adapter supplies one
+// (NULL_PROFILES.getActive() returns null) and when recomputeLegs() is called
+// with no profileOverride. Its fuel figures must stay in lockstep with
+// web/aircraft-config.json and with RV9A_DEFAULT in planning-adapters/idb-profile.js.
+// These are flight-safety constants: too LOW a phase GPH under-plans burn, which
+// over-states fuel remaining — the direction that runs tanks dry.
+// ---------------------------------------------------------------------------
+describe('RV9A fallback profile — measured phase fuel flows', () => {
+    const fallbackAero = makeAeroAdapter({
+        airports: {
+            KA: { icao: 'KA', lat: 33.0, lon: -85.0 },
+            KC: { icao: 'KC', lat: 34.0, lon: -84.0 },
+        },
+    });
+    const fallbackPlan = {
+        departure: 'KA', destination: 'KC',
+        cruiseAltFt: 6500,
+        waypoints: [
+            { id: 'KA', lat: 33.0, lon: -85.0 },
+            { id: 'KC', lat: 34.0, lon: -84.0 },
+        ],
+        options: { routingMode: 'gps-direct', maxLegHrs: 10, selfServeOnly: false, avoidance: [] },
+    };
+
+    function fallbackSegments() {
+        const planner = new RoutePlanner({ aero: fallbackAero, plans: NULL_PLANS });
+        // No profileOverride -> RV9A_FALLBACK
+        const result = planner.recomputeLegs(fallbackPlan);
+        return result.legs[0].segments;
+    }
+
+    it('descends at the measured p85 of 6.9 gph, not the old 4.0 book guess', () => {
+        const des = fallbackSegments().find(s => s.phase === 'DES');
+        expect(des).toBeDefined();
+        expect(des.gph).toBe(6.9);
+    });
+
+    it('cruises at 8.1 gph — the power_settings band nearest cruise_pwr_pct 65', () => {
+        const crz = fallbackSegments().find(s => s.phase === 'CRZ');
+        expect(crz).toBeDefined();
+        expect(crz.gph).toBe(8.1);
+    });
+
+    it('climbs at the measured p85 of 15 gph', () => {
+        const clb = fallbackSegments().find(s => s.phase === 'CLB');
+        expect(clb).toBeDefined();
+        expect(clb.gph).toBe(15);
+    });
+
+    it('burns more descent fuel than the old 4.0 gph constant would have', () => {
+        const des = fallbackSegments().find(s => s.phase === 'DES');
+        const descentHrs = des.ete_min / 60;
+        expect(des.gph * descentHrs).toBeGreaterThan(4.0 * descentHrs);
+    });
+
+    it('carries the aircraft-config reserve of 10 gal into parsed plans', async () => {
+        const p = new RoutePlanner(adapters);   // NULL_PROFILES -> RV9A_FALLBACK
+        const r = await p.parseRoute('A V1 C');
+        expect(r.reserveGal).toBe(10);
+    });
+});

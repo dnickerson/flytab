@@ -29,6 +29,24 @@ import { PlanError, DestinationUnreachableError } from './route-planner-errors.j
 
 const AIRWAY_RE = /^[VTJQ]\d+[A-Z]?$/;
 
+/**
+ * Last-resort profile, used only when no `profiles` adapter is wired up at all
+ * (or when a caller passes no `profileOverride` to recomputeLegs()).
+ *
+ * This is deliberately a plain literal, not a config read: the planning library
+ * is host-environment-agnostic and must not reach for `CockpitConfig` (a
+ * classic-script global owned by the cockpit app). Per-aircraft data enters the
+ * library through the `ProfileStore` adapter — see
+ * `web/shared/planning-adapters/idb-profile.js`.
+ *
+ * KEEP IN SYNC, BY HAND, with `RV9A_DEFAULT` in `planning-adapters/idb-profile.js`
+ * and with `web/aircraft-config.json` `performance.*`. There is no automatic
+ * config→profile sync today (verified 2026-07-31). Fuel figures are measured,
+ * not book values — cruise 8.1 gph is the `power_settings[]` band nearest
+ * `cruise_pwr_pct` (65), climb 15 / descent 6.9 gph are the p85 of EDM fuel flow
+ * across 53 `ml_phase`-labelled flight logs. p85 rather than median is
+ * deliberate: under-estimating burn over-states fuel remaining.
+ */
 const RV9A_FALLBACK = {
     id: 'rv9a-default',
     tailNumber: '',
@@ -37,7 +55,7 @@ const RV9A_FALLBACK = {
     cruise_ias: 140,
     fuel_burn_gph: 8.1,
     fuel_capacity_gal: 36,
-    reserve_gal: 10,
+    reserve_gal: 10,       // must match aircraft-config.json performance.reserve_gal
     climb_rate_fpm: 1500,
     service_ceiling_ft: 17500,
     taxi_burn_gal: 0.33,
@@ -49,7 +67,9 @@ const RV9A_FALLBACK = {
                    mixture: 'FULL_RICH', rpm: 2700, mp: 28 },
         cruise:  { gph: 8.1, ias_kt: 140, percent_power: 65,
                    mixture: 'LOP', rpm: 2400, mp: 22 },
-        descent: { gph: 4.0, ias_kt: 170, rate_fpm: 700, percent_power: 50,
+        // 6.9 = measured p85, NOT the old 4.0 book guess. 4.0 under-planned
+        // descent burn by ~2.9 gph and therefore over-stated fuel remaining.
+        descent: { gph: 6.9, ias_kt: 170, rate_fpm: 700, percent_power: 50,
                    mixture: 'LOP', rpm: 2400, mp: 14 },
     },
 };
