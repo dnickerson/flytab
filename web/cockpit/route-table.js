@@ -1561,7 +1561,16 @@ class RouteTable {
             cumulativeDistRemaining -= legDist;
         }
 
-        // Mark passed waypoints
+        // Mark passed waypoints — clear both waypoint-level fields and their segments'
+        // fields, since multi-segment (CLB/CRZ/DES) legs are rendered from wp._segments,
+        // not the waypoint-level fields, and were previously left showing stale numbers.
+        //
+        // The compute loop above starts at _activeIndex, so a passed leg's segments are
+        // never revisited: their _fuelRem was frozen at whatever the live fuel state was
+        // when the leg was last ahead of the aircraft. If real burn beat the plan, that
+        // frozen figure OVERSTATES fuel remaining, directly above rows projected from the
+        // current (lower) reading. Blanking it is the only safe option — the row cannot be
+        // recomputed, and a passed leg's remaining fuel is not a number the pilot needs.
         for (let i = 0; i < this._activeIndex; i++) {
             this._waypoints[i]._dist = null;
             this._waypoints[i]._ete = null;
@@ -1570,6 +1579,14 @@ class RouteTable {
             this._waypoints[i]._brg = null;
             this._waypoints[i]._hdg = null;
             this._waypoints[i]._phase = '\u2014';
+            if (this._waypoints[i]._segments) {
+                for (const seg of this._waypoints[i]._segments) {
+                    seg._fuel = null;
+                    seg._fuelRem = null;
+                    seg._tas = null;
+                    seg._pwr = null;
+                }
+            }
         }
 
         // Compute cumulative dist/ete from the aircraft's current position forward.

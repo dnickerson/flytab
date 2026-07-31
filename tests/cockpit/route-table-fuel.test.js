@@ -33,6 +33,9 @@ function installGlobals({ currentFuel, startFuel, perf = {} }) {
             if (Object.prototype.hasOwnProperty.call(perf, path)) return perf[path];
             return null;
         },
+        // _getCellValue reads the caution/warning thresholds; null falls through to
+        // its own `|| 8` / `|| 4` defaults.
+        get() { return null; },
     };
     globalThis.FlyTabPlanning = {
         bearing: () => 0,
@@ -201,6 +204,110 @@ describe('_computeEnroute — explicit fuel_add_gal over-capacity clamp', () => 
         expect(wps[2]._fuelAdded).toBeCloseTo(30, 6);  // clamped: min(100, 40 − 10), not 100
         expect(wps[2]._fuelRem + wps[2]._fuelAdded).toBeLessThanOrEqual(FUEL_CAP);
         expect(wps[3]._fuelRem).toBeCloseTo(30, 6);    // 40 − 10; unclamped would read 100
+    });
+});
+
+// ── Task 10: passed multi-segment legs must not keep stale segment fuel ─────
+
+/**
+ * A two-segment leg (CLB + CRZ) — the shape that _renderTable draws as one
+ * SegmentRow per phase, reading seg._fuel / seg._fuelRem instead of the
+ * waypoint-level fields. CLB burns 3.0 gal (15 gph × 12 min), CRZ burns 8.0
+ * (10 gph × 48 min); 11.0 gal for the leg, 120 nm total.
+ */
+function clbCrzSegs() {
+    return [
+        { phase: 'CLB', gph: 15, ete_min: 12, tas: 100, gs: 100, dist:  20, percent_power: 100 },
+        { phase: 'CRZ', gph: 10, ete_min: 48, tas: 120, gs: 120, dist: 100, percent_power:  65 },
+    ];
+}
+
+/** KLKR -> ENO (multi-segment leg) -> KLWA. No intermediate airport, so
+ *  _buildFlights produces a single flight and no fuel-stop reset is involved. */
+function makeMultiSegRoute() {
+    return [
+        { icao: 'KLKR', type: 'APT', lat: 34.72, lon: -80.78, index: 0 },
+        { icao: 'ENO',  type: 'VOR', lat: 35.00, lon: -80.50, index: 1, _legDist: 120, _segments: clbCrzSegs() },
+        { icao: 'KLWA', type: 'APT', lat: 36.10, lon: -79.94, index: 2, _legDist: 120, _segments: seg(10) },
+    ];
+}
+
+describe('_computeEnroute — passed multi-segment legs', () => {
+    it('clears segment-level fuel fields once the leg is behind the aircraft', () => {
+        installGlobals({ currentFuel: 30, startFuel: 30 });
+        const wps = makeMultiSegRoute();
+        const rt = makeTable(wps, 1);
+        rt._computeEnroute();
+
+        // While the leg is active its segments carry real numbers.
+        const [clb, crz] = wps[1]._segments;
+        expect(clb._fuel).toBeCloseTo(3, 6);
+        expect(crz._fuelRem).toBeCloseTo(19, 6);   // 30 − 11
+
+        // Aircraft crosses ENO. The compute loop starts at _activeIndex, so wp1's
+        // segments are never revisited — only the "Mark passed waypoints" pass can
+        // clear them.
+        rt._activeIndex = 2;
+        rt._computeEnroute();
+
+        expect(wps[1]._fuelRem).toBeNull();        // waypoint level (already correct)
+        for (const s of wps[1]._segments) {
+            expect(s._fuel).toBeNull();
+            expect(s._fuelRem).toBeNull();
+            expect(s._tas).toBeNull();
+            expect(s._pwr).toBeNull();
+        }
+    });
+
+    it('renders em-dashes, not stale numbers, in the passed leg FUEL/REM cells', () => {
+        installGlobals({ currentFuel: 30, startFuel: 30 });
+        const wps = makeMultiSegRoute();
+        const rt = makeTable(wps, 1);
+        rt._computeEnroute();
+        rt._activeIndex = 2;
+        rt._computeEnroute();
+
+        const segs = wps[1]._segments;
+        for (let si = 0; si < segs.length; si++) {
+            expect(rt._getCellValue(wps[1], 'fuel', segs[si], si)).toBe('—');
+            expect(rt._getCellValue(wps[1], 'fuel_rem', segs[si], si)).toBe('—');
+        }
+    });
+
+    it('does not clear segments of legs still ahead of the aircraft', () => {
+        installGlobals({ currentFuel: 30, startFuel: 30 });
+        const wps = makeMultiSegRoute();
+        const rt = makeTable(wps, 1);
+        rt._computeEnroute();
+
+        // wp1 is the ACTIVE leg — not passed — so its segments keep their numbers.
+        const [clb, crz] = wps[1]._segments;
+        expect(clb._fuel).toBeCloseTo(3, 6);
+        expect(crz._fuel).toBeCloseTo(8, 6);
+        expect(rt._getCellValue(wps[1], 'fuel', crz, 1)).toBe('8.0');
+        expect(rt._getCellValue(wps[1], 'fuel_rem', crz, 1)).toBe('19.0');
+    });
+
+    /**
+     * Error direction: the stale figure is OPTIMISTIC whenever real burn beat the
+     * plan. Here the pilot crosses ENO with 12 gal in the tanks (the plan said 19).
+     * Pre-fix the passed CRZ row still read 19.0 — 7 gal MORE than the aircraft
+     * actually holds, on a row sitting directly above live rows computed from 12.
+     */
+    it('never shows a passed-leg REM higher than the live fuel state', () => {
+        installGlobals({ currentFuel: 30, startFuel: 30 });
+        const wps = makeMultiSegRoute();
+        const rt = makeTable(wps, 1);
+        rt._computeEnroute();
+
+        installGlobals({ currentFuel: 12, startFuel: 30 });   // burned more than planned
+        rt._activeIndex = 2;
+        rt._computeEnroute();
+
+        for (const s of wps[1]._segments) {
+            expect(s._fuelRem == null || s._fuelRem <= 12).toBe(true);
+        }
+        expect(wps[2]._fuelRem).toBeCloseTo(2, 6);   // live projection: 12 − 10
     });
 });
 

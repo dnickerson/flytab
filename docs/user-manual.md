@@ -445,6 +445,8 @@ The route table's **FUEL** column shows the fuel burned on each leg; **REM** sho
 
 For fuel stops further ahead on the route that you have not yet reached, REM is a **planning projection**, not a measurement. It assumes you fill to full unless you have entered an explicit gallons-added figure for that stop. Treat those downstream numbers as estimates for planning, and the current flight's REM as the figure to fly by.
 
+**Legs already behind you show `—` in FUEL and REM, not numbers.** A dash there is correct, not a fault: FlyTab only projects fuel forward from your live tracked figure, so a leg it can no longer recompute is blanked rather than left showing what it last predicted. Legs split into separate climb/cruise/descent rows used to keep those old numbers, and after a heavier-than-planned burn they read *higher* than the fuel actually on board — sitting directly above live rows showing much less. Their TAS and PWR cells now blank for the same reason. The TOTAL and per-flight footer figures count only legs still to fly, so they match the rows still showing numbers.
+
 ### The DEST figure in the route strip handle
 
 The collapsed route strip handle shows departure → destination, distance and time to run, planned burn, and a **DEST:X.X** badge — gallons expected to remain on arrival. The badge turns amber at 8 gallons and red at 4.
