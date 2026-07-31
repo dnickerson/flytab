@@ -435,6 +435,16 @@ The **fuel tanks widget** (floating, top-left corner of the map) shows left/righ
 
 The **FUEL** field in the nav strip shows total fuel remaining and projected endurance at current burn rate. This is the authoritative fuel-state display.
 
+### Route table FUEL and REM columns
+
+The route table's **FUEL** column shows the fuel burned on each leg; **REM** shows the fuel expected to remain on arrival at that waypoint.
+
+**On the flight you are actually flying, REM is derived from live tracked fuel** — the same figure the fuel tanks widget and nav strip show, which traces back to your most recent tic measurement plus integrated burn. This is true on every leg of a multi-leg trip, not just the first. After a fuel stop where you added a partial fill, the next flight's REM reflects what you actually put in; it does not assume full tanks.
+
+**Approaching a fuel stop, REM decreases all the way into the stop.** The REM shown at a fuel-stop waypoint is your fuel on *arrival* — before refueling. The added fuel appears on the legs after the stop. If you have seen REM jump upward on the leg before a fuel stop, that was a display error and is fixed.
+
+For fuel stops further ahead on the route that you have not yet reached, REM is a **planning projection**, not a measurement. It assumes you fill to full unless you have entered an explicit gallons-added figure for that stop. Treat those downstream numbers as estimates for planning, and the current flight's REM as the figure to fly by.
+
 ---
 
 ## Logbook
