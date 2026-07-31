@@ -17,6 +17,7 @@ class FuelTanksDisplay {
         this._timerInterval = null;
         this._lastGph = 0;
         this._initPanelMode = null;   // 'preflight' | 'recovery' | null (panel closed)
+        this._initPanelDirty = false;  // set to true while user is editing, prevents live updates from clobbering
         this._tankCapacity = 18;   // per side, updated from config on init
         this._senderAccurateBelowGal = 12;
         this._initSelectedTank = 'L';
@@ -40,6 +41,9 @@ class FuelTanksDisplay {
 
         this._onStateChanged = () => { this._render(); this._refreshOpenPanel(); };
         window.addEventListener('fueltankstate:changed', this._onStateChanged);
+
+        this._onFuelStateChanged = () => this._refreshOpenPanel();
+        window.addEventListener('fuelstate:changed', this._onFuelStateChanged);
 
         this._onConfirmPrompt = (e) => this._showConfirmBanner(e.detail?.active_tank);
         window.addEventListener('fueltankstate:confirm_prompt', this._onConfirmPrompt);
@@ -67,6 +71,7 @@ class FuelTanksDisplay {
             window.engineClient.removeEventListener('engine:data', this._onEngineData);
         }
         if (this._onStateChanged) window.removeEventListener('fueltankstate:changed', this._onStateChanged);
+        if (this._onFuelStateChanged) window.removeEventListener('fuelstate:changed', this._onFuelStateChanged);
         if (this._onConfirmPrompt) window.removeEventListener('fueltankstate:confirm_prompt', this._onConfirmPrompt);
         if (this._timerInterval) clearInterval(this._timerInterval);
         if (this._confirmTimer) clearTimeout(this._confirmTimer);
@@ -224,7 +229,9 @@ class FuelTanksDisplay {
         });
 
         wireTap(this._dom.initOk, () => this._applyInit());
-        wireTap(this._dom.initCancel, () => { this._dom.initPanel.style.display = 'none'; this._initPanelMode = null; });
+        this._dom.initL.addEventListener('input', () => { this._initPanelDirty = true; });
+        this._dom.initR.addEventListener('input', () => { this._initPanelDirty = true; });
+        wireTap(this._dom.initCancel, () => { this._dom.initPanel.style.display = 'none'; this._initPanelDirty = false; this._initPanelMode = null; });
         wireTap(this._dom.confirmYes, () => this._dismissConfirm(false));
         wireTap(this._dom.confirmSwitch, () => this._dismissConfirm(true));
     }
@@ -274,6 +281,7 @@ class FuelTanksDisplay {
             b.classList.toggle('ftw-sel-active', b.dataset.tank === activeTank)
         );
         this._dom.initPanel.style.display = 'flex';
+        this._initPanelDirty = false;
         this._initPanelMode = 'preflight';
     }
 
@@ -283,6 +291,7 @@ class FuelTanksDisplay {
         if (isNaN(leftGal) || isNaN(rightGal) || leftGal < 0 || rightGal < 0) return;
         FuelTankState.init(leftGal, rightGal, this._initSelectedTank);
         this._dom.initPanel.style.display = 'none';
+        this._initPanelDirty = false;
         this._initPanelMode = null;
     }
 
@@ -301,6 +310,7 @@ class FuelTanksDisplay {
             b.classList.toggle('ftw-sel-active', b.dataset.tank === state.active_tank)
         );
         this._dom.initPanel.style.display = 'flex';
+        this._initPanelDirty = false;
         this._initPanelMode = 'recovery';
     }
 
@@ -313,6 +323,7 @@ class FuelTanksDisplay {
      * ----------------------------------------------------------------*/
     _refreshOpenPanel() {
         if (!this._initPanelMode || this._dom.initPanel.style.display !== 'flex') return;
+        if (this._initPanelDirty) return; // pilot is mid-edit — don't overwrite with a live value
         const state = FuelTankState.getState();
         if (!state) return;
         this._dom.initL.value = state.left_gal.toFixed(1);
