@@ -2622,7 +2622,11 @@ class RouteTable {
         const liveGph = engData?.fuel_flow_gph ?? engData?.gph ?? engData?.Fuel_Flow ?? null;
         const plannedGph = CockpitConfig.aircraft('performance.cruise_gph') ?? 9.0;
         const activeFlightNum = this._waypoints[this._activeIndex]?._flightIndex ?? 0;
-        const activeFlight = this._flights[activeFlightNum];
+        // `_flights` can be stale or absent relative to `_waypoints` (it is rebuilt by
+        // _computeEnroute, which does not run on every path into _updateSummary), and
+        // _updateSummary runs on the 1 Hz GPS path — an unguarded index would throw on
+        // every position update and blank the strip. Optional-chain both lookups.
+        const activeFlight = this._flights?.[activeFlightNum];
         // Distance remaining to the ACTIVE flight's own destination (fuel stop or final),
         // not the trip's overall remaining distance — remainDist as computed above already
         // sums to the final waypoint, so recompute scoped to the active flight's end index.
@@ -2630,8 +2634,8 @@ class RouteTable {
         if (activeFlight) {
             for (let i = this._activeIndex; i <= activeFlight.destWpIndex; i++) {
                 remainDistToActiveFlightDest += (i === this._activeIndex)
-                    ? (this._waypoints[i]._liveDist ?? this._waypoints[i]._legDist ?? 0)
-                    : (this._waypoints[i]._legDist ?? 0);
+                    ? (this._waypoints[i]?._liveDist ?? this._waypoints[i]?._legDist ?? 0)
+                    : (this._waypoints[i]?._legDist ?? 0);
             }
         } else {
             remainDistToActiveFlightDest = remainDist; // no flight-split data — fall back to trip-wide
@@ -2639,10 +2643,21 @@ class RouteTable {
         const destWp = [...this._waypoints].reverse().find(wp => wp.type === 'APT')
                     || this._waypoints[this._waypoints.length - 1];
         let fuelAtDest = null;
+        // The badge label must name the airport the figure actually describes. The
+        // handle label beside it always names the TRIP's final airport, so on a
+        // fuel-stop trip a bare "DEST:" reads as fuel at the final airport when it is
+        // really fuel at the fuel stop — optimistic by the whole downstream leg if the
+        // pilot overflies the stop. Show the active flight's identifier instead.
+        let fuelDestLabel = 'DEST';
         if (currentFuel != null && remainDistToActiveFlightDest > 0 && cruiseSpeed > 0) {
             const gph = liveGph ?? plannedGph;
             fuelAtDest = currentFuel - (remainDistToActiveFlightDest / cruiseSpeed) * gph;
+            const headerDestId = dest.icao || '?';
+            if (activeFlight?.dest && activeFlight.dest !== headerDestId) {
+                fuelDestLabel = activeFlight.dest;
+            }
         } else if (destWp?._fuelRem != null) {
+            // Planned fallback is trip-scoped — it really is the final destination.
             fuelAtDest = destWp._fuelRem;
         }
 
@@ -2655,7 +2670,7 @@ class RouteTable {
             else if (fuelAtDest <= cautionGal) fuelColor = 'var(--status-warning)';
         }
         const fuelDestHtml = fuelAtDest != null
-            ? `<span style="color:${fuelColor};font-weight:700">DEST:${fuelAtDest.toFixed(1)}</span>`
+            ? `<span style="color:${fuelColor};font-weight:700">${fuelDestLabel}:${fuelAtDest.toFixed(1)}</span>`
             : '';
 
         summaryEl.innerHTML =
