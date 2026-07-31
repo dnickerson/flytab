@@ -18,6 +18,7 @@ class FuelTanksDisplay {
         this._lastGph = 0;
         this._initPanelMode = null;   // 'preflight' | 'recovery' | null (panel closed)
         this._tankCapacity = 18;   // per side, updated from config on init
+        this._senderAccurateBelowGal = 12;
         this._initSelectedTank = 'L';
     }
 
@@ -26,6 +27,7 @@ class FuelTanksDisplay {
             if (typeof CockpitConfig !== 'undefined') {
                 const cap = CockpitConfig.aircraft('performance.fuel_capacity_gal');
                 if (cap > 0) this._tankCapacity = cap / 2;
+                this._senderAccurateBelowGal = CockpitConfig.aircraft('performance.fuel_sender_accurate_below_gal') ?? 12;
             }
         } catch (_) {}
 
@@ -451,16 +453,27 @@ class FuelTanksDisplay {
     }
 
     _updateSenderDisplay(data) {
-        // Raw EDM sender values — secondary reference only, kept visible as sanity check
+        // Raw EDM sender values — secondary reference only. Only meaningful (per this
+        // aircraft's sender hardware) once tracked tank level drops to the configured
+        // threshold; above it the sender reads an invalid/flat value and must not be
+        // shown as if it were a real cross-check.
         const senderL = data.fuel_level_l ?? data.left_fuel ?? null;
         const senderR = data.fuel_level_r ?? data.right_fuel ?? null;
+        const trackedState = (typeof FuelTankState !== 'undefined') ? FuelTankState.getState() : null;
+        const threshold = this._senderAccurateBelowGal ?? 12;
+
+        const leftInRange = !trackedState || trackedState.left_gal <= threshold;
+        const rightInRange = !trackedState || trackedState.right_gal <= threshold;
+
         if (senderL != null) {
-            this._dom.senderL.textContent = 's:' + senderL.toFixed(1);
+            this._dom.senderL.textContent = leftInRange ? 's:' + senderL.toFixed(1) : 's:\u2014';
         } else if (senderL == null && senderR == null) {
             const total = FuelEngine.extractEdmFuel(data);
-            if (total > 0) this._dom.senderL.textContent = `s:${total.toFixed(0)}`;
+            if (total > 0) this._dom.senderL.textContent = leftInRange ? `s:${total.toFixed(0)}` : 's:\u2014';
         }
-        if (senderR != null) this._dom.senderR.textContent = 's:' + senderR.toFixed(1);
+        if (senderR != null) {
+            this._dom.senderR.textContent = rightInRange ? 's:' + senderR.toFixed(1) : 's:\u2014';
+        }
     }
 
     /* ------------------------------------------------------------------
