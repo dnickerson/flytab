@@ -1365,6 +1365,28 @@ git commit -m "fix(fuel): clear segment-level fuel fields on passed multi-segmen
 > Note `route-table.js`'s `lop_sfc = 0.067` is **not** a wrong constant — it equals 14.93 HP/gph,
 > matching the Pi's LOP factor. The defect is feeding an MP-derived label into a fuel-derived
 > equation, not the equation itself.
+>
+> **5. RESOLVED 2026-07-31 (Dana's decision) — the planning library's cruise constant stays at
+> 8.1 gph; do not raise it to the measured cruise p85 of 8.3.** A review of the first fix round
+> flagged this as a possible gap under the "plan more consumption, not less" principle. Two
+> things resolve it:
+>
+> - **8.1 and 8.3 are not measuring the same thing.** 8.1 gph is the measured value for the
+>   61-65% power band specifically (1,120 samples) — i.e. conditioned on the aircraft's actual
+>   configured cruise power setting (`cruise_pwr_pct: 65`). 8.3 is the p85 across *all*
+>   cruise-phase samples pooled regardless of power setting — i.e. unconditioned, blending
+>   flights at 55%, 60%, 65%, 70%, etc. For the specific question "what does 65% cruise power
+>   burn," 8.1 is the more correct figure, not merely an acceptable-but-lower one.
+> - **On this carbureted engine, a 0.2 gph delta is within normal fuel-flow variance (~0.5
+>   gph) and is noise, not signal.** Chasing it would imply a precision the airframe doesn't
+>   support — exactly what "approximately correct but not precisely wrong" warns against.
+>
+> Also verified and worth recording: this engine runs LOP, where fuel flow determines power
+> directly (`HP = GPH × 14.9`) rather than RPM/MP. Checked against Dana's real climb-phase data,
+> binned by matched %power band across altitude (2,000-8,000 ft): fuel flow is flat across
+> altitude for a given %power band (e.g. 60-65% power: 7.5 gph at both 2-4K ft, n=946, and 4-6K
+> ft, n=903 — effectively identical). This is the LOP-physics prediction, not just theory, and it
+> is why a single measured `climb_gph` (no altitude split, no sub-phase split) is the right model.
 
 **Files:**
 - Modify: `web/shared/planning/planner/route-planner.js`
