@@ -66,14 +66,7 @@ class FuelState {
         }
 
         // 4. Full capacity (lowest priority)
-        let cap = 50;
-        try {
-            if (typeof CockpitConfig !== 'undefined') {
-                cap = CockpitConfig.aircraft('performance.fuel_capacity_gal') ?? 50;
-            }
-        } catch (_) { /* use default */ }
-
-        return { gallons: cap, source: 'capacity' };
+        return { gallons: FuelState._capacityFallback(), source: 'capacity' };
     }
 
     /**
@@ -97,5 +90,37 @@ class FuelState {
      */
     static clearManualOverride() {
         Settings.fuelManualOverride = null;
+    }
+
+    /**
+     * Get current fuel on board using the canonical live-fuel priority chain:
+     * manual override > FuelTankState (canonical live per-tank tracker) > capacity fallback.
+     * @returns {{ gallons: number, source: 'manual'|'tank_state'|'capacity' }}
+     */
+    static getCurrentFuel() {
+        const manual = Settings.fuelManualOverride;
+        if (manual != null && manual > 0) {
+            return { gallons: manual, source: 'manual' };
+        }
+        try {
+            if (typeof FuelTankState !== 'undefined') {
+                const state = FuelTankState.getState();
+                if (state) {
+                    return { gallons: state.left_gal + state.right_gal, source: 'tank_state' };
+                }
+            }
+        } catch (_) { /* FuelTankState unavailable */ }
+        return { gallons: FuelState._capacityFallback(), source: 'capacity' };
+    }
+
+    /** Shared capacity fallback — must match fuel-tanks.js's own 18gal/side * 2 default. */
+    static _capacityFallback() {
+        try {
+            if (typeof CockpitConfig !== 'undefined') {
+                const cap = CockpitConfig.aircraft('performance.fuel_capacity_gal');
+                if (cap > 0) return cap;
+            }
+        } catch (_) { /* use default */ }
+        return 36; // matches fuel-tanks.js's hardcoded 18gal/side fallback, not the old 50gal guess
     }
 }
