@@ -1638,10 +1638,14 @@ Style `.wb-fuel-stale-warning` using the project's caution-badge token pattern: 
 1. With `FuelTankState` in a confirmed (fresh) state, open the W&B overlay — confirm no warning appears.
 2. Force `FuelTankState.needsConfirmation()` to return true (e.g. simulate a stale restart), open the W&B overlay — confirm the warning appears alongside the pre-filled value.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 4: Update the user manual**
+
+This is a new pilot-visible warning indicator (not a bug fix restoring prior behavior — this UI element didn't exist before). Per the project CLAUDE.md's User Manual policy, add a short note to `docs/user-manual.md`'s W&B section describing when the "Fuel quantity unconfirmed" warning appears and what it means.
+
+- [ ] **Step 5: Commit**
 
 ```bash
-git add web/cockpit/wb-overlay.js web/style.css
+git add web/cockpit/wb-overlay.js web/style.css docs/user-manual.md
 git commit -m "fix(fuel): W&B overlay warns when the pre-filled fuel figure is unconfirmed/stale"
 ```
 
