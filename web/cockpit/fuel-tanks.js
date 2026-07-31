@@ -16,6 +16,7 @@ class FuelTanksDisplay {
         this._confirmTimer = null;
         this._timerInterval = null;
         this._lastGph = 0;
+        this._initPanelMode = null;   // 'preflight' | 'recovery' | null (panel closed)
         this._tankCapacity = 18;   // per side, updated from config on init
         this._initSelectedTank = 'L';
     }
@@ -35,7 +36,7 @@ class FuelTanksDisplay {
             window.engineClient.addEventListener('engine:data', this._onEngineData);
         }
 
-        this._onStateChanged = () => this._render();
+        this._onStateChanged = () => { this._render(); this._refreshOpenPanel(); };
         window.addEventListener('fueltankstate:changed', this._onStateChanged);
 
         this._onConfirmPrompt = (e) => this._showConfirmBanner(e.detail?.active_tank);
@@ -221,7 +222,7 @@ class FuelTanksDisplay {
         });
 
         wireTap(this._dom.initOk, () => this._applyInit());
-        wireTap(this._dom.initCancel, () => { this._dom.initPanel.style.display = 'none'; });
+        wireTap(this._dom.initCancel, () => { this._dom.initPanel.style.display = 'none'; this._initPanelMode = null; });
         wireTap(this._dom.confirmYes, () => this._dismissConfirm(false));
         wireTap(this._dom.confirmSwitch, () => this._dismissConfirm(true));
     }
@@ -271,6 +272,7 @@ class FuelTanksDisplay {
             b.classList.toggle('ftw-sel-active', b.dataset.tank === activeTank)
         );
         this._dom.initPanel.style.display = 'flex';
+        this._initPanelMode = 'preflight';
     }
 
     _applyInit() {
@@ -279,6 +281,7 @@ class FuelTanksDisplay {
         if (isNaN(leftGal) || isNaN(rightGal) || leftGal < 0 || rightGal < 0) return;
         FuelTankState.init(leftGal, rightGal, this._initSelectedTank);
         this._dom.initPanel.style.display = 'none';
+        this._initPanelMode = null;
     }
 
     /* ------------------------------------------------------------------
@@ -296,6 +299,26 @@ class FuelTanksDisplay {
             b.classList.toggle('ftw-sel-active', b.dataset.tank === state.active_tank)
         );
         this._dom.initPanel.style.display = 'flex';
+        this._initPanelMode = 'recovery';
+    }
+
+    /* ------------------------------------------------------------------
+     * Keep an open init/recovery panel in sync with FuelTankState.
+     * Without this, a panel opened before an external update (e.g. a tic
+     * mark measurement entered via the fuel-overlay screen) keeps showing
+     * its stale snapshot, and tapping its action button would reapply the
+     * stale numbers over the correct ones.
+     * ----------------------------------------------------------------*/
+    _refreshOpenPanel() {
+        if (!this._initPanelMode || this._dom.initPanel.style.display !== 'flex') return;
+        const state = FuelTankState.getState();
+        if (!state) return;
+        this._dom.initL.value = state.left_gal.toFixed(1);
+        this._dom.initR.value = state.right_gal.toFixed(1);
+        this._initSelectedTank = state.active_tank;
+        this._dom.selRow.querySelectorAll('.ftw-sel-btn').forEach(b =>
+            b.classList.toggle('ftw-sel-active', b.dataset.tank === state.active_tank)
+        );
     }
 
     /* ------------------------------------------------------------------
