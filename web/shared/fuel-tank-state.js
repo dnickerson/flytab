@@ -60,10 +60,14 @@ class FuelTankState {
      * Initialize with preflight fuel quantities. Clears requires_confirm.
      * @param {number} leftGal
      * @param {number} rightGal
-     * @param {'L'|'R'|'BOTH'} activeTank
+     * @param {'L'|'R'} activeTank - this airframe has no BOTH selector position
      */
     static init(leftGal, rightGal, activeTank = 'L') {
         const now = new Date().toISOString();
+        // This aircraft draws from one tank at a time — there is no BOTH position on the
+        // selector. A legacy 'BOTH' (or anything else) is not a tank we can integrate
+        // against, so fall back to L and make the pilot confirm rather than guessing.
+        const validTank = (activeTank === 'L' || activeTank === 'R');
         FuelTankState._lastConfirmPromptAt = Date.now();
         let perSideCap = Infinity;
         try {
@@ -75,10 +79,10 @@ class FuelTankState {
         FuelTankState._state = {
             left_gal: Math.min(perSideCap, Math.max(0, leftGal)),
             right_gal: Math.min(perSideCap, Math.max(0, rightGal)),
-            active_tank: activeTank,
+            active_tank: validTank ? activeTank : 'L',
             tank_switched_at: now,
             last_sample_at: now,
-            requires_confirm: false,
+            requires_confirm: !validTank,
             initialized_at: now,
             imbalance: false,
             dropped_burn_estimate_gal: 0,
@@ -119,9 +123,15 @@ class FuelTankState {
         } else if (FuelTankState._state.active_tank === 'R') {
             FuelTankState._state.right_gal = Math.max(0, FuelTankState._state.right_gal - burned);
         } else {
-            // BOTH: split evenly
-            FuelTankState._state.left_gal = Math.max(0, FuelTankState._state.left_gal - burned / 2);
-            FuelTankState._state.right_gal = Math.max(0, FuelTankState._state.right_gal - burned / 2);
+            // Fail safe. This airframe feeds from exactly one tank, so an active_tank that
+            // is neither L nor R (legacy 'BOTH' state, or corruption) tells us nothing about
+            // which tank is draining. Splitting the burn would understate the feeding tank —
+            // it could run dry while the gauge still shows fuel — so stop integrating and
+            // make the pilot re-confirm which tank is selected.
+            FuelTankState._state.requires_confirm = true;
+            FuelTankState._save();
+            FuelTankState._fire();
+            return;
         }
 
         FuelTankState._state.last_sample_at = new Date(nowMs).toISOString();
@@ -147,11 +157,12 @@ class FuelTankState {
 
     /**
      * Switch the active fuel tank.
-     * @param {'L'|'R'|'BOTH'} tank
+     * @param {'L'|'R'} tank - this airframe has no BOTH selector position
      */
     static switchTank(tank) {
         FuelTankState._load();
         if (!FuelTankState._state) return;
+        if (tank !== 'L' && tank !== 'R') return;   // no BOTH on this aircraft
         FuelTankState._state.active_tank = tank;
         FuelTankState._state.tank_switched_at = new Date().toISOString();
         FuelTankState._save();

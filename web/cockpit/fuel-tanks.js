@@ -163,7 +163,6 @@ class FuelTanksDisplay {
                 </div>
                 <div class="ftw-sel-row" id="ftw-sel-row">
                     <button class="ftw-sel-btn ftw-sel-active" data-tank="L">L</button>
-                    <button class="ftw-sel-btn" data-tank="BOTH">BOTH</button>
                     <button class="ftw-sel-btn" data-tank="R">R</button>
                 </div>
                 <div class="ftw-init-btns">
@@ -338,7 +337,7 @@ class FuelTanksDisplay {
      * Periodic confirmation banner
      * ----------------------------------------------------------------*/
     _showConfirmBanner(activeTank) {
-        const label = activeTank === 'L' ? 'LEFT' : activeTank === 'R' ? 'RIGHT' : 'BOTH';
+        const label = activeTank === 'R' ? 'RIGHT' : 'LEFT';
         this._dom.confirmMsg.textContent = `Still on ${label} tank?`;
         this._dom.confirmBanner.style.display = 'flex';
         if (this._confirmTimer) clearTimeout(this._confirmTimer);
@@ -393,8 +392,8 @@ class FuelTanksDisplay {
         this._dom.galL.textContent = state.left_gal.toFixed(1);
         this._dom.galR.textContent = state.right_gal.toFixed(1);
 
-        const activeL = state.active_tank === 'L' || state.active_tank === 'BOTH';
-        const activeR = state.active_tank === 'R' || state.active_tank === 'BOTH';
+        const activeL = state.active_tank === 'L';
+        const activeR = state.active_tank === 'R';
         this._dom.tankL.classList.toggle('ftw-tank-active', activeL);
         this._dom.tankR.classList.toggle('ftw-tank-active', activeR);
         this._dom.badgeL.classList.toggle('ftw-badge-active', activeL);
@@ -457,8 +456,8 @@ class FuelTanksDisplay {
         const hrs = Math.floor(elMin / 60);
         const mins = elMin % 60;
         const label = hrs > 0 ? `${hrs}:${String(mins).padStart(2, '0')}` : `${mins}m`;
-        const activeL = state.active_tank === 'L' || state.active_tank === 'BOTH';
-        const activeR = state.active_tank === 'R' || state.active_tank === 'BOTH';
+        const activeL = state.active_tank === 'L';
+        const activeR = state.active_tank === 'R';
         this._dom.timerL.textContent = activeL ? label : '';
         this._dom.timerR.textContent = activeR ? label : '';
     }
