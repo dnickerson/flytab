@@ -272,6 +272,8 @@ class ConfigEditor {
             'cruise_speed_kt': { type: 'number', label: 'Cruise TAS (kt)', min: 50, max: 300 },
             'fuel_capacity_gal': { type: 'number', label: 'Fuel Capacity (gal)', min: 10, max: 200, step: 0.5 },
             'cruise_gph': { type: 'number', label: 'Fuel Burn (gph)', min: 1, max: 50, step: 0.1 },
+            'reserve_gal': { type: 'number', label: 'Reserve Fuel (gal)', min: 0, max: 50, step: 0.1 },
+            'fuel_sender_accurate_below_gal': { type: 'number', label: 'Fuel Sender Accuracy Threshold (gal)', min: 0, max: 50, step: 0.1 },
             'vs0_kt': { type: 'number', label: 'Vs0 (kt)', min: 20, max: 100 },
             'vs1_kt': { type: 'number', label: 'Vs1 (kt)', min: 20, max: 100 },
             'vfe_kt': { type: 'number', label: 'Vfe (kt)', min: 40, max: 200 },
