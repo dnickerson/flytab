@@ -1929,7 +1929,21 @@ class FlyTabApp {
         window.addEventListener('fueltankstate:changed', onTankStateChanged);
 
         overlay.querySelector('#fso-measure-btn').addEventListener('click', () => {
+            // Hide (not remove) so #fuelStopOverlay's state/listeners survive while
+            // fuel-overlay.js's full-screen Fuel Entry UI is on top — both are
+            // position:fixed, and fuel-overlay.js's z-index (9000) is below this
+            // overlay's (9998), so it would otherwise render invisibly underneath.
+            overlay.style.display = 'none';
             this.fuelOverlay.show();
+            const checkClosed = setInterval(() => {
+                if (!this.fuelOverlay.visible) {
+                    clearInterval(checkClosed);
+                    if (document.body.contains(overlay)) {
+                        overlay.style.display = 'flex';
+                        refreshMeasureStatus();
+                    }
+                }
+            }, 300);
         });
 
         overlay.querySelector('#fso-continue-btn').addEventListener('click', () => {
