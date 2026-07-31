@@ -549,6 +549,16 @@ class FuelOverlay {
             this._setAddStatus('Enter gallons added', 'error');
             return;
         }
+        // Reject before any state mutation if the tic sliders were never touched from their
+        // default of 0. ticToGallons(0) evaluates to the polynomial's non-zero y-intercept
+        // (~2.24 gal), so checking computed gallons can't detect "no reading entered" — check
+        // the raw tic inputs directly. A genuine 0/0 tic reading (both tanks at empty) is not
+        // a plausible real-world fuel-stop scenario, so treating tic=0,0 as "not entered" is
+        // an acceptable, intentional trade-off.
+        if (this._leftTic === 0 && this._rightTic === 0) {
+            this._setAddStatus('Enter a tic-mark reading above before recording a fuel stop', 'error');
+            return;
+        }
         const airport = this._dom.addAirport.value.trim().toUpperCase();
         const date = this._dom.addDate.value;
         const time = this._dom.addTime.value;
@@ -567,10 +577,6 @@ class FuelOverlay {
             // a fresh physical measurement, never computed from "previous + added."
             const leftGal = FuelEngine.ticToGallons(this._leftTic, this._coefficients);
             const rightGal = FuelEngine.ticToGallons(this._rightTic, this._coefficients);
-            if (leftGal <= 0 && rightGal <= 0) {
-                this._setAddStatus('Enter a tic-mark reading above before recording a fuel stop', 'error');
-                return;
-            }
             const existingTank = (typeof FuelTankState !== 'undefined') ? FuelTankState.getState() : null;
             if (typeof FuelTankState !== 'undefined') {
                 FuelTankState.init(leftGal, rightGal, existingTank?.active_tank ?? 'L');
