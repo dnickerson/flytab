@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'fs';
 import { RoutePlanner } from '../../../web/shared/planning/planner/route-planner.js';
 import { makeAeroAdapter, NULL_WEATHER, NULL_PLANS, NULL_PROFILES, NULL_NETWORK, FROZEN_CLOCK } from '../fixtures/mock-adapters.js';
 import { FIXES, AIRWAYS } from '../fixtures/synthetic-airway-graph.js';
@@ -231,5 +232,43 @@ describe('RV9A fallback profile — measured phase fuel flows', () => {
         const p = new RoutePlanner(adapters);   // NULL_PROFILES -> RV9A_FALLBACK
         const r = await p.parseRoute('A V1 C');
         expect(r.reserveGal).toBe(10);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Sync-invariant test (Task 11 fix round 1): the review found that mutating
+// RV9A_DEFAULT (idb-profile.js) or aircraft-config.json's descent_gph alone,
+// leaving RV9A_FALLBACK above untouched, left the whole suite green (M7/M8 in
+// the Task 11 report's mutation table) — neither copy has any other coverage.
+// Neither RV9A_FALLBACK nor RV9A_DEFAULT is exported (both are deliberately
+// private module consts — see the "KEEP IN SYNC, BY HAND" comments above each),
+// and RV9A_DEFAULT lives behind IdbProfileStore, which needs a real IndexedDB
+// the project has no fake for. So this reads all three sources directly off
+// disk — exactly like a human doing the hand-sync check the comments ask for —
+// rather than importing/instantiating anything.
+// ---------------------------------------------------------------------------
+describe('descent_gph sync invariant — all three hand-maintained copies must agree', () => {
+    function extractDescentGph(sourceText, label) {
+        const m = sourceText.match(/descent:\s*\{[\s\S]*?gph:\s*([\d.]+)/);
+        if (!m) throw new Error(`descent.gph literal not found in ${label}`);
+        return parseFloat(m[1]);
+    }
+
+    it('RV9A_FALLBACK (route-planner.js), RV9A_DEFAULT (idb-profile.js), and aircraft-config.json performance.descent_gph are all the same number', () => {
+        const routePlannerSrc = readFileSync('web/shared/planning/planner/route-planner.js', 'utf8');
+        const idbProfileSrc   = readFileSync('web/shared/planning-adapters/idb-profile.js', 'utf8');
+        const aircraftConfig  = JSON.parse(readFileSync('web/aircraft-config.json', 'utf8'));
+
+        const fallbackGph = extractDescentGph(routePlannerSrc, 'RV9A_FALLBACK (route-planner.js)');
+        const defaultGph  = extractDescentGph(idbProfileSrc, 'RV9A_DEFAULT (idb-profile.js)');
+        const configGph   = aircraftConfig.performance.descent_gph;
+
+        expect(fallbackGph).toBe(defaultGph);
+        expect(defaultGph).toBe(configGph);
+        // Pin the known-correct measured value too, so a matched three-way drift
+        // (all three edited together back to some other number) still fails —
+        // agreement alone isn't sufficient, since three copies of a wrong number
+        // agree with each other just as well as three copies of the right one.
+        expect(configGph).toBe(6.9);
     });
 });
