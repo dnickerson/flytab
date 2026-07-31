@@ -412,7 +412,8 @@ git commit -m "fix(fuel): capacity clamp, dropped-burn tracking, confirm-prompt 
 
 **Interfaces:**
 - Consumes: `FuelTankState.getState()` (from Task 2, returns `{left_gal, right_gal, ...}` or `null`), `Settings.fuelManualOverride`, `CockpitConfig.aircraft('performance.fuel_capacity_gal')`
-- Produces: `FuelState.getCurrentFuel()` → `{ gallons: number, source: 'manual'|'tank_state'|'capacity' }`. `FuelState.getStartFuel()` keeps its existing signature/return shape (`{gallons, source}` with `source` now one of `'manual'|'edm'|'tic'|'tank_state'|'capacity'` — the `'edm'`/`'tic'` branches for the *pre-flight, engine-off* case are retained since they're the correct source before `FuelTankState` has been initialized for the day; once `FuelTankState` is initialized, `getStartFuel()` delegates to `getCurrentFuel()`).
+- Produces: `FuelState.getCurrentFuel()` → `{ gallons: number, source: 'manual'|'tank_state'|'capacity' }`. `FuelState.getStartFuel()` keeps its existing signature/return shape (`{gallons, source}` with `source` one of `'manual'|'edm'|'tic'|'capacity'`).
+- **These are two distinct APIs — `getStartFuel()` does NOT delegate to `getCurrentFuel()` and never returns `source: 'tank_state'`.** Use `getStartFuel()` for pre-flight/planning reads (what was in the tanks at engine start) and `getCurrentFuel()` for live in-flight reads (what is in the tanks now, per `FuelTankState`). The `'edm'`/`'tic'` branches in `getStartFuel()` are the correct source for the pre-flight, engine-off case. Tasks 8, 9, 12, and 13 depend on this separation — do not collapse the two.
 
 - [ ] **Step 1: Write failing tests**
 
