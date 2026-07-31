@@ -1882,13 +1882,14 @@ class FlyTabApp {
                 <div style="background:var(--bg-surface);border-radius:8px;padding:12px;margin-bottom:12px;">
                     <div style="font-size:12px;color:var(--text-label);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;">Fuel</div>
                     ${hasPreset
-                        ? `<div style="font-size:16px;color:var(--text-primary);">Add <strong>${presetGal.toFixed(1)}\u2009gal</strong> \u2014 fill to <strong>${fillToGal}\u2009gal</strong></div>`
-                        : `<div style="display:flex;align-items:center;gap:8px;">
-                               <label for="fso-fuel-input" style="font-size:14px;color:var(--text-secondary);">Gallons added:</label>
-                               <input id="fso-fuel-input" type="number" min="0" max="${fuelCap}" step="0.5"
-                                   style="width:80px;padding:6px 8px;background:var(--bg-surface-raised);color:var(--text-primary);border:1px solid var(--border);border-radius:4px;font-size:16px;text-align:right;">
-                           </div>`
+                        ? `<div style="font-size:14px;color:var(--text-secondary);margin-bottom:8px;">Planned refuel: ~${presetGal.toFixed(1)}\u2009gal (fill to ~${fillToGal}\u2009gal) \u2014 measure actual tic marks below</div>`
+                        : ''
                     }
+                    <div id="fso-measure-status" style="font-size:14px;color:var(--color-danger);font-weight:700;margin-bottom:8px;">Not yet measured</div>
+                    <button id="fso-measure-btn"
+                        style="width:100%;min-height:var(--touch-min, 56px);padding:12px;background:var(--accent);color:var(--text-on-dark);border:none;border-radius:8px;font-size:16px;font-weight:700;cursor:pointer;">
+                        \u270f Measure &amp; Record Fuel
+                    </button>
                 </div>
                 ${nextFlight ? flightCard(nextFlight, `Flight ${nextNum} \u2014 ${icao} \u2192 ${nextDest}`) : ''}
                 <button id="fso-continue-btn"
@@ -1908,27 +1909,42 @@ class FlyTabApp {
             overlay.remove();
         });
 
-        overlay.querySelector('#fso-continue-btn').addEventListener('click', () => {
-            let gallonsAdded = 0;
-            if (hasPreset) {
-                gallonsAdded = presetGal;
+        const overlayShownAt = Date.now();
+        const measureStatusEl = overlay.querySelector('#fso-measure-status');
+        const refreshMeasureStatus = () => {
+            const state = (typeof FuelTankState !== 'undefined') ? FuelTankState.getState() : null;
+            const measuredSinceOpen = state?.initialized_at &&
+                new Date(state.initialized_at).getTime() >= overlayShownAt;
+            if (measuredSinceOpen) {
+                measureStatusEl.textContent = `Measured: ${(state.left_gal + state.right_gal).toFixed(1)} gal`;
+                measureStatusEl.style.color = 'var(--color-success)';
             } else {
-                const input = overlay.querySelector('#fso-fuel-input');
-                gallonsAdded = parseFloat(input?.value) || 0;
+                measureStatusEl.textContent = 'Not yet measured';
+                measureStatusEl.style.color = 'var(--color-danger)';
             }
+            return measuredSinceOpen;
+        };
+        refreshMeasureStatus();
+        const onTankStateChanged = () => refreshMeasureStatus();
+        window.addEventListener('fueltankstate:changed', onTankStateChanged);
 
-            if (typeof FuelState !== 'undefined') {
-                const currentFuel = (fuelAtStop != null && fuelAtStop > 0)
-                    ? fuelAtStop
-                    : FuelState.getStartFuel().gallons;
-                const newTotal = Math.min(currentFuel + gallonsAdded, fuelCap);
-                FuelState.saveMeasurement({ total_gal: newTotal, source: 'tic' });
-                window.dispatchEvent(new CustomEvent('fuelstate:changed'));
+        overlay.querySelector('#fso-measure-btn').addEventListener('click', () => {
+            this.fuelOverlay.show();
+        });
+
+        overlay.querySelector('#fso-continue-btn').addEventListener('click', () => {
+            if (!refreshMeasureStatus()) {
+                measureStatusEl.textContent = 'Measure fuel before continuing';
+                return;
             }
-
+            window.removeEventListener('fueltankstate:changed', onTankStateChanged);
             overlay.remove();
             this.showToast(`Flight ${nextNum} active \u2014 ${nextDest} ${nextDistS}nm`);
         });
+
+        overlay.querySelector('#fso-close-btn').addEventListener('click', () => {
+            window.removeEventListener('fueltankstate:changed', onTankStateChanged);
+        }, { once: false }); // in addition to the existing close-btn listener already registered above
     }
 
     // === Toast Notifications ==========
