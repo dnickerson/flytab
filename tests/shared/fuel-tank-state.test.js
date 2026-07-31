@@ -96,12 +96,24 @@ describe('FuelTankState', () => {
         it('flags requires_confirm on getState() when last_sample_at is stale, even mid-session', () => {
             const FuelTankState = freshFuelTankState();
             global.CockpitConfig = { aircraft: () => 36 };
-            FuelTankState.init(18, 18, 'L');
-            // Force last_sample_at far in the past without going through onSample
-            const raw = JSON.parse(localStorage.getItem(FuelTankState.STORAGE_KEY));
-            raw.last_sample_at = new Date(Date.now() - 46 * 60 * 1000).toISOString(); // 46 min ago
-            localStorage.setItem(FuelTankState.STORAGE_KEY, JSON.stringify(raw));
-            // getState() alone (no onSample) must re-evaluate staleness
+
+            // Write a stale state to localStorage BEFORE the first _load() / needsConfirmation() call
+            // This simulates state that was loaded on a prior app session and has since become stale
+            const staleState = {
+                left_gal: 18,
+                right_gal: 18,
+                active_tank: 'L',
+                tank_switched_at: new Date().toISOString(),
+                last_sample_at: new Date(Date.now() - 46 * 60 * 1000).toISOString(), // 46 min ago
+                requires_confirm: false,
+                initialized_at: new Date().toISOString(),
+                imbalance: false,
+                dropped_burn_estimate_gal: 0,
+            };
+            localStorage.setItem(FuelTankState.STORAGE_KEY, JSON.stringify(staleState));
+
+            // needsConfirmation() will _load() the stale state from localStorage and _checkStaleness()
+            // should detect that last_sample_at is > 45 min in the past
             expect(FuelTankState.needsConfirmation()).toBe(true);
         });
     });

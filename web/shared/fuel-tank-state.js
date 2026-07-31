@@ -35,12 +35,6 @@ class FuelTankState {
     /** Re-evaluate staleness against the current clock. Called on every getState()/needsConfirmation(),
      *  not just once per page load, so a silent mid-session data gap is caught. */
     static _checkStaleness() {
-        // Reload from storage in case it's been updated externally (e.g., by another tab or mid-session changes)
-        try {
-            const raw = localStorage.getItem(FuelTankState.STORAGE_KEY);
-            if (raw) FuelTankState._state = JSON.parse(raw);
-        } catch (_) { }
-
         if (FuelTankState._state && !FuelTankState._state.requires_confirm) {
             const lastMs = FuelTankState._state.last_sample_at
                 ? new Date(FuelTankState._state.last_sample_at).getTime()
