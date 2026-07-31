@@ -93,6 +93,7 @@ class FlyTabApp {
         this._applyingPlan = false;   // re-entrancy guard for applyRouteEdit
         this._pendingPlanEdit = null; // latest-wins queuing for rapid calls
         this._shownFuelStopOverlays = new Set(); // tracks shown overlays by "ICAO_index" key
+        this._fuelStopOverlayCleanup = null; // removes the open overlay's window listener + poll interval; see _showFuelStopOverlay
 
         // DOM references
         this.dom = {
@@ -1815,6 +1816,13 @@ class FlyTabApp {
      * @param {number} wpIndex   - Index of wp in the waypoints array
      */
     _showFuelStopOverlay(wp, wpIndex) {
+        // Tear down any prior, still-open instance's window listener + poll interval
+        // before replacing its DOM — without this, a second fuel-stop waypoint
+        // reached while a prior instance is still open (un-dismissed) leaks the old
+        // instance's 'fueltankstate:changed' listener and checkClosed interval for
+        // the rest of the session.
+        this._fuelStopOverlayCleanup?.();
+        this._fuelStopOverlayCleanup = null;
         document.getElementById('fuelStopOverlay')?.remove();
 
         // Route table computes _flights and per-waypoint fuel data during updateLive().
@@ -1928,16 +1936,35 @@ class FlyTabApp {
         const onTankStateChanged = () => refreshMeasureStatus();
         window.addEventListener('fueltankstate:changed', onTankStateChanged);
 
+        // checkClosedInterval is captured by reference so the cleanup function below
+        // always clears whichever interval is currently outstanding (or none, if the
+        // measure button was never tapped / the poll already finished naturally).
+        let checkClosedInterval = null;
+        this._fuelStopOverlayCleanup = () => {
+            window.removeEventListener('fueltankstate:changed', onTankStateChanged);
+            if (checkClosedInterval != null) {
+                clearInterval(checkClosedInterval);
+                checkClosedInterval = null;
+            }
+        };
+
         overlay.querySelector('#fso-measure-btn').addEventListener('click', () => {
+            // Fail safe: if fuelOverlay isn't available, do nothing rather than hiding
+            // #fuelStopOverlay and then throwing on .show() — that would leave the
+            // pilot stuck on a blank/invisible screen with no way back short of an
+            // app restart, in a safety-critical fuel workflow.
+            if (typeof this.fuelOverlay === 'undefined' || !this.fuelOverlay) return;
+
             // Hide (not remove) so #fuelStopOverlay's state/listeners survive while
             // fuel-overlay.js's full-screen Fuel Entry UI is on top — both are
             // position:fixed, and fuel-overlay.js's z-index (9000) is below this
             // overlay's (9998), so it would otherwise render invisibly underneath.
             overlay.style.display = 'none';
             this.fuelOverlay.show();
-            const checkClosed = setInterval(() => {
+            checkClosedInterval = setInterval(() => {
                 if (!this.fuelOverlay.visible) {
-                    clearInterval(checkClosed);
+                    clearInterval(checkClosedInterval);
+                    checkClosedInterval = null;
                     if (document.body.contains(overlay)) {
                         overlay.style.display = 'flex';
                         refreshMeasureStatus();
@@ -1951,13 +1978,15 @@ class FlyTabApp {
                 measureStatusEl.textContent = 'Measure fuel before continuing';
                 return;
             }
-            window.removeEventListener('fueltankstate:changed', onTankStateChanged);
+            this._fuelStopOverlayCleanup?.();
+            this._fuelStopOverlayCleanup = null;
             overlay.remove();
             this.showToast(`Flight ${nextNum} active \u2014 ${nextDest} ${nextDistS}nm`);
         });
 
         overlay.querySelector('#fso-close-btn').addEventListener('click', () => {
-            window.removeEventListener('fueltankstate:changed', onTankStateChanged);
+            this._fuelStopOverlayCleanup?.();
+            this._fuelStopOverlayCleanup = null;
         }, { once: false }); // in addition to the existing close-btn listener already registered above
     }
 
