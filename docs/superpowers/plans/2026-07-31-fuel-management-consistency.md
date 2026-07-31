@@ -1326,6 +1326,46 @@ git commit -m "fix(fuel): clear segment-level fuel fields on passed multi-segmen
 
 ### Task 11: Canonical %power → GPH table in the planning library
 
+> **SCOPE ADDITION 2026-07-31 (Dana's decision) — measured phase GPH belongs in this task.**
+>
+> **Governing principle, from Dana:** *"We want to be approximately correct but not precisely
+> wrong. There are many variables that can change the fuel flow and we want to be on the side of
+> planning more consumption rather than less."* Derive planning constants from a **conservative
+> upper percentile (p85), never the median or mean** — a median under-plans burn on half of all
+> flights, and under-planned burn over-states fuel remaining, the direction that runs tanks dry.
+>
+> **1. Fix `descent_gph`.** `aircraft-config.json` has `descent_gph: 4`. Measured p85 across
+> 11,819 phase-labelled samples is **6.9 gph** — the config under-plans descent burn by ~2.9 gph,
+> the one constant genuinely wrong in the unsafe direction. Roughly 0.7 gal per 15-min descent,
+> ~2 gal across a three-leg day, and it bites nearest reserves. This is user-visible (route fuel
+> numbers change) — update `docs/user-manual.md` in the same commit.
+>
+> **2. Leave `climb_gph: 15` alone.** It looks 40% high against a 10.7 gph median, but p85 is
+> **15.1** — the value is already correct under the principle above. Do NOT "correct" it downward.
+> Use **one** measured `climb_gph`; Dana explicitly does not want climb split into full-power vs
+> cruise-climb sub-phases. `cruise_gph: 9` vs p85 8.3 is likewise already conservative — leave it.
+>
+> **3. Derive from `ml_phase`, not RPM heuristics.** `web/cockpit/flight-recorder.js` writes an
+> `ml_phase` column (53 of 82 CSVs carry it) from the 12-phase detector, so takeoff/climb/cruise/
+> descent rows can be selected directly. `~/engine_analysis/build_power_curve.py` currently finds
+> cruise with RPM/stability heuristics (`MIN_CRUISE_RPM 2000`, stable alt/speed 3+ min, GS>80,
+> roll<15°) and never uses `ml_phase`. Measured p85 reference values: takeoff 17.5, climb 15.1,
+> cruise 8.3, descent 6.9.
+>
+> **4. The %power label semantics are inconsistent — state which definition wins.** Dana flies
+> **50°F lean of peak**; the Lycoming charts these formulas come from are **50°F rich of peak**.
+> When LOP, *power is determined by fuel flow, not by MP* (`HP = GPH × 14.9` for the 8.5:1 O-360).
+> `engine_monitor.py` already does this correctly — it uses fuel flow for power when LEAN and
+> RPM/MP when RICH. But `build_power_curve.py`'s `estimate_pct_power()` falls back to
+> `(RPM/2700) × (MAP/29.92) × 100`, the chart/MP formula, so the `pct` labels on the bands are
+> MP-derived while their `gph` values are measured. That is why 8.1 gph (67% by LOP physics) sits
+> in the band labelled 65%. The measured `gph` is ground truth; make the table authoritative and
+> document which definition the `pct` label carries so planning and the engine page agree.
+>
+> Note `route-table.js`'s `lop_sfc = 0.067` is **not** a wrong constant — it equals 14.93 HP/gph,
+> matching the Pi's LOP factor. The defect is feeding an MP-derived label into a fuel-derived
+> equation, not the equation itself.
+
 **Files:**
 - Modify: `web/shared/planning/planner/route-planner.js`
 - Modify: `web/shared/planning-adapters/idb-profile.js`
