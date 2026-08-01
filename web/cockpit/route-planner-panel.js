@@ -7,6 +7,46 @@
  * Only outward calls: app.applyRouteEdit(plan) and app.closeRoutePlanner().
  */
 class RoutePlannerPanel {
+    /**
+     * Cruise planning burn at the aircraft's CONFIGURED cruise power
+     * (`performance.cruise_pwr_pct`, currently 65%). 8.4 gph.
+     *
+     * This is the number the pilot actually reads in the route table, so it is
+     * the one that matters. It is deliberately NOT `power_settings[].gph` for
+     * the 61-65 band, which reads 8.1:
+     *
+     *   - `~/engine_analysis/build_power_curve.py:352` writes
+     *     `"gph": round(gph_med, 1)` — every band value in that table is a
+     *     MEDIAN, i.e. the burn on an average day.
+     *   - Dana's governing principle is "we want to be on the side of planning
+     *     more consumption rather than less": planning constants come from a
+     *     conservative upper percentile, never a median or a mean. A median is
+     *     precisely the statistic that principle excludes.
+     *   - Binning `ml_phase == 'cruise'` rows by recorded %power across 53
+     *     flight logs gives, for the 65-69% band: n=7,879, median 8.10,
+     *     p85 8.40. 8.4 is the same distribution as the 8.1 band value, read at
+     *     p85 instead of at the median.
+     *
+     * Dana's direct instruction, 2026-07-31: "use 8.4 for the cruise gal/hr".
+     * Commit 65323c2 put 8.4 into RV9A_FALLBACK and RV9A_DEFAULT but this panel
+     * still built its profile out of the band table, so the route table kept
+     * showing the 8.1 median — ~0.93 gal MORE fuel remaining over a three-hour
+     * cruise than planned, i.e. optimistic, the direction that runs tanks dry.
+     *
+     * KEEP IN SYNC, BY HAND, with `fuelPhases.cruise.gph` in
+     * `web/shared/planning/planner/route-planner.js` (RV9A_FALLBACK) and
+     * `web/shared/planning-adapters/idb-profile.js` (RV9A_DEFAULT). The active
+     * profile itself is NOT readable from here: it lives behind
+     * `IdbProfileStore.getActive()`, which is async and IndexedDB-backed, while
+     * `_profileForPower()` is called synchronously inside render paths.
+     * `tests/planning/fuel-constants-sync.test.js` is the machine check that the
+     * hand-sync happened; it executes `_profileForPower()` and compares.
+     *
+     * DO NOT "correct" this back to 8.1 to match the band table, and do not
+     * edit the band table up to match this — that table is measured median data.
+     */
+    static CRUISE_GPH_AT_CONFIGURED_POWER = 8.4;
+
     constructor(panelEl, nasrDb, planningAdapters) {
         this._el      = panelEl;
         this._nasrDb  = nasrDb;
@@ -658,11 +698,25 @@ class RoutePlannerPanel {
             || powerSettings.reduce((best, s) =>
                 Math.abs(s.pct - pctPower) < Math.abs(best.pct - pctPower) ? s : best);
         if (!entry) return null;
+
+        // Cruise burn: the band table gives MEDIAN gph (build_power_curve.py
+        // writes `round(gph_med, 1)`), and planning must use a conservative
+        // upper percentile instead — see CRUISE_GPH_AT_CONFIGURED_POWER above.
+        // Only the aircraft's configured cruise power has a decided p85 figure,
+        // so every OTHER selected power keeps its measured band value rather
+        // than an invented one. rpm / mp / tas always come from the band.
+        // Math.max, not a replacement: this may only ever raise planned burn.
+        const atConfiguredCruise = perf?.cruise_pwr_pct != null
+            && Number(pctPower) === Number(perf.cruise_pwr_pct);
+        const cruiseGph = atConfiguredCruise
+            ? Math.max(entry.gph, RoutePlannerPanel.CRUISE_GPH_AT_CONFIGURED_POWER)
+            : entry.gph;
+
         return {
             id: 'rv9a-default', model: 'RV-9A',
             cruise_ktas:                entry.tas_kt,
             cruise_ias:                 perf?.cruise_speed_kt ?? 140,
-            fuel_burn_gph:              entry.gph,
+            fuel_burn_gph:              cruiseGph,
             fuel_capacity_gal:          perf?.fuel_capacity_gal ?? 36,
             reserve_gal:                10,
             climb_rate_fpm:             perf?.climb_fpm ?? 1500,
@@ -678,11 +732,17 @@ class RoutePlannerPanel {
                            rpm: perf?.climb_rpm, mp: perf?.climb_mp,
                            percent_power: perf?.climb_pwr_pct },
                 cruise:  { ias_kt:   perf?.cruise_speed_kt ?? 140,
-                           gph:      entry.gph,
+                           gph:      cruiseGph,
                            rpm:      entry.rpm,  mp: entry.mp,
                            percent_power: entry.pct },
+                // Descent fallback is 6.9, the measured descent p85 — NOT the
+                // old 4.0 book guess, which under-planned descent burn by ~2.9
+                // gph and therefore over-stated fuel remaining. Dead today
+                // (`descent_gph` is present in aircraft-config.json), but it is
+                // the same defect class as the cruise median above: a stale
+                // optimistic default waiting for the config key to go missing.
                 descent: { rate_fpm: perf?.descent_fpm ?? 700,
-                           gph:      perf?.descent_gph ?? 4,
+                           gph:      perf?.descent_gph ?? 6.9,
                            ias_kt:   perf?.descent_speed_kt ?? 170,
                            rpm: perf?.descent_rpm, mp: perf?.descent_mp,
                            percent_power: perf?.descent_pwr_pct },

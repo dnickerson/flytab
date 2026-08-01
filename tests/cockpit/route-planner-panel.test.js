@@ -254,3 +254,125 @@ describe('_doApply dep/dest derivation', () => {
         delete globalThis.app;
     });
 });
+
+// ── _profileForPower — cruise burn at configured cruise power ──────────────
+//
+// This is the profile the pilot's route table is actually computed from:
+// every `recomputeLegs(...)` call in this panel passes
+// `_profileForPower(this._pctPower)`, and `recomputeLegs` resolves
+// `profileOverride || RV9A_FALLBACK` — so RV9A_FALLBACK's 8.4 gph cruise
+// NEVER reaches the route table. Whatever this function returns is what the
+// FUEL / REM columns, the TOTAL footer and the DEST badge are built from.
+//
+// ERROR DIRECTION for everything below: too LOW a cruise gph under-plans burn
+// and therefore OVER-states fuel remaining — the direction that runs tanks dry.
+// `power_settings[].gph` is a MEDIAN (build_power_curve.py writes
+// `round(gph_med, 1)`), so taking the band value at the configured cruise power
+// planned the average day; 8.4 is the p85 of that same 65-69% distribution.
+
+const realConfig = JSON.parse(
+    readFileSync(join(__dirname, '../../web/aircraft-config.json'), 'utf8')
+);
+
+function withConfig(perfPatch = {}) {
+    const cfg = structuredClone(realConfig);
+    Object.assign(cfg.performance, perfPatch);
+    globalThis.CockpitConfig = { aircraftRaw: cfg };
+    return cfg.performance;
+}
+
+describe('_profileForPower — cruise gph at the configured cruise power', () => {
+    beforeEach(() => { withConfig(); });
+
+    it('returns 8.4 gph at 65%, not the 8.1 band median', () => {
+        const perf = withConfig();
+        expect(perf.cruise_pwr_pct).toBe(65);
+        expect(perf.power_settings.find(s => s.pct === 65).gph).toBe(8.1);
+
+        const p = makePanel()._profileForPower(65);
+        expect(p.fuelPhases.cruise.gph).toBe(8.4);
+        expect(p.fuel_burn_gph).toBe(8.4);
+    });
+
+    it('still takes rpm / mp / tas / %power from the measured band entry', () => {
+        const band = realConfig.performance.power_settings.find(s => s.pct === 65);
+        const p = makePanel()._profileForPower(65);
+        expect(p.fuelPhases.cruise.rpm).toBe(band.rpm);
+        expect(p.fuelPhases.cruise.mp).toBe(band.mp);
+        expect(p.fuelPhases.cruise.percent_power).toBe(band.pct);
+        expect(p.cruise_ktas).toBe(band.tas_kt);
+    });
+
+    // Only 65% has a decided p85. No other band may be silently invented.
+    it.each([[55, 6.5], [60, 7.3], [70, 8.7], [75, 8.9]])(
+        'keeps the measured band median at %i%% (%s gph)',
+        (pct, gph) => {
+            const p = makePanel()._profileForPower(pct);
+            expect(p.fuelPhases.cruise.gph).toBe(gph);
+            expect(p.fuel_burn_gph).toBe(gph);
+        });
+
+    // The trigger is `perf.cruise_pwr_pct`, not a hardcoded 65.
+    it('follows cruise_pwr_pct if the aircraft is reconfigured to cruise at 70%', () => {
+        withConfig({ cruise_pwr_pct: 70 });
+        const panel = makePanel();
+        expect(panel._profileForPower(70).fuelPhases.cruise.gph).toBe(8.7); // max(8.7, 8.4)
+        expect(panel._profileForPower(65).fuelPhases.cruise.gph).toBe(8.1); // no longer configured cruise
+    });
+
+    // Math.max, not a replacement — the constant may only ever RAISE burn.
+    it('never lowers a band value that already exceeds the planning constant', () => {
+        const perf = withConfig();
+        perf.power_settings.find(s => s.pct === 65).gph = 9.2;
+        expect(makePanel()._profileForPower(65).fuelPhases.cruise.gph).toBe(9.2);
+    });
+
+    // Stale-default guard: the old fallback was 4, ~2.9 gph below the measured
+    // descent p85 of 6.9 — dead while `descent_gph` is in the config, but it is
+    // the same defect class as the cruise median this suite exists for.
+    it('descent falls back to the measured p85 6.9 when descent_gph is missing', () => {
+        withConfig({ descent_gph: undefined });
+        const p = makePanel()._profileForPower(65);
+        expect(p.fuelPhases.descent.gph).toBe(6.9);
+    });
+});
+
+describe('_profileForPower drives the real planner — 516.4 nm leg from 36 gal', () => {
+    // End-to-end: the panel's profile through the same RoutePlanner the panel
+    // uses. Pins the actual number on the pilot's REM column, not just the
+    // constant behind it.
+    it('shows 7.428 gal remaining, ~0.93 gal LESS than the 8.1 band median would', async () => {
+        withConfig();
+        const { RoutePlanner } = await import('../../web/shared/planning/planner/route-planner.js');
+        const planner = new RoutePlanner({ aero: {}, plans: {}, profiles: {} });
+        // 516.4 nm due north — 3.106 h of cruise at 6,500 ft.
+        const plan = {
+            waypoints: [
+                { id: 'DEP', icao: 'KDEP', lat: 34.0,       lon: -80.0 },
+                { id: 'DST', icao: 'KDST', lat: 42.6008667105, lon: -80.0 },
+            ],
+            cruiseAltFt: 6500,
+        };
+        const opts = { cruiseAltFt: 6500, pctPower: 65,
+                       departureTime: new Date('2026-07-31T15:00:00Z') };
+
+        const profile = makePanel()._profileForPower(65);
+        expect(profile.fuel_capacity_gal).toBe(36);
+        const after = planner.recomputeLegs(plan, profile, opts);
+        expect(after.legs[0].distNm).toBeCloseTo(516.4, 1);
+        expect(after.summary.fuelRemGal).toBeCloseTo(7.428, 3);
+        expect(after.legs[0].segments.find(s => s.phase === 'CRZ').gph).toBe(8.4);
+
+        // The same leg on the raw band median, i.e. what the pilot saw before.
+        const band = structuredClone(profile);
+        band.fuel_burn_gph = 8.1;
+        band.fuelPhases.cruise.gph = 8.1;
+        const before = planner.recomputeLegs(plan, band, opts);
+        expect(before.summary.fuelRemGal).toBeCloseTo(8.359, 3);
+
+        // Direction of error: planned burn UP, fuel remaining DOWN. Never the reverse.
+        expect(after.summary.totalFuelGal).toBeGreaterThan(before.summary.totalFuelGal);
+        expect(after.summary.fuelRemGal).toBeLessThan(before.summary.fuelRemGal);
+        expect(before.summary.fuelRemGal - after.summary.fuelRemGal).toBeCloseTo(0.932, 2);
+    });
+});

@@ -23,6 +23,17 @@ import { decomposeLeg } from '../../web/shared/planning/math/fuel-phases.js';
 // `CockpitConfig.aircraftRaw.performance`. RV9A_FALLBACK only fires when no
 // profile is supplied at all. So the config copy is pinned here too.
 //
+// The one field `_profileForPower()` does NOT take from the config is cruise
+// gph at the configured cruise power: every `power_settings[].gph` is a MEDIAN
+// (build_power_curve.py writes `round(gph_med, 1)`), and planning uses the p85.
+// Copy 4 therefore carries its own constant,
+// `RoutePlannerPanel.CRUISE_GPH_AT_CONFIGURED_POWER`, and it is pinned below by
+// EXECUTING `_profileForPower()` — a value that is present but wired to the
+// wrong field still fails. The active profile is not reachable from that
+// function (IdbProfileStore.getActive() is async and IndexedDB-backed;
+// `_profileForPower()` is called synchronously from render paths), which is why
+// there is a fourth hand-maintained copy at all.
+//
 // ERROR DIRECTION for every constant below: too LOW a phase GPH, or too LOW a
 // reserve, under-plans fuel burn and therefore OVER-states fuel remaining. That
 // is the direction that runs tanks dry, and it is the direction these pins
@@ -108,6 +119,16 @@ const idbSrc   = readFileSync('web/shared/planning-adapters/idb-profile.js', 'ut
 const dflt     = extractObjectLiteral(idbSrc, 'RV9A_DEFAULT', 'idb-profile.js');
 const isStale  = extractMigrationPredicate(idbSrc, 'idb-profile.js');
 
+// Copy 4. Loaded the same way tests/cockpit/*.test.js load classic-script
+// cockpit classes — this file has no bundler path to it. `_profileForPower()`
+// touches nothing but the `CockpitConfig` global, so it runs on a bare receiver.
+const RoutePlannerPanel = new Function(
+    readFileSync('web/cockpit/route-planner-panel.js', 'utf8') + '\nreturn RoutePlannerPanel;')();
+const panelProfileForPower = (pct, performance = perf) => {
+    globalThis.CockpitConfig = { aircraftRaw: { performance } };
+    return RoutePlannerPanel.prototype._profileForPower.call({}, pct);
+};
+
 describe('fuel constants — extraction sanity', () => {
     // If the extractor silently returned junk, every assertion below would be
     // vacuous. Prove it actually parsed real profiles first.
@@ -162,18 +183,51 @@ describe('fuel constants — measured values pinned in every copy', () => {
         expect(band.gph).toBe(8.1);
     });
 
-    // The band lookup that `_profileForPower()` performs for the route table,
-    // executed rather than asserted. It must still resolve to the 61-65 band's
-    // measured median, and that median must sit BELOW the profile cruise
-    // constant — which is the whole reason the route-table path is the
-    // optimistic one (see the route-planner-panel note in the Task 11 report).
-    // If the band table is edited, this fails even if 8.4 is still written in
-    // both profile literals.
+    // The raw band lookup for the configured cruise power. It must still
+    // resolve to the 61-65 band's measured median, and that median must sit
+    // BELOW the profile cruise constant — that gap is the whole reason
+    // `_profileForPower()` may not use the band value at cruise power. If the
+    // band table is edited, this fails even if 8.4 is still written everywhere.
     it('gphForPowerPct(power_settings, cruise_pwr_pct) returns the 8.1 band median, below the 8.4 profile cruise', () => {
         expect(perf.cruise_pwr_pct).toBe(65);
         expect(gphForPowerPct(perf.power_settings, perf.cruise_pwr_pct)).toBe(8.1);
         expect(gphForPowerPct(perf.power_settings, perf.cruise_pwr_pct))
             .toBeLessThan(fallback.fuelPhases.cruise.gph);
+    });
+
+    // Copy 4 — the profile the pilot's route table is ACTUALLY built from.
+    // Executed, not string-matched. Before 2026-07-31 this returned the 8.1
+    // band median while both profile literals said 8.4, so Dana's decision was
+    // cosmetic: ~0.93 gal MORE fuel shown remaining over a three-hour cruise.
+    it('route-planner-panel _profileForPower(cruise_pwr_pct) agrees with the 8.4 profile cruise constant', () => {
+        const p = panelProfileForPower(perf.cruise_pwr_pct);
+        expect(p.fuelPhases.cruise.gph).toBe(fallback.fuelPhases.cruise.gph);
+        expect(p.fuelPhases.cruise.gph).toBe(dflt.fuelPhases.cruise.gph);
+        expect(p.fuel_burn_gph).toBe(fallback.fuel_burn_gph);
+        expect(p.fuelPhases.cruise.gph).toBe(8.4);
+        expect(RoutePlannerPanel.CRUISE_GPH_AT_CONFIGURED_POWER)
+            .toBe(fallback.fuelPhases.cruise.gph);
+    });
+
+    // Climb and descent still come straight from the config in copy 4, so a
+    // config edit that lowers either must not slip past this file.
+    it('route-planner-panel climb/descent match aircraft-config.json', () => {
+        const p = panelProfileForPower(perf.cruise_pwr_pct);
+        expect(p.fuelPhases.climb.gph).toBe(perf.climb_gph);
+        expect(p.fuelPhases.descent.gph).toBe(perf.descent_gph);
+        expect(p.fuel_capacity_gal).toBe(perf.fuel_capacity_gal);
+    });
+
+    // Every stale hardcoded default inside `_profileForPower()`, exercised by
+    // stripping the config key it shadows. `descent_gph` used to default to 4 —
+    // ~2.9 gph below the measured p85, the tank-drying direction.
+    it('route-planner-panel phase fallbacks are the measured p85s, not book guesses', () => {
+        const stripped = { ...perf };
+        delete stripped.climb_gph;
+        delete stripped.descent_gph;
+        const p = panelProfileForPower(perf.cruise_pwr_pct, stripped);
+        expect(p.fuelPhases.descent.gph, 'descent fallback').toBeGreaterThanOrEqual(6.9);
+        expect(p.fuelPhases.climb.gph,   'climb fallback').toBeGreaterThanOrEqual(15);
     });
 
     it('reserve is 10 gal in aircraft-config.json, RV9A_FALLBACK and RV9A_DEFAULT', () => {
