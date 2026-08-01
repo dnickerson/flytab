@@ -73,14 +73,40 @@ function extractObjectLiteral(src, constName, label) {
     return obj;
 }
 
+/**
+ * Pull the `getActive()` staleness predicate out of idb-profile.js and return it
+ * as a callable `(rv9a, RV9A_DEFAULT) => boolean`.
+ *
+ * The predicate is the only thing that re-seeds an already-provisioned tablet.
+ * It lives inline inside a method on a class that needs a real IndexedDB, so it
+ * is read off disk and evaluated — same approach as the profile literals above,
+ * for the same reason. Evaluating it (rather than string-matching the source)
+ * means a comparison that is present but wired to the wrong field still fails.
+ */
+function extractMigrationPredicate(src, label) {
+    const anchor = src.indexOf("const rv9a = all.find(");
+    if (anchor === -1) throw new Error(`rv9a lookup not found in ${label}`);
+    const ifAt = src.indexOf('if (', anchor);
+    if (ifAt === -1) throw new Error(`migration if() not found in ${label}`);
+    const open = src.indexOf('(', ifAt);
+    let depth = 0, i = open;
+    for (; i < src.length; i++) {
+        if (src[i] === '(') depth++;
+        else if (src[i] === ')') { depth--; if (depth === 0) break; }
+    }
+    if (depth !== 0) throw new Error(`unbalanced parens reading migration predicate from ${label}`);
+    const cond = src.slice(open + 1, i);
+    return new Function('rv9a', 'RV9A_DEFAULT', `return !!(${cond});`);
+}
+
 const config   = JSON.parse(readFileSync('web/aircraft-config.json', 'utf8'));
 const perf     = config.performance;
 const fallback = extractObjectLiteral(
     readFileSync('web/shared/planning/planner/route-planner.js', 'utf8'),
     'RV9A_FALLBACK', 'route-planner.js');
-const dflt     = extractObjectLiteral(
-    readFileSync('web/shared/planning-adapters/idb-profile.js', 'utf8'),
-    'RV9A_DEFAULT', 'idb-profile.js');
+const idbSrc   = readFileSync('web/shared/planning-adapters/idb-profile.js', 'utf8');
+const dflt     = extractObjectLiteral(idbSrc, 'RV9A_DEFAULT', 'idb-profile.js');
+const isStale  = extractMigrationPredicate(idbSrc, 'idb-profile.js');
 
 describe('fuel constants — extraction sanity', () => {
     // If the extractor silently returned junk, every assertion below would be
@@ -111,30 +137,43 @@ describe('fuel constants — measured values pinned in every copy', () => {
         expect(dflt.fuelPhases.descent.gph).toBe(6.9);
     });
 
-    // cruise: the measured power_settings band nearest cruise_pwr_pct (65 ->
-    // the 61-65 band, pct_mid 63, n=1120). Deliberately NOT the pooled cruise
-    // p85 of 8.3 — see the resolution recorded in the Task 11 plan: 8.1 is
-    // conditioned on the aircraft's actual configured cruise power, 8.3 pools
-    // every cruise sample regardless of power setting.
-    it('cruise is 8.1 gph in RV9A_FALLBACK, RV9A_DEFAULT, and the 61-65 power band', () => {
-        expect(fallback.fuelPhases.cruise.gph).toBe(8.1);
-        expect(dflt.fuelPhases.cruise.gph).toBe(8.1);
-        expect(fallback.fuel_burn_gph).toBe(8.1);
-        expect(dflt.fuel_burn_gph).toBe(8.1);
+    // cruise: p85 of cruise-phase rows binned by recorded %power, 65-69% band
+    // (n=7,879; median 8.10, p85 8.40). Dana's direct instruction 2026-07-31 —
+    // "use 8.4 for the cruise gal/hr" — superseding commit 96d62f3, which had
+    // recorded the opposite.
+    //
+    // The profile constant and the power_settings band value are now
+    // DELIBERATELY DIFFERENT NUMBERS and both are pinned here so neither gets
+    // "tidied" into the other:
+    //   - profiles carry 8.4, the p85. build_power_curve.py:352 writes
+    //     `"gph": round(gph_med, 1)`, so every band value is a MEDIAN, and a
+    //     median is exactly the statistic the "plan more consumption rather
+    //     than less" principle excludes.
+    //   - power_settings 61-65 stays 8.1, its measured median. That table is
+    //     measured data; editing it to match the profile would corrupt it.
+    it('cruise is 8.4 gph in RV9A_FALLBACK and RV9A_DEFAULT — the 61-65 band keeps its 8.1 median', () => {
+        expect(fallback.fuelPhases.cruise.gph).toBe(8.4);
+        expect(dflt.fuelPhases.cruise.gph).toBe(8.4);
+        expect(fallback.fuel_burn_gph).toBe(8.4);
+        expect(dflt.fuel_burn_gph).toBe(8.4);
 
         const band = perf.power_settings.find(s => s.band === '61-65');
         expect(band, 'aircraft-config.json 61-65 power band').toBeDefined();
         expect(band.gph).toBe(8.1);
     });
 
-    // The stated derivation of the cruise constant, executed rather than
-    // asserted: this is exactly what _profileForPower() does for the route
-    // table. If the band table is edited, this fails even if 8.1 is still
-    // written in both profile literals.
-    it('gphForPowerPct(power_settings, cruise_pwr_pct) reproduces the profile cruise gph', () => {
+    // The band lookup that `_profileForPower()` performs for the route table,
+    // executed rather than asserted. It must still resolve to the 61-65 band's
+    // measured median, and that median must sit BELOW the profile cruise
+    // constant — which is the whole reason the route-table path is the
+    // optimistic one (see the route-planner-panel note in the Task 11 report).
+    // If the band table is edited, this fails even if 8.4 is still written in
+    // both profile literals.
+    it('gphForPowerPct(power_settings, cruise_pwr_pct) returns the 8.1 band median, below the 8.4 profile cruise', () => {
         expect(perf.cruise_pwr_pct).toBe(65);
+        expect(gphForPowerPct(perf.power_settings, perf.cruise_pwr_pct)).toBe(8.1);
         expect(gphForPowerPct(perf.power_settings, perf.cruise_pwr_pct))
-            .toBe(fallback.fuelPhases.cruise.gph);
+            .toBeLessThan(fallback.fuelPhases.cruise.gph);
     });
 
     it('reserve is 10 gal in aircraft-config.json, RV9A_FALLBACK and RV9A_DEFAULT', () => {
@@ -153,27 +192,82 @@ describe('fuel constants — measured values pinned in every copy', () => {
     });
 
     // performance.cruise_gph is route-table.js's self-generated-segment figure
-    // (`cfgGph`). It is deliberately 9, ABOVE both 8.1 and the pooled cruise p85
-    // of 8.3 — over-planning, i.e. the safe side. Pinned so it is never "tidied"
-    // down to match the profile literals.
-    it('performance.cruise_gph stays at 9 — above both 8.1 and the pooled p85 8.3', () => {
+    // (`cfgGph`). It is deliberately 9, ABOVE the 8.4 profile cruise constant
+    // and above the 8.1 band median — over-planning, i.e. the safe side. Dana
+    // said leave it there. Pinned so it is never "tidied" down to match the
+    // profile literals.
+    it('performance.cruise_gph stays at 9 — above the 8.4 profile cruise and the 8.1 band median', () => {
         expect(perf.cruise_gph).toBe(9);
         expect(perf.cruise_gph).toBeGreaterThan(fallback.fuelPhases.cruise.gph);
     });
 });
 
+// ---------------------------------------------------------------------------
+// getActive()'s migration predicate (widened 2026-07-31 with the 8.1 -> 8.4
+// cruise change).
+//
+// A tablet that has already seeded `rv9a-default` into IndexedDB NEVER re-reads
+// the RV9A_DEFAULT literal again — the only thing that refreshes it is this
+// predicate. Any fuel-planning field missing from the comparison list keeps its
+// old stored value forever. For a burn rate or a reserve that means the app
+// plans LESS fuel than the shipped constants say and over-states fuel
+// remaining: the direction that runs tanks dry. Before this change the
+// predicate compared only climb_rate_fpm, taxi_burn_gal, climb.rate_fpm and
+// descent.gph — so cruise 8.4 would never have reached Dana's tablet.
+//
+// Each field is perturbed DOWNWARD (the stale/unsafe direction) on a clone.
+// ---------------------------------------------------------------------------
+describe('idb-profile getActive() migration re-seeds every fuel-planning field', () => {
+    const set = (obj, path, v) => {
+        const keys = path.split('.');
+        let o = obj;
+        for (const k of keys.slice(0, -1)) o = o[k];
+        o[keys.at(-1)] = v;
+    };
+
+    it('is a real predicate: false for an identical profile, true for an obviously stale one', () => {
+        expect(isStale(structuredClone(dflt), dflt)).toBe(false);
+        expect(isStale({ ...structuredClone(dflt), taxi_burn_gal: 0.1 }, dflt)).toBe(true);
+    });
+
+    const STALE = {
+        'fuel_burn_gph':              8.1,   // the pre-2026-07-31 cruise value
+        'reserve_gal':                5,
+        'climb_rate_fpm':             500,
+        'taxi_burn_gal':              0.1,
+        'fuelPhases.cruise.gph':      8.1,   // the pre-2026-07-31 cruise value
+        'fuelPhases.climb.gph':       10.7,
+        'fuelPhases.climb.rate_fpm':  500,
+        'fuelPhases.descent.gph':     4.0,   // the old book guess
+    };
+
+    for (const [path, staleValue] of Object.entries(STALE)) {
+        it(`fires when a seeded profile still carries a stale ${path}`, () => {
+            const stored = structuredClone(dflt);
+            set(stored, path, staleValue);
+            expect(stored, `${path} fixture must actually differ from the shipped default`)
+                .not.toEqual(dflt);
+            expect(isStale(stored, dflt), `${path} is not compared by the migration predicate`)
+                .toBe(true);
+        });
+    }
+});
+
 describe('fuel constants — no phase rate may drop below its measured p85', () => {
     // Direction-of-error guard, independent of the exact pinned numbers above:
     // whatever these become, they may only ever move UP.
-    const MEASURED_P85 = { climb: 15.1, cruise: 8.3, descent: 6.9 };
+    // cruise 8.4 is the p85 of the 65-69% power band (n=7,879), i.e. conditioned
+    // on the aircraft's configured cruise power — not the 8.3 pooled across all
+    // cruise samples regardless of power setting, and not the 8.1 band median.
+    const MEASURED_P85 = { climb: 15.1, cruise: 8.4, descent: 6.9 };
 
     for (const [phase, p85] of Object.entries(MEASURED_P85)) {
         it(`${phase}: config + both profiles stay within tolerance of the measured p85 ${p85}`, () => {
             const configGph = { climb: perf.climb_gph, cruise: perf.cruise_gph, descent: perf.descent_gph }[phase];
-            // cruise is intentionally conditioned on the 65% band (8.1) rather
-            // than the pooled p85 (8.3); allow that documented 0.2 gph gap and
-            // nothing more. climb/descent must meet or exceed their p85.
-            const floor = phase === 'cruise' ? 8.1 : p85 - 0.1;
+            // Only climb gets a tolerance: its p85 is 15.1 but it is carried as
+            // a round 15.0. cruise and descent are carried at exactly their p85,
+            // so they must meet it with no slack.
+            const floor = phase === 'climb' ? p85 - 0.1 : p85;
             for (const [label, gph] of [
                 ['aircraft-config.json', configGph],
                 ['RV9A_FALLBACK',        fallback.fuelPhases[phase].gph],
@@ -189,14 +283,15 @@ describe('fuel constants — no phase rate may drop below its measured p85', () 
 // `decomposeLeg` falls back to an SFC estimate when a profile carries no
 // measured `fuelPhases.descent.gph`. That estimate has two branches and one of
 // them was unsafe: without `max_hp`, gphAtPower degrades to
-// `fuel_burn_gph * (0.55/0.75)` = 5.94 gph for an 8.1 gph cruise profile —
-// below the measured descent p85 of 6.9, so it under-plans burn and over-states
-// fuel remaining. It is now floored at the profile's cruise burn.
+// `fuel_burn_gph * (0.55/0.75)` = 6.16 gph for the RV-9A's 8.4 gph cruise
+// profile (5.94 back when cruise was 8.1) — below the measured descent p85 of
+// 6.9 either way, so it under-plans burn and over-states fuel remaining. It is
+// now floored at the profile's cruise burn.
 // ---------------------------------------------------------------------------
 describe('decomposeLeg descent fallback never plans below the measured descent p85', () => {
     const MEASURED_DESCENT_P85 = 6.9;
     const base = { cruise_ktas: 153, cruise_ias: 140, climb_rate_fpm: 1500,
-                   taxi_burn_gal: 0.33, fuel_burn_gph: 8.1 };
+                   taxi_burn_gal: 0.33, fuel_burn_gph: 8.4 };
     const leg  = { distNm: 200, altFt: 6500, departingFromGround: true, endingAtGround: true };
 
     function fallbackDescentGph(profile) {
@@ -204,13 +299,13 @@ describe('decomposeLeg descent fallback never plans below the measured descent p
         return d.phases.descent.fuelGal / d.phases.descent.timeHrs;
     }
 
-    it('profile WITHOUT max_hp (the branch that used to yield 5.94 gph)', () => {
+    it('profile WITHOUT max_hp (the branch that yields 6.16 gph unfloored)', () => {
         expect(fallbackDescentGph({ ...base })).toBeGreaterThanOrEqual(MEASURED_DESCENT_P85);
     });
 
     it('profile WITH max_hp keeps its already-conservative 9.21 gph estimate', () => {
         // Math.max, not a replacement — flooring at cruise burn must not LOWER
-        // this branch from 9.21 to 8.1.
+        // this branch from 9.21 to 8.4.
         const gph = fallbackDescentGph({ ...base, max_hp: 180, alt_power_loss_pct_per_kft: 3.0 });
         expect(gph).toBeGreaterThanOrEqual(MEASURED_DESCENT_P85);
         expect(gph).toBeCloseTo(9.207, 2);
@@ -221,7 +316,7 @@ describe('decomposeLeg descent fallback never plans below the measured descent p
             ...base, max_hp: 180, alt_power_loss_pct_per_kft: 3.0,
             fuelPhases: {
                 climb:   { gph: 15,  ias_kt: 120, rate_fpm: 1500 },
-                cruise:  { gph: 8.1, ias_kt: 140 },
+                cruise:  { gph: 8.4, ias_kt: 140 },
                 descent: { gph: 6.9, ias_kt: 170, rate_fpm: 700 },
             },
         });

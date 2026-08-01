@@ -210,10 +210,16 @@ describe('RV9A fallback profile — measured phase fuel flows', () => {
         expect(des.gph).toBe(6.9);
     });
 
-    it('cruises at 8.1 gph — the power_settings band nearest cruise_pwr_pct 65', () => {
+    // 8.4 = p85 of cruise rows binned by recorded %power, 65-69% band
+    // (n=7,879; median 8.10, p85 8.40). Deliberately NOT the 8.1 that
+    // `power_settings[]` carries for the 61-65 band: build_power_curve.py
+    // writes `round(gph_med, 1)` into that table, so band values are MEDIANS,
+    // and planning constants must come from a conservative upper percentile.
+    // Dana's direct instruction 2026-07-31, superseding commit 96d62f3.
+    it('cruises at 8.4 gph — the p85 of the 65% cruise band, not its 8.1 median', () => {
         const crz = fallbackSegments().find(s => s.phase === 'CRZ');
         expect(crz).toBeDefined();
-        expect(crz.gph).toBe(8.1);
+        expect(crz.gph).toBe(8.4);
     });
 
     it('climbs at the measured p85 of 15 gph', () => {
