@@ -469,6 +469,8 @@ The route table's **FUEL** column shows the fuel burned on each leg; **REM** sho
 
 For fuel stops further ahead on the route that you have not yet reached, REM is a **planning projection**, not a measurement. It assumes you fill to full unless you have entered an explicit gallons-added figure for that stop. Treat those downstream numbers as estimates for planning, and the current flight's REM as the figure to fly by.
 
+**A stale tracked figure marks the whole REM column.** Every REM cell is your tracked fuel less the planned burn to that waypoint, so if the tank state has gone 45 minutes or more without an integrated fuel-flow sample, every cell in the column reads high by whatever was burned during the gap — including the rows after a fuel stop, which are built on the same figure. When that happens each REM cell turns amber and gains a trailing **?** (`25.0?`), the same signal used on the instrument strip's FUEL field and the DEST badge. Cells already in the red band stay red. Confirm or re-enter your fuel to clear it.
+
 **Legs already behind you show `—` in FUEL and REM, not numbers.** A dash there is correct, not a fault: FlyTab only projects fuel forward from your live tracked figure, so a leg it can no longer recompute is blanked rather than left showing what it last predicted. Legs split into separate climb/cruise/descent rows used to keep those old numbers, and after a heavier-than-planned burn they read *higher* than the fuel actually on board — sitting directly above live rows showing much less. Their TAS and PWR cells now blank for the same reason. The TOTAL and per-flight footer figures count only legs still to fly, so they match the rows still showing numbers.
 
 ### Where the planned burn numbers come from
@@ -499,7 +501,19 @@ The collapsed route strip handle shows departure → destination, distance and t
 
 **The badge assumes you actually make the planned fuel stop.** It is fuel on arrival at the named airport only — it does not include the leg beyond it. If you overfly a planned fuel stop, for weather, a closed FBO, or a decision to press on, the route does not change and the badge keeps showing fuel at the stop. You will arrive at the final airport with substantially less than the badge shows — the whole downstream leg's burn less. Re-plan the route, or work the arrival figure from the route table, before pressing past a planned stop.
 
-One limitation to know in the other direction: while you are flying the last leg directly into a fuel stop, the badge still projects across the whole remaining trip and therefore reads **lower** than the fuel you will actually land with. The route table's REM column at the fuel-stop waypoint is the better figure on that leg, but treat it as a conservative estimate rather than an exact arrival number — it charges the full planned burn for the segment you are on without crediting the distance you have already flown, so it too reads low (measured: REM 20.0 where the true arrival figure is 25.0).
+**The badge no longer disagrees with itself on the last leg into a fuel stop.** Previously, once the fuel stop itself became your active waypoint, the badge jumped to projecting across the whole remaining trip and read 15.0 where you were really going to land with 25.0 — while the instrument strip, reading the same route, showed about 25.0 at the same moment. Both now scope to the flight you are actually on, so the two agree.
+
+**If you have no fuel tracked, there is no badge.** With nothing entered in the fuel tanks widget and no manual override, FlyTab has no measurement to project from. It used to fall back to full tanks and show a comfortable green figure on a route it knew nothing about. The badge is now simply absent until you enter your fuel — the rest of the handle (route, distance, time, planned burn) is unaffected.
+
+**A stale tracked figure is marked here too.** If the tank state has gone 45 minutes or more without an integrated fuel-flow sample, the badge turns amber and gains a trailing **?** — `DEST:25.4?` — even when the reserve is comfortable. It is the same signal the instrument strip's FUEL field and the engine page's UNCONFIRMED banner use, and it means the same thing: the number does not include anything burned during the gap, so it reads high. A marked figure never shows green, whatever the arithmetic says.
+
+### The power tradeoff panel
+
+Tapping **DEST** or **ETE** on the instrument strip opens the power tradeoff panel: one row per power setting, showing the ground speed, fuel flow, ETE and **FUEL@DEST** you would see at that power.
+
+**FUEL@DEST is your tracked fuel less the projected burn.** It reads from the same canonical figure as everything else — your tank state, or a manual override if you have set one. It previously read the EDM's own totalizer instead, which on a typical flight sat about 20 gallons above the tracked figure: the panel showed 25.5 gal remaining at destination, uncoloured, where the truth was 5.5.
+
+With nothing tracked, FUEL@DEST shows **—** rather than a projection from full tanks. A stale tank state is shown but marked with a trailing **?** and never left uncoloured. The colour bands are amber at 12 gallons, deeper amber at 8, and red at 4 — the 8 and 4 figures are the same thresholds every other fuel display uses, set in `cockpit-config.json`. Those colours previously did not render at all, so a 2-gallon arrival looked exactly like a 25-gallon one.
 
 ---
 

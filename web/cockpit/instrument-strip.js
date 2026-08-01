@@ -365,12 +365,10 @@ class InstrumentStrip {
             return;
         }
 
-        let stale = false;
-        if (fuelRead.source === 'tank_state') {
-            try {
-                stale = (typeof FuelTankState !== 'undefined') && FuelTankState.needsConfirmation();
-            } catch (_) { stale = false; }
-        }
+        // Staleness predicate is owned by FuelState.getCurrentFuel() (SDD Task 14) so
+        // this strip, the engine page and the route table cannot disagree about
+        // whether a figure is trustworthy. Already false for `manual` and `capacity`.
+        const stale = !!fuelRead.stale;
 
         el.textContent = fuelRead.gallons.toFixed(1) + (stale ? '?' : '');
         el.className = 'is-value' + (stale ? ' is-unconfirmed' : '');

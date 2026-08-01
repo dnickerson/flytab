@@ -471,12 +471,11 @@ class EnginePage {
         // that has not been updated in 45+ minutes read as a live measurement. The
         // stale figure always reads HIGH (fuel burned during the gap is not
         // subtracted), so it must never be presented as a measurement.
-        let fuelStale = false;
-        if (fuelRead.source === 'tank_state') {
-            try {
-                fuelStale = (typeof FuelTankState !== 'undefined') && FuelTankState.needsConfirmation();
-            } catch (_) { fuelStale = false; }
-        }
+        // The predicate itself lives on FuelState.getCurrentFuel() (SDD Task 14) so
+        // this page, the instrument strip and the route table cannot disagree about
+        // whether a figure is trustworthy; it is already false for `manual` (the
+        // pilot's own entry) and `capacity` (nothing tracked).
+        const fuelStale = !!fuelRead.stale;
         // The EDM's own totalizer (EDM field 12). Used ONLY by the TIC vs EDM
         // cross-check row below, whose whole purpose is to surface disagreement
         // between the tic-mark measurement and the EDM — it must stay an EDM read.

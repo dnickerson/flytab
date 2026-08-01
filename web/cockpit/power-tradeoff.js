@@ -139,6 +139,31 @@ class PowerTradeoff {
 
         const d = this._legData;
 
+        // FUEL@DEST colour bands. Previously hardcoded as `<4` / `<8` / `<12`.
+        // 4 and 8 are the same reserve thresholds every other fuel display uses —
+        // they now come from the same config keys (enginePage.fuelWarningGal /
+        // fuelCautionGal) so the panel cannot disagree with the engine page, the
+        // route table's REM column or the route-strip DEST badge.
+        //
+        // 12 had no config counterpart anywhere in the app — an invented third band
+        // unique to this panel. It is KEPT (dropping it would silently turn a set of
+        // currently-flagged rows plain, i.e. more reassuring than before, which is the
+        // wrong error direction) but is now a named, editable key rather than a magic
+        // number: `enginePage.fuelAdvisoryGal`, default 12.
+        //
+        // The comparisons are `<=`, not `<`: every other fuel display in the app
+        // treats the threshold itself as already in the band, and exactly 4.0 gal
+        // should read danger on all of them, not danger on one and caution here.
+        const cautionGal  = CockpitConfig.get('enginePage.fuelCautionGal')  ?? 8;
+        const warnGal     = CockpitConfig.get('enginePage.fuelWarningGal')  ?? 4;
+        const advisoryGal = CockpitConfig.get('enginePage.fuelAdvisoryGal') ?? 12;
+
+        // `fuelRemaining` is the canonical live quantity published by route-table.js
+        // `_emitLegUpdate` (manual override > tracked tank state; null when nothing is
+        // tracked). `fuelRemainingStale` marks a tracked figure FuelTankState considers
+        // unconfirmed — see the stale handling at the FUEL@DEST cell below.
+        const fuelStale = !!d.fuelRemainingStale;
+
         // Identify current power row (match live pct within ±5%)
         const livePct = d.livePctPower;
 
@@ -193,12 +218,17 @@ class PowerTradeoff {
             let fuelStr = '—';
             let fuelClass = '';
             if (calc.fuelAtDest != null) {
-                fuelStr = calc.fuelAtDest.toFixed(1) + ' gal';
-                // Warn if low: <8 = caution, <4 = danger
-                fuelClass = calc.fuelAtDest < 4  ? 'pt-red'
-                          : calc.fuelAtDest < 8  ? 'pt-amber'
-                          : calc.fuelAtDest < 12 ? 'pt-yellow'
+                fuelStr = calc.fuelAtDest.toFixed(1) + (fuelStale ? '? gal' : ' gal');
+                fuelClass = calc.fuelAtDest <= warnGal     ? 'pt-red'
+                          : calc.fuelAtDest <= cautionGal  ? 'pt-amber'
+                          : calc.fuelAtDest <= advisoryGal ? 'pt-yellow'
                           : '';
+                // STALE-NEVER-GREEN: the fuel quantity this row is projected from has
+                // not been updated in 45+ min, so it reads HIGH by the whole unrecorded
+                // burn. Never leave such a row in the plain (in-limits) style, whatever
+                // the arithmetic says. Caution colour + trailing '?' — the same two
+                // signals instrument-strip.js and the route table use.
+                if (fuelStale && !fuelClass) fuelClass = 'pt-amber';
             }
 
             if (ps.samples) minSamples = Math.min(minSamples, ps.samples);

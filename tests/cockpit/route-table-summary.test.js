@@ -29,7 +29,7 @@ const FUEL_CAP = 40;
 
 /** Config stub. `perf` supplies performance.* values; `get` covers the
  *  enginePage.* caution/warning thresholds _updateSummary colour-codes with. */
-function installGlobals({ currentFuel, perf = {} }) {
+function installGlobals({ currentFuel, perf = {}, fuelSource = 'tank_state', fuelStale = false }) {
     globalThis.CockpitConfig = {
         aircraft(path) {
             if (path === 'performance.fuel_capacity_gal') return FUEL_CAP;
@@ -44,7 +44,7 @@ function installGlobals({ currentFuel, perf = {} }) {
         crossTrackDistanceNm: () => 0,
     };
     globalThis.FuelState = {
-        getCurrentFuel: () => ({ gallons: currentFuel, source: 'tank_state' }),
+        getCurrentFuel: () => ({ gallons: currentFuel, source: fuelSource, stale: fuelStale }),
         getStartFuel:   () => ({ gallons: currentFuel, source: 'tic' }),
     };
 }
@@ -253,11 +253,15 @@ describe('_updateSummary — fuel badge label', () => {
         expect(destBadge(rt)).toEqual({ label: 'DEST', gal: 15.0 });
     });
 
-    it('labels the planned fallback DEST — that branch is trip-scoped', () => {
+    // Changed by SDD Task 14. This branch used to be trip-scoped: with no distance
+    // left to run it showed `_fuelRem` at the TRIP's final airport, which on a
+    // fuel-stop trip is a POST-REFUEL projection — a figure decoupled from what is in
+    // the tanks now, and higher than it by the whole planned uplift (22.0 here where
+    // arrival at the stop is 15.0). The live branch directly above it is scoped to the
+    // active flight, so the two branches also disagreed about which airport they were
+    // describing. Both are now scoped to the active flight's own destination.
+    it('scopes the planned fallback to the active flight\'s destination, not the post-refuel trip end', () => {
         installGlobals({ currentFuel: 30, perf: PERF });
-        // No distance left to run → planned fallback, which is fuel at the TRIP's
-        // final airport (it already accounts for the planned refuel). Naming it after
-        // the active flight would be wrong.
         const wps = [
             { icao: 'KLKR', type: 'APT', _flightIndex: 0 },
             { icao: 'KFGX', type: 'APT', _flightIndex: 1, _fuelRem: 15 },
@@ -270,7 +274,7 @@ describe('_updateSummary — fuel badge label', () => {
         ];
         rt._updateSummary();
 
-        expect(destBadge(rt)).toEqual({ label: 'DEST', gal: 22.0 });
+        expect(destBadge(rt)).toEqual({ label: 'KFGX', gal: 15.0 });
     });
 });
 
@@ -420,5 +424,232 @@ describe('_emitRouteChange — destination lookup', () => {
         rt._emitRouteChange();
 
         expect(emitted.flight_plan.destination).toBe('LIB');
+    });
+});
+
+// ══ SDD Task 14 ═══════════════════════════════════════════════════════════
+// Scope items 1-3: containment lookup, capacity gate, staleness marking.
+
+/** The badge's inline colour — `var(--status-ok|warning|danger)`. */
+function destColor(rt) {
+    const m = /<span style="color:(var\(--status-[a-z]+\));font-weight:700">/.exec(rt._summaryEl.innerHTML);
+    return m ? m[1] : null;
+}
+
+/** The badge's raw number-plus-marker text, e.g. `15.0` or `25.0?`. */
+function destText(rt) {
+    const m = /font-weight:700">[A-Z0-9?]+:(-?\d+\.\d\??)</.exec(rt._summaryEl.innerHTML);
+    return m ? m[1] : null;
+}
+
+// ── Item 2: the active flight is resolved by containment, not _flightIndex ──
+
+describe('_updateSummary — active flight resolved by containment', () => {
+    // _buildFlights gives a fuel-stop waypoint the DEPARTING flight's index, because
+    // the fuel overlay uses _flightIndex as "next flight". Reading it here selected
+    // the DOWNSTREAM flight on the final leg INTO the stop and scoped the projection
+    // all the way to the trip's final airport. _emitLegUpdate already used
+    // containment, so the route strip and the instrument strip disagreed by 10 gal
+    // about fuel at destination at the same instant.
+    function tripInboundToFuelStop() {
+        const wps = [
+            { icao: 'KLKR', type: 'APT', lat: 34.72, lon: -80.78 },
+            { icao: 'ENO',  type: 'VOR', lat: 35.00, lon: -80.50, _legDist: 120, _segments: seg(10) },
+            { icao: 'KFGX', type: 'APT', lat: 35.50, lon: -80.20, _legDist: 120, _liveDist: 60, _segments: seg(10) },
+            { icao: 'KLWA', type: 'APT', lat: 36.10, lon: -79.94, _legDist: 120, _segments: seg(10) },
+        ];
+        return wps;
+    }
+
+    it('picks the ARRIVING flight when the active waypoint is the fuel stop itself', () => {
+        installGlobals({ currentFuel: 30, perf: PERF });
+        window.enginePanel = { lastData: { fuel_flow_gph: 10 } };
+
+        const wps = tripInboundToFuelStop();
+        const rt = makeTable(wps, 2);
+        rt._computeEnroute();
+        rt._updateSummary();
+
+        // The shared-boundary waypoint really does carry the DEPARTING flight's index.
+        expect(wps[2]._flightIndex).toBe(1);
+        expect(rt._flights[0].destWpIndex).toBe(2);
+
+        // 60 nm to run → 30 − 5 = 25.0 gal on arrival at the stop.
+        expect(destFuel(rt)).toBeCloseTo(25.0, 6);
+        // The _flightIndex lookup scoped 60 + 120 = 180 nm and read 15.0.
+        expect(destFuel(rt)).not.toBeCloseTo(15.0, 6);
+        expect(destBadge(rt).label).toBe('KFGX');
+    });
+
+    it('agrees with _emitLegUpdate, which already used containment', () => {
+        installGlobals({ currentFuel: 30, perf: PERF });
+        window.enginePanel = { lastData: { fuel_flow_gph: 10 } };
+
+        const wps = tripInboundToFuelStop();
+        const rt = makeTable(wps, 2);
+        let emitted = null;
+        rt._emitLegUpdate = RouteTable.prototype._emitLegUpdate;   // restore the real one
+        const onLeg = (e) => { emitted = e.detail; };
+        window.addEventListener('activeroute:legupdate', onLeg);
+        rt._computeEnroute();
+        window.removeEventListener('activeroute:legupdate', onLeg);
+        rt._updateSummary();
+
+        // Both now describe the same airport.
+        expect(emitted.destIcao).toBe('KFGX');
+        expect(destBadge(rt).label).toBe('KFGX');
+    });
+});
+
+// ── Item 3: nothing tracked must not become a projection from full tanks ───
+
+describe('_updateSummary — capacity source is not a measurement', () => {
+    it('shows no badge at all when nothing is tracked', () => {
+        // getCurrentFuel() returns the capacity fallback here. Reading `.gallons`
+        // unguarded projected from FULL TANKS and coloured the result green on a
+        // route with no fuel data behind it.
+        installGlobals({ currentFuel: 40, perf: PERF, fuelSource: 'capacity' });
+        window.enginePanel = { lastData: { fuel_flow_gph: 10 } };
+
+        const wps = [
+            { icao: 'KLKR', type: 'APT', lat: 34.72, lon: -80.78 },
+            { icao: 'KLWA', type: 'APT', lat: 36.10, lon: -79.94, _legDist: 120, _segments: seg(10) },
+        ];
+        const rt = makeTable(wps, 0);
+        rt._computeEnroute();
+        rt._updateSummary();
+
+        expect(destBadge(rt)).toBeNull();
+        // The route strip itself still renders — only the fuel figure is withheld.
+        expect(rt._summaryEl.innerHTML).toContain('KLWA');
+    });
+
+    it('withholds the planned fallback too — it is rooted in the same capacity read', () => {
+        installGlobals({ currentFuel: 40, perf: PERF, fuelSource: 'capacity' });
+        const wps = [
+            { icao: 'KLKR', type: 'APT' },
+            { icao: 'KLWA', type: 'APT', _fuelRem: 22 },
+        ];
+        const rt = makeTable(wps, 0);
+        rt._flights = [{ index: 0, dep: 'KLKR', dest: 'KLWA', depWpIndex: 0, destWpIndex: 1 }];
+        rt._updateSummary();
+
+        expect(destBadge(rt)).toBeNull();
+    });
+
+    it('still shows a real 0.0 for dry tracked tanks', () => {
+        installGlobals({ currentFuel: 0, perf: PERF });
+        window.enginePanel = { lastData: { fuel_flow_gph: 10 } };
+        const wps = [
+            { icao: 'KLKR', type: 'APT' },
+            { icao: 'KLWA', type: 'APT', _legDist: 120, _segments: seg(10) },
+        ];
+        const rt = makeTable(wps, 0);
+        rt._computeEnroute();
+        rt._updateSummary();
+
+        expect(destFuel(rt)).toBeCloseTo(-10.0, 6);
+        expect(destColor(rt)).toBe('var(--status-danger)');
+    });
+});
+
+// ── Item 1: stale-never-green on the DEST badge ────────────────────────────
+
+describe('_updateSummary — stale tracked fuel is marked, never reassuring', () => {
+    const wps = () => ([
+        { icao: 'KLKR', type: 'APT' },
+        { icao: 'KLWA', type: 'APT', _legDist: 120, _liveDist: 120, _segments: seg(10) },
+    ]);
+
+    it('marks a comfortable reserve with the caution colour and a trailing ?', () => {
+        // 40 gal − 10 = 30.0, far above every threshold, so without the rule this
+        // renders green — on a figure that has not been updated in 45+ minutes and
+        // reads HIGH by the whole unrecorded burn.
+        installGlobals({ currentFuel: 40, perf: PERF, fuelStale: true });
+        window.enginePanel = { lastData: { fuel_flow_gph: 10 } };
+        const rt = makeTable(wps(), 0);
+        rt._computeEnroute();
+        rt._updateSummary();
+
+        expect(destText(rt)).toBe('30.0?');
+        expect(destColor(rt)).toBe('var(--status-warning)');
+        expect(destColor(rt)).not.toBe('var(--status-ok)');
+    });
+
+    it('leaves the danger colour alone — staleness never softens a warning', () => {
+        installGlobals({ currentFuel: 12, perf: PERF, fuelStale: true });
+        window.enginePanel = { lastData: { fuel_flow_gph: 10 } };
+        const rt = makeTable(wps(), 0);
+        rt._computeEnroute();
+        rt._updateSummary();
+
+        expect(destText(rt)).toBe('2.0?');
+        expect(destColor(rt)).toBe('var(--status-danger)');
+    });
+
+    it('renders the green colour and no marker when the figure is fresh', () => {
+        installGlobals({ currentFuel: 40, perf: PERF });
+        window.enginePanel = { lastData: { fuel_flow_gph: 10 } };
+        const rt = makeTable(wps(), 0);
+        rt._computeEnroute();
+        rt._updateSummary();
+
+        expect(destText(rt)).toBe('30.0');
+        expect(destColor(rt)).toBe('var(--status-ok)');
+    });
+});
+
+// ── Item 1: stale-never-green on the REM column ────────────────────────────
+
+describe('_getCellValue fuel_rem — the REM column carries the same marker', () => {
+    /** Compute a route, then render one REM cell for the given waypoint index. */
+    function remCell({ currentFuel, fuelStale }, wpIndex) {
+        installGlobals({ currentFuel, perf: PERF, fuelStale });
+        const wps = [
+            { icao: 'KLKR', type: 'APT' },
+            { icao: 'KLWA', type: 'APT', _legDist: 120, _segments: seg(10) },
+        ];
+        const rt = makeTable(wps, 0);
+        rt._computeEnroute();
+        return rt._getCellValue(wps[wpIndex], 'fuel_rem');
+    }
+
+    it('marks every cell when the start-fuel read is stale', () => {
+        // Whole column is startFuel − plannedBurn, so a stale startFuel makes every
+        // row read HIGH — including post-fuel-stop rows, whose reset start fuel is
+        // derived from the same figure.
+        expect(remCell({ currentFuel: 40, fuelStale: true }, 1))
+            .toBe('<span class="fuel-yellow">30.0?</span>');
+    });
+
+    it('leaves a fresh comfortable cell plain', () => {
+        expect(remCell({ currentFuel: 40, fuelStale: false }, 1)).toBe('30.0');
+    });
+
+    it('keeps the danger class on a stale low cell — no softening', () => {
+        expect(remCell({ currentFuel: 12, fuelStale: true }, 1))
+            .toBe('<span class="fuel-red">2.0?</span>');
+    });
+
+    it('marks the segment-row branch identically to the waypoint-row branch', () => {
+        // The two branches used to carry duplicate copies of this expression; they
+        // now share _fuelRemCell, and this pins that they cannot drift apart.
+        installGlobals({ currentFuel: 40, perf: PERF, fuelStale: true });
+        const wps = [
+            { icao: 'KLKR', type: 'APT' },
+            { icao: 'KLWA', type: 'APT', _legDist: 120, _segments: seg(10) },
+        ];
+        const rt = makeTable(wps, 0);
+        rt._computeEnroute();
+        const segRow = rt._getCellValue(wps[1], 'fuel_rem', wps[1]._segments[0], 0);
+        const wpRow  = rt._getCellValue(wps[1], 'fuel_rem');
+        expect(segRow).toBe('<span class="fuel-yellow">30.0?</span>');
+        expect(segRow).toBe(wpRow);
+    });
+
+    it('renders the dash for a waypoint with no computed remaining fuel', () => {
+        installGlobals({ currentFuel: 40, perf: PERF });
+        const rt = makeTable([{ icao: 'KLKR', type: 'APT' }], 0);
+        expect(rt._getCellValue({ _fuelRem: null }, 'fuel_rem')).toBe('—');
     });
 });

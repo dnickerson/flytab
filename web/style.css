@@ -6958,11 +6958,17 @@ body.fs-overlay-open .radar-loop-controls {
 .pt-row-current td { color: var(--accent-blue, #4aa8ff); }
 .pt-pwr { font-weight: 700 !important; }
 
-/* Delta colours */
-.pt-green  { color: var(--status-ok)   !important; }
-.pt-amber  { color: var(--status-warn) !important; }
-.pt-yellow { color: var(--status-warn) !important; }
-.pt-red    { color: var(--status-err)  !important; }
+/* Delta and FUEL@DEST colours.
+   --status-warn / --status-err were never DEFINED anywhere in this stylesheet (only
+   referenced), so these three declarations were invalid and dropped: every FUEL@DEST
+   cell rendered in the plain body colour, including the danger band. A low-fuel
+   projection therefore looked exactly like a comfortable one on a pilot-reachable
+   panel. Repointed at the tokens that actually exist — the same two the route-strip
+   DEST badge uses, so the two displays agree. (SDD Task 14.) */
+.pt-green  { color: var(--status-ok)      !important; }
+.pt-amber  { color: var(--status-warning) !important; }
+.pt-yellow { color: var(--status-warning) !important; }
+.pt-red    { color: var(--status-danger)  !important; }
 
 /* Tab bar: fixed bottom nav, positioned above Android system nav bar */
 #tabBar {
