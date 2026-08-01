@@ -337,6 +337,224 @@ describe('_profileForPower — cruise gph at the configured cruise power', () =>
     });
 });
 
+// ── _showFuelStopPicker — manual airport entry ────────────────────────────
+//
+// The suggestion list can simply not contain the field the pilot wants
+// (better price, self-serve after hours, a field he knows). Before this, the
+// modal had no input at all: accept a suggestion or Skip. These tests pin the
+// contract the consumer depends on — _processFuelStopCandidates uses ONLY
+// chosen.icao / chosen.lat / chosen.lon, so a manual stop that resolves
+// without coordinates would be spliced into the route and then silently
+// vanish during Apply.
+
+describe('_showFuelStopPicker — manual airport entry', () => {
+    const CANDIDATE = {
+        afterFixId: 'KLKR',
+        cumHrsAtStop: 3.5,
+        options: [
+            { icao: 'KAND', name: 'Anderson Rgnl', lat: 34.49, lon: -82.71,
+              distNm: 8.2, hasSelfServeFuel: true },
+        ],
+    };
+
+    const flush = () => new Promise(r => setTimeout(r, 0));
+
+    function openPicker(nasrDb, coords = {}) {
+        const panel = makePanel();
+        panel._nasrDb = nasrDb;
+        panel._coords = coords;
+        panel._toast  = vi.fn();
+
+        const promise = panel._showFuelStopPicker(CANDIDATE);
+        // Track settlement without awaiting — several tests assert the picker
+        // deliberately does NOT resolve.
+        let settled = false, value;
+        promise.then(v => { settled = true; value = v; });
+
+        const overlay = document.body.lastElementChild;
+        return {
+            panel, overlay,
+            input: overlay.querySelector('.rpp-fs-manual-input'),
+            btn:   overlay.querySelector('.rpp-fs-manual-btn'),
+            tapUse: () => overlay.querySelector('.rpp-fs-manual-btn')
+                                 .dispatchEvent(new Event('pointerup')),
+            pressEnter: () => overlay.querySelector('.rpp-fs-manual-input')
+                                 .dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' })),
+            isSettled: () => settled,
+            getValue:  () => value,
+        };
+    }
+
+    beforeEach(() => { document.body.innerHTML = ''; });
+
+    it('renders a manual-entry input and USE button in the picker', () => {
+        const { input, btn } = openPicker(null);
+        expect(input).toBeTruthy();
+        expect(btn).toBeTruthy();
+        expect(btn.textContent.trim()).toBe('USE');
+    });
+
+    // The tablet lives in direct sunlight in the cockpit; the dark scheme this
+    // modal used to carry was unreadable there. Guard against a revert.
+    it('renders the panel on the light, sunlight-readable token scheme', () => {
+        const { overlay } = openPicker(null);
+        const html = overlay.innerHTML;
+        expect(html).toContain('var(--bg-primary');      // panel surface
+        expect(html).toContain('var(--text-primary');    // identifiers
+        expect(html).toContain('var(--accent');          // self-serve tag
+        // None of the old dark-scheme values may come back.
+        expect(html).not.toMatch(/#1a2030|#2a3040|#243040|#8899aa|#4db8ff|#aabbd0/i);
+        // Nothing the pilot reads may drop below weight 700.
+        expect(html).not.toMatch(/font-weight:\s*[1-6]00/);
+    });
+
+    it('gives the manual input and USE button full cockpit touch targets', () => {
+        const { input, btn } = openPicker(null);
+        expect(input.getAttribute('style')).toContain('min-height:var(--touch-min,56px)');
+        expect(btn.getAttribute('style')).toContain('min-height:var(--touch-min,56px)');
+    });
+
+    it('resolves a candidate-shaped object from a typed identifier', async () => {
+        const db = { getAirport: vi.fn(async () => (
+            { id: 'KFDW', name: 'Fairfield County', lat: 34.6847, lon: -80.8547 })) };
+        const p = openPicker(db);
+        p.input.value = 'KFDW';
+        p.tapUse();
+        await flush();
+
+        expect(p.isSettled()).toBe(true);
+        expect(p.getValue()).toEqual({
+            icao: 'KFDW',
+            name: 'Fairfield County',
+            lat: 34.6847,
+            lon: -80.8547,
+            hasSelfServeFuel: false,
+        });
+        // Consumer contract: coords cached and the modal torn down.
+        expect(p.panel._coords.KFDW).toEqual({ lat: 34.6847, lon: -80.8547 });
+        expect(document.body.contains(p.overlay)).toBe(false);
+    });
+
+    it('uppercases and trims the typed identifier before lookup', async () => {
+        const db = { getAirport: vi.fn(async () => (
+            { name: 'Fairfield County', lat: 34.6847, lon: -80.8547 })) };
+        const p = openPicker(db);
+        p.input.value = '  kfdw  ';
+        p.tapUse();
+        await flush();
+
+        expect(db.getAirport).toHaveBeenCalledWith('KFDW');
+        expect(p.getValue().icao).toBe('KFDW');
+    });
+
+    it('resolves on Enter in the input, not just on the USE tap', async () => {
+        const db = { getAirport: vi.fn(async () => (
+            { name: 'Fairfield County', lat: 34.6847, lon: -80.8547 })) };
+        const p = openPicker(db);
+        p.input.value = 'kfdw';
+        p.pressEnter();
+        await flush();
+
+        expect(db.getAirport).toHaveBeenCalledWith('KFDW');
+        expect(p.isSettled()).toBe(true);
+        expect(p.getValue().icao).toBe('KFDW');
+    });
+
+    it('keeps the modal open and does not resolve when the identifier is unknown', async () => {
+        const db = { getAirport: vi.fn(async () => null) };
+        const p = openPicker(db);
+        p.input.value = 'ZZZZ';
+        p.tapUse();
+        await flush();
+        await flush();
+
+        expect(p.isSettled()).toBe(false);
+        expect(document.body.contains(p.overlay)).toBe(true);
+        expect(p.panel._toast).toHaveBeenCalledWith(
+            expect.stringContaining('not found as an airport'), expect.any(Number));
+
+        // …and the pilot can correct it in the still-open modal.
+        db.getAirport.mockResolvedValueOnce({ name: 'Fairfield County', lat: 34.6847, lon: -80.8547 });
+        p.input.value = 'KFDW';
+        p.tapUse();
+        await flush();
+        expect(p.isSettled()).toBe(true);
+        expect(p.getValue().icao).toBe('KFDW');
+    });
+
+    it('refuses to resolve while the navigation database is still loading', async () => {
+        const p = openPicker(null);
+        p.input.value = 'KFDW';
+        p.tapUse();
+        await flush();
+        await flush();
+
+        expect(p.isSettled()).toBe(false);
+        expect(document.body.contains(p.overlay)).toBe(true);
+        expect(p.panel._toast).toHaveBeenCalledWith(
+            expect.stringContaining('Navigation database still loading'), expect.any(Number));
+    });
+
+    it('does not resolve on an empty identifier', async () => {
+        const db = { getAirport: vi.fn(async () => null) };
+        const p = openPicker(db);
+        p.input.value = '   ';
+        p.tapUse();
+        await flush();
+
+        expect(db.getAirport).not.toHaveBeenCalled();
+        expect(p.isSettled()).toBe(false);
+        expect(document.body.contains(p.overlay)).toBe(true);
+    });
+
+    it('measures distNm from the anchor fix when its coordinates are cached', async () => {
+        globalThis.NasrDB = { haversineNm: vi.fn(() => 12.345) };
+        try {
+            const db = { getAirport: vi.fn(async () => (
+                { name: 'Fairfield County', lat: 34.6847, lon: -80.8547 })) };
+            const p = openPicker(db, { KLKR: { lat: 34.7235, lon: -80.8546 } });
+            p.input.value = 'KFDW';
+            p.tapUse();
+            await flush();
+
+            expect(globalThis.NasrDB.haversineNm)
+                .toHaveBeenCalledWith(34.7235, -80.8546, 34.6847, -80.8547);
+            expect(p.getValue().distNm).toBe(12.3);
+        } finally {
+            delete globalThis.NasrDB;
+        }
+    });
+
+    it('omits distNm rather than inventing one when the anchor fix has no coords', async () => {
+        // NasrDB IS available here — the ONLY thing missing is the anchor's
+        // position, so a distance measured from a substituted origin (0,0 say)
+        // would be a fabricated number on a fuel-stop decision.
+        globalThis.NasrDB = { haversineNm: vi.fn(() => 999) };
+        try {
+            const db = { getAirport: vi.fn(async () => (
+                { name: 'Fairfield County', lat: 34.6847, lon: -80.8547 })) };
+            const p = openPicker(db);   // _coords empty — anchor KLKR unknown
+            p.input.value = 'KFDW';
+            p.tapUse();
+            await flush();
+
+            expect(globalThis.NasrDB.haversineNm).not.toHaveBeenCalled();
+            expect('distNm' in p.getValue()).toBe(false);
+        } finally {
+            delete globalThis.NasrDB;
+        }
+    });
+
+    it('leaves the Skip button working — Skip still resolves null', async () => {
+        const p = openPicker(null);
+        p.overlay.querySelector('.rpp-fs-skip').dispatchEvent(new Event('pointerup'));
+        await flush();
+        expect(p.isSettled()).toBe(true);
+        expect(p.getValue()).toBe(null);
+        expect(document.body.contains(p.overlay)).toBe(false);
+    });
+});
+
 describe('_profileForPower drives the real planner — 516.4 nm leg from 36 gal', () => {
     // End-to-end: the panel's profile through the same RoutePlanner the panel
     // uses. Pins the actual number on the pilot's REM column, not just the

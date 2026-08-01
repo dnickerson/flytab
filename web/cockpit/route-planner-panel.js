@@ -2324,48 +2324,132 @@ class RoutePlannerPanel {
                 'position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:9999;' +
                 'display:flex;align-items:center;justify-content:center';
 
+            // Light, high-contrast scheme — this modal is read in direct sunlight
+            // on the panel-mounted tablet, where the old dark scheme washed out.
+            // Colours come from the design tokens in web/style.css; only the
+            // backdrop scrim behind the panel stays dark.
             overlay.innerHTML = `
-              <div style="background:#1a2030;border-radius:10px;max-width:420px;width:92%;
+              <div style="background:var(--bg-primary,#ffffff);border-radius:10px;max-width:420px;width:92%;
                            max-height:80vh;overflow:hidden;display:flex;flex-direction:column;
-                           box-shadow:0 8px 32px rgba(0,0,0,.6)">
-                <div style="padding:16px;border-bottom:1px solid #2a3040;
+                           box-shadow:0 8px 32px rgba(0,0,0,.45)">
+                <div style="padding:16px;border-bottom:1px solid var(--border,#e0e0e0);
                              display:flex;justify-content:space-between;align-items:flex-start">
                   <div>
-                    <div style="font-size:17px;font-weight:700;color:#fff">⛽ Fuel Stop Required</div>
-                    <div style="font-size:13px;color:#8899aa;margin-top:4px">
+                    <div style="font-size:17px;font-weight:800;color:var(--text-primary,#1a1a2e)">⛽ Fuel Stop Required</div>
+                    <div style="font-size:13px;font-weight:700;color:var(--text-secondary,#444444);margin-top:4px">
                       Near ${candidate.afterFixId} · ${hh}:${mm} flight time
                     </div>
                   </div>
-                  <button class="rpp-fs-skip" style="background:none;border:1px solid #3a4050;
-                    border-radius:6px;padding:6px 12px;color:#8899aa;cursor:pointer;
-                    font-size:14px;flex-shrink:0;margin-left:12px">Skip</button>
+                  <button class="rpp-fs-skip" style="background:var(--bg-surface,#f5f5f5);
+                    border:1px solid var(--border-strong,#b0b0b0);border-radius:6px;
+                    min-height:var(--touch-min,56px);padding:0 16px;flex-shrink:0;margin-left:12px;
+                    color:var(--text-secondary,#444444);font-size:15px;font-weight:700;cursor:pointer">Skip</button>
                 </div>
                 <div class="rpp-fs-list" style="overflow-y:auto;padding:4px 0"></div>
+                <div style="padding:12px 16px;border-top:1px solid var(--border,#e0e0e0);flex-shrink:0">
+                  <div style="font-size:13px;font-weight:800;color:var(--text-secondary,#444444);margin-bottom:8px">
+                    Or enter your own fuel stop
+                  </div>
+                  <div style="display:flex;gap:8px;align-items:stretch">
+                    <input class="rpp-fs-manual-input" type="text" placeholder="Identifier"
+                      autocapitalize="characters" autocomplete="off" autocorrect="off" spellcheck="false"
+                      style="flex:1;min-width:0;min-height:var(--touch-min,56px);
+                             background:var(--bg-surface,#f5f5f5);border:2px solid var(--border-strong,#b0b0b0);
+                             border-radius:6px;color:var(--text-primary,#1a1a2e);
+                             font-size:17px;font-weight:800;padding:0 12px">
+                    <button class="rpp-fs-manual-btn"
+                      style="min-height:var(--touch-min,56px);min-width:92px;flex-shrink:0;
+                             background:var(--bg-surface,#f5f5f5);border:2px solid var(--accent,#0066cc);
+                             border-radius:6px;color:var(--text-primary,#1a1a2e);
+                             font-size:16px;font-weight:800;cursor:pointer">USE</button>
+                  </div>
+                </div>
               </div>`;
 
             const list = overlay.querySelector('.rpp-fs-list');
             for (const apt of candidate.options) {
                 const row = document.createElement('div');
                 row.style.cssText =
-                    'padding:13px 16px;border-bottom:1px solid #2a3040;cursor:pointer;' +
+                    'padding:13px 16px;border-bottom:1px solid var(--border-light,#f0f0f0);cursor:pointer;' +
+                    'min-height:var(--touch-min,56px);box-sizing:border-box;' +
                     'display:flex;justify-content:space-between;align-items:center';
                 row.innerHTML = `
                   <div>
-                    <div style="font-size:16px;font-weight:600;color:#fff">${apt.icao}</div>
-                    <div style="font-size:12px;color:#8899aa;margin-top:2px">
-                      ${apt.name}${apt.hasSelfServeFuel ? ' · <span style="color:#4db8ff">Self-serve</span>' : ''}
+                    <div style="font-size:17px;font-weight:800;color:var(--text-primary,#1a1a2e)">${apt.icao}</div>
+                    <div style="font-size:13px;font-weight:700;color:var(--text-secondary,#444444);margin-top:2px">
+                      ${apt.name}${apt.hasSelfServeFuel ? ' · <span style="color:var(--accent,#0066cc);font-weight:800">Self-serve</span>' : ''}
                     </div>
                   </div>
-                  <div style="font-size:14px;color:#aabbd0;white-space:nowrap;margin-left:12px">
-                    ${apt.distNm} nm
+                  <div style="font-size:15px;font-weight:700;color:var(--text-secondary,#444444);white-space:nowrap;margin-left:12px">
+                    ${apt.distNm != null ? apt.distNm + ' nm' : ''}
                   </div>`;
-                row.addEventListener('touchstart', () => { row.style.background = '#243040'; }, { passive: true });
+                row.addEventListener('touchstart', () => { row.style.background = 'var(--bg-surface,#f5f5f5)'; }, { passive: true });
                 row.addEventListener('touchend',   () => { row.style.background = ''; }, { passive: true });
                 wireTap(row, () => { overlay.remove(); resolve(apt); });
                 list.appendChild(row);
             }
 
             wireTap(overlay.querySelector('.rpp-fs-skip'), () => { overlay.remove(); resolve(null); });
+
+            // Manual entry — the suggestion list can miss the field the pilot
+            // actually wants (better price, self-serve after hours, a field he
+            // knows). Resolve the typed identifier exactly the way _onAddTap
+            // does, so a manual stop can never resolve without coordinates —
+            // a coordinate-less stop would silently vanish during Apply.
+            const manualInput = overlay.querySelector('.rpp-fs-manual-input');
+            const manualBtn   = overlay.querySelector('.rpp-fs-manual-btn');
+            let manualBusy = false;
+            const useManual = async () => {
+                if (manualBusy) return;
+                const v = (manualInput?.value || '').trim().toUpperCase();
+                if (!v) { manualInput?.focus(); return; }
+                if (!this._nasrDb) {
+                    this._toast('Navigation database still loading — try again in a moment', 3500);
+                    return;
+                }
+                manualBusy = true;
+                try {
+                    let rec = null;
+                    let coord = this._coords[v];
+                    if (!coord) {
+                        rec = await this._nasrDb.getAirport(v).catch(() => null);
+                        if (Number.isFinite(rec?.lat) && Number.isFinite(rec?.lon)) {
+                            coord = { lat: rec.lat, lon: rec.lon };
+                            this._coords[v] = coord;
+                        }
+                    }
+                    if (!coord) {
+                        // Keep the modal open so the identifier can be corrected.
+                        this._toast(`"${v}" not found as an airport — check identifier`, 4000);
+                        return;
+                    }
+                    const apt = {
+                        icao: v,
+                        name: rec?.name || v,
+                        lat:  coord.lat,
+                        lon:  coord.lon,
+                        hasSelfServeFuel: !!rec?.hasSelfServeFuel,
+                    };
+                    // distNm is measured from the anchor fix when its coordinates
+                    // are already cached; omitted rather than invented when not.
+                    const anchor = this._coords[candidate.afterFixId];
+                    if (Number.isFinite(anchor?.lat) && Number.isFinite(anchor?.lon)
+                        && typeof NasrDB !== 'undefined'
+                        && typeof NasrDB.haversineNm === 'function') {
+                        apt.distNm = Math.round(
+                            NasrDB.haversineNm(anchor.lat, anchor.lon, coord.lat, coord.lon) * 10
+                        ) / 10;
+                    }
+                    overlay.remove();
+                    resolve(apt);
+                } finally {
+                    manualBusy = false;
+                }
+            };
+            wireTap(manualBtn, () => { useManual(); });
+            manualInput?.addEventListener('keydown', e => {
+                if (e.key === 'Enter') { e.preventDefault(); useManual(); }
+            });
 
             // Backdrop: tap on the dim background (not on any child) dismisses.
             // Must track touchstart ourselves because e.target is the original touch target
