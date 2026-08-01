@@ -1640,6 +1640,17 @@ git commit -m "fix(fuel): range-calc.js reads canonical fuel state — fixes alw
 > `instrument-strip.js`'s and `engine-page.js`'s, so the three instruments agree about whether a number
 > can be trusted. Read both before choosing a presentation; do not invent a third.
 >
+> **6. VERIFY THE DOWNSTREAM CONSUMER — `power-tradeoff.js` (added 2026-08-01, found by Task 18).**
+> `PowerTradeoff` is MOUNTED (`app.js:859-860`, wired to the instrument strip at :867) and pilot-reachable
+> by tapping ETE or DEST. It consumes `detail.fuelRemaining` from `_emitLegUpdate` — the very field this
+> task makes canonical — and computes `fuelAtDest = fuelRemaining - fuelBurn` at line 122. Today that
+> resolves to the RAW EDM TOTALIZER, measured ~20 gal over the canonical figure (25.5 gal GREEN where the
+> truth was 5.5 gal AMBER). Fixing `_emitLegUpdate` should fix it for free — **confirm that by RUNNING
+> PowerTradeoff, not by reading**; Task 18 traced this statically and explicitly did not execute it.
+> Separately, its colour bands at lines 195-201 are HARDCODED (`<4` red, `<8` amber, `<12` yellow). 4 and 8
+> match `cockpit-config.json`'s `fuelWarningGal`/`fuelCautionGal`, but 12 is an invented third band with no
+> config equivalent. Move them to config, and apply the same stale-never-green rule the other instruments use.
+>
 > **Testability note:** `web/cockpit/route-table.js` is script-tag loaded with no importable-ESM path,
 > so it has NO unit coverage — every route-table change in Tasks 8-11 was verified by scratch
 > harnesses instead. Expect the same here; verify by harness and say plainly what is not covered.
