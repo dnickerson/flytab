@@ -10293,6 +10293,13 @@ body.emergency-active #tabBar {
     font-family: var(--font-instrument, monospace);
 }
 
+/* Total Weight / CG computed from a fuel figure that is missing or stale.
+   Declared BEFORE .wb-over-gross so that, at equal specificity, an over-gross weight
+   still renders in the danger colour — the more severe of the two must win. */
+.wb-result-value.wb-unconfirmed {
+    color: var(--color-caution);
+}
+
 .wb-result-value.wb-over-gross {
     color: var(--color-danger);
 }
@@ -10328,6 +10335,28 @@ body.emergency-active #tabBar {
     background: var(--color-danger);
     color: #fff;
 }
+
+/* STALE-NEVER-GREEN: an in-envelope verdict computed from a missing or >45 min stale
+   fuel quantity is shown, but in the caution fill — never the reassuring green. */
+.wb-envelope-badge.wb-envelope-unconfirmed {
+    background: var(--color-caution);
+    color: #000;
+}
+
+/* Full-width caution bar above the envelope badge, naming why the loading is not a
+   measurement. Same solid caution-badge fill as the status-badge pattern. */
+.wb-fuel-notice {
+    grid-column: 1 / -1;
+    background: var(--color-caution);
+    color: #000;
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 15px;
+    font-weight: 800;
+    font-family: var(--font-ui, sans-serif);
+    line-height: 1.3;
+}
+
 
 .wb-chart-container {
     background: var(--bg-surface);

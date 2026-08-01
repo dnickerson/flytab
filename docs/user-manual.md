@@ -189,7 +189,7 @@ Opens a right-side drawer with infrequently used actions, organized in three sec
 | **Fuel Entry** | Manually enter fuel quantity after a fuel stop |
 | **Plan on flywhere.app** | Opens the web route planner in a browser for pre-flight planning |
 | **Weather Briefing** | Full weather briefing panel (see below) |
-| **Weight & Balance** | Enter station weights and fuel; shows total weight, CG, and envelope status with a CG diagram |
+| **Weight & Balance** | Enter station weights and fuel; shows total weight, CG, and envelope status with a CG diagram. Fuel pre-fills from tracked tank state — see *Fuel on the Weight & Balance page* |
 | **Logbook** | View and edit flight log entries |
 | **Flight Upload** | Sync flight logs to the cloud |
 | **User Manual** | This document |
@@ -514,6 +514,16 @@ Tapping **DEST** or **ETE** on the instrument strip opens the power tradeoff pan
 **FUEL@DEST is your tracked fuel less the projected burn.** It reads from the same canonical figure as everything else — your tank state, or a manual override if you have set one. It previously read the EDM's own totalizer instead, which on a typical flight sat about 20 gallons above the tracked figure: the panel showed 25.5 gal remaining at destination, uncoloured, where the truth was 5.5.
 
 With nothing tracked, FUEL@DEST shows **—** rather than a projection from full tanks. A stale tank state is shown but marked with a trailing **?** and never left uncoloured. The colour bands are amber at 12 gallons, deeper amber at 8, and red at 4 — the 8 and 4 figures are the same thresholds every other fuel display uses, set in `cockpit-config.json`. Those colours previously did not render at all, so a 2-gallon arrival looked exactly like a 25-gallon one.
+
+### Fuel on the Weight & Balance page
+
+The **Fuel** station on the W&B page (MORE → Weight & Balance) pre-fills from the same tracked figure as everything else — your tank state, or a manual override if you have set one. It previously read the pre-flight planning chain, which never consulted tank state at all: with 18 gallons tracked it pre-filled **36**, and with the tanks tracked dry it still pre-filled **36**. At 6 lb per gallon that is up to 216 lb of fuel that may not be in the aeroplane, and on this airframe the fuel arm sits ahead of the forward CG limit, so a fuel figure that is too high also drags the plotted CG forward of where it really is.
+
+**With nothing tracked, the Fuel field is left blank rather than filled with full tanks.** The page then refuses to give you an envelope verdict: the badge reads **NO VERDICT — ENTER FUEL QUANTITY** in amber, an amber line above it reads "FUEL NOT ENTERED — this weight excludes fuel. Enter gallons aboard.", and Total Weight and CG are shown in amber with a trailing **?**. This matters more here than anywhere else in the app: a missing fuel figure makes the aeroplane look *lighter* than it is, which is the one direction a weight and balance answer must never err in. Type the gallons aboard and the page computes normally.
+
+**A stale tracked figure is flagged, not hidden.** If the tank state has gone 45 minutes or more without an integrated fuel-flow sample — the same condition behind the engine page's UNCONFIRMED banner and the instrument strip's `18.0?` — the figure is still pre-filled, but an amber line reads "FUEL QUANTITY UNCONFIRMED — tank tracking is over 45 min stale and reads high. Verify before using this weight.", Total Weight and CG carry the same amber **?**, and the envelope badge reads **IN ENVELOPE — UNCONFIRMED FUEL** in amber instead of green. The CG dot on the diagram turns amber for the same reason. An **OUT OF ENVELOPE** result stays red whatever the fuel confidence — a limit exceedance is never softened.
+
+**Your own entry always wins.** As soon as you type in the Fuel field, the number is yours: the amber marking clears and the page will not overwrite it when you re-open W&B. Until you do type in it, an untouched pre-fill is re-read from the tracker each time the page opens, so it follows the burn instead of freezing at the ramp figure. A tracked **0.0** is a real reading and computes normally — dry tanks and untracked tanks never look the same.
 
 ---
 
