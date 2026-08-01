@@ -1820,3 +1820,55 @@ git commit -m "chore: bump version to vX.XX for fuel management consistency rele
 - **Spec coverage:** All 9 architecture sections and all 25 appendix findings from the design doc map to a task above (Tasks 1-15 cover Sections 1-9; Task 16 is integration). The two corrections made during pre-implementation reading (K-Factor Calculator extension instead of new mechanism; gallons-added field retained for record-keeping) are reflected in Tasks 5-6.
 - **Line numbers will drift.** Every task modifying `route-table.js`, `engine-page.js`, `range-calc.js`, `fuel-overlay.js` etc. includes a "re-read current line numbers" step precisely because these files may shift between when this plan was written and when each task executes (especially since tasks are sequential and earlier tasks in this same plan modify some of these files). Treat quoted line numbers as locators via the quoted code snippet, not as guaranteed-accurate coordinates.
 - **Task 11 has more uncertainty than the others** (whether `CockpitConfig` is reachable from the planning library, exact profile-sync location) — flagged explicitly in-task rather than guessed at, since the planning library's environment-agnostic adapter design means the answer depends on code this plan's author did not have time to fully trace. Whoever executes Task 11 should budget extra investigation time there.
+
+---
+
+### Task 17: instrument-strip.js migration, then remove the dead nav-strip/range-calc code
+
+**Added 2026-08-01 (Dana's decision) after a Task 13 review found the migrated display is not mounted.**
+
+This is the task that makes the whole effort reach the pilot. Do the migration FIRST, then the deletion —
+the deletion may remove logic worth porting, so read before removing.
+
+**Why this exists:** `web/cockpit/instrument-strip.js` `_updateFuel()` (~line 323) is the FUEL field the
+pilot actually sees in flight. It was never migrated and still over-reports:
+
+```js
+const remaining = engData?.fuel_remaining_gal ?? engData?.fuel_gal
+                ?? engData?.Gallons_Rem ?? engData?.Fuel_Remaining ?? null;
+```
+
+Raw EDM first, then `Settings.fuelManualOverride`, then `FuelState.getStartFuel()`. Measured by review:
+with 10.0 gal tracked and the EDM totalizer reading 30, it shows **30.0**; with nothing tracked it shows
+**36.0** — full tanks with no measurement behind them. That is exactly the over-report Tasks 12 and 13
+were written to eliminate, still live on the primary instrument.
+
+**Part A — migrate `instrument-strip.js`:**
+- `_updateFuel()` must read the canonical `FuelState.getCurrentFuel()` and MUST guard
+  `source === 'capacity'` (do not display a capacity fallback as a measurement). Four earlier briefs in
+  this plan specified the unguarded read and all four would have fabricated a full-tank display.
+- Apply the same staleness treatment Task 14 lands for the route table and Task 12 landed for the engine
+  page (`FuelTankState.needsConfirmation()` → show the number, marked unconfirmed). Read both
+  implementations first and stay consistent; do not invent a third presentation.
+- Dry tanks (0.0 gal, source `tank_state`) must be distinguishable from no-data, per Task 12.
+- `instrument-strip.js` is a `web/cockpit/*.js` file and IS testable via the
+  `new Function(src + '\nreturn ClassName;')()` jsdom pattern. Add load-bearing tests.
+- Verify against the DOM `app.js` actually builds (`#is-container`, `.is-field`, `.is-value`), NOT a
+  hand-built fixture. A Task 13 fixture manufactured `ns-*` elements the app never creates, letting 16
+  green tests certify an invisible display.
+
+**Part B — remove the dead code (only after Part A):**
+Verified inert: `NavStrip` is never instantiated (`grep -rn "new NavStrip" web/` → nothing; the only hit
+is a Playwright harness). It is the sole producer of `#ns-range` / `#ns-fuel-rem` / `#ns-fuel-endur`, which
+are `RangeCalc`'s only DOM outputs. `_addRangeRingControl()` is called only by its own `setTimeout` retry
+at line 181, so `_showRangeRing` is permanently false and `_drawRangeRing` never runs.
+- Remove `web/cockpit/nav-strip.js`, `web/cockpit/range-calc.js`, their `<script>` tags in
+  `web/index.html`, `app.js`'s `rangeCalc` field/instantiation/`setPlan` call (lines ~61, 859-860, 1262),
+  `tests/cockpit/range-calc-fuel.test.js`, and `tests/components/harnesses/nav-strip.html`.
+- BEFORE deleting, check whether `_fuelForRemainingRoute` or the with-route reserve colouring contains
+  logic worth porting into Part A. Port it or explicitly say it was not worth porting.
+
+**Part C — retract the false manual claim:**
+`docs/user-manual.md` says "The nav strip's RANGE and FUEL fields now work" and "all three come alive".
+Both are false — nothing renders them. Also correct the pre-existing line calling the nav-strip FUEL field
+"the authoritative fuel-state display". Telling a pilot a blank fuel instrument works is worse than silence.
