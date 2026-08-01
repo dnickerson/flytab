@@ -451,6 +451,14 @@ The **fuel tanks widget** (floating, top-left corner of the map) shows left/righ
 
 The **FUEL** field in the nav strip shows total fuel remaining and projected endurance at current burn rate. This is the authoritative fuel-state display.
 
+**The nav strip's RANGE and FUEL fields now work.** They previously stayed blank on every flight because they were reading a fuel field the engine monitor does not send. They now read the same tracked fuel figure as everything else — tracked tank state, or a manual override if you have set one — divided by your live fuel flow from the engine. RANGE is how far you can go on the fuel aboard at current burn and current ground speed.
+
+**If no tank quantities have been entered, RANGE, FUEL and the endurance below it stay blank.** As on the engine page, this is deliberate: with nothing tracked there is no measurement to range off, and showing a full-tank range would suggest you can reach airports you may not have the fuel to reach. Enter your fuel — the **✎** button on the fuel tanks widget, or the Fuel Entry screen — and all three come alive. The FUEL field is colour-coded by endurance: green above 90 minutes, amber 45–90, red below 45. With a route loaded it colours by your reserve on arrival instead: green above 1 hour, amber above 30 minutes, red below.
+
+> Note: unlike the engine page, the nav strip does **not** yet flag a stale tracked figure. If the UNCONFIRMED banner is showing on the engine page, treat the nav strip RANGE and FUEL as reading high by whatever was burned during the gap.
+>
+> The map range ring is not available — the **RNG** map button described in earlier notes was never wired up, so no ring is drawn. The ring's sizing is correct when it is enabled; the control itself is missing.
+
 ### Route table FUEL and REM columns
 
 The route table's **FUEL** column shows the fuel burned on each leg; **REM** shows the fuel expected to remain on arrival at that waypoint.

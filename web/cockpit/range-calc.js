@@ -33,7 +33,23 @@ class RangeCalc {
         const engData = this.enginePanel ? this.enginePanel.lastData : null;
         const sit = this.stratux ? this.stratux.situation : null;
 
-        const fuelRemaining = engData ? (engData.fuel_remaining_gal || engData.fuel_gal || engData.Gallons_Rem || 0) : 0;
+        // Canonical live fuel read (manual override > tracked tank state > capacity).
+        // Was: engData.fuel_remaining_gal || engData.fuel_gal || engData.Gallons_Rem — none
+        // of those names exist anywhere in the engine_monitor payload (the EDM parser emits
+        // `Fuel_Remaining`, the Pi fuel tracker is nested at `fuel.fuel_remaining`), so this
+        // always resolved to 0 and the nav strip was permanently "—" with no range ring.
+        //
+        // A `capacity` source means nothing is actually tracked — it is a planning default,
+        // not a measurement. Rendering it here would show FUEL 36.0 / RANGE 540 / ENDURANCE
+        // 4:00 in green and paint a 540 nm range ring on the map with no fuel data behind it
+        // (measured). That is the unacceptable error direction, so fall through to the
+        // existing "—" placeholders instead.
+        const fuelRead = (typeof FuelState !== 'undefined')
+            ? FuelState.getCurrentFuel()
+            : { gallons: 0, source: 'none' };
+        const fuelRemaining = (fuelRead.source === 'capacity') ? 0 : fuelRead.gallons;
+        // GPH stays sourced from live engine data — the plan's Non-goals preserve the
+        // live-burn-rate override; only the gallons source is unified here.
         const gph = engData ? (engData.fuel_flow_gph || engData.gph || engData.Fuel_Flow || 0) : 0;
         const gs = sit ? (sit.ground_speed || 0) : 0;
 
