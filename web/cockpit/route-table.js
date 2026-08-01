@@ -1064,7 +1064,12 @@ class RouteTable {
         const climbMp = CockpitConfig.aircraft('performance.climb_mp') ?? cfgCruiseMp;
         const climbPwr = CockpitConfig.aircraft('performance.climb_pwr_pct') ?? 100;
         const descentSpeed = CockpitConfig.aircraft('performance.descent_speed_kt') ?? cfgCruiseSpeed;
-        const descentGph = CockpitConfig.aircraft('performance.descent_gph') ?? cfgGph * 0.6;
+        // 0.8, not 0.6: 0.6 x the 9.0 gph cruise default = 5.4 gph, BELOW this
+        // airframe's measured descent p85 of 6.9 — under-planning descent burn
+        // over-states fuel remaining. Measured descent:cruise here is 6.9:8.1
+        // = 0.85; 0.8 against the 9.0 config cruise figure gives 7.2 gph, at or
+        // above measured. Only fires if performance.descent_gph is missing.
+        const descentGph = CockpitConfig.aircraft('performance.descent_gph') ?? cfgGph * 0.8;
         const descentRpm = CockpitConfig.aircraft('performance.descent_rpm') ?? cfgCruiseRpm;
         const descentMp = CockpitConfig.aircraft('performance.descent_mp') ?? cfgCruiseMp;
         const descentPwr = CockpitConfig.aircraft('performance.descent_pwr_pct') ?? 50;
@@ -1334,7 +1339,9 @@ class RouteTable {
         const cfgClbRpm   = CockpitConfig.aircraft('performance.climb_rpm') ?? cfgCruiseRpm;
         const cfgClbMp    = CockpitConfig.aircraft('performance.climb_mp') ?? cfgCruiseMp;
         const cfgDesSpeed = CockpitConfig.aircraft('performance.descent_speed_kt') ?? cfgCruiseSpeed;
-        const cfgDesGph   = CockpitConfig.aircraft('performance.descent_gph') ?? cfgGph * 0.6;
+        // 0.8, not 0.6 — see the matching note in _buildMissingSegments(): 0.6 x
+        // the 9.0 gph cruise default lands at 5.4 gph, below the measured 6.9.
+        const cfgDesGph   = CockpitConfig.aircraft('performance.descent_gph') ?? cfgGph * 0.8;
         const cfgDesPwr   = CockpitConfig.aircraft('performance.descent_pwr_pct') ?? 50;
         const cfgDesRpm   = CockpitConfig.aircraft('performance.descent_rpm') ?? cfgCruiseRpm;
         const cfgDesMp    = CockpitConfig.aircraft('performance.descent_mp') ?? cfgCruiseMp;
