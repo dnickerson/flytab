@@ -1631,6 +1631,17 @@ git commit -m "fix(fuel): range-calc.js reads canonical fuel state — fixes alw
 > `destWp._fuelRem` — a planned POST-REFUEL figure decoupled from actual tanks — measured reading
 > 30.0 with 10 gal aboard. That is the over-reporting direction.
 >
+> **4. Include the nav strip in the staleness surface** (found by Task 13). `range-calc.js` feeds the
+> nav strip's FUEL / RANGE / ENDURANCE fields from the same canonical read and is likewise blind to
+> `needsConfirmation()` — a mutation forcing that flag true breaks an engine-page test but nothing in
+> range-calc. Whatever staleness treatment this task lands must cover the nav strip too, or the two
+> instruments will disagree about whether the same number is trustworthy.
+>
+> **5. Nav strip conflates dry tanks with no data** (also from Task 13). A genuinely dry tracked state
+> (0.0 gal) renders identically to "nothing tracked" — both `—`. Task 12 eliminated exactly this
+> conflation on the engine page; the nav strip still has it. Under-reporting so not a hazard, but the
+> two instruments are now inconsistent on the edge that matters most.
+>
 > **Testability note:** `web/cockpit/route-table.js` is script-tag loaded with no importable-ESM path,
 > so it has NO unit coverage — every route-table change in Tasks 8-11 was verified by scratch
 > harnesses instead. Expect the same here; verify by harness and say plainly what is not covered.
