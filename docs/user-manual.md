@@ -41,7 +41,7 @@ FlyTab connects automatically on app launch. The status bar at the top shows con
 │  Fuel widget                                          │
 │  (top-left)      [FIS-B ⇄] radar badge (bottom-left) │
 ├───────────────────────────────────────────────────────┤
-│  NEXT  ——   DEST  ——   GS  ——kt  ALT  ——  FUEL  ——    │ ← Nav strip
+│ GS —— ALT —— BARO —— CRS —— FUEL —— DEST —— ETE ——    │ ← Instrument strip
 ├───────────────────────────────────────────────────────┤
 │  ≡  │ 🗺MAP │ ✈APT │ ⚙ENG │ ✅CHK │ 📻CLR │ ⊟CMPCT │ ⋯ │ ← Tab bar
 └───────────────────────────────────────────────────────┘
@@ -56,7 +56,7 @@ FlyTab connects automatically on app launch. The status bar at the top shows con
 - **Radar source badge** (bottom-left, when radar is active) — shows active source (FIS-B or INET) with a `⇄` tap target to switch.
 - **Corner buttons** (bottom-right of map): **⊙** auto-pan toggle, **→** direct-to, **⋮** map menu.
 
-**Nav strip** — always visible below the map. Shows six configurable fields (default: next waypoint, destination, ground speed, altitude, range, fuel). Tap any field to change it.
+**Instrument strip** — always visible below the map. Shows the configured numeric fields (default: ground speed, altitude, nearest altimeter setting, course, fuel, distance to destination, ETE). Tap **FUEL** to open the fuel overlay; tap **DEST** or **ETE** to open the power tradeoff panel. The field list itself is set in `cockpit-config.json`, not from the strip.
 
 **Tab bar** — seven tabs along the bottom. **≡ LAYERS** at the far left opens the layer and weather toggle panel. **⋯ MORE** at the far right opens the secondary-functions drawer.
 
@@ -449,21 +449,21 @@ If FlyTab detects a gap of more than a few seconds in engine data since the last
 
 The **fuel tanks widget** (floating, top-left corner of the map) shows left/right tank quantities in gallons, live fuel flow (GPH), and combined endurance. The center column displays a total-fuel bar gauge, current GPH, and hours:minutes remaining. Tap the **L** or **R** badge to switch the active tank. Tap the **✎** button in the center column to edit fuel quantities at any time — the dialog pre-fills with your most recent tic measurement if one exists. All values update in real time from the engine monitor.
 
-The **FUEL** field in the nav strip shows total fuel remaining and projected endurance at current burn rate. This is the authoritative fuel-state display.
+The **FUEL** field in the instrument strip along the bottom of the map is the in-flight fuel figure. It shows total fuel remaining in gallons and reads the same tracked figure as everything else — a manual override if you have set one, otherwise your tracked tank state (most recent tic measurement plus integrated burn). It no longer shows the EDM's own totalizer: that field could disagree with tracked fuel by 20 gallons in the optimistic direction. Tap the field to open the fuel overlay.
 
-**The nav strip's RANGE and FUEL fields now work.** They previously stayed blank on every flight because they were reading a fuel field the engine monitor does not send. They now read the same tracked fuel figure as everything else — tracked tank state, or a manual override if you have set one — divided by your live fuel flow from the engine. RANGE is how far you can go on the fuel aboard at current burn and current ground speed.
+**If no tank quantities have been entered, FUEL shows a dash (—), not a number.** As on the engine page, this is deliberate: with nothing tracked there is no measurement to show, and displaying full tanks would tell you there is more fuel aboard than is known to exist. Enter your fuel — the **✎** button on the fuel tanks widget, or the Fuel Entry screen — and the field starts reading. A tracked **0.0** is a real reading (tanks dry) and is deliberately different from the dash.
 
-**If no tank quantities have been entered, RANGE, FUEL and the endurance below it stay blank.** As on the engine page, this is deliberate: with nothing tracked there is no measurement to range off, and showing a full-tank range would suggest you can reach airports you may not have the fuel to reach. Enter your fuel — the **✎** button on the fuel tanks widget, or the Fuel Entry screen — and all three come alive. The FUEL field is colour-coded by endurance: green above 90 minutes, amber 45–90, red below 45. With a route loaded it colours by your reserve on arrival instead: green above 1 hour, amber above 30 minutes, red below.
+**A stale tracked figure is flagged, not hidden.** If the tank state has gone 45 minutes or more without an integrated fuel-flow sample — the same condition that raises the UNCONFIRMED banner on the engine page — the FUEL value turns amber and a **?** is appended, e.g. `18.0?`. The number is still your last known-good quantity, which is why it is kept, but it reads HIGH: the fuel burned during the gap was never subtracted. Confirm your fuel before flying by it.
 
-> Note: unlike the engine page, the nav strip does **not** yet flag a stale tracked figure. If the UNCONFIRMED banner is showing on the engine page, treat the nav strip RANGE and FUEL as reading high by whatever was burned during the gap.
+> **Correction to earlier notes in this manual.** Earlier versions said the nav strip's RANGE and FUEL fields "now work", that RANGE, FUEL and endurance "all come alive" once fuel is entered, and that the nav strip FUEL field was "the authoritative fuel-state display". All of that was wrong. The nav strip was never mounted in the app, so none of those fields ever rendered — there was no display to come alive and none of it was ever authoritative. The nav strip and its range calculator have been removed. The figure to fly by is the instrument strip **FUEL** field described above, cross-checked against the engine page's FUEL STATUS section.
 >
-> The map range ring is not available — the **RNG** map button described in earlier notes was never wired up, so no ring is drawn. The ring's sizing is correct when it is enabled; the control itself is missing.
+> There is no range display and no map range ring. The **RNG** map button described in earlier notes was never wired up, and both went away with the nav strip. Use the engine page's FUEL STATUS **RANGE** and **ENDURANCE** gauges, which are live and read from the same tracked fuel figure.
 
 ### Route table FUEL and REM columns
 
 The route table's **FUEL** column shows the fuel burned on each leg; **REM** shows the fuel expected to remain on arrival at that waypoint.
 
-**On the flight you are actually flying, REM is derived from live tracked fuel** — the same figure the fuel tanks widget and nav strip show, which traces back to your most recent tic measurement plus integrated burn. This is true on every leg of a multi-leg trip, not just the first. After a fuel stop where you added a partial fill, the next flight's REM reflects what you actually put in; it does not assume full tanks.
+**On the flight you are actually flying, REM is derived from live tracked fuel** — the same figure the fuel tanks widget and the instrument strip FUEL field show, which traces back to your most recent tic measurement plus integrated burn. This is true on every leg of a multi-leg trip, not just the first. After a fuel stop where you added a partial fill, the next flight's REM reflects what you actually put in; it does not assume full tanks.
 
 **Approaching a fuel stop, REM decreases all the way into the stop.** The REM shown at a fuel-stop waypoint is your fuel on *arrival* — before refueling. The added fuel appears on the legs after the stop. If you have seen REM jump upward on the leg before a fuel stop, that was a display error and is fixed.
 

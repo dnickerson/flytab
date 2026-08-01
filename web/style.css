@@ -6823,6 +6823,14 @@ body.fs-overlay-open .radar-loop-controls {
     line-height: 1;
 }
 
+/* FUEL value whose tracked tank state has not been updated in 45+ min.
+   The figure is still shown (it is the pilot's last known-good quantity) but it
+   reads HIGH, so it carries the caution colour plus a trailing '?' in the text —
+   the strip has no room for engine-page.js's UNCONFIRMED banner. */
+.is-value.is-unconfirmed {
+    color: var(--color-caution);
+}
+
 /* FUEL field is tappable — subtle highlight to indicate interactivity */
 .is-field-tap {
     cursor: pointer;
