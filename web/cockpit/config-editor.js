@@ -271,7 +271,14 @@ class ConfigEditor {
             'type': { type: 'text', label: 'Aircraft Type' },
             'cruise_speed_kt': { type: 'number', label: 'Cruise TAS (kt)', min: 50, max: 300 },
             'fuel_capacity_gal': { type: 'number', label: 'Fuel Capacity (gal)', min: 10, max: 200, step: 0.5 },
-            'cruise_gph': { type: 'number', label: 'Fuel Burn (gph)', min: 1, max: 50, step: 0.1 },
+            // climb_gph and descent_gph drive route-table and planning-library fuel
+            // projections but were previously absent from this editor. SAVE CONFIGURATION
+            // writes the WHOLE performance block to flypi_user_aircraft, so an un-editable
+            // key got frozen into localStorage and silently shadowed every later change to
+            // the bundled aircraft-config.json — with no in-app way to see or correct it.
+            'cruise_gph': { type: 'number', label: 'Cruise Fuel Burn (gph)', min: 1, max: 50, step: 0.1 },
+            'climb_gph': { type: 'number', label: 'Climb Fuel Burn (gph)', min: 1, max: 50, step: 0.1 },
+            'descent_gph': { type: 'number', label: 'Descent Fuel Burn (gph)', min: 1, max: 50, step: 0.1 },
             'reserve_gal': { type: 'number', label: 'Reserve Fuel (gal)', min: 0, max: 50, step: 0.1 },
             'fuel_sender_accurate_below_gal': { type: 'number', label: 'Fuel Sender Accuracy Threshold (gal)', min: 0, max: 50, step: 0.1 },
             'vs0_kt': { type: 'number', label: 'Vs0 (kt)', min: 20, max: 100 },
