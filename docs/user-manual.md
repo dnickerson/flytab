@@ -122,11 +122,17 @@ Live engine data from the Pi. Updates approximately every second.
 
 **The FUEL STATUS panel reads the same tracked fuel figure as everything else.** REMAINING, ENDURANCE and RANGE come from your tracked tank state — or from a manual override if you have set one — the same canonical figure behind the fuel tanks widget, the route table's REM column and the DEST badge. They no longer read the EDM's own totalizer, which could disagree with the rest of the fuel displays.
 
-**If no tank quantities have been entered, REMAINING shows `--.-` and ENDURANCE and RANGE show dashes.** That is deliberate: with nothing tracked, the page has no live measurement, and showing full tanks there would tell you there is more fuel on board than is actually known. Enter your fuel — the **✎** button on the fuel tanks widget, or the Fuel Entry screen — to get live numbers back.
+**If no tank quantities have been entered, the whole panel says so.** REMAINING shows `--.-`, ENDURANCE and RANGE show dashes, and the total-fuel bar is empty with the label `--% (--.-/36 gal)` and no colour. That is deliberate: with nothing tracked the page has no live measurement, and showing full tanks there would tell you there is more fuel on board than is actually known. Enter your fuel — the **✎** button on the fuel tanks widget, or the Fuel Entry screen — to get live numbers back.
+
+**Empty tanks look different from untracked tanks.** If you are tracking fuel and the tanks really are down to zero, REMAINING reads `0.0` and the bar is red. A red bar always means low fuel; a blank, colourless bar always means "no fuel data entered." The two never look the same.
+
+**UNCONFIRMED banner.** If more than 45 minutes pass without the tracker integrating a fuel-flow sample (engine data dropped out, or the app was closed), the panel keeps showing the last tracked figure but marks it: REMAINING turns amber and an amber banner reads "UNCONFIRMED — TANK STATE NOT UPDATED IN 45+ MIN. REMAINING MAY READ HIGH; CONFIRM FUEL." The number is kept because it is still your best starting point, but it does not include anything burned during the gap, so it reads high. Confirm or re-enter your fuel to clear it.
 
 **USED (FLIGHT)** shows gallons burned so far this flight, from the Pi's fuel tracker. It previously always read `--.-`.
 
-The total-fuel bar turns amber at 8 gallons and red at 4, matching the DEST badge thresholds. Those two figures are configurable (`enginePage.fuelCautionGal` / `fuelWarningGal`); changing them previously had no effect on this bar, and now does.
+**LEFT (EDM SENDER) / RIGHT (EDM SENDER)** — the two small tank bars under the gauges are raw EDM float-sender readings, *not* the tracked figure. They are labelled that way because they come from a different and less reliable source and can disagree with REMAINING above. On this airframe the senders are only meaningful below 12 gallons per side; above that they read a flat value, so the bar is drawn empty and the number shows `—` rather than a figure you might mistake for a real level. This matches how the fuel tanks widget already treats its `s:` sender readouts.
+
+The total-fuel bar shows fuel remaining against the aircraft's full capacity from the aircraft page (36 gallons, 2 × 18-gallon tanks). It previously used a hardcoded 34, so percentages now read slightly lower for the same gallons — about 3 points lower at half tanks. The bar turns amber at 8 gallons and red at 4, matching the DEST badge thresholds. Those two figures are configurable (`enginePage.fuelCautionGal` / `fuelWarningGal`); changing them previously had no effect on this bar, and now does.
 
 The **TIC vs EDM** row is unchanged — it still compares your tic-mark measurement against the EDM's own totalizer. Disagreement between those two is exactly what the row exists to show, so it deliberately does not use the tracked figure.
 
