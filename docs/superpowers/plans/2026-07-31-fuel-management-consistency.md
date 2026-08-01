@@ -1603,6 +1603,38 @@ git commit -m "fix(fuel): range-calc.js reads canonical fuel state — fixes alw
 
 ### Task 14: route-table.js `_emitLegUpdate()` canonical read
 
+> **SCOPE ADDITION 2026-07-31 (Dana's decision) — three items folded in here.**
+>
+> **1. Stale tracked fuel must not render as a live figure.** `FuelState.getCurrentFuel()` returns
+> tank gallons even when `FuelTankState.needsConfirmation()` is true — i.e. the fuel stream broke for
+> >45 min (in-flight tablet reboot, Pi dropout, app killed) and the burn during that gap was never
+> subtracted, so the figure reads **HIGH**. The route table's REM column, the DEST badge and
+> `_emitLegUpdate`'s `fuelRemaining` all present it with no staleness indication. Task 12 fixed this
+> on the engine page by keeping the number visible but explicitly marking it unconfirmed — Dana's
+> stated preference, since blanking removes a figure the pilot may want in the air while an unmarked
+> stale number is the actual hazard. **Apply the same treatment here, consistently with the engine
+> page's marker** (read that implementation first). Prefer surfacing staleness through
+> `getCurrentFuel()`'s return (e.g. an added field) over each consumer calling
+> `FuelTankState.needsConfirmation()` independently — but note that changing that shared API affects
+> every consumer, so enumerate them and state the effect on each before changing it.
+>
+> **2. Adopt `_emitLegUpdate`'s containment lookup in `_updateSummary`** (deferred from Task 9's
+> review). `_updateSummary` resolves the active flight via `_flightIndex` while `_emitLegUpdate` uses
+> containment (`f => activeIndex >= f.depWpIndex && activeIndex <= f.destWpIndex`). Because
+> `_buildFlights` gives a fuel-stop waypoint the DEPARTING flight's index, flying the final leg INTO
+> a fuel stop makes the badge read 15.0 where arrival fuel is 25.0 — and simultaneously the route
+> strip shows 15.0 while `route-nav-strip.js`'s `_calcFuelAtDest` shows ~25.0. Two fuel-at-destination
+> numbers on screen at once, 10 gal apart. The containment lookup closes both.
+>
+> **3. Gate the planned fallback on `getCurrentFuel().source !== 'capacity'`** (also deferred from
+> Task 9). When scoped distance is 0 but trip distance is not, the badge falls through to
+> `destWp._fuelRem` — a planned POST-REFUEL figure decoupled from actual tanks — measured reading
+> 30.0 with 10 gal aboard. That is the over-reporting direction.
+>
+> **Testability note:** `web/cockpit/route-table.js` is script-tag loaded with no importable-ESM path,
+> so it has NO unit coverage — every route-table change in Tasks 8-11 was verified by scratch
+> harnesses instead. Expect the same here; verify by harness and say plainly what is not covered.
+
 **Files:**
 - Modify: `web/cockpit/route-table.js`
 - Test: manual
