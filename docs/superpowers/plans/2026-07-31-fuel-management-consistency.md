@@ -1631,16 +1631,14 @@ git commit -m "fix(fuel): range-calc.js reads canonical fuel state — fixes alw
 > `destWp._fuelRem` — a planned POST-REFUEL figure decoupled from actual tanks — measured reading
 > 30.0 with 10 gal aboard. That is the over-reporting direction.
 >
-> **4. Include the nav strip in the staleness surface** (found by Task 13). `range-calc.js` feeds the
-> nav strip's FUEL / RANGE / ENDURANCE fields from the same canonical read and is likewise blind to
-> `needsConfirmation()` — a mutation forcing that flag true breaks an engine-page test but nothing in
-> range-calc. Whatever staleness treatment this task lands must cover the nav strip too, or the two
-> instruments will disagree about whether the same number is trustworthy.
->
-> **5. Nav strip conflates dry tanks with no data** (also from Task 13). A genuinely dry tracked state
-> (0.0 gal) renders identically to "nothing tracked" — both `—`. Task 12 eliminated exactly this
-> conflation on the engine page; the nav strip still has it. Under-reporting so not a hazard, but the
-> two instruments are now inconsistent on the edge that matters most.
+> **4-5. OBSOLETE as written — corrected 2026-08-01.** These items told this task to cover
+> `range-calc.js`/the nav strip for staleness and the dry-tank/no-data conflation. Task 17 DELETED
+> `range-calc.js` and `nav-strip.js` (commit ff4f0f8) after confirming neither was ever mounted, and
+> migrated the display that is actually mounted — `instrument-strip.js` — including both the staleness
+> marker and the dry-tank distinction (commit a030d9a). **Do not go looking for those files.** The
+> surviving obligation is only that this task's route-table staleness presentation MATCHES
+> `instrument-strip.js`'s and `engine-page.js`'s, so the three instruments agree about whether a number
+> can be trusted. Read both before choosing a presentation; do not invent a third.
 >
 > **Testability note:** `web/cockpit/route-table.js` is script-tag loaded with no importable-ESM path,
 > so it has NO unit coverage — every route-table change in Tasks 8-11 was verified by scratch
@@ -1872,3 +1870,36 @@ at line 181, so `_showRangeRing` is permanently false and `_drawRangeRing` never
 `docs/user-manual.md` says "The nav strip's RANGE and FUEL fields now work" and "all three come alive".
 Both are false — nothing renders them. Also correct the pre-existing line calling the nav-strip FUEL field
 "the authoritative fuel-state display". Telling a pilot a blank fuel instrument works is worse than silence.
+
+
+---
+
+### Task 18: route-nav-strip.js — port or delete (do BEFORE Task 14)
+
+**Added 2026-08-01 (Dana's decision), sequenced ahead of Task 14 deliberately:** if this component is
+mounted it becomes a live fuel surface, and Task 14's staleness work would then have to cover it. Deciding
+first avoids migrating it twice or shipping a fourth inconsistent fuel display.
+
+`web/cockpit/route-nav-strip.js` (10 KB) is the THIRD dead component found on this branch — no `<script>`
+tag in `web/index.html` (verified: 0 matches), no instantiation anywhere, zero call sites. It joins
+`NavStrip` and `RangeCalc`, both deleted in Task 17.
+
+It carries a **FUEL@DEST field with reserve colouring** that Task 17 judged "closer to what the manual
+promised than range-calc ever had". That is the only thing here worth salvaging.
+
+**Apply the same port-or-drop discipline Task 17 used — decide with evidence, not by preference:**
+1. Read `_calcFuelAtDest` and the reserve colouring in full. Determine whether each actually WORKS, or is
+   independently broken the way range-calc's two candidates were (`_fuelForRemainingRoute` read a
+   non-existent `_activeWpIndex` so it summed the whole route from waypoint 0; the colouring's gph chain
+   omitted `fuel_flow`, the name `engine_monitor.py` emits, so it bailed before any colour branch).
+   Check the field names against what the Pi actually emits and what `FuelState` actually returns.
+2. If the colouring is sound and worth having, PORT it into `instrument-strip.js` — the mounted display —
+   rather than mounting a third strip. It must obey a **stale-never-green precedence rule**: a figure
+   marked unconfirmed must never render in a reassuring colour, whatever the reserve arithmetic says.
+   Note the route table already computes fuel-at-destination correctly and live, so check for duplication
+   before adding a second computation.
+3. Then DELETE `web/cockpit/route-nav-strip.js` and any test/harness that only drives it, and verify
+   nothing still references `RouteNavStrip` or its element ids.
+
+If the colouring turns out broken or duplicative, say so with evidence and delete without porting — that
+is a success, not a shortfall.
