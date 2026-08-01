@@ -51,8 +51,8 @@ class EnginePage {
             carbTempCaution: 40,    // icing range upper (degrees F)
             carbTempDanger: -15,    // icing range lower (degrees F)
             fuelCapacity: 34,
-            fuelLowGal: 8,
-            fuelCriticalGal: 4,
+            fuelCautionGal: 8,
+            fuelWarningGal: 4,
             trendChartMinutes: 30,
             stickyValveWarmupMin: 10,
             stickyValveEgtRatio: 0.50,
@@ -423,8 +423,22 @@ class EnginePage {
         const oat       = d.oat ?? 0;
         const gs        = d.speed_kts ?? d.ground_speed ?? 0;
 
-        const gallonsRem = d.gallons_rem ?? d.fuel_remaining_gal ?? d.Gallons_Rem ?? d.Fuel_Remaining ?? d.fuel_remaining ?? 0;
-        const fuelUsed   = d.flight_fuel_used ?? 0;
+        // Canonical live fuel read (manual override > tracked tank state > capacity).
+        // A `capacity` source means nothing is actually being tracked — it is a planning
+        // default, not a measurement. Showing full tanks on a live instrument would tell
+        // the pilot there is more fuel than is known to exist, so fall through to this
+        // page's existing "no data" placeholders instead.
+        const fuelRead = (typeof FuelState !== 'undefined')
+            ? FuelState.getCurrentFuel()
+            : { gallons: 0, source: 'none' };
+        const gallonsRem = (fuelRead.source === 'capacity') ? 0 : fuelRead.gallons;
+        // The EDM's own totalizer (EDM field 12). Used ONLY by the TIC vs EDM
+        // cross-check row below, whose whole purpose is to surface disagreement
+        // between the tic-mark measurement and the EDM — it must stay an EDM read.
+        const edmFuelRem = d.gallons_rem ?? d.fuel_remaining_gal ?? d.Gallons_Rem ?? d.Fuel_Remaining ?? d.fuel_remaining ?? 0;
+        // engine_monitor.get_status() nests the Pi fuel tracker under `fuel`;
+        // there is no top-level flight_fuel_used.
+        const fuelUsed   = d.fuel?.flight_fuel_used ?? 0;
         const fuelL      = d.fuel_l1 ?? d.Fuel_L1 ?? d.Fuel_Left ?? d.edm_fuel_left ?? 0;
         const fuelR      = d.fuel_l2 ?? d.Fuel_L2 ?? d.Fuel_Right ?? d.edm_fuel_right ?? 0;
 
@@ -557,14 +571,14 @@ class EnginePage {
         if (this._dom.fuelBar) {
             this._dom.fuelBar.style.width = fuelPct + '%';
             this._dom.fuelBar.className = 'ep-fuel-bar' +
-                (gallonsRem <= this._cfg.fuelCriticalGal ? ' critical' :
-                 gallonsRem <= this._cfg.fuelLowGal ? ' low' : '');
+                (gallonsRem <= this._cfg.fuelWarningGal ? ' critical' :
+                 gallonsRem <= this._cfg.fuelCautionGal ? ' low' : '');
         }
         this._setText('ep-fuel-bar-label',
             `${Math.round(fuelPct)}% (${gallonsRem.toFixed(1)}/${cap} gal)`);
 
         /* ---- TIC vs EDM variance ---- */
-        this._updateTicEdm(gallonsRem);
+        this._updateTicEdm(edmFuelRem);
 
         /* ---- Section 6: Efficiency ---- */
         if (fuelFlow > 0 && gs > 40) {

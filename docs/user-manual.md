@@ -120,6 +120,16 @@ Live engine data from the Pi. Updates approximately every second.
 | **Oil Temp** | Oil temperature |
 | **Oil Press** | Oil pressure |
 
+**The FUEL STATUS panel reads the same tracked fuel figure as everything else.** REMAINING, ENDURANCE and RANGE come from your tracked tank state — or from a manual override if you have set one — the same canonical figure behind the fuel tanks widget, the route table's REM column and the DEST badge. They no longer read the EDM's own totalizer, which could disagree with the rest of the fuel displays.
+
+**If no tank quantities have been entered, REMAINING shows `--.-` and ENDURANCE and RANGE show dashes.** That is deliberate: with nothing tracked, the page has no live measurement, and showing full tanks there would tell you there is more fuel on board than is actually known. Enter your fuel — the **✎** button on the fuel tanks widget, or the Fuel Entry screen — to get live numbers back.
+
+**USED (FLIGHT)** shows gallons burned so far this flight, from the Pi's fuel tracker. It previously always read `--.-`.
+
+The total-fuel bar turns amber at 8 gallons and red at 4, matching the DEST badge thresholds. Those two figures are configurable (`enginePage.fuelCautionGal` / `fuelWarningGal`); changing them previously had no effect on this bar, and now does.
+
+The **TIC vs EDM** row is unchanged — it still compares your tic-mark measurement against the EDM's own totalizer. Disagreement between those two is exactly what the row exists to show, so it deliberately does not use the tracked figure.
+
 The **engine advisory banner** (below the status bar, on any tab) appears in red if the ML anomaly detector finds an abnormal pattern in the current engine data. Tap it to see which parameters are outside normal for this phase of flight.
 
 **Sticky-valve caution (startup only)** — During engine start, if one cylinder's EGT rise noticeably lags the other three, you may see "Cylinder N EGT rise lagging others during startup (possible sticky valve) — UNVALIDATED CHECK, confirm on ground." This check is new and its sensitivity has not yet been tuned against a confirmed sticky-valve event — treat an alert as a prompt to inspect on the ground, not a confirmed diagnosis.
