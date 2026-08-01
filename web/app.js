@@ -58,7 +58,6 @@ class FlyTabApp {
         this.enginePanel = null;
         this.trackLog = null;
         this.deviceStatus = null;
-        this.rangeCalc = null;
         this.routePlannerPanel = null;
 
         // Cockpit redesign components
@@ -855,10 +854,6 @@ class FlyTabApp {
         );
         this.deviceStatus.init();
 
-        // Range calculator
-        this.rangeCalc = new RangeCalc(this.stratuxClient, this.enginePanel, this.cockpitMap);
-        this.rangeCalc.init();
-
         // ── Power Tradeoff Panel ─────────────────────────────────────────────
         if (typeof PowerTradeoff !== 'undefined') {
             this.powerTradeoff = new PowerTradeoff();
@@ -1259,7 +1254,6 @@ class FlyTabApp {
         if (this.instrumentStrip) this.instrumentStrip.setActivePlan(normalized);
         if (this.routeTable && !skipRouteTable) this.routeTable.loadPlan(normalized);
         if (this.cockpitMap && wps.length >= 2) this.cockpitMap.setRoute(wps);
-        if (this.rangeCalc) this.rangeCalc.setPlan(normalized);
         // routePlannerPanel syncs via open() when the pilot explicitly opens it;
         // no live-sync needed while the panel is closed.
 
