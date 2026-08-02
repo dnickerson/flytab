@@ -52,6 +52,18 @@ sed -i "s/versionCode [0-9]*/versionCode $VERSION_CODE/" "$REPO_ROOT/android/app
 sed -i "s/versionName \"[^\"]*\"/versionName \"$VERSION_NUMERIC\"/" "$REPO_ROOT/android/app/build.gradle"
 echo "[0] Version: $VERSION (code $VERSION_CODE) → build.gradle updated"
 
+# Publish the canonical user manual into web/ so the in-app viewer serves it.
+#
+# CLAUDE.md names docs/user-manual.md as the pilot-facing reference, but the app
+# fetches '/user-manual.md' (tab-bar.js), i.e. web/user-manual.md. Those two drifted
+# 189 lines apart — the in-app manual still described pre-fuel-audit behaviour while
+# docs/ carried every update. Generating the served copy at build time keeps one file
+# authoritative instead of relying on remembering to edit both.
+#
+# web/user-manual.md is now a BUILD ARTIFACT. Edit docs/user-manual.md.
+echo "[0b] Publishing user manual → web/user-manual.md"
+cp "$REPO_ROOT/docs/user-manual.md" "$REPO_ROOT/web/user-manual.md"
+
 # Sync web assets into Android
 echo ""
 echo "[1] Syncing web assets..."

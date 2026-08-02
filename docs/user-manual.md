@@ -168,6 +168,12 @@ Hides the instrument strip and route table so the map fills the full screen. Use
 
 ---
 
+### TMR — Timer
+
+A floating countdown/count-up timer overlay that stays visible over any other tab. Use for holding, approach timing, or any en-route interval. Tap TMR again to dismiss it without losing the timer state.
+
+---
+
 ### MORE — Secondary Functions
 
 Opens a right-side drawer with infrequently used actions, organized in three sections.
@@ -484,6 +490,8 @@ Planned fuel figures — the route table's FUEL and REM columns, the TOTAL foote
 These are **measured, not book numbers.** All three are the **85th-percentile** fuel flow recorded by the engine monitor for that phase, across 53 logged flights in N194JT — deliberately the high side of normal rather than the average, because an under-estimate quietly over-states the fuel you will have left, and that is the error that runs tanks dry. Climb p85 is 15.1 gph, carried as 15.0; descent p85 is 6.9. Cruise comes from the same logs, narrowed first to the power setting you actually fly: of the cruise-phase samples recorded at 65–69% power — 7,879 of them — the 85th percentile is **8.4 gph.** The *median* of that same set is 8.10, and 8.10 is what the aircraft configuration's measured power table carries for the 61–65% band, because that table is built from medians. The planning figure is deliberately not the median: a median plans for the average day.
 
 **Descent now plans at 6.9 gph instead of the old 4.0.** The 4.0 figure was an estimate and it was wrong in the unsafe direction — real descents in this airplane burn nearly 3 gph more than that. Expect route FUEL and REM figures, and the DEST badge, to read **slightly more fuel burned and slightly less remaining than they used to**, on any leg that ends at an airport. On a 150 nm leg the whole-leg planned burn rises by about 0.3 gal from 4,500 ft, 0.45 gal from 6,500 ft, and 0.75 gal from 10,500 ft. Over a three-leg day that is roughly 2 gallons. Nothing is broken — the old numbers were optimistic and the new ones are not.
+
+**Changing these numbers.** All six fuel figures are editable on the aircraft page (MORE → Configuration): Fuel Capacity, Cruise Fuel Burn, Climb Fuel Burn, Descent Fuel Burn, Reserve Fuel, and the Fuel Sender Accuracy Threshold. Climb and descent burn were previously absent from that page even though both drive every planned figure above — so if you had ever tapped SAVE CONFIGURATION, a stale descent figure could sit in your saved settings shadowing the shipped one, with no way to see or correct it. Both fields are now shown. Note that saving stores your whole performance block, so a value you save keeps overriding later updates to that figure until you change it back; if planned burn ever looks wrong after an update, check this page first.
 
 **Which cruise number is actually in use — there are three.** Cruise burn is not a single fixed figure, and which one sits behind the cruise rows depends on how those rows were produced:
 
