@@ -150,6 +150,25 @@
     --color-fuel-ok:     #00aaff;
     --color-terrain:     #c8961e;   /* terrain highlight — brighter for sunlight */
 
+    /* Text colour for controls FILLED with --accent or --status-danger.
+       This was referenced in 14 declarations across style.css (plus app.js,
+       logbook.js, thermal-monitor.js) and DEFINED NOWHERE, so every one of those
+       `color:` declarations was invalid and dropped at parse time. The label fell
+       back to the inherited --text-primary (#1a1a2e), measured at 3.06:1 on
+       --accent (#0066cc) in Chrome. Defining it here fixes all of them at once. */
+    --text-on-dark:      #ffffff;
+
+    /* Warning colours for TEXT ON A LIGHT SURFACE.
+       --color-caution / --color-danger above are tuned for the old dark cockpit
+       background and are still correct where they are used as solid badge FILLS
+       with black/white text on top (e.g. .fo-grade-good, .ep-fuel-stale). As
+       FOREGROUND text on --bg-surface (#f5f5f5) they measure 1.51:1 and 3.37:1 —
+       effectively invisible on the tablet in direct sun. Cockpit data that renders
+       as coloured text on a light sheet must use the two below instead; both are
+       >= 7:1 on #f5f5f5 (measured in Chrome, see the fuel colour block). */
+    --color-caution-on-light: #6b4a00;   /* 7.40:1 on #f5f5f5 */
+    --color-danger-on-light:  #a30d0d;   /* 7.35:1 on #f5f5f5 */
+
     /* Navaid type colors — shared by map, popup, legend */
     --navaid-vor:        #00ccaa;
     --navaid-ndb:        #cc8800;
@@ -1672,18 +1691,37 @@ body {
     color: #f87171 !important;
 }
 
-/* ========== Fuel Color Coding ========== */
+/* ========== Fuel Color Coding ==========
+
+   .fuel-yellow / .fuel-red are the route table's REM column (route-table.js
+   _fuelRemCell). Both carried literal dark-theme values computed against the old
+   cockpit background (#1a1a2e). The route table renders on
+   .route-table-sheet { background: var(--bg-surface) } = #f5f5f5, where Chrome
+   measured them at 1.53:1 (#fbbf24) and 2.54:1 (#f87171) — invisible in sun.
+
+   That became load-bearing on this branch: _fuelRemCell now routes the STALE
+   signal through .fuel-yellow, so the amber half of the two-signal stale
+   convention was not being displayed at all, and a <= 4 gal REM — the loudest
+   fuel warning in the table — rendered at 2.54:1.
+
+   Repointed at the on-light foreground tokens. NOTE these are NOT
+   --color-caution / --color-danger: those resolve to #ffc000 / #ff3030 in this
+   app (the #b87000 / #cc2222 values live only inside the [data-mode="cockpit"]
+   block, which is never applied — FlyTab is light-theme only), i.e. 1.51:1 and
+   3.37:1 here. Verified in Chrome, not assumed. (SDD Task S5.)
+
+   .fuel-green has no JS caller anywhere in web/ and is left as-is. */
 
 .fuel-green {
     color: #4ade80 !important;
 }
 
 .fuel-yellow {
-    color: #fbbf24 !important;
+    color: var(--color-caution-on-light) !important;   /* 7.40:1 on #f5f5f5 */
 }
 
 .fuel-red {
-    color: #f87171 !important;
+    color: var(--color-danger-on-light) !important;    /* 7.35:1 on #f5f5f5 */
     animation: fuel-blink 1s ease-in-out infinite;
 }
 
