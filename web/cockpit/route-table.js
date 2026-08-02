@@ -1289,6 +1289,41 @@ class RouteTable {
      * Compute enroute data for all waypoints: dist, ETE, fuel remaining.
      * Uses per-segment data (CLB/CRZ/DES) when available from flight plan.
      */
+    /**
+     * Planned cruise burn (gph) for a user-selected cruise-power override.
+     *
+     * Returns the MEASURED figure from `performance.power_settings[]` — the band
+     * table built from real EDM flight logs — not a theoretical SFC number.
+     * Until 2026-08-01 all three override sites computed
+     * `(pct/100) * max_hp * lop_sfc`, which at 65% yields 7.84 gph against a
+     * measured 8.1 and a planned 8.4: selecting a power made the route table
+     * show MORE fuel remaining than selecting nothing. Under-planning burn is
+     * the direction that runs tanks dry, so the formula is gone.
+     *
+     * Selecting the aircraft's CONFIGURED cruise power is handled by the caller,
+     * not here — see `cruisePwrOverride` in `_computeEnroute`.
+     *
+     * @param {number} pct  selected cruise power, percent
+     * @returns {number|null} measured band gph, or null when no answer is
+     *   available (no band table, or the planning library has not finished
+     *   loading). Null means "leave the planned figure alone" — callers must
+     *   NOT substitute a formula.
+     */
+    _cruiseBandGph(pct) {
+        const powerSettings = CockpitConfig.aircraft('performance.power_settings');
+        if (!powerSettings || !powerSettings.length) return null;
+        // gphForPowerPct (nearest band by pct_mid) lives in the planning library
+        // and reaches this classic script via window.FlyTabPlanning, the same way
+        // bearing()/windCorrectedMagHdg() below already do. That object is
+        // populated asynchronously by shared/planning/index.js, so it can legitimately
+        // be absent on a very early render — hence the null return rather than a
+        // local reimplementation.
+        if (typeof FlyTabPlanning !== 'undefined' && FlyTabPlanning.gphForPowerPct) {
+            return FlyTabPlanning.gphForPowerPct(powerSettings, pct);
+        }
+        return null;
+    }
+
     /** Calculate manifold pressure from power%, RPM, and max RPM */
     _mpFromPower(pwr, rpm, maxRpm) {
         if (pwr == null || rpm == null || maxRpm == null) return null;
@@ -1334,9 +1369,11 @@ class RouteTable {
         const cfgCruiseRpm = CockpitConfig.aircraft('performance.cruise_rpm') ?? null;
         const cfgCruiseMp = CockpitConfig.aircraft('performance.cruise_mp') ?? null;
         const cfgCruisePwr = CockpitConfig.aircraft('performance.cruise_pwr_pct') ?? null;
-        const maxHp = CockpitConfig.aircraft('performance.max_hp') ?? 180;
         const maxRpm = CockpitConfig.aircraft('performance.max_rpm') ?? 2700;
-        const lopSfc = CockpitConfig.aircraft('performance.lop_sfc') ?? 0.067;
+        // NOTE: performance.max_hp / performance.lop_sfc are deliberately NOT read
+        // here any more. They fed the theoretical SFC cruise-burn formula that this
+        // file used for power overrides; see _cruiseBandGph above. Do not reintroduce
+        // them to "compute" a cruise burn — the measured band table is the source.
 
         // Phase-specific config — hoisted out of the per-segment inner loop so
         // these are read once per _computeEnroute call, not once per segment.
@@ -1353,8 +1390,32 @@ class RouteTable {
         const cfgDesRpm   = CockpitConfig.aircraft('performance.descent_rpm') ?? cfgCruiseRpm;
         const cfgDesMp    = CockpitConfig.aircraft('performance.descent_mp') ?? cfgCruiseMp;
 
-        // Cruise power override from user selection
-        const cruisePwrOverride = this._cruisePower;
+        // Cruise power override from user selection.
+        //
+        // Selecting the aircraft's own configured cruise power must be IDENTICAL
+        // to selecting nothing — same burn, same TAS, same ETE, same REM. The plan's
+        // CRZ segments were already built at that power (8.4 gph, the p85 of the 65%
+        // cruise distribution — see RoutePlannerPanel.CRUISE_GPH_AT_CONFIGURED_POWER),
+        // so the override is collapsed to null here and the whole CRZ override block
+        // below becomes a no-op. That makes the equality exact by construction rather
+        // than by a fifth hand-maintained copy of the 8.4 constant.
+        //
+        // The override is ALSO collapsed to null when the band table can give no
+        // answer for the selected power. The override does more than set burn — it
+        // rescales TAS, and therefore ETE — so half-applying it (new speed, planned
+        // burn) shows LESS fuel used over the same distance. Either the whole
+        // override runs on measured data or none of it runs.
+        const cruisePwrOverrideRaw = this._cruisePower;
+        const atConfiguredCruise = cruisePwrOverrideRaw != null && cfgCruisePwr != null
+            && Number(cruisePwrOverrideRaw) === Number(cfgCruisePwr);
+        // Measured burn for the selected power, looked up once per compute rather
+        // than per segment.
+        const overrideBandGph = (cruisePwrOverrideRaw != null && !atConfiguredCruise)
+            ? this._cruiseBandGph(cruisePwrOverrideRaw)
+            : null;
+        const cruisePwrOverride = (atConfiguredCruise || overrideBandGph == null)
+            ? null
+            : cruisePwrOverrideRaw;
 
         let cumulativeDistRemaining = 0;
 
@@ -1443,7 +1504,9 @@ class RouteTable {
 
                     // Apply cruise power override to CRZ segments
                     if (seg.phase === 'CRZ' && cruisePwrOverride) {
-                        segGph = (cruisePwrOverride / 100) * maxHp * lopSfc;
+                        // Measured band burn. Non-null whenever cruisePwrOverride is
+                        // set — the two are decided together above.
+                        segGph = overrideBandGph;
                         const origPwr = seg.percent_power || cfgCruisePwr || 65;
                         const tasRatio = Math.sqrt(cruisePwrOverride / origPwr);
                         segTas = (seg.tas || cfgCruiseSpeed) * tasRatio;
@@ -1482,7 +1545,10 @@ class RouteTable {
                     wp._pwr = cruisePwrOverride;
                     wp._rpm = cfgCruiseRpm;
                     wp._mp = this._mpFromPower(cruisePwrOverride, cfgCruiseRpm, maxRpm) || cfgCruiseMp;
-                    const overrideGph = (cruisePwrOverride / 100) * maxHp * lopSfc;
+                    // (No gph here: this block only sets the waypoint's DISPLAY
+                    // engine values. Burn was already accumulated per-segment above
+                    // from overrideBandGph. The old `overrideGph` local computed the
+                    // SFC formula and was never read — removed with the formula.)
                     const origPwr = displaySeg.percent_power || cfgCruisePwr || 65;
                     const tasRatio = Math.sqrt(cruisePwrOverride / origPwr);
                     wp._tas = Math.round((displaySeg.tas || cfgCruiseSpeed) * tasRatio);
@@ -1526,9 +1592,10 @@ class RouteTable {
                     wp._phase = 'CRZ';
                 }
 
-                const fallbackGph = cruisePwrOverride
-                    ? (cruisePwrOverride / 100) * maxHp * lopSfc
-                    : cfgGph;
+                // Seg-less leg: measured band burn when a power is selected, else the
+                // config cruise gph (9.0 — the deliberately higher self-generated-row
+                // figure, unchanged).
+                const fallbackGph = cruisePwrOverride != null ? overrideBandGph : cfgGph;
                 const fallbackSpeed = gs > 30 ? gs : cfgCruiseSpeed;
 
                 wp._tas = wp.tas || cfgCruiseSpeed;
