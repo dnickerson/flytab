@@ -6290,6 +6290,23 @@ body.fs-overlay-open .radar-loop-controls {
     text-align: center;
 }
 
+/* Tracked tank figure that FuelTankState considers unconfirmed (>45 min without an
+   integrated sample). The figure is still SHOWN — it is the pilot's last known-good
+   quantity — but it reads HIGH, so it carries the caution colour plus a trailing '?'
+   in the text: the same two signals instrument-strip.js uses in its own cramped
+   field. The widget is far too small for engine-page.js's full-width UNCONFIRMED
+   banner. (SDD Task S3.)
+
+   Uses --color-caution-on-light, not --color-caution: this widget sits on a light
+   background, where --color-caution (#ffc000) measures 1.51:1. The sibling stale
+   markers (.is-value.is-unconfirmed, .ep-gauge-value.ep-unconfirmed,
+   .wb-result-value.wb-unconfirmed, .pt-amber/.pt-yellow/.pt-red) still point at the
+   dark-tuned tokens and are still invisible on the tablet — see the S5 report; they
+   were left alone only because they were outside the scope of this task. */
+.ftw-unconfirmed {
+    color: var(--color-caution-on-light) !important;
+}
+
 /* Tank-select badge (tap to switch) */
 .ftw-badge {
     margin-top: 4px;
@@ -6988,6 +7005,21 @@ body.fs-overlay-open .radar-loop-controls {
 }
 .pt-table tbody td:first-child { text-align: left; }
 .pt-table tbody tr:last-child td { border-bottom: none; }
+
+/* Power band with `samples: 0` in aircraft-config.json — its TAS and GPH are
+   interpolated estimates, not measured flight data. Marked, never removed: the
+   rows are real power settings the pilot can fly, they just have no data behind
+   them. Deliberately NOT muted — muting would drop a cockpit value below the
+   contrast floor. The `~` prefix and this tag carry the signal instead. (SDD S2.) */
+.pt-est-tag {
+    font-family: var(--font-ui);
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.4px;
+    color: var(--color-caution-on-light);
+    vertical-align: 1px;
+    margin-left: 3px;
+}
 
 /* Current power row */
 .pt-row-current {

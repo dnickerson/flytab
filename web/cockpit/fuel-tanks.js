@@ -48,7 +48,14 @@ class FuelTanksDisplay {
         this._onConfirmPrompt = (e) => this._showConfirmBanner(e.detail?.active_tank);
         window.addEventListener('fueltankstate:confirm_prompt', this._onConfirmPrompt);
 
-        this._timerInterval = setInterval(() => this._updateTimers(), 10000);
+        // Full re-render, not just the tank timers. FuelTankState._checkStaleness()
+        // calls _save() but NOT _fire(), so crossing the 45-min line emits no
+        // 'fueltankstate:changed' event — without this the unconfirmed marking would
+        // not appear until some unrelated state change happened to repaint the
+        // widget, which in a quiet cockpit may be never. _render() is idempotent
+        // (it only writes textContent, className and bar heights from current state)
+        // and calls _updateTimers() itself, so this is a superset of the old tick.
+        this._timerInterval = setInterval(() => this._render(), 10000);
 
         // If state exists but is stale, show recovery modal
         if (!FuelTankState.needsConfirmation()) {
@@ -360,12 +367,39 @@ class FuelTanksDisplay {
     /* ------------------------------------------------------------------
      * Rendering
      * ----------------------------------------------------------------*/
+    /**
+     * Render the tracked tank figures.
+     *
+     * A tracked figure FuelTankState considers unconfirmed (>45 min without an
+     * integrated sample) is STILL SHOWN, marked, rather than blanked. This widget
+     * used to fall through to _renderEmpty() on needsConfirmation(), which was
+     * survivable while staleness was only evaluated at page load; now that
+     * FuelTankState._checkStaleness() runs on every getState() it means the most
+     * prominent per-tank display in the cockpit drops to '--' mid-flight while the
+     * engine page, the instrument strip, the route table's REM column, the W&B
+     * overlay and the PowerTradeoff panel all keep showing the last figure marked
+     * unconfirmed. Blanking throws away the pilot's last known-good quantity at
+     * exactly the moment he most needs a starting point (see the DECISION note in
+     * engine-page.js ~466 and FuelState.getCurrentFuel()).
+     *
+     * The marking is the same two signals instrument-strip.js carries in its own
+     * cramped 64px field — a trailing '?' on the value and the caution colour —
+     * not a new visual language. A stale figure always reads HIGH (the burn during
+     * the gap was never subtracted), so:
+     *   STALE-NEVER-PLAIN: the bars never render in the in-limits style while the
+     *   state is unconfirmed, however comfortable the quantity looks.
+     *
+     * The genuine no-state case (nothing ever tracked) still renders empty — there
+     * is no last known-good quantity to preserve there.
+     */
     _render() {
         const state = FuelTankState.getState();
-        if (!state || FuelTankState.needsConfirmation()) {
+        if (!state) {
             this._renderEmpty();
             return;
         }
+        const stale = FuelTankState.needsConfirmation();
+        const q = stale ? '?' : '';
 
         let cautionGal = 8, warningGal = 4;
         try {
@@ -385,12 +419,15 @@ class FuelTanksDisplay {
         const barCls = (gal) =>
             gal <= warningGal ? 'ftw-bar-fill ftw-bar-warn' :
             gal <= cautionGal ? 'ftw-bar-fill ftw-bar-caution' :
+            stale             ? 'ftw-bar-fill ftw-bar-caution' :
             'ftw-bar-fill';
         this._dom.barL.className = barCls(state.left_gal);
         this._dom.barR.className = barCls(state.right_gal);
 
-        this._dom.galL.textContent = state.left_gal.toFixed(1);
-        this._dom.galR.textContent = state.right_gal.toFixed(1);
+        this._dom.galL.textContent = state.left_gal.toFixed(1) + q;
+        this._dom.galR.textContent = state.right_gal.toFixed(1) + q;
+        this._dom.galL.classList.toggle('ftw-unconfirmed', stale);
+        this._dom.galR.classList.toggle('ftw-unconfirmed', stale);
 
         const activeL = state.active_tank === 'L';
         const activeR = state.active_tank === 'R';
@@ -400,7 +437,8 @@ class FuelTanksDisplay {
         this._dom.badgeR.classList.toggle('ftw-badge-active', activeR);
 
         const total = state.left_gal + state.right_gal;
-        this._dom.total.textContent = total.toFixed(1) + 'g';
+        this._dom.total.textContent = total.toFixed(1) + 'g' + q;
+        this._dom.total.classList.toggle('ftw-unconfirmed', stale);
 
         const pctTotal = Math.min(1, Math.max(0, total / (this._tankCapacity * 2)));
         this._dom.barTotal.style.height = (pctTotal * 100).toFixed(1) + '%';
@@ -413,6 +451,10 @@ class FuelTanksDisplay {
     }
 
     _renderEmpty() {
+        this._dom.galL.classList.remove('ftw-unconfirmed');
+        this._dom.galR.classList.remove('ftw-unconfirmed');
+        this._dom.total.classList.remove('ftw-unconfirmed');
+        this._dom.end.classList.remove('ftw-unconfirmed');
         this._dom.galL.textContent = '--';
         this._dom.galR.textContent = '--';
         this._dom.timerL.textContent = '';
@@ -431,18 +473,25 @@ class FuelTanksDisplay {
         this._dom.imbal.style.display = 'none';
     }
 
+    /* Endurance is total / GPH, so it inherits the tracked total's trust level: a
+       stale total reads HIGH, which makes the endurance read LONG. It carries the
+       same '?' + caution marking rather than being blanked (see _render). GPH itself
+       is a live engine read, not a tank-state figure, so it is never marked. */
     _renderEndurance() {
         const state = FuelTankState.getState();
-        if (!state || FuelTankState.needsConfirmation()) return;
+        if (!state) return;
+        const stale = FuelTankState.needsConfirmation();
         const total = state.left_gal + state.right_gal;
         if (this._lastGph > 0) {
             this._dom.flow.textContent = this._lastGph.toFixed(1);
             const { hours, minutes } = FuelEngine.endurance(total, this._lastGph);
-            this._dom.end.textContent = `${hours}:${String(minutes).padStart(2, '0')}`;
+            this._dom.end.textContent =
+                `${hours}:${String(minutes).padStart(2, '0')}` + (stale ? '?' : '');
         } else {
             this._dom.flow.textContent = '--';
             this._dom.end.textContent = '--';
         }
+        this._dom.end.classList.toggle('ftw-unconfirmed', stale && this._lastGph > 0);
     }
 
     _updateTimers() {
