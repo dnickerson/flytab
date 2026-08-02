@@ -1954,7 +1954,17 @@ class FlyTabApp {
             // position:fixed, and fuel-overlay.js's z-index (9000) is below this
             // overlay's (9998), so it would otherwise render invisibly underneath.
             overlay.style.display = 'none';
-            this.fuelOverlay.show();
+            // requireFreshTics: this is the in-flight fuel-stop door. fuel-overlay.js's
+            // show() restores the PREVIOUS (departure) measurement into the tic fields,
+            // and both of its write paths — APPLY TIC MEASUREMENT and RECORD FUEL STOP —
+            // call FuelTankState.init(), which re-stamps initialized_at. That timestamp is
+            // the ONLY thing refreshMeasureStatus() above compares against overlayShownAt,
+            // so an untouched restored reading would flip this overlay's gate to
+            // "Measured: <departure gallons>" with nothing measured. With the flag set,
+            // both paths refuse a reading the pilot did not enter or confirm this session.
+            // The preflight call sites (tab-bar.js MORE → Fuel Entry, instrument-strip.js)
+            // deliberately pass nothing and keep the permissive re-apply behaviour.
+            this.fuelOverlay.show({ requireFreshTics: true });
             checkClosedInterval = setInterval(() => {
                 if (!this.fuelOverlay.visible) {
                     clearInterval(checkClosedInterval);

@@ -324,7 +324,8 @@ describe('structural contract with app.js', () => {
         expect(recordBody).toMatch(/this\._leftTic === 0 && this\._rightTic === 0/);
 
         const showBody = FUEL_OVERLAY_SRC.slice(
-            FUEL_OVERLAY_SRC.indexOf('    show() {'),
+            // show(opts = {}) since the APPLY guard — see fuel-overlay-apply-guard.test.js.
+            FUEL_OVERLAY_SRC.indexOf('    show(opts'),
             FUEL_OVERLAY_SRC.indexOf('    hide() {'));
         expect(showBody).toMatch(/this\._ticsTouchedSinceShow = false/);
     });

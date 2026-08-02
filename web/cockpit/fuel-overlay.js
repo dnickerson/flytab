@@ -22,10 +22,15 @@ class FuelOverlay {
         // ± button since the current show(). show() restores the PREVIOUS
         // measurement into the tic fields, so a fuel stop recorded without touching
         // them would write the departure figure back as if it had just been measured.
-        // Only _recordFuelStop() requires this; _applyMeasurement() deliberately does
-        // not, so the pilot can still reopen the overlay preflight and re-apply a
-        // restored reading.
         this._ticsTouchedSinceShow = false;
+        // Which door the overlay was opened from. show() takes no argument from the
+        // preflight call sites (MORE → Fuel Entry in tab-bar.js, the instrument-strip
+        // fuel readout), where re-applying a restored reading is a legitimate
+        // re-confirmation and must keep working. app.js's in-flight fuel-stop overlay
+        // opens it with show({ requireFreshTics: true }): there the restored reading is
+        // the DEPARTURE reading, and BOTH write paths into canonical FuelTankState —
+        // _applyMeasurement() and _recordFuelStop() — must refuse it.
+        this._requireFreshTics = false;
         this._buildDOM();
     }
 
@@ -135,6 +140,9 @@ class FuelOverlay {
 
             <!-- D) APPLY -->
             <button class="fo-apply-btn" id="fo-apply">APPLY TIC MEASUREMENT</button>
+            <!-- Reuses .fo-add-status styling (hidden while empty) so a refused APPLY
+                 explains itself instead of silently doing nothing. -->
+            <div class="fo-add-status" id="fo-apply-status"></div>
 
             <!-- E) FUEL ADDED -->
             <div class="fo-section-title">FUEL ADDED</div>
@@ -233,6 +241,7 @@ class FuelOverlay {
             addPrice: this._el.querySelector('#fo-add-price'),
             addRecord: this._el.querySelector('#fo-add-record'),
             addStatus: this._el.querySelector('#fo-add-status'),
+            applyStatus: this._el.querySelector('#fo-apply-status'),
             histBody:  this._el.querySelector('#fo-hist-body'),
             kfFilled:  this._el.querySelector('#fo-kf-filled'),
             kfUsed:    this._el.querySelector('#fo-kf-used'),
@@ -336,12 +345,23 @@ class FuelOverlay {
     /* ------------------------------------------------------------------
      * Show / Hide
      * ----------------------------------------------------------------*/
-    show() {
+    /**
+     * @param {object}  [opts]
+     * @param {boolean} [opts.requireFreshTics=false]
+     *        Set by the in-flight fuel-stop path only (app.js _showFuelStopOverlay's
+     *        "Measure & Record Fuel" button). When set, APPLY as well as RECORD refuse
+     *        to write canonical FuelTankState from a reading the pilot did not enter or
+     *        confirm during this session. Left unset by the preflight call sites
+     *        (tab-bar.js MORE → Fuel Entry, instrument-strip.js), where re-applying the
+     *        restored reading is the intended way to re-confirm it.
+     */
+    show(opts = {}) {
         // A restored reading is NOT a reading taken now. Recording a fuel stop needs a
         // measurement the pilot entered or confirmed during this session, so every
         // show() starts untouched — including the show() the fuel-stop overlay's
         // "Measure & Record Fuel" button triggers (app.js _showFuelStopOverlay).
         this._ticsTouchedSinceShow = false;
+        this._requireFreshTics = !!(opts && opts.requireFreshTics);
 
         // Restore previous tic values
         const prev = Settings.fuelMeasurement;
@@ -393,6 +413,7 @@ class FuelOverlay {
 
         // Clear previous status
         this._dom.addStatus.textContent = '';
+        if (this._dom.applyStatus) this._dom.applyStatus.textContent = '';
 
         this._updateDisplay();
         this._updateSourceDisplay();
@@ -497,6 +518,28 @@ class FuelOverlay {
         if (Date.now() - this._shownAt < 600) return;
         // Guard against double-tap during the async EDM resolve (can take 3-5s)
         if (this._applying) return;
+
+        // Opened from the in-flight fuel-stop overlay: APPLY writes canonical
+        // FuelTankState (init() → fresh initialized_at) exactly as RECORD does, and that
+        // timestamp is the only thing app.js's Continue gate checks. show() restored the
+        // DEPARTURE reading into the tic fields, so tapping this button without touching
+        // a control would report "Measured: <departure gallons>" over tanks that have
+        // since burned down — the same defect as the record path, on the larger button.
+        // Refuse here, before the async resolve and before any write, so FuelState,
+        // FuelTankState and initialized_at are all left byte-identical.
+        // A reading that genuinely equals the restored one is confirmed the same way as
+        // for RECORD: any ± nudge or slider touch sets the flag, so a + then − round trip
+        // (or − then + at max tic, where + is clamped) counts and a correct entry is
+        // never made impossible.
+        // Preflight (MORE → Fuel Entry, instrument strip) leaves _requireFreshTics false,
+        // so re-applying a restored reading there keeps working unchanged.
+        if (this._requireFreshTics && !this._ticsTouchedSinceShow) {
+            this._setApplyStatus(
+                'Enter this stop’s tic-mark reading above (nudge ± to confirm an unchanged value) before applying',
+                'error');
+            return;
+        }
+
         this._applying = true;
 
         // Resolve EDM fuel async, then complete measurement
@@ -678,6 +721,13 @@ class FuelOverlay {
 
     _setAddStatus(msg, type) {
         const el = this._dom.addStatus;
+        el.textContent = msg;
+        el.className = 'fo-add-status fo-add-status-' + (type || 'ok');
+    }
+
+    _setApplyStatus(msg, type) {
+        const el = this._dom.applyStatus;
+        if (!el) return;
         el.textContent = msg;
         el.className = 'fo-add-status fo-add-status-' + (type || 'ok');
     }
