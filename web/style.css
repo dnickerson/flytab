@@ -156,7 +156,17 @@
        `color:` declarations was invalid and dropped at parse time. The label fell
        back to the inherited --text-primary (#1a1a2e), measured at 3.06:1 on
        --accent (#0066cc) in Chrome. Defining it here fixes all of them at once. */
-    --text-on-dark:      #ffffff;
+    /* HELD 2026-08-01, deliberately NOT defined. Defining it as #ffffff fixes 8
+       sites (incl. the new Measure & Record Fuel button, 3.06 -> 5.57:1) but
+       REGRESSES 14 where it lands on --status-danger (#ff3030) fills: white
+       measures 3.67:1 there against 4.64:1 for the current dropped-declaration
+       fallback. Affected: emergency-glide header/title/ack, .ml-adv-warn,
+       .eml-sev-2, the thermal warning banner and others -- all safety alerts.
+       Root cause is the same as the fuel colours below: dark-theme reds used as
+       light-UI fills. Define this token only together with repointing those fills
+       to a light-safe danger colour, so white-on-red becomes legitimate.
+       Tracked as an issue; not fixed here to avoid a net regression on alerts.
+    --text-on-dark:      #ffffff;   */
 
     /* Warning colours for TEXT ON A LIGHT SURFACE.
        --color-caution / --color-danger above are tuned for the old dark cockpit
