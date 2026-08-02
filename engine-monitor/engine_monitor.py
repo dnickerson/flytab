@@ -99,8 +99,14 @@ CSV_HEADER = 'Zulu_Time,MP,Oil Temp,Oil Pressure,Fuel Pressure,Volts,Amps,RPM,Fu
 
 # Fuel tracking configuration
 FUEL_CONFIG = {
-    'capacity_gal': 36.0,           # Aircraft fuel capacity (2x 18 gal tanks)
-    'usable_capacity_gal': 34.0,    # Typical fill (1 gal expansion space per tank)
+    'capacity_gal': 36.0,           # Aircraft fuel capacity (2x 18 gal tanks) — canonical
+    # DEPRECATED (2026-07-31, owner decision): the "usable capacity" concept is retired.
+    # Capacity is 36 gal total / 18 per side everywhere, matching the canonical value in
+    # web/aircraft-config.json (performance.fuel_capacity_gal), which the aircraft page
+    # edits. This key is kept only so the emitted JSON keys below ('capacity' in
+    # get_status(), 'usable_capacity' in fuel_data.json) keep their names; it is now just
+    # an alias for capacity_gal and no new code should reference it.
+    'usable_capacity_gal': 36.0,
     'low_fuel_warning_gal': 8.0,    # Yellow warning threshold
     'low_fuel_critical_gal': 4.0,   # Red warning threshold
     'min_endurance_minutes': 45,    # Endurance warning threshold
@@ -459,11 +465,11 @@ class FuelTracker:
                 self.fuel_remaining += gallons
                 gallons_added = gallons
 
-            # Cap at usable capacity
-            self.fuel_remaining = min(self.fuel_remaining, FUEL_CONFIG['usable_capacity_gal'])
+            # Cap at aircraft capacity (36 gal; "usable capacity" is deprecated)
+            self.fuel_remaining = min(self.fuel_remaining, FUEL_CONFIG['capacity_gal'])
 
             # Reset total since fill if this was a fill-up
-            if set_total or self.fuel_remaining >= FUEL_CONFIG['usable_capacity_gal'] * 0.95:
+            if set_total or self.fuel_remaining >= FUEL_CONFIG['capacity_gal'] * 0.95:
                 self.total_since_fill = 0.0
 
             addition = {
@@ -518,7 +524,9 @@ class FuelTracker:
                 'total_since_fill': round(self.total_since_fill, 1),
                 'engine_running': self.engine_running,
                 'last_updated': self.last_updated,
-                'capacity': FUEL_CONFIG['usable_capacity_gal'],
+                # Key name kept for the client JSON contract; value is now the full
+                # 36 gal aircraft capacity ("usable capacity" is deprecated).
+                'capacity': FUEL_CONFIG['capacity_gal'],
                 'warnings': warnings,
                 # EDM fuel tank readings
                 'edm_fuel_total': round(self.edm_fuel_total, 1),
@@ -562,7 +570,9 @@ class FuelTracker:
                 'version': 1,
                 'aircraft': {
                     'fuel_capacity': FUEL_CONFIG['capacity_gal'],
-                    'usable_capacity': FUEL_CONFIG['usable_capacity_gal']
+                    # DEPRECATED field, kept so existing fuel_data.json files keep the
+                    # same shape. Now identical to fuel_capacity.
+                    'usable_capacity': FUEL_CONFIG['capacity_gal']
                 },
                 'current_state': {
                     'fuel_remaining': self.fuel_remaining,
@@ -3882,7 +3892,7 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
 
         // Fuel tracking functions
         let currentFuelRemaining = 0;
-        const FUEL_CAPACITY = 34.0;  // Usable capacity
+        const FUEL_CAPACITY = 36.0;  // Aircraft capacity, 2x 18 gal tanks ("usable capacity" deprecated)
 
         function updateFuelDisplay(fuel) {
             if (!fuel) return;

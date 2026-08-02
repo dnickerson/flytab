@@ -12,6 +12,14 @@ class WbOverlay {
         this._inputs        = {};   // { stationName: <input element> }
         this._fuelInput     = null;
         this._envelopePoints = null; // cached once — envelope never changes at runtime
+        // Set by _syncFuelFromState() from FuelState.getCurrentFuel().stale; consumed by
+        // _renderResults(). Cleared the moment the pilot types in the fuel field — at that
+        // point the number is his own entry, not an aged tracked figure.
+        this._fuelStale     = false;
+        // False until the pilot edits the fuel field himself. While false, every show()
+        // re-reads the canonical source, so a prefill taken on the ramp does not silently
+        // age across the flight; once true, his entry is never overwritten.
+        this._fuelUserEdited = false;
 
         this._buildDOM();
     }
@@ -141,6 +149,15 @@ class WbOverlay {
                     input.step = '0.1';  // decimal gallons (overrides the step="1" default)
                     input.value = '';
                     input.placeholder = '0';
+                    // Registered inside setup(), so it fires BEFORE the _compute()
+                    // listener _makeStationCard attaches afterwards — the re-render
+                    // therefore already sees the updated flags. Programmatic
+                    // `input.value = …` fires no 'input' event, so the pre-fill in
+                    // _syncFuelFromState() never trips this.
+                    input.addEventListener('input', () => {
+                        this._fuelUserEdited = true;
+                        this._fuelStale = false;
+                    });
                 }
             );
             grid.appendChild(card);
@@ -164,15 +181,100 @@ class WbOverlay {
         return card;
     }
 
+    /**
+     * Pre-fill the Fuel station from the canonical live-fuel chain.
+     *
+     * SOURCE, not the number, decides whether there is anything to pre-fill.
+     * `FuelState.getCurrentFuel()` returns `{gallons, source, stale}` and its
+     * `capacity` source means nothing is tracked at all — it is a planning default
+     * worth a full 36 gal / 216 lb of fuel that may not be in the aircraft. This
+     * used to read `FuelState.getStartFuel()`, which never consults FuelTankState:
+     * measured on this branch, dry tracked tanks (0.0 gal) and a normally tracked
+     * 18.0 gal BOTH pre-filled 36.0, and a tracked 10.0 gal with the EDM totalizer
+     * reading 30 pre-filled 30.0. Same canonical read as engine-page.js,
+     * instrument-strip.js and route-table.js, so the four cannot disagree about how
+     * much fuel is aboard.
+     *
+     * Nothing is lost by dropping the old chain's `tic` branch: both writers of
+     * `Settings.fuelMeasurement` (fuel-overlay.js `_applyMeasurement` and its
+     * fuel-stop path) call `FuelTankState.init()` in the same block, so a saved tic
+     * measurement always leaves a tracked tank state behind it.
+     *
+     * When nothing is tracked the field is left EMPTY rather than fabricated, and
+     * _renderResults() then refuses to publish an envelope verdict — a blank fuel
+     * field makes the total weight read LOW, which is the one direction a W&B
+     * display must never err in.
+     */
     _syncFuelFromState() {
         if (!this._fuelInput) return;
-        if (this._fuelInput.value) return;  // user already typed a value — keep it
+        // Only the pilot's own entry is protected. An untouched pre-fill is re-read on
+        // every open so it tracks burn instead of freezing at the ramp figure.
+        if (this._fuelUserEdited) return;
         try {
-            const fuel = FuelState.getStartFuel();
-            if (fuel && fuel.gallons > 0) {
-                this._fuelInput.value = Math.round(fuel.gallons * 10) / 10;
+            const read = (typeof FuelState !== 'undefined')
+                ? FuelState.getCurrentFuel()
+                : { gallons: 0, source: 'none', stale: false };
+            const tracked = (read.source === 'manual' || read.source === 'tank_state');
+            if (!tracked) {
+                this._fuelInput.value = '';
+                this._fuelStale = false;
+                return;
             }
-        } catch (_) {}
+            this._fuelInput.value = Math.round(read.gallons * 10) / 10;
+            // Staleness predicate is owned by FuelState.getCurrentFuel() (SDD Task 14).
+            // A stale tracked figure reads HIGH — the burn during the >45 min gap was
+            // never subtracted — so the weight it produces is not a measurement.
+            this._fuelStale = !!read.stale;
+        } catch (_) {
+            this._fuelInput.value = '';
+            this._fuelStale = false;
+        }
+    }
+
+    /** True once the fuel quantity is established — pre-filled from a tracked source or
+     *  typed by the pilot. An aircraft with no fuel station has nothing to establish. */
+    _fuelQuantityKnown() {
+        if (!this._fuelInput) return true;
+        return String(this._fuelInput.value).trim() !== '';
+    }
+
+    /**
+     * How far this loading can be trusted, decided entirely by the fuel figure.
+     *
+     *   missing — nothing tracked, so the field is blank and `_getFuelGal()` is 0. The
+     *             total weight then EXCLUDES fuel and reads LOW, and the CG sits off the
+     *             fuel arm: a reassuring-but-wrong answer, the one direction a W&B panel
+     *             must never err in.
+     *   stale   — the pre-filled tracked figure is >45 min old (see _syncFuelFromState);
+     *             it reads HIGH by the burn that was never subtracted.
+     *
+     * Either way the numbers are still SHOWN — blanking them would throw away the pilot's
+     * only starting point — but they are marked, and no green verdict is issued off them.
+     * STALE-NEVER-GREEN, the rule engine-page.js, instrument-strip.js and route-table.js
+     * already apply to their fuel figures.
+     *
+     * Both are suppressed until there is a payload at all: an untouched empty form is not
+     * a wrong answer, and the "Enter weights to compute" placeholder already covers it.
+     *
+     * Shared by _renderResults and _renderChart so the badge and the CG dot cannot
+     * disagree about whether this loading has been confirmed.
+     */
+    _fuelConfidence() {
+        const hasPayload = Object.values(this._inputs).some(inp => parseFloat(inp?.value) > 0)
+            || this._getFuelGal() > 0;
+        const fuelMissing = hasPayload && !this._fuelQuantityKnown();
+        const fuelStale   = hasPayload && !fuelMissing && !!this._fuelStale;
+        return {
+            hasPayload,
+            fuelMissing,
+            fuelStale,
+            unconfirmed: fuelMissing || fuelStale,
+            notice: fuelMissing
+                ? '⚠ FUEL NOT ENTERED — this weight excludes fuel. Enter gallons aboard.'
+                : fuelStale
+                    ? '⚠ FUEL QUANTITY UNCONFIRMED — tank tracking is over 45 min stale and reads high. Verify before using this weight.'
+                    : null,
+        };
     }
 
     _getStationWeights() {
@@ -206,20 +308,39 @@ class WbOverlay {
         const fwdStr = limits ? limits.fwdLimit.toFixed(2) : '--';
         const aftStr = limits ? limits.aftLimit.toFixed(2) : '--';
 
-        // Suppress envelope badge when no payload has been entered (empty aircraft state).
-        // The empty CG legitimately sits outside the operating envelope — only show status
+        // hasPayload suppresses the envelope badge in the empty-aircraft state: the empty
+        // CG legitimately sits outside the operating envelope, so a verdict is only issued
         // once the pilot has entered at least one non-zero station weight or fuel.
-        const hasPayload = Object.values(this._inputs).some(inp => parseFloat(inp?.value) > 0)
-            || this._getFuelGal() > 0;
+        // unconfirmed/notice carry the fuel-confidence decision — see _fuelConfidence().
+        const { hasPayload, fuelMissing, unconfirmed, notice } = this._fuelConfidence();
+        const markCls = unconfirmed ? ' wb-unconfirmed' : '';
+
+        // Out-of-envelope stays red even when the fuel figure is unconfirmed. Red is not a
+        // reassuring colour, and the exceedance is real either way: on this airframe the
+        // fuel arm (76.75") sits forward of the fwd limit, so adding the missing fuel can
+        // only move the CG further forward, and it can only add weight — an out-of-envelope
+        // verdict computed without fuel is a valid lower bound in both directions.
+        // An IN result, by contrast, is not: with no fuel figure there is no verdict to
+        // give, so say so rather than printing a green-adjacent "IN ENVELOPE".
+        const badgeCls = r.inEnvelope
+            ? (unconfirmed ? 'wb-envelope-unconfirmed' : 'in-envelope')
+            : 'out-of-envelope';
+        const badgeText = !r.inEnvelope
+            ? 'OUT OF ENVELOPE' + (r.envelopeReason ? ' — ' + r.envelopeReason : '')
+            : fuelMissing
+                ? 'NO VERDICT — ENTER FUEL QUANTITY'
+                : unconfirmed
+                    ? 'IN ENVELOPE — UNCONFIRMED FUEL'
+                    : 'IN ENVELOPE';
 
         this._resultsEl.innerHTML = `
             <div class="wb-result-item">
                 <div class="wb-result-label">Total Weight</div>
-                <div class="wb-result-value${r.overGross ? ' wb-over-gross' : ''}">${r.totalWeight.toLocaleString()} <span class="wb-result-unit">lb</span></div>
+                <div class="wb-result-value${r.overGross ? ' wb-over-gross' : ''}${markCls}">${r.totalWeight.toLocaleString()}${unconfirmed ? '?' : ''} <span class="wb-result-unit">lb</span></div>
             </div>
             <div class="wb-result-item">
                 <div class="wb-result-label">CG</div>
-                <div class="wb-result-value">${r.cg.toFixed(2)}<span class="wb-result-unit">"</span></div>
+                <div class="wb-result-value${markCls}">${r.cg.toFixed(2)}${unconfirmed ? '?' : ''}<span class="wb-result-unit">"</span></div>
             </div>
             <div class="wb-result-item">
                 <div class="wb-result-label">Max Gross</div>
@@ -229,9 +350,11 @@ class WbOverlay {
                 <div class="wb-result-label">CG Limits</div>
                 <div class="wb-result-value wb-result-secondary">${fwdStr}–${aftStr}<span class="wb-result-unit">"</span></div>
             </div>
+            ${notice ? `
+            <div class="wb-fuel-notice">${notice}</div>` : ''}
             ${hasPayload ? `
-            <div class="wb-envelope-badge ${r.inEnvelope ? 'in-envelope' : 'out-of-envelope'}">
-                ${r.inEnvelope ? 'IN ENVELOPE' : 'OUT OF ENVELOPE' + (r.envelopeReason ? ' — ' + r.envelopeReason : '')}
+            <div class="wb-envelope-badge ${badgeCls}">
+                ${badgeText}
             </div>` : `
             <div class="wb-envelope-badge" style="background:var(--bg-surface);color:var(--text-muted);border:1px solid var(--border)">
                 Enter weights to compute
@@ -292,8 +415,13 @@ class WbOverlay {
         // Use cached envelope polygon — computed once at init, never changes at runtime
         const envelopePoints = this._envelopePoints || [];
         const currentPoint = [{ x: r.cg, y: r.totalWeight }];
-        // Chart.js can't read CSS vars; use design-system light-theme values directly
-        const pointColor = r.inEnvelope ? '#1a8c35' : '#cc2222';
+        // Chart.js can't read CSS vars; use design-system light-theme values directly.
+        // STALE-NEVER-GREEN applies to the CG dot too — a green dot inside the polygon is
+        // the most reassuring thing on this panel, and it must not appear for a loading
+        // whose fuel figure is missing or stale. Caution amber (--color-caution) instead;
+        // out-of-envelope stays red, which is not a reassuring colour.
+        const unconfirmed = this._fuelConfidence().unconfirmed;
+        const pointColor = !r.inEnvelope ? '#cc2222' : (unconfirmed ? '#b87000' : '#1a8c35');
 
         if (this._chart) {
             // Envelope polygon is static — only update the moving CG point

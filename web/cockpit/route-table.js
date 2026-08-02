@@ -799,7 +799,8 @@ class RouteTable {
             flight_plan: {
                 ...(this._trip?.flight_plan || {}),
                 departure: this._waypoints[0]?.icao || '',
-                destination: this._waypoints[this._waypoints.length - 1]?.icao || '',
+                destination: ([...this._waypoints].reverse().find(wp => wp.type === 'APT')
+                    || this._waypoints[this._waypoints.length - 1])?.icao || '',
                 // Clear stale legs — they were for the original route, not the edited one
                 legs: [],
                 // Preserve the original airway route array when waypoints are structurally
@@ -1063,7 +1064,12 @@ class RouteTable {
         const climbMp = CockpitConfig.aircraft('performance.climb_mp') ?? cfgCruiseMp;
         const climbPwr = CockpitConfig.aircraft('performance.climb_pwr_pct') ?? 100;
         const descentSpeed = CockpitConfig.aircraft('performance.descent_speed_kt') ?? cfgCruiseSpeed;
-        const descentGph = CockpitConfig.aircraft('performance.descent_gph') ?? cfgGph * 0.6;
+        // 0.8, not 0.6: 0.6 x the 9.0 gph cruise default = 5.4 gph, BELOW this
+        // airframe's measured descent p85 of 6.9 — under-planning descent burn
+        // over-states fuel remaining. Measured descent:cruise here is 6.9:8.1
+        // = 0.85; 0.8 against the 9.0 config cruise figure gives 7.2 gph, at or
+        // above measured. Only fires if performance.descent_gph is missing.
+        const descentGph = CockpitConfig.aircraft('performance.descent_gph') ?? cfgGph * 0.8;
         const descentRpm = CockpitConfig.aircraft('performance.descent_rpm') ?? cfgCruiseRpm;
         const descentMp = CockpitConfig.aircraft('performance.descent_mp') ?? cfgCruiseMp;
         const descentPwr = CockpitConfig.aircraft('performance.descent_pwr_pct') ?? 50;
@@ -1283,6 +1289,41 @@ class RouteTable {
      * Compute enroute data for all waypoints: dist, ETE, fuel remaining.
      * Uses per-segment data (CLB/CRZ/DES) when available from flight plan.
      */
+    /**
+     * Planned cruise burn (gph) for a user-selected cruise-power override.
+     *
+     * Returns the MEASURED figure from `performance.power_settings[]` — the band
+     * table built from real EDM flight logs — not a theoretical SFC number.
+     * Until 2026-08-01 all three override sites computed
+     * `(pct/100) * max_hp * lop_sfc`, which at 65% yields 7.84 gph against a
+     * measured 8.1 and a planned 8.4: selecting a power made the route table
+     * show MORE fuel remaining than selecting nothing. Under-planning burn is
+     * the direction that runs tanks dry, so the formula is gone.
+     *
+     * Selecting the aircraft's CONFIGURED cruise power is handled by the caller,
+     * not here — see `cruisePwrOverride` in `_computeEnroute`.
+     *
+     * @param {number} pct  selected cruise power, percent
+     * @returns {number|null} measured band gph, or null when no answer is
+     *   available (no band table, or the planning library has not finished
+     *   loading). Null means "leave the planned figure alone" — callers must
+     *   NOT substitute a formula.
+     */
+    _cruiseBandGph(pct) {
+        const powerSettings = CockpitConfig.aircraft('performance.power_settings');
+        if (!powerSettings || !powerSettings.length) return null;
+        // gphForPowerPct (nearest band by pct_mid) lives in the planning library
+        // and reaches this classic script via window.FlyTabPlanning, the same way
+        // bearing()/windCorrectedMagHdg() below already do. That object is
+        // populated asynchronously by shared/planning/index.js, so it can legitimately
+        // be absent on a very early render — hence the null return rather than a
+        // local reimplementation.
+        if (typeof FlyTabPlanning !== 'undefined' && FlyTabPlanning.gphForPowerPct) {
+            return FlyTabPlanning.gphForPowerPct(powerSettings, pct);
+        }
+        return null;
+    }
+
     /** Calculate manifold pressure from power%, RPM, and max RPM */
     _mpFromPower(pwr, rpm, maxRpm) {
         if (pwr == null || rpm == null || maxRpm == null) return null;
@@ -1305,25 +1346,34 @@ class RouteTable {
         const cfgGph = CockpitConfig.aircraft('performance.cruise_gph') ?? 9.0;
         const fuelCap = CockpitConfig.aircraft('performance.fuel_capacity_gal') ?? 50;
 
-        // Determine which Flight contains the active waypoint so we can set the
-        // right starting fuel (actual FuelState for flight 0, full tanks for later flights).
+        // Which Flight contains the active waypoint. Currently unreferenced — retained
+        // for the pending per-flight projection block (SDD Task 8 Step 4, held: its
+        // arithmetic double-counts fuel_add_gal across 3+ flight trips).
+        // eslint-disable-next-line no-unused-vars
         const activeFlightNum = this._waypoints[this._activeIndex]?._flightIndex ?? 0;
-        // Starting fuel for the active flight.
-        // For Flight 0: read from FuelState (actual fuel on board).
-        // For Flight N>0: computed after the main loop using per-flight totals,
-        //   then applied via fuelResetIndices during a second pass if needed.
-        // On first entry we don't have _totFuel yet, so start with FuelState/capacity
-        // and let the fuelResetIndices path correct it mid-loop at each fuel stop.
+        // The flight currently being flown always uses the live canonical fuel source —
+        // not just flight 0. A flight becomes "active" the moment the pilot's active
+        // waypoint enters its range; before that, its start fuel is a forward-looking
+        // projection only (produced by the fuel-stop reset later in this loop).
         // `let` — reassigned at each fuel stop boundary during the computation loop below
-        let startFuel = (activeFlightNum === 0)
-            ? ((typeof FuelState !== 'undefined') ? FuelState.getStartFuel().gallons : fuelCap)
-            : (this._flights[activeFlightNum]?._plannedStartFuel ?? fuelCap);
+        const startFuelRead = (typeof FuelState !== 'undefined')
+            ? FuelState.getCurrentFuel()
+            : { gallons: fuelCap, source: 'capacity', stale: false };
+        let startFuel = startFuelRead.gallons;
+        // Every REM cell in the table is `startFuel - plannedBurn`, so if the canonical
+        // read is a stale tracked figure (>45 min without an integrated sample, the burn
+        // during the gap never subtracted) the WHOLE column reads HIGH — including the
+        // post-fuel-stop rows, whose reset start fuel is derived from the same figure.
+        // Recorded here for _getCellValue to mark; see the fuel_rem cases.
+        this._startFuelStale = !!startFuelRead.stale;
         const cfgCruiseRpm = CockpitConfig.aircraft('performance.cruise_rpm') ?? null;
         const cfgCruiseMp = CockpitConfig.aircraft('performance.cruise_mp') ?? null;
         const cfgCruisePwr = CockpitConfig.aircraft('performance.cruise_pwr_pct') ?? null;
-        const maxHp = CockpitConfig.aircraft('performance.max_hp') ?? 180;
         const maxRpm = CockpitConfig.aircraft('performance.max_rpm') ?? 2700;
-        const lopSfc = CockpitConfig.aircraft('performance.lop_sfc') ?? 0.067;
+        // NOTE: performance.max_hp / performance.lop_sfc are deliberately NOT read
+        // here any more. They fed the theoretical SFC cruise-burn formula that this
+        // file used for power overrides; see _cruiseBandGph above. Do not reintroduce
+        // them to "compute" a cruise burn — the measured band table is the source.
 
         // Phase-specific config — hoisted out of the per-segment inner loop so
         // these are read once per _computeEnroute call, not once per segment.
@@ -1333,13 +1383,39 @@ class RouteTable {
         const cfgClbRpm   = CockpitConfig.aircraft('performance.climb_rpm') ?? cfgCruiseRpm;
         const cfgClbMp    = CockpitConfig.aircraft('performance.climb_mp') ?? cfgCruiseMp;
         const cfgDesSpeed = CockpitConfig.aircraft('performance.descent_speed_kt') ?? cfgCruiseSpeed;
-        const cfgDesGph   = CockpitConfig.aircraft('performance.descent_gph') ?? cfgGph * 0.6;
+        // 0.8, not 0.6 — see the matching note in _buildMissingSegments(): 0.6 x
+        // the 9.0 gph cruise default lands at 5.4 gph, below the measured 6.9.
+        const cfgDesGph   = CockpitConfig.aircraft('performance.descent_gph') ?? cfgGph * 0.8;
         const cfgDesPwr   = CockpitConfig.aircraft('performance.descent_pwr_pct') ?? 50;
         const cfgDesRpm   = CockpitConfig.aircraft('performance.descent_rpm') ?? cfgCruiseRpm;
         const cfgDesMp    = CockpitConfig.aircraft('performance.descent_mp') ?? cfgCruiseMp;
 
-        // Cruise power override from user selection
-        const cruisePwrOverride = this._cruisePower;
+        // Cruise power override from user selection.
+        //
+        // Selecting the aircraft's own configured cruise power must be IDENTICAL
+        // to selecting nothing — same burn, same TAS, same ETE, same REM. The plan's
+        // CRZ segments were already built at that power (8.4 gph, the p85 of the 65%
+        // cruise distribution — see RoutePlannerPanel.CRUISE_GPH_AT_CONFIGURED_POWER),
+        // so the override is collapsed to null here and the whole CRZ override block
+        // below becomes a no-op. That makes the equality exact by construction rather
+        // than by a fifth hand-maintained copy of the 8.4 constant.
+        //
+        // The override is ALSO collapsed to null when the band table can give no
+        // answer for the selected power. The override does more than set burn — it
+        // rescales TAS, and therefore ETE — so half-applying it (new speed, planned
+        // burn) shows LESS fuel used over the same distance. Either the whole
+        // override runs on measured data or none of it runs.
+        const cruisePwrOverrideRaw = this._cruisePower;
+        const atConfiguredCruise = cruisePwrOverrideRaw != null && cfgCruisePwr != null
+            && Number(cruisePwrOverrideRaw) === Number(cfgCruisePwr);
+        // Measured burn for the selected power, looked up once per compute rather
+        // than per segment.
+        const overrideBandGph = (cruisePwrOverrideRaw != null && !atConfiguredCruise)
+            ? this._cruiseBandGph(cruisePwrOverrideRaw)
+            : null;
+        const cruisePwrOverride = (atConfiguredCruise || overrideBandGph == null)
+            ? null
+            : cruisePwrOverrideRaw;
 
         let cumulativeDistRemaining = 0;
 
@@ -1397,18 +1473,6 @@ class RouteTable {
                 ? FlyTabPlanning.windCorrectedMagHdg(wp._brg, wp.lat, wp.lon, wp._tas ?? 0, wp._wind?.dir ?? 0, wp._wind?.spd ?? 0)
                 : null;
 
-            // Multi-flight: reset fuel counter when a new Flight departs from a fuel stop.
-            // This waypoint is the departure of the next Flight — pilot refuelled here.
-            if (fuelResetIndices.has(i) && i > this._activeIndex) {
-                const fuelRemAtStop = startFuel - fuelBurned;
-                const fuelAdded = wp.fuel_add_gal != null
-                    ? Math.min(wp.fuel_add_gal, fuelCap - fuelRemAtStop)  // explicit: add only what was pumped
-                    : (fuelCap - fuelRemAtStop);                           // default: fill to capacity
-                wp._fuelAdded = fuelAdded;   // stash for "Fuel added" row in _renderTable
-                fuelBurned = 0;
-                startFuel  = fuelRemAtStop + fuelAdded;
-            }
-
             // If we have segment data, use it for phase, fuel, and time
             if (segs.length > 0 && i > 0) {
                 // Determine dominant phase: CLB > DES > CRZ
@@ -1440,7 +1504,9 @@ class RouteTable {
 
                     // Apply cruise power override to CRZ segments
                     if (seg.phase === 'CRZ' && cruisePwrOverride) {
-                        segGph = (cruisePwrOverride / 100) * maxHp * lopSfc;
+                        // Measured band burn. Non-null whenever cruisePwrOverride is
+                        // set — the two are decided together above.
+                        segGph = overrideBandGph;
                         const origPwr = seg.percent_power || cfgCruisePwr || 65;
                         const tasRatio = Math.sqrt(cruisePwrOverride / origPwr);
                         segTas = (seg.tas || cfgCruiseSpeed) * tasRatio;
@@ -1479,7 +1545,10 @@ class RouteTable {
                     wp._pwr = cruisePwrOverride;
                     wp._rpm = cfgCruiseRpm;
                     wp._mp = this._mpFromPower(cruisePwrOverride, cfgCruiseRpm, maxRpm) || cfgCruiseMp;
-                    const overrideGph = (cruisePwrOverride / 100) * maxHp * lopSfc;
+                    // (No gph here: this block only sets the waypoint's DISPLAY
+                    // engine values. Burn was already accumulated per-segment above
+                    // from overrideBandGph. The old `overrideGph` local computed the
+                    // SFC formula and was never read — removed with the formula.)
                     const origPwr = displaySeg.percent_power || cfgCruisePwr || 65;
                     const tasRatio = Math.sqrt(cruisePwrOverride / origPwr);
                     wp._tas = Math.round((displaySeg.tas || cfgCruiseSpeed) * tasRatio);
@@ -1523,9 +1592,10 @@ class RouteTable {
                     wp._phase = 'CRZ';
                 }
 
-                const fallbackGph = cruisePwrOverride
-                    ? (cruisePwrOverride / 100) * maxHp * lopSfc
-                    : cfgGph;
+                // Seg-less leg: measured band burn when a power is selected, else the
+                // config cruise gph (9.0 — the deliberately higher self-generated-row
+                // figure, unchanged).
+                const fallbackGph = cruisePwrOverride != null ? overrideBandGph : cfgGph;
                 const fallbackSpeed = gs > 30 ? gs : cfgCruiseSpeed;
 
                 wp._tas = wp.tas || cfgCruiseSpeed;
@@ -1547,11 +1617,41 @@ class RouteTable {
                 wp._fuelRem = startFuel - fuelBurned;
             }
 
+            // Multi-flight: reset fuel counter when a new Flight departs from a fuel stop.
+            // This waypoint is the shared boundary — arrival of Flight N and departure of
+            // Flight N+1; the pilot refuels here.
+            //
+            // Placed AFTER the per-waypoint burn computation above (all three branches
+            // accumulate into fuelBurned) so fuelRemAtStop reflects the fuel actually
+            // remaining on arrival, not a pre-arrival snapshot. wp._fuelRem therefore
+            // shows arrival fuel and REM decreases monotonically into the stop.
+            //
+            // This is a PROJECTION only — it never drives the figure for the flight
+            // that's actually being flown, which reads the live source above.
+            if (fuelResetIndices.has(i) && i > this._activeIndex) {
+                const fuelRemAtStop = startFuel - fuelBurned;
+                const fuelAdded = wp.fuel_add_gal != null
+                    ? Math.min(wp.fuel_add_gal, fuelCap - fuelRemAtStop)  // explicit: add only what was pumped
+                    : (fuelCap - fuelRemAtStop);                           // default: fill to capacity
+                wp._fuelAdded = fuelAdded;   // stash for "Fuel added" row in _renderTable
+                fuelBurned = 0;
+                startFuel  = fuelRemAtStop + fuelAdded;
+            }
+
             wp._distRemaining = Math.round(cumulativeDistRemaining);
             cumulativeDistRemaining -= legDist;
         }
 
-        // Mark passed waypoints
+        // Mark passed waypoints — clear both waypoint-level fields and their segments'
+        // fields, since multi-segment (CLB/CRZ/DES) legs are rendered from wp._segments,
+        // not the waypoint-level fields, and were previously left showing stale numbers.
+        //
+        // The compute loop above starts at _activeIndex, so a passed leg's segments are
+        // never revisited: their _fuelRem was frozen at whatever the live fuel state was
+        // when the leg was last ahead of the aircraft. If real burn beat the plan, that
+        // frozen figure OVERSTATES fuel remaining, directly above rows projected from the
+        // current (lower) reading. Blanking it is the only safe option — the row cannot be
+        // recomputed, and a passed leg's remaining fuel is not a number the pilot needs.
         for (let i = 0; i < this._activeIndex; i++) {
             this._waypoints[i]._dist = null;
             this._waypoints[i]._ete = null;
@@ -1560,6 +1660,14 @@ class RouteTable {
             this._waypoints[i]._brg = null;
             this._waypoints[i]._hdg = null;
             this._waypoints[i]._phase = '\u2014';
+            if (this._waypoints[i]._segments) {
+                for (const seg of this._waypoints[i]._segments) {
+                    seg._fuel = null;
+                    seg._fuelRem = null;
+                    seg._tas = null;
+                    seg._pwr = null;
+                }
+            }
         }
 
         // Compute cumulative dist/ete from the aircraft's current position forward.
@@ -1593,21 +1701,9 @@ class RouteTable {
             flight._totFuel = flightFuel;
         }
 
-        // Back-fill _plannedStartFuel for Flight N+1 now that _totFuel is known.
-        // Used by the next _computeEnroute call so Flight 2+ show correct pre-stop fuel numbers.
-        const depFuel0 = (typeof FuelState !== 'undefined') ? FuelState.getStartFuel().gallons : fuelCap;
-        let rollingFuel = depFuel0;
-        for (let fi = 0; fi < this._flights.length; fi++) {
-            this._flights[fi]._plannedStartFuel = rollingFuel;
-            if (fi + 1 < this._flights.length) {
-                const stopWp  = this._waypoints[this._flights[fi + 1].depWpIndex];
-                const fuelRem = Math.max(0, rollingFuel - (this._flights[fi]._totFuel || 0));
-                const added   = stopWp?.fuel_add_gal != null
-                    ? Math.min(stopWp.fuel_add_gal, fuelCap - fuelRem)
-                    : (fuelCap - fuelRem);
-                rollingFuel = fuelRem + added;
-            }
-        }
+        // (The _plannedStartFuel back-fill that used to live here is gone: the active
+        //  flight now reads the live canonical source, and every later flight's start
+        //  fuel is produced in-loop by the fuel-stop reset above.)
 
         // Emit leg update event so InstrumentStrip and PowerTradeoff can update
         // without polling. Fires after every _computeEnroute() — ~1Hz in flight.
@@ -1637,9 +1733,31 @@ class RouteTable {
         // Planned GPH for remaining cruise (from config)
         const plannedGph = CockpitConfig.aircraft('performance.cruise_gph') ?? 9.0;
 
-        // Live fuel remaining
+        // Live fuel remaining — canonical chain (manual override > tracked FuelTankState),
+        // NOT the raw EDM totalizer this used to read. `fuel_remaining_gal`/`Gallons_Rem`/
+        // `Fuel_Remaining` all resolve to the EDM's own totalizer (engine-panel.js flattens
+        // raw.data over raw; engine_monitor.py emits Gallons_Rem), which beat both the
+        // tracked tank state and the pilot's own manual override — measured ~20 gal high.
+        // PowerTradeoff computes fuelAtDest = fuelRemaining - burn straight off this field,
+        // so an over-reported number here becomes an over-reported, reassuringly-coloured
+        // FUEL@DEST on a pilot-reachable panel.
+        //
+        // `capacity` source means nothing is tracked at all. That is a planning default,
+        // not a measurement, so it is published as null — consumers already render null as
+        // no-data ('—'), which is the honest state. Publishing 36.0 would tell PowerTradeoff
+        // the tanks are full when no fuel data exists.
+        const fuelRead = (typeof FuelState !== 'undefined')
+            ? FuelState.getCurrentFuel()
+            : { gallons: 0, source: 'none', stale: false };
+        const fuelTracked = (fuelRead.source === 'manual' || fuelRead.source === 'tank_state');
+        const fuelRem = fuelTracked ? fuelRead.gallons : null;
+        // A tracked-but-stale figure is still published (blanking it would throw away the
+        // pilot's last known-good quantity) but flagged, so consumers can mark it instead
+        // of rendering it in a reassuring colour. It always reads HIGH.
+        const fuelRemStale = fuelTracked && !!fuelRead.stale;
+        // GPH stays live-EDM-sourced — it is a flow rate, not a quantity, and the EDM is
+        // the only thing that measures it.
         const engData = window.enginePanel?.lastData;
-        const fuelRem = engData?.fuel_remaining_gal ?? engData?.fuel_gal ?? engData?.Gallons_Rem ?? engData?.Fuel_Remaining ?? null;
         const liveGph = (engData?.fuel_flow_gph ?? engData?.gph ?? engData?.Fuel_Flow ?? null);
 
         // Cross-track error: perpendicular distance from current position to the
@@ -1702,7 +1820,9 @@ class RouteTable {
 
                 // Fuel
                 plannedGph,
-                fuelRemaining:  fuelRem,
+                fuelRemaining:  fuelRem,          // canonical live gallons, or null when nothing is tracked
+                fuelRemainingStale: fuelRemStale, // true = >45 min unconfirmed; reads HIGH, never show it as trusted
+                fuelRemainingSource: fuelRead.source,
                 liveGph,
 
                 // Live performance
@@ -2615,17 +2735,81 @@ class RouteTable {
         }
         const fuelBurnFmt = totalFuelBurn > 0 ? totalFuelBurn.toFixed(1) : null;
 
-        // Fuel at destination — live engine GPH if available, else planned
+        // Fuel at destination — live canonical fuel if available, else planned figure.
+        // Fuel-stop-aware: uses the ACTIVE FLIGHT's remaining distance to its own
+        // destination (which may be a fuel stop, not the trip's final destination),
+        // not the whole remaining trip distance.
+        // `capacity` source means nothing is tracked — a planning default, not a
+        // measurement. Reading `.gallons` unguarded made the badge project from FULL
+        // TANKS (36.0) on a route with no fuel data at all, and colour the result
+        // green. Gate on the SOURCE, not the number, exactly as the engine page and
+        // the instrument strip do.
+        const fuelRead = (typeof FuelState !== 'undefined')
+            ? FuelState.getCurrentFuel()
+            : { gallons: 0, source: 'none', stale: false };
+        const fuelTracked = (fuelRead.source === 'manual' || fuelRead.source === 'tank_state');
+        const currentFuel = fuelTracked ? fuelRead.gallons : null;
+        const fuelStale = fuelTracked && !!fuelRead.stale;
         const engData = window.enginePanel?.lastData;
-        const currentFuel = engData?.fuel_remaining_gal ?? engData?.fuel_gal ?? null;
-        const liveGph = engData?.fuel_flow_gph ?? engData?.gph ?? null;
+        const liveGph = engData?.fuel_flow_gph ?? engData?.gph ?? engData?.Fuel_Flow ?? null;
         const plannedGph = CockpitConfig.aircraft('performance.cruise_gph') ?? 9.0;
-        const destWp = this._waypoints[this._waypoints.length - 1];
+        // Which Flight is being flown — resolved by CONTAINMENT, matching
+        // _emitLegUpdate. `_flightIndex` cannot be used here: _buildFlights assigns a
+        // fuel-stop waypoint the DEPARTING flight's index, so on the final leg INTO a
+        // fuel stop it selects the downstream flight and scopes the projection all the
+        // way to the trip's final airport — the badge read 15.0 where arrival fuel at
+        // the stop was 25.0, while other displays showed ~25.0 at the same moment.
+        // `_flights` can be stale or absent relative to `_waypoints` (it is rebuilt by
+        // _computeEnroute, which does not run on every path into _updateSummary), and
+        // _updateSummary runs on the 1 Hz GPS path — an unguarded lookup would throw on
+        // every position update and blank the strip. Optional-chain it.
+        const activeFlight = this._flights?.find(f =>
+            this._activeIndex >= f.depWpIndex && this._activeIndex <= f.destWpIndex
+        );
+        // Distance remaining to the ACTIVE flight's own destination (fuel stop or final),
+        // not the trip's overall remaining distance — remainDist as computed above already
+        // sums to the final waypoint, so recompute scoped to the active flight's end index.
+        let remainDistToActiveFlightDest = 0;
+        if (activeFlight) {
+            for (let i = this._activeIndex; i <= activeFlight.destWpIndex; i++) {
+                remainDistToActiveFlightDest += (i === this._activeIndex)
+                    ? (this._waypoints[i]?._liveDist ?? this._waypoints[i]?._legDist ?? 0)
+                    : (this._waypoints[i]?._legDist ?? 0);
+            }
+        } else {
+            remainDistToActiveFlightDest = remainDist; // no flight-split data — fall back to trip-wide
+        }
+        // Planned fallback target: the ACTIVE flight's own destination waypoint, not
+        // the trip's final airport. On a fuel-stop trip `_fuelRem` at the final airport
+        // is a POST-REFUEL projection — decoupled from what is in the tanks now — and
+        // read 30.0 with 10 gal aboard. The active flight's destination row is computed
+        // from the same canonical start fuel the live branch uses, so the two branches
+        // now describe the same airport and the same tanks.
+        // The APT walk-back from Task 9 is preserved inside that scope: the active
+        // flight's last waypoint may itself be a missed-approach/hold fix trailing the
+        // airport, and a fix's `_fuelRem` is not the arrival figure.
+        const fallbackEndIdx = activeFlight ? activeFlight.destWpIndex : this._waypoints.length - 1;
+        const destWp = this._waypoints.slice(0, fallbackEndIdx + 1).reverse().find(wp => wp.type === 'APT')
+                    || this._waypoints[fallbackEndIdx];
         let fuelAtDest = null;
-        if (currentFuel != null && remainDist > 0 && cruiseSpeed > 0) {
+        // The badge label must name the airport the figure actually describes. The
+        // handle label beside it always names the TRIP's final airport, so on a
+        // fuel-stop trip a bare "DEST:" reads as fuel at the final airport when it is
+        // really fuel at the fuel stop — optimistic by the whole downstream leg if the
+        // pilot overflies the stop. Show the active flight's identifier instead.
+        let fuelDestLabel = 'DEST';
+        const headerDestId = dest.icao || '?';
+        if (activeFlight?.dest && activeFlight.dest !== headerDestId) {
+            fuelDestLabel = activeFlight.dest;
+        }
+        if (currentFuel != null && remainDistToActiveFlightDest > 0 && cruiseSpeed > 0) {
             const gph = liveGph ?? plannedGph;
-            fuelAtDest = currentFuel - (remainDist / cruiseSpeed) * gph;
-        } else if (destWp?._fuelRem != null) {
+            fuelAtDest = currentFuel - (remainDistToActiveFlightDest / cruiseSpeed) * gph;
+        } else if (fuelTracked && destWp?._fuelRem != null) {
+            // Gated on a tracked source: `_fuelRem` is `startFuel - plannedBurn`, and
+            // startFuel is the same canonical read. With nothing tracked that chain is
+            // rooted in the capacity fallback, so the planned figure would be a
+            // projection from full tanks presented as a reserve — show no badge instead.
             fuelAtDest = destWp._fuelRem;
         }
 
@@ -2636,9 +2820,15 @@ class RouteTable {
         if (fuelAtDest != null) {
             if (fuelAtDest <= warnGal) fuelColor = 'var(--status-danger)';
             else if (fuelAtDest <= cautionGal) fuelColor = 'var(--status-warning)';
+            // STALE-NEVER-GREEN: a figure projected from an unconfirmed tank state
+            // reads HIGH by the whole unrecorded burn, so however comfortable the
+            // reserve arithmetic looks it must not render in the reassuring colour.
+            // Marked the same way the instrument strip marks its FUEL field — caution
+            // colour plus a trailing '?' — so the two agree at a glance.
+            if (fuelStale && fuelColor === 'var(--status-ok)') fuelColor = 'var(--status-warning)';
         }
         const fuelDestHtml = fuelAtDest != null
-            ? `<span style="color:${fuelColor};font-weight:700">DEST:${fuelAtDest.toFixed(1)}</span>`
+            ? `<span style="color:${fuelColor};font-weight:700">${fuelDestLabel}:${fuelAtDest.toFixed(1)}${fuelStale ? '?' : ''}</span>`
             : '';
 
         summaryEl.innerHTML =
@@ -2992,6 +3182,33 @@ class RouteTable {
         return row;
     }
 
+    /**
+     * Render one REM (fuel remaining) cell.
+     *
+     * Shared by the segment-row and waypoint-row branches of _getCellValue so the two
+     * cannot drift — they previously carried duplicate copies of this expression, which
+     * is exactly the kind of pair a single-site edit silently half-fixes.
+     *
+     * Every REM figure is `startFuel - plannedBurn`, and startFuel is the canonical
+     * live read taken in _computeEnroute. When that read is a stale tracked figure
+     * (>45 min without an integrated sample, so the burn during the gap was never
+     * subtracted) the whole column reads HIGH. Such a cell is still shown — it is the
+     * pilot's last known-good quantity — but it is marked with the same two signals
+     * instrument-strip.js uses for its FUEL field: a trailing '?' and the caution
+     * colour. STALE-NEVER-GREEN: it never renders in the plain (in-limits) style,
+     * however comfortable the reserve arithmetic looks.
+     */
+    _fuelRemCell(galRem) {
+        if (galRem == null) return '\u2014';
+        const cautionGal = CockpitConfig.get('enginePage.fuelCautionGal') || 8;
+        const warnGal = CockpitConfig.get('enginePage.fuelWarningGal') || 4;
+        const stale = !!this._startFuelStale;
+        const val = galRem.toFixed(1) + (stale ? '?' : '');
+        if (galRem <= warnGal) return `<span class="fuel-red">${val}</span>`;
+        if (galRem <= cautionGal || stale) return `<span class="fuel-yellow">${val}</span>`;
+        return val;
+    }
+
     _getCellValue(wp, key, seg = null, segIndex = 0) {
         // When seg is provided, use segment-specific computed values
         if (seg) {
@@ -3023,15 +3240,8 @@ class RouteTable {
                     return segIndex === 0 ? '\u2014' : '';
                 case 'fuel':
                     return seg._fuel != null ? seg._fuel.toFixed(1) : '\u2014';
-                case 'fuel_rem': {
-                    if (seg._fuelRem == null) return '\u2014';
-                    const cautionGal = CockpitConfig.get('enginePage.fuelCautionGal') || 8;
-                    const warnGal = CockpitConfig.get('enginePage.fuelWarningGal') || 4;
-                    const val = seg._fuelRem.toFixed(1);
-                    if (seg._fuelRem <= warnGal) return `<span class="fuel-red">${val}</span>`;
-                    if (seg._fuelRem <= cautionGal) return `<span class="fuel-yellow">${val}</span>`;
-                    return val;
-                }
+                case 'fuel_rem':
+                    return this._fuelRemCell(seg._fuelRem);
                 case 'tas':
                     return seg._tas != null ? Math.round(seg._tas) : '\u2014';
                 case 'gs': {
@@ -3082,15 +3292,8 @@ class RouteTable {
                     : '\u2014';
             case 'fuel':
                 return wp._fuel != null ? wp._fuel.toFixed(1) : '\u2014';
-            case 'fuel_rem': {
-                if (wp._fuelRem == null) return '\u2014';
-                const cautionGal = CockpitConfig.get('enginePage.fuelCautionGal') || 8;
-                const warnGal = CockpitConfig.get('enginePage.fuelWarningGal') || 4;
-                const val = wp._fuelRem.toFixed(1);
-                if (wp._fuelRem <= warnGal) return `<span class="fuel-red">${val}</span>`;
-                if (wp._fuelRem <= cautionGal) return `<span class="fuel-yellow">${val}</span>`;
-                return val;
-            }
+            case 'fuel_rem':
+                return this._fuelRemCell(wp._fuelRem);
             case 'tas':
                 return wp._tas != null ? Math.round(wp._tas) : '\u2014';
             case 'gs': {

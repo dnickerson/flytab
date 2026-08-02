@@ -78,6 +78,7 @@
     "trendChartMinutes": 30,
     "fuelCautionGal": 8,
     "fuelWarningGal": 4,
+    "fuelAdvisoryGal": 12,
     "stickyValveThresholdPct": 50,
     "stickyValveWindowMinutes": 10,
     "egtChartEnabled": true,

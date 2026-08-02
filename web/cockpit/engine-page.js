@@ -50,9 +50,16 @@ class EnginePage {
             oilPressDanger: 100,     // red above — Lycoming redline
             carbTempCaution: 40,    // icing range upper (degrees F)
             carbTempDanger: -15,    // icing range lower (degrees F)
-            fuelCapacity: 34,
-            fuelLowGal: 8,
-            fuelCriticalGal: 4,
+            // Fallback only. The canonical capacity lives in aircraft-config.json
+            // (performance.fuel_capacity_gal) and is read in _loadConfig(). 36 gal =
+            // 2 x 18 gal tanks; the Pi's old 34 gal "usable capacity" is deprecated.
+            fuelCapacity: 36,
+            fuelCautionGal: 8,
+            fuelWarningGal: 4,
+            // Above this per-tank level the EDM senders on this airframe read a flat/
+            // invalid value. Canonical value: aircraft-config.json
+            // performance.fuel_sender_accurate_below_gal (read in _loadConfig()).
+            senderAccurateBelowGal: 12,
             trendChartMinutes: 30,
             stickyValveWarmupMin: 10,
             stickyValveEgtRatio: 0.50,
@@ -171,14 +178,18 @@ class EnginePage {
                 ${this._gaugeHtml('ep-fuel-end',  'ENDURANCE',   '-:--', 'H:MM')}
                 ${this._gaugeHtml('ep-fuel-rng',  'RANGE',       '---',  'NM')}
             </div>
+            <div class="ep-fuel-stale" id="ep-fuel-stale" style="display:none;">
+                UNCONFIRMED &mdash; TANK STATE NOT UPDATED IN 45+ MIN. REMAINING MAY READ HIGH; CONFIRM FUEL.
+            </div>
+            <div class="ep-tank-source-note">LEFT/RIGHT below are raw EDM sender readings, not the tracked figure above.</div>
             <div class="ep-fuel-tanks">
                 <div class="ep-tank">
-                    <div class="ep-tank-label">LEFT</div>
+                    <div class="ep-tank-label">LEFT (EDM SENDER)</div>
                     <div class="ep-tank-bar-wrap"><div class="ep-tank-bar" id="ep-tank-l"></div></div>
                     <div class="ep-tank-val" id="ep-tank-l-val">--.-</div>
                 </div>
                 <div class="ep-tank">
-                    <div class="ep-tank-label">RIGHT</div>
+                    <div class="ep-tank-label">RIGHT (EDM SENDER)</div>
                     <div class="ep-tank-bar-wrap"><div class="ep-tank-bar" id="ep-tank-r"></div></div>
                     <div class="ep-tank-val" id="ep-tank-r-val">--.-</div>
                 </div>
@@ -258,6 +269,8 @@ class EnginePage {
             dataAge: this._el.querySelector('#ep-data-age'),
             mix: this._el.querySelector('#ep-mix'),
             fuelBar: this._el.querySelector('#ep-fuel-bar'),
+            fuelRem: this._el.querySelector('#ep-fuel-rem'),
+            fuelStale: this._el.querySelector('#ep-fuel-stale'),
             stickyBanner: this._el.querySelector('#ep-sticky-banner'),
             stickyCyl: this._el.querySelector('#ep-sticky-cyl'),
             recRow: this._el.querySelector('#ep-rec-row'),
@@ -331,6 +344,19 @@ class EnginePage {
                 if (c) Object.assign(this._cfg, c);
             }
         } catch (_) { /* ignore */ }
+
+        // Aircraft-level values come from aircraft-config.json, the single source of
+        // truth for the airframe (the aircraft page edits it). Applied AFTER the
+        // enginePage block on purpose: a UI-preferences key must not be able to fork
+        // the airframe's real fuel capacity. Falls back to the constructor defaults.
+        try {
+            if (typeof CockpitConfig !== 'undefined' && CockpitConfig.aircraft) {
+                const cap = CockpitConfig.aircraft('performance.fuel_capacity_gal');
+                if (cap > 0) this._cfg.fuelCapacity = cap;
+                const senderLimit = CockpitConfig.aircraft('performance.fuel_sender_accurate_below_gal');
+                if (senderLimit > 0) this._cfg.senderAccurateBelowGal = senderLimit;
+            }
+        } catch (_) { /* keep fallbacks */ }
 
         // Sync both dropdowns to config
         const durStr = String(this._cfg.trendChartMinutes);
@@ -423,8 +449,40 @@ class EnginePage {
         const oat       = d.oat ?? 0;
         const gs        = d.speed_kts ?? d.ground_speed ?? 0;
 
-        const gallonsRem = d.gallons_rem ?? d.fuel_remaining_gal ?? d.Gallons_Rem ?? d.Fuel_Remaining ?? d.fuel_remaining ?? 0;
-        const fuelUsed   = d.flight_fuel_used ?? 0;
+        // Canonical live fuel read (manual override > tracked tank state > capacity).
+        // A `capacity` source means nothing is actually being tracked — it is a planning
+        // default, not a measurement. Showing full tanks on a live instrument would tell
+        // the pilot there is more fuel than is known to exist, so fall through to this
+        // page's existing "no data" placeholders instead.
+        const fuelRead = (typeof FuelState !== 'undefined')
+            ? FuelState.getCurrentFuel()
+            : { gallons: 0, source: 'none' };
+        // The SOURCE, not the number, decides whether this panel has fuel data at all.
+        // Gating on `gallonsRem > 0` conflated two different states: "nothing is being
+        // tracked" and "the tanks are dry". Those must never render the same on a fuel
+        // instrument, so every sink below gates on `fuelTracked` instead.
+        const fuelTracked = (fuelRead.source === 'manual' || fuelRead.source === 'tank_state');
+        const gallonsRem = fuelTracked ? fuelRead.gallons : 0;
+        // DECISION (2026-07-31, Dana): a tracked figure that FuelTankState considers
+        // stale (>45 min since the last integrated sample, i.e. needsConfirmation())
+        // is still SHOWN, but explicitly marked unconfirmed. Rationale: blanking it
+        // would throw away the pilot's last known-good quantity at exactly the moment
+        // he most needs a starting point, while showing it unmarked would let a number
+        // that has not been updated in 45+ minutes read as a live measurement. The
+        // stale figure always reads HIGH (fuel burned during the gap is not
+        // subtracted), so it must never be presented as a measurement.
+        // The predicate itself lives on FuelState.getCurrentFuel() (SDD Task 14) so
+        // this page, the instrument strip and the route table cannot disagree about
+        // whether a figure is trustworthy; it is already false for `manual` (the
+        // pilot's own entry) and `capacity` (nothing tracked).
+        const fuelStale = !!fuelRead.stale;
+        // The EDM's own totalizer (EDM field 12). Used ONLY by the TIC vs EDM
+        // cross-check row below, whose whole purpose is to surface disagreement
+        // between the tic-mark measurement and the EDM — it must stay an EDM read.
+        const edmFuelRem = d.gallons_rem ?? d.fuel_remaining_gal ?? d.Gallons_Rem ?? d.Fuel_Remaining ?? d.fuel_remaining ?? 0;
+        // engine_monitor.get_status() nests the Pi fuel tracker under `fuel`;
+        // there is no top-level flight_fuel_used.
+        const fuelUsed   = d.fuel?.flight_fuel_used ?? 0;
         const fuelL      = d.fuel_l1 ?? d.Fuel_L1 ?? d.Fuel_Left ?? d.edm_fuel_left ?? 0;
         const fuelR      = d.fuel_l2 ?? d.Fuel_L2 ?? d.Fuel_Right ?? d.edm_fuel_right ?? 0;
 
@@ -525,10 +583,16 @@ class EnginePage {
         }
 
         /* ---- Section 5: Fuel ---- */
-        this._setText('ep-fuel-rem', gallonsRem > 0 ? gallonsRem.toFixed(1) : '--.-');
+        this._setText('ep-fuel-rem', fuelTracked ? gallonsRem.toFixed(1) : '--.-');
         this._setText('ep-fuel-used', fuelUsed > 0 ? fuelUsed.toFixed(1) : '--.-');
+        if (this._dom.fuelRem) {
+            this._dom.fuelRem.className = 'ep-gauge-value' + (fuelStale ? ' ep-unconfirmed' : '');
+        }
+        if (this._dom.fuelStale) {
+            this._dom.fuelStale.style.display = fuelStale ? '' : 'none';
+        }
 
-        if (fuelFlow > 0 && gallonsRem > 0) {
+        if (fuelFlow > 0 && fuelTracked) {
             const endH = gallonsRem / fuelFlow;
             const h = Math.floor(endH);
             const m = Math.round((endH - h) * 60);
@@ -537,34 +601,51 @@ class EnginePage {
             this._setText('ep-fuel-end', '-:--');
         }
 
-        if (gs > 0 && fuelFlow > 0 && gallonsRem > 0) {
+        if (gs > 0 && fuelFlow > 0 && fuelTracked) {
             const nmpg = gs / fuelFlow;
             this._setText('ep-fuel-rng', Math.round(gallonsRem * nmpg));
         } else {
             this._setText('ep-fuel-rng', '---');
         }
 
-        // Tank bars
+        // Tank bars — these are RAW EDM SENDER readings, a different (and less
+        // trustworthy) source than the tracked REMAINING figure above, so they are
+        // labelled as such in the UI and can legitimately disagree with it. Same
+        // suppression rule as fuel-tanks.js `_updateSenderDisplay`: above the
+        // configured accurate-below level the sender reads a flat/invalid value and
+        // must not be shown as if it were a real cross-check.
         const cap = this._cfg.fuelCapacity;
         const halfCap = cap / 2;
-        this._setTankBar('ep-tank-l', fuelL, halfCap);
-        this._setTankBar('ep-tank-r', fuelR, halfCap);
-        this._setText('ep-tank-l-val', fuelL > 0 ? fuelL.toFixed(1) + ' gal' : '--.-');
-        this._setText('ep-tank-r-val', fuelR > 0 ? fuelR.toFixed(1) + ' gal' : '--.-');
+        const senderLimit = this._cfg.senderAccurateBelowGal;
+        let trackedTanks = null;
+        try {
+            if (typeof FuelTankState !== 'undefined') trackedTanks = FuelTankState.getState();
+        } catch (_) { trackedTanks = null; }
+        const lSenderValid = !trackedTanks || trackedTanks.left_gal <= senderLimit;
+        const rSenderValid = !trackedTanks || trackedTanks.right_gal <= senderLimit;
+        this._setTankBar('ep-tank-l', fuelL, halfCap, !lSenderValid);
+        this._setTankBar('ep-tank-r', fuelR, halfCap, !rSenderValid);
+        this._setText('ep-tank-l-val', !lSenderValid ? '—'
+            : (fuelL > 0 ? fuelL.toFixed(1) + ' gal' : '--.-'));
+        this._setText('ep-tank-r-val', !rSenderValid ? '—'
+            : (fuelR > 0 ? fuelR.toFixed(1) + ' gal' : '--.-'));
 
-        // Fuel bar
-        const fuelPct = cap > 0 ? Math.min(100, (gallonsRem / cap) * 100) : 0;
+        // Fuel bar — driven by the same canonical read as REMAINING. With no tracked
+        // state there is no percentage to draw: empty bar, placeholder label, and NO
+        // caution/warning colour (an untracked panel is not a low-fuel condition).
+        const fuelPct = (fuelTracked && cap > 0) ? Math.min(100, (gallonsRem / cap) * 100) : 0;
         if (this._dom.fuelBar) {
             this._dom.fuelBar.style.width = fuelPct + '%';
-            this._dom.fuelBar.className = 'ep-fuel-bar' +
-                (gallonsRem <= this._cfg.fuelCriticalGal ? ' critical' :
-                 gallonsRem <= this._cfg.fuelLowGal ? ' low' : '');
+            this._dom.fuelBar.className = 'ep-fuel-bar' + (!fuelTracked ? '' :
+                gallonsRem <= this._cfg.fuelWarningGal ? ' critical' :
+                gallonsRem <= this._cfg.fuelCautionGal ? ' low' : '');
         }
-        this._setText('ep-fuel-bar-label',
-            `${Math.round(fuelPct)}% (${gallonsRem.toFixed(1)}/${cap} gal)`);
+        this._setText('ep-fuel-bar-label', fuelTracked
+            ? `${Math.round(fuelPct)}% (${gallonsRem.toFixed(1)}/${cap} gal)`
+            : `--% (--.-/${cap} gal)`);
 
         /* ---- TIC vs EDM variance ---- */
-        this._updateTicEdm(gallonsRem);
+        this._updateTicEdm(edmFuelRem);
 
         /* ---- Section 6: Efficiency ---- */
         if (fuelFlow > 0 && gs > 40) {
@@ -907,9 +988,16 @@ class EnginePage {
         }
     }
 
-    _setTankBar(id, val, max) {
+    _setTankBar(id, val, max, suppressed = false) {
         const el = this._el.querySelector('#' + id);
         if (!el) return;
+        if (suppressed) {
+            // Sender out of its accurate range — draw nothing rather than a bar the
+            // pilot could read as a level (and never a red "critical" empty bar).
+            el.style.height = '0%';
+            el.className = 'ep-tank-bar';
+            return;
+        }
         const pct = max > 0 ? Math.min(100, Math.max(0, (val / max) * 100)) : 0;
         el.style.height = pct + '%';
         el.className = 'ep-tank-bar' +
@@ -1143,6 +1231,30 @@ class EnginePage {
 .ep-chart-wrap canvas {
     width: 100%;
     height: 100%;
+}
+
+/* Unconfirmed / stale tracked fuel state */
+.ep-fuel-stale {
+    background: var(--color-caution);
+    color: #000;
+    font-family: var(--font-ui);
+    font-size: 15px;
+    font-weight: 800;
+    text-align: center;
+    padding: 6px 8px;
+    border-radius: 4px;
+    margin: 4px 0;
+}
+.ep-gauge-value.ep-unconfirmed {
+    color: var(--color-caution) !important;
+}
+.ep-tank-source-note {
+    font-family: var(--font-ui);
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-align: center;
+    margin-top: 4px;
 }
 
 /* Fuel tank bars */

@@ -35,11 +35,11 @@
     "climb_pwr_pct": 100,
     "climb_rpm": 2700,
     "climb_mp": 28,
-    "descent_gph": 4,
+    "descent_gph": 6.9,
     "descent_pwr_pct": 50,
     "descent_rpm": 2400,
     "descent_mp": 14,
-    "glide_ratio": 10.0,
+    "glide_ratio": 10,
     "test_alt_agl_ft": 10000,
     "lop_sfc": 0.067,
     "max_rpm": 2700,
@@ -49,7 +49,31 @@
     "vne_kt": 182,
     "power_settings": [
       {
+        "band": "40-45",
+        "pct": 42,
+        "pct_mid": 42,
+        "rpm": 2390,
+        "mp": 14.5,
+        "tas_kt": 97,
+        "gph": 5,
+        "gph_std": 0,
+        "samples": 0
+      },
+      {
+        "band": "46-50",
+        "pct": 48,
+        "pct_mid": 48,
+        "rpm": 2390,
+        "mp": 16.7,
+        "tas_kt": 111,
+        "gph": 5.7,
+        "gph_std": 0,
+        "samples": 0
+      },
+      {
+        "band": "51-55",
         "pct": 55,
+        "pct_mid": 53,
         "rpm": 2390,
         "mp": 19.4,
         "tas_kt": 128,
@@ -58,7 +82,9 @@
         "samples": 149
       },
       {
+        "band": "56-60",
         "pct": 60,
+        "pct_mid": 58,
         "rpm": 2390,
         "mp": 21.3,
         "tas_kt": 140,
@@ -67,7 +93,9 @@
         "samples": 329
       },
       {
+        "band": "61-65",
         "pct": 65,
+        "pct_mid": 63,
         "rpm": 2390,
         "mp": 22.1,
         "tas_kt": 153,
@@ -76,7 +104,9 @@
         "samples": 1120
       },
       {
+        "band": "66-70",
         "pct": 70,
+        "pct_mid": 68,
         "rpm": 2400,
         "mp": 23.6,
         "tas_kt": 156,
@@ -85,7 +115,9 @@
         "samples": 359
       },
       {
+        "band": "71-75",
         "pct": 75,
+        "pct_mid": 73,
         "rpm": 2410,
         "mp": 24.5,
         "tas_kt": 161,
@@ -94,21 +126,49 @@
         "samples": 47
       }
     ],
-    "power_settings_source": "data-derived from 33 EDM+GPS flight logs, N194JT O-360-A1A"
+    "power_settings_source": "data-derived from 33 EDM+GPS flight logs, N194JT O-360-A1A",
+    "reserve_gal": 10,
+    "fuel_sender_accurate_below_gal": 12
   },
   "weight_balance": {
     "empty_weight": 1034,
     "empty_cg": 76.34,
     "max_gross_weight": 1800,
     "stations": [
-      { "name": "Pilot",     "arm": 92.7,  "max_weight": 400 },
-      { "name": "Passenger", "arm": 92.7,  "max_weight": 400 },
-      { "name": "Baggage",   "arm": 122.0, "max_weight": 50  },
-      { "name": "Fuel",      "arm": 76.75, "fuel": true, "gal_to_lbs": 6, "max_gal": 36 }
+      {
+        "name": "Pilot",
+        "arm": 92.7,
+        "max_weight": 400
+      },
+      {
+        "name": "Passenger",
+        "arm": 92.7,
+        "max_weight": 400
+      },
+      {
+        "name": "Baggage",
+        "arm": 122,
+        "max_weight": 50
+      },
+      {
+        "name": "Fuel",
+        "arm": 76.75,
+        "fuel": true,
+        "gal_to_lbs": 6,
+        "max_gal": 36
+      }
     ],
     "cg_envelope": [
-      { "weight": 1034, "fwd_cg": 77.95, "aft_cg": 84.84 },
-      { "weight": 1800, "fwd_cg": 77.95, "aft_cg": 84.84 }
+      {
+        "weight": 1034,
+        "fwd_cg": 77.95,
+        "aft_cg": 84.84
+      },
+      {
+        "weight": 1800,
+        "fwd_cg": 77.95,
+        "aft_cg": 84.84
+      }
     ]
   },
   "engine_type": "Lycoming",

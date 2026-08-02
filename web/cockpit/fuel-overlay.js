@@ -18,6 +18,19 @@ class FuelOverlay {
         this._cachedCsvEdmFuel = 0;
         this._shownAt = 0;
         this._applying = false;
+        // True once the pilot has moved a slider, typed in a tic field or tapped a
+        // ± button since the current show(). show() restores the PREVIOUS
+        // measurement into the tic fields, so a fuel stop recorded without touching
+        // them would write the departure figure back as if it had just been measured.
+        this._ticsTouchedSinceShow = false;
+        // Which door the overlay was opened from. show() takes no argument from the
+        // preflight call sites (MORE → Fuel Entry in tab-bar.js, the instrument-strip
+        // fuel readout), where re-applying a restored reading is a legitimate
+        // re-confirmation and must keep working. app.js's in-flight fuel-stop overlay
+        // opens it with show({ requireFreshTics: true }): there the restored reading is
+        // the DEPARTURE reading, and BOTH write paths into canonical FuelTankState —
+        // _applyMeasurement() and _recordFuelStop() — must refuse it.
+        this._requireFreshTics = false;
         this._buildDOM();
     }
 
@@ -79,6 +92,9 @@ class FuelOverlay {
             <div class="fo-total-row">
                 TOTAL: <span id="fo-total-gal" class="fo-total-val">0.0</span> gal
             </div>
+            <div class="fo-dropped-burn-row" id="fo-dropped-burn-row" style="display:none;">
+                Possible under-tracked burn during a comms gap: <span id="fo-dropped-burn-val">0.0</span> gal
+            </div>
 
             <!-- B) EDM COMPARISON -->
             <div class="fo-edm-section" id="fo-edm-section" style="display:none;">
@@ -124,6 +140,9 @@ class FuelOverlay {
 
             <!-- D) APPLY -->
             <button class="fo-apply-btn" id="fo-apply">APPLY TIC MEASUREMENT</button>
+            <!-- Reuses .fo-add-status styling (hidden while empty) so a refused APPLY
+                 explains itself instead of silently doing nothing. -->
+            <div class="fo-add-status" id="fo-apply-status"></div>
 
             <!-- E) FUEL ADDED -->
             <div class="fo-section-title">FUEL ADDED</div>
@@ -202,6 +221,8 @@ class FuelOverlay {
             rightInput: this._el.querySelector('#fo-right-input'),
             rightGal: this._el.querySelector('#fo-right-gal'),
             totalGal: this._el.querySelector('#fo-total-gal'),
+            droppedBurnRow: this._el.querySelector('#fo-dropped-burn-row'),
+            droppedBurnVal: this._el.querySelector('#fo-dropped-burn-val'),
             edmSection: this._el.querySelector('#fo-edm-section'),
             edmTic: this._el.querySelector('#fo-edm-tic'),
             edmEdm: this._el.querySelector('#fo-edm-edm'),
@@ -220,6 +241,7 @@ class FuelOverlay {
             addPrice: this._el.querySelector('#fo-add-price'),
             addRecord: this._el.querySelector('#fo-add-record'),
             addStatus: this._el.querySelector('#fo-add-status'),
+            applyStatus: this._el.querySelector('#fo-apply-status'),
             histBody:  this._el.querySelector('#fo-hist-body'),
             kfFilled:  this._el.querySelector('#fo-kf-filled'),
             kfUsed:    this._el.querySelector('#fo-kf-used'),
@@ -231,49 +253,62 @@ class FuelOverlay {
         wireTap(this._el.querySelector('#fo-close'), () => this.hide());
 
         // Wire left tank controls
+        // Every one of these fires only on real pilot interaction, so each marks the
+        // reading as entered during THIS session (see _ticsTouchedSinceShow). The ±
+        // buttons mark even when the value is clamped or lands back where it started —
+        // that is what lets a pilot confirm a reading that legitimately equals the
+        // restored one.
         this._dom.leftSlider.addEventListener('input', (e) => {
+            this._ticsTouchedSinceShow = true;
             this._leftTic = parseFloat(e.target.value);
             this._dom.leftInput.value = this._leftTic;
             this._updateDisplay();
         });
         this._dom.leftInput.addEventListener('input', (e) => {
+            this._ticsTouchedSinceShow = true;
             const raw = parseFloat(e.target.value) || 0;
             this._leftTic = Math.min(this._maxTic, Math.max(0, Math.round(raw / this._ticStep) * this._ticStep));
             this._dom.leftSlider.value = this._leftTic;
             this._updateDisplay();
         });
         wireTap(this._el.querySelector('#fo-left-minus'), () => {
+            this._ticsTouchedSinceShow = true;
             this._leftTic = Math.max(0, Math.round((this._leftTic - this._ticStep) / this._ticStep) * this._ticStep);
             this._dom.leftSlider.value = this._leftTic;
             this._dom.leftInput.value = this._leftTic;
             this._updateDisplay();
         });
         wireTap(this._el.querySelector('#fo-left-plus'), () => {
+            this._ticsTouchedSinceShow = true;
             this._leftTic = Math.min(this._maxTic, Math.round((this._leftTic + this._ticStep) / this._ticStep) * this._ticStep);
             this._dom.leftSlider.value = this._leftTic;
             this._dom.leftInput.value = this._leftTic;
             this._updateDisplay();
         });
 
-        // Wire right tank controls
+        // Wire right tank controls (same _ticsTouchedSinceShow contract as the left)
         this._dom.rightSlider.addEventListener('input', (e) => {
+            this._ticsTouchedSinceShow = true;
             this._rightTic = parseFloat(e.target.value);
             this._dom.rightInput.value = this._rightTic;
             this._updateDisplay();
         });
         this._dom.rightInput.addEventListener('input', (e) => {
+            this._ticsTouchedSinceShow = true;
             const raw = parseFloat(e.target.value) || 0;
             this._rightTic = Math.min(this._maxTic, Math.max(0, Math.round(raw / this._ticStep) * this._ticStep));
             this._dom.rightSlider.value = this._rightTic;
             this._updateDisplay();
         });
         wireTap(this._el.querySelector('#fo-right-minus'), () => {
+            this._ticsTouchedSinceShow = true;
             this._rightTic = Math.max(0, Math.round((this._rightTic - this._ticStep) / this._ticStep) * this._ticStep);
             this._dom.rightSlider.value = this._rightTic;
             this._dom.rightInput.value = this._rightTic;
             this._updateDisplay();
         });
         wireTap(this._el.querySelector('#fo-right-plus'), () => {
+            this._ticsTouchedSinceShow = true;
             this._rightTic = Math.min(this._maxTic, Math.round((this._rightTic + this._ticStep) / this._ticStep) * this._ticStep);
             this._dom.rightSlider.value = this._rightTic;
             this._dom.rightInput.value = this._rightTic;
@@ -310,7 +345,24 @@ class FuelOverlay {
     /* ------------------------------------------------------------------
      * Show / Hide
      * ----------------------------------------------------------------*/
-    show() {
+    /**
+     * @param {object}  [opts]
+     * @param {boolean} [opts.requireFreshTics=false]
+     *        Set by the in-flight fuel-stop path only (app.js _showFuelStopOverlay's
+     *        "Measure & Record Fuel" button). When set, APPLY as well as RECORD refuse
+     *        to write canonical FuelTankState from a reading the pilot did not enter or
+     *        confirm during this session. Left unset by the preflight call sites
+     *        (tab-bar.js MORE → Fuel Entry, instrument-strip.js), where re-applying the
+     *        restored reading is the intended way to re-confirm it.
+     */
+    show(opts = {}) {
+        // A restored reading is NOT a reading taken now. Recording a fuel stop needs a
+        // measurement the pilot entered or confirmed during this session, so every
+        // show() starts untouched — including the show() the fuel-stop overlay's
+        // "Measure & Record Fuel" button triggers (app.js _showFuelStopOverlay).
+        this._ticsTouchedSinceShow = false;
+        this._requireFreshTics = !!(opts && opts.requireFreshTics);
+
         // Restore previous tic values
         const prev = Settings.fuelMeasurement;
         if (prev) {
@@ -327,6 +379,18 @@ class FuelOverlay {
         if (manual != null && manual > 0) {
             this._dom.manualInput.value = manual;
         }
+
+        // Surface any dropped-burn estimate from FuelTankState (comms-gap tracking)
+        try {
+            const tankState = (typeof FuelTankState !== 'undefined') ? FuelTankState.getState() : null;
+            const dropped = tankState?.dropped_burn_estimate_gal ?? 0;
+            if (dropped > 0.05) {
+                this._dom.droppedBurnVal.textContent = dropped.toFixed(2);
+                this._dom.droppedBurnRow.style.display = '';
+            } else {
+                this._dom.droppedBurnRow.style.display = 'none';
+            }
+        } catch (_) { /* FuelTankState unavailable */ }
 
         // Auto-fill fuel-add date/time with current local time
         const now = new Date();
@@ -349,6 +413,7 @@ class FuelOverlay {
 
         // Clear previous status
         this._dom.addStatus.textContent = '';
+        if (this._dom.applyStatus) this._dom.applyStatus.textContent = '';
 
         this._updateDisplay();
         this._updateSourceDisplay();
@@ -453,6 +518,28 @@ class FuelOverlay {
         if (Date.now() - this._shownAt < 600) return;
         // Guard against double-tap during the async EDM resolve (can take 3-5s)
         if (this._applying) return;
+
+        // Opened from the in-flight fuel-stop overlay: APPLY writes canonical
+        // FuelTankState (init() → fresh initialized_at) exactly as RECORD does, and that
+        // timestamp is the only thing app.js's Continue gate checks. show() restored the
+        // DEPARTURE reading into the tic fields, so tapping this button without touching
+        // a control would report "Measured: <departure gallons>" over tanks that have
+        // since burned down — the same defect as the record path, on the larger button.
+        // Refuse here, before the async resolve and before any write, so FuelState,
+        // FuelTankState and initialized_at are all left byte-identical.
+        // A reading that genuinely equals the restored one is confirmed the same way as
+        // for RECORD: any ± nudge or slider touch sets the flag, so a + then − round trip
+        // (or − then + at max tic, where + is clamped) counts and a correct entry is
+        // never made impossible.
+        // Preflight (MORE → Fuel Entry, instrument strip) leaves _requireFreshTics false,
+        // so re-applying a restored reading there keeps working unchanged.
+        if (this._requireFreshTics && !this._ticsTouchedSinceShow) {
+            this._setApplyStatus(
+                'Enter this stop’s tic-mark reading above (nudge ± to confirm an unchanged value) before applying',
+                'error');
+            return;
+        }
+
         this._applying = true;
 
         // Resolve EDM fuel async, then complete measurement
@@ -532,6 +619,32 @@ class FuelOverlay {
             this._setAddStatus('Enter gallons added', 'error');
             return;
         }
+        // Reject before any state mutation unless the pilot entered or confirmed the tic
+        // reading during THIS overlay session. show() restores the previous measurement
+        // into the tic fields, which after any preflight measurement — i.e. always, in
+        // normal use — leaves them non-zero: a value check alone therefore cannot tell a
+        // fresh reading from the departure reading, and recording would write the
+        // departure gallons into FuelTankState with a fresh initialized_at, turning the
+        // fuel-stop overlay's Continue gate green on a measurement that never happened.
+        // A pilot whose true reading equals the restored one confirms it by nudging a ±
+        // button (or the slider) — the handlers set the flag on any interaction, so a +
+        // then − round trip counts, and a correct entry is never made impossible.
+        if (!this._ticsTouchedSinceShow) {
+            this._setAddStatus(
+                'Enter this stop’s tic-mark reading above (tap + then − to confirm an unchanged value) before recording a fuel stop',
+                'error');
+            return;
+        }
+        // Second, narrower guard: the pilot did touch the controls but left both tanks at
+        // 0. ticToGallons(0) evaluates to the polynomial's non-zero y-intercept (~2.24
+        // gal), so checking computed gallons can't detect "no reading entered" — check the
+        // raw tic inputs directly. A genuine 0/0 tic reading (both tanks at empty) is not
+        // a plausible real-world fuel-stop scenario, so treating tic=0,0 as "not entered"
+        // is an acceptable, intentional trade-off.
+        if (this._leftTic === 0 && this._rightTic === 0) {
+            this._setAddStatus('Enter a tic-mark reading above before recording a fuel stop', 'error');
+            return;
+        }
         const airport = this._dom.addAirport.value.trim().toUpperCase();
         const date = this._dom.addDate.value;
         const time = this._dom.addTime.value;
@@ -545,29 +658,29 @@ class FuelOverlay {
             stops.push(record);
             localStorage.setItem('flytab_fuel_stops', JSON.stringify(stops));
 
-            // Update current fuel total: previous fuel + gallons added
-            const { gallons: currentFuel } = FuelState.getStartFuel();
-            const newTotal = currentFuel + gallons;
-            FuelState.saveMeasurement({ total_gal: newTotal, source: 'tic' });
-
-            // Update synthetic per-tank state if available
+            // Reset tracked fuel from the tic-mark reading already entered above (§A),
+            // exactly like _applyMeasurement() does — a fuel stop is always grounded in
+            // a fresh physical measurement, never computed from "previous + added."
+            const leftGal = FuelEngine.ticToGallons(this._leftTic, this._coefficients);
+            const rightGal = FuelEngine.ticToGallons(this._rightTic, this._coefficients);
+            const existingTank = (typeof FuelTankState !== 'undefined') ? FuelTankState.getState() : null;
             if (typeof FuelTankState !== 'undefined') {
-                const galL = parseFloat(this._dom.addGalL?.value);
-                const galR = parseFloat(this._dom.addGalR?.value);
-                if (galL > 0) FuelTankState.topOff('L', galL);
-                if (galR > 0) FuelTankState.topOff('R', galR);
-                if (!(galL > 0) && !(galR > 0)) {
-                    // No per-tank split given — divide evenly
-                    FuelTankState.topOff('L', gallons / 2);
-                    FuelTankState.topOff('R', gallons / 2);
-                }
+                FuelTankState.init(leftGal, rightGal, existingTank?.active_tank ?? 'L');
             }
+            const m = FuelEngine.createMeasurement(this._leftTic, this._rightTic, this._coefficients);
+            FuelState.saveMeasurement(m);
+            const newTotal = m.total_gal;
 
             window.dispatchEvent(new CustomEvent('fuelstate:changed'));
             this._updateSourceDisplay();
 
             // Sync fuel stop to Pi — use add endpoint so Pi logs the stop in its own history
             this._syncFuelAddToEngine(gallons, airport, price);
+
+            // The reading has been consumed. A second RECORD tap must be backed by its own
+            // fresh measurement, not this one — otherwise a double tap (or a second stop
+            // on the same ramp) re-writes these gallons and re-stamps initialized_at.
+            this._ticsTouchedSinceShow = false;
 
             // Clear inputs and show success
             this._dom.addGal.value = '';
@@ -608,6 +721,13 @@ class FuelOverlay {
 
     _setAddStatus(msg, type) {
         const el = this._dom.addStatus;
+        el.textContent = msg;
+        el.className = 'fo-add-status fo-add-status-' + (type || 'ok');
+    }
+
+    _setApplyStatus(msg, type) {
+        const el = this._dom.applyStatus;
+        if (!el) return;
         el.textContent = msg;
         el.className = 'fo-add-status fo-add-status-' + (type || 'ok');
     }

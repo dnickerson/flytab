@@ -7,6 +7,46 @@
  * Only outward calls: app.applyRouteEdit(plan) and app.closeRoutePlanner().
  */
 class RoutePlannerPanel {
+    /**
+     * Cruise planning burn at the aircraft's CONFIGURED cruise power
+     * (`performance.cruise_pwr_pct`, currently 65%). 8.4 gph.
+     *
+     * This is the number the pilot actually reads in the route table, so it is
+     * the one that matters. It is deliberately NOT `power_settings[].gph` for
+     * the 61-65 band, which reads 8.1:
+     *
+     *   - `~/engine_analysis/build_power_curve.py:352` writes
+     *     `"gph": round(gph_med, 1)` — every band value in that table is a
+     *     MEDIAN, i.e. the burn on an average day.
+     *   - Dana's governing principle is "we want to be on the side of planning
+     *     more consumption rather than less": planning constants come from a
+     *     conservative upper percentile, never a median or a mean. A median is
+     *     precisely the statistic that principle excludes.
+     *   - Binning `ml_phase == 'cruise'` rows by recorded %power across 53
+     *     flight logs gives, for the 65-69% band: n=7,879, median 8.10,
+     *     p85 8.40. 8.4 is the same distribution as the 8.1 band value, read at
+     *     p85 instead of at the median.
+     *
+     * Dana's direct instruction, 2026-07-31: "use 8.4 for the cruise gal/hr".
+     * Commit 65323c2 put 8.4 into RV9A_FALLBACK and RV9A_DEFAULT but this panel
+     * still built its profile out of the band table, so the route table kept
+     * showing the 8.1 median — ~0.93 gal MORE fuel remaining over a three-hour
+     * cruise than planned, i.e. optimistic, the direction that runs tanks dry.
+     *
+     * KEEP IN SYNC, BY HAND, with `fuelPhases.cruise.gph` in
+     * `web/shared/planning/planner/route-planner.js` (RV9A_FALLBACK) and
+     * `web/shared/planning-adapters/idb-profile.js` (RV9A_DEFAULT). The active
+     * profile itself is NOT readable from here: it lives behind
+     * `IdbProfileStore.getActive()`, which is async and IndexedDB-backed, while
+     * `_profileForPower()` is called synchronously inside render paths.
+     * `tests/planning/fuel-constants-sync.test.js` is the machine check that the
+     * hand-sync happened; it executes `_profileForPower()` and compares.
+     *
+     * DO NOT "correct" this back to 8.1 to match the band table, and do not
+     * edit the band table up to match this — that table is measured median data.
+     */
+    static CRUISE_GPH_AT_CONFIGURED_POWER = 8.4;
+
     constructor(panelEl, nasrDb, planningAdapters) {
         this._el      = panelEl;
         this._nasrDb  = nasrDb;
@@ -658,11 +698,25 @@ class RoutePlannerPanel {
             || powerSettings.reduce((best, s) =>
                 Math.abs(s.pct - pctPower) < Math.abs(best.pct - pctPower) ? s : best);
         if (!entry) return null;
+
+        // Cruise burn: the band table gives MEDIAN gph (build_power_curve.py
+        // writes `round(gph_med, 1)`), and planning must use a conservative
+        // upper percentile instead — see CRUISE_GPH_AT_CONFIGURED_POWER above.
+        // Only the aircraft's configured cruise power has a decided p85 figure,
+        // so every OTHER selected power keeps its measured band value rather
+        // than an invented one. rpm / mp / tas always come from the band.
+        // Math.max, not a replacement: this may only ever raise planned burn.
+        const atConfiguredCruise = perf?.cruise_pwr_pct != null
+            && Number(pctPower) === Number(perf.cruise_pwr_pct);
+        const cruiseGph = atConfiguredCruise
+            ? Math.max(entry.gph, RoutePlannerPanel.CRUISE_GPH_AT_CONFIGURED_POWER)
+            : entry.gph;
+
         return {
             id: 'rv9a-default', model: 'RV-9A',
             cruise_ktas:                entry.tas_kt,
             cruise_ias:                 perf?.cruise_speed_kt ?? 140,
-            fuel_burn_gph:              entry.gph,
+            fuel_burn_gph:              cruiseGph,
             fuel_capacity_gal:          perf?.fuel_capacity_gal ?? 36,
             reserve_gal:                10,
             climb_rate_fpm:             perf?.climb_fpm ?? 1500,
@@ -678,11 +732,17 @@ class RoutePlannerPanel {
                            rpm: perf?.climb_rpm, mp: perf?.climb_mp,
                            percent_power: perf?.climb_pwr_pct },
                 cruise:  { ias_kt:   perf?.cruise_speed_kt ?? 140,
-                           gph:      entry.gph,
+                           gph:      cruiseGph,
                            rpm:      entry.rpm,  mp: entry.mp,
                            percent_power: entry.pct },
+                // Descent fallback is 6.9, the measured descent p85 — NOT the
+                // old 4.0 book guess, which under-planned descent burn by ~2.9
+                // gph and therefore over-stated fuel remaining. Dead today
+                // (`descent_gph` is present in aircraft-config.json), but it is
+                // the same defect class as the cruise median above: a stale
+                // optimistic default waiting for the config key to go missing.
                 descent: { rate_fpm: perf?.descent_fpm ?? 700,
-                           gph:      perf?.descent_gph ?? 4,
+                           gph:      perf?.descent_gph ?? 6.9,
                            ias_kt:   perf?.descent_speed_kt ?? 170,
                            rpm: perf?.descent_rpm, mp: perf?.descent_mp,
                            percent_power: perf?.descent_pwr_pct },
@@ -2264,48 +2324,132 @@ class RoutePlannerPanel {
                 'position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:9999;' +
                 'display:flex;align-items:center;justify-content:center';
 
+            // Light, high-contrast scheme — this modal is read in direct sunlight
+            // on the panel-mounted tablet, where the old dark scheme washed out.
+            // Colours come from the design tokens in web/style.css; only the
+            // backdrop scrim behind the panel stays dark.
             overlay.innerHTML = `
-              <div style="background:#1a2030;border-radius:10px;max-width:420px;width:92%;
+              <div style="background:var(--bg-primary,#ffffff);border-radius:10px;max-width:420px;width:92%;
                            max-height:80vh;overflow:hidden;display:flex;flex-direction:column;
-                           box-shadow:0 8px 32px rgba(0,0,0,.6)">
-                <div style="padding:16px;border-bottom:1px solid #2a3040;
+                           box-shadow:0 8px 32px rgba(0,0,0,.45)">
+                <div style="padding:16px;border-bottom:1px solid var(--border,#e0e0e0);
                              display:flex;justify-content:space-between;align-items:flex-start">
                   <div>
-                    <div style="font-size:17px;font-weight:700;color:#fff">⛽ Fuel Stop Required</div>
-                    <div style="font-size:13px;color:#8899aa;margin-top:4px">
+                    <div style="font-size:17px;font-weight:800;color:var(--text-primary,#1a1a2e)">⛽ Fuel Stop Required</div>
+                    <div style="font-size:13px;font-weight:700;color:var(--text-secondary,#444444);margin-top:4px">
                       Near ${candidate.afterFixId} · ${hh}:${mm} flight time
                     </div>
                   </div>
-                  <button class="rpp-fs-skip" style="background:none;border:1px solid #3a4050;
-                    border-radius:6px;padding:6px 12px;color:#8899aa;cursor:pointer;
-                    font-size:14px;flex-shrink:0;margin-left:12px">Skip</button>
+                  <button class="rpp-fs-skip" style="background:var(--bg-surface,#f5f5f5);
+                    border:1px solid var(--border-strong,#b0b0b0);border-radius:6px;
+                    min-height:var(--touch-min,56px);padding:0 16px;flex-shrink:0;margin-left:12px;
+                    color:var(--text-secondary,#444444);font-size:15px;font-weight:700;cursor:pointer">Skip</button>
                 </div>
                 <div class="rpp-fs-list" style="overflow-y:auto;padding:4px 0"></div>
+                <div style="padding:12px 16px;border-top:1px solid var(--border,#e0e0e0);flex-shrink:0">
+                  <div style="font-size:13px;font-weight:800;color:var(--text-secondary,#444444);margin-bottom:8px">
+                    Or enter your own fuel stop
+                  </div>
+                  <div style="display:flex;gap:8px;align-items:stretch">
+                    <input class="rpp-fs-manual-input" type="text" placeholder="Identifier"
+                      autocapitalize="characters" autocomplete="off" autocorrect="off" spellcheck="false"
+                      style="flex:1;min-width:0;min-height:var(--touch-min,56px);
+                             background:var(--bg-surface,#f5f5f5);border:2px solid var(--border-strong,#b0b0b0);
+                             border-radius:6px;color:var(--text-primary,#1a1a2e);
+                             font-size:17px;font-weight:800;padding:0 12px">
+                    <button class="rpp-fs-manual-btn"
+                      style="min-height:var(--touch-min,56px);min-width:92px;flex-shrink:0;
+                             background:var(--bg-surface,#f5f5f5);border:2px solid var(--accent,#0066cc);
+                             border-radius:6px;color:var(--text-primary,#1a1a2e);
+                             font-size:16px;font-weight:800;cursor:pointer">USE</button>
+                  </div>
+                </div>
               </div>`;
 
             const list = overlay.querySelector('.rpp-fs-list');
             for (const apt of candidate.options) {
                 const row = document.createElement('div');
                 row.style.cssText =
-                    'padding:13px 16px;border-bottom:1px solid #2a3040;cursor:pointer;' +
+                    'padding:13px 16px;border-bottom:1px solid var(--border-light,#f0f0f0);cursor:pointer;' +
+                    'min-height:var(--touch-min,56px);box-sizing:border-box;' +
                     'display:flex;justify-content:space-between;align-items:center';
                 row.innerHTML = `
                   <div>
-                    <div style="font-size:16px;font-weight:600;color:#fff">${apt.icao}</div>
-                    <div style="font-size:12px;color:#8899aa;margin-top:2px">
-                      ${apt.name}${apt.hasSelfServeFuel ? ' · <span style="color:#4db8ff">Self-serve</span>' : ''}
+                    <div style="font-size:17px;font-weight:800;color:var(--text-primary,#1a1a2e)">${apt.icao}</div>
+                    <div style="font-size:13px;font-weight:700;color:var(--text-secondary,#444444);margin-top:2px">
+                      ${apt.name}${apt.hasSelfServeFuel ? ' · <span style="color:var(--accent,#0066cc);font-weight:800">Self-serve</span>' : ''}
                     </div>
                   </div>
-                  <div style="font-size:14px;color:#aabbd0;white-space:nowrap;margin-left:12px">
-                    ${apt.distNm} nm
+                  <div style="font-size:15px;font-weight:700;color:var(--text-secondary,#444444);white-space:nowrap;margin-left:12px">
+                    ${apt.distNm != null ? apt.distNm + ' nm' : ''}
                   </div>`;
-                row.addEventListener('touchstart', () => { row.style.background = '#243040'; }, { passive: true });
+                row.addEventListener('touchstart', () => { row.style.background = 'var(--bg-surface,#f5f5f5)'; }, { passive: true });
                 row.addEventListener('touchend',   () => { row.style.background = ''; }, { passive: true });
                 wireTap(row, () => { overlay.remove(); resolve(apt); });
                 list.appendChild(row);
             }
 
             wireTap(overlay.querySelector('.rpp-fs-skip'), () => { overlay.remove(); resolve(null); });
+
+            // Manual entry — the suggestion list can miss the field the pilot
+            // actually wants (better price, self-serve after hours, a field he
+            // knows). Resolve the typed identifier exactly the way _onAddTap
+            // does, so a manual stop can never resolve without coordinates —
+            // a coordinate-less stop would silently vanish during Apply.
+            const manualInput = overlay.querySelector('.rpp-fs-manual-input');
+            const manualBtn   = overlay.querySelector('.rpp-fs-manual-btn');
+            let manualBusy = false;
+            const useManual = async () => {
+                if (manualBusy) return;
+                const v = (manualInput?.value || '').trim().toUpperCase();
+                if (!v) { manualInput?.focus(); return; }
+                if (!this._nasrDb) {
+                    this._toast('Navigation database still loading — try again in a moment', 3500);
+                    return;
+                }
+                manualBusy = true;
+                try {
+                    let rec = null;
+                    let coord = this._coords[v];
+                    if (!coord) {
+                        rec = await this._nasrDb.getAirport(v).catch(() => null);
+                        if (Number.isFinite(rec?.lat) && Number.isFinite(rec?.lon)) {
+                            coord = { lat: rec.lat, lon: rec.lon };
+                            this._coords[v] = coord;
+                        }
+                    }
+                    if (!coord) {
+                        // Keep the modal open so the identifier can be corrected.
+                        this._toast(`"${v}" not found as an airport — check identifier`, 4000);
+                        return;
+                    }
+                    const apt = {
+                        icao: v,
+                        name: rec?.name || v,
+                        lat:  coord.lat,
+                        lon:  coord.lon,
+                        hasSelfServeFuel: !!rec?.hasSelfServeFuel,
+                    };
+                    // distNm is measured from the anchor fix when its coordinates
+                    // are already cached; omitted rather than invented when not.
+                    const anchor = this._coords[candidate.afterFixId];
+                    if (Number.isFinite(anchor?.lat) && Number.isFinite(anchor?.lon)
+                        && typeof NasrDB !== 'undefined'
+                        && typeof NasrDB.haversineNm === 'function') {
+                        apt.distNm = Math.round(
+                            NasrDB.haversineNm(anchor.lat, anchor.lon, coord.lat, coord.lon) * 10
+                        ) / 10;
+                    }
+                    overlay.remove();
+                    resolve(apt);
+                } finally {
+                    manualBusy = false;
+                }
+            };
+            wireTap(manualBtn, () => { useManual(); });
+            manualInput?.addEventListener('keydown', e => {
+                if (e.key === 'Enter') { e.preventDefault(); useManual(); }
+            });
 
             // Backdrop: tap on the dim background (not on any child) dismisses.
             // Must track touchstart ourselves because e.target is the original touch target

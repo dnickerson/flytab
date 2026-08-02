@@ -19,7 +19,7 @@ class Settings {
         show_fixes: false,
         show_airports: true,
         show_airways: false,
-        fuel_measurement: 'gallons',
+        fuel_measurement: null,
         fuel_manual_override: false,
         gps_source: 'auto',  // 'auto' (Stratux primary, device GPS fallback) | 'stratux' | 'internal'
         flytab_api_key: 'flytab2025',

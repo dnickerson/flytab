@@ -16,7 +16,10 @@ class FuelTanksDisplay {
         this._confirmTimer = null;
         this._timerInterval = null;
         this._lastGph = 0;
+        this._initPanelMode = null;   // 'preflight' | 'recovery' | null (panel closed)
+        this._initPanelDirty = false;  // set to true while user is editing, prevents live updates from clobbering
         this._tankCapacity = 18;   // per side, updated from config on init
+        this._senderAccurateBelowGal = 12;
         this._initSelectedTank = 'L';
     }
 
@@ -25,6 +28,7 @@ class FuelTanksDisplay {
             if (typeof CockpitConfig !== 'undefined') {
                 const cap = CockpitConfig.aircraft('performance.fuel_capacity_gal');
                 if (cap > 0) this._tankCapacity = cap / 2;
+                this._senderAccurateBelowGal = CockpitConfig.aircraft('performance.fuel_sender_accurate_below_gal') ?? 12;
             }
         } catch (_) {}
 
@@ -35,13 +39,23 @@ class FuelTanksDisplay {
             window.engineClient.addEventListener('engine:data', this._onEngineData);
         }
 
-        this._onStateChanged = () => this._render();
+        this._onStateChanged = () => { this._render(); this._refreshOpenPanel(); };
         window.addEventListener('fueltankstate:changed', this._onStateChanged);
+
+        this._onFuelStateChanged = () => this._refreshOpenPanel();
+        window.addEventListener('fuelstate:changed', this._onFuelStateChanged);
 
         this._onConfirmPrompt = (e) => this._showConfirmBanner(e.detail?.active_tank);
         window.addEventListener('fueltankstate:confirm_prompt', this._onConfirmPrompt);
 
-        this._timerInterval = setInterval(() => this._updateTimers(), 10000);
+        // Full re-render, not just the tank timers. FuelTankState._checkStaleness()
+        // calls _save() but NOT _fire(), so crossing the 45-min line emits no
+        // 'fueltankstate:changed' event — without this the unconfirmed marking would
+        // not appear until some unrelated state change happened to repaint the
+        // widget, which in a quiet cockpit may be never. _render() is idempotent
+        // (it only writes textContent, className and bar heights from current state)
+        // and calls _updateTimers() itself, so this is a superset of the old tick.
+        this._timerInterval = setInterval(() => this._render(), 10000);
 
         // If state exists but is stale, show recovery modal
         if (!FuelTankState.needsConfirmation()) {
@@ -64,6 +78,7 @@ class FuelTanksDisplay {
             window.engineClient.removeEventListener('engine:data', this._onEngineData);
         }
         if (this._onStateChanged) window.removeEventListener('fueltankstate:changed', this._onStateChanged);
+        if (this._onFuelStateChanged) window.removeEventListener('fuelstate:changed', this._onFuelStateChanged);
         if (this._onConfirmPrompt) window.removeEventListener('fueltankstate:confirm_prompt', this._onConfirmPrompt);
         if (this._timerInterval) clearInterval(this._timerInterval);
         if (this._confirmTimer) clearTimeout(this._confirmTimer);
@@ -155,7 +170,6 @@ class FuelTanksDisplay {
                 </div>
                 <div class="ftw-sel-row" id="ftw-sel-row">
                     <button class="ftw-sel-btn ftw-sel-active" data-tank="L">L</button>
-                    <button class="ftw-sel-btn" data-tank="BOTH">BOTH</button>
                     <button class="ftw-sel-btn" data-tank="R">R</button>
                 </div>
                 <div class="ftw-init-btns">
@@ -221,7 +235,9 @@ class FuelTanksDisplay {
         });
 
         wireTap(this._dom.initOk, () => this._applyInit());
-        wireTap(this._dom.initCancel, () => { this._dom.initPanel.style.display = 'none'; });
+        this._dom.initL.addEventListener('input', () => { this._initPanelDirty = true; });
+        this._dom.initR.addEventListener('input', () => { this._initPanelDirty = true; });
+        wireTap(this._dom.initCancel, () => { this._dom.initPanel.style.display = 'none'; this._initPanelDirty = false; this._initPanelMode = null; });
         wireTap(this._dom.confirmYes, () => this._dismissConfirm(false));
         wireTap(this._dom.confirmSwitch, () => this._dismissConfirm(true));
     }
@@ -271,6 +287,8 @@ class FuelTanksDisplay {
             b.classList.toggle('ftw-sel-active', b.dataset.tank === activeTank)
         );
         this._dom.initPanel.style.display = 'flex';
+        this._initPanelDirty = false;
+        this._initPanelMode = 'preflight';
     }
 
     _applyInit() {
@@ -279,6 +297,8 @@ class FuelTanksDisplay {
         if (isNaN(leftGal) || isNaN(rightGal) || leftGal < 0 || rightGal < 0) return;
         FuelTankState.init(leftGal, rightGal, this._initSelectedTank);
         this._dom.initPanel.style.display = 'none';
+        this._initPanelDirty = false;
+        this._initPanelMode = null;
     }
 
     /* ------------------------------------------------------------------
@@ -296,13 +316,35 @@ class FuelTanksDisplay {
             b.classList.toggle('ftw-sel-active', b.dataset.tank === state.active_tank)
         );
         this._dom.initPanel.style.display = 'flex';
+        this._initPanelDirty = false;
+        this._initPanelMode = 'recovery';
+    }
+
+    /* ------------------------------------------------------------------
+     * Keep an open init/recovery panel in sync with FuelTankState.
+     * Without this, a panel opened before an external update (e.g. a tic
+     * mark measurement entered via the fuel-overlay screen) keeps showing
+     * its stale snapshot, and tapping its action button would reapply the
+     * stale numbers over the correct ones.
+     * ----------------------------------------------------------------*/
+    _refreshOpenPanel() {
+        if (!this._initPanelMode || this._dom.initPanel.style.display !== 'flex') return;
+        if (this._initPanelDirty) return; // pilot is mid-edit — don't overwrite with a live value
+        const state = FuelTankState.getState();
+        if (!state) return;
+        this._dom.initL.value = state.left_gal.toFixed(1);
+        this._dom.initR.value = state.right_gal.toFixed(1);
+        this._initSelectedTank = state.active_tank;
+        this._dom.selRow.querySelectorAll('.ftw-sel-btn').forEach(b =>
+            b.classList.toggle('ftw-sel-active', b.dataset.tank === state.active_tank)
+        );
     }
 
     /* ------------------------------------------------------------------
      * Periodic confirmation banner
      * ----------------------------------------------------------------*/
     _showConfirmBanner(activeTank) {
-        const label = activeTank === 'L' ? 'LEFT' : activeTank === 'R' ? 'RIGHT' : 'BOTH';
+        const label = activeTank === 'R' ? 'RIGHT' : 'LEFT';
         this._dom.confirmMsg.textContent = `Still on ${label} tank?`;
         this._dom.confirmBanner.style.display = 'flex';
         if (this._confirmTimer) clearTimeout(this._confirmTimer);
@@ -325,12 +367,39 @@ class FuelTanksDisplay {
     /* ------------------------------------------------------------------
      * Rendering
      * ----------------------------------------------------------------*/
+    /**
+     * Render the tracked tank figures.
+     *
+     * A tracked figure FuelTankState considers unconfirmed (>45 min without an
+     * integrated sample) is STILL SHOWN, marked, rather than blanked. This widget
+     * used to fall through to _renderEmpty() on needsConfirmation(), which was
+     * survivable while staleness was only evaluated at page load; now that
+     * FuelTankState._checkStaleness() runs on every getState() it means the most
+     * prominent per-tank display in the cockpit drops to '--' mid-flight while the
+     * engine page, the instrument strip, the route table's REM column, the W&B
+     * overlay and the PowerTradeoff panel all keep showing the last figure marked
+     * unconfirmed. Blanking throws away the pilot's last known-good quantity at
+     * exactly the moment he most needs a starting point (see the DECISION note in
+     * engine-page.js ~466 and FuelState.getCurrentFuel()).
+     *
+     * The marking is the same two signals instrument-strip.js carries in its own
+     * cramped 64px field — a trailing '?' on the value and the caution colour —
+     * not a new visual language. A stale figure always reads HIGH (the burn during
+     * the gap was never subtracted), so:
+     *   STALE-NEVER-PLAIN: the bars never render in the in-limits style while the
+     *   state is unconfirmed, however comfortable the quantity looks.
+     *
+     * The genuine no-state case (nothing ever tracked) still renders empty — there
+     * is no last known-good quantity to preserve there.
+     */
     _render() {
         const state = FuelTankState.getState();
-        if (!state || FuelTankState.needsConfirmation()) {
+        if (!state) {
             this._renderEmpty();
             return;
         }
+        const stale = FuelTankState.needsConfirmation();
+        const q = stale ? '?' : '';
 
         let cautionGal = 8, warningGal = 4;
         try {
@@ -350,22 +419,26 @@ class FuelTanksDisplay {
         const barCls = (gal) =>
             gal <= warningGal ? 'ftw-bar-fill ftw-bar-warn' :
             gal <= cautionGal ? 'ftw-bar-fill ftw-bar-caution' :
+            stale             ? 'ftw-bar-fill ftw-bar-caution' :
             'ftw-bar-fill';
         this._dom.barL.className = barCls(state.left_gal);
         this._dom.barR.className = barCls(state.right_gal);
 
-        this._dom.galL.textContent = state.left_gal.toFixed(1);
-        this._dom.galR.textContent = state.right_gal.toFixed(1);
+        this._dom.galL.textContent = state.left_gal.toFixed(1) + q;
+        this._dom.galR.textContent = state.right_gal.toFixed(1) + q;
+        this._dom.galL.classList.toggle('ftw-unconfirmed', stale);
+        this._dom.galR.classList.toggle('ftw-unconfirmed', stale);
 
-        const activeL = state.active_tank === 'L' || state.active_tank === 'BOTH';
-        const activeR = state.active_tank === 'R' || state.active_tank === 'BOTH';
+        const activeL = state.active_tank === 'L';
+        const activeR = state.active_tank === 'R';
         this._dom.tankL.classList.toggle('ftw-tank-active', activeL);
         this._dom.tankR.classList.toggle('ftw-tank-active', activeR);
         this._dom.badgeL.classList.toggle('ftw-badge-active', activeL);
         this._dom.badgeR.classList.toggle('ftw-badge-active', activeR);
 
         const total = state.left_gal + state.right_gal;
-        this._dom.total.textContent = total.toFixed(1) + 'g';
+        this._dom.total.textContent = total.toFixed(1) + 'g' + q;
+        this._dom.total.classList.toggle('ftw-unconfirmed', stale);
 
         const pctTotal = Math.min(1, Math.max(0, total / (this._tankCapacity * 2)));
         this._dom.barTotal.style.height = (pctTotal * 100).toFixed(1) + '%';
@@ -378,6 +451,10 @@ class FuelTanksDisplay {
     }
 
     _renderEmpty() {
+        this._dom.galL.classList.remove('ftw-unconfirmed');
+        this._dom.galR.classList.remove('ftw-unconfirmed');
+        this._dom.total.classList.remove('ftw-unconfirmed');
+        this._dom.end.classList.remove('ftw-unconfirmed');
         this._dom.galL.textContent = '--';
         this._dom.galR.textContent = '--';
         this._dom.timerL.textContent = '';
@@ -396,18 +473,25 @@ class FuelTanksDisplay {
         this._dom.imbal.style.display = 'none';
     }
 
+    /* Endurance is total / GPH, so it inherits the tracked total's trust level: a
+       stale total reads HIGH, which makes the endurance read LONG. It carries the
+       same '?' + caution marking rather than being blanked (see _render). GPH itself
+       is a live engine read, not a tank-state figure, so it is never marked. */
     _renderEndurance() {
         const state = FuelTankState.getState();
-        if (!state || FuelTankState.needsConfirmation()) return;
+        if (!state) return;
+        const stale = FuelTankState.needsConfirmation();
         const total = state.left_gal + state.right_gal;
         if (this._lastGph > 0) {
             this._dom.flow.textContent = this._lastGph.toFixed(1);
             const { hours, minutes } = FuelEngine.endurance(total, this._lastGph);
-            this._dom.end.textContent = `${hours}:${String(minutes).padStart(2, '0')}`;
+            this._dom.end.textContent =
+                `${hours}:${String(minutes).padStart(2, '0')}` + (stale ? '?' : '');
         } else {
             this._dom.flow.textContent = '--';
             this._dom.end.textContent = '--';
         }
+        this._dom.end.classList.toggle('ftw-unconfirmed', stale && this._lastGph > 0);
     }
 
     _updateTimers() {
@@ -421,23 +505,34 @@ class FuelTanksDisplay {
         const hrs = Math.floor(elMin / 60);
         const mins = elMin % 60;
         const label = hrs > 0 ? `${hrs}:${String(mins).padStart(2, '0')}` : `${mins}m`;
-        const activeL = state.active_tank === 'L' || state.active_tank === 'BOTH';
-        const activeR = state.active_tank === 'R' || state.active_tank === 'BOTH';
+        const activeL = state.active_tank === 'L';
+        const activeR = state.active_tank === 'R';
         this._dom.timerL.textContent = activeL ? label : '';
         this._dom.timerR.textContent = activeR ? label : '';
     }
 
     _updateSenderDisplay(data) {
-        // Raw EDM sender values — secondary reference only, kept visible as sanity check
+        // Raw EDM sender values — secondary reference only. Only meaningful (per this
+        // aircraft's sender hardware) once tracked tank level drops to the configured
+        // threshold; above it the sender reads an invalid/flat value and must not be
+        // shown as if it were a real cross-check.
         const senderL = data.fuel_level_l ?? data.left_fuel ?? null;
         const senderR = data.fuel_level_r ?? data.right_fuel ?? null;
+        const trackedState = (typeof FuelTankState !== 'undefined') ? FuelTankState.getState() : null;
+        const threshold = this._senderAccurateBelowGal ?? 12;
+
+        const leftInRange = !trackedState || trackedState.left_gal <= threshold;
+        const rightInRange = !trackedState || trackedState.right_gal <= threshold;
+
         if (senderL != null) {
-            this._dom.senderL.textContent = 's:' + senderL.toFixed(1);
+            this._dom.senderL.textContent = leftInRange ? 's:' + senderL.toFixed(1) : 's:\u2014';
         } else if (senderL == null && senderR == null) {
             const total = FuelEngine.extractEdmFuel(data);
-            if (total > 0) this._dom.senderL.textContent = `s:${total.toFixed(0)}`;
+            if (total > 0) this._dom.senderL.textContent = leftInRange ? `s:${total.toFixed(0)}` : 's:\u2014';
         }
-        if (senderR != null) this._dom.senderR.textContent = 's:' + senderR.toFixed(1);
+        if (senderR != null) {
+            this._dom.senderR.textContent = rightInRange ? 's:' + senderR.toFixed(1) : 's:\u2014';
+        }
     }
 
     /* ------------------------------------------------------------------

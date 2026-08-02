@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v9.97';
+const FLYTAB_VERSION = 'v9.99';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -58,7 +58,6 @@ class FlyTabApp {
         this.enginePanel = null;
         this.trackLog = null;
         this.deviceStatus = null;
-        this.rangeCalc = null;
         this.routePlannerPanel = null;
 
         // Cockpit redesign components
@@ -93,6 +92,7 @@ class FlyTabApp {
         this._applyingPlan = false;   // re-entrancy guard for applyRouteEdit
         this._pendingPlanEdit = null; // latest-wins queuing for rapid calls
         this._shownFuelStopOverlays = new Set(); // tracks shown overlays by "ICAO_index" key
+        this._fuelStopOverlayCleanup = null; // removes the open overlay's window listener + poll interval; see _showFuelStopOverlay
 
         // DOM references
         this.dom = {
@@ -854,10 +854,6 @@ class FlyTabApp {
         );
         this.deviceStatus.init();
 
-        // Range calculator
-        this.rangeCalc = new RangeCalc(this.stratuxClient, this.enginePanel, this.cockpitMap);
-        this.rangeCalc.init();
-
         // ── Power Tradeoff Panel ─────────────────────────────────────────────
         if (typeof PowerTradeoff !== 'undefined') {
             this.powerTradeoff = new PowerTradeoff();
@@ -1258,7 +1254,6 @@ class FlyTabApp {
         if (this.instrumentStrip) this.instrumentStrip.setActivePlan(normalized);
         if (this.routeTable && !skipRouteTable) this.routeTable.loadPlan(normalized);
         if (this.cockpitMap && wps.length >= 2) this.cockpitMap.setRoute(wps);
-        if (this.rangeCalc) this.rangeCalc.setPlan(normalized);
         // routePlannerPanel syncs via open() when the pilot explicitly opens it;
         // no live-sync needed while the panel is closed.
 
@@ -1815,6 +1810,13 @@ class FlyTabApp {
      * @param {number} wpIndex   - Index of wp in the waypoints array
      */
     _showFuelStopOverlay(wp, wpIndex) {
+        // Tear down any prior, still-open instance's window listener + poll interval
+        // before replacing its DOM — without this, a second fuel-stop waypoint
+        // reached while a prior instance is still open (un-dismissed) leaks the old
+        // instance's 'fueltankstate:changed' listener and checkClosed interval for
+        // the rest of the session.
+        this._fuelStopOverlayCleanup?.();
+        this._fuelStopOverlayCleanup = null;
         document.getElementById('fuelStopOverlay')?.remove();
 
         // Route table computes _flights and per-waypoint fuel data during updateLive().
@@ -1882,13 +1884,14 @@ class FlyTabApp {
                 <div style="background:var(--bg-surface);border-radius:8px;padding:12px;margin-bottom:12px;">
                     <div style="font-size:12px;color:var(--text-label);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;">Fuel</div>
                     ${hasPreset
-                        ? `<div style="font-size:16px;color:var(--text-primary);">Add <strong>${presetGal.toFixed(1)}\u2009gal</strong> \u2014 fill to <strong>${fillToGal}\u2009gal</strong></div>`
-                        : `<div style="display:flex;align-items:center;gap:8px;">
-                               <label for="fso-fuel-input" style="font-size:14px;color:var(--text-secondary);">Gallons added:</label>
-                               <input id="fso-fuel-input" type="number" min="0" max="${fuelCap}" step="0.5"
-                                   style="width:80px;padding:6px 8px;background:var(--bg-surface-raised);color:var(--text-primary);border:1px solid var(--border);border-radius:4px;font-size:16px;text-align:right;">
-                           </div>`
+                        ? `<div style="font-size:14px;color:var(--text-secondary);margin-bottom:8px;">Planned refuel: ~${presetGal.toFixed(1)}\u2009gal (fill to ~${fillToGal}\u2009gal) \u2014 measure actual tic marks below</div>`
+                        : ''
                     }
+                    <div id="fso-measure-status" style="font-size:14px;color:var(--color-danger);font-weight:700;margin-bottom:8px;">Not yet measured</div>
+                    <button id="fso-measure-btn"
+                        style="width:100%;min-height:var(--touch-min, 56px);padding:12px;background:var(--accent);color:var(--text-on-dark);border:none;border-radius:8px;font-size:16px;font-weight:700;cursor:pointer;">
+                        \u270f Measure &amp; Record Fuel
+                    </button>
                 </div>
                 ${nextFlight ? flightCard(nextFlight, `Flight ${nextNum} \u2014 ${icao} \u2192 ${nextDest}`) : ''}
                 <button id="fso-continue-btn"
@@ -1908,27 +1911,87 @@ class FlyTabApp {
             overlay.remove();
         });
 
-        overlay.querySelector('#fso-continue-btn').addEventListener('click', () => {
-            let gallonsAdded = 0;
-            if (hasPreset) {
-                gallonsAdded = presetGal;
+        const overlayShownAt = Date.now();
+        const measureStatusEl = overlay.querySelector('#fso-measure-status');
+        const refreshMeasureStatus = () => {
+            const state = (typeof FuelTankState !== 'undefined') ? FuelTankState.getState() : null;
+            const measuredSinceOpen = state?.initialized_at &&
+                new Date(state.initialized_at).getTime() >= overlayShownAt;
+            if (measuredSinceOpen) {
+                measureStatusEl.textContent = `Measured: ${(state.left_gal + state.right_gal).toFixed(1)} gal`;
+                measureStatusEl.style.color = 'var(--color-success)';
             } else {
-                const input = overlay.querySelector('#fso-fuel-input');
-                gallonsAdded = parseFloat(input?.value) || 0;
+                measureStatusEl.textContent = 'Not yet measured';
+                measureStatusEl.style.color = 'var(--color-danger)';
             }
+            return measuredSinceOpen;
+        };
+        refreshMeasureStatus();
+        const onTankStateChanged = () => refreshMeasureStatus();
+        window.addEventListener('fueltankstate:changed', onTankStateChanged);
 
-            if (typeof FuelState !== 'undefined') {
-                const currentFuel = (fuelAtStop != null && fuelAtStop > 0)
-                    ? fuelAtStop
-                    : FuelState.getStartFuel().gallons;
-                const newTotal = Math.min(currentFuel + gallonsAdded, fuelCap);
-                FuelState.saveMeasurement({ total_gal: newTotal, source: 'tic' });
-                window.dispatchEvent(new CustomEvent('fuelstate:changed'));
+        // checkClosedInterval is captured by reference so the cleanup function below
+        // always clears whichever interval is currently outstanding (or none, if the
+        // measure button was never tapped / the poll already finished naturally).
+        let checkClosedInterval = null;
+        this._fuelStopOverlayCleanup = () => {
+            window.removeEventListener('fueltankstate:changed', onTankStateChanged);
+            if (checkClosedInterval != null) {
+                clearInterval(checkClosedInterval);
+                checkClosedInterval = null;
             }
+        };
 
+        overlay.querySelector('#fso-measure-btn').addEventListener('click', () => {
+            // Fail safe: if fuelOverlay isn't available, do nothing rather than hiding
+            // #fuelStopOverlay and then throwing on .show() — that would leave the
+            // pilot stuck on a blank/invisible screen with no way back short of an
+            // app restart, in a safety-critical fuel workflow.
+            if (typeof this.fuelOverlay === 'undefined' || !this.fuelOverlay) return;
+
+            // Hide (not remove) so #fuelStopOverlay's state/listeners survive while
+            // fuel-overlay.js's full-screen Fuel Entry UI is on top — both are
+            // position:fixed, and fuel-overlay.js's z-index (9000) is below this
+            // overlay's (9998), so it would otherwise render invisibly underneath.
+            overlay.style.display = 'none';
+            // requireFreshTics: this is the in-flight fuel-stop door. fuel-overlay.js's
+            // show() restores the PREVIOUS (departure) measurement into the tic fields,
+            // and both of its write paths — APPLY TIC MEASUREMENT and RECORD FUEL STOP —
+            // call FuelTankState.init(), which re-stamps initialized_at. That timestamp is
+            // the ONLY thing refreshMeasureStatus() above compares against overlayShownAt,
+            // so an untouched restored reading would flip this overlay's gate to
+            // "Measured: <departure gallons>" with nothing measured. With the flag set,
+            // both paths refuse a reading the pilot did not enter or confirm this session.
+            // The preflight call sites (tab-bar.js MORE → Fuel Entry, instrument-strip.js)
+            // deliberately pass nothing and keep the permissive re-apply behaviour.
+            this.fuelOverlay.show({ requireFreshTics: true });
+            checkClosedInterval = setInterval(() => {
+                if (!this.fuelOverlay.visible) {
+                    clearInterval(checkClosedInterval);
+                    checkClosedInterval = null;
+                    if (document.body.contains(overlay)) {
+                        overlay.style.display = 'flex';
+                        refreshMeasureStatus();
+                    }
+                }
+            }, 300);
+        });
+
+        overlay.querySelector('#fso-continue-btn').addEventListener('click', () => {
+            if (!refreshMeasureStatus()) {
+                measureStatusEl.textContent = 'Measure fuel before continuing';
+                return;
+            }
+            this._fuelStopOverlayCleanup?.();
+            this._fuelStopOverlayCleanup = null;
             overlay.remove();
             this.showToast(`Flight ${nextNum} active \u2014 ${nextDest} ${nextDistS}nm`);
         });
+
+        overlay.querySelector('#fso-close-btn').addEventListener('click', () => {
+            this._fuelStopOverlayCleanup?.();
+            this._fuelStopOverlayCleanup = null;
+        }, { once: false }); // in addition to the existing close-btn listener already registered above
     }
 
     // === Toast Notifications ==========
