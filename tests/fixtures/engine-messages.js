@@ -3,7 +3,9 @@
 // The engine panel flattens via: raw.data ? { ...raw, ...raw.data } : raw
 
 const ENGINE_FRAME = {
-    version:               '3.3.0',
+    version:               '3.4.0',
+    api_contract:           2,
+    capabilities:          ['fuel_tracker', 'sticky_valve', 'peak_egt'],
     capturing:             true,
     serial_connected:      true,
     stratux_connected:     false,
@@ -50,6 +52,19 @@ const ENGINE_FRAME = {
 
 const ENGINE_FRAME_FLAT = { ...ENGINE_FRAME, ...ENGINE_FRAME.data };
 
+// Pi build that predates the #113 contract handshake entirely — no
+// api_contract/capabilities fields at all, exactly like a Pi that has not
+// been redeployed since deploy-pi.sh last shipped this feature.
+const { api_contract: _omitContract, capabilities: _omitCaps, ...ENGINE_FRAME_NO_CONTRACT } = ENGINE_FRAME;
+
+// Pi build that publishes the handshake but reports an old contract number —
+// the 2026-08-01 fuel-management shape change (usable_capacity_gal 34->36,
+// flight_fuel_used moved under 'fuel') without the api_contract bump itself.
+const ENGINE_FRAME_OLD_CONTRACT = { ...ENGINE_FRAME, api_contract: 1 };
+
 const ENGINE_STALE_EVENT = { stale: true, ageMs: 6000 };
 
-module.exports = { ENGINE_FRAME, ENGINE_FRAME_FLAT, ENGINE_STALE_EVENT };
+module.exports = {
+    ENGINE_FRAME, ENGINE_FRAME_FLAT, ENGINE_STALE_EVENT,
+    ENGINE_FRAME_NO_CONTRACT, ENGINE_FRAME_OLD_CONTRACT,
+};

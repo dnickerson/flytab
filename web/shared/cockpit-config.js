@@ -192,22 +192,63 @@ class CockpitConfig {
     /**
      * Deep-merge user overrides from localStorage on top of a base config object.
      * Returns the merged result (base is not mutated).
+     *
+     * Self-heals the stored override on every call (#112): the config editor used to
+     * persist the WHOLE edited object regardless of which fields the pilot actually
+     * touched, so any key merely displayed-and-resaved got frozen at whatever value
+     * it had at that moment — silently shadowing every later bundled correction to
+     * that key (this happened for real: `descent_gph` was corrected 4 -> 6.9 in the
+     * bundle and a stale `4` from months earlier kept winning). Re-diffing the stored
+     * override against the current bundle on every load drops any key that now
+     * matches the bundle — nothing was really overridden there — so a bundle
+     * correction takes effect for any key the pilot never actually diverged from,
+     * without waiting for the pilot to re-open the config editor. A key that still
+     * differs is kept: this cannot distinguish a deliberate pilot value from one that
+     * coincidentally still differs, so the conservative choice is to never discard it.
      */
     static _mergeUserOverrides(base, storageKey) {
         try {
             const raw = localStorage.getItem(storageKey);
             if (!raw) return base;
             const saved = JSON.parse(raw);
+            const shrunk = CockpitConfig._diffAgainstBundle(saved, base);
+            if (JSON.stringify(shrunk) !== JSON.stringify(saved)) {
+                try { localStorage.setItem(storageKey, JSON.stringify(shrunk)); } catch { /* quota */ }
+            }
             const merged = { ...base };
-            for (const key of Object.keys(saved)) {
-                if (saved[key] != null && typeof saved[key] === 'object' && !Array.isArray(saved[key])) {
-                    merged[key] = Object.assign({}, merged[key] || {}, saved[key]);
+            for (const key of Object.keys(shrunk)) {
+                if (shrunk[key] != null && typeof shrunk[key] === 'object' && !Array.isArray(shrunk[key])) {
+                    merged[key] = Object.assign({}, merged[key] || {}, shrunk[key]);
                 } else {
-                    merged[key] = saved[key];
+                    merged[key] = shrunk[key];
                 }
             }
             return merged;
         } catch { return base; }
+    }
+
+    /**
+     * Recursively diff a stored override against the current bundle, keeping only
+     * keys/subkeys that actually differ. A key present in `saved` with no bundle
+     * counterpart at all is always kept — that is a device-specific setting with
+     * nothing to compare against (homeServer, flightUpload), not a shadowed bundle
+     * value. Primitives and arrays are compared by JSON equality; empty resulting
+     * sub-objects are dropped rather than kept as clutter.
+     */
+    static _diffAgainstBundle(saved, bundle) {
+        if (saved == null || typeof saved !== 'object' || Array.isArray(saved)) return saved;
+        const out = {};
+        for (const key of Object.keys(saved)) {
+            const sv = saved[key];
+            const bv = (bundle && typeof bundle === 'object' && !Array.isArray(bundle)) ? bundle[key] : undefined;
+            if (sv != null && typeof sv === 'object' && !Array.isArray(sv)) {
+                const sub = CockpitConfig._diffAgainstBundle(sv, bv);
+                if (sub && typeof sub === 'object' && Object.keys(sub).length > 0) out[key] = sub;
+            } else if (bv === undefined || JSON.stringify(sv) !== JSON.stringify(bv)) {
+                out[key] = sv;
+            }
+        }
+        return out;
     }
 
     /**
@@ -269,7 +310,7 @@ class CockpitConfig {
     /**
      * Patch a dot-path in the live config and persist to localStorage.
      * Used for in-app edits that should survive a reload without re-editing the JSON.
-     * e.g. CockpitConfig.patch('navStrip.fields', ['next','dest','gs'])
+     * e.g. CockpitConfig.patch('instrumentStrip.fields', ['gs','alt','fuel'])
      */
     static patch(path, value) {
         if (!CockpitConfig._config) CockpitConfig._config = {};

@@ -7,6 +7,12 @@
  */
 
 class EngineClient extends EventTarget {
+    // Minimum Pi payload-contract version this build of FlyTab requires (#113).
+    // Bump alongside any code change that depends on a new/changed field name,
+    // nesting, unit, or shared physical constant published by engine_monitor.py's
+    // PI_API_CONTRACT. Not the app version — this is what the two sides compare.
+    static MIN_PI_CONTRACT = 2;
+
     constructor(ip = '192.168.10.1', port = 8082, httpPort = 8080) {
         super();
         this._ws = null;
@@ -34,6 +40,21 @@ class EngineClient extends EventTarget {
     get stale() { return this._stale; }
     /** Milliseconds since last data, or Infinity if never received */
     get dataAge() { return this._lastDataTime ? Date.now() - this._lastDataTime : Infinity; }
+
+    /** Pi's api_contract, or 0 if the field is missing entirely (#113) —
+     *  a Pi that predates this handshake reports as contract 0, not "unknown". */
+    get piContract() { return this.lastData?.api_contract ?? 0; }
+    /** Pi's human-readable VERSION string, or null if not yet known. */
+    get piVersion() { return this.lastData?.version ?? null; }
+    /** Optional feature flags the connected Pi build supports. */
+    get piCapabilities() { return this.lastData?.capabilities ?? []; }
+    /** True only once we have a live reading AND it reports an old contract —
+     *  never true while merely disconnected/no data yet, that is a separate,
+     *  already-visible failure mode ("ENGINE MON. OFFLINE"), not a version
+     *  mismatch, and the two must not be conflated on screen. */
+    get piContractOld() {
+        return this._connected && !!this.lastData && this.piContract < EngineClient.MIN_PI_CONTRACT;
+    }
 
     connect() {
         this._doConnect();

@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { readFileSync } from 'fs';
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
-const { ENGINE_FRAME } = require('../fixtures/engine-messages.js');
+const { ENGINE_FRAME, ENGINE_FRAME_NO_CONTRACT, ENGINE_FRAME_OLD_CONTRACT } = require('../fixtures/engine-messages.js');
 
 // ---------------------------------------------------------------------------
 // Browser globals that engine-client.js references at evaluation time.
@@ -45,7 +45,7 @@ describe('EngineClient._onData', () => {
     it('emits engine:data with the raw frame', () => {
         client._onData(ENGINE_FRAME);
         expect(events).toHaveLength(1);
-        expect(events[0].version).toBe('3.3.0');
+        expect(events[0].version).toBe('3.4.0');
         expect(events[0].data.RPM).toBe(2200);
     });
 
@@ -86,6 +86,73 @@ describe('EngineClient._onData', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Pi contract handshake (#113)
+// ---------------------------------------------------------------------------
+describe('EngineClient — Pi contract handshake (#113)', () => {
+    let client;
+
+    beforeEach(() => {
+        vi.useFakeTimers();
+        client = new EngineClient('127.0.0.1', 8082);
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it('reports 0 (not "unknown") before any data has ever been received', () => {
+        expect(client.piContract).toBe(0);
+        expect(client.piVersion).toBeNull();
+        expect(client.piCapabilities).toEqual([]);
+        // Not "old" — no live reading at all yet is a different, already-visible
+        // failure mode ("offline"), not a version mismatch to warn about.
+        expect(client.piContractOld).toBe(false);
+    });
+
+    it('a current-contract Pi reports ok — no mismatch', () => {
+        client._onData(ENGINE_FRAME);
+        client._connected = true; // _onData alone doesn't flip this; onopen does
+        expect(client.piContract).toBe(2);
+        expect(client.piVersion).toBe('3.4.0');
+        expect(client.piCapabilities).toEqual(['fuel_tracker', 'sticky_valve', 'peak_egt']);
+        expect(client.piContractOld).toBe(false);
+    });
+
+    it('a missing api_contract field is treated as contract 0 and flagged old, not silently accepted', () => {
+        client._onData(ENGINE_FRAME_NO_CONTRACT);
+        client._connected = true;
+        expect(client.piContract).toBe(0);
+        expect(client.piContractOld).toBe(true);
+    });
+
+    it('an explicit old contract number is flagged old', () => {
+        client._onData(ENGINE_FRAME_OLD_CONTRACT);
+        client._connected = true;
+        expect(client.piContract).toBe(1);
+        expect(client.piContractOld).toBe(true);
+    });
+
+    it('a contract newer than MIN_PI_CONTRACT is NOT flagged old — the Pi may legitimately be ahead', () => {
+        client._onData({ ...ENGINE_FRAME, api_contract: 99 });
+        client._connected = true;
+        expect(client.piContractOld).toBe(false);
+    });
+
+    it('is never flagged old while disconnected, even with a stale old-contract reading cached', () => {
+        // EnginePanel-style behavior: lastData survives a disconnect so gauges
+        // don't flash dashes. The contract check must not piggyback on that
+        // stale data while genuinely offline — that is "ENGINE MON. OFFLINE",
+        // a different, already-visible problem.
+        client._onData(ENGINE_FRAME_NO_CONTRACT);
+        client._connected = true;
+        expect(client.piContractOld).toBe(true);
+
+        client._connected = false;
+        expect(client.piContractOld).toBe(false);
+    });
+});
+
+// ---------------------------------------------------------------------------
 // Engine panel data-flatten tests (inline logic, no DOM required)
 // ---------------------------------------------------------------------------
 describe('EnginePanel data flatten', () => {
@@ -96,7 +163,7 @@ describe('EnginePanel data flatten', () => {
         // Top-level engine status fields survive
         expect(flat.percent_power).toBe(65.0);
         expect(flat.rop_lop_mode).toBe('RICH');
-        expect(flat.version).toBe('3.3.0');
+        expect(flat.version).toBe('3.4.0');
 
         // Nested EDM fields promoted to top level
         expect(flat.RPM).toBe(2200);

@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v9.99';
+const FLYTAB_VERSION = 'v10.16';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -104,6 +104,7 @@ class FlyTabApp {
             statusTimeLocal: document.getElementById('statusTimeLocal'),
             statusGps: document.getElementById('statusGps'),
             statusFisb: document.getElementById('statusFisb'),
+            statusPiContract: document.getElementById('statusPiContract'),
             statusNasr: document.getElementById('statusNasr'),
             mainContent: document.getElementById('mainContent'),
             cockpitView: document.getElementById('cockpitView'),
@@ -120,6 +121,15 @@ class FlyTabApp {
             this.dom.statusFisb.style.cursor = 'pointer';
             this.dom.statusFisb.addEventListener('click', () => {
                 if (this.fisbStatus) this.fisbStatus.show();
+            });
+        }
+
+        // Pi contract badge (#113) opens the ENG page, which carries the full
+        // banner with both version numbers and what to do.
+        if (this.dom.statusPiContract) {
+            this.dom.statusPiContract.style.cursor = 'pointer';
+            this.dom.statusPiContract.addEventListener('click', () => {
+                this.tabBar?.selectTab('eng');
             });
         }
     }
@@ -1087,6 +1097,19 @@ class FlyTabApp {
 
         // Latest-wins guard: if a plan apply is already in progress, store the latest
         // request and return — the running loop will pick it up when done.
+        // #74: a plan sitting in _pendingPlanEdit right now was itself never applied —
+        // it is about to be silently replaced by this one. routePlannerPanel's own
+        // local state (updated synchronously in _doApply(), independent of whether
+        // its plan actually made it through this queue) can disagree with routeTable
+        // during exactly this window. Not fixed here — a breadcrumb for whoever next
+        // has to debug a report of the table and panel briefly disagreeing.
+        if (this._pendingPlanEdit) {
+            const dropped = this._pendingPlanEdit.plan?.waypoints?.length ?? '?';
+            const incoming = plan.waypoints?.length ?? '?';
+            if (typeof DiagLog !== 'undefined') {
+                DiagLog.log('route', `applyRouteEdit: dropping queued edit (${dropped} wp) for a newer one (${incoming} wp) — #74 latest-wins race`);
+            }
+        }
         this._pendingPlanEdit = { plan, opts: { fromRouteTable } };
         if (this._applyingPlan) return;
 
@@ -1256,6 +1279,24 @@ class FlyTabApp {
         if (this.cockpitMap && wps.length >= 2) this.cockpitMap.setRoute(wps);
         // routePlannerPanel syncs via open() when the pilot explicitly opens it;
         // no live-sync needed while the panel is closed.
+
+        // #74 sanity check: while the panel IS open, its own _route pills and
+        // routeTable's just-resolved waypoints describe the same trip and should
+        // agree in count. Not a hard invariant — a pill can legitimately resolve to
+        // a different count than routeTable's post-NASR list (an id that failed to
+        // resolve, dropped by the filter above) — so this only logs, it never blocks
+        // or alters anything. A persistent mismatch here is the state-drift class of
+        // bug this issue describes; a one-off is more likely a normal resolution
+        // difference. AWY pills are metadata on the following fix, not their own
+        // waypoint, so they're excluded to match how _pillsToWaypoints() counts.
+        if (this.routePlannerPanel
+                && document.getElementById('cockpitContainer')?.classList.contains('route-editing')) {
+            const panelCount = this.routePlannerPanel._route.filter(p => p.type !== 'awy').length;
+            const tableCount = normalized.waypoints.length;
+            if (panelCount !== tableCount && typeof DiagLog !== 'undefined') {
+                DiagLog.log('route', `#74 state check: routePlannerPanel shows ${panelCount} waypoints, routeTable resolved ${tableCount}`);
+            }
+        }
 
         if (this.approachCharts) {
             const icaoList = wps.map(wp => wp.icao).filter(Boolean);
@@ -1535,6 +1576,20 @@ class FlyTabApp {
                     this.dom.statusFisb.textContent = `FIS-B ${metars}`;
                 } else {
                     this.dom.statusFisb.textContent = 'FIS-B';
+                }
+            }
+
+            // Pi contract mismatch (#113) — discoverable but easy to ignore is the
+            // point: a badge, not a modal. This is a preflight problem, not an
+            // in-flight one. Engine data keeps displaying either way; see the
+            // matching banner on the ENG page for the full detail + what to do.
+            if (this.dom.statusPiContract) {
+                const old = !!this.engineClient?.piContractOld;
+                this.dom.statusPiContract.hidden = !old;
+                if (old) {
+                    const piV = this.engineClient.piVersion || '?';
+                    this.dom.statusPiContract.textContent = `PI v${piV}`;
+                    this.dom.statusPiContract.title = `Pi contract ${this.engineClient.piContract} < required ${EngineClient.MIN_PI_CONTRACT}. Run: bash deploy-pi.sh`;
                 }
             }
         };

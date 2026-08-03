@@ -383,15 +383,29 @@ class WbOverlay {
         };
     }
 
+    // Fuel row and TOTAL row both need the same unconfirmed marking _renderResults
+    // already applies to Total Weight/CG — otherwise this table asserts a specific
+    // total with no fuel figure behind it, or a stale one, with nothing on screen
+    // saying so. (#120)
     _renderTable(r) {
-        const rows = r.stations.map(s => `
+        const { fuelMissing, unconfirmed } = this._fuelConfidence();
+        const markCls = unconfirmed ? 'wb-unconfirmed' : '';
+
+        const rows = r.stations.map(s => {
+            const isFuelRow = s.gallons != null;
+            const fuelLabel = isFuelRow
+                ? (fuelMissing ? ' (not entered)' : ` (${s.gallons} gal)`)
+                : '';
+            const rowMarkCls = isFuelRow ? markCls : '';
+            return `
             <tr>
-                <td>${s.name}${s.gallons != null ? ` (${s.gallons} gal)` : ''}</td>
-                <td>${s.weight.toLocaleString()}</td>
+                <td>${s.name}${fuelLabel}</td>
+                <td class="${rowMarkCls}">${s.weight.toLocaleString()}${rowMarkCls ? '?' : ''}</td>
                 <td>${s.arm.toFixed(2)}</td>
                 <td>${s.moment.toFixed(0)}</td>
             </tr>
-        `).join('');
+        `;
+        }).join('');
 
         this._tableEl.innerHTML = `
             <table>
@@ -400,8 +414,8 @@ class WbOverlay {
                 <tfoot>
                     <tr>
                         <td>TOTAL</td>
-                        <td>${r.totalWeight.toLocaleString()}</td>
-                        <td>${r.cg.toFixed(2)}</td>
+                        <td class="${markCls}">${r.totalWeight.toLocaleString()}${markCls ? '?' : ''}</td>
+                        <td class="${markCls}">${r.cg.toFixed(2)}${markCls ? '?' : ''}</td>
                         <td>${r.totalMoment.toFixed(0)}</td>
                     </tr>
                 </tfoot>

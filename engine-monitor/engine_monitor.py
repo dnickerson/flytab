@@ -18,7 +18,22 @@ Usage:
 Access at: http://stratux.local:8080
 """
 
-VERSION = "3.3.0"
+VERSION = "3.4.0"
+
+# Contract version for the payload shape and shared physical constants FlyTab
+# depends on (field names, nesting, units, usable_capacity_gal and similar).
+# Bump this when any of those change — NOT for ordinary bug fixes. VERSION is
+# for humans; this is what client code compares. Starts at 2 because the
+# 2026-08-01 fuel-management work already changed the contract once, silently
+# (usable_capacity_gal 34->36, flight_fuel_used moved under 'fuel') — this
+# value retroactively names that shape "2" so a Pi that has not been
+# redeployed since then correctly reports as behind. See issue #113.
+PI_API_CONTRACT = 2
+
+# Optional features this build of engine_monitor.py supports, independent of
+# api_contract — a client can check `'fuel_tracker' in capabilities` rather
+# than inferring feature support from a version/contract number comparison.
+PI_CAPABILITIES = ["fuel_tracker", "sticky_valve", "peak_egt"]
 
 import os
 import sys
@@ -2081,6 +2096,8 @@ def get_status():
 
     return {
         'version': VERSION,
+        'api_contract': PI_API_CONTRACT,
+        'capabilities': PI_CAPABILITIES,
         'capturing': state.capturing,
         'serial_connected': state.serial_connected,
         'stratux_connected': stratux_connected,
@@ -2153,6 +2170,8 @@ def get_diagnostics():
 
     return {
         'version': VERSION,
+        'api_contract': PI_API_CONTRACT,
+        'capabilities': PI_CAPABILITIES,
         'config': {
             'port': port,
             'baud': CONFIG['BAUD_RATE'],

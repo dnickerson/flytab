@@ -91,6 +91,15 @@ class EnginePage {
 
         <div class="ep-container">
 
+            <!-- Pi contract mismatch banner (#113) -->
+            <div class="ep-contract-banner" id="ep-contract-banner" style="display:none;">
+                <div class="ep-contract-text">
+                    PI OUT OF DATE — this build needs contract <span id="ep-contract-required">?</span>,
+                    connected Pi (v<span id="ep-contract-pi-version">?</span>) reports <span id="ep-contract-pi-contract">?</span>.
+                    Run <code>bash deploy-pi.sh</code>.
+                </div>
+            </div>
+
             <!-- Sticky valve warning banner -->
             <div class="ep-sticky-banner" id="ep-sticky-banner" style="display:none;">
                 <div class="ep-sticky-text">
@@ -273,6 +282,10 @@ class EnginePage {
             fuelStale: this._el.querySelector('#ep-fuel-stale'),
             stickyBanner: this._el.querySelector('#ep-sticky-banner'),
             stickyCyl: this._el.querySelector('#ep-sticky-cyl'),
+            contractBanner: this._el.querySelector('#ep-contract-banner'),
+            contractRequired: this._el.querySelector('#ep-contract-required'),
+            contractPiVersion: this._el.querySelector('#ep-contract-pi-version'),
+            contractPiContract: this._el.querySelector('#ep-contract-pi-contract'),
             recRow: this._el.querySelector('#ep-rec-row'),
             captureStatus: this._el.querySelector('#ep-capture-status'),
             captureStop: this._el.querySelector('#ep-capture-stop'),
@@ -668,6 +681,9 @@ class EnginePage {
         /* ---- Section 9: Sticky valve check ---- */
         this._checkStickyValve(rpm, egt);
 
+        /* ---- Section 10: Pi contract check (#113) ---- */
+        this._checkPiContract(d);
+
         /* ---- Render trend charts ---- */
         this._renderEgtChart();
         this._renderChtChart();
@@ -736,6 +752,29 @@ class EnginePage {
             this._dom.stickyBanner.style.display = 'flex';
         } else {
             this._dom.stickyBanner.style.display = 'none';
+        }
+    }
+
+    /**
+     * Pi contract mismatch banner (#113). Gated on a LIVE connection, not just
+     * whatever the last cached reading happened to report — same rule as
+     * EngineClient.piContractOld, so this banner and the status-bar badge
+     * never disagree about whether a warning is currently showing. Engine
+     * data keeps displaying regardless; this only ever adds a banner, never
+     * blocks anything.
+     */
+    _checkPiContract(d) {
+        if (!this._dom.contractBanner) return;
+        const connected = window.enginePanel?.connected === true;
+        const contract = d.api_contract ?? 0;
+        const isOld = connected && contract < EngineClient.MIN_PI_CONTRACT;
+        if (isOld) {
+            this._dom.contractRequired.textContent = EngineClient.MIN_PI_CONTRACT;
+            this._dom.contractPiVersion.textContent = d.version ?? '?';
+            this._dom.contractPiContract.textContent = contract;
+            this._dom.contractBanner.style.display = 'flex';
+        } else {
+            this._dom.contractBanner.style.display = 'none';
         }
     }
 
@@ -1245,8 +1284,10 @@ class EnginePage {
     border-radius: 4px;
     margin: 4px 0;
 }
+/* --color-caution measures 1.51:1 on this light background — repointed at
+   the on-light token, same fix as .fuel-yellow/.fuel-red in style.css. (#120) */
 .ep-gauge-value.ep-unconfirmed {
-    color: var(--color-caution) !important;
+    color: var(--color-caution-on-light) !important;
 }
 .ep-tank-source-note {
     font-family: var(--font-ui);
@@ -1435,6 +1476,32 @@ class EnginePage {
     font-weight: 700;
     cursor: pointer;
     white-space: nowrap;
+}
+
+/* Pi contract mismatch banner (#113). NOTE: color:#000 here, not
+   var(--color-danger) — .ep-sticky-text above uses --color-danger text on
+   this same --color-caution fill and measures 2.24:1 (checked while building
+   this banner, not part of this issue, flagged separately rather than fixed
+   here). The documented Status badge pattern for a --color-caution fill is
+   solid black text; this banner follows that instead of the sibling's. */
+.ep-contract-banner {
+    background: var(--color-caution);
+    border-radius: 5px;
+    padding: 8px 10px;
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+}
+.ep-contract-text {
+    font-size: 16px;
+    font-weight: 900;
+    color: #000;
+}
+.ep-contract-text code {
+    background: rgba(0, 0, 0, 0.15);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-family: var(--font-mono, monospace);
 }
 
 /* Portrait iPad tweaks */

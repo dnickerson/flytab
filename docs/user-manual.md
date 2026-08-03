@@ -72,8 +72,11 @@ FlyTab connects automatically on app launch. The status bar at the top shows con
 | **NASR** | Database current | ≥7 days old | Very old |
 | **ML** | Engine anomaly score normal | Elevated | Anomaly detected |
 | **REC** | Flight recording active | — | Not recording |
+| **PI vX.X** | Hidden — Pi build matches what this app requires | Shown — connected Pi's software is older than this app needs | — |
 
 The **advisory** badge appears between GPS and FIS-B when a weather advisory is active along the route.
+
+**The PI badge is hidden unless there's a mismatch.** It only appears when the connected Pi's engine monitor software is older than this build of FlyTab expects — a real possibility if the tablet gets updated without also redeploying the Pi (`bash deploy-pi.sh`). Tap it to open the ENG page, which carries the full detail: both version numbers and the exact command to run. Engine data keeps displaying normally either way — a mismatch is a preflight problem to fix on the ground, not a reason to lose the engine page in the air.
 
 ---
 
@@ -491,6 +494,10 @@ For fuel stops further ahead on the route that you have not yet reached, REM is 
 
 **Legs already behind you show `—` in FUEL and REM, not numbers.** A dash there is correct, not a fault: FlyTab only projects fuel forward from your live tracked figure, so a leg it can no longer recompute is blanked rather than left showing what it last predicted. Legs split into separate climb/cruise/descent rows used to keep those old numbers, and after a heavier-than-planned burn they read *higher* than the fuel actually on board — sitting directly above live rows showing much less. Their TAS and PWR cells now blank for the same reason. The TOTAL and per-flight footer figures count only legs still to fly, so they match the rows still showing numbers.
 
+**The leg you are actually flying now burns at your measured fuel flow, not the planned or %PWR-selected figure.** Once you are airborne on a leg, FUEL for that row comes straight from the engine monitor's live fuel flow — the same figure used elsewhere in the app — not from the plan or from whatever %PWR selection is in effect. That figure is shown in **bold blue** to mark it as measured. The %PWR column header now reads "Applies to legs ahead" on tap-and-hold: the selection was always meant as a planning question ("if I fly at 65%, where do I need to stop for fuel?"), and now it only drives legs you have not reached yet — it no longer has any effect on the leg you are on. The **%PWR figure shown on the active leg is also live** — what the engine is actually making, not a plan.
+
+**If the engine monitor is not reporting fuel flow, the active leg falls back to the planned figure and marks it.** That row's FUEL turns amber with a trailing **?** — the same two-signal convention used everywhere else in the app for a figure that is a fallback, not a fact — rather than silently looking like a genuine live measurement. This can happen before you have gotten far enough along the route for GPS to consider you en route to the next waypoint, or if the Pi connection drops.
+
 ### Where the planned burn numbers come from
 
 Planned fuel figures — the route table's FUEL and REM columns, the TOTAL footer, and the DEST badge — are built from three burn rates: **climb 15.0 gph, cruise 8.4 gph at the aircraft's normal 65% power, descent 6.9 gph.** Climb and descent are those figures in every case. **Cruise is not** — depending on how the rows were produced and whether you have set a cruise-power override, the number behind the cruise rows can be 8.4, 9.0, or a measured figure for the power you selected. Which one applies is spelled out under *Which cruise number is actually in use* below. All three now come from recorded flight data rather than from a formula.
@@ -499,7 +506,9 @@ These are **measured, not book numbers.** All three are the **85th-percentile** 
 
 **Descent now plans at 6.9 gph instead of the old 4.0.** The 4.0 figure was an estimate and it was wrong in the unsafe direction — real descents in this airplane burn nearly 3 gph more than that. Expect route FUEL and REM figures, and the DEST badge, to read **slightly more fuel burned and slightly less remaining than they used to**, on any leg that ends at an airport. On a 150 nm leg the whole-leg planned burn rises by about 0.3 gal from 4,500 ft, 0.45 gal from 6,500 ft, and 0.75 gal from 10,500 ft. Over a three-leg day that is roughly 2 gallons. Nothing is broken — the old numbers were optimistic and the new ones are not.
 
-**Changing these numbers.** All six fuel figures are editable on the aircraft page (MORE → Configuration): Fuel Capacity, Cruise Fuel Burn, Climb Fuel Burn, Descent Fuel Burn, Reserve Fuel, and the Fuel Sender Accuracy Threshold. Climb and descent burn were previously absent from that page even though both drive every planned figure above — so if you had ever tapped SAVE CONFIGURATION, a stale descent figure could sit in your saved settings shadowing the shipped one, with no way to see or correct it. Both fields are now shown. Note that saving stores your whole performance block, so a value you save keeps overriding later updates to that figure until you change it back; if planned burn ever looks wrong after an update, check this page first.
+**Changing these numbers.** All six fuel figures are editable on the aircraft page (MORE → Configuration): Fuel Capacity, Cruise Fuel Burn, Climb Fuel Burn, Descent Fuel Burn, Reserve Fuel, and the Fuel Sender Accuracy Threshold. Climb and descent burn were previously absent from that page even though both drive every planned figure above — so if you had ever tapped SAVE CONFIGURATION, a stale descent figure could sit in your saved settings shadowing the shipped one, with no way to see or correct it. Both fields are now shown.
+
+**Saving now stores only the fields you actually changed (fixed 2 Aug 2026).** SAVE CONFIGURATION used to write your entire performance block, so any field merely displayed at the time — not just the one you edited — froze at whatever value it had and silently kept overriding every later update to that figure, indefinitely. A field you have genuinely edited still overrides future updates until you change it back, same as before; a field you have never touched now tracks whatever value ships in a later update, automatically. If planned burn still looks wrong after an update on a tablet that was already carrying a saved override from before this fix, clearing and re-saving the affected field on this page — or reinstalling — clears the old shadow.
 
 **Which cruise number is actually in use — there are three.** Cruise burn is not a single fixed figure, and which one sits behind the cruise rows depends on how those rows were produced:
 
@@ -552,6 +561,10 @@ The **Fuel** station on the W&B page (MORE → Weight & Balance) pre-fills from 
 **A stale tracked figure is flagged, not hidden.** If the tank state has gone 45 minutes or more without an integrated fuel-flow sample — the same condition behind the engine page's UNCONFIRMED banner and the instrument strip's `18.0?` — the figure is still pre-filled, but an amber line reads "FUEL QUANTITY UNCONFIRMED — tank tracking is over 45 min stale and reads high. Verify before using this weight.", Total Weight and CG carry the same amber **?**, and the envelope badge reads **IN ENVELOPE — UNCONFIRMED FUEL** in amber instead of green. The CG dot on the diagram turns amber for the same reason. An **OUT OF ENVELOPE** result stays red whatever the fuel confidence — a limit exceedance is never softened.
 
 **Your own entry always wins.** As soon as you type in the Fuel field, the number is yours: the amber marking clears and the page will not overwrite it when you re-open W&B. Until you do type in it, an untouched pre-fill is re-read from the tracker each time the page opens, so it follows the burn instead of freezing at the ramp figure. A tracked **0.0** is a real reading and computes normally — dry tanks and untracked tanks never look the same.
+
+**Typing in the field is one-way for the rest of the session.** Once you type a fuel figure, W&B stops re-reading the tracker for the remainder of this app session — there is currently no in-app button to go back to tracked fuel. If you want the page to resume following your tracked tank state, restart FlyTab.
+
+**The station breakdown table below the summary carries the same marking.** If fuel has not been entered, the Fuel row reads **(not entered)** instead of a gallon figure, and both that row and the TOTAL row are shown in amber with a trailing **?** — the same convention as the summary above, so the two cannot disagree about whether the total is confirmed.
 
 ---
 

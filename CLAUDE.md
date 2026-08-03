@@ -94,8 +94,21 @@ Home server (:8090)  ──HTTP──▶  map tiles, approach plates, NASR, CIFP
 
 ### Backend (`engine-monitor/`)
 
-- `engine_monitor.py` (v3.3.0) — HTTP server + WebSocket on Pi, parses EDM serial data.
+- `engine_monitor.py` (v3.4.0) — HTTP server + WebSocket on Pi, parses EDM serial data.
 - `data_simulator.py` — replays captured flight files as virtual serial for testing.
+
+#### Pi ↔ FlyTab contract version — bump discipline
+
+`engine_monitor.py`'s `get_status()` publishes `PI_API_CONTRACT` (currently 2) and `PI_CAPABILITIES` alongside `VERSION`. FlyTab's `web/shared/engine-client.js` reads `data.api_contract` and compares it against `EngineClient.MIN_PI_CONTRACT`; a Pi reporting older than that (or no field at all — treated as contract 0) gets a status-bar badge + an ENG-page banner naming both versions and telling the pilot to run `deploy-pi.sh`. See issue #113.
+
+**`VERSION` is for humans. `PI_API_CONTRACT` is what code compares — bump it whenever you change:**
+- a payload field name or nesting (e.g. `flight_fuel_used` moving under `fuel`)
+- a unit
+- a shared physical constant the client also hardcodes or reads from `aircraft-config.json` (e.g. `usable_capacity_gal`)
+
+**Do NOT bump it for an ordinary bug fix** that doesn't change the wire shape or a shared constant.
+
+**When you bump `PI_API_CONTRACT` in `engine_monitor.py`, also bump `EngineClient.MIN_PI_CONTRACT`** in `web/shared/engine-client.js` to match — the two are meant to move together; the client requiring anything less than what the Pi now publishes just means the warning never fires for the case you were fixing.
 
 ### Android wrapper (`android/`)
 
@@ -360,10 +373,15 @@ All new UI must use CSS custom properties from `web/style.css`. Never use hardco
 | `var(--border)` | Card borders | `#e0e0e0` |
 | `var(--border-light)` | Table row dividers | `#f0f0f0` |
 | `var(--border-strong)` | Header borders, input underlines | `#b0b0b0` |
-| `var(--color-success)` | In-limits, OK badges | `#1a8c35` |
-| `var(--color-caution)` | Caution (non-urgent) | `#b87000` |
-| `var(--color-danger)` | Out-of-limits, warnings, over-gross | `#cc2222` |
-| `var(--color-info)` | Informational | `#0055bb` |
+| `var(--color-success)` | In-limits, OK badges | `#00e87a` |
+| `var(--color-caution)` | Caution (non-urgent) | `#ffc000` |
+| `var(--color-danger)` | Out-of-limits, warnings, over-gross | `#ff3030` |
+| `var(--color-info)` | Informational | `#00aaff` |
+
+These four values were wrong in this table until 2026-08 (this file documented dead
+values from a `[data-mode="cockpit"]` block that is never applied — FlyTab is
+light-theme only, see `feedback_light_theme_tablet` memory). The values above are
+now what's actually live in `style.css`'s unconditional `:root` block.
 
 **Status badge pattern** (solid fill, matches `fo-grade-*`):
 ```css
@@ -378,6 +396,23 @@ background: var(--color-caution); color: #000;
 ```
 
 Never use semi-transparent rgba approximations of these colors for badges — use the solid token.
+
+**These four are FILL colors only — never use them as foreground text color on a
+light surface.** They're bright/saturated (tuned for the old dark cockpit theme)
+and measure as low as 1.5:1 as text on `--bg-surface` (#f5f5f5) — invisible in
+direct sunlight. For text (not a filled badge), use the light-safe equivalents
+instead:
+
+| Token | Contrast on `#f5f5f5` |
+|-------|------------------------|
+| `var(--color-caution-on-light)` (`#6b4a00`) | 7.40:1 |
+| `var(--color-danger-on-light)` (`#a30d0d`) | 7.35:1 |
+
+`--status-warning` / `--status-danger` (used by e.g. `.pt-amber`/`.pt-red` in the
+PowerTradeoff panel) are the same class of bright fill color and have the same
+text-contrast problem, with no dedicated `-on-light` variant yet — reuse
+`--color-caution-on-light` / `--color-danger-on-light` for that text too rather
+than inventing new tokens.
 
 ### Font tokens
 

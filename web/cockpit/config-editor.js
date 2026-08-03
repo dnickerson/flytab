@@ -44,13 +44,23 @@ class ConfigEditor {
                 fetch('cockpit-config.json', { signal: AbortSignal.timeout(3000) }),
                 fetch('aircraft-config.json', { signal: AbortSignal.timeout(3000) }),
             ]);
-            this._cockpitConfig = cockpitResp.ok ? await cockpitResp.json() : {};
-            this._aircraftConfig = aircraftResp.ok ? await aircraftResp.json() : {};
+            // Pristine bundle, kept separate from the editable/merged view below —
+            // _save() diffs against this so only genuinely-edited fields get persisted
+            // (#112). Must stay untouched by anything _collectValues() does.
+            this._cockpitBundle  = cockpitResp.ok ? await cockpitResp.json() : {};
+            this._aircraftBundle = aircraftResp.ok ? await aircraftResp.json() : {};
 
             // Merge user-saved overrides from localStorage on top of bundled defaults
             // so the editor shows the user's actual saved settings, not just bundled values.
-            this._cockpitConfig = CockpitConfig._mergeUserOverrides(this._cockpitConfig, 'flypi_user_cockpit');
-            this._aircraftConfig = CockpitConfig._mergeUserOverrides(this._aircraftConfig, 'flypi_user_aircraft');
+            // Deep-cloned after merging: _mergeUserOverrides only shallow-copies nested
+            // objects for keys that ARE overridden, so an un-overridden nested object
+            // (e.g. `performance` on a first-time edit) would otherwise be the SAME
+            // object reference as this._aircraftBundle.performance — _collectValues()
+            // mutating it in place would corrupt the pristine bundle it's diffed against.
+            this._cockpitConfig = JSON.parse(JSON.stringify(
+                CockpitConfig._mergeUserOverrides(this._cockpitBundle, 'flypi_user_cockpit')));
+            this._aircraftConfig = JSON.parse(JSON.stringify(
+                CockpitConfig._mergeUserOverrides(this._aircraftBundle, 'flypi_user_aircraft')));
 
             this._render();
         } catch (err) {
@@ -475,9 +485,19 @@ class ConfigEditor {
 
             // FlyTab: save user overrides to localStorage (bundled files are read-only).
             // Uses dedicated keys so _fetchJson's offline cache doesn't overwrite user edits.
+            //
+            // Persist only what actually differs from the bundle (#112), not the whole
+            // edited object — every field the pilot never touched has a value equal to
+            // the bundle it was pre-filled from, so diffing drops it automatically and
+            // a future bundled correction to that field takes effect. A field the pilot
+            // DID change differs from the bundle and is kept. In-memory config (used by
+            // the rest of the app) stays the full merged view; only what's WRITTEN to
+            // localStorage is minimal.
             try {
-                localStorage.setItem('flypi_user_cockpit', JSON.stringify(this._cockpitConfig));
-                localStorage.setItem('flypi_user_aircraft', JSON.stringify(this._aircraftConfig));
+                const cockpitOverride  = CockpitConfig._diffAgainstBundle(this._cockpitConfig, this._cockpitBundle);
+                const aircraftOverride = CockpitConfig._diffAgainstBundle(this._aircraftConfig, this._aircraftBundle);
+                localStorage.setItem('flypi_user_cockpit', JSON.stringify(cockpitOverride));
+                localStorage.setItem('flypi_user_aircraft', JSON.stringify(aircraftOverride));
                 // Update in-memory config immediately
                 if (typeof CockpitConfig !== 'undefined') {
                     CockpitConfig._config = this._cockpitConfig;

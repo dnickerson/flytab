@@ -1417,6 +1417,22 @@ class RouteTable {
             ? null
             : cruisePwrOverrideRaw;
 
+        // Active leg's burn comes from measured fuel flow, not the planned %PWR
+        // selection above (#114) — the pilot didn't choose a power setting for the
+        // leg they are actually flying, the engine did. %PWR only applies to legs
+        // ahead; see the isActiveAirborne checks in the per-waypoint loop below.
+        //
+        // `.connected`, not just a non-null `lastData` field: EnginePanel never
+        // nulls `lastData` on disconnect (so gauges show last-known values instead
+        // of flashing dashes), so a non-null fuel_flow_gph could be an arbitrarily
+        // stale cached reading. `.connected` reflects the live WebSocket state and
+        // goes false on `engine:disconnect`.
+        const engData = window.enginePanel?.lastData;
+        const engConnected = !!window.enginePanel?.connected;
+        const liveGph = engData?.fuel_flow_gph ?? engData?.gph ?? engData?.Fuel_Flow ?? null;
+        const livePctPower = engData?.percent_power ?? engData?.pwr ?? null;
+        const hasLiveFuelFlow = engConnected && liveGph != null;
+
         let cumulativeDistRemaining = 0;
 
         // First pass: sum total remaining distance from active waypoint
@@ -1565,12 +1581,56 @@ class RouteTable {
                 // For the active leg, override segment-plan ETE with live time (liveDist / actual GS).
                 // Segment ETE is the original planned duration for the full leg — it doesn't shrink
                 // as the aircraft approaches the waypoint, making the total ETE appear frozen.
-                if (i === this._activeIndex && gs > 30 && wp._liveDist != null) {
+                const isActiveAirborne = i === this._activeIndex && gs > 30 && wp._liveDist != null;
+                if (isActiveAirborne) {
                     wp._ete = (wp._liveDist / gs) * 60;
                 } else {
                     wp._ete = segTime;
                 }
-                wp._fuel = segFuel;
+                if (isActiveAirborne && hasLiveFuelFlow) {
+                    // Measured burn for the leg actually being flown (#114), not the
+                    // planned/override figure computed into segFuel above. fuelBurned
+                    // already included segFuel for this waypoint (added right after
+                    // the per-segment loop, before this display block) — correct it
+                    // by the difference so every downstream leg's REM still starts
+                    // from the right running total.
+                    const measuredFuel = (wp._ete / 60) * liveGph;
+                    fuelBurned += (measuredFuel - segFuel);
+                    wp._fuel = measuredFuel;
+                    wp._fuelMeasured = true;
+                    // Measured is the honest answer to "what power am I making" —
+                    // display it, but it is not an input to the burn calculation
+                    // above (already computed from liveGph directly).
+                    if (livePctPower != null) wp._pwr = livePctPower;
+
+                    // Rescale the CLB/CRZ/DES sub-rows to the same measured total
+                    // (#114 gap, found in review) — a single live fuel-flow reading
+                    // doesn't decompose into a separate rate per phase, so each
+                    // segment's planned share of the leg is scaled by the ratio that
+                    // corrected the aggregate above. Without this, the sub-rows kept
+                    // showing planned-burn REM while the waypoint row showed measured
+                    // REM — two disagreeing numbers for the leg actually being flown.
+                    if (segFuel > 0) {
+                        const scale = measuredFuel / segFuel;
+                        let cum = fuelBurned - measuredFuel; // running total just before this leg
+                        for (const seg of segs) {
+                            seg._fuel = seg._fuel * scale;
+                            cum += seg._fuel;
+                            seg._fuelRem = startFuel - cum;
+                            seg._fuelMeasured = true;
+                        }
+                    }
+                } else {
+                    wp._fuel = segFuel;
+                    wp._fuelMeasured = false;
+                }
+                // This IS the leg being flown but no live fuel flow was available to
+                // measure it — falls back to planned, and must say so rather than
+                // looking identical to a genuinely-measured active leg (#114).
+                // Legs ahead are planned by definition; this only applies to i ===
+                // _activeIndex, where "planned" would otherwise be a silent guess
+                // about what's happening right now.
+                wp._activeNoLiveData = (i === this._activeIndex) && !wp._fuelMeasured;
                 wp._fuelRem = startFuel - fuelBurned;
             } else if (i === 0) {
                 // Departure waypoint: no leg data to compute — show starting fuel only
@@ -1578,6 +1638,8 @@ class RouteTable {
                 wp._dist = null;
                 wp._ete = null;
                 wp._fuel = null;
+                wp._fuelMeasured = false;
+                wp._activeNoLiveData = false;
                 wp._fuelRem = startFuel;
                 wp._tas = null;
                 wp._gs = null;
@@ -1592,6 +1654,12 @@ class RouteTable {
                     wp._phase = 'CRZ';
                 }
 
+                // Active leg's burn comes from measured fuel flow here too (#114),
+                // same rule as the segmented branch above — same gate (airborne,
+                // active leg, live engine data).
+                const isActiveAirborneSegless = i === this._activeIndex && gs > 30;
+                const useLiveGph = isActiveAirborneSegless && hasLiveFuelFlow;
+
                 // Seg-less leg: measured band burn when a power is selected, else the
                 // config cruise gph (9.0 — the deliberately higher self-generated-row
                 // figure, unchanged).
@@ -1604,16 +1672,21 @@ class RouteTable {
                 wp._mp = cruisePwrOverride
                     ? (this._mpFromPower(cruisePwrOverride, wp.rpm || cfgCruiseRpm, maxRpm) || cfgCruiseMp)
                     : (wp.mp || cfgCruiseMp);
-                wp._pwr = cruisePwrOverride || wp.percent_power || cfgCruisePwr;
+                wp._pwr = (useLiveGph && livePctPower != null)
+                    ? livePctPower
+                    : (cruisePwrOverride || wp.percent_power || cfgCruisePwr);
 
                 const legSpeed = wp._gs > 0 ? wp._gs : fallbackSpeed;
                 const legTimeHrs = legSpeed > 0 ? legDist / legSpeed : 0;
-                const legFuel = legTimeHrs * fallbackGph;
+                const legFuel = legTimeHrs * (useLiveGph ? liveGph : fallbackGph);
                 fuelBurned += legFuel;
 
                 wp._dist = Math.round(legDist);
                 wp._ete = legTimeHrs * 60;
                 wp._fuel = legFuel;
+                wp._fuelMeasured = useLiveGph;
+                // See the matching comment in the segmented branch above (#114).
+                wp._activeNoLiveData = (i === this._activeIndex) && !wp._fuelMeasured;
                 wp._fuelRem = startFuel - fuelBurned;
             }
 
@@ -1656,6 +1729,8 @@ class RouteTable {
             this._waypoints[i]._dist = null;
             this._waypoints[i]._ete = null;
             this._waypoints[i]._fuel = null;
+            this._waypoints[i]._fuelMeasured = false;
+            this._waypoints[i]._activeNoLiveData = false;
             this._waypoints[i]._fuelRem = null;
             this._waypoints[i]._brg = null;
             this._waypoints[i]._hdg = null;
@@ -2885,7 +2960,11 @@ class RouteTable {
                 const pwrLabel = this._cruisePower
                     ? `${col.label} <span class="rt-pwr-badge">${this._cruisePower}%</span>`
                     : col.label;
-                html += `<th style="width:${col.width || 'auto'};cursor:pointer" class="rt-pwr-header">${pwrLabel}</th>`;
+                // The badge names the selection applied to legs AHEAD, not a claim
+                // about the whole table — the active leg uses measured fuel flow and
+                // ignores it entirely. (#114)
+                const pwrTitle = 'Applies to legs ahead. The active leg uses measured fuel flow, not this selection.';
+                html += `<th style="width:${col.width || 'auto'};cursor:pointer" class="rt-pwr-header" title="${pwrTitle}">${pwrLabel}</th>`;
             } else if (col.key === 'alt') {
                 const rulesLabel = `${col.label} <span class="rt-rules-badge">${this._flightRules}</span>`;
                 html += `<th style="width:${col.width || 'auto'};cursor:pointer" class="rt-rules-header">${rulesLabel}</th>`;
@@ -3239,7 +3318,13 @@ class RouteTable {
                     }
                     return segIndex === 0 ? '\u2014' : '';
                 case 'fuel':
-                    return seg._fuel != null ? seg._fuel.toFixed(1) : '\u2014';
+                    if (seg._fuel == null) return '\u2014';
+                    // Same measured-vs-planned marking as the waypoint aggregate (#114) \u2014
+                    // seg._fuelMeasured is only ever true for the active leg's sub-rows,
+                    // rescaled to the same measured total computed above.
+                    return seg._fuelMeasured
+                        ? `<span class="rt-fuel-measured" title="Measured from live fuel flow">${seg._fuel.toFixed(1)}</span>`
+                        : seg._fuel.toFixed(1);
                 case 'fuel_rem':
                     return this._fuelRemCell(seg._fuelRem);
                 case 'tas':
@@ -3291,7 +3376,23 @@ class RouteTable {
                     ? new Date(wp._eta).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
                     : '\u2014';
             case 'fuel':
-                return wp._fuel != null ? wp._fuel.toFixed(1) : '\u2014';
+                if (wp._fuel == null) return '\u2014';
+                // Measured (active leg, live fuel flow) vs planned — same distinction
+                // as the caution-marker convention elsewhere, but positive rather than
+                // a warning: this figure is MORE trustworthy than a planned one, not
+                // less, so it is not the caution/danger colour. (#114)
+                if (wp._fuelMeasured) {
+                    return `<span class="rt-fuel-measured" title="Measured from live fuel flow">${wp._fuel.toFixed(1)}</span>`;
+                }
+                // This IS the leg being flown, but no live fuel flow was available —
+                // falls back to planned and says so, the same two-signal convention
+                // (caution colour + trailing '?') used for every other unconfirmed
+                // figure in the app, rather than looking identical to a genuinely
+                // measured active leg. (#114)
+                if (wp._activeNoLiveData) {
+                    return `<span class="rt-fuel-planned-fallback" title="No live fuel flow — showing planned figure">${wp._fuel.toFixed(1)}?</span>`;
+                }
+                return wp._fuel.toFixed(1);
             case 'fuel_rem':
                 return this._fuelRemCell(wp._fuelRem);
             case 'tas':

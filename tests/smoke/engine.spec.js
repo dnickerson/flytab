@@ -25,8 +25,8 @@ test.describe('engine panel smoke @smoke @engine', () => {
 
         const lastData = await page.evaluate(() => window.engineClient.lastData);
         expect(lastData).not.toBeNull();
-        // Verify canonical Pi engine-monitor frame shape (v3.3.0 — nested data object)
-        expect(lastData.version).toBe('3.3.0');
+        // Verify canonical Pi engine-monitor frame shape (v3.4.0 — nested data object)
+        expect(lastData.version).toBe('3.4.0');
         expect(lastData.capturing).toBe(true);
         expect(typeof lastData.data?.RPM).toBe('number');
         expect(lastData.data.RPM).toBeGreaterThan(0);

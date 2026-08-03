@@ -61,9 +61,6 @@
       { "key": "mp", "label": "MP", "width": "38px" }
     ]
   },
-  "navStrip": {
-    "fields": ["next", "dest"]
-  },
   "instrumentStrip": {
     "fields": ["gs", "alt", "baro", "hdg", "fuel", "dest", "ete"]
   },
