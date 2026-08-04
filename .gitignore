@@ -23,3 +23,4 @@ screenshots/
 .env.local
 .env.*.local
 .worktrees/
+.superpowers/
