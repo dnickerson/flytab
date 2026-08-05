@@ -281,6 +281,16 @@ describe('cloudBuildResult', () => {
         expect(dep[0].spanNm).not.toBe(20);
     });
 
+    it('returns empty arrays for a record with no points', () => {
+        // The span geometry indexes points[0] / points[n-1] directly; unreachable
+        // through the live call chain (getCells requires >= 2 points) but a
+        // corrupt cache must degrade, not throw.
+        const r = cloudBuildResult(overcastRecord([]), [], SYNTH_NOW);
+        expect(r.covered).toBe(false);
+        expect(r.cells).toEqual([]);
+        expect(r.contours).toEqual([]);
+    });
+
     it('gives interior points one full spacing, unchanged', () => {
         const r = cloudBuildResult(overcastRecord([0, 25, 50]),
                                    [SYNTH_ETA, SYNTH_ETA, SYNTH_ETA], SYNTH_NOW);

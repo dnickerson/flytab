@@ -250,6 +250,9 @@ function cloudBuildResult(record, etaMs, nowMs) {
 
     const hours = record.points.map((_, i) => cloudHourIndex(record.times, etaMs[i]));
     if (hours.some(h => h < 0)) return empty;
+    // A pointless record has nothing to draw, and the span geometry below indexes
+    // points[0] / points[n-1] directly.
+    if (record.points.length === 0) return empty;
 
     const cells = [], freezingLevel = [];
     /** BKN/OVC candidates grouped by sample point, in distance order — the merge
