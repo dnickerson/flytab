@@ -163,6 +163,76 @@ function cloudAgeLabel(ageMs) {
 }
 
 /**
+ * Merge BKN/OVC cells belonging to one physical layer into a single rectangle
+ * carrying a single label.
+ *
+ * `byPoint[p]` holds sample point p's contour candidates, ascending in
+ * altitude, each with explicit `loNm`/`hiNm` edges. Two candidates are the
+ * same layer when they sit at CONSECUTIVE sample points — the points tile the
+ * route edge to edge, so point adjacency is distance adjacency — share an octa
+ * class, and have overlapping altitude bands.
+ *
+ * levelIdx is deliberately NOT the adjacency key: each point's slab edges come
+ * from that point's own geopotential heights, so one deck legitimately sits at
+ * different level indices at different points. Band overlap is the physical
+ * question; level index is an artefact of the ladder.
+ *
+ * Classes are not merged into each other — a BKN run beside an OVC run stays
+ * two rectangles, because the label has to stay true of everything under it.
+ *
+ * Without this, a long BKN deck drew as N abutting outlined boxes each
+ * labelled "BKN" — visual noise, the opposite of what the hard contour was
+ * chosen to deliver.
+ */
+function cloudMergeContours(byPoint) {
+    const closed = [];
+    let open = [];                     // runs still extendable from the last point
+
+    for (const candidates of byPoint) {
+        const claimed = new Set();     // a candidate can only extend ONE run
+        const next = [];
+
+        for (const run of open) {
+            let hit = -1;
+            for (let k = 0; k < candidates.length; k++) {
+                if (claimed.has(k)) continue;
+                const c = candidates[k];
+                if (c.cover !== run.cover) continue;
+                if (c.baseFt > run.topFt || c.topFt < run.baseFt) continue;  // no overlap
+                hit = k;
+                break;
+            }
+            if (hit < 0) { closed.push(run); continue; }   // the layer ends here
+            claimed.add(hit);
+            const c = candidates[hit];
+            run.baseFt = Math.min(run.baseFt, c.baseFt);
+            run.topFt  = Math.max(run.topFt,  c.topFt);
+            run.hiNm   = c.hiNm;
+            next.push(run);
+        }
+
+        for (let k = 0; k < candidates.length; k++) {
+            if (claimed.has(k)) continue;
+            const c = candidates[k];
+            next.push({ cover: c.cover, baseFt: c.baseFt, topFt: c.topFt,
+                        loNm: c.loNm, hiNm: c.hiNm });
+        }
+        open = next;
+    }
+    closed.push(...open);
+
+    return closed
+        .sort((a, b) => (a.loNm - b.loNm) || (a.baseFt - b.baseFt))
+        .map(r => ({
+            distNm: (r.loNm + r.hiNm) / 2,
+            spanNm: r.hiNm - r.loNm,
+            baseFt: r.baseFt,
+            topFt:  r.topFt,
+            cover:  r.cover,
+        }));
+}
+
+/**
  * Turn a stored record + per-point ETAs into render-ready arrays.
  *
  * staleness describes FETCH AGE only; 'expired' still draws. `covered` is the
@@ -182,17 +252,37 @@ function cloudBuildResult(record, etaMs, nowMs) {
     if (hours.some(h => h < 0)) return empty;
 
     const cells = [], freezingLevel = [];
+    /** BKN/OVC candidates grouped by sample point, in distance order — the merge
+     *  needs to know which cells are neighbours, and an empty entry is what makes
+     *  a gap in the deck read as a gap rather than as adjacency. */
+    const contourByPoint = [];
 
-    for (let p = 0; p < record.points.length; p++) {
+    const nPts       = record.points.length;
+    const routeStart = record.points[0].distNm;
+    const routeEnd   = record.points[nPts - 1].distNm;
+
+    for (let p = 0; p < nPts; p++) {
         const t       = hours[p];
         const distNm  = record.points[p].distNm;
-        const prevD   = p > 0 ? record.points[p - 1].distNm : distNm;
-        const nextD   = p < record.points.length - 1 ? record.points[p + 1].distNm : distNm;
-        const spanNm  = Math.max(1, (nextD - prevD) / 2 || 1);
+        // Half-way to each neighbour; at the two ends the shading runs all the way
+        // to the route boundary rather than collapsing inward. The old
+        // (nextD - prevD)/2 gave the first and last point a QUARTER-width span,
+        // because the missing neighbour defaulted to the point's own distance. On
+        // a 2-point route — every route <= 50 nm, since n = clamp(ceil(total/25),
+        // 2, 20) — that left the middle half of the chart blank with cloud data
+        // available for it.
+        const loNm = p > 0        ? (record.points[p - 1].distNm + distNm) / 2 : routeStart;
+        const hiNm = p < nPts - 1 ? (distNm + record.points[p + 1].distNm) / 2 : routeEnd;
+        // The emitted cell contract is {distNm, spanNm} centred on the sample
+        // point, so the span is widened to reach the further edge; the renderer
+        // clamps the rectangle back into [0, totalDistNm]. Contour candidates
+        // carry the exact edges instead, so merged rectangles need no clamping.
+        const spanNm = Math.max(1, 2 * Math.max(distNm - loNm, hiNm - distNm));
 
         const frz = record.freezingFt[p]?.[t];
         if (frz != null) freezingLevel.push({ distNm, altFt: frz });
 
+        const candidates = [];
         for (const slab of cloudSlabEdges(record.heightFt[p]?.[t] ?? [])) {
             const pct   = record.coverPct[p]?.[t]?.[slab.levelIdx];
             const klass = cloudOctaClass(pct);
@@ -204,10 +294,14 @@ function cloudBuildResult(record, etaMs, nowMs) {
                 coverPct: pct,
                 cover:    klass,
             });
+            if (klass === 'BKN' || klass === 'OVC') {
+                candidates.push({ loNm, hiNm, baseFt: slab.baseFt, topFt: slab.topFt, cover: klass });
+            }
         }
+        contourByPoint.push(candidates);
     }
 
-    const contours = cells.filter(c => c.cover === 'BKN' || c.cover === 'OVC');
+    const contours = cloudMergeContours(contourByPoint);
 
     return { staleness, covered: true, fetchedAt: record.fetchedAt, ageLabel,
              cells, contours, freezingLevel };

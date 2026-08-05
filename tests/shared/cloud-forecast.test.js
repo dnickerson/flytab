@@ -115,9 +115,11 @@ const {
     cloudBuildUrl,
     cloudNormalize,
     cloudBuildResult,
+    cloudMergeContours,
+    CloudForecastStore,
 } = new Function(`
     ${src}
-    return { cloudBuildUrl, cloudNormalize, cloudBuildResult };
+    return { cloudBuildUrl, cloudNormalize, cloudBuildResult, cloudMergeContours, CloudForecastStore };
 `)();
 
 const FIXTURE = JSON.parse(readFileSync('tests/fixtures/open-meteo-route.json', 'utf8'));
@@ -235,5 +237,133 @@ describe('cloudBuildResult', () => {
         holed.coverPct[0] = holed.coverPct[0].map(row => row.map(() => null));
         const r = cloudBuildResult(holed, [hour3, hour3], nowMs);
         expect(r.cells.every(c => c.distNm !== FIX_POINTS[0].distNm)).toBe(true);
+    });
+
+    // ── Endpoint spans reach the route ends (review finding 5) ────────────────
+    // With only two sample points (every route <= 50 nm) the old
+    // (nextD - prevD)/2 gave each endpoint a quarter-width span and left the
+    // middle half of the chart blank with data available for it.
+    // Real weather decides whether the fixture has cloud at a given point/hour, so
+    // the span geometry is pinned against a synthetic overcast record instead.
+    const HEIGHTS = [400, 1131, 1873, 2631, 3408, 5013, 6686, 10354, 14520, 19274];
+    /** Solid OVC at every level, one hour, at each of `dists`. */
+    function overcastRecord(dists) {
+        const cov = CLOUD_LEVELS_HPA.map(() => 100);
+        return {
+            routeHash:  'synthetic',
+            fetchedAt:  '2026-08-04T00:00:00.000Z',
+            points:     dists.map((d, i) => ({ lat: 39 + i, lon: -78 - i, distNm: d })),
+            times:      ['2026-08-04T00:00'],
+            levels:     CLOUD_LEVELS_HPA.slice(),
+            coverPct:   dists.map(() => [cov.slice()]),
+            heightFt:   dists.map(() => [HEIGHTS.slice()]),
+            freezingFt: dists.map(() => [8000]),
+        };
+    }
+    const SYNTH_ETA = Date.parse('2026-08-04T00:30:00Z');
+    const SYNTH_NOW = Date.parse('2026-08-04T00:00:00Z');
+
+    it('shades from route start to route end with no gap between the endpoints', () => {
+        // A 40 nm route samples at exactly 2 points — n = clamp(ceil(40/25), 2, 20).
+        const r = cloudBuildResult(overcastRecord([0, 40]), [SYNTH_ETA, SYNTH_ETA], SYNTH_NOW);
+        const dep  = r.cells.filter(c => c.distNm === 0);
+        const dest = r.cells.filter(c => c.distNm === 40);
+        expect(dep.length).toBeGreaterThan(0);
+        expect(dest.length).toBeGreaterThan(0);
+
+        // The renderer draws [distNm - span/2, distNm + span/2] clamped to the
+        // route, so the departure cell must reach the 20 nm midpoint and the
+        // destination cell must reach back to it — no unshaded middle.
+        expect(Math.min(40, dep[0].distNm  + dep[0].spanNm  / 2)).toBe(20);
+        expect(Math.max(0,  dest[0].distNm - dest[0].spanNm / 2)).toBe(20);
+        // Old behaviour: (nextD - prevD)/2 = 20, so the departure reached only
+        // 10 nm and the destination back to 30 — half the chart blank.
+        expect(dep[0].spanNm).not.toBe(20);
+    });
+
+    it('gives interior points one full spacing, unchanged', () => {
+        const r = cloudBuildResult(overcastRecord([0, 25, 50]),
+                                   [SYNTH_ETA, SYNTH_ETA, SYNTH_ETA], SYNTH_NOW);
+        const mid = r.cells.filter(c => c.distNm === 25);
+        expect(mid.length).toBeGreaterThan(0);
+        expect(mid[0].spanNm).toBe(25);      // 12.5 either side
+    });
+});
+
+// ── Contour merging (review finding 4) ────────────────────────────────────────
+
+describe('cloudMergeContours', () => {
+    const cell = (loNm, hiNm, baseFt, topFt, cover) => ({ loNm, hiNm, baseFt, topFt, cover });
+
+    it('merges two adjacent BKN cells into one labelled rectangle', () => {
+        const merged = cloudMergeContours([
+            [cell(0,  50, 3000, 5000, 'BKN')],
+            [cell(50, 100, 3200, 5400, 'BKN')],
+        ]);
+        expect(merged).toHaveLength(1);
+        expect(merged[0]).toMatchObject({ cover: 'BKN', distNm: 50, spanNm: 100 });
+        // The merged band is the union of the two, not either one alone.
+        expect(merged[0].baseFt).toBe(3000);
+        expect(merged[0].topFt).toBe(5400);
+    });
+
+    it('does NOT merge across a gap — an empty point between two decks', () => {
+        const merged = cloudMergeContours([
+            [cell(0,   50, 3000, 5000, 'BKN')],
+            [],                                       // clear air here
+            [cell(100, 150, 3000, 5000, 'BKN')],
+        ]);
+        expect(merged).toHaveLength(2);
+        expect(merged[0]).toMatchObject({ distNm: 25,  spanNm: 50 });
+        expect(merged[1]).toMatchObject({ distNm: 125, spanNm: 50 });
+    });
+
+    it('does not merge different octa classes into one label', () => {
+        const merged = cloudMergeContours([
+            [cell(0,  50, 3000, 5000, 'BKN')],
+            [cell(50, 100, 3000, 5000, 'OVC')],
+        ]);
+        expect(merged).toHaveLength(2);
+        expect(merged.map(m => m.cover)).toEqual(['BKN', 'OVC']);
+    });
+
+    it('does not merge two decks that are adjacent but vertically separated', () => {
+        const merged = cloudMergeContours([
+            [cell(0,  50, 3000, 5000, 'BKN')],
+            [cell(50, 100, 12000, 14000, 'BKN')],     // no band overlap
+        ]);
+        expect(merged).toHaveLength(2);
+    });
+
+    it('tracks two stacked decks independently across three points', () => {
+        const merged = cloudMergeContours([
+            [cell(0,   50,  3000, 5000, 'BKN'), cell(0,   50,  11000, 13000, 'OVC')],
+            [cell(50,  100, 3100, 5100, 'BKN'), cell(50,  100, 11200, 13200, 'OVC')],
+            [cell(100, 150, 3200, 5200, 'BKN'), cell(100, 150, 11400, 13400, 'OVC')],
+        ]);
+        expect(merged).toHaveLength(2);
+        for (const m of merged) {
+            expect(m.distNm).toBe(75);
+            expect(m.spanNm).toBe(150);
+        }
+        expect(merged.map(m => m.cover)).toEqual(['BKN', 'OVC']);   // sorted by base
+    });
+
+    it('emits nothing when there are no candidates', () => {
+        expect(cloudMergeContours([[], [], []])).toEqual([]);
+    });
+
+    it('collapses a run of cells to strictly fewer rectangles than cells', () => {
+        const rec2 = cloudNormalize(FIXTURE, FIX_POINTS);
+        const h = Date.parse(`${rec2.times[3]}Z`) + 60000;
+        const r = cloudBuildResult(rec2, [h, h], Date.parse(rec2.fetchedAt));
+        // Every emitted contour still carries a drawable class and band.
+        for (const c of r.contours) {
+            expect(['BKN', 'OVC']).toContain(c.cover);
+            expect(c.topFt).toBeGreaterThan(c.baseFt);
+            expect(c.spanNm).toBeGreaterThan(0);
+        }
+        const bknOvcCells = r.cells.filter(c => c.cover === 'BKN' || c.cover === 'OVC');
+        expect(r.contours.length).toBeLessThanOrEqual(bknOvcCells.length);
     });
 });
