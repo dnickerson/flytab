@@ -371,6 +371,10 @@ class RouteProfileView {
                 ctx.strokeStyle = contourC;
                 ctx.lineWidth   = 2;
                 ctx.strokeRect(r.x, r.y, r.w, r.h);
+                ctx.fillStyle   = contourC;
+                ctx.font        = '900 12px sans-serif';
+                ctx.textAlign   = 'left';
+                ctx.fillText(c.cover, r.x + 4, r.y + 12);
                 ctx.restore();
             }
         } catch (e) {
