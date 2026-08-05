@@ -767,6 +767,7 @@ class RouteTable {
         this._updateSummary();
         this._renderTable();
         this._emitRouteChange();
+        this._refreshCloudForecast();   // fire-and-forget ground pre-fetch
     }
 
     _emitRouteChange() {
@@ -2571,6 +2572,71 @@ class RouteTable {
         this._profileView.show(profileData);
     }
 
+    /**
+     * Even distance sampling along the route, capped at 20 points — the size
+     * measured end-to-end against the live API (~16 KB gzipped for 48h).
+     */
+    _cloudSamplePoints() {
+        const wps = this._waypoints.filter(wp => wp.lat != null && wp.lon != null);
+        if (wps.length < 2) return [];
+
+        const dists = [];
+        let cum = 0;
+        for (let i = 0; i < wps.length; i++) {
+            if (i > 0) cum += wps[i]._legDist || 0;
+            dists.push(cum);
+        }
+        const total = cum;
+        if (total <= 0) return [];
+
+        const n = Math.min(20, Math.max(2, Math.ceil(total / 25)));
+        const out = [];
+        for (let k = 0; k < n; k++) {
+            const d = (total * k) / (n - 1);
+            let j = 1;
+            while (j < dists.length - 1 && dists[j] < d) j++;
+            const d0 = dists[j - 1], d1 = dists[j];
+            const f  = d1 > d0 ? (d - d0) / (d1 - d0) : 0;
+            const a  = wps[j - 1], b = wps[j];
+            out.push({
+                lat:    a.lat + (b.lat - a.lat) * f,
+                lon:    a.lon + (b.lon - a.lon) * f,
+                distNm: d,
+                etaMs:  (a._eta != null && b._eta != null)
+                    ? a._eta + (b._eta - a._eta) * f
+                    : null,
+            });
+        }
+        return out;
+    }
+
+    /**
+     * Ground pre-fetch. Fires on route edit when online so the cache is warm
+     * before departure — the profile itself never touches the network.
+     * Failure is deliberately silent: this runs on every edit, and a toast
+     * would be noise. The age chip on the panel is the signal.
+     */
+    async _refreshCloudForecast() {
+        if (typeof CloudForecastStore === 'undefined') return;
+        const mode = (typeof app !== 'undefined') ? app.networkMode?.mode : null;
+        if (mode !== 'home' && mode !== 'internet') return;
+
+        const points = this._cloudSamplePoints();
+        if (points.length < 2) return;
+
+        const hash = cloudRouteHash(points);
+        if (hash === this._cloudFetchedHash) return;   // already have this route
+
+        this._cloudStore = this._cloudStore || new CloudForecastStore();
+        try {
+            await this._cloudStore.fetchAndStore(points);
+            this._cloudFetchedHash = hash;
+            window.DiagLog?.log('cloud', `forecast cached — ${points.length} pts`);
+        } catch (e) {
+            window.DiagLog?.log('cloud', `forecast fetch failed: ${e?.message}`);
+        }
+    }
+
     async _buildProfileData() {
         const wps     = this._waypoints;
         const totalDist = wps.reduce((s, wp) => s + (wp._legDist || 0), 0);
@@ -2648,6 +2714,34 @@ class RouteTable {
             }
         }
 
+        // Cloud + freezing level — cache only, never network. A failure here
+        // must not cost the pilot the terrain profile.
+        let cloudCells = [], cloudContours = [], freezingLevel = [], cloudMeta = null;
+        try {
+            const pts = this._cloudSamplePoints();
+            if (pts.length >= 2 && typeof CloudForecastStore !== 'undefined') {
+                this._cloudStore = this._cloudStore || new CloudForecastStore();
+                const nowHour = Math.floor(Date.now() / 3600000) * 3600000;
+                const etas = pts.map(p => p.etaMs ?? nowHour);
+                const res  = await this._cloudStore.getCells({
+                    routeHash: cloudRouteHash(pts), samplePoints: pts, etaMs: etas,
+                });
+                if (res) {
+                    cloudCells    = res.cells;
+                    cloudContours = res.contours;
+                    freezingLevel = res.freezingLevel;
+                    cloudMeta     = {
+                        staleness: res.staleness,
+                        covered:   res.covered,
+                        ageLabel:  res.ageLabel,
+                        estimated: pts.some(p => p.etaMs == null),
+                    };
+                }
+            }
+        } catch (e) {
+            console.warn('[RouteTable] cloud forecast failed:', e?.message);
+        }
+
         return {
             legs,
             totalDistNm:  totalDist,
@@ -2659,6 +2753,10 @@ class RouteTable {
             airspaceBands,
             waypointConstraints,
             fuelStops,   // trip.flights[] boundary markers for the profile chart
+            cloudCells,
+            cloudContours,
+            freezingLevel,
+            cloudMeta,
         };
     }
 
