@@ -290,6 +290,55 @@ describe('cloudBuildResult', () => {
     });
 });
 
+// ── getCells cache guards (spec test 6; review finding 7a) ────────────────────
+// Reachable without a real IndexedDB: getCells only calls load() when _data is
+// falsy, so seeding _data exercises the guards directly.
+
+describe('CloudForecastStore.getCells — cache guards', () => {
+    const rec = cloudNormalize(FIXTURE, FIX_POINTS);
+    const eta = Date.parse(`${rec.times[3]}Z`) + 60000;
+
+    it('returns null when the route hash does not match the cache', async () => {
+        // The worst available failure mode is editing a route offline and being
+        // shown the PREVIOUS route's clouds with full confidence.
+        const s = new CloudForecastStore();
+        s._data = rec;
+        expect(await s.getCells({
+            routeHash: 'not-the-real-hash', samplePoints: FIX_POINTS, etaMs: [eta, eta],
+        })).toBeNull();
+    });
+
+    it('accepts the matching hash, and derives it from the points when omitted', async () => {
+        const s = new CloudForecastStore();
+        s._data = rec;
+        const byHash = await s.getCells({
+            routeHash: rec.routeHash, samplePoints: FIX_POINTS, etaMs: [eta, eta],
+        });
+        expect(byHash).not.toBeNull();
+        const derived = await s.getCells({ samplePoints: FIX_POINTS, etaMs: [eta, eta] });
+        expect(derived).not.toBeNull();
+    });
+
+    it('returns null when the point count does not match etaMs length', async () => {
+        // A cube indexed [pointIdx][timeIdx][levelIdx] read with a mismatched ETA
+        // list would silently pair the wrong hour with the wrong place.
+        const s = new CloudForecastStore();
+        s._data = rec;
+        expect(await s.getCells({
+            routeHash: rec.routeHash, samplePoints: FIX_POINTS, etaMs: [eta],
+        })).toBeNull();
+    });
+
+    it('returns null when there is no cached record at all', async () => {
+        const s = new CloudForecastStore();
+        s._data = null;
+        s.load = async () => null;      // stand in for an empty IDB
+        expect(await s.getCells({
+            routeHash: rec.routeHash, samplePoints: FIX_POINTS, etaMs: [eta, eta],
+        })).toBeNull();
+    });
+});
+
 // ── Contour merging (review finding 4) ────────────────────────────────────────
 
 describe('cloudMergeContours', () => {
