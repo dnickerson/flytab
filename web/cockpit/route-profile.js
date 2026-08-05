@@ -93,7 +93,9 @@ class RouteProfileView {
         });
 
         const creditEl = document.createElement('span');
-        creditEl.textContent = 'WX: Open-Meteo (CC-BY 4.0)';
+        // CC-BY 4.0 attribution, plus the key for the asterisk on every cloud
+        // contour label: BKN*/OVC* are model-derived, not observed.
+        creditEl.textContent = 'WX: Open-Meteo (CC-BY 4.0) · * model-derived';
         Object.assign(creditEl.style, {
             fontSize: '9px', fontWeight: '700',
             color: 'var(--text-muted)', marginRight: '6px',
@@ -391,7 +393,12 @@ class RouteProfileView {
                 ctx.fillStyle   = contourC;
                 ctx.font        = '900 12px sans-serif';
                 ctx.textAlign   = 'left';
-                ctx.fillText(c.cover, r.x + 4, r.y + 12);
+                // "BKN*", not "BKN" — a bare octa group is typographically
+                // identical to a METAR sky-cover observation, and this is a model
+                // cloud FRACTION over a ~3 km grid cell, which is close to but not
+                // the same thing as an observer's octas. The asterisk is keyed to
+                // the "* model-derived" note in the panel header.
+                ctx.fillText(`${c.cover}*`, r.x + 4, r.y + 12);
                 ctx.restore();
             }
         } catch (e) {
@@ -638,9 +645,14 @@ class RouteProfileView {
             if (!m) { this._wxChip.style.display = 'none'; return; }
 
             const css = getComputedStyle(document.documentElement);
+            // covered:false is the one condition under which nothing is drawn, so
+            // it must never render in muted grey — a blank cloud layer that looks
+            // like a routine timestamp reads as "no cloud", not "no data".
+            // Escalated to caution rather than replacing the ladder, so an expired
+            // fetch keeps its stronger danger colour.
             const colour = m.staleness === 'expired'
                 ? css.getPropertyValue('--color-danger-on-light').trim()  || '#a30d0d'
-                : m.staleness === 'stale'
+                : (m.staleness === 'stale' || !m.covered)
                     ? css.getPropertyValue('--color-caution-on-light').trim() || '#6b4a00'
                     : css.getPropertyValue('--text-muted').trim() || '#888888';
 
