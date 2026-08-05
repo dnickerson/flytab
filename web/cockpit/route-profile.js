@@ -105,6 +105,13 @@ class RouteProfileView {
         closeBtn.addEventListener('click', () => this.hide());
 
         header.appendChild(titleEl);
+
+        this._wxChip = document.createElement('span');
+        Object.assign(this._wxChip.style, {
+            fontSize: '11px', fontWeight: '800', marginRight: '4px', display: 'none',
+        });
+        header.appendChild(this._wxChip);
+
         header.appendChild(this._chevronBtn);
         header.appendChild(closeBtn);
 
@@ -212,6 +219,8 @@ class RouteProfileView {
     _render(routeData) {
         if (!routeData) return;
 
+        this._updateWxChip(routeData);
+
         const canvas = this._canvas;
         const dpr    = window.devicePixelRatio || 1;
         const w      = canvas.offsetWidth;
@@ -305,36 +314,69 @@ class RouteProfileView {
             ctx.restore();
         }
 
-        // 4. Freezing level line ─────────────────────────────────────────────
-        if (routeData.freezingLevelFt) {
-            const fy = yOf(routeData.freezingLevelFt);
+        // 4. Freezing level ──────────────────────────────────────────────────
+        // A polyline, not a scalar: the freezing level moves materially over a
+        // few hundred miles, and one number would be invented precision.
+        const frzPts = routeData.freezingLevel || [];
+        if (frzPts.length > 0) {
+            ctx.save();
+            ctx.strokeStyle = getComputedStyle(document.documentElement)
+                .getPropertyValue('--color-danger-on-light').trim() || '#a30d0d';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            frzPts.forEach((p, i) => {
+                const px = xOf(p.distNm), py = yOf(p.altFt);
+                if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+            });
+            ctx.stroke();
+            const first = frzPts[0];
+            const fy = yOf(first.altFt);
             if (fy > pad.top && fy < h - pad.bottom) {
-                ctx.save();
-                ctx.strokeStyle = '#818cf8';
-                ctx.lineWidth = 1.5;
-                ctx.setLineDash([5, 4]);
-                ctx.beginPath();
-                ctx.moveTo(pad.left, fy);
-                ctx.lineTo(pad.left + cw, fy);
-                ctx.stroke();
-                ctx.setLineDash([]);
-                ctx.fillStyle = '#818cf8';
-                ctx.font = 'bold 12px sans-serif';
+                ctx.fillStyle = ctx.strokeStyle;
+                ctx.font = '900 12px sans-serif';
                 ctx.textAlign = 'left';
-                ctx.fillText('FZL', pad.left + 4, fy - 4);
-                ctx.restore();
+                ctx.fillText('0°C', pad.left + 4, fy - 5);
             }
+            ctx.restore();
         }
 
-        // 5. Cloud layers ────────────────────────────────────────────────────
-        if (routeData.cloudLayers?.length) {
-            ctx.fillStyle = 'rgba(148,163,184,0.4)';
-            for (const cl of routeData.cloudLayers) {
-                const cx = xOf(cl.dist_nm);
-                const y1 = yOf(cl.top_ft);
-                const y2 = yOf(cl.base_ft);
-                ctx.fillRect(cx - 20, y1, 40, Math.max(1, y2 - y1));
+        // 5. Clouds ──────────────────────────────────────────────────────────
+        // Native pressure-level slabs. Density fill is texture; the BKN/OVC
+        // contour is what has to survive sunlight. Wrapped because terrain
+        // clearance must not depend on this code being correct.
+        try {
+            const css       = getComputedStyle(document.documentElement);
+            const fillRGB   = css.getPropertyValue('--cloud-fill').trim()    || '#5b6b7f';
+            const contourC  = css.getPropertyValue('--cloud-contour').trim() || '#1f3348';
+
+            const rectOf = (c) => {
+                const x  = xOf(Math.max(0, c.distNm - c.spanNm / 2));
+                const x2 = xOf(Math.min(totalDist, c.distNm + c.spanNm / 2));
+                const y  = yOf(c.topFt);
+                return { x, y, w: Math.max(1, x2 - x), h: Math.max(1, yOf(c.baseFt) - y) };
+            };
+
+            for (const c of routeData.cloudCells || []) {
+                const r = rectOf(c);
+                ctx.save();
+                ctx.globalAlpha = 0.12 + 0.33 * Math.min(1, (c.coverPct || 0) / 100);
+                ctx.fillStyle   = fillRGB;
+                ctx.fillRect(r.x, r.y, r.w, r.h);
+                ctx.restore();
             }
+
+            if ((routeData.cloudContours || []).length > 0) {
+                ctx.save();
+                ctx.strokeStyle = contourC;
+                ctx.lineWidth   = 2;
+                for (const c of routeData.cloudContours) {
+                    const r = rectOf(c);
+                    ctx.strokeRect(r.x, r.y, r.w, r.h);
+                }
+                ctx.restore();
+            }
+        } catch (e) {
+            console.warn('[RouteProfile] cloud render skipped:', e?.message);
         }
 
         // 6. Cruise altitude dashed reference ────────────────────────────────
@@ -565,6 +607,28 @@ class RouteProfileView {
         } else {
             this._tooltip.style.display = 'none';
         }
+    }
+
+    _updateWxChip(routeData) {
+        if (!this._wxChip) return;
+        const m = routeData.cloudMeta;
+        if (!m) { this._wxChip.style.display = 'none'; return; }
+
+        const css = getComputedStyle(document.documentElement);
+        const colour = m.staleness === 'expired'
+            ? css.getPropertyValue('--color-danger-on-light').trim()  || '#a30d0d'
+            : m.staleness === 'stale'
+                ? css.getPropertyValue('--color-caution-on-light').trim() || '#6b4a00'
+                : css.getPropertyValue('--text-muted').trim() || '#888888';
+
+        let label;
+        if (!m.covered)      label = 'WX: no data for ETA';
+        else if (m.estimated) label = `WX ${m.ageLabel} · valid now`;
+        else                  label = `WX ${m.ageLabel}`;
+
+        this._wxChip.textContent  = label;
+        this._wxChip.style.color  = colour;
+        this._wxChip.style.display = 'inline';
     }
 
     // ── Drawing helpers ───────────────────────────────────────────────────────
