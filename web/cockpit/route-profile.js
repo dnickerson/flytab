@@ -272,7 +272,15 @@ class RouteProfileView {
         if (terrain.length > 0) {
             this._drawTerrainFill(ctx, terrain, xOf, yOf);
         } else {
-            this._drawMockTerrain(ctx, totalDist, xOf, yOf, yMax);
+            // Mock terrain is a placeholder shape, not real elevation data — its
+            // height must stay anchored to terrain/cruise altitude, not to yMax,
+            // which cloud tops can now pull much taller than cruise. Scaling the
+            // placeholder to the cloud-inclusive yMax drew it as if there were
+            // 15,000+ft mountains under a route with no such terrain. yOf() still
+            // positions it on the real (possibly taller) axis — only its own
+            // fictional height uses this smaller reference.
+            const mockScale = Math.max(maxTerrain, cruiseAlt) * 1.15;
+            this._drawMockTerrain(ctx, totalDist, xOf, yOf, mockScale);
         }
 
         // 1b. Airspace bands (after terrain, before flight path)
