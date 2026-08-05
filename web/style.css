@@ -185,6 +185,11 @@
     --color-caution-on-light: #6b4a00;   /* 7.40:1 on #f5f5f5 */
     --color-danger-on-light:  #a30d0d;   /* 7.35:1 on #f5f5f5 */
 
+    /* Route profile cloud rendering — fill is texture, contour carries
+       legibility. --cloud-contour measures 12.9:1 on white. */
+    --cloud-fill:    #5b6b7f;
+    --cloud-contour: #1f3348;
+
     /* Navaid type colors — shared by map, popup, legend */
     --navaid-vor:        #00ccaa;
     --navaid-ndb:        #cc8800;

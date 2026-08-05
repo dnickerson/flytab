@@ -434,6 +434,24 @@ The route imports with all waypoints, planned altitude, and cruise speed. The na
 
 Tap any airport on the map, then tap the **→** corner button. FlyTab sets a direct course to that airport, overriding the current leg but preserving the rest of the route.
 
+### Route Profile
+
+Expand the route strip and tap the mountain icon (⛰) in the handle to open the profile view — a side-on chart of your route showing terrain, Class B/C/D airspace bands, waypoints, and fuel stops along the distance axis. Tap the panel's chevron to expand or collapse it, or tap **✕** to close. Touch and drag anywhere on the chart to scrub along the route and see airspace detail for that point.
+
+#### Clouds on the profile
+
+When a cloud forecast has been cached, the profile shades cloud along your route at the altitudes it occupies. Shading density follows how much cloud the model expects: faint for scattered, solid for overcast. Anywhere cover reaches broken or worse, a dark outlined box is drawn and labelled **BKN\*** or **OVC\***. A continuous deck is drawn as one box spanning the whole stretch, not as a row of small boxes.
+
+The asterisk is deliberate — the header note reads "\* model-derived". These are model cloud fractions over roughly 3 km grid squares, not an observer's octas, and they are not a METAR.
+
+The bands are deliberately blocky. The forecast samples about every 750 ft low down but only every 3,000–4,000 ft above roughly 6,700 ft, and the boxes show the real span the model resolves rather than a smoothed guess. A layer that sits entirely inside one of those upper gaps will not appear at all.
+
+A solid red line marks the 0°C freezing level, which moves along the route.
+
+**Cloud data is fetched on the ground and does not update in flight.** It refreshes automatically whenever you edit the route while connected at home or on the internet. The WX chip in the profile header shows how old the forecast is — grey when recent, amber past three hours, red past six. Old data is still drawn; the chip tells you how much to trust it. If the chip reads "no data for ETA" — shown in amber — the cached forecast does not reach far enough forward in time to cover your arrival and nothing is drawn.
+
+If the route has no computed timing yet, the chip adds "valid now" and the whole chart is drawn for the current hour rather than for your ETA at each point. It is all or nothing: you never get a chart that mixes the two.
+
 ---
 
 ## Approach Charts
