@@ -289,6 +289,23 @@ class RouteTable {
                 wpAlt = wp.elev_ft;
             }
 
+            // ETA at this waypoint. `leg` is legs[i-1] — the leg ARRIVING here —
+            // and route-planner.js sets leg.eta to the running clock AFTER adding
+            // that leg's timeHrs, so leg.eta is the arrival time at waypoint i.
+            // The departure has no inbound leg, which left _eta structurally null
+            // on wp[0] of EVERY route: the first sample-point ETAs in
+            // _cloudSamplePoints then interpolated from null and the profile's
+            // "valid now" caveat was permanently stuck on. Derive it by walking
+            // back from the first leg's arrival: departure = eta(wp1) − that leg's
+            // duration, which is exactly the clock route-planner started from.
+            let wpEta = leg.eta ?? null;
+            if (i === 0) {
+                const firstLeg = legs[0];
+                wpEta = (firstLeg?.eta != null && firstLeg?.timeHrs != null)
+                    ? firstLeg.eta - firstLeg.timeHrs * 3600000
+                    : null;   // no leg timing yet — genuinely unknown, not a bug
+            }
+
             const isApt = wp.type === 'APT' || wp.icao === planDep || wp.icao === planDest;
             return {
                 ...wp,
@@ -305,7 +322,7 @@ class RouteTable {
                 tas: wp.tas ?? leg.tasKt ?? null,
                 gs: wp.gs ?? leg.gsKt ?? null,
                 gph: wp.gph ?? cruiseSeg.gph ?? null,
-                _eta: leg.eta ?? null,        // UTC ms ETA at this waypoint (from recomputeLegs)
+                _eta: wpEta,                  // UTC ms ETA at this waypoint (from recomputeLegs)
                 _planAltFt: leg.altFt ?? null, // cruise altitude used for this leg's TAS/fuel
             };
         });
@@ -767,6 +784,7 @@ class RouteTable {
         this._updateSummary();
         this._renderTable();
         this._emitRouteChange();
+        this._refreshCloudForecast();   // fire-and-forget ground pre-fetch
     }
 
     _emitRouteChange() {
@@ -2571,6 +2589,89 @@ class RouteTable {
         this._profileView.show(profileData);
     }
 
+    /**
+     * Even distance sampling along the route, capped at 20 points — the size
+     * measured end-to-end against the live API (~16 KB gzipped for 48h).
+     */
+    _cloudSamplePoints() {
+        const all = this._waypoints || [];
+        const wps = all.filter(wp => wp.lat != null && wp.lon != null);
+        // _legDist is assigned per adjacent pair of the UNFILTERED list, so
+        // dropping a coordinate-less waypoint desynchronises the two: the next
+        // survivor keeps a _legDist measured FROM the waypoint that was dropped.
+        // Distances then under-count and, worse, lat/lon is interpolated between
+        // two waypoints that are not actually adjacent on the route — sample
+        // points land off-route and clouds are drawn for the wrong ground.
+        // Refuse to sample rather than draw a confident, wrong picture.
+        if (wps.length !== all.length) return [];
+        if (wps.length < 2) return [];
+
+        const dists = [];
+        let cum = 0;
+        for (let i = 0; i < wps.length; i++) {
+            if (i > 0) cum += wps[i]._legDist || 0;
+            dists.push(cum);
+        }
+        const total = cum;
+        if (total <= 0) return [];
+
+        const n = Math.min(20, Math.max(2, Math.ceil(total / 25)));
+        const out = [];
+        for (let k = 0; k < n; k++) {
+            const d = (total * k) / (n - 1);
+            let j = 1;
+            while (j < dists.length - 1 && dists[j] < d) j++;
+            const d0 = dists[j - 1], d1 = dists[j];
+            const f  = d1 > d0 ? (d - d0) / (d1 - d0) : 0;
+            const a  = wps[j - 1], b = wps[j];
+            out.push({
+                lat:    a.lat + (b.lat - a.lat) * f,
+                lon:    a.lon + (b.lon - a.lon) * f,
+                distNm: d,
+                etaMs:  (a._eta != null && b._eta != null)
+                    ? a._eta + (b._eta - a._eta) * f
+                    : null,
+            });
+        }
+
+        // ALL-OR-NOTHING, per the spec: "If any _eta is null … the entire render
+        // falls back to the current UTC hour for every column." A per-point
+        // fallback would put "now" columns and genuine future-forecast columns on
+        // one chart with nothing to tell them apart — the pilot would read a
+        // time-correct picture that is only partly time-correct.
+        if (out.some(p => p.etaMs == null)) {
+            for (const p of out) p.etaMs = null;
+        }
+        return out;
+    }
+
+    /**
+     * Ground pre-fetch. Fires on route edit when online so the cache is warm
+     * before departure — the profile itself never touches the network.
+     * Failure is deliberately silent: this runs on every edit, and a toast
+     * would be noise. The age chip on the panel is the signal.
+     */
+    async _refreshCloudForecast() {
+        if (typeof CloudForecastStore === 'undefined') return;
+        const mode = (typeof app !== 'undefined') ? app.networkMode?.mode : null;
+        if (mode !== 'home' && mode !== 'internet') return;
+
+        const points = this._cloudSamplePoints();
+        if (points.length < 2) return;
+
+        const hash = cloudRouteHash(points);
+        if (hash === this._cloudFetchedHash) return;   // already have this route
+
+        this._cloudStore = this._cloudStore || new CloudForecastStore();
+        try {
+            await this._cloudStore.fetchAndStore(points);
+            this._cloudFetchedHash = hash;
+            window.DiagLog?.log('cloud', `forecast cached — ${points.length} pts`);
+        } catch (e) {
+            window.DiagLog?.log('cloud', `forecast fetch failed: ${e?.message}`);
+        }
+    }
+
     async _buildProfileData() {
         const wps     = this._waypoints;
         const totalDist = wps.reduce((s, wp) => s + (wp._legDist || 0), 0);
@@ -2648,6 +2749,47 @@ class RouteTable {
             }
         }
 
+        // Cloud + freezing level — cache only, never network. A failure here
+        // must not cost the pilot the terrain profile.
+        let cloudCells = [], cloudContours = [], freezingLevel = [], cloudMeta = null;
+        try {
+            const pts = this._cloudSamplePoints();
+            if (pts.length >= 2 && typeof CloudForecastStore !== 'undefined') {
+                this._cloudStore = this._cloudStore || new CloudForecastStore();
+                // _cloudSamplePoints() nulls EVERY etaMs if any one is unknown, so
+                // this is a whole-chart decision, not a per-column one: either all
+                // columns carry real ETAs or all of them read the current hour.
+                const allEstimated = pts.some(p => p.etaMs == null);
+                const nowHour = Math.floor(Date.now() / 3600000) * 3600000;
+                const etas = allEstimated ? pts.map(() => nowHour) : pts.map(p => p.etaMs);
+                // Raced against a timeout because getCells() awaits indexedDB.open(),
+                // which can sit unsettled forever when an IDB connection is blocked
+                // (see the NASR-import hang documented in CLAUDE.md). The surrounding
+                // try/catch only catches a THROW; an unsettled promise here would
+                // never open the profile at all — no terrain, no danger zones. A
+                // timeout is treated exactly like "no cache": draw nothing.
+                const res  = await Promise.race([
+                    this._cloudStore.getCells({
+                        routeHash: cloudRouteHash(pts), samplePoints: pts, etaMs: etas,
+                    }),
+                    new Promise(resolve => setTimeout(() => resolve(null), 2000)),
+                ]);
+                if (res) {
+                    cloudCells    = res.cells;
+                    cloudContours = res.contours;
+                    freezingLevel = res.freezingLevel;
+                    cloudMeta     = {
+                        staleness: res.staleness,
+                        covered:   res.covered,
+                        ageLabel:  res.ageLabel,
+                        estimated: allEstimated,   // uniform now-hour fallback was used
+                    };
+                }
+            }
+        } catch (e) {
+            console.warn('[RouteTable] cloud forecast failed:', e?.message);
+        }
+
         return {
             legs,
             totalDistNm:  totalDist,
@@ -2659,6 +2801,10 @@ class RouteTable {
             airspaceBands,
             waypointConstraints,
             fuelStops,   // trip.flights[] boundary markers for the profile chart
+            cloudCells,
+            cloudContours,
+            freezingLevel,
+            cloudMeta,
         };
     }
 
