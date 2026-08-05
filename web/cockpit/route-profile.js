@@ -325,27 +325,36 @@ class RouteProfileView {
         // 4. Freezing level ──────────────────────────────────────────────────
         // A polyline, not a scalar: the freezing level moves materially over a
         // few hundred miles, and one number would be invented precision.
+        // Wrapped for the same reason the cloud block and the WX chip are: this is
+        // decoration drawn BEFORE the cruise line, waypoint markers and axes, so a
+        // throw here would leave a chart that looks finished but has no altitude
+        // scale. `freezingLevel` arriving as a truthy non-array is all it takes.
         const frzPts = routeData.freezingLevel || [];
         if (frzPts.length > 0) {
             ctx.save();
-            ctx.strokeStyle = getComputedStyle(document.documentElement)
-                .getPropertyValue('--color-danger-on-light').trim() || '#a30d0d';
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            frzPts.forEach((p, i) => {
-                const px = xOf(p.distNm), py = yOf(p.altFt);
-                if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
-            });
-            ctx.stroke();
-            const first = frzPts[0];
-            const fy = yOf(first.altFt);
-            if (fy > pad.top && fy < h - pad.bottom) {
-                ctx.fillStyle = ctx.strokeStyle;
-                ctx.font = '900 12px sans-serif';
-                ctx.textAlign = 'left';
-                ctx.fillText('0°C', pad.left + 4, fy - 5);
+            try {
+                ctx.strokeStyle = getComputedStyle(document.documentElement)
+                    .getPropertyValue('--color-danger-on-light').trim() || '#a30d0d';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                frzPts.forEach((p, i) => {
+                    const px = xOf(p.distNm), py = yOf(p.altFt);
+                    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+                });
+                ctx.stroke();
+                const first = frzPts[0];
+                const fy = yOf(first.altFt);
+                if (fy > pad.top && fy < h - pad.bottom) {
+                    ctx.fillStyle = ctx.strokeStyle;
+                    ctx.font = '900 12px sans-serif';
+                    ctx.textAlign = 'left';
+                    ctx.fillText('0°C', pad.left + 4, fy - 5);
+                }
+            } catch (e) {
+                console.warn('[RouteProfile] freezing level render skipped:', e?.message);
+            } finally {
+                ctx.restore();   // paired with the save() above on every path
             }
-            ctx.restore();
         }
 
         // 5. Clouds ──────────────────────────────────────────────────────────
