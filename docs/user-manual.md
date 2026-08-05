@@ -436,7 +436,7 @@ Tap any airport on the map, then tap the **→** corner button. FlyTab sets a di
 
 ### Route Profile
 
-Expand the route strip and tap the mountain icon (⛰) in the handle to open the profile view — a side-on chart of your route showing terrain, Class B/C/D airspace bands, waypoints, and fuel stops along the distance axis. Drag the panel's chevron to expand or collapse it, or tap **✕** to close. Touch and hold anywhere on the chart to scrub along the route and see airspace detail for that point.
+Expand the route strip and tap the mountain icon (⛰) in the handle to open the profile view — a side-on chart of your route showing terrain, Class B/C/D airspace bands, waypoints, and fuel stops along the distance axis. Tap the panel's chevron to expand or collapse it, or tap **✕** to close. Touch and drag anywhere on the chart to scrub along the route and see airspace detail for that point.
 
 #### Clouds on the profile
 
