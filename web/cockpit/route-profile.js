@@ -92,6 +92,14 @@ class RouteProfileView {
             flex:       '1',
         });
 
+        const creditEl = document.createElement('span');
+        creditEl.textContent = 'WX: Open-Meteo (CC-BY 4.0)';
+        Object.assign(creditEl.style, {
+            fontSize: '9px', fontWeight: '700',
+            color: 'var(--text-muted)', marginRight: '6px',
+        });
+        header.appendChild(creditEl);
+
         this._chevronBtn = document.createElement('button');
         this._chevronBtn.textContent = '\u25B2';
         this._chevronBtn.title = 'Expand/collapse';
