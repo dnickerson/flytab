@@ -110,3 +110,130 @@ describe('cloudHourIndex', () => {
         expect(cloudHourIndex(times, Date.parse('2026-08-04T09:00:00Z'))).toBe(-1);
     });
 });
+
+const {
+    cloudBuildUrl,
+    cloudNormalize,
+    cloudBuildResult,
+} = new Function(`
+    ${src}
+    return { cloudBuildUrl, cloudNormalize, cloudBuildResult };
+`)();
+
+const FIXTURE = JSON.parse(readFileSync('tests/fixtures/open-meteo-route.json', 'utf8'));
+const FIX_POINTS = [
+    { lat: 39.40, lon: -77.98, distNm: 0 },
+    { lat: 39.05, lon: -84.67, distNm: 320 },
+];
+
+describe('cloudBuildUrl', () => {
+    const url = cloudBuildUrl(FIX_POINTS);
+
+    it('never requests cloud_base or cloud_top — both are always null', () => {
+        expect(url).not.toContain('cloud_base');
+        expect(url).not.toContain('cloud_top');
+    });
+
+    it('requests cover and height for every level in the ladder', () => {
+        for (const L of CLOUD_LEVELS_HPA) {
+            expect(url).toContain(`cloud_cover_${L}hPa`);
+            expect(url).toContain(`geopotential_height_${L}hPa`);
+        }
+    });
+
+    it('requests UTC and the freezing level', () => {
+        expect(url).toContain('timezone=UTC');
+        expect(url).toContain('freezing_level_height');
+    });
+
+    it('joins all points into one call', () => {
+        expect(url).toContain('latitude=39.4,39.05');
+        expect(url).toContain('longitude=-77.98,-84.67');
+    });
+});
+
+describe('cloudNormalize', () => {
+    const rec = cloudNormalize(FIXTURE, FIX_POINTS);
+
+    it('captures the route hash and both points', () => {
+        expect(rec.routeHash).toBe(cloudRouteHash(FIX_POINTS));
+        expect(rec.points).toHaveLength(2);
+    });
+
+    it('builds a [point][time][level] cube matching the ladder', () => {
+        expect(rec.levels).toEqual(CLOUD_LEVELS_HPA);
+        expect(rec.coverPct).toHaveLength(2);
+        expect(rec.coverPct[0]).toHaveLength(rec.times.length);
+        expect(rec.coverPct[0][0]).toHaveLength(CLOUD_LEVELS_HPA.length);
+        expect(rec.heightFt[0][0]).toHaveLength(CLOUD_LEVELS_HPA.length);
+    });
+
+    it('converts geopotential metres to feet', () => {
+        const m = FIXTURE[0].hourly.geopotential_height_850hPa[0];
+        const idx = CLOUD_LEVELS_HPA.indexOf(850);
+        expect(rec.heightFt[0][0][idx]).toBeCloseTo(m * 3.28084, 1);
+    });
+
+    it('uses the field name coverPct, never a bare cover, on the record', () => {
+        expect(rec.coverPct).toBeDefined();
+        expect(rec.cover).toBeUndefined();
+    });
+});
+
+describe('cloudBuildResult', () => {
+    const rec = cloudNormalize(FIXTURE, FIX_POINTS);
+    const hour3 = Date.parse(`${rec.times[3]}Z`) + 60000;
+    const nowMs = Date.parse(rec.fetchedAt);
+
+    it('reports covered when every ETA is inside the window', () => {
+        const r = cloudBuildResult(rec, [hour3, hour3], nowMs);
+        expect(r.covered).toBe(true);
+        expect(Array.isArray(r.cells)).toBe(true);
+    });
+
+    it('returns empty arrays — not null — when an ETA is out of window', () => {
+        const far = Date.parse(`${rec.times[rec.times.length - 1]}Z`) + 86400000;
+        const r = cloudBuildResult(rec, [hour3, far], nowMs);
+        expect(r.covered).toBe(false);
+        expect(r.cells).toEqual([]);
+        expect(r.contours).toEqual([]);
+        expect(r.freezingLevel).toEqual([]);
+    });
+
+    it('still emits cells when the fetch is expired — age is not usability', () => {
+        const sevenHoursLater = nowMs + 7 * 3600000;
+        const r = cloudBuildResult(rec, [hour3, hour3], sevenHoursLater);
+        expect(r.staleness).toBe('expired');
+        expect(r.covered).toBe(true);
+    });
+
+    it('walks the staleness ladder by fetch age', () => {
+        const at = h => cloudBuildResult(rec, [hour3, hour3], nowMs + h * 3600000).staleness;
+        expect(at(0.5)).toBe('fresh');
+        expect(at(2)).toBe('aging');
+        expect(at(4)).toBe('stale');
+        expect(at(7)).toBe('expired');
+    });
+
+    it('omits SKC cells but keeps every cell it emits classified', () => {
+        const r = cloudBuildResult(rec, [hour3, hour3], nowMs);
+        for (const c of r.cells) {
+            expect(['FEW', 'SCT', 'BKN', 'OVC']).toContain(c.cover);
+            expect(c.topFt).toBeGreaterThan(c.baseFt);
+        }
+    });
+
+    it('only contours BKN and OVC', () => {
+        const r = cloudBuildResult(rec, [hour3, hour3], nowMs);
+        for (const c of r.contours) {
+            expect(['BKN', 'OVC']).toContain(c.cover);
+        }
+    });
+
+    it('never coerces a null cover into a drawn cell', () => {
+        const holed = JSON.parse(JSON.stringify(rec));
+        holed.coverPct[0] = holed.coverPct[0].map(row => row.map(() => null));
+        const r = cloudBuildResult(holed, [hour3, hour3], nowMs);
+        expect(r.cells.every(c => c.distNm !== FIX_POINTS[0].distNm)).toBe(true);
+    });
+});
