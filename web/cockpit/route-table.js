@@ -289,6 +289,23 @@ class RouteTable {
                 wpAlt = wp.elev_ft;
             }
 
+            // ETA at this waypoint. `leg` is legs[i-1] — the leg ARRIVING here —
+            // and route-planner.js sets leg.eta to the running clock AFTER adding
+            // that leg's timeHrs, so leg.eta is the arrival time at waypoint i.
+            // The departure has no inbound leg, which left _eta structurally null
+            // on wp[0] of EVERY route: the first sample-point ETAs in
+            // _cloudSamplePoints then interpolated from null and the profile's
+            // "valid now" caveat was permanently stuck on. Derive it by walking
+            // back from the first leg's arrival: departure = eta(wp1) − that leg's
+            // duration, which is exactly the clock route-planner started from.
+            let wpEta = leg.eta ?? null;
+            if (i === 0) {
+                const firstLeg = legs[0];
+                wpEta = (firstLeg?.eta != null && firstLeg?.timeHrs != null)
+                    ? firstLeg.eta - firstLeg.timeHrs * 3600000
+                    : null;   // no leg timing yet — genuinely unknown, not a bug
+            }
+
             const isApt = wp.type === 'APT' || wp.icao === planDep || wp.icao === planDest;
             return {
                 ...wp,
@@ -305,7 +322,7 @@ class RouteTable {
                 tas: wp.tas ?? leg.tasKt ?? null,
                 gs: wp.gs ?? leg.gsKt ?? null,
                 gph: wp.gph ?? cruiseSeg.gph ?? null,
-                _eta: leg.eta ?? null,        // UTC ms ETA at this waypoint (from recomputeLegs)
+                _eta: wpEta,                  // UTC ms ETA at this waypoint (from recomputeLegs)
                 _planAltFt: leg.altFt ?? null, // cruise altitude used for this leg's TAS/fuel
             };
         });
@@ -2607,6 +2624,15 @@ class RouteTable {
                     : null,
             });
         }
+
+        // ALL-OR-NOTHING, per the spec: "If any _eta is null … the entire render
+        // falls back to the current UTC hour for every column." A per-point
+        // fallback would put "now" columns and genuine future-forecast columns on
+        // one chart with nothing to tell them apart — the pilot would read a
+        // time-correct picture that is only partly time-correct.
+        if (out.some(p => p.etaMs == null)) {
+            for (const p of out) p.etaMs = null;
+        }
         return out;
     }
 
@@ -2721,8 +2747,12 @@ class RouteTable {
             const pts = this._cloudSamplePoints();
             if (pts.length >= 2 && typeof CloudForecastStore !== 'undefined') {
                 this._cloudStore = this._cloudStore || new CloudForecastStore();
+                // _cloudSamplePoints() nulls EVERY etaMs if any one is unknown, so
+                // this is a whole-chart decision, not a per-column one: either all
+                // columns carry real ETAs or all of them read the current hour.
+                const allEstimated = pts.some(p => p.etaMs == null);
                 const nowHour = Math.floor(Date.now() / 3600000) * 3600000;
-                const etas = pts.map(p => p.etaMs ?? nowHour);
+                const etas = allEstimated ? pts.map(() => nowHour) : pts.map(p => p.etaMs);
                 // Raced against a timeout because getCells() awaits indexedDB.open(),
                 // which can sit unsettled forever when an IDB connection is blocked
                 // (see the NASR-import hang documented in CLAUDE.md). The surrounding
@@ -2743,7 +2773,7 @@ class RouteTable {
                         staleness: res.staleness,
                         covered:   res.covered,
                         ageLabel:  res.ageLabel,
-                        estimated: pts.some(p => p.etaMs == null),
+                        estimated: allEstimated,   // uniform now-hour fallback was used
                     };
                 }
             }
