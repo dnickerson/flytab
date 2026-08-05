@@ -226,6 +226,12 @@ class CloudForecastStore {
             req.onupgradeneeded = e => e.target.result.createObjectStore(CLOUD_STORE);
             req.onsuccess = e => { this._db = e.target.result; resolve(); };
             req.onerror   = () => reject(req.error);
+            // A blocked open NEVER fires onsuccess or onerror — the promise would
+            // simply never settle, and this call sits in the awaited chain that
+            // opens the terrain profile. Fail fast instead of hanging. (The
+            // profile's own read is additionally raced against a timeout in
+            // route-table.js; this is the belt to that suspenders.)
+            req.onblocked = () => reject(new Error('cloud forecast IDB open blocked'));
         });
     }
 

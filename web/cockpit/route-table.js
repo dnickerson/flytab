@@ -2723,9 +2723,18 @@ class RouteTable {
                 this._cloudStore = this._cloudStore || new CloudForecastStore();
                 const nowHour = Math.floor(Date.now() / 3600000) * 3600000;
                 const etas = pts.map(p => p.etaMs ?? nowHour);
-                const res  = await this._cloudStore.getCells({
-                    routeHash: cloudRouteHash(pts), samplePoints: pts, etaMs: etas,
-                });
+                // Raced against a timeout because getCells() awaits indexedDB.open(),
+                // which can sit unsettled forever when an IDB connection is blocked
+                // (see the NASR-import hang documented in CLAUDE.md). The surrounding
+                // try/catch only catches a THROW; an unsettled promise here would
+                // never open the profile at all — no terrain, no danger zones. A
+                // timeout is treated exactly like "no cache": draw nothing.
+                const res  = await Promise.race([
+                    this._cloudStore.getCells({
+                        routeHash: cloudRouteHash(pts), samplePoints: pts, etaMs: etas,
+                    }),
+                    new Promise(resolve => setTimeout(() => resolve(null), 2000)),
+                ]);
                 if (res) {
                     cloudCells    = res.cells;
                     cloudContours = res.contours;
