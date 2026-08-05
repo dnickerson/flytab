@@ -365,14 +365,12 @@ class RouteProfileView {
                 ctx.restore();
             }
 
-            if ((routeData.cloudContours || []).length > 0) {
+            for (const c of routeData.cloudContours || []) {
+                const r = rectOf(c);
                 ctx.save();
                 ctx.strokeStyle = contourC;
                 ctx.lineWidth   = 2;
-                for (const c of routeData.cloudContours) {
-                    const r = rectOf(c);
-                    ctx.strokeRect(r.x, r.y, r.w, r.h);
-                }
+                ctx.strokeRect(r.x, r.y, r.w, r.h);
                 ctx.restore();
             }
         } catch (e) {
@@ -610,25 +608,32 @@ class RouteProfileView {
     }
 
     _updateWxChip(routeData) {
-        if (!this._wxChip) return;
-        const m = routeData.cloudMeta;
-        if (!m) { this._wxChip.style.display = 'none'; return; }
+        // Wrapped for the same reason the canvas cloud block is wrapped: this
+        // must never throw into _render() and abort terrain drawing that
+        // hasn't run yet, even if cloudMeta's shape changes later.
+        try {
+            if (!this._wxChip) return;
+            const m = routeData.cloudMeta;
+            if (!m) { this._wxChip.style.display = 'none'; return; }
 
-        const css = getComputedStyle(document.documentElement);
-        const colour = m.staleness === 'expired'
-            ? css.getPropertyValue('--color-danger-on-light').trim()  || '#a30d0d'
-            : m.staleness === 'stale'
-                ? css.getPropertyValue('--color-caution-on-light').trim() || '#6b4a00'
-                : css.getPropertyValue('--text-muted').trim() || '#888888';
+            const css = getComputedStyle(document.documentElement);
+            const colour = m.staleness === 'expired'
+                ? css.getPropertyValue('--color-danger-on-light').trim()  || '#a30d0d'
+                : m.staleness === 'stale'
+                    ? css.getPropertyValue('--color-caution-on-light').trim() || '#6b4a00'
+                    : css.getPropertyValue('--text-muted').trim() || '#888888';
 
-        let label;
-        if (!m.covered)      label = 'WX: no data for ETA';
-        else if (m.estimated) label = `WX ${m.ageLabel} · valid now`;
-        else                  label = `WX ${m.ageLabel}`;
+            let label;
+            if (!m.covered)      label = 'WX: no data for ETA';
+            else if (m.estimated) label = `WX ${m.ageLabel} · valid now`;
+            else                  label = `WX ${m.ageLabel}`;
 
-        this._wxChip.textContent  = label;
-        this._wxChip.style.color  = colour;
-        this._wxChip.style.display = 'inline';
+            this._wxChip.textContent  = label;
+            this._wxChip.style.color  = colour;
+            this._wxChip.style.display = 'inline';
+        } catch (e) {
+            console.warn('[RouteProfile] wx chip update skipped:', e?.message);
+        }
     }
 
     // ── Drawing helpers ───────────────────────────────────────────────────────
