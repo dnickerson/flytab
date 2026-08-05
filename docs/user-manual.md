@@ -452,6 +452,8 @@ A solid red line marks the 0°C freezing level, which moves along the route.
 
 If the route has no computed timing yet, the chip adds "valid now" and the whole chart is drawn for the current hour rather than for your ETA at each point. It is all or nothing: you never get a chart that mixes the two.
 
+Touch and drag on the chart to scrub, and the detail panel adds a CLOUDS section for that point: coverage %, base–top altitude for the layer nearest your flight altitude, and the freezing level. With several layers stacked, only the one closest to your altitude is shown — the panel has no room to scroll — with a "+N more layers" note for the rest.
+
 ---
 
 ## Approach Charts

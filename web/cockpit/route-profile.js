@@ -640,6 +640,51 @@ class RouteProfileView {
                     html += `</div>`;
                 }
 
+                // Cloud cells covering this x position — a cell owns
+                // [distNm - spanNm/2, distNm + spanNm/2], same span rectOf()
+                // uses to draw it, so "covering" here matches what's drawn.
+                // Ranked by distance to the flight altitude AT THIS POINT, not
+                // by base altitude: with several layers stacked (common in the
+                // mountains) the panel's height is fixed and it cannot scroll —
+                // pointer-events is 'none' so a touch here keeps scrubbing the
+                // chart instead of the list — so whatever doesn't fit must be
+                // the least relevant, and "nearest my altitude" is the most
+                // actionable ranking for that, not "nearest the ground."
+                const distToFlightAlt = (c) => (flightAlt >= c.baseFt && flightAlt <= c.topFt)
+                    ? 0
+                    : Math.min(Math.abs(flightAlt - c.baseFt), Math.abs(flightAlt - c.topFt));
+                const cloudsHere = (routeData.cloudCells || [])
+                    .filter(c => dist >= c.distNm - c.spanNm / 2 && dist <= c.distNm + c.spanNm / 2)
+                    .sort((a, b) => distToFlightAlt(a) - distToFlightAlt(b));
+                const CLOUD_LAYER_CAP = 1;
+                const shownClouds  = cloudsHere.slice(0, CLOUD_LAYER_CAP);
+                const hiddenLayers = cloudsHere.length - shownClouds.length;
+                const freezingHere = routeData.freezingLevel?.length
+                    ? this._interpValue(routeData.freezingLevel, dist, 'distNm', 'altFt')
+                    : null;
+
+                if (cloudsHere.length > 0 || freezingHere != null) {
+                    // Deliberately single-line entries with a tight line-height override
+                    // (the panel's own 1.6 default costs a full extra line per wrapped
+                    // pair) — this section is competing for a fixed, non-scrollable
+                    // budget against FLIGHT/TERRAIN/CLEAR above it.
+                    html += `<div style="border-top:1px solid #333;padding-top:4px;margin-top:2px;line-height:1.25">`;
+                    html += `<div style="color:#9ca3af;font-size:11px;margin-bottom:3px">CLOUDS</div>`;
+                    for (const c of shownClouds) {
+                        html += `<div style="font-size:12px;color:#ccd;margin-bottom:3px">
+                            <span style="font-weight:700;color:#5b6b7f">${c.cover} ${Math.round(c.coverPct)}%</span>
+                            ${fmtAlt(Math.round(c.baseFt))}–${fmtAlt(Math.round(c.topFt))}
+                        </div>`;
+                    }
+                    if (hiddenLayers > 0) {
+                        html += `<div style="font-size:11px;color:#888;margin-bottom:3px">+${hiddenLayers} more layer${hiddenLayers > 1 ? 's' : ''}</div>`;
+                    }
+                    if (freezingHere != null) {
+                        html += `<div style="font-size:12px;color:#a30d0d">0°C: ${fmtAlt(Math.round(freezingHere))}</div>`;
+                    }
+                    html += `</div>`;
+                }
+
                 this._tooltip.innerHTML = html;
                 this._tooltip.style.display = 'block';
                 console.log('[Profile] panel visible, offsetWidth:', this._tooltip.offsetWidth, 'offsetHeight:', this._tooltip.offsetHeight, 'zIndex:', this._tooltip.style.zIndex);
