@@ -375,6 +375,13 @@ class RouteTable {
         this._computeEnroute();
         this._updateSummary();
         this._renderTable();
+        // Ground pre-fetch also fires on plain route LOAD, not just on edit —
+        // otherwise a route that was already loaded before this feature shipped
+        // (or simply never edited) never populates the cloud cache, and the
+        // profile silently shows nothing. If waypoints have no coordinates yet
+        // (legs-only reconstructed plan, see below), this is a harmless no-op —
+        // _resolveWaypointCoords() fires the real fetch once coordinates land.
+        this._refreshCloudForecast();
     }
 
     /**
@@ -413,6 +420,11 @@ class RouteTable {
             this._computeEnroute();
             this._updateSummary();
             this._renderTable();
+            // Coordinates just landed for a legs-only reconstructed plan — this
+            // is the first point sampling is actually possible, so this is the
+            // real fetch trigger for that path (loadPlan()'s own trigger was a
+            // no-op earlier since no waypoint had lat/lon yet).
+            this._refreshCloudForecast();
         }
     }
 

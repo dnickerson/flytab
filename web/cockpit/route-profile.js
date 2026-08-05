@@ -255,7 +255,13 @@ class RouteProfileView {
         const maxTerrain = terrain.length > 0
             ? Math.max(...terrain.map(p => p.elev_ft))
             : cruiseAlt * 0.3;
-        const yMax = Math.max(maxTerrain, cruiseAlt) * 1.15;
+        // Cloud tops routinely sit well above cruise altitude (cirrus, altostratus).
+        // Without this, yMax was computed purely from terrain/cruise and any cell
+        // above it rendered off the top of the canvas — invisible, no error, even
+        // though the data was correct and cached.
+        const cloudTops  = (routeData.cloudCells || []).map(c => c.topFt);
+        const maxCloudTop = cloudTops.length > 0 ? Math.max(...cloudTops) : 0;
+        const yMax = Math.max(maxTerrain, cruiseAlt, maxCloudTop) * 1.15;
 
         const xOf = (dist) => pad.left + (dist / totalDist) * cw;
         const yOf = (alt)  => pad.top  + ch - (alt  / yMax)  * ch;
