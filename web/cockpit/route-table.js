@@ -2594,7 +2594,16 @@ class RouteTable {
      * measured end-to-end against the live API (~16 KB gzipped for 48h).
      */
     _cloudSamplePoints() {
-        const wps = this._waypoints.filter(wp => wp.lat != null && wp.lon != null);
+        const all = this._waypoints || [];
+        const wps = all.filter(wp => wp.lat != null && wp.lon != null);
+        // _legDist is assigned per adjacent pair of the UNFILTERED list, so
+        // dropping a coordinate-less waypoint desynchronises the two: the next
+        // survivor keeps a _legDist measured FROM the waypoint that was dropped.
+        // Distances then under-count and, worse, lat/lon is interpolated between
+        // two waypoints that are not actually adjacent on the route — sample
+        // points land off-route and clouds are drawn for the wrong ground.
+        // Refuse to sample rather than draw a confident, wrong picture.
+        if (wps.length !== all.length) return [];
         if (wps.length < 2) return [];
 
         const dists = [];
