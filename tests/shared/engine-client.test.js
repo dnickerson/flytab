@@ -23,6 +23,7 @@ global.fetch = vi.fn().mockRejectedValue(new Error('no network'));
 // surrounding scope; new Function + explicit return is the correct pattern.
 const src = readFileSync('web/shared/engine-client.js', 'utf8');
 const EngineClient = new Function(`${src}\nreturn EngineClient;`)();
+const { _createEngineWs } = new Function(`${src}\nreturn { _createEngineWs };`)();
 
 // ---------------------------------------------------------------------------
 // _onData tests
@@ -192,5 +193,87 @@ describe('EnginePanel data flatten', () => {
         const raw = { rpm: 2200, egt1: 1350 };
         const flat = raw.data ? { ...raw, ...raw.data } : raw;
         expect(Object.keys(flat)).toEqual(['rpm', 'egt1']);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// _createEngineWs — falls back to plain WebSocket outside Capacitor (Finding 1)
+// ---------------------------------------------------------------------------
+describe('_createEngineWs — no Capacitor present', () => {
+    it('falls back to the plain browser WebSocket', () => {
+        const ws = _createEngineWs('ws://127.0.0.1:8082/');
+        expect(ws).toBeInstanceOf(WebSocket);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// _createEngineWs — native plugin bridging (Finding 1)
+// ---------------------------------------------------------------------------
+describe('_createEngineWs — native EngineWS plugin present', () => {
+    let mockPlugin, listeners, _createEngineWsNative;
+
+    beforeEach(() => {
+        listeners = {};
+        mockPlugin = {
+            addListener: vi.fn((type, cb) => { listeners[type] = cb; }),
+            open: vi.fn(),
+            close: vi.fn(),
+        };
+        global.Capacitor = { Plugins: { EngineWS: mockPlugin } };
+        // Re-evaluate the source fresh so the _EngineNativeBus IIFE sees Capacitor.
+        ({ _createEngineWs: _createEngineWsNative } = new Function(`${src}\nreturn { _createEngineWs };`)());
+    });
+
+    afterEach(() => {
+        delete global.Capacitor;
+    });
+
+    it('opens via the native plugin, not the browser WebSocket', () => {
+        const ws = _createEngineWsNative('ws://1.2.3.4:8082/');
+        expect(ws).not.toBeInstanceOf(WebSocket);
+        expect(mockPlugin.open).toHaveBeenCalledWith(
+            expect.objectContaining({ channel: 'engine', url: 'ws://1.2.3.4:8082/' })
+        );
+    });
+
+    it('routes a native open event to ws.onopen and flips readyState to 1', () => {
+        const ws = _createEngineWsNative('ws://x');
+        ws.onopen = vi.fn();
+        const session = mockPlugin.open.mock.calls[0][0].session;
+        listeners.open({ channel: 'engine', session });
+        expect(ws.readyState).toBe(1);
+        expect(ws.onopen).toHaveBeenCalled();
+    });
+
+    it('routes a native close event (e.g. ping-timeout 1006) to ws.onclose with code/reason', () => {
+        const ws = _createEngineWsNative('ws://x');
+        ws.onclose = vi.fn();
+        const session = mockPlugin.open.mock.calls[0][0].session;
+        listeners.close({ channel: 'engine', session, code: 1006, reason: 'ping_timeout_or_network_failure' });
+        expect(ws.readyState).toBe(3);
+        expect(ws.onclose).toHaveBeenCalledWith({ code: 1006, reason: 'ping_timeout_or_network_failure' });
+    });
+
+    it('ignores a close event carrying a stale session id from a socket that was replaced', () => {
+        const ws1 = _createEngineWsNative('ws://x');
+        ws1.onclose = vi.fn();
+        const staleSession = mockPlugin.open.mock.calls[0][0].session;
+
+        const ws2 = _createEngineWsNative('ws://x'); // reconnect before ws1's close event arrives
+        ws2.onclose = vi.fn();
+
+        listeners.close({ channel: 'engine', session: staleSession, code: 1006, reason: 'stale' });
+
+        expect(ws1.onclose).not.toHaveBeenCalled();
+        expect(ws2.onclose).not.toHaveBeenCalled(); // event belongs to neither current socket
+    });
+
+    it('close() tells the native plugin to close and detaches before the local synthesized event', async () => {
+        const ws = _createEngineWsNative('ws://x');
+        ws.onclose = vi.fn();
+        ws.close();
+        expect(mockPlugin.close).toHaveBeenCalledWith({ channel: 'engine' });
+        await Promise.resolve(); // flush the queueMicrotask
+        expect(ws.onclose).toHaveBeenCalledWith({ code: 1000, reason: 'client_close' });
     });
 });
