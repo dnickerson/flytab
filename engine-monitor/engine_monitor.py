@@ -52,6 +52,8 @@ from urllib.parse import parse_qs, urlparse
 import glob
 import uuid
 import shutil
+import hmac
+import secrets
 
 # Path to local Chart.js file (same directory as this script)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -999,6 +1001,34 @@ def log(message):
             f.write(log_line + '\n')
     except:
         pass
+
+# Shared-secret token gating /api/upload (Finding 8: unauthenticated upload
+# endpoint). Self-provisions on first boot — no manual deploy step required —
+# and persists in DATA_DIR alongside fuel_data.json so it survives redeploys
+# of this script.
+UPLOAD_TOKEN_FILE = os.path.join(CONFIG['DATA_DIR'], '.upload_token')
+MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB — largest real upload target today
+                                     # (engine_monitor.py) is ~193 KB; ~26x headroom.
+
+def _load_or_create_upload_token():
+    try:
+        if os.path.exists(UPLOAD_TOKEN_FILE):
+            with open(UPLOAD_TOKEN_FILE, 'r') as f:
+                tok = f.read().strip()
+                if tok:
+                    return tok
+        os.makedirs(os.path.dirname(UPLOAD_TOKEN_FILE), exist_ok=True)
+        tok = secrets.token_hex(32)
+        with open(UPLOAD_TOKEN_FILE, 'w') as f:
+            f.write(tok)
+        os.chmod(UPLOAD_TOKEN_FILE, 0o600)
+        log(f"Generated new /api/upload token at {UPLOAD_TOKEN_FILE}")
+        return tok
+    except Exception as e:
+        log(f"WARNING: could not load/create upload token ({e}) — /api/upload will reject all requests")
+        return None
+
+UPLOAD_TOKEN = _load_or_create_upload_token()
 
 def extract_numeric(s):
     """Extract numeric value from a field that may have text prefix (e.g., 'CRB00117' -> 117)."""
@@ -4431,15 +4461,29 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.send_json({'error': str(e)}, 400)
 
         elif path == '/api/upload':
-            # File upload endpoint for updating scripts from iPad
+            # File upload endpoint for updating scripts from iPad.
             try:
+                supplied = self.headers.get('X-Upload-Token', '')
+                if not UPLOAD_TOKEN or not hmac.compare_digest(supplied, UPLOAD_TOKEN):
+                    log("Upload rejected: missing/invalid X-Upload-Token")
+                    self.send_json({'error': 'Unauthorized'}, 401)
+                    return
+
                 content_type = self.headers.get('Content-Type', '')
                 if 'multipart/form-data' not in content_type:
                     self.send_json({'error': 'Expected multipart/form-data'}, 400)
                     return
 
-                # Parse multipart form data
                 content_length = int(self.headers.get('Content-Length', 0))
+                if content_length <= 0:
+                    self.send_json({'error': 'Missing or empty Content-Length'}, 400)
+                    return
+                if content_length > MAX_UPLOAD_BYTES:
+                    log(f"Upload rejected: Content-Length {content_length} exceeds {MAX_UPLOAD_BYTES}-byte cap")
+                    self.send_json({'error': f'Upload too large (max {MAX_UPLOAD_BYTES // (1024*1024)} MB)'}, 413)
+                    return
+
+                # Parse multipart form data
                 body = self.rfile.read(content_length)
 
                 # Extract boundary from content-type
