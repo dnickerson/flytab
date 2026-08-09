@@ -449,12 +449,15 @@ class RouteTable {
             if (wp.lat && wp.lon && lat && lon) {
                 const dist = NasrDB.haversineNm(lat, lon, wp.lat, wp.lon);
                 const track = situation.true_course ?? situation.gps_track ?? null;
-                const bearingToWpt = FlyTabPlanning.bearing(lat, lon, wp.lat, wp.lon);
+                const bearingToWpt = this._ftpBearing(lat, lon, wp.lat, wp.lon);
 
                 // Passed if within 1nm, OR if waypoint is >90° behind our track
-                // (handles flying past without getting within 1nm of it)
+                // (handles flying past without getting within 1nm of it).
+                // bearingToWpt != null guards the planning lib not being ready — without
+                // it, `null - track` coerces to 0 and can falsely satisfy the >90° test,
+                // advancing the active waypoint on bad data instead of just skipping this tick.
                 const isPast = dist < 1.0 ||
-                    (track !== null && gs > 30 &&
+                    (track !== null && gs > 30 && bearingToWpt != null &&
                      Math.abs(((bearingToWpt - track + 540) % 360) - 180) > 90);
 
                 if (isPast && this._activeIndex < this._waypoints.length - 1) {
@@ -467,7 +470,9 @@ class RouteTable {
         const active = this._waypoints[this._activeIndex];
         if (active && active.lat && active.lon && lat && lon) {
             active._liveDist = NasrDB.haversineNm(lat, lon, active.lat, active.lon);
-            active._liveHdg = FlyTabPlanning.bearing(lat, lon, active.lat, active.lon);
+            // null while the lib loads; _computeEnroute's `wp._liveHdg != null` check
+            // already falls back to planned bearing in that case.
+            active._liveHdg = this._ftpBearing(lat, lon, active.lat, active.lon);
         }
 
         // Recompute all enroute data with current GS
@@ -1354,6 +1359,36 @@ class RouteTable {
         return null;
     }
 
+    /**
+     * Guarded wrapper for FlyTabPlanning.bearing() — the planning lib loads
+     * asynchronously (11 dynamic imports in shared/planning/index.js) and
+     * window.FlyTabPlanning starts as {}. Returns null instead of throwing
+     * when the lib hasn't finished loading; callers already treat a null
+     * bearing/heading as "no data yet".
+     */
+    _ftpBearing(lat1, lon1, lat2, lon2) {
+        if (typeof FlyTabPlanning !== 'undefined' && FlyTabPlanning.bearing) {
+            return FlyTabPlanning.bearing(lat1, lon1, lat2, lon2);
+        }
+        return null;
+    }
+
+    /** Guarded wrapper for FlyTabPlanning.windCorrectedMagHdg() — see _ftpBearing. */
+    _ftpWindCorrectedMagHdg(brgTrue, lat, lon, tasKt, windDir, windSpd) {
+        if (typeof FlyTabPlanning !== 'undefined' && FlyTabPlanning.windCorrectedMagHdg) {
+            return FlyTabPlanning.windCorrectedMagHdg(brgTrue, lat, lon, tasKt, windDir, windSpd);
+        }
+        return null;
+    }
+
+    /** Guarded wrapper for FlyTabPlanning.crossTrackDistanceNm() — see _ftpBearing. */
+    _ftpCrossTrackDistanceNm(lat1, lon1, lat2, lon2, lat3, lon3) {
+        if (typeof FlyTabPlanning !== 'undefined' && FlyTabPlanning.crossTrackDistanceNm) {
+            return FlyTabPlanning.crossTrackDistanceNm(lat1, lon1, lat2, lon2, lat3, lon3);
+        }
+        return null;
+    }
+
     /** Calculate manifold pressure from power%, RPM, and max RPM */
     _mpFromPower(pwr, rpm, maxRpm) {
         if (pwr == null || rpm == null || maxRpm == null) return null;
@@ -1498,7 +1533,8 @@ class RouteTable {
             if (i > this._activeIndex && i > 0) {
                 const prev = this._waypoints[i - 1];
                 if (prev.lat != null && prev.lon != null && wp.lat != null && wp.lon != null) {
-                    wp._brg = FlyTabPlanning.bearing(prev.lat, prev.lon, wp.lat, wp.lon);
+                    // null while the lib loads; render already shows '—' for null.
+                    wp._brg = this._ftpBearing(prev.lat, prev.lon, wp.lat, wp.lon);
                 }
             } else if (i === this._activeIndex) {
                 // Live bearing from GPS when airborne; fall back to planned bearing on ground
@@ -1507,16 +1543,17 @@ class RouteTable {
                 } else if (i > 0) {
                     const prev = this._waypoints[i - 1];
                     if (prev.lat != null && prev.lon != null && wp.lat != null && wp.lon != null) {
-                        wp._brg = FlyTabPlanning.bearing(prev.lat, prev.lon, wp.lat, wp.lon);
+                        wp._brg = this._ftpBearing(prev.lat, prev.lon, wp.lat, wp.lon);
                     }
                 }
             }
 
             wp._wind = wp.wind || null;
 
-            // Compute wind-corrected magnetic heading from bearing + wind + TAS
+            // Compute wind-corrected magnetic heading from bearing + wind + TAS.
+            // Falls back to null (rendered as '—') while the planning lib loads.
             wp._hdg = (wp._brg != null && wp.lat != null && wp.lon != null)
-                ? FlyTabPlanning.windCorrectedMagHdg(wp._brg, wp.lat, wp.lon, wp._tas ?? 0, wp._wind?.dir ?? 0, wp._wind?.spd ?? 0)
+                ? this._ftpWindCorrectedMagHdg(wp._brg, wp.lat, wp.lon, wp._tas ?? 0, wp._wind?.dir ?? 0, wp._wind?.spd ?? 0)
                 : null;
 
             // If we have segment data, use it for phase, fuel, and time
@@ -1873,7 +1910,9 @@ class RouteTable {
             const prevIdx = this._activeIndex > 0 ? this._activeIndex - 1 : 0;
             const prevWp = this._waypoints[prevIdx];
             if (prevWp?.lat != null && prevWp?.lon != null && prevIdx !== this._activeIndex) {
-                xtk = FlyTabPlanning.crossTrackDistanceNm(prevWp.lat, prevWp.lon, active.lat, active.lon, sit.lat, sit.lon);
+                // Stays null (its default) while the lib loads; consumers already
+                // treat a null xtk as no-data.
+                xtk = this._ftpCrossTrackDistanceNm(prevWp.lat, prevWp.lon, active.lat, active.lon, sit.lat, sit.lon);
             }
         }
 
