@@ -284,11 +284,24 @@ class EnginePage {
         });
 
         // Wire ATIS override controls
+        // SET must never fall through to CLEAR semantics — an empty/unparseable
+        // input is a no-op (with a status hint), not a null POST. See _setAtis,
+        // which is also called directly by CLEAR with an explicit null and must
+        // keep accepting that.
         const atisAltInput = this._el.querySelector('#ep-atis-alt-input');
         const atisOatInput = this._el.querySelector('#ep-atis-oat-input');
-        wireTap(this._el.querySelector('#ep-atis-alt-set'), () => this._setAtis('altimeter', atisAltInput.value));
+        const wireAtisSet = (btn, input, key) => {
+            wireTap(btn, () => {
+                if (input.value === '') {
+                    this._atisStatusError('Enter a value first');
+                    return;
+                }
+                this._setAtis(key, input.value);
+            });
+        };
+        wireAtisSet(this._el.querySelector('#ep-atis-alt-set'), atisAltInput, 'altimeter');
+        wireAtisSet(this._el.querySelector('#ep-atis-oat-set'), atisOatInput, 'oat');
         wireTap(this._el.querySelector('#ep-atis-alt-clear'), () => { atisAltInput.value = ''; this._setAtis('altimeter', null); });
-        wireTap(this._el.querySelector('#ep-atis-oat-set'), () => this._setAtis('oat', atisOatInput.value));
         wireTap(this._el.querySelector('#ep-atis-oat-clear'), () => { atisOatInput.value = ''; this._setAtis('oat', null); });
 
         // Wire chart duration selectors
@@ -1039,19 +1052,56 @@ class EnginePage {
         if (btn) btn.textContent = 'STOP & SAVE';
     }
 
+    // Same pattern as fuel-overlay.js's _engineBaseUrl() — read the configured
+    // Pi IP off the shared EngineClient instance, falling back to the default.
+    _engineBaseUrl() {
+        const ip = window.engineClient?.ip || '192.168.10.1';
+        return `http://${ip}:8080`;
+    }
+
+    _atisStatusError(msg) {
+        const statusEl = this._dom.atisStatus;
+        if (!statusEl) return;
+        statusEl.textContent = msg;
+        statusEl.className = 'ep-atis-status ep-atis-status--error';
+    }
+
     async _setAtis(key, rawVal) {
         const val = (rawVal === '' || rawVal === null || rawVal === undefined) ? null : parseFloat(rawVal);
         if (val !== null && Number.isNaN(val)) return;
+
+        // Range-guard non-null values only — CLEAR (val === null) always proceeds.
+        if (val !== null) {
+            if (key === 'altimeter' && (val < 27.0 || val > 32.0)) {
+                this._atisStatusError('Altimeter must be 27.0–32.0 inHg');
+                return;
+            }
+            if (key === 'oat' && (val < -60 || val > 60)) {
+                this._atisStatusError('OAT must be -60–60°C');
+                return;
+            }
+        }
+
         try {
-            await fetch('http://192.168.10.1:8080/api/atis', {
+            // No explicit Content-Type: setting one makes this a non-simple
+            // cross-origin request, forcing a CORS preflight (OPTIONS /api/atis)
+            // that engine_monitor.py has no handler for -- the preflight fails
+            // and the POST never goes out. Without the header, fetch sends the
+            // CORS-safelisted text/plain, which the Pi's json.loads(body) parses
+            // fine (it never inspects Content-Type).
+            const resp = await fetch(`${this._engineBaseUrl()}/api/atis`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ [key]: val }),
                 signal: AbortSignal.timeout(5000),
             });
-        } catch (_) {
-            // Next status poll reflects whatever the Pi actually has; no local
-            // optimistic state to roll back.
+            if (!resp.ok) {
+                this._atisStatusError(`✗ ATIS update failed: HTTP ${resp.status}`);
+            }
+            // On success, the next update() tick's _updateAtisStatus(d) call
+            // overwrites this with the Pi's actual manual_altimeter/manual_oat
+            // state -- no hand-crafted success message needed here.
+        } catch (err) {
+            this._atisStatusError(`✗ ATIS update failed: ${err.message}`);
         }
     }
 
@@ -1319,6 +1369,12 @@ class EnginePage {
 }
 .ep-atis-status--active {
     color: var(--accent);
+    font-weight: 800;
+}
+.ep-atis-status--error {
+    /* Text on the panel's light --bg-surface fill -- use the light-safe
+       equivalent, not the bright --color-danger fill token. */
+    color: var(--color-danger-on-light);
     font-weight: 800;
 }
 

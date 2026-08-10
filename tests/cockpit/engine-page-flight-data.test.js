@@ -146,4 +146,32 @@ describe('EnginePage — ATIS override', () => {
             })
         );
     });
+
+    it('tapping SET with a populated input fires the wired fetch', async () => {
+        setup();
+        const input = page._el.querySelector('#ep-atis-alt-input');
+        const btn = page._el.querySelector('#ep-atis-alt-set');
+        input.value = '29.85';
+        btn.dispatchEvent(new Event('pointerup'));
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(globalThis.fetch).toHaveBeenCalledWith(
+            'http://192.168.10.1:8080/api/atis',
+            expect.objectContaining({
+                method: 'POST',
+                body: JSON.stringify({ altimeter: 29.85 }),
+            })
+        );
+    });
+
+    it('tapping SET with an empty input does not fetch (no-ops instead of clearing)', async () => {
+        setup();
+        const input = page._el.querySelector('#ep-atis-oat-input');
+        const btn = page._el.querySelector('#ep-atis-oat-set');
+        input.value = '';
+        btn.dispatchEvent(new Event('pointerup'));
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(globalThis.fetch).not.toHaveBeenCalled();
+    });
 });

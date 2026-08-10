@@ -2676,6 +2676,17 @@ Examples:
                         # auto-capture still works. Independent of check_sticky_valve()
                         # (deleted in Task 2) — this is its own inline check against
                         # the most recent parseable line in the probe.
+                        #
+                        # just_cleared tracks whether THIS pass is the one that
+                        # cleared the latch. If it is, we deliberately do NOT also
+                        # start capture in the same pass — a pilot who shuts the
+                        # engine down (RPM < 300) and then taps Stop would otherwise
+                        # have this same probe both clear the latch and immediately
+                        # restart capture, defeating the whole point of the latch.
+                        # The next probe cycle (~15-20s later) decides whether to
+                        # start, by which point manually_stopped is already False
+                        # and the normal pre-latch auto-start logic applies cleanly.
+                        just_cleared = False
                         if state.manually_stopped:
                             last_rpm = None
                             for line in data.decode('utf-8', errors='ignore').split('\n'):
@@ -2684,9 +2695,10 @@ Examples:
                                     last_rpm = parsed.get('RPM', 0)
                             if last_rpm is not None and last_rpm < 300:
                                 state.manually_stopped = False
+                                just_cleared = True
                                 log("Auto-capture: engine RPM dropped below 300, manual-stop latch cleared")
 
-                        if not state.manually_stopped:
+                        if not state.manually_stopped and not just_cleared:
                             log(f"Auto-capture: EDM data detected on {port} ({len(data)} bytes), starting capture")
                             time.sleep(0.5)  # Let port fully release before capture thread opens it
                             if not state.capturing:
