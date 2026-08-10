@@ -654,6 +654,9 @@ class CaptureState:
     def __init__(self):
         self.lock = threading.Lock()
         self.capturing = False
+        self.manually_stopped = False  # True after an explicit /api/stop; blocks
+                                        # auto_capture_monitor's auto-restart until
+                                        # cleared by Start or engine RPM < 300.
         self.capture_thread = None
         self.stop_event = threading.Event()
         self.latest_data = {}
@@ -1994,6 +1997,8 @@ def start_capture():
     """Start the capture thread."""
     if state.capturing:
         return {'success': False, 'message': 'Already capturing'}
+
+    state.manually_stopped = False
 
     # Check for orphan active file
     active_path = os.path.join(CONFIG['DATA_DIR'], CONFIG['ACTIVE_FILE'])
@@ -4339,6 +4344,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.send_json(result)
 
         elif path == '/api/stop':
+            state.manually_stopped = True
             result = stop_capture()
             self.send_json(result)
 
@@ -4699,10 +4705,27 @@ Examples:
                     probe.close()
 
                     if data and len(data) > 10:
-                        log(f"Auto-capture: EDM data detected on {port} ({len(data)} bytes), starting capture")
-                        time.sleep(0.5)  # Let port fully release before capture thread opens it
-                        if not state.capturing:
-                            start_capture()
+                        # If a manual Stop is latched, use this same probe data to
+                        # check whether the engine has since shut down — if RPM has
+                        # dropped below 300, clear the latch so the *next* flight's
+                        # auto-capture still works. Independent of check_sticky_valve()
+                        # (deleted in Task 2) — this is its own inline check against
+                        # the most recent parseable line in the probe.
+                        if state.manually_stopped:
+                            last_rpm = None
+                            for line in data.decode('utf-8', errors='ignore').split('\n'):
+                                parsed = parse_line(line)
+                                if parsed:
+                                    last_rpm = parsed.get('RPM', 0)
+                            if last_rpm is not None and last_rpm < 300:
+                                state.manually_stopped = False
+                                log("Auto-capture: engine RPM dropped below 300, manual-stop latch cleared")
+
+                        if not state.manually_stopped:
+                            log(f"Auto-capture: EDM data detected on {port} ({len(data)} bytes), starting capture")
+                            time.sleep(0.5)  # Let port fully release before capture thread opens it
+                            if not state.capturing:
+                                start_capture()
                 except Exception as e:
                     # Port busy or unavailable — try again later
                     pass
