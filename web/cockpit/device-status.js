@@ -113,7 +113,7 @@ class DeviceStatus {
 
     async _checkPi() {
         try {
-            const r = await fetch('http://192.168.10.1/getStatus', {
+            const r = await fetch(`http://${Settings.stratuxIp || '192.168.10.1'}/getStatus`, {
                 cache: 'no-store',
                 signal: AbortSignal.timeout(3000),
             });
