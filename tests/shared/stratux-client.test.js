@@ -339,3 +339,99 @@ describe('StratuxClient — weather/jsonio reconnect scheduling gated at schedul
         expect(client._jsonioReconnectTimer).toBeNull();
     });
 });
+
+// ---------------------------------------------------------------------------
+// Code-review follow-up round 2: the flag-only gate (!this._disconnected, plus
+// udpMode || trafficWs-OPEN) could NOT fully close the disconnect()+connect()
+// race when udpMode is permanently true (native UDP plugin present) — udpMode
+// is a static availability getter, not a connection-freshness signal, so it
+// stays true across a reconnect and doesn't distinguish "stale onclose from a
+// replaced socket" from "current onclose." This was flagged as a residual gap
+// in the previous round's report rather than silently claimed fixed. The fix
+// is a socket-identity check: capture the socket reference at onclose-
+// registration time, compare it against the live this._weatherWs/_jsonioWs
+// when onclose actually fires. These tests reproduce the EXACT scenario the
+// previous round's tests could not close: udpMode forced true (via a fresh
+// module evaluation with Capacitor.Plugins.StratuxUDP mocked present) AND a
+// synchronous disconnect()+connect() cycle before the stale onclose fires.
+// ---------------------------------------------------------------------------
+describe('StratuxClient — socket-identity check closes the udpMode-permanently-true gap', () => {
+    beforeEach(() => {
+        vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it('a weather-WS onclose deferred past disconnect()+connect() does not schedule a reconnect timer even when udpMode is permanently true', () => {
+        global.Capacitor = { Plugins: { StratuxUDP: { addListener: vi.fn(), start: vi.fn(), stop: vi.fn() } } };
+        try {
+            const freshSrc = readFileSync('web/shared/stratux-client.js', 'utf8');
+            const StratuxClientUdp = new Function(`${freshSrc}\nreturn StratuxClient;`)();
+            const udpClient = new StratuxClientUdp();
+            expect(udpClient.udpMode).toBe(true); // sanity check the stub actually engaged udpMode
+
+            udpClient._connectWeather(); // primes the real onclose on weatherWs #1
+            // Capture the STALE handler before disconnect() replaces the socket —
+            // mirrors what a queueMicrotask-deferred close callback from the OLD
+            // socket would still hold a reference to in production.
+            const staleOnclose = udpClient._weatherWs.onclose;
+
+            udpClient.disconnect(); // _disconnected = true, _weatherWs nulled
+            udpClient.connect();    // _disconnected = false again, brand-new weatherWs
+            // created — udpMode is STILL true here (it's static), so a flag-only gate
+            // (no identity check) would pass at this point. Synchronous, no await,
+            // matching config-editor.js's IP-change handler exactly.
+
+            // Simulate the deferred microtask firing the STALE handler late, after
+            // connect() has already run and replaced the socket.
+            staleOnclose({ code: 1000, reason: 'client_close' });
+
+            expect(udpClient._weatherReconnectTimer).toBeNull();
+        } finally {
+            delete global.Capacitor; // don't leak into other tests, even on assertion failure
+        }
+    });
+
+    it('a jsonio-WS onclose deferred past disconnect()+connect() does not schedule a reconnect timer even when udpMode is permanently true', () => {
+        global.Capacitor = { Plugins: { StratuxUDP: { addListener: vi.fn(), start: vi.fn(), stop: vi.fn() } } };
+        try {
+            const freshSrc = readFileSync('web/shared/stratux-client.js', 'utf8');
+            const StratuxClientUdp = new Function(`${freshSrc}\nreturn StratuxClient;`)();
+            const udpClient = new StratuxClientUdp();
+            expect(udpClient.udpMode).toBe(true);
+
+            udpClient._connectJsonio();
+            const staleOnclose = udpClient._jsonioWs.onclose;
+
+            udpClient.disconnect();
+            udpClient.connect();
+
+            staleOnclose({ code: 1000, reason: 'client_close' });
+
+            expect(udpClient._jsonioReconnectTimer).toBeNull();
+        } finally {
+            delete global.Capacitor;
+        }
+    });
+
+    it('a situation-WS onclose deferred past disconnect()+connect() does not schedule a reconnect timer, even if the new trafficWs happens to already be OPEN', () => {
+        // Situation's pre-existing readyState===OPEN check happened to mask this
+        // bug in practice (a fresh WS is essentially never immediately OPEN), but
+        // it was an imperfect proxy, not a real fix — this test forces the masking
+        // condition to not apply (trafficWs IS already OPEN) so only the identity
+        // check can save it.
+        const client = new StratuxClient();
+        client._connectSituation();
+        const staleOnclose = client._situationWs.onclose;
+
+        client.disconnect();
+        client.connect();
+        client._trafficWs = { readyState: WebSocket.OPEN, close() {} }; // force the masking condition true
+
+        staleOnclose({ code: 1000, reason: 'client_close' });
+
+        expect(client._situationReconnectTimer).toBeNull();
+    });
+});
