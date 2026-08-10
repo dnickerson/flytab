@@ -227,7 +227,9 @@ class EnginePage {
                 ${this._gaugeHtml('ep-da',   'DENS ALT',  '-----', 'ft')}
                 ${this._gaugeHtml('ep-oat',  'OAT',       '--',    '\u00B0C')}
                 ${this._gaugeHtml('ep-gs',   'GND SPD',   '---',   'kts')}
+                ${this._gaugeHtml('ep-tas',  'EST. TAS',  '---',   'kts')}
             </div>
+            <div class="ep-tas-note">TAS is estimated from ground speed + density altitude (no wind correction) \u2014 not a pitot-derived airspeed.</div>
 
             <!-- Section 8: Recording indicator -->
             <div class="ep-rec-row" id="ep-rec-row" style="display:none;">
@@ -674,6 +676,7 @@ class EnginePage {
         this._setText('ep-da',  densAlt !== 0 ? Math.round(densAlt) : '-----');
         this._setText('ep-oat', oat !== 0 ? Math.round(oat) : '--');
         this._setText('ep-gs',  gs > 0 ? Math.round(gs) : '---');
+        this._setText('ep-tas', d.tas ? Math.round(d.tas) : '---');
 
         /* ---- Section 8: Recording indicator ---- */
         this._updateRecording(d);
@@ -1158,11 +1161,19 @@ class EnginePage {
     gap: 4px;
 }
 
-/* Flight data row -- 4 columns */
+/* Flight data row -- 5 columns */
 .ep-flight-row {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     gap: 4px;
+}
+
+.ep-tas-note {
+    font-family: var(--font-ui);
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-align: center;
 }
 
 /* Standard gauge cell */

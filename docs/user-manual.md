@@ -145,6 +145,8 @@ The **engine advisory banner** (below the status bar, on any tab) appears in red
 
 The **Engine ML** monitor (MORE → Engine ML) shows the real-time anomaly score, per-feature reconstruction errors, and the current flight phase (startup, warmup, taxi_out, runup, takeoff, climb, cruise, descent, approach, landing, taxi_in, or shutdown). The model was trained on N194JT flight data and knows what this engine normally does in each phase.
 
+**FLIGHT DATA** now also shows **EST. TAS** — an estimate from ground speed and density altitude (roughly +2%/1000 ft DA), not a wind-corrected true airspeed. Treat it as approximate.
+
 ---
 
 ### CHK — Checklists
