@@ -722,11 +722,13 @@ class FlyTabApp {
                 stratuxClient: this.stratuxClient,
                 preflightStore,
             });
-            const convDisplay = new ConvectiveDisplay(this.cockpitMap?.map);
-            const convAlerts  = new ConvectiveAlerts();
-            this.convectiveEngine.init(convDisplay, convAlerts);
-            if (this.cockpitMap?.map) {
-                convAlerts.mount(this.cockpitMap.map.getContainer());
+            if (typeof ConvectiveDisplay !== 'undefined' && typeof ConvectiveAlerts !== 'undefined') {
+                const convDisplay = new ConvectiveDisplay(this.cockpitMap?.map);
+                const convAlerts  = new ConvectiveAlerts();
+                this.convectiveEngine.init(convDisplay, convAlerts);
+                if (this.cockpitMap?.map) {
+                    convAlerts.mount(this.cockpitMap.map.getContainer());
+                }
             }
             this.convectiveEngine.loadPreflight().catch(e => DiagLog.log('convective', `Preflight load error: ${e.message}`));
             if (CockpitConfig.get('convective.enabled')) {
