@@ -18,7 +18,7 @@ Usage:
 Access at: http://stratux.local:8080
 """
 
-VERSION = "3.4.0"
+VERSION = "3.4.1"
 
 # Contract version for the payload shape and shared physical constants FlyTab
 # depends on (field names, nesting, units, usable_capacity_gal and similar).
@@ -649,7 +649,18 @@ class CaptureState:
                                         # auto_capture_monitor's auto-restart until
                                         # cleared by Start or engine RPM < 300.
         self.capture_thread = None
+        # Per-capture stop signal -- read ONLY by capture_thread_func, set by
+        # stop_capture()/cleared by start_capture(). Long-lived background
+        # threads (Stratux polling, auto-capture monitor, WS broadcast) must
+        # use shutdown_event instead -- they used to share this event with
+        # the capture thread, which meant any /api/stop permanently killed
+        # them for the rest of the process's uptime (issue #124).
         self.stop_event = threading.Event()
+        # Process-lifetime signal -- read by every long-lived background
+        # thread/task that should keep running across Start/Stop cycles and
+        # only stop when the process itself is shutting down (SIGINT/SIGTERM,
+        # /api/shutdown, or serve_forever() exiting).
+        self.shutdown_event = threading.Event()
         self.latest_data = {}
         self.data_count = 0
         self.capture_start_time = None
@@ -1006,15 +1017,23 @@ MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB — largest real upload target today
 def _load_or_create_upload_token():
     try:
         if os.path.exists(UPLOAD_TOKEN_FILE):
+            # Re-assert 0600 even on the existing-file path — a token file
+            # created before this chmod line existed, or restored from a
+            # backup, would otherwise stay at whatever mode it has forever.
+            os.chmod(UPLOAD_TOKEN_FILE, 0o600)
             with open(UPLOAD_TOKEN_FILE, 'r') as f:
                 tok = f.read().strip()
                 if tok:
                     return tok
         os.makedirs(os.path.dirname(UPLOAD_TOKEN_FILE), exist_ok=True)
         tok = secrets.token_hex(32)
-        with open(UPLOAD_TOKEN_FILE, 'w') as f:
+        # Create with 0600 from the first byte on disk -- open(..., 'w') then
+        # chmod() leaves a window where the file exists at the umask-derived
+        # default (typically 0644, world-readable) with the token already
+        # written into it.
+        fd = os.open(UPLOAD_TOKEN_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, 'w') as f:
             f.write(tok)
-        os.chmod(UPLOAD_TOKEN_FILE, 0o600)
         log(f"Generated new /api/upload token at {UPLOAD_TOKEN_FILE}")
         return tok
     except Exception as e:
@@ -1423,7 +1442,7 @@ def stratux_thread_func():
         kml_provider = KMLGPSProvider(kml_file)
         state.stratux_connected = True
 
-        while not state.stop_event.is_set():
+        while not state.shutdown_event.is_set():
             try:
                 # Get current playback time from latest EDM data
                 with state.lock:
@@ -1480,7 +1499,7 @@ def stratux_thread_func():
     consecutive_failures = 0
     max_failures_before_log = 5  # Only log after this many consecutive failures
 
-    while not state.stop_event.is_set():
+    while not state.shutdown_event.is_set():
         try:
             # HTTP GET request with short timeout
             req = urllib.request.Request(stratux_url, headers={'Accept': 'application/json'})
@@ -1546,8 +1565,8 @@ def stratux_thread_func():
         except Exception as e:
             log(f"Stratux unexpected error: {e}")
 
-        # Wait before next poll; stop_event.wait() blocks until timeout or shutdown signal
-        state.stop_event.wait(timeout=poll_interval)
+        # Wait before next poll; shutdown_event.wait() blocks until timeout or shutdown signal
+        state.shutdown_event.wait(timeout=poll_interval)
 
     state.stratux_connected = False
     log("Stratux thread stopped")
@@ -2156,7 +2175,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         """Shutdown server after a brief delay to allow response to be sent."""
         import time
         time.sleep(0.5)  # Allow response to complete
-        state.stop_event.set()
+        state.shutdown_event.set()
         if state.capturing:
             stop_capture()
         if state.server:
@@ -2586,15 +2605,15 @@ Examples:
             import serial as _serial
             port = CONFIG['SERIAL_PORT']
             log("Auto-capture monitor started")
-            while not state.stop_event.is_set():
+            while not state.shutdown_event.is_set():
                 # Only act if not already capturing
                 if state.capturing:
-                    state.stop_event.wait(5)
+                    state.shutdown_event.wait(5)
                     continue
 
                 # Check if serial port exists
                 if not os.path.exists(port):
-                    state.stop_event.wait(10)
+                    state.shutdown_event.wait(10)
                     continue
 
                 # Probe the port briefly for EDM data
@@ -2643,7 +2662,7 @@ Examples:
                     # Port busy or unavailable — try again later
                     pass
 
-                state.stop_event.wait(15)
+                state.shutdown_event.wait(15)
             log("Auto-capture monitor stopped")
 
         acm_thread = threading.Thread(target=auto_capture_monitor, daemon=True)
@@ -2675,7 +2694,7 @@ Examples:
 
         async def broadcast_loop():
             """Push engine status to all connected WS clients at 1Hz"""
-            while not state.stop_event.is_set():
+            while not state.shutdown_event.is_set():
                 if ws_clients:
                     try:
                         status = get_status()
@@ -2719,7 +2738,7 @@ Examples:
 
     def signal_handler(sig, frame):
         log("Shutdown signal received")
-        state.stop_event.set()  # Signal all threads to stop
+        state.shutdown_event.set()  # Signal long-lived background threads to stop
         if state.capturing:
             stop_capture()
         # Run shutdown in separate thread to avoid deadlock with serve_forever
@@ -2734,7 +2753,7 @@ Examples:
     except KeyboardInterrupt:
         pass
     finally:
-        state.stop_event.set()  # Signal all threads to stop
+        state.shutdown_event.set()  # Signal long-lived background threads to stop
         if state.capturing:
             stop_capture()
         log("Server stopped")
