@@ -43,6 +43,7 @@ function setup() {
         aircraft: (path) => (path === 'performance.fuel_capacity_gal' ? 36 : undefined),
     };
     window.enginePanel = { connected: true };
+    window.engineClient = { ip: '192.168.10.1' };
 
     const host = document.createElement('div');
     document.body.appendChild(host);
@@ -63,6 +64,7 @@ afterEach(() => {
     delete globalThis.Settings;
     delete globalThis.CockpitConfig;
     delete window.enginePanel;
+    delete window.engineClient;
     delete globalThis.fetch;
 });
 
@@ -199,5 +201,19 @@ describe('EnginePage — ATIS override', () => {
         } finally {
             nowSpy.mockRestore();
         }
+    });
+
+    it('_engineBaseUrl returns null, not a guessed IP, when engineClient is unavailable', () => {
+        setup();
+        delete window.engineClient;
+        expect(page._engineBaseUrl()).toBeNull();
+    });
+
+    it('_setAtis shows a clear error and does not fetch when the IP is unavailable', async () => {
+        setup();
+        delete window.engineClient;
+        await page._setAtis('altimeter', '29.85');
+        expect(globalThis.fetch).not.toHaveBeenCalled();
+        expect(page._el.querySelector('#ep-atis-status').textContent).toBe('Engine monitor IP unavailable');
     });
 });

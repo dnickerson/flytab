@@ -1023,7 +1023,9 @@ class EnginePage {
         const btn = this._dom.captureStop;
         if (btn) { btn.disabled = true; btn.textContent = 'Stopping…'; }
         try {
-            const resp = await fetch('http://192.168.10.1:8080/api/stop', { method: 'POST', signal: AbortSignal.timeout(5000) });
+            const base = this._engineBaseUrl();
+            if (!base) throw new Error('Engine monitor IP unavailable');
+            const resp = await fetch(`${base}/api/stop`, { method: 'POST', signal: AbortSignal.timeout(5000) });
             const data = await resp.json().catch(() => ({}));
             if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
             if (this._dom.captureStatus) {
@@ -1058,11 +1060,13 @@ class EnginePage {
         if (btn) btn.textContent = 'STOP & SAVE';
     }
 
-    // Same pattern as fuel-overlay.js's _engineBaseUrl() — read the configured
-    // Pi IP off the shared EngineClient instance, falling back to the default.
+    // No fallback IP: window.engineClient is assigned at app.js:518, before
+    // this page can be constructed or shown, so a missing ip here means
+    // something is genuinely wrong — guessing an address is worse than
+    // skipping. Matches fuel-overlay.js's _engineBaseUrl() (same fix, #Finding 7b).
     _engineBaseUrl() {
-        const ip = window.engineClient?.ip || '192.168.10.1';
-        return `http://${ip}:8080`;
+        const ip = window.engineClient?.ip;
+        return ip ? `http://${ip}:8080` : null;
     }
 
     _atisStatusError(msg) {
@@ -1089,6 +1093,12 @@ class EnginePage {
                 this._atisStatusError('OAT must be -60–60°C');
                 return;
             }
+        }
+
+        const base = this._engineBaseUrl();
+        if (!base) {
+            this._atisStatusError('Engine monitor IP unavailable');
+            return;
         }
 
         try {
