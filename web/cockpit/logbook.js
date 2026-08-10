@@ -6,6 +6,10 @@
  */
 
 class Logbook {
+    // 'flypi'/'flypi-flights' are legacy names from the deprecated FlyPi/iPad
+    // predecessor product (see CLAUDE.md) — see the matching note in
+    // web/shared/trip-store.js, which independently hardcodes these same
+    // three literals and must stay in exact sync with any change here.
     static IDB_STORE = 'flypi_logbook';
     static IDB_NAME = 'flypi-flights';
     static IDB_VERSION = 5;

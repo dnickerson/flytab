@@ -6,6 +6,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 FlyTab is an Android cockpit app for experimental aircraft. It runs as a Capacitor web app (vanilla JavaScript, no framework) and communicates with a Raspberry Pi running a Python engine monitor and an unmodified Stratux ADS-B/GPS receiver.
 
+## There Is No iPad — "FlyPi" and "flypi" Are Legacy Naming, Not a Second System
+
+FlyTab's predecessor was an iPad-based product called **FlyPi**. It was deprecated (see commit `0fe8ad2`, "deprecate flypi") and fully replaced by FlyTab running on an Android tablet via Capacitor. **There is no iPad anywhere in the current system, and there is no separate "FlyPi" product.** If you encounter a comment, docstring, or doc that talks about an iPad or describes something as "FlyPi," treat it as stale — it was never updated after the cutover, not evidence that an iPad exists.
+
+That cleanup was never fully finished, though, and the codebase still contains real, **functional** identifiers carrying the old `flypi`/`flypi_*` prefix — not just leftover text. These are load-bearing and hold real pilot data on tablets already in the field:
+
+- `localStorage` keys: `flypi_active_plan`, `flypi_saved_plans`, `flypi_user_cockpit`/`flypi_user_aircraft`, `flypi_fuel_history`, `flypi_oil_events`, `flypi_track`, `flypi_checklist_state`, and others — plus `Settings._key()` (`web/shared/settings.js`), which generates ~18 more (`flypi_stratux_ip`, `flypi_flytab_api_key`, etc.) from a single template.
+- IndexedDB database/store names: `NasrDB.DB_NAME = 'flypi'` (`web/shared/nasr-db.js`), and the shared `'flypi-flights'` database (`web/shared/trip-store.js` + `web/cockpit/logbook.js`) with stores `flypi_logbook`/`flypi_ml_logs`.
+- A stored **data value**, not just a key: `logbook.js` writes `source: 'flypi'` into saved logbook entries.
+- Real Pi infrastructure: `deploy-pi.sh` stops/disables a systemd service literally named `flypi` and cleans real paths under `/opt/flypi/`. `engine_monitor.py`'s `_is_aircraft` check compares against the Pi's actual OS hostname, which may still literally be `flypi` — unverified from the repo, check the real device before touching that line.
+
+**Do not rename any of these to "clean up the naming."** They are not currently causing a bug, and a blind rename (or a well-meaning find-and-replace) would silently orphan real, already-stored flight plans, logbook history, fuel records, and settings — the app would just start reading from empty new keys with no error. If a rename is ever actually warranted, it needs a deliberate migration (read the old key/value if the new one is absent, then write forward, or a dual-read compatibility shim) and, for the Pi-side pieces, verification against the real device — not a text substitution.
+
 ## Network Constraint — Tablet Has No Internet During Flight
 
 **The tablet is on Stratux WiFi during every flight. It has no internet access, ever, in the air.**

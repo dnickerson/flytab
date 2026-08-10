@@ -1,5 +1,5 @@
 /**
- * FlyPi — Route Table (Bottom Sheet)
+ * FlyTab — Route Table (Bottom Sheet)
  * Collapsible bottom sheet showing enroute nav data with live updates.
  * Includes inline edit mode: delete, reorder, and smart waypoint insertion.
  */

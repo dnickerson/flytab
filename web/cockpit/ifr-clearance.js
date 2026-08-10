@@ -1,5 +1,5 @@
 /**
- * FlyPi — IFR Clearance Panel
+ * FlyTab — IFR Clearance Panel
  * Two-mode panel: DEP (CRAFT departure clearance) + APCH (approach clearance).
  * Custom numpad bottom sheet for squawk and frequency entry.
  * Opens as full-screen overlay; replaces LOG tab in bottom tab bar.

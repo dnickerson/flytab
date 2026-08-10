@@ -1,5 +1,5 @@
 /**
- * FlyPi -- Engine Page (Full-Screen Instrumentation)
+ * FlyTab -- Engine Page (Full-Screen Instrumentation)
  * Full-screen overlay mirroring the capture_v5 engine_monitor.py layout.
  * Opens over the map when [ENG] button is tapped; closes with [X].
  *
@@ -243,7 +243,7 @@ class EnginePage {
         // even before the engine page is first opened.
         this._tick();
 
-        // Wire close button — touchstart + click for iPad
+        // Wire close button — touchstart + click for Android touch reliability
         wireTap(this._el.querySelector('#ep-close'), () => this.hide());
 
         // Wire capture stop button
@@ -979,7 +979,7 @@ class EnginePage {
                     dlBtn.style.borderColor = 'var(--status-ok)';
                     this._dom.captureStatus.parentNode.insertBefore(dlBtn, this._dom.captureStop);
                     wireTap(dlBtn, () => {
-                        window.flightSync.downloadToiPad(fname);
+                        window.flightSync.downloadToDevice(fname);
                         dlBtn.textContent = '✓ Saved';
                         dlBtn.disabled = true;
                     });
@@ -1504,7 +1504,7 @@ class EnginePage {
     font-family: var(--font-mono, monospace);
 }
 
-/* Portrait iPad tweaks */
+/* Portrait tablet tweaks */
 @media (max-width: 820px) {
     .ep-primary-row {
         grid-template-columns: repeat(4, 1fr);

@@ -122,7 +122,7 @@
             {
               "name": "Approach",
               "items": [
-                { "title": "FlyPi approach", "response": "LOADED", "note": "Go to flight plan, procedure" },
+                { "title": "Load approach", "response": "LOADED", "note": "Go to flight plan, procedure" },
                 { "title": "ATIS", "response": "RECEIVED" },
                 { "title": "Altimeter", "response": "ENTERED", "note": "EFIS and Autopilot" },
                 { "title": "Tower Frequency", "response": "STANDBY" },
@@ -148,7 +148,7 @@
                 { "title": "Heading", "response": "CONFIRM" },
                 { "title": "Altitude", "response": "CONFIRMED" },
                 { "title": "Departure Frequency", "response": "STANDBY" },
-                { "title": "Departure Plate", "response": "ACTIVE", "note": "FlyPi, airport detail, procedure, departure runway" }
+                { "title": "Departure Plate", "response": "ACTIVE", "note": "Airport detail, procedure, departure runway" }
               ]
             }
           ]

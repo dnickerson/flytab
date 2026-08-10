@@ -1,5 +1,5 @@
 /**
- * FlyPi — Airport Info Panel (v5)
+ * FlyTab — Airport Info Panel (v5)
  * Shows airport details in a right-side sliding panel with Info/Weather/Runway/Approach tabs.
  * Replaces the Leaflet popup for airports. Navaid popup remains as a small Leaflet popup.
  */

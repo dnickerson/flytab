@@ -1,5 +1,5 @@
 /**
- * FlyPi — Fuel Overlay
+ * FlyTab — Fuel Overlay
  * Full-screen overlay for tic mark entry, EDM comparison, and fuel source management.
  * Same pattern as EnginePage: show/hide with buildDOM, reads from FuelEngine + FuelState.
  */

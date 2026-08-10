@@ -1,5 +1,5 @@
 /**
- * FlyPi — Engine Overlay
+ * FlyTab — Engine Overlay
  * Small floating widget on the map showing configurable engine fields.
  * Default: just carb temp. Reads from EnginePanel.lastData.
  */

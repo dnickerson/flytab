@@ -1,5 +1,5 @@
 /**
- * FlyPi — Fuel Engine
+ * FlyTab — Fuel Engine
  * Pure computation module for tic mark polynomial conversion,
  * fuel measurement creation, and accuracy grading.
  * Works fully offline — no network, no storage dependencies.

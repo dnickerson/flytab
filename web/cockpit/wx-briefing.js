@@ -1,5 +1,5 @@
 /**
- * FlyPi — Weather Briefing Panel
+ * FlyTab — Weather Briefing Panel
  * Route weather timeline using NOAA GFS MOS (MAV short-range + MEX extended).
  *
  * Two display modes:

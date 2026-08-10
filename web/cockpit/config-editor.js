@@ -1,5 +1,5 @@
 /**
- * FlyPi — Config Editor Overlay
+ * FlyTab — Config Editor Overlay
  * Editable view of cockpit-config.json and aircraft-config.json.
  */
 
@@ -309,7 +309,7 @@ class ConfigEditor {
 
         body.innerHTML = sections.join('');
 
-        // Bind save/reload — touchstart + click for iPad
+        // Bind save/reload — touchstart + click for Android touch reliability
         wireTap(body.querySelector('.ce-save-btn'), () => this._save());
         wireTap(body.querySelector('.ce-reload-btn'), () => this._load());
         wireTap(body.querySelector('.ce-update-btn'), () => this._downloadAndInstall());

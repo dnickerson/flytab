@@ -1,5 +1,5 @@
 /**
- * FlyPi — Cockpit Config Loader
+ * FlyTab — Cockpit Config Loader
  * Fetches cockpit-config.json and aircraft-config.json once,
  * provides dot-path access with hardcoded defaults.
  */

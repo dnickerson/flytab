@@ -1,5 +1,5 @@
 /**
- * FlyPi — Flight Plan Package Model
+ * FlyTab — Flight Plan Package Model
  * Data model matching PRD Section 5.7.3 JSON format.
  */
 

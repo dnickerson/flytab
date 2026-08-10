@@ -1,5 +1,5 @@
 /**
- * FlyPi — Fuel State Manager
+ * FlyTab — Fuel State Manager
  * Priority chain for determining start fuel:
  *   manual override
  *   > engine stopped (RPM=0): tic measurement > EDM live > capacity

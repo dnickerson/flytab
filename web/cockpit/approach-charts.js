@@ -484,7 +484,7 @@ class ApproachCharts {
         this._panContainer = this._viewerEl.querySelector('.plate-pan-container');
         this._mapBtn = this._viewerEl.querySelector('[data-action="show-on-map"]');
 
-        // Viewer button handlers — use wireTap() for iPad reliability
+        // Viewer button handlers — use wireTap() for Android touch reliability
         wireTap(this._viewerEl.querySelector('[data-action="close-viewer"]'), () => {
             this._viewerEl.style.display = 'none';
             this._pickerEl.style.display = 'flex';
@@ -665,7 +665,7 @@ class ApproachCharts {
 
         listEl.innerHTML = html;
 
-        // Collapsible airport group headers — same iPad touch pattern
+        // Collapsible airport group headers — same Android touch pattern
         listEl.querySelectorAll('.approach-airport-header').forEach(hdr => {
             let t0 = 0, x0 = 0, y0 = 0;
             hdr.addEventListener('touchstart', (e) => {
@@ -690,9 +690,11 @@ class ApproachCharts {
             });
         });
 
-        // Direct per-button touch handlers — the MEMORY pattern for iPad Safari.
-        // Delegation and click events are unreliable in scrollable containers on iOS.
-        // Each button gets its own touchstart/touchend with x+y movement + time guard.
+        // Direct per-button touch handlers — click delegation is unreliable in
+        // scrollable containers on the Android/Capacitor WebView (same class of
+        // issue as CLAUDE.md's "Leaflet Touch Handling" section documents for the
+        // map layer). Each button gets its own touchstart/touchend with x+y
+        // movement + time guard.
         listEl.querySelectorAll('.approach-plate-item').forEach(btn => {
             let t0 = 0, x0 = 0, y0 = 0;
             btn.addEventListener('touchstart', (e) => {
@@ -752,7 +754,8 @@ class ApproachCharts {
                 }
             };
         } else if (file && file.toLowerCase().endsWith('.pdf')) {
-            // Render PDF with PDF.js (works on iOS Safari; iframes don't)
+            // Render PDF with PDF.js — Capacitor's Android WebView has no built-in
+            // PDF viewer, so a plain <iframe src="...pdf"> would show nothing
             this._renderPdf(plateUrl(file), body);
         } else {
             this._imgEl.style.display = '';

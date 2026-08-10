@@ -1,5 +1,5 @@
 /**
- * FlyPi — Device Status Panel
+ * FlyTab — Device Status Panel
  * Shows connection state of Stratux, GPS, engine monitor, FastAPI.
  */
 

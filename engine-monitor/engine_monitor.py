@@ -3,7 +3,7 @@
 Engine Monitor Web Server
 =========================
 All-in-one solution for capturing, monitoring, and downloading engine data.
-Designed for high-visibility on iPad in direct sunlight.
+Designed for high-visibility on a cockpit tablet in direct sunlight.
 
 Features:
 - Live dashboard with EGT, CHT, RPM, MP, Fuel Flow
@@ -85,7 +85,13 @@ STICKY_VALVE_EGT_RATIO = 0.50  # Alert if one cylinder EGT < 50% of others' aver
 STICKY_VALVE_MIN_EGT = 200  # Minimum average EGT to consider engine "running" for detection
 STICKY_VALVE_PERSIST_SECONDS = 30  # Must persist for 30 seconds to trigger alert
 
-# Auto-detect environment (stratux hostname = aircraft, otherwise desktop)
+# Auto-detect environment (stratux hostname = aircraft, otherwise desktop).
+# 'flypi' here is the real OS hostname of a Pi, a leftover from the deprecated
+# FlyPi/iPad predecessor product (see CLAUDE.md) — NOT evidence that FlyPi or
+# an iPad still exists. Do not remove this string without first confirming
+# (on the actual device) that the Pi's hostname has actually been changed —
+# removing it while a real Pi is still named 'flypi' would silently flip
+# production mode off (wrong DATA_DIR, wrong bind behavior).
 _hostname = socket.gethostname()
 _is_aircraft = _hostname in ('stratux', 'flypi')
 
@@ -95,7 +101,7 @@ CONFIG = {
     'BAUD_RATE': 115200,
     'DATA_DIR': '/opt/capture_v5' if _is_aircraft else os.path.expanduser('~/engine_data'),
     'WEB_PORT': 8080,
-    'WEB_BIND': '0.0.0.0',  # Bind all interfaces — FlyPi serves over ap0 hotspot
+    'WEB_BIND': '0.0.0.0',  # Bind all interfaces — must be reachable from the tablet over the aircraft WiFi, not just localhost
     'ACTIVE_FILE': 'capture_active.txt',
     'ACTIVE_CSV': 'flight_active.csv',
     'LOG_FILE': 'engine_monitor.log',
@@ -2308,7 +2314,7 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
     <script src="/static/chart.min.js"></script>
     <style>
         /* COMPACT SUNLIGHT-READABLE THEME
-           Optimized for iPad portrait split-screen (upper window) with ForeFlight below
+           Optimized for tablet portrait split-screen (upper window) with ForeFlight below
            - Maximum data density while maintaining sunlight readability
            - Compact gauges with abbreviated labels
            - High contrast colors
@@ -4291,7 +4297,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/javascript')
                 self.send_header('Content-Length', len(content))
-                # Safari needs no-cache so it always checks for SW updates
+                # No-cache so the browser always checks for service worker updates
                 self.send_header('Cache-Control', 'no-cache')
                 self.send_header('Service-Worker-Allowed', '/')
                 self.end_headers()
@@ -4461,7 +4467,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.send_json({'error': str(e)}, 400)
 
         elif path == '/api/upload':
-            # File upload endpoint for updating scripts from iPad.
+            # File upload endpoint for pushing updated script files to the Pi.
             try:
                 supplied = self.headers.get('X-Upload-Token', '')
                 if not UPLOAD_TOKEN or not hmac.compare_digest(supplied, UPLOAD_TOKEN):
