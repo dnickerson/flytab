@@ -116,6 +116,10 @@ class StratuxClient extends EventTarget {
         this._reconnectTimer = null;
         this._statusTimer = null;
         this._towerTimer = null;
+        this._situationReconnectTimer = null;
+        this._weatherReconnectTimer = null;
+        this._jsonioReconnectTimer = null;
+        this._disconnected = false;
 
         // Traffic map: icao_addr → target object
         this.traffic = new Map();
@@ -143,6 +147,7 @@ class StratuxClient extends EventTarget {
     get udpMode() { return !!_StratuxUdpBus && !this._simMode; }
 
     connect() {
+        this._disconnected = false;
         // Cancel any pending reconnect timer so the external call and the timer
         // don't both call _connectTraffic() independently.
         if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
@@ -199,12 +204,16 @@ class StratuxClient extends EventTarget {
     }
 
     disconnect() {
+        this._disconnected = true;
         if (_StratuxUdpBus) { _StratuxUdpBus.detach(); _StratuxUdpBus.stop(); }
         if (this._trafficWs) { this._trafficWs.close(); this._trafficWs = null; }
         if (this._situationWs) { this._situationWs.close(); this._situationWs = null; }
         if (this._weatherWs) { this._weatherWs.close(); this._weatherWs = null; }
         if (this._jsonioWs) { this._jsonioWs.close(); this._jsonioWs = null; }
         if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
+        if (this._situationReconnectTimer) { clearTimeout(this._situationReconnectTimer); this._situationReconnectTimer = null; }
+        if (this._weatherReconnectTimer) { clearTimeout(this._weatherReconnectTimer); this._weatherReconnectTimer = null; }
+        if (this._jsonioReconnectTimer) { clearTimeout(this._jsonioReconnectTimer); this._jsonioReconnectTimer = null; }
         if (this._purgeInterval) { clearInterval(this._purgeInterval); this._purgeInterval = null; }
         if (this._statusTimer) { clearInterval(this._statusTimer); this._statusTimer = null; }
         if (this._towerTimer) { clearInterval(this._towerTimer); this._towerTimer = null; }
@@ -328,10 +337,12 @@ class StratuxClient extends EventTarget {
 
         this._situationWs.onclose = (e) => {
             if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', `Situation WS closed code=${e?.code} reason=${e?.reason || ''}`);
-            if (this._trafficWs?.readyState === WebSocket.OPEN) {
-                setTimeout(() => {
-                    // Guard: don't create a duplicate if already reconnected
-                    if (!this._situationWs || this._situationWs.readyState !== WebSocket.OPEN) {
+            if (!this._disconnected && this._trafficWs?.readyState === WebSocket.OPEN) {
+                this._situationReconnectTimer = setTimeout(() => {
+                    this._situationReconnectTimer = null;
+                    // Guard: don't create a duplicate if already reconnected, and never
+                    // reconnect if disconnect() ran while this timer was pending.
+                    if (!this._disconnected && (!this._situationWs || this._situationWs.readyState !== WebSocket.OPEN)) {
                         this._connectSituation();
                     }
                 }, 2000);
@@ -450,9 +461,13 @@ class StratuxClient extends EventTarget {
             if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', `Weather WS closed code=${e?.code} reason=${e?.reason || ''}`);
             // Reconnect after 5s if the overall Stratux connection is still alive
             // (covers both WS-mode traffic OPEN and UDP-mode where traffic flows
-            // separately).
-            setTimeout(() => {
-                if (this.udpMode || this._trafficWs?.readyState === WebSocket.OPEN) {
+            // separately). !this._disconnected is required because udpMode reflects
+            // static plugin/config availability, not connection lifecycle — it is
+            // never falsified by disconnect(), so without this check this fires
+            // unconditionally on any hardware with the native UDP plugin present.
+            this._weatherReconnectTimer = setTimeout(() => {
+                this._weatherReconnectTimer = null;
+                if (!this._disconnected && (this.udpMode || this._trafficWs?.readyState === WebSocket.OPEN)) {
                     this._connectWeather();
                 }
             }, 5000);
@@ -493,8 +508,9 @@ class StratuxClient extends EventTarget {
 
         this._jsonioWs.onclose = (e) => {
             if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', `Jsonio WS closed code=${e?.code} reason=${e?.reason || ''}`);
-            setTimeout(() => {
-                if (this.udpMode || this._trafficWs?.readyState === WebSocket.OPEN) {
+            this._jsonioReconnectTimer = setTimeout(() => {
+                this._jsonioReconnectTimer = null;
+                if (!this._disconnected && (this.udpMode || this._trafficWs?.readyState === WebSocket.OPEN)) {
                     this._connectJsonio();
                 }
             }, 5000);

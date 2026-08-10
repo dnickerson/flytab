@@ -10,7 +10,7 @@ const { SITUATION, TRAFFIC_TARGET } = require('../fixtures/stratux-messages.js')
 // The top-level IIFEs (_StratuxNativeBus, _StratuxUdpBus) both guard with
 // `typeof Capacitor !== 'undefined'`, so leaving Capacitor undefined is safe.
 // ---------------------------------------------------------------------------
-global.WebSocket     = class { constructor() {} static OPEN = 1; };
+global.WebSocket     = class { constructor() {} close() {} static OPEN = 1; };
 global.CockpitConfig = { raw: {} };
 global.Settings      = { stratuxIp: '127.0.0.1', ownshipModeS: '000000' };
 global.DiagLog       = { log: vi.fn() };
@@ -180,5 +180,97 @@ describe('StratuxClient._handleTraffic', () => {
         client._handleTraffic({ ...TRAFFIC_TARGET, Icao_addr: 0 });
 
         expect(events).toHaveLength(0);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// disconnect() cancels all pending reconnect timers (Finding 10)
+// ---------------------------------------------------------------------------
+describe('StratuxClient.disconnect — cancels pending reconnect timers', () => {
+    let client;
+
+    beforeEach(() => {
+        vi.useFakeTimers();
+        client = new StratuxClient();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it('a situation-WS reconnect scheduled before disconnect() never fires after it', () => {
+        // Exercises the REAL _connectSituation()/onclose handler (spied, not
+        // reimplemented) — priming call runs for real via the WebSocket stub at
+        // the top of this file, so the assertion below is against Step 6's
+        // actual code, not a hand-copied stand-in that could silently drift
+        // from it.
+        client._trafficWs = { readyState: WebSocket.OPEN, close() {} }; // satisfies the reconnect guard; close() needed because disconnect() calls it unconditionally
+        const spy = vi.spyOn(client, '_connectSituation');
+        client._connectSituation(); // priming call — installs the real onclose on a stub WS
+        spy.mockClear();
+
+        client._situationWs.onclose({ code: 1006, reason: 'test' }); // simulate the WS actually closing
+        // toBeTruthy(), not not.toBeNull() — the latter also passes if the field is
+        // simply undefined (i.e. doesn't exist yet on unfixed code), which would let
+        // this assertion pass even before Step 3 adds the field.
+        expect(client._situationReconnectTimer).toBeTruthy();
+
+        client.disconnect();
+        vi.advanceTimersByTime(5000);
+
+        expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('a weather-WS reconnect scheduled before disconnect() never fires, even when the UDP plugin makes udpMode permanently true', () => {
+        // udpMode is a getter with no setter (`get udpMode() { return !!_StratuxUdpBus
+        // && !this._simMode; }`, confirmed directly in source) — `client.udpMode = true`
+        // throws (class bodies are strict mode). _StratuxUdpBus is a module-level
+        // constant fixed at source-evaluation time, so reproducing udpMode===true (the
+        // actual "fires unconditionally on real hardware" case from Finding 10, not a
+        // timing race) requires re-evaluating the source with Capacitor.Plugins.StratuxUDP
+        // present — mirroring how the class itself detects the native plugin.
+        global.Capacitor = { Plugins: { StratuxUDP: { addListener: vi.fn(), start: vi.fn(), stop: vi.fn() } } };
+        try {
+            const freshSrc = readFileSync('web/shared/stratux-client.js', 'utf8');
+            const StratuxClientUdp = new Function(`${freshSrc}\nreturn StratuxClient;`)();
+            const udpClient = new StratuxClientUdp();
+            expect(udpClient.udpMode).toBe(true); // sanity check the stub actually engaged udpMode
+
+            const spy = vi.spyOn(udpClient, '_connectWeather');
+            udpClient._connectWeather();
+            spy.mockClear();
+
+            udpClient._weatherWs.onclose({ code: 1006, reason: 'test' });
+            expect(udpClient._weatherReconnectTimer).toBeTruthy();
+
+            udpClient.disconnect();
+            vi.advanceTimersByTime(10000);
+
+            expect(spy).not.toHaveBeenCalled();
+        } finally {
+            delete global.Capacitor; // don't leak into other tests, even on assertion failure
+        }
+    });
+
+    it('disconnect() clears the timer fields themselves, not just skipping the callback', () => {
+        client._situationReconnectTimer = setTimeout(() => {}, 2000);
+        client._weatherReconnectTimer = setTimeout(() => {}, 5000);
+        client._jsonioReconnectTimer = setTimeout(() => {}, 5000);
+
+        client.disconnect();
+
+        expect(client._situationReconnectTimer).toBeNull();
+        expect(client._weatherReconnectTimer).toBeNull();
+        expect(client._jsonioReconnectTimer).toBeNull();
+    });
+
+    it('connect() resets _disconnected — reconnecting after a settings-driven IP change still works', () => {
+        // config-editor.js calls disconnect() immediately followed by connect() on every
+        // Stratux-IP settings edit. If _disconnected didn't reset here, every reconnect
+        // scheduled after the FIRST IP edit would be permanently suppressed.
+        client.disconnect();
+        expect(client._disconnected).toBe(true);
+        client.connect();
+        expect(client._disconnected).toBe(false);
     });
 });
