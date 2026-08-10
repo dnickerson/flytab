@@ -42,23 +42,26 @@ class EngineGpsBridge {
                 if (typeof DiagLog !== 'undefined')
                     DiagLog.log('gps', 'Engine GPS bridge active — injecting engine GPS as Stratux situation');
             }
-            this._stratux.dispatchEvent(new CustomEvent('stratux:situation', {
-                detail: {
-                    lat:             d.latitude,
-                    lon:             d.longitude,
-                    alt_msl:         d.gps_altitude,
-                    alt_baro:        d.gps_altitude,
-                    ground_speed:    d.ground_speed,
-                    true_course:     d.course,
-                    pitch:           d.pitch,
-                    roll:            d.bank,
-                    g_load:          d.acc_vert,
-                    gps_fix_quality: 1,
-                    gps_sats:        null,
-                    vertical_speed:  0,
-                    _source:         'engine',
-                }
-            }));
+            const situation = {
+                lat:             d.latitude,
+                lon:             d.longitude,
+                alt_msl:         d.gps_altitude,
+                alt_baro:        d.gps_altitude,
+                ground_speed:    d.ground_speed,
+                true_course:     d.course,
+                pitch:           d.pitch,
+                roll:            d.bank,
+                g_load:          d.acc_vert,
+                gps_fix_quality: 1,
+                gps_sats:        null,
+                vertical_speed:  0,
+                _source:         'engine',
+            };
+            // Mirror gps-source.js:303-304 — set the property so direct readers
+            // (track-log.js, device-status.js, map.js traffic filter) see engine
+            // GPS too, not just addEventListener('stratux:situation') subscribers.
+            this._stratux.situation = situation;
+            this._stratux.dispatchEvent(new CustomEvent('stratux:situation', { detail: situation }));
         } else if (this._active) {
             this._active = false;
             if (typeof DiagLog !== 'undefined') {
