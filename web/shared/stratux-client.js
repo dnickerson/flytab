@@ -465,12 +465,20 @@ class StratuxClient extends EventTarget {
             // static plugin/config availability, not connection lifecycle — it is
             // never falsified by disconnect(), so without this check this fires
             // unconditionally on any hardware with the native UDP plugin present.
-            this._weatherReconnectTimer = setTimeout(() => {
-                this._weatherReconnectTimer = null;
-                if (!this._disconnected && (this.udpMode || this._trafficWs?.readyState === WebSocket.OPEN)) {
-                    this._connectWeather();
-                }
-            }, 5000);
+            // The gate must wrap the setTimeout() call itself, not just the code
+            // inside it — a stale onclose from a socket disconnect() already closed
+            // can still fire (queueMicrotask defers it) after connect() runs, and if
+            // only the callback body were gated, an unconditional setTimeout here
+            // would still schedule a spurious reconnect 5s after every disconnect()+
+            // connect() cycle (e.g. config-editor.js's Stratux-IP-change handler).
+            if (!this._disconnected && (this.udpMode || this._trafficWs?.readyState === WebSocket.OPEN)) {
+                this._weatherReconnectTimer = setTimeout(() => {
+                    this._weatherReconnectTimer = null;
+                    if (!this._disconnected && (this.udpMode || this._trafficWs?.readyState === WebSocket.OPEN)) {
+                        this._connectWeather();
+                    }
+                }, 5000);
+            }
         };
     }
 
@@ -508,12 +516,16 @@ class StratuxClient extends EventTarget {
 
         this._jsonioWs.onclose = (e) => {
             if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', `Jsonio WS closed code=${e?.code} reason=${e?.reason || ''}`);
-            this._jsonioReconnectTimer = setTimeout(() => {
-                this._jsonioReconnectTimer = null;
-                if (!this._disconnected && (this.udpMode || this._trafficWs?.readyState === WebSocket.OPEN)) {
-                    this._connectJsonio();
-                }
-            }, 5000);
+            // See the matching comment in _weatherWs.onclose above: the gate must
+            // wrap the setTimeout() call itself, not just the code inside it.
+            if (!this._disconnected && (this.udpMode || this._trafficWs?.readyState === WebSocket.OPEN)) {
+                this._jsonioReconnectTimer = setTimeout(() => {
+                    this._jsonioReconnectTimer = null;
+                    if (!this._disconnected && (this.udpMode || this._trafficWs?.readyState === WebSocket.OPEN)) {
+                        this._connectJsonio();
+                    }
+                }, 5000);
+            }
         };
     }
 

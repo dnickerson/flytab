@@ -274,3 +274,68 @@ describe('StratuxClient.disconnect — cancels pending reconnect timers', () => 
         expect(client._disconnected).toBe(false);
     });
 });
+
+// ---------------------------------------------------------------------------
+// Code-review follow-up (Finding 10 re-review): weather/jsonio reconnect-timer
+// SCHEDULING must be gated by _disconnected at the setTimeout() call site
+// itself, not just inside the timeout callback body.
+//
+// _createStratuxWs's close() (web/shared/stratux-client.js ~line 88) defers
+// firing the closed socket's onclose via queueMicrotask. config-editor.js's
+// Stratux-IP-change handler calls disconnect() immediately followed by
+// connect(), synchronously, with no await between them — so that deferred
+// microtask fires the STALE onclose (still closing over the same `this`
+// client instance) only AFTER connect() has already run and reset
+// _disconnected back to false and stood up a brand-new weatherWs/jsonioWs.
+// If only the callback body checked _disconnected, the (previously
+// unconditional) setTimeout() call would still fire at that moment, scheduling
+// a spurious reconnect that tears down the connection connect() just
+// established ~5s later. Gating the outer setTimeout() call with
+// !this._disconnected (mirroring the existing situation-WS pattern) closes
+// this for the common case, where _trafficWs is not yet readyState OPEN
+// immediately after a fresh connect() — see caveat in task-10-report.md about
+// the udpMode-permanently-true sub-case.
+// ---------------------------------------------------------------------------
+describe('StratuxClient — weather/jsonio reconnect scheduling gated at schedule time (not just callback)', () => {
+    let client;
+
+    beforeEach(() => {
+        vi.useFakeTimers();
+        client = new StratuxClient();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it('a weather-WS onclose deferred past a disconnect()+connect() cycle does not schedule a reconnect timer', () => {
+        client._connectWeather(); // primes the real onclose on weatherWs #1
+        // Capture the handler BEFORE disconnect() nulls _weatherWs — this mirrors
+        // what a queueMicrotask-deferred close callback from the OLD socket would
+        // still hold a reference to in production.
+        const staleOnclose = client._weatherWs.onclose;
+
+        client.disconnect(); // _disconnected = true, _weatherWs nulled
+        client.connect();    // _disconnected = false, brand-new weatherWs created —
+        // synchronous, no await, matching config-editor.js's IP-change handler exactly.
+
+        // Simulate the deferred microtask firing the STALE handler late, after
+        // connect() has already run (this is what queueMicrotask does in the real
+        // _createStratuxWs.close()).
+        staleOnclose({ code: 1000, reason: 'client_close' });
+
+        expect(client._weatherReconnectTimer).toBeNull();
+    });
+
+    it('a jsonio-WS onclose deferred past a disconnect()+connect() cycle does not schedule a reconnect timer', () => {
+        client._connectJsonio();
+        const staleOnclose = client._jsonioWs.onclose;
+
+        client.disconnect();
+        client.connect();
+
+        staleOnclose({ code: 1000, reason: 'client_close' });
+
+        expect(client._jsonioReconnectTimer).toBeNull();
+    });
+});
