@@ -3,7 +3,7 @@
 Engine Monitor Web Server
 =========================
 All-in-one solution for capturing, monitoring, and downloading engine data.
-Designed for high-visibility on iPad in direct sunlight.
+Designed for high-visibility on a cockpit tablet in direct sunlight.
 
 Features:
 - Live dashboard with EGT, CHT, RPM, MP, Fuel Flow
@@ -52,6 +52,8 @@ from urllib.parse import parse_qs, urlparse
 import glob
 import uuid
 import shutil
+import hmac
+import secrets
 
 # Path to local Chart.js file (same directory as this script)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -83,7 +85,13 @@ STICKY_VALVE_EGT_RATIO = 0.50  # Alert if one cylinder EGT < 50% of others' aver
 STICKY_VALVE_MIN_EGT = 200  # Minimum average EGT to consider engine "running" for detection
 STICKY_VALVE_PERSIST_SECONDS = 30  # Must persist for 30 seconds to trigger alert
 
-# Auto-detect environment (stratux hostname = aircraft, otherwise desktop)
+# Auto-detect environment (stratux hostname = aircraft, otherwise desktop).
+# 'flypi' here is the real OS hostname of a Pi, a leftover from the deprecated
+# FlyPi/iPad predecessor product (see CLAUDE.md) — NOT evidence that FlyPi or
+# an iPad still exists. Do not remove this string without first confirming
+# (on the actual device) that the Pi's hostname has actually been changed —
+# removing it while a real Pi is still named 'flypi' would silently flip
+# production mode off (wrong DATA_DIR, wrong bind behavior).
 _hostname = socket.gethostname()
 _is_aircraft = _hostname in ('stratux', 'flypi')
 
@@ -93,7 +101,7 @@ CONFIG = {
     'BAUD_RATE': 115200,
     'DATA_DIR': '/opt/capture_v5' if _is_aircraft else os.path.expanduser('~/engine_data'),
     'WEB_PORT': 8080,
-    'WEB_BIND': '0.0.0.0',  # Bind all interfaces — FlyPi serves over ap0 hotspot
+    'WEB_BIND': '0.0.0.0',  # Bind all interfaces — must be reachable from the tablet over the aircraft WiFi, not just localhost
     'ACTIVE_FILE': 'capture_active.txt',
     'ACTIVE_CSV': 'flight_active.csv',
     'LOG_FILE': 'engine_monitor.log',
@@ -1010,6 +1018,42 @@ def log(message):
             f.write(log_line + '\n')
     except:
         pass
+
+# Shared-secret token gating /api/upload (Finding 8: unauthenticated upload
+# endpoint). Self-provisions on first boot — no manual deploy step required —
+# and persists in DATA_DIR alongside fuel_data.json so it survives redeploys
+# of this script.
+UPLOAD_TOKEN_FILE = os.path.join(CONFIG['DATA_DIR'], '.upload_token')
+MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB — largest real upload target today
+                                     # (engine_monitor.py) is ~193 KB; ~26x headroom.
+
+def _load_or_create_upload_token():
+    try:
+        if os.path.exists(UPLOAD_TOKEN_FILE):
+            # Re-assert 0600 even on the existing-file path — a token file
+            # created before this chmod line existed, or restored from a
+            # backup, would otherwise stay at whatever mode it has forever.
+            os.chmod(UPLOAD_TOKEN_FILE, 0o600)
+            with open(UPLOAD_TOKEN_FILE, 'r') as f:
+                tok = f.read().strip()
+                if tok:
+                    return tok
+        os.makedirs(os.path.dirname(UPLOAD_TOKEN_FILE), exist_ok=True)
+        tok = secrets.token_hex(32)
+        # Create with 0600 from the first byte on disk -- open(..., 'w') then
+        # chmod() leaves a window where the file exists at the umask-derived
+        # default (typically 0644, world-readable) with the token already
+        # written into it.
+        fd = os.open(UPLOAD_TOKEN_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, 'w') as f:
+            f.write(tok)
+        log(f"Generated new /api/upload token at {UPLOAD_TOKEN_FILE}")
+        return tok
+    except Exception as e:
+        log(f"WARNING: could not load/create upload token ({e}) — /api/upload will reject all requests")
+        return None
+
+UPLOAD_TOKEN = _load_or_create_upload_token()
 
 def extract_numeric(s):
     """Extract numeric value from a field that may have text prefix (e.g., 'CRB00117' -> 117)."""
@@ -2289,7 +2333,7 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
     <script src="/static/chart.min.js"></script>
     <style>
         /* COMPACT SUNLIGHT-READABLE THEME
-           Optimized for iPad portrait split-screen (upper window) with ForeFlight below
+           Optimized for tablet portrait split-screen (upper window) with ForeFlight below
            - Maximum data density while maintaining sunlight readability
            - Compact gauges with abbreviated labels
            - High contrast colors
@@ -3263,15 +3307,10 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
 
     <div class="files-section" style="margin-top:10px;">
         <div class="section-title">Upload Script Files</div>
-        <div class="upload-section">
-            <input type="file" id="uploadInput" multiple accept=".py,.js,.html,.css,.json,.md" style="display:none;">
-            <button class="btn btn-start" onclick="document.getElementById('uploadInput').click()">SELECT FILES</button>
-            <span id="uploadStatus" style="margin-left:10px;font-size:11px;"></span>
-        </div>
-        <div id="uploadPreview" style="font-size:11px;color:#666;margin-top:6px;"></div>
-        <button id="uploadBtn" class="btn btn-stop" onclick="uploadFiles()" style="display:none;margin-top:8px;">UPLOAD</button>
-        <div style="font-size:10px;color:#999;margin-top:6px;">
-            Allowed: .py, .js, .html, .css, .json, .md
+        <div style="font-size:11px;color:#999;">
+            Disabled -- /api/upload now requires a token this page has no way to
+            supply without embedding a secret in page source. Use
+            <code>bash deploy-pi.sh</code> (the actual deploy path) instead.
         </div>
     </div>
 
@@ -4272,7 +4311,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/javascript')
                 self.send_header('Content-Length', len(content))
-                # Safari needs no-cache so it always checks for SW updates
+                # No-cache so the browser always checks for service worker updates
                 self.send_header('Cache-Control', 'no-cache')
                 self.send_header('Service-Worker-Allowed', '/')
                 self.end_headers()
@@ -4442,15 +4481,29 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.send_json({'error': str(e)}, 400)
 
         elif path == '/api/upload':
-            # File upload endpoint for updating scripts from iPad
+            # File upload endpoint for pushing updated script files to the Pi.
             try:
+                supplied = self.headers.get('X-Upload-Token', '')
+                if not UPLOAD_TOKEN or not hmac.compare_digest(supplied, UPLOAD_TOKEN):
+                    log("Upload rejected: missing/invalid X-Upload-Token")
+                    self.send_json({'error': 'Unauthorized'}, 401)
+                    return
+
                 content_type = self.headers.get('Content-Type', '')
                 if 'multipart/form-data' not in content_type:
                     self.send_json({'error': 'Expected multipart/form-data'}, 400)
                     return
 
-                # Parse multipart form data
                 content_length = int(self.headers.get('Content-Length', 0))
+                if content_length <= 0:
+                    self.send_json({'error': 'Missing or empty Content-Length'}, 400)
+                    return
+                if content_length > MAX_UPLOAD_BYTES:
+                    log(f"Upload rejected: Content-Length {content_length} exceeds {MAX_UPLOAD_BYTES}-byte cap")
+                    self.send_json({'error': f'Upload too large (max {MAX_UPLOAD_BYTES // (1024*1024)} MB)'}, 413)
+                    return
+
+                # Parse multipart form data
                 body = self.rfile.read(content_length)
 
                 # Extract boundary from content-type

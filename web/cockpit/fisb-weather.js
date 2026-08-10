@@ -1,5 +1,5 @@
 /**
- * FlyPi — FIS-B Weather Display Manager
+ * FlyTab — FIS-B Weather Display Manager
  * Renders PIREPs, SIGMETs, AIRMETs on the map. Manages weather strip and alerts.
  */
 

@@ -1,5 +1,5 @@
 /**
- * FlyPi — Cockpit Moving Map
+ * FlyTab — Cockpit Moving Map
  * Leaflet-based map with sectional tiles, own-ship, traffic, route, radar.
  */
 
@@ -238,7 +238,7 @@ class CockpitMap {
         this.map.on('zoomend', this._zoomBadgeHandler);
         this._updateZoomBadge();
 
-        // Resize map when virtual keyboard opens/closes (iPad)
+        // Resize map when virtual keyboard opens/closes (Android)
         if (window.visualViewport) {
             this._viewportResizeHandler = () => {
                 if (this.map) this.map.invalidateSize();

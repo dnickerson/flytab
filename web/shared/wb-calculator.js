@@ -1,5 +1,5 @@
 /**
- * FlyPi — Weight & Balance Calculator
+ * FlyTab — Weight & Balance Calculator
  * Pure computation functions, no UI. Used by wb-step.js.
  */
 

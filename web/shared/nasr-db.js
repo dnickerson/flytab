@@ -1,10 +1,18 @@
 /**
- * FlyPi — NASR Database (IndexedDB)
+ * FlyTab — NASR Database (IndexedDB)
  * Wraps IndexedDB for structured data storage: airports, navaids, airways,
  * weather cache, flight plans, W&B scenarios, fuel prices, aircraft profiles.
  */
 
 class NasrDB {
+    // 'flypi' is a legacy name from the deprecated FlyPi/iPad predecessor
+    // product (see CLAUDE.md) — NOT evidence of a current iPad or FlyPi
+    // system. This is a real IndexedDB already holding airports, navaids,
+    // flight plans, W&B scenarios, and more on installed tablets — do not
+    // rename without a migration. tab-bar.js's "Reset NASR Data" action
+    // independently hardcodes this same literal ('flypi') rather than
+    // reading DB_NAME — a rename here must update that too, or the reset
+    // button will silently delete a database that no longer exists.
     static DB_NAME = 'flypi';
     static DB_VERSION = 8;
 

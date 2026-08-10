@@ -1,5 +1,5 @@
 /**
- * FlyPi v5 — Tab Bar + More Drawer
+ * FlyTab v5 — Tab Bar + More Drawer
  * Bottom iOS-style tab bar: Map | ENG | CHK | LOG | More
  * More tab opens a right-side drawer with secondary actions.
  */

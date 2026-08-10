@@ -1,5 +1,5 @@
 /**
- * FlyPi v5 — Instrument Strip
+ * FlyTab v5 — Instrument Strip
  * Bottom bar: GS, ALT, HDG, FUEL▲, DEST, ETE▲ when route active.
  * Without route: GS, ALT, FUEL, DIST, ETE (config-driven fallback).
  * Config-driven field list via cockpit-config.json instrumentStrip.fields.

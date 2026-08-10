@@ -1,5 +1,5 @@
 /**
- * FlyPi — Settings Manager
+ * FlyTab — Settings Manager
  * Persistent settings via localStorage with defaults.
  */
 
@@ -25,6 +25,16 @@ class Settings {
         flytab_api_key: 'flytab2025',
     };
 
+    // 'flypi' is a legacy prefix from the deprecated FlyPi/iPad predecessor
+    // product (see CLAUDE.md) — NOT evidence of a current iPad or FlyPi system.
+    // This single line produces ~18 real, currently-used localStorage keys
+    // (Stratux/Pi IP, API key, every toggle in DEFAULTS above). Changing it
+    // would silently revert every existing installed tablet's settings to
+    // factory defaults on next launch — do not change without a migration
+    // that copies old keys forward first. vector-map-layers.js also hardcodes
+    // several of these keys directly rather than going through Settings.get(),
+    // so a migration must update those literals too or layer visibility
+    // toggles will silently desync.
     static _key(name) { return `flypi_${name}`; }
 
     static get(name) {

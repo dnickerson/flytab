@@ -1,5 +1,5 @@
 /**
- * FlyPi — Weather API Client
+ * FlyTab — Weather API Client
  * Fetches METARs, TAFs, winds aloft, PIREPs, SIGMETs, NOTAMs, TFRs
  * from the Cloudflare Worker proxy. Decodes METAR and determines flight category.
  */

@@ -1,5 +1,5 @@
 /**
- * FlyPi — Pre-flight Data Readiness Check
+ * FlyTab — Pre-flight Data Readiness Check
  *
  * Runs 4 parallel checks on cockpit load (when active plan exists):
  *   1. Weather age — how old is the cached weather in the flight plan?

@@ -6,6 +6,73 @@
  * Fires: engine:data, engine:connect, engine:disconnect, engine:stale
  */
 
+// Mirrors _StratuxNativeBus/_createStratuxWs in stratux-client.js. Single fixed
+// channel ('engine') since there's only one Pi socket. Backed by the native
+// EngineWS plugin (ping-interval + synthesized 1006 close on a half-open Pi
+// socket — see EngineWsPlugin.java); falls back to the browser WebSocket API
+// outside Capacitor (e.g. desktop dev, or this test suite).
+const _EngineNativeBus = (() => {
+    const native = (typeof Capacitor !== 'undefined' && Capacitor.Plugins && Capacitor.Plugins.EngineWS)
+        ? Capacitor.Plugins.EngineWS : null;
+    if (!native) return null;
+    const sessions = new Map();
+    const route = (type) => (ev) => {
+        const s = sessions.get(ev.channel);
+        if (!s || s.id !== ev.session) return;
+        const h = s.handlers[type];
+        if (h) h(ev);
+    };
+    native.addListener('open',    route('onopen'));
+    native.addListener('message', route('onmessage'));
+    native.addListener('close',   route('onclose'));
+    native.addListener('error',   route('onerror'));
+    let nextId = 1;
+    return {
+        attach(channel, handlers) {
+            const id = String(nextId++);
+            sessions.set(channel, { id, handlers });
+            return id;
+        },
+        detach(channel, id) {
+            const s = sessions.get(channel);
+            if (s && s.id === id) sessions.delete(channel);
+        },
+        open(channel, url, session) { native.open({ channel, url, session }); },
+        close(channel)              { native.close({ channel }); },
+    };
+})();
+
+function _createEngineWs(url) {
+    if (!_EngineNativeBus) return new WebSocket(url);
+    const channel = 'engine';
+    const ws = {
+        url, readyState: 0,
+        onopen: null, onmessage: null, onclose: null, onerror: null,
+        _sid: '',
+        close() {
+            if (this.readyState >= 2) return;
+            this.readyState = 3;
+            _EngineNativeBus.detach(channel, this._sid);
+            _EngineNativeBus.close(channel);
+            const cb = this.onclose;
+            if (cb) queueMicrotask(() => cb({ code: 1000, reason: 'client_close' }));
+        },
+    };
+    ws._sid = _EngineNativeBus.attach(channel, {
+        onopen:    ()   => { ws.readyState = 1; if (ws.onopen)  ws.onopen({}); },
+        onmessage: (ev) => { if (ws.onmessage) ws.onmessage({ data: ev.data }); },
+        onclose:   (ev) => {
+            if (ws.readyState === 3) return;
+            ws.readyState = 3;
+            _EngineNativeBus.detach(channel, ws._sid);
+            if (ws.onclose) ws.onclose({ code: ev.code, reason: ev.reason });
+        },
+        onerror:   (ev) => { if (ws.onerror) ws.onerror({ message: ev.message }); },
+    });
+    _EngineNativeBus.open(channel, url, ws._sid);
+    return ws;
+}
+
 class EngineClient extends EventTarget {
     // Minimum Pi payload-contract version this build of FlyTab requires (#113).
     // Bump alongside any code change that depends on a new/changed field name,
@@ -97,7 +164,7 @@ class EngineClient extends EventTarget {
 
         const url = `ws://${this._ip}:${this._port}/`;
         try {
-            this._ws = new WebSocket(url);
+            this._ws = _createEngineWs(url);
         } catch {
             this._scheduleReconnect();
             return;

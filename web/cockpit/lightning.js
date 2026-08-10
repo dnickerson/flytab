@@ -1,5 +1,5 @@
 /**
- * FlyPi — Lightning Strikes Layer
+ * FlyTab — Lightning Strikes Layer
  * Real-time lightning visualization using Blitzortung.org WebSocket feed.
  * Strikes rendered as canvas markers with age-based coloring (white → red → fade).
  * Strikes older than 20 minutes are removed.

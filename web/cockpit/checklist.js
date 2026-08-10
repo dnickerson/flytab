@@ -1,5 +1,5 @@
 /**
- * FlyPi — Interactive Checklist
+ * FlyTab — Interactive Checklist
  * Full-screen overlay with tabbed Normal/Abnormal/Emergency checklists.
  * Data loaded from checklist.json (ForeFlight-derived format).
  */
@@ -427,7 +427,7 @@ class Checklist {
         return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
 
-    /** Wire touchstart + click with iPad-safe debounce */
+    /** Wire touchstart + click with Android-safe debounce */
     _wire(el, handler) {
         if (!el) return;
         let touchFired = false;

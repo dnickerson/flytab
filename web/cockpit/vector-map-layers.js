@@ -1,5 +1,5 @@
 /**
- * FlyPi — Vector Map Layers
+ * FlyTab — Vector Map Layers
  * Renders NASR data + geographic context on a dark background.
  * Manages airspace, airports, navaids, fixes, airways as togglable layer groups.
  */
@@ -98,7 +98,7 @@ class VectorMapLayers {
         });
 
         // Touch tap: bypass Leaflet entirely. Leaflet's drag handler eats
-        // most single-finger taps on iPad (finger jitter > draggable threshold).
+        // most single-finger taps on Android (finger jitter > draggable threshold).
         // We track touchstart/touchend ourselves and fire a synthetic tap
         // if the finger didn't move more than TAP_TOLERANCE pixels.
         //
@@ -939,7 +939,7 @@ class VectorMapLayers {
                 const upperStr = (upper != null && upper <= -1000) ? 'UNL' : upper;
                 const lowerStr = (lower === 0 || lower == null) ? 'SFC' : lower;
                 const altRange = upper != null ? `${upperStr} - ${lowerStr} ft` : '';
-                // No tooltip — sticky tooltips interfere with touch interactions on iPad
+                // No tooltip — sticky tooltips interfere with touch interactions on Android
 
                 polygon.addTo(this._airspaceLayer);
 
