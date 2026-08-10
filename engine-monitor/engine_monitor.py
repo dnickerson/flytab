@@ -18,7 +18,7 @@ Usage:
 Access at: http://stratux.local:8080
 """
 
-VERSION = "3.4.0"
+VERSION = "3.4.1"
 
 # Contract version for the payload shape and shared physical constants FlyTab
 # depends on (field names, nesting, units, usable_capacity_gal and similar).
