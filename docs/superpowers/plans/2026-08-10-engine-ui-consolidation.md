@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - No `PI_API_CONTRACT` bump — every field this plan newly consumes (`tas`, `target_fuel_flow`, `target_power`, `target_mode`, `manual_altimeter`, `manual_oat`) is already published by `get_status()` today.
-- `engine-monitor/engine_monitor.py` has zero automated test coverage in this repo — verify Python changes by running the script locally in `--playback` mode and with `curl`, not `pytest`.
+- `engine-monitor/engine_monitor.py` has zero automated test coverage in this repo — verify Python changes by running the script locally with `curl`, not `pytest`. Use `--playback` mode only for route/response checks; anything touching `auto_capture_monitor` requires *live* serial mode (`data_simulator.py`'s virtual pty), since that thread is gated `if not playback_mode:` and never runs in playback mode at all.
 - Any change to `web/cockpit/engine-page.js` requires on-device or CDP verification that the ENG page still renders and updates correctly (per CLAUDE.md) — `npm test` passing is necessary but not sufficient.
 - New UI must follow CLAUDE.md's Design Token Standards: no hardcoded hex, `var(--touch-min, 56px)` minimum touch targets, font-weight ≥ 700 for anything the pilot reads, instrument values in `var(--font-instrument)` at weight 900.
 - `docs/user-manual.md` must be updated in the same commit as any user-visible change (new gauge, new section, new control).
@@ -24,7 +24,7 @@
 
 | File | Change |
 |---|---|
-| `engine-monitor/engine_monitor.py` | Add `state.manually_stopped` latch (Task 1). Delete `HTML_TEMPLATE`, its `do_GET('/')`/`do_GET('/static/chart.min.js')` branches, `check_sticky_valve()`, its `CaptureState` fields, its call site, `/api/dismiss_sticky_valve`, `sticky_valve_*` in `get_status()`, `STICKY_VALVE_*` constants, `'sticky_valve'` from `PI_CAPABILITIES` (Task 2). |
+| `engine-monitor/engine_monitor.py` | Add `state.manually_stopped` latch (Task 1). Delete `HTML_TEMPLATE`, its `do_GET('/')`/`do_GET('/static/chart.min.js')` branches, `check_sticky_valve()`, its `CaptureState` fields, its call site, `/api/dismiss_sticky_valve`, `sticky_valve_*` in `get_status()`, `STICKY_VALVE_*` constants, `'sticky_valve'` from `PI_CAPABILITIES`, and the always-on `state.history`/`get_history()`/`/api/history` trend-chart backend (Task 2). |
 | `tests/fixtures/engine-messages.js` | Drop `sticky_valve_alert`/`sticky_valve_dismissed`/`'sticky_valve'` (Task 2); add `target_fuel_flow`/`target_power`/`target_mode` (Task 4). |
 | `tests/shared/engine-client.test.js` | Update the `piCapabilities` assertion to match the trimmed `PI_CAPABILITIES` (Task 2). |
 | `web/cockpit/engine-page.js` | Add TAS gauge (Task 3), Cruise Targets section (Task 4), ATIS override panel (Task 5). |
@@ -162,26 +162,30 @@ Replace the `if data and len(data) > 10:` block with:
 
 `parse_line` is the same module-level EDM line parser used by `capture_thread_func` (line 1050) — no new import needed, `auto_capture_monitor` is defined in the same module scope.
 
-- [ ] **Step 5: Local playback smoke-test**
+**Behavioral boundary, not a bug:** the latch only clears on an explicit Start or when RPM drops below 300. A deliberate Stop mid-flight *without* shutting the engine down (e.g. pausing recording between two legs while taxiing) will **not** auto-resume — the pilot must hit Start again for the next leg. Only a Stop followed by an actual engine shutdown re-arms auto-capture automatically. This matches "next flight," not "next time RPM happens to look idle," and is the more conservative reading of a deliberate pilot action.
 
-There is no Python unit-test harness in this repo for `engine_monitor.py` — verify by running the script standalone against a captured flight file:
+- [ ] **Step 5: Local verification with a live (non-playback) virtual serial port**
 
-Run:
+`auto_capture_monitor` — the thread this whole task is about — only starts `if not playback_mode:` (line 4676). A `--playback`-mode test would never exercise it, because that thread simply never runs in playback mode — it would pass identically whether the fix is correct, broken, or absent. Verify instead with `data_simulator.py`, which opens a real pty and feeds it EDM lines, letting `engine_monitor.py` run its normal *live*-serial code path (the one that actually starts `auto_capture_monitor`) with no physical Pi required:
+
+Run (background both, same shell):
 ```bash
 cd engine-monitor
 ls *.txt 2>/dev/null || echo "no local sample — use ~/Engine_Analysis/*.txt if present"
-python3 engine_monitor.py --playback <a-real-stream-file.txt> --no-stratux --web-port 8081 &
-sleep 2
-curl -s http://localhost:8081/api/status | python3 -c "import json,sys; d=json.load(sys.stdin); print('capturing:', d['capturing'])"
+python3 data_simulator.py <a-real-stream-file.txt> --rate 10 &
+sleep 1   # let it create /tmp/ttyUSB0
+python3 engine_monitor.py --port /tmp/ttyUSB0 --no-stratux --web-port 8081 &
+sleep 3
+curl -s http://localhost:8081/api/status | python3 -c "import json,sys; print('capturing before stop:', json.load(sys.stdin)['capturing'])"
 curl -s -X POST http://localhost:8081/api/stop
-curl -s http://localhost:8081/api/status | python3 -c "import json,sys; d=json.load(sys.stdin); print('capturing:', d['capturing'])"
+curl -s http://localhost:8081/api/status | python3 -c "import json,sys; print('capturing right after stop:', json.load(sys.stdin)['capturing'])"
 sleep 20
-curl -s http://localhost:8081/api/status | python3 -c "import json,sys; d=json.load(sys.stdin); print('capturing after 20s (should still be False if engine RPM in the file is >=300):', d['capturing'])"
-kill %1
+curl -s http://localhost:8081/api/status | python3 -c "import json,sys; print('capturing 20s after stop (must still be False -- this is what the fix prevents):', json.load(sys.stdin)['capturing'])"
+kill %1 %2
 ```
-Expected: `capturing` is `True` initially (playback auto-starts capture), `False` immediately after `/api/stop`, and still `False` 20 seconds later — confirming `auto_capture_monitor` did not silently restart it. (Playback mode's own `start_capture()` call at startup happens before the monitor thread runs — this test exercises the same `stop_capture`/`auto_capture_monitor` interaction that matters on real hardware.)
+Expected: `capturing` is `True` before Stop (auto-capture detected the simulated live EDM stream and started it), `False` immediately after `/api/stop`, and — this is the actual behavior under test — still `False` 20 seconds later, since a real flight file's RPM stays well above 300 throughout. Without the fix, `auto_capture_monitor`'s ~15-20s probe cycle would have silently called `start_capture()` again by this point, and this same command sequence would show `True`.
 
-This is a smoke test, not full proof — the definitive test is the manual scenario in the plan's final acceptance step (after Task 5): start capture on the real Pi via `test-pipeline.sh`, hit Stop while the simulated engine is still "running," and confirm capture does not resume within the old ~15-20s window.
+This still isn't full proof — real serial-port timing and the crash-restart scenario only exist on the actual Pi — see the plan's Final Acceptance section for the `test-pipeline.sh` run on real hardware.
 
 - [ ] **Step 6: Commit**
 
@@ -201,12 +205,14 @@ auto-restart until an explicit Start or the engine RPM drops below 300."
 ### Task 2: Delete the Pi's embedded dashboard and dead sticky-valve server code
 
 **Files:**
-- Modify: `engine-monitor/engine_monitor.py:36` (`PI_CAPABILITIES`), `:83-86` (`STICKY_VALVE_*` constants), `:653-729` (`CaptureState.__init__`), `:1251-1330` (`check_sticky_valve`), `:1810-1817` (call site), `:2091-2179` (`get_status`), `:2304-4130` (`HTML_TEMPLATE`), `:4170-4193` (`do_GET`), `:4354-4356` (`/api/dismiss_sticky_valve`)
+- Modify: `engine-monitor/engine_monitor.py:36` (`PI_CAPABILITIES`), `:49` (`deque` import), `:66` (`MAX_HISTORY_POINTS`), `:83-86` (`STICKY_VALVE_*` constants), `:653-729` (`CaptureState.__init__`), `:1251-1330` (`check_sticky_valve`), `:1810-1817` (call site), `:1838-1850` (`history_entry` build/append), `:2091-2179` (`get_status`), `:2249-2302` (`get_history`), `:2304-4130` (`HTML_TEMPLATE`), `:4170-4193` (`do_GET` `/`  and `/static/chart.min.js`), `:4204-4213` (`do_GET` `/api/history`), `:4354-4356` (`/api/dismiss_sticky_valve`)
 - Modify: `tests/fixtures/engine-messages.js`, `tests/shared/engine-client.test.js`
 
 **Interfaces:**
 - Consumes: nothing new.
-- Produces: `GET /` now returns `text/plain` `"Engine Monitor API running — see FlyTab"` instead of the dashboard HTML. All other routes unchanged in shape. `get_status()` no longer includes `sticky_valve_alert`/`sticky_valve_dismissed`; `capabilities` no longer includes `'sticky_valve'`.
+- Produces: `GET /` now returns `text/plain` `"Engine Monitor API running — see FlyTab"` instead of the dashboard HTML. `GET /api/history` and `GET /static/chart.min.js` are gone (404). All other routes unchanged in shape. `get_status()` no longer includes `sticky_valve_alert`/`sticky_valve_dismissed`; `capabilities` no longer includes `'sticky_valve'`.
+
+This task also removes `state.history` and its `/api/history` backend — not just the dashboard HTML. That deque is appended to on every parsed EDM sample (up to 6 Hz, for the life of every flight) inside the `state.lock` critical section, purely to feed the dashboard's own trend charts. FlyTab has never called `/api/history` (confirmed via `grep -rn "api/history" web/`, no hits) — it builds its own independent client-side trend buffer (`engine-page.js`'s `_trendHistory`). This is an *unconditional* per-sample cost, unlike the dashboard's own HTTP polling (which only mattered if a browser tab was left open) — leaving it in place would mean the "reduce Pi load" goal is only partially met.
 
 This is a single coherent deletion: the HTML dashboard's own embedded JS reads `data.sticky_valve_alert`/`sticky_valve_dismissed` (lines 3469-3470, 3709 inside `HTML_TEMPLATE`), so both go together. Confirmed via `grep` that nothing in `web/` (FlyTab) reads `piCapabilities`, `'sticky_valve'`, or any `sticky_valve_*` field from the Pi — engine-page.js's own sticky-valve detection (`_checkStickyValve`, kept per Task design) is fully independent and reads only local EGT/RPM samples.
 
@@ -336,7 +342,64 @@ Replace the `if`/`elif` for `/`, `/index.html`, and `/static/chart.min.js` with 
 
 Also delete the now-unused `CHART_JS_PATH` constant (line 60: `CHART_JS_PATH = os.path.join(SCRIPT_DIR, 'chart.min.js')`). Leave the vendored `engine-monitor/chart.min.js` file itself on disk — deleting it is unnecessary and out of scope.
 
-- [ ] **Step 6: Update the JS fixture and its dependent test**
+- [ ] **Step 6: Delete the dead `state.history` / `/api/history` trend-chart backend**
+
+This is the other half of the Pi-workload reduction goal, separate from the dashboard's own HTTP polling deleted above: `state.history` is appended to on every parsed EDM sample regardless of whether a dashboard was ever open. Deleting it removes an always-on cost, not just a conditional one.
+
+Delete the unused import (line 49):
+```python
+from collections import deque
+```
+
+Delete the now-unused constant (line 66):
+```python
+MAX_HISTORY_POINTS = 20000  # Max points to store (auto-pruned by time, not count)
+```
+(leave `HISTORY_SECONDS` at line 65 alone — it is separately unused today, predates this change, and is out of scope here.)
+
+In `CaptureState.__init__`, delete the history buffer (lines 664-665):
+```python
+        # History for plotting (30 minutes)
+        self.history = deque(maxlen=MAX_HISTORY_POINTS)
+```
+
+In `capture_thread_func`'s main read loop, inside the `with state.lock:` block, delete the history-entry build and append (lines 1838-1850):
+```python
+                            # Add to history with timestamp
+                            history_entry = {
+                                'timestamp': time.time(),
+                                'EGT1': parsed.get('EGT1', 0),
+                                'EGT2': parsed.get('EGT2', 0),
+                                'EGT3': parsed.get('EGT3', 0),
+                                'EGT4': parsed.get('EGT4', 0),
+                                'CHT1': parsed.get('CHT1', 0),
+                                'CHT2': parsed.get('CHT2', 0),
+                                'CHT3': parsed.get('CHT3', 0),
+                                'CHT4': parsed.get('CHT4', 0),
+                            }
+                            state.history.append(history_entry)
+```
+(the other assignments in the same `with state.lock:` block — `state.latest_data`, `state.data_count`, `state.percent_power`, `state.rop_lop_percent`, `state.rop_lop_mode`, `state.sfc` — are unrelated and stay untouched).
+
+Delete `get_history()` in full (lines 2249-2302 — the entire function, from `def get_history(duration_minutes=30):` through its final closing `}`).
+
+In `do_GET`, delete the `/api/history` branch (lines 4204-4213):
+```python
+        elif path == '/api/history':
+            # Get duration from query parameter (default 30 minutes)
+            duration = 30
+            if 'duration' in query:
+                try:
+                    duration = int(query['duration'][0])
+                    duration = max(1, min(duration, 120))  # Clamp to 1-120 minutes
+                except (ValueError, IndexError):
+                    pass
+            self.send_json(get_history(duration))
+
+```
+(the blank line after it, before `elif path.startswith('/download/'):`, goes too — leave exactly one blank line between the two `elif` branches, matching the surrounding style).
+
+- [ ] **Step 7: Update the JS fixture and its dependent test**
 
 In `tests/fixtures/engine-messages.js`, in `ENGINE_FRAME`:
 - Change `capabilities: ['fuel_tracker', 'sticky_valve', 'peak_egt'],` to `capabilities: ['fuel_tracker', 'peak_egt'],`
@@ -351,12 +414,14 @@ to:
         expect(client.piCapabilities).toEqual(['fuel_tracker', 'peak_egt']);
 ```
 
-- [ ] **Step 7: Run the JS test suite**
+- [ ] **Step 8: Run the JS test suite**
 
 Run: `npm test`
 Expected: PASS, including the updated `engine-client.test.js` assertion.
 
-- [ ] **Step 8: Local playback smoke-test of the route changes**
+- [ ] **Step 9: Local playback smoke-test of the route changes**
+
+`--playback` mode is fine here — this step checks route *responses*, not `auto_capture_monitor` (that's Task 1 Step 5's job, using the live pty simulator).
 
 Run:
 ```bash
@@ -366,20 +431,25 @@ sleep 2
 curl -s http://localhost:8081/ ; echo
 curl -s http://localhost:8081/api/status | python3 -m json.tool | grep -i sticky
 curl -s http://localhost:8081/api/status | python3 -c "import json,sys; print('capabilities:', json.load(sys.stdin)['capabilities'])"
+curl -s -o /dev/null -w "/api/history -> %{http_code}\n" http://localhost:8081/api/history
 kill %1
 ```
-Expected: `GET /` prints `Engine Monitor API running -- see FlyTab`; the `grep -i sticky` line prints nothing (fields gone); `capabilities` prints `['fuel_tracker', 'peak_egt']`.
+Expected: `GET /` prints `Engine Monitor API running -- see FlyTab`; the `grep -i sticky` line prints nothing (fields gone); `capabilities` prints `['fuel_tracker', 'peak_egt']`; `/api/history` returns `404` (falls through to the `do_GET` default `{"error": "Not found"}` branch now that its `elif` is deleted).
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 git add engine-monitor/engine_monitor.py tests/fixtures/engine-messages.js tests/shared/engine-client.test.js
-git commit -m "refactor(engine-monitor): delete embedded dashboard and dead sticky-valve server code
+git commit -m "refactor(engine-monitor): delete embedded dashboard and dead sticky-valve/history server code
 
 FlyTab's ENG page is now the only human-facing engine UI. The dashboard's
-own JS was the last reader of sticky_valve_alert/dismissed on the Pi side
-(engine-page.js's on-device sticky-valve check is fully independent), so
-both go together. All other API routes are unchanged; no PI_API_CONTRACT
+own JS was the last reader of sticky_valve_alert/dismissed and the sole
+consumer of /api/history's trend-chart data on the Pi side (engine-page.js's
+on-device sticky-valve check and trend buffer are both fully independent),
+so all three go together. state.history was being appended to on every
+EDM sample regardless of whether a dashboard was ever open -- removing it
+is the larger, unconditional half of the Pi CPU/lock-contention reduction
+this change is for. All other API routes are unchanged; no PI_API_CONTRACT
 bump needed."
 ```
 
