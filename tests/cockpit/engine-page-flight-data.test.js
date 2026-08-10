@@ -53,6 +53,7 @@ function setup() {
 
 beforeEach(() => {
     vi.stubGlobal('requestAnimationFrame', () => 0);
+    globalThis.fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ success: true }) });
 });
 
 afterEach(() => {
@@ -62,6 +63,7 @@ afterEach(() => {
     delete globalThis.Settings;
     delete globalThis.CockpitConfig;
     delete window.enginePanel;
+    delete globalThis.fetch;
 });
 
 describe('EnginePage — EST. TAS', () => {
@@ -93,5 +95,55 @@ describe('EnginePage — Cruise Targets', () => {
         expect(page._el.querySelector('#ep-target-ff').textContent).toBe('--.-');
         expect(page._el.querySelector('#ep-target-pwr').textContent).toBe('--');
         expect(page._el.querySelector('#ep-target-mode').textContent).toBe('---');
+    });
+});
+
+describe('EnginePage — ATIS override', () => {
+    it('shows "using calculated" when no override is active', () => {
+        setup();
+        page.update({ ...FRAME, manual_altimeter: null, manual_oat: null });
+        expect(page._el.querySelector('#ep-atis-status').textContent).toBe('Using calculated OAT / altimeter');
+    });
+
+    it('shows active-override text and pre-fills empty inputs', () => {
+        setup();
+        page.update({ ...FRAME, manual_altimeter: 29.92, manual_oat: 15 });
+        expect(page._el.querySelector('#ep-atis-status').textContent).toContain('ATIS OVERRIDE ACTIVE');
+        expect(page._el.querySelector('#ep-atis-status').textContent).toContain('ALT 29.92 inHg');
+        expect(page._el.querySelector('#ep-atis-status').textContent).toContain('OAT 15°C');
+        expect(page._el.querySelector('#ep-atis-alt-input').value).toBe('29.92');
+        expect(page._el.querySelector('#ep-atis-oat-input').value).toBe('15');
+    });
+
+    it('does not clobber an in-progress pilot edit', () => {
+        setup();
+        const input = page._el.querySelector('#ep-atis-alt-input');
+        input.value = '30.01';
+        page.update({ ...FRAME, manual_altimeter: 29.92 });
+        expect(input.value).toBe('30.01');
+    });
+
+    it('SET posts only the altimeter key', async () => {
+        setup();
+        await page._setAtis('altimeter', '29.85');
+        expect(globalThis.fetch).toHaveBeenCalledWith(
+            'http://192.168.10.1:8080/api/atis',
+            expect.objectContaining({
+                method: 'POST',
+                body: JSON.stringify({ altimeter: 29.85 }),
+            })
+        );
+    });
+
+    it('CLEAR posts null for the given key', async () => {
+        setup();
+        await page._setAtis('oat', null);
+        expect(globalThis.fetch).toHaveBeenCalledWith(
+            'http://192.168.10.1:8080/api/atis',
+            expect.objectContaining({
+                method: 'POST',
+                body: JSON.stringify({ oat: null }),
+            })
+        );
     });
 });

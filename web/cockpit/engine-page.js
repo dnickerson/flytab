@@ -239,6 +239,24 @@ class EnginePage {
                 ${this._gaugeHtml('ep-target-mode', 'MODE',       '---',  '')}
             </div>
 
+            <!-- Section 7.6: ATIS manual override for altimeter/OAT (feeds density alt + TAS calcs above) -->
+            <div class="ep-section-title">ATIS OVERRIDE</div>
+            <div class="ep-atis-panel">
+                <div class="ep-atis-row">
+                    <span class="ep-atis-label">ALTIMETER (inHg)</span>
+                    <input type="number" class="ep-atis-input" id="ep-atis-alt-input" placeholder="29.92" min="27" max="32" step="0.01" inputmode="decimal">
+                    <button class="ep-atis-btn ep-atis-set-btn" id="ep-atis-alt-set">SET</button>
+                    <button class="ep-atis-btn ep-atis-clear-btn" id="ep-atis-alt-clear">CLEAR</button>
+                </div>
+                <div class="ep-atis-row">
+                    <span class="ep-atis-label">OAT (°C)</span>
+                    <input type="number" class="ep-atis-input" id="ep-atis-oat-input" placeholder="15" min="-40" max="50" step="1" inputmode="decimal">
+                    <button class="ep-atis-btn ep-atis-set-btn" id="ep-atis-oat-set">SET</button>
+                    <button class="ep-atis-btn ep-atis-clear-btn" id="ep-atis-oat-clear">CLEAR</button>
+                </div>
+                <div class="ep-atis-status" id="ep-atis-status">Using calculated OAT / altimeter</div>
+            </div>
+
             <!-- Section 8: Recording indicator -->
             <div class="ep-rec-row" id="ep-rec-row" style="display:none;">
                 <span class="ep-rec-dot"></span>
@@ -264,6 +282,14 @@ class EnginePage {
             this._stickyDismissed = true;
             this._el.querySelector('#ep-sticky-banner').style.display = 'none';
         });
+
+        // Wire ATIS override controls
+        const atisAltInput = this._el.querySelector('#ep-atis-alt-input');
+        const atisOatInput = this._el.querySelector('#ep-atis-oat-input');
+        wireTap(this._el.querySelector('#ep-atis-alt-set'), () => this._setAtis('altimeter', atisAltInput.value));
+        wireTap(this._el.querySelector('#ep-atis-alt-clear'), () => { atisAltInput.value = ''; this._setAtis('altimeter', null); });
+        wireTap(this._el.querySelector('#ep-atis-oat-set'), () => this._setAtis('oat', atisOatInput.value));
+        wireTap(this._el.querySelector('#ep-atis-oat-clear'), () => { atisOatInput.value = ''; this._setAtis('oat', null); });
 
         // Wire chart duration selectors
         this._el.querySelector('#ep-chart-dur').addEventListener('change', (e) => {
@@ -306,6 +332,7 @@ class EnginePage {
             edmTotal: this._el.querySelector('#ep-edm-total'),
             ticVar: this._el.querySelector('#ep-tic-var'),
             ticGrade: this._el.querySelector('#ep-tic-grade'),
+            atisStatus: this._el.querySelector('#ep-atis-status'),
         };
         // Cache per-cylinder elements
         for (let i = 1; i <= 4; i++) {
@@ -690,6 +717,7 @@ class EnginePage {
         this._setText('ep-target-ff',   d.target_fuel_flow ? d.target_fuel_flow.toFixed(1) : '--.-');
         this._setText('ep-target-pwr',  d.target_power || '--');
         this._setText('ep-target-mode', d.target_mode || '---');
+        this._updateAtisStatus(d);
 
         /* ---- Section 8: Recording indicator ---- */
         this._updateRecording(d);
@@ -1011,6 +1039,46 @@ class EnginePage {
         if (btn) btn.textContent = 'STOP & SAVE';
     }
 
+    async _setAtis(key, rawVal) {
+        const val = (rawVal === '' || rawVal === null || rawVal === undefined) ? null : parseFloat(rawVal);
+        if (val !== null && Number.isNaN(val)) return;
+        try {
+            await fetch('http://192.168.10.1:8080/api/atis', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ [key]: val }),
+                signal: AbortSignal.timeout(5000),
+            });
+        } catch (_) {
+            // Next status poll reflects whatever the Pi actually has; no local
+            // optimistic state to roll back.
+        }
+    }
+
+    _updateAtisStatus(d) {
+        const altInput = this._el.querySelector('#ep-atis-alt-input');
+        const oatInput = this._el.querySelector('#ep-atis-oat-input');
+        const statusEl = this._dom.atisStatus;
+        if (!statusEl) return;
+
+        const altOverride = d.manual_altimeter != null;
+        const oatOverride = d.manual_oat != null;
+
+        if (altInput && altInput.value === '' && altOverride) altInput.value = d.manual_altimeter;
+        if (oatInput && oatInput.value === '' && oatOverride) oatInput.value = d.manual_oat;
+
+        if (!altOverride && !oatOverride) {
+            statusEl.textContent = 'Using calculated OAT / altimeter';
+            statusEl.className = 'ep-atis-status';
+        } else {
+            const parts = [];
+            if (altOverride) parts.push(`ALT ${d.manual_altimeter} inHg`);
+            if (oatOverride) parts.push(`OAT ${d.manual_oat}°C`);
+            statusEl.textContent = `ATIS OVERRIDE ACTIVE — ${parts.join(' / ')}`;
+            statusEl.className = 'ep-atis-status ep-atis-status--active';
+        }
+    }
+
     /* ------------------------------------------------------------------
      * DOM helpers
      * ----------------------------------------------------------------*/
@@ -1186,6 +1254,72 @@ class EnginePage {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 4px;
+}
+
+/* ATIS override panel */
+.ep-atis-panel {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 8px;
+}
+.ep-atis-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 4px 0;
+}
+.ep-atis-label {
+    flex: 1;
+    font-family: var(--font-ui);
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+}
+.ep-atis-input {
+    width: 90px;
+    height: var(--touch-min, 56px);
+    text-align: center;
+    font-size: 18px;
+    font-weight: 900;
+    font-family: var(--font-instrument);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    border: 2px solid var(--border-strong);
+    border-radius: 6px;
+}
+.ep-atis-btn {
+    height: var(--touch-min, 56px);
+    padding: 0 14px;
+    border-radius: 6px;
+    font-family: var(--font-ui);
+    font-size: 15px;
+    font-weight: 800;
+    cursor: pointer;
+    border: none;
+}
+.ep-atis-set-btn {
+    background: var(--accent);
+    color: #000;
+}
+.ep-atis-clear-btn {
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    border: 2px solid var(--border-strong);
+}
+.ep-atis-btn:active { opacity: 0.6; }
+.ep-atis-status {
+    font-family: var(--font-ui);
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-align: center;
+    margin-top: 4px;
+}
+.ep-atis-status--active {
+    color: var(--accent);
+    font-weight: 800;
 }
 
 .ep-tas-note {
