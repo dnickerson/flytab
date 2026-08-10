@@ -115,7 +115,7 @@ describe('EngineClient — Pi contract handshake (#113)', () => {
         client._connected = true; // _onData alone doesn't flip this; onopen does
         expect(client.piContract).toBe(2);
         expect(client.piVersion).toBe('3.4.0');
-        expect(client.piCapabilities).toEqual(['fuel_tracker', 'sticky_valve', 'peak_egt']);
+        expect(client.piCapabilities).toEqual(['fuel_tracker', 'peak_egt']);
         expect(client.piContractOld).toBe(false);
     });
 

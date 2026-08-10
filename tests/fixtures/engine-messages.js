@@ -5,7 +5,7 @@
 const ENGINE_FRAME = {
     version:               '3.4.0',
     api_contract:           2,
-    capabilities:          ['fuel_tracker', 'sticky_valve', 'peak_egt'],
+    capabilities:          ['fuel_tracker', 'peak_egt'],
     capturing:             true,
     serial_connected:      true,
     stratux_connected:     false,
@@ -19,8 +19,6 @@ const ENGINE_FRAME = {
     tas:                    155,
     oat:                     12.0,
     density_altitude:      6200,
-    sticky_valve_alert:    null,
-    sticky_valve_dismissed: false,
     serial_warning:        null,
     degrees_from_peak:     {},
     peaks_valid:           false,
