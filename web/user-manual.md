@@ -145,6 +145,12 @@ The **engine advisory banner** (below the status bar, on any tab) appears in red
 
 The **Engine ML** monitor (MORE → Engine ML) shows the real-time anomaly score, per-feature reconstruction errors, and the current flight phase (startup, warmup, taxi_out, runup, takeoff, climb, cruise, descent, approach, landing, taxi_in, or shutdown). The model was trained on N194JT flight data and knows what this engine normally does in each phase.
 
+**FLIGHT DATA** now also shows **EST. TAS** — an estimate from ground speed and density altitude (roughly +2%/1000 ft DA), not a wind-corrected true airspeed. Treat it as approximate.
+
+**CRUISE TARGETS** — recommended fuel flow, power setting, and mixture mode for the current density altitude (below 8,000 ft DA: 65% power LEAN; 8,000–12,000 ft: 60%; above 12,000 ft: 55%), aimed at best-economy LOP operation. A guideline, not a limit — cross-check against your own POH power charts.
+
+**ATIS OVERRIDE** — enter a fresher altimeter setting and/or OAT than the Pi's own calculated values (e.g. right after copying ATIS/AWOS before an approach). SET applies one field at a time; CLEAR reverts that field to the calculated value. An active override is flagged below the inputs ("ATIS OVERRIDE ACTIVE — ...") because it also feeds DENS ALT and EST. TAS above, not just the OAT gauge — those three numbers reflect your entered value, not a live measurement, until cleared.
+
 ---
 
 ### CHK — Checklists

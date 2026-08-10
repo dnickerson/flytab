@@ -32,6 +32,12 @@ class EnginePage {
         this._stickyAlert = null; // cylinder 1-4 or null
         this._stickyDismissed = false;
 
+        // ATIS status error hold: _updateAtisStatus() runs every update() tick
+        // (~1Hz) and would otherwise overwrite an error message before the
+        // pilot can read it -- this timestamp holds the error on screen for a
+        // few seconds before the normal override/no-override text resumes.
+        this._atisErrorUntil = 0;
+
         // Previous EGT/CHT for trend arrows
         this._prevEgt = [0, 0, 0, 0];
         this._prevCht = [0, 0, 0, 0];
@@ -227,6 +233,34 @@ class EnginePage {
                 ${this._gaugeHtml('ep-da',   'DENS ALT',  '-----', 'ft')}
                 ${this._gaugeHtml('ep-oat',  'OAT',       '--',    '\u00B0C')}
                 ${this._gaugeHtml('ep-gs',   'GND SPD',   '---',   'kts')}
+                ${this._gaugeHtml('ep-tas',  'EST. TAS',  '---',   'kts')}
+            </div>
+            <div class="ep-tas-note">TAS is estimated from ground speed + density altitude (no wind correction) \u2014 not a pitot-derived airspeed.</div>
+
+            <!-- Section 7.5: Cruise targets (recommended power/mixture for current density altitude) -->
+            <div class="ep-section-title">CRUISE TARGETS</div>
+            <div class="ep-section ep-target-row">
+                ${this._gaugeHtml('ep-target-ff',   'TARGET FF',  '--.-', 'GPH')}
+                ${this._gaugeHtml('ep-target-pwr',  'TARGET PWR', '--',   '%')}
+                ${this._gaugeHtml('ep-target-mode', 'MODE',       '---',  '')}
+            </div>
+
+            <!-- Section 7.6: ATIS manual override for altimeter/OAT (feeds density alt + TAS calcs above) -->
+            <div class="ep-section-title">ATIS OVERRIDE</div>
+            <div class="ep-atis-panel">
+                <div class="ep-atis-row">
+                    <span class="ep-atis-label">ALTIMETER (inHg)</span>
+                    <input type="number" class="ep-atis-input" id="ep-atis-alt-input" placeholder="29.92" min="27" max="32" step="0.01" inputmode="decimal">
+                    <button class="ep-atis-btn ep-atis-set-btn" id="ep-atis-alt-set">SET</button>
+                    <button class="ep-atis-btn ep-atis-clear-btn" id="ep-atis-alt-clear">CLEAR</button>
+                </div>
+                <div class="ep-atis-row">
+                    <span class="ep-atis-label">OAT (°C)</span>
+                    <input type="number" class="ep-atis-input" id="ep-atis-oat-input" placeholder="15" min="-40" max="50" step="1" inputmode="decimal">
+                    <button class="ep-atis-btn ep-atis-set-btn" id="ep-atis-oat-set">SET</button>
+                    <button class="ep-atis-btn ep-atis-clear-btn" id="ep-atis-oat-clear">CLEAR</button>
+                </div>
+                <div class="ep-atis-status" id="ep-atis-status">Using calculated OAT / altimeter</div>
             </div>
 
             <!-- Section 8: Recording indicator -->
@@ -254,6 +288,27 @@ class EnginePage {
             this._stickyDismissed = true;
             this._el.querySelector('#ep-sticky-banner').style.display = 'none';
         });
+
+        // Wire ATIS override controls
+        // SET must never fall through to CLEAR semantics — an empty/unparseable
+        // input is a no-op (with a status hint), not a null POST. See _setAtis,
+        // which is also called directly by CLEAR with an explicit null and must
+        // keep accepting that.
+        const atisAltInput = this._el.querySelector('#ep-atis-alt-input');
+        const atisOatInput = this._el.querySelector('#ep-atis-oat-input');
+        const wireAtisSet = (btn, input, key) => {
+            wireTap(btn, () => {
+                if (input.value === '') {
+                    this._atisStatusError('Enter a value first');
+                    return;
+                }
+                this._setAtis(key, input.value);
+            });
+        };
+        wireAtisSet(this._el.querySelector('#ep-atis-alt-set'), atisAltInput, 'altimeter');
+        wireAtisSet(this._el.querySelector('#ep-atis-oat-set'), atisOatInput, 'oat');
+        wireTap(this._el.querySelector('#ep-atis-alt-clear'), () => { atisAltInput.value = ''; this._setAtis('altimeter', null); });
+        wireTap(this._el.querySelector('#ep-atis-oat-clear'), () => { atisOatInput.value = ''; this._setAtis('oat', null); });
 
         // Wire chart duration selectors
         this._el.querySelector('#ep-chart-dur').addEventListener('change', (e) => {
@@ -296,6 +351,7 @@ class EnginePage {
             edmTotal: this._el.querySelector('#ep-edm-total'),
             ticVar: this._el.querySelector('#ep-tic-var'),
             ticGrade: this._el.querySelector('#ep-tic-grade'),
+            atisStatus: this._el.querySelector('#ep-atis-status'),
         };
         // Cache per-cylinder elements
         for (let i = 1; i <= 4; i++) {
@@ -674,6 +730,13 @@ class EnginePage {
         this._setText('ep-da',  densAlt !== 0 ? Math.round(densAlt) : '-----');
         this._setText('ep-oat', oat !== 0 ? Math.round(oat) : '--');
         this._setText('ep-gs',  gs > 0 ? Math.round(gs) : '---');
+        this._setText('ep-tas', d.tas ? Math.round(d.tas) : '---');
+
+        /* ---- Section 7.5: Cruise targets ---- */
+        this._setText('ep-target-ff',   d.target_fuel_flow ? d.target_fuel_flow.toFixed(1) : '--.-');
+        this._setText('ep-target-pwr',  d.target_power || '--');
+        this._setText('ep-target-mode', d.target_mode || '---');
+        this._updateAtisStatus(d);
 
         /* ---- Section 8: Recording indicator ---- */
         this._updateRecording(d);
@@ -995,6 +1058,91 @@ class EnginePage {
         if (btn) btn.textContent = 'STOP & SAVE';
     }
 
+    // Same pattern as fuel-overlay.js's _engineBaseUrl() — read the configured
+    // Pi IP off the shared EngineClient instance, falling back to the default.
+    _engineBaseUrl() {
+        const ip = window.engineClient?.ip || '192.168.10.1';
+        return `http://${ip}:8080`;
+    }
+
+    _atisStatusError(msg) {
+        const statusEl = this._dom.atisStatus;
+        if (!statusEl) return;
+        statusEl.textContent = msg;
+        statusEl.className = 'ep-atis-status ep-atis-status--error';
+        // Hold this message through the next several update() ticks (~1Hz)
+        // so it doesn't get overwritten before the pilot can read it.
+        this._atisErrorUntil = Date.now() + 5000;
+    }
+
+    async _setAtis(key, rawVal) {
+        const val = (rawVal === '' || rawVal === null || rawVal === undefined) ? null : parseFloat(rawVal);
+        if (val !== null && Number.isNaN(val)) return;
+
+        // Range-guard non-null values only — CLEAR (val === null) always proceeds.
+        if (val !== null) {
+            if (key === 'altimeter' && (val < 27.0 || val > 32.0)) {
+                this._atisStatusError('Altimeter must be 27.0–32.0 inHg');
+                return;
+            }
+            if (key === 'oat' && (val < -60 || val > 60)) {
+                this._atisStatusError('OAT must be -60–60°C');
+                return;
+            }
+        }
+
+        try {
+            // No explicit Content-Type: setting one makes this a non-simple
+            // cross-origin request, forcing a CORS preflight (OPTIONS /api/atis)
+            // that engine_monitor.py has no handler for -- the preflight fails
+            // and the POST never goes out. Without the header, fetch sends the
+            // CORS-safelisted text/plain, which the Pi's json.loads(body) parses
+            // fine (it never inspects Content-Type).
+            const resp = await fetch(`${this._engineBaseUrl()}/api/atis`, {
+                method: 'POST',
+                body: JSON.stringify({ [key]: val }),
+                signal: AbortSignal.timeout(5000),
+            });
+            if (!resp.ok) {
+                this._atisStatusError(`✗ ATIS update failed: HTTP ${resp.status}`);
+            }
+            // On success, the next update() tick's _updateAtisStatus(d) call
+            // overwrites this with the Pi's actual manual_altimeter/manual_oat
+            // state -- no hand-crafted success message needed here.
+        } catch (err) {
+            this._atisStatusError(`✗ ATIS update failed: ${err.message}`);
+        }
+    }
+
+    _updateAtisStatus(d) {
+        // An error/hint message is being held on screen -- don't let this
+        // tick's normal override/no-override text stomp it before the hold
+        // window expires (see _atisStatusError).
+        if (Date.now() < this._atisErrorUntil) return;
+
+        const altInput = this._el.querySelector('#ep-atis-alt-input');
+        const oatInput = this._el.querySelector('#ep-atis-oat-input');
+        const statusEl = this._dom.atisStatus;
+        if (!statusEl) return;
+
+        const altOverride = d.manual_altimeter != null;
+        const oatOverride = d.manual_oat != null;
+
+        if (altInput && altInput.value === '' && altOverride) altInput.value = d.manual_altimeter;
+        if (oatInput && oatInput.value === '' && oatOverride) oatInput.value = d.manual_oat;
+
+        if (!altOverride && !oatOverride) {
+            statusEl.textContent = 'Using calculated OAT / altimeter';
+            statusEl.className = 'ep-atis-status';
+        } else {
+            const parts = [];
+            if (altOverride) parts.push(`ALT ${d.manual_altimeter} inHg`);
+            if (oatOverride) parts.push(`OAT ${d.manual_oat}°C`);
+            statusEl.textContent = `ATIS OVERRIDE ACTIVE — ${parts.join(' / ')}`;
+            statusEl.className = 'ep-atis-status ep-atis-status--active';
+        }
+    }
+
     /* ------------------------------------------------------------------
      * DOM helpers
      * ----------------------------------------------------------------*/
@@ -1158,11 +1306,98 @@ class EnginePage {
     gap: 4px;
 }
 
-/* Flight data row -- 4 columns */
+/* Flight data row -- 5 columns */
 .ep-flight-row {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     gap: 4px;
+}
+
+/* Cruise targets row -- 3 columns */
+.ep-target-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 4px;
+}
+
+/* ATIS override panel */
+.ep-atis-panel {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 8px;
+}
+.ep-atis-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 4px 0;
+}
+.ep-atis-label {
+    flex: 1;
+    font-family: var(--font-ui);
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+}
+.ep-atis-input {
+    width: 90px;
+    height: var(--touch-min, 56px);
+    text-align: center;
+    font-size: 18px;
+    font-weight: 900;
+    font-family: var(--font-instrument);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    border: 2px solid var(--border-strong);
+    border-radius: 6px;
+}
+.ep-atis-btn {
+    height: var(--touch-min, 56px);
+    padding: 0 14px;
+    border-radius: 6px;
+    font-family: var(--font-ui);
+    font-size: 15px;
+    font-weight: 800;
+    cursor: pointer;
+    border: none;
+}
+.ep-atis-set-btn {
+    background: var(--accent);
+    color: var(--text-on-accent);
+}
+.ep-atis-clear-btn {
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    border: 2px solid var(--border-strong);
+}
+.ep-atis-btn:active { opacity: 0.6; }
+.ep-atis-status {
+    font-family: var(--font-ui);
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-align: center;
+    margin-top: 4px;
+}
+.ep-atis-status--active {
+    color: var(--accent);
+    font-weight: 800;
+}
+.ep-atis-status--error {
+    /* Text on the panel's light --bg-surface fill -- use the light-safe
+       equivalent, not the bright --color-danger fill token. */
+    color: var(--color-danger-on-light);
+    font-weight: 800;
+}
+
+.ep-tas-note {
+    font-family: var(--font-ui);
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-align: center;
 }
 
 /* Standard gauge cell */
