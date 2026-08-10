@@ -1688,6 +1688,9 @@ def capture_thread_func():
         lines_parsed = 0
         consecutive_empty = 0  # Track consecutive empty reads
         last_warning_time = 0  # Avoid spamming logs
+        reconnect_backoff = 2.0        # seconds; doubles on repeated failures
+        reconnect_backoff_max = 30.0   # cap — matches EngineClient's JS backoff ceiling
+        next_reconnect_attempt = 0.0   # epoch gate; 0 = attempt on first failure
 
         while not state.stop_event.is_set():
             try:
@@ -1731,18 +1734,20 @@ def capture_thread_func():
 
                         percent_power, deviation, mode, sfc = calculate_engine_parameters(rpm, mp, fuel_flow, edm_timestamp)
 
-                        # Track per-cylinder peak EGT during leaning
-                        update_peak_tracking(
-                            parsed.get('EGT1', 0),
-                            parsed.get('EGT2', 0),
-                            parsed.get('EGT3', 0),
-                            parsed.get('EGT4', 0),
-                            fuel_flow,
-                            rpm,
-                            mp
-                        )
-
                         with state.lock:
+                            # Track per-cylinder peak EGT during leaning (writes
+                            # state.peak_egts/degrees_from_peak/peaks_valid —
+                            # get_status() reads these locked; this call must be too)
+                            update_peak_tracking(
+                                parsed.get('EGT1', 0),
+                                parsed.get('EGT2', 0),
+                                parsed.get('EGT3', 0),
+                                parsed.get('EGT4', 0),
+                                fuel_flow,
+                                rpm,
+                                mp
+                            )
+
                             state.latest_data = parsed
                             state.data_count += 1
                             state.percent_power = percent_power
@@ -1867,7 +1872,39 @@ def capture_thread_func():
             except Exception as e:
                 state.last_error = str(e)
                 state.last_serial_error = str(e)
-                log(f"Capture loop error: {e}")
+                # Handles the device physically vanishing (ser.in_waiting / ser.read()
+                # raising, e.g. an unplugged USB-serial adapter) — distinct from the
+                # "ready but no data" case above, which never reaches this branch
+                # because the exception fires before consecutive_empty/data_was_waiting
+                # bookkeeping runs. Gated by next_reconnect_attempt so a permanently
+                # unplugged device doesn't spin open_serial()/log() at 10Hz forever.
+                # Excludes playback_mode — there is no live serial port to reopen when
+                # replaying a captured file; an exception here in playback is a
+                # different, rarer problem this fix isn't targeting.
+                if not playback_mode:
+                    now = time.time()
+                    if now >= next_reconnect_attempt:
+                        log(f"Capture loop error: {e} — attempting serial port reopen")
+                        try:
+                            if ser:
+                                try:
+                                    ser.close()
+                                except Exception:
+                                    pass
+                            ser = open_serial()
+                            state.reconnect_count += 1
+                            consecutive_empty = 0
+                            reconnect_backoff = 2.0
+                            log(f"Serial port reconnected after error (attempt #{state.reconnect_count})")
+                        except Exception as reconnect_err:
+                            err_msg = str(reconnect_err)
+                            state.last_serial_error = err_msg
+                            state.serial_warning = f"Reconnect failed: {err_msg}"
+                            next_reconnect_attempt = now + reconnect_backoff
+                            reconnect_backoff = min(reconnect_backoff * 2, reconnect_backoff_max)
+                            log(f"Reconnect failed: {err_msg} — next attempt in {reconnect_backoff:.0f}s")
+                else:
+                    log(f"Capture loop error: {e}")
                 time.sleep(0.1)
 
         log("Capture thread stopped normally")
