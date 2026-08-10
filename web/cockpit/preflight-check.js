@@ -25,7 +25,7 @@ class PreflightCheck {
         if (this._dismissed) return;
         try {
             await this.db.open();
-            const plan = await this.db.getActiveFlightPlan();
+            const plan = this._getActivePlan();
             if (!plan) return; // no plan — nothing to check
             const results = await this._runChecks(plan);
             this._render(results);
@@ -39,7 +39,7 @@ class PreflightCheck {
     async show() {
         try {
             await this.db.open();
-            const plan = await this.db.getActiveFlightPlan();
+            const plan = this._getActivePlan();
             const results = await this._runChecks(plan);
             this._render(results);
             this._show();
@@ -51,6 +51,31 @@ class PreflightCheck {
     dismiss() {
         this._dismissed = true;
         if (this._el) this._el.classList.remove('pfc-visible');
+    }
+
+    /**
+     * Read the pilot's currently active flight plan.
+     *
+     * Deliberately NOT this.db (NasrDB / the 'flypi' IDB database) — flypi's
+     * flight_plans store is written only by NasrDB.saveFlightPlan(), which has
+     * zero callers anywhere in the app. The live active plan lives in
+     * localStorage['flypi_active_plan'], written by app.js's _applyPlan()
+     * (every plan load, including flywhere.app cloud sync) and by
+     * route-table.js's Save Route / Plan Picker flows — same key/shape
+     * app.js, logbook.js, and plan-sync.js already read.
+     *
+     * Note: locally-built routes (route-table.js "Save Route") don't carry a
+     * weather_cache field, so _checkWeather() below can still read "Not
+     * fetched" for those plans even once the plan itself is found — a
+     * separate, pre-existing gap this does not fix.
+     */
+    _getActivePlan() {
+        try {
+            return JSON.parse(localStorage.getItem('flypi_active_plan') || 'null');
+        } catch (err) {
+            console.warn('PreflightCheck: failed to parse flypi_active_plan', err);
+            return null;
+        }
     }
 
     // ========== Checks ==========
