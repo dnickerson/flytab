@@ -32,6 +32,12 @@ class EnginePage {
         this._stickyAlert = null; // cylinder 1-4 or null
         this._stickyDismissed = false;
 
+        // ATIS status error hold: _updateAtisStatus() runs every update() tick
+        // (~1Hz) and would otherwise overwrite an error message before the
+        // pilot can read it -- this timestamp holds the error on screen for a
+        // few seconds before the normal override/no-override text resumes.
+        this._atisErrorUntil = 0;
+
         // Previous EGT/CHT for trend arrows
         this._prevEgt = [0, 0, 0, 0];
         this._prevCht = [0, 0, 0, 0];
@@ -1064,6 +1070,9 @@ class EnginePage {
         if (!statusEl) return;
         statusEl.textContent = msg;
         statusEl.className = 'ep-atis-status ep-atis-status--error';
+        // Hold this message through the next several update() ticks (~1Hz)
+        // so it doesn't get overwritten before the pilot can read it.
+        this._atisErrorUntil = Date.now() + 5000;
     }
 
     async _setAtis(key, rawVal) {
@@ -1106,6 +1115,11 @@ class EnginePage {
     }
 
     _updateAtisStatus(d) {
+        // An error/hint message is being held on screen -- don't let this
+        // tick's normal override/no-override text stomp it before the hold
+        // window expires (see _atisStatusError).
+        if (Date.now() < this._atisErrorUntil) return;
+
         const altInput = this._el.querySelector('#ep-atis-alt-input');
         const oatInput = this._el.querySelector('#ep-atis-oat-input');
         const statusEl = this._dom.atisStatus;
@@ -1351,7 +1365,7 @@ class EnginePage {
 }
 .ep-atis-set-btn {
     background: var(--accent);
-    color: #000;
+    color: var(--text-on-accent);
 }
 .ep-atis-clear-btn {
     background: var(--bg-primary);

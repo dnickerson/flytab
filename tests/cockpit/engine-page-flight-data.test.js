@@ -174,4 +174,30 @@ describe('EnginePage — ATIS override', () => {
         await Promise.resolve();
         expect(globalThis.fetch).not.toHaveBeenCalled();
     });
+
+    it('holds an error message through subsequent update() ticks until the hold window expires', async () => {
+        setup();
+        const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+        try {
+            // An out-of-range SET writes an error via _atisStatusError, which
+            // starts a 5s hold window.
+            await page._setAtis('altimeter', '99.0');
+            expect(page._el.querySelector('#ep-atis-status').textContent)
+                .toBe('Altimeter must be 27.0–32.0 inHg');
+
+            // A telemetry tick 1s later must not stomp the error.
+            nowSpy.mockReturnValue(1_001_000);
+            page.update({ ...FRAME, manual_altimeter: null, manual_oat: null });
+            expect(page._el.querySelector('#ep-atis-status').textContent)
+                .toBe('Altimeter must be 27.0–32.0 inHg');
+
+            // Once the hold window has elapsed, normal status text resumes.
+            nowSpy.mockReturnValue(1_006_000);
+            page.update({ ...FRAME, manual_altimeter: null, manual_oat: null });
+            expect(page._el.querySelector('#ep-atis-status').textContent)
+                .toBe('Using calculated OAT / altimeter');
+        } finally {
+            nowSpy.mockRestore();
+        }
+    });
 });
