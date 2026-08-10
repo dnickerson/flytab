@@ -231,6 +231,14 @@ class EnginePage {
             </div>
             <div class="ep-tas-note">TAS is estimated from ground speed + density altitude (no wind correction) \u2014 not a pitot-derived airspeed.</div>
 
+            <!-- Section 7.5: Cruise targets (recommended power/mixture for current density altitude) -->
+            <div class="ep-section-title">CRUISE TARGETS</div>
+            <div class="ep-section ep-target-row">
+                ${this._gaugeHtml('ep-target-ff',   'TARGET FF',  '--.-', 'GPH')}
+                ${this._gaugeHtml('ep-target-pwr',  'TARGET PWR', '--',   '%')}
+                ${this._gaugeHtml('ep-target-mode', 'MODE',       '---',  '')}
+            </div>
+
             <!-- Section 8: Recording indicator -->
             <div class="ep-rec-row" id="ep-rec-row" style="display:none;">
                 <span class="ep-rec-dot"></span>
@@ -677,6 +685,11 @@ class EnginePage {
         this._setText('ep-oat', oat !== 0 ? Math.round(oat) : '--');
         this._setText('ep-gs',  gs > 0 ? Math.round(gs) : '---');
         this._setText('ep-tas', d.tas ? Math.round(d.tas) : '---');
+
+        /* ---- Section 7.5: Cruise targets ---- */
+        this._setText('ep-target-ff',   d.target_fuel_flow ? d.target_fuel_flow.toFixed(1) : '--.-');
+        this._setText('ep-target-pwr',  d.target_power || '--');
+        this._setText('ep-target-mode', d.target_mode || '---');
 
         /* ---- Section 8: Recording indicator ---- */
         this._updateRecording(d);
@@ -1165,6 +1178,13 @@ class EnginePage {
 .ep-flight-row {
     display: grid;
     grid-template-columns: repeat(5, 1fr);
+    gap: 4px;
+}
+
+/* Cruise targets row -- 3 columns */
+.ep-target-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
     gap: 4px;
 }
 

@@ -77,3 +77,21 @@ describe('EnginePage — EST. TAS', () => {
         expect(page._el.querySelector('#ep-tas').textContent).toBe('---');
     });
 });
+
+describe('EnginePage — Cruise Targets', () => {
+    it('renders target fuel flow, power, and mode', () => {
+        setup();
+        page.update({ ...FRAME, target_fuel_flow: 9.2, target_power: 65, target_mode: 'LEAN' });
+        expect(page._el.querySelector('#ep-target-ff').textContent).toBe('9.2');
+        expect(page._el.querySelector('#ep-target-pwr').textContent).toBe('65');
+        expect(page._el.querySelector('#ep-target-mode').textContent).toBe('LEAN');
+    });
+
+    it('shows placeholders when target fields are zero/empty', () => {
+        setup();
+        page.update({ ...FRAME, target_fuel_flow: 0, target_power: 0, target_mode: '' });
+        expect(page._el.querySelector('#ep-target-ff').textContent).toBe('--.-');
+        expect(page._el.querySelector('#ep-target-pwr').textContent).toBe('--');
+        expect(page._el.querySelector('#ep-target-mode').textContent).toBe('---');
+    });
+});

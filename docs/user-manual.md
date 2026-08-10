@@ -147,6 +147,8 @@ The **Engine ML** monitor (MORE → Engine ML) shows the real-time anomaly score
 
 **FLIGHT DATA** now also shows **EST. TAS** — an estimate from ground speed and density altitude (roughly +2%/1000 ft DA), not a wind-corrected true airspeed. Treat it as approximate.
 
+**CRUISE TARGETS** — recommended fuel flow, power setting, and mixture mode for the current density altitude (below 8,000 ft DA: 65% power LEAN; 8,000–12,000 ft: 60%; above 12,000 ft: 55%), aimed at best-economy LOP operation. A guideline, not a limit — cross-check against your own POH power charts.
+
 ---
 
 ### CHK — Checklists
