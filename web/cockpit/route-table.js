@@ -2301,10 +2301,9 @@ class RouteTable {
                     const idx = parseInt(btn.dataset.idx);
                     const plan = plans[idx];
                     if (plan) {
-                        localStorage.setItem('flypi_active_plan', JSON.stringify(plan));
                         overlay.remove();
-                        if (typeof app !== 'undefined' && app._applyPlan) {
-                            await app._applyPlan(plan);
+                        if (typeof app !== 'undefined' && app.applyRouteEdit) {
+                            await app.applyRouteEdit(plan);
                             app.showToast('Plan loaded');
                         }
                     }
