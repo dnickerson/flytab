@@ -1019,15 +1019,23 @@ MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB — largest real upload target today
 def _load_or_create_upload_token():
     try:
         if os.path.exists(UPLOAD_TOKEN_FILE):
+            # Re-assert 0600 even on the existing-file path — a token file
+            # created before this chmod line existed, or restored from a
+            # backup, would otherwise stay at whatever mode it has forever.
+            os.chmod(UPLOAD_TOKEN_FILE, 0o600)
             with open(UPLOAD_TOKEN_FILE, 'r') as f:
                 tok = f.read().strip()
                 if tok:
                     return tok
         os.makedirs(os.path.dirname(UPLOAD_TOKEN_FILE), exist_ok=True)
         tok = secrets.token_hex(32)
-        with open(UPLOAD_TOKEN_FILE, 'w') as f:
+        # Create with 0600 from the first byte on disk -- open(..., 'w') then
+        # chmod() leaves a window where the file exists at the umask-derived
+        # default (typically 0644, world-readable) with the token already
+        # written into it.
+        fd = os.open(UPLOAD_TOKEN_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, 'w') as f:
             f.write(tok)
-        os.chmod(UPLOAD_TOKEN_FILE, 0o600)
         log(f"Generated new /api/upload token at {UPLOAD_TOKEN_FILE}")
         return tok
     except Exception as e:
@@ -3288,15 +3296,10 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
 
     <div class="files-section" style="margin-top:10px;">
         <div class="section-title">Upload Script Files</div>
-        <div class="upload-section">
-            <input type="file" id="uploadInput" multiple accept=".py,.js,.html,.css,.json,.md" style="display:none;">
-            <button class="btn btn-start" onclick="document.getElementById('uploadInput').click()">SELECT FILES</button>
-            <span id="uploadStatus" style="margin-left:10px;font-size:11px;"></span>
-        </div>
-        <div id="uploadPreview" style="font-size:11px;color:#666;margin-top:6px;"></div>
-        <button id="uploadBtn" class="btn btn-stop" onclick="uploadFiles()" style="display:none;margin-top:8px;">UPLOAD</button>
-        <div style="font-size:10px;color:#999;margin-top:6px;">
-            Allowed: .py, .js, .html, .css, .json, .md
+        <div style="font-size:11px;color:#999;">
+            Disabled -- /api/upload now requires a token this page has no way to
+            supply without embedding a secret in page source. Use
+            <code>bash deploy-pi.sh</code> (the actual deploy path) instead.
         </div>
     </div>
 
