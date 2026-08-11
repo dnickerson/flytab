@@ -307,9 +307,15 @@ The `anomaly_v2_metadata.json` `"quantization"` field is documentation only and 
 
 ### Delegate Selection on Snapdragon 8 Gen 3 (TB520FU)
 
-NNAPI and GPU delegates are rejected at load time (`"static-sized tensors only, graph has dynamic tensors"`). CPU with XNNPACK is the active delegate. Inference latency: **~2.5ms** per 60-sample window.
+**As of v10.31, NNAPI/NPU is the active delegate.** Confirmed on-device (2026-08-11): `InferenceEngine: NNAPI delegate loaded (warmup: 0ms → NPU (NNAPI))`, real inference latency **~1.4ms** per 60-sample window (down from the prior CPU/XNNPACK path's ~2.5ms).
 
-If a new model eliminates dynamic-shaped tensors, NNAPI may work — the warmup in `tryQnnDelegate()` handles it automatically. Check logcat on first launch after any model change:
+The blocker was never runtime code — `tryQnnDelegate()`'s dtype detection and delegate selection were already dynamic and NPU-ready. It was the model graph: the Keras `Input` layer had no fixed batch size (`keras.Input(shape=(WINDOW_SIZE, n_features))`, `batch_size=None`), and `export_tflite()` converted straight from that Keras model, so the exported `.tflite`'s `shape_signature` carried a dynamic (`-1`) batch dim through 41 of 91 tensors. NNAPI rejects any graph with a dynamic-shaped tensor outright (`"static-sized tensors only, graph has dynamic tensors"`).
+
+Fixed by re-exporting the same trained weights (no retraining) through a fixed batch-1 signature: `keras.export.ExportArchive` + explicit `input_signature=[tf.TensorSpec(shape=(1, WINDOW_SIZE, n_features), dtype=tf.float32)]`, then `TFLiteConverter.from_saved_model()` instead of `TFLiteConverter.from_keras_model(model)`. Result: 0 dynamic tensors, metadata unchanged, inference output bit-identical to the prior model. This lives in `~/engine_analysis/train_anomaly_model.py`'s `export_tflite()` (commit `89d9aa6`) — **do not revert to `from_keras_model()`**, it silently reintroduces the dynamic batch dim and drops back to CPU/XNNPACK.
+
+A dead end worth avoiding if re-deriving this: `tf.function(lambda x: model(x))` + `TFLiteConverter.from_concrete_functions()` looks like a simpler fix for the same dynamic-batch problem, but on this TF/Keras version it silently drops ~95% of the model's weights and produces all-NaN inference with no conversion error. Use `ExportArchive`, not that pattern.
+
+Check logcat on first launch after any model change:
 ```
 InferenceEngine: NNAPI delegate loaded (warmup: 1ms → NPU (NNAPI))  ← NPU active
 InferenceEngine: Using CPU delegate                                   ← NNAPI rejected
