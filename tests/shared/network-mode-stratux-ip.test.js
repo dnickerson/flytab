@@ -13,13 +13,15 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const read = (p) => readFileSync(join(__dirname, '../../', p), 'utf8');
 
 describe('Stratux getStatus probes read Settings.stratuxIp (Finding 7a)', () => {
-    it('network-mode.js builds the probe URL from Settings.stratuxIp', () => {
+    it('network-mode.js builds the probe URL from Settings.stratuxIp, with no redundant hardcoded-IP fallback', () => {
         const src = read('web/shared/network-mode.js');
-        expect(src).toMatch(/fetch\(`http:\/\/\$\{Settings\.stratuxIp \|\| '192\.168\.10\.1'\}\/getStatus`/);
+        expect(src).toMatch(/fetch\(`http:\/\/\$\{Settings\.stratuxIp\}\/getStatus`/);
+        expect(src).not.toMatch(/Settings\.stratuxIp \|\| '192\.168\.10\.1'/);
     });
 
-    it('device-status.js builds the probe URL from Settings.stratuxIp', () => {
+    it('device-status.js builds the probe URL from Settings.stratuxIp, with no redundant hardcoded-IP fallback', () => {
         const src = read('web/cockpit/device-status.js');
-        expect(src).toMatch(/fetch\(`http:\/\/\$\{Settings\.stratuxIp \|\| '192\.168\.10\.1'\}\/getStatus`/);
+        expect(src).toMatch(/fetch\(`http:\/\/\$\{Settings\.stratuxIp\}\/getStatus`/);
+        expect(src).not.toMatch(/Settings\.stratuxIp \|\| '192\.168\.10\.1'/);
     });
 });

@@ -46,7 +46,7 @@ class NetworkMode extends EventTarget {
 
         // Try Stratux — if reachable, we're in the aircraft
         try {
-            const r = await fetch(`http://${Settings.stratuxIp || '192.168.10.1'}/getStatus`, {
+            const r = await fetch(`http://${Settings.stratuxIp}/getStatus`, {
                 signal: AbortSignal.timeout(2000),
             });
             if (r.ok) return 'flight';
