@@ -1,6 +1,15 @@
 'use strict';
 
 const TripStore = (() => {
+    // 'flypi'/'flypi-flights' are legacy names from the deprecated FlyPi/iPad
+    // predecessor product (see CLAUDE.md) — NOT evidence of a current iPad or
+    // FlyPi system. This database, and the 'flypi_logbook'/'flypi_ml_logs'
+    // stores below, hold real pilot logbook + EngineML history on installed
+    // tablets. logbook.js independently hardcodes these same three literals
+    // (IDB_NAME/IDB_STORE/IDB_ML_STORE) rather than importing them from here —
+    // any rename must update both files in exact sync, respect DB_VERSION's
+    // upgrade path, and migrate existing records (including the stored
+    // `source: 'flypi'` value logbook.js writes into entries) or data is lost.
     const DB_NAME = 'flypi-flights';
     const DB_VERSION = 5;
     const STORE = 'trips';

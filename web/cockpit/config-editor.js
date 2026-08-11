@@ -1,5 +1,5 @@
 /**
- * FlyPi — Config Editor Overlay
+ * FlyTab — Config Editor Overlay
  * Editable view of cockpit-config.json and aircraft-config.json.
  */
 
@@ -44,13 +44,23 @@ class ConfigEditor {
                 fetch('cockpit-config.json', { signal: AbortSignal.timeout(3000) }),
                 fetch('aircraft-config.json', { signal: AbortSignal.timeout(3000) }),
             ]);
-            this._cockpitConfig = cockpitResp.ok ? await cockpitResp.json() : {};
-            this._aircraftConfig = aircraftResp.ok ? await aircraftResp.json() : {};
+            // Pristine bundle, kept separate from the editable/merged view below —
+            // _save() diffs against this so only genuinely-edited fields get persisted
+            // (#112). Must stay untouched by anything _collectValues() does.
+            this._cockpitBundle  = cockpitResp.ok ? await cockpitResp.json() : {};
+            this._aircraftBundle = aircraftResp.ok ? await aircraftResp.json() : {};
 
             // Merge user-saved overrides from localStorage on top of bundled defaults
             // so the editor shows the user's actual saved settings, not just bundled values.
-            this._cockpitConfig = CockpitConfig._mergeUserOverrides(this._cockpitConfig, 'flypi_user_cockpit');
-            this._aircraftConfig = CockpitConfig._mergeUserOverrides(this._aircraftConfig, 'flypi_user_aircraft');
+            // Deep-cloned after merging: _mergeUserOverrides only shallow-copies nested
+            // objects for keys that ARE overridden, so an un-overridden nested object
+            // (e.g. `performance` on a first-time edit) would otherwise be the SAME
+            // object reference as this._aircraftBundle.performance — _collectValues()
+            // mutating it in place would corrupt the pristine bundle it's diffed against.
+            this._cockpitConfig = JSON.parse(JSON.stringify(
+                CockpitConfig._mergeUserOverrides(this._cockpitBundle, 'flypi_user_cockpit')));
+            this._aircraftConfig = JSON.parse(JSON.stringify(
+                CockpitConfig._mergeUserOverrides(this._aircraftBundle, 'flypi_user_aircraft')));
 
             this._render();
         } catch (err) {
@@ -271,7 +281,16 @@ class ConfigEditor {
             'type': { type: 'text', label: 'Aircraft Type' },
             'cruise_speed_kt': { type: 'number', label: 'Cruise TAS (kt)', min: 50, max: 300 },
             'fuel_capacity_gal': { type: 'number', label: 'Fuel Capacity (gal)', min: 10, max: 200, step: 0.5 },
-            'cruise_gph': { type: 'number', label: 'Fuel Burn (gph)', min: 1, max: 50, step: 0.1 },
+            // climb_gph and descent_gph drive route-table and planning-library fuel
+            // projections but were previously absent from this editor. SAVE CONFIGURATION
+            // writes the WHOLE performance block to flypi_user_aircraft, so an un-editable
+            // key got frozen into localStorage and silently shadowed every later change to
+            // the bundled aircraft-config.json — with no in-app way to see or correct it.
+            'cruise_gph': { type: 'number', label: 'Cruise Fuel Burn (gph)', min: 1, max: 50, step: 0.1 },
+            'climb_gph': { type: 'number', label: 'Climb Fuel Burn (gph)', min: 1, max: 50, step: 0.1 },
+            'descent_gph': { type: 'number', label: 'Descent Fuel Burn (gph)', min: 1, max: 50, step: 0.1 },
+            'reserve_gal': { type: 'number', label: 'Reserve Fuel (gal)', min: 0, max: 50, step: 0.1 },
+            'fuel_sender_accurate_below_gal': { type: 'number', label: 'Fuel Sender Accuracy Threshold (gal)', min: 0, max: 50, step: 0.1 },
             'vs0_kt': { type: 'number', label: 'Vs0 (kt)', min: 20, max: 100 },
             'vs1_kt': { type: 'number', label: 'Vs1 (kt)', min: 20, max: 100 },
             'vfe_kt': { type: 'number', label: 'Vfe (kt)', min: 40, max: 200 },
@@ -290,7 +309,7 @@ class ConfigEditor {
 
         body.innerHTML = sections.join('');
 
-        // Bind save/reload — touchstart + click for iPad
+        // Bind save/reload — touchstart + click for Android touch reliability
         wireTap(body.querySelector('.ce-save-btn'), () => this._save());
         wireTap(body.querySelector('.ce-reload-btn'), () => this._load());
         wireTap(body.querySelector('.ce-update-btn'), () => this._downloadAndInstall());
@@ -466,9 +485,19 @@ class ConfigEditor {
 
             // FlyTab: save user overrides to localStorage (bundled files are read-only).
             // Uses dedicated keys so _fetchJson's offline cache doesn't overwrite user edits.
+            //
+            // Persist only what actually differs from the bundle (#112), not the whole
+            // edited object — every field the pilot never touched has a value equal to
+            // the bundle it was pre-filled from, so diffing drops it automatically and
+            // a future bundled correction to that field takes effect. A field the pilot
+            // DID change differs from the bundle and is kept. In-memory config (used by
+            // the rest of the app) stays the full merged view; only what's WRITTEN to
+            // localStorage is minimal.
             try {
-                localStorage.setItem('flypi_user_cockpit', JSON.stringify(this._cockpitConfig));
-                localStorage.setItem('flypi_user_aircraft', JSON.stringify(this._aircraftConfig));
+                const cockpitOverride  = CockpitConfig._diffAgainstBundle(this._cockpitConfig, this._cockpitBundle);
+                const aircraftOverride = CockpitConfig._diffAgainstBundle(this._aircraftConfig, this._aircraftBundle);
+                localStorage.setItem('flypi_user_cockpit', JSON.stringify(cockpitOverride));
+                localStorage.setItem('flypi_user_aircraft', JSON.stringify(aircraftOverride));
                 // Update in-memory config immediately
                 if (typeof CockpitConfig !== 'undefined') {
                     CockpitConfig._config = this._cockpitConfig;

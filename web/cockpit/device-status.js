@@ -1,5 +1,5 @@
 /**
- * FlyPi — Device Status Panel
+ * FlyTab — Device Status Panel
  * Shows connection state of Stratux, GPS, engine monitor, FastAPI.
  */
 
@@ -113,7 +113,7 @@ class DeviceStatus {
 
     async _checkPi() {
         try {
-            const r = await fetch('http://192.168.10.1/getStatus', {
+            const r = await fetch(`http://${Settings.stratuxIp}/getStatus`, {
                 cache: 'no-store',
                 signal: AbortSignal.timeout(3000),
             });

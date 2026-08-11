@@ -28,6 +28,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(EngineMLPlugin.class);
         registerPlugin(SftpPlugin.class);
         registerPlugin(StratuxWsPlugin.class);
+        registerPlugin(EngineWsPlugin.class);
         registerPlugin(StratuxUdpPlugin.class);
         super.onCreate(savedInstanceState);
 

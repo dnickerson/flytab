@@ -1,5 +1,5 @@
 /**
- * FlyPi -- Engine Page (Full-Screen Instrumentation)
+ * FlyTab -- Engine Page (Full-Screen Instrumentation)
  * Full-screen overlay mirroring the capture_v5 engine_monitor.py layout.
  * Opens over the map when [ENG] button is tapped; closes with [X].
  *
@@ -32,6 +32,12 @@ class EnginePage {
         this._stickyAlert = null; // cylinder 1-4 or null
         this._stickyDismissed = false;
 
+        // ATIS status error hold: _updateAtisStatus() runs every update() tick
+        // (~1Hz) and would otherwise overwrite an error message before the
+        // pilot can read it -- this timestamp holds the error on screen for a
+        // few seconds before the normal override/no-override text resumes.
+        this._atisErrorUntil = 0;
+
         // Previous EGT/CHT for trend arrows
         this._prevEgt = [0, 0, 0, 0];
         this._prevCht = [0, 0, 0, 0];
@@ -50,9 +56,16 @@ class EnginePage {
             oilPressDanger: 100,     // red above — Lycoming redline
             carbTempCaution: 40,    // icing range upper (degrees F)
             carbTempDanger: -15,    // icing range lower (degrees F)
-            fuelCapacity: 34,
-            fuelLowGal: 8,
-            fuelCriticalGal: 4,
+            // Fallback only. The canonical capacity lives in aircraft-config.json
+            // (performance.fuel_capacity_gal) and is read in _loadConfig(). 36 gal =
+            // 2 x 18 gal tanks; the Pi's old 34 gal "usable capacity" is deprecated.
+            fuelCapacity: 36,
+            fuelCautionGal: 8,
+            fuelWarningGal: 4,
+            // Above this per-tank level the EDM senders on this airframe read a flat/
+            // invalid value. Canonical value: aircraft-config.json
+            // performance.fuel_sender_accurate_below_gal (read in _loadConfig()).
+            senderAccurateBelowGal: 12,
             trendChartMinutes: 30,
             stickyValveWarmupMin: 10,
             stickyValveEgtRatio: 0.50,
@@ -83,6 +96,15 @@ class EnginePage {
         </div>
 
         <div class="ep-container">
+
+            <!-- Pi contract mismatch banner (#113) -->
+            <div class="ep-contract-banner" id="ep-contract-banner" style="display:none;">
+                <div class="ep-contract-text">
+                    PI OUT OF DATE — this build needs contract <span id="ep-contract-required">?</span>,
+                    connected Pi (v<span id="ep-contract-pi-version">?</span>) reports <span id="ep-contract-pi-contract">?</span>.
+                    Run <code>bash deploy-pi.sh</code>.
+                </div>
+            </div>
 
             <!-- Sticky valve warning banner -->
             <div class="ep-sticky-banner" id="ep-sticky-banner" style="display:none;">
@@ -171,14 +193,18 @@ class EnginePage {
                 ${this._gaugeHtml('ep-fuel-end',  'ENDURANCE',   '-:--', 'H:MM')}
                 ${this._gaugeHtml('ep-fuel-rng',  'RANGE',       '---',  'NM')}
             </div>
+            <div class="ep-fuel-stale" id="ep-fuel-stale" style="display:none;">
+                UNCONFIRMED &mdash; TANK STATE NOT UPDATED IN 45+ MIN. REMAINING MAY READ HIGH; CONFIRM FUEL.
+            </div>
+            <div class="ep-tank-source-note">LEFT/RIGHT below are raw EDM sender readings, not the tracked figure above.</div>
             <div class="ep-fuel-tanks">
                 <div class="ep-tank">
-                    <div class="ep-tank-label">LEFT</div>
+                    <div class="ep-tank-label">LEFT (EDM SENDER)</div>
                     <div class="ep-tank-bar-wrap"><div class="ep-tank-bar" id="ep-tank-l"></div></div>
                     <div class="ep-tank-val" id="ep-tank-l-val">--.-</div>
                 </div>
                 <div class="ep-tank">
-                    <div class="ep-tank-label">RIGHT</div>
+                    <div class="ep-tank-label">RIGHT (EDM SENDER)</div>
                     <div class="ep-tank-bar-wrap"><div class="ep-tank-bar" id="ep-tank-r"></div></div>
                     <div class="ep-tank-val" id="ep-tank-r-val">--.-</div>
                 </div>
@@ -207,6 +233,34 @@ class EnginePage {
                 ${this._gaugeHtml('ep-da',   'DENS ALT',  '-----', 'ft')}
                 ${this._gaugeHtml('ep-oat',  'OAT',       '--',    '\u00B0C')}
                 ${this._gaugeHtml('ep-gs',   'GND SPD',   '---',   'kts')}
+                ${this._gaugeHtml('ep-tas',  'EST. TAS',  '---',   'kts')}
+            </div>
+            <div class="ep-tas-note">TAS is estimated from ground speed + density altitude (no wind correction) \u2014 not a pitot-derived airspeed.</div>
+
+            <!-- Section 7.5: Cruise targets (recommended power/mixture for current density altitude) -->
+            <div class="ep-section-title">CRUISE TARGETS</div>
+            <div class="ep-section ep-target-row">
+                ${this._gaugeHtml('ep-target-ff',   'TARGET FF',  '--.-', 'GPH')}
+                ${this._gaugeHtml('ep-target-pwr',  'TARGET PWR', '--',   '%')}
+                ${this._gaugeHtml('ep-target-mode', 'MODE',       '---',  '')}
+            </div>
+
+            <!-- Section 7.6: ATIS manual override for altimeter/OAT (feeds density alt + TAS calcs above) -->
+            <div class="ep-section-title">ATIS OVERRIDE</div>
+            <div class="ep-atis-panel">
+                <div class="ep-atis-row">
+                    <span class="ep-atis-label">ALTIMETER (inHg)</span>
+                    <input type="number" class="ep-atis-input" id="ep-atis-alt-input" placeholder="29.92" min="27" max="32" step="0.01" inputmode="decimal">
+                    <button class="ep-atis-btn ep-atis-set-btn" id="ep-atis-alt-set">SET</button>
+                    <button class="ep-atis-btn ep-atis-clear-btn" id="ep-atis-alt-clear">CLEAR</button>
+                </div>
+                <div class="ep-atis-row">
+                    <span class="ep-atis-label">OAT (°C)</span>
+                    <input type="number" class="ep-atis-input" id="ep-atis-oat-input" placeholder="15" min="-40" max="50" step="1" inputmode="decimal">
+                    <button class="ep-atis-btn ep-atis-set-btn" id="ep-atis-oat-set">SET</button>
+                    <button class="ep-atis-btn ep-atis-clear-btn" id="ep-atis-oat-clear">CLEAR</button>
+                </div>
+                <div class="ep-atis-status" id="ep-atis-status">Using calculated OAT / altimeter</div>
             </div>
 
             <!-- Section 8: Recording indicator -->
@@ -223,7 +277,7 @@ class EnginePage {
         // even before the engine page is first opened.
         this._tick();
 
-        // Wire close button — touchstart + click for iPad
+        // Wire close button — touchstart + click for Android touch reliability
         wireTap(this._el.querySelector('#ep-close'), () => this.hide());
 
         // Wire capture stop button
@@ -234,6 +288,27 @@ class EnginePage {
             this._stickyDismissed = true;
             this._el.querySelector('#ep-sticky-banner').style.display = 'none';
         });
+
+        // Wire ATIS override controls
+        // SET must never fall through to CLEAR semantics — an empty/unparseable
+        // input is a no-op (with a status hint), not a null POST. See _setAtis,
+        // which is also called directly by CLEAR with an explicit null and must
+        // keep accepting that.
+        const atisAltInput = this._el.querySelector('#ep-atis-alt-input');
+        const atisOatInput = this._el.querySelector('#ep-atis-oat-input');
+        const wireAtisSet = (btn, input, key) => {
+            wireTap(btn, () => {
+                if (input.value === '') {
+                    this._atisStatusError('Enter a value first');
+                    return;
+                }
+                this._setAtis(key, input.value);
+            });
+        };
+        wireAtisSet(this._el.querySelector('#ep-atis-alt-set'), atisAltInput, 'altimeter');
+        wireAtisSet(this._el.querySelector('#ep-atis-oat-set'), atisOatInput, 'oat');
+        wireTap(this._el.querySelector('#ep-atis-alt-clear'), () => { atisAltInput.value = ''; this._setAtis('altimeter', null); });
+        wireTap(this._el.querySelector('#ep-atis-oat-clear'), () => { atisOatInput.value = ''; this._setAtis('oat', null); });
 
         // Wire chart duration selectors
         this._el.querySelector('#ep-chart-dur').addEventListener('change', (e) => {
@@ -258,8 +333,14 @@ class EnginePage {
             dataAge: this._el.querySelector('#ep-data-age'),
             mix: this._el.querySelector('#ep-mix'),
             fuelBar: this._el.querySelector('#ep-fuel-bar'),
+            fuelRem: this._el.querySelector('#ep-fuel-rem'),
+            fuelStale: this._el.querySelector('#ep-fuel-stale'),
             stickyBanner: this._el.querySelector('#ep-sticky-banner'),
             stickyCyl: this._el.querySelector('#ep-sticky-cyl'),
+            contractBanner: this._el.querySelector('#ep-contract-banner'),
+            contractRequired: this._el.querySelector('#ep-contract-required'),
+            contractPiVersion: this._el.querySelector('#ep-contract-pi-version'),
+            contractPiContract: this._el.querySelector('#ep-contract-pi-contract'),
             recRow: this._el.querySelector('#ep-rec-row'),
             captureStatus: this._el.querySelector('#ep-capture-status'),
             captureStop: this._el.querySelector('#ep-capture-stop'),
@@ -270,6 +351,7 @@ class EnginePage {
             edmTotal: this._el.querySelector('#ep-edm-total'),
             ticVar: this._el.querySelector('#ep-tic-var'),
             ticGrade: this._el.querySelector('#ep-tic-grade'),
+            atisStatus: this._el.querySelector('#ep-atis-status'),
         };
         // Cache per-cylinder elements
         for (let i = 1; i <= 4; i++) {
@@ -331,6 +413,19 @@ class EnginePage {
                 if (c) Object.assign(this._cfg, c);
             }
         } catch (_) { /* ignore */ }
+
+        // Aircraft-level values come from aircraft-config.json, the single source of
+        // truth for the airframe (the aircraft page edits it). Applied AFTER the
+        // enginePage block on purpose: a UI-preferences key must not be able to fork
+        // the airframe's real fuel capacity. Falls back to the constructor defaults.
+        try {
+            if (typeof CockpitConfig !== 'undefined' && CockpitConfig.aircraft) {
+                const cap = CockpitConfig.aircraft('performance.fuel_capacity_gal');
+                if (cap > 0) this._cfg.fuelCapacity = cap;
+                const senderLimit = CockpitConfig.aircraft('performance.fuel_sender_accurate_below_gal');
+                if (senderLimit > 0) this._cfg.senderAccurateBelowGal = senderLimit;
+            }
+        } catch (_) { /* keep fallbacks */ }
 
         // Sync both dropdowns to config
         const durStr = String(this._cfg.trendChartMinutes);
@@ -423,8 +518,40 @@ class EnginePage {
         const oat       = d.oat ?? 0;
         const gs        = d.speed_kts ?? d.ground_speed ?? 0;
 
-        const gallonsRem = d.gallons_rem ?? d.fuel_remaining_gal ?? d.Gallons_Rem ?? d.Fuel_Remaining ?? d.fuel_remaining ?? 0;
-        const fuelUsed   = d.flight_fuel_used ?? 0;
+        // Canonical live fuel read (manual override > tracked tank state > capacity).
+        // A `capacity` source means nothing is actually being tracked — it is a planning
+        // default, not a measurement. Showing full tanks on a live instrument would tell
+        // the pilot there is more fuel than is known to exist, so fall through to this
+        // page's existing "no data" placeholders instead.
+        const fuelRead = (typeof FuelState !== 'undefined')
+            ? FuelState.getCurrentFuel()
+            : { gallons: 0, source: 'none' };
+        // The SOURCE, not the number, decides whether this panel has fuel data at all.
+        // Gating on `gallonsRem > 0` conflated two different states: "nothing is being
+        // tracked" and "the tanks are dry". Those must never render the same on a fuel
+        // instrument, so every sink below gates on `fuelTracked` instead.
+        const fuelTracked = (fuelRead.source === 'manual' || fuelRead.source === 'tank_state');
+        const gallonsRem = fuelTracked ? fuelRead.gallons : 0;
+        // DECISION (2026-07-31, Dana): a tracked figure that FuelTankState considers
+        // stale (>45 min since the last integrated sample, i.e. needsConfirmation())
+        // is still SHOWN, but explicitly marked unconfirmed. Rationale: blanking it
+        // would throw away the pilot's last known-good quantity at exactly the moment
+        // he most needs a starting point, while showing it unmarked would let a number
+        // that has not been updated in 45+ minutes read as a live measurement. The
+        // stale figure always reads HIGH (fuel burned during the gap is not
+        // subtracted), so it must never be presented as a measurement.
+        // The predicate itself lives on FuelState.getCurrentFuel() (SDD Task 14) so
+        // this page, the instrument strip and the route table cannot disagree about
+        // whether a figure is trustworthy; it is already false for `manual` (the
+        // pilot's own entry) and `capacity` (nothing tracked).
+        const fuelStale = !!fuelRead.stale;
+        // The EDM's own totalizer (EDM field 12). Used ONLY by the TIC vs EDM
+        // cross-check row below, whose whole purpose is to surface disagreement
+        // between the tic-mark measurement and the EDM — it must stay an EDM read.
+        const edmFuelRem = d.gallons_rem ?? d.fuel_remaining_gal ?? d.Gallons_Rem ?? d.Fuel_Remaining ?? d.fuel_remaining ?? 0;
+        // engine_monitor.get_status() nests the Pi fuel tracker under `fuel`;
+        // there is no top-level flight_fuel_used.
+        const fuelUsed   = d.fuel?.flight_fuel_used ?? 0;
         const fuelL      = d.fuel_l1 ?? d.Fuel_L1 ?? d.Fuel_Left ?? d.edm_fuel_left ?? 0;
         const fuelR      = d.fuel_l2 ?? d.Fuel_L2 ?? d.Fuel_Right ?? d.edm_fuel_right ?? 0;
 
@@ -525,10 +652,16 @@ class EnginePage {
         }
 
         /* ---- Section 5: Fuel ---- */
-        this._setText('ep-fuel-rem', gallonsRem > 0 ? gallonsRem.toFixed(1) : '--.-');
+        this._setText('ep-fuel-rem', fuelTracked ? gallonsRem.toFixed(1) : '--.-');
         this._setText('ep-fuel-used', fuelUsed > 0 ? fuelUsed.toFixed(1) : '--.-');
+        if (this._dom.fuelRem) {
+            this._dom.fuelRem.className = 'ep-gauge-value' + (fuelStale ? ' ep-unconfirmed' : '');
+        }
+        if (this._dom.fuelStale) {
+            this._dom.fuelStale.style.display = fuelStale ? '' : 'none';
+        }
 
-        if (fuelFlow > 0 && gallonsRem > 0) {
+        if (fuelFlow > 0 && fuelTracked) {
             const endH = gallonsRem / fuelFlow;
             const h = Math.floor(endH);
             const m = Math.round((endH - h) * 60);
@@ -537,34 +670,51 @@ class EnginePage {
             this._setText('ep-fuel-end', '-:--');
         }
 
-        if (gs > 0 && fuelFlow > 0 && gallonsRem > 0) {
+        if (gs > 0 && fuelFlow > 0 && fuelTracked) {
             const nmpg = gs / fuelFlow;
             this._setText('ep-fuel-rng', Math.round(gallonsRem * nmpg));
         } else {
             this._setText('ep-fuel-rng', '---');
         }
 
-        // Tank bars
+        // Tank bars — these are RAW EDM SENDER readings, a different (and less
+        // trustworthy) source than the tracked REMAINING figure above, so they are
+        // labelled as such in the UI and can legitimately disagree with it. Same
+        // suppression rule as fuel-tanks.js `_updateSenderDisplay`: above the
+        // configured accurate-below level the sender reads a flat/invalid value and
+        // must not be shown as if it were a real cross-check.
         const cap = this._cfg.fuelCapacity;
         const halfCap = cap / 2;
-        this._setTankBar('ep-tank-l', fuelL, halfCap);
-        this._setTankBar('ep-tank-r', fuelR, halfCap);
-        this._setText('ep-tank-l-val', fuelL > 0 ? fuelL.toFixed(1) + ' gal' : '--.-');
-        this._setText('ep-tank-r-val', fuelR > 0 ? fuelR.toFixed(1) + ' gal' : '--.-');
+        const senderLimit = this._cfg.senderAccurateBelowGal;
+        let trackedTanks = null;
+        try {
+            if (typeof FuelTankState !== 'undefined') trackedTanks = FuelTankState.getState();
+        } catch (_) { trackedTanks = null; }
+        const lSenderValid = !trackedTanks || trackedTanks.left_gal <= senderLimit;
+        const rSenderValid = !trackedTanks || trackedTanks.right_gal <= senderLimit;
+        this._setTankBar('ep-tank-l', fuelL, halfCap, !lSenderValid);
+        this._setTankBar('ep-tank-r', fuelR, halfCap, !rSenderValid);
+        this._setText('ep-tank-l-val', !lSenderValid ? '—'
+            : (fuelL > 0 ? fuelL.toFixed(1) + ' gal' : '--.-'));
+        this._setText('ep-tank-r-val', !rSenderValid ? '—'
+            : (fuelR > 0 ? fuelR.toFixed(1) + ' gal' : '--.-'));
 
-        // Fuel bar
-        const fuelPct = cap > 0 ? Math.min(100, (gallonsRem / cap) * 100) : 0;
+        // Fuel bar — driven by the same canonical read as REMAINING. With no tracked
+        // state there is no percentage to draw: empty bar, placeholder label, and NO
+        // caution/warning colour (an untracked panel is not a low-fuel condition).
+        const fuelPct = (fuelTracked && cap > 0) ? Math.min(100, (gallonsRem / cap) * 100) : 0;
         if (this._dom.fuelBar) {
             this._dom.fuelBar.style.width = fuelPct + '%';
-            this._dom.fuelBar.className = 'ep-fuel-bar' +
-                (gallonsRem <= this._cfg.fuelCriticalGal ? ' critical' :
-                 gallonsRem <= this._cfg.fuelLowGal ? ' low' : '');
+            this._dom.fuelBar.className = 'ep-fuel-bar' + (!fuelTracked ? '' :
+                gallonsRem <= this._cfg.fuelWarningGal ? ' critical' :
+                gallonsRem <= this._cfg.fuelCautionGal ? ' low' : '');
         }
-        this._setText('ep-fuel-bar-label',
-            `${Math.round(fuelPct)}% (${gallonsRem.toFixed(1)}/${cap} gal)`);
+        this._setText('ep-fuel-bar-label', fuelTracked
+            ? `${Math.round(fuelPct)}% (${gallonsRem.toFixed(1)}/${cap} gal)`
+            : `--% (--.-/${cap} gal)`);
 
         /* ---- TIC vs EDM variance ---- */
-        this._updateTicEdm(gallonsRem);
+        this._updateTicEdm(edmFuelRem);
 
         /* ---- Section 6: Efficiency ---- */
         if (fuelFlow > 0 && gs > 40) {
@@ -580,12 +730,22 @@ class EnginePage {
         this._setText('ep-da',  densAlt !== 0 ? Math.round(densAlt) : '-----');
         this._setText('ep-oat', oat !== 0 ? Math.round(oat) : '--');
         this._setText('ep-gs',  gs > 0 ? Math.round(gs) : '---');
+        this._setText('ep-tas', d.tas ? Math.round(d.tas) : '---');
+
+        /* ---- Section 7.5: Cruise targets ---- */
+        this._setText('ep-target-ff',   d.target_fuel_flow ? d.target_fuel_flow.toFixed(1) : '--.-');
+        this._setText('ep-target-pwr',  d.target_power || '--');
+        this._setText('ep-target-mode', d.target_mode || '---');
+        this._updateAtisStatus(d);
 
         /* ---- Section 8: Recording indicator ---- */
         this._updateRecording(d);
 
         /* ---- Section 9: Sticky valve check ---- */
         this._checkStickyValve(rpm, egt);
+
+        /* ---- Section 10: Pi contract check (#113) ---- */
+        this._checkPiContract(d);
 
         /* ---- Render trend charts ---- */
         this._renderEgtChart();
@@ -655,6 +815,29 @@ class EnginePage {
             this._dom.stickyBanner.style.display = 'flex';
         } else {
             this._dom.stickyBanner.style.display = 'none';
+        }
+    }
+
+    /**
+     * Pi contract mismatch banner (#113). Gated on a LIVE connection, not just
+     * whatever the last cached reading happened to report — same rule as
+     * EngineClient.piContractOld, so this banner and the status-bar badge
+     * never disagree about whether a warning is currently showing. Engine
+     * data keeps displaying regardless; this only ever adds a banner, never
+     * blocks anything.
+     */
+    _checkPiContract(d) {
+        if (!this._dom.contractBanner) return;
+        const connected = window.enginePanel?.connected === true;
+        const contract = d.api_contract ?? 0;
+        const isOld = connected && contract < EngineClient.MIN_PI_CONTRACT;
+        if (isOld) {
+            this._dom.contractRequired.textContent = EngineClient.MIN_PI_CONTRACT;
+            this._dom.contractPiVersion.textContent = d.version ?? '?';
+            this._dom.contractPiContract.textContent = contract;
+            this._dom.contractBanner.style.display = 'flex';
+        } else {
+            this._dom.contractBanner.style.display = 'none';
         }
     }
 
@@ -840,7 +1023,9 @@ class EnginePage {
         const btn = this._dom.captureStop;
         if (btn) { btn.disabled = true; btn.textContent = 'Stopping…'; }
         try {
-            const resp = await fetch('http://192.168.10.1:8080/api/stop', { method: 'POST', signal: AbortSignal.timeout(5000) });
+            const base = this._engineBaseUrl();
+            if (!base) throw new Error('Engine monitor IP unavailable');
+            const resp = await fetch(`${base}/api/stop`, { method: 'POST', signal: AbortSignal.timeout(5000) });
             const data = await resp.json().catch(() => ({}));
             if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
             if (this._dom.captureStatus) {
@@ -859,7 +1044,7 @@ class EnginePage {
                     dlBtn.style.borderColor = 'var(--status-ok)';
                     this._dom.captureStatus.parentNode.insertBefore(dlBtn, this._dom.captureStop);
                     wireTap(dlBtn, () => {
-                        window.flightSync.downloadToiPad(fname);
+                        window.flightSync.downloadToDevice(fname);
                         dlBtn.textContent = '✓ Saved';
                         dlBtn.disabled = true;
                     });
@@ -873,6 +1058,96 @@ class EnginePage {
             if (btn) btn.disabled = false;
         }
         if (btn) btn.textContent = 'STOP & SAVE';
+    }
+
+    // Shared with fuel-overlay.js via EngineClient.baseUrl() (issue #128) —
+    // do not reintroduce a per-file copy of this logic.
+    _engineBaseUrl() {
+        return EngineClient.baseUrl();
+    }
+
+    _atisStatusError(msg) {
+        const statusEl = this._dom.atisStatus;
+        if (!statusEl) return;
+        statusEl.textContent = msg;
+        statusEl.className = 'ep-atis-status ep-atis-status--error';
+        // Hold this message through the next several update() ticks (~1Hz)
+        // so it doesn't get overwritten before the pilot can read it.
+        this._atisErrorUntil = Date.now() + 5000;
+    }
+
+    async _setAtis(key, rawVal) {
+        const val = (rawVal === '' || rawVal === null || rawVal === undefined) ? null : parseFloat(rawVal);
+        if (val !== null && Number.isNaN(val)) return;
+
+        // Range-guard non-null values only — CLEAR (val === null) always proceeds.
+        if (val !== null) {
+            if (key === 'altimeter' && (val < 27.0 || val > 32.0)) {
+                this._atisStatusError('Altimeter must be 27.0–32.0 inHg');
+                return;
+            }
+            if (key === 'oat' && (val < -60 || val > 60)) {
+                this._atisStatusError('OAT must be -60–60°C');
+                return;
+            }
+        }
+
+        const base = this._engineBaseUrl();
+        if (!base) {
+            this._atisStatusError('Engine monitor IP unavailable');
+            return;
+        }
+
+        try {
+            // No explicit Content-Type: setting one makes this a non-simple
+            // cross-origin request, forcing a CORS preflight (OPTIONS /api/atis)
+            // that engine_monitor.py has no handler for -- the preflight fails
+            // and the POST never goes out. Without the header, fetch sends the
+            // CORS-safelisted text/plain, which the Pi's json.loads(body) parses
+            // fine (it never inspects Content-Type).
+            const resp = await fetch(`${base}/api/atis`, {
+                method: 'POST',
+                body: JSON.stringify({ [key]: val }),
+                signal: AbortSignal.timeout(5000),
+            });
+            if (!resp.ok) {
+                this._atisStatusError(`✗ ATIS update failed: HTTP ${resp.status}`);
+            }
+            // On success, the next update() tick's _updateAtisStatus(d) call
+            // overwrites this with the Pi's actual manual_altimeter/manual_oat
+            // state -- no hand-crafted success message needed here.
+        } catch (err) {
+            this._atisStatusError(`✗ ATIS update failed: ${err.message}`);
+        }
+    }
+
+    _updateAtisStatus(d) {
+        // An error/hint message is being held on screen -- don't let this
+        // tick's normal override/no-override text stomp it before the hold
+        // window expires (see _atisStatusError).
+        if (Date.now() < this._atisErrorUntil) return;
+
+        const altInput = this._el.querySelector('#ep-atis-alt-input');
+        const oatInput = this._el.querySelector('#ep-atis-oat-input');
+        const statusEl = this._dom.atisStatus;
+        if (!statusEl) return;
+
+        const altOverride = d.manual_altimeter != null;
+        const oatOverride = d.manual_oat != null;
+
+        if (altInput && altInput.value === '' && altOverride) altInput.value = d.manual_altimeter;
+        if (oatInput && oatInput.value === '' && oatOverride) oatInput.value = d.manual_oat;
+
+        if (!altOverride && !oatOverride) {
+            statusEl.textContent = 'Using calculated OAT / altimeter';
+            statusEl.className = 'ep-atis-status';
+        } else {
+            const parts = [];
+            if (altOverride) parts.push(`ALT ${d.manual_altimeter} inHg`);
+            if (oatOverride) parts.push(`OAT ${d.manual_oat}°C`);
+            statusEl.textContent = `ATIS OVERRIDE ACTIVE — ${parts.join(' / ')}`;
+            statusEl.className = 'ep-atis-status ep-atis-status--active';
+        }
     }
 
     /* ------------------------------------------------------------------
@@ -907,9 +1182,16 @@ class EnginePage {
         }
     }
 
-    _setTankBar(id, val, max) {
+    _setTankBar(id, val, max, suppressed = false) {
         const el = this._el.querySelector('#' + id);
         if (!el) return;
+        if (suppressed) {
+            // Sender out of its accurate range — draw nothing rather than a bar the
+            // pilot could read as a level (and never a red "critical" empty bar).
+            el.style.height = '0%';
+            el.className = 'ep-tank-bar';
+            return;
+        }
         const pct = max > 0 ? Math.min(100, Math.max(0, (val / max) * 100)) : 0;
         el.style.height = pct + '%';
         el.className = 'ep-tank-bar' +
@@ -1031,11 +1313,98 @@ class EnginePage {
     gap: 4px;
 }
 
-/* Flight data row -- 4 columns */
+/* Flight data row -- 5 columns */
 .ep-flight-row {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     gap: 4px;
+}
+
+/* Cruise targets row -- 3 columns */
+.ep-target-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 4px;
+}
+
+/* ATIS override panel */
+.ep-atis-panel {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 8px;
+}
+.ep-atis-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 4px 0;
+}
+.ep-atis-label {
+    flex: 1;
+    font-family: var(--font-ui);
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+}
+.ep-atis-input {
+    width: 90px;
+    height: var(--touch-min, 56px);
+    text-align: center;
+    font-size: 18px;
+    font-weight: 900;
+    font-family: var(--font-instrument);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    border: 2px solid var(--border-strong);
+    border-radius: 6px;
+}
+.ep-atis-btn {
+    height: var(--touch-min, 56px);
+    padding: 0 14px;
+    border-radius: 6px;
+    font-family: var(--font-ui);
+    font-size: 15px;
+    font-weight: 800;
+    cursor: pointer;
+    border: none;
+}
+.ep-atis-set-btn {
+    background: var(--accent);
+    color: var(--text-on-accent);
+}
+.ep-atis-clear-btn {
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    border: 2px solid var(--border-strong);
+}
+.ep-atis-btn:active { opacity: 0.6; }
+.ep-atis-status {
+    font-family: var(--font-ui);
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-align: center;
+    margin-top: 4px;
+}
+.ep-atis-status--active {
+    color: var(--accent);
+    font-weight: 800;
+}
+.ep-atis-status--error {
+    /* Text on the panel's light --bg-surface fill -- use the light-safe
+       equivalent, not the bright --color-danger fill token. */
+    color: var(--color-danger-on-light);
+    font-weight: 800;
+}
+
+.ep-tas-note {
+    font-family: var(--font-ui);
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-align: center;
 }
 
 /* Standard gauge cell */
@@ -1143,6 +1512,32 @@ class EnginePage {
 .ep-chart-wrap canvas {
     width: 100%;
     height: 100%;
+}
+
+/* Unconfirmed / stale tracked fuel state */
+.ep-fuel-stale {
+    background: var(--color-caution);
+    color: #000;
+    font-family: var(--font-ui);
+    font-size: 15px;
+    font-weight: 800;
+    text-align: center;
+    padding: 6px 8px;
+    border-radius: 4px;
+    margin: 4px 0;
+}
+/* --color-caution measures 1.51:1 on this light background — repointed at
+   the on-light token, same fix as .fuel-yellow/.fuel-red in style.css. (#120) */
+.ep-gauge-value.ep-unconfirmed {
+    color: var(--color-caution-on-light) !important;
+}
+.ep-tank-source-note {
+    font-family: var(--font-ui);
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-align: center;
+    margin-top: 4px;
 }
 
 /* Fuel tank bars */
@@ -1325,7 +1720,33 @@ class EnginePage {
     white-space: nowrap;
 }
 
-/* Portrait iPad tweaks */
+/* Pi contract mismatch banner (#113). NOTE: color:#000 here, not
+   var(--color-danger) — .ep-sticky-text above uses --color-danger text on
+   this same --color-caution fill and measures 2.24:1 (checked while building
+   this banner, not part of this issue, flagged separately rather than fixed
+   here). The documented Status badge pattern for a --color-caution fill is
+   solid black text; this banner follows that instead of the sibling's. */
+.ep-contract-banner {
+    background: var(--color-caution);
+    border-radius: 5px;
+    padding: 8px 10px;
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+}
+.ep-contract-text {
+    font-size: 16px;
+    font-weight: 900;
+    color: #000;
+}
+.ep-contract-text code {
+    background: rgba(0, 0, 0, 0.15);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-family: var(--font-mono, monospace);
+}
+
+/* Portrait tablet tweaks */
 @media (max-width: 820px) {
     .ep-primary-row {
         grid-template-columns: repeat(4, 1fr);

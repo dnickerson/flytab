@@ -3,7 +3,7 @@
 Engine Monitor Web Server
 =========================
 All-in-one solution for capturing, monitoring, and downloading engine data.
-Designed for high-visibility on iPad in direct sunlight.
+Designed for high-visibility on a cockpit tablet in direct sunlight.
 
 Features:
 - Live dashboard with EGT, CHT, RPM, MP, Fuel Flow
@@ -18,7 +18,22 @@ Usage:
 Access at: http://stratux.local:8080
 """
 
-VERSION = "3.3.0"
+VERSION = "3.4.1"
+
+# Contract version for the payload shape and shared physical constants FlyTab
+# depends on (field names, nesting, units, usable_capacity_gal and similar).
+# Bump this when any of those change — NOT for ordinary bug fixes. VERSION is
+# for humans; this is what client code compares. Starts at 2 because the
+# 2026-08-01 fuel-management work already changed the contract once, silently
+# (usable_capacity_gal 34->36, flight_fuel_used moved under 'fuel') — this
+# value retroactively names that shape "2" so a Pi that has not been
+# redeployed since then correctly reports as behind. See issue #113.
+PI_API_CONTRACT = 2
+
+# Optional features this build of engine_monitor.py supports, independent of
+# api_contract — a client can check `'fuel_tracker' in capabilities` rather
+# than inferring feature support from a version/contract number comparison.
+PI_CAPABILITIES = ["fuel_tracker", "peak_egt"]
 
 import os
 import sys
@@ -31,22 +46,21 @@ import math
 import socket
 import xml.etree.ElementTree as ET
 from datetime import datetime
-from collections import deque
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 import glob
 import uuid
 import shutil
+import hmac
+import secrets
 
 # Path to local Chart.js file (same directory as this script)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-CHART_JS_PATH = os.path.join(SCRIPT_DIR, 'chart.min.js')
 
 # Stratux integration uses HTTP API (no extra dependencies needed)
 
 # Constants for calculations
 HISTORY_SECONDS = 30 * 60  # 30 minutes of history
-MAX_HISTORY_POINTS = 20000  # Max points to store (auto-pruned by time, not count)
 
 # O-360-A1A Engine Constants
 ENGINE_MAX_HP = 180  # Rated horsepower
@@ -62,13 +76,13 @@ BEST_ECONOMY_SFC = 0.067  # GPH per HP at best economy (LOP)
 # Fuel flow smoothing for carbureted float bowl lag (TIME-BASED)
 FF_SMOOTHING_SECONDS = 3.0  # 3 second rolling average to smooth float bowl oscillations
 
-# Sticky valve detection parameters (TIME-BASED)
-STICKY_VALVE_WARMUP_MINUTES = 10  # Monitor for sticky valve during first 10 minutes
-STICKY_VALVE_EGT_RATIO = 0.50  # Alert if one cylinder EGT < 50% of others' average
-STICKY_VALVE_MIN_EGT = 200  # Minimum average EGT to consider engine "running" for detection
-STICKY_VALVE_PERSIST_SECONDS = 30  # Must persist for 30 seconds to trigger alert
-
-# Auto-detect environment (stratux hostname = aircraft, otherwise desktop)
+# Auto-detect environment (stratux hostname = aircraft, otherwise desktop).
+# 'flypi' here is the real OS hostname of a Pi, a leftover from the deprecated
+# FlyPi/iPad predecessor product (see CLAUDE.md) — NOT evidence that FlyPi or
+# an iPad still exists. Do not remove this string without first confirming
+# (on the actual device) that the Pi's hostname has actually been changed —
+# removing it while a real Pi is still named 'flypi' would silently flip
+# production mode off (wrong DATA_DIR, wrong bind behavior).
 _hostname = socket.gethostname()
 _is_aircraft = _hostname in ('stratux', 'flypi')
 
@@ -78,7 +92,7 @@ CONFIG = {
     'BAUD_RATE': 115200,
     'DATA_DIR': '/opt/capture_v5' if _is_aircraft else os.path.expanduser('~/engine_data'),
     'WEB_PORT': 8080,
-    'WEB_BIND': '0.0.0.0',  # Bind all interfaces — FlyPi serves over ap0 hotspot
+    'WEB_BIND': '0.0.0.0',  # Bind all interfaces — must be reachable from the tablet over the aircraft WiFi, not just localhost
     'ACTIVE_FILE': 'capture_active.txt',
     'ACTIVE_CSV': 'flight_active.csv',
     'LOG_FILE': 'engine_monitor.log',
@@ -99,8 +113,14 @@ CSV_HEADER = 'Zulu_Time,MP,Oil Temp,Oil Pressure,Fuel Pressure,Volts,Amps,RPM,Fu
 
 # Fuel tracking configuration
 FUEL_CONFIG = {
-    'capacity_gal': 36.0,           # Aircraft fuel capacity (2x 18 gal tanks)
-    'usable_capacity_gal': 34.0,    # Typical fill (1 gal expansion space per tank)
+    'capacity_gal': 36.0,           # Aircraft fuel capacity (2x 18 gal tanks) — canonical
+    # DEPRECATED (2026-07-31, owner decision): the "usable capacity" concept is retired.
+    # Capacity is 36 gal total / 18 per side everywhere, matching the canonical value in
+    # web/aircraft-config.json (performance.fuel_capacity_gal), which the aircraft page
+    # edits. This key is kept only so the emitted JSON keys below ('capacity' in
+    # get_status(), 'usable_capacity' in fuel_data.json) keep their names; it is now just
+    # an alias for capacity_gal and no new code should reference it.
+    'usable_capacity_gal': 36.0,
     'low_fuel_warning_gal': 8.0,    # Yellow warning threshold
     'low_fuel_critical_gal': 4.0,   # Red warning threshold
     'min_endurance_minutes': 45,    # Endurance warning threshold
@@ -459,11 +479,11 @@ class FuelTracker:
                 self.fuel_remaining += gallons
                 gallons_added = gallons
 
-            # Cap at usable capacity
-            self.fuel_remaining = min(self.fuel_remaining, FUEL_CONFIG['usable_capacity_gal'])
+            # Cap at aircraft capacity (36 gal; "usable capacity" is deprecated)
+            self.fuel_remaining = min(self.fuel_remaining, FUEL_CONFIG['capacity_gal'])
 
             # Reset total since fill if this was a fill-up
-            if set_total or self.fuel_remaining >= FUEL_CONFIG['usable_capacity_gal'] * 0.95:
+            if set_total or self.fuel_remaining >= FUEL_CONFIG['capacity_gal'] * 0.95:
                 self.total_since_fill = 0.0
 
             addition = {
@@ -518,7 +538,9 @@ class FuelTracker:
                 'total_since_fill': round(self.total_since_fill, 1),
                 'engine_running': self.engine_running,
                 'last_updated': self.last_updated,
-                'capacity': FUEL_CONFIG['usable_capacity_gal'],
+                # Key name kept for the client JSON contract; value is now the full
+                # 36 gal aircraft capacity ("usable capacity" is deprecated).
+                'capacity': FUEL_CONFIG['capacity_gal'],
                 'warnings': warnings,
                 # EDM fuel tank readings
                 'edm_fuel_total': round(self.edm_fuel_total, 1),
@@ -562,7 +584,9 @@ class FuelTracker:
                 'version': 1,
                 'aircraft': {
                     'fuel_capacity': FUEL_CONFIG['capacity_gal'],
-                    'usable_capacity': FUEL_CONFIG['usable_capacity_gal']
+                    # DEPRECATED field, kept so existing fuel_data.json files keep the
+                    # same shape. Now identical to fuel_capacity.
+                    'usable_capacity': FUEL_CONFIG['capacity_gal']
                 },
                 'current_state': {
                     'fuel_remaining': self.fuel_remaining,
@@ -621,15 +645,27 @@ class CaptureState:
     def __init__(self):
         self.lock = threading.Lock()
         self.capturing = False
+        self.manually_stopped = False  # True after an explicit /api/stop; blocks
+                                        # auto_capture_monitor's auto-restart until
+                                        # cleared by Start or engine RPM < 300.
         self.capture_thread = None
+        # Per-capture stop signal -- read ONLY by capture_thread_func, set by
+        # stop_capture()/cleared by start_capture(). Long-lived background
+        # threads (Stratux polling, auto-capture monitor, WS broadcast) must
+        # use shutdown_event instead -- they used to share this event with
+        # the capture thread, which meant any /api/stop permanently killed
+        # them for the rest of the process's uptime (issue #124).
         self.stop_event = threading.Event()
+        # Process-lifetime signal -- read by every long-lived background
+        # thread/task that should keep running across Start/Stop cycles and
+        # only stop when the process itself is shutting down (SIGINT/SIGTERM,
+        # /api/shutdown, or serve_forever() exiting).
+        self.shutdown_event = threading.Event()
         self.latest_data = {}
         self.data_count = 0
         self.capture_start_time = None
         self.last_error = None
         self.serial_connected = False
-        # History for plotting (30 minutes)
-        self.history = deque(maxlen=MAX_HISTORY_POINTS)
         # Fuel flow smoothing buffer: list of (timestamp, value) tuples for time-based smoothing
         self.ff_buffer = []
         # Calculated values
@@ -657,11 +693,6 @@ class CaptureState:
         self.target_fuel_flow = 0  # Optimal fuel flow for cruise
         self.target_power = 0  # Recommended power setting
         self.target_mode = "---"  # Recommended mixture mode
-        # Sticky valve detection (TIME-BASED)
-        self.engine_start_time = None  # When engine first started (RPM > 500)
-        self.sticky_valve_alert = None  # Cylinder number if sticky valve detected (1-4)
-        self.sticky_valve_start_times = [None, None, None, None]  # When each cylinder first showed low EGT
-        self.sticky_valve_dismissed = False  # User dismissed the alert
         # Fuel tracking (initialized in main() after CONFIG is finalized)
         self.fuel_tracker = None
         # Serial connection health monitoring
@@ -975,6 +1006,42 @@ def log(message):
     except:
         pass
 
+# Shared-secret token gating /api/upload (Finding 8: unauthenticated upload
+# endpoint). Self-provisions on first boot — no manual deploy step required —
+# and persists in DATA_DIR alongside fuel_data.json so it survives redeploys
+# of this script.
+UPLOAD_TOKEN_FILE = os.path.join(CONFIG['DATA_DIR'], '.upload_token')
+MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB — largest real upload target today
+                                     # (engine_monitor.py) is ~193 KB; ~26x headroom.
+
+def _load_or_create_upload_token():
+    try:
+        if os.path.exists(UPLOAD_TOKEN_FILE):
+            # Re-assert 0600 even on the existing-file path — a token file
+            # created before this chmod line existed, or restored from a
+            # backup, would otherwise stay at whatever mode it has forever.
+            os.chmod(UPLOAD_TOKEN_FILE, 0o600)
+            with open(UPLOAD_TOKEN_FILE, 'r') as f:
+                tok = f.read().strip()
+                if tok:
+                    return tok
+        os.makedirs(os.path.dirname(UPLOAD_TOKEN_FILE), exist_ok=True)
+        tok = secrets.token_hex(32)
+        # Create with 0600 from the first byte on disk -- open(..., 'w') then
+        # chmod() leaves a window where the file exists at the umask-derived
+        # default (typically 0644, world-readable) with the token already
+        # written into it.
+        fd = os.open(UPLOAD_TOKEN_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, 'w') as f:
+            f.write(tok)
+        log(f"Generated new /api/upload token at {UPLOAD_TOKEN_FILE}")
+        return tok
+    except Exception as e:
+        log(f"WARNING: could not load/create upload token ({e}) — /api/upload will reject all requests")
+        return None
+
+UPLOAD_TOKEN = _load_or_create_upload_token()
+
 def extract_numeric(s):
     """Extract numeric value from a field that may have text prefix (e.g., 'CRB00117' -> 117)."""
     if not s:
@@ -1187,88 +1254,6 @@ def calculate_engine_parameters(rpm, mp, fuel_flow, edm_timestamp):
 
     return round(percent_power, 1), round(deviation, 1), mode, round(bsfc, 2)
 
-def check_sticky_valve(egt1, egt2, egt3, egt4, rpm):
-    """
-    Check for sticky exhaust valve condition during engine warmup.
-
-    A sticky valve causes one cylinder to not fire, resulting in:
-    - Very low or zero EGT on that cylinder
-    - Other cylinders showing normal EGT
-
-    This is most common during cold starts ("morning sickness").
-
-    Uses TIME-BASED detection: tracks when each cylinder first showed low EGT,
-    and triggers alert if condition persists for STICKY_VALVE_PERSIST_SECONDS.
-    This works correctly regardless of data sample rate.
-
-    Returns: cylinder number (1-4) if sticky valve detected, None otherwise
-    """
-    egts = [egt1, egt2, egt3, egt4]
-    current_time = time.time()
-
-    # Only check during warmup period
-    if state.engine_start_time is None:
-        # Detect engine start (RPM > 500)
-        if rpm > 500:
-            state.engine_start_time = current_time
-            state.sticky_valve_start_times = [None, None, None, None]
-            state.sticky_valve_alert = None
-            state.sticky_valve_dismissed = False
-            log("Engine start detected - monitoring for sticky valve")
-        return None
-
-    # Check if still in warmup period
-    elapsed_minutes = (current_time - state.engine_start_time) / 60
-    if elapsed_minutes > STICKY_VALVE_WARMUP_MINUTES:
-        return state.sticky_valve_alert  # Keep existing alert if any
-
-    # Reset engine start time if engine stopped
-    if rpm < 300:
-        state.engine_start_time = None
-        state.sticky_valve_start_times = [None, None, None, None]
-        return None
-
-    # Calculate average EGT of all cylinders
-    avg_all = sum(egts) / 4
-
-    # Need minimum EGT to detect (engine must be producing heat)
-    if avg_all < STICKY_VALVE_MIN_EGT:
-        return state.sticky_valve_alert
-
-    # Check each cylinder against average of the OTHER three
-    for i in range(4):
-        other_egts = [egts[j] for j in range(4) if j != i]
-        avg_others = sum(other_egts) / 3
-
-        # Skip if others aren't hot enough to compare
-        if avg_others < STICKY_VALVE_MIN_EGT:
-            continue
-
-        # Check if this cylinder is significantly colder
-        ratio = egts[i] / avg_others if avg_others > 0 else 1.0
-
-        if ratio < STICKY_VALVE_EGT_RATIO:
-            # This cylinder is too cold - record when it started (if not already)
-            if state.sticky_valve_start_times[i] is None:
-                state.sticky_valve_start_times[i] = current_time
-
-            # Check if condition has persisted long enough (TIME-BASED)
-            elapsed_cold = current_time - state.sticky_valve_start_times[i]
-            if elapsed_cold >= STICKY_VALVE_PERSIST_SECONDS:
-                if state.sticky_valve_alert != (i + 1):
-                    state.sticky_valve_alert = i + 1  # 1-indexed cylinder number
-                    log(f"STICKY VALVE ALERT: Cylinder {i + 1} EGT ({egts[i]}°F) is {ratio*100:.0f}% of others ({avg_others:.0f}°F avg) for {elapsed_cold:.0f}s")
-        else:
-            # Cylinder is OK - reset its start time
-            state.sticky_valve_start_times[i] = None
-            # Clear alert if this was the alerting cylinder and it recovered
-            if state.sticky_valve_alert == (i + 1):
-                log(f"Sticky valve alert cleared: Cylinder {i + 1} EGT recovered")
-                state.sticky_valve_alert = None
-
-    return state.sticky_valve_alert
-
-
 def update_peak_tracking(egt1, egt2, egt3, egt4, fuel_flow, rpm, mp):
     """
     Track peak EGT for each cylinder during leaning events.
@@ -1282,7 +1267,15 @@ def update_peak_tracking(egt1, egt2, egt3, egt4, fuel_flow, rpm, mp):
         fuel_flow: Current fuel flow in GPH
         rpm: Engine RPM
         mp: Manifold pressure in inHg
+
+    Returns:
+        list[str]: messages to log. Callers run this under state.lock (it
+        mutates state.peak_egts/degrees_from_peak/peaks_valid, which
+        get_status() reads locked) — log() does blocking file I/O, so
+        messages are collected here and written by the caller after the
+        lock is released, instead of holding the lock across disk writes.
     """
+    log_msgs = []
     current_time = time.time()
     egts = [egt1, egt2, egt3, egt4]
 
@@ -1311,7 +1304,7 @@ def update_peak_tracking(egt1, egt2, egt3, egt4, fuel_flow, rpm, mp):
             state.leaning_active = False
             state.peak_egts = [0, 0, 0, 0]
             state.degrees_from_peak = [0, 0, 0, 0]
-            log(f"Peak tracking reset: power change (RPM: {rpm_change:.1f}%, MP: {mp_change:.1f}%)")
+            log_msgs.append(f"Peak tracking reset: power change (RPM: {rpm_change:.1f}%, MP: {mp_change:.1f}%)")
 
     # Detect leaning: fuel flow decreasing over 10 seconds
     if len(state.ff_history) >= 5:
@@ -1331,7 +1324,7 @@ def update_peak_tracking(egt1, egt2, egt3, egt4, fuel_flow, rpm, mp):
                     state.leaning_active = False
                     state.peak_egts = [0, 0, 0, 0]
                     state.degrees_from_peak = [0, 0, 0, 0]
-                    log(f"Peak tracking reset: mixture enriched (+{-ff_change:.1f} GPH)")
+                    log_msgs.append(f"Peak tracking reset: mixture enriched (+{-ff_change:.1f} GPH)")
 
                 # Detect leaning (fuel flow decreasing by at least 0.5 GPH over interval)
                 elif ff_change >= 0.5:
@@ -1339,7 +1332,7 @@ def update_peak_tracking(egt1, egt2, egt3, egt4, fuel_flow, rpm, mp):
                         state.leaning_active = True
                         state.last_stable_rpm = rpm
                         state.last_stable_mp = mp
-                        log(f"Leaning detected: FF dropping {ff_change:.1f} GPH")
+                        log_msgs.append(f"Leaning detected: FF dropping {ff_change:.1f} GPH")
 
     # During active leaning, track peaks
     if state.leaning_active:
@@ -1351,7 +1344,7 @@ def update_peak_tracking(egt1, egt2, egt3, egt4, fuel_flow, rpm, mp):
 
         if peaks_updated and not state.peaks_valid:
             state.peaks_valid = True
-            log(f"Peak EGTs captured: {state.peak_egts}")
+            log_msgs.append(f"Peak EGTs captured: {state.peak_egts}")
 
     # Calculate degrees from peak for each cylinder
     if state.peaks_valid:
@@ -1364,6 +1357,8 @@ def update_peak_tracking(egt1, egt2, egt3, egt4, fuel_flow, rpm, mp):
                 state.degrees_from_peak[i] = 0
     else:
         state.degrees_from_peak = [0, 0, 0, 0]
+
+    return log_msgs
 
 
 def calculate_oat_from_altitude(pressure_alt_ft):
@@ -1457,7 +1452,7 @@ def stratux_thread_func():
         kml_provider = KMLGPSProvider(kml_file)
         state.stratux_connected = True
 
-        while not state.stop_event.is_set():
+        while not state.shutdown_event.is_set():
             try:
                 # Get current playback time from latest EDM data
                 with state.lock:
@@ -1514,7 +1509,7 @@ def stratux_thread_func():
     consecutive_failures = 0
     max_failures_before_log = 5  # Only log after this many consecutive failures
 
-    while not state.stop_event.is_set():
+    while not state.shutdown_event.is_set():
         try:
             # HTTP GET request with short timeout
             req = urllib.request.Request(stratux_url, headers={'Accept': 'application/json'})
@@ -1580,8 +1575,8 @@ def stratux_thread_func():
         except Exception as e:
             log(f"Stratux unexpected error: {e}")
 
-        # Wait before next poll; stop_event.wait() blocks until timeout or shutdown signal
-        state.stop_event.wait(timeout=poll_interval)
+        # Wait before next poll; shutdown_event.wait() blocks until timeout or shutdown signal
+        state.shutdown_event.wait(timeout=poll_interval)
 
     state.stratux_connected = False
     log("Stratux thread stopped")
@@ -1703,6 +1698,9 @@ def capture_thread_func():
         lines_parsed = 0
         consecutive_empty = 0  # Track consecutive empty reads
         last_warning_time = 0  # Avoid spamming logs
+        reconnect_backoff = 2.0        # seconds; doubles on repeated failures
+        reconnect_backoff_max = 30.0   # cap — matches EngineClient's JS backoff ceiling
+        next_reconnect_attempt = 0.0   # epoch gate; 0 = attempt on first failure
 
         while not state.stop_event.is_set():
             try:
@@ -1746,27 +1744,24 @@ def capture_thread_func():
 
                         percent_power, deviation, mode, sfc = calculate_engine_parameters(rpm, mp, fuel_flow, edm_timestamp)
 
-                        # Check for sticky valve during warmup
-                        check_sticky_valve(
-                            parsed.get('EGT1', 0),
-                            parsed.get('EGT2', 0),
-                            parsed.get('EGT3', 0),
-                            parsed.get('EGT4', 0),
-                            rpm
-                        )
-
-                        # Track per-cylinder peak EGT during leaning
-                        update_peak_tracking(
-                            parsed.get('EGT1', 0),
-                            parsed.get('EGT2', 0),
-                            parsed.get('EGT3', 0),
-                            parsed.get('EGT4', 0),
-                            fuel_flow,
-                            rpm,
-                            mp
-                        )
-
                         with state.lock:
+                            # Track per-cylinder peak EGT during leaning (writes
+                            # state.peak_egts/degrees_from_peak/peaks_valid —
+                            # get_status() reads these locked; this call must be too).
+                            # update_peak_tracking() defers its log() calls (blocking
+                            # file I/O) instead of making them here, so this lock only
+                            # ever guards in-memory state — get_status()'s /api/status
+                            # poll never blocks on a disk write.
+                            peak_log_msgs = update_peak_tracking(
+                                parsed.get('EGT1', 0),
+                                parsed.get('EGT2', 0),
+                                parsed.get('EGT3', 0),
+                                parsed.get('EGT4', 0),
+                                fuel_flow,
+                                rpm,
+                                mp
+                            )
+
                             state.latest_data = parsed
                             state.data_count += 1
                             state.percent_power = percent_power
@@ -1774,19 +1769,8 @@ def capture_thread_func():
                             state.rop_lop_mode = mode
                             state.sfc = sfc
 
-                            # Add to history with timestamp
-                            history_entry = {
-                                'timestamp': time.time(),
-                                'EGT1': parsed.get('EGT1', 0),
-                                'EGT2': parsed.get('EGT2', 0),
-                                'EGT3': parsed.get('EGT3', 0),
-                                'EGT4': parsed.get('EGT4', 0),
-                                'CHT1': parsed.get('CHT1', 0),
-                                'CHT2': parsed.get('CHT2', 0),
-                                'CHT3': parsed.get('CHT3', 0),
-                                'CHT4': parsed.get('CHT4', 0),
-                            }
-                            state.history.append(history_entry)
+                        for msg in peak_log_msgs:
+                            log(msg)
 
                         # Update fuel tracker
                         if state.fuel_tracker:
@@ -1905,7 +1889,48 @@ def capture_thread_func():
             except Exception as e:
                 state.last_error = str(e)
                 state.last_serial_error = str(e)
-                log(f"Capture loop error: {e}")
+                # Handles the device physically vanishing (ser.in_waiting / ser.read()
+                # raising, e.g. an unplugged USB-serial adapter) — distinct from the
+                # "ready but no data" case above, which never reaches this branch
+                # because the exception fires before consecutive_empty/data_was_waiting
+                # bookkeeping runs. Gated by next_reconnect_attempt so a permanently
+                # unplugged device doesn't spin open_serial()/log() at 10Hz forever.
+                # Excludes playback_mode — there is no live serial port to reopen when
+                # replaying a captured file; an exception here in playback is a
+                # different, rarer problem this fix isn't targeting.
+                if not playback_mode:
+                    now = time.time()
+                    if now >= next_reconnect_attempt:
+                        log(f"Capture loop error: {e} — attempting serial port reopen")
+                        try:
+                            if ser:
+                                try:
+                                    ser.close()
+                                except Exception:
+                                    pass
+                            ser = open_serial()
+                            state.reconnect_count += 1
+                            consecutive_empty = 0
+                            reconnect_backoff = 2.0
+                            # Floor the next reopen attempt at least reconnect_backoff
+                            # seconds out even on success — otherwise a reopen that
+                            # succeeds but is immediately followed by another failed
+                            # read (a real pyserial pattern: "device reports readiness
+                            # to read but returned no data") re-enters this except
+                            # block with a stale/past gate value, passing every time
+                            # and re-enabling the 10Hz reopen spin this fix prevents.
+                            next_reconnect_attempt = now + reconnect_backoff
+                            log(f"Serial port reconnected after error (attempt #{state.reconnect_count})")
+                        except Exception as reconnect_err:
+                            err_msg = str(reconnect_err)
+                            state.last_serial_error = err_msg
+                            state.serial_warning = f"Reconnect failed: {err_msg}"
+                            delay = reconnect_backoff
+                            next_reconnect_attempt = now + delay
+                            reconnect_backoff = min(reconnect_backoff * 2, reconnect_backoff_max)
+                            log(f"Reconnect failed: {err_msg} — next attempt in {delay:.0f}s")
+                else:
+                    log(f"Capture loop error: {e}")
                 time.sleep(0.1)
 
         log("Capture thread stopped normally")
@@ -1933,6 +1958,8 @@ def start_capture():
     """Start the capture thread."""
     if state.capturing:
         return {'success': False, 'message': 'Already capturing'}
+
+    state.manually_stopped = False
 
     # Check for orphan active file
     active_path = os.path.join(CONFIG['DATA_DIR'], CONFIG['ACTIVE_FILE'])
@@ -2053,9 +2080,6 @@ def get_status():
         pitch = state.pitch
         bank = state.bank
         acc_vert = state.acc_vert
-        # Sticky valve alert
-        sticky_valve_alert = state.sticky_valve_alert
-        sticky_valve_dismissed = state.sticky_valve_dismissed
         # Serial connection health
         serial_warning = state.serial_warning
         # Peak EGT tracking
@@ -2071,6 +2095,8 @@ def get_status():
 
     return {
         'version': VERSION,
+        'api_contract': PI_API_CONTRACT,
+        'capabilities': PI_CAPABILITIES,
         'capturing': state.capturing,
         'serial_connected': state.serial_connected,
         'stratux_connected': stratux_connected,
@@ -2100,9 +2126,6 @@ def get_status():
         'pitch': pitch,
         'bank': bank,
         'acc_vert': acc_vert,
-        # Sticky valve alert
-        'sticky_valve_alert': sticky_valve_alert,
-        'sticky_valve_dismissed': sticky_valve_dismissed,
         # Serial connection health
         'serial_warning': serial_warning,
         # Peak EGT tracking (per-cylinder degrees from peak)
@@ -2143,6 +2166,8 @@ def get_diagnostics():
 
     return {
         'version': VERSION,
+        'api_contract': PI_API_CONTRACT,
+        'capabilities': PI_CAPABILITIES,
         'config': {
             'port': port,
             'baud': CONFIG['BAUD_RATE'],
@@ -2181,1889 +2206,6 @@ def get_diagnostics():
         },
     }
 
-def get_history(duration_minutes=30):
-    """Get temperature history for plotting (downsampled for web).
-
-    Args:
-        duration_minutes: How many minutes of history to return (default 30)
-    """
-    with state.lock:
-        history_list = list(state.history)
-
-    if not history_list:
-        return {'labels': [], 'egt': {}, 'cht': {}, 'duration': duration_minutes}
-
-    # Filter to requested duration
-    now = time.time()
-    cutoff = now - (duration_minutes * 60)
-    history_list = [h for h in history_list if h['timestamp'] >= cutoff]
-
-    if not history_list:
-        return {'labels': [], 'egt': {}, 'cht': {}, 'duration': duration_minutes}
-
-    # Downsample to max 360 points for display
-    max_points = 360
-    if len(history_list) > max_points:
-        step = len(history_list) // max_points
-        history_list = history_list[::step]
-
-    labels = []
-    egt1, egt2, egt3, egt4 = [], [], [], []
-    cht1, cht2, cht3, cht4 = [], [], [], []
-
-    start_time = history_list[0]['timestamp'] if history_list else 0
-
-    for entry in history_list:
-        # Time as minutes:seconds from start
-        elapsed = entry['timestamp'] - start_time
-        mins = int(elapsed // 60)
-        secs = int(elapsed % 60)
-        labels.append(f"{mins}:{secs:02d}")
-
-        egt1.append(entry['EGT1'])
-        egt2.append(entry['EGT2'])
-        egt3.append(entry['EGT3'])
-        egt4.append(entry['EGT4'])
-        cht1.append(entry['CHT1'])
-        cht2.append(entry['CHT2'])
-        cht3.append(entry['CHT3'])
-        cht4.append(entry['CHT4'])
-
-    return {
-        'labels': labels,
-        'egt': {'EGT1': egt1, 'EGT2': egt2, 'EGT3': egt3, 'EGT4': egt4},
-        'cht': {'CHT1': cht1, 'CHT2': cht2, 'CHT3': cht3, 'CHT4': cht4},
-        'duration': duration_minutes,
-    }
-
-# HTML Template - High contrast for sunlight
-HTML_TEMPLATE = '''<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <link rel="manifest" href="./engine-monitor-manifest.json">
-    <title>Engine Monitor</title>
-    <script src="/static/chart.min.js"></script>
-    <style>
-        /* COMPACT SUNLIGHT-READABLE THEME
-           Optimized for iPad portrait split-screen (upper window) with ForeFlight below
-           - Maximum data density while maintaining sunlight readability
-           - Compact gauges with abbreviated labels
-           - High contrast colors
-        */
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
-            font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif;
-            background: #FFFFF0;
-            color: #000;
-            padding: 6px;
-            -webkit-font-smoothing: antialiased;
-        }
-
-        /* Compact header */
-        .header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 4px 0 6px 0;
-            margin-bottom: 6px;
-            border-bottom: 2px solid #333;
-        }
-        .status {
-            font-size: 18px;
-            font-weight: 800;
-            text-transform: uppercase;
-        }
-        .status.capturing { color: #006400; }
-        .status.stopped { color: #CC0000; }
-        .status.waiting { color: #CC6600; }
-
-        .controls { display: flex; gap: 6px; }
-        .btn {
-            padding: 8px 14px;
-            font-size: 15px;
-            font-weight: 800;
-            border: 2px solid;
-            border-radius: 5px;
-            cursor: pointer;
-            text-transform: uppercase;
-        }
-        .btn-start { background: #90EE90; color: #000; border-color: #006400; }
-        .btn-stop { background: #FFB6C1; color: #000; border-color: #CC0000; }
-        .btn-help { background: #87CEEB; color: #000; border-color: #00008B; }
-        .btn-shutdown { background: #FF6B6B; color: #FFF; border-color: #8B0000; font-weight: 800; }
-        .btn:active { opacity: 0.7; }
-        .btn:disabled { opacity: 0.3; }
-
-        /* Primary gauges - 7 columns */
-        .dashboard {
-            display: grid;
-            grid-template-columns: repeat(7, 1fr);
-            gap: 4px;
-            margin-bottom: 6px;
-        }
-        .gauge {
-            background: #FFF;
-            border: 2px solid #333;
-            border-radius: 5px;
-            padding: 4px;
-            text-align: center;
-        }
-        .gauge-label {
-            font-size: 12px;
-            font-weight: 700;
-            color: #333;
-            text-transform: uppercase;
-            line-height: 1;
-        }
-        .gauge-value {
-            font-size: 28px;
-            font-weight: 900;
-            font-family: 'Courier New', monospace;
-            color: #000;
-            line-height: 1.1;
-        }
-        .gauge-unit {
-            font-size: 11px;
-            font-weight: 600;
-            color: #555;
-        }
-
-        /* EGT/CHT rows - 4 columns each, side by side when possible */
-        .temps-container {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 6px;
-            margin-bottom: 6px;
-        }
-        .temp-section { }
-        .egt-row, .cht-row {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 3px;
-        }
-        .temp-gauge {
-            background: #FFF;
-            border: 2px solid #333;
-            border-radius: 4px;
-            padding: 3px;
-            text-align: center;
-        }
-        .temp-gauge .gauge-label {
-            font-size: 12px;
-            font-weight: 700;
-        }
-        .temp-gauge .gauge-value {
-            font-size: 24px;
-            line-height: 1;
-        }
-        .temp-gauge .value-row {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            gap: 2px;
-        }
-        .trend-arrow {
-            font-size: 18px;
-            font-weight: 900;
-        }
-        .trend-up { color: #CC0000; }
-        .trend-down { color: #006400; }
-        .trend-stable { color: #888; }
-        /* Degrees from peak display */
-        .peak-delta {
-            font-size: 13px;
-            font-weight: 700;
-            margin-top: 2px;
-        }
-        .peak-delta.lop { color: #0066CC; }  /* Blue for LOP */
-        .peak-delta.rop { color: #CC6600; }  /* Orange for ROP (approaching peak) */
-        .peak-delta.at-peak { color: #006400; }  /* Green at peak */
-        .peak-delta.no-peak { color: #999; }  /* Gray when no peak data */
-
-        /* ATIS input row */
-        .atis-row {
-            display: flex;
-            gap: 8px;
-            align-items: center;
-            margin-bottom: 6px;
-            padding: 4px 8px;
-            background: #E8E8E8;
-            border: 2px solid #666;
-            border-radius: 5px;
-        }
-        .atis-row label {
-            font-size: 12px;
-            font-weight: 700;
-            color: #333;
-        }
-        .atis-row input {
-            width: 70px;
-            padding: 4px 6px;
-            font-size: 16px;
-            font-weight: 700;
-            border: 2px solid #333;
-            border-radius: 4px;
-            text-align: center;
-        }
-        .atis-row input.has-value {
-            background: #90EE90;
-            border-color: #006400;
-        }
-        .atis-row .atis-unit {
-            font-size: 11px;
-            color: #555;
-            margin-left: -4px;
-        }
-        .atis-row .btn-clear {
-            padding: 4px 8px;
-            font-size: 11px;
-            font-weight: 700;
-            background: #FFB6C1;
-            border: 2px solid #CC0000;
-            border-radius: 4px;
-            cursor: pointer;
-        }
-
-        .section-label {
-            font-size: 13px;
-            font-weight: 800;
-            color: #333;
-            text-transform: uppercase;
-            margin-bottom: 2px;
-        }
-
-        /* Analysis row - 6 columns */
-        .calcs-row {
-            display: grid;
-            grid-template-columns: repeat(6, 1fr);
-            gap: 4px;
-            margin-bottom: 6px;
-        }
-        .calc-gauge {
-            background: #FFF;
-            border: 2px solid #333;
-            border-radius: 5px;
-            padding: 4px;
-            text-align: center;
-        }
-        .calc-gauge .gauge-value {
-            font-size: 24px;
-        }
-
-        /* Flight data row - 5 columns */
-        .flight-row {
-            display: grid;
-            grid-template-columns: repeat(5, 1fr);
-            gap: 4px;
-            margin-bottom: 6px;
-        }
-
-        /* Target row - 3 columns */
-        .target-row {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 4px;
-            margin-bottom: 6px;
-        }
-
-        /* Status colors - backgrounds for sunlight visibility */
-        .rich-value {
-            color: #000;
-            background: #FFA500;
-            padding: 1px 4px;
-            border-radius: 3px;
-        }
-        .lean-value {
-            color: #FFF;
-            background: #0066CC;
-            padding: 1px 4px;
-            border-radius: 3px;
-        }
-        .target-value {
-            color: #FFF;
-            background: #006400;
-            padding: 1px 4px;
-            border-radius: 3px;
-        }
-        .stratux-disconnected {
-            color: #666;
-            background: #DDD;
-            padding: 1px 4px;
-            border-radius: 3px;
-        }
-        .peak-value {
-            color: #000;
-            background: #FFD700;
-            padding: 1px 4px;
-            border-radius: 3px;
-        }
-        .power-value { color: #000; }
-
-        /* Temperature warnings */
-        .temp-normal { color: #000; }
-        .temp-caution {
-            color: #000;
-            background: #FFD700;
-            padding: 1px 3px;
-            border-radius: 3px;
-        }
-        .temp-warning {
-            color: #FFF;
-            background: #CC0000;
-            padding: 1px 3px;
-            border-radius: 3px;
-        }
-
-        /* Compact charts */
-        .chart-container {
-            background: #FFF;
-            border: 2px solid #333;
-            border-radius: 5px;
-            padding: 6px;
-            margin-bottom: 6px;
-            height: 180px;
-        }
-        .chart-container canvas {
-            width: 100% !important;
-            height: 100% !important;
-        }
-        .chart-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 4px;
-        }
-        .section-title {
-            font-size: 13px;
-            font-weight: 800;
-            color: #333;
-            text-transform: uppercase;
-        }
-        .duration-select {
-            background: #FFF;
-            color: #000;
-            border: 2px solid #333;
-            border-radius: 4px;
-            padding: 2px 6px;
-            font-size: 13px;
-            font-weight: 600;
-        }
-
-        /* Sticky valve warning - compact */
-        .sticky-valve-warning {
-            background: #FFD700;
-            border: 3px solid #CC0000;
-            color: #000;
-            padding: 8px;
-            border-radius: 5px;
-            margin-bottom: 6px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .sticky-valve-warning .warning-text {
-            font-size: 18px;
-            font-weight: 900;
-            color: #CC0000;
-        }
-        .sticky-valve-warning .warning-cylinder {
-            color: #CC0000;
-            font-size: 24px;
-            font-weight: 900;
-        }
-        .sticky-valve-warning .dismiss-btn {
-            background: #FFF;
-            color: #000;
-            border: 2px solid #333;
-            padding: 4px 10px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 14px;
-            font-weight: 700;
-        }
-
-        /* Serial connection warning - red background */
-        .serial-warning {
-            background: #FF4444;
-            border: 3px solid #CC0000;
-            color: #FFF;
-            padding: 8px;
-            border-radius: 5px;
-            margin-bottom: 6px;
-            display: none;
-            text-align: center;
-        }
-        .serial-warning .warning-text {
-            font-size: 18px;
-            font-weight: 900;
-        }
-        .serial-warning .warning-detail {
-            font-size: 15px;
-            margin-top: 3px;
-        }
-
-        .error-msg {
-            background: #FFCCCC;
-            color: #990000;
-            padding: 6px;
-            border: 2px solid #CC0000;
-            border-radius: 4px;
-            margin-bottom: 6px;
-            font-weight: 700;
-            font-size: 15px;
-        }
-
-        /* Fuel tracking styles */
-        .fuel-row {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 4px;
-            margin-bottom: 6px;
-        }
-        .fuel-gauge {
-            background: #FFF;
-            border: 2px solid #333;
-            border-radius: 5px;
-            padding: 4px;
-            text-align: center;
-        }
-        .fuel-bar-container {
-            background: #DDD;
-            border: 2px solid #333;
-            border-radius: 4px;
-            height: 22px;
-            position: relative;
-            margin-bottom: 4px;
-        }
-        .fuel-bar {
-            background: linear-gradient(90deg, #006400 0%, #90EE90 100%);
-            height: 100%;
-            border-radius: 2px;
-            transition: width 0.5s ease;
-        }
-        .fuel-bar.low {
-            background: linear-gradient(90deg, #CC6600 0%, #FFD700 100%);
-        }
-        .fuel-bar.critical {
-            background: linear-gradient(90deg, #CC0000 0%, #FF6666 100%);
-        }
-        .fuel-bar-label {
-            position: absolute;
-            left: 50%;
-            top: 50%;
-            transform: translate(-50%, -50%);
-            font-weight: 700;
-            font-size: 14px;
-            color: #000;
-            text-shadow: 0 0 2px #FFF;
-        }
-        .fuel-efficiency {
-            text-align: center;
-            font-size: 15px;
-            font-weight: 600;
-            margin-bottom: 4px;
-            color: #333;
-        }
-        .btn-fuel {
-            background: #87CEEB;
-            color: #000;
-            border: 2px solid #00008B;
-            padding: 8px 16px;
-            border-radius: 5px;
-            font-weight: 800;
-            width: 100%;
-            margin-bottom: 6px;
-            cursor: pointer;
-        }
-        .btn-fuel:active { opacity: 0.7; }
-        .fuel-warning {
-            background: #FFD700;
-            border: 3px solid #CC6600;
-            padding: 8px;
-            border-radius: 5px;
-            margin-bottom: 6px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .fuel-warning.critical {
-            background: #FF6666;
-            border-color: #CC0000;
-        }
-        .fuel-warning .warning-text {
-            font-size: 18px;
-            font-weight: 900;
-            color: #CC0000;
-        }
-
-        /* Modal styles */
-        .modal {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0,0,0,0.7);
-            z-index: 1000;
-            display: flex;
-            justify-content: center;
-            align-items: flex-start;
-            padding-top: 20px;
-        }
-        .modal-content {
-            background: #FFFFF0;
-            border: 3px solid #333;
-            border-radius: 8px;
-            width: 90%;
-            max-width: 400px;
-            max-height: 90vh;
-            overflow-y: auto;
-        }
-        .modal-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 10px 12px;
-            background: #333;
-            color: #FFF;
-            font-size: 18px;
-            font-weight: 800;
-        }
-        .modal-close {
-            background: #CC0000;
-            color: #FFF;
-            border: none;
-            padding: 4px 10px;
-            border-radius: 4px;
-            font-weight: 700;
-            cursor: pointer;
-        }
-        .modal-body {
-            padding: 12px;
-        }
-        .modal-footer {
-            display: flex;
-            justify-content: flex-end;
-            gap: 8px;
-            padding: 12px;
-            border-top: 2px solid #CCC;
-        }
-        .form-row {
-            margin-bottom: 10px;
-        }
-        .form-row label {
-            display: block;
-            font-size: 14px;
-            font-weight: 700;
-            color: #333;
-            margin-bottom: 3px;
-        }
-        .form-row input[type="text"],
-        .form-row input[type="number"],
-        .form-row input[type="date"],
-        .form-row input[type="time"] {
-            width: 100%;
-            padding: 8px;
-            font-size: 18px;
-            border: 2px solid #333;
-            border-radius: 4px;
-            background: #FFF;
-        }
-        .radio-label, .checkbox-label {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            font-size: 15px;
-            cursor: pointer;
-        }
-        .radio-label input, .checkbox-label input {
-            width: 18px;
-            height: 18px;
-        }
-        .fuel-preview {
-            background: #E8E8E8;
-            padding: 8px;
-            border-radius: 4px;
-            text-align: center;
-            font-size: 15px;
-            font-weight: 700;
-            color: #333;
-        }
-
-        .version-badge {
-            background: #333;
-            color: #FFF;
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-size: 13px;
-            font-weight: 600;
-            margin-left: 6px;
-        }
-
-        .time-display {
-            font-size: 18px;
-            font-weight: 800;
-            font-family: 'Courier New', monospace;
-            color: #000;
-        }
-        .duration {
-            font-size: 14px;
-            font-weight: 600;
-            color: #444;
-        }
-
-        /* Files section - collapsible */
-        .files-section {
-            margin-top: 8px;
-            border-top: 2px solid #333;
-            padding-top: 6px;
-        }
-        .file-list {
-            max-height: 100px;
-            overflow-y: auto;
-        }
-        .file-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 4px;
-            border-bottom: 1px solid #CCC;
-            background: #FFF;
-            font-size: 14px;
-        }
-        .file-name {
-            color: #00008B;
-            font-weight: 700;
-        }
-        .file-size {
-            color: #444;
-            font-size: 13px;
-        }
-        .btn-download {
-            padding: 3px 8px;
-            font-size: 13px;
-            font-weight: 700;
-            background: #87CEEB;
-            color: #000;
-            border: 2px solid #00008B;
-            border-radius: 4px;
-        }
-        /* CSV Recording controls */
-        .recording-section {
-            background: #FFF;
-            border: 2px solid #333;
-            border-radius: 5px;
-            padding: 6px;
-            margin-bottom: 6px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 8px;
-        }
-        .recording-indicator {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        .record-dot {
-            width: 14px;
-            height: 14px;
-            border-radius: 50%;
-            background: #999;
-        }
-        .record-dot.recording {
-            background: #CC0000;
-            animation: pulse 1s infinite;
-        }
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
-        }
-        .recording-info {
-            font-size: 13px;
-            font-weight: 600;
-            color: #333;
-        }
-        .recording-buttons {
-            display: flex;
-            gap: 4px;
-        }
-        .btn-record {
-            padding: 6px 10px;
-            font-size: 13px;
-            font-weight: 700;
-            border: 2px solid;
-            border-radius: 4px;
-            cursor: pointer;
-        }
-        .btn-record.download {
-            background: #87CEEB;
-            border-color: #00008B;
-            color: #000;
-        }
-        .auto-indicator {
-            font-size: 11px;
-            color: #CC6600;
-            font-weight: 700;
-        }
-    </style>
-</head>
-<body>
-    <div class="header">
-        <div>
-            <div id="status" class="status stopped">● STOPPED <span class="version-badge" id="version">v--</span></div>
-            <div class="time-display" id="time">--:--:--</div>
-            <div class="duration" id="duration"></div>
-        </div>
-        <div id="connectionBadge" style="padding:4px 10px; border-radius:4px; font-size:13px; font-weight:800; text-transform:uppercase; background:#90EE90; color:#006400; border:2px solid #006400;">Connected</div>
-        <div class="controls">
-            <button class="btn btn-start" id="btnStart" onclick="startCapture()">Start</button>
-            <button class="btn btn-stop" id="btnStop" onclick="stopCapture()">Stop</button>
-            <button class="btn btn-help" onclick="window.open('/help','_blank')">Help</button>
-            <button class="btn btn-shutdown" onclick="shutdownApp()">Shutdown</button>
-        </div>
-    </div>
-
-    <!-- CSV Recording Section (server-side) -->
-    <div class="recording-section">
-        <div class="recording-indicator">
-            <span id="recordDot" class="record-dot"></span>
-            <span id="recordStatus">Not Recording</span>
-        </div>
-        <div class="recording-info">
-            <span id="recordCount">0</span> pts
-            (<span id="recordDuration">0:00</span>)
-        </div>
-        <div class="recording-buttons">
-            <button class="btn-record download" onclick="downloadActiveCSV()">CSV</button>
-        </div>
-    </div>
-
-    <div id="error" class="error-msg" style="display:none;"></div>
-
-    <div id="serialWarning" class="serial-warning">
-        <div class="warning-text">SERIAL CONNECTION WARNING</div>
-        <div class="warning-detail" id="serialWarningDetail"></div>
-    </div>
-
-    <div id="stickyValveWarning" class="sticky-valve-warning" style="display:none;">
-        <div>
-            <div class="warning-text">STICKY VALVE WARNING</div>
-            <div>Cylinder <span id="stickyValveCylinder" class="warning-cylinder">?</span> EGT significantly below others</div>
-            <div style="font-size:15px; color:#ccc; margin-top:5px;">Have mechanic check exhaust valve clearance (Lycoming SB 388C)</div>
-        </div>
-        <button class="dismiss-btn" onclick="dismissStickyValve()">Dismiss</button>
-    </div>
-
-    <div class="dashboard">
-        <div class="gauge">
-            <div class="gauge-label">RPM</div>
-            <div class="gauge-value" id="rpm">----</div>
-        </div>
-        <div class="gauge">
-            <div class="gauge-label">MAP</div>
-            <div class="gauge-value" id="mp">--.-</div>
-            <div class="gauge-unit">inHg</div>
-        </div>
-        <div class="gauge">
-            <div class="gauge-label">FUEL FLOW</div>
-            <div class="gauge-value" id="fuel">--.-</div>
-            <div class="gauge-unit">GPH</div>
-        </div>
-        <div class="gauge">
-            <div class="gauge-label">OIL TEMP</div>
-            <div class="gauge-value" id="oilT">---</div>
-            <div class="gauge-unit">°F</div>
-        </div>
-        <div class="gauge">
-            <div class="gauge-label">OIL PRESS</div>
-            <div class="gauge-value" id="oilP">--</div>
-            <div class="gauge-unit">PSI</div>
-        </div>
-        <div class="gauge">
-            <div class="gauge-label">VOLTS</div>
-            <div class="gauge-value" id="volts">--.-</div>
-        </div>
-        <div class="gauge">
-            <div class="gauge-label">CARB TEMP</div>
-            <div class="gauge-value" id="carbTemp">---</div>
-            <div class="gauge-unit">°F</div>
-        </div>
-    </div>
-
-    <div class="section-title">ENGINE ANALYSIS</div>
-    <div class="calcs-row">
-        <div class="calc-gauge">
-            <div class="gauge-label">% POWER</div>
-            <div class="gauge-value" id="percentPower">--</div>
-        </div>
-        <div class="calc-gauge">
-            <div class="gauge-label">MIXTURE</div>
-            <div class="gauge-value" id="ropLopMode">---</div>
-        </div>
-        <div class="calc-gauge">
-            <div class="gauge-label">DEVIATION %</div>
-            <div class="gauge-value" id="ropLopPercent">--</div>
-        </div>
-        <div class="calc-gauge">
-            <div class="gauge-label">BSFC (lb/HP/hr)</div>
-            <div class="gauge-value" id="sfc">--</div>
-        </div>
-    </div>
-
-    <div class="section-title">EGT (°F)</div>
-    <div class="egt-row">
-        <div class="temp-gauge"><div class="gauge-label">EGT 1</div><div class="value-row"><span class="gauge-value" id="egt1">----</span><span class="trend-arrow" id="egt1Trend"></span></div><div class="peak-delta no-peak" id="peak1">--</div></div>
-        <div class="temp-gauge"><div class="gauge-label">EGT 2</div><div class="value-row"><span class="gauge-value" id="egt2">----</span><span class="trend-arrow" id="egt2Trend"></span></div><div class="peak-delta no-peak" id="peak2">--</div></div>
-        <div class="temp-gauge"><div class="gauge-label">EGT 3</div><div class="value-row"><span class="gauge-value" id="egt3">----</span><span class="trend-arrow" id="egt3Trend"></span></div><div class="peak-delta no-peak" id="peak3">--</div></div>
-        <div class="temp-gauge"><div class="gauge-label">EGT 4</div><div class="value-row"><span class="gauge-value" id="egt4">----</span><span class="trend-arrow" id="egt4Trend"></span></div><div class="peak-delta no-peak" id="peak4">--</div></div>
-    </div>
-
-    <div class="section-title">CHT (°F)</div>
-    <div class="cht-row">
-        <div class="temp-gauge"><div class="gauge-label">CHT 1</div><div class="value-row"><span class="gauge-value" id="cht1">---</span><span class="trend-arrow" id="cht1Trend"></span></div></div>
-        <div class="temp-gauge"><div class="gauge-label">CHT 2</div><div class="value-row"><span class="gauge-value" id="cht2">---</span><span class="trend-arrow" id="cht2Trend"></span></div></div>
-        <div class="temp-gauge"><div class="gauge-label">CHT 3</div><div class="value-row"><span class="gauge-value" id="cht3">---</span><span class="trend-arrow" id="cht3Trend"></span></div></div>
-        <div class="temp-gauge"><div class="gauge-label">CHT 4</div><div class="value-row"><span class="gauge-value" id="cht4">---</span><span class="trend-arrow" id="cht4Trend"></span></div></div>
-    </div>
-
-    <div class="chart-header">
-        <span class="section-title">EGT/CHT TREND</span>
-        <select id="chartDuration" class="duration-select" onchange="updateCharts()">
-            <option value="5">Last 5 min</option>
-            <option value="10">Last 10 min</option>
-            <option value="15">Last 15 min</option>
-            <option value="30" selected>Last 30 min</option>
-            <option value="60">Last 60 min</option>
-            <option value="120">Last 2 hours</option>
-        </select>
-    </div>
-    <div class="chart-container">
-        <canvas id="egtChart"></canvas>
-    </div>
-    <div class="chart-container">
-        <canvas id="chtChart"></canvas>
-    </div>
-
-    <div class="atis-row">
-        <label>ATIS:</label>
-        <label>Altimeter</label>
-        <input type="text" id="atisAltimeter" placeholder="29.92" maxlength="5" inputmode="decimal">
-        <span class="atis-unit">inHg</span>
-        <label>OAT</label>
-        <input type="text" id="atisOat" placeholder="15" maxlength="4" inputmode="numeric">
-        <span class="atis-unit">°C</span>
-        <button class="btn-clear" onclick="clearAtis()">Clear</button>
-    </div>
-
-    <div class="section-title">FLIGHT DATA</div>
-    <div class="calcs-row">
-        <div class="calc-gauge">
-            <div class="gauge-label">ALT (MSL)</div>
-            <div class="gauge-value" id="gpsAlt">-----</div>
-            <div class="gauge-unit">ft</div>
-        </div>
-        <div class="calc-gauge">
-            <div class="gauge-label">DENS ALT</div>
-            <div class="gauge-value" id="densAlt">-----</div>
-            <div class="gauge-unit">ft</div>
-        </div>
-        <div class="calc-gauge">
-            <div class="gauge-label">OAT</div>
-            <div class="gauge-value" id="oat">--</div>
-            <div class="gauge-unit">°C</div>
-        </div>
-        <div class="calc-gauge">
-            <div class="gauge-label">GND SPD</div>
-            <div class="gauge-value" id="gndSpd">---</div>
-            <div class="gauge-unit">kts</div>
-        </div>
-        <div class="calc-gauge">
-            <div class="gauge-label">TAS</div>
-            <div class="gauge-value" id="tas">---</div>
-            <div class="gauge-unit">kts</div>
-        </div>
-    </div>
-
-    <div class="section-title">CRUISE TARGETS</div>
-    <div class="calcs-row">
-        <div class="calc-gauge">
-            <div class="gauge-label">TARGET FF</div>
-            <div class="gauge-value target-value" id="targetFf">--.-</div>
-            <div class="gauge-unit">GPH</div>
-        </div>
-        <div class="calc-gauge">
-            <div class="gauge-label">TARGET PWR</div>
-            <div class="gauge-value target-value" id="targetPwr">--</div>
-            <div class="gauge-unit">%</div>
-        </div>
-        <div class="calc-gauge">
-            <div class="gauge-label">TARGET MIX</div>
-            <div class="gauge-value target-value" id="targetMode">---</div>
-        </div>
-    </div>
-
-    <!-- Fuel Status Section -->
-    <div class="section-title">FUEL STATUS</div>
-    <div id="fuelWarning" class="fuel-warning" style="display:none;">
-        <div class="warning-text" id="fuelWarningText">LOW FUEL</div>
-        <button class="dismiss-btn" onclick="dismissFuelWarning()">Dismiss</button>
-    </div>
-    <div class="fuel-row">
-        <div class="fuel-gauge">
-            <div class="gauge-label">REMAINING</div>
-            <div class="gauge-value" id="fuelRemaining">--.-</div>
-            <div class="gauge-unit">GAL</div>
-        </div>
-        <div class="fuel-gauge">
-            <div class="gauge-label">USED (FLIGHT)</div>
-            <div class="gauge-value" id="fuelUsed">--.-</div>
-            <div class="gauge-unit">GAL</div>
-        </div>
-        <div class="fuel-gauge">
-            <div class="gauge-label">ENDURANCE</div>
-            <div class="gauge-value" id="fuelEndurance">-:--</div>
-            <div class="gauge-unit">H:MM</div>
-        </div>
-        <div class="fuel-gauge">
-            <div class="gauge-label">RANGE</div>
-            <div class="gauge-value" id="fuelRange">---</div>
-            <div class="gauge-unit">NM</div>
-        </div>
-    </div>
-    <div class="section-label">EDM FUEL GAUGES</div>
-    <div class="fuel-row" style="grid-template-columns: repeat(3, 1fr);">
-        <div class="fuel-gauge">
-            <div class="gauge-label">LEFT TANK</div>
-            <div class="gauge-value" id="edmFuelLeft">--.-</div>
-            <div class="gauge-unit">GAL</div>
-        </div>
-        <div class="fuel-gauge">
-            <div class="gauge-label">RIGHT TANK</div>
-            <div class="gauge-value" id="edmFuelRight">--.-</div>
-            <div class="gauge-unit">GAL</div>
-        </div>
-        <div class="fuel-gauge">
-            <div class="gauge-label">TOTAL (EDM)</div>
-            <div class="gauge-value" id="edmFuelTotal">--.-</div>
-            <div class="gauge-unit">GAL</div>
-        </div>
-    </div>
-    <div class="fuel-bar-container">
-        <div class="fuel-bar" id="fuelBar" style="width:0%"></div>
-        <span class="fuel-bar-label" id="fuelBarLabel">--% (--/-- gal)</span>
-    </div>
-    <div class="fuel-efficiency" id="fuelEfficiency">-- GPH @ -- kts = -- nm/gal</div>
-    <button class="btn btn-fuel" onclick="openAddFuelModal()">+ ADD FUEL</button>
-
-    <!-- Add Fuel Modal -->
-    <div id="addFuelModal" class="modal" style="display:none;">
-        <div class="modal-content">
-            <div class="modal-header">
-                <span>ADD FUEL</span>
-                <button class="modal-close" onclick="closeAddFuelModal()">X</button>
-            </div>
-            <div class="modal-body">
-                <div class="form-row">
-                    <label>Date</label>
-                    <input type="date" id="fuelDate">
-                </div>
-                <div class="form-row">
-                    <label>Time</label>
-                    <input type="time" id="fuelTime">
-                </div>
-                <div class="form-row">
-                    <label>Airport</label>
-                    <input type="text" id="fuelAirport" maxlength="4" placeholder="KXXX" style="text-transform:uppercase;">
-                </div>
-                <div class="form-row">
-                    <label>Gallons</label>
-                    <input type="number" id="fuelGallons" step="0.1" min="0" max="50">
-                </div>
-                <div class="form-row">
-                    <label>Price/gal</label>
-                    <input type="number" id="fuelPrice" step="0.01" min="0" placeholder="Optional">
-                </div>
-                <div class="form-row">
-                    <label class="radio-label">
-                        <input type="radio" name="fuelMode" value="add" checked> Add gallons to current
-                    </label>
-                </div>
-                <div class="form-row">
-                    <label class="radio-label">
-                        <input type="radio" name="fuelMode" value="set"> Set total fuel to this amount
-                    </label>
-                </div>
-                <div class="form-row">
-                    <label class="checkbox-label">
-                        <input type="checkbox" id="includeCalibration" checked> Include in K-factor calibration
-                    </label>
-                </div>
-                <div class="form-row">
-                    <label>Notes</label>
-                    <input type="text" id="fuelNotes" placeholder="Optional notes">
-                </div>
-                <div class="fuel-preview" id="fuelPreview">Current: -- gal → After: -- gal</div>
-            </div>
-            <div class="modal-footer">
-                <button class="btn btn-stop" onclick="closeAddFuelModal()">CANCEL</button>
-                <button class="btn btn-start" onclick="submitAddFuel()">SAVE</button>
-            </div>
-        </div>
-    </div>
-
-    <div class="files-section">
-        <div class="section-title">Captured Files</div>
-        <div class="file-list" id="fileList">Loading...</div>
-    </div>
-
-    <div class="files-section" style="margin-top:10px;">
-        <div class="section-title">Upload Script Files</div>
-        <div class="upload-section">
-            <input type="file" id="uploadInput" multiple accept=".py,.js,.html,.css,.json,.md" style="display:none;">
-            <button class="btn btn-start" onclick="document.getElementById('uploadInput').click()">SELECT FILES</button>
-            <span id="uploadStatus" style="margin-left:10px;font-size:11px;"></span>
-        </div>
-        <div id="uploadPreview" style="font-size:11px;color:#666;margin-top:6px;"></div>
-        <button id="uploadBtn" class="btn btn-stop" onclick="uploadFiles()" style="display:none;margin-top:8px;">UPLOAD</button>
-        <div style="font-size:10px;color:#999;margin-top:6px;">
-            Allowed: .py, .js, .html, .css, .json, .md
-        </div>
-    </div>
-
-    <script>
-        // Download active or most recent CSV from server
-        function downloadActiveCSV() {
-            // Try active CSV first (during capture), fall back to most recent flight CSV
-            const a = document.createElement('a');
-            a.href = '/download/' + encodeURIComponent('flight_active.csv');
-            a.download = 'flight_active.csv';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-        }
-
-        // Offline tracking
-        let isOffline = false;
-        let statusPollId = null;
-        let filesPollId = null;
-        let chartsPollId = null;
-
-        function updateConnectionBadge(offline) {
-            const badge = document.getElementById('connectionBadge');
-            if (!badge) return;
-            if (offline) {
-                badge.textContent = 'Offline';
-                badge.style.background = '#FFB6C1';
-                badge.style.color = '#CC0000';
-                badge.style.borderColor = '#CC0000';
-            } else {
-                badge.textContent = 'Connected';
-                badge.style.background = '#90EE90';
-                badge.style.color = '#006400';
-                badge.style.borderColor = '#006400';
-            }
-        }
-
-        function setOfflineState(offline) {
-            if (isOffline === offline) return;
-            isOffline = offline;
-            updateConnectionBadge(offline);
-
-            // Adjust poll intervals: slow down when offline, speed up when back online
-            clearInterval(statusPollId);
-            clearInterval(filesPollId);
-            clearInterval(chartsPollId);
-            if (offline) {
-                statusPollId = setInterval(updateStatus, 5000);
-                // Don't poll files or charts when offline
-            } else {
-                statusPollId = setInterval(updateStatus, 1000);
-                filesPollId = setInterval(updateFiles, 10000);
-                chartsPollId = setInterval(updateCharts, 2000);
-            }
-        }
-
-        // Service Worker registration for offline support
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./service-worker.js')
-                    .then(reg => console.log('Service Worker registered, scope:', reg.scope))
-                    .catch(err => console.error('Service Worker registration failed:', err));
-            });
-        }
-
-        // Flight Data Recording is now server-side (in capture thread)
-
-        // Trend calculation: compare current value to value from 3 seconds ago
-        // Optimized from actual flight data analysis for mag check detection
-        const BUFFER_SIZE = 30;  // 30 seconds of history at 1Hz API updates
-        const LOOKBACK = 3;      // Compare to value from 3 seconds ago (responsive for mag check)
-        const EGT_THRESHOLD = 20; // Degrees change to show EGT trend (98% stable during cruise)
-        const CHT_THRESHOLD = 3;  // Degrees change to show CHT trend
-
-        const valueBuffers = {
-            EGT1: [], EGT2: [], EGT3: [], EGT4: [],
-            CHT1: [], CHT2: [], CHT3: [], CHT4: []
-        };
-
-        function updateTrend(id, currentVal, isEGT) {
-            const el = document.getElementById(id + 'Trend');
-            if (!el) return;
-
-            const buffer = valueBuffers[id.toUpperCase()];
-            const threshold = isEGT ? EGT_THRESHOLD : CHT_THRESHOLD;
-
-            // Add current value to buffer
-            if (currentVal && currentVal > 0) {
-                buffer.push(currentVal);
-                if (buffer.length > BUFFER_SIZE) {
-                    buffer.shift(); // Remove oldest value
-                }
-            }
-
-            // Need enough samples to compare (LOOKBACK + 1)
-            if (buffer.length <= LOOKBACK || currentVal === 0) {
-                el.textContent = '';
-                el.className = 'trend-arrow';
-                return;
-            }
-
-            // Compare current value to value from LOOKBACK seconds ago
-            const oldValue = buffer[buffer.length - 1 - LOOKBACK];
-            const diff = currentVal - oldValue;
-
-            if (diff > threshold) {
-                el.textContent = '\u25B2'; // Up arrow - rising
-                el.className = 'trend-arrow trend-up';
-            } else if (diff < -threshold) {
-                el.textContent = '\u25BC'; // Down arrow - falling
-                el.className = 'trend-arrow trend-down';
-            } else {
-                el.textContent = '\u25CF'; // Dot for stable
-                el.className = 'trend-arrow trend-stable';
-            }
-        }
-
-        function updateStatus() {
-            fetch('/api/status')
-                .then(r => r.json())
-                .then(data => {
-                    // Update server-side CSV recording display
-                    const dot = document.getElementById('recordDot');
-                    const recStatus = document.getElementById('recordStatus');
-                    const recCount = document.getElementById('recordCount');
-                    const recDuration = document.getElementById('recordDuration');
-                    if (dot) dot.className = 'record-dot' + (data.capturing ? ' recording' : '');
-                    if (recStatus) recStatus.textContent = data.capturing ? 'Recording CSV' : 'Not Recording';
-                    if (recCount) recCount.textContent = data.csv_points || 0;
-                    if (recDuration) recDuration.textContent = data.duration || '0:00';
-
-                    const statusEl = document.getElementById('status');
-                    const btnStart = document.getElementById('btnStart');
-                    const btnStop = document.getElementById('btnStop');
-
-                    const versionBadge = data.version ? '<span class="version-badge">v' + data.version + '</span>' : '';
-                    if (data.capturing) {
-                        statusEl.innerHTML = '● CAPTURING ' + versionBadge;
-                        statusEl.className = 'status capturing';
-                        btnStart.disabled = true;
-                        btnStop.disabled = false;
-                    } else {
-                        statusEl.innerHTML = '● STOPPED ' + versionBadge;
-                        statusEl.className = 'status stopped';
-                        btnStart.disabled = false;
-                        btnStop.disabled = true;
-                    }
-
-                    document.getElementById('duration').textContent =
-                        data.duration ? `Duration: ${data.duration}` : '';
-
-                    if (data.last_error) {
-                        document.getElementById('error').style.display = 'block';
-                        document.getElementById('error').textContent = data.last_error;
-                    } else {
-                        document.getElementById('error').style.display = 'none';
-                    }
-
-                    // Serial connection warning
-                    const serialWarning = document.getElementById('serialWarning');
-                    if (data.serial_warning) {
-                        document.getElementById('serialWarningDetail').textContent = data.serial_warning;
-                        serialWarning.style.display = 'block';
-                    } else {
-                        serialWarning.style.display = 'none';
-                    }
-
-                    // Sticky valve warning
-                    const stickyWarning = document.getElementById('stickyValveWarning');
-                    if (data.sticky_valve_alert && !data.sticky_valve_dismissed) {
-                        document.getElementById('stickyValveCylinder').textContent = data.sticky_valve_alert;
-                        stickyWarning.style.display = 'flex';
-                    } else {
-                        stickyWarning.style.display = 'none';
-                    }
-
-                    // Update gauges
-                    const d = data.data;
-                    if (d && Object.keys(d).length > 0) {
-                        document.getElementById('time').textContent = d.time || '--:--:--';
-                        document.getElementById('rpm').textContent = d.RPM || '----';
-                        document.getElementById('mp').textContent = d.MP ? d.MP.toFixed(1) : '--.-';
-                        document.getElementById('fuel').textContent = d.Fuel_Flow ? d.Fuel_Flow.toFixed(1) : '--.-';
-                        document.getElementById('oilT').textContent = d.Oil_Temp || '---';
-                        document.getElementById('oilP').textContent = d.Oil_Press || '--';
-                        document.getElementById('volts').textContent = d.Volts ? d.Volts.toFixed(1) : '--.-';
-                        document.getElementById('carbTemp').textContent = d.Carb_Temp || '---';
-
-                        // Update EGTs with trend arrows (10-second rolling average)
-                        document.getElementById('egt1').textContent = d.EGT1 || '----';
-                        document.getElementById('egt2').textContent = d.EGT2 || '----';
-                        document.getElementById('egt3').textContent = d.EGT3 || '----';
-                        document.getElementById('egt4').textContent = d.EGT4 || '----';
-                        updateTrend('egt1', d.EGT1, true);
-                        updateTrend('egt2', d.EGT2, true);
-                        updateTrend('egt3', d.EGT3, true);
-                        updateTrend('egt4', d.EGT4, true);
-
-                        // Update degrees from peak for each cylinder
-                        const peakDeltas = data.degrees_from_peak || [0, 0, 0, 0];
-                        const peaksValid = data.peaks_valid || false;
-                        for (let i = 1; i <= 4; i++) {
-                            const peakEl = document.getElementById('peak' + i);
-                            const delta = peakDeltas[i - 1];
-                            peakEl.className = 'peak-delta';
-                            if (!peaksValid) {
-                                peakEl.textContent = '--';
-                                peakEl.classList.add('no-peak');
-                            } else if (delta === 0) {
-                                peakEl.textContent = 'PEAK';
-                                peakEl.classList.add('at-peak');
-                            } else if (delta < 0) {
-                                peakEl.textContent = delta + '°';
-                                peakEl.classList.add('lop');
-                            } else {
-                                peakEl.textContent = '+' + delta + '°';
-                                peakEl.classList.add('rop');
-                            }
-                        }
-
-                        // Update CHTs with trend arrows (10-second rolling average)
-                        document.getElementById('cht1').textContent = d.CHT1 || '---';
-                        document.getElementById('cht2').textContent = d.CHT2 || '---';
-                        document.getElementById('cht3').textContent = d.CHT3 || '---';
-                        document.getElementById('cht4').textContent = d.CHT4 || '---';
-                        updateTrend('cht1', d.CHT1, false);
-                        updateTrend('cht2', d.CHT2, false);
-                        updateTrend('cht3', d.CHT3, false);
-                        updateTrend('cht4', d.CHT4, false);
-
-                        // Color code CHTs
-                        ['cht1','cht2','cht3','cht4'].forEach(id => {
-                            const el = document.getElementById(id);
-                            const val = parseInt(el.textContent);
-                            el.className = 'gauge-value';
-                            if (val > 400) el.classList.add('temp-warning');
-                            else if (val > 380) el.classList.add('temp-caution');
-                            else el.classList.add('temp-normal');
-                        });
-                    }
-
-                    // Update percent power display (always show value)
-                    const powerEl = document.getElementById('percentPower');
-                    powerEl.textContent = (data.percent_power !== undefined ? data.percent_power.toFixed(0) : '0') + '%';
-                    powerEl.className = 'gauge-value power-value';
-
-                    // Update mixture mode and deviation displays (always show values)
-                    const modeEl = document.getElementById('ropLopMode');
-                    const pctEl = document.getElementById('ropLopPercent');
-                    const sfcEl = document.getElementById('sfc');
-
-                    modeEl.textContent = data.rop_lop_mode || '---';
-                    modeEl.className = 'gauge-value';
-                    if (data.rop_lop_mode === 'RICH') modeEl.classList.add('rich-value');
-                    else if (data.rop_lop_mode === 'LEAN') modeEl.classList.add('lean-value');
-                    else if (data.rop_lop_mode === 'PEAK') modeEl.classList.add('peak-value');
-
-                    const pct = Math.abs(data.rop_lop_percent !== undefined ? data.rop_lop_percent : 0).toFixed(1);
-                    pctEl.textContent = pct + '%';
-                    pctEl.className = 'gauge-value';
-                    if (data.rop_lop_mode === 'RICH') pctEl.classList.add('rich-value');
-                    else if (data.rop_lop_mode === 'LEAN') pctEl.classList.add('lean-value');
-
-                    sfcEl.textContent = (data.sfc !== undefined ? data.sfc : 0).toFixed(2);
-                    sfcEl.className = 'gauge-value';
-                    // Color code SFC - green for efficient, yellow for normal, red for high
-                    if (data.sfc && data.sfc > 0) {
-                        if (data.sfc < 0.42) sfcEl.classList.add('temp-normal');
-                        else if (data.sfc < 0.50) sfcEl.classList.add('temp-caution');
-                        else sfcEl.classList.add('temp-warning');
-                    }
-
-                    // Update flight data from Stratux
-                    const stratuxClass = data.stratux_connected ? '' : 'stratux-disconnected';
-                    const gpsAltEl = document.getElementById('gpsAlt');
-                    const densAltEl = document.getElementById('densAlt');
-                    const oatEl = document.getElementById('oat');
-                    const gndSpdEl = document.getElementById('gndSpd');
-                    const tasEl = document.getElementById('tas');
-
-                    gpsAltEl.textContent = data.gps_altitude ? Math.round(data.gps_altitude) : '-----';
-                    gpsAltEl.className = 'gauge-value ' + stratuxClass;
-                    densAltEl.textContent = data.density_altitude ? Math.round(data.density_altitude) : '-----';
-                    densAltEl.className = 'gauge-value ' + stratuxClass;
-                    oatEl.textContent = data.oat !== undefined ? data.oat.toFixed(0) : '--';
-                    // Highlight OAT if using manual ATIS value
-                    oatEl.className = 'gauge-value ' + (data.manual_oat !== null ? '' : stratuxClass);
-                    if (data.manual_oat !== null) oatEl.style.background = '#90EE90';
-                    else oatEl.style.background = '';
-                    gndSpdEl.textContent = data.ground_speed ? Math.round(data.ground_speed) : '---';
-                    gndSpdEl.className = 'gauge-value ' + stratuxClass;
-                    tasEl.textContent = data.tas ? Math.round(data.tas) : '---';
-                    tasEl.className = 'gauge-value ' + stratuxClass;
-
-                    // Update cruise targets
-                    const targetFfEl = document.getElementById('targetFf');
-                    const targetPwrEl = document.getElementById('targetPwr');
-                    const targetModeEl = document.getElementById('targetMode');
-
-                    targetFfEl.textContent = data.target_fuel_flow ? data.target_fuel_flow.toFixed(1) : '--.-';
-                    targetFfEl.className = 'gauge-value target-value ' + stratuxClass;
-                    targetPwrEl.textContent = data.target_power ? data.target_power + '%' : '--%';
-                    targetPwrEl.className = 'gauge-value target-value ' + stratuxClass;
-                    targetModeEl.textContent = data.target_mode || '---';
-                    targetModeEl.className = 'gauge-value target-value lean-value ' + stratuxClass;
-
-                    // Update fuel display
-                    if (data.fuel) {
-                        updateFuelDisplay(data.fuel);
-                    }
-
-                    // Sync ATIS input fields from server (only if user hasn't entered values)
-                    const atisAltEl = document.getElementById('atisAltimeter');
-                    const atisOatEl = document.getElementById('atisOat');
-                    if (atisAltEl.value === '' && data.manual_altimeter !== null) {
-                        atisAltEl.value = data.manual_altimeter;
-                    }
-                    if (atisOatEl.value === '' && data.manual_oat !== null) {
-                        atisOatEl.value = data.manual_oat;
-                    }
-                    updateAtisStyle();
-                    setOfflineState(false);
-                })
-                .catch(e => {
-                    setOfflineState(true);
-                });
-        }
-
-        function updateFiles() {
-            if (isOffline) return;
-            fetch('/api/files')
-                .then(r => r.json())
-                .then(files => {
-                    const list = document.getElementById('fileList');
-                    if (files.length === 0) {
-                        list.innerHTML = '<div style="color:#666;padding:10px;">No captured files</div>';
-                        return;
-                    }
-                    list.innerHTML = files.map(f => `
-                        <div class="file-item">
-                            <div>
-                                <div class="file-name">${f.name}</div>
-                                <div class="file-size">${(f.size/1024).toFixed(1)} KB - ${f.modified}</div>
-                            </div>
-                            <button class="btn-download" onclick="downloadFile('${f.name}')">Download</button>
-                        </div>
-                    `).join('');
-                });
-        }
-
-        function startCapture() {
-            fetch('/api/start', {method: 'POST'})
-                .then(r => r.json())
-                .then(data => {
-                    if (!data.success) alert(data.message);
-                    updateStatus();
-                });
-        }
-
-        function triggerDownload(filename) {
-            const a = document.createElement('a');
-            a.href = '/download/' + encodeURIComponent(filename);
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-        }
-
-        function stopCapture() {
-            fetch('/api/stop', {method: 'POST'})
-                .then(r => r.json())
-                .then(data => {
-                    // Auto-download the CSV
-                    if (data.csv_filename) {
-                        triggerDownload(data.csv_filename);
-                    }
-                    alert(data.message);
-                    updateStatus();
-                    updateFiles();
-                });
-        }
-
-        function shutdownApp() {
-            if (confirm('Shutdown the Engine Monitor app?\\n\\nYou will need to restart it manually or reboot the Raspberry Pi.')) {
-                // Stop capture first to save and download CSV, then shutdown
-                fetch('/api/stop', {method: 'POST'})
-                    .then(r => r.json())
-                    .then(data => {
-                        if (data.csv_filename) {
-                            triggerDownload(data.csv_filename);
-                        }
-                        // Brief delay to allow download to start
-                        return new Promise(resolve => setTimeout(resolve, 500));
-                    })
-                    .catch(() => {})  // Ignore if not capturing
-                    .then(() => {
-                        return fetch('/api/shutdown', {method: 'POST'});
-                    })
-                    .then(r => r.json())
-                    .then(data => {
-                        alert(data.message);
-                    })
-                    .catch(() => {
-                        // Connection will be lost after shutdown
-                    });
-            }
-        }
-
-        function dismissStickyValve() {
-            fetch('/api/dismiss_sticky_valve', {method: 'POST'})
-                .then(r => r.json())
-                .then(data => {
-                    document.getElementById('stickyValveWarning').style.display = 'none';
-                });
-        }
-
-        // ATIS input handling
-        function updateAtis() {
-            const altimeter = document.getElementById('atisAltimeter').value.trim();
-            const oat = document.getElementById('atisOat').value.trim();
-
-            const data = {};
-            if (altimeter !== '') data.altimeter = parseFloat(altimeter);
-            else data.altimeter = null;
-            if (oat !== '') data.oat = parseFloat(oat);
-            else data.oat = null;
-
-            fetch('/api/atis', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(data)
-            }).then(r => r.json()).then(result => {
-                updateAtisStyle();
-            });
-        }
-
-        function clearAtis() {
-            document.getElementById('atisAltimeter').value = '';
-            document.getElementById('atisOat').value = '';
-            fetch('/api/atis', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({altimeter: null, oat: null})
-            }).then(r => r.json()).then(result => {
-                updateAtisStyle();
-            });
-        }
-
-        function updateAtisStyle() {
-            const altEl = document.getElementById('atisAltimeter');
-            const oatEl = document.getElementById('atisOat');
-            altEl.classList.toggle('has-value', altEl.value.trim() !== '');
-            oatEl.classList.toggle('has-value', oatEl.value.trim() !== '');
-        }
-
-        // Attach event listeners for ATIS inputs
-        document.addEventListener('DOMContentLoaded', function() {
-            const altEl = document.getElementById('atisAltimeter');
-            const oatEl = document.getElementById('atisOat');
-            altEl.addEventListener('change', updateAtis);
-            oatEl.addEventListener('change', updateAtis);
-            altEl.addEventListener('blur', updateAtis);
-            oatEl.addEventListener('blur', updateAtis);
-        });
-
-        function downloadFile(name) {
-            triggerDownload(name);
-        }
-
-        // File upload handling - wrap in DOMContentLoaded to ensure element exists
-        document.addEventListener('DOMContentLoaded', function() {
-            const uploadInput = document.getElementById('uploadInput');
-            if (uploadInput) {
-                uploadInput.addEventListener('change', function(e) {
-                    const files = e.target.files;
-                    const preview = document.getElementById('uploadPreview');
-                    const uploadBtn = document.getElementById('uploadBtn');
-
-                    if (files.length === 0) {
-                        preview.textContent = '';
-                        uploadBtn.style.display = 'none';
-                        return;
-                    }
-
-                    const fileList = Array.from(files).map(f => `${f.name} (${(f.size/1024).toFixed(1)} KB)`).join(', ');
-                    preview.textContent = `Selected: ${fileList}`;
-                    uploadBtn.style.display = 'inline-block';
-                });
-            }
-        });
-
-        function uploadFiles() {
-            const input = document.getElementById('uploadInput');
-            const files = input.files;
-            const statusEl = document.getElementById('uploadStatus');
-            const uploadBtn = document.getElementById('uploadBtn');
-
-            if (files.length === 0) {
-                alert('No files selected');
-                return;
-            }
-
-            statusEl.textContent = 'Uploading...';
-            statusEl.style.color = '#CC6600';
-            uploadBtn.disabled = true;
-
-            const formData = new FormData();
-            for (let i = 0; i < files.length; i++) {
-                formData.append('file' + i, files[i]);
-            }
-
-            fetch('/api/upload', {
-                method: 'POST',
-                body: formData
-            })
-            .then(r => r.json())
-            .then(data => {
-                if (data.success) {
-                    statusEl.textContent = data.message;
-                    statusEl.style.color = '#006400';
-                    input.value = '';
-                    document.getElementById('uploadPreview').textContent = '';
-                    uploadBtn.style.display = 'none';
-                    alert(data.message + '. Restart service: sudo systemctl restart engine_monitor');
-                } else {
-                    statusEl.textContent = 'Error: ' + data.error;
-                    statusEl.style.color = '#CC0000';
-                }
-                uploadBtn.disabled = false;
-            })
-            .catch(err => {
-                statusEl.textContent = 'Upload failed: ' + err;
-                statusEl.style.color = '#CC0000';
-                uploadBtn.disabled = false;
-            });
-        }
-
-        // Cylinder colors - HIGH CONTRAST for sunlight readability on white background
-        // Using dark, saturated colors that are easily distinguishable
-        const cylColors = ['#CC0000', '#006400', '#00008B', '#CC6600'];  // Dark Red, Dark Green, Dark Blue, Dark Orange
-
-        // Chart configuration with Y axis on both sides - SUNLIGHT OPTIMIZED
-        const chartOptions = {
-            responsive: true,
-            maintainAspectRatio: false,
-            animation: false,
-            plugins: {
-                legend: {
-                    labels: {
-                        color: '#000',
-                        font: { size: 11, weight: 'bold' },
-                        padding: 8
-                    }
-                }
-            },
-            scales: {
-                x: {
-                    ticks: { color: '#000', font: { size: 12, weight: '600' }, maxTicksLimit: 10 },
-                    grid: { color: '#CCC' }
-                },
-                y: {
-                    position: 'left',
-                    ticks: { color: '#000', font: { size: 12, weight: '600' } },
-                    grid: { color: '#CCC' }
-                },
-                y1: {
-                    position: 'right',
-                    ticks: { color: '#000', font: { size: 12, weight: '600' } },
-                    grid: { drawOnChartArea: false }
-                }
-            }
-        };
-
-        // Initialize EGT Chart (deep copy options so charts don't share state)
-        // Using THICK lines (borderWidth: 3) for sunlight visibility
-        const egtCtx = document.getElementById('egtChart').getContext('2d');
-        const egtChart = new Chart(egtCtx, {
-            type: 'line',
-            data: {
-                labels: [],
-                datasets: [
-                    { label: 'EGT1', data: [], borderColor: cylColors[0], borderWidth: 3, pointRadius: 0, tension: 0.1, yAxisID: 'y' },
-                    { label: 'EGT2', data: [], borderColor: cylColors[1], borderWidth: 3, pointRadius: 0, tension: 0.1, yAxisID: 'y' },
-                    { label: 'EGT3', data: [], borderColor: cylColors[2], borderWidth: 3, pointRadius: 0, tension: 0.1, yAxisID: 'y' },
-                    { label: 'EGT4', data: [], borderColor: cylColors[3], borderWidth: 3, pointRadius: 0, tension: 0.1, yAxisID: 'y' }
-                ]
-            },
-            options: JSON.parse(JSON.stringify(chartOptions))
-        });
-
-        // Initialize CHT Chart (deep copy options so charts don't share state)
-        // Using THICK lines (borderWidth: 3) for sunlight visibility
-        const chtCtx = document.getElementById('chtChart').getContext('2d');
-        const chtChart = new Chart(chtCtx, {
-            type: 'line',
-            data: {
-                labels: [],
-                datasets: [
-                    { label: 'CHT1', data: [], borderColor: cylColors[0], borderWidth: 3, pointRadius: 0, tension: 0.1, yAxisID: 'y' },
-                    { label: 'CHT2', data: [], borderColor: cylColors[1], borderWidth: 3, pointRadius: 0, tension: 0.1, yAxisID: 'y' },
-                    { label: 'CHT3', data: [], borderColor: cylColors[2], borderWidth: 3, pointRadius: 0, tension: 0.1, yAxisID: 'y' },
-                    { label: 'CHT4', data: [], borderColor: cylColors[3], borderWidth: 3, pointRadius: 0, tension: 0.1, yAxisID: 'y' }
-                ]
-            },
-            options: JSON.parse(JSON.stringify(chartOptions))
-        });
-
-        function updateCharts() {
-            if (isOffline) return;
-            const duration = document.getElementById('chartDuration').value;
-            fetch('/api/history?duration=' + duration)
-                .then(r => r.json())
-                .then(data => {
-                    if (!data.labels || data.labels.length === 0) return;
-
-                    // Update EGT chart
-                    egtChart.data.labels = data.labels;
-                    egtChart.data.datasets[0].data = data.egt.EGT1;
-                    egtChart.data.datasets[1].data = data.egt.EGT2;
-                    egtChart.data.datasets[2].data = data.egt.EGT3;
-                    egtChart.data.datasets[3].data = data.egt.EGT4;
-                    // First update to calculate scales
-                    egtChart.update('none');
-                    // Sync right Y axis with left Y axis for EGT
-                    const egtYScale = egtChart.scales.y;
-                    egtChart.options.scales.y1.min = egtYScale.min;
-                    egtChart.options.scales.y1.max = egtYScale.max;
-                    // Second update to apply synced scales
-                    egtChart.update('none');
-
-                    // Update CHT chart
-                    chtChart.data.labels = data.labels;
-                    chtChart.data.datasets[0].data = data.cht.CHT1;
-                    chtChart.data.datasets[1].data = data.cht.CHT2;
-                    chtChart.data.datasets[2].data = data.cht.CHT3;
-                    chtChart.data.datasets[3].data = data.cht.CHT4;
-                    // First update to calculate scales
-                    chtChart.update('none');
-                    // Sync right Y axis with left Y axis for CHT
-                    const chtYScale = chtChart.scales.y;
-                    chtChart.options.scales.y1.min = chtYScale.min;
-                    chtChart.options.scales.y1.max = chtYScale.max;
-                    // Second update to apply synced scales
-                    chtChart.update('none');
-                })
-                .catch(e => console.error('Chart update error:', e));
-        }
-
-        // Fuel tracking functions
-        let currentFuelRemaining = 0;
-        const FUEL_CAPACITY = 34.0;  // Usable capacity
-
-        function updateFuelDisplay(fuel) {
-            if (!fuel) return;
-
-            currentFuelRemaining = fuel.fuel_remaining || 0;
-
-            // Update fuel gauges
-            document.getElementById('fuelRemaining').textContent =
-                fuel.fuel_remaining !== undefined ? fuel.fuel_remaining.toFixed(1) : '--.-';
-            document.getElementById('fuelUsed').textContent =
-                fuel.flight_fuel_used !== undefined ? fuel.flight_fuel_used.toFixed(1) : '--.-';
-
-            // Endurance formatting (hours to H:MM)
-            if (fuel.endurance_hours !== undefined && fuel.endurance_hours > 0) {
-                const hrs = Math.floor(fuel.endurance_hours);
-                const mins = Math.round((fuel.endurance_hours - hrs) * 60);
-                document.getElementById('fuelEndurance').textContent = hrs + ':' + mins.toString().padStart(2, '0');
-            } else {
-                document.getElementById('fuelEndurance').textContent = '-:--';
-            }
-
-            // Range
-            document.getElementById('fuelRange').textContent =
-                fuel.range_nm !== undefined ? Math.round(fuel.range_nm) : '---';
-
-            // Fuel bar
-            const pct = Math.min(100, (fuel.fuel_remaining / FUEL_CAPACITY) * 100);
-            const bar = document.getElementById('fuelBar');
-            bar.style.width = pct + '%';
-            bar.className = 'fuel-bar';
-            if (pct <= 12) bar.classList.add('critical');  // ~4 gal
-            else if (pct <= 24) bar.classList.add('low');   // ~8 gal
-
-            document.getElementById('fuelBarLabel').textContent =
-                pct.toFixed(0) + '% (' + fuel.fuel_remaining.toFixed(1) + '/' + FUEL_CAPACITY + ' gal)';
-
-            // Efficiency display
-            if (fuel.cruise_efficiency) {
-                const eff = fuel.cruise_efficiency;
-                document.getElementById('fuelEfficiency').textContent =
-                    eff.avg_fuel_flow.toFixed(1) + ' GPH @ ' +
-                    Math.round(eff.avg_ground_speed) + ' kts = ' +
-                    eff.nm_per_gallon.toFixed(1) + ' nm/gal';
-            } else {
-                document.getElementById('fuelEfficiency').textContent = '-- GPH @ -- kts = -- nm/gal';
-            }
-
-            // EDM fuel tank readings
-            document.getElementById('edmFuelLeft').textContent =
-                fuel.edm_fuel_left !== undefined ? fuel.edm_fuel_left.toFixed(1) : '--.-';
-            document.getElementById('edmFuelRight').textContent =
-                fuel.edm_fuel_right !== undefined ? fuel.edm_fuel_right.toFixed(1) : '--.-';
-            document.getElementById('edmFuelTotal').textContent =
-                fuel.edm_fuel_total !== undefined ? fuel.edm_fuel_total.toFixed(1) : '--.-';
-
-            // Fuel warnings
-            const warningEl = document.getElementById('fuelWarning');
-            if (fuel.warnings && fuel.warnings.length > 0) {
-                const warn = fuel.warnings[0];
-                document.getElementById('fuelWarningText').textContent = warn.message;
-                warningEl.className = 'fuel-warning' + (warn.level === 'critical' ? ' critical' : '');
-                warningEl.style.display = 'flex';
-            } else {
-                warningEl.style.display = 'none';
-            }
-        }
-
-        function dismissFuelWarning() {
-            fetch('/api/fuel/dismiss_warning', {method: 'POST'})
-                .then(r => r.json())
-                .then(data => {
-                    const el = document.getElementById('fuelWarning');
-                    if (el) el.style.display = 'none';
-                })
-                .catch(e => console.error('Dismiss warning error:', e));
-        }
-
-        function openAddFuelModal() {
-            const modal = document.getElementById('addFuelModal');
-            if (!modal) return;
-
-            const now = new Date();
-            const dateEl = document.getElementById('fuelDate');
-            const timeEl = document.getElementById('fuelTime');
-            const airportEl = document.getElementById('fuelAirport');
-            const gallonsEl = document.getElementById('fuelGallons');
-            const priceEl = document.getElementById('fuelPrice');
-            const notesEl = document.getElementById('fuelNotes');
-            const modeEl = document.querySelector('input[name="fuelMode"][value="add"]');
-            const calEl = document.getElementById('includeCalibration');
-
-            if (dateEl) dateEl.value = now.toISOString().split('T')[0];
-            if (timeEl) timeEl.value = now.toTimeString().slice(0, 5);
-            if (airportEl) airportEl.value = '';
-            if (gallonsEl) gallonsEl.value = '';
-            if (priceEl) priceEl.value = '';
-            if (notesEl) notesEl.value = '';
-            if (modeEl) modeEl.checked = true;
-            if (calEl) calEl.checked = true;
-            updateFuelPreview();
-            modal.style.display = 'flex';
-        }
-
-        function closeAddFuelModal() {
-            const modal = document.getElementById('addFuelModal');
-            if (modal) modal.style.display = 'none';
-        }
-
-        function updateFuelPreview() {
-            const gallonsEl = document.getElementById('fuelGallons');
-            const previewEl = document.getElementById('fuelPreview');
-            const modeEl = document.querySelector('input[name="fuelMode"]:checked');
-            if (!gallonsEl || !previewEl || !modeEl) return;
-
-            const gallons = parseFloat(gallonsEl.value) || 0;
-            const mode = modeEl.value;
-            const current = currentFuelRemaining;
-            let after;
-            if (mode === 'set') {
-                after = Math.min(gallons, FUEL_CAPACITY);
-            } else {
-                after = Math.min(current + gallons, FUEL_CAPACITY);
-            }
-            previewEl.textContent = 'Current: ' + current.toFixed(1) + ' gal → After: ' + after.toFixed(1) + ' gal';
-        }
-
-        // Add event listeners for preview updates (with null checks)
-        const fuelGallonsEl = document.getElementById('fuelGallons');
-        if (fuelGallonsEl) {
-            fuelGallonsEl.addEventListener('input', updateFuelPreview);
-        }
-        document.querySelectorAll('input[name="fuelMode"]').forEach(el => {
-            el.addEventListener('change', updateFuelPreview);
-        });
-
-        function submitAddFuel() {
-            const gallons = parseFloat(document.getElementById('fuelGallons').value);
-            if (!gallons || gallons <= 0) {
-                alert('Please enter a valid gallons amount');
-                return;
-            }
-
-            const data = {
-                gallons: gallons,
-                airport: document.getElementById('fuelAirport').value.toUpperCase(),
-                price_per_gallon: parseFloat(document.getElementById('fuelPrice').value) || null,
-                notes: document.getElementById('fuelNotes').value,
-                set_total: document.querySelector('input[name="fuelMode"]:checked').value === 'set',
-                include_in_calibration: document.getElementById('includeCalibration').checked
-            };
-
-            fetch('/api/fuel/add', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(data)
-            })
-            .then(r => r.json())
-            .then(result => {
-                if (result.success) {
-                    closeAddFuelModal();
-                    updateStatus();
-                    alert('Fuel added: ' + result.fuel_remaining.toFixed(1) + ' gal total');
-                } else {
-                    alert('Error: ' + (result.error || 'Unknown error'));
-                }
-            })
-            .catch(err => alert('Error: ' + err.message));
-        }
-
-        // Initial load and auto-refresh
-        updateStatus();
-        updateFiles();
-        updateCharts();
-        statusPollId = setInterval(updateStatus, 1000);
-        filesPollId = setInterval(updateFiles, 10000);
-        chartsPollId = setInterval(updateCharts, 2000);
-    </script>
-</body>
-</html>
-'''
-
 class RequestHandler(BaseHTTPRequestHandler):
     """HTTP request handler."""
 
@@ -4096,7 +2238,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         """Shutdown server after a brief delay to allow response to be sent."""
         import time
         time.sleep(0.5)  # Allow response to complete
-        state.stop_event.set()
+        state.shutdown_event.set()
         if state.capturing:
             stop_capture()
         if state.server:
@@ -4109,21 +2251,11 @@ class RequestHandler(BaseHTTPRequestHandler):
         query = parse_qs(parsed.query)
 
         if path == '/' or path == '/index.html':
-            self.send_html(HTML_TEMPLATE)
-
-        elif path == '/static/chart.min.js':
-            # Serve local Chart.js file
             try:
-                with open(CHART_JS_PATH, 'rb') as f:
-                    content = f.read()
                 self.send_response(200)
-                self.send_header('Content-Type', 'application/javascript')
-                self.send_header('Content-Length', len(content))
-                self.send_header('Cache-Control', 'public, max-age=86400')
+                self.send_header('Content-Type', 'text/plain; charset=utf-8')
                 self.end_headers()
-                self.wfile.write(content)
-            except FileNotFoundError:
-                self.send_json({'error': 'Chart.js not found'}, 404)
+                self.wfile.write(b'Engine Monitor API running -- see FlyTab\n')
             except BrokenPipeError:
                 pass  # Client disconnected, ignore
 
@@ -4135,17 +2267,6 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         elif path == '/api/diagnostics':
             self.send_json(get_diagnostics())
-
-        elif path == '/api/history':
-            # Get duration from query parameter (default 30 minutes)
-            duration = 30
-            if 'duration' in query:
-                try:
-                    duration = int(query['duration'][0])
-                    duration = max(1, min(duration, 120))  # Clamp to 1-120 minutes
-                except (ValueError, IndexError):
-                    pass
-            self.send_json(get_history(duration))
 
         elif path.startswith('/download/'):
             filename = path[10:]  # Remove '/download/'
@@ -4175,70 +2296,6 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.send_html(help_html)
             except FileNotFoundError:
                 self.send_json({'error': 'Help file not found'}, 404)
-
-        # PWA files for standalone fuel planner
-        elif path == '/fuel-planner.html':
-            pwa_path = os.path.join(SCRIPT_DIR, 'fuel-planner.html')
-            try:
-                with open(pwa_path, 'r') as f:
-                    self.send_html(f.read())
-            except FileNotFoundError:
-                self.send_json({'error': 'fuel-planner.html not found'}, 404)
-
-        elif path == '/fuel-planner.js':
-            pwa_path = os.path.join(SCRIPT_DIR, 'fuel-planner.js')
-            try:
-                with open(pwa_path, 'rb') as f:
-                    content = f.read()
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/javascript')
-                self.send_header('Content-Length', len(content))
-                self.end_headers()
-                self.wfile.write(content)
-            except FileNotFoundError:
-                self.send_json({'error': 'fuel-planner.js not found'}, 404)
-
-        elif path == '/fuel-planner.css':
-            pwa_path = os.path.join(SCRIPT_DIR, 'fuel-planner.css')
-            try:
-                with open(pwa_path, 'rb') as f:
-                    content = f.read()
-                self.send_response(200)
-                self.send_header('Content-Type', 'text/css')
-                self.send_header('Content-Length', len(content))
-                self.end_headers()
-                self.wfile.write(content)
-            except FileNotFoundError:
-                self.send_json({'error': 'fuel-planner.css not found'}, 404)
-
-        elif path == '/manifest.json' or path == '/engine-monitor-manifest.json':
-            manifest_path = os.path.join(SCRIPT_DIR, os.path.basename(path))
-            try:
-                with open(manifest_path, 'rb') as f:
-                    content = f.read()
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/json')
-                self.send_header('Content-Length', len(content))
-                self.end_headers()
-                self.wfile.write(content)
-            except FileNotFoundError:
-                self.send_json({'error': os.path.basename(path) + ' not found'}, 404)
-
-        elif path == '/service-worker.js':
-            sw_path = os.path.join(SCRIPT_DIR, 'service-worker.js')
-            try:
-                with open(sw_path, 'rb') as f:
-                    content = f.read()
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/javascript')
-                self.send_header('Content-Length', len(content))
-                # Safari needs no-cache so it always checks for SW updates
-                self.send_header('Cache-Control', 'no-cache')
-                self.send_header('Service-Worker-Allowed', '/')
-                self.end_headers()
-                self.wfile.write(content)
-            except FileNotFoundError:
-                self.send_json({'error': 'service-worker.js not found'}, 404)
 
         # Fuel tracking API endpoints
         elif path == '/api/fuel':
@@ -4274,6 +2331,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.send_json(result)
 
         elif path == '/api/stop':
+            state.manually_stopped = True
             result = stop_capture()
             self.send_json(result)
 
@@ -4285,10 +2343,6 @@ class RequestHandler(BaseHTTPRequestHandler):
             if state.server:
                 import threading
                 threading.Thread(target=self._delayed_shutdown).start()
-
-        elif path == '/api/dismiss_sticky_valve':
-            state.sticky_valve_dismissed = True
-            self.send_json({'success': True, 'message': 'Alert dismissed'})
 
         elif path == '/api/atis':
             # Set manual ATIS values (altimeter and OAT)
@@ -4402,15 +2456,29 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.send_json({'error': str(e)}, 400)
 
         elif path == '/api/upload':
-            # File upload endpoint for updating scripts from iPad
+            # File upload endpoint for pushing updated script files to the Pi.
             try:
+                supplied = self.headers.get('X-Upload-Token', '')
+                if not UPLOAD_TOKEN or not hmac.compare_digest(supplied, UPLOAD_TOKEN):
+                    log("Upload rejected: missing/invalid X-Upload-Token")
+                    self.send_json({'error': 'Unauthorized'}, 401)
+                    return
+
                 content_type = self.headers.get('Content-Type', '')
                 if 'multipart/form-data' not in content_type:
                     self.send_json({'error': 'Expected multipart/form-data'}, 400)
                     return
 
-                # Parse multipart form data
                 content_length = int(self.headers.get('Content-Length', 0))
+                if content_length <= 0:
+                    self.send_json({'error': 'Missing or empty Content-Length'}, 400)
+                    return
+                if content_length > MAX_UPLOAD_BYTES:
+                    log(f"Upload rejected: Content-Length {content_length} exceeds {MAX_UPLOAD_BYTES}-byte cap")
+                    self.send_json({'error': f'Upload too large (max {MAX_UPLOAD_BYTES // (1024*1024)} MB)'}, 413)
+                    return
+
+                # Parse multipart form data
                 body = self.rfile.read(content_length)
 
                 # Extract boundary from content-type
@@ -4600,15 +2668,15 @@ Examples:
             import serial as _serial
             port = CONFIG['SERIAL_PORT']
             log("Auto-capture monitor started")
-            while not state.stop_event.is_set():
+            while not state.shutdown_event.is_set():
                 # Only act if not already capturing
                 if state.capturing:
-                    state.stop_event.wait(5)
+                    state.shutdown_event.wait(5)
                     continue
 
                 # Check if serial port exists
                 if not os.path.exists(port):
-                    state.stop_event.wait(10)
+                    state.shutdown_event.wait(10)
                     continue
 
                 # Probe the port briefly for EDM data
@@ -4620,15 +2688,44 @@ Examples:
                     probe.close()
 
                     if data and len(data) > 10:
-                        log(f"Auto-capture: EDM data detected on {port} ({len(data)} bytes), starting capture")
-                        time.sleep(0.5)  # Let port fully release before capture thread opens it
-                        if not state.capturing:
-                            start_capture()
+                        # If a manual Stop is latched, use this same probe data to
+                        # check whether the engine has since shut down — if RPM has
+                        # dropped below 300, clear the latch so the *next* flight's
+                        # auto-capture still works. Independent of check_sticky_valve()
+                        # (deleted in Task 2) — this is its own inline check against
+                        # the most recent parseable line in the probe.
+                        #
+                        # just_cleared tracks whether THIS pass is the one that
+                        # cleared the latch. If it is, we deliberately do NOT also
+                        # start capture in the same pass — a pilot who shuts the
+                        # engine down (RPM < 300) and then taps Stop would otherwise
+                        # have this same probe both clear the latch and immediately
+                        # restart capture, defeating the whole point of the latch.
+                        # The next probe cycle (~15-20s later) decides whether to
+                        # start, by which point manually_stopped is already False
+                        # and the normal pre-latch auto-start logic applies cleanly.
+                        just_cleared = False
+                        if state.manually_stopped:
+                            last_rpm = None
+                            for line in data.decode('utf-8', errors='ignore').split('\n'):
+                                parsed = parse_line(line)
+                                if parsed:
+                                    last_rpm = parsed.get('RPM', 0)
+                            if last_rpm is not None and last_rpm < 300:
+                                state.manually_stopped = False
+                                just_cleared = True
+                                log("Auto-capture: engine RPM dropped below 300, manual-stop latch cleared")
+
+                        if not state.manually_stopped and not just_cleared:
+                            log(f"Auto-capture: EDM data detected on {port} ({len(data)} bytes), starting capture")
+                            time.sleep(0.5)  # Let port fully release before capture thread opens it
+                            if not state.capturing:
+                                start_capture()
                 except Exception as e:
                     # Port busy or unavailable — try again later
                     pass
 
-                state.stop_event.wait(15)
+                state.shutdown_event.wait(15)
             log("Auto-capture monitor stopped")
 
         acm_thread = threading.Thread(target=auto_capture_monitor, daemon=True)
@@ -4660,7 +2757,7 @@ Examples:
 
         async def broadcast_loop():
             """Push engine status to all connected WS clients at 1Hz"""
-            while not state.stop_event.is_set():
+            while not state.shutdown_event.is_set():
                 if ws_clients:
                     try:
                         status = get_status()
@@ -4704,7 +2801,7 @@ Examples:
 
     def signal_handler(sig, frame):
         log("Shutdown signal received")
-        state.stop_event.set()  # Signal all threads to stop
+        state.shutdown_event.set()  # Signal long-lived background threads to stop
         if state.capturing:
             stop_capture()
         # Run shutdown in separate thread to avoid deadlock with serve_forever
@@ -4719,7 +2816,7 @@ Examples:
     except KeyboardInterrupt:
         pass
     finally:
-        state.stop_event.set()  # Signal all threads to stop
+        state.shutdown_event.set()  # Signal long-lived background threads to stop
         if state.capturing:
             stop_capture()
         log("Server stopped")

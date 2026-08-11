@@ -1,5 +1,5 @@
 /**
- * FlyPi — NEXRAD Radar Loop
+ * FlyTab — NEXRAD Radar Loop
  * Animated radar playback using FIS-B NEXRAD frame history from FisbNexrad.
  * Falls back to "NO FIS-B RADAR" when no data is available.
  */
@@ -370,7 +370,7 @@ class RadarLoop {
         nextBtn.addEventListener('click', (e) => { e.stopPropagation(); this.nextFrame(); });
         refreshBtn.addEventListener('click', (e) => { e.stopPropagation(); this.refresh(); });
 
-        // Touch support for iPad
+        // Touch support for Android
         [prevBtn, playBtn, nextBtn, refreshBtn].forEach(btn => {
             btn.addEventListener('touchend', (e) => {
                 e.preventDefault();

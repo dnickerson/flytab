@@ -116,6 +116,10 @@ class StratuxClient extends EventTarget {
         this._reconnectTimer = null;
         this._statusTimer = null;
         this._towerTimer = null;
+        this._situationReconnectTimer = null;
+        this._weatherReconnectTimer = null;
+        this._jsonioReconnectTimer = null;
+        this._disconnected = false;
 
         // Traffic map: icao_addr → target object
         this.traffic = new Map();
@@ -143,6 +147,7 @@ class StratuxClient extends EventTarget {
     get udpMode() { return !!_StratuxUdpBus && !this._simMode; }
 
     connect() {
+        this._disconnected = false;
         // Cancel any pending reconnect timer so the external call and the timer
         // don't both call _connectTraffic() independently.
         if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
@@ -199,12 +204,16 @@ class StratuxClient extends EventTarget {
     }
 
     disconnect() {
+        this._disconnected = true;
         if (_StratuxUdpBus) { _StratuxUdpBus.detach(); _StratuxUdpBus.stop(); }
         if (this._trafficWs) { this._trafficWs.close(); this._trafficWs = null; }
         if (this._situationWs) { this._situationWs.close(); this._situationWs = null; }
         if (this._weatherWs) { this._weatherWs.close(); this._weatherWs = null; }
         if (this._jsonioWs) { this._jsonioWs.close(); this._jsonioWs = null; }
         if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
+        if (this._situationReconnectTimer) { clearTimeout(this._situationReconnectTimer); this._situationReconnectTimer = null; }
+        if (this._weatherReconnectTimer) { clearTimeout(this._weatherReconnectTimer); this._weatherReconnectTimer = null; }
+        if (this._jsonioReconnectTimer) { clearTimeout(this._jsonioReconnectTimer); this._jsonioReconnectTimer = null; }
         if (this._purgeInterval) { clearInterval(this._purgeInterval); this._purgeInterval = null; }
         if (this._statusTimer) { clearInterval(this._statusTimer); this._statusTimer = null; }
         if (this._towerTimer) { clearInterval(this._towerTimer); this._towerTimer = null; }
@@ -269,9 +278,15 @@ class StratuxClient extends EventTarget {
             } catch { /* ignore malformed */ }
         };
 
-        this._trafficWs.onclose = () => {
-            if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', 'Traffic WS closed, reconnecting traffic only…');
-            this._scheduleTrafficReconnect();
+        // Same stale-onclose race as situation/weather/jsonio (see _connectSituation
+        // for the full explanation) — disconnect()+connect() can leave a deferred
+        // onclose from the just-replaced socket to fire after a new one is live.
+        const trafficWsRef = this._trafficWs;
+        this._trafficWs.onclose = (e) => {
+            if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', `Traffic WS closed, reconnecting traffic only… code=${e?.code} reason=${e?.reason || ''}`);
+            if (!this._disconnected && this._trafficWs === trafficWsRef) {
+                this._scheduleTrafficReconnect(trafficWsRef);
+            }
         };
         this._trafficWs.onerror = () => { /* onclose will fire */ };
     }
@@ -326,11 +341,24 @@ class StratuxClient extends EventTarget {
             } catch { /* ignore */ }
         };
 
-        this._situationWs.onclose = () => {
-            if (this._trafficWs?.readyState === WebSocket.OPEN) {
-                setTimeout(() => {
-                    // Guard: don't create a duplicate if already reconnected
-                    if (!this._situationWs || this._situationWs.readyState !== WebSocket.OPEN) {
+        // Capture this specific socket instance so the handler below can tell
+        // "this onclose belongs to the socket that's still current" from "this
+        // onclose belongs to a socket that's already been replaced" — _disconnected
+        // alone can't: connect() resets it synchronously, and _createStratuxWs's
+        // close() defers firing onclose via queueMicrotask, so a stale onclose from
+        // a socket disconnect() already closed can fire AFTER a synchronous
+        // disconnect()+connect() cycle (e.g. config-editor.js's Stratux-IP-change
+        // handler) has already reset the flag and stood up a brand-new socket.
+        const situationWsRef = this._situationWs;
+        this._situationWs.onclose = (e) => {
+            if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', `Situation WS closed code=${e?.code} reason=${e?.reason || ''}`);
+            if (!this._disconnected && this._situationWs === situationWsRef && this._trafficWs?.readyState === WebSocket.OPEN) {
+                this._situationReconnectTimer = setTimeout(() => {
+                    this._situationReconnectTimer = null;
+                    // Guard: don't create a duplicate if already reconnected, and never
+                    // reconnect if disconnect() ran (or this socket was replaced) while
+                    // this timer was pending.
+                    if (!this._disconnected && this._situationWs === situationWsRef && (!this._situationWs || this._situationWs.readyState !== WebSocket.OPEN)) {
                         this._connectSituation();
                     }
                 }, 2000);
@@ -445,15 +473,37 @@ class StratuxClient extends EventTarget {
             } catch { /* ignore malformed */ }
         };
 
-        this._weatherWs.onclose = () => {
+        // Capture this specific socket instance — see the matching comment in
+        // _connectSituation() above. udpMode alone can't distinguish "this onclose
+        // is for the current socket" from "this onclose is stale" because it's a
+        // static plugin/config availability getter, not a connection-freshness
+        // signal — on hardware with the native UDP plugin present, udpMode stays
+        // true across a disconnect()+connect() cycle, so a flag-only gate (even
+        // with !this._disconnected) still lets a stale onclose schedule a spurious
+        // reconnect. The identity check closes that regardless of udpMode.
+        const weatherWsRef = this._weatherWs;
+        this._weatherWs.onclose = (e) => {
+            if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', `Weather WS closed code=${e?.code} reason=${e?.reason || ''}`);
             // Reconnect after 5s if the overall Stratux connection is still alive
             // (covers both WS-mode traffic OPEN and UDP-mode where traffic flows
-            // separately).
-            setTimeout(() => {
-                if (this.udpMode || this._trafficWs?.readyState === WebSocket.OPEN) {
-                    this._connectWeather();
-                }
-            }, 5000);
+            // separately). !this._disconnected is required because udpMode reflects
+            // static plugin/config availability, not connection lifecycle — it is
+            // never falsified by disconnect(), so without this check this fires
+            // unconditionally on any hardware with the native UDP plugin present.
+            // The gate must wrap the setTimeout() call itself, not just the code
+            // inside it — a stale onclose from a socket disconnect() already closed
+            // can still fire (queueMicrotask defers it) after connect() runs, and if
+            // only the callback body were gated, an unconditional setTimeout here
+            // would still schedule a spurious reconnect 5s after every disconnect()+
+            // connect() cycle (e.g. config-editor.js's Stratux-IP-change handler).
+            if (!this._disconnected && this._weatherWs === weatherWsRef && (this.udpMode || this._trafficWs?.readyState === WebSocket.OPEN)) {
+                this._weatherReconnectTimer = setTimeout(() => {
+                    this._weatherReconnectTimer = null;
+                    if (!this._disconnected && this._weatherWs === weatherWsRef && (this.udpMode || this._trafficWs?.readyState === WebSocket.OPEN)) {
+                        this._connectWeather();
+                    }
+                }, 5000);
+            }
         };
     }
 
@@ -469,6 +519,12 @@ class StratuxClient extends EventTarget {
         this._jsonioWs.onmessage = (e) => {
             try {
                 const msg = JSON.parse(e.data);
+                // /jsonio also carries Stratux's trafficUpdate/radarUpdate/situationUpdate
+                // broadcasts (same connection subscribes to all four server-side) — those
+                // are TrafficInfo/Settings/SituationData objects, never uatparse.Frame, so
+                // they never carry a Product_id field (uatparse.Frame always sets it, even
+                // to 0). Drop them here instead of misdispatching as stratux:fisb-frame.
+                if (msg.Product_id === undefined) return;
                 // Stratux UATFrame JSON uses field name "NEXRAD" ([]NEXRADBlock struct).
                 // Discriminate by presence of NEXRAD array — covers all PIDs 51-64.
                 if (msg.NEXRAD && msg.NEXRAD.length > 0) {
@@ -483,23 +539,39 @@ class StratuxClient extends EventTarget {
             } catch { /* ignore malformed */ }
         };
 
-        this._jsonioWs.onclose = () => {
-            setTimeout(() => {
-                if (this.udpMode || this._trafficWs?.readyState === WebSocket.OPEN) {
-                    this._connectJsonio();
-                }
-            }, 5000);
+        // Capture this specific socket instance — see the matching comments in
+        // _connectSituation() and _connectWeather() above.
+        const jsonioWsRef = this._jsonioWs;
+        this._jsonioWs.onclose = (e) => {
+            if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', `Jsonio WS closed code=${e?.code} reason=${e?.reason || ''}`);
+            // See the matching comment in _weatherWs.onclose above: the gate must
+            // wrap the setTimeout() call itself, not just the code inside it, and
+            // must include the identity check (not just !this._disconnected) since
+            // udpMode alone can't tell a stale onclose from a current one.
+            if (!this._disconnected && this._jsonioWs === jsonioWsRef && (this.udpMode || this._trafficWs?.readyState === WebSocket.OPEN)) {
+                this._jsonioReconnectTimer = setTimeout(() => {
+                    this._jsonioReconnectTimer = null;
+                    if (!this._disconnected && this._jsonioWs === jsonioWsRef && (this.udpMode || this._trafficWs?.readyState === WebSocket.OPEN)) {
+                        this._connectJsonio();
+                    }
+                }, 5000);
+            }
         };
     }
 
     // ========== Reconnect ==========
 
     /** Reconnect only the traffic WS — don't tear down situation/weather/jsonio */
-    _scheduleTrafficReconnect() {
+    _scheduleTrafficReconnect(trafficWsRef) {
         this._setConnected(false);
         if (this._reconnectTimer) return;
         this._reconnectTimer = setTimeout(() => {
             this._reconnectTimer = null;
+            // Guard: never reconnect if disconnect() ran, or this socket was
+            // already replaced by a fresh connect() cycle, while this timer
+            // was pending — same race the identity check in _connectTraffic's
+            // onclose exists for.
+            if (this._disconnected || this._trafficWs !== trafficWsRef) return;
             this._connectTraffic();
             // Reconnect companion sockets only if fully closed — not if still connecting
             if (!this._situationWs || this._situationWs.readyState === WebSocket.CLOSED) {

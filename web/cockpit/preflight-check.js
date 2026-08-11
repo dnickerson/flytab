@@ -1,5 +1,5 @@
 /**
- * FlyPi — Pre-flight Data Readiness Check
+ * FlyTab — Pre-flight Data Readiness Check
  *
  * Runs 4 parallel checks on cockpit load (when active plan exists):
  *   1. Weather age — how old is the cached weather in the flight plan?
@@ -25,7 +25,7 @@ class PreflightCheck {
         if (this._dismissed) return;
         try {
             await this.db.open();
-            const plan = await this.db.getActiveFlightPlan();
+            const plan = this._getActivePlan();
             if (!plan) return; // no plan — nothing to check
             const results = await this._runChecks(plan);
             this._render(results);
@@ -39,7 +39,7 @@ class PreflightCheck {
     async show() {
         try {
             await this.db.open();
-            const plan = await this.db.getActiveFlightPlan();
+            const plan = this._getActivePlan();
             const results = await this._runChecks(plan);
             this._render(results);
             this._show();
@@ -51,6 +51,32 @@ class PreflightCheck {
     dismiss() {
         this._dismissed = true;
         if (this._el) this._el.classList.remove('pfc-visible');
+    }
+
+    /**
+     * Read the pilot's currently active flight plan.
+     *
+     * Deliberately NOT this.db (NasrDB / the 'flypi' IDB database) — flypi's
+     * flight_plans store is written only by NasrDB.saveFlightPlan(), which has
+     * zero callers anywhere in the app. The live active plan lives in
+     * localStorage['flypi_active_plan'], written by app.js's _applyPlan()
+     * (every plan load, including flywhere.app cloud sync) and by
+     * route-table.js's Save Route / Plan Picker flows — same key/shape
+     * app.js, logbook.js, and plan-sync.js already read.
+     *
+     * Note: locally-built routes (route-table.js "Save Route") don't carry a
+     * weather_cache field — that's a deliberate design gap, not a bug.
+     * _checkWeather() below reports 'warn' (not 'fail') when weather_cache is
+     * simply absent, so a pilot-built local route doesn't trip the overall
+     * verdict to FAIL just because it was never routed through weather fetch.
+     */
+    _getActivePlan() {
+        try {
+            return JSON.parse(localStorage.getItem('flypi_active_plan') || 'null');
+        } catch (err) {
+            console.warn('PreflightCheck: failed to parse flypi_active_plan', err);
+            return null;
+        }
     }
 
     // ========== Checks ==========
@@ -72,7 +98,19 @@ class PreflightCheck {
     _checkWeather(plan) {
         if (!plan) return { label: 'Weather', status: 'fail', msg: 'No flight plan' };
         const fetchedAt = plan.weather_cache?.fetched_at;
-        if (!fetchedAt) return { label: 'Weather', status: 'fail', msg: 'Not fetched' };
+        if (!fetchedAt) {
+            // plan.id is only ever set by PlanSync._normalizePlan() for a
+            // flywhere.app cloud-synced plan (see plan-sync.js) — a locally-built
+            // route (route-table.js "Save Route") never has an id. Both cases
+            // leave weather_cache absent/empty, but they aren't the same risk:
+            // a local route never went through weather fetch by design, while a
+            // synced plan missing weather_cache means its fetch never ran or
+            // failed — worth a more pointed warning since this app has zero
+            // in-flight internet to retry.
+            return plan.id
+                ? { label: 'Weather', status: 'warn', msg: 'Not cached — verify weather before departure' }
+                : { label: 'Weather', status: 'warn', msg: 'Not cached — route built locally' };
+        }
         const ageMin = (Date.now() - new Date(fetchedAt).getTime()) / 60000;
         if (ageMin < 60)  return { label: 'Weather', status: 'ok',   msg: `${Math.round(ageMin)}m old — FRESH` };
         if (ageMin < 180) return { label: 'Weather', status: 'warn', msg: `${Math.round(ageMin)}m old — AGING` };

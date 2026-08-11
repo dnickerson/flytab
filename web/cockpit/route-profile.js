@@ -92,6 +92,16 @@ class RouteProfileView {
             flex:       '1',
         });
 
+        const creditEl = document.createElement('span');
+        // CC-BY 4.0 attribution, plus the key for the asterisk on every cloud
+        // contour label: BKN*/OVC* are model-derived, not observed.
+        creditEl.textContent = 'WX: Open-Meteo (CC-BY 4.0) · * model-derived';
+        Object.assign(creditEl.style, {
+            fontSize: '9px', fontWeight: '700',
+            color: 'var(--text-muted)', marginRight: '6px',
+        });
+        header.appendChild(creditEl);
+
         this._chevronBtn = document.createElement('button');
         this._chevronBtn.textContent = '\u25B2';
         this._chevronBtn.title = 'Expand/collapse';
@@ -105,6 +115,13 @@ class RouteProfileView {
         closeBtn.addEventListener('click', () => this.hide());
 
         header.appendChild(titleEl);
+
+        this._wxChip = document.createElement('span');
+        Object.assign(this._wxChip.style, {
+            fontSize: '11px', fontWeight: '800', marginRight: '4px', display: 'none',
+        });
+        header.appendChild(this._wxChip);
+
         header.appendChild(this._chevronBtn);
         header.appendChild(closeBtn);
 
@@ -212,6 +229,8 @@ class RouteProfileView {
     _render(routeData) {
         if (!routeData) return;
 
+        this._updateWxChip(routeData);
+
         const canvas = this._canvas;
         const dpr    = window.devicePixelRatio || 1;
         const w      = canvas.offsetWidth;
@@ -236,7 +255,13 @@ class RouteProfileView {
         const maxTerrain = terrain.length > 0
             ? Math.max(...terrain.map(p => p.elev_ft))
             : cruiseAlt * 0.3;
-        const yMax = Math.max(maxTerrain, cruiseAlt) * 1.15;
+        // Cloud tops routinely sit well above cruise altitude (cirrus, altostratus).
+        // Without this, yMax was computed purely from terrain/cruise and any cell
+        // above it rendered off the top of the canvas — invisible, no error, even
+        // though the data was correct and cached.
+        const cloudTops  = (routeData.cloudCells || []).map(c => c.topFt);
+        const maxCloudTop = cloudTops.length > 0 ? Math.max(...cloudTops) : 0;
+        const yMax = Math.max(maxTerrain, cruiseAlt, maxCloudTop) * 1.15;
 
         const xOf = (dist) => pad.left + (dist / totalDist) * cw;
         const yOf = (alt)  => pad.top  + ch - (alt  / yMax)  * ch;
@@ -247,7 +272,15 @@ class RouteProfileView {
         if (terrain.length > 0) {
             this._drawTerrainFill(ctx, terrain, xOf, yOf);
         } else {
-            this._drawMockTerrain(ctx, totalDist, xOf, yOf, yMax);
+            // Mock terrain is a placeholder shape, not real elevation data — its
+            // height must stay anchored to terrain/cruise altitude, not to yMax,
+            // which cloud tops can now pull much taller than cruise. Scaling the
+            // placeholder to the cloud-inclusive yMax drew it as if there were
+            // 15,000+ft mountains under a route with no such terrain. yOf() still
+            // positions it on the real (possibly taller) axis — only its own
+            // fictional height uses this smaller reference.
+            const mockScale = Math.max(maxTerrain, cruiseAlt) * 1.15;
+            this._drawMockTerrain(ctx, totalDist, xOf, yOf, mockScale);
         }
 
         // 1b. Airspace bands (after terrain, before flight path)
@@ -305,36 +338,85 @@ class RouteProfileView {
             ctx.restore();
         }
 
-        // 4. Freezing level line ─────────────────────────────────────────────
-        if (routeData.freezingLevelFt) {
-            const fy = yOf(routeData.freezingLevelFt);
-            if (fy > pad.top && fy < h - pad.bottom) {
-                ctx.save();
-                ctx.strokeStyle = '#818cf8';
-                ctx.lineWidth = 1.5;
-                ctx.setLineDash([5, 4]);
+        // 4. Freezing level ──────────────────────────────────────────────────
+        // A polyline, not a scalar: the freezing level moves materially over a
+        // few hundred miles, and one number would be invented precision.
+        // Wrapped for the same reason the cloud block and the WX chip are: this is
+        // decoration drawn BEFORE the cruise line, waypoint markers and axes, so a
+        // throw here would leave a chart that looks finished but has no altitude
+        // scale. `freezingLevel` arriving as a truthy non-array is all it takes.
+        const frzPts = routeData.freezingLevel || [];
+        if (frzPts.length > 0) {
+            ctx.save();
+            try {
+                ctx.strokeStyle = getComputedStyle(document.documentElement)
+                    .getPropertyValue('--color-danger-on-light').trim() || '#a30d0d';
+                ctx.lineWidth = 2;
                 ctx.beginPath();
-                ctx.moveTo(pad.left, fy);
-                ctx.lineTo(pad.left + cw, fy);
+                frzPts.forEach((p, i) => {
+                    const px = xOf(p.distNm), py = yOf(p.altFt);
+                    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+                });
                 ctx.stroke();
-                ctx.setLineDash([]);
-                ctx.fillStyle = '#818cf8';
-                ctx.font = 'bold 12px sans-serif';
-                ctx.textAlign = 'left';
-                ctx.fillText('FZL', pad.left + 4, fy - 4);
-                ctx.restore();
+                const first = frzPts[0];
+                const fy = yOf(first.altFt);
+                if (fy > pad.top && fy < h - pad.bottom) {
+                    ctx.fillStyle = ctx.strokeStyle;
+                    ctx.font = '900 12px sans-serif';
+                    ctx.textAlign = 'left';
+                    ctx.fillText('0°C', pad.left + 4, fy - 5);
+                }
+            } catch (e) {
+                console.warn('[RouteProfile] freezing level render skipped:', e?.message);
+            } finally {
+                ctx.restore();   // paired with the save() above on every path
             }
         }
 
-        // 5. Cloud layers ────────────────────────────────────────────────────
-        if (routeData.cloudLayers?.length) {
-            ctx.fillStyle = 'rgba(148,163,184,0.4)';
-            for (const cl of routeData.cloudLayers) {
-                const cx = xOf(cl.dist_nm);
-                const y1 = yOf(cl.top_ft);
-                const y2 = yOf(cl.base_ft);
-                ctx.fillRect(cx - 20, y1, 40, Math.max(1, y2 - y1));
+        // 5. Clouds ──────────────────────────────────────────────────────────
+        // Native pressure-level slabs. Density fill is texture; the BKN/OVC
+        // contour is what has to survive sunlight. Wrapped because terrain
+        // clearance must not depend on this code being correct.
+        try {
+            const css       = getComputedStyle(document.documentElement);
+            const fillRGB   = css.getPropertyValue('--cloud-fill').trim()    || '#5b6b7f';
+            const contourC  = css.getPropertyValue('--cloud-contour').trim() || '#1f3348';
+
+            const rectOf = (c) => {
+                const x  = xOf(Math.max(0, c.distNm - c.spanNm / 2));
+                const x2 = xOf(Math.min(totalDist, c.distNm + c.spanNm / 2));
+                const y  = yOf(c.topFt);
+                return { x, y, w: Math.max(1, x2 - x), h: Math.max(1, yOf(c.baseFt) - y) };
+            };
+
+            for (const c of routeData.cloudCells || []) {
+                const r = rectOf(c);
+                ctx.save();
+                ctx.globalAlpha = 0.12 + 0.33 * Math.min(1, (c.coverPct || 0) / 100);
+                ctx.fillStyle   = fillRGB;
+                ctx.fillRect(r.x, r.y, r.w, r.h);
+                ctx.restore();
             }
+
+            for (const c of routeData.cloudContours || []) {
+                const r = rectOf(c);
+                ctx.save();
+                ctx.strokeStyle = contourC;
+                ctx.lineWidth   = 2;
+                ctx.strokeRect(r.x, r.y, r.w, r.h);
+                ctx.fillStyle   = contourC;
+                ctx.font        = '900 12px sans-serif';
+                ctx.textAlign   = 'left';
+                // "BKN*", not "BKN" — a bare octa group is typographically
+                // identical to a METAR sky-cover observation, and this is a model
+                // cloud FRACTION over a ~3 km grid cell, which is close to but not
+                // the same thing as an observer's octas. The asterisk is keyed to
+                // the "* model-derived" note in the panel header.
+                ctx.fillText(`${c.cover}*`, r.x + 4, r.y + 12);
+                ctx.restore();
+            }
+        } catch (e) {
+            console.warn('[RouteProfile] cloud render skipped:', e?.message);
         }
 
         // 6. Cruise altitude dashed reference ────────────────────────────────
@@ -558,12 +640,91 @@ class RouteProfileView {
                     html += `</div>`;
                 }
 
+                // Cloud cells covering this x position — a cell owns
+                // [distNm - spanNm/2, distNm + spanNm/2], same span rectOf()
+                // uses to draw it, so "covering" here matches what's drawn.
+                // Ranked by distance to the flight altitude AT THIS POINT, not
+                // by base altitude: with several layers stacked (common in the
+                // mountains) the panel's height is fixed and it cannot scroll —
+                // pointer-events is 'none' so a touch here keeps scrubbing the
+                // chart instead of the list — so whatever doesn't fit must be
+                // the least relevant, and "nearest my altitude" is the most
+                // actionable ranking for that, not "nearest the ground."
+                const distToFlightAlt = (c) => (flightAlt >= c.baseFt && flightAlt <= c.topFt)
+                    ? 0
+                    : Math.min(Math.abs(flightAlt - c.baseFt), Math.abs(flightAlt - c.topFt));
+                const cloudsHere = (routeData.cloudCells || [])
+                    .filter(c => dist >= c.distNm - c.spanNm / 2 && dist <= c.distNm + c.spanNm / 2)
+                    .sort((a, b) => distToFlightAlt(a) - distToFlightAlt(b));
+                const CLOUD_LAYER_CAP = 1;
+                const shownClouds  = cloudsHere.slice(0, CLOUD_LAYER_CAP);
+                const hiddenLayers = cloudsHere.length - shownClouds.length;
+                const freezingHere = routeData.freezingLevel?.length
+                    ? this._interpValue(routeData.freezingLevel, dist, 'distNm', 'altFt')
+                    : null;
+
+                if (cloudsHere.length > 0 || freezingHere != null) {
+                    // Deliberately single-line entries with a tight line-height override
+                    // (the panel's own 1.6 default costs a full extra line per wrapped
+                    // pair) — this section is competing for a fixed, non-scrollable
+                    // budget against FLIGHT/TERRAIN/CLEAR above it.
+                    html += `<div style="border-top:1px solid #333;padding-top:4px;margin-top:2px;line-height:1.25">`;
+                    html += `<div style="color:#9ca3af;font-size:11px;margin-bottom:3px">CLOUDS</div>`;
+                    for (const c of shownClouds) {
+                        html += `<div style="font-size:12px;color:#ccd;margin-bottom:3px">
+                            <span style="font-weight:700;color:#5b6b7f">${c.cover} ${Math.round(c.coverPct)}%</span>
+                            ${fmtAlt(Math.round(c.baseFt))}–${fmtAlt(Math.round(c.topFt))}
+                        </div>`;
+                    }
+                    if (hiddenLayers > 0) {
+                        html += `<div style="font-size:11px;color:#888;margin-bottom:3px">+${hiddenLayers} more layer${hiddenLayers > 1 ? 's' : ''}</div>`;
+                    }
+                    if (freezingHere != null) {
+                        html += `<div style="font-size:12px;color:#a30d0d">0°C: ${fmtAlt(Math.round(freezingHere))}</div>`;
+                    }
+                    html += `</div>`;
+                }
+
                 this._tooltip.innerHTML = html;
                 this._tooltip.style.display = 'block';
                 console.log('[Profile] panel visible, offsetWidth:', this._tooltip.offsetWidth, 'offsetHeight:', this._tooltip.offsetHeight, 'zIndex:', this._tooltip.style.zIndex);
             }
         } else {
             this._tooltip.style.display = 'none';
+        }
+    }
+
+    _updateWxChip(routeData) {
+        // Wrapped for the same reason the canvas cloud block is wrapped: this
+        // must never throw into _render() and abort terrain drawing that
+        // hasn't run yet, even if cloudMeta's shape changes later.
+        try {
+            if (!this._wxChip) return;
+            const m = routeData.cloudMeta;
+            if (!m) { this._wxChip.style.display = 'none'; return; }
+
+            const css = getComputedStyle(document.documentElement);
+            // covered:false is the one condition under which nothing is drawn, so
+            // it must never render in muted grey — a blank cloud layer that looks
+            // like a routine timestamp reads as "no cloud", not "no data".
+            // Escalated to caution rather than replacing the ladder, so an expired
+            // fetch keeps its stronger danger colour.
+            const colour = m.staleness === 'expired'
+                ? css.getPropertyValue('--color-danger-on-light').trim()  || '#a30d0d'
+                : (m.staleness === 'stale' || !m.covered)
+                    ? css.getPropertyValue('--color-caution-on-light').trim() || '#6b4a00'
+                    : css.getPropertyValue('--text-muted').trim() || '#888888';
+
+            let label;
+            if (!m.covered)      label = 'WX: no data for ETA';
+            else if (m.estimated) label = `WX ${m.ageLabel} · valid now`;
+            else                  label = `WX ${m.ageLabel}`;
+
+            this._wxChip.textContent  = label;
+            this._wxChip.style.color  = colour;
+            this._wxChip.style.display = 'inline';
+        } catch (e) {
+            console.warn('[RouteProfile] wx chip update skipped:', e?.message);
         }
     }
 

@@ -1,5 +1,5 @@
 /**
- * FlyPi v5 — Layer Panel
+ * FlyTab v5 — Layer Panel
  * Right-side slide-in drawer for base chart selection and overlay toggles.
  * Triggered by LAYERS tab in the tab bar.
  */

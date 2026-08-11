@@ -29,7 +29,6 @@ public class EngineMLPlugin extends Plugin {
 
     private InferenceEngine inferenceEngine;
     private ThresholdAdapter thresholdAdapter;
-    private PhaseDetector phaseDetector;
     private EngineAdvisor engineAdvisor;
 
     private float[][] window;
@@ -53,7 +52,6 @@ public class EngineMLPlugin extends Plugin {
             });
 
             thresholdAdapter = new ThresholdAdapter(getContext(), inferenceEngine.getPhaseThresholds());
-            phaseDetector = new PhaseDetector();
             engineAdvisor = new EngineAdvisor();
 
             window = new float[WINDOW_SIZE][N_FEATURES];
@@ -126,15 +124,37 @@ public class EngineMLPlugin extends Plugin {
             windowPos = (windowPos + 1) % WINDOW_SIZE;
             if (windowPos == 0) windowFull = true;
 
-            // Detect phase
-            String phase = phaseDetector.detect(rpm, altitude, groundSpeed);
+            // Read phase from payload (computed in JS by PhaseDetector — see engine-ml.js)
+            String phase = call.getString("phase", "cruise");
+            if (phase == null || phase.isEmpty()) {
+                phase = "cruise";
+            }
 
             // Feed advisor
-            engineAdvisor.addSample(features, mp, carbTemp, fuelRemaining, altitude);
+            engineAdvisor.addSample(features, phase, mp, carbTemp, fuelRemaining, altitude);
+
+            // Sticky-valve check is a pure EGT-delta comparison — it doesn't need
+            // ML inference results, so run it unconditionally rather than gating
+            // it on windowFull. A normal engine start typically leaves "startup"
+            // well before the 60-sample ML window fills, so gating this on
+            // windowFull would silently skip the check for the common case.
+            List<EngineAdvisor.Advisory> stickyValveAdvisories =
+                engineAdvisor.checkStickyValve(features, phase);
 
             JSObject ret = new JSObject();
             ret.put("phase", phase);
             ret.put("windowReady", windowFull);
+
+            // Advisories are populated unconditionally (sticky-valve findings first)
+            // so they surface even on samples where the ML window isn't full yet.
+            JSArray advArr = new JSArray();
+            for (EngineAdvisor.Advisory adv : stickyValveAdvisories) {
+                JSObject a = new JSObject();
+                a.put("message", adv.message);
+                a.put("severity", adv.severity);
+                a.put("category", adv.category);
+                advArr.put(a);
+            }
 
             if (windowFull && rpm > 100) {
                 // Build ordered window (oldest to newest)
@@ -155,9 +175,13 @@ public class EngineMLPlugin extends Plugin {
                         thresholdAdapter.recordNormalScore(phase, score);
                     }
 
-                    // Get advisories
+                    // Get advisories. Tell advise() whether the standalone sticky-valve
+                    // check already produced a finding for this sample so its own
+                    // "nothing else fired" fallback doesn't also append the generic
+                    // "monitoring" info message alongside a specific caution.
                     List<EngineAdvisor.Advisory> advisories = engineAdvisor.advise(
-                        features, phase, score, anomaly, distanceNm, groundSpeed);
+                        features, phase, score, anomaly, distanceNm, groundSpeed,
+                        !stickyValveAdvisories.isEmpty());
 
                     ret.put("score", score);
                     ret.put("threshold", threshold);
@@ -179,8 +203,7 @@ public class EngineMLPlugin extends Plugin {
                         ret.put("featureErrors", errArr);
                     }
 
-                    // Advisories
-                    JSArray advArr = new JSArray();
+                    // Advisories from advise() (sticky-valve already merged in above)
                     for (EngineAdvisor.Advisory adv : advisories) {
                         JSObject a = new JSObject();
                         a.put("message", adv.message);
@@ -188,7 +211,6 @@ public class EngineMLPlugin extends Plugin {
                         a.put("category", adv.category);
                         advArr.put(a);
                     }
-                    ret.put("advisories", advArr);
 
                 } catch (TimeoutException te) {
                     // Inference hung — resolve without score so the plugin stays responsive.
@@ -198,6 +220,8 @@ public class EngineMLPlugin extends Plugin {
                     Log.w(TAG, "Inference error — resolving without score", ie);
                 }
             }
+
+            ret.put("advisories", advArr);
 
             call.resolve(ret);
         } catch (Exception e) {

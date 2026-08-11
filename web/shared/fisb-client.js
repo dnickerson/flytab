@@ -1,5 +1,5 @@
 /**
- * FlyPi — FIS-B Weather Client
+ * FlyTab — FIS-B Weather Client
  * Higher-level weather manager that listens to StratuxClient events,
  * maintains in-memory weather store, decodes METARs, fires typed events.
  * Writes to IndexedDB via NasrDB.putWeather() for airport popup lookups.

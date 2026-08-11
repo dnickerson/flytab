@@ -80,8 +80,23 @@ export function decomposeLeg(profile, leg) {
         const tasDesc  = fp?.descent?.ias_kt
             ? iasToTas(fp.descent.ias_kt, leg.altFt / 2)
             : (overrideTas ? overrideTas * 0.9625 : tasAtAltitude(profile, leg.altFt / 2));
-        const descGph  = fp?.descent?.gph
-            ?? gphAtPower(profile, 0.55, leg.altFt / 2, 'FULL_RICH');
+        // Fallback for profiles carrying no measured `fuelPhases.descent.gph`.
+        // Floored at the profile's cruise burn, because the bare 55%-power SFC
+        // estimate is unsafe on one of its two branches:
+        //   - profile WITH `max_hp`:  0.55 * 180 * SFC.FULL_RICH(0.093) = 9.21 gph
+        //   - profile WITHOUT it:     fuel_burn_gph * (0.55/0.75)       = 6.16 gph
+        //     (6.16 for the RV-9A's 8.4 gph cruise; it was 5.94 when cruise was 8.1)
+        // 6.16 is below the RV-9A's measured descent p85 of 6.9 gph, so that
+        // branch under-plans descent burn and over-states fuel remaining — the
+        // direction that runs tanks dry. Measured descent burn here is 82% of
+        // planned cruise (6.9 of 8.4), so "descent costs nothing" is simply
+        // wrong for this airframe; absent real data, assume no fuel saving in
+        // the descent. Math.max, not a replacement: the 9.21 branch is already
+        // conservative and must not be lowered to 8.4 by this change.
+        const descGph  = fp?.descent?.gph ?? Math.max(
+            gphAtPower(profile, 0.55, leg.altFt / 2, 'FULL_RICH'),
+            fp?.cruise?.gph ?? profile.fuel_burn_gph ?? 0,
+        );
         const descDist = (tasDesc + wind) * descHrs;
         phases.descent = {
             timeHrs: descHrs,

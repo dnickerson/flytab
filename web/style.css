@@ -44,89 +44,6 @@
     --shadow-raised:     0 4px 16px rgba(0,0,0,0.15);
 }
 
-/* ── Cockpit Mode — direct sunlight on iPad ─────────────────────────────────── */
-/* All contrast ratios verified against bg-primary (#1a1a2e, L≈0.0083)          */
-[data-mode="cockpit"] {
-    /* Surfaces — light background for direct sunlight readability */
-    --bg-primary:        #f0f4f8;
-    --bg-surface:        #ffffff;
-    --bg-surface-raised: #e8edf4;
-
-    /* Text — dark on light background */
-    --text-primary:      #111111;
-    --text-secondary:    #333333;
-    --text-label:        #555555;
-    --text-muted:        #888888;
-    --text-on-accent:    #ffffff;
-
-    /* Instrument readouts */
-    --instrument-value:  #111111;
-    --instrument-unit:   #555555;
-    --instrument-label:  #888888;
-
-    /* Interactive */
-    --accent:            #0055bb;
-    --accent-hover:      #0044aa;
-    --accent-active:     #003388;
-
-    /* Borders */
-    --border:            #ccd4e0;
-    --border-light:      #e4eaf2;
-    --border-strong:     #8899bb;
-
-    /* Elevation */
-    --shadow:            0 2px 8px rgba(0,0,0,0.12);
-    --shadow-raised:     0 4px 20px rgba(0,0,0,0.18);
-
-    /* Status colors — deep tones readable on light background */
-    --status-ok:         #1a8c35;
-    --status-caution:    #b87000;
-    --status-warning:    #c45200;
-    --status-danger:     #cc2222;
-    --color-success:     #1a8c35;
-    --color-caution:     #b87000;
-    --color-danger:      #cc2222;
-    --color-info:        #0055bb;
-
-    /* Touch targets — enlarged for turbulence */
-    --touch-min:         56px;
-    --touch-preferred:   64px;
-    --touch-large:       80px;
-}
-
-/* ── Night Mode — red spectrum, preserves scotopic vision ───────────────────── */
-[data-mode="night"] {
-    /* Surfaces */
-    --bg-primary:        #0a0a0a;
-    --bg-surface:        #111111;
-    --bg-surface-raised: #1a1111;
-    /* Text */
-    --text-primary:      #ff6b6b;
-    --text-secondary:    #cc4444;
-    --text-label:        #992222;
-    --text-muted:        #661111;
-    --text-on-accent:    #000000;
-
-    /* Instrument readouts */
-    --instrument-value:  #ff6b6b;
-    --instrument-unit:   #992222;
-    --instrument-label:  #661111;
-
-    /* Interactive */
-    --accent:            #882222;
-    --accent-hover:      #aa3333;
-    --accent-active:     #661111;
-
-    /* Borders */
-    --border:            #331111;
-    --border-light:      #221111;
-    --border-strong:     #551111;
-
-    /* Elevation */
-    --shadow:            none;
-    --shadow-raised:     none;
-}
-
 /* ── Global semantic tokens — constant across all modes ─────────────────────── */
 :root {
     /* Flight category colors — FAA standard, sunlight-visible */
@@ -149,6 +66,47 @@
     --color-info:        #00aaff;
     --color-fuel-ok:     #00aaff;
     --color-terrain:     #c8961e;   /* terrain highlight — brighter for sunlight */
+
+    /* Text colour for controls FILLED with --accent or --status-danger.
+       This was referenced in 14 declarations across style.css (plus app.js,
+       logbook.js, thermal-monitor.js) and DEFINED NOWHERE, so every one of those
+       `color:` declarations was invalid and dropped at parse time. The label fell
+       back to the inherited --text-primary (#1a1a2e), measured at 3.06:1 on
+       --accent (#0066cc) in Chrome. Defining it here fixes all of them at once. */
+    /* HELD 2026-08-01, deliberately NOT defined. Defining it as #ffffff fixes 8
+       sites (incl. the new Measure & Record Fuel button, 3.06 -> 5.57:1) but
+       REGRESSES 14 where it lands on --status-danger (#ff3030) fills: white
+       measures 3.67:1 there against 4.64:1 for the current dropped-declaration
+       fallback. Affected: emergency-glide header/title/ack, .ml-adv-warn,
+       .eml-sev-2, the thermal warning banner and others -- all safety alerts.
+       Root cause is the same as the fuel colours below: dark-theme reds used as
+       light-UI fills. Define this token only together with repointing those fills
+       to a light-safe danger colour, so white-on-red becomes legitimate.
+       Tracked as an issue; not fixed here to avoid a net regression on alerts.
+    --text-on-dark:      #ffffff;   */
+
+    /* Warning colours for TEXT ON A LIGHT SURFACE.
+       --color-caution / --color-danger above are tuned for the old dark cockpit
+       background and are still correct where they are used as solid badge FILLS
+       with black/white text on top (e.g. .fo-grade-good, .ep-fuel-stale). As
+       FOREGROUND text on --bg-surface (#f5f5f5) they measure 1.51:1 and 3.37:1 —
+       effectively invisible on the tablet in direct sun. Cockpit data that renders
+       as coloured text on a light sheet must use the two below instead; both are
+       >= 7:1 on #f5f5f5 (measured in Chrome, see the fuel colour block).
+       --status-warning / --status-danger (above) are the same class of bright
+       dark-theme fill colour and have the identical foreground-text problem
+       (fixed for .pt-amber/.pt-yellow/.pt-red in #117 by repointing to the
+       tokens below) — no -on-light variant exists for --status-warning/
+       --status-danger themselves; reuse --color-caution-on-light /
+       --color-danger-on-light for any other text usage of them rather than
+       inventing new tokens. */
+    --color-caution-on-light: #6b4a00;   /* 7.40:1 on #f5f5f5 */
+    --color-danger-on-light:  #a30d0d;   /* 7.35:1 on #f5f5f5 */
+
+    /* Route profile cloud rendering — fill is texture, contour carries
+       legibility. --cloud-contour measures 12.9:1 on white. */
+    --cloud-fill:    #5b6b7f;
+    --cloud-contour: #1f3348;
 
     /* Navaid type colors — shared by map, popup, legend */
     --navaid-vor:        #00ccaa;
@@ -176,9 +134,9 @@
 
     /* ── Touch targets — Apple HIG + sunlight glove tolerance ── */
     --touch-compact:     36px;      /* compact toolbar/table buttons (fixed, no cockpit override) */
-    --touch-min:         48px;      /* 18mm — iOS minimum, bare finger           */
-    --touch-preferred:   56px;      /* 21mm — preferred, sunglasses + bright sun */
-    --touch-large:       64px;      /* 24mm — primary cockpit actions            */
+    --touch-min:         56px;      /* iOS minimum, bare finger                  */
+    --touch-preferred:   64px;      /* preferred, sunglasses + bright sun        */
+    --touch-large:       80px;      /* 24mm — primary cockpit actions            */
     --touch-spacing:     6px;       /* gap between adjacent touch targets        */
 
     /* ── Typography ── */
@@ -316,6 +274,22 @@ body {
 .status-fisb { background: #661111; color: #ff6666; }
 .status-gps.active { background: #116611; color: #44ff44; }
 .status-fisb.active { background: #116611; color: #44ff44; }
+
+/* Pi contract mismatch badge (#113) — hidden by default, only shown when the
+   connected Pi reports a payload contract older than this build requires.
+   Follows the documented Status badge pattern (solid token fill + black
+   text), not the sibling .status-gps/.status-fisb dark-fill/bright-text
+   style above — that pair predates the token system and (unrelated to this
+   issue) has its own contrast problem worth a separate look. */
+.status-pi-contract {
+    font-size: 14px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 4px;
+    letter-spacing: 0.3px;
+    background: var(--color-caution);
+    color: #000;
+}
 .status-gps.active-degraded { background: #664400; color: #ffcc44; }
 .status-advisory {
     font-size: 14px; font-weight: 800; padding: 1px 7px;
@@ -699,7 +673,7 @@ body {
 }
 
 /* Close / dismiss button — turbulence-safe large tap target.
-   Uses --touch-large (64px global, 80px in cockpit mode).
+   Uses --touch-large (80px).
    Add this class to any dismiss button; keep module-specific class for binding. */
 .btn-close {
     display: inline-flex;
@@ -957,118 +931,10 @@ body {
     transition: width 0.3s ease;
 }
 
-/* ========== Cockpit: Nav Strip ========== */
-
-.nav-strip {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    padding: 2px 12px;
-    background: var(--bg-surface);
-    border-bottom: 1px solid var(--border);
-    font-family: var(--font-instrument);
-    font-size: 16px;
-    min-height: 36px;
-    overflow-x: auto;
-    flex-shrink: 0;
-}
-
-.nav-strip-item {
-    display: flex;
-    align-items: baseline;
-    gap: 4px;
-    white-space: nowrap;
-}
-
-.nav-strip-label {
-    font-size: 14px;
-    font-weight: 700;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
-
-.nav-strip-value {
-    font-size: 16px;
-    font-weight: 700;
-    color: var(--text-primary);
-}
-
-.nav-strip-value.instrument-value {
-    font-size: 16px;
-}
-
-.nav-strip-sub {
-    font-size: 14px;
-    color: var(--text-secondary);
-}
-
-.nav-strip-sep {
-    width: 1px;
-    height: 28px;
-    background: var(--border);
-    margin: 0 8px;
-    flex-shrink: 0;
-}
-
-/* ========== Nav Strip Field Picker ========== */
-.ns-picker {
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    z-index: 3000;
-    background: var(--bg-surface-raised);
-    border: 1px solid var(--border-strong);
-    border-radius: 12px;
-    padding: 16px;
-    min-width: 280px;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.6);
-}
-.ns-picker-title {
-    font-size: var(--text-sm);
-    font-weight: 700;
-    color: var(--text-secondary);
-    text-align: center;
-    margin-bottom: 12px;
-    letter-spacing: 1px;
-    text-transform: uppercase;
-}
-.ns-picker-btns {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    justify-content: center;
-    margin-bottom: 14px;
-}
-.ns-picker-btn {
-    padding: 8px 14px;
-    border-radius: 8px;
-    border: 1px solid var(--border);
-    background: var(--bg-surface);
-    color: var(--text-muted);
-    font-size: var(--text-sm);
-    font-weight: 700;
-    min-height: var(--touch-min);
-    cursor: pointer;
-}
-.ns-picker-btn.active {
-    background: var(--accent);
-    color: var(--text-on-dark);
-    border-color: var(--accent);
-}
-.ns-picker-done {
-    width: 100%;
-    padding: 10px;
-    border-radius: 8px;
-    border: 1px solid var(--border-strong);
-    background: var(--bg-surface);
-    color: var(--text-primary);
-    font-size: var(--text-base);
-    font-weight: 700;
-    min-height: var(--touch-min);
-    cursor: pointer;
-}
+/* Nav Strip / Nav Strip Field Picker (.nav-strip*, .ns-picker*) removed (#120) —
+   dead CSS for a component with zero JS callers anywhere in web/. Superseded by
+   the instrument strip / route table. See also the .rnav-* removal further down
+   and the "navStrip" key removed from cockpit-config.json. */
 
 /* ========== Cockpit: Map Controls ========== */
 
@@ -1664,32 +1530,59 @@ body {
     color: #4ade80 !important;
 }
 
+/* #fbbf24 / #f87171 were the same literal dark-theme hex values .fuel-yellow/
+   .fuel-red carried before being fixed (see the Fuel Color Coding block below) —
+   1.53:1 / 2.54:1 on the light background. Same defect, same fix. (#120) */
 .wx-aging {
-    color: #fbbf24 !important;
+    color: var(--color-caution-on-light) !important;
 }
 
 .wx-stale {
-    color: #f87171 !important;
+    color: var(--color-danger-on-light) !important;
 }
 
-/* ========== Fuel Color Coding ========== */
+/* ========== Fuel Color Coding ==========
+
+   .fuel-yellow / .fuel-red are the route table's REM column (route-table.js
+   _fuelRemCell). Both carried literal dark-theme values computed against the old
+   cockpit background (#1a1a2e). The route table renders on
+   .route-table-sheet { background: var(--bg-surface) } = #f5f5f5, where Chrome
+   measured them at 1.53:1 (#fbbf24) and 2.54:1 (#f87171) — invisible in sun.
+
+   That became load-bearing on this branch: _fuelRemCell now routes the STALE
+   signal through .fuel-yellow, so the amber half of the two-signal stale
+   convention was not being displayed at all, and a <= 4 gal REM — the loudest
+   fuel warning in the table — rendered at 2.54:1.
+
+   Repointed at the on-light foreground tokens. NOTE these are NOT
+   --color-caution / --color-danger: those resolve to #ffc000 / #ff3030 in this
+   app (the #b87000 / #cc2222 values were removed along with the dead
+   [data-mode="cockpit"] block in the dead-theme cleanup — FlyTab is
+   light-theme only), i.e. 1.51:1 and 3.37:1 here. Verified in Chrome, not
+   assumed. (SDD Task S5.)
+
+   .fuel-green has no JS caller anywhere in web/ and is left as-is. */
 
 .fuel-green {
     color: #4ade80 !important;
 }
 
 .fuel-yellow {
-    color: #fbbf24 !important;
+    color: var(--color-caution-on-light) !important;   /* 7.40:1 on #f5f5f5 */
 }
 
 .fuel-red {
-    color: #f87171 !important;
+    color: var(--color-danger-on-light) !important;    /* 7.35:1 on #f5f5f5 */
     animation: fuel-blink 1s ease-in-out infinite;
 }
 
+/* Trough was opacity:0.5, compositing #a30d0d over #f5f5f5 to #cc8181 = 2.74:1 —
+   the loudest fuel warning in the app dipping below the 3:1 floor twice a second.
+   0.75 composites to #b74747 = 4.79:1 (measured), clearing the 4.5:1 "never
+   below" floor with margin while keeping a visible pulse. (#120) */
 @keyframes fuel-blink {
     0%, 100% { opacity: 1; }
-    50% { opacity: 0.5; }
+    50% { opacity: 0.75; }
 }
 
 /* ========== Range Ring Button ========== */
@@ -1968,7 +1861,7 @@ body {
     align-items: center;
     gap: 6px;
     padding: 10px 12px;
-    min-height: var(--touch-preferred); /* 56px — cockpit turbulence target */
+    min-height: var(--touch-preferred); /* 64px — cockpit turbulence target */
     cursor: pointer;
 }
 
@@ -2507,6 +2400,25 @@ body {
     border-radius: 3px;
     margin-left: 2px;
     vertical-align: middle;
+}
+
+/* Active leg's FUEL figure when it comes from measured fuel flow rather than
+   the planned/%PWR-selected figure (#114). Positive signal, not a caution one —
+   this is MORE trustworthy than a planned figure — so it uses --accent (5.11:1
+   on this light background, measured in Chrome) rather than the caution/danger
+   vocabulary reserved for stale/uncertain values. */
+.rt-fuel-measured {
+    color: var(--accent);
+    font-weight: 700;
+}
+
+/* Active leg's FUEL figure when no live fuel flow was available to measure it —
+   falls back to planned, marked with the same caution colour + trailing '?'
+   two-signal convention used everywhere else in the app for an unconfirmed
+   figure (#114). Distinct from .fuel-yellow/.fuel-red (REM column staleness) —
+   this is a different signal (no data at all vs a stale tracked reading). */
+.rt-fuel-planned-fallback {
+    color: var(--color-caution-on-light);
 }
 
 /* Planned vertical speed annotation in ALT cell (CLB/DES rows) */
@@ -5764,6 +5676,14 @@ body.fs-overlay-open .radar-loop-controls {
     font-family: var(--font-instrument);
     color: var(--color-success);
 }
+.fo-dropped-burn-row {
+    text-align: center;
+    font-size: 14px;
+    color: var(--color-caution);
+    font-weight: 700;
+    margin: -4px 0 10px;
+    padding: 6px 8px;
+}
 
 /* EDM comparison */
 .fo-edm-section {
@@ -6247,6 +6167,23 @@ body.fs-overlay-open .radar-loop-controls {
     text-align: center;
 }
 
+/* Tracked tank figure that FuelTankState considers unconfirmed (>45 min without an
+   integrated sample). The figure is still SHOWN — it is the pilot's last known-good
+   quantity — but it reads HIGH, so it carries the caution colour plus a trailing '?'
+   in the text: the same two signals instrument-strip.js uses in its own cramped
+   field. The widget is far too small for engine-page.js's full-width UNCONFIRMED
+   banner. (SDD Task S3.)
+
+   Uses --color-caution-on-light, not --color-caution: this widget sits on a light
+   background, where --color-caution (#ffc000) measures 1.51:1. The sibling stale
+   markers (.is-value.is-unconfirmed, .ep-gauge-value.ep-unconfirmed,
+   .wb-result-value.wb-unconfirmed) had the identical defect — see the S5 report
+   for how they were originally left out of scope. Fixed in #120.
+   (.pt-amber/.pt-yellow/.pt-red fixed separately in #117.) */
+.ftw-unconfirmed {
+    color: var(--color-caution-on-light) !important;
+}
+
 /* Tank-select badge (tap to switch) */
 .ftw-badge {
     margin-top: 4px;
@@ -6538,24 +6475,9 @@ body.fs-overlay-open .radar-loop-controls {
     padding-bottom: var(--tab-bar-height) !important;
 }
 
-/* Route strip (compact nav-strip at top) */
-#routeStrip {
-    flex-shrink: 0;
-}
-
-#routeStrip .nav-strip {
-    min-height: 36px;
-    padding: 2px 8px;
-    font-size: 16px;
-}
-
-#routeStrip .nav-strip-value {
-    font-size: 16px;
-}
-
-#routeStrip .nav-strip-value.instrument-value {
-    font-size: 16px;
-}
+/* #routeStrip removed (#120) — dead CSS, no element with this id exists in
+   web/index.html or any cockpit/*.js. Same abandoned component as .nav-strip
+   above. */
 
 /* Cockpit main: horizontal flex row (left rail + map area) */
 .cockpit-main {
@@ -6672,103 +6594,10 @@ body.fs-overlay-open .radar-loop-controls {
     color: #000;
 }
 
-/* ── Route Nav Strip: in-flight navigation display ── */
-.rnav-strip {
-    flex-shrink: 0;
-    background: var(--bg-primary);
-    border-top: 1px solid var(--border);
-    overflow: hidden;
-    transition: max-height 0.2s ease;
-}
-.rnav-strip.rnav-hidden { display: none; }
-.rnav-compact { cursor: pointer; }
-.rnav-row {
-    display: flex;
-    align-items: center;
-    padding: 2px 8px;
-    gap: 4px;
-}
-.rnav-active-row {
-    min-height: 32px;
-    background: var(--bg-surface);
-}
-.rnav-detail-row {
-    min-height: 28px;
-    border-top: 1px solid var(--border);
-}
-.rnav-wpt {
-    font-family: var(--font-instrument);
-    font-size: 18px;
-    font-weight: 700;
-    color: var(--status-ok);
-    min-width: 56px;
-    letter-spacing: 0.5px;
-}
-.rnav-cell {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    flex: 1;
-    min-width: 0;
-}
-.rnav-lbl {
-    font-size: 9px;
-    color: var(--text-tertiary);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    line-height: 1;
-}
-.rnav-val {
-    font-family: var(--font-instrument);
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--text-primary);
-    line-height: 1.2;
-}
-.rnav-val.rnav-green { color: var(--status-ok); }
-.rnav-val.rnav-amber { color: var(--status-warning); }
-.rnav-val.rnav-red   { color: var(--status-danger); }
-.rnav-fuel-dest { flex: 1.5; }
-.rnav-next .rnav-val { font-size: 13px; color: var(--text-secondary); }
-.rnav-edit-btn {
-    font-family: var(--font-instrument);
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--accent);
-    background: transparent;
-    border: 1px solid var(--accent);
-    border-radius: 4px;
-    padding: 4px 10px;
-    min-height: 28px;
-    cursor: pointer;
-    flex-shrink: 0;
-}
-.rnav-edit-btn:active { background: var(--overlay-subtle); }
-
-/* Expanded state: show upcoming waypoints */
-.rnav-upcoming { display: none; }
-.rnav-expanded .rnav-upcoming {
-    display: block;
-    border-top: 1px solid var(--border);
-    max-height: 200px;
-    overflow-y: auto;
-}
-.rnav-upcoming-row {
-    min-height: 28px;
-    border-bottom: 1px solid var(--overlay-subtle);
-}
-.rnav-upcoming-row .rnav-wpt {
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--text-secondary);
-}
-.rnav-ucell {
-    flex: 1;
-    font-family: var(--font-instrument);
-    font-size: 13px;
-    color: var(--text-secondary);
-    text-align: center;
-}
+/* Route Nav Strip (.rnav-*, ~30 selectors) removed (#120) — dead CSS, zero JS
+   callers anywhere in web/cockpit/*.js or app.js. Same abandoned component
+   family as .nav-strip and #routeStrip above; superseded by the route table
+   and instrument strip. */
 
 /* Instrument strip: bottom bar with numeric flight data */
 #instrumentStrip {
@@ -6816,6 +6645,16 @@ body.fs-overlay-open .radar-loop-controls {
     font-size: 14px;
     color: var(--text-muted);
     line-height: 1;
+}
+
+/* FUEL value whose tracked tank state has not been updated in 45+ min.
+   The figure is still shown (it is the pilot's last known-good quantity) but it
+   reads HIGH, so it carries the caution colour plus a trailing '?' in the text —
+   the strip has no room for engine-page.js's UNCONFIRMED banner.
+   --color-caution measures 1.51:1 on this light background — repointed at the
+   on-light token, same fix as .fuel-yellow/.fuel-red. (#120) */
+.is-value.is-unconfirmed {
+    color: var(--color-caution-on-light);
 }
 
 /* FUEL field is tappable — subtle highlight to indicate interactivity */
@@ -6938,6 +6777,23 @@ body.fs-overlay-open .radar-loop-controls {
 .pt-table tbody td:first-child { text-align: left; }
 .pt-table tbody tr:last-child td { border-bottom: none; }
 
+/* Power band with `samples: 0` in aircraft-config.json — its TAS and GPH are
+   interpolated estimates, not measured flight data. Marked, never removed: the
+   rows are real power settings the pilot can fly, they just have no data behind
+   them. Deliberately NOT muted — muting would drop a cockpit value below the
+   contrast floor. The `~` prefix and this tag carry the signal instead. (SDD S2.)
+   font-size was 11px — below the 16px vibration floor the type-scale comment
+   above --text-sm specifies. Bumped to the token (#117). */
+.pt-est-tag {
+    font-family: var(--font-ui);
+    font-size: var(--text-sm);
+    font-weight: 800;
+    letter-spacing: 0.4px;
+    color: var(--color-caution-on-light);
+    vertical-align: 1px;
+    margin-left: 3px;
+}
+
 /* Current power row */
 .pt-row-current {
     background: rgba(0, 102, 204, 0.12);
@@ -6945,11 +6801,26 @@ body.fs-overlay-open .radar-loop-controls {
 .pt-row-current td { color: var(--accent-blue, #4aa8ff); }
 .pt-pwr { font-weight: 700 !important; }
 
-/* Delta colours */
-.pt-green  { color: var(--status-ok)   !important; }
-.pt-amber  { color: var(--status-warn) !important; }
-.pt-yellow { color: var(--status-warn) !important; }
-.pt-red    { color: var(--status-err)  !important; }
+/* Delta and FUEL@DEST colours.
+   --status-warn / --status-err were never DEFINED anywhere in this stylesheet (only
+   referenced), so these three declarations were invalid and dropped: every FUEL@DEST
+   cell rendered in the plain body colour, including the danger band. A low-fuel
+   projection therefore looked exactly like a comfortable one on a pilot-reachable
+   panel. Repointed at the tokens that actually exist — the same two the route-strip
+   DEST badge uses, so the two displays agree. (SDD Task 14.)
+
+   That repoint (--status-warning / --status-danger) never actually rendered:
+   both are bright dark-theme fill colours used here as foreground TEXT on the
+   panel's light background, measuring 2.69:1 / 3.37:1 in Chrome — a 2-gallon
+   arrival was visually indistinguishable from a 25-gallon one. Repointed again
+   at the light-safe text tokens added for exactly this problem elsewhere
+   (route table, tanks widget). (#117) .pt-green is unchanged/out of scope for
+   this issue — it shares the same underlying defect (--status-ok measures
+   ~1.5:1 here too) but wasn't part of what #117 reported; flagged separately. */
+.pt-green  { color: var(--status-ok)             !important; }
+.pt-amber  { color: var(--color-caution-on-light) !important; }
+.pt-yellow { color: var(--color-caution-on-light) !important; }
+.pt-red    { color: var(--color-danger-on-light)  !important; }
 
 /* Tab bar: fixed bottom nav, positioned above Android system nav bar */
 #tabBar {
@@ -10274,6 +10145,18 @@ body.emergency-active #tabBar {
     font-family: var(--font-instrument, monospace);
 }
 
+/* Total Weight / CG computed from a fuel figure that is missing or stale.
+   Declared BEFORE .wb-over-gross so that, at equal specificity, an over-gross weight
+   still renders in the danger colour — the more severe of the two must win.
+   --color-caution measures 1.51:1 on this light background — repointed at the
+   on-light token, same fix as .fuel-yellow/.fuel-red. (#120) */
+.wb-result-value.wb-unconfirmed {
+    color: var(--color-caution-on-light);
+}
+
+/* .wb-over-gross has the identical --color-danger contrast defect (3.37:1 as
+   text here) but wasn't part of what #120 reported — left as-is, flagged
+   separately rather than folded in. */
 .wb-result-value.wb-over-gross {
     color: var(--color-danger);
 }
@@ -10309,6 +10192,28 @@ body.emergency-active #tabBar {
     background: var(--color-danger);
     color: #fff;
 }
+
+/* STALE-NEVER-GREEN: an in-envelope verdict computed from a missing or >45 min stale
+   fuel quantity is shown, but in the caution fill — never the reassuring green. */
+.wb-envelope-badge.wb-envelope-unconfirmed {
+    background: var(--color-caution);
+    color: #000;
+}
+
+/* Full-width caution bar above the envelope badge, naming why the loading is not a
+   measurement. Same solid caution-badge fill as the status-badge pattern. */
+.wb-fuel-notice {
+    grid-column: 1 / -1;
+    background: var(--color-caution);
+    color: #000;
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 15px;
+    font-weight: 800;
+    font-family: var(--font-ui, sans-serif);
+    line-height: 1.3;
+}
+
 
 .wb-chart-container {
     background: var(--bg-surface);
@@ -10361,6 +10266,14 @@ body.emergency-active #tabBar {
 
 .wb-moment-table td:not(:first-child) {
     text-align: right;
+}
+
+/* Fuel row / TOTAL row when fuel is missing or stale — same signal as
+   .wb-result-value.wb-unconfirmed, applied to the moment-table breakdown (#120):
+   an unmarked "Fuel (0 gal) | 0 lb" and unmarked TOTAL asserted a quantity this
+   panel simultaneously says it doesn't know. */
+.wb-moment-table td.wb-unconfirmed {
+    color: var(--color-caution-on-light);
 }
 
 .wb-moment-table tr:last-child td {

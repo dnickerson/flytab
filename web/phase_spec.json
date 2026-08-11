@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "phases": ["startup", "warmup", "taxi_out", "runup", "takeoff", "climb", "cruise", "descent", "approach", "landing", "taxi_in", "shutdown"],
+  "transitions": {
+    "startup":  ["warmup", "shutdown"],
+    "warmup":   ["taxi_out", "runup", "shutdown"],
+    "taxi_out": ["runup", "warmup", "takeoff", "shutdown"],
+    "runup":    ["taxi_out", "takeoff", "warmup", "shutdown"],
+    "takeoff":  ["climb", "taxi_out", "shutdown"],
+    "climb":    ["cruise", "descent", "approach", "shutdown"],
+    "cruise":   ["climb", "descent", "approach", "shutdown"],
+    "descent":  ["cruise", "climb", "approach", "shutdown"],
+    "approach": ["landing", "taxi_in", "climb", "cruise", "descent", "shutdown"],
+    "landing":  ["taxi_in", "takeoff", "shutdown"],
+    "taxi_in":  ["shutdown", "warmup", "takeoff"],
+    "shutdown": []
+  },
+  "thresholds": {
+    "rpm_shutdown": 100,
+    "rpm_startup_max": 1400,
+    "rpm_runup_min": 1600,
+    "rpm_runup_max": 2100,
+    "rpm_takeoff_min": 2400,
+    "mp_full_power": 25.0,
+    "ff_shutdown_max": 0.5,
+    "gps_delta_stationary_m": 5.0,
+    "gps_delta_window_s": 7,
+    "alt_roc_climb_fpm": 350,
+    "alt_roc_descent_fpm": -350,
+    "alt_airborne_min_agl_ft": 200,
+    "alt_approach_agl_ft": 300,
+    "speed_approach_max_kts": 90,
+    "speed_landing_max_kts": 30,
+    "speed_taxi_max_kts": 20,
+    "startup_rpm_slope_window_s": 15,
+    "startup_rpm_slope_flatten_rpm": 20,
+    "field_elev_lock_samples": 200,
+    "field_elev_max_idle_rpm": 2000,
+    "alt_rate_window_s": 30,
+    "shutdown_restart_debounce_samples": 3
+  },
+  "dwell_seconds": {
+    "startup": 20, "warmup": 10, "taxi_out": 10, "runup": 15, "takeoff": 5,
+    "climb": 15, "cruise": 15, "descent": 15, "approach": 10, "landing": 8,
+    "taxi_in": 10, "shutdown": 5
+  },
+  "descriptions": {
+    "startup": "Engine running, stationary, RPM still climbing from cold-start idle (rolling RPM slope above the flatten threshold). Ends once RPM stabilizes, not on a fixed timer. Window for cold-cylinder/sticky-valve check: RPM rise should correlate with EGT/CHT rise per cylinder within this window.",
+    "warmup": "Engine running, no GPS movement, oil warming.",
+    "taxi_out": "Low RPM, GPS position creeping toward runway/runup area.",
+    "runup": "RPM ~1600-2100, no GPS movement, mag check.",
+    "takeoff": "Max power (RPM >= 2400, MP >= 25\"), GPS position creeping or airborne, AGL < 200ft.",
+    "climb": "Airborne (AGL >= 200ft), sustained positive altitude rate (> 350 fpm).",
+    "cruise": "Airborne, level flight (altitude rate within +-350 fpm).",
+    "descent": "Airborne, sustained altitude loss (< -350 fpm), not yet near the field.",
+    "approach": "Airborne, AGL < 300ft near the field, speed < 90kts, speed >= 30kts.",
+    "landing": "AGL < 300ft near the field, speed < 30kts, decelerating.",
+    "taxi_in": "Post-landing, low RPM, GPS position creeping.",
+    "shutdown": "RPM < 100 and fuel flow < 0.5 GPH."
+  }
+}

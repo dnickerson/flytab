@@ -18,6 +18,13 @@ set -e
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 ENGINE_SRC="$REPO_ROOT/engine-monitor"
 
+# #113: what this deploy is about to ship, so it's visible in the deploy output
+# rather than only discoverable by diffing engine_monitor.py. If FlyTab's
+# MIN_PI_CONTRACT (web/shared/engine-client.js) requires more than this after
+# deploying, the ENG page + status bar will say so on the tablet.
+PI_VERSION_LOCAL="$(grep -m1 '^VERSION = ' "$ENGINE_SRC/engine_monitor.py" | sed -E 's/VERSION = "(.*)"/\1/')"
+PI_API_CONTRACT_LOCAL="$(grep -m1 '^PI_API_CONTRACT = ' "$ENGINE_SRC/engine_monitor.py" | sed -E 's/PI_API_CONTRACT = ([0-9]+)/\1/')"
+
 PI_HOST="${PI_HOST:-192.168.1.212}"
 PI_USER="pi"
 PI_SSH="$PI_USER@$PI_HOST"
@@ -38,6 +45,7 @@ echo "=============================="
 echo " FlyTab Pi Deploy"
 echo "=============================="
 echo " Target: $PI_SSH"
+echo " Deploying: engine_monitor.py v${PI_VERSION_LOCAL:-?} (api_contract ${PI_API_CONTRACT_LOCAL:-?})"
 echo ""
 
 # ── Check Pi is reachable ──────────────────────────────────────────────
@@ -189,6 +197,10 @@ echo ""
 echo " Services on Pi:"
 echo "   Stratux:        standard (port 80/443, hotspot 192.168.10.1)"
 echo "   Engine Monitor: /opt/engine-monitor/ (HTTP :8080, WS :8082)"
+echo "                   v${PI_VERSION_LOCAL:-?}, api_contract ${PI_API_CONTRACT_LOCAL:-?}"
+echo ""
+echo " If the tablet's FlyTab build requires a newer api_contract than this,"
+echo " it will show an amber badge in the status bar and a banner on the ENG page."
 echo ""
 if [ "$DO_RESTART" = false ]; then
     echo " To restart engine monitor:"

@@ -1,5 +1,5 @@
 /**
- * FlyPi — Track Log
+ * FlyTab — Track Log
  * Records GPS position every 10s, stores in localStorage ring buffer.
  * Renders as polyline on map. GPX export.
  */

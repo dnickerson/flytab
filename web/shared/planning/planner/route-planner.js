@@ -29,15 +29,50 @@ import { PlanError, DestinationUnreachableError } from './route-planner-errors.j
 
 const AIRWAY_RE = /^[VTJQ]\d+[A-Z]?$/;
 
+/**
+ * Last-resort profile, used only when no `profiles` adapter is wired up at all
+ * (or when a caller passes no `profileOverride` to recomputeLegs()).
+ *
+ * This is deliberately a plain literal, not a config read: the planning library
+ * is host-environment-agnostic and must not reach for `CockpitConfig` (a
+ * classic-script global owned by the cockpit app). Per-aircraft data enters the
+ * library through the `ProfileStore` adapter — see
+ * `web/shared/planning-adapters/idb-profile.js`.
+ *
+ * KEEP IN SYNC, BY HAND, with `RV9A_DEFAULT` in `planning-adapters/idb-profile.js`
+ * and with `web/aircraft-config.json` `performance.*`. There is no automatic
+ * config→profile sync today (verified 2026-07-31). Fuel figures are measured,
+ * not book values — climb 15 / cruise 8.4 / descent 6.9 gph are all the p85 of
+ * EDM fuel flow across 53 `ml_phase`-labelled flight logs. p85 rather than
+ * median is deliberate: under-estimating burn over-states fuel remaining.
+ *
+ * CRUISE IS 8.4, NOT 8.1 — DO NOT "CORRECT" IT BACK. Dana's decision,
+ * 2026-07-31, direct instruction: "use 8.4 for the cruise gal/hr". It supersedes
+ * commit 96d62f3, which had recorded the opposite. Rationale, so nobody
+ * re-derives 8.1 from the band table and calls it a fix:
+ *   - Governing principle: "we want to be on the side of planning more
+ *     consumption rather than less" — planning constants come from a
+ *     conservative upper percentile, never a median or a mean.
+ *   - `~/engine_analysis/build_power_curve.py:352` writes
+ *     `"gph": round(gph_med, 1)`, so every `power_settings[].gph` band value in
+ *     aircraft-config.json is a MEDIAN. 8.1 was the median of the 65% cruise
+ *     distribution — precisely the statistic the principle excludes.
+ *   - Binning `ml_phase == 'cruise'` rows by recorded %power across the same 53
+ *     flight CSVs gives, for the 65-69% band: n=7,879, median 8.10, p85 8.40.
+ * 8.4 is therefore the right population (65% cruise, not all cruise pooled) AND
+ * the right statistic (p85, not median). The 61-65 `power_settings[]` band still
+ * reads 8.1 on purpose — that table is measured median data and must not be
+ * edited to match this constant.
+ */
 const RV9A_FALLBACK = {
     id: 'rv9a-default',
     tailNumber: '',
     model: 'RV-9A',
     cruise_ktas: 153,
     cruise_ias: 140,
-    fuel_burn_gph: 8.1,
+    fuel_burn_gph: 8.4,    // p85 of 65% cruise — see header note; NOT the 8.1 band median
     fuel_capacity_gal: 36,
-    reserve_gal: 10,
+    reserve_gal: 10,       // must match aircraft-config.json performance.reserve_gal
     climb_rate_fpm: 1500,
     service_ceiling_ft: 17500,
     taxi_burn_gal: 0.33,
@@ -47,9 +82,13 @@ const RV9A_FALLBACK = {
     fuelPhases: {
         climb:   { gph: 15,  ias_kt: 120, rate_fpm: 1500, percent_power: 100,
                    mixture: 'FULL_RICH', rpm: 2700, mp: 28 },
-        cruise:  { gph: 8.1, ias_kt: 140, percent_power: 65,
+        // 8.4 = p85 of the 65-69% cruise band (n=7,879; median 8.10, p85 8.40).
+        // NOT the 8.1 `power_settings[]` band value, which is a MEDIAN.
+        cruise:  { gph: 8.4, ias_kt: 140, percent_power: 65,
                    mixture: 'LOP', rpm: 2400, mp: 22 },
-        descent: { gph: 4.0, ias_kt: 170, rate_fpm: 700, percent_power: 50,
+        // 6.9 = measured p85, NOT the old 4.0 book guess. 4.0 under-planned
+        // descent burn by ~2.9 gph and therefore over-stated fuel remaining.
+        descent: { gph: 6.9, ias_kt: 170, rate_fpm: 700, percent_power: 50,
                    mixture: 'LOP', rpm: 2400, mp: 14 },
     },
 };

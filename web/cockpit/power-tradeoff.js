@@ -139,6 +139,31 @@ class PowerTradeoff {
 
         const d = this._legData;
 
+        // FUEL@DEST colour bands. Previously hardcoded as `<4` / `<8` / `<12`.
+        // 4 and 8 are the same reserve thresholds every other fuel display uses —
+        // they now come from the same config keys (enginePage.fuelWarningGal /
+        // fuelCautionGal) so the panel cannot disagree with the engine page, the
+        // route table's REM column or the route-strip DEST badge.
+        //
+        // 12 had no config counterpart anywhere in the app — an invented third band
+        // unique to this panel. It is KEPT (dropping it would silently turn a set of
+        // currently-flagged rows plain, i.e. more reassuring than before, which is the
+        // wrong error direction) but is now a named, editable key rather than a magic
+        // number: `enginePage.fuelAdvisoryGal`, default 12.
+        //
+        // The comparisons are `<=`, not `<`: every other fuel display in the app
+        // treats the threshold itself as already in the band, and exactly 4.0 gal
+        // should read danger on all of them, not danger on one and caution here.
+        const cautionGal  = CockpitConfig.get('enginePage.fuelCautionGal')  ?? 8;
+        const warnGal     = CockpitConfig.get('enginePage.fuelWarningGal')  ?? 4;
+        const advisoryGal = CockpitConfig.get('enginePage.fuelAdvisoryGal') ?? 12;
+
+        // `fuelRemaining` is the canonical live quantity published by route-table.js
+        // `_emitLegUpdate` (manual override > tracked tank state; null when nothing is
+        // tracked). `fuelRemainingStale` marks a tracked figure FuelTankState considers
+        // unconfirmed — see the stale handling at the FUEL@DEST cell below.
+        const fuelStale = !!d.fuelRemainingStale;
+
         // Identify current power row (match live pct within ±5%)
         const livePct = d.livePctPower;
 
@@ -149,6 +174,7 @@ class PowerTradeoff {
         const plannedEteMin = d.destEteMin;
 
         let minSamples = Infinity;
+        let estCount   = 0;
         let html = `
             <table class="pt-table">
                 <thead>
@@ -169,7 +195,18 @@ class PowerTradeoff {
             if (!calc.valid) continue;
 
             const isCurrent = livePct != null && Math.abs(livePct - ps.pct) <= 5;
-            const rowClass  = isCurrent ? 'pt-row-current' : '';
+
+            // `samples` is the count of real logged flight points behind a band.
+            // `samples: 0` is not "no data recorded" bookkeeping — it is the flag
+            // aircraft-config.json uses to say the row's tas_kt and gph are
+            // interpolated/extrapolated estimates rather than measurements. Two of
+            // the seven bands (40-45 and 46-50) are like that, and one of them is the
+            // bottom row of this table: the row a pilot consults when stretching fuel,
+            // carrying the longest endurance and the best FUEL@DEST on screen. Nothing
+            // used to distinguish them, so both read as measured data. (SDD Task S2.)
+            const isEst    = !(ps.samples > 0);
+            const rowClass = [isCurrent ? 'pt-row-current' : '', isEst ? 'pt-row-est' : '']
+                .filter(Boolean).join(' ');
 
             // ETE
             const eteStr = PowerTradeoff._fmtTime(calc.eteMin);
@@ -193,19 +230,26 @@ class PowerTradeoff {
             let fuelStr = '—';
             let fuelClass = '';
             if (calc.fuelAtDest != null) {
-                fuelStr = calc.fuelAtDest.toFixed(1) + ' gal';
-                // Warn if low: <8 = caution, <4 = danger
-                fuelClass = calc.fuelAtDest < 4  ? 'pt-red'
-                          : calc.fuelAtDest < 8  ? 'pt-amber'
-                          : calc.fuelAtDest < 12 ? 'pt-yellow'
+                fuelStr = calc.fuelAtDest.toFixed(1) + (fuelStale ? '? gal' : ' gal');
+                fuelClass = calc.fuelAtDest <= warnGal     ? 'pt-red'
+                          : calc.fuelAtDest <= cautionGal  ? 'pt-amber'
+                          : calc.fuelAtDest <= advisoryGal ? 'pt-yellow'
                           : '';
+                // STALE-NEVER-GREEN: the fuel quantity this row is projected from has
+                // not been updated in 45+ min, so it reads HIGH by the whole unrecorded
+                // burn. Never leave such a row in the plain (in-limits) style, whatever
+                // the arithmetic says. Caution colour + trailing '?' — the same two
+                // signals instrument-strip.js and the route table use.
+                if (fuelStale && !fuelClass) fuelClass = 'pt-amber';
             }
 
             if (ps.samples) minSamples = Math.min(minSamples, ps.samples);
+            if (isEst) estCount++;
 
             html += `
                 <tr class="${rowClass}">
-                    <td class="pt-pwr">${isCurrent ? '▶ ' : ''}${ps.pct}%</td>
+                    <td class="pt-pwr">${isCurrent ? '▶ ' : ''}${isEst ? '~' : ''}${ps.pct}%${
+                        isEst ? ' <span class="pt-est-tag">EST</span>' : ''}</td>
                     <td>${calc.gsKt}kt</td>
                     <td>${calc.gph.toFixed(1)}</td>
                     <td>${eteStr}</td>
@@ -220,8 +264,18 @@ class PowerTradeoff {
 
         // Footer: data confidence + dist remaining
         const distStr = d.destDistNm != null ? `${Math.round(d.destDistNm)}nm to dest` : '';
-        const sampleStr = isFinite(minSamples) ? `Based on ${minSamples}+ actual flight data points` : '';
-        footer.innerHTML = [distStr, sampleStr].filter(Boolean).join(' · ');
+        // `minSamples` only ever saw rows with samples > 0 (the `if (ps.samples)` guard
+        // above skips the estimated ones), so the old unqualified
+        // "Based on 47+ actual flight data points" was claimed for the whole table
+        // while two of its rows had no flight data behind them at all. Scope the claim
+        // to the rows it is true of, and name the estimated ones. (SDD Task S2.)
+        const sampleStr = isFinite(minSamples)
+            ? `Measured rows: ${minSamples}+ actual flight data points`
+            : '';
+        const estStr = estCount > 0
+            ? `~ rows are ESTIMATES — no flight data, TAS and GPH interpolated`
+            : '';
+        footer.innerHTML = [distStr, sampleStr, estStr].filter(Boolean).join(' · ');
     }
 
     static _fmtTime(minutes) {

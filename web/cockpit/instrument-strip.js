@@ -1,5 +1,5 @@
 /**
- * FlyPi v5 — Instrument Strip
+ * FlyTab v5 — Instrument Strip
  * Bottom bar: GS, ALT, HDG, FUEL▲, DEST, ETE▲ when route active.
  * Without route: GS, ALT, FUEL, DIST, ETE (config-driven fallback).
  * Config-driven field list via cockpit-config.json instrumentStrip.fields.
@@ -82,9 +82,15 @@ class InstrumentStrip {
         this._onEngineData = () => this._updateFuel();
         if (this._engine) this._engine.addEventListener('engine:data', this._onEngineData);
 
-        // Fuel updates from manual fuel overlay changes
+        // Fuel updates from manual fuel overlay changes ('fuelstate:changed') and from
+        // the canonical per-tank tracker itself ('fueltankstate:changed' — fired by
+        // FuelTankState on init/switch/top-off/integrate). The FUEL field now reads
+        // FuelTankState, so it has to listen to it: without this the strip only
+        // refreshed on the engine poll, and would sit on a stale figure whenever the
+        // pilot edited tanks with the engine client disconnected.
         this._onFuelChanged = () => this._updateFuel();
         window.addEventListener('fuelstate:changed', this._onFuelChanged);
+        window.addEventListener('fueltankstate:changed', this._onFuelChanged);
 
         // Route leg updates from RouteTable — HDG, destination ETE/fuel deltas
         this._onLegUpdate = (e) => {
@@ -108,6 +114,7 @@ class InstrumentStrip {
         }
         if (this._onFuelChanged) {
             window.removeEventListener('fuelstate:changed', this._onFuelChanged);
+            window.removeEventListener('fueltankstate:changed', this._onFuelChanged);
         }
         if (this._onLegUpdate) {
             window.removeEventListener('activeroute:legupdate', this._onLegUpdate);
@@ -320,33 +327,51 @@ class InstrumentStrip {
         }
     }
 
+    /**
+     * FUEL field — the primary in-flight fuel figure the pilot reads.
+     *
+     * Reads the canonical live-fuel chain (`FuelState.getCurrentFuel()`:
+     * manual override > tracked FuelTankState > capacity fallback) instead of the
+     * old raw-EDM-first chain, which took `fuel_remaining_gal`/`Gallons_Rem`/
+     * `Fuel_Remaining` straight off the engine poll payload and so showed the EDM
+     * totalizer (measured: 30.0) over a tracked 10.0 gal, and fell through to
+     * `FuelState.getStartFuel()` — full tank capacity — when nothing was tracked.
+     *
+     * The SOURCE, not the number, decides whether this field has data:
+     *  - `capacity` means nothing is being tracked. That is a planning default, not
+     *    a measurement; rendering it would show FUEL 36.0 on a live instrument with
+     *    no fuel data behind it. Show the no-data placeholder instead.
+     *  - dry tracked tanks (0.0 gal, source `tank_state`) are a real reading and must
+     *    stay distinguishable from no-data (same rule as engine-page.js Task 12).
+     *  - a tracked figure FuelTankState considers stale (>45 min without an integrated
+     *    sample) is still SHOWN but marked unconfirmed, matching engine-page.js. It
+     *    always reads HIGH — the burn during the gap was never subtracted — so it must
+     *    never be presented as a live measurement. There is no room for the engine
+     *    page's full-width banner in a 64px strip field, so the same two signals are
+     *    carried inline: a trailing `?` on the value and the caution colour.
+     */
     _updateFuel() {
-        // 1. Live EDM data from engine monitor (most current — during flight)
-        const engData = window.enginePanel?.lastData;
-        const remaining = engData?.fuel_remaining_gal ?? engData?.fuel_gal ?? engData?.Gallons_Rem ?? engData?.Fuel_Remaining ?? null;
-        if (remaining != null && remaining > 0) {
-            this._set('fuel', remaining.toFixed(1));
+        const el = this._els['fuel'];
+        if (!el) return;
+
+        const fuelRead = (typeof FuelState !== 'undefined')
+            ? FuelState.getCurrentFuel()
+            : { gallons: 0, source: 'none' };
+        const tracked = (fuelRead.source === 'manual' || fuelRead.source === 'tank_state');
+
+        if (!tracked) {
+            el.textContent = '—';
+            el.className = 'is-value';
             return;
         }
-        // 2. Manual override (pilot explicitly set a value via fuel overlay SET button)
-        const manual = typeof Settings !== 'undefined' ? (Settings.fuelManualOverride || 0) : 0;
-        if (manual > 0) {
-            this._set('fuel', manual.toFixed(1));
-            return;
-        }
-        // 3. Last known from completed flight CSV — more recent than a pre-flight tic measurement
-        const stored = parseFloat(localStorage.getItem('flypi_last_known_fuel') || '0');
-        if (stored > 0) {
-            this._set('fuel', stored.toFixed(1));
-            return;
-        }
-        // 4. FuelState tic/capacity fallback
-        if (typeof FuelState !== 'undefined') {
-            const fs = FuelState.getStartFuel();
-            if (fs && fs.gallons > 0) {
-                this._set('fuel', fs.gallons.toFixed(1));
-            }
-        }
+
+        // Staleness predicate is owned by FuelState.getCurrentFuel() (SDD Task 14) so
+        // this strip, the engine page and the route table cannot disagree about
+        // whether a figure is trustworthy. Already false for `manual` and `capacity`.
+        const stale = !!fuelRead.stale;
+
+        el.textContent = fuelRead.gallons.toFixed(1) + (stale ? '?' : '');
+        el.className = 'is-value' + (stale ? ' is-unconfirmed' : '');
     }
 
     _updateRoute(sit) {

@@ -17,6 +17,7 @@
         <span id="statusGps" class="status-item status-gps">GPS</span>
         <span id="statusAdvisory" class="status-item status-advisory" hidden></span>
         <span id="statusFisb" class="status-item status-fisb">FIS-B</span>
+        <span id="statusPiContract" class="status-item status-pi-contract" hidden></span>
         <span id="statusRec" class="status-item rec-indicator" hidden></span>
         <span id="statusSync" class="status-item status-sync">OFFL</span>
         <span id="statusNasr" class="status-item status-nasr"></span>
@@ -72,6 +73,7 @@
     <script src="./shared/active-route.js"></script>
     <script src="./shared/stratux-client.js"></script>
     <script src="./shared/engine-client.js"></script>
+    <script src="./shared/gps-staleness.js"></script>
     <script src="./shared/engine-gps-bridge.js"></script>
     <script src="./shared/gps-source.js"></script>
     <script src="./shared/nasr-db.js"></script>
@@ -88,6 +90,7 @@
     <script src="./shared/nexrad-sites.js"></script>
     <script src="./shared/convective-intelligence.js"></script>
     <script src="./shared/hrrr-preflight.js"></script>
+    <script src="./shared/cloud-forecast.js"></script>
     <script src="./shared/trip-store.js"></script>
 
     <!-- Config (must load before cockpit modules) -->
@@ -97,11 +100,9 @@
 
     <!-- Cockpit modules -->
     <script src="./cockpit/map.js"></script>
-    <script src="./cockpit/nav-strip.js"></script>
     <script src="./cockpit/engine-panel.js"></script>
     <script src="./cockpit/track-log.js"></script>
     <script src="./cockpit/device-status.js"></script>
-    <script src="./cockpit/range-calc.js"></script>
     <script type="module" src="./shared/planning/index.js"></script>
     <script src="./cockpit/route-planner-panel.js"></script>
     <script src="./cockpit/sua-notams.js"></script>
@@ -138,6 +139,10 @@
     <script src="./cockpit/flight-upload.js"></script>
     <script src="./cockpit/thermal-monitor.js"></script>
     <script src="./cockpit/emergency-glide.js"></script>
+    <script src="./shared/phase-spec-loader.js"></script>
+    <script src="./shared/phase-detector-helpers.js"></script>
+    <script src="./shared/phase-detector-classify.js"></script>
+    <script src="./shared/phase-detector.js"></script>
     <script src="./cockpit/engine-ml.js"></script>
 
     <!-- v5 UI components -->

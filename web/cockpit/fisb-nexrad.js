@@ -1,5 +1,5 @@
 /**
- * FlyPi — FIS-B NEXRAD Renderer
+ * FlyTab — FIS-B NEXRAD Renderer
  * Renders NEXRAD radar blocks from FIS-B (/jsonio) on a Leaflet canvas overlay.
  * Each block has geographic coordinates and 0-15 intensity values from Stratux.
  */

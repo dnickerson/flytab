@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
 """
+OBSOLETE — historical recovery tool from the FlyPi/iPad predecessor product.
+There is no iPad in the current FlyTab system (Android/Capacitor) and this
+script has no current use — kept only in case an old iPad from the FlyPi era
+ever needs its stored data recovered. Not referenced by deploy-pi.sh or any
+other current tooling. See CLAUDE.md's "There Is No iPad" section.
+
+Original docstring follows, describing the iPad-era workflow this was built for:
+
 Extracts flight data from iPad localStorage by impersonating the Stratux.
 
 Creates a WiFi hotspot with IP 192.168.10.1 so the iPad PWA

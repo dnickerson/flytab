@@ -41,7 +41,7 @@ FlyTab connects automatically on app launch. The status bar at the top shows con
 │  Fuel widget                                          │
 │  (top-left)      [FIS-B ⇄] radar badge (bottom-left) │
 ├───────────────────────────────────────────────────────┤
-│  NEXT  ——   DEST  ——   GS  ——kt  ALT  ——  FUEL  ——    │ ← Nav strip
+│ GS —— ALT —— BARO —— CRS —— FUEL —— DEST —— ETE ——    │ ← Instrument strip
 ├───────────────────────────────────────────────────────┤
 │  ≡  │ 🗺MAP │ ✈APT │ ⚙ENG │ ✅CHK │ 📻CLR │ ⊟CMPCT │ ⋯ │ ← Tab bar
 └───────────────────────────────────────────────────────┘
@@ -56,7 +56,7 @@ FlyTab connects automatically on app launch. The status bar at the top shows con
 - **Radar source badge** (bottom-left, when radar is active) — shows active source (FIS-B or INET) with a `⇄` tap target to switch.
 - **Corner buttons** (bottom-right of map): **⊙** auto-pan toggle, **→** direct-to, **⋮** map menu.
 
-**Nav strip** — always visible below the map. Shows six configurable fields (default: next waypoint, destination, ground speed, altitude, range, fuel). Tap any field to change it.
+**Instrument strip** — always visible below the map. Shows the configured numeric fields (default: ground speed, altitude, nearest altimeter setting, course, fuel, distance to destination, ETE). Tap **FUEL** to open the fuel overlay; tap **DEST** or **ETE** to open the power tradeoff panel. The field list itself is set in `cockpit-config.json`, not from the strip.
 
 **Tab bar** — seven tabs along the bottom. **≡ LAYERS** at the far left opens the layer and weather toggle panel. **⋯ MORE** at the far right opens the secondary-functions drawer.
 
@@ -72,8 +72,11 @@ FlyTab connects automatically on app launch. The status bar at the top shows con
 | **NASR** | Database current | ≥7 days old | Very old |
 | **ML** | Engine anomaly score normal | Elevated | Anomaly detected |
 | **REC** | Flight recording active | — | Not recording |
+| **PI vX.X** | Hidden — Pi build matches what this app requires | Shown — connected Pi's software is older than this app needs | — |
 
 The **advisory** badge appears between GPS and FIS-B when a weather advisory is active along the route.
+
+**The PI badge is hidden unless there's a mismatch.** It only appears when the connected Pi's engine monitor software is older than this build of FlyTab expects — a real possibility if the tablet gets updated without also redeploying the Pi (`bash deploy-pi.sh`). Tap it to open the ENG page, which carries the full detail: both version numbers and the exact command to run. Engine data keeps displaying normally either way — a mismatch is a preflight problem to fix on the ground, not a reason to lose the engine page in the air.
 
 ---
 
@@ -120,9 +123,33 @@ Live engine data from the Pi. Updates approximately every second.
 | **Oil Temp** | Oil temperature |
 | **Oil Press** | Oil pressure |
 
+**The FUEL STATUS panel reads the same tracked fuel figure as everything else.** REMAINING, ENDURANCE and RANGE come from your tracked tank state — or from a manual override if you have set one — the same canonical figure behind the fuel tanks widget, the route table's REM column and the DEST badge. They no longer read the EDM's own totalizer, which could disagree with the rest of the fuel displays.
+
+**If no tank quantities have been entered, the whole panel says so.** REMAINING shows `--.-`, ENDURANCE and RANGE show dashes, and the total-fuel bar is empty with the label `--% (--.-/36 gal)` and no colour. That is deliberate: with nothing tracked the page has no live measurement, and showing full tanks there would tell you there is more fuel on board than is actually known. Enter your fuel — the **✎** button on the fuel tanks widget, or the Fuel Entry screen — to get live numbers back.
+
+**Empty tanks look different from untracked tanks.** If you are tracking fuel and the tanks really are down to zero, REMAINING reads `0.0` and the bar is red. A red bar always means low fuel; a blank, colourless bar always means "no fuel data entered." The two never look the same.
+
+**UNCONFIRMED banner.** If more than 45 minutes pass without the tracker integrating a fuel-flow sample (engine data dropped out, or the app was closed), the panel keeps showing the last tracked figure but marks it: REMAINING turns amber and an amber banner reads "UNCONFIRMED — TANK STATE NOT UPDATED IN 45+ MIN. REMAINING MAY READ HIGH; CONFIRM FUEL." The number is kept because it is still your best starting point, but it does not include anything burned during the gap, so it reads high. Confirm or re-enter your fuel to clear it.
+
+**USED (FLIGHT)** shows gallons burned so far this flight, from the Pi's fuel tracker. It previously always read `--.-`.
+
+**LEFT (EDM SENDER) / RIGHT (EDM SENDER)** — the two small tank bars under the gauges are raw EDM float-sender readings, *not* the tracked figure. They are labelled that way because they come from a different and less reliable source and can disagree with REMAINING above. On this airframe the senders are only meaningful below 12 gallons per side; above that they read a flat value, so the bar is drawn empty and the number shows `—` rather than a figure you might mistake for a real level. This matches how the fuel tanks widget already treats its `s:` sender readouts.
+
+The total-fuel bar shows fuel remaining against the aircraft's full capacity from the aircraft page (36 gallons, 2 × 18-gallon tanks). It previously used a hardcoded 34, so percentages now read slightly lower for the same gallons — about 3 points lower at half tanks. The bar turns amber at 8 gallons and red at 4, matching the DEST badge thresholds. Those two figures are configurable (`enginePage.fuelCautionGal` / `fuelWarningGal`); changing them previously had no effect on this bar, and now does.
+
+The **TIC vs EDM** row is unchanged — it still compares your tic-mark measurement against the EDM's own totalizer. Disagreement between those two is exactly what the row exists to show, so it deliberately does not use the tracked figure.
+
 The **engine advisory banner** (below the status bar, on any tab) appears in red if the ML anomaly detector finds an abnormal pattern in the current engine data. Tap it to see which parameters are outside normal for this phase of flight.
 
-The **Engine ML** monitor (MORE → Engine ML) shows the real-time anomaly score, per-feature reconstruction errors, and the current flight phase (ground/climb/cruise/descent). The model was trained on N194JT flight data and knows what this engine normally does in each phase.
+**Sticky-valve caution (startup only)** — During engine start, if one cylinder's EGT rise noticeably lags the other three, you may see "Cylinder N EGT rise lagging others during startup (possible sticky valve) — UNVALIDATED CHECK, confirm on ground." This check is new and its sensitivity has not yet been tuned against a confirmed sticky-valve event — treat an alert as a prompt to inspect on the ground, not a confirmed diagnosis.
+
+The **Engine ML** monitor (MORE → Engine ML) shows the real-time anomaly score, per-feature reconstruction errors, and the current flight phase (startup, warmup, taxi_out, runup, takeoff, climb, cruise, descent, approach, landing, taxi_in, or shutdown). The model was trained on N194JT flight data and knows what this engine normally does in each phase.
+
+**FLIGHT DATA** now also shows **EST. TAS** — an estimate from ground speed and density altitude (roughly +2%/1000 ft DA), not a wind-corrected true airspeed. Treat it as approximate.
+
+**CRUISE TARGETS** — recommended fuel flow, power setting, and mixture mode for the current density altitude (below 8,000 ft DA: 65% power LEAN; 8,000–12,000 ft: 60%; above 12,000 ft: 55%), aimed at best-economy LOP operation. A guideline, not a limit — cross-check against your own POH power charts.
+
+**ATIS OVERRIDE** — enter a fresher altimeter setting and/or OAT than the Pi's own calculated values (e.g. right after copying ATIS/AWOS before an approach). SET applies one field at a time; CLEAR reverts that field to the calculated value. An active override is flagged below the inputs ("ATIS OVERRIDE ACTIVE — ...") because it also feeds DENS ALT and EST. TAS above, not just the OAT gauge — those three numbers reflect your entered value, not a live measurement, until cleared.
 
 ---
 
@@ -150,6 +177,12 @@ Hides the instrument strip and route table so the map fills the full screen. Use
 
 ---
 
+### TMR — Timer
+
+A floating countdown/count-up timer overlay that stays visible over any other tab. Use for holding, approach timing, or any en-route interval. Tap TMR again to dismiss it without losing the timer state.
+
+---
+
 ### MORE — Secondary Functions
 
 Opens a right-side drawer with infrequently used actions, organized in three sections.
@@ -171,7 +204,7 @@ Opens a right-side drawer with infrequently used actions, organized in three sec
 | **Fuel Entry** | Manually enter fuel quantity after a fuel stop |
 | **Plan on flywhere.app** | Opens the web route planner in a browser for pre-flight planning |
 | **Weather Briefing** | Full weather briefing panel (see below) |
-| **Weight & Balance** | Enter station weights and fuel; shows total weight, CG, and envelope status with a CG diagram |
+| **Weight & Balance** | Enter station weights and fuel; shows total weight, CG, and envelope status with a CG diagram. Fuel pre-fills from tracked tank state — see *Fuel on the Weight & Balance page* |
 | **Logbook** | View and edit flight log entries |
 | **Flight Upload** | Sync flight logs to the cloud |
 | **User Manual** | This document |
@@ -407,6 +440,26 @@ The route imports with all waypoints, planned altitude, and cruise speed. The na
 
 Tap any airport on the map, then tap the **→** corner button. FlyTab sets a direct course to that airport, overriding the current leg but preserving the rest of the route.
 
+### Route Profile
+
+Expand the route strip and tap the mountain icon (⛰) in the handle to open the profile view — a side-on chart of your route showing terrain, Class B/C/D airspace bands, waypoints, and fuel stops along the distance axis. Tap the panel's chevron to expand or collapse it, or tap **✕** to close. Touch and drag anywhere on the chart to scrub along the route and see airspace detail for that point.
+
+#### Clouds on the profile
+
+When a cloud forecast has been cached, the profile shades cloud along your route at the altitudes it occupies. Shading density follows how much cloud the model expects: faint for scattered, solid for overcast. Anywhere cover reaches broken or worse, a dark outlined box is drawn and labelled **BKN\*** or **OVC\***. A continuous deck is drawn as one box spanning the whole stretch, not as a row of small boxes.
+
+The asterisk is deliberate — the header note reads "\* model-derived". These are model cloud fractions over roughly 3 km grid squares, not an observer's octas, and they are not a METAR.
+
+The bands are deliberately blocky. The forecast samples about every 750 ft low down but only every 3,000–4,000 ft above roughly 6,700 ft, and the boxes show the real span the model resolves rather than a smoothed guess. A layer that sits entirely inside one of those upper gaps will not appear at all.
+
+A solid red line marks the 0°C freezing level, which moves along the route.
+
+**Cloud data is fetched on the ground and does not update in flight.** It refreshes automatically whenever you edit the route while connected at home or on the internet. The WX chip in the profile header shows how old the forecast is — grey when recent, amber past three hours, red past six. Old data is still drawn; the chip tells you how much to trust it. If the chip reads "no data for ETA" — shown in amber — the cached forecast does not reach far enough forward in time to cover your arrival and nothing is drawn.
+
+If the route has no computed timing yet, the chip adds "valid now" and the whole chart is drawn for the current hour rather than for your ETA at each point. It is all or nothing: you never get a chart that mixes the two.
+
+Touch and drag on the chart to scrub, and the detail panel adds a CLOUDS section for that point: coverage %, base–top altitude for the layer nearest your flight altitude, and the freezing level. With several layers stacked, only the one closest to your altitude is shown — the panel has no room to scroll — with a "+N more layers" note for the rest.
+
 ---
 
 ## Approach Charts
@@ -423,9 +476,121 @@ During the approach, tap **APT** tab instead for quick access to all plates for 
 
 **Fuel Entry** (MORE → Fuel Entry) — After refueling, enter the quantity for each tank. FlyTab uses this as the starting fuel for the flight.
 
+**Recording a fuel stop:** Set the tic-mark sliders at the top of the Fuel Entry screen to your dipped/observed reading for each tank, then fill in gallons added, airport, date/time, and price in the FUEL ADDED section before tapping **RECORD FUEL STOP**. Tracked fuel is reset from the tic-mark reading itself, not calculated as "previous fuel + gallons added" — a fuel stop must always be grounded in a fresh physical measurement.
+
+**The tic reading must be one you set on this visit to the screen.** Opening Fuel Entry pre-loads the sliders with your *previous* measurement, which after any preflight measurement is your departure reading — normally more fuel than you have on the ramp. RECORD FUEL STOP is therefore refused unless you have moved a slider, typed in a tic field, or tapped a **+**/**−** button since the screen opened; it shows "Enter this stop's tic-mark reading above" and nothing is recorded. **If you re-dip the tanks and get the same number that is already showing, tap + then − on that tank** — the value ends up unchanged but the reading is now yours, and the entry is accepted. (At a full-tank reading the **+** cannot go any higher, so use **−** then **+** instead; either direction works.) Each recorded stop consumes the reading, so a second RECORD FUEL STOP tap needs its own fresh measurement.
+
+**APPLY TIC MEASUREMENT follows the same rule at a fuel stop — but not preflight.** When you reach the Fuel Entry screen through the in-flight Fuel Stop overlay's **Measure & Record Fuel** button, APPLY TIC MEASUREMENT writes tracked fuel exactly as RECORD FUEL STOP does, so it is refused on the same terms: without a slider, tic field or **+**/**−** touch since the screen opened it shows "Enter this stop's tic-mark reading above" under the button and nothing is written. Confirm an unchanged reading the same way, with a **+**/**−** round trip. Reaching Fuel Entry the ordinary way (**MORE → Fuel Entry**, or tapping the FUEL field in the instrument strip) is unchanged: there, APPLY still re-applies the reading the sliders come up showing, which is how you re-confirm a measurement without re-dipping.
+
+If FlyTab detects a gap of more than a few seconds in engine data since the last fuel-flow sample (e.g. a Wi-Fi dropout), a caution line reading "Possible under-tracked burn during a comms gap" appears above the tic total when you open the Fuel Entry screen, showing the estimated gallons that may not have been tracked during the gap. This clears automatically once you record a new tic measurement or fuel stop.
+
+**Choosing a fuel stop when you plan a route:** If a planned route is longer than your leg limit, tapping **Plan Route** in the Route Planner opens a **⛽ Fuel Stop Required** panel for each stop the route needs. The panel names the fix the stop falls near and the flight time to that point, then lists the nearest airports with fuel — identifier, name, distance, and a **Self-serve** tag on fields that have it. Tap one and it is inserted into the route as a fuel stop. Tap **Skip** to plan the route without that stop. The panel is drawn in the same high-contrast light scheme as the rest of FlyTab, so it stays readable in direct sun; it used to be dark, which did not.
+
+**Entering your own fuel stop:** The list only offers the nearest fields with fuel, so it will not always contain the one you want — a better price, a field that is self-serve after hours, or somewhere you simply know. Type the identifier into the **Identifier** box at the bottom of the panel and tap **USE**, or press Enter on the keyboard. FlyTab looks the identifier up in the navigation database and inserts that airport as the fuel stop, exactly as if you had tapped it in the list. If the identifier is not found the panel stays open with a message so you can correct it, and nothing is inserted; if the navigation database is still loading you are told to try again in a moment. An airport is never added as a fuel stop until FlyTab has its position.
+
+**In-flight fuel-stop confirmation:** When you get within 10nm of a fuel-stop airport on an active route, FlyTab opens a full-screen Fuel Stop overlay showing the completed and upcoming flight legs. Tap **Measure & Record Fuel** to open the Fuel Entry screen and set the tic-mark sliders to your dipped/observed reading — the same tic-based reset described above, including the requirement that the reading be one you set on this visit to the screen. The overlay's fuel status line stays red ("Not yet measured") until a tic measurement is recorded; neither a gallons-added number on its own, nor tapping RECORD FUEL STOP **or APPLY TIC MEASUREMENT** over the departure reading the sliders come up showing, is accepted here. Both buttons write the same tracked-fuel figure and both are refused until the reading is yours — previously APPLY was not, and tapping it over an untouched departure reading turned the status line green with your departure gallons over tanks that had since burned down. The **Continue** button remains tappable at all times, but tapping it before a measurement is recorded shows "Measure fuel before continuing" instead of starting the next leg. Once a fresh measurement is applied, the status line turns green ("Measured: X gal") and **Continue** starts the next flight leg. Tap **✕** to dismiss the overlay without starting the next leg — it will reappear if you re-enter the 10nm ring around the same fuel stop.
+
 The **fuel tanks widget** (floating, top-left corner of the map) shows left/right tank quantities in gallons, live fuel flow (GPH), and combined endurance. The center column displays a total-fuel bar gauge, current GPH, and hours:minutes remaining. Tap the **L** or **R** badge to switch the active tank. Tap the **✎** button in the center column to edit fuel quantities at any time — the dialog pre-fills with your most recent tic measurement if one exists. All values update in real time from the engine monitor.
 
-The **FUEL** field in the nav strip shows total fuel remaining and projected endurance at current burn rate. This is the authoritative fuel-state display.
+**A stale tracked figure stays on the widget, marked — it no longer blanks.** If the tank state goes 45 minutes or more without an integrated fuel-flow sample (engine data dropped out, or the app was closed), the widget used to drop both tanks, the total, the GPH and the endurance to `--` while every other fuel display in FlyTab kept showing the figure. It now behaves the same as the rest: both tank quantities, the total and the endurance keep their numbers, each gains a trailing **?** (`15.0?`, `29.0g?`, `3:38?`) and turns amber, and the tank bars drop out of the plain in-limits colour even when the quantity looks comfortable. The number is your last known-good quantity, which is why it is kept, but it reads HIGH — nothing burned during the gap was subtracted. Live GPH is not marked; it comes from the engine, not from tank tracking. A tank already in the red low-fuel band stays red. Confirm or re-enter your fuel to clear the marking.
+
+**If no tank quantities have ever been entered, the widget still shows `--`.** That case is unchanged, and is different from a stale figure: with nothing tracked there is no last known-good quantity to preserve.
+
+The **FUEL** field in the instrument strip along the bottom of the map is the in-flight fuel figure. It shows total fuel remaining in gallons and reads the same tracked figure as everything else — a manual override if you have set one, otherwise your tracked tank state (most recent tic measurement plus integrated burn). It no longer shows the EDM's own totalizer: that field could disagree with tracked fuel by 20 gallons in the optimistic direction. Tap the field to open the fuel overlay.
+
+**If no tank quantities have been entered, FUEL shows a dash (—), not a number.** As on the engine page, this is deliberate: with nothing tracked there is no measurement to show, and displaying full tanks would tell you there is more fuel aboard than is known to exist. Enter your fuel — the **✎** button on the fuel tanks widget, or the Fuel Entry screen — and the field starts reading. A tracked **0.0** is a real reading (tanks dry) and is deliberately different from the dash.
+
+**A stale tracked figure is flagged, not hidden.** If the tank state has gone 45 minutes or more without an integrated fuel-flow sample — the same condition that raises the UNCONFIRMED banner on the engine page — the FUEL value turns amber and a **?** is appended, e.g. `18.0?`. The number is still your last known-good quantity, which is why it is kept, but it reads HIGH: the fuel burned during the gap was never subtracted. Confirm your fuel before flying by it.
+
+> **Correction to earlier notes in this manual.** Earlier versions said the nav strip's RANGE and FUEL fields "now work", that RANGE, FUEL and endurance "all come alive" once fuel is entered, and that the nav strip FUEL field was "the authoritative fuel-state display". All of that was wrong. The nav strip was never mounted in the app, so none of those fields ever rendered — there was no display to come alive and none of it was ever authoritative. The nav strip and its range calculator have been removed. The figure to fly by is the instrument strip **FUEL** field described above, cross-checked against the engine page's FUEL STATUS section.
+>
+> There is no range display and no map range ring. The **RNG** map button described in earlier notes was never wired up, and both went away with the nav strip. Use the engine page's FUEL STATUS **RANGE** and **ENDURANCE** gauges, which are live and read from the same tracked fuel figure.
+
+### Route table FUEL and REM columns
+
+The route table's **FUEL** column shows the fuel burned on each leg; **REM** shows the fuel expected to remain on arrival at that waypoint.
+
+**On the flight you are actually flying, REM is derived from live tracked fuel** — the same figure the fuel tanks widget and the instrument strip FUEL field show, which traces back to your most recent tic measurement plus integrated burn. This is true on every leg of a multi-leg trip, not just the first. After a fuel stop where you added a partial fill, the next flight's REM reflects what you actually put in; it does not assume full tanks.
+
+**Approaching a fuel stop, REM decreases all the way into the stop.** The REM shown at a fuel-stop waypoint is your fuel on *arrival* — before refueling. The added fuel appears on the legs after the stop. If you have seen REM jump upward on the leg before a fuel stop, that was a display error and is fixed.
+
+For fuel stops further ahead on the route that you have not yet reached, REM is a **planning projection**, not a measurement. It assumes you fill to full unless you have entered an explicit gallons-added figure for that stop. Treat those downstream numbers as estimates for planning, and the current flight's REM as the figure to fly by.
+
+**A stale tracked figure marks the whole REM column.** Every REM cell is your tracked fuel less the planned burn to that waypoint, so if the tank state has gone 45 minutes or more without an integrated fuel-flow sample, every cell in the column reads high by whatever was burned during the gap — including the rows after a fuel stop, which are built on the same figure. When that happens each REM cell turns amber and gains a trailing **?** (`25.0?`), the same signal used on the instrument strip's FUEL field and the DEST badge. Cells already in the red band stay red. Confirm or re-enter your fuel to clear it.
+
+**Legs already behind you show `—` in FUEL and REM, not numbers.** A dash there is correct, not a fault: FlyTab only projects fuel forward from your live tracked figure, so a leg it can no longer recompute is blanked rather than left showing what it last predicted. Legs split into separate climb/cruise/descent rows used to keep those old numbers, and after a heavier-than-planned burn they read *higher* than the fuel actually on board — sitting directly above live rows showing much less. Their TAS and PWR cells now blank for the same reason. The TOTAL and per-flight footer figures count only legs still to fly, so they match the rows still showing numbers.
+
+**The leg you are actually flying now burns at your measured fuel flow, not the planned or %PWR-selected figure.** Once you are airborne on a leg, FUEL for that row comes straight from the engine monitor's live fuel flow — the same figure used elsewhere in the app — not from the plan or from whatever %PWR selection is in effect. That figure is shown in **bold blue** to mark it as measured. The %PWR column header now reads "Applies to legs ahead" on tap-and-hold: the selection was always meant as a planning question ("if I fly at 65%, where do I need to stop for fuel?"), and now it only drives legs you have not reached yet — it no longer has any effect on the leg you are on. The **%PWR figure shown on the active leg is also live** — what the engine is actually making, not a plan.
+
+**If the engine monitor is not reporting fuel flow, the active leg falls back to the planned figure and marks it.** That row's FUEL turns amber with a trailing **?** — the same two-signal convention used everywhere else in the app for a figure that is a fallback, not a fact — rather than silently looking like a genuine live measurement. This can happen before you have gotten far enough along the route for GPS to consider you en route to the next waypoint, or if the Pi connection drops.
+
+### Where the planned burn numbers come from
+
+Planned fuel figures — the route table's FUEL and REM columns, the TOTAL footer, and the DEST badge — are built from three burn rates: **climb 15.0 gph, cruise 8.4 gph at the aircraft's normal 65% power, descent 6.9 gph.** Climb and descent are those figures in every case. **Cruise is not** — depending on how the rows were produced and whether you have set a cruise-power override, the number behind the cruise rows can be 8.4, 9.0, or a measured figure for the power you selected. Which one applies is spelled out under *Which cruise number is actually in use* below. All three now come from recorded flight data rather than from a formula.
+
+These are **measured, not book numbers.** All three are the **85th-percentile** fuel flow recorded by the engine monitor for that phase, across 53 logged flights in N194JT — deliberately the high side of normal rather than the average, because an under-estimate quietly over-states the fuel you will have left, and that is the error that runs tanks dry. Climb p85 is 15.1 gph, carried as 15.0; descent p85 is 6.9. Cruise comes from the same logs, narrowed first to the power setting you actually fly: of the cruise-phase samples recorded at 65–69% power — 7,879 of them — the 85th percentile is **8.4 gph.** The *median* of that same set is 8.10, and 8.10 is what the aircraft configuration's measured power table carries for the 61–65% band, because that table is built from medians. The planning figure is deliberately not the median: a median plans for the average day.
+
+**Descent now plans at 6.9 gph instead of the old 4.0.** The 4.0 figure was an estimate and it was wrong in the unsafe direction — real descents in this airplane burn nearly 3 gph more than that. Expect route FUEL and REM figures, and the DEST badge, to read **slightly more fuel burned and slightly less remaining than they used to**, on any leg that ends at an airport. On a 150 nm leg the whole-leg planned burn rises by about 0.3 gal from 4,500 ft, 0.45 gal from 6,500 ft, and 0.75 gal from 10,500 ft. Over a three-leg day that is roughly 2 gallons. Nothing is broken — the old numbers were optimistic and the new ones are not.
+
+**Changing these numbers.** All six fuel figures are editable on the aircraft page (MORE → Configuration): Fuel Capacity, Cruise Fuel Burn, Climb Fuel Burn, Descent Fuel Burn, Reserve Fuel, and the Fuel Sender Accuracy Threshold. Climb and descent burn were previously absent from that page even though both drive every planned figure above — so if you had ever tapped SAVE CONFIGURATION, a stale descent figure could sit in your saved settings shadowing the shipped one, with no way to see or correct it. Both fields are now shown.
+
+**Saving now stores only the fields you actually changed (fixed 2 Aug 2026).** SAVE CONFIGURATION used to write your entire performance block, so any field merely displayed at the time — not just the one you edited — froze at whatever value it had and silently kept overriding every later update to that figure, indefinitely. A field you have genuinely edited still overrides future updates until you change it back, same as before; a field you have never touched now tracks whatever value ships in a later update, automatically. If planned burn still looks wrong after an update on a tablet that was already carrying a saved override from before this fix, clearing and re-saving the affected field on this page — or reinstalling — clears the old shadow.
+
+**Which cruise number is actually in use — there are three.** Cruise burn is not a single fixed figure, and which one sits behind the cruise rows depends on how those rows were produced:
+
+- **A route FlyTab planned for you — 8.4 gph at 65%.** This is the normal case, and it is the planning figure above. The route table looks up the measured power table in the aircraft configuration and uses the recorded band closest to the power percentage in effect; 65% is the default. **At 65% — the aircraft's configured cruise power — the planner uses the 8.4 p85 rather than that band's 8.1,** because the band table is built from medians and a median plans for the average day. Everything else in the row still comes from the measured band: RPM 2390, 22.1" MP, 153 KTAS. At any *other* power setting the band's own figure is used as-is, since 8.4 is a 65% number and nothing else has been re-derived — measured burn at the other recorded settings ranges from 5.0 gph at 42% power up to 8.9 gph at 75%. **This is why the route table's 65% cruise burn reads 0.3 gph higher than the 61–65 band in the power table** — the two are the same flight data read at different percentiles, and that is deliberate.
+- **Rows FlyTab had to build itself — 9.0 gph.** When a leg arrives with no climb/cruise/descent breakdown — a waypoint you added by hand, or a plan imported without segment detail — the route table generates its own segments using the `cruise_gph` figure from the aircraft configuration, which is 9.0. That is deliberately higher than 8.4: it over-plans the burn, which is the safe side. (A plan imported *with* segment detail keeps whatever burn rates that plan was built with — those are not FlyTab's numbers and FlyTab does not second-guess them.)
+- **A cruise-power override you have set — the measured figure for that power.** Tapping the route table's **%PWR** column header cycles an override through 55%, 65%, 75%, then off again. While one is active, FUEL, REM, TOTAL and DEST recompute the cruise rows using the **measured power table** — the nearest recorded band to the power you picked: **6.5 gph at 55%** and **8.9 gph at 75%.** Selecting **65%** — the aircraft's configured cruise power — changes nothing at all: it plans at the same 8.4 gph, and shows exactly the same FUEL, REM, TOTAL and DEST figures, as leaving the override off.
+
+**Selecting a power no longer makes the fuel look better (fixed 1 Aug 2026).** The override used to compute cruise burn from a formula — % power × 180 hp × 0.067 — instead of from the recorded data. In the 60–70% range that formula sat *below* what the engine actually burns: it produced 7.8 gph at 65% against a measured 8.1 and a planned 8.4, so an override left sitting on 65% showed **more** fuel remaining than doing nothing, about 1.7 gal over a three-hour cruise. The formula is gone; every override figure is now measured. If you had learned to distrust the %PWR override, that reason no longer applies.
+
+Two things to know when you use it. **Selecting a lower power really does show more fuel remaining** — 55% burns 6.5 gph against 8.4, and that is a genuine saving, not the old error. It also costs speed, so the leg takes longer; the REM figure accounts for both. And **the override's cruise figures are the band medians, not the 85th percentile** the default 65% planning number uses — so at any setting other than 65% you are looking at an average-day burn rather than the deliberately conservative one.
+
+**The TAS the override shows is still estimated, not measured.** Burn now comes from the recorded band, but the KTAS in an overridden cruise row is still scaled from the cruise TAS by the square root of the power ratio — at 75% it reads about 164 kt where the recorded band for that power is 161, and at 55% about 141 against a recorded 128. Because that estimate is optimistic, a 70% or 75% override can still show marginally *more* fuel remaining than the default view (about 0.1 gal over a three-hour cruise at 75%) even though its burn rate is correctly higher. Treat overridden TAS and ETE as approximate. Use the override to compare settings, then clear it (keep tapping past 75%) before you fly the numbers.
+
+One caveat when comparing to the engine page: the **% power label** on those bands is calculated from RPM and manifold pressure, the way the Lycoming charts do it, while the engine monitor computes power from fuel flow when you are running lean of peak. The **gallons-per-hour figure is the measured ground truth** in both places; the percentage beside it is a label for the band, not a number to compare across the two screens.
+
+### The DEST figure in the route strip handle
+
+The collapsed route strip handle shows departure → destination, distance and time to run, planned burn, and a **DEST:X.X** badge — gallons expected to remain on arrival. The badge turns amber at 8 gallons and red at 4.
+
+**The badge is computed from your tracked fuel** — the same canonical figure the fuel tanks widget and the route table's REM column use — projected forward at your live fuel flow, or at planned cruise GPH if the engine monitor is not reporting flow. It no longer reads a separate engine-panel field that could disagree with the rest of the fuel displays.
+
+**On a trip with a fuel stop, the badge is fuel remaining at the end of the flight you are currently on — normally the fuel stop, not the trip's final airport.** Once you are established on a leg after the stop it re-scopes to the final airport. The airport named in the handle label is always the trip's *final* destination, so on a fuel-stop trip the label and the DEST figure can refer to different airports. To make that unambiguous, **when the badge refers to an airport other than the one in the handle label it is named** — you will see `KFGX:15.0` rather than `DEST:15.0`. A plain `DEST:` badge always means the airport shown in the handle label.
+
+**The badge assumes you actually make the planned fuel stop.** It is fuel on arrival at the named airport only — it does not include the leg beyond it. If you overfly a planned fuel stop, for weather, a closed FBO, or a decision to press on, the route does not change and the badge keeps showing fuel at the stop. You will arrive at the final airport with substantially less than the badge shows — the whole downstream leg's burn less. Re-plan the route, or work the arrival figure from the route table, before pressing past a planned stop.
+
+**The badge no longer disagrees with itself on the last leg into a fuel stop.** Previously, once the fuel stop itself became your active waypoint, the badge jumped to projecting across the whole remaining trip and read 15.0 where you were really going to land with 25.0 — while the instrument strip, reading the same route, showed about 25.0 at the same moment. Both now scope to the flight you are actually on, so the two agree.
+
+**If you have no fuel tracked, there is no badge.** With nothing entered in the fuel tanks widget and no manual override, FlyTab has no measurement to project from. It used to fall back to full tanks and show a comfortable green figure on a route it knew nothing about. The badge is now simply absent until you enter your fuel — the rest of the handle (route, distance, time, planned burn) is unaffected.
+
+**A stale tracked figure is marked here too.** If the tank state has gone 45 minutes or more without an integrated fuel-flow sample, the badge turns amber and gains a trailing **?** — `DEST:25.4?` — even when the reserve is comfortable. It is the same signal the instrument strip's FUEL field and the engine page's UNCONFIRMED banner use, and it means the same thing: the number does not include anything burned during the gap, so it reads high. A marked figure never shows green, whatever the arithmetic says.
+
+### The power tradeoff panel
+
+Tapping **DEST** or **ETE** on the instrument strip opens the power tradeoff panel: one row per power setting, showing the ground speed, fuel flow, ETE and **FUEL@DEST** you would see at that power.
+
+**FUEL@DEST is your tracked fuel less the projected burn.** It reads from the same canonical figure as everything else — your tank state, or a manual override if you have set one. It previously read the EDM's own totalizer instead, which on a typical flight sat about 20 gallons above the tracked figure: the panel showed 25.5 gal remaining at destination, uncoloured, where the truth was 5.5.
+
+**Two rows in this table are estimates, and are now labelled as such.** The 40-45% and 46-50% power bands have no logged flight data behind them — their true airspeed and fuel flow were interpolated from the bands above, not measured in your aeroplane. They now show as **~42% EST** and **~48% EST**: a tilde before the percentage and an amber EST tag. Every figure on those rows — ground speed, GPH, ETE, FUEL@DEST and △TIME — follows from the estimated numbers and should be treated as a rough guide, not a measurement. This matters most at the bottom of the table: 42% is the lowest power setting shown, so it carries the longest endurance and the best FUEL@DEST on screen, and it is the row you are most likely to be reading when you are trying to stretch fuel.
+
+The panel footer says which rows the data claim covers: "Measured rows: 47+ actual flight data points · ~ rows are ESTIMATES — no flight data, TAS and GPH interpolated". It previously read "Based on 47+ actual flight data points" with no qualification, which claimed measured data for the whole table including the two rows that had none. The estimated rows are kept rather than removed — they are real power settings you can fly, and having a rough number is better than having none, as long as you know which it is.
+
+With nothing tracked, FUEL@DEST shows **—** rather than a projection from full tanks. A stale tank state is shown but marked with a trailing **?** and never left uncoloured. The colour bands are amber at 12 gallons, deeper amber at 8, and red at 4 — the 8 and 4 figures are the same thresholds every other fuel display uses, set in `cockpit-config.json`. Those colours previously did not render at all, so a 2-gallon arrival looked exactly like a 25-gallon one.
+
+### Fuel on the Weight & Balance page
+
+The **Fuel** station on the W&B page (MORE → Weight & Balance) pre-fills from the same tracked figure as everything else — your tank state, or a manual override if you have set one. It previously read the pre-flight planning chain, which never consulted tank state at all: with 18 gallons tracked it pre-filled **36**, and with the tanks tracked dry it still pre-filled **36**. At 6 lb per gallon that is up to 216 lb of fuel that may not be in the aeroplane, and on this airframe the fuel arm sits ahead of the forward CG limit, so a fuel figure that is too high also drags the plotted CG forward of where it really is.
+
+**With nothing tracked, the Fuel field is left blank rather than filled with full tanks.** The page then refuses to give you an envelope verdict: the badge reads **NO VERDICT — ENTER FUEL QUANTITY** in amber, an amber line above it reads "FUEL NOT ENTERED — this weight excludes fuel. Enter gallons aboard.", and Total Weight and CG are shown in amber with a trailing **?**. This matters more here than anywhere else in the app: a missing fuel figure makes the aeroplane look *lighter* than it is, which is the one direction a weight and balance answer must never err in. Type the gallons aboard and the page computes normally.
+
+**A stale tracked figure is flagged, not hidden.** If the tank state has gone 45 minutes or more without an integrated fuel-flow sample — the same condition behind the engine page's UNCONFIRMED banner and the instrument strip's `18.0?` — the figure is still pre-filled, but an amber line reads "FUEL QUANTITY UNCONFIRMED — tank tracking is over 45 min stale and reads high. Verify before using this weight.", Total Weight and CG carry the same amber **?**, and the envelope badge reads **IN ENVELOPE — UNCONFIRMED FUEL** in amber instead of green. The CG dot on the diagram turns amber for the same reason. An **OUT OF ENVELOPE** result stays red whatever the fuel confidence — a limit exceedance is never softened.
+
+**Your own entry always wins.** As soon as you type in the Fuel field, the number is yours: the amber marking clears and the page will not overwrite it when you re-open W&B. Until you do type in it, an untouched pre-fill is re-read from the tracker each time the page opens, so it follows the burn instead of freezing at the ramp figure. A tracked **0.0** is a real reading and computes normally — dry tanks and untracked tanks never look the same.
+
+**Typing in the field is one-way for the rest of the session.** Once you type a fuel figure, W&B stops re-reading the tracker for the remainder of this app session — there is currently no in-app button to go back to tracked fuel. If you want the page to resume following your tracked tank state, restart FlyTab.
+
+**The station breakdown table below the summary carries the same marking.** If fuel has not been entered, the Fuel row reads **(not entered)** instead of a gallon figure, and both that row and the TOTAL row are shown in amber with a trailing **?** — the same convention as the summary above, so the two cannot disagree about whether the total is confirmed.
 
 ---
 

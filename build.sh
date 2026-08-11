@@ -20,10 +20,49 @@ echo "=============================="
 
 # Sync versionCode/versionName in build.gradle from app.js version
 VERSION_NUMERIC="${VERSION#v}"                          # e.g. "4.22"
-VERSION_CODE=$(echo "$VERSION_NUMERIC" | tr -d '.')    # e.g. "422"
+
+# versionCode = major*100 + minor.
+#
+# The old rule was `tr -d '.'` (just delete the dot). That silently broke at the
+# 9.99 -> 10.0 rollover: "10.0" became 100, which is LOWER than 9.99's 999, and
+# Android rejects a lower versionCode as a downgrade ("cannot install this app").
+# major*100+minor reproduces every historical code exactly (4.22 -> 422,
+# 9.98 -> 998, 9.99 -> 999) while continuing to climb past the rollover
+# (10.0 -> 1000, 10.1 -> 1001), so nothing already installed is disturbed.
+VERSION_MAJOR="${VERSION_NUMERIC%%.*}"
+VERSION_MINOR="${VERSION_NUMERIC#*.}"
+[ "$VERSION_MINOR" = "$VERSION_NUMERIC" ] && VERSION_MINOR=0   # no dot, e.g. "10"
+VERSION_MINOR="${VERSION_MINOR#0}"                              # "08" -> "8"
+: "${VERSION_MINOR:=0}"
+
+# The minor field MUST stay under 100 or versionCodes collide: v9.100 would give
+# 9*100+100 = 1000, the same code as v10.0. Fail loudly rather than shipping an
+# APK that silently refuses to install over its predecessor.
+if ! [ "$VERSION_MAJOR" -ge 0 ] 2>/dev/null || ! [ "$VERSION_MINOR" -ge 0 ] 2>/dev/null; then
+    echo "ERROR: cannot parse FLYTAB_VERSION '$VERSION' as major.minor" >&2
+    exit 1
+fi
+if [ "$VERSION_MINOR" -ge 100 ]; then
+    echo "ERROR: minor version $VERSION_MINOR must be < 100 (v$VERSION_MAJOR.$VERSION_MINOR would" >&2
+    echo "       collide with v$((VERSION_MAJOR + 1)).0). Use two digits after the dot." >&2
+    exit 1
+fi
+VERSION_CODE=$(( VERSION_MAJOR * 100 + VERSION_MINOR ))
 sed -i "s/versionCode [0-9]*/versionCode $VERSION_CODE/" "$REPO_ROOT/android/app/build.gradle"
 sed -i "s/versionName \"[^\"]*\"/versionName \"$VERSION_NUMERIC\"/" "$REPO_ROOT/android/app/build.gradle"
 echo "[0] Version: $VERSION (code $VERSION_CODE) → build.gradle updated"
+
+# Publish the canonical user manual into web/ so the in-app viewer serves it.
+#
+# CLAUDE.md names docs/user-manual.md as the pilot-facing reference, but the app
+# fetches '/user-manual.md' (tab-bar.js), i.e. web/user-manual.md. Those two drifted
+# 189 lines apart — the in-app manual still described pre-fuel-audit behaviour while
+# docs/ carried every update. Generating the served copy at build time keeps one file
+# authoritative instead of relying on remembering to edit both.
+#
+# web/user-manual.md is now a BUILD ARTIFACT. Edit docs/user-manual.md.
+echo "[0b] Publishing user manual → web/user-manual.md"
+cp "$REPO_ROOT/docs/user-manual.md" "$REPO_ROOT/web/user-manual.md"
 
 # Sync web assets into Android
 echo ""

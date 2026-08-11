@@ -55,8 +55,8 @@ class FlightSync {
      * @param {string} _filename
      * @returns {Promise<boolean>}
      */
-    async downloadToiPad(_filename) {
-        console.warn('[FlightSync] downloadToiPad not implemented — Phase 3');
+    async downloadToDevice(_filename) {
+        console.warn('[FlightSync] downloadToDevice not implemented — Phase 3');
         return false;
     }
 

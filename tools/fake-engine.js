@@ -21,7 +21,9 @@ function makeFrame() {
   const ff  = parseFloat((8.5 + Math.cos(t / 10) * 0.3).toFixed(1));
   const gallons = parseFloat(Math.max(0, 24.9 - t / 3600 * ff).toFixed(1));
   return {
-    version:              '3.3.0',
+    version:              '3.4.0',
+    api_contract:          2,
+    capabilities:         ['fuel_tracker', 'sticky_valve', 'peak_egt'],
     capturing:            true,
     serial_connected:     true,
     stratux_connected:    false,

@@ -6,6 +6,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 FlyTab is an Android cockpit app for experimental aircraft. It runs as a Capacitor web app (vanilla JavaScript, no framework) and communicates with a Raspberry Pi running a Python engine monitor and an unmodified Stratux ADS-B/GPS receiver.
 
+## There Is No iPad — "FlyPi" and "flypi" Are Legacy Naming, Not a Second System
+
+FlyTab's predecessor was an iPad-based product called **FlyPi**. It was deprecated (see commit `0fe8ad2`, "deprecate flypi") and fully replaced by FlyTab running on an Android tablet via Capacitor. **There is no iPad anywhere in the current system, and there is no separate "FlyPi" product.** If you encounter a comment, docstring, or doc that talks about an iPad or describes something as "FlyPi," treat it as stale — it was never updated after the cutover, not evidence that an iPad exists.
+
+That cleanup was never fully finished, though, and the codebase still contains real, **functional** identifiers carrying the old `flypi`/`flypi_*` prefix — not just leftover text. These are load-bearing and hold real pilot data on tablets already in the field:
+
+- `localStorage` keys: `flypi_active_plan`, `flypi_saved_plans`, `flypi_user_cockpit`/`flypi_user_aircraft`, `flypi_fuel_history`, `flypi_oil_events`, `flypi_track`, `flypi_checklist_state`, and others — plus `Settings._key()` (`web/shared/settings.js`), which generates ~18 more (`flypi_stratux_ip`, `flypi_flytab_api_key`, etc.) from a single template.
+- IndexedDB database/store names: `NasrDB.DB_NAME = 'flypi'` (`web/shared/nasr-db.js`), and the shared `'flypi-flights'` database (`web/shared/trip-store.js` + `web/cockpit/logbook.js`) with stores `flypi_logbook`/`flypi_ml_logs`.
+- A stored **data value**, not just a key: `logbook.js` writes `source: 'flypi'` into saved logbook entries.
+- Real Pi infrastructure: `deploy-pi.sh` stops/disables a systemd service literally named `flypi` and cleans real paths under `/opt/flypi/`. `engine_monitor.py`'s `_is_aircraft` check compares against the Pi's actual OS hostname, which may still literally be `flypi` — unverified from the repo, check the real device before touching that line.
+
+**Do not rename any of these to "clean up the naming."** They are not currently causing a bug, and a blind rename (or a well-meaning find-and-replace) would silently orphan real, already-stored flight plans, logbook history, fuel records, and settings — the app would just start reading from empty new keys with no error. If a rename is ever actually warranted, it needs a deliberate migration (read the old key/value if the new one is absent, then write forward, or a dual-read compatibility shim) and, for the Pi-side pieces, verification against the real device — not a text substitution.
+
 ## Network Constraint — Tablet Has No Internet During Flight
 
 **The tablet is on Stratux WiFi during every flight. It has no internet access, ever, in the air.**
@@ -94,8 +107,21 @@ Home server (:8090)  ──HTTP──▶  map tiles, approach plates, NASR, CIFP
 
 ### Backend (`engine-monitor/`)
 
-- `engine_monitor.py` (v3.3.0) — HTTP server + WebSocket on Pi, parses EDM serial data.
+- `engine_monitor.py` (v3.4.1) — HTTP server + WebSocket on Pi, parses EDM serial data.
 - `data_simulator.py` — replays captured flight files as virtual serial for testing.
+
+#### Pi ↔ FlyTab contract version — bump discipline
+
+`engine_monitor.py`'s `get_status()` publishes `PI_API_CONTRACT` (currently 2) and `PI_CAPABILITIES` alongside `VERSION`. FlyTab's `web/shared/engine-client.js` reads `data.api_contract` and compares it against `EngineClient.MIN_PI_CONTRACT`; a Pi reporting older than that (or no field at all — treated as contract 0) gets a status-bar badge + an ENG-page banner naming both versions and telling the pilot to run `deploy-pi.sh`. See issue #113.
+
+**`VERSION` is for humans. `PI_API_CONTRACT` is what code compares — bump it whenever you change:**
+- a payload field name or nesting (e.g. `flight_fuel_used` moving under `fuel`)
+- a unit
+- a shared physical constant the client also hardcodes or reads from `aircraft-config.json` (e.g. `usable_capacity_gal`)
+
+**Do NOT bump it for an ordinary bug fix** that doesn't change the wire shape or a shared constant.
+
+**When you bump `PI_API_CONTRACT` in `engine_monitor.py`, also bump `EngineClient.MIN_PI_CONTRACT`** in `web/shared/engine-client.js` to match — the two are meant to move together; the client requiring anything less than what the Pi now publishes just means the warning never fires for the case you were fixing.
 
 ### Android wrapper (`android/`)
 
@@ -247,15 +273,27 @@ The `EngineML` Capacitor plugin runs a TFLite Conv1D autoencoder on 60-second ro
 | `android/app/src/main/assets/anomaly_v2_metadata.json` | Normalization stats, per-phase thresholds, feature list |
 | `android/app/src/main/java/.../engineml/InferenceEngine.java` | TFLite wrapper — dtype detection, inference, MSE |
 | `android/app/src/main/java/.../engineml/EngineMLPlugin.java` | Capacitor bridge — rolling window, calls InferenceEngine + EngineAdvisor |
-| `android/app/src/main/java/.../engineml/EngineAdvisor.java` | Rule-based advisories — trends, mixture, carb ice, fuel |
-| `android/app/src/main/java/.../engineml/PhaseDetector.java` | Flight phase from RPM + altitude + ground speed |
+| `android/app/src/main/java/.../engineml/EngineAdvisor.java` | Rule-based advisories — trends, mixture, carb ice, fuel, sticky-valve |
 | `web/cockpit/engine-ml.js` | JS bridge — calls plugin at 1Hz, exposes `window.engineML.lastResult` |
+| `web/phase_spec.json` | Shared 12-phase taxonomy, thresholds, transitions, dwell times — copied verbatim from `~/engine_analysis/phase_spec.json`. Single source of truth for both repos; do not hand-edit divergently. |
+| `web/shared/phase-detector.js` | Causal 12-phase FSM (`PhaseDetector` class) — computes `phase` before the Capacitor `processSample` call. Loaded as a classic script (not `type="module"`), same as `engine-ml.js`. |
+| `web/shared/phase-detector-classify.js`, `web/shared/phase-detector-helpers.js`, `web/shared/phase-spec-loader.js` | Supporting modules for the above — row classifier, causal signal-window helpers, spec loader/validator. |
 
 ### Feature Array — 12 Features, No Altitude
 
 The v2 model takes **12 features**: `[RPM, EGT1, EGT2, EGT3, EGT4, CHT1, CHT2, CHT3, CHT4, OilTemp, OilPress, FuelFlow]` (indices 0–11).
 
-**Altitude is NOT a model feature.** It is extracted from the JS call separately and passed only to `PhaseDetector.detect()` and `EngineAdvisor.addSample()`. If the training model is retrained with altitude as a feature (index 12 like v1), `EngineAdvisor.java` and `EngineMLPlugin.java` both need updating — they currently expect 12-element feature arrays.
+**Altitude is NOT a model feature.** It is extracted from the JS call separately and passed only to `EngineAdvisor.addSample()`. If the training model is retrained with altitude as a feature (index 12 like v1), `EngineAdvisor.java` and `EngineMLPlugin.java` both need updating — they currently expect 12-element feature arrays.
+
+### Phase Detection — Bridge Change (2026-07)
+
+`phase` is computed in JS (`web/shared/phase-detector.js`, a causal port of `~/engine_analysis/train_anomaly_model.detect_phases()`) and sent as an INPUT field on the `processSample` payload. `EngineMLPlugin.java` no longer computes phase — it reads `call.getString("phase", "cruise")` and defaults to `"cruise"` on anything missing/unparseable. `PhaseDetector.java` was deleted in this change; do not re-add Java-side phase computation — see `docs/superpowers/specs/2026-06-21-flight-phase-detection-redesign.md` for the full design rationale, and `docs/superpowers/plans/2026-07-14-flight-phase-detection-runtime.md` for what shipped.
+
+The 12-phase taxonomy (`startup, warmup, taxi_out, runup, takeoff, climb, cruise, descent, approach, landing, taxi_in, shutdown`) replaces the old 8-phase one. `phase_spec.json` (checked into both repos) is the only place any threshold/transition/dwell value should live — never hardcode a phase threshold in JS or Python again.
+
+`engine-ml.js`'s old `_computeGPSPhase` was **not** deleted outright — it was trimmed and renamed to `_updateLaunchState`. The brief's plan assumed the whole function was a "cosmetic GPS phase override" safe to remove once `PhaseDetector` owned phase computation, but it turned out to also drive shared state (`_hasLaunched`, `_fieldElev`, `_altHistory`) that the "airborne only" physics advisories and the emergency-glide joint trigger's landing-flare AGL guard read directly. `_updateLaunchState` keeps computing that state every sample (field-elevation estimate, altitude history, launched/landed detection) — it just no longer returns a phase string, since `phase-detector.js` owns that now. See the comment above `_updateLaunchState` in `engine-ml.js` for the one intentional behavior change (an old `altHistory.length < 10` guard was dropped, which can only make `_hasLaunched` arm sooner, never later).
+
+A new **sticky-valve advisory** was added to `EngineAdvisor.java` (`addStickyValveCheck`, gated on `phase == "startup"`): it flags a cylinder whose EGT rise lags the others by more than `STICKY_VALVE_LAG_THRESHOLD_F` (150°F) during startup, as a possible cold/sticky valve signature. **That threshold is an explicitly unvalidated placeholder** — no real sticky-valve flight data has been used to calibrate it. Do not treat its alert as confirmed, and do not tighten/loosen the threshold without a known-good vs. known-sticky comparison flight.
 
 ### Dtype — Detect at Runtime, Never Assume
 
@@ -269,9 +307,15 @@ The `anomaly_v2_metadata.json` `"quantization"` field is documentation only and 
 
 ### Delegate Selection on Snapdragon 8 Gen 3 (TB520FU)
 
-NNAPI and GPU delegates are rejected at load time (`"static-sized tensors only, graph has dynamic tensors"`). CPU with XNNPACK is the active delegate. Inference latency: **~2.5ms** per 60-sample window.
+**As of v10.31, NNAPI/NPU is the active delegate.** Confirmed on-device (2026-08-11): `InferenceEngine: NNAPI delegate loaded (warmup: 0ms → NPU (NNAPI))`, real inference latency **~1.4ms** per 60-sample window (down from the prior CPU/XNNPACK path's ~2.5ms).
 
-If a new model eliminates dynamic-shaped tensors, NNAPI may work — the warmup in `tryQnnDelegate()` handles it automatically. Check logcat on first launch after any model change:
+The blocker was never runtime code — `tryQnnDelegate()`'s dtype detection and delegate selection were already dynamic and NPU-ready. It was the model graph: the Keras `Input` layer had no fixed batch size (`keras.Input(shape=(WINDOW_SIZE, n_features))`, `batch_size=None`), and `export_tflite()` converted straight from that Keras model, so the exported `.tflite`'s `shape_signature` carried a dynamic (`-1`) batch dim through 41 of 91 tensors. NNAPI rejects any graph with a dynamic-shaped tensor outright (`"static-sized tensors only, graph has dynamic tensors"`).
+
+Fixed by re-exporting the same trained weights (no retraining) through a fixed batch-1 signature: `keras.export.ExportArchive` + explicit `input_signature=[tf.TensorSpec(shape=(1, WINDOW_SIZE, n_features), dtype=tf.float32)]`, then `TFLiteConverter.from_saved_model()` instead of `TFLiteConverter.from_keras_model(model)`. Result: 0 dynamic tensors, metadata unchanged, inference output bit-identical to the prior model. This lives in `~/engine_analysis/train_anomaly_model.py`'s `export_tflite()` (commit `89d9aa6`) — **do not revert to `from_keras_model()`**, it silently reintroduces the dynamic batch dim and drops back to CPU/XNNPACK.
+
+A dead end worth avoiding if re-deriving this: `tf.function(lambda x: model(x))` + `TFLiteConverter.from_concrete_functions()` looks like a simpler fix for the same dynamic-batch problem, but on this TF/Keras version it silently drops ~95% of the model's weights and produces all-NaN inference with no conversion error. Use `ExportArchive`, not that pattern.
+
+Check logcat on first launch after any model change:
 ```
 InferenceEngine: NNAPI delegate loaded (warmup: 1ms → NPU (NNAPI))  ← NPU active
 InferenceEngine: Using CPU delegate                                   ← NNAPI rejected
@@ -348,10 +392,15 @@ All new UI must use CSS custom properties from `web/style.css`. Never use hardco
 | `var(--border)` | Card borders | `#e0e0e0` |
 | `var(--border-light)` | Table row dividers | `#f0f0f0` |
 | `var(--border-strong)` | Header borders, input underlines | `#b0b0b0` |
-| `var(--color-success)` | In-limits, OK badges | `#1a8c35` |
-| `var(--color-caution)` | Caution (non-urgent) | `#b87000` |
-| `var(--color-danger)` | Out-of-limits, warnings, over-gross | `#cc2222` |
-| `var(--color-info)` | Informational | `#0055bb` |
+| `var(--color-success)` | In-limits, OK badges | `#00e87a` |
+| `var(--color-caution)` | Caution (non-urgent) | `#ffc000` |
+| `var(--color-danger)` | Out-of-limits, warnings, over-gross | `#ff3030` |
+| `var(--color-info)` | Informational | `#00aaff` |
+
+These four values were wrong in this table until 2026-08 (this file documented dead
+values from a `[data-mode="cockpit"]` block that is never applied — FlyTab is
+light-theme only, see `feedback_light_theme_tablet` memory). The values above are
+now what's actually live in `style.css`'s unconditional `:root` block.
 
 **Status badge pattern** (solid fill, matches `fo-grade-*`):
 ```css
@@ -366,6 +415,23 @@ background: var(--color-caution); color: #000;
 ```
 
 Never use semi-transparent rgba approximations of these colors for badges — use the solid token.
+
+**These four are FILL colors only — never use them as foreground text color on a
+light surface.** They're bright/saturated (tuned for the old dark cockpit theme)
+and measure as low as 1.5:1 as text on `--bg-surface` (#f5f5f5) — invisible in
+direct sunlight. For text (not a filled badge), use the light-safe equivalents
+instead:
+
+| Token | Contrast on `#f5f5f5` |
+|-------|------------------------|
+| `var(--color-caution-on-light)` (`#6b4a00`) | 7.40:1 |
+| `var(--color-danger-on-light)` (`#a30d0d`) | 7.35:1 |
+
+`--status-warning` / `--status-danger` (used by e.g. `.pt-amber`/`.pt-red` in the
+PowerTradeoff panel) are the same class of bright fill color and have the same
+text-contrast problem, with no dedicated `-on-light` variant yet — reuse
+`--color-caution-on-light` / `--color-danger-on-light` for that text too rather
+than inventing new tokens.
 
 ### Font tokens
 

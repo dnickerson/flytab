@@ -30,7 +30,7 @@ class PreflightBrief {
             <div class="pfb-container">
                 <div class="pfb-header">
                     <span class="pfb-title">PREFLIGHT BRIEF</span>
-                    <button class="ep-close pfb-close">MAP</button>
+                    <button class="btn-close ep-close pfb-close">MAP</button>
                 </div>
                 <div class="pfb-verdict-row" id="pfb-verdict-row">
                     <span class="pfb-verdict-badge" id="pfb-verdict-badge">—</span>

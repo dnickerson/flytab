@@ -6,6 +6,10 @@
  */
 
 class Logbook {
+    // 'flypi'/'flypi-flights' are legacy names from the deprecated FlyPi/iPad
+    // predecessor product (see CLAUDE.md) — see the matching note in
+    // web/shared/trip-store.js, which independently hardcodes these same
+    // three literals and must stay in exact sync with any change here.
     static IDB_STORE = 'flypi_logbook';
     static IDB_NAME = 'flypi-flights';
     static IDB_VERSION = 5;
@@ -566,6 +570,11 @@ class Logbook {
 
         // Save full ML ring buffer linked to this entry
         this._saveMLLog(entry.id).catch(() => {});
+
+        // getFullLog() above already copied the ring buffer synchronously, so it's
+        // safe to clear now — otherwise the ML tab's "Current Session (Live)" card
+        // keeps showing this finished flight as in-progress until the next one starts.
+        window.engineML?.clearLog();
 
         // Don't auto-sync drafts — pilot must review first
         return entry;
@@ -1251,13 +1260,17 @@ class Logbook {
             if (!dist) return '';
             const phases = [
                 { key: 'startup',  color: 'var(--text-muted)',     label: 'SU' },
-                { key: 'taxi',     color: 'var(--status-caution)', label: 'TX' },
+                { key: 'warmup',   color: 'var(--text-muted)',     label: 'WM' },
+                { key: 'taxi_out', color: 'var(--status-caution)', label: 'TX' },
                 { key: 'runup',    color: 'var(--accent)',         label: 'RU' },
                 { key: 'takeoff',  color: 'var(--status-ok)',      label: 'TO' },
                 { key: 'climb',    color: 'var(--status-ok)',      label: 'CL' },
                 { key: 'cruise',   color: 'var(--status-ok)',      label: 'CR' },
                 { key: 'descent',  color: 'var(--status-caution)', label: 'DS' },
+                { key: 'approach', color: 'var(--accent)',         label: 'AP' },
                 { key: 'landing',  color: 'var(--accent)',         label: 'LN' },
+                { key: 'taxi_in',  color: 'var(--status-caution)', label: 'TI' },
+                { key: 'shutdown', color: 'var(--text-muted)',     label: 'SD' },
             ];
             const segments = phases.filter(p => dist[p.key] > 0).map(p =>
                 `<div style="flex:${dist[p.key]};background:${p.color};min-width:2px;height:100%" title="${p.label} ${dist[p.key]}%"></div>`

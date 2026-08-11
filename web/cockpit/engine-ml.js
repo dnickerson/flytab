@@ -25,6 +25,12 @@ class EngineMLBridge {
         this._baselineWindow = [];            // last 60 samples for baseline computation
         this._baselineWindowMax = 60;
         this._flightPhase = 'ground';         // derived phase: ground/climb/cruise/descent
+        // Last phase PhaseDetector.classify() actually produced. Left unset
+        // (not pre-seeded to 'cruise') so the 'cruise' fallback in _onEngineData
+        // only applies on a genuine cold-start-with-no-GPS-ever case (or when the
+        // last computed phase was 'shutdown', which has no trained ML threshold),
+        // not a mid-flight transient GPS gap — see Task 15 and its follow-up fix.
+        this._lastComputedPhase = undefined;
         this._advisoryLog = [];               // ring buffer, last 20 advisories for debrief
         this._advisoryLogMax = 20;
         this._lastAdvisoryTime = {};          // type → timestamp, for per-type rate-limiting
@@ -37,8 +43,12 @@ class EngineMLBridge {
         // GPS-based phase smoothing — prevents model phase thrashing on turbulence
         this._altHistory = [];      // circular buffer of MSL altitudes, last 60s
         this._altHistoryMax = 60;
-        this._fieldElev = null;     // estimated field elevation (MSL), set on first samples
-        this._fieldElevSamples = 0; // number of ground samples used to estimate field elev
+        // Field elevation (MSL) is no longer tracked here — Task 13 deleted this
+        // file's own never-reset running-minimum estimator (it locked to leg 1's
+        // departure airport and never cleared on a multi-leg day, corrupting the
+        // landing-flare AGL guard below on leg 2+). Both consumers now read
+        // this._phaseDetector.getFieldElevationFt(), the single reset-aware
+        // estimate PhaseDetector already maintains for its own phase classification.
         this._hasLaunched = false;  // true once aircraft has left the ground
 
         // Long-press state for test mode trigger
@@ -79,6 +89,12 @@ class EngineMLBridge {
     start(engineClient, stratuxClient) {
         this._engineClient = engineClient;
         this._stratuxClient = stratuxClient;
+        this._phaseDetectorReady = window.loadPhaseSpec()
+            .then((spec) => { this._phaseDetector = new window.PhaseDetector(spec); })
+            .catch((err) => {
+                DiagLog?.error?.('EngineML', `Failed to load phase_spec.json: ${err.message}`);
+                this._phaseDetector = null; // _onEngineData falls back to a fixed phase below
+            });
 
         // Always listen for engine data — Layer 1 physics rules run without the native plugin.
         // ML inference (Layer 2) is skipped gracefully when _initialized is false.
@@ -215,6 +231,7 @@ class EngineMLBridge {
                     fuel_remaining: num(d.fuel_remaining_gal ?? d.fuel_gal ?? d.Gallons_Rem, 20),
                     ground_speed:   num(sit?.ground_speed, 100),
                     distance_nm:    0,
+                    phase:          (this._lastComputedPhase && this._lastComputedPhase !== 'shutdown') ? this._lastComputedPhase : (this._flightPhase ?? 'cruise'),
                 });
             }
         } catch (err) {
@@ -254,13 +271,45 @@ class EngineMLBridge {
         // Get altitude and speed from Stratux situation
         const sit = this._stratuxClient?.situation;
 
-        // Compute GPS-smoothed phase once per sample (updates _altHistory).
-        // This is used both for physics-rule thresholds (_derivePhase) and
-        // to override the model's phase in result.phase before CSV logging.
-        const _gpsPhaseThisSample = this._computeGPSPhase(sit, d);
+        // Compute the causal flight phase once per sample via the shared PhaseDetector
+        // (Tasks 1-6). If the spec hasn't loaded yet or GPS is momentarily unavailable,
+        // retain the last phase PhaseDetector actually produced instead of resetting to
+        // 'cruise' — a transient GPS dropout mid-climb must not snap phase to 'cruise'
+        // (wrong CHT limit, skipped sticky-valve latch, wrong ML threshold). Only fall
+        // back to 'cruise' when there's genuinely no prior phase yet, e.g. the very
+        // first sample of the app session before GPS has ever been available. The
+        // detector's own internal state (windows/latches) is left undisturbed during
+        // the gap since classify() simply isn't called — it resumes correctly once GPS
+        // returns. See Task 15.
+        //
+        // 'shutdown' is excluded from retention: it has no entry in
+        // anomaly_v2_metadata.json's phase_thresholds (the ML model was never trained
+        // on it), so passing phase='shutdown' into the plugin makes ThresholdAdapter
+        // fall back to its hardcoded global default (0.88) — far looser than every
+        // trained phase, including cruise (0.0745). A GPS gap spanning a shutdown→
+        // restart boundary (e.g. leg 2 of a multi-leg day, engine started before
+        // Stratux reacquires a fix) would otherwise silently disable ML anomaly
+        // detection through taxi/runup/takeoff/initial climb. 'cruise' is used as the
+        // safe default bucket here instead, matching EngineMLPlugin.java's own
+        // call.getString("phase", "cruise") convention. See Task 15 follow-up.
+        let phase = (this._lastComputedPhase && this._lastComputedPhase !== 'shutdown')
+            ? this._lastComputedPhase
+            : 'cruise';
+        if (this._phaseDetector && sit?.lat != null && sit?.lon != null) {
+            phase = this._phaseDetector.classify({
+                rpm: d.rpm ?? d.RPM ?? 0,
+                mp: d.manifold_pressure ?? d.mp ?? d.MAP ?? 0,
+                fuelFlow: d.fuel_flow_gph ?? d.gph ?? d.Fuel_Flow ?? 0,
+                lat: sit.lat,
+                lon: sit.lon,
+                altitudeFt: sit.alt_msl ?? d.altitude_ft ?? 0,
+                speedKts: sit.ground_speed ?? d.speed_kts ?? 0,
+            });
+            this._lastComputedPhase = phase;
+        }
+        this._flightPhase = phase;
+        this._updateLaunchState(sit, d);
 
-        // Update phase and baseline before physics check so CHT phase-limit is current
-        this._derivePhase(d, this._lastResult?.phase, _gpsPhaseThisSample);
         this._updateBaseline(d);
 
         // Layer 1: physics rules — run before ML (no latency)
@@ -289,10 +338,10 @@ class EngineMLBridge {
                 fuel_remaining: num(d.fuel_remaining_gal ?? d.fuel_gal ?? d.Gallons_Rem ?? 0),
                 ground_speed: num(sit?.ground_speed ?? 0),
                 distance_nm: 0, // TODO: compute from route
+                phase,
             });
 
-            // Override model phase with GPS-smoothed phase when airborne.
-            if (_gpsPhaseThisSample) result.phase = _gpsPhaseThisSample;
+            // no post-hoc override — result.phase now just echoes what was computed and sent
 
             this._lastResult = result;
 
@@ -355,9 +404,24 @@ class EngineMLBridge {
         // CHT exceedance >420°F — skip during climb (normal CHT rise expected)
         const chtLimit = 420;
         const chtClimbLimit = 440; // relaxed limit during climb
+        // Task 17: use pending-OR-committed 'climb' for this check specifically,
+        // not just the committed phase. PhaseDetector requires dwell_seconds.climb
+        // (15) consecutive qualifying samples before actually COMMITTING to
+        // 'climb', but the first ~15 seconds of a real climb are exactly the
+        // highest-CHT-stress window of flight -- waiting for commit here would
+        // apply the tighter 420°F limit and risk a spurious "act now" advisory.
+        // Relaxing a few seconds early is the safe direction (both limits sit
+        // well below the real 450°F max); this does NOT change the FSM's own
+        // commit timing (no golden-parity impact), only what this check reads.
+        // Falls back to the pre-Task-17 committed-phase check if the detector
+        // isn't ready yet, so the relaxation degrades gracefully instead of
+        // being lost entirely.
+        const isClimb = this._phaseDetector
+            ? this._phaseDetector.isPendingOrCommitted('climb')
+            : this._flightPhase === 'climb';
         for (let i = 1; i <= 4; i++) {
             const cht = num(d[`cht${i}`] ?? d[`CHT${i}`] ?? 0);
-            const limit = this._flightPhase === 'climb' ? chtClimbLimit : chtLimit;
+            const limit = isClimb ? chtClimbLimit : chtLimit;
             if (cht > limit) {
                 advisories.push({
                     type: `cht${i}_exceedance`,
@@ -553,102 +617,65 @@ class EngineMLBridge {
     // ========== Phase Tracking ==========
 
     /**
-     * Compute the current flight phase from GPS altitude rate using a 60-second
-     * smoothing window. This overrides the TFLite model's phase output when
-     * airborne, preventing thrashing caused by turbulence and GPS jitter.
+     * Maintain GPS-derived launch/field-elevation state consumed by the
+     * "airborne only" physics rules (MAP/RPM sudden-drop, _checkPhysicsRules)
+     * and the Scenario 6 emergency joint-trigger's landing-flare AGL guard
+     * (_checkEmergencyTrigger). Flight *phase* itself is now owned entirely
+     * by the causal PhaseDetector (Tasks 1-6, see _onEngineData) — this
+     * method no longer computes or returns a phase string.
      *
-     * Returns a phase string, or null if GPS data is unavailable.
-     *
-     * Thresholds mirror the fixed detect_phases() in train_anomaly_model.py:
-     *   climb    > +300 fpm (60-second smoothed)
-     *   descent  < -300 fpm
-     *   cruise   |rate| <= 300 fpm, airborne
-     *   takeoff  high RPM, AGL <= 1000 ft, positive rate (initial departure)
+     * Task 7 deviation from the brief: the brief's Step 3 said to delete
+     * this function entirely as "the cosmetic GPS override." That's true of
+     * the phase string it used to return (superseded by PhaseDetector), but
+     * the side effects below are not cosmetic — _hasLaunched gates two
+     * "act-now" physics advisories and the entire emergency-glide joint
+     * trigger, and nothing else in the file ever sets _hasLaunched = true.
+     * A literal full deletion would silently and permanently disable those
+     * safety checks for the whole flight. Kept as state-tracking only;
+     * flagged in task-7-report.md for review.
      */
-    _computeGPSPhase(sit, d) {
+    _updateLaunchState(sit, d) {
         const num = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
         const altMSL = num(sit?.alt_msl ?? d.altitude_ft ?? 0);
         const groundSpeed = num(sit?.ground_speed ?? d.speed_kts ?? 0);
         const rpm = num(d.rpm ?? d.RPM ?? 0);
 
-        if (altMSL === 0 && groundSpeed === 0) return null; // no GPS
+        if (altMSL === 0 && groundSpeed === 0) return; // no GPS
 
-        // Maintain 60-sample altitude history
+        // Maintain 60-sample altitude history (read by _checkEmergencyTrigger's
+        // AGL guard; falls back to sit.alt_msl directly when empty).
         this._altHistory.push(altMSL);
         if (this._altHistory.length > this._altHistoryMax) this._altHistory.shift();
 
-        // Build field elevation estimate from the first 5 minutes of low-speed samples.
-        // Only update while on the ground (speed < 20 kts, RPM < 2000) and within
-        // the first 300 samples so a runway run-up can't skew it.
-        if (!this._hasLaunched && groundSpeed < 20 && rpm < 2000 && this._fieldElevSamples < 300) {
-            if (this._fieldElev === null) {
-                this._fieldElev = altMSL;
-            } else {
-                // Running minimum — approach plates report field elev, GPS may read high
-                this._fieldElev = Math.min(this._fieldElev, altMSL);
-            }
-            this._fieldElevSamples++;
-        }
-
-        const fieldElev = this._fieldElev ?? altMSL;
+        // Field elevation estimate now comes from the shared, reset-aware
+        // PhaseDetector (Task 13) instead of a duplicate estimator here — see
+        // the constructor comment. Falls back to raw MSL altitude (agl = 0)
+        // when no estimate exists yet (spec not loaded, GPS unavailable this
+        // sample, or not enough ground samples since the last reset), matching
+        // this function's own prior `?? altMSL` fallback shape exactly.
+        const fieldElev = this._phaseDetector?.getFieldElevationFt() ?? altMSL;
         const agl = altMSL - fieldElev;
 
-        // Compute smoothed altitude rate over available history (up to 60 seconds).
-        // Fewer than 10 samples: not enough data, fall through to model phase.
-        if (this._altHistory.length < 10) return null;
-        const oldest = this._altHistory[0];
-        const span = this._altHistory.length - 1; // seconds
-        const altRateFpm = ((altMSL - oldest) / span) * 60;
+        // NOTE: the original _computeGPSPhase had `if (this._altHistory.length < 10)
+        // return null;` right here, before evaluating launch state. That guard gated
+        // an altitude-rate-based phase computation that no longer exists in this
+        // trimmed function (phase is now PhaseDetector's job entirely) — it is
+        // intentionally NOT carried over, since there is nothing left for it to gate.
+        // Effect: _hasLaunched can now go true on the very first sample instead of
+        // only after 10 samples of _altHistory accumulate. This only differs from the
+        // old behavior in one edge case — the app/plugin restarting while the
+        // aircraft is already airborne (e.g. after a crash mid-flight) — where it now
+        // arms _hasLaunched (and the airborne-only physics advisories + emergency-glide
+        // trigger) sooner rather than later. That's fail-safe-direction, not a
+        // regression, and was reviewed and accepted as intentional (Dana, task-7 review).
 
-        // Not yet airborne / on ground
+        // Not yet airborne / back on the ground and slowed
         if (groundSpeed < 30 && agl < 200) {
             this._hasLaunched = false;
-            return null; // let engine MAP/RPM heuristic handle ground phases
+            return;
         }
 
-        // Airborne
         this._hasLaunched = true;
-
-        if (agl <= 1000 && altRateFpm > 100 && rpm > 2400) return 'takeoff';
-        if (altRateFpm > 300) return 'climb';
-        if (altRateFpm < -300) return 'descent';
-        return 'cruise';
-    }
-
-    /**
-     * Derive flight phase for physics-rule threshold selection.
-     * GPS-based phase takes priority when airborne (60-second smoothed alt rate).
-     * Falls back to model phase, then MAP/RPM heuristic.
-     *
-     * @param {object} d - engine data sample
-     * @param {string|null} mlPhase - phase from TFLite model result
-     * @param {string|null} gpsPhase - pre-computed GPS phase (from _computeGPSPhase)
-     */
-    _derivePhase(d, mlPhase, gpsPhase = null) {
-        if (gpsPhase) {
-            this._flightPhase = gpsPhase;
-            return;
-        }
-
-        if (mlPhase && mlPhase !== 'unknown' && mlPhase !== 'ground') {
-            this._flightPhase = mlPhase;
-            return;
-        }
-
-        // MAP/RPM heuristic fallback (no GPS, no model phase)
-        const num = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
-        const rpm = num(d.rpm ?? d.RPM ?? 0);
-        const mp = num(d.manifold_pressure ?? d.mp ?? d.MAP ?? 0);
-
-        if (rpm < 1000) {
-            this._flightPhase = 'ground';
-        } else if (mp > 26 && rpm > 2400) {
-            this._flightPhase = 'climb';
-        } else if (mp < 22 && rpm < 2400) {
-            this._flightPhase = 'descent';
-        } else {
-            this._flightPhase = 'cruise';
-        }
     }
 
     // ========== Baseline Computation ==========
@@ -793,7 +820,17 @@ class EngineMLBridge {
             const altMSL = this._altHistory.length > 0
                 ? this._altHistory[this._altHistory.length - 1]
                 : (sit?.alt_msl ?? 0);
-            const agl = this._fieldElev !== null ? (altMSL - this._fieldElev) : altMSL;
+            // Deliberately NOT `getFieldElevationFt() ?? altMSL` collapsed into a
+            // single fallback-then-subtract (that would silently turn "no estimate
+            // yet" into agl = altMSL - altMSL = 0, which is BELOW the 500ft guard
+            // and would wrongly suppress a real emergency trigger any time the
+            // estimate isn't locked yet). Preserves the original ternary: no
+            // estimate yet -> agl = altMSL (a large number for anyone airborne),
+            // so the guard only suppresses once a real ground-elevation estimate
+            // says the aircraft is genuinely low — never as a side effect of the
+            // estimate simply not existing yet.
+            const fieldElevFt = this._phaseDetector?.getFieldElevationFt() ?? null;
+            const agl = fieldElevFt !== null ? (altMSL - fieldElevFt) : altMSL;
             if (agl < 500) {
                 console.log(`[EngineML] Emergency suppressed — AGL ${Math.round(agl)} ft < 500 ft (landing flare guard)`);
                 return;
@@ -818,6 +855,16 @@ class EngineMLBridge {
     stopLogging() {
         this._logActive = false;
         console.log(`[EngineML] Logging stopped — ${this._log.length} samples`);
+    }
+
+    /** Clears the in-memory log once it has been persisted to a logbook entry —
+     *  otherwise the "Current Session (Live)" card keeps showing a finished
+     *  flight as in-progress until the next startLogging() call. Must not be
+     *  called from stopLogging(): logbook.js reads getFlightSummary()/getFullLog()
+     *  after awaiting airport lookups, so clearing here first would race and
+     *  silently drop the ML summary for every logged flight. */
+    clearLog() {
+        this._log = [];
     }
 
     /** Returns compact summary for logbook custom_fields. Returns null if no data. */
