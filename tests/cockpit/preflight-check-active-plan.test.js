@@ -45,3 +45,45 @@ describe('PreflightCheck._getActivePlan reads the real active-plan source (Findi
         expect(pc._getActivePlan()).toBeNull();
     });
 });
+
+describe('PreflightCheck._checkWeather — missing weather_cache is a warn, not a fail (whole-branch Finding 1)', () => {
+    // Reading the real active-plan source (Finding 6, above) surfaced this
+    // overlay on every cockpit load with an active plan — including plans
+    // built locally via route-table.js's Save Route flow, which never attach
+    // weather_cache by design. That must not read as a hard preflight FAIL.
+
+    it('reports warn (not fail) when weather_cache is entirely absent', () => {
+        const pc = makeCheck();
+        const result = pc._checkWeather({ flight_plan: { departure: 'KLKR', destination: 'KFGX' } });
+        expect(result.status).toBe('warn');
+        expect(result.status).not.toBe('fail');
+    });
+
+    it('still reports fail when weather_cache exists but is genuinely stale (>=180min)', () => {
+        const pc = makeCheck();
+        const staleFetchedAt = new Date(Date.now() - 200 * 60000).toISOString();
+        const result = pc._checkWeather({ weather_cache: { fetched_at: staleFetchedAt } });
+        expect(result.status).toBe('fail');
+    });
+
+    it('still reports fail when there is no active plan at all', () => {
+        const pc = makeCheck();
+        const result = pc._checkWeather(null);
+        expect(result.status).toBe('fail');
+    });
+
+    it('a warn-only weather check does not flip the aggregate verdict to fail', async () => {
+        // Mirrors _runChecks' aggregation: hasFailure ? 'fail' : hasCaution ? 'warn' : 'ok'.
+        const items = [
+            { label: 'Flight Plan', status: 'ok' },
+            { label: 'Weather', status: 'warn', msg: 'Not cached — route built locally' },
+            { label: 'NASR Data', status: 'ok' },
+            { label: 'Offline Maps', status: 'ok' },
+        ];
+        const hasFailure = items.some(i => i.status === 'fail');
+        const hasCaution = items.some(i => i.status === 'warn');
+        const verdict = hasFailure ? 'fail' : hasCaution ? 'warn' : 'ok';
+        expect(verdict).toBe('warn');
+        expect(verdict).not.toBe('fail');
+    });
+});

@@ -1895,14 +1895,23 @@ def capture_thread_func():
                             state.reconnect_count += 1
                             consecutive_empty = 0
                             reconnect_backoff = 2.0
+                            # Floor the next reopen attempt at least reconnect_backoff
+                            # seconds out even on success — otherwise a reopen that
+                            # succeeds but is immediately followed by another failed
+                            # read (a real pyserial pattern: "device reports readiness
+                            # to read but returned no data") re-enters this except
+                            # block with a stale/past gate value, passing every time
+                            # and re-enabling the 10Hz reopen spin this fix prevents.
+                            next_reconnect_attempt = now + reconnect_backoff
                             log(f"Serial port reconnected after error (attempt #{state.reconnect_count})")
                         except Exception as reconnect_err:
                             err_msg = str(reconnect_err)
                             state.last_serial_error = err_msg
                             state.serial_warning = f"Reconnect failed: {err_msg}"
-                            next_reconnect_attempt = now + reconnect_backoff
+                            delay = reconnect_backoff
+                            next_reconnect_attempt = now + delay
                             reconnect_backoff = min(reconnect_backoff * 2, reconnect_backoff_max)
-                            log(f"Reconnect failed: {err_msg} — next attempt in {reconnect_backoff:.0f}s")
+                            log(f"Reconnect failed: {err_msg} — next attempt in {delay:.0f}s")
                 else:
                     log(f"Capture loop error: {e}")
                 time.sleep(0.1)

@@ -136,7 +136,7 @@
     --touch-compact:     36px;      /* compact toolbar/table buttons (fixed, no cockpit override) */
     --touch-min:         56px;      /* iOS minimum, bare finger                  */
     --touch-preferred:   64px;      /* preferred, sunglasses + bright sun        */
-    --touch-large:       64px;      /* 24mm — primary cockpit actions            */
+    --touch-large:       80px;      /* 24mm — primary cockpit actions            */
     --touch-spacing:     6px;       /* gap between adjacent touch targets        */
 
     /* ── Typography ── */
@@ -673,7 +673,7 @@ body {
 }
 
 /* Close / dismiss button — turbulence-safe large tap target.
-   Uses --touch-large (64px).
+   Uses --touch-large (80px).
    Add this class to any dismiss button; keep module-specific class for binding. */
 .btn-close {
     display: inline-flex;
@@ -1556,9 +1556,10 @@ body {
 
    Repointed at the on-light foreground tokens. NOTE these are NOT
    --color-caution / --color-danger: those resolve to #ffc000 / #ff3030 in this
-   app (the #b87000 / #cc2222 values live only inside the [data-mode="cockpit"]
-   block, which is never applied — FlyTab is light-theme only), i.e. 1.51:1 and
-   3.37:1 here. Verified in Chrome, not assumed. (SDD Task S5.)
+   app (the #b87000 / #cc2222 values were removed along with the dead
+   [data-mode="cockpit"] block in the dead-theme cleanup — FlyTab is
+   light-theme only), i.e. 1.51:1 and 3.37:1 here. Verified in Chrome, not
+   assumed. (SDD Task S5.)
 
    .fuel-green has no JS caller anywhere in web/ and is left as-is. */
 

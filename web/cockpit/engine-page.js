@@ -1108,7 +1108,7 @@ class EnginePage {
             // and the POST never goes out. Without the header, fetch sends the
             // CORS-safelisted text/plain, which the Pi's json.loads(body) parses
             // fine (it never inspects Content-Type).
-            const resp = await fetch(`${this._engineBaseUrl()}/api/atis`, {
+            const resp = await fetch(`${base}/api/atis`, {
                 method: 'POST',
                 body: JSON.stringify({ [key]: val }),
                 signal: AbortSignal.timeout(5000),

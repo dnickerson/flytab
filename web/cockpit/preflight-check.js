@@ -65,9 +65,10 @@ class PreflightCheck {
      * app.js, logbook.js, and plan-sync.js already read.
      *
      * Note: locally-built routes (route-table.js "Save Route") don't carry a
-     * weather_cache field, so _checkWeather() below can still read "Not
-     * fetched" for those plans even once the plan itself is found — a
-     * separate, pre-existing gap this does not fix.
+     * weather_cache field — that's a deliberate design gap, not a bug.
+     * _checkWeather() below reports 'warn' (not 'fail') when weather_cache is
+     * simply absent, so a pilot-built local route doesn't trip the overall
+     * verdict to FAIL just because it was never routed through weather fetch.
      */
     _getActivePlan() {
         try {
@@ -97,7 +98,7 @@ class PreflightCheck {
     _checkWeather(plan) {
         if (!plan) return { label: 'Weather', status: 'fail', msg: 'No flight plan' };
         const fetchedAt = plan.weather_cache?.fetched_at;
-        if (!fetchedAt) return { label: 'Weather', status: 'fail', msg: 'Not fetched' };
+        if (!fetchedAt) return { label: 'Weather', status: 'warn', msg: 'Not cached — route built locally' };
         const ageMin = (Date.now() - new Date(fetchedAt).getTime()) / 60000;
         if (ageMin < 60)  return { label: 'Weather', status: 'ok',   msg: `${Math.round(ageMin)}m old — FRESH` };
         if (ageMin < 180) return { label: 'Weather', status: 'warn', msg: `${Math.round(ageMin)}m old — AGING` };
