@@ -35,14 +35,16 @@ The UI/UX is a little rough as I'm not a UI designer but it works for me.
 ### Moving Map
 
 - Sectional, vector, and OpenStreetMap base layers
-- Real-time ownship position from Stratux GPS
+- Real-time ownship position from Stratux GPS, with automatic failover to engine-monitor GPS/AHRS if the Stratux feed goes stale
 - ADS-B traffic overlay with altitude filtering
 - Airspace classes B/C/D/E with configurable minimum zoom
 - Navaids, airports, airways, and fixes overlays
 - Route line with active leg highlighted
-- NEXRAD radar loop (2-hour playback, configurable frame interval)
+- NEXRAD radar loop (2-hour playback, configurable frame interval) with frame-to-frame CB Building detection
 - Lightning overlay
 - Terrain elevation grid
+- GPS track log — continuous 12-hour breadcrumb trail
+- Profile view with terrain and clouds
 
 ### Engine Monitoring
 
@@ -62,7 +64,8 @@ The UI/UX is a little rough as I'm not a UI designer but it works for me.
 
 ### Fuel Management
 
-- Fuel remaining with caution/warning thresholds
+- Fuel remaining with caution/warning thresholds (aggregate total)
+- Per-tank synthetic gauges (L/R) computed from fuel flow + tank selection, with imbalance warnings and periodic confirm-selection prompts
 - Tic mark to gallons conversion using calibration polynomial
 - Fuel burn history and endurance calculations
 - Power/speed trade-off panel with actual performance data
@@ -71,10 +74,12 @@ The UI/UX is a little rough as I'm not a UI designer but it works for me.
 ### Flight Planning & Navigation
 
 - Route editor — enter waypoints, airways, and airports
-- Nav strip: bearing, distance, ETE, groundspeed, fuel remaining, wind
+- **Universal search** — one tab searches airports, navaids, fixes, airways, and instrument procedures together, with a query parser for shorthand like "ILS RWY 22 KXYZ"
+- Nav strip: bearing, distance, ETE, groundspeed, fuel remaining, and altimeter setting (auto-selected from nearest METAR)
 - Route table with per-leg fuel and time calculations
+- Route vertical profile — terrain, cruise altitude, and route-relevant cloud cover (density fill + hard BKN/OVC contour) plotted together, with freezing-level track; auto-fetched from Open-Meteo when on internet-connected Wi-Fi
 - Fuel stop planner
-- Integration with [flywhere.app](https://www.flywhere.app) for flight plan sync via `flytab://plan/{uuid}` deep link
+- Cloud plan sync via [flywhere.app](https://www.flywhere.app) — `flytab://plan/{uuid}` deep link, plus an in-app CLOUD/DEVICE plan picker with per-leg "replan with current winds"
 
 ### Approach Charts
 
@@ -86,10 +91,13 @@ The UI/UX is a little rough as I'm not a UI designer but it works for me.
 
 ### Weather
 
-- FIS-B METAR/TAF display from Stratux
+- FIS-B METAR/TAF, PIREPs, AIRMETs (icing/turbulence/IFR/mountain obscuration), SIGMETs, CWAs, and winds-aloft barbs from Stratux, de-duplicated against internet advisories when available
 - NEXRAD radar playback
 - Wind display with runway crosswind components
-- Airport weather popup from map tap
+- NOTAMs — tiered/filtered display (critical items surface first, routine obstacle-light NOTAMs collapsed) plus SUA-specific NOTAMs shown directly on airspace polygons on the map
+- FIS-B Status page — ground-station health and per-product freshness across all 9 FIS-B product types
+- Airport info panel from map tap — INFO/WX/RWY/DIAG/A-FD tabs: weather, runway data with best-runway-from-wind, frequencies, CD phone number, airport diagram, and A/FD plate viewer
+- **Convective Intelligence** *(experimental)* — blends NEXRAD growth-rate analysis with a preflight-fetched HRRR CAPE/shear grid to flag likely convective cells, with route-deviation alerts and voice warnings. Self-labeled "not for navigation" in the UI; treat as situational awareness only
 
 ### Logbook
 
@@ -97,6 +105,12 @@ The UI/UX is a little rough as I'm not a UI designer but it works for me.
 - Manual entry creation
 - Sync to flywhere.app
 - Hobbs time tracking
+
+### Flight Data Recording
+
+- Automatic 1 Hz recording of engine, GPS, and ML anomaly data in Savvy Aviation CSV format, on the same engine-start/stop triggers as the logbook auto-record
+- Companion weather event log (NEXRAD/METAR/PIREP/SIGMET/AIRMET/CWA/winds/NOTAM) and traffic log per flight
+- SFTP upload manager — per-file status, batch upload, encrypted stored credentials
 
 ### IFR Tools
 
@@ -106,7 +120,14 @@ The UI/UX is a little rough as I'm not a UI designer but it works for me.
 ### Checklists
 
 - Normal, abnormal, and emergency checklists (customizable via `checklist.json`)
-- Preflight weather brief generator
+- Preflight weather brief generator — 7-day and 24-hour route timeline from NOAA MOS forecasts (worst flight category per day, ceiling/vis/wind/precip%/thunderstorm%), with an auto-generated plain-language summary and go/no-go recommendation
+- **AI-generated preflight brief** — on-demand, per cloud-synced plan: a GO/CAUTION/NO-GO verdict plus categorized concern items (airspace, TFR, weather, convective, winds), generated server-side by Claude, alongside the underlying METARs/TAFs/NOTAMs/TFRs/advisories/winds-aloft for cross-check. Requires Wi-Fi to generate; cached for offline viewing after
+- Preflight data readiness check — auto-checks weather cache age, NASR cycle currency, and offline tile coverage before departure; GO/CAUTION/NO-GO panel
+
+### Data & Device Management
+
+- **Data & maps sync center** — on-tablet manager for NASR/CIFP, terrain, approach plates, and all four map tile layers (sectional, IFR-low, IFR-area, TAC); server-vs-tablet inventory with AIRAC-aware expiration badges, one-tap "sync all outdated," manual ZIP import, and a weather-cache browser
+- Tablet thermal monitor — status-bar badge and warning if surface temperature climbs high enough to affect reliability
 
 ---
 
@@ -196,15 +217,20 @@ The Pi runs two services:
 
 ## Data Sources
 
-| Data                           | Source                        | Notes                     |
-| ------------------------------ | ----------------------------- | ------------------------- |
-| Navigation (airports, navaids) | FAA NASR                      | Updated 28-day cycles     |
-| Approach plates                | FAA digital-TPP               | Served from home server   |
-| Procedures (CIFP)              | FAA CIFP                      | IFR procedure data        |
-| Map tiles                      | OpenStreetMap / FAA sectional | Served from home server   |
-| Terrain elevation              | SRTM (1 arc-second)           | HGT tiles via home server |
-| Weather (METAR/TAF/NEXRAD)     | FIS-B via Stratux             | In-flight only            |
-| Traffic                        | ADS-B via Stratux             | 978 MHz UAT + 1090 ES     |
+| Data                                | Source                        | Notes                                   |
+| ----------------------------------- | ----------------------------- | --------------------------------------- |
+| Navigation (airports, navaids)      | FAA NASR                      | Updated 28-day cycles                   |
+| Approach plates                     | FAA digital-TPP               | Served from home server                 |
+| Procedures (CIFP)                   | FAA CIFP                      | IFR procedure data                      |
+| Map tiles                           | OpenStreetMap / FAA sectional | Served from home server                 |
+| Terrain elevation                   | SRTM (1 arc-second)           | HGT tiles via home server               |
+| Weather (METAR/TAF/NEXRAD)          | FIS-B via Stratux             | In-flight only                          |
+| Weather (MOS forecast)              | NOAA GFS MOS                  | Ground only, via flywhere.app proxy     |
+| Cloud cover / freezing level        | Open-Meteo                    | Ground only, route vertical profile     |
+| Convective instability (CAPE/shear) | NOAA HRRR                     | Ground-prefetched, experimental feature |
+| NOTAMs                              | FAA NMS-API                   | Staging endpoint currently              |
+| AI brief analysis                   | Claude, via flywhere.app      | Ground only, on-demand                  |
+| Traffic                             | ADS-B via Stratux             | 978 MHz UAT + 1090 ES                   |
 
 ---
 
