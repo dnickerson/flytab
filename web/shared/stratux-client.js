@@ -278,9 +278,15 @@ class StratuxClient extends EventTarget {
             } catch { /* ignore malformed */ }
         };
 
+        // Same stale-onclose race as situation/weather/jsonio (see _connectSituation
+        // for the full explanation) — disconnect()+connect() can leave a deferred
+        // onclose from the just-replaced socket to fire after a new one is live.
+        const trafficWsRef = this._trafficWs;
         this._trafficWs.onclose = (e) => {
             if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', `Traffic WS closed, reconnecting traffic only… code=${e?.code} reason=${e?.reason || ''}`);
-            this._scheduleTrafficReconnect();
+            if (!this._disconnected && this._trafficWs === trafficWsRef) {
+                this._scheduleTrafficReconnect(trafficWsRef);
+            }
         };
         this._trafficWs.onerror = () => { /* onclose will fire */ };
     }
@@ -556,11 +562,16 @@ class StratuxClient extends EventTarget {
     // ========== Reconnect ==========
 
     /** Reconnect only the traffic WS — don't tear down situation/weather/jsonio */
-    _scheduleTrafficReconnect() {
+    _scheduleTrafficReconnect(trafficWsRef) {
         this._setConnected(false);
         if (this._reconnectTimer) return;
         this._reconnectTimer = setTimeout(() => {
             this._reconnectTimer = null;
+            // Guard: never reconnect if disconnect() ran, or this socket was
+            // already replaced by a fresh connect() cycle, while this timer
+            // was pending — same race the identity check in _connectTraffic's
+            // onclose exists for.
+            if (this._disconnected || this._trafficWs !== trafficWsRef) return;
             this._connectTraffic();
             // Reconnect companion sockets only if fully closed — not if still connecting
             if (!this._situationWs || this._situationWs.readyState === WebSocket.CLOSED) {

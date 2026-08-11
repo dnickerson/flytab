@@ -1267,7 +1267,15 @@ def update_peak_tracking(egt1, egt2, egt3, egt4, fuel_flow, rpm, mp):
         fuel_flow: Current fuel flow in GPH
         rpm: Engine RPM
         mp: Manifold pressure in inHg
+
+    Returns:
+        list[str]: messages to log. Callers run this under state.lock (it
+        mutates state.peak_egts/degrees_from_peak/peaks_valid, which
+        get_status() reads locked) — log() does blocking file I/O, so
+        messages are collected here and written by the caller after the
+        lock is released, instead of holding the lock across disk writes.
     """
+    log_msgs = []
     current_time = time.time()
     egts = [egt1, egt2, egt3, egt4]
 
@@ -1296,7 +1304,7 @@ def update_peak_tracking(egt1, egt2, egt3, egt4, fuel_flow, rpm, mp):
             state.leaning_active = False
             state.peak_egts = [0, 0, 0, 0]
             state.degrees_from_peak = [0, 0, 0, 0]
-            log(f"Peak tracking reset: power change (RPM: {rpm_change:.1f}%, MP: {mp_change:.1f}%)")
+            log_msgs.append(f"Peak tracking reset: power change (RPM: {rpm_change:.1f}%, MP: {mp_change:.1f}%)")
 
     # Detect leaning: fuel flow decreasing over 10 seconds
     if len(state.ff_history) >= 5:
@@ -1316,7 +1324,7 @@ def update_peak_tracking(egt1, egt2, egt3, egt4, fuel_flow, rpm, mp):
                     state.leaning_active = False
                     state.peak_egts = [0, 0, 0, 0]
                     state.degrees_from_peak = [0, 0, 0, 0]
-                    log(f"Peak tracking reset: mixture enriched (+{-ff_change:.1f} GPH)")
+                    log_msgs.append(f"Peak tracking reset: mixture enriched (+{-ff_change:.1f} GPH)")
 
                 # Detect leaning (fuel flow decreasing by at least 0.5 GPH over interval)
                 elif ff_change >= 0.5:
@@ -1324,7 +1332,7 @@ def update_peak_tracking(egt1, egt2, egt3, egt4, fuel_flow, rpm, mp):
                         state.leaning_active = True
                         state.last_stable_rpm = rpm
                         state.last_stable_mp = mp
-                        log(f"Leaning detected: FF dropping {ff_change:.1f} GPH")
+                        log_msgs.append(f"Leaning detected: FF dropping {ff_change:.1f} GPH")
 
     # During active leaning, track peaks
     if state.leaning_active:
@@ -1336,7 +1344,7 @@ def update_peak_tracking(egt1, egt2, egt3, egt4, fuel_flow, rpm, mp):
 
         if peaks_updated and not state.peaks_valid:
             state.peaks_valid = True
-            log(f"Peak EGTs captured: {state.peak_egts}")
+            log_msgs.append(f"Peak EGTs captured: {state.peak_egts}")
 
     # Calculate degrees from peak for each cylinder
     if state.peaks_valid:
@@ -1349,6 +1357,8 @@ def update_peak_tracking(egt1, egt2, egt3, egt4, fuel_flow, rpm, mp):
                 state.degrees_from_peak[i] = 0
     else:
         state.degrees_from_peak = [0, 0, 0, 0]
+
+    return log_msgs
 
 
 def calculate_oat_from_altitude(pressure_alt_ft):
@@ -1737,8 +1747,12 @@ def capture_thread_func():
                         with state.lock:
                             # Track per-cylinder peak EGT during leaning (writes
                             # state.peak_egts/degrees_from_peak/peaks_valid —
-                            # get_status() reads these locked; this call must be too)
-                            update_peak_tracking(
+                            # get_status() reads these locked; this call must be too).
+                            # update_peak_tracking() defers its log() calls (blocking
+                            # file I/O) instead of making them here, so this lock only
+                            # ever guards in-memory state — get_status()'s /api/status
+                            # poll never blocks on a disk write.
+                            peak_log_msgs = update_peak_tracking(
                                 parsed.get('EGT1', 0),
                                 parsed.get('EGT2', 0),
                                 parsed.get('EGT3', 0),
@@ -1754,6 +1768,9 @@ def capture_thread_func():
                             state.rop_lop_percent = deviation
                             state.rop_lop_mode = mode
                             state.sfc = sfc
+
+                        for msg in peak_log_msgs:
+                            log(msg)
 
                         # Update fuel tracker
                         if state.fuel_tracker:

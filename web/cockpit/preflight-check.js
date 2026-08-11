@@ -98,7 +98,19 @@ class PreflightCheck {
     _checkWeather(plan) {
         if (!plan) return { label: 'Weather', status: 'fail', msg: 'No flight plan' };
         const fetchedAt = plan.weather_cache?.fetched_at;
-        if (!fetchedAt) return { label: 'Weather', status: 'warn', msg: 'Not cached — route built locally' };
+        if (!fetchedAt) {
+            // plan.id is only ever set by PlanSync._normalizePlan() for a
+            // flywhere.app cloud-synced plan (see plan-sync.js) — a locally-built
+            // route (route-table.js "Save Route") never has an id. Both cases
+            // leave weather_cache absent/empty, but they aren't the same risk:
+            // a local route never went through weather fetch by design, while a
+            // synced plan missing weather_cache means its fetch never ran or
+            // failed — worth a more pointed warning since this app has zero
+            // in-flight internet to retry.
+            return plan.id
+                ? { label: 'Weather', status: 'warn', msg: 'Not cached — verify weather before departure' }
+                : { label: 'Weather', status: 'warn', msg: 'Not cached — route built locally' };
+        }
         const ageMin = (Date.now() - new Date(fetchedAt).getTime()) / 60000;
         if (ageMin < 60)  return { label: 'Weather', status: 'ok',   msg: `${Math.round(ageMin)}m old — FRESH` };
         if (ageMin < 180) return { label: 'Weather', status: 'warn', msg: `${Math.round(ageMin)}m old — AGING` };

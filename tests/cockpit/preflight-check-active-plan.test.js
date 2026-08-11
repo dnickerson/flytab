@@ -72,6 +72,18 @@ describe('PreflightCheck._checkWeather — missing weather_cache is a warn, not 
         expect(result.status).toBe('fail');
     });
 
+    it('distinguishes a cloud-synced plan (plan.id set) from a locally-built one when weather_cache is missing', () => {
+        const pc = makeCheck();
+        const local = pc._checkWeather({ flight_plan: { departure: 'KLKR', destination: 'KFGX' } });
+        expect(local.status).toBe('warn');
+        expect(local.msg).toBe('Not cached — route built locally');
+
+        const synced = pc._checkWeather({ id: 'abc123', flight_plan: { departure: 'KLKR', destination: 'KFGX' } });
+        expect(synced.status).toBe('warn');
+        expect(synced.msg).not.toBe('Not cached — route built locally');
+        expect(synced.msg).toBe('Not cached — verify weather before departure');
+    });
+
     it('a warn-only weather check does not flip the aggregate verdict to fail', async () => {
         // Mirrors _runChecks' aggregation: hasFailure ? 'fail' : hasCaution ? 'warn' : 'ok'.
         const items = [
