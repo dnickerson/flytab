@@ -198,7 +198,7 @@ public class TileServer extends NanoHTTPD {
      * [{"layer":"sectional","exists":true,"size_mb":2380},{"layer":"ifr-low","exists":false}]
      */
     private Response handleMbtilesStatus() {
-        String[] layers = {"sectional", "ifr-low"};
+        String[] layers = {"sectional", "ifr-low", "ifr-area", "tac"};
         StringBuilder sb = new StringBuilder("[");
         for (int i = 0; i < layers.length; i++) {
             File f = new File(new File(baseDir, "tiles"), layers[i] + ".mbtiles");

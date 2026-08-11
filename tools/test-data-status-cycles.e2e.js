@@ -143,8 +143,51 @@ const report = (name, ok, detail) => {
     report('migrated device: tablet line says "On tablet", no fabricated cycle date',
         /On tablet/.test(scenarioC.tablet) && !/Cycle undefined/.test(scenarioC.tablet),
         scenarioC.tablet);
-    report('migrated device: badge still CURRENT (server has the expiration data even though device manifest does not)',
-        /CURRENT/.test(scenarioC.badge), scenarioC.badge);
+    // Updated for the Critical #2 fix: a migrated device has NO recorded cycle_date
+    // (seeded as {} — see the "no version — forces update check on next sync" comment
+    // in _readOrMigrateDeviceManifest()), so cycle_date always mismatches the server's
+    // and the layer must be flagged UPDATE AVAILABLE, not a guessed CURRENT. Before the
+    // fix, tileUpdateAvail short-circuited on expiration_date and never looked at
+    // cycle_date, so this case wrongly showed CURRENT — exactly the false-positive the
+    // reviewer flagged.
+    report('migrated device: badge is UPDATE AVAILABLE (unknown cycle must not be assumed current)',
+        /UPDATE AVAILABLE/.test(scenarioC.badge), scenarioC.badge);
+
+    // ---------- Scenario D: server rolled to a newer cycle, but the server's OWN
+    // current cycle hasn't expired yet. Regression for the reviewer's Critical #2:
+    // the old code only compared expiration_date and never noticed the device was
+    // still sitting on the prior cycle, so it kept showing a false CURRENT badge. ----------
+    const scenarioD = await page.evaluate(() => {
+        const addDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+        // Server has rolled forward to a new cycle with plenty of days left before
+        // ITS expiration — the old buggy code short-circuited on this and never
+        // looked at cycle_date at all.
+        const serverManifest = { tiles: { sectional: { cycle_date: '2026-08-06', expiration_date: addDays(45), built_at: '2026-08-07T00:00:00Z', tile_count: 1, size_mb: 1751 } } };
+        // Device is still on the OLD cycle from before the server's rollover.
+        const deviceManifest = { tiles: { sectional: { cycle_date: '2026-07-09', expiration_date: addDays(-2), built_at: '2026-07-10T00:00:00Z' } } };
+        const mbt = [
+            { layer: 'sectional', exists: true, size_mb: 1750 },
+            { layer: 'ifr-low', exists: false }, { layer: 'ifr-area', exists: false }, { layer: 'tac', exists: false },
+        ];
+        window.app.dataStatus._resolvedBase = 'http://192.168.1.77:8090';
+        window.app.dataStatus._render(serverManifest, deviceManifest, mbt);
+        const body = window.app.dataStatus._el.querySelector('.data-status-body');
+        const card = [...body.querySelectorAll('.ds-section-card')].find(c => c.querySelector('.ds-section-name')?.textContent.includes('Sectional'));
+        return {
+            badge: card?.querySelector('.ds-section-badge')?.textContent.trim(),
+            actionText: card?.querySelector('.ds-inv-action button')?.textContent.trim() || null,
+            actionHasUpdateClass: !!card?.querySelector('.ds-inv-action button.ds-update'),
+            needsSync: window.app.dataStatus._needsSync,
+        };
+    });
+    report('device-behind-server cycle: badge is NOT CURRENT (regression check for false CURRENT claim)',
+        !/^●?\s*CURRENT/.test(scenarioD.badge) && !/CURRENT/.test(scenarioD.badge), scenarioD.badge);
+    report('device-behind-server cycle: badge is UPDATE AVAILABLE',
+        /UPDATE AVAILABLE/.test(scenarioD.badge), scenarioD.badge);
+    report('device-behind-server cycle: RE-DOWNLOAD action (highlighted/update style)',
+        scenarioD.actionText === 'RE-DOWNLOAD' && scenarioD.actionHasUpdateClass,
+        JSON.stringify(scenarioD));
+    report('device-behind-server cycle: needsSync true', scenarioD.needsSync === true, scenarioD.needsSync);
 
     // Leave the page rendered with sectional NOT DOWNLOADED (a plain, unmodified
     // .ds-action-btn with neither .ds-secondary nor .ds-update) so Task 2's

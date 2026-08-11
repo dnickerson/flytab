@@ -9,6 +9,16 @@
  * Tailscale fallback: if local IP unreachable, tries homeServer.fallbackBase.
  */
 
+// Offline Maps tile layers — order drives render order in the "Offline Maps"
+// section. Static content, doesn't depend on render-time state — module scope
+// so it isn't rebuilt on every _render() call.
+const TILE_LAYERS = [
+    { layer: 'sectional', label: 'Sectional Charts (z5–11)',               approxMb: 1800 },
+    { layer: 'ifr-low',   label: 'IFR Low Enroute (z4–10, 512px retina)',  approxMb: 600  },
+    { layer: 'ifr-area',  label: 'IFR Area Charts (z10–12)',               approxMb: 150  },
+    { layer: 'tac',       label: 'Terminal Area Charts (z8–12) — VFR Flyways', approxMb: 250 },
+];
+
 class DataStatus {
     // ── Constants ─────────────────────────────────────────────────────────────
     static LOCAL_BASE  = 'http://localhost:9090';
@@ -323,28 +333,12 @@ class DataStatus {
         }
 
         // ── MBTiles sections ──────────────────────────────────────────────────
-        const TILE_LAYERS = [
-            { layer: 'sectional', label: 'Sectional Charts (z5–11)',               approxMb: 1800 },
-            { layer: 'ifr-low',   label: 'IFR Low Enroute (z4–10, 512px retina)',  approxMb: 600  },
-            { layer: 'ifr-area',  label: 'IFR Area Charts (z10–12)',               approxMb: 150  },
-            { layer: 'tac',       label: 'Terminal Area Charts (z8–12) — VFR Flyways', approxMb: 250 },
-        ];
         const tileStates = []; // captured per-layer so "Sync All" can reuse it below without recomputing
         const mbtilesHtml = TILE_LAYERS.map(({ layer, label, approxMb }) => {
             const entry = mbt.find(l => l.layer === layer);
             const sTile = serverManifest?.tiles?.[layer] || null;
             const dTile = deviceManifest?.tiles?.[layer] || null;
-            const tileUpdateAvail = (() => {
-                if (!entry?.exists || !sTile || !dTile) return false;
-                // Sectional/TAC/IFR tiles run a 56-day cycle; NASR runs 28-day.
-                // When expiration_date is present use it — avoids false positives
-                // after a NASR-only refresh where cycle_date legitimately differs.
-                if (sTile.expiration_date) {
-                    const today = new Date().toISOString().slice(0, 10);
-                    return today > sTile.expiration_date;
-                }
-                return sTile.cycle_date !== dTile.cycle_date || sTile.built_at !== dTile.built_at;
-            })();
+            const tileUpdateAvail = entry?.exists ? this._tileUpdateAvail(sTile, dTile) : false;
             tileStates.push({ layer, exists: !!entry?.exists, updateAvail: tileUpdateAvail });
 
             const sizeMb = sTile?.size_mb ?? approxMb;
@@ -368,8 +362,12 @@ class DataStatus {
                     badge  = this._badge('UPDATE AVAILABLE', 'yellow');
                     action = base ? `<button class="ds-action-btn ds-update ds-mbt-dl-btn" data-layer="${layer}">RE-DOWNLOAD</button>` : '';
                 } else {
-                    const expDate = sTile?.expiration_date ? new Date(sTile.expiration_date)
-                                  : dTile?.expiration_date ? new Date(dTile.expiration_date) : null;
+                    // Cycle mismatch (if any) was already caught by tileUpdateAvail above,
+                    // so server/device expiration_date agree whenever we reach here. Prefer
+                    // the device's own recorded expiration — what's actually on the tablet —
+                    // falling back to the server's only if the device manifest lacks one.
+                    const expDate = dTile?.expiration_date ? new Date(dTile.expiration_date)
+                                  : sTile?.expiration_date ? new Date(sTile.expiration_date) : null;
                     badge  = expDate ? this._cycleStatus(expDate, now) : this._badge('ON DEVICE', 'green');
                     action = base ? `<button class="ds-action-btn ds-secondary ds-mbt-dl-btn" data-layer="${layer}">SYNC</button>` : '';
                 }
@@ -509,7 +507,7 @@ class DataStatus {
 
             containerEl.innerHTML = `
                 <div class="ds-section-title">Weather Cache
-                    <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px">${entries.length} airports · oldest ${oldestStr}</span>
+                    <span style="font-size:11px;font-weight:700;color:var(--text-muted);margin-left:8px">${entries.length} airports · oldest ${oldestStr}</span>
                 </div>
                 <div class="ds-wx-list">${rows}</div>
                 <div style="padding:6px 12px 10px">
@@ -727,6 +725,28 @@ class DataStatus {
 
     // ── Cycle Status Helpers ──────────────────────────────────────────────────
 
+    /**
+     * Shared tile-layer staleness check — used both for the badge in _render()
+     * and for the "skip if already synced" decision in _syncAll(). Requires
+     * both sTile and dTile (server/device manifest entries for the layer).
+     */
+    _tileUpdateAvail(sTile, dTile) {
+        if (!sTile || !dTile) return false;
+        // Device cycle behind server cycle always means an update is
+        // available, regardless of whether the server's own current
+        // cycle has expired yet — a device on an older cycle is stale
+        // even if the server hasn't rolled past ITS cycle's expiration.
+        if (sTile.cycle_date !== dTile.cycle_date) return true;
+        // Sectional/TAC/IFR tiles run a 56-day cycle; NASR runs 28-day.
+        // When expiration_date is present use it — avoids false positives
+        // after a NASR-only refresh where cycle_date legitimately differs.
+        if (sTile.expiration_date) {
+            const today = new Date().toISOString().slice(0, 10);
+            return today > sTile.expiration_date;
+        }
+        return sTile.built_at !== dTile.built_at;
+    }
+
     _cycleStatus(expDate, now) {
         if (!expDate) return this._badge('UNKNOWN', 'gray');
         const daysLeft = (expDate - now) / 86400000;
@@ -739,10 +759,15 @@ class DataStatus {
     }
 
     _badge(text, color) {
+        // .ds-badge renders these as plain foreground text on the light card
+        // background (no fill) — per CLAUDE.md's Design Token Standards, the
+        // bright --status-caution/--status-danger fill tokens are not readable
+        // as text at that weight, so caution/red use the -on-light variants.
+        // --status-ok has no -on-light counterpart and stays as-is (per CLAUDE.md).
         const colors = {
             green: 'var(--status-ok)',
-            yellow: 'var(--status-caution)',
-            red: 'var(--status-danger)',
+            yellow: 'var(--color-caution-on-light)',
+            red: 'var(--color-danger-on-light)',
             gray: 'var(--text-muted)',
         };
         return `<span class="ds-badge" style="color:${colors[color] || colors.gray}">&#9679; ${text}</span>`;
@@ -1031,12 +1056,14 @@ class DataStatus {
         const LOCAL    = DataStatus.LOCAL_BASE;
 
         const body = this._el.querySelector('.data-status-body');
-        const stepIds    = ['aero', 'sec', 'ifr', 'plates'];
+        const stepIds    = ['aero', 'sec', 'ifr', 'ifr-area', 'tac', 'plates'];
         const stepLabels = {
-            aero:   'Aeronautical Database',
-            sec:    'Sectional MBTiles',
-            ifr:    'IFR Low MBTiles',
-            plates: 'Approach Plates & A/FD',
+            aero:      'Aeronautical Database',
+            sec:       'Sectional MBTiles',
+            ifr:       'IFR Low MBTiles',
+            'ifr-area': 'IFR Area MBTiles',
+            tac:       'TAC MBTiles',
+            plates:    'Approach Plates & A/FD',
         };
 
         const renderSteps = (states) => {
@@ -1066,7 +1093,7 @@ class DataStatus {
                 `</div><button class="ds-sync-btn" id="dsSyncDoneBtn" style="margin-top:12px">Done — Refresh</button>`;
         };
 
-        const states = { aero: { status: 'pending' }, sec: { status: 'pending' }, ifr: { status: 'pending' }, plates: { status: 'pending' } };
+        const states = { aero: { status: 'pending' }, sec: { status: 'pending' }, ifr: { status: 'pending' }, 'ifr-area': { status: 'pending' }, tac: { status: 'pending' }, plates: { status: 'pending' } };
         const setStep   = (id, status, msg, pct = null) => { states[id] = { status, msg, pct }; body.innerHTML = renderSteps(states); this._wireDoneBtn(); };
         const failStep  = (id, err)                     => setStep(id, 'fail', err?.message || String(err));
 
@@ -1147,9 +1174,12 @@ class DataStatus {
             if (r.ok) mbStatus = await r.json();
         } catch { /* NanoHTTPD offline */ }
 
-        for (const [stepId, layer, label] of [['sec', 'sectional', 'Sectional (~1.8 GB)'], ['ifr', 'ifr-low', 'IFR Low (~600 MB)'], ['ifr-area', 'ifr-area', 'IFR Area (~150 MB)']]) {
+        for (const [stepId, layer, label] of [['sec', 'sectional', 'Sectional (~1.8 GB)'], ['ifr', 'ifr-low', 'IFR Low (~600 MB)'], ['ifr-area', 'ifr-area', 'IFR Area (~150 MB)'], ['tac', 'tac', 'TAC (~250 MB)']]) {
             const entry = mbStatus.find(s => s.layer === layer);
-            if (entry?.exists) {
+            const sTile = this._serverManifest?.tiles?.[layer] || null;
+            const dTile = this._readDeviceManifest().tiles?.[layer] || null;
+            const stale = entry?.exists ? this._tileUpdateAvail(sTile, dTile) : false;
+            if (entry?.exists && !stale) {
                 setStep(stepId, 'skip', `On device — ${entry.size_mb.toLocaleString()} MB`);
                 continue;
             }
