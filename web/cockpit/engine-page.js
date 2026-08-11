@@ -1060,13 +1060,10 @@ class EnginePage {
         if (btn) btn.textContent = 'STOP & SAVE';
     }
 
-    // No fallback IP: window.engineClient is assigned at app.js:518, before
-    // this page can be constructed or shown, so a missing ip here means
-    // something is genuinely wrong — guessing an address is worse than
-    // skipping. Matches fuel-overlay.js's _engineBaseUrl() (same fix, #Finding 7b).
+    // Shared with fuel-overlay.js via EngineClient.baseUrl() (issue #128) —
+    // do not reintroduce a per-file copy of this logic.
     _engineBaseUrl() {
-        const ip = window.engineClient?.ip;
-        return ip ? `http://${ip}:8080` : null;
+        return EngineClient.baseUrl();
     }
 
     _atisStatusError(msg) {

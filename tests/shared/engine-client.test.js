@@ -207,6 +207,23 @@ describe('_createEngineWs — no Capacitor present', () => {
 });
 
 // ---------------------------------------------------------------------------
+// EngineClient.baseUrl (static, issue #128)
+// ---------------------------------------------------------------------------
+describe('EngineClient.baseUrl (static, issue #128)', () => {
+    afterEach(() => { delete window.engineClient; });
+
+    it('returns null, not a guessed IP, when window.engineClient is unavailable', () => {
+        delete window.engineClient;
+        expect(EngineClient.baseUrl()).toBeNull();
+    });
+
+    it('builds the URL from window.engineClient.ip when available', () => {
+        window.engineClient = { ip: '192.168.1.50' };
+        expect(EngineClient.baseUrl()).toBe('http://192.168.1.50:8080');
+    });
+});
+
+// ---------------------------------------------------------------------------
 // _createEngineWs — native plugin bridging (Finding 1)
 // ---------------------------------------------------------------------------
 describe('_createEngineWs — native EngineWS plugin present', () => {

@@ -23,12 +23,20 @@ const read = (p) => readFileSync(join(__dirname, '../../', p), 'utf8');
 
 globalThis.wireTap = vi.fn((el, fn) => el && el.addEventListener && el.addEventListener('pointerup', fn));
 
+// Browser globals that engine-client.js requires
+global.WebSocket = class {
+    constructor() {}
+    close() {}
+};
+global.fetch = vi.fn().mockRejectedValue(new Error('no network'));
+
+// Load the real EngineClient to provide baseUrl() static method
+globalThis.EngineClient = new Function(read('web/shared/engine-client.js') + '\nreturn EngineClient;')();
+
 globalThis.FuelEngine = new Function(read('web/shared/fuel-engine.js') + '\nreturn FuelEngine;')();
 globalThis.FuelTankState = new Function(read('web/shared/fuel-tank-state.js') + '\nreturn FuelTankState;')();
 globalThis.FuelState = new Function(read('web/shared/fuel-state.js') + '\nreturn FuelState;')();
 const EnginePage = new Function(read('web/cockpit/engine-page.js') + '\nreturn EnginePage;')();
-
-globalThis.EngineClient = { MIN_PI_CONTRACT: 2 };
 
 let page = null;
 

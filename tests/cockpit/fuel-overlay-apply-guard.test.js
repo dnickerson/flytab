@@ -47,6 +47,8 @@ globalThis.Settings      = new Function(read('web/shared/settings.js') + '\nretu
 globalThis.FuelEngine    = new Function(read('web/shared/fuel-engine.js') + '\nreturn FuelEngine;')();
 globalThis.FuelTankState = new Function(read('web/shared/fuel-tank-state.js') + '\nreturn FuelTankState;')();
 globalThis.FuelState     = new Function(read('web/shared/fuel-state.js') + '\nreturn FuelState;')();
+// Load the real EngineClient to provide baseUrl() static method
+globalThis.EngineClient  = new Function(read('web/shared/engine-client.js') + '\nreturn EngineClient;')();
 const FuelOverlay        = new Function(FUEL_OVERLAY_SRC + '\nreturn FuelOverlay;')();
 
 const AC = JSON.parse(read('web/aircraft-config.json'));

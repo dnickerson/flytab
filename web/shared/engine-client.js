@@ -123,6 +123,17 @@ class EngineClient extends EventTarget {
         return this._connected && !!this.lastData && this.piContract < EngineClient.MIN_PI_CONTRACT;
     }
 
+    /** Pi engine-monitor base URL built from window.engineClient.ip, or null
+     *  if unavailable. window.engineClient is assigned synchronously at
+     *  app.js:518, before any UI that calls this can construct — a missing
+     *  ip here means something is genuinely wrong, so this returns null
+     *  rather than guessing a fallback IP. Single source for what was two
+     *  verbatim copies (fuel-overlay.js, engine-page.js — issue #128). */
+    static baseUrl() {
+        const ip = window.engineClient?.ip;
+        return ip ? `http://${ip}:8080` : null;
+    }
+
     connect() {
         this._doConnect();
     }

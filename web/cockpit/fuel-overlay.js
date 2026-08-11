@@ -694,11 +694,7 @@ class FuelOverlay {
     }
 
     _engineBaseUrl() {
-        // No fallback IP: window.engineClient is assigned at app.js:518, before
-        // FuelOverlay can be constructed or shown, so a missing ip here means
-        // something is genuinely wrong — guessing an address is worse than skipping.
-        const ip = window.engineClient?.ip;
-        return ip ? `http://${ip}:8080` : null;
+        return EngineClient.baseUrl();
     }
 
     _syncFuelSetToEngine(gallons, reason = '') {
