@@ -213,7 +213,7 @@ Opens a right-side drawer with infrequently used actions, organized in three sec
 
 | Item | What it does |
 |---|---|
-| **Data Status** | Shows local database age, tile cache status |
+| **Data Status** | Shows local database age and tile cache status, with a per-item CURRENT/EXPIRING/UPDATE AVAILABLE badge and days-remaining count; a current, already-downloaded layer shows a SYNC button (RE-DOWNLOAD forces a fresh copy) |
 | **Configuration** | Aircraft, engine, and system settings |
 | **Reset NASR Data** | Forces a full re-download of the airport/navaid database |
 
