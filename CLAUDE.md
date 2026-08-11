@@ -107,7 +107,7 @@ Home server (:8090)  ──HTTP──▶  map tiles, approach plates, NASR, CIFP
 
 ### Backend (`engine-monitor/`)
 
-- `engine_monitor.py` (v3.4.0) — HTTP server + WebSocket on Pi, parses EDM serial data.
+- `engine_monitor.py` (v3.4.1) — HTTP server + WebSocket on Pi, parses EDM serial data.
 - `data_simulator.py` — replays captured flight files as virtual serial for testing.
 
 #### Pi ↔ FlyTab contract version — bump discipline

@@ -1267,7 +1267,15 @@ def update_peak_tracking(egt1, egt2, egt3, egt4, fuel_flow, rpm, mp):
         fuel_flow: Current fuel flow in GPH
         rpm: Engine RPM
         mp: Manifold pressure in inHg
+
+    Returns:
+        list[str]: messages to log. Callers run this under state.lock (it
+        mutates state.peak_egts/degrees_from_peak/peaks_valid, which
+        get_status() reads locked) — log() does blocking file I/O, so
+        messages are collected here and written by the caller after the
+        lock is released, instead of holding the lock across disk writes.
     """
+    log_msgs = []
     current_time = time.time()
     egts = [egt1, egt2, egt3, egt4]
 
@@ -1296,7 +1304,7 @@ def update_peak_tracking(egt1, egt2, egt3, egt4, fuel_flow, rpm, mp):
             state.leaning_active = False
             state.peak_egts = [0, 0, 0, 0]
             state.degrees_from_peak = [0, 0, 0, 0]
-            log(f"Peak tracking reset: power change (RPM: {rpm_change:.1f}%, MP: {mp_change:.1f}%)")
+            log_msgs.append(f"Peak tracking reset: power change (RPM: {rpm_change:.1f}%, MP: {mp_change:.1f}%)")
 
     # Detect leaning: fuel flow decreasing over 10 seconds
     if len(state.ff_history) >= 5:
@@ -1316,7 +1324,7 @@ def update_peak_tracking(egt1, egt2, egt3, egt4, fuel_flow, rpm, mp):
                     state.leaning_active = False
                     state.peak_egts = [0, 0, 0, 0]
                     state.degrees_from_peak = [0, 0, 0, 0]
-                    log(f"Peak tracking reset: mixture enriched (+{-ff_change:.1f} GPH)")
+                    log_msgs.append(f"Peak tracking reset: mixture enriched (+{-ff_change:.1f} GPH)")
 
                 # Detect leaning (fuel flow decreasing by at least 0.5 GPH over interval)
                 elif ff_change >= 0.5:
@@ -1324,7 +1332,7 @@ def update_peak_tracking(egt1, egt2, egt3, egt4, fuel_flow, rpm, mp):
                         state.leaning_active = True
                         state.last_stable_rpm = rpm
                         state.last_stable_mp = mp
-                        log(f"Leaning detected: FF dropping {ff_change:.1f} GPH")
+                        log_msgs.append(f"Leaning detected: FF dropping {ff_change:.1f} GPH")
 
     # During active leaning, track peaks
     if state.leaning_active:
@@ -1336,7 +1344,7 @@ def update_peak_tracking(egt1, egt2, egt3, egt4, fuel_flow, rpm, mp):
 
         if peaks_updated and not state.peaks_valid:
             state.peaks_valid = True
-            log(f"Peak EGTs captured: {state.peak_egts}")
+            log_msgs.append(f"Peak EGTs captured: {state.peak_egts}")
 
     # Calculate degrees from peak for each cylinder
     if state.peaks_valid:
@@ -1349,6 +1357,8 @@ def update_peak_tracking(egt1, egt2, egt3, egt4, fuel_flow, rpm, mp):
                 state.degrees_from_peak[i] = 0
     else:
         state.degrees_from_peak = [0, 0, 0, 0]
+
+    return log_msgs
 
 
 def calculate_oat_from_altitude(pressure_alt_ft):
@@ -1688,6 +1698,9 @@ def capture_thread_func():
         lines_parsed = 0
         consecutive_empty = 0  # Track consecutive empty reads
         last_warning_time = 0  # Avoid spamming logs
+        reconnect_backoff = 2.0        # seconds; doubles on repeated failures
+        reconnect_backoff_max = 30.0   # cap — matches EngineClient's JS backoff ceiling
+        next_reconnect_attempt = 0.0   # epoch gate; 0 = attempt on first failure
 
         while not state.stop_event.is_set():
             try:
@@ -1731,24 +1744,33 @@ def capture_thread_func():
 
                         percent_power, deviation, mode, sfc = calculate_engine_parameters(rpm, mp, fuel_flow, edm_timestamp)
 
-                        # Track per-cylinder peak EGT during leaning
-                        update_peak_tracking(
-                            parsed.get('EGT1', 0),
-                            parsed.get('EGT2', 0),
-                            parsed.get('EGT3', 0),
-                            parsed.get('EGT4', 0),
-                            fuel_flow,
-                            rpm,
-                            mp
-                        )
-
                         with state.lock:
+                            # Track per-cylinder peak EGT during leaning (writes
+                            # state.peak_egts/degrees_from_peak/peaks_valid —
+                            # get_status() reads these locked; this call must be too).
+                            # update_peak_tracking() defers its log() calls (blocking
+                            # file I/O) instead of making them here, so this lock only
+                            # ever guards in-memory state — get_status()'s /api/status
+                            # poll never blocks on a disk write.
+                            peak_log_msgs = update_peak_tracking(
+                                parsed.get('EGT1', 0),
+                                parsed.get('EGT2', 0),
+                                parsed.get('EGT3', 0),
+                                parsed.get('EGT4', 0),
+                                fuel_flow,
+                                rpm,
+                                mp
+                            )
+
                             state.latest_data = parsed
                             state.data_count += 1
                             state.percent_power = percent_power
                             state.rop_lop_percent = deviation
                             state.rop_lop_mode = mode
                             state.sfc = sfc
+
+                        for msg in peak_log_msgs:
+                            log(msg)
 
                         # Update fuel tracker
                         if state.fuel_tracker:
@@ -1867,7 +1889,48 @@ def capture_thread_func():
             except Exception as e:
                 state.last_error = str(e)
                 state.last_serial_error = str(e)
-                log(f"Capture loop error: {e}")
+                # Handles the device physically vanishing (ser.in_waiting / ser.read()
+                # raising, e.g. an unplugged USB-serial adapter) — distinct from the
+                # "ready but no data" case above, which never reaches this branch
+                # because the exception fires before consecutive_empty/data_was_waiting
+                # bookkeeping runs. Gated by next_reconnect_attempt so a permanently
+                # unplugged device doesn't spin open_serial()/log() at 10Hz forever.
+                # Excludes playback_mode — there is no live serial port to reopen when
+                # replaying a captured file; an exception here in playback is a
+                # different, rarer problem this fix isn't targeting.
+                if not playback_mode:
+                    now = time.time()
+                    if now >= next_reconnect_attempt:
+                        log(f"Capture loop error: {e} — attempting serial port reopen")
+                        try:
+                            if ser:
+                                try:
+                                    ser.close()
+                                except Exception:
+                                    pass
+                            ser = open_serial()
+                            state.reconnect_count += 1
+                            consecutive_empty = 0
+                            reconnect_backoff = 2.0
+                            # Floor the next reopen attempt at least reconnect_backoff
+                            # seconds out even on success — otherwise a reopen that
+                            # succeeds but is immediately followed by another failed
+                            # read (a real pyserial pattern: "device reports readiness
+                            # to read but returned no data") re-enters this except
+                            # block with a stale/past gate value, passing every time
+                            # and re-enabling the 10Hz reopen spin this fix prevents.
+                            next_reconnect_attempt = now + reconnect_backoff
+                            log(f"Serial port reconnected after error (attempt #{state.reconnect_count})")
+                        except Exception as reconnect_err:
+                            err_msg = str(reconnect_err)
+                            state.last_serial_error = err_msg
+                            state.serial_warning = f"Reconnect failed: {err_msg}"
+                            delay = reconnect_backoff
+                            next_reconnect_attempt = now + delay
+                            reconnect_backoff = min(reconnect_backoff * 2, reconnect_backoff_max)
+                            log(f"Reconnect failed: {err_msg} — next attempt in {delay:.0f}s")
+                else:
+                    log(f"Capture loop error: {e}")
                 time.sleep(0.1)
 
         log("Capture thread stopped normally")

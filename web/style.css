@@ -44,88 +44,6 @@
     --shadow-raised:     0 4px 16px rgba(0,0,0,0.15);
 }
 
-/* ── Cockpit Mode — direct sunlight on iPad ─────────────────────────────────── */
-/* All contrast ratios verified against bg-primary (#1a1a2e, L≈0.0083)          */
-[data-mode="cockpit"] {
-    /* Surfaces — light background for direct sunlight readability */
-    --bg-primary:        #f0f4f8;
-    --bg-surface:        #ffffff;
-    --bg-surface-raised: #e8edf4;
-
-    /* Text — dark on light background */
-    --text-primary:      #111111;
-    --text-secondary:    #333333;
-    --text-label:        #555555;
-    --text-muted:        #888888;
-    --text-on-accent:    #ffffff;
-
-    /* Instrument readouts */
-    --instrument-value:  #111111;
-    --instrument-unit:   #555555;
-    --instrument-label:  #888888;
-
-    /* Interactive */
-    --accent:            #0055bb;
-    --accent-hover:      #0044aa;
-    --accent-active:     #003388;
-
-    /* Borders */
-    --border:            #ccd4e0;
-    --border-light:      #e4eaf2;
-    --border-strong:     #8899bb;
-
-    /* Elevation */
-    --shadow:            0 2px 8px rgba(0,0,0,0.12);
-    --shadow-raised:     0 4px 20px rgba(0,0,0,0.18);
-
-    /* Status colors intentionally NOT redefined here (issue #116). This block
-       is dead code — [data-mode="cockpit"] is never applied; FlyTab is
-       light-theme only, see CLAUDE.md and memory feedback_light_theme_tablet.
-       Defining the --status- and --color- alert tokens here previously
-       shadowed nothing at runtime (this mode never activates) but documented
-       values that were never actually live, misleading CLAUDE.md's token
-       table. The single live definition is the unconditional :root block
-       below; see the comment there for FILL-vs-TEXT usage of these tokens. */
-
-    /* Touch targets — enlarged for turbulence */
-    --touch-min:         56px;
-    --touch-preferred:   64px;
-    --touch-large:       80px;
-}
-
-/* ── Night Mode — red spectrum, preserves scotopic vision ───────────────────── */
-[data-mode="night"] {
-    /* Surfaces */
-    --bg-primary:        #0a0a0a;
-    --bg-surface:        #111111;
-    --bg-surface-raised: #1a1111;
-    /* Text */
-    --text-primary:      #ff6b6b;
-    --text-secondary:    #cc4444;
-    --text-label:        #992222;
-    --text-muted:        #661111;
-    --text-on-accent:    #000000;
-
-    /* Instrument readouts */
-    --instrument-value:  #ff6b6b;
-    --instrument-unit:   #992222;
-    --instrument-label:  #661111;
-
-    /* Interactive */
-    --accent:            #882222;
-    --accent-hover:      #aa3333;
-    --accent-active:     #661111;
-
-    /* Borders */
-    --border:            #331111;
-    --border-light:      #221111;
-    --border-strong:     #551111;
-
-    /* Elevation */
-    --shadow:            none;
-    --shadow-raised:     none;
-}
-
 /* ── Global semantic tokens — constant across all modes ─────────────────────── */
 :root {
     /* Flight category colors — FAA standard, sunlight-visible */
@@ -216,9 +134,9 @@
 
     /* ── Touch targets — Apple HIG + sunlight glove tolerance ── */
     --touch-compact:     36px;      /* compact toolbar/table buttons (fixed, no cockpit override) */
-    --touch-min:         48px;      /* 18mm — iOS minimum, bare finger           */
-    --touch-preferred:   56px;      /* 21mm — preferred, sunglasses + bright sun */
-    --touch-large:       64px;      /* 24mm — primary cockpit actions            */
+    --touch-min:         56px;      /* iOS minimum, bare finger                  */
+    --touch-preferred:   64px;      /* preferred, sunglasses + bright sun        */
+    --touch-large:       80px;      /* 24mm — primary cockpit actions            */
     --touch-spacing:     6px;       /* gap between adjacent touch targets        */
 
     /* ── Typography ── */
@@ -755,7 +673,7 @@ body {
 }
 
 /* Close / dismiss button — turbulence-safe large tap target.
-   Uses --touch-large (64px global, 80px in cockpit mode).
+   Uses --touch-large (80px).
    Add this class to any dismiss button; keep module-specific class for binding. */
 .btn-close {
     display: inline-flex;
@@ -1638,9 +1556,10 @@ body {
 
    Repointed at the on-light foreground tokens. NOTE these are NOT
    --color-caution / --color-danger: those resolve to #ffc000 / #ff3030 in this
-   app (the #b87000 / #cc2222 values live only inside the [data-mode="cockpit"]
-   block, which is never applied — FlyTab is light-theme only), i.e. 1.51:1 and
-   3.37:1 here. Verified in Chrome, not assumed. (SDD Task S5.)
+   app (the #b87000 / #cc2222 values were removed along with the dead
+   [data-mode="cockpit"] block in the dead-theme cleanup — FlyTab is
+   light-theme only), i.e. 1.51:1 and 3.37:1 here. Verified in Chrome, not
+   assumed. (SDD Task S5.)
 
    .fuel-green has no JS caller anywhere in web/ and is left as-is. */
 
@@ -1942,7 +1861,7 @@ body {
     align-items: center;
     gap: 6px;
     padding: 10px 12px;
-    min-height: var(--touch-preferred); /* 56px — cockpit turbulence target */
+    min-height: var(--touch-preferred); /* 64px — cockpit turbulence target */
     cursor: pointer;
 }
 

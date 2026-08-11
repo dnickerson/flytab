@@ -694,12 +694,17 @@ class FuelOverlay {
     }
 
     _engineBaseUrl() {
-        const ip = window.engineClient?.ip || '192.168.10.1';
-        return `http://${ip}:8080`;
+        // No fallback IP: window.engineClient is assigned at app.js:518, before
+        // FuelOverlay can be constructed or shown, so a missing ip here means
+        // something is genuinely wrong — guessing an address is worse than skipping.
+        const ip = window.engineClient?.ip;
+        return ip ? `http://${ip}:8080` : null;
     }
 
     _syncFuelSetToEngine(gallons, reason = '') {
-        fetch(`${this._engineBaseUrl()}/api/fuel/set`, {
+        const base = this._engineBaseUrl();
+        if (!base) { console.warn('FuelOverlay: engineClient.ip unavailable, skipping Pi fuel/set sync'); return; }
+        fetch(`${base}/api/fuel/set`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ fuel_remaining: gallons, reason }),
@@ -708,10 +713,12 @@ class FuelOverlay {
     }
 
     _syncFuelAddToEngine(gallons, airport = '', price = null) {
+        const base = this._engineBaseUrl();
+        if (!base) { console.warn('FuelOverlay: engineClient.ip unavailable, skipping Pi fuel/add sync'); return; }
         const body = { gallons };
         if (airport) body.airport = airport;
         if (price != null) body.price_per_gallon = price;
-        fetch(`${this._engineBaseUrl()}/api/fuel/add`, {
+        fetch(`${base}/api/fuel/add`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),

@@ -56,7 +56,7 @@ class EmergencyGlide {
 
         console.warn('[EmergencyGlide] TRIGGERED — computing glide options', { testMode });
 
-        const sit = window.app?.stratuxClient?.situation ?? window.stratuxClient?.situation;
+        const sit = window.app?.stratuxClient?.situation;
         const lat = sit?.lat;
         const lon = sit?.lon;
         const altMsl = sit?.alt_msl ?? sit?.alt_baro ?? 0;
@@ -540,7 +540,7 @@ class EmergencyGlide {
     /** Draw glide-path line and fit the map so the route is centred in the
      *  visible area below the approach panel. */
     _centerMapToApproach(apt) {
-        const sit = window.app?.stratuxClient?.situation ?? window.stratuxClient?.situation;
+        const sit = window.app?.stratuxClient?.situation;
         if (!sit?.lat || !sit?.lon || !apt?.lat || !apt?.lon) return;
         try {
             const leafletMap = window.app?.cockpitMap?.map;
@@ -588,7 +588,7 @@ class EmergencyGlide {
         const apt = this._approachApt;
         if (!apt || !this._overlay) return;
 
-        const sit = window.app?.stratuxClient?.situation ?? window.stratuxClient?.situation;
+        const sit = window.app?.stratuxClient?.situation;
         if (!sit?.lat || !sit?.lon) return;
 
         const distNm = NasrDB.haversineNm(sit.lat, sit.lon, apt.lat, apt.lon);

@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v10.28';
+const FLYTAB_VERSION = 'v10.29';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -722,11 +722,13 @@ class FlyTabApp {
                 stratuxClient: this.stratuxClient,
                 preflightStore,
             });
-            const convDisplay = new ConvectiveDisplay(this.cockpitMap?.map);
-            const convAlerts  = new ConvectiveAlerts();
-            this.convectiveEngine.init(convDisplay, convAlerts);
-            if (this.cockpitMap?.map) {
-                convAlerts.mount(this.cockpitMap.map.getContainer());
+            if (typeof ConvectiveDisplay !== 'undefined' && typeof ConvectiveAlerts !== 'undefined') {
+                const convDisplay = new ConvectiveDisplay(this.cockpitMap?.map);
+                const convAlerts  = new ConvectiveAlerts();
+                this.convectiveEngine.init(convDisplay, convAlerts);
+                if (this.cockpitMap?.map) {
+                    convAlerts.mount(this.cockpitMap.map.getContainer());
+                }
             }
             this.convectiveEngine.loadPreflight().catch(e => DiagLog.log('convective', `Preflight load error: ${e.message}`));
             if (CockpitConfig.get('convective.enabled')) {
