@@ -164,7 +164,7 @@ class TabBar {
                 this._showMLMonitor();
             }},
             { icon: '📡', label: 'Stratux Status', action: () => {
-                const ip = c.stratuxIp || '192.168.10.1';
+                const ip = c.stratuxIp;
                 window.open(`http://${ip}`, '_blank');
                 this._closeMoreDrawer();
             }},

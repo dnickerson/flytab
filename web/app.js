@@ -932,7 +932,7 @@ class FlyTabApp {
                 wxBriefing: this.wxBriefing,
                 trackLog: this.trackLog,
                 airportPopup: this.airportPopup,
-                stratuxIp: Settings.stratuxIp || '192.168.10.1',
+                stratuxIp: Settings.stratuxIp,
                 planSync: this.planSync,
                 radarLoop: this.radarLoop,
                 radarPage: this.radarPage,
