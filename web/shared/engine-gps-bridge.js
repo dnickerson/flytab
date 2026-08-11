@@ -30,17 +30,13 @@ class EngineGpsBridge {
         this._active = false;
     }
 
-    /** Degrade the last-written situation to zero fix quality and dispatch it —
-     * mirrors gps-source.js's _resetStaleTimer() degradation logic. */
+    /** Degrade the last-written situation to zero fix quality and dispatch it.
+     * Shared with gps-source.js via gps-staleness.js (issue #129). */
     _degradeSituation() {
-        const lastSit = this._stratux.situation;
-        if (!lastSit) return;
-        const staleSit = { ...lastSit, gps_fix_quality: 0 };
-        this._stratux.situation = staleSit;
-        this._stratux.dispatchEvent(new CustomEvent('stratux:situation', { detail: staleSit }));
+        degradeGpsSituation(this._stratux);
     }
 
-    /** Reset the 15s staleness watchdog — mirrors gps-source.js's _resetStaleTimer(). */
+    /** Reset the 15s staleness watchdog. Timeout shared with gps-source.js via gps-staleness.js (issue #129). */
     _resetStaleTimer() {
         if (this._staleTimer) clearTimeout(this._staleTimer);
         this._staleTimer = setTimeout(() => {
@@ -49,7 +45,7 @@ class EngineGpsBridge {
                 DiagLog.log('gps', 'Engine GPS bridge stale — no engine data for 15s');
             this._degradeSituation();
             this._active = false;
-        }, 15000);
+        }, GPS_STALE_TIMEOUT_MS);
     }
 
     _tick() {

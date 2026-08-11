@@ -230,20 +230,15 @@ class GpsSource {
         }
     }
 
-    /** Reset the staleness watchdog — if no fix arrives within 15s, dim the marker */
+    /** Reset the staleness watchdog — if no fix arrives within 15s, dim the marker.
+     *  Degrade logic shared with engine-gps-bridge.js via gps-staleness.js (issue #129). */
     _resetStaleTimer() {
         if (this._staleTimer) clearTimeout(this._staleTimer);
         this._staleTimer = setTimeout(() => {
             if (this._source !== 'internal') return;
             if (typeof DiagLog !== 'undefined') DiagLog.log('gps', 'Internal GPS stale — no fix for 15s');
-            // Dispatch a zero-quality situation so the map dims the ownship marker
-            const lastSit = this._stratux.situation;
-            if (lastSit) {
-                const staleSit = { ...lastSit, gps_fix_quality: 0 };
-                this._stratux.situation = staleSit;
-                this._stratux.dispatchEvent(new CustomEvent('stratux:situation', { detail: staleSit }));
-            }
-        }, 15000);
+            degradeGpsSituation(this._stratux);
+        }, GPS_STALE_TIMEOUT_MS);
     }
 
     _onInternalPosition(pos) {

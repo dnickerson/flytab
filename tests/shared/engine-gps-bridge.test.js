@@ -14,8 +14,9 @@ if (typeof global.CustomEvent === 'undefined') {
     };
 }
 
+const staleSrc = readFileSync('web/shared/gps-staleness.js', 'utf8');
 const src = readFileSync('web/shared/engine-gps-bridge.js', 'utf8');
-const EngineGpsBridge = new Function(`${src}\nreturn EngineGpsBridge;`)();
+const EngineGpsBridge = new Function(`${staleSrc}\n${src}\nreturn EngineGpsBridge;`)();
 
 function makeStratux() {
     const target = new EventTarget();
