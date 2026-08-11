@@ -23,13 +23,6 @@ const read = (p) => readFileSync(join(__dirname, '../../', p), 'utf8');
 
 globalThis.wireTap = vi.fn((el, fn) => el && el.addEventListener && el.addEventListener('pointerup', fn));
 
-// Browser globals that engine-client.js requires
-global.WebSocket = class {
-    constructor() {}
-    close() {}
-};
-global.fetch = vi.fn().mockRejectedValue(new Error('no network'));
-
 // Load the real EngineClient to provide baseUrl() static method
 globalThis.EngineClient = new Function(read('web/shared/engine-client.js') + '\nreturn EngineClient;')();
 
