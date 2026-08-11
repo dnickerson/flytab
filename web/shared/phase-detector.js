@@ -7,8 +7,18 @@ const classify = (typeof require !== 'undefined')
     ? require('./phase-detector-classify.js')
     : { classifyRow: window.classifyRow, applyTransition: window.applyTransition };
 
-const { GpsDeltaWindow, RpmSlopeWindow, TrailingAltRate, FieldElevationEstimate } = helpers;
-const { classifyRow, applyTransition } = classify;
+// Referenced as helpers.X / classify.X below, never destructured to bare
+// names. Classic <script> tags (as index.html uses, not modules) share one
+// global lexical scope, and destructuring `const { GpsDeltaWindow, ... } =
+// helpers` / `const { classifyRow, ... } = classify` here collided with
+// helpers.js's `class GpsDeltaWindow` etc. AND classify.js's `function
+// classifyRow` etc. -- confirmed empirically that top-level `function`
+// declarations collide with a same-named `const` from another script
+// exactly like `class` does, not just `class`/`class`. Either collision
+// throws a SyntaxError parsing this whole file, silently breaking phase
+// detection in production (every sample fell back to a hardcoded 'cruise'
+// phase, since engine-ml.js's `new window.PhaseDetector(spec)` then threw
+// and was caught). See tests/shared/phase-detector-browser-load.test.js.
 
 const AIRBORNE_PHASES = new Set(['takeoff', 'climb', 'cruise', 'descent', 'approach']);
 
@@ -33,10 +43,10 @@ class PhaseDetector {
     // session would report 'shutdown' forever. See the Task 12 note in the
     // implementation plan for the full incident.
     reset() {
-        this._gpsDelta = new GpsDeltaWindow(this._thr.gps_delta_window_s);
-        this._rpmSlope = new RpmSlopeWindow(this._thr.startup_rpm_slope_window_s);
-        this._altRate = new TrailingAltRate(this._thr.alt_rate_window_s);
-        this._fieldElev = new FieldElevationEstimate(
+        this._gpsDelta = new helpers.GpsDeltaWindow(this._thr.gps_delta_window_s);
+        this._rpmSlope = new helpers.RpmSlopeWindow(this._thr.startup_rpm_slope_window_s);
+        this._altRate = new helpers.TrailingAltRate(this._thr.alt_rate_window_s);
+        this._fieldElev = new helpers.FieldElevationEstimate(
             this._thr.field_elev_lock_samples,
             this._thr.speed_taxi_max_kts,
             this._thr.field_elev_max_idle_rpm,
@@ -121,7 +131,7 @@ class PhaseDetector {
         const agl = altitudeFt - fieldElevFt;
         const altRateFpm = this._altRate.push(altitudeFt) ?? 0;
 
-        const candidate = classifyRow(
+        const candidate = classify.classifyRow(
             { rpm, agl, speedKts, mp, fuelFlow, altRateFpm, rpmSlope, stationary },
             { currentPhase: this._committedPhase, hasTakenOff: this._hasTakenOff, hasLeftRamp: this._hasLeftRamp },
             this._thr,
@@ -142,7 +152,7 @@ class PhaseDetector {
         // lets the FSM continue advancing instead of being stuck rejecting
         // every future candidate against a stale committedPhase forever.
         const legalityAnchor = this._pendingCandidate ?? this._committedPhase;
-        const validated = applyTransition(candidate, legalityAnchor, this._transitions);
+        const validated = classify.applyTransition(candidate, legalityAnchor, this._transitions);
 
         if (validated === this._committedPhase) {
             this._pendingCandidate = null;
