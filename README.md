@@ -50,7 +50,7 @@ The UI/UX is a little rough as I'm not a UI designer but it works for me.
 - 30-minute EGT/CHT trend charts
 - BSFC (brake-specific fuel consumption) calculation
 - Peak EGT detection with lean-of-peak delta
-- **ML anomaly detection** — trained on 2,004 actual cruise data points; flags deviations from established engine patterns
+- **ML anomaly detection** — trained on 51,064 actual cruise data points; flags deviations from established engine patterns
 - **Emergency glide calculator** — on ML-confirmed engine anomaly, ranks reachable airports by glide distance, with live approach guidance panel:
   - Heading and distance to selected airport
   - Overhead target altitude for 2 nm emergency pattern → 500 ft threshold crossing
@@ -124,7 +124,7 @@ Home server (:8090)  ──HTTP──▶  map tiles, plates, NASR, CIFP
 
 **Frontend:** Vanilla JavaScript Capacitor web app — no framework, no bundler. All modules loaded via `<script>` tags in `web/index.html`. 40+ specialized cockpit components in `web/cockpit/`.
 
-**Android wrapper:** Standard Capacitor/Gradle project targeting Android 9+. Mixed HTTP content allowed so the WebView can reach the Pi and home server over HTTP.
+**Android wrapper:** Standard Capacitor/Gradle project targeting Android 7+. Mixed HTTP content allowed so the WebView can reach the Pi and home server over HTTP.
 
 **Backend (Pi):** `engine-monitor/engine_monitor.py` (Python) — reads EDM serial data, exposes HTTP status endpoint and WebSocket stream. Supports `--playback` mode for ground testing with captured flight files.
 
@@ -159,8 +159,8 @@ bash build.sh
 bash deploy-pi.sh              # deploy only
 bash deploy-pi.sh --full       # deploy + restart services
 
-# Start home data server (tiles, plates, NASR) on port 8090
-bash start-home-server.sh
+# Start home data server (tiles, plates, NASR) on port 8090 (lives in the fly-pipeline repo)
+bash ~/fly-pipeline/start-home-server.sh
 
 # Test the full data pipeline with a captured flight file
 bash test-pipeline.sh
