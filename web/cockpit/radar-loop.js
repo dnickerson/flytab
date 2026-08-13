@@ -163,8 +163,11 @@ class RadarLoop {
         const frames = this._nexrad ? this._nexrad.frameHistory : [];
         if (frames.length > 0) {
             this._updateFrameCount();
-            // Clamp frameIndex so a rebuilt (shorter) frame array doesn't leave us out of range
-            this._goToFrame(Math.min(this._frameIndex, frames.length - 1));
+            // Jump to the latest frame — a pilot pressing refresh wants current
+            // conditions, not whatever frame they happened to be paused on before
+            // the refresh recomputed every frame's time (was: preserved the old
+            // index, so a paused-on-an-old-frame view stayed stale after refresh).
+            this._goToFrame(frames.length - 1);
             this.play();
         } else {
             this._showNoData();
