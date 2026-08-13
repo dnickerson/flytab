@@ -223,9 +223,10 @@ class StratuxClient extends EventTarget {
         this._setConnected(false);
     }
 
-    /** Stratux IP — always direct, never location.hostname */
+    /** Stratux IP — always direct, never location.hostname.
+     *  No fallback: Settings.get() already defaults stratux_ip when unset (#130). */
     get ip() {
-        return Settings.stratuxIp || '192.168.10.1';
+        return Settings.stratuxIp;
     }
 
     /** True when cockpit-config.json has simMode: true */

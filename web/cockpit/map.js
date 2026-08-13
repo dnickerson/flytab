@@ -1654,7 +1654,7 @@ class CockpitMap {
             this._stxOverlay = null;
             return;
         }
-        const ip = Settings.stratuxIp || '192.168.10.1';
+        const ip = Settings.stratuxIp;
         const overlay = document.createElement('div');
         overlay.className = 'stx-overlay';
         overlay.innerHTML = `
