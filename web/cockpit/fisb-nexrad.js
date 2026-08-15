@@ -96,12 +96,21 @@ class FisbNexrad {
      * hours/minutes[/seconds]); Go's zero-value for an unset uint32 is 0, which is
      * never a valid real month or day, so treat 0 as "not present" and fall back to
      * today's UTC date from the arrival clock.
+     *
+     * FlyTab's own exportFrames() writes LocaltimeReceived (no FISB_* fields) into
+     * its NDJSON capture format, and tools/mock-stratux.py's --replay-nexrad path
+     * broadcasts those captures verbatim with no restamping — so LocaltimeReceived
+     * is still checked as a second source, for FlyTab's own replayed data, never
+     * present on real live Stratux traffic.
      * @param {number} now - Date.now() at message arrival, used as both the
      *   fallback value and the reference date/year for a message that has no
      *   month/day of its own.
      */
     static _parseFisbDataTime(msg, now) {
-        if (msg.FISB_hours == null || msg.FISB_minutes == null) return now;
+        if (msg.FISB_hours == null || msg.FISB_minutes == null) {
+            if (msg.LocaltimeReceived) return new Date(msg.LocaltimeReceived).getTime() || now;
+            return now;
+        }
         const ref = new Date(now);
         const month = msg.FISB_month > 0 ? msg.FISB_month - 1 : ref.getUTCMonth(); // JS months are 0-based
         const day   = msg.FISB_day   > 0 ? msg.FISB_day       : ref.getUTCDate();
