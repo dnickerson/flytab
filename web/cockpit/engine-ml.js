@@ -193,7 +193,7 @@ class EngineMLBridge {
         const num = (v, fallback) => { const n = Number(v); return isFinite(n) && n > 0 ? n : fallback; };
 
         const baseRpm = num(base.rpm ?? base.RPM, 2400);
-        const baseMp  = num(base.manifold_pressure ?? base.mp ?? base.MAP, 25);
+        const baseMp  = num(base.MP ?? base.manifold_pressure ?? base.mp ?? base.MAP, 25);
 
         // Synthetic frame: MAP drop >5" Hg, RPM drop >300 (trips Layer 1 physics rules)
         const fakeFrame = {
@@ -225,7 +225,7 @@ class EngineMLBridge {
                     oil_temp:       num(d.oil_temp ?? d.oil_temp_f ?? d.Oil_Temp, 190),
                     oil_press:      num(d.oil_pressure ?? d.oil_press_psi ?? d.Oil_Press, 60),
                     fuel_flow:      num(d.fuel_flow_gph ?? d.gph ?? d.Fuel_Flow, 8),
-                    altitude:       num(sit?.alt_msl ?? d.altitude_ft, 3000),
+                    altitude:       num(sit?.alt_msl ?? d.gps_altitude ?? d.altitude_ft, 3000),
                     mp:             fakeFrame.manifold_pressure,
                     carb_temp:      num(d.carb_temp ?? d.Carb_Temp, 40),
                     fuel_remaining: num(d.fuel_remaining_gal ?? d.fuel_gal ?? d.Gallons_Rem, 20),
@@ -298,12 +298,12 @@ class EngineMLBridge {
         if (this._phaseDetector && sit?.lat != null && sit?.lon != null) {
             phase = this._phaseDetector.classify({
                 rpm: d.rpm ?? d.RPM ?? 0,
-                mp: d.manifold_pressure ?? d.mp ?? d.MAP ?? 0,
+                mp: d.MP ?? d.manifold_pressure ?? d.mp ?? d.MAP ?? 0,
                 fuelFlow: d.fuel_flow_gph ?? d.gph ?? d.Fuel_Flow ?? 0,
                 lat: sit.lat,
                 lon: sit.lon,
-                altitudeFt: sit.alt_msl ?? d.altitude_ft ?? 0,
-                speedKts: sit.ground_speed ?? d.speed_kts ?? 0,
+                altitudeFt: sit.alt_msl ?? d.gps_altitude ?? d.altitude_ft ?? 0,
+                speedKts: sit.ground_speed ?? d.ground_speed ?? d.speed_kts ?? 0,
             });
             this._lastComputedPhase = phase;
         }
@@ -332,11 +332,11 @@ class EngineMLBridge {
                 oil_temp: num(d.oil_temp ?? d.oil_temp_f ?? d.Oil_Temp),
                 oil_press: num(d.oil_pressure ?? d.oil_press_psi ?? d.Oil_Press),
                 fuel_flow: num(d.fuel_flow_gph ?? d.gph ?? d.Fuel_Flow),
-                altitude: num(sit?.alt_msl ?? d.altitude_ft ?? 0),
-                mp: num(d.manifold_pressure ?? d.mp ?? d.MAP ?? 0),
+                altitude: num(sit?.alt_msl ?? d.gps_altitude ?? d.altitude_ft ?? 0),
+                mp: num(d.MP ?? d.manifold_pressure ?? d.mp ?? d.MAP ?? 0),
                 carb_temp: num(d.carb_temp ?? d.Carb_Temp ?? 0),
                 fuel_remaining: num(d.fuel_remaining_gal ?? d.fuel_gal ?? d.Gallons_Rem ?? 0),
-                ground_speed: num(sit?.ground_speed ?? 0),
+                ground_speed: num(sit?.ground_speed ?? d.ground_speed ?? d.speed_kts ?? 0),
                 distance_nm: 0, // TODO: compute from route
                 phase,
             });
@@ -386,7 +386,7 @@ class EngineMLBridge {
         const advisories = [];
 
         const rpm = num(d.rpm ?? d.RPM ?? 0);
-        const mp = num(d.manifold_pressure ?? d.mp ?? d.MAP ?? 0);
+        const mp = num(d.MP ?? d.manifold_pressure ?? d.mp ?? d.MAP ?? 0);
         const oilP = num(d.oil_pressure ?? d.oil_press_psi ?? d.Oil_Press ?? 0);
         const fuelFlow = num(d.fuel_flow_gph ?? d.gph ?? d.Fuel_Flow ?? 0);
 
@@ -433,7 +433,7 @@ class EngineMLBridge {
 
         // MAP sudden drop >3" Hg (unexplained power loss) — airborne only
         if (this._hasLaunched && this._prevSample && mp > 0) {
-            const prevMp = num(this._prevSample.manifold_pressure ?? this._prevSample.mp ?? this._prevSample.MAP ?? 0);
+            const prevMp = num(this._prevSample.MP ?? this._prevSample.manifold_pressure ?? this._prevSample.mp ?? this._prevSample.MAP ?? 0);
             const delta = prevMp - mp;
             if (prevMp > 0 && delta > 3) {
                 advisories.push({
@@ -493,7 +493,7 @@ class EngineMLBridge {
             oil_press: num(d.oil_pressure ?? d.oil_press_psi ?? d.Oil_Press ?? 0),
             fuel_flow: num(d.fuel_flow_gph ?? d.gph ?? d.Fuel_Flow ?? 0),
             rpm: num(d.rpm ?? d.RPM ?? 0),
-            mp: num(d.manifold_pressure ?? d.mp ?? d.MAP ?? 0),
+            mp: num(d.MP ?? d.manifold_pressure ?? d.mp ?? d.MAP ?? 0),
         };
 
         let maxDeviation = 0;
@@ -636,8 +636,8 @@ class EngineMLBridge {
      */
     _updateLaunchState(sit, d) {
         const num = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
-        const altMSL = num(sit?.alt_msl ?? d.altitude_ft ?? 0);
-        const groundSpeed = num(sit?.ground_speed ?? d.speed_kts ?? 0);
+        const altMSL = num(sit?.alt_msl ?? d.gps_altitude ?? d.altitude_ft ?? 0);
+        const groundSpeed = num(sit?.ground_speed ?? d.ground_speed ?? d.speed_kts ?? 0);
         const rpm = num(d.rpm ?? d.RPM ?? 0);
 
         if (altMSL === 0 && groundSpeed === 0) return; // no GPS
@@ -696,7 +696,7 @@ class EngineMLBridge {
             oil_press: num(d.oil_pressure ?? d.oil_press_psi ?? d.Oil_Press ?? 0),
             fuel_flow: num(d.fuel_flow_gph ?? d.gph ?? d.Fuel_Flow ?? 0),
             rpm: num(d.rpm ?? d.RPM ?? 0),
-            mp: num(d.manifold_pressure ?? d.mp ?? d.MAP ?? 0),
+            mp: num(d.MP ?? d.manifold_pressure ?? d.mp ?? d.MAP ?? 0),
         };
 
         this._baselineWindow.push(sample);
@@ -777,7 +777,7 @@ class EngineMLBridge {
 
         const num = (v) => { const n = Number(v); return isFinite(n) ? n : null; };
 
-        const curMAP = num(d.manifold_pressure ?? d.mp ?? d.MAP);
+        const curMAP = num(d.MP ?? d.manifold_pressure ?? d.mp ?? d.MAP);
         const curRPM = num(d.rpm ?? d.RPM);
         const oilPress = num(d.oil_pressure ?? d.oil_press_psi ?? d.Oil_Press);
 
