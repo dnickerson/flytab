@@ -24,7 +24,13 @@ class EngineMLBridge {
         this._baseline = {};                  // rolling parameter averages
         this._baselineWindow = [];            // last 60 samples for baseline computation
         this._baselineWindowMax = 60;
-        this._flightPhase = 'ground';         // derived phase: ground/climb/cruise/descent
+        // Initial value before the first _onEngineData sample ever arrives (e.g. no
+        // engine connection yet). 'cruise' matches the safe-default convention used
+        // everywhere else in this file (see the fallback at line ~297 and
+        // EngineMLPlugin.java's own call.getString("phase", "cruise")) — 'ground'
+        // was a stale leftover from the pre-12-phase taxonomy and isn't a trained
+        // phase (anomaly_v2_metadata.json has no threshold for it).
+        this._flightPhase = 'cruise';
         // Last phase PhaseDetector.classify() actually produced. Left unset
         // (not pre-seeded to 'cruise') so the 'cruise' fallback in _onEngineData
         // only applies on a genuine cold-start-with-no-GPS-ever case (or when the
