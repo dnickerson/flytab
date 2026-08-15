@@ -89,6 +89,9 @@ class TabBar {
 
         // Close all full-screen overlays first, then open the requested one
         document.getElementById('flytabManualOverlay')?.remove();
+        document.getElementById('afdFullscreenOverlay')?.remove();
+        document.getElementById('diagLogOverlay')?.remove();
+        window.app?.closeFuelStopOverlay?.();
         if (tabId !== 'more') this._closeMoreDrawer();
         if (tabId !== 'layers') this._comps.layerPanel?.close();
         if (c.enginePage?.visible) c.enginePage.hide();
@@ -103,6 +106,7 @@ class TabBar {
         if (c.wbOverlay?.hide) c.wbOverlay.hide();
         if (c.planSync?.hide) c.planSync.hide();
         if (c.fisbStatus?.hide) c.fisbStatus.hide();
+        c.fisbWeather?.closeAdvisoryPanel?.();
         if (c.flightUpload?.hide) c.flightUpload.hide();
         if (c.radarPage?.hide) c.radarPage.hide();
         if (c.airportPopup?.close) c.airportPopup.close();
