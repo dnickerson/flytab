@@ -9482,15 +9482,17 @@ body.fs-overlay-open .radar-loop-controls {
 }
 .ps-error { color: var(--status-danger); }
 
-/* Hide tab bar while emergency overlay is active so ACKNOWLEDGE button is reachable */
-body.emergency-active #tabBar {
-    display: none !important;
-}
-
 /* ── Emergency Glide Overlay (Scenario 6) ───────────────────────────────── */
+/* Leaves room for #tabBar (z-index 99999, always on top) at the bottom — the
+   tab bar must stay visible and reachable even during an active anomaly alert,
+   so the pilot can always get back to the map. Was previously inset:0 with
+   #tabBar force-hidden via body.emergency-active; that blocked map access. */
 .eg-overlay {
     position: fixed;
-    inset: 0;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: var(--tab-bar-height);
     z-index: 9900;
     background: var(--bg-primary);
     display: flex;
@@ -10288,19 +10290,12 @@ body.compact-strips .route-table-sheet {
 }
 
 /* When the route planner is open, hide bottom UI strips so the map+panel
-   fill the available screen area. */
+   fill the available screen area. #tabBar stays visible (and #cockpitView
+   keeps its default tab-bar-height padding below) so the pilot can always
+   reach MAP/APT/etc. even while the route editor is open. */
 body.route-editing-mode #instrumentStrip,
-body.route-editing-mode #tabBar,
 body.route-editing-mode .route-table-sheet {
     display: none !important;
-}
-
-/* Reclaim the tab-bar padding when those bars are hidden, but preserve the
-   Android system nav bar height so the planner toolbar isn't clipped.
-   env(safe-area-inset-bottom) is unreliable in Capacitor's WebView on Android;
-   --android-nav-height is set from the Java-measured exact value. */
-body.route-editing-mode #cockpitView {
-    padding-bottom: var(--android-nav-height) !important;
 }
 
 /* ── Route Planner Panel Inner Layout ────────────────────────────────────── */

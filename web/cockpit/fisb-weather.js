@@ -817,6 +817,11 @@ class FisbWeatherDisplay {
         this._advisoryPanel.classList.add('visible');
     }
 
+    /** Close the advisory list panel, if open. Called by TabBar on every tab switch. */
+    closeAdvisoryPanel() {
+        this._advisoryPanel?.classList.remove('visible');
+    }
+
     _renderAdvisoryPanel() {
         const now = Date.now();
         const active = (entries) => entries.filter(e => !e.expires_at || e.expires_at > now);

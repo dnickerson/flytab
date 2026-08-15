@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v10.37';
+const FLYTAB_VERSION = 'v10.39';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -941,6 +941,7 @@ class FlyTabApp {
                 layerPanel: this.layerPanel,
                 everywhereSearch: this.everywhereSearch,
                 wbOverlay: this.wbOverlay,
+                fisbWeather: this.fisbWeather,
             });
             this.tabBar.init();
         }
@@ -1848,14 +1849,18 @@ class FlyTabApp {
         const wps = this._currentTrip.waypoints;
         for (let i = 1; i < wps.length - 1; i++) {
             const wp = wps[i];
-            if (wp.type !== 'APT') continue;
+            // Use the same fuel-stop determination as route-table.js (isFuelStop) —
+            // not a raw wp.type==='APT' check, which fired for ANY intermediate
+            // airport waypoint (e.g. one used only as a routing point) and ignored
+            // the pilot's explicit "No, not a fuel stop" override (wp.is_fuel_stop).
+            if (!isFuelStop(wp, i, wps)) continue;
             if (!wp.lat || !wp.lon) continue;
             const key = `${wp.icao || wp.name}_${i}`;
             if (this._shownFuelStopOverlays.has(key)) continue;
             const dist = NasrDB.haversineNm(lat, lon, wp.lat, wp.lon);
             if (dist <= 10) {
                 this._shownFuelStopOverlays.add(key);
-                this._showFuelStopOverlay(wp, i);
+                this._showFuelStopOverlay(wp);
                 break; // one overlay at a time
             }
         }
@@ -1863,10 +1868,9 @@ class FlyTabApp {
 
     /**
      * Show the full-screen fuel stop overlay.
-     * @param {object} wp        - The fuel stop waypoint (from this._currentTrip.waypoints)
-     * @param {number} wpIndex   - Index of wp in the waypoints array
+     * @param {object} wp - The fuel stop waypoint (from this._currentTrip.waypoints)
      */
-    _showFuelStopOverlay(wp, wpIndex) {
+    _showFuelStopOverlay(wp) {
         // Tear down any prior, still-open instance's window listener + poll interval
         // before replacing its DOM — without this, a second fuel-stop waypoint
         // reached while a prior instance is still open (un-dismissed) leaks the old
@@ -1960,11 +1964,14 @@ class FlyTabApp {
 
         document.body.appendChild(overlay);
 
-        // ✕ clears the proximity guard so the overlay can re-appear if the pilot
-        // circles back to the same fuel stop with fuel genuinely critical.
-        const proximityKey = `${wp.icao || wp.name}_${wpIndex}`;
+        // ✕ dismisses for this occurrence only — it must NOT clear the proximity
+        // guard. _checkFuelStopProximity runs on ~every GPS situation update and
+        // the aircraft stays within the 10nm radius for minutes; re-arming the
+        // guard here caused the very next update to immediately re-show the
+        // overlay, which read to the pilot as an unclosable screen.
         overlay.querySelector('#fso-close-btn').addEventListener('click', () => {
-            this._shownFuelStopOverlays.delete(proximityKey);
+            this._fuelStopOverlayCleanup?.();
+            this._fuelStopOverlayCleanup = null;
             overlay.remove();
         });
 
@@ -2044,11 +2051,18 @@ class FlyTabApp {
             overlay.remove();
             this.showToast(`Flight ${nextNum} active \u2014 ${nextDest} ${nextDistS}nm`);
         });
+    }
 
-        overlay.querySelector('#fso-close-btn').addEventListener('click', () => {
-            this._fuelStopOverlayCleanup?.();
-            this._fuelStopOverlayCleanup = null;
-        }, { once: false }); // in addition to the existing close-btn listener already registered above
+    /**
+     * Tear down the fuel-stop proximity overlay, if open. This is a raw
+     * document.body overlay (not a tracked TabBar component), so TabBar calls
+     * this on every tab switch \u2014 otherwise the overlay silently persists on
+     * top of whatever page the pilot navigates to, blocking it entirely.
+     */
+    closeFuelStopOverlay() {
+        this._fuelStopOverlayCleanup?.();
+        this._fuelStopOverlayCleanup = null;
+        document.getElementById('fuelStopOverlay')?.remove();
     }
 
     // === Toast Notifications ==========

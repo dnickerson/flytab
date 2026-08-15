@@ -628,7 +628,7 @@ class ConfigEditor {
         return new Promise((resolve) => {
             const modal = document.createElement('div');
             modal.style.cssText = [
-                'position:fixed', 'inset:0', 'z-index:300000',
+                'position:fixed', 'inset:0', 'z-index:99998',
                 'background:rgba(0,0,0,0.75)',
                 'display:flex', 'align-items:center', 'justify-content:center',
                 'font-family:-apple-system,system-ui,sans-serif'
