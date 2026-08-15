@@ -440,6 +440,43 @@ class FisbNexrad {
         const zoom = map.getZoom();
         const products = Array.isArray(product) ? product : [product];
 
+        // CONUS bins are ~5x coarser than Regional's. When both products are drawn
+        // together, CONUS is meant only to fill gaps beyond Regional coverage (see
+        // above) — but a CONUS block that overlaps Regional's own coverage area
+        // still gets drawn in full underneath it, and bleeds its blocky coloring
+        // through Regional's own no-echo (transparent) bins. Confirmed against a
+        // real flight capture: a CONUS block can report e.g. "very heavy" over a
+        // 4°x0.33° footprint while the Regional data covering that same footprint
+        // in 5x finer bins shows mostly no echo — drawn together, the coarse CONUS
+        // block reads as a giant, misleadingly blocky weather cell. Compute
+        // Regional's coverage bbox once and skip any CONUS block overlapping it.
+        //
+        // Only blocks received within the last 5 minutes contribute to the bbox.
+        // _blocks (and a loop snapshot's copy of it) can hold Regional blocks up
+        // to 15 minutes old (_purgeOld's cutoff) with no distance scoping — at
+        // ~150kt that's up to ~40nm of aircraft travel. Without a recency limit,
+        // a stale Regional block from a prior position could stretch the bbox
+        // toward the current position and wrongly suppress real, current CONUS
+        // data in a spot with no actual current Regional coverage there.
+        let regionalBounds = null;
+        if (products.includes('conus') && products.includes('regional')) {
+            let newestRegionalAt = 0;
+            for (const [, block] of blockMap) {
+                if (FisbNexrad._productOf(block) === 'regional' && block.received_at > newestRegionalAt) {
+                    newestRegionalAt = block.received_at;
+                }
+            }
+            const recentCutoff = newestRegionalAt - 5 * 60000;
+            for (const [, block] of blockMap) {
+                if (FisbNexrad._productOf(block) !== 'regional') continue;
+                if (block.received_at < recentCutoff) continue;
+                const sw = L.latLng(block.latN - block.height, block.lonW);
+                const ne = L.latLng(block.latN, block.lonW + block.width);
+                if (!regionalBounds) regionalBounds = L.latLngBounds(sw, ne);
+                else regionalBounds.extend(sw).extend(ne);
+            }
+        }
+
         for (const p of products) {
             for (const [, block] of blockMap) {
                 if (FisbNexrad._productOf(block) !== p) continue;
@@ -447,6 +484,10 @@ class FisbNexrad {
                 const blockE = block.lonW + block.width;
                 if (block.latN < bounds.getSouth() || blockS > bounds.getNorth()) continue;
                 if (blockE < bounds.getWest() || block.lonW > bounds.getEast()) continue;
+                if (p === 'conus' && regionalBounds && regionalBounds.overlaps(
+                    L.latLngBounds(L.latLng(blockS, block.lonW), L.latLng(block.latN, blockE)))) {
+                    continue;
+                }
                 this._drawBlock(ctx, map, block, zoom);
             }
         }
