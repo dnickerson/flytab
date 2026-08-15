@@ -440,6 +440,31 @@ class FisbNexrad {
         const zoom = map.getZoom();
         const products = Array.isArray(product) ? product : [product];
 
+        // CONUS bins are ~5x coarser than Regional's. When both products are drawn
+        // together, CONUS is meant only to fill gaps beyond Regional coverage (see
+        // above) — but a CONUS block that overlaps Regional's own coverage area
+        // still gets drawn in full underneath it, and bleeds its blocky coloring
+        // through Regional's own no-echo (transparent) bins. Confirmed against a
+        // real flight capture: a CONUS block can report e.g. "very heavy" over a
+        // 4°x0.33° footprint while the Regional data covering that same footprint
+        // in 5x finer bins shows mostly no echo — drawn together, the coarse CONUS
+        // block reads as a giant, misleadingly blocky weather cell. Compute
+        // Regional's coverage bbox once and skip any CONUS block overlapping it.
+        let regionalBounds = null;
+        if (products.includes('conus') && products.includes('regional')) {
+            for (const [, block] of blockMap) {
+                if (FisbNexrad._productOf(block) !== 'regional') continue;
+                const s = block.latN - block.height, e = block.lonW + block.width;
+                if (!regionalBounds) regionalBounds = { n: block.latN, s, w: block.lonW, e };
+                else {
+                    if (block.latN > regionalBounds.n) regionalBounds.n = block.latN;
+                    if (s < regionalBounds.s) regionalBounds.s = s;
+                    if (block.lonW < regionalBounds.w) regionalBounds.w = block.lonW;
+                    if (e > regionalBounds.e) regionalBounds.e = e;
+                }
+            }
+        }
+
         for (const p of products) {
             for (const [, block] of blockMap) {
                 if (FisbNexrad._productOf(block) !== p) continue;
@@ -447,6 +472,11 @@ class FisbNexrad {
                 const blockE = block.lonW + block.width;
                 if (block.latN < bounds.getSouth() || blockS > bounds.getNorth()) continue;
                 if (blockE < bounds.getWest() || block.lonW > bounds.getEast()) continue;
+                if (p === 'conus' && regionalBounds &&
+                    block.latN >= regionalBounds.s && blockS <= regionalBounds.n &&
+                    block.lonW <= regionalBounds.e && blockE >= regionalBounds.w) {
+                    continue;
+                }
                 this._drawBlock(ctx, map, block, zoom);
             }
         }
