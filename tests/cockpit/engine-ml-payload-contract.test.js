@@ -123,6 +123,17 @@ describe('EngineMLBridge — payload field-name contract', () => {
         expect(call.mp).toBe(29.25);
     });
 
+    it('defaults to a trained phase before any real engine data has ever arrived', async () => {
+        // _flightPhase used to initialize to 'ground', a stale leftover from the
+        // pre-12-phase taxonomy with no trained threshold in
+        // anomaly_v2_metadata.json. It's only ever read before the first real
+        // _onEngineData sample (e.g. simulateAnomaly() triggered with no engine
+        // connection yet) -- exactly the state hit live on-device (v10.40,
+        // engine disconnected) that surfaced this.
+        await bridge.simulateAnomaly();
+        expect(processSampleSpy).toHaveBeenCalledWith(expect.objectContaining({ phase: 'cruise' }));
+    });
+
     // The six checks below cover every remaining field the ML plugin input
     // reads from `d` (web/cockpit/engine-ml.js's processSample() call).
     // Real field name for each, verified against engine_monitor.py's
