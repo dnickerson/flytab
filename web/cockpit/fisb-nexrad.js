@@ -85,6 +85,47 @@ class FisbNexrad {
         return (block.radarType === 64 || block.scale > 0) ? 'conus' : 'regional';
     }
 
+    /**
+     * Derive the true FIS-B broadcast time for a NEXRAD message, in ms since epoch.
+     * Stratux's real UATFrame struct (verified against b3nn0/stratux uatparse.go —
+     * there is no LocaltimeReceived field) carries the broadcast time as separate
+     * FISB_hours/FISB_minutes/FISB_seconds/FISB_month/FISB_day fields, decoded once
+     * per frame from the generic UAT time-format header (decodeTimeFormat()) before
+     * any product-specific parsing — so this applies uniformly to NEXRAD frames too.
+     * Not every time format includes month/day (some UAT time formats only carry
+     * hours/minutes[/seconds]); Go's zero-value for an unset uint32 is 0, which is
+     * never a valid real month or day, so treat 0 as "not present" and fall back to
+     * today's UTC date from the arrival clock.
+     *
+     * FlyTab's own exportFrames() writes LocaltimeReceived (no FISB_* fields) into
+     * its NDJSON capture format, and tools/mock-stratux.py's --replay-nexrad path
+     * broadcasts those captures verbatim with no restamping — so LocaltimeReceived
+     * is still checked as a second source, for FlyTab's own replayed data, never
+     * present on real live Stratux traffic.
+     * @param {number} now - Date.now() at message arrival, used as both the
+     *   fallback value and the reference date/year for a message that has no
+     *   month/day of its own.
+     */
+    static _parseFisbDataTime(msg, now) {
+        if (msg.FISB_hours == null || msg.FISB_minutes == null) {
+            if (msg.LocaltimeReceived) return new Date(msg.LocaltimeReceived).getTime() || now;
+            return now;
+        }
+        const ref = new Date(now);
+        const month = msg.FISB_month > 0 ? msg.FISB_month - 1 : ref.getUTCMonth(); // JS months are 0-based
+        const day   = msg.FISB_day   > 0 ? msg.FISB_day       : ref.getUTCDate();
+        let t = Date.UTC(ref.getUTCFullYear(), month, day,
+            msg.FISB_hours, msg.FISB_minutes, msg.FISB_seconds || 0);
+        if (!Number.isFinite(t)) return now;
+        // A message with no month/day defaults to today's date from the arrival
+        // clock — wrong by a day right around a UTC midnight rollover (e.g. a
+        // 23:58 broadcast arriving just after 00:00 UTC would otherwise compute
+        // as ~24h in the future). Roll back a day when that happens.
+        if (t - now > 12 * 3600000) t -= 24 * 3600000;
+        // Sanity guard against a corrupted/garbage frame.
+        return Math.abs(t - now) > 24 * 3600000 ? now : t;
+    }
+
     // ========== Public API ==========
 
     /** Add the NEXRAD overlay to a Leaflet map */
@@ -222,9 +263,7 @@ class FisbNexrad {
         if (!msg.NEXRAD?.length) return;
 
         const now = Date.now();
-        const dataTime = msg.LocaltimeReceived
-            ? new Date(msg.LocaltimeReceived).getTime() || now
-            : now;
+        const dataTime = FisbNexrad._parseFisbDataTime(msg, now);
         this._latestDataTime = dataTime;
         const blocks = msg.NEXRAD;
 

@@ -119,8 +119,11 @@ class FisbLogger {
     _logNexrad(msg) {
         if (!this._recording || !msg?.NEXRAD?.length) return;
         const now = Date.now();
-        const dataTime = msg.LocaltimeReceived
-            ? (new Date(msg.LocaltimeReceived).getTime() || now) : now;
+        // FisbNexrad._parseFisbDataTime derives the real FIS-B broadcast time from
+        // FISB_hours/minutes/seconds/month/day — msg.LocaltimeReceived doesn't exist
+        // on Stratux's real UATFrame struct (see fisb-nexrad.js and issue #136).
+        const dataTime = (typeof FisbNexrad !== 'undefined')
+            ? FisbNexrad._parseFisbDataTime(msg, now) : now;
         const blocks = msg.NEXRAD
             .filter(b => b.Intensity?.length > 0)
             .map(b => ({
