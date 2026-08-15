@@ -18,6 +18,12 @@
  * fixture's real numbers — not 0, not undefined. A future field-name
  * mismatch in this file fails this test immediately, without needing a
  * flight to surface it.
+ *
+ * Covers every field the ML plugin input (processSample()) reads from the
+ * engine payload: rpm, mp, fuel flow, altitude, ground speed, all 4 CHTs,
+ * all 4 EGTs, oil temp/pressure, carb temp, fuel remaining. If you're
+ * adding a new field read here, add a case below too — this file is the
+ * up-to-date reference for which alias in each `??` chain is the real one.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'fs';
@@ -115,5 +121,43 @@ describe('EngineMLBridge — payload field-name contract', () => {
         const call = classifySpy.mock.calls[0][0];
         expect(call.mp).not.toBe(0);
         expect(call.mp).toBe(29.25);
+    });
+
+    // The six checks below cover every remaining field the ML plugin input
+    // reads from `d` (web/cockpit/engine-ml.js's processSample() call).
+    // Real field name for each, verified against engine_monitor.py's
+    // FIELD_NAMES / get_status(), noted alongside its plugin-input key:
+    //   cht1..cht4      <- CHT1..CHT4    (real; 2nd alias in the fallback chain)
+    //   egt1..egt4      <- EGT1..EGT4    (real; 2nd alias)
+    //   oil_temp        <- Oil_Temp      (real; 3rd alias)
+    //   oil_press       <- Oil_Press     (real; 3rd alias)
+    //   carb_temp       <- Carb_Temp     (real; 2nd alias)
+    //   fuel_remaining  <- Gallons_Rem   (real; 3rd alias)
+    // None of these were broken when this test was added — they're asserted
+    // here so a future edit to any of these fallback chains (or a Pi-side
+    // rename) fails immediately instead of waiting for a flight to surface it.
+
+    it('reads all four CHTs from the real CHT1..CHT4 fields', async () => {
+        await bridge._onEngineData(ENGINE_FRAME);
+        expect(processSampleSpy).toHaveBeenCalledWith(expect.objectContaining({
+            cht1: 380, cht2: 365, cht3: 370, cht4: 355,
+        }));
+    });
+
+    it('reads all four EGTs from the real EGT1..EGT4 fields', async () => {
+        await bridge._onEngineData(ENGINE_FRAME);
+        expect(processSampleSpy).toHaveBeenCalledWith(expect.objectContaining({
+            egt1: 1350, egt2: 1320, egt3: 1360, egt4: 1340,
+        }));
+    });
+
+    it('reads oil temp/pressure, carb temp, and fuel remaining from their real fields', async () => {
+        await bridge._onEngineData(ENGINE_FRAME);
+        expect(processSampleSpy).toHaveBeenCalledWith(expect.objectContaining({
+            oil_temp: 180.0,       // Oil_Temp
+            oil_press: 76.0,       // Oil_Press
+            carb_temp: 45.0,       // Carb_Temp
+            fuel_remaining: 24.9,  // Gallons_Rem
+        }));
     });
 });

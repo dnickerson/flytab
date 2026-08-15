@@ -40,6 +40,7 @@ const ENGINE_FRAME = {
         Gallons_Rem:  24.9,
         Fuel_L1:      13.7,
         Fuel_L2:      11.2,
+        Carb_Temp:    45.0,
         EGT1: 1350,
         EGT2: 1320,
         EGT3: 1360,
