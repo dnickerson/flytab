@@ -594,15 +594,21 @@ describe('FuelTankState.perSideCapGal', () => {
 });
 ```
 
-Create `tests/cockpit/fuel-overlay-implausible-tic.test.js`:
+Create `tests/cockpit/fuel-overlay-implausible-tic.test.js`. This drives the REAL `FuelOverlay` through its own `_buildDOM()` — same proven pattern as the existing `tests/cockpit/fuel-overlay-apply-guard.test.js` — rather than a hand-stubbed `_dom`, because `_applyMeasurement()`'s success path touches `_updateSourceDisplay()`/`_renderHistory()`/etc. across nearly the whole DOM; a partial stub would crash inside the swallowed `.catch()` and produce a falsely-passing test.
+
+**Important:** the real `web/aircraft-config.json` calibrates `tic_polynomial.max_tic` to 11, which is *already* capacity-correct (`ticToGallons(11)` ≈ 18 gal/side with the real coefficients) — the pilot cannot normally dial in an implausible reading because the slider/number-input handlers clamp to `_maxTic`. The audit's "109 gal at tic=17" bug only reaches the pilot when `tic_polynomial` config is unavailable and `FuelOverlay` falls back to its constructor default (`_maxTic = 17`, `FuelEngine.DEFAULT_COEFFICIENTS`) — e.g. a config load race or a misconfigured aircraft. The test must reproduce that fallback deliberately by omitting `tic_polynomial` from the `CockpitConfig.aircraft()` stub, not by using the real (already-safe) config.
 
 ```javascript
 /**
  * The tic-mark polynomial can evaluate to physically impossible gallons for a
- * reading near max tic (e.g. ~109 gal at tic=17 for a 36gal aircraft) — nothing
- * previously stopped that number from being displayed or applied.
+ * reading near max tic. The real aircraft-config.json already caps max_tic at
+ * a capacity-correct 11 — this guard exists for when tic_polynomial config is
+ * unavailable and FuelOverlay falls back to its constructor default (max_tic
+ * 17, FuelEngine.DEFAULT_COEFFICIENTS), which the audit found reaches ~109 gal
+ * at tic=17 for a 36gal aircraft (verified: hand-computed against the actual
+ * default coefficients).
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -610,68 +616,81 @@ import { dirname, join } from 'path';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const read = (p) => readFileSync(join(__dirname, '../../', p), 'utf8');
 
+globalThis.Settings      = new Function(read('web/shared/settings.js') + '\nreturn Settings;')();
+globalThis.FuelEngine    = new Function(read('web/shared/fuel-engine.js') + '\nreturn FuelEngine;')();
 globalThis.FuelTankState = new Function(read('web/shared/fuel-tank-state.js') + '\nreturn FuelTankState;')();
-globalThis.FuelEngine = new Function(read('web/shared/fuel-engine.js') + '\nreturn FuelEngine;')();
-globalThis.FuelState = new Function(read('web/shared/fuel-state.js') + '\nreturn FuelState;')();
-const FuelOverlay = new Function(read('web/cockpit/fuel-overlay.js') + '\nreturn FuelOverlay;')();
+globalThis.FuelState     = new Function(read('web/shared/fuel-state.js') + '\nreturn FuelState;')();
+globalThis.EngineClient  = new Function(read('web/shared/engine-client.js') + '\nreturn EngineClient;')();
+const FuelOverlay        = new Function(read('web/cockpit/fuel-overlay.js') + '\nreturn FuelOverlay;')();
 
-function makeOverlay() {
-    const overlay = Object.create(FuelOverlay.prototype);
-    overlay._leftTic = 0;
-    overlay._rightTic = 0;
-    overlay._coefficients = FuelEngine.DEFAULT_COEFFICIENTS;
-    overlay._ticsTouchedSinceShow = true;
-    overlay._requireFreshTics = false;
-    overlay._shownAt = 0;
-    overlay._applying = false;
-    overlay._dom = {
-        applyStatus: document.createElement('div'),
-        addStatus: document.createElement('div'),
-        addGal: Object.assign(document.createElement('input'), { value: '10' }),
-        addAirport: document.createElement('input'),
-        addDate: document.createElement('input'),
-        addTime: document.createElement('input'),
-        addPrice: document.createElement('input'),
-        addGalL: document.createElement('input'),
-        addGalR: document.createElement('input'),
-    };
-    return overlay;
-}
+const AC = JSON.parse(read('web/aircraft-config.json'));
+
+let overlay = null;
+let realFetch = null;
 
 beforeEach(() => {
     localStorage.clear();
-    global.CockpitConfig = { aircraft: (k) => k === 'performance.fuel_capacity_gal' ? 36 : null };
+    FuelTankState._state = null;
+    FuelTankState._loaded = false;
+    delete window.enginePanel;
+
+    // Deliberately no tic_polynomial — forces FuelOverlay's fallback
+    // (_maxTic=17, FuelEngine.DEFAULT_COEFFICIENTS) so tic=17 reproduces the
+    // audit's ~109gal scenario. performance.fuel_capacity_gal IS provided
+    // (36, matching the real aircraft) so the new guard's cap is 18/side.
+    globalThis.CockpitConfig = {
+        get: () => null,
+        aircraft: (p) => (p === 'performance.fuel_capacity_gal') ? AC.performance.fuel_capacity_gal : undefined,
+    };
+    realFetch = globalThis.fetch;
+    globalThis.fetch = () => Promise.reject(new Error('offline'));
+    globalThis.wireTap = (el, fn) => { if (el) el.addEventListener('click', fn); };
+
+    overlay = new FuelOverlay(document.body);
+    overlay.show();
+    overlay._shownAt = 0;
+    overlay._ticsTouchedSinceShow = true;
 });
+
+afterEach(() => {
+    overlay?._el?.remove();
+    overlay = null;
+    globalThis.fetch = realFetch;
+});
+
+const drag = (el, tic) => { el.value = String(tic); el.dispatchEvent(new window.Event('input')); };
+const tap  = (id) => overlay._el.querySelector('#' + id)
+    .dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+const applyAndSettle = async () => { tap('fo-apply'); await new Promise(r => setTimeout(r, 20)); };
 
 describe('FuelOverlay implausible tic-mark guard', () => {
     it('_applyMeasurement refuses a reading that implies more fuel than the tank holds', async () => {
-        const overlay = makeOverlay();
-        overlay._leftTic = 17; // ≈109 gal via the default polynomial, cap is 18/side
-        const fetchSpy = vi.spyOn(global, 'fetch');
+        expect(overlay._maxTic).toBe(17); // confirms the fallback engaged, not the real 11-tic config
+        drag(overlay._dom.leftSlider, 17); // ≈109 gal via the default polynomial, cap is 18/side
 
-        await overlay._applyMeasurement();
+        await applyAndSettle();
 
         expect(overlay._dom.applyStatus.textContent).toMatch(/more than it can hold/i);
         expect(overlay._dom.applyStatus.className).toContain('fo-add-status-error');
-        expect(fetchSpy).not.toHaveBeenCalled();
+        expect(overlay.visible).toBe(true); // refused, overlay stays open — nothing written
     });
 
-    it('_recordFuelStop refuses the same implausible reading', async () => {
-        const overlay = makeOverlay();
-        overlay._rightTic = 17;
+    it('_recordFuelStop refuses the same implausible reading', () => {
+        drag(overlay._dom.rightSlider, 17);
+        overlay._dom.addGal.value = '10';
 
-        await overlay._recordFuelStop();
+        tap('fo-add-record');
 
         expect(overlay._dom.addStatus.textContent).toMatch(/more than it can hold/i);
         expect(overlay._dom.addStatus.className).toContain('fo-add-status-error');
     });
 
     it('a plausible reading is not refused by the new guard', async () => {
-        const overlay = makeOverlay();
-        overlay._leftTic = 8; // well within an 18gal/side cap
-        overlay._rightTic = 8;
-        vi.spyOn(global, 'fetch').mockRejectedValue(new Error('offline')); // resolveEdmFuel path, irrelevant here
-        await overlay._applyMeasurement();
+        drag(overlay._dom.leftSlider, 8);
+        drag(overlay._dom.rightSlider, 8);
+
+        await applyAndSettle();
+
         expect(overlay._dom.applyStatus.textContent).not.toMatch(/more than it can hold/i);
     });
 });
