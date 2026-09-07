@@ -230,21 +230,23 @@ class FuelOverlay {
             </div>
 
             <!-- H) PI K-FACTOR (LIVE) -->
-            <div class="fo-section-title">PI K-FACTOR (LIVE)</div>
-            <div class="fo-kfactor-panel" id="fo-kfactor-pi" style="display:none;">
-                <div class="fo-kfactor-row">
-                    <div class="fo-kfactor-item">
-                        <div class="fo-kfactor-label">CURRENT (PI)</div>
-                        <div class="fo-kfactor-val" id="fo-kf-pi-current">--</div>
+            <div id="fo-kfactor-pi" style="display:none;">
+                <div class="fo-section-title">PI K-FACTOR (LIVE)</div>
+                <div class="fo-kfactor-panel">
+                    <div class="fo-kfactor-row">
+                        <div class="fo-kfactor-item">
+                            <div class="fo-kfactor-label">CURRENT (PI)</div>
+                            <div class="fo-kfactor-val" id="fo-kf-pi-current">--</div>
+                        </div>
+                        <div class="fo-kfactor-item">
+                            <div class="fo-kfactor-label">SUGGESTED (PI)</div>
+                            <div class="fo-kfactor-val" id="fo-kf-pi-suggested">--</div>
+                        </div>
                     </div>
-                    <div class="fo-kfactor-item">
-                        <div class="fo-kfactor-label">SUGGESTED (PI)</div>
-                        <div class="fo-kfactor-val" id="fo-kf-pi-suggested">--</div>
-                    </div>
+                    <div class="fo-kfactor-guidance" id="fo-kf-pi-recommendation"></div>
+                    <button class="fo-manual-btn fo-set-btn" id="fo-kf-pi-apply" style="display:none;">APPLY TO PI</button>
+                    <div class="fo-add-status" id="fo-kf-pi-status"></div>
                 </div>
-                <div class="fo-kfactor-guidance" id="fo-kf-pi-recommendation"></div>
-                <button class="fo-manual-btn fo-set-btn" id="fo-kf-pi-apply" style="display:none;">APPLY TO PI</button>
-                <div class="fo-add-status" id="fo-kf-pi-status"></div>
             </div>
         </div>`;
 
