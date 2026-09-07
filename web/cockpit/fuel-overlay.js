@@ -228,6 +228,24 @@ class FuelOverlay {
                     Ratio = Filled ÷ Used (EDM). Multiply by current K-factor to correct fuel flow accuracy.
                 </div>
             </div>
+
+            <!-- H) PI K-FACTOR (LIVE) -->
+            <div class="fo-kfactor-panel" id="fo-kfactor-pi" style="display:none;">
+                <div class="fo-section-title">PI K-FACTOR (LIVE)</div>
+                <div class="fo-kfactor-row">
+                    <div class="fo-kfactor-item">
+                        <div class="fo-kfactor-label">CURRENT (PI)</div>
+                        <div class="fo-kfactor-val" id="fo-kf-pi-current">--</div>
+                    </div>
+                    <div class="fo-kfactor-item">
+                        <div class="fo-kfactor-label">SUGGESTED (PI)</div>
+                        <div class="fo-kfactor-val" id="fo-kf-pi-suggested">--</div>
+                    </div>
+                </div>
+                <div class="fo-kfactor-guidance" id="fo-kf-pi-recommendation"></div>
+                <button class="fo-manual-btn fo-set-btn" id="fo-kf-pi-apply" style="display:none;">APPLY TO PI</button>
+                <div class="fo-add-status" id="fo-kf-pi-status"></div>
+            </div>
         </div>`;
 
         this._container.appendChild(this._el);
@@ -270,6 +288,12 @@ class FuelOverlay {
             kfUsed:    this._el.querySelector('#fo-kf-used'),
             kfRatio:   this._el.querySelector('#fo-kf-ratio'),
             kfGuidance: this._el.querySelector('#fo-kf-guidance'),
+            kfPiSection: this._el.querySelector('#fo-kfactor-pi'),
+            kfPiCurrent: this._el.querySelector('#fo-kf-pi-current'),
+            kfPiSuggested: this._el.querySelector('#fo-kf-pi-suggested'),
+            kfPiRecommendation: this._el.querySelector('#fo-kf-pi-recommendation'),
+            kfPiApply: this._el.querySelector('#fo-kf-pi-apply'),
+            kfPiStatus: this._el.querySelector('#fo-kf-pi-status'),
         };
 
         // Wire close
@@ -374,6 +398,11 @@ class FuelOverlay {
         wireTap(this._el.querySelector('#fo-add-record'), () => {
             this._recordFuelStop();
         });
+
+        // Wire Pi K-factor apply button
+        wireTap(this._el.querySelector('#fo-kf-pi-apply'), () => {
+            this._applyPiKFactor();
+        });
     }
 
     /* ------------------------------------------------------------------
@@ -443,6 +472,7 @@ class FuelOverlay {
         this._updateSourceDisplay();
         this._renderHistory();
         this._renderKFactor();
+        this._fetchPiCalibration();
         this._cachedCsvEdmFuel = 0;
         this._el.style.display = 'flex';
         this._visible = true;
@@ -1150,6 +1180,71 @@ class FuelOverlay {
             this._dom.kfGuidance.textContent = totalFilled > 0
                 ? 'Record more tic measurements with EDM data to compute ratio.'
                 : 'Record fuel stops to compute ratio.';
+        }
+    }
+
+    /** Best-effort read of the Pi's own K-factor calibration status. Passive
+     *  display refresh, same non-blocking pattern as _resolveEdmFuel() in
+     *  show() — on failure, leaves the panel hidden rather than showing stale
+     *  or fabricated numbers. */
+    async _fetchPiCalibration() {
+        const base = this._engineBaseUrl();
+        if (!base || !this._dom.kfPiSection) { if (this._dom.kfPiSection) this._dom.kfPiSection.style.display = 'none'; return; }
+        try {
+            const resp = await fetch(`${base}/api/fuel/calibration`, { signal: AbortSignal.timeout(4000) });
+            if (!resp.ok) throw new Error(`Pi returned ${resp.status}`);
+            const status = await resp.json();
+            this._renderPiKFactor(status);
+        } catch (_) {
+            this._dom.kfPiSection.style.display = 'none';
+        }
+    }
+
+    _renderPiKFactor(status) {
+        this._piCalibration = status;
+        this._dom.kfPiSection.style.display = '';
+        this._dom.kfPiCurrent.textContent = status.current_k_factor != null ? String(status.current_k_factor) : '--';
+        if (status.ready) {
+            this._dom.kfPiSuggested.textContent = String(status.suggested_k_factor);
+            this._dom.kfPiRecommendation.textContent = status.recommendation || '';
+            this._dom.kfPiApply.style.display = '';
+        } else {
+            this._dom.kfPiSuggested.textContent = '--';
+            this._dom.kfPiRecommendation.textContent = status.message || '';
+            this._dom.kfPiApply.style.display = 'none';
+        }
+    }
+
+    /** Record the Pi's own suggested K-factor as applied (POST — the Pi does
+     *  not re-program the physical sensor; this is a log entry the pilot
+     *  confirms after manually setting the new K-factor on the Dynon EMS). */
+    async _applyPiKFactor() {
+        if (!this._piCalibration?.ready) return;
+        const newK = this._piCalibration.suggested_k_factor;
+        const base = this._engineBaseUrl();
+        if (!base) {
+            this._setStatus(this._dom.kfPiStatus, 'Pi unreachable — cannot record applied K-factor', 'error');
+            return;
+        }
+        this._dom.kfPiApply.disabled = true;
+        try {
+            const resp = await fetch(`${base}/api/fuel/calibration/applied`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ new_k_factor: newK }),
+                signal: AbortSignal.timeout(4000),
+            });
+            const result = await resp.json().catch(() => ({}));
+            if (resp.ok && result.success) {
+                this._setStatus(this._dom.kfPiStatus, result.message || `K-factor ${newK} recorded as applied`, 'ok');
+                await this._fetchPiCalibration();
+            } else {
+                this._setStatus(this._dom.kfPiStatus, result.error || `Pi returned ${resp.status}`, 'error');
+            }
+        } catch (err) {
+            this._setStatus(this._dom.kfPiStatus, `Pi sync failed (${err.message})`, 'error');
+        } finally {
+            this._dom.kfPiApply.disabled = false;
         }
     }
 

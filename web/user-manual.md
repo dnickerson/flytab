@@ -510,6 +510,12 @@ The **FUEL** field in the instrument strip along the bottom of the map is the in
 >
 > There is no range display and no map range ring. The **RNG** map button described in earlier notes was never wired up, and both went away with the nav strip. Use the engine page's FUEL STATUS **RANGE** and **ENDURANCE** gauges, which are live and read from the same tracked fuel figure.
 
+### K-Factor Calculator
+
+The Fuel Entry screen's K-FACTOR CALCULATOR section computes a ratio of actual fuel filled (from recorded fuel stops) against fuel used per the EDM, to check whether the fuel-flow sensor's K-factor is still accurate.
+
+Below the calculator, a PI K-FACTOR (LIVE) panel shows the K-factor currently programmed into the Pi's own tracker, and — once the Pi has logged at least 30 gal of fuel additions — a suggested new value with a recommendation. Tapping APPLY TO PI only records that you applied the suggested value to the physical Dynon EMS; it does not reprogram the sensor itself, which must still be set manually on the EMS per its own calibration procedure.
+
 ### Route table FUEL and REM columns
 
 The route table's **FUEL** column shows the fuel burned on each leg; **REM** shows the fuel expected to remain on arrival at that waypoint.
