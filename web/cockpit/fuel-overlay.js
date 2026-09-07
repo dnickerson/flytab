@@ -596,7 +596,7 @@ class FuelOverlay {
         this._applying = true;
 
         // Resolve EDM fuel async, then complete measurement
-        this._resolveEdmFuel().then(edmFuel => {
+        this._resolveEdmFuel().then(async edmFuel => {
             const m = FuelEngine.createMeasurement(
                 this._leftTic, this._rightTic, this._coefficients, edmFuel
             );
@@ -612,9 +612,15 @@ class FuelOverlay {
             this._updateSourceDisplay();
             this._syncMeasurement(m);
             this._renderHistory();
-            // Sync authoritative tic measurement to Pi so both systems agree
-            this._syncFuelSetToEngine(m.total_gal, 'Preflight tic mark measurement');
-            this.hide();
+            // Sync authoritative tic measurement to Pi so both systems agree. Reported
+            // to the pilot instead of swallowed — a failed sync here means the Pi's own
+            // fuel total silently diverges from what FlyTab now shows (PR #143 audit).
+            const synced = await this._syncFuelSetToEngine(m.total_gal, 'Preflight tic mark measurement');
+            if (synced.ok) {
+                this.hide();
+            } else {
+                this._setApplyStatus(synced.message, 'error');
+            }
         }).catch(err => console.error('[FuelOverlay] applyMeasurement failed:', err))
           .finally(() => { this._applying = false; });
     }
@@ -666,7 +672,7 @@ class FuelOverlay {
         return null;
     }
 
-    _recordFuelStop() {
+    async _recordFuelStop() {
         const gallons = parseFloat(this._dom.addGal.value);
         if (!gallons || gallons <= 0) {
             this._setAddStatus('Enter gallons added', 'error');
@@ -727,8 +733,8 @@ class FuelOverlay {
             window.dispatchEvent(new CustomEvent('fuelstate:changed'));
             this._updateSourceDisplay();
 
-            // Sync fuel stop to Pi — use add endpoint so Pi logs the stop in its own history
-            this._syncFuelAddToEngine(gallons, airport, price);
+            // Sync fuel stop to Pi — reported instead of swallowed (see _syncFuelSetToEngine).
+            const synced = await this._syncFuelAddToEngine(gallons, airport, price);
 
             // The reading has been consumed. A second RECORD tap must be backed by its own
             // fresh measurement, not this one — otherwise a double tap (or a second stop
@@ -740,7 +746,12 @@ class FuelOverlay {
             this._dom.addPrice.value = '';
             if (this._dom.addGalL) this._dom.addGalL.value = '';
             if (this._dom.addGalR) this._dom.addGalR.value = '';
-            this._setAddStatus(`Recorded: +${gallons.toFixed(1)} gal at ${airport || '—'} → ${newTotal.toFixed(1)} gal total`, 'ok');
+
+            if (synced.ok) {
+                this._setAddStatus(`Recorded: +${gallons.toFixed(1)} gal at ${airport || '—'} → ${newTotal.toFixed(1)} gal total`, 'ok');
+            } else {
+                this._setAddStatus(`Recorded locally: +${gallons.toFixed(1)} gal → ${newTotal.toFixed(1)} gal total. ${synced.message}`, 'error');
+            }
         } catch (err) {
             this._setAddStatus(`Save failed: ${err.message}`, 'error');
         }
@@ -868,29 +879,58 @@ class FuelOverlay {
 
     _setDroppedBurnStatus(msg, type) { this._setStatus(this._dom.droppedBurnStatus, msg, type); }
 
-    _syncFuelSetToEngine(gallons, reason = '') {
+    /**
+     * Push the pilot-confirmed tic measurement to the Pi as its new authoritative
+     * fuel_remaining. Returns {ok, message} instead of swallowing the outcome — a
+     * failed sync here leaves the Pi's own fuel total silently diverged from what
+     * FlyTab now shows, the same risk fixed for the dropped-burn correction's Pi
+     * sync in PR #143.
+     * @returns {Promise<{ok: boolean, message: string}>}
+     */
+    async _syncFuelSetToEngine(gallons, reason = '') {
         const base = this._engineBaseUrl();
-        if (!base) { console.warn('FuelOverlay: engineClient.ip unavailable, skipping Pi fuel/set sync'); return; }
-        fetch(`${base}/api/fuel/set`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ fuel_remaining: gallons, reason }),
-            signal: AbortSignal.timeout(4000),
-        }).catch(() => { /* best-effort — Pi may be unreachable at fuel station */ });
+        if (!base) {
+            return { ok: false, message: 'Measurement saved locally — Pi unreachable, engine-side total NOT updated. Retry when back in range.' };
+        }
+        try {
+            const resp = await fetch(`${base}/api/fuel/set`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ fuel_remaining: gallons, reason }),
+                signal: AbortSignal.timeout(4000),
+            });
+            if (!resp.ok) throw new Error(`Pi returned ${resp.status}`);
+            return { ok: true, message: '' };
+        } catch (err) {
+            return { ok: false, message: `Measurement saved locally — Pi sync failed (${err.message}). Retry when back in range.` };
+        }
     }
 
-    _syncFuelAddToEngine(gallons, airport = '', price = null) {
+    /**
+     * Push a recorded fuel stop to the Pi's own fuel-addition log. Returns
+     * {ok, message} — same rationale as _syncFuelSetToEngine().
+     * @returns {Promise<{ok: boolean, message: string}>}
+     */
+    async _syncFuelAddToEngine(gallons, airport = '', price = null) {
         const base = this._engineBaseUrl();
-        if (!base) { console.warn('FuelOverlay: engineClient.ip unavailable, skipping Pi fuel/add sync'); return; }
+        if (!base) {
+            return { ok: false, message: 'Fuel stop saved locally — Pi unreachable, engine-side total NOT updated. Retry when back in range.' };
+        }
         const body = { gallons };
         if (airport) body.airport = airport;
         if (price != null) body.price_per_gallon = price;
-        fetch(`${base}/api/fuel/add`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-            signal: AbortSignal.timeout(4000),
-        }).catch(() => { /* best-effort */ });
+        try {
+            const resp = await fetch(`${base}/api/fuel/add`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+                signal: AbortSignal.timeout(4000),
+            });
+            if (!resp.ok) throw new Error(`Pi returned ${resp.status}`);
+            return { ok: true, message: '' };
+        } catch (err) {
+            return { ok: false, message: `Fuel stop saved locally — Pi sync failed (${err.message}). Retry when back in range.` };
+        }
     }
 
     _setAddStatus(msg, type) { this._setStatus(this._dom.addStatus, msg, type); }

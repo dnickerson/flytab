@@ -66,10 +66,19 @@ beforeEach(() => {
             return undefined;
         },
     };
-    // Every network call the overlay makes is best-effort (Pi sync, flight-CSV EDM
-    // lookup). Offline is the fuel-stop reality and keeps _resolveEdmFuel() at null.
+    // The flight-CSV EDM lookup (_resolveEdmFuel(), localhost:9090) stays offline —
+    // these guard tests don't exercise EDM resolution and rely on it resolving to
+    // null. The Pi fuel-sync endpoints (fuel-overlay.js's _syncFuelSetToEngine /
+    // _syncFuelAddToEngine) are mocked reachable-and-successful instead: since
+    // Pi-sync outcome is now surfaced (rather than swallowed — see
+    // fuel-overlay-set-add-sync.test.js for the outcome-reporting contract itself),
+    // a real "offline" mock here would make every guard-accepted reading also
+    // report a Pi-sync failure, which is not what these tests are checking.
+    window.engineClient = { ip: '192.168.1.50' };
     realFetch = globalThis.fetch;
-    globalThis.fetch = () => Promise.reject(new Error('offline'));
+    globalThis.fetch = (url) => (typeof url === 'string' && url.includes('localhost:9090'))
+        ? Promise.reject(new Error('offline'))
+        : Promise.resolve({ ok: true, status: 200 });
     globalThis.wireTap = (el, fn) => { if (el) el.addEventListener('click', fn); };
 
     overlay = new FuelOverlay(document.body);
@@ -79,6 +88,7 @@ afterEach(() => {
     overlay?._el?.remove();
     overlay = null;
     globalThis.fetch = realFetch;
+    delete window.engineClient;
 });
 
 /* ---------------------------------------------------------------- helpers */
@@ -126,17 +136,20 @@ function departWith(tic) {
     return tank();
 }
 
-/** Fill in the gallons-purchased field and tap RECORD FUEL STOP. */
-function recordStop(gallons = 12) {
+/** Fill in the gallons-purchased field, tap RECORD FUEL STOP, and let its promise
+ *  chain settle (_recordFuelStop() is async — it awaits the Pi sync outcome
+ *  before writing status). */
+async function recordStop(gallons = 12) {
     overlay._dom.addGal.value = String(gallons);
     overlay._dom.addAirport.value = 'KMYL';
     tap('fo-add-record');
+    await new Promise(r => setTimeout(r, 20));
 }
 
 /* ------------------------------------------------------------------ tests */
 
 describe('fuel stop record — requires a reading entered this session', () => {
-    it('refuses the restored departure reading when no tic control was touched', () => {
+    it('refuses the restored departure reading when no tic control was touched', async () => {
         const departure = departWith(MAX_TIC);       // departed full: 36.0 gal
         expect(departure.total).toBe(36);
 
@@ -145,7 +158,7 @@ describe('fuel stop record — requires a reading entered this session', () => {
         expect(overlay._leftTic).toBe(MAX_TIC);
         expect(overlay._rightTic).toBe(MAX_TIC);
 
-        recordStop(12);
+        await recordStop(12);
 
         expect(rejected()).toBe(true);
         expect(status()).toMatch(/tic-mark reading/i);
@@ -156,13 +169,13 @@ describe('fuel stop record — requires a reading entered this session', () => {
         expect(JSON.parse(localStorage.getItem('flytab_fuel_stops') || '[]')).toHaveLength(0);
     });
 
-    it('records the pilot’s own reading, and writes THAT figure to tank state', () => {
+    it('records the pilot’s own reading, and writes THAT figure to tank state', async () => {
         departWith(MAX_TIC);                          // departed 36.0 gal
         const d = open();
         drag(d.leftSlider, 6);
         drag(d.rightSlider, 6);
 
-        recordStop(12);
+        await recordStop(12);
 
         expect(rejected()).toBe(false);
         expect(status()).toMatch(/Recorded:/);
@@ -172,7 +185,7 @@ describe('fuel stop record — requires a reading entered this session', () => {
         expect(JSON.parse(localStorage.getItem('flytab_fuel_stops'))).toHaveLength(1);
     });
 
-    it('accepts a reading that legitimately equals the restored one, once confirmed', () => {
+    it('accepts a reading that legitimately equals the restored one, once confirmed', async () => {
         departWith(8);
         const before = tank().total;
         open();
@@ -185,7 +198,7 @@ describe('fuel stop record — requires a reading entered this session', () => {
         expect(overlay._leftTic).toBe(8);
         expect(overlay._rightTic).toBe(8);
 
-        recordStop(8);
+        await recordStop(8);
 
         expect(rejected()).toBe(false);
         // Same figure, correctly recorded. Not bit-identical to `before` only because
@@ -197,13 +210,13 @@ describe('fuel stop record — requires a reading entered this session', () => {
         expect(Math.abs(tank().total - before)).toBeLessThan(0.15);
     });
 
-    it('counts the number field as entering the reading', () => {
+    it('counts the number field as entering the reading', async () => {
         departWith(MAX_TIC);
         const d = open();
         type(d.leftInput, 5);
         type(d.rightInput, 5);
 
-        recordStop(10);
+        await recordStop(10);
 
         expect(rejected()).toBe(false);
         expect(tank().total).toBe(FuelEngine.createMeasurement(5, 5, overlay._coefficients).total_gal);
@@ -223,12 +236,12 @@ describe('fuel stop record — requires a reading entered this session', () => {
         ['right + button',    () => tap('fo-right-plus')],
     ];
     CONTROLS.forEach(([label, touch]) => {
-        it(`accepts a reading entered with the ${label} alone`, () => {
+        it(`accepts a reading entered with the ${label} alone`, async () => {
             departWith(8);
             const d = open();
             touch(d);
 
-            recordStop(10);
+            await recordStop(10);
 
             expect(rejected()).toBe(false);
             expect(status()).toMatch(/Recorded:/);
@@ -238,7 +251,7 @@ describe('fuel stop record — requires a reading entered this session', () => {
         });
     });
 
-    it('starts every show() untouched — a reading entered before a hide does not carry over', () => {
+    it('starts every show() untouched — a reading entered before a hide does not carry over', async () => {
         departWith(MAX_TIC);
         const d = open();
         drag(d.leftSlider, 6);
@@ -246,29 +259,29 @@ describe('fuel stop record — requires a reading entered this session', () => {
         overlay.hide();
 
         open();                                        // second session, nothing touched
-        recordStop(12);
+        await recordStop(12);
 
         expect(rejected()).toBe(true);
         expect(tank().total).toBe(36);                 // still the departure figure
     });
 
-    it('consumes the reading — a second RECORD tap needs its own measurement', () => {
+    it('consumes the reading — a second RECORD tap needs its own measurement', async () => {
         departWith(MAX_TIC);
         const d = open();
         drag(d.leftSlider, 6);
         drag(d.rightSlider, 6);
 
-        recordStop(12);
+        await recordStop(12);
         expect(rejected()).toBe(false);
         const afterFirst = tank();
 
-        recordStop(12);                                // double tap / second pump
+        await recordStop(12);                          // double tap / second pump
         expect(rejected()).toBe(true);
         expect(tank().stampedAt).toBe(afterFirst.stampedAt);
         expect(JSON.parse(localStorage.getItem('flytab_fuel_stops'))).toHaveLength(1);
     });
 
-    it('still refuses 0/0 after the controls were touched — ticToGallons(0) is not zero', () => {
+    it('still refuses 0/0 after the controls were touched — ticToGallons(0) is not zero', async () => {
         // The reason a computed-gallons check cannot stand in for this guard.
         expect(FuelEngine.ticToGallons(0, overlay._coefficients)).toBeGreaterThan(2);
 
@@ -277,7 +290,7 @@ describe('fuel stop record — requires a reading entered this session', () => {
         drag(d.leftSlider, 0);
         drag(d.rightSlider, 0);
 
-        recordStop(12);
+        await recordStop(12);
 
         expect(rejected()).toBe(true);
         expect(tank().total).toBe(36);                 // 4.5 gal of intercept never written

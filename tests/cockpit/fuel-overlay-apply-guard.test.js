@@ -71,10 +71,19 @@ beforeEach(() => {
             return undefined;
         },
     };
-    // Every network call the overlay makes is best-effort (Pi sync, flight-CSV EDM
-    // lookup). Offline is the fuel-stop reality and keeps _resolveEdmFuel() at null.
+    // The flight-CSV EDM lookup (_resolveEdmFuel(), localhost:9090) stays offline —
+    // these guard tests don't exercise EDM resolution and rely on it resolving to
+    // null. The Pi fuel-sync endpoint (fuel-overlay.js's _syncFuelSetToEngine) is
+    // mocked reachable-and-successful instead: since Pi-sync outcome is now
+    // surfaced (rather than swallowed — see fuel-overlay-set-add-sync.test.js for
+    // the outcome-reporting contract itself), a real "offline" mock here would
+    // make every guard-accepted reading also report a Pi-sync failure and stay
+    // open, which is not what these tests are checking.
+    window.engineClient = { ip: '192.168.1.50' };
     realFetch = globalThis.fetch;
-    globalThis.fetch = () => Promise.reject(new Error('offline'));
+    globalThis.fetch = (url) => (typeof url === 'string' && url.includes('localhost:9090'))
+        ? Promise.reject(new Error('offline'))
+        : Promise.resolve({ ok: true, status: 200 });
     globalThis.wireTap = (el, fn) => { if (el) el.addEventListener('click', fn); };
 
     overlay = new FuelOverlay(document.body);
@@ -84,6 +93,7 @@ afterEach(() => {
     overlay?._el?.remove();
     overlay = null;
     globalThis.fetch = realFetch;
+    delete window.engineClient;
 });
 
 /* ---------------------------------------------------------------- helpers */
