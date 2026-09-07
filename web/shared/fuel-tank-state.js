@@ -57,6 +57,23 @@ class FuelTankState {
     }
 
     /**
+     * Configured per-tank capacity from aircraft-config.json (via CockpitConfig),
+     * or `fallback` if unavailable/invalid. Single source for this lookup — shared
+     * by init()'s clamp and any caller needing a fat-finger/plausibility ceiling —
+     * so a future change to the capacity config path updates every caller at once.
+     * @param {number} fallback - value to use when config is unavailable
+     */
+    static perSideCapGal(fallback) {
+        try {
+            if (typeof CockpitConfig !== 'undefined') {
+                const cap = CockpitConfig.aircraft('performance.fuel_capacity_gal');
+                if (cap > 0) return cap / 2;
+            }
+        } catch (_) { /* fall through to caller's fallback */ }
+        return fallback;
+    }
+
+    /**
      * Initialize with preflight fuel quantities. Clears requires_confirm.
      * @param {number} leftGal
      * @param {number} rightGal
@@ -69,13 +86,7 @@ class FuelTankState {
         // against, so fall back to L and make the pilot confirm rather than guessing.
         const validTank = (activeTank === 'L' || activeTank === 'R');
         FuelTankState._lastConfirmPromptAt = Date.now();
-        let perSideCap = Infinity;
-        try {
-            if (typeof CockpitConfig !== 'undefined') {
-                const cap = CockpitConfig.aircraft('performance.fuel_capacity_gal');
-                if (cap > 0) perSideCap = cap / 2;
-            }
-        } catch (_) { /* no config available — no clamp */ }
+        const perSideCap = FuelTankState.perSideCapGal(Infinity);
         FuelTankState._state = {
             left_gal: Math.min(perSideCap, Math.max(0, leftGal)),
             right_gal: Math.min(perSideCap, Math.max(0, rightGal)),

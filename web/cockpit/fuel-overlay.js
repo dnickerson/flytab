@@ -471,9 +471,12 @@ class FuelOverlay {
         const leftGal = FuelEngine.ticToGallons(this._leftTic, this._coefficients);
         const rightGal = FuelEngine.ticToGallons(this._rightTic, this._coefficients);
         const total = leftGal + rightGal;
+        const cap = (typeof FuelTankState !== 'undefined') ? FuelTankState.perSideCapGal(18) : 18;
 
         this._dom.leftGal.textContent = leftGal.toFixed(1) + ' gal';
+        this._dom.leftGal.classList.toggle('fo-gal-implausible', leftGal > cap);
         this._dom.rightGal.textContent = rightGal.toFixed(1) + ' gal';
+        this._dom.rightGal.classList.toggle('fo-gal-implausible', rightGal > cap);
         this._dom.totalGal.textContent = total.toFixed(1);
 
         // EDM comparison
@@ -600,6 +603,16 @@ class FuelOverlay {
             return;
         }
 
+        const leftGal = FuelEngine.ticToGallons(this._leftTic, this._coefficients);
+        const rightGal = FuelEngine.ticToGallons(this._rightTic, this._coefficients);
+        const cap = (typeof FuelTankState !== 'undefined') ? FuelTankState.perSideCapGal(18) : 18;
+        if (leftGal > cap || rightGal > cap) {
+            this._setApplyStatus(
+                `Tic reading implies ${Math.max(leftGal, rightGal).toFixed(1)} gal in one tank, more than it can hold (${cap.toFixed(0)} gal) — check the tic reading before applying`,
+                'error');
+            return;
+        }
+
         this._applying = true;
 
         // Resolve EDM fuel async, then complete measurement
@@ -719,6 +732,15 @@ class FuelOverlay {
             this._setAddStatus('Enter a tic-mark reading above before recording a fuel stop', 'error');
             return;
         }
+        const leftGalCheck = FuelEngine.ticToGallons(this._leftTic, this._coefficients);
+        const rightGalCheck = FuelEngine.ticToGallons(this._rightTic, this._coefficients);
+        const capCheck = (typeof FuelTankState !== 'undefined') ? FuelTankState.perSideCapGal(18) : 18;
+        if (leftGalCheck > capCheck || rightGalCheck > capCheck) {
+            this._setAddStatus(
+                `Tic reading implies ${Math.max(leftGalCheck, rightGalCheck).toFixed(1)} gal in one tank, more than it can hold (${capCheck.toFixed(0)} gal) — check the tic reading before recording`,
+                'error');
+            return;
+        }
         const airport = this._dom.addAirport.value.trim().toUpperCase();
         const date = this._dom.addDate.value;
         const time = this._dom.addTime.value;
@@ -783,13 +805,7 @@ class FuelOverlay {
      *  per side. Catches a decimal-point fat-finger (17 vs 1.7) that would
      *  otherwise floor an active tank at 0 with no confirmation prompt. */
     _droppedBurnMaxGal() {
-        try {
-            if (typeof CockpitConfig !== 'undefined') {
-                const cap = CockpitConfig.aircraft('performance.fuel_capacity_gal');
-                if (cap > 0) return cap / 2;
-            }
-        } catch (_) { /* fall through to default */ }
-        return 18;
+        return (typeof FuelTankState !== 'undefined') ? FuelTankState.perSideCapGal(18) : 18;
     }
 
     /**

@@ -277,3 +277,18 @@ describe('FuelTankState', () => {
         });
     });
 });
+
+describe('FuelTankState.perSideCapGal', () => {
+    it('returns configured capacity / 2 when CockpitConfig is available', () => {
+        const FuelTankState = freshFuelTankState();
+        global.CockpitConfig = { aircraft: (k) => k === 'performance.fuel_capacity_gal' ? 36 : null };
+        expect(FuelTankState.perSideCapGal(18)).toBe(18);
+    });
+
+    it('returns the caller-supplied fallback when CockpitConfig is unavailable', () => {
+        const FuelTankState = freshFuelTankState();
+        delete global.CockpitConfig;
+        expect(FuelTankState.perSideCapGal(Infinity)).toBe(Infinity);
+        expect(FuelTankState.perSideCapGal(18)).toBe(18);
+    });
+});
