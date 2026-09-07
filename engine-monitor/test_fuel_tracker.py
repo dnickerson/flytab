@@ -83,6 +83,20 @@ class FuelTrackerGapHandlingTests(unittest.TestCase):
         reloaded = em.FuelTracker(self.tmpdir)
         self.assertAlmostEqual(reloaded.dropped_burn_estimate_gal, 3.21, places=9)
 
+    def test_set_fuel_clears_outstanding_dropped_burn_debt(self):
+        # A fresh ground-truth reading (tic mark, fuel stop) supersedes whatever
+        # gap happened before it. Without this, applying a correction afterward
+        # would double-subtract fuel the fresh total already accounted for.
+        self.ft.dropped_burn_estimate_gal = 2.5
+        self.ft.set_fuel(15.0, reason='tic mark measurement')
+        self.assertEqual(self.ft.dropped_burn_estimate_gal, 0.0)
+        self.assertEqual(self.ft.fuel_remaining, 15.0)
+
+    def test_add_fuel_clears_outstanding_dropped_burn_debt(self):
+        self.ft.dropped_burn_estimate_gal = 1.8
+        self.ft.add_fuel(10.0, airport='KPAO')
+        self.assertEqual(self.ft.dropped_burn_estimate_gal, 0.0)
+
 
 if __name__ == '__main__':
     unittest.main()

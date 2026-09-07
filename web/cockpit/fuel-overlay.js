@@ -839,7 +839,20 @@ class FuelOverlay {
                 signal: AbortSignal.timeout(4000),
             });
             if (!resp.ok) throw new Error(`Pi returned ${resp.status}`);
-            const result = await resp.json().catch(() => null);
+            let result;
+            try {
+                result = await resp.json();
+            } catch (parseErr) {
+                // The Pi's endpoint ran (200 OK, and it applies under a single lock
+                // acquisition — see engine_monitor.py's apply_own_dropped_burn()), so
+                // the correction almost certainly landed. But we can't confirm the
+                // amount, so this must NOT collapse into the same reassuring message
+                // as a verified success (PR #143 review) — flag it and offer a retry.
+                this._piSyncFailed = true;
+                this._setDroppedBurnStatus(
+                    'Pi accepted the correction but its response could not be read — verify the Pi\'s own fuel display, or retry.', 'error');
+                return;
+            }
             this._piSyncFailed = false;
             const appliedGal = result?.applied_gal;
             this._setDroppedBurnStatus(

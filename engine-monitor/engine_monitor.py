@@ -479,6 +479,12 @@ class FuelTracker:
         """
         Record fuel addition.
 
+        A fresh fuel-stop entry supersedes any outstanding dropped-burn debt from
+        whatever gap happened before it — mirrors FlyTab's FuelTankState.init(),
+        which resets dropped_burn_estimate_gal to 0 on every fresh measurement.
+        Without this, applying a dropped-burn correction after a fuel stop would
+        double-subtract fuel the fresh total already accounted for.
+
         Args:
             gallons: Gallons added (or total if set_total=True)
             airport: Airport identifier
@@ -499,6 +505,7 @@ class FuelTracker:
 
             # Cap at aircraft capacity (36 gal; "usable capacity" is deprecated)
             self.fuel_remaining = min(self.fuel_remaining, FUEL_CONFIG['capacity_gal'])
+            self.dropped_burn_estimate_gal = 0.0
 
             # Reset total since fill if this was a fill-up
             if set_total or self.fuel_remaining >= FUEL_CONFIG['capacity_gal'] * 0.95:
@@ -531,10 +538,14 @@ class FuelTracker:
             return addition
 
     def set_fuel(self, gallons, reason=''):
-        """Manual override of fuel remaining."""
+        """Manual override of fuel remaining. A fresh ground-truth reading (tic
+        mark, fuel stop) supersedes any outstanding dropped-burn debt from
+        whatever gap happened before it — mirrors FlyTab's FuelTankState.init(),
+        which resets dropped_burn_estimate_gal to 0 on every fresh measurement."""
         with self.lock:
             old_value = self.fuel_remaining
             self.fuel_remaining = max(0, min(gallons, FUEL_CONFIG['capacity_gal']))
+            self.dropped_burn_estimate_gal = 0.0
             self.last_updated = datetime.now().isoformat()
             log(f"FuelTracker: Manual set from {old_value:.1f} to {self.fuel_remaining:.1f} gal - {reason}")
             self._save_state()
@@ -590,7 +601,6 @@ class FuelTracker:
                 return 0.0
             self.apply_dropped_burn(gallons)
             return gallons
-            self._save_state()
 
     def get_status(self):
         """Get current fuel status for API response."""

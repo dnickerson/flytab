@@ -137,6 +137,27 @@ describe('FuelOverlay._applyDroppedBurnCorrection', () => {
         expect(overlay._piSyncFailed).toBe(false);
     });
 
+    it('does not report a confident success when the Pi returns 200 but an unparseable body', async () => {
+        // The endpoint ran (200 OK) and applies atomically under one lock, so the
+        // correction almost certainly landed — but the amount is unknown, and this
+        // must not collapse into the same reassuring "Applied to both trackers"
+        // wording a verified success gets (PR #143 third review pass).
+        window.engineClient = { ip: '192.168.1.50' };
+        const overlay = makeOverlay();
+        overlay._dom.droppedBurnInput.value = '1.7';
+        vi.spyOn(global, 'fetch').mockResolvedValue({
+            ok: true, status: 200, json: async () => { throw new SyntaxError('Unexpected end of JSON input'); },
+        });
+
+        await overlay._applyDroppedBurnCorrection();
+
+        expect(FuelTankState.getState().left_gal).toBeCloseTo(8.3, 5); // local still applied
+        expect(overlay._dom.droppedBurnStatus.textContent).toMatch(/could not be read/i);
+        expect(overlay._dom.droppedBurnStatus.textContent).not.toMatch(/applied to both trackers/i);
+        expect(overlay._dom.droppedBurnStatus.className).toContain('fo-add-status-error');
+        expect(overlay._piSyncFailed).toBe(true);
+    });
+
     it('still applies locally, sets _piSyncFailed, and surfaces the failure when the Pi is unreachable', async () => {
         window.engineClient = { ip: '192.168.1.50' };
         const overlay = makeOverlay();
