@@ -249,23 +249,6 @@ class FuelTankState {
         return true;
     }
 
-    /**
-     * Add fuel to a specific tank (fuel stop).
-     * @param {'L'|'R'} tank
-     * @param {number} gallons
-     */
-    static topOff(tank, gallons) {
-        FuelTankState._load();
-        if (!FuelTankState._state || gallons <= 0) return;
-        if (tank === 'L') {
-            FuelTankState._state.left_gal = Math.max(0, FuelTankState._state.left_gal + gallons);
-        } else if (tank === 'R') {
-            FuelTankState._state.right_gal = Math.max(0, FuelTankState._state.right_gal + gallons);
-        }
-        FuelTankState._save();
-        FuelTankState._fire();
-    }
-
     /** Returns a copy of current state, or null if not initialized. */
     static getState() {
         FuelTankState._load();
