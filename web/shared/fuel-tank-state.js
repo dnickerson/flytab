@@ -170,6 +170,32 @@ class FuelTankState {
     }
 
     /**
+     * Apply a pilot-confirmed correction for fuel burned during a comms gap
+     * (tracked in dropped_burn_estimate_gal by onSample() but never auto-applied —
+     * the gap-time estimate extrapolates from whatever GPH arrived right after the
+     * gap, which may not represent what was actually happening during it, so this
+     * requires the pilot to review/edit the amount before it touches the gauge).
+     * Subtracts from the active tank and reduces the outstanding estimate by the
+     * same amount; does not touch the inactive tank.
+     * @param {number} gallons - pilot-confirmed (or edited) correction amount
+     */
+    static applyDroppedBurn(gallons) {
+        FuelTankState._load();
+        if (!FuelTankState._state || !(gallons > 0)) return;
+        if (FuelTankState._state.active_tank === 'L') {
+            FuelTankState._state.left_gal = Math.max(0, FuelTankState._state.left_gal - gallons);
+        } else if (FuelTankState._state.active_tank === 'R') {
+            FuelTankState._state.right_gal = Math.max(0, FuelTankState._state.right_gal - gallons);
+        } else {
+            return;   // no active tank to charge the correction against
+        }
+        FuelTankState._state.dropped_burn_estimate_gal =
+            Math.max(0, (FuelTankState._state.dropped_burn_estimate_gal || 0) - gallons);
+        FuelTankState._save();
+        FuelTankState._fire();
+    }
+
+    /**
      * Add fuel to a specific tank (fuel stop).
      * @param {'L'|'R'} tank
      * @param {number} gallons

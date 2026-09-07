@@ -93,7 +93,13 @@ class FuelOverlay {
                 TOTAL: <span id="fo-total-gal" class="fo-total-val">0.0</span> gal
             </div>
             <div class="fo-dropped-burn-row" id="fo-dropped-burn-row" style="display:none;">
-                Possible under-tracked burn during a comms gap: <span id="fo-dropped-burn-val">0.0</span> gal
+                <div>Possible under-tracked burn during a comms gap: <span id="fo-dropped-burn-val">0.0</span> gal</div>
+                <div class="fo-manual-row">
+                    <input type="number" class="fo-manual-input" id="fo-dropped-burn-input"
+                           min="0" max="50" step="0.1" value="0" aria-label="Correction amount, gallons">
+                    <button class="fo-manual-btn fo-set-btn" id="fo-dropped-burn-apply">APPLY CORRECTION</button>
+                </div>
+                <div class="fo-add-status" id="fo-dropped-burn-status"></div>
             </div>
 
             <!-- B) EDM COMPARISON -->
@@ -223,6 +229,9 @@ class FuelOverlay {
             totalGal: this._el.querySelector('#fo-total-gal'),
             droppedBurnRow: this._el.querySelector('#fo-dropped-burn-row'),
             droppedBurnVal: this._el.querySelector('#fo-dropped-burn-val'),
+            droppedBurnInput: this._el.querySelector('#fo-dropped-burn-input'),
+            droppedBurnApply: this._el.querySelector('#fo-dropped-burn-apply'),
+            droppedBurnStatus: this._el.querySelector('#fo-dropped-burn-status'),
             edmSection: this._el.querySelector('#fo-edm-section'),
             edmTic: this._el.querySelector('#fo-edm-tic'),
             edmEdm: this._el.querySelector('#fo-edm-edm'),
@@ -331,6 +340,11 @@ class FuelOverlay {
             window.dispatchEvent(new CustomEvent('fuelstate:changed'));
         });
 
+        // Wire dropped-burn correction
+        wireTap(this._el.querySelector('#fo-dropped-burn-apply'), () => {
+            this._applyDroppedBurnCorrection();
+        });
+
         // Wire apply
         wireTap(this._el.querySelector('#fo-apply'), () => {
             this._applyMeasurement();
@@ -380,17 +394,7 @@ class FuelOverlay {
             this._dom.manualInput.value = manual;
         }
 
-        // Surface any dropped-burn estimate from FuelTankState (comms-gap tracking)
-        try {
-            const tankState = (typeof FuelTankState !== 'undefined') ? FuelTankState.getState() : null;
-            const dropped = tankState?.dropped_burn_estimate_gal ?? 0;
-            if (dropped > 0.05) {
-                this._dom.droppedBurnVal.textContent = dropped.toFixed(2);
-                this._dom.droppedBurnRow.style.display = '';
-            } else {
-                this._dom.droppedBurnRow.style.display = 'none';
-            }
-        } catch (_) { /* FuelTankState unavailable */ }
+        this._refreshDroppedBurnRow();
 
         // Auto-fill fuel-add date/time with current local time
         const now = new Date();
@@ -454,6 +458,29 @@ class FuelOverlay {
 
         // EDM comparison
         this._updateEdmComparison(total);
+    }
+
+    /**
+     * Surface any dropped-burn estimate from FuelTankState (comms-gap tracking) and
+     * pre-fill the correction input with it. Called on show() and again after
+     * _applyDroppedBurnCorrection() so the row reflects what's actually left to
+     * reconcile rather than the value it had when the overlay was opened.
+     */
+    _refreshDroppedBurnRow() {
+        try {
+            const tankState = (typeof FuelTankState !== 'undefined') ? FuelTankState.getState() : null;
+            const dropped = tankState?.dropped_burn_estimate_gal ?? 0;
+            if (dropped > 0.05) {
+                this._dom.droppedBurnVal.textContent = dropped.toFixed(2);
+                this._dom.droppedBurnRow.style.display = '';
+                // Don't clobber a value the pilot is actively editing.
+                if (document.activeElement !== this._dom.droppedBurnInput) {
+                    this._dom.droppedBurnInput.value = dropped.toFixed(1);
+                }
+            } else {
+                this._dom.droppedBurnRow.style.display = 'none';
+            }
+        } catch (_) { /* FuelTankState unavailable */ }
     }
 
     _updateEdmComparison(ticTotal) {
@@ -695,6 +722,53 @@ class FuelOverlay {
 
     _engineBaseUrl() {
         return EngineClient.baseUrl();
+    }
+
+    /**
+     * Apply a pilot-confirmed (or edited) dropped-burn correction to both fuel
+     * trackers: FlyTab's own FuelTankState, and the Pi's independent FuelTracker.
+     * Unlike _syncFuelSetToEngine()/_syncFuelAddToEngine(), the Pi sync here is NOT
+     * fire-and-forget — a correction the pilot explicitly confirmed that silently
+     * fails to reach the Pi would leave the two displayed fuel numbers diverged
+     * with no indication, so failure is reported instead of swallowed.
+     */
+    async _applyDroppedBurnCorrection() {
+        const gallons = parseFloat(this._dom.droppedBurnInput.value);
+        if (!(gallons > 0)) {
+            this._setDroppedBurnStatus('Enter a positive correction amount', 'error');
+            return;
+        }
+        this._dom.droppedBurnApply.disabled = true;
+        try {
+            FuelTankState.applyDroppedBurn(gallons);
+
+            const base = this._engineBaseUrl();
+            if (!base) {
+                this._setDroppedBurnStatus(
+                    `Applied ${gallons.toFixed(1)} gal to FlyTab — Pi unreachable, engine-side total NOT corrected`, 'error');
+                return;
+            }
+            const resp = await fetch(`${base}/api/fuel/apply_dropped_burn`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ gallons }),
+                signal: AbortSignal.timeout(4000),
+            });
+            if (!resp.ok) throw new Error(`Pi returned ${resp.status}`);
+            this._setDroppedBurnStatus(`Applied ${gallons.toFixed(1)} gal to both trackers`, 'ok');
+        } catch (err) {
+            this._setDroppedBurnStatus(
+                `Applied ${gallons.toFixed(1)} gal to FlyTab — Pi sync failed (${err.message}), engine-side total NOT corrected`, 'error');
+        } finally {
+            this._dom.droppedBurnApply.disabled = false;
+            this._refreshDroppedBurnRow();
+        }
+    }
+
+    _setDroppedBurnStatus(msg, type) {
+        const el = this._dom.droppedBurnStatus;
+        el.textContent = msg;
+        el.className = 'fo-add-status fo-add-status-' + (type || 'ok');
     }
 
     _syncFuelSetToEngine(gallons, reason = '') {
