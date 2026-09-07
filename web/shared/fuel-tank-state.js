@@ -57,6 +57,23 @@ class FuelTankState {
     }
 
     /**
+     * Configured per-tank capacity from aircraft-config.json (via CockpitConfig),
+     * or `fallback` if unavailable/invalid. Single source for this lookup — shared
+     * by init()'s clamp and any caller needing a fat-finger/plausibility ceiling —
+     * so a future change to the capacity config path updates every caller at once.
+     * @param {number} fallback - value to use when config is unavailable
+     */
+    static perSideCapGal(fallback) {
+        try {
+            if (typeof CockpitConfig !== 'undefined') {
+                const cap = CockpitConfig.aircraft('performance.fuel_capacity_gal');
+                if (cap > 0) return cap / 2;
+            }
+        } catch (_) { /* fall through to caller's fallback */ }
+        return fallback;
+    }
+
+    /**
      * Initialize with preflight fuel quantities. Clears requires_confirm.
      * @param {number} leftGal
      * @param {number} rightGal
@@ -69,13 +86,7 @@ class FuelTankState {
         // against, so fall back to L and make the pilot confirm rather than guessing.
         const validTank = (activeTank === 'L' || activeTank === 'R');
         FuelTankState._lastConfirmPromptAt = Date.now();
-        let perSideCap = Infinity;
-        try {
-            if (typeof CockpitConfig !== 'undefined') {
-                const cap = CockpitConfig.aircraft('performance.fuel_capacity_gal');
-                if (cap > 0) perSideCap = cap / 2;
-            }
-        } catch (_) { /* no config available — no clamp */ }
+        const perSideCap = FuelTankState.perSideCapGal(Infinity);
         FuelTankState._state = {
             left_gal: Math.min(perSideCap, Math.max(0, leftGal)),
             right_gal: Math.min(perSideCap, Math.max(0, rightGal)),
@@ -86,6 +97,7 @@ class FuelTankState {
             initialized_at: now,
             imbalance: false,
             dropped_burn_estimate_gal: 0,
+            dropped_burn_ambiguous: false,
         };
         FuelTankState._loaded = true;
         FuelTankState._save();
@@ -117,7 +129,26 @@ class FuelTankState {
         }
 
         const burned = gph * (dtMs / 1000) / 3600;
-        if (!FuelTankState._debitActiveTank(burned)) return;
+
+        // If the pilot switched tanks since the last sample, split this interval's
+        // burn at the switch point instead of crediting it all to whichever tank is
+        // active now — otherwise burn actually drawn from the tank just left, before
+        // the switch, is never subtracted from it.
+        const switchMs = FuelTankState._state.tank_switched_at
+            ? new Date(FuelTankState._state.tank_switched_at).getTime()
+            : null;
+        const preSwitchTank = FuelTankState._state.pre_switch_tank;
+        FuelTankState._state.pre_switch_tank = null; // consume regardless of outcome below
+
+        if (preSwitchTank && switchMs !== null && switchMs > lastMs && switchMs < nowMs) {
+            const preFraction = (switchMs - lastMs) / rawDtMs;
+            const burnedPre = burned * preFraction;
+            const burnedPost = burned - burnedPre;
+            if (!FuelTankState._debitTank(preSwitchTank, burnedPre)) return;
+            if (!FuelTankState._debitActiveTank(burnedPost)) return;
+        } else {
+            if (!FuelTankState._debitActiveTank(burned)) return;
+        }
 
         FuelTankState._state.last_sample_at = new Date(nowMs).toISOString();
 
@@ -141,20 +172,19 @@ class FuelTankState {
     }
 
     /**
-     * Debit `gallons` from whichever tank is active. Shared by onSample() and
-     * applyDroppedBurn() so the two burn-accounting paths can't drift apart — an
-     * active_tank that's neither L nor R (legacy 'BOTH' state, or corruption)
-     * tells us nothing about which tank is draining. Splitting the burn would
-     * understate the feeding tank — it could run dry while the gauge still shows
-     * fuel — so this stops and flags requires_confirm instead of guessing.
+     * Debit `gallons` from a specific tank ('L' or 'R'). An invalid tank (legacy
+     * 'BOTH' state, or corruption) tells us nothing about which tank is draining;
+     * splitting the burn would understate the feeding tank, so this stops and
+     * flags requires_confirm instead of guessing.
+     * @param {'L'|'R'} tank
      * @param {number} gallons
      * @returns {boolean} true if the debit was applied
      */
-    static _debitActiveTank(gallons) {
-        if (FuelTankState._state.active_tank === 'L') {
+    static _debitTank(tank, gallons) {
+        if (tank === 'L') {
             FuelTankState._state.left_gal = Math.max(0, FuelTankState._state.left_gal - gallons);
             return true;
-        } else if (FuelTankState._state.active_tank === 'R') {
+        } else if (tank === 'R') {
             FuelTankState._state.right_gal = Math.max(0, FuelTankState._state.right_gal - gallons);
             return true;
         }
@@ -165,6 +195,16 @@ class FuelTankState {
     }
 
     /**
+     * Debit `gallons` from whichever tank is active. Shared by onSample() and
+     * applyDroppedBurn() so the two burn-accounting paths can't drift apart.
+     * @param {number} gallons
+     * @returns {boolean} true if the debit was applied
+     */
+    static _debitActiveTank(gallons) {
+        return FuelTankState._debitTank(FuelTankState._state.active_tank, gallons);
+    }
+
+    /**
      * Switch the active fuel tank.
      * @param {'L'|'R'} tank - this airframe has no BOTH selector position
      */
@@ -172,8 +212,21 @@ class FuelTankState {
         FuelTankState._load();
         if (!FuelTankState._state) return;
         if (tank !== 'L' && tank !== 'R') return;   // no BOTH on this aircraft
+        const prevTank = FuelTankState._state.active_tank;
+        if ((prevTank === 'L' || prevTank === 'R') && prevTank !== tank) {
+            FuelTankState._state.pre_switch_tank = prevTank;
+            FuelTankState._state.tank_switched_at = new Date().toISOString();
+            // A comms-gap correction accrued while feeding from prevTank has no record of
+            // which tank was active for each contributing gap — dropped_burn_estimate_gal
+            // is one running total, not a per-tank breakdown. Once the pilot has moved to
+            // a different tank it can no longer be safely auto-attributed to either one.
+            // Same "stop and ask, don't guess" rule as an invalid active_tank; clears on
+            // the next fresh measurement via init().
+            if ((FuelTankState._state.dropped_burn_estimate_gal || 0) > 0.05) {
+                FuelTankState._state.dropped_burn_ambiguous = true;
+            }
+        }
         FuelTankState._state.active_tank = tank;
-        FuelTankState._state.tank_switched_at = new Date().toISOString();
         FuelTankState._save();
         FuelTankState._fire();
     }
@@ -198,6 +251,7 @@ class FuelTankState {
     static applyDroppedBurn(gallons) {
         FuelTankState._load();
         if (!FuelTankState._state || FuelTankState._state.requires_confirm || !(gallons > 0)) return false;
+        if (FuelTankState._state.dropped_burn_ambiguous) return false;
         if (!FuelTankState._debitActiveTank(gallons)) return false;
         FuelTankState._state.dropped_burn_estimate_gal =
             Math.max(0, (FuelTankState._state.dropped_burn_estimate_gal || 0) - gallons);
@@ -206,21 +260,12 @@ class FuelTankState {
         return true;
     }
 
-    /**
-     * Add fuel to a specific tank (fuel stop).
-     * @param {'L'|'R'} tank
-     * @param {number} gallons
-     */
-    static topOff(tank, gallons) {
+    /** True if a tank switch occurred while a comms-gap correction was still
+     *  outstanding, making it unsafe to auto-attribute to either tank. Clears
+     *  on the next init() (fresh tic measurement or fuel stop). */
+    static isDroppedBurnAmbiguous() {
         FuelTankState._load();
-        if (!FuelTankState._state || gallons <= 0) return;
-        if (tank === 'L') {
-            FuelTankState._state.left_gal = Math.max(0, FuelTankState._state.left_gal + gallons);
-        } else if (tank === 'R') {
-            FuelTankState._state.right_gal = Math.max(0, FuelTankState._state.right_gal + gallons);
-        }
-        FuelTankState._save();
-        FuelTankState._fire();
+        return !!(FuelTankState._state && FuelTankState._state.dropped_burn_ambiguous);
     }
 
     /** Returns a copy of current state, or null if not initialized. */

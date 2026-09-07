@@ -149,7 +149,7 @@ describe('InstrumentStrip FUEL — canonical fuel source', () => {
         const el = setup({ tankL: 9, tankR: 9 });
         const value = () => el.querySelector('.is-field[data-field="fuel"] .is-value').textContent;
         expect(fuelField({}).text).toBe('18.0');
-        FuelTankState.topOff('L', 4);       // fires fueltankstate:changed
+        FuelTankState.init(13, 9, 'L');     // fires fueltankstate:changed
         expect(value()).toBe('22.0');
     });
 

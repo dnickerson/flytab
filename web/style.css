@@ -5659,6 +5659,10 @@ body.fs-overlay-open .radar-loop-controls {
     color: var(--color-success);
     margin-top: 6px;
 }
+.fo-gal-implausible {
+    color: var(--color-danger-on-light);
+    font-weight: 900;
+}
 .fo-total-row {
     text-align: center;
     font-size: 16px;

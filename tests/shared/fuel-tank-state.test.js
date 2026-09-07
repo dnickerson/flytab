@@ -215,4 +215,146 @@ describe('FuelTankState', () => {
             expect(FuelTankState.needsConfirmation()).toBe(true);
         });
     });
+
+    describe('mid-interval tank switch', () => {
+        it('splits burn across a mid-interval tank switch between the tank left and the tank switched to', () => {
+            const FuelTankState = freshFuelTankState();
+            delete global.CockpitConfig;
+            FuelTankState.init(18, 18, 'L');
+            const t0 = new Date(FuelTankState.getState().last_sample_at).getTime();
+
+            // First sample: 2s @ 10 GPH burned from L before any switch.
+            FuelTankState.onSample(10, t0 + 2000);
+            const afterFirst = FuelTankState.getState();
+
+            // Pilot switches to R 3s after that sample. Write the switch directly to
+            // storage (mirrors switchTank()'s own writes) so the test can control the
+            // exact timestamp instead of racing Date.now().
+            const switchAt = t0 + 2000 + 3000;
+            const switched = {
+                ...afterFirst,
+                active_tank: 'R',
+                pre_switch_tank: 'L',
+                tank_switched_at: new Date(switchAt).toISOString(),
+            };
+            localStorage.setItem(FuelTankState.STORAGE_KEY, JSON.stringify(switched));
+            FuelTankState._loaded = false;
+
+            // Next telemetry sample arrives 7s after the switch (10s after the last real sample).
+            FuelTankState.onSample(10, switchAt + 7000);
+            const finalState = FuelTankState.getState();
+
+            // Of the 10s interval since the last sample, 3s was pre-switch (still fed
+            // from L) and 7s was post-switch (fed from R) — burn must split accordingly,
+            // not be credited entirely to R just because R is active by the time the
+            // sample lands.
+            expect(finalState.left_gal).toBeCloseTo(afterFirst.left_gal - 10 * (3 / 3600), 4);
+            expect(finalState.right_gal).toBeCloseTo(18 - 10 * (7 / 3600), 4);
+            expect(finalState.pre_switch_tank == null).toBe(true); // consumed
+        });
+
+        it('does not split burn when no tank switch occurred since the last sample', () => {
+            const FuelTankState = freshFuelTankState();
+            delete global.CockpitConfig;
+            FuelTankState.init(18, 18, 'L');
+            const t0 = new Date(FuelTankState.getState().last_sample_at).getTime();
+            FuelTankState.onSample(10, t0 + 5000);
+            const state = FuelTankState.getState();
+            expect(state.left_gal).toBeCloseTo(18 - 10 * (5 / 3600), 4);
+            expect(state.right_gal).toBe(18);
+        });
+
+        it('switchTank() records pre_switch_tank and tank_switched_at only when the tank actually changes', () => {
+            const FuelTankState = freshFuelTankState();
+            delete global.CockpitConfig;
+            FuelTankState.init(18, 18, 'L');
+            FuelTankState.switchTank('L'); // no-op — already on L
+            expect(FuelTankState.getState().pre_switch_tank == null).toBe(true);
+            FuelTankState.switchTank('R');
+            const state = FuelTankState.getState();
+            expect(state.pre_switch_tank).toBe('L');
+            expect(state.active_tank).toBe('R');
+        });
+    });
+});
+
+describe('FuelTankState.perSideCapGal', () => {
+    it('returns configured capacity / 2 when CockpitConfig is available', () => {
+        const FuelTankState = freshFuelTankState();
+        global.CockpitConfig = { aircraft: (k) => k === 'performance.fuel_capacity_gal' ? 36 : null };
+        expect(FuelTankState.perSideCapGal(18)).toBe(18);
+    });
+
+    it('returns the caller-supplied fallback when CockpitConfig is unavailable', () => {
+        const FuelTankState = freshFuelTankState();
+        delete global.CockpitConfig;
+        expect(FuelTankState.perSideCapGal(Infinity)).toBe(Infinity);
+        expect(FuelTankState.perSideCapGal(18)).toBe(18);
+    });
+});
+
+describe('FuelTankState dropped-burn ambiguity after a mid-gap tank switch', () => {
+    it('flags ambiguous when switching tanks while a dropped-burn correction is outstanding', () => {
+        const FuelTankState = freshFuelTankState();
+        delete global.CockpitConfig;
+        FuelTankState.init(18, 18, 'L');
+        FuelTankState._state.dropped_burn_estimate_gal = 2.0;
+        FuelTankState._save();
+
+        FuelTankState.switchTank('R');
+
+        expect(FuelTankState.isDroppedBurnAmbiguous()).toBe(true);
+    });
+
+    it('does not flag ambiguous when switching tanks with no outstanding correction', () => {
+        const FuelTankState = freshFuelTankState();
+        delete global.CockpitConfig;
+        FuelTankState.init(18, 18, 'L');
+
+        FuelTankState.switchTank('R');
+
+        expect(FuelTankState.isDroppedBurnAmbiguous()).toBe(false);
+    });
+
+    it('does not flag ambiguous for a below-threshold outstanding correction', () => {
+        const FuelTankState = freshFuelTankState();
+        delete global.CockpitConfig;
+        FuelTankState.init(18, 18, 'L');
+        FuelTankState._state.dropped_burn_estimate_gal = 0.02; // below the 0.05 threshold
+        FuelTankState._save();
+
+        FuelTankState.switchTank('R');
+
+        expect(FuelTankState.isDroppedBurnAmbiguous()).toBe(false);
+    });
+
+    it('applyDroppedBurn() refuses while ambiguous, without touching tank gallons or the estimate', () => {
+        const FuelTankState = freshFuelTankState();
+        delete global.CockpitConfig;
+        FuelTankState.init(18, 18, 'L');
+        FuelTankState._state.dropped_burn_estimate_gal = 2.0;
+        FuelTankState._save();
+        FuelTankState.switchTank('R');
+
+        const applied = FuelTankState.applyDroppedBurn(2.0);
+
+        expect(applied).toBe(false);
+        const state = FuelTankState.getState();
+        expect(state.right_gal).toBe(18); // active tank untouched
+        expect(state.dropped_burn_estimate_gal).toBe(2.0); // not consumed
+    });
+
+    it('clears the ambiguous flag on a fresh init() (new tic measurement or fuel stop)', () => {
+        const FuelTankState = freshFuelTankState();
+        delete global.CockpitConfig;
+        FuelTankState.init(18, 18, 'L');
+        FuelTankState._state.dropped_burn_estimate_gal = 2.0;
+        FuelTankState._save();
+        FuelTankState.switchTank('R');
+        expect(FuelTankState.isDroppedBurnAmbiguous()).toBe(true);
+
+        FuelTankState.init(16, 16, 'R');
+
+        expect(FuelTankState.isDroppedBurnAmbiguous()).toBe(false);
+    });
 });

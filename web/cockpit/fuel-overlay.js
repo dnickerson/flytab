@@ -18,6 +18,13 @@ class FuelOverlay {
         this._cachedCsvEdmFuel = 0;
         this._shownAt = 0;
         this._applying = false;
+        // Re-entrancy guard for _recordFuelStop(), same rationale as _applying above:
+        // the Pi sync it awaits (_syncFuelAddToEngine, up to 4000ms) is a real network
+        // round trip, so a second RECORD tap before the first settles must be refused
+        // rather than racing past the guard-clearing side effects that only run after
+        // the await — otherwise a double tap can duplicate a fuel-stop entry and
+        // double-add gallons to the Pi's authoritative fuel total.
+        this._recording = false;
         // True once the pilot has moved a slider, typed in a tic field or tapped a
         // ± button since the current show(). show() restores the PREVIOUS
         // measurement into the tic fields, so a fuel stop recorded without touching
@@ -37,6 +44,22 @@ class FuelOverlay {
         // visible with a RETRY affordance even after the local correction already
         // landed, so a failed Pi sync isn't a dead end (see PR #143 review).
         this._piSyncFailed = false;
+        // Mirrors _piSyncFailed but for the RECORD FUEL STOP path — set when
+        // _syncFuelAddToEngine() fails after a fuel stop has already been recorded
+        // locally (flytab_fuel_stops + FuelTankState). _lastFuelStopPending holds the
+        // exact {gallons, airport, price} that failed to reach the Pi, so the RECORD
+        // FUEL STOP button can dual-purpose as a Pi-only retry (same pattern as
+        // _piSyncFailed / _retryPiDroppedBurnSync(), PR #143) instead of forcing the
+        // pilot to re-enter a fresh tic reading — which would append a SECOND
+        // flytab_fuel_stops entry and, since the Pi's fuel total is additive, could
+        // double-add gallons if the original POST actually landed despite the
+        // client-side failure (Finding 1, 2026-09 whole-branch audit). Only the most
+        // recently failed fuel stop is tracked; if a second, distinct stop is recorded
+        // successfully before an earlier failure is retried, the earlier failure's
+        // tracking is intentionally superseded (single-slot, not a queue) — matches
+        // the scope of the audit finding.
+        this._fuelStopPiSyncFailed = false;
+        this._lastFuelStopPending = null;
         this._buildDOM();
     }
 
@@ -221,6 +244,26 @@ class FuelOverlay {
                     Ratio = Filled ÷ Used (EDM). Multiply by current K-factor to correct fuel flow accuracy.
                 </div>
             </div>
+
+            <!-- H) PI K-FACTOR (LIVE) -->
+            <div id="fo-kfactor-pi" style="display:none;">
+                <div class="fo-section-title">PI K-FACTOR (LIVE)</div>
+                <div class="fo-kfactor-panel">
+                    <div class="fo-kfactor-row">
+                        <div class="fo-kfactor-item">
+                            <div class="fo-kfactor-label">CURRENT (PI)</div>
+                            <div class="fo-kfactor-val" id="fo-kf-pi-current">--</div>
+                        </div>
+                        <div class="fo-kfactor-item">
+                            <div class="fo-kfactor-label">SUGGESTED (PI)</div>
+                            <div class="fo-kfactor-val" id="fo-kf-pi-suggested">--</div>
+                        </div>
+                    </div>
+                    <div class="fo-kfactor-guidance" id="fo-kf-pi-recommendation"></div>
+                    <button class="fo-manual-btn fo-set-btn" id="fo-kf-pi-apply" style="display:none;">APPLY TO PI</button>
+                    <div class="fo-add-status" id="fo-kf-pi-status"></div>
+                </div>
+            </div>
         </div>`;
 
         this._container.appendChild(this._el);
@@ -263,6 +306,12 @@ class FuelOverlay {
             kfUsed:    this._el.querySelector('#fo-kf-used'),
             kfRatio:   this._el.querySelector('#fo-kf-ratio'),
             kfGuidance: this._el.querySelector('#fo-kf-guidance'),
+            kfPiSection: this._el.querySelector('#fo-kfactor-pi'),
+            kfPiCurrent: this._el.querySelector('#fo-kf-pi-current'),
+            kfPiSuggested: this._el.querySelector('#fo-kf-pi-suggested'),
+            kfPiRecommendation: this._el.querySelector('#fo-kf-pi-recommendation'),
+            kfPiApply: this._el.querySelector('#fo-kf-pi-apply'),
+            kfPiStatus: this._el.querySelector('#fo-kf-pi-status'),
         };
 
         // Wire close
@@ -363,9 +412,23 @@ class FuelOverlay {
             this._applyMeasurement();
         });
 
-        // Wire fuel-add record button
+        // Wire fuel-add record button. Dual-purpose, same pattern as the dropped-burn
+        // APPLY/RETRY button: when the last fuel stop's Pi sync failed and the pilot
+        // has not entered a new gallons figure (addGal is empty — it's cleared after
+        // every record attempt, success or failure), this tap retries ONLY the Pi
+        // sync for the pending stop rather than recording a new one.
         wireTap(this._el.querySelector('#fo-add-record'), () => {
-            this._recordFuelStop();
+            const newGalEntered = parseFloat(this._dom.addGal.value) > 0;
+            if (this._fuelStopPiSyncFailed && this._lastFuelStopPending && !newGalEntered) {
+                this._retryFuelStopPiSync();
+            } else {
+                this._recordFuelStop();
+            }
+        });
+
+        // Wire Pi K-factor apply button
+        wireTap(this._el.querySelector('#fo-kf-pi-apply'), () => {
+            this._applyPiKFactor();
         });
     }
 
@@ -432,10 +495,24 @@ class FuelOverlay {
         this._dom.addStatus.textContent = '';
         if (this._dom.applyStatus) this._dom.applyStatus.textContent = '';
 
+        // Unlike _ticsTouchedSinceShow, a pending failed fuel-stop Pi sync is NOT a
+        // per-session thing — closing and reopening the overlay doesn't make the Pi's
+        // fuel total any less wrong, so this persists across show()/hide() (mirrors
+        // _piSyncFailed) and is re-surfaced here rather than reset.
+        this._refreshFuelStopButton();
+        if (this._fuelStopPiSyncFailed && this._lastFuelStopPending) {
+            const { gallons, airport, reason } = this._lastFuelStopPending;
+            this._setAddStatus(
+                `Pi still doesn't have the +${gallons.toFixed(1)} gal fuel stop at ${airport || '—'} ` +
+                `(${reason}). No new reading needed — tap RECORD FUEL STOP to retry sending it to the Pi.`,
+                'error');
+        }
+
         this._updateDisplay();
         this._updateSourceDisplay();
         this._renderHistory();
         this._renderKFactor();
+        this._fetchPiCalibration();
         this._cachedCsvEdmFuel = 0;
         this._el.style.display = 'flex';
         this._visible = true;
@@ -464,9 +541,12 @@ class FuelOverlay {
         const leftGal = FuelEngine.ticToGallons(this._leftTic, this._coefficients);
         const rightGal = FuelEngine.ticToGallons(this._rightTic, this._coefficients);
         const total = leftGal + rightGal;
+        const cap = (typeof FuelTankState !== 'undefined') ? FuelTankState.perSideCapGal(18) : 18;
 
         this._dom.leftGal.textContent = leftGal.toFixed(1) + ' gal';
+        this._dom.leftGal.classList.toggle('fo-gal-implausible', leftGal > cap);
         this._dom.rightGal.textContent = rightGal.toFixed(1) + ' gal';
+        this._dom.rightGal.classList.toggle('fo-gal-implausible', rightGal > cap);
         this._dom.totalGal.textContent = total.toFixed(1);
 
         // EDM comparison
@@ -563,6 +643,22 @@ class FuelOverlay {
         });
     }
 
+    /**
+     * Returns an error message if either tank's CURRENT tic-derived gallons
+     * exceeds capacity, else null. A single shared check so _applyMeasurement()
+     * and _recordFuelStop() can't drift apart, and so it can be re-run at write
+     * time (not just at tap time) — see _applyMeasurement()'s re-check comment.
+     */
+    _ticCapacityError() {
+        const leftGal = FuelEngine.ticToGallons(this._leftTic, this._coefficients);
+        const rightGal = FuelEngine.ticToGallons(this._rightTic, this._coefficients);
+        const cap = (typeof FuelTankState !== 'undefined') ? FuelTankState.perSideCapGal(18) : 18;
+        if (leftGal > cap || rightGal > cap) {
+            return `Tic reading implies ${Math.max(leftGal, rightGal).toFixed(1)} gal in one tank, more than it can hold (${cap.toFixed(0)} gal)`;
+        }
+        return null;
+    }
+
     /* ------------------------------------------------------------------
      * Apply measurement
      * ----------------------------------------------------------------*/
@@ -593,10 +689,28 @@ class FuelOverlay {
             return;
         }
 
+        const capError = this._ticCapacityError();
+        if (capError) {
+            this._setApplyStatus(`${capError} — check the tic reading before applying`, 'error');
+            return;
+        }
+
         this._applying = true;
 
         // Resolve EDM fuel async, then complete measurement
-        this._resolveEdmFuel().then(edmFuel => {
+        this._resolveEdmFuel().then(async edmFuel => {
+            // Re-check: the pilot can edit the tic reading during the async EDM
+            // resolve above (its own comment elsewhere notes this "can take
+            // 3-5s"), and nothing disables the sliders meanwhile. The guard above
+            // only validated the value at tap time — re-validate the CURRENT
+            // value here, right before it's written, so an implausible edit made
+            // mid-flight can't slip past the guard this re-check exists for
+            // (2026-09 audit finding).
+            const capErrorNow = this._ticCapacityError();
+            if (capErrorNow) {
+                this._setApplyStatus(`${capErrorNow} — check the tic reading before applying`, 'error');
+                return;
+            }
             const m = FuelEngine.createMeasurement(
                 this._leftTic, this._rightTic, this._coefficients, edmFuel
             );
@@ -612,9 +726,15 @@ class FuelOverlay {
             this._updateSourceDisplay();
             this._syncMeasurement(m);
             this._renderHistory();
-            // Sync authoritative tic measurement to Pi so both systems agree
-            this._syncFuelSetToEngine(m.total_gal, 'Preflight tic mark measurement');
-            this.hide();
+            // Sync authoritative tic measurement to Pi so both systems agree. Reported
+            // to the pilot instead of swallowed — a failed sync here means the Pi's own
+            // fuel total silently diverges from what FlyTab now shows (PR #143 audit).
+            const synced = await this._syncFuelSetToEngine(m.total_gal, 'Preflight tic mark measurement');
+            if (synced.ok) {
+                this.hide();
+            } else {
+                this._setApplyStatus(synced.message, 'error');
+            }
         }).catch(err => console.error('[FuelOverlay] applyMeasurement failed:', err))
           .finally(() => { this._applying = false; });
     }
@@ -666,7 +786,15 @@ class FuelOverlay {
         return null;
     }
 
-    _recordFuelStop() {
+    async _recordFuelStop() {
+        // Re-entrancy guard, same rationale as _applyMeasurement()'s _applying latch:
+        // the Pi sync below is a real await (up to 4000ms), and the guard-clearing
+        // side effects (_ticsTouchedSinceShow, addGal/addPrice/addGalL/addGalR) only
+        // run after it settles. Without this, a second RECORD tap before the first
+        // settles would sail past every other guard and append a duplicate
+        // flytab_fuel_stops entry, double-adding gallons to the Pi's authoritative total.
+        if (this._recording) return;
+
         const gallons = parseFloat(this._dom.addGal.value);
         if (!gallons || gallons <= 0) {
             this._setAddStatus('Enter gallons added', 'error');
@@ -698,12 +826,18 @@ class FuelOverlay {
             this._setAddStatus('Enter a tic-mark reading above before recording a fuel stop', 'error');
             return;
         }
+        const capError = this._ticCapacityError();
+        if (capError) {
+            this._setAddStatus(`${capError} — check the tic reading before recording`, 'error');
+            return;
+        }
         const airport = this._dom.addAirport.value.trim().toUpperCase();
         const date = this._dom.addDate.value;
         const time = this._dom.addTime.value;
         const priceRaw = parseFloat(this._dom.addPrice.value);
         const price = priceRaw > 0 ? priceRaw : null;
 
+        this._recording = true;
         try {
             // Store fuel stop locally (Capacitor Filesystem in Phase 3)
             const stops = JSON.parse(localStorage.getItem('flytab_fuel_stops') || '[]');
@@ -727,8 +861,8 @@ class FuelOverlay {
             window.dispatchEvent(new CustomEvent('fuelstate:changed'));
             this._updateSourceDisplay();
 
-            // Sync fuel stop to Pi — use add endpoint so Pi logs the stop in its own history
-            this._syncFuelAddToEngine(gallons, airport, price);
+            // Sync fuel stop to Pi — reported instead of swallowed (see _syncFuelSetToEngine).
+            const synced = await this._syncFuelAddToEngine(gallons, airport, price);
 
             // The reading has been consumed. A second RECORD tap must be backed by its own
             // fresh measurement, not this one — otherwise a double tap (or a second stop
@@ -740,9 +874,71 @@ class FuelOverlay {
             this._dom.addPrice.value = '';
             if (this._dom.addGalL) this._dom.addGalL.value = '';
             if (this._dom.addGalR) this._dom.addGalR.value = '';
-            this._setAddStatus(`Recorded: +${gallons.toFixed(1)} gal at ${airport || '—'} → ${newTotal.toFixed(1)} gal total`, 'ok');
+
+            if (synced.ok) {
+                // This record's own sync landed — but don't clobber tracking of a
+                // DIFFERENT, still-unretried fuel stop's failure (single-slot, see
+                // constructor comment): only clear if nothing else is pending.
+                if (!this._lastFuelStopPending) this._fuelStopPiSyncFailed = false;
+                this._setAddStatus(`Recorded: +${gallons.toFixed(1)} gal at ${airport || '—'} → ${newTotal.toFixed(1)} gal total`, 'ok');
+            } else {
+                // Local record already landed (flytab_fuel_stops + FuelTankState,
+                // above) — track exactly this stop so RECORD FUEL STOP can retry ONLY
+                // the Pi POST, never re-writing local state (Finding 1, 2026-09 audit).
+                this._fuelStopPiSyncFailed = true;
+                this._lastFuelStopPending = { gallons, airport, price, reason: synced.message };
+                this._setAddStatus(
+                    `Recorded: +${gallons.toFixed(1)} gal at ${airport || '—'} → ${newTotal.toFixed(1)} gal total. ` +
+                    `Pi not yet updated (${synced.message}) No new reading needed — tap RECORD FUEL STOP again to resend this fuel stop to the Pi.`,
+                    'error');
+            }
+            this._refreshFuelStopButton();
         } catch (err) {
             this._setAddStatus(`Save failed: ${err.message}`, 'error');
+        } finally {
+            this._recording = false;
+        }
+    }
+
+    /** Toggle the RECORD FUEL STOP button's label between its two purposes —
+     *  recording a new stop, or (when the last stop's Pi sync failed) retrying
+     *  just that sync. Mirrors _refreshDroppedBurnRow()'s APPLY/RETRY toggle. */
+    _refreshFuelStopButton() {
+        if (!this._dom.addRecord) return;
+        this._dom.addRecord.textContent =
+            (this._fuelStopPiSyncFailed && this._lastFuelStopPending) ? 'RETRY PI SYNC' : 'RECORD FUEL STOP';
+    }
+
+    /**
+     * Retry syncing the last-failed fuel stop to the Pi only — used when the local
+     * record already landed (flytab_fuel_stops + FuelTankState) but the earlier
+     * _syncFuelAddToEngine() call failed. Does NOT touch localStorage or
+     * FuelTankState again: doing so would append a second flytab_fuel_stops entry,
+     * and since the Pi's fuel total is additive, could double-add gallons if the
+     * original POST actually landed despite the client-side failure (e.g. a slow
+     * Pi that timed out at the JS side but still processed the request).
+     */
+    async _retryFuelStopPiSync() {
+        if (!this._lastFuelStopPending || this._recording) return;
+        this._recording = true;
+        if (this._dom.addRecord) this._dom.addRecord.disabled = true;
+        try {
+            const { gallons, airport, price } = this._lastFuelStopPending;
+            const synced = await this._syncFuelAddToEngine(gallons, airport, price);
+            if (synced.ok) {
+                this._fuelStopPiSyncFailed = false;
+                this._lastFuelStopPending = null;
+                this._setAddStatus(
+                    `Pi sync succeeded — +${gallons.toFixed(1)} gal at ${airport || '—'} is now recorded on the Pi as well.`,
+                    'ok');
+            } else {
+                this._lastFuelStopPending = { gallons, airport, price, reason: synced.message };
+                this._setAddStatus(`Retry failed — ${synced.message} Tap RECORD FUEL STOP again to retry.`, 'error');
+            }
+        } finally {
+            this._recording = false;
+            if (this._dom.addRecord) this._dom.addRecord.disabled = false;
+            this._refreshFuelStopButton();
         }
     }
 
@@ -754,13 +950,7 @@ class FuelOverlay {
      *  per side. Catches a decimal-point fat-finger (17 vs 1.7) that would
      *  otherwise floor an active tank at 0 with no confirmation prompt. */
     _droppedBurnMaxGal() {
-        try {
-            if (typeof CockpitConfig !== 'undefined') {
-                const cap = CockpitConfig.aircraft('performance.fuel_capacity_gal');
-                if (cap > 0) return cap / 2;
-            }
-        } catch (_) { /* fall through to default */ }
-        return 18;
+        return (typeof FuelTankState !== 'undefined') ? FuelTankState.perSideCapGal(18) : 18;
     }
 
     /**
@@ -782,6 +972,12 @@ class FuelOverlay {
         if (typeof FuelTankState !== 'undefined' && FuelTankState.needsConfirmation()) {
             this._setDroppedBurnStatus(
                 'Tank state needs confirmation before applying a correction — confirm tank selection first', 'error');
+            return;
+        }
+        if (typeof FuelTankState !== 'undefined' && FuelTankState.isDroppedBurnAmbiguous()) {
+            this._setDroppedBurnStatus(
+                'Cannot auto-apply — you switched tanks while this estimate was outstanding, so it can no longer be safely attributed to one tank. Record a fresh tic measurement or fuel stop to clear it.',
+                'error');
             return;
         }
         this._dom.droppedBurnApply.disabled = true;
@@ -868,29 +1064,58 @@ class FuelOverlay {
 
     _setDroppedBurnStatus(msg, type) { this._setStatus(this._dom.droppedBurnStatus, msg, type); }
 
-    _syncFuelSetToEngine(gallons, reason = '') {
+    /**
+     * Push the pilot-confirmed tic measurement to the Pi as its new authoritative
+     * fuel_remaining. Returns {ok, message} instead of swallowing the outcome — a
+     * failed sync here leaves the Pi's own fuel total silently diverged from what
+     * FlyTab now shows, the same risk fixed for the dropped-burn correction's Pi
+     * sync in PR #143.
+     * @returns {Promise<{ok: boolean, message: string}>}
+     */
+    async _syncFuelSetToEngine(gallons, reason = '') {
         const base = this._engineBaseUrl();
-        if (!base) { console.warn('FuelOverlay: engineClient.ip unavailable, skipping Pi fuel/set sync'); return; }
-        fetch(`${base}/api/fuel/set`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ fuel_remaining: gallons, reason }),
-            signal: AbortSignal.timeout(4000),
-        }).catch(() => { /* best-effort — Pi may be unreachable at fuel station */ });
+        if (!base) {
+            return { ok: false, message: 'Measurement saved locally — Pi unreachable, engine-side total NOT updated. Retry when back in range.' };
+        }
+        try {
+            const resp = await fetch(`${base}/api/fuel/set`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ fuel_remaining: gallons, reason }),
+                signal: AbortSignal.timeout(4000),
+            });
+            if (!resp.ok) throw new Error(`Pi returned ${resp.status}`);
+            return { ok: true, message: '' };
+        } catch (err) {
+            return { ok: false, message: `Measurement saved locally — Pi sync failed (${err.message}). Retry when back in range.` };
+        }
     }
 
-    _syncFuelAddToEngine(gallons, airport = '', price = null) {
+    /**
+     * Push a recorded fuel stop to the Pi's own fuel-addition log. Returns
+     * {ok, message} — same rationale as _syncFuelSetToEngine().
+     * @returns {Promise<{ok: boolean, message: string}>}
+     */
+    async _syncFuelAddToEngine(gallons, airport = '', price = null) {
         const base = this._engineBaseUrl();
-        if (!base) { console.warn('FuelOverlay: engineClient.ip unavailable, skipping Pi fuel/add sync'); return; }
+        if (!base) {
+            return { ok: false, message: 'Fuel stop saved locally — Pi unreachable, engine-side total NOT updated. Retry when back in range.' };
+        }
         const body = { gallons };
         if (airport) body.airport = airport;
         if (price != null) body.price_per_gallon = price;
-        fetch(`${base}/api/fuel/add`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-            signal: AbortSignal.timeout(4000),
-        }).catch(() => { /* best-effort */ });
+        try {
+            const resp = await fetch(`${base}/api/fuel/add`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+                signal: AbortSignal.timeout(4000),
+            });
+            if (!resp.ok) throw new Error(`Pi returned ${resp.status}`);
+            return { ok: true, message: '' };
+        } catch (err) {
+            return { ok: false, message: `Fuel stop saved locally — Pi sync failed (${err.message}). Retry when back in range.` };
+        }
     }
 
     _setAddStatus(msg, type) { this._setStatus(this._dom.addStatus, msg, type); }
@@ -1076,6 +1301,71 @@ class FuelOverlay {
             this._dom.kfGuidance.textContent = totalFilled > 0
                 ? 'Record more tic measurements with EDM data to compute ratio.'
                 : 'Record fuel stops to compute ratio.';
+        }
+    }
+
+    /** Best-effort read of the Pi's own K-factor calibration status. Passive
+     *  display refresh, same non-blocking pattern as _resolveEdmFuel() in
+     *  show() — on failure, leaves the panel hidden rather than showing stale
+     *  or fabricated numbers. */
+    async _fetchPiCalibration() {
+        const base = this._engineBaseUrl();
+        if (!base || !this._dom.kfPiSection) { if (this._dom.kfPiSection) this._dom.kfPiSection.style.display = 'none'; return; }
+        try {
+            const resp = await fetch(`${base}/api/fuel/calibration`, { signal: AbortSignal.timeout(4000) });
+            if (!resp.ok) throw new Error(`Pi returned ${resp.status}`);
+            const status = await resp.json();
+            this._renderPiKFactor(status);
+        } catch (_) {
+            this._dom.kfPiSection.style.display = 'none';
+        }
+    }
+
+    _renderPiKFactor(status) {
+        this._piCalibration = status;
+        this._dom.kfPiSection.style.display = '';
+        this._dom.kfPiCurrent.textContent = status.current_k_factor != null ? String(status.current_k_factor) : '--';
+        if (status.ready) {
+            this._dom.kfPiSuggested.textContent = String(status.suggested_k_factor);
+            this._dom.kfPiRecommendation.textContent = status.recommendation || '';
+            this._dom.kfPiApply.style.display = '';
+        } else {
+            this._dom.kfPiSuggested.textContent = '--';
+            this._dom.kfPiRecommendation.textContent = status.message || '';
+            this._dom.kfPiApply.style.display = 'none';
+        }
+    }
+
+    /** Record the Pi's own suggested K-factor as applied (POST — the Pi does
+     *  not re-program the physical sensor; this is a log entry the pilot
+     *  confirms after manually setting the new K-factor on the Dynon EMS). */
+    async _applyPiKFactor() {
+        if (!this._piCalibration?.ready) return;
+        const newK = this._piCalibration.suggested_k_factor;
+        const base = this._engineBaseUrl();
+        if (!base) {
+            this._setStatus(this._dom.kfPiStatus, 'Pi unreachable — cannot record applied K-factor', 'error');
+            return;
+        }
+        this._dom.kfPiApply.disabled = true;
+        try {
+            const resp = await fetch(`${base}/api/fuel/calibration/applied`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ new_k_factor: newK }),
+                signal: AbortSignal.timeout(4000),
+            });
+            const result = await resp.json().catch(() => ({}));
+            if (resp.ok && result.success) {
+                this._setStatus(this._dom.kfPiStatus, result.message || `K-factor ${newK} recorded as applied`, 'ok');
+                await this._fetchPiCalibration();
+            } else {
+                this._setStatus(this._dom.kfPiStatus, result.error || `Pi returned ${resp.status}`, 'error');
+            }
+        } catch (err) {
+            this._setStatus(this._dom.kfPiStatus, `Pi sync failed (${err.message})`, 'error');
+        } finally {
+            this._dom.kfPiApply.disabled = false;
         }
     }
 
