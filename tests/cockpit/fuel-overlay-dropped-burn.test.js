@@ -89,6 +89,30 @@ describe('FuelOverlay._applyDroppedBurnCorrection', () => {
         expect(FuelTankState.getState().left_gal).toBe(10);
     });
 
+    it('does not report success or sync to the Pi when applyDroppedBurn() silently refuses (invalid active_tank)', async () => {
+        // The precondition check passes going in (requires_confirm is false), but
+        // applyDroppedBurn() itself flags requires_confirm as a SIDE EFFECT because
+        // active_tank is neither 'L' nor 'R' — the overlay must catch this via the
+        // return value, not assume "didn't throw" means "was applied" (PR #143 review).
+        FuelTankState._state.active_tank = 'BOTH';
+        FuelTankState._save();
+        window.engineClient = { ip: '192.168.1.50' };
+        const overlay = makeOverlay();
+        overlay._dom.droppedBurnInput.value = '1.7';
+        const fetchSpy = vi.spyOn(global, 'fetch');
+
+        await overlay._applyDroppedBurnCorrection();
+
+        expect(fetchSpy).not.toHaveBeenCalled(); // never reached the Pi sync step
+        expect(overlay._dom.droppedBurnStatus.textContent).not.toMatch(/applied/i);
+        expect(overlay._dom.droppedBurnStatus.className).toContain('fo-add-status-error');
+        const state = FuelTankState.getState();
+        expect(state.left_gal).toBe(10);   // nothing actually subtracted
+        expect(state.right_gal).toBe(12);
+        expect(state.dropped_burn_estimate_gal).toBe(2.14); // correction not consumed
+        expect(state.requires_confirm).toBe(true);
+    });
+
     it('applies to FlyTab locally, sends no body, and reports the Pi\'s own applied amount', async () => {
         window.engineClient = { ip: '192.168.1.50' };
         const overlay = makeOverlay();

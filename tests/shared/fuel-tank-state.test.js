@@ -69,8 +69,9 @@ describe('FuelTankState', () => {
             FuelTankState._state.dropped_burn_estimate_gal = 2.14;
             FuelTankState._save();
 
-            FuelTankState.applyDroppedBurn(1.7); // pilot edited 2.14 down to 1.7
+            const applied = FuelTankState.applyDroppedBurn(1.7); // pilot edited 2.14 down to 1.7
 
+            expect(applied).toBe(true);
             const state = FuelTankState.getState();
             expect(state.left_gal).toBeCloseTo(8.3, 5);
             expect(state.right_gal).toBe(12); // inactive tank untouched
@@ -116,8 +117,8 @@ describe('FuelTankState', () => {
             FuelTankState.init(10, 12, 'L');
             FuelTankState._state.dropped_burn_estimate_gal = 1.0;
             FuelTankState._save();
-            FuelTankState.applyDroppedBurn(0);
-            FuelTankState.applyDroppedBurn(-3);
+            expect(FuelTankState.applyDroppedBurn(0)).toBe(false);
+            expect(FuelTankState.applyDroppedBurn(-3)).toBe(false);
             const state = FuelTankState.getState();
             expect(state.left_gal).toBe(10);
             expect(state.dropped_burn_estimate_gal).toBe(1.0);
@@ -131,14 +132,15 @@ describe('FuelTankState', () => {
             FuelTankState._state.requires_confirm = true;
             FuelTankState._save();
 
-            FuelTankState.applyDroppedBurn(1.5);
+            const applied = FuelTankState.applyDroppedBurn(1.5);
 
+            expect(applied).toBe(false);
             const state = FuelTankState.getState();
             expect(state.left_gal).toBe(10);
             expect(state.dropped_burn_estimate_gal).toBe(2.0);
         });
 
-        it('flags requires_confirm instead of guessing when active_tank is invalid (e.g. legacy BOTH)', () => {
+        it('flags requires_confirm instead of guessing when active_tank is invalid (e.g. legacy BOTH), and returns false', () => {
             const FuelTankState = freshFuelTankState();
             global.CockpitConfig = { aircraft: () => 36 };
             FuelTankState.init(10, 12, 'L');
@@ -146,8 +148,9 @@ describe('FuelTankState', () => {
             FuelTankState._state.dropped_burn_estimate_gal = 1.0;
             FuelTankState._save();
 
-            FuelTankState.applyDroppedBurn(1.0);
+            const applied = FuelTankState.applyDroppedBurn(1.0);
 
+            expect(applied).toBe(false); // caller must not treat this as success
             const state = FuelTankState.getState();
             expect(state.left_gal).toBe(10);   // untouched — didn't guess which tank
             expect(state.right_gal).toBe(12);

@@ -574,6 +574,24 @@ class FuelTracker:
             log(f"FuelTracker: Applied dropped-burn correction of {gallons:.1f} gal, now {self.fuel_remaining:.1f} gal")
             self._save_state()
 
+    def apply_own_dropped_burn(self):
+        """
+        Atomically read-and-apply this tracker's own current
+        dropped_burn_estimate_gal. self.lock is an RLock, so this and the nested
+        apply_dropped_burn() call both hold it for the whole read-then-apply —
+        without that, a read here followed by capture_thread_func's concurrent
+        update() mutating dropped_burn_estimate_gal before apply_dropped_burn()
+        runs would apply a different amount than what gets reported to the caller.
+        Returns the amount actually applied (0.0 if there was nothing to apply).
+        """
+        with self.lock:
+            gallons = self.dropped_burn_estimate_gal
+            if gallons <= 0:
+                return 0.0
+            self.apply_dropped_burn(gallons)
+            return gallons
+            self._save_state()
+
     def get_status(self):
         """Get current fuel status for API response."""
         with self.lock:
@@ -2484,8 +2502,10 @@ class RequestHandler(BaseHTTPRequestHandler):
             if not state.fuel_tracker:
                 self.send_json({'error': 'Fuel tracker not initialized'}, 500)
                 return
-            applied_gal = round(state.fuel_tracker.dropped_burn_estimate_gal, 2)
-            state.fuel_tracker.apply_dropped_burn(state.fuel_tracker.dropped_burn_estimate_gal)
+            # apply_own_dropped_burn() reads-and-applies under one lock acquisition —
+            # reading dropped_burn_estimate_gal separately here would race the
+            # capture thread's concurrent update() calls (see PR #143 review).
+            applied_gal = round(state.fuel_tracker.apply_own_dropped_burn(), 2)
             self.send_json({
                 'success': True,
                 'applied_gal': applied_gal,

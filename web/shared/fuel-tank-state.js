@@ -188,16 +188,22 @@ class FuelTankState {
      * same amount; does not touch the inactive tank. Refuses while
      * requires_confirm is set — same rationale as onSample(): a stale or
      * unconfirmed tank selection means we can't safely say which tank to charge.
+     * requires_confirm can also become true as a SIDE EFFECT of this very call
+     * (an invalid active_tank caught by _debitActiveTank()), so callers must
+     * check the return value rather than assuming a call that didn't throw
+     * actually applied anything.
      * @param {number} gallons - pilot-confirmed (or edited) correction amount
+     * @returns {boolean} true if the correction was actually applied
      */
     static applyDroppedBurn(gallons) {
         FuelTankState._load();
-        if (!FuelTankState._state || FuelTankState._state.requires_confirm || !(gallons > 0)) return;
-        if (!FuelTankState._debitActiveTank(gallons)) return;
+        if (!FuelTankState._state || FuelTankState._state.requires_confirm || !(gallons > 0)) return false;
+        if (!FuelTankState._debitActiveTank(gallons)) return false;
         FuelTankState._state.dropped_burn_estimate_gal =
             Math.max(0, (FuelTankState._state.dropped_burn_estimate_gal || 0) - gallons);
         FuelTankState._save();
         FuelTankState._fire();
+        return true;
     }
 
     /**

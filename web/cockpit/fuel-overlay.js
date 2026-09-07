@@ -102,7 +102,8 @@ class FuelOverlay {
                 <div>Possible under-tracked burn during a comms gap: <span id="fo-dropped-burn-val">0.0</span> gal</div>
                 <div class="fo-manual-row">
                     <input type="number" class="fo-manual-input" id="fo-dropped-burn-input"
-                           min="0" max="50" step="0.1" value="0" aria-label="Correction amount, gallons">
+                           min="0" max="${this._droppedBurnMaxGal()}" step="0.1" value="0"
+                           aria-label="Correction amount, gallons">
                     <button class="fo-manual-btn fo-set-btn" id="fo-dropped-burn-apply">APPLY CORRECTION</button>
                 </div>
                 <div class="fo-add-status" id="fo-dropped-burn-status"></div>
@@ -785,7 +786,16 @@ class FuelOverlay {
         }
         this._dom.droppedBurnApply.disabled = true;
         try {
-            FuelTankState.applyDroppedBurn(gallons);
+            // The precondition check above can't catch every refusal — an invalid
+            // active_tank (legacy 'BOTH', corruption) flags requires_confirm as a
+            // SIDE EFFECT of this call rather than before it, so the return value
+            // is the only reliable signal that anything was actually applied.
+            const applied = FuelTankState.applyDroppedBurn(gallons);
+            if (!applied) {
+                this._setDroppedBurnStatus(
+                    'Could not apply — tank state needs confirmation. Confirm tank selection, then retry.', 'error');
+                return;
+            }
             await this._syncDroppedBurnToPi();
         } finally {
             this._dom.droppedBurnApply.disabled = false;
@@ -843,11 +853,7 @@ class FuelOverlay {
         }
     }
 
-    _setDroppedBurnStatus(msg, type) {
-        const el = this._dom.droppedBurnStatus;
-        el.textContent = msg;
-        el.className = 'fo-add-status fo-add-status-' + (type || 'ok');
-    }
+    _setDroppedBurnStatus(msg, type) { this._setStatus(this._dom.droppedBurnStatus, msg, type); }
 
     _syncFuelSetToEngine(gallons, reason = '') {
         const base = this._engineBaseUrl();
@@ -874,14 +880,13 @@ class FuelOverlay {
         }).catch(() => { /* best-effort */ });
     }
 
-    _setAddStatus(msg, type) {
-        const el = this._dom.addStatus;
-        el.textContent = msg;
-        el.className = 'fo-add-status fo-add-status-' + (type || 'ok');
-    }
+    _setAddStatus(msg, type) { this._setStatus(this._dom.addStatus, msg, type); }
 
-    _setApplyStatus(msg, type) {
-        const el = this._dom.applyStatus;
+    _setApplyStatus(msg, type) { this._setStatus(this._dom.applyStatus, msg, type); }
+
+    /** Shared body for _setAddStatus()/_setApplyStatus()/_setDroppedBurnStatus() —
+     *  each targets a different status element with the same textContent/className pattern. */
+    _setStatus(el, msg, type) {
         if (!el) return;
         el.textContent = msg;
         el.className = 'fo-add-status fo-add-status-' + (type || 'ok');
