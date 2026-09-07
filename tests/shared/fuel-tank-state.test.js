@@ -122,6 +122,38 @@ describe('FuelTankState', () => {
             expect(state.left_gal).toBe(10);
             expect(state.dropped_burn_estimate_gal).toBe(1.0);
         });
+
+        it('refuses while requires_confirm is set, same as onSample()', () => {
+            const FuelTankState = freshFuelTankState();
+            global.CockpitConfig = { aircraft: () => 36 };
+            FuelTankState.init(10, 12, 'L');
+            FuelTankState._state.dropped_burn_estimate_gal = 2.0;
+            FuelTankState._state.requires_confirm = true;
+            FuelTankState._save();
+
+            FuelTankState.applyDroppedBurn(1.5);
+
+            const state = FuelTankState.getState();
+            expect(state.left_gal).toBe(10);
+            expect(state.dropped_burn_estimate_gal).toBe(2.0);
+        });
+
+        it('flags requires_confirm instead of guessing when active_tank is invalid (e.g. legacy BOTH)', () => {
+            const FuelTankState = freshFuelTankState();
+            global.CockpitConfig = { aircraft: () => 36 };
+            FuelTankState.init(10, 12, 'L');
+            FuelTankState._state.active_tank = 'BOTH'; // simulate legacy/corrupt state
+            FuelTankState._state.dropped_burn_estimate_gal = 1.0;
+            FuelTankState._save();
+
+            FuelTankState.applyDroppedBurn(1.0);
+
+            const state = FuelTankState.getState();
+            expect(state.left_gal).toBe(10);   // untouched — didn't guess which tank
+            expect(state.right_gal).toBe(12);
+            expect(state.dropped_burn_estimate_gal).toBe(1.0); // correction not consumed
+            expect(state.requires_confirm).toBe(true);
+        });
     });
 
     describe('confirm-prompt timing', () => {

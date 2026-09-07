@@ -31,6 +31,12 @@ class FuelOverlay {
         // the DEPARTURE reading, and BOTH write paths into canonical FuelTankState —
         // _applyMeasurement() and _recordFuelStop() — must refuse it.
         this._requireFreshTics = false;
+        // True when the last attempt to sync a dropped-burn correction to the Pi
+        // failed (Pi unreachable, or a non-2xx response) — set/cleared only by
+        // _syncDroppedBurnToPi(). Drives _refreshDroppedBurnRow() to keep the row
+        // visible with a RETRY affordance even after the local correction already
+        // landed, so a failed Pi sync isn't a dead end (see PR #143 review).
+        this._piSyncFailed = false;
         this._buildDOM();
     }
 
@@ -340,9 +346,15 @@ class FuelOverlay {
             window.dispatchEvent(new CustomEvent('fuelstate:changed'));
         });
 
-        // Wire dropped-burn correction
+        // Wire dropped-burn correction. When only a Pi sync is outstanding (local
+        // side already applied but the Pi never got it), the button retries just
+        // the Pi sync instead of re-touching FuelTankState — see _refreshDroppedBurnRow().
         wireTap(this._el.querySelector('#fo-dropped-burn-apply'), () => {
-            this._applyDroppedBurnCorrection();
+            if (this._piSyncFailed && !(FuelTankState.getState()?.dropped_burn_estimate_gal > 0.05)) {
+                this._retryPiDroppedBurnSync();
+            } else {
+                this._applyDroppedBurnCorrection();
+            }
         });
 
         // Wire apply
@@ -470,13 +482,26 @@ class FuelOverlay {
         try {
             const tankState = (typeof FuelTankState !== 'undefined') ? FuelTankState.getState() : null;
             const dropped = tankState?.dropped_burn_estimate_gal ?? 0;
-            if (dropped > 0.05) {
+            const localPending = dropped > 0.05;
+
+            if (localPending) {
                 this._dom.droppedBurnVal.textContent = dropped.toFixed(2);
                 this._dom.droppedBurnRow.style.display = '';
+                this._dom.droppedBurnInput.disabled = false;
                 // Don't clobber a value the pilot is actively editing.
                 if (document.activeElement !== this._dom.droppedBurnInput) {
                     this._dom.droppedBurnInput.value = dropped.toFixed(1);
                 }
+                this._dom.droppedBurnApply.textContent = 'APPLY CORRECTION';
+            } else if (this._piSyncFailed) {
+                // Nothing left to apply locally, but the Pi never got its own
+                // correction — keep the row up as a retry affordance rather than
+                // silently dropping the pilot's confirmed correction (PR #143 review).
+                this._dom.droppedBurnVal.textContent = '0.0';
+                this._dom.droppedBurnRow.style.display = '';
+                this._dom.droppedBurnInput.value = '0.0';
+                this._dom.droppedBurnInput.disabled = true;
+                this._dom.droppedBurnApply.textContent = 'RETRY PI SYNC';
             } else {
                 this._dom.droppedBurnRow.style.display = 'none';
             }
@@ -724,13 +749,22 @@ class FuelOverlay {
         return EngineClient.baseUrl();
     }
 
+    /** Sane ceiling for a single dropped-burn correction: a full tank's worth,
+     *  per side. Catches a decimal-point fat-finger (17 vs 1.7) that would
+     *  otherwise floor an active tank at 0 with no confirmation prompt. */
+    _droppedBurnMaxGal() {
+        try {
+            if (typeof CockpitConfig !== 'undefined') {
+                const cap = CockpitConfig.aircraft('performance.fuel_capacity_gal');
+                if (cap > 0) return cap / 2;
+            }
+        } catch (_) { /* fall through to default */ }
+        return 18;
+    }
+
     /**
-     * Apply a pilot-confirmed (or edited) dropped-burn correction to both fuel
-     * trackers: FlyTab's own FuelTankState, and the Pi's independent FuelTracker.
-     * Unlike _syncFuelSetToEngine()/_syncFuelAddToEngine(), the Pi sync here is NOT
-     * fire-and-forget — a correction the pilot explicitly confirmed that silently
-     * fails to reach the Pi would leave the two displayed fuel numbers diverged
-     * with no indication, so failure is reported instead of swallowed.
+     * Apply a pilot-confirmed (or edited) dropped-burn correction to FlyTab's own
+     * FuelTankState, then sync the Pi's independent FuelTracker separately.
      */
     async _applyDroppedBurnCorrection() {
         const gallons = parseFloat(this._dom.droppedBurnInput.value);
@@ -738,30 +772,74 @@ class FuelOverlay {
             this._setDroppedBurnStatus('Enter a positive correction amount', 'error');
             return;
         }
+        const maxGal = this._droppedBurnMaxGal();
+        if (gallons > maxGal) {
+            this._setDroppedBurnStatus(
+                `${gallons.toFixed(1)} gal exceeds a full tank (${maxGal.toFixed(0)} gal) — check for a typo before applying`, 'error');
+            return;
+        }
+        if (typeof FuelTankState !== 'undefined' && FuelTankState.needsConfirmation()) {
+            this._setDroppedBurnStatus(
+                'Tank state needs confirmation before applying a correction — confirm tank selection first', 'error');
+            return;
+        }
         this._dom.droppedBurnApply.disabled = true;
         try {
             FuelTankState.applyDroppedBurn(gallons);
-
-            const base = this._engineBaseUrl();
-            if (!base) {
-                this._setDroppedBurnStatus(
-                    `Applied ${gallons.toFixed(1)} gal to FlyTab — Pi unreachable, engine-side total NOT corrected`, 'error');
-                return;
-            }
-            const resp = await fetch(`${base}/api/fuel/apply_dropped_burn`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ gallons }),
-                signal: AbortSignal.timeout(4000),
-            });
-            if (!resp.ok) throw new Error(`Pi returned ${resp.status}`);
-            this._setDroppedBurnStatus(`Applied ${gallons.toFixed(1)} gal to both trackers`, 'ok');
-        } catch (err) {
-            this._setDroppedBurnStatus(
-                `Applied ${gallons.toFixed(1)} gal to FlyTab — Pi sync failed (${err.message}), engine-side total NOT corrected`, 'error');
+            await this._syncDroppedBurnToPi();
         } finally {
             this._dom.droppedBurnApply.disabled = false;
             this._refreshDroppedBurnRow();
+        }
+    }
+
+    /** Retry syncing to the Pi only — used when the local correction already
+     *  landed but the earlier Pi sync attempt failed. Does not touch FuelTankState
+     *  again (that would double-subtract from the tank). */
+    async _retryPiDroppedBurnSync() {
+        this._dom.droppedBurnApply.disabled = true;
+        try {
+            await this._syncDroppedBurnToPi();
+        } finally {
+            this._dom.droppedBurnApply.disabled = false;
+            this._refreshDroppedBurnRow();
+        }
+    }
+
+    /**
+     * Tell the Pi to apply ITS OWN tracked dropped_burn_estimate_gal (the server
+     * ignores any amount from the client — see the /api/fuel/apply_dropped_burn
+     * handler comment: FlyTab's estimate is a different quantity from a different
+     * sample stream and must not be pushed onto the Pi's tracker). Unlike
+     * _syncFuelSetToEngine()/_syncFuelAddToEngine(), failure here is reported to
+     * the pilot instead of swallowed, and sets _piSyncFailed so the row stays up
+     * as a retry affordance rather than silently going stale.
+     */
+    async _syncDroppedBurnToPi() {
+        const base = this._engineBaseUrl();
+        if (!base) {
+            this._piSyncFailed = true;
+            this._setDroppedBurnStatus(
+                'Applied locally — Pi unreachable, engine-side total NOT corrected. Retry when back in range.', 'error');
+            return;
+        }
+        try {
+            const resp = await fetch(`${base}/api/fuel/apply_dropped_burn`, {
+                method: 'POST',
+                signal: AbortSignal.timeout(4000),
+            });
+            if (!resp.ok) throw new Error(`Pi returned ${resp.status}`);
+            const result = await resp.json().catch(() => null);
+            this._piSyncFailed = false;
+            const appliedGal = result?.applied_gal;
+            this._setDroppedBurnStatus(
+                appliedGal != null
+                    ? `Applied locally; Pi applied its own ${appliedGal.toFixed(1)} gal estimate`
+                    : 'Applied to both trackers', 'ok');
+        } catch (err) {
+            this._piSyncFailed = true;
+            this._setDroppedBurnStatus(
+                `Applied locally — Pi sync failed (${err.message}). Retry when back in range.`, 'error');
         }
     }
 

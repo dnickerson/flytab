@@ -348,10 +348,7 @@ class FuelTracker:
                     # from a stale dt). Any excess is tracked, not discarded — see
                     # dropped_burn_estimate_gal and apply_dropped_burn().
                     integrated_hours = min(dt_hours, self.MAX_SAMPLE_GAP_HOURS)
-                    fuel_increment = fuel_flow * integrated_hours
-                    self.flight_fuel_used += fuel_increment
-                    self.total_since_fill += fuel_increment
-                    self.fuel_remaining = max(0, self.fuel_remaining - fuel_increment)
+                    self._debit_fuel(fuel_flow * integrated_hours)
 
                     dropped_hours = dt_hours - integrated_hours
                     if dropped_hours > 0:
@@ -547,20 +544,31 @@ class FuelTracker:
         with self.lock:
             self.fuel_warning_dismissed = True
 
+    def _debit_fuel(self, gallons):
+        """
+        Shared fuel_remaining/flight_fuel_used/total_since_fill debit, used by
+        both update()'s normal integration and apply_dropped_burn()'s correction
+        so the two accounting paths can't drift apart. Caller holds self.lock.
+        """
+        self.flight_fuel_used += gallons
+        self.total_since_fill += gallons
+        self.fuel_remaining = max(0, self.fuel_remaining - gallons)
+
     def apply_dropped_burn(self, gallons):
         """
-        Apply a pilot-confirmed correction for fuel burned during a comms gap.
-        Mirrors FlyTab's FuelTankState.applyDroppedBurn() — dropped_burn_estimate_gal
-        is tracked automatically in update() but never auto-applied, since it
-        extrapolates from whatever GPH arrived right after the gap and may not
-        reflect what was actually happening during it.
+        Apply a correction for fuel burned during a comms gap. Mirrors FlyTab's
+        FuelTankState.applyDroppedBurn() — dropped_burn_estimate_gal is tracked
+        automatically in update() but never auto-applied, since it extrapolates
+        from whatever GPH arrived right after the gap and may not reflect what
+        was actually happening during it. Callers pass this tracker's OWN
+        dropped_burn_estimate_gal (see the /api/fuel/apply_dropped_burn handler) —
+        FlyTab's independently-computed estimate is a different quantity from a
+        different sample stream and must not be applied here.
         """
         with self.lock:
             if gallons <= 0:
                 return
-            self.fuel_remaining = max(0, self.fuel_remaining - gallons)
-            self.flight_fuel_used += gallons
-            self.total_since_fill += gallons
+            self._debit_fuel(gallons)
             self.dropped_burn_estimate_gal = max(0, self.dropped_burn_estimate_gal - gallons)
             self.last_updated = datetime.now().isoformat()
             log(f"FuelTracker: Applied dropped-burn correction of {gallons:.1f} gal, now {self.fuel_remaining:.1f} gal")
@@ -2466,25 +2474,24 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.send_json({'error': str(e)}, 400)
 
         elif path == '/api/fuel/apply_dropped_burn':
+            # Applies THIS tracker's own dropped_burn_estimate_gal — deliberately
+            # ignores any amount the client might send. FlyTab's FuelTankState
+            # computes its own independent estimate from a different sample
+            # stream (Date.now() polling vs. the EDM serial timestamp here); the
+            # two can diverge, and applying FlyTab's number to the Pi's tracker
+            # would over- or under-correct it. Each tracker corrects itself with
+            # its own truth. A no-op (still 'success') if nothing is tracked.
             if not state.fuel_tracker:
                 self.send_json({'error': 'Fuel tracker not initialized'}, 500)
                 return
-            try:
-                content_length = int(self.headers.get('Content-Length', 0))
-                body = self.rfile.read(content_length).decode('utf-8')
-                data = json.loads(body) if body else {}
-                gallons = float(data.get('gallons', 0))
-                if gallons <= 0:
-                    self.send_json({'error': 'gallons must be positive'}, 400)
-                    return
-                state.fuel_tracker.apply_dropped_burn(gallons)
-                self.send_json({
-                    'success': True,
-                    'fuel_remaining': state.fuel_tracker.fuel_remaining,
-                    'dropped_burn_estimate_gal': state.fuel_tracker.dropped_burn_estimate_gal
-                })
-            except (ValueError, json.JSONDecodeError) as e:
-                self.send_json({'error': str(e)}, 400)
+            applied_gal = round(state.fuel_tracker.dropped_burn_estimate_gal, 2)
+            state.fuel_tracker.apply_dropped_burn(state.fuel_tracker.dropped_burn_estimate_gal)
+            self.send_json({
+                'success': True,
+                'applied_gal': applied_gal,
+                'fuel_remaining': state.fuel_tracker.fuel_remaining,
+                'dropped_burn_estimate_gal': state.fuel_tracker.dropped_burn_estimate_gal
+            })
 
         elif path == '/api/fuel/dismiss_warning':
             if state.fuel_tracker:
