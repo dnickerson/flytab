@@ -97,6 +97,7 @@ class FuelTankState {
             initialized_at: now,
             imbalance: false,
             dropped_burn_estimate_gal: 0,
+            dropped_burn_ambiguous: false,
         };
         FuelTankState._loaded = true;
         FuelTankState._save();
@@ -215,6 +216,15 @@ class FuelTankState {
         if ((prevTank === 'L' || prevTank === 'R') && prevTank !== tank) {
             FuelTankState._state.pre_switch_tank = prevTank;
             FuelTankState._state.tank_switched_at = new Date().toISOString();
+            // A comms-gap correction accrued while feeding from prevTank has no record of
+            // which tank was active for each contributing gap — dropped_burn_estimate_gal
+            // is one running total, not a per-tank breakdown. Once the pilot has moved to
+            // a different tank it can no longer be safely auto-attributed to either one.
+            // Same "stop and ask, don't guess" rule as an invalid active_tank; clears on
+            // the next fresh measurement via init().
+            if ((FuelTankState._state.dropped_burn_estimate_gal || 0) > 0.05) {
+                FuelTankState._state.dropped_burn_ambiguous = true;
+            }
         }
         FuelTankState._state.active_tank = tank;
         FuelTankState._save();
@@ -241,12 +251,21 @@ class FuelTankState {
     static applyDroppedBurn(gallons) {
         FuelTankState._load();
         if (!FuelTankState._state || FuelTankState._state.requires_confirm || !(gallons > 0)) return false;
+        if (FuelTankState._state.dropped_burn_ambiguous) return false;
         if (!FuelTankState._debitActiveTank(gallons)) return false;
         FuelTankState._state.dropped_burn_estimate_gal =
             Math.max(0, (FuelTankState._state.dropped_burn_estimate_gal || 0) - gallons);
         FuelTankState._save();
         FuelTankState._fire();
         return true;
+    }
+
+    /** True if a tank switch occurred while a comms-gap correction was still
+     *  outstanding, making it unsafe to auto-attribute to either tank. Clears
+     *  on the next init() (fresh tic measurement or fuel stop). */
+    static isDroppedBurnAmbiguous() {
+        FuelTankState._load();
+        return !!(FuelTankState._state && FuelTankState._state.dropped_burn_ambiguous);
     }
 
     /** Returns a copy of current state, or null if not initialized. */

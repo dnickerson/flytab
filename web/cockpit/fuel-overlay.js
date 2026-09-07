@@ -643,6 +643,22 @@ class FuelOverlay {
         });
     }
 
+    /**
+     * Returns an error message if either tank's CURRENT tic-derived gallons
+     * exceeds capacity, else null. A single shared check so _applyMeasurement()
+     * and _recordFuelStop() can't drift apart, and so it can be re-run at write
+     * time (not just at tap time) — see _applyMeasurement()'s re-check comment.
+     */
+    _ticCapacityError() {
+        const leftGal = FuelEngine.ticToGallons(this._leftTic, this._coefficients);
+        const rightGal = FuelEngine.ticToGallons(this._rightTic, this._coefficients);
+        const cap = (typeof FuelTankState !== 'undefined') ? FuelTankState.perSideCapGal(18) : 18;
+        if (leftGal > cap || rightGal > cap) {
+            return `Tic reading implies ${Math.max(leftGal, rightGal).toFixed(1)} gal in one tank, more than it can hold (${cap.toFixed(0)} gal)`;
+        }
+        return null;
+    }
+
     /* ------------------------------------------------------------------
      * Apply measurement
      * ----------------------------------------------------------------*/
@@ -673,13 +689,9 @@ class FuelOverlay {
             return;
         }
 
-        const leftGal = FuelEngine.ticToGallons(this._leftTic, this._coefficients);
-        const rightGal = FuelEngine.ticToGallons(this._rightTic, this._coefficients);
-        const cap = (typeof FuelTankState !== 'undefined') ? FuelTankState.perSideCapGal(18) : 18;
-        if (leftGal > cap || rightGal > cap) {
-            this._setApplyStatus(
-                `Tic reading implies ${Math.max(leftGal, rightGal).toFixed(1)} gal in one tank, more than it can hold (${cap.toFixed(0)} gal) — check the tic reading before applying`,
-                'error');
+        const capError = this._ticCapacityError();
+        if (capError) {
+            this._setApplyStatus(`${capError} — check the tic reading before applying`, 'error');
             return;
         }
 
@@ -687,6 +699,18 @@ class FuelOverlay {
 
         // Resolve EDM fuel async, then complete measurement
         this._resolveEdmFuel().then(async edmFuel => {
+            // Re-check: the pilot can edit the tic reading during the async EDM
+            // resolve above (its own comment elsewhere notes this "can take
+            // 3-5s"), and nothing disables the sliders meanwhile. The guard above
+            // only validated the value at tap time — re-validate the CURRENT
+            // value here, right before it's written, so an implausible edit made
+            // mid-flight can't slip past the guard this re-check exists for
+            // (2026-09 audit finding).
+            const capErrorNow = this._ticCapacityError();
+            if (capErrorNow) {
+                this._setApplyStatus(`${capErrorNow} — check the tic reading before applying`, 'error');
+                return;
+            }
             const m = FuelEngine.createMeasurement(
                 this._leftTic, this._rightTic, this._coefficients, edmFuel
             );
@@ -802,13 +826,9 @@ class FuelOverlay {
             this._setAddStatus('Enter a tic-mark reading above before recording a fuel stop', 'error');
             return;
         }
-        const leftGalCheck = FuelEngine.ticToGallons(this._leftTic, this._coefficients);
-        const rightGalCheck = FuelEngine.ticToGallons(this._rightTic, this._coefficients);
-        const capCheck = (typeof FuelTankState !== 'undefined') ? FuelTankState.perSideCapGal(18) : 18;
-        if (leftGalCheck > capCheck || rightGalCheck > capCheck) {
-            this._setAddStatus(
-                `Tic reading implies ${Math.max(leftGalCheck, rightGalCheck).toFixed(1)} gal in one tank, more than it can hold (${capCheck.toFixed(0)} gal) — check the tic reading before recording`,
-                'error');
+        const capError = this._ticCapacityError();
+        if (capError) {
+            this._setAddStatus(`${capError} — check the tic reading before recording`, 'error');
             return;
         }
         const airport = this._dom.addAirport.value.trim().toUpperCase();
@@ -952,6 +972,12 @@ class FuelOverlay {
         if (typeof FuelTankState !== 'undefined' && FuelTankState.needsConfirmation()) {
             this._setDroppedBurnStatus(
                 'Tank state needs confirmation before applying a correction — confirm tank selection first', 'error');
+            return;
+        }
+        if (typeof FuelTankState !== 'undefined' && FuelTankState.isDroppedBurnAmbiguous()) {
+            this._setDroppedBurnStatus(
+                'Cannot auto-apply — you switched tanks while this estimate was outstanding, so it can no longer be safely attributed to one tank. Record a fresh tic measurement or fuel stop to clear it.',
+                'error');
             return;
         }
         this._dom.droppedBurnApply.disabled = true;

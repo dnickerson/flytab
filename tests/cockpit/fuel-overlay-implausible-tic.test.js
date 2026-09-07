@@ -92,4 +92,21 @@ describe('FuelOverlay implausible tic-mark guard', () => {
 
         expect(overlay._dom.applyStatus.textContent).not.toMatch(/more than it can hold/i);
     });
+
+    it('re-validates the cap at write time — an edit made during the async EDM resolve cannot bypass the guard', async () => {
+        // A plausible reading passes the tap-time guard and starts the async chain
+        // (_resolveEdmFuel(), which the code's own comment notes "can take 3-5s").
+        drag(overlay._dom.leftSlider, 8);
+        tap('fo-apply');
+
+        // Before that promise settles, the pilot edits the slider to an implausible
+        // value — nothing disables the sliders during the wait.
+        drag(overlay._dom.leftSlider, 17);
+        await new Promise(r => setTimeout(r, 20));
+
+        expect(overlay._dom.applyStatus.textContent).toMatch(/more than it can hold/i);
+        expect(overlay._dom.applyStatus.className).toContain('fo-add-status-error');
+        expect(overlay.visible).toBe(true); // refused, not hidden
+        expect(FuelTankState.getState()).toBe(null); // nothing written
+    });
 });

@@ -292,3 +292,69 @@ describe('FuelTankState.perSideCapGal', () => {
         expect(FuelTankState.perSideCapGal(18)).toBe(18);
     });
 });
+
+describe('FuelTankState dropped-burn ambiguity after a mid-gap tank switch', () => {
+    it('flags ambiguous when switching tanks while a dropped-burn correction is outstanding', () => {
+        const FuelTankState = freshFuelTankState();
+        delete global.CockpitConfig;
+        FuelTankState.init(18, 18, 'L');
+        FuelTankState._state.dropped_burn_estimate_gal = 2.0;
+        FuelTankState._save();
+
+        FuelTankState.switchTank('R');
+
+        expect(FuelTankState.isDroppedBurnAmbiguous()).toBe(true);
+    });
+
+    it('does not flag ambiguous when switching tanks with no outstanding correction', () => {
+        const FuelTankState = freshFuelTankState();
+        delete global.CockpitConfig;
+        FuelTankState.init(18, 18, 'L');
+
+        FuelTankState.switchTank('R');
+
+        expect(FuelTankState.isDroppedBurnAmbiguous()).toBe(false);
+    });
+
+    it('does not flag ambiguous for a below-threshold outstanding correction', () => {
+        const FuelTankState = freshFuelTankState();
+        delete global.CockpitConfig;
+        FuelTankState.init(18, 18, 'L');
+        FuelTankState._state.dropped_burn_estimate_gal = 0.02; // below the 0.05 threshold
+        FuelTankState._save();
+
+        FuelTankState.switchTank('R');
+
+        expect(FuelTankState.isDroppedBurnAmbiguous()).toBe(false);
+    });
+
+    it('applyDroppedBurn() refuses while ambiguous, without touching tank gallons or the estimate', () => {
+        const FuelTankState = freshFuelTankState();
+        delete global.CockpitConfig;
+        FuelTankState.init(18, 18, 'L');
+        FuelTankState._state.dropped_burn_estimate_gal = 2.0;
+        FuelTankState._save();
+        FuelTankState.switchTank('R');
+
+        const applied = FuelTankState.applyDroppedBurn(2.0);
+
+        expect(applied).toBe(false);
+        const state = FuelTankState.getState();
+        expect(state.right_gal).toBe(18); // active tank untouched
+        expect(state.dropped_burn_estimate_gal).toBe(2.0); // not consumed
+    });
+
+    it('clears the ambiguous flag on a fresh init() (new tic measurement or fuel stop)', () => {
+        const FuelTankState = freshFuelTankState();
+        delete global.CockpitConfig;
+        FuelTankState.init(18, 18, 'L');
+        FuelTankState._state.dropped_burn_estimate_gal = 2.0;
+        FuelTankState._save();
+        FuelTankState.switchTank('R');
+        expect(FuelTankState.isDroppedBurnAmbiguous()).toBe(true);
+
+        FuelTankState.init(16, 16, 'R');
+
+        expect(FuelTankState.isDroppedBurnAmbiguous()).toBe(false);
+    });
+});
