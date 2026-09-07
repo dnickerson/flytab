@@ -18,6 +18,13 @@ class FuelOverlay {
         this._cachedCsvEdmFuel = 0;
         this._shownAt = 0;
         this._applying = false;
+        // Re-entrancy guard for _recordFuelStop(), same rationale as _applying above:
+        // the Pi sync it awaits (_syncFuelAddToEngine, up to 4000ms) is a real network
+        // round trip, so a second RECORD tap before the first settles must be refused
+        // rather than racing past the guard-clearing side effects that only run after
+        // the await — otherwise a double tap can duplicate a fuel-stop entry and
+        // double-add gallons to the Pi's authoritative fuel total.
+        this._recording = false;
         // True once the pilot has moved a slider, typed in a tic field or tapped a
         // ± button since the current show(). show() restores the PREVIOUS
         // measurement into the tic fields, so a fuel stop recorded without touching
@@ -673,6 +680,14 @@ class FuelOverlay {
     }
 
     async _recordFuelStop() {
+        // Re-entrancy guard, same rationale as _applyMeasurement()'s _applying latch:
+        // the Pi sync below is a real await (up to 4000ms), and the guard-clearing
+        // side effects (_ticsTouchedSinceShow, addGal/addPrice/addGalL/addGalR) only
+        // run after it settles. Without this, a second RECORD tap before the first
+        // settles would sail past every other guard and append a duplicate
+        // flytab_fuel_stops entry, double-adding gallons to the Pi's authoritative total.
+        if (this._recording) return;
+
         const gallons = parseFloat(this._dom.addGal.value);
         if (!gallons || gallons <= 0) {
             this._setAddStatus('Enter gallons added', 'error');
@@ -710,6 +725,7 @@ class FuelOverlay {
         const priceRaw = parseFloat(this._dom.addPrice.value);
         const price = priceRaw > 0 ? priceRaw : null;
 
+        this._recording = true;
         try {
             // Store fuel stop locally (Capacitor Filesystem in Phase 3)
             const stops = JSON.parse(localStorage.getItem('flytab_fuel_stops') || '[]');
@@ -754,6 +770,8 @@ class FuelOverlay {
             }
         } catch (err) {
             this._setAddStatus(`Save failed: ${err.message}`, 'error');
+        } finally {
+            this._recording = false;
         }
     }
 

@@ -28,7 +28,7 @@
  * creates, with the real FuelEngine / FuelState / FuelTankState / Settings and the
  * real shipped aircraft profile.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -279,6 +279,41 @@ describe('fuel stop record — requires a reading entered this session', () => {
         expect(rejected()).toBe(true);
         expect(tank().stampedAt).toBe(afterFirst.stampedAt);
         expect(JSON.parse(localStorage.getItem('flytab_fuel_stops'))).toHaveLength(1);
+    });
+
+    it('refuses a second RECORD tap fired before the first Pi sync settles (double-tap race)', async () => {
+        // Regression test for the async-conversion race: _recordFuelStop() now awaits
+        // a real network round trip (_syncFuelAddToEngine, up to 4000ms) before clearing
+        // _ticsTouchedSinceShow and the add* fields. Without a re-entrancy guard set
+        // BEFORE that await, a second tap fired while the Pi is slow to respond would
+        // sail past every guard — addGal.value unchanged, _ticsTouchedSinceShow still
+        // true — and append a second flytab_fuel_stops entry plus a second
+        // /api/fuel/add call, double-adding gallons to the Pi's authoritative total.
+        departWith(MAX_TIC);
+        const d = open();
+        drag(d.leftSlider, 6);
+        drag(d.rightSlider, 6);
+
+        // Simulate a slow Pi: /api/fuel/add doesn't resolve for 50ms.
+        globalThis.fetch = vi.fn((url) => (typeof url === 'string' && url.includes('localhost:9090'))
+            ? Promise.reject(new Error('offline'))
+            : new Promise(resolve => setTimeout(() => resolve({ ok: true, status: 200 }), 50)));
+
+        overlay._dom.addGal.value = '12';
+        overlay._dom.addAirport.value = 'KMYL';
+        // Fire two taps back-to-back, with no await between them — the async function
+        // only yields at the fetch await, so the second tap's guard check runs
+        // synchronously against the flag the first tap already set.
+        tap('fo-add-record');
+        tap('fo-add-record');
+
+        await new Promise(r => setTimeout(r, 80));
+
+        expect(JSON.parse(localStorage.getItem('flytab_fuel_stops'))).toHaveLength(1);
+        const addCalls = globalThis.fetch.mock.calls
+            .filter(([url]) => typeof url === 'string' && url.includes('/api/fuel/add'));
+        expect(addCalls).toHaveLength(1);
+        expect(overlay._recording).toBe(false);   // latch cleared, not wedged
     });
 
     it('still refuses 0/0 after the controls were touched — ticToGallons(0) is not zero', async () => {

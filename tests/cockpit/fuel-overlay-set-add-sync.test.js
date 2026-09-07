@@ -102,4 +102,25 @@ describe('FuelOverlay._syncFuelAddToEngine', () => {
         expect(result.ok).toBe(false);
         expect(result.message).toMatch(/Pi unreachable/);
     });
+
+    it('reports ok:false with a message when the fetch rejects', async () => {
+        window.engineClient = { ip: '192.168.1.50' };
+        const overlay = makeOverlay();
+        vi.spyOn(global, 'fetch').mockRejectedValue(new Error('network down'));
+
+        const result = await overlay._syncFuelAddToEngine(10, 'KPAO', 5.99);
+
+        expect(result.ok).toBe(false);
+        expect(result.message).toMatch(/Pi sync failed/);
+    });
+
+    it('reports ok:false when the Pi returns a non-2xx status', async () => {
+        window.engineClient = { ip: '192.168.1.50' };
+        const overlay = makeOverlay();
+        vi.spyOn(global, 'fetch').mockResolvedValue({ ok: false, status: 500 });
+
+        const result = await overlay._syncFuelAddToEngine(10, 'KPAO', 5.99);
+
+        expect(result.ok).toBe(false);
+    });
 });
