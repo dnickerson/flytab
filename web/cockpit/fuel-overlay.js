@@ -230,8 +230,8 @@ class FuelOverlay {
             </div>
 
             <!-- H) PI K-FACTOR (LIVE) -->
+            <div class="fo-section-title">PI K-FACTOR (LIVE)</div>
             <div class="fo-kfactor-panel" id="fo-kfactor-pi" style="display:none;">
-                <div class="fo-section-title">PI K-FACTOR (LIVE)</div>
                 <div class="fo-kfactor-row">
                     <div class="fo-kfactor-item">
                         <div class="fo-kfactor-label">CURRENT (PI)</div>
