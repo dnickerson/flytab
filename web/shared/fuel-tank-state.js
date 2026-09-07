@@ -117,7 +117,26 @@ class FuelTankState {
         }
 
         const burned = gph * (dtMs / 1000) / 3600;
-        if (!FuelTankState._debitActiveTank(burned)) return;
+
+        // If the pilot switched tanks since the last sample, split this interval's
+        // burn at the switch point instead of crediting it all to whichever tank is
+        // active now — otherwise burn actually drawn from the tank just left, before
+        // the switch, is never subtracted from it.
+        const switchMs = FuelTankState._state.tank_switched_at
+            ? new Date(FuelTankState._state.tank_switched_at).getTime()
+            : null;
+        const preSwitchTank = FuelTankState._state.pre_switch_tank;
+        FuelTankState._state.pre_switch_tank = null; // consume regardless of outcome below
+
+        if (preSwitchTank && switchMs !== null && switchMs > lastMs && switchMs < nowMs) {
+            const preFraction = (switchMs - lastMs) / rawDtMs;
+            const burnedPre = burned * preFraction;
+            const burnedPost = burned - burnedPre;
+            if (!FuelTankState._debitTank(preSwitchTank, burnedPre)) return;
+            if (!FuelTankState._debitActiveTank(burnedPost)) return;
+        } else {
+            if (!FuelTankState._debitActiveTank(burned)) return;
+        }
 
         FuelTankState._state.last_sample_at = new Date(nowMs).toISOString();
 
@@ -141,20 +160,19 @@ class FuelTankState {
     }
 
     /**
-     * Debit `gallons` from whichever tank is active. Shared by onSample() and
-     * applyDroppedBurn() so the two burn-accounting paths can't drift apart — an
-     * active_tank that's neither L nor R (legacy 'BOTH' state, or corruption)
-     * tells us nothing about which tank is draining. Splitting the burn would
-     * understate the feeding tank — it could run dry while the gauge still shows
-     * fuel — so this stops and flags requires_confirm instead of guessing.
+     * Debit `gallons` from a specific tank ('L' or 'R'). An invalid tank (legacy
+     * 'BOTH' state, or corruption) tells us nothing about which tank is draining;
+     * splitting the burn would understate the feeding tank, so this stops and
+     * flags requires_confirm instead of guessing.
+     * @param {'L'|'R'} tank
      * @param {number} gallons
      * @returns {boolean} true if the debit was applied
      */
-    static _debitActiveTank(gallons) {
-        if (FuelTankState._state.active_tank === 'L') {
+    static _debitTank(tank, gallons) {
+        if (tank === 'L') {
             FuelTankState._state.left_gal = Math.max(0, FuelTankState._state.left_gal - gallons);
             return true;
-        } else if (FuelTankState._state.active_tank === 'R') {
+        } else if (tank === 'R') {
             FuelTankState._state.right_gal = Math.max(0, FuelTankState._state.right_gal - gallons);
             return true;
         }
@@ -165,6 +183,16 @@ class FuelTankState {
     }
 
     /**
+     * Debit `gallons` from whichever tank is active. Shared by onSample() and
+     * applyDroppedBurn() so the two burn-accounting paths can't drift apart.
+     * @param {number} gallons
+     * @returns {boolean} true if the debit was applied
+     */
+    static _debitActiveTank(gallons) {
+        return FuelTankState._debitTank(FuelTankState._state.active_tank, gallons);
+    }
+
+    /**
      * Switch the active fuel tank.
      * @param {'L'|'R'} tank - this airframe has no BOTH selector position
      */
@@ -172,8 +200,12 @@ class FuelTankState {
         FuelTankState._load();
         if (!FuelTankState._state) return;
         if (tank !== 'L' && tank !== 'R') return;   // no BOTH on this aircraft
+        const prevTank = FuelTankState._state.active_tank;
+        if ((prevTank === 'L' || prevTank === 'R') && prevTank !== tank) {
+            FuelTankState._state.pre_switch_tank = prevTank;
+            FuelTankState._state.tank_switched_at = new Date().toISOString();
+        }
         FuelTankState._state.active_tank = tank;
-        FuelTankState._state.tank_switched_at = new Date().toISOString();
         FuelTankState._save();
         FuelTankState._fire();
     }
