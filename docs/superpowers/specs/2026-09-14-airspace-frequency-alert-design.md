@@ -1,7 +1,8 @@
 # Airspace Frequency Alert — Design
 
 Date: 2026-09-14
-Status: Draft — pending user review
+Status: Reviewed — ready for implementation planning (see Open risks for
+pre-implementation spikes)
 
 ## Problem
 
@@ -89,7 +90,11 @@ present.
   `project_sua_pipeline` prior work). If TRSA boundary data isn't present in
   the FAA products currently ingested, this spec's TRSA support is blocked
   until a source is found — Class B/C/D/E support can ship independently in
-  the meantime.
+  the meantime. The spike must also confirm whether TRSA records carry a
+  clean vertical floor/ceiling the way Class B/C/D do — TRSAs are often
+  published with more complex vertical/segment structure than a single
+  `lower_ft`/`upper_ft` pair, and the vertical bound check below assumes
+  that shape unless the spike finds otherwise.
 
 - Bundle versioning: this is an additive field/store, so existing
   `sua_count`-style staleness detection doesn't need to change shape, but the
@@ -133,6 +138,14 @@ present.
   fixed margin (e.g. +10nm) to catch polygons whose edge is closer to the
   flight path than either endpoint — a box drawn tightly around just the two
   points can clip a boundary that bulges between them.
+- **Don't re-query `NasrDB` every tick.** GPS position ticks at ~1Hz; running
+  three IndexedDB bounding-box queries (`airspace`/`sua`/`trsa`) that often
+  for the whole flight is unnecessary IDB load and battery drain on a tablet.
+  Cache the candidate polygon set and only re-run the `NasrDB` query when the
+  aircraft's position moves outside the bounding box used for the *previous*
+  query (or that box's margin is about to be exhausted) — the point-in-polygon
+  and altitude checks still run every tick against the cached candidates,
+  only the IDB fetch itself is throttled.
 - **Vertical (altitude) bound check**: lateral containment alone is not
   sufficient to decide "inside" — an aircraft flying beneath a Bravo/Charlie
   shelf, or above a Class D ceiling, is laterally inside the polygon but not
@@ -260,6 +273,10 @@ convention) rather than writing directly into the fetched config object.
   - Dismissing suppresses re-fire while still inside/approaching.
   - Re-arms correctly after a full exit and later re-approach.
   - Per-type toggles actually suppress/enable their respective alert types.
+  - Flying laterally inside a shelf but below its floor does NOT alert;
+    climbing through the floor while still laterally inside DOES alert —
+    exercises the vertical bound check specifically, not just the lateral
+    case the other scenarios above cover.
   - The existing airport-tap popup (`onAirportClick`) still opens normally
     afterward — required by this repo's tap-handler regression rule, since
     this feature adds a new map-adjacent popup path that could plausibly
