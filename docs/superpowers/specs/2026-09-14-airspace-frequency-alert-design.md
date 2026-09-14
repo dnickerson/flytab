@@ -150,11 +150,15 @@ present.
 - **Don't re-query `NasrDB` every tick.** GPS position ticks at ~1Hz; running
   three IndexedDB bounding-box queries (`airspace`/`sua`/`trsa`) that often
   for the whole flight is unnecessary IDB load and battery drain on a tablet.
-  Cache the candidate polygon set and only re-run the `NasrDB` query when the
-  aircraft's position moves outside the bounding box used for the *previous*
-  query (or that box's margin is about to be exhausted) — the point-in-polygon
-  and altitude checks still run every tick against the cached candidates,
-  only the IDB fetch itself is throttled.
+  Cache the candidate polygon set and only re-run the `NasrDB` query when
+  **either** the aircraft's current position **or its projected position**
+  moves outside the bounding box used for the *previous* query (checking
+  current position alone is not enough — a sharp turn can move the projected
+  point outside the cached box's coverage well before the current position
+  does, since the box was sized around the old heading's projected point,
+  and a new heading could point toward airspace the stale cache never
+  fetched). The point-in-polygon and altitude checks still run every tick
+  against the cached candidates; only the IDB fetch itself is throttled.
 - **Vertical (altitude) bound check**: lateral containment alone is not
   sufficient to decide "inside" — an aircraft flying beneath a Bravo/Charlie
   shelf, or above a Class D ceiling, is laterally inside the polygon but not
@@ -206,6 +210,12 @@ present.
     polygon (laterally or vertically); `exited` immediately re-arms to
     `not-alerted` for a later separate approach (satisfies "once per entry"
     — no re-fire while still approaching/inside the same shelf).
+  - **Evaluation order per tick**: check `alerted → inside` before
+    `alerted → not-alerted`. Since both conditions could theoretically be
+    true in the same tick (e.g. actual position just entered while the
+    forward-projected segment happens to exit the far side of a narrow
+    shelf), entry must take priority — otherwise a genuine entry could be
+    misclassified as an abort in the same tick it happens.
 - **Module init while already inside an airspace** (e.g. app restart
   mid-flight, or GPS fix acquired after departure): seed that airspace's
   state directly to `inside`, not `not-alerted`, so restart doesn't trigger
@@ -330,3 +340,13 @@ convention) rather than writing directly into the fetched config object.
    field naming itself is inconsistent in `nasr-db.js` (`lower_ft`/`lower`,
    `upper_ft`/`upper`). Must confirm against real bundle data before the
    vertical bound check can be coded correctly.
+6. **Altitude source for the vertical check is unverified.** Controlled
+   airspace floors/ceilings are published as pressure altitudes (referenced
+   to a local altimeter setting, or 29.92 above 18,000). If the Stratux
+   situation object only exposes GPS-derived (geometric) MSL altitude —
+   not confirmed either way here — the two can disagree by on the order of
+   a few hundred feet on a non-standard-pressure day, which matters right at
+   a boundary. Given this feature is an advance-warning heads-up rather than
+   a precision violation detector, some slop may be acceptable, but that's a
+   judgment call to make once it's known what altitude source is actually
+   available — not something to silently assume is fine.
