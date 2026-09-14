@@ -62,10 +62,19 @@ present.
   { "type": "APP", "freq": "119.0", "facility_name": "WILMINGTON APP" }
   ```
   Populated by **name-matching** the airspace record's name field (e.g.
-  `"WILMINGTON"`) against the airport dataset, then pulling that airport's
-  approach/tower frequency from its existing `frequencies` array. Where the
-  automatic match is wrong or ambiguous (e.g. multi-airport Class B with
-  satellite fields sharing a name fragment), a **curated override file**
+  `"WILMINGTON"`) against the airport dataset, then pulling a frequency from
+  that airport's existing `frequencies` array using an explicit per-class
+  rule (this was previously left as "approach/tower," which is ambiguous —
+  a Class D shelf is the towered airport's own airspace, not an approach
+  control's):
+  - Class D → prefer `type: "TWR"`.
+  - Class B / Class C / TRSA → prefer `type: "APP"`, falling back to `TWR`
+    if the matched airport's `frequencies` array has no `APP` entry.
+  - Class E surface → same rule as the co-located airport's own class
+    (usually `TWR`, since Class E surface typically extends a towered
+    field's area beyond its Class D core).
+  Where the automatic match is wrong or ambiguous (e.g. multi-airport Class B
+  with satellite fields sharing a name fragment), a **curated override file**
   (`airspace_freq_overrides.json` or similar, keyed by airspace ID) patches
   the specific case. This override file needs periodic review as AIRAC
   cycles update, same spirit as any other hand-maintained pipeline data.
@@ -117,7 +126,12 @@ present.
 - **Trigger logic**: on each position tick (matched to GPS update rate),
   project the aircraft position forward by the configured `lead_time_min`
   using current track/groundspeed, then point-in-polygon test that projected
-  point against each candidate airspace polygon in range.
+  point against each candidate airspace polygon in range. "In range" means
+  the `NasrDB` bounding-box query passed to `getAirspaceInBounds()` etc. must
+  cover *both* the current position and the projected position, expanded by
+  a fixed margin (e.g. +10nm) to catch polygons whose edge is closer to the
+  flight path than either endpoint — a box drawn tightly around just the two
+  points can clip a boundary that bulges between them.
 - **Point-in-polygon**: consolidate the four existing near-duplicate
   ray-casting implementations (`avoidance.js:25`, `route-table.js:11`,
   `fisb-weather.js:420`, `wx-briefing.js:1887`) into one shared utility
@@ -130,6 +144,12 @@ present.
   inside → exited`, re-arming only after a full exit (satisfies "once per
   entry" — no re-fire while still approaching/inside the same shelf, but a
   later separate approach after fully leaving fires again).
+- **Module init while already inside an airspace** (e.g. app restart
+  mid-flight, or GPS fix acquired after departure): seed that airspace's
+  state directly to `inside`, not `not-alerted`, so restart doesn't trigger
+  a popup for airspace the pilot is already established in and presumably
+  already talking to. Only fire when a `not-alerted → alerted` transition is
+  observed, never on first classification.
 - **Multiple simultaneous candidates** (e.g. a Class D satellite field inside
   a Class C shelf): each airspace fires its own alert independently (the
   pilot may genuinely need to call both facilities), but popups queue rather
@@ -220,3 +240,12 @@ convention) rather than writing directly into the fetched config object.
 4. **Name-match accuracy** for `controlling_freq` needs spot-checking against
    a handful of real Class B/C shelves (especially multi-airport Class B)
    before trusting the override-file approach is sufficiently rare.
+5. **Ground/departure-airport suppression is undecided.** As written, a
+   Class D shelf that's centered on the airport you just departed from (or
+   are taxiing at) will alert like any other approaching boundary the moment
+   you're airborne and moving — even though you're presumably already
+   talking to that tower. Needs a decision: suppress alerts for the
+   airspace class matching the airport the aircraft is currently at/departed
+   from, suppress below some AGL/groundspeed threshold, or leave it firing
+   every time and rely on "once per entry" to keep it to a single popup per
+   departure.
