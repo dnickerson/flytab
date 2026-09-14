@@ -174,6 +174,18 @@ present.
   a popup for airspace the pilot is already established in and presumably
   already talking to. Only fire when a `not-alerted → alerted` transition is
   observed, never on first classification.
+- **No separate ground/departure-airport suppression.** Resolved: this is
+  not needed as a distinct mechanism. In the normal case the app is already
+  running (GPS position already acquired) before taxi, so the departure
+  airport's own shelf is already `inside` at init per the rule above, and
+  climb-out never produces a `not-alerted → alerted` transition — it only
+  produces `inside → exited`, which doesn't alert. Adding airport-identity
+  detection ("which airport am I at") to suppress a case the init rule
+  already covers would be unjustified complexity. The one case this doesn't
+  cover — the app started fresh *after* becoming airborne, so the departure
+  shelf's first classification happens mid-climb — is treated as correct
+  behavior, not a gap: the pilot is genuinely mid-approach to that shelf
+  from the app's point of view and should be alerted.
 - **Multiple simultaneous candidates** (e.g. a Class D satellite field inside
   a Class C shelf): each airspace fires its own alert independently (the
   pilot may genuinely need to call both facilities), but popups queue rather
@@ -268,12 +280,3 @@ convention) rather than writing directly into the fetched config object.
    field naming itself is inconsistent in `nasr-db.js` (`lower_ft`/`lower`,
    `upper_ft`/`upper`). Must confirm against real bundle data before the
    vertical bound check can be coded correctly.
-6. **Ground/departure-airport suppression is undecided.** As written, a
-   Class D shelf that's centered on the airport you just departed from (or
-   are taxiing at) will alert like any other approaching boundary the moment
-   you're airborne and moving — even though you're presumably already
-   talking to that tower. Needs a decision: suppress alerts for the
-   airspace class matching the airport the aircraft is currently at/departed
-   from, suppress below some AGL/groundspeed threshold, or leave it firing
-   every time and rely on "once per entry" to keep it to a single popup per
-   departure.
