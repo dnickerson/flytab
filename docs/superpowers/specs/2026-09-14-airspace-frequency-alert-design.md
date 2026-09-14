@@ -130,9 +130,18 @@ present.
   Panning the map away from the aircraft must not silence alerts.
 - **Trigger logic**: on each position tick (matched to GPS update rate),
   project the aircraft position forward by the configured `lead_time_min`
-  using current track/groundspeed, then point-in-polygon test that projected
-  point against each candidate airspace polygon in range (lateral test
-  only — see vertical bound check below). "In range" means the `NasrDB`
+  using current track/groundspeed, then test the **line segment from current
+  position to the projected position** against each candidate airspace
+  polygon in range (lateral test only — see vertical bound check below), not
+  just the single projected endpoint. A narrow shelf can be crossed in well
+  under the lead time at typical cruise speeds (e.g. a 4nm-radius Class D at
+  120kt is fully traversed in ~4 minutes, less than half that to cross the
+  diameter) — testing only the far endpoint risks the projected point
+  jumping from "before the polygon" to "past the polygon" between two
+  consecutive ticks without either endpoint ever having landed inside it,
+  silently skipping the alert entirely for small airspace relative to
+  groundspeed. Segment-vs-polygon intersection (or sampling several points
+  along the segment) avoids this. "In range" means the `NasrDB`
   bounding-box query passed to `getAirspaceInBounds()` etc. must cover
   *both* the current position and the projected position, expanded by a
   fixed margin (e.g. +10nm) to catch polygons whose edge is closer to the
@@ -169,18 +178,34 @@ present.
     skipping it. An extra popup is a minor nuisance; silently missing a
     controlled-airspace call because of a parsing gap is not an acceptable
     trade for this feature.
-- **Point-in-polygon**: consolidate the four existing near-duplicate
-  ray-casting implementations (`avoidance.js:25`, `route-table.js:11`,
-  `fisb-weather.js:420`, `wx-briefing.js:1887`) into one shared utility
-  (e.g. `web/shared/geo-utils.js`) and use it here as the fifth consumer.
-  This is in-scope cleanup, not unrelated refactor — this feature is the
-  first caller that needs point-in-polygon on a moving *projected* point
-  rather than a static route/click point, so it's a natural point to
-  de-duplicate the four existing copies it would otherwise become a fifth of.
+- **Point-in-polygon / segment-intersection**: consolidate the four existing
+  near-duplicate ray-casting implementations (`avoidance.js:25`,
+  `route-table.js:11`, `fisb-weather.js:420`, `wx-briefing.js:1887`) into one
+  shared utility (e.g. `web/shared/geo-utils.js`), extended with a
+  segment-vs-polygon intersection test (per the trigger logic above) as the
+  fifth consumer. This is in-scope cleanup, not unrelated refactor — this
+  feature is the first caller that needs more than a single static
+  point-in-polygon test, so it's a natural point to de-duplicate the four
+  existing copies it would otherwise become a fifth (near-)copy of.
 - **State machine per airspace ID**: `not-alerted → alerted (popup shown) →
-  inside → exited`, re-arming only after a full exit (satisfies "once per
-  entry" — no re-fire while still approaching/inside the same shelf, but a
-  later separate approach after fully leaving fires again).
+  inside → exited → (back to not-alerted, re-armed)`.
+  - `not-alerted → alerted`: the projected path segment (above) intersects
+    the polygon, passing the vertical check.
+  - `alerted → inside`: the aircraft's **actual current position** (not the
+    projected one) is confirmed laterally and vertically inside the polygon.
+  - `alerted → not-alerted` (**previously missing**): the projected path
+    segment no longer intersects the polygon — i.e. the pilot altered course
+    away from the boundary after the popup fired and never actually entered.
+    Without this transition, a predicted-but-aborted approach leaves the
+    airspace stuck in `alerted` forever, since the only other path out of
+    `alerted` was `inside`; a later genuine approach to the same airspace
+    would then silently fail to re-fire because the state machine never
+    reaches `not-alerted` again. This must be treated as effectively an
+    alert-only transition, not a mirror of `inside`.
+  - `inside → exited → not-alerted`: actual current position leaves the
+    polygon (laterally or vertically); `exited` immediately re-arms to
+    `not-alerted` for a later separate approach (satisfies "once per entry"
+    — no re-fire while still approaching/inside the same shelf).
 - **Module init while already inside an airspace** (e.g. app restart
   mid-flight, or GPS fix acquired after departure): seed that airspace's
   state directly to `inside`, not `not-alerted`, so restart doesn't trigger
@@ -277,6 +302,14 @@ convention) rather than writing directly into the fetched config object.
     climbing through the floor while still laterally inside DOES alert —
     exercises the vertical bound check specifically, not just the lateral
     case the other scenarios above cover.
+  - Approach a boundary until the popup fires, then turn away before
+    actually entering — confirm the airspace re-arms (`alerted → not-alerted`)
+    and a later genuine approach to the same airspace still alerts, rather
+    than staying silently stuck.
+  - Fly a narrow shelf (e.g. Class D) at a groundspeed fast enough that the
+    lead-time distance exceeds the shelf's diameter — confirm the alert
+    still fires, exercising the segment-intersection test rather than a
+    single-endpoint check that could jump clean over it.
   - The existing airport-tap popup (`onAirportClick`) still opens normally
     afterward — required by this repo's tap-handler regression rule, since
     this feature adds a new map-adjacent popup path that could plausibly
