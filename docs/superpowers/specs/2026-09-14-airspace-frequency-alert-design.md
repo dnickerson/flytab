@@ -126,12 +126,36 @@ present.
 - **Trigger logic**: on each position tick (matched to GPS update rate),
   project the aircraft position forward by the configured `lead_time_min`
   using current track/groundspeed, then point-in-polygon test that projected
-  point against each candidate airspace polygon in range. "In range" means
-  the `NasrDB` bounding-box query passed to `getAirspaceInBounds()` etc. must
-  cover *both* the current position and the projected position, expanded by
-  a fixed margin (e.g. +10nm) to catch polygons whose edge is closer to the
+  point against each candidate airspace polygon in range (lateral test
+  only — see vertical bound check below). "In range" means the `NasrDB`
+  bounding-box query passed to `getAirspaceInBounds()` etc. must cover
+  *both* the current position and the projected position, expanded by a
+  fixed margin (e.g. +10nm) to catch polygons whose edge is closer to the
   flight path than either endpoint — a box drawn tightly around just the two
   points can clip a boundary that bulges between them.
+- **Vertical (altitude) bound check**: lateral containment alone is not
+  sufficient to decide "inside" — an aircraft flying beneath a Bravo/Charlie
+  shelf, or above a Class D ceiling, is laterally inside the polygon but not
+  actually in that airspace. After a candidate polygon passes the lateral
+  test, compare the aircraft's current altitude (MSL, read from the same
+  Stratux situation object used for position — reuse rather than a second
+  source) against that record's `lower_ft`/`upper_ft`. Only transition to
+  `inside`/fire `alerted` if altitude falls within `[lower_ft, upper_ft]`.
+  `lower_ft` of `0` or a `"SFC"`-style surface marker means the floor is
+  always satisfied at or above ground.
+  - **Needs verification before coding**: whether `lower_ft`/`upper_ft` (or
+    `lower`/`upper` — `nasr-db.js` uses inconsistent naming between the two,
+    per the earlier codebase exploration; pick one canonical name during
+    pipeline work) are stored as MSL or AGL. FAA charts publish Class B/C/D
+    shelf altitudes in MSL, but this repo's own parsing hasn't been
+    confirmed field-by-field — do not assume from chart convention alone.
+  - **Fail-open on missing/malformed bound data**: if a candidate record's
+    altitude fields are absent or unparseable, do not use the vertical check
+    to suppress an otherwise-valid lateral match — treat the record as
+    vertically unbounded (still eligible to alert) rather than silently
+    skipping it. An extra popup is a minor nuisance; silently missing a
+    controlled-airspace call because of a parsing gap is not an acceptable
+    trade for this feature.
 - **Point-in-polygon**: consolidate the four existing near-duplicate
   ray-casting implementations (`avoidance.js:25`, `route-table.js:11`,
   `fisb-weather.js:420`, `wx-briefing.js:1887`) into one shared utility
@@ -240,7 +264,11 @@ convention) rather than writing directly into the fetched config object.
 4. **Name-match accuracy** for `controlling_freq` needs spot-checking against
    a handful of real Class B/C shelves (especially multi-airport Class B)
    before trusting the override-file approach is sufficiently rare.
-5. **Ground/departure-airport suppression is undecided.** As written, a
+5. **`lower_ft`/`upper_ft` units (MSL vs AGL) are unverified**, and the
+   field naming itself is inconsistent in `nasr-db.js` (`lower_ft`/`lower`,
+   `upper_ft`/`upper`). Must confirm against real bundle data before the
+   vertical bound check can be coded correctly.
+6. **Ground/departure-airport suppression is undecided.** As written, a
    Class D shelf that's centered on the airport you just departed from (or
    are taxiing at) will alert like any other approaching boundary the moment
    you're airborne and moving — even though you're presumably already
