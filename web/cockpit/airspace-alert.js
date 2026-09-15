@@ -73,4 +73,66 @@ class AirspaceAlert {
         this._cachedCandidates = { box, airspace, sua };
         return this._cachedCandidates;
     }
+
+    _altitudeInBounds(altMsl, rec) {
+        const lower = rec.lower_ft ?? rec.lower ?? 0;
+        const upper = rec.upper_ft ?? rec.upper;
+        // Fail-open: missing/malformed bounds must not suppress an
+        // otherwise-valid lateral match -- an extra popup is a minor
+        // nuisance, silently missing a required call is not acceptable.
+        if (typeof lower !== 'number' || Number.isNaN(lower)) return true;
+        // upper < 0 is not a malformed value -- it's the pipeline's
+        // _parse_altitude() sentinel for an AIXM UNLIMITED/UNL ceiling
+        // (SUA records only; Class B/C/D/E never emit it). Do not "simplify"
+        // this away as redundant with the NaN check above -- doing so would
+        // silently suppress alerts for any unlimited-ceiling restricted area.
+        if (typeof upper !== 'number' || Number.isNaN(upper) || upper < 0) return altMsl >= lower;
+        return altMsl >= lower && altMsl <= upper;
+    }
+
+    _evaluateOne(rec, lat, lon, projLat, projLon, altMsl) {
+        const boundary = rec.boundary || rec.points || [];
+        if (boundary.length < 3) return null;
+
+        const state = this._states.get(rec.id);
+        const actuallyInside = GeoUtils.pointInPolygon(lat, lon, boundary)
+            && this._altitudeInBounds(altMsl, rec);
+
+        if (state === 'alerted') {
+            // Check entry before abort -- both could be true in the same
+            // tick (e.g. actual position just entered while the forward
+            // projection exits the far side of a narrow shelf); entry wins.
+            if (actuallyInside) {
+                this._states.set(rec.id, 'inside');
+                return null;
+            }
+            const stillApproaching = GeoUtils.segmentIntersectsPolygon(lat, lon, projLat, projLon, boundary)
+                && this._altitudeInBounds(altMsl, rec);
+            if (!stillApproaching) {
+                this._states.set(rec.id, 'not-alerted');
+            }
+            return null;
+        }
+
+        if (state === 'inside') {
+            if (!actuallyInside) this._states.set(rec.id, 'not-alerted'); // exited -> re-armed
+            return null;
+        }
+
+        // state is 'not-alerted' or unset (first time seeing this airspace)
+        if (actuallyInside) {
+            // Already inside on first classification (e.g. module just
+            // initialized while on the ground at a towered field, or app
+            // restarted mid-flight) -- seed straight to 'inside', never fire.
+            this._states.set(rec.id, 'inside');
+            return null;
+        }
+        const approaching = GeoUtils.segmentIntersectsPolygon(lat, lon, projLat, projLon, boundary)
+            && this._altitudeInBounds(altMsl, rec);
+        if (approaching) {
+            this._states.set(rec.id, 'alerted');
+            return rec;
+        }
+        return null;
+    }
 }
