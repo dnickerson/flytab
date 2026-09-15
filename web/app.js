@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v10.47';
+const FLYTAB_VERSION = 'v10.48';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -734,6 +734,18 @@ class FlyTabApp {
             if (CockpitConfig.get('convective.enabled')) {
                 this.convectiveEngine.setActive(true);
             }
+        }
+
+        // Airspace Frequency Alert
+        if (typeof AirspaceAlert !== 'undefined' && typeof AirspaceAlertPopup !== 'undefined' && this.stratuxClient) {
+            this.airspaceAlert = new AirspaceAlert();
+            this.airspaceAlert.init(this.stratuxClient, nasrDb);
+            const airspaceAlertPopup = new AirspaceAlertPopup();
+            if (this.cockpitMap?.map) {
+                airspaceAlertPopup.mount(this.cockpitMap.map.getContainer());
+            }
+            this.airspaceAlert.onAlert = (record, kind) => airspaceAlertPopup.show(record, kind);
+            setInterval(() => this.airspaceAlert.tick(), 1000);
         }
 
         // Radar loop (animated NEXRAD — uses FIS-B frames)

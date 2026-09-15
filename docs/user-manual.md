@@ -248,6 +248,7 @@ The panel has four accordion sections: **Base Chart**, **Map Overlays**, **Traff
 | **Airways** | Victor airways and Jet routes with labels |
 | **Airspace** | Class B/C/D/E boundaries with altitude labels |
 | **Restricted/MOA** | Special use airspace (R/P/W/A/MOA) — amber fill when active |
+| **Airspace Alerts** | Master switch for the approach frequency alert popup (see "Airspace Frequency Alert" below). Five sub-toggles beneath it — Class B, Class C, Class D, Class E surface, Restricted/MOA — arm or disarm alerting for each airspace type individually. |
 | **IFR Area Charts** | High-altitude obstacle/terrain charts |
 | **Runway Extensions** | Dashed extended centerlines for route airports |
 | **TFRs** | Temporary Flight Restrictions — red boundaries with type and altitude |
@@ -296,6 +297,34 @@ At the bottom of the layer panel are two buttons:
 Defaults are stored on-device and persist across app restarts. To change the defaults, configure the layers however you want and tap **Save as Defaults** again.
 
 > **Note:** SIGMETs, TFRs, and all AIRMET types (Tango, Zulu, Sierra) always start ON regardless of saved defaults. These overlays are safety-critical and cannot be permanently disabled through the defaults system — if you turn them off, they will be back on at the next app launch or when you tap **Reset to Defaults**.
+
+---
+
+## Airspace Frequency Alert
+
+FlyTab watches your projected ground track and altitude and pops up a banner shortly before you enter Class B, C, D, or E surface airspace, or a Restricted/MOA special use area — a heads-up to get the controlling frequency dialed in before you cross the boundary, without needing to look it up or remember it from the chart.
+
+**Enable it from the Layer Panel** — open the **LAYERS tab**, expand **Map Overlays**, and turn on the **Airspace Alerts** master switch. Beneath it are five sub-toggles — **Class B**, **Class C**, **Class D**, **Class E surface**, **Restricted/MOA** — so you can alert on some airspace types and not others (for example, alerting on Class B/C/D but leaving Restricted/MOA off). Both the master switch and the per-type toggles take effect immediately, including mid-flight.
+
+#### What triggers it
+
+The popup fires once as you approach a boundary — based on your current ground track and speed projected a couple of minutes ahead, not just your current position — so it typically appears before you actually cross in. It does not re-fire while you remain in the same approach, and re-arms once you're clear of the area (either by landing/exiting, or climbing/descending back out of the airspace's altitude band) so a later approach into the same airspace alerts again.
+
+#### What it shows
+
+| Field | Meaning |
+|-------|---------|
+| Title | `Entering Class B/C/D — <name>` for controlled airspace, or `Approaching <name>` for Class E surface areas and Restricted/MOA |
+| Frequency | The controlling facility name and frequency, when known |
+| Advisory text | Shown instead of (or alongside) a frequency when one isn't available — see below |
+
+For Restricted/MOA areas, the advisory line shows the published active times when known, or a reminder to verify NOTAMs when the schedule isn't in the data. Multiple simultaneous alerts are queued and shown one at a time — dismiss one to see the next.
+
+#### Frequency data requires an updated NASR bundle
+
+The controlling frequency for each Class B/C/D area comes from the NASR bundle built by the ground data pipeline — the same bundle used for airport and airspace data elsewhere in FlyTab. If your bundle predates this feature, or an area's tower data isn't in the current cycle, the popup still fires but shows **"No frequency data — update NASR bundle"** instead of a frequency. Class E surface areas without a nearby tower correctly show **"No published frequency for this area"** — that's expected, not a data problem, since Class E surface areas aren't required to have one. Rebuild and re-import the NASR bundle (see **Troubleshooting → "NASR badge is red"**) to get real frequencies for Class B/C/D.
+
+**EXPERIMENTAL — verify frequencies against your chart or ATC before relying on them.** This is a convenience aid, not a substitute for chart review or a standard weather/airspace briefing.
 
 ---
 
