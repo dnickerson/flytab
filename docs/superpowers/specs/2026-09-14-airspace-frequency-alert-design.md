@@ -60,25 +60,32 @@ present.
 - `build_nasr.py`'s existing Class B/C/D/E airspace parsing gains a
   `controlling_freq` field per record:
   ```json
-  { "type": "APP", "freq": "119.0", "facility_name": "WILMINGTON APP" }
+  { "type": "app", "freq": "125.5", "facility_name": "WILMINGTON APP" }
   ```
-  Populated by **name-matching** the airspace record's name field (e.g.
-  `"WILMINGTON"`) against the airport dataset, then pulling a frequency from
-  that airport's existing `frequencies` array using an explicit per-class
-  rule (this was previously left as "approach/tower," which is ambiguous —
-  a Class D shelf is the towered airport's own airspace, not an approach
-  control's):
-  - Class D → prefer `type: "TWR"`.
-  - Class B / Class C / TRSA → prefer `type: "APP"`, falling back to `TWR`
-    if the matched airport's `frequencies` array has no `APP` entry.
-  - Class E surface → same rule as the co-located airport's own class
-    (usually `TWR`, since Class E surface typically extends a towered
-    field's area beyond its Class D core).
-  Where the automatic match is wrong or ambiguous (e.g. multi-airport Class B
-  with satellite fields sharing a name fragment), a **curated override file**
-  (`airspace_freq_overrides.json` or similar, keyed by airspace ID) patches
-  the specific case. This override file needs periodic review as AIRAC
-  cycles update, same spirit as any other hand-maintained pipeline data.
+  **Correction from an earlier draft of this spec**: `flytab-pipeline`'s
+  actual frequency `type` values are lowercase (`twr`, `app`, `gnd`,
+  `clr_del`, `dep`, `atis`, `ctaf`, `unicom`), not the uppercase shown
+  originally — confirmed by reading `build_nasr.py`'s `USE_MAP` directly.
+
+  Populated by **geometric point-in-polygon matching**, not name-string
+  matching as originally drafted — `flytab-pipeline` research found no
+  existing name-matching precedent and no fuzzy-match library in that repo,
+  while a geometric point-in-polygon join already exists there for a
+  different feature (`mark_restricted_airway_segments`) and is directly
+  reusable. The airport whose `(lat, lon)` falls inside the airspace
+  boundary is the match; multiple candidates (e.g. a satellite towered field
+  inside a Class B/C outer shelf) are tie-broken by name similarity, then by
+  longest runway. Per-class frequency-type priority:
+  - Class D → `twr` only.
+  - Class B / Class C / TRSA → `app`, falling back to `twr`.
+  - Class E surface → `twr`, falling back to `app`, falling back to `ctaf`.
+  Where the automatic match is wrong or produces nothing, a **curated
+  override file** (new to that repo — no such pattern existed before),
+  keyed by `"<name>|<class>"` rather than airspace `id` (the `id` field
+  embeds a shapefile enumeration index that isn't guaranteed stable across
+  NASR cycles). Full algorithm and rationale now live in the
+  `flytab-pipeline` implementation plan, since that's where this code
+  actually lives.
 
 - **TRSA is not currently parsed anywhere in either repo.** This is a gap,
   not a refinement — before implementation, a research spike must confirm
@@ -246,10 +253,17 @@ present.
 - Content:
   - Class B/C/D/TRSA: facility name + frequency, styled as an actionable
     "call" popup.
-  - Class E surface / SUA: frequency if `controlling_freq` is present,
-    otherwise advisory text (e.g. SUA active-times, already available in the
-    existing `sua` store record) — no "call now" framing since these aren't
-    mandatory-contact airspace.
+  - Class E surface: frequency if `controlling_freq` is present, otherwise
+    advisory text — no "call now" framing since it isn't mandatory-contact
+    airspace.
+  - SUA: always advisory text (active-times summary), never a frequency —
+    **correction from an earlier draft**: SUA active-times data does not
+    "already exist" in the bundle as this spec originally assumed; it
+    required new parsing work in `flytab-pipeline` (now included in that
+    repo's implementation plan). Restricted areas/MOAs also don't have a
+    published ATC voice frequency the way towered airports do, so
+    `controlling_freq` matching is never attempted for SUA at all, only for
+    Class E surface.
 - Design tokens throughout, per this repo's standards: frequency in
   `var(--font-instrument)` / weight 900, facility/section label at weight
   800, dismiss button sized `var(--touch-min, 56px)` or larger, no hardcoded
