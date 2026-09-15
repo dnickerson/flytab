@@ -99,9 +99,14 @@ class AirspaceAlert {
             && this._altitudeInBounds(altMsl, rec);
 
         if (state === 'alerted') {
-            // Check entry before abort -- both could be true in the same
-            // tick (e.g. actual position just entered while the forward
-            // projection exits the far side of a narrow shelf); entry wins.
+            // Check entry before abort. segmentIntersectsPolygon's first
+            // sample point (k=0) IS the current position and is gated by
+            // the same altitude test actuallyInside uses, so
+            // actuallyInside === true mathematically implies the "still
+            // approaching" segment test below is also true in this tick --
+            // they can never disagree. Checking entry first just means
+            // that when both are (necessarily) true together, the record
+            // is classified as a genuine entry ('inside'), not as an abort.
             if (actuallyInside) {
                 this._states.set(rec.id, 'inside');
                 return null;
@@ -119,13 +124,28 @@ class AirspaceAlert {
             return null;
         }
 
-        // state is 'not-alerted' or unset (first time seeing this airspace)
+        // state is 'not-alerted' (evaluated before, no match at that time)
+        // or undefined (never evaluated this session -- module just
+        // started, or this record just entered the candidate box).
+        const neverEvaluated = state === undefined;
         if (actuallyInside) {
-            // Already inside on first classification (e.g. module just
-            // initialized while on the ground at a towered field, or app
-            // restarted mid-flight) -- seed straight to 'inside', never fire.
+            if (neverEvaluated) {
+                // Already inside on first-ever classification (e.g. module
+                // just initialized while on the ground at a towered field,
+                // or app restarted mid-flight) -- seed straight to
+                // 'inside', never fire.
+                this._states.set(rec.id, 'inside');
+                return null;
+            }
+            // Genuine new entry while state was explicitly 'not-alerted':
+            // either a lateral approach that wasn't caught as "approaching"
+            // last tick, or a vertical climb/descent into the altitude band
+            // while the aircraft stayed laterally inside the whole time
+            // (that case never sets 'approaching', since altitude fails the
+            // bounds check the entire time it's outside the band -- this is
+            // the only place such an entry can be detected). Must fire.
             this._states.set(rec.id, 'inside');
-            return null;
+            return rec;
         }
         const approaching = GeoUtils.segmentIntersectsPolygon(lat, lon, projLat, projLon, boundary)
             && this._altitudeInBounds(altMsl, rec);
@@ -133,13 +153,24 @@ class AirspaceAlert {
             this._states.set(rec.id, 'alerted');
             return rec;
         }
+        // Evaluated, no match this tick -- record explicit 'not-alerted' so
+        // a later tick can tell "evaluated, no match" apart from "never
+        // evaluated" (see neverEvaluated above).
+        this._states.set(rec.id, 'not-alerted');
         return null;
     }
 
     tick() {
         if (!this._stratux || !this._nasrDb) return;
         if (this._tickInFlight) return; // guard against overlapping async ticks (see below)
-        if (!CockpitConfig.get('airspace_alerts.enabled')) return; // live master kill switch, not just a startup gate
+        if (!CockpitConfig.get('airspace_alerts.enabled')) {
+            // Live master kill switch, not just a startup gate. Clear state
+            // so a record frozen in 'alerted' while the feature was off
+            // can't suppress a genuinely new approach after re-enabling --
+            // always start re-enabling from a clean slate.
+            this._states.clear();
+            return;
+        }
         const sit = this._stratux.situation;
         if (!sit || typeof sit.lat !== 'number' || typeof sit.lon !== 'number') return;
 
@@ -173,6 +204,14 @@ class AirspaceAlert {
                     const fired = this._evaluateOne(rec, sit.lat, sit.lon, projLat, projLon, altMsl);
                     if (fired && this.onAlert) this.onAlert(fired, 'sua');
                 }
+            }
+        }).catch((err) => {
+            // NasrDB's underlying IDB calls can reject (tx.onabort,
+            // req.onerror). Without this, that rejection skips .then()
+            // silently -- this tick's whole evaluation is dropped -- and
+            // then re-raises as an unhandled rejection with no diagnostic.
+            if (typeof DiagLog !== 'undefined') {
+                DiagLog.log('airspace', `tick() candidate evaluation failed: ${err && err.message}`);
             }
         }).finally(() => { this._tickInFlight = false; });
     }
