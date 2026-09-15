@@ -77,8 +77,13 @@ present.
   inside a Class B/C outer shelf) are tie-broken by name similarity, then by
   longest runway. Per-class frequency-type priority:
   - Class D → `twr` only.
-  - Class B / Class C / TRSA → `app`, falling back to `twr`.
+  - Class B / Class C → `app`, falling back to `twr`.
   - Class E surface → `twr`, falling back to `app`, falling back to `ctaf`.
+  - **TRSA does not go through this priority list.** Unlike Class B/C/D/E,
+    a TRSA's frequency doesn't need geometric matching at all — `TWR.txt`
+    already ties the `TRSA`-tagged frequency directly to a specific airport
+    by `loc_id`, the same join `merge_frequencies()` already performs for
+    every other tower frequency type. See the TRSA findings below.
   Where the automatic match is wrong or produces nothing, a **curated
   override file** (new to that repo — no such pattern existed before),
   keyed by `"<name>|<class>"` rather than airspace `id` (the `id` field
@@ -87,21 +92,43 @@ present.
   `flytab-pipeline` implementation plan, since that's where this code
   actually lives.
 
-- **TRSA is not currently parsed anywhere in either repo.** This is a gap,
-  not a refinement — before implementation, a research spike must confirm
-  where TRSA boundaries actually live in the FAA NASR 28-day
-  subscription/shapefile product FlyTab already pulls from. Do not assume a
-  file name or field from training memory; inspect the real subscription
-  contents first, the same way the SUA AIXM parsing was verified against
-  real XML before being trusted (see `reference_nasr_bundle_shape` /
-  `project_sua_pipeline` prior work). If TRSA boundary data isn't present in
-  the FAA products currently ingested, this spec's TRSA support is blocked
-  until a source is found — Class B/C/D/E support can ship independently in
-  the meantime. The spike must also confirm whether TRSA records carry a
-  clean vertical floor/ceiling the way Class B/C/D do — TRSAs are often
-  published with more complex vertical/segment structure than a single
-  `lower_ft`/`upper_ft` pair, and the vertical bound check below assumes
-  that shape unless the spike finds otherwise.
+- **TRSA spike resolved (2026-09-15), against the real September 2026 NASR
+  cycle, not assumed.** Findings:
+  - **Frequency**: real and already reachable. `TWR.txt` (already parsed by
+    `parse_tower_frequencies()`) tags frequencies with a literal `TRSA` use
+    code at 28 airports nationwide, including **ILM (Wilmington)** — this
+    spec's own motivating example. Extending `USE_MAP` with `'TRSA': 'trsa'`
+    is a one-line change to existing, working code.
+  - **Boundary geometry**: genuinely absent, confirmed by checking the raw
+    *unfiltered* `Class_Airspace` shapefile (only classes `B`/`C`/`D`/`E`
+    exist in it) and the CSV product's `CLS_ARSP.csv` (columns are literally
+    `CLASS_B/C/D/E_AIRSPACE`, no TRSA column). This isn't a gap in what the
+    pipeline parses — TRSA participation is voluntary, not FAA-regulated
+    controlled airspace, so the FAA doesn't publish a legal boundary for it
+    the way it does Class B/C/D. It's chart-only.
+  - **Radius, for most of them**: `TWR.txt`'s `TWR4` remark records (not
+    previously parsed by this pipeline at all) carry free-text service
+    remarks like `"TRSA CTC APCH CTL WITHIN 20 NM"` for ILM. 16 of the 28
+    airports have an explicit radius in this text; 12 do not
+    (AGS/AZO/BGM/DWU/FAI/GPT/GTF/HTS/MGM/MKG/RFD/TRI).
+  - **Decision**: approximate TRSA laterally as a **circle** around the
+    airport, radius from the parsed remark text where present — an honest
+    approximation of the real (irregular, often sectored) shape, not a
+    guess, since the radius itself is FAA-published data, not invented.
+    Flag it as such on the record (`approximate: true`) so the UI can be
+    transparent about it rather than presenting it as precisely as a real
+    Class B/C/D boundary. For the 12 without a published radius: still
+    attach the real frequency (useful on its own via the airport-tap
+    popup), but no boundary — proximity alerting is simply not attempted
+    for those until someone looks up the real chart radius (no invented
+    default radius).
+  - **Vertical extent**: no clean floor/ceiling either, except one remark
+    (MLU: `"WITHIN 25 NM BLW 7000"`) that gives an explicit ceiling. Default
+    `lower_ft: 0` (TRSA is a surface-based service everywhere it applies),
+    no `upper_ft` unless a `BLW n` value was parsed — the existing fail-open
+    vertical-bound-check design (below) already treats a missing upper
+    bound as unbounded, which is the right behavior here rather than
+    guessing a typical ceiling.
 
 - Bundle versioning: this is an additive field/store, so existing
   `sua_count`-style staleness detection doesn't need to change shape, but the
@@ -112,17 +139,23 @@ present.
 
 - `airspace` object store: add optional `controlling_freq` field, same shape
   as above. Absent field → treated as "no frequency data," not an error.
-- New `trsa` object store, same shape/indexing convention as `airspace`
-  (keyed by `id`, indexed for bounding-box query) — added only once the
-  pipeline-side TRSA spike above is resolved.
+- New `trsa` object store, keyed by `id`, indexed for bounding-box query
+  the same way `airspace`/`sua` are. Records: `{id, name, freq,
+  facility_name, lower_ft: 0, upper_ft: number|null, boundary: [[lat,lon],
+  ...]|[], radius_nm: number|null, approximate: true}`. `boundary` is empty
+  for the ~12 airports (of 28) with no published radius — those still carry
+  a real frequency (shown via the airport-tap popup) but get no proximity
+  alert until a radius is added via override.
 - IDB schema version bump required for the new store (`NasrDB` version
   constant), with a no-op migration for tablets that haven't re-imported yet.
 
 ## Runtime detection (`web/cockpit/airspace-alert.js`, new module)
 
 - **Position source**: reads the same shared aircraft-position object other
-  modules already use (`window.app._stratux.situation`-style pattern, as in
-  `emergency-glide.js`), not a fresh `GpsSource` subscription — keeps one
+  modules already use — **correction from an earlier draft**: verified as
+  `window.app.stratuxClient.situation` (not `window.app._stratux.situation`,
+  which was never the real property name), same pattern as
+  `emergency-glide.js` — not a fresh `GpsSource` subscription, keeping one
   source of truth for position across the app.
 - **Track/groundspeed field names** (needed to project position forward for
   predictive lead time) must be verified against `stratux-client.js`'s actual
@@ -252,7 +285,10 @@ present.
   cockpit UX expectation that the map stays visible during interaction).
 - Content:
   - Class B/C/D/TRSA: facility name + frequency, styled as an actionable
-    "call" popup.
+    "call" popup. For TRSA specifically, also show that the lateral boundary
+    is an approximation (`record.approximate`), e.g. "Approximate boundary —
+    verify on sectional chart" — the real shape is often irregular/sectored,
+    while this feature only has a circle derived from the published radius.
   - Class E surface: frequency if `controlling_freq` is present, otherwise
     advisory text — no "call now" framing since it isn't mandatory-contact
     airspace.
@@ -316,8 +352,7 @@ convention) rather than writing directly into the fetched config object.
   `web/shared/planning/`, which is the only directory with vitest coverage
   in this repo. Verification is manual.
 - Manual verification plan: use `tools/mock-stratux.py` to simulate a flight
-  track toward a known Class C or TRSA boundary (once TRSA data exists) and
-  confirm:
+  track toward a known Class C or TRSA boundary and confirm:
   - Popup fires at the configured lead time, not late/never.
   - Dismissing suppresses re-fire while still inside/approaching.
   - Re-arms correctly after a full exit and later re-approach.
@@ -341,26 +376,32 @@ convention) rather than writing directly into the fetched config object.
 
 ## Open risks / unresolved before implementation
 
-1. **TRSA data source is unverified.** Blocking for TRSA specifically; not
-   blocking for Class B/C/D/E, which can ship first.
-2. **Stratux situation object field names** for track/groundspeed need
-   confirming against `stratux-client.js`, not assumed.
-3. **Settings UI surface** for the new config toggles needs a quick check of
-   existing patterns before deciding where they live.
-4. **Name-match accuracy** for `controlling_freq` needs spot-checking against
-   a handful of real Class B/C shelves (especially multi-airport Class B)
-   before trusting the override-file approach is sufficiently rare.
-5. **`lower_ft`/`upper_ft` units (MSL vs AGL) are unverified**, and the
-   field naming itself is inconsistent in `nasr-db.js` (`lower_ft`/`lower`,
-   `upper_ft`/`upper`). Must confirm against real bundle data before the
-   vertical bound check can be coded correctly.
-6. **Altitude source for the vertical check is unverified.** Controlled
-   airspace floors/ceilings are published as pressure altitudes (referenced
-   to a local altimeter setting, or 29.92 above 18,000). If the Stratux
-   situation object only exposes GPS-derived (geometric) MSL altitude —
-   not confirmed either way here — the two can disagree by on the order of
-   a few hundred feet on a non-standard-pressure day, which matters right at
-   a boundary. Given this feature is an advance-warning heads-up rather than
-   a precision violation detector, some slop may be acceptable, but that's a
-   judgment call to make once it's known what altitude source is actually
-   available — not something to silently assume is fine.
+Resolved during plan-writing (kept here for history, not because they're
+still open): TRSA data source (frequency + radius-where-published, see TRSA
+findings above); Stratux situation field names (`true_course`,
+`ground_speed`, `alt_msl`, `alt_baro` — verified in `stratux-client.js`);
+altitude source for the vertical check (`alt_msl` primary, per Stratux's
+own `CalcAltitude()` source showing `alt_baro` is fixed-29.92 pressure
+altitude, not local-altimeter-corrected); settings UI surface (layer panel,
+following the existing `conv-intel` toggle pattern); `lower_ft`/`upper_ft`
+field-naming inconsistency (canonical name is `lower_ft`/`upper_ft` — the
+`lower`/`upper` fallback seen in some JS call sites is defensive, not
+evidence of a second real spelling); name-match accuracy for
+`controlling_freq` (superseded — matching is geometric, not name-based, per
+the correction above).
+
+Still genuinely open:
+
+1. **`lower_ft`/`upper_ft` units (MSL vs AGL) for Class B/C/D/E are
+   unverified.** `parse_class_airspace()` reads the shapefile's
+   `LOWER_VAL`/`UPPER_VAL` with no unit normalization or comment, unlike
+   `_parse_altitude()` (used for SUA), which does. Must confirm against the
+   FAA Class Airspace shapefile spec or real bundle data before the vertical
+   bound check can be trusted for these classes.
+2. **Geometric matching tie-break accuracy** for `controlling_freq` needs
+   spot-checking against a handful of real multi-airport Class B shelves
+   before trusting the name-then-runway tie-break is right often enough.
+3. **12 of 28 TRSA airports have no published radius** in the NASR remark
+   text (AGS/AZO/BGM/DWU/FAI/GPT/GTF/HTS/MGM/MKG/RFD/TRI) — they get real
+   frequency data but no proximity alert until someone looks up the actual
+   chart radius and adds it via override.
