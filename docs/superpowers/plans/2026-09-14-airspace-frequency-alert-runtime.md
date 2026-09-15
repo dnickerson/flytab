@@ -820,13 +820,19 @@ git commit -m "feat: wire AirspaceAlert and AirspaceAlertPopup into app startup"
 ## Task 7: TRSA support
 
 Layered on top of Tasks 1-6, which must be done and working first. Depends
-on the companion pipeline plan's Task 6, which adds a `trsa` field to the
-NASR bundle: `[{id, name, freq, facility_name, lower_ft: 0, upper_ft:
+on the companion pipeline plan's Task 6 (including its own review-driven fix
+round, which changed the schema below from an original single `freq` field
+— see that plan's ledger), which adds a `trsa` field to the NASR bundle:
+`[{id, name, freqs: [string, ...], facility_name, lower_ft: 0, upper_ft:
 number|null, boundary: [[lat,lon],...]|[], radius_nm: number|null,
-approximate: true}]`. `boundary` is empty for the ~12 of 28 TRSA airports
-with no published radius — those never produce a candidate with `boundary.
-length >= 3`, so `_evaluateOne` (Task 3) already skips them via its existing
-early-return, with no code change needed for that case.
+approximate: true}]`. `freqs` always has length ≥ 1 — some real airports
+(11 of the 20 that produce a record, as of the September 2026 cycle,
+including **ILM**) publish more than one sectorized frequency with no way
+for the pipeline to tell which applies to which arrival direction; show all
+of them, don't pick one. `boundary` is empty for airports with no published
+radius in the source remark — those never produce a candidate with
+`boundary.length >= 3`, so `_evaluateOne` (Task 3) already skips them via
+its existing early-return, with no code change needed for that case.
 
 **Files:**
 - Modify: `web/shared/nasr-db.js` (bump `DB_VERSION`; add `trsa` object store; add `getTrsaInBounds()`)
@@ -947,7 +953,7 @@ No change needed to `_evaluateOne`, `_altitudeInBounds`, or the state machine �
 
 - [ ] **Step 6: Manual verification**
 
-Via CDP console or `tools/mock-stratux.py`, simulate a track approaching KILM's TRSA (center ~34.2706, -77.9025, per the pipeline plan's real fixture) with `airspace_alerts.types.trsa` enabled — confirm `onAlert(record, 'trsa')` fires with `record.freq` populated and `record.approximate === true`.
+Via CDP console or `tools/mock-stratux.py`, simulate a track approaching KILM's TRSA (center ~34.2706, -77.9025, per the pipeline plan's real fixture) with `airspace_alerts.types.trsa` enabled — confirm `onAlert(record, 'trsa')` fires with `record.freqs` populated (a non-empty array — ILM's real data has two entries, `["118.25", "135.75"]`, per the pipeline plan's Task 6 fix) and `record.approximate === true`.
 
 - [ ] **Step 7: Commit**
 
@@ -1011,7 +1017,11 @@ to:
         } else if (!record.controlling_freq) {
 ```
 
-The `freqEl` block also needs a change — `record.controlling_freq` is never set on TRSA records (the pipeline puts the frequency directly in `record.freq`/`record.facility_name`, not `controlling_freq`, since TRSA doesn't go through the geometric-match pipeline the other classes do), so without a TRSA-specific branch the frequency would silently never display. Change (currently from Task 4):
+The `freqEl` block also needs a change — `record.controlling_freq` is never set on TRSA records (the pipeline puts the frequency directly on the record, not under `controlling_freq`, since TRSA doesn't go through the geometric-match pipeline the other classes do), so without a TRSA-specific branch the frequency would silently never display.
+
+**`record.freqs` is a list, not a single value — corrected during the pipeline plan's Task 6 review against real data, after this popup task was originally drafted.** `TWR.txt` strips sector-angle text before the pipeline's frequency parser sees it, so a sectorized TRSA (e.g. **ILM, this spec's own motivating example**, which really does publish two: `118.25` for one arrival sector, `135.75` for the other) produces multiple indistinguishable `trsa`-typed frequencies with no way for the pipeline to know which one applies to which direction. `record.freqs` always has length ≥ 1. Show all of them — picking one and presenting it with false confidence is exactly the bug the pipeline-side fix exists to prevent; don't reintroduce it here by taking `record.freqs[0]` alone.
+
+Change (currently from Task 4):
 
 ```javascript
         if (record.controlling_freq) {
@@ -1026,7 +1036,9 @@ to:
 
 ```javascript
         if (kind === 'trsa') {
-            freqEl.textContent = `${record.facility_name} ${record.freq}`;
+            freqEl.textContent = record.freqs.length > 1
+                ? `${record.facility_name} ${record.freqs.join(' / ')} (sector — verify)`
+                : `${record.facility_name} ${record.freqs[0]}`;
             freqEl.style.display = '';
         } else if (record.controlling_freq) {
             freqEl.textContent = `${record.controlling_freq.facility_name} ${record.controlling_freq.freq}`;
@@ -1038,7 +1050,7 @@ to:
 
 - [ ] **Step 9: Manual verification**
 
-Via CDP console: `p.show({name: 'Wilmington TRSA', freq: '125.5', facility_name: 'WILMINGTON INTL APCH', approximate: true}, 'trsa');` — confirm the title reads "Entering TRSA — Wilmington TRSA", the frequency line shows, and the advisory line shows "Approximate boundary — verify on sectional chart".
+Via CDP console: `p.show({name: 'Wilmington TRSA', freqs: ['118.25', '135.75'], facility_name: 'WILMINGTON INTL APCH', approximate: true}, 'trsa');` (ILM's real sectorized frequencies) — confirm the title reads "Entering TRSA — Wilmington TRSA", the frequency line shows BOTH frequencies with the "(sector — verify)" note (not just one), and the advisory line shows "Approximate boundary — verify on sectional chart". Then separately test `p.show({name: 'Test TRSA', freqs: ['118.3'], facility_name: 'TEST APCH', approximate: true}, 'trsa');` — confirm the single-frequency case displays without the sector note.
 
 - [ ] **Step 10: Commit**
 
