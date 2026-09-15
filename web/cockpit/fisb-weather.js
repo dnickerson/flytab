@@ -407,27 +407,13 @@ class FisbWeatherDisplay {
         for (const entry of allPolygons) {
             const pts = entry.advisory?.points;
             if (!pts || pts.length < 3) continue;
-            if (FisbWeatherDisplay._pointInPolygon(latlng.lat, latlng.lng, pts)) {
+            if (GeoUtils.pointInPolygon(latlng.lat, latlng.lng, pts)) {
                 hits.push(entry);
             }
         }
 
         if (!hits.length) return;
         this._openAdvisoryPopup(hits, clientX, clientY);
-    }
-
-    // Ray-casting point-in-polygon for [lat, lon] coordinate arrays.
-    static _pointInPolygon(lat, lon, points) {
-        let inside = false;
-        const n = points.length;
-        for (let i = 0, j = n - 1; i < n; j = i++) {
-            const [yi, xi] = points[i];
-            const [yj, xj] = points[j];
-            if (((yi > lat) !== (yj > lat)) && (lon < (xj - xi) * (lat - yi) / (yj - yi) + xi)) {
-                inside = !inside;
-            }
-        }
-        return inside;
     }
 
     _openAdvisoryPopup(hits, clientX, clientY) {
