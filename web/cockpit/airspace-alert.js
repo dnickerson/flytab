@@ -135,4 +135,45 @@ class AirspaceAlert {
         }
         return null;
     }
+
+    tick() {
+        if (!this._stratux || !this._nasrDb) return;
+        if (this._tickInFlight) return; // guard against overlapping async ticks (see below)
+        if (!CockpitConfig.get('airspace_alerts.enabled')) return; // live master kill switch, not just a startup gate
+        const sit = this._stratux.situation;
+        if (!sit || typeof sit.lat !== 'number' || typeof sit.lon !== 'number') return;
+
+        const altMsl = this._altitudeMsl(sit);
+        if (altMsl === null) return;
+
+        const leadTimeMin = CockpitConfig.get('airspace_alerts.lead_time_min') ?? 2;
+        const groundSpeedKt = sit.ground_speed || 0;
+        const trueCourseDeg = sit.true_course || 0;
+        const distNm = groundSpeedKt * (leadTimeMin / 60);
+        const rad = trueCourseDeg * Math.PI / 180;
+        const projLat = sit.lat + this._nmToDegLat(distNm) * Math.cos(rad);
+        const projLon = sit.lon + this._nmToDegLon(distNm, sit.lat) * Math.sin(rad);
+
+        // IDB queries inside _getCandidates could in principle take longer
+        // than the 1000ms tick interval under device contention -- without
+        // this guard, a second tick() could start a second query before the
+        // first's .then() resolves, letting two callbacks interleave state
+        // machine updates with inconsistent position snapshots.
+        this._tickInFlight = true;
+        this._getCandidates(sit.lat, sit.lon, projLat, projLon).then(({ airspace, sua }) => {
+            const types = CockpitConfig.get('airspace_alerts.types') || {};
+            const classEnabled = { B: types.class_b, C: types.class_c, D: types.class_d, E: types.class_e_surface };
+            for (const rec of airspace) {
+                if (!classEnabled[rec.class]) continue;
+                const fired = this._evaluateOne(rec, sit.lat, sit.lon, projLat, projLon, altMsl);
+                if (fired && this.onAlert) this.onAlert(fired, 'airspace');
+            }
+            if (types.sua) {
+                for (const rec of sua) {
+                    const fired = this._evaluateOne(rec, sit.lat, sit.lon, projLat, projLon, altMsl);
+                    if (fired && this.onAlert) this.onAlert(fired, 'sua');
+                }
+            }
+        }).finally(() => { this._tickInFlight = false; });
+    }
 }
