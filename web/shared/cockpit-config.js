@@ -143,6 +143,17 @@ class CockpitConfig {
             apiSecret: '',
             baseUrl: 'https://api-staging.cgifederal-aim.com',
         },
+        airspace_alerts: {
+            enabled: true,
+            lead_time_min: 2,
+            types: {
+                class_b: true,
+                class_c: true,
+                class_d: true,
+                class_e_surface: false,
+                sua: false,
+            },
+        },
     };
 
     static AIRCRAFT_DEFAULTS = {
