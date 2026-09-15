@@ -2,22 +2,22 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the FlyTab-side half of the airspace frequency alert feature — a new module that watches aircraft position, detects predictive approach into Class B/C/D/E airspace or SUA, and shows a non-blocking popup with the controlling frequency (or advisory text), matching ForeFlight's airspace-alert behavior.
+**Goal:** Build the FlyTab-side half of the airspace frequency alert feature — a new module that watches aircraft position, detects predictive approach into Class B/C/D/E airspace, SUA, or TRSA, and shows a non-blocking popup with the controlling frequency (or advisory text), matching ForeFlight's airspace-alert behavior.
 
-**Architecture:** One new module (`web/cockpit/airspace-alert.js`) owns position-tracking, candidate caching, geometry/altitude testing, and the per-airspace state machine; it reads from `NasrDB` (already extended by the companion `flytab-pipeline` plan with `controlling_freq`/`active_times` fields) and from the shared Stratux situation object. A small new shared utility (`web/shared/geo-utils.js`) de-duplicates point-in-polygon logic already triplicated across three classic-script files, extended with a segment-intersection test this feature needs. UI is a `ConvectiveAlerts`-style non-blocking banner, but using design tokens instead of inline styles. Six new config toggles live in the layer panel, backed by `CockpitConfig`.
+**Architecture:** One new module (`web/cockpit/airspace-alert.js`) owns position-tracking, candidate caching, geometry/altitude testing, and the per-airspace state machine; it reads from `NasrDB` (already extended by the companion `flytab-pipeline` plan with `controlling_freq`/`active_times` fields, and by this plan's own Task 7 with a new `trsa` store) and from the shared Stratux situation object. A small new shared utility (`web/shared/geo-utils.js`) de-duplicates point-in-polygon logic already triplicated across three classic-script files, extended with a segment-intersection test this feature needs. UI is a `ConvectiveAlerts`-style non-blocking banner, but using design tokens instead of inline styles. Config toggles live in the layer panel, backed by `CockpitConfig`. Tasks 1-6 deliver Class B/C/D/E + SUA as a complete, working feature; Task 7 layers on TRSA support using the approximate circular boundaries the companion pipeline plan's Task 6 produces.
 
 **Tech Stack:** Vanilla JS, classic `<script>` tags (no bundler, no ES modules outside `web/shared/planning/`), IndexedDB via the existing `NasrDB` wrapper.
 
 **Spec:** `docs/superpowers/specs/2026-09-14-airspace-frequency-alert-design.md`
 
-**Companion plan:** `flytab-pipeline` repo's `docs/superpowers/plans/2026-09-14-airspace-controlling-frequency.md` must ship first (or in parallel) — this plan's `airspace-alert.js` reads the `controlling_freq`/`active_times` fields that plan adds to the NASR bundle. This plan degrades gracefully without them (shows advisory-only content), so it is not strictly blocked, but full behavior needs both.
+**Companion plan:** `flytab-pipeline` repo's `docs/superpowers/plans/2026-09-14-airspace-controlling-frequency.md`. For Tasks 1-6, it must ship first (or in parallel) — `airspace-alert.js` reads the `controlling_freq`/`active_times` fields that plan adds to the NASR bundle, degrading gracefully without them (advisory-only content), so Tasks 1-6 aren't strictly blocked. Task 7 (TRSA) genuinely does depend on the companion plan's Task 6 having shipped first, since it reads a `trsa` bundle field that doesn't exist before that.
 
 ## Global Constraints
 
 - No new runtime dependencies. No bundler. New files load via `<script>` tags in `web/index.html`, in the existing `web/shared/` → `web/cockpit/` load order.
 - All colors via `var(--…)` design tokens (no hardcoded hex), numeric displays use `var(--font-instrument)` weight 900, section labels weight 800, touch targets `var(--touch-min, 56px)` minimum — per this repo's Design Token Standards.
 - Config writes go through `CockpitConfig.patch(path, value)`, never `CockpitConfig.set()` (that method doesn't exist on the class — an existing call site at `web/cockpit/layer-panel.js:173` is a latent dead-call bug; do not copy that pattern, and do not fix that pre-existing bug either — out of scope for this plan).
-- TRSA is out of scope for this plan (no `trsa` NasrDB store exists yet — blocked on the pipeline-side spike per the spec). This plan implements Class B/C/D/E and SUA only.
+- TRSA support (Task 7) is layered on top of Tasks 1-6, not interleaved with them — Tasks 1-6 implement and verify Class B/C/D/E + SUA as a complete, working feature on their own first. This mirrors the companion pipeline plan's Task 6, which resolved the TRSA data-source spike with real findings: real frequency data for 28 airports, an approximate circular boundary (not the true legal shape, which the FAA doesn't publish for TRSA at all) for 16 of them.
 - Any change touching `onAirportClick`/`onNavaidClick`/`onFixClick` (`web/app.js`) requires manually re-verifying the airport-tap popup still opens (this repo's Tap Handler Regression Rule) — this plan's new popup is programmatic (GPS-triggered), not tap-triggered, so it must not register any competing tap/click listener on the map; Task 6 includes the required manual check regardless, since the new module still adds a DOM overlay onto the map container.
 
 ---
@@ -250,7 +250,7 @@ class AirspaceAlert {
         this._stratux = null;
         this._nasrDb = null;
         this._states = new Map(); // airspace id -> 'alerted' | 'inside'
-        this._cachedCandidates = null; // { box: {south,west,north,east}, airspace: [...], sua: [...] }
+        this._cachedCandidates = null; // { box: {south,west,north,east}, airspace: [...], sua: [...] } -- Task 7 adds a trsa: [...] key
         this._tickInFlight = false; // re-entrancy guard, see tick()
         this.onAlert = null; // (record, kind: 'airspace'|'sua') => void, set by caller
     }
@@ -643,7 +643,7 @@ git commit -m "feat: add AirspaceAlertPopup UI component"
 
 **Interfaces:**
 - Produces: `CockpitConfig.get('airspace_alerts.enabled')`, `.get('airspace_alerts.lead_time_min')`, `.get('airspace_alerts.types.<class_b|class_c|class_d|class_e_surface|sua>')` — all consumed by Task 3's `tick()`.
-- **No `types.trsa` key.** TRSA is out of scope for this plan (Global Constraints) — there is no detection code path for it anywhere in Task 3, so a `trsa` toggle would control nothing. Do not add one; add it in a future plan alongside the actual TRSA detection support, once the companion pipeline plan's TRSA spike resolves.
+- **`types.trsa` is added by Task 7, not this task.** Keep it out of the `DEFAULTS`/`cockpit-config.json`/layer-panel edits below — Task 7 adds it once the TRSA detection path (a new `trsa` NasrDB store, `getTrsaInBounds()`, and `tick()` wiring) actually exists. Adding the config/UI key here first would ship a dead toggle again, the exact bug fixed in the previous review round.
 
 - [ ] **Step 1: Add defaults to `CockpitConfig.DEFAULTS`**
 
@@ -683,7 +683,7 @@ In `web/shared/cockpit-config.js`, inside `static DEFAULTS = { ... }`, add a new
 
 - [ ] **Step 3: Add layer panel toggle rows**
 
-In `web/cockpit/layer-panel.js`, inside `_buildHtml()`, after the existing Airspace row (currently around line 525) and before the Restricted/MOA row, add a new accordion section (following the existing `.lp-accordion`/`.lp-accordion-body` structure used elsewhere in the file — confirm the exact section-wrapper markup by viewing a full existing section, since this plan only shows row-level markup). The first row is the master kill switch (`enabled`); the rest are per-type (no `trsa` row — see this task's Interfaces note):
+In `web/cockpit/layer-panel.js`, inside `_buildHtml()`, after the existing Airspace row (currently around line 525) and before the Restricted/MOA row, add a new accordion section (following the existing `.lp-accordion`/`.lp-accordion-body` structure used elsewhere in the file — confirm the exact section-wrapper markup by viewing a full existing section, since this plan only shows row-level markup). The first row is the master kill switch (`enabled`); the rest are per-type (no `trsa` row yet — Task 7 adds it once TRSA detection exists):
 
 ```html
 <div class="lp-row">
@@ -813,4 +813,281 @@ Run `bash build.sh`, install on the tablet. Using `tools/mock-stratux.py`, repla
 ```bash
 git add web/app.js web/index.html
 git commit -m "feat: wire AirspaceAlert and AirspaceAlertPopup into app startup"
+```
+
+---
+
+## Task 7: TRSA support
+
+Layered on top of Tasks 1-6, which must be done and working first. Depends
+on the companion pipeline plan's Task 6, which adds a `trsa` field to the
+NASR bundle: `[{id, name, freq, facility_name, lower_ft: 0, upper_ft:
+number|null, boundary: [[lat,lon],...]|[], radius_nm: number|null,
+approximate: true}]`. `boundary` is empty for the ~12 of 28 TRSA airports
+with no published radius — those never produce a candidate with `boundary.
+length >= 3`, so `_evaluateOne` (Task 3) already skips them via its existing
+early-return, with no code change needed for that case.
+
+**Files:**
+- Modify: `web/shared/nasr-db.js` (bump `DB_VERSION`; add `trsa` object store; add `getTrsaInBounds()`)
+- Modify: `web/cockpit/airspace-alert.js` (wire `trsa` into `_getCandidates()` and `tick()`)
+- Modify: `web/cockpit/airspace-alert-popup.js` (TRSA display: mandatory-call framing, approximate-boundary note)
+- Modify: `web/shared/cockpit-config.js`, `web/cockpit-config.json`, `web/cockpit/layer-panel.js` (re-add the `trsa` toggle — legitimately backed this time)
+
+**Interfaces:**
+- Produces: `NasrDB.getTrsaInBounds(south, west, north, east, limit=500)`, same shape/contract as `getAirspaceInBounds`/`getSuaInBounds`.
+- Consumes: pipeline's `trsa` bundle field (see above).
+
+- [ ] **Step 1: Add the `trsa` object store**
+
+In `web/shared/nasr-db.js`, bump the version (currently `static DB_VERSION = 8;` — Task 2's large-polygon fix only changed query methods, not the schema, so it left this unchanged):
+
+```javascript
+    static DB_VERSION = 9;
+```
+
+Inside `onupgradeneeded`, after the existing `sua` store block, add:
+
+```javascript
+                // TRSA (Terminal Radar Service Area) -- approximate circular
+                // boundaries per the pipeline's flytab-pipeline Task 6; no
+                // secondary index needed, same as the airways store.
+                if (!db.objectStoreNames.contains('trsa')) {
+                    db.createObjectStore('trsa', { keyPath: 'id' });
+                }
+```
+
+- [ ] **Step 2: Add `getTrsaInBounds()`**
+
+Directly after `getSuaInBounds()`, add (already including the large-polygon-blind-spot fix from Task 2 — no reason to write it without the fix here just to "fix" it later, since a 30nm TRSA circle has exactly the same failure mode a wide Class B shelf does):
+
+```javascript
+    /**
+     * Get TRSA approximate circular boundaries that overlap a bounding box.
+     */
+    async getTrsaInBounds(south, west, north, east, limit = 500) {
+        const db = await this.open();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction('trsa', 'readonly');
+            tx.onabort = () => reject(tx.error || new Error('Transaction aborted'));
+            const results = [];
+            const req = tx.objectStore('trsa').openCursor();
+            req.onsuccess = () => {
+                const cursor = req.result;
+                if (!cursor || results.length >= limit) { resolve(results); return; }
+                const v = cursor.value;
+                const boundary = v.boundary || [];
+                const vertexInBounds = boundary.some(pt => {
+                    const lat = pt[0], lon = pt[1];
+                    return lat >= south && lat <= north && lon >= west && lon <= east;
+                });
+                const centerInPolygon = !vertexInBounds && boundary.length >= 3
+                    && typeof GeoUtils !== 'undefined'
+                    && GeoUtils.pointInPolygon((south + north) / 2, (west + east) / 2, boundary);
+                if (vertexInBounds || centerInPolygon) results.push(v);
+                cursor.continue();
+            };
+            req.onerror = () => reject(req.error);
+        });
+    }
+```
+
+- [ ] **Step 3: Manual verification of the schema change**
+
+Run `bash build.sh`, install, and confirm via CDP that opening the app bumps the IDB schema without error (`indexedDB.databases()` should show `flypi` at version 9) and that a fresh NASR bundle import (from a pipeline build that includes Task 6) populates the `trsa` store — check via CDP's Application > IndexedDB panel, or `NasrDB.getTrsaInBounds(-90,-180,90,180)` from the console, and confirm `KILM`'s TRSA record (`id: "TRSA-KILM"`) is present with a 32-point `boundary`.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add web/shared/nasr-db.js
+git commit -m "feat: add trsa object store and getTrsaInBounds() to NasrDB"
+```
+
+- [ ] **Step 5: Wire `trsa` into `_getCandidates()` and `tick()`**
+
+In `web/cockpit/airspace-alert.js`, change `_getCandidates()`'s query and cache shape:
+
+```javascript
+        const [airspace, sua, trsa] = await Promise.all([
+            this._nasrDb.getAirspaceInBounds(box.south, box.west, box.north, box.east),
+            this._nasrDb.getSuaInBounds(box.south, box.west, box.north, box.east),
+            this._nasrDb.getTrsaInBounds(box.south, box.west, box.north, box.east),
+        ]);
+        this._cachedCandidates = { box, airspace, sua, trsa };
+        return this._cachedCandidates;
+```
+
+In `tick()`, change the `.then()` destructuring and add a TRSA loop, gated by `types.trsa` the same way SUA is gated by `types.sua`:
+
+```javascript
+        this._getCandidates(sit.lat, sit.lon, projLat, projLon).then(({ airspace, sua, trsa }) => {
+            const types = CockpitConfig.get('airspace_alerts.types') || {};
+            const classEnabled = { B: types.class_b, C: types.class_c, D: types.class_d, E: types.class_e_surface };
+            for (const rec of airspace) {
+                if (!classEnabled[rec.class]) continue;
+                const fired = this._evaluateOne(rec, sit.lat, sit.lon, projLat, projLon, altMsl);
+                if (fired && this.onAlert) this.onAlert(fired, 'airspace');
+            }
+            if (types.sua) {
+                for (const rec of sua) {
+                    const fired = this._evaluateOne(rec, sit.lat, sit.lon, projLat, projLon, altMsl);
+                    if (fired && this.onAlert) this.onAlert(fired, 'sua');
+                }
+            }
+            if (types.trsa) {
+                for (const rec of trsa) {
+                    const fired = this._evaluateOne(rec, sit.lat, sit.lon, projLat, projLon, altMsl);
+                    if (fired && this.onAlert) this.onAlert(fired, 'trsa');
+                }
+            }
+        }).finally(() => { this._tickInFlight = false; });
+```
+
+No change needed to `_evaluateOne`, `_altitudeInBounds`, or the state machine — they already operate generically on any record with `id`/`boundary`/`lower_ft`/`upper_ft`, which TRSA records provide in the same shape as `airspace`/`sua`.
+
+- [ ] **Step 6: Manual verification**
+
+Via CDP console or `tools/mock-stratux.py`, simulate a track approaching KILM's TRSA (center ~34.2706, -77.9025, per the pipeline plan's real fixture) with `airspace_alerts.types.trsa` enabled — confirm `onAlert(record, 'trsa')` fires with `record.freq` populated and `record.approximate === true`.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add web/cockpit/airspace-alert.js
+git commit -m "feat: wire TRSA into AirspaceAlert candidate fetch and tick()"
+```
+
+- [ ] **Step 8: Update the popup for TRSA**
+
+In `web/cockpit/airspace-alert-popup.js`, TRSA needs mandatory-call framing (contacting approach is the whole point of a TRSA, even though participation is technically voluntary) and an approximate-boundary disclosure. Change:
+
+```javascript
+        const mandatoryCall = kind === 'airspace' && ['B', 'C', 'D'].includes(record.class);
+
+        titleEl.textContent = mandatoryCall
+            ? `Entering Class ${record.class} — ${record.name}`
+            : `Approaching ${record.name}`;
+```
+
+to:
+
+```javascript
+        const mandatoryCall = (kind === 'airspace' && ['B', 'C', 'D'].includes(record.class)) || kind === 'trsa';
+
+        titleEl.textContent = kind === 'trsa'
+            ? `Entering TRSA — ${record.name}`
+            : mandatoryCall
+                ? `Entering Class ${record.class} — ${record.name}`
+                : `Approaching ${record.name}`;
+```
+
+And change the advisory branch:
+
+```javascript
+        if (kind === 'sua') {
+            advisoryEl.textContent = record.active_times
+                ? `Active: ${record.active_times}`
+                : 'Schedule unknown — verify NOTAMs before entry';
+            advisoryEl.style.display = '';
+        } else if (!record.controlling_freq) {
+```
+
+to:
+
+```javascript
+        if (kind === 'trsa') {
+            // Always show this for TRSA -- record.approximate is always
+            // true per the pipeline's build_trsa_records(), but checking
+            // it explicitly rather than hardcoding keeps this resilient if
+            // that ever changes.
+            advisoryEl.textContent = record.approximate
+                ? 'Approximate boundary — verify on sectional chart'
+                : '';
+            advisoryEl.style.display = record.approximate ? '' : 'none';
+        } else if (kind === 'sua') {
+            advisoryEl.textContent = record.active_times
+                ? `Active: ${record.active_times}`
+                : 'Schedule unknown — verify NOTAMs before entry';
+            advisoryEl.style.display = '';
+        } else if (!record.controlling_freq) {
+```
+
+The `freqEl` block also needs a change — `record.controlling_freq` is never set on TRSA records (the pipeline puts the frequency directly in `record.freq`/`record.facility_name`, not `controlling_freq`, since TRSA doesn't go through the geometric-match pipeline the other classes do), so without a TRSA-specific branch the frequency would silently never display. Change (currently from Task 4):
+
+```javascript
+        if (record.controlling_freq) {
+            freqEl.textContent = `${record.controlling_freq.facility_name} ${record.controlling_freq.freq}`;
+            freqEl.style.display = '';
+        } else {
+            freqEl.style.display = 'none';
+        }
+```
+
+to:
+
+```javascript
+        if (kind === 'trsa') {
+            freqEl.textContent = `${record.facility_name} ${record.freq}`;
+            freqEl.style.display = '';
+        } else if (record.controlling_freq) {
+            freqEl.textContent = `${record.controlling_freq.facility_name} ${record.controlling_freq.freq}`;
+            freqEl.style.display = '';
+        } else {
+            freqEl.style.display = 'none';
+        }
+```
+
+- [ ] **Step 9: Manual verification**
+
+Via CDP console: `p.show({name: 'Wilmington TRSA', freq: '125.5', facility_name: 'WILMINGTON INTL APCH', approximate: true}, 'trsa');` — confirm the title reads "Entering TRSA — Wilmington TRSA", the frequency line shows, and the advisory line shows "Approximate boundary — verify on sectional chart".
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add web/cockpit/airspace-alert-popup.js
+git commit -m "feat: add TRSA display to AirspaceAlertPopup"
+```
+
+- [ ] **Step 11: Re-add the TRSA config toggle**
+
+This is the toggle removed during the earlier code review (it shipped with no backing detection code) — now it has one. In `web/shared/cockpit-config.js`, add `trsa: true` back to `airspace_alerts.types`:
+
+```javascript
+        airspace_alerts: {
+            enabled: true,
+            lead_time_min: 2,
+            types: {
+                class_b: true,
+                class_c: true,
+                class_d: true,
+                trsa: true,
+                class_e_surface: false,
+                sua: false,
+            },
+        },
+```
+
+Make the matching change in `web/cockpit-config.json`. In `web/cockpit/layer-panel.js`, add a TRSA row back to the markup from Task 5 Step 3 (as a `lp-row-sub` row, same convention as the others):
+
+```html
+<div class="lp-row lp-row-sub">
+    <span class="lp-row-label lp-sub-label">Alert: TRSA</span>
+    <label class="lp-toggle"><input type="checkbox" data-action="airspace-alert-trsa"><span class="lp-toggle-track"></span></label>
+</div>
+```
+
+And add `'trsa'` back to the wiring loop's array from Task 5 Step 4:
+
+```javascript
+for (const key of ['class_b', 'class_c', 'class_d', 'class_e_surface', 'sua', 'trsa']) {
+```
+
+- [ ] **Step 12: Full manual verification**
+
+Run `bash build.sh`, install. Confirm the "Alert: TRSA" row now appears in the layer panel (checked by default), toggling it off/on actually suppresses/enables TRSA alerts (per Step 6's verification method), and re-confirm the Tap Handler Regression Rule check from Task 6 Step 4 still passes (this task didn't touch tap handling, but it did touch the same popup component that check exercises).
+
+- [ ] **Step 13: Commit**
+
+```bash
+git add web/shared/cockpit-config.js web/cockpit-config.json web/cockpit/layer-panel.js
+git commit -m "feat: re-add TRSA layer-panel toggle, now with real detection behind it"
 ```
