@@ -96,9 +96,16 @@ present.
   cycle, not assumed.** Findings:
   - **Frequency**: real and already reachable. `TWR.txt` (already parsed by
     `parse_tower_frequencies()`) tags frequencies with a literal `TRSA` use
-    code at 28 airports nationwide, including **ILM (Wilmington)** — this
-    spec's own motivating example. Extending `USE_MAP` with `'TRSA': 'trsa'`
-    is a one-line change to existing, working code.
+    code, including at **ILM (Wilmington)** — this spec's own motivating
+    example. Extending `USE_MAP` with `'TRSA': 'trsa'` is a one-line change
+    to existing, working code. **A pilot-count caveat found during
+    implementation, not just planning**: raw counts of "how many airports
+    mention TRSA" varied across different NASR sub-products checked during
+    the initial spike (28-29 depending on whether counting `TWR4` remarks or
+    `TWR3` frequency tags) — treat any specific number in this document as
+    approximate. The number that actually matters is code-verified at build
+    time: **20 airports produced a usable record** against the September
+    2026 cycle (see below).
   - **Boundary geometry**: genuinely absent, confirmed by checking the raw
     *unfiltered* `Class_Airspace` shapefile (only classes `B`/`C`/`D`/`E`
     exist in it) and the CSV product's `CLS_ARSP.csv` (columns are literally
@@ -108,9 +115,30 @@ present.
     the way it does Class B/C/D. It's chart-only.
   - **Radius, for most of them**: `TWR.txt`'s `TWR4` remark records (not
     previously parsed by this pipeline at all) carry free-text service
-    remarks like `"TRSA CTC APCH CTL WITHIN 20 NM"` for ILM. 16 of the 28
-    airports have an explicit radius in this text; 12 do not
-    (AGS/AZO/BGM/DWU/FAI/GPT/GTF/HTS/MGM/MKG/RFD/TRI).
+    remarks like `"TRSA CTC APCH CTL WITHIN 20 NM"` for ILM.
+  - **Real coverage, verified against actual code + actual data (2026-09-03
+    cycle), not estimated**: of the airports with a `TWR4` TRSA remark, only
+    **20 produce a full record** (real VHF `trsa`-typed frequency found);
+    **9 are silently skipped** (`BPT, DWU, ERI, MBS, MCN, MKG, PSP, UAM,
+    WRB` — some have no TRSA-tagged frequency at all, `ERI`'s only one is
+    UHF and correctly filtered by the existing military-frequency guard).
+    The skip is correct behavior (don't fabricate), but the pipeline now
+    logs which airports were dropped rather than staying silent about it.
+    Of the 20 real records, **11 have more than one `trsa`-typed
+    frequency** — see the sectorized-frequency finding below.
+  - **Sectorized frequencies — found during code review against real data,
+    not anticipated in the original design.** `TWR.txt` publishes some
+    TRSA frequencies per-sector (e.g. ILM: `118.25` for arrivals from
+    164°-343°, `135.75` for 344°-163°), but strips the sector-angle text
+    before this pipeline's existing frequency parser ever sees it — so
+    sectorized frequencies are indistinguishable by type. An early version
+    of this implementation picked one via `next(...)` and presented it with
+    false confidence; **this would have told a pilot arriving ILM from the
+    wrong sector the wrong frequency, for this spec's own motivating
+    example.** Fixed by changing the field from a singular `freq` to a
+    `freqs` list (see below) rather than attempting sector disambiguation,
+    which would require aircraft-bearing-from-airport geometry on the
+    `flytab` side — out of scope for this iteration.
   - **Decision**: approximate TRSA laterally as a **circle** around the
     airport, radius from the parsed remark text where present — an honest
     approximation of the real (irregular, often sectored) shape, not a
@@ -140,12 +168,29 @@ present.
 - `airspace` object store: add optional `controlling_freq` field, same shape
   as above. Absent field → treated as "no frequency data," not an error.
 - New `trsa` object store, keyed by `id`, indexed for bounding-box query
-  the same way `airspace`/`sua` are. Records: `{id, name, freq,
-  facility_name, lower_ft: 0, upper_ft: number|null, boundary: [[lat,lon],
-  ...]|[], radius_nm: number|null, approximate: true}`. `boundary` is empty
-  for the ~12 airports (of 28) with no published radius — those still carry
-  a real frequency (shown via the airport-tap popup) but get no proximity
-  alert until a radius is added via override.
+  the same way `airspace`/`sua` are. Records: `{id, name, freqs: [string,
+  ...], facility_name, lower_ft: 0, upper_ft: number|null, boundary:
+  [[lat,lon], ...]|[], radius_nm: number|null, approximate: true}`.
+  **`freqs` is a list, not a single value — corrected during implementation
+  against real data.** `TWR.txt` strips sector-angle text (e.g.
+  `118.25 ;164-343`) before this pipeline ever sees it, so a sectorized TRSA
+  publishes multiple indistinguishable `trsa`-typed frequencies with no way
+  for this pipeline to tell which one applies to which arrival direction.
+  **ILM — this spec's own motivating example — is one of them**: real data
+  has both `118.25` (164°–343°) and `135.75` (344°–163°). An earlier version
+  of this design picked one arbitrarily via `next(...)`, which would have
+  confidently told a pilot arriving from the wrong sector the wrong
+  frequency. `freqs` always has length ≥ 1; the UI must show all of them
+  when there's more than one (with no attempt at sector disambiguation
+  in this iteration — that would require aircraft-bearing-from-airport
+  geometry client-side, out of scope here) rather than silently picking one.
+  `boundary` is empty for airports with no published radius in the source
+  remark — those still carry real frequency data (shown via the airport-tap
+  popup) but get no proximity alert until a radius is added via override.
+  Real coverage as of the September 2026 cycle: 20 airports produce a full
+  record (not the ~28 with *some* TRSA remark — 9 have a remark but no
+  matching VHF `trsa`-tagged frequency and are skipped, logged, not
+  fabricated).
 - IDB schema version bump required for the new store (`NasrDB` version
   constant), with a no-op migration for tablets that haven't re-imported yet.
 
@@ -401,7 +446,15 @@ Still genuinely open:
 2. **Geometric matching tie-break accuracy** for `controlling_freq` needs
    spot-checking against a handful of real multi-airport Class B shelves
    before trusting the name-then-runway tie-break is right often enough.
-3. **12 of 28 TRSA airports have no published radius** in the NASR remark
-   text (AGS/AZO/BGM/DWU/FAI/GPT/GTF/HTS/MGM/MKG/RFD/TRI) — they get real
-   frequency data but no proximity alert until someone looks up the actual
-   chart radius and adds it via override.
+3. **Resolved during implementation, not left open**: of the airports with a
+   TRSA remark, 20 produced a usable record against the September 2026
+   cycle; 9 had no matching frequency and are logged as skipped, not
+   fabricated (see above). Of those with a radius, some have none published
+   in the remark text — same handling as before (real frequency data, no
+   proximity alert until a radius is added via override) — exact per-cycle
+   counts belong in the pipeline's own build output, not hardcoded here.
+4. **Resolved during implementation**: sectorized TRSA frequencies (multiple
+   `trsa`-typed frequencies per airport, sector-angle text discarded
+   upstream) are preserved as a list (`freqs`) rather than one arbitrarily
+   picked value — see the TRSA findings above for the real ILM case that
+   surfaced this.
