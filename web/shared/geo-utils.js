@@ -1,6 +1,10 @@
 /**
  * FlyTab — Geometry utilities shared across map/planning features.
- * Classic script (not an ES module) — attaches to window.GeoUtils.
+ * Classic script (not an ES module) — declared as a top-level `const`, so it
+ * is available as a global identifier (`GeoUtils`) to any other classic
+ * script loaded after it, the same way other shared modules are consumed
+ * in this repo. This does NOT attach a `GeoUtils` property to `window`
+ * (only `var`/bare assignment does that at the top level of a script).
  */
 const GeoUtils = {
     /**

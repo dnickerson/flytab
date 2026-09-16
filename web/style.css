@@ -11439,7 +11439,7 @@ body.route-editing-mode .route-table-sheet {
 
 .airspace-alert-popup {
     position: absolute;
-    top: 56px;
+    top: 160px;
     left: 50%;
     transform: translateX(-50%);
     z-index: 950;

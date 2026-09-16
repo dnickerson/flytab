@@ -304,7 +304,7 @@ Defaults are stored on-device and persist across app restarts. To change the def
 
 FlyTab watches your projected ground track and altitude and pops up a banner shortly before you enter Class B, C, D, or E surface airspace, a Restricted/MOA special use area, or a Terminal Radar Service Area (TRSA) — a heads-up to get the controlling frequency dialed in before you cross the boundary, without needing to look it up or remember it from the chart.
 
-**Enable it from the Layer Panel** — open the **LAYERS tab**, expand **Map Overlays**, and turn on the **Airspace Alerts** master switch. Beneath it are six sub-toggles — **Class B**, **Class C**, **Class D**, **Class E surface**, **Restricted/MOA**, **TRSA** — so you can alert on some airspace types and not others (for example, alerting on Class B/C/D but leaving Restricted/MOA off). Both the master switch and the per-type toggles take effect immediately, including mid-flight.
+**On by default** — Airspace Alerts are already enabled out of the box; you don't need to turn anything on to use it. To check its state or turn it off, open the **LAYERS tab**, expand **Map Overlays**, and find the **Airspace Alerts** master switch. Beneath it are six sub-toggles — **Class B**, **Class C**, **Class D**, **Class E surface**, **Restricted/MOA**, **TRSA** — so you can alert on some airspace types and not others (for example, alerting on Class B/C/D but leaving Restricted/MOA off). Both the master switch and the per-type toggles take effect immediately, including mid-flight.
 
 #### What triggers it
 
