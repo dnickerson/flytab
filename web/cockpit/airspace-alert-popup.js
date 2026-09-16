@@ -1,8 +1,8 @@
 /**
  * FlyTab — Airspace Alert Popup
  * Non-blocking banner shown as the aircraft approaches Class B/C/D/E
- * airspace or SUA. Queues multiple simultaneous alerts rather than
- * stacking them on screen.
+ * airspace, SUA, or a TRSA. Queues multiple simultaneous alerts rather
+ * than stacking them on screen.
  */
 class AirspaceAlertPopup {
     constructor() {
@@ -46,20 +46,36 @@ class AirspaceAlertPopup {
         const titleEl = this._el.querySelector('.aap-title');
         const freqEl = this._el.querySelector('.aap-freq');
         const advisoryEl = this._el.querySelector('.aap-advisory');
-        const mandatoryCall = kind === 'airspace' && ['B', 'C', 'D'].includes(record.class);
+        const mandatoryCall = (kind === 'airspace' && ['B', 'C', 'D'].includes(record.class)) || kind === 'trsa';
 
-        titleEl.textContent = mandatoryCall
-            ? `Entering Class ${record.class} — ${record.name}`
-            : `Approaching ${record.name}`;
+        titleEl.textContent = kind === 'trsa'
+            ? `Entering TRSA — ${record.name}`
+            : mandatoryCall
+                ? `Entering Class ${record.class} — ${record.name}`
+                : `Approaching ${record.name}`;
 
-        if (record.controlling_freq) {
+        if (kind === 'trsa') {
+            freqEl.textContent = record.freqs.length > 1
+                ? `${record.facility_name} ${record.freqs.join(' / ')} (sector — verify)`
+                : `${record.facility_name} ${record.freqs[0]}`;
+            freqEl.style.display = '';
+        } else if (record.controlling_freq) {
             freqEl.textContent = `${record.controlling_freq.facility_name} ${record.controlling_freq.freq}`;
             freqEl.style.display = '';
         } else {
             freqEl.style.display = 'none';
         }
 
-        if (kind === 'sua') {
+        if (kind === 'trsa') {
+            // Always show this for TRSA -- record.approximate is always
+            // true per the pipeline's build_trsa_records(), but checking
+            // it explicitly rather than hardcoding keeps this resilient if
+            // that ever changes.
+            advisoryEl.textContent = record.approximate
+                ? 'Approximate boundary — verify on sectional chart'
+                : '';
+            advisoryEl.style.display = record.approximate ? '' : 'none';
+        } else if (kind === 'sua') {
             advisoryEl.textContent = record.active_times
                 ? `Active: ${record.active_times}`
                 : 'Schedule unknown — verify NOTAMs before entry';
