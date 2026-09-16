@@ -1,7 +1,7 @@
 /**
  * FlyTab — Airspace Frequency Alert
  * Watches aircraft position and predicts approach into Class B/C/D/E
- * airspace or SUA, firing onAlert(airspaceRecord) once per entry.
+ * airspace, SUA, or a TRSA, firing onAlert(record, kind) once per entry.
  * See docs/superpowers/specs/2026-09-14-airspace-frequency-alert-design.md
  */
 class AirspaceAlert {
@@ -13,9 +13,9 @@ class AirspaceAlert {
         this._stratux = null;
         this._nasrDb = null;
         this._states = new Map(); // airspace id -> 'alerted' | 'inside'
-        this._cachedCandidates = null; // { box: {south,west,north,east}, airspace: [...], sua: [...] } -- Task 7 adds a trsa: [...] key
+        this._cachedCandidates = null; // { box: {south,west,north,east}, airspace: [...], sua: [...], trsa: [...] }
         this._tickInFlight = false; // re-entrancy guard, see tick()
-        this.onAlert = null; // (record, kind: 'airspace'|'sua') => void, set by caller
+        this.onAlert = null; // (record, kind: 'airspace'|'sua'|'trsa') => void, set by caller
     }
 
     init(stratuxClient, nasrDb) {
@@ -66,11 +66,12 @@ class AirspaceAlert {
         if (cached && this._boxContains(cached.box, lat, lon) && this._boxContains(cached.box, projLat, projLon)) {
             return cached;
         }
-        const [airspace, sua] = await Promise.all([
+        const [airspace, sua, trsa] = await Promise.all([
             this._nasrDb.getAirspaceInBounds(box.south, box.west, box.north, box.east),
             this._nasrDb.getSuaInBounds(box.south, box.west, box.north, box.east),
+            this._nasrDb.getTrsaInBounds(box.south, box.west, box.north, box.east),
         ]);
-        this._cachedCandidates = { box, airspace, sua };
+        this._cachedCandidates = { box, airspace, sua, trsa };
         return this._cachedCandidates;
     }
 
@@ -191,7 +192,7 @@ class AirspaceAlert {
         // first's .then() resolves, letting two callbacks interleave state
         // machine updates with inconsistent position snapshots.
         this._tickInFlight = true;
-        this._getCandidates(sit.lat, sit.lon, projLat, projLon).then(({ airspace, sua }) => {
+        this._getCandidates(sit.lat, sit.lon, projLat, projLon).then(({ airspace, sua, trsa }) => {
             const types = CockpitConfig.get('airspace_alerts.types') || {};
             const classEnabled = { B: types.class_b, C: types.class_c, D: types.class_d, E: types.class_e_surface };
             for (const rec of airspace) {
@@ -203,6 +204,12 @@ class AirspaceAlert {
                 for (const rec of sua) {
                     const fired = this._evaluateOne(rec, sit.lat, sit.lon, projLat, projLon, altMsl);
                     if (fired && this.onAlert) this.onAlert(fired, 'sua');
+                }
+            }
+            if (types.trsa) {
+                for (const rec of trsa) {
+                    const fired = this._evaluateOne(rec, sit.lat, sit.lon, projLat, projLon, altMsl);
+                    if (fired && this.onAlert) this.onAlert(fired, 'trsa');
                 }
             }
         }).catch((err) => {
