@@ -14,7 +14,7 @@ class NasrDB {
     // reading DB_NAME — a rename here must update that too, or the reset
     // button will silently delete a database that no longer exists.
     static DB_NAME = 'flypi';
-    static DB_VERSION = 8;
+    static DB_VERSION = 9;
 
     constructor() {
         this._db = null;
@@ -64,6 +64,13 @@ class NasrDB {
                 if (!db.objectStoreNames.contains('sua')) {
                     const store = db.createObjectStore('sua', { keyPath: 'id' });
                     store.createIndex('type', 'type', { unique: false });
+                }
+
+                // TRSA (Terminal Radar Service Area) -- approximate circular
+                // boundaries per the pipeline's flytab-pipeline Task 6; no
+                // secondary index needed, same as the airways store.
+                if (!db.objectStoreNames.contains('trsa')) {
+                    db.createObjectStore('trsa', { keyPath: 'id' });
                 }
 
                 // Named fixes/waypoints for route parsing
@@ -467,6 +474,35 @@ class NasrDB {
     }
 
     /**
+     * Get TRSA approximate circular boundaries that overlap a bounding box.
+     */
+    async getTrsaInBounds(south, west, north, east, limit = 500) {
+        const db = await this.open();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction('trsa', 'readonly');
+            tx.onabort = () => reject(tx.error || new Error('Transaction aborted'));
+            const results = [];
+            const req = tx.objectStore('trsa').openCursor();
+            req.onsuccess = () => {
+                const cursor = req.result;
+                if (!cursor || results.length >= limit) { resolve(results); return; }
+                const v = cursor.value;
+                const boundary = v.boundary || [];
+                const vertexInBounds = boundary.some(pt => {
+                    const lat = pt[0], lon = pt[1];
+                    return lat >= south && lat <= north && lon >= west && lon <= east;
+                });
+                const centerInPolygon = !vertexInBounds && boundary.length >= 3
+                    && typeof GeoUtils !== 'undefined'
+                    && GeoUtils.pointInPolygon((south + north) / 2, (west + east) / 2, boundary);
+                if (vertexInBounds || centerInPolygon) results.push(v);
+                cursor.continue();
+            };
+            req.onerror = () => reject(req.error);
+        });
+    }
+
+    /**
      * Get airways that have at least one waypoint within bounds.
      */
     async getAirwaysInBounds(south, west, north, east, limit = 100) {
@@ -684,11 +720,11 @@ class NasrDB {
     // ========== NASR Data Import ==========
 
     async importNasrBundle(bundle) {
-        // Bundle is an object with { airports, navaids, airways, airspace, sua, fixes, cycle_info }
+        // Bundle is an object with { airports, navaids, airways, airspace, sua, trsa, fixes, cycle_info }
         // All stores are written in a single transaction so that a mid-import failure
         // never leaves the DB in a partially-cleared state.
         const db = await this.open();
-        const storeNames = ['airports', 'navaids', 'airways', 'airspace', 'sua', 'fixes'];
+        const storeNames = ['airports', 'navaids', 'airways', 'airspace', 'sua', 'trsa', 'fixes'];
         let count = 0;
 
         await new Promise((resolve, reject) => {
@@ -712,6 +748,7 @@ class NasrDB {
             write('airways', bundle.airways);
             write('airspace', bundle.airspace);
             write('sua', bundle.sua);
+            write('trsa', bundle.trsa);
             write('fixes', bundle.fixes);
         });
 
