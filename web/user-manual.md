@@ -248,7 +248,7 @@ The panel has four accordion sections: **Base Chart**, **Map Overlays**, **Traff
 | **Airways** | Victor airways and Jet routes with labels |
 | **Airspace** | Class B/C/D/E boundaries with altitude labels |
 | **Restricted/MOA** | Special use airspace (R/P/W/A/MOA) — amber fill when active |
-| **Airspace Alerts** | Master switch for the approach frequency alert popup (see "Airspace Frequency Alert" below). Five sub-toggles beneath it — Class B, Class C, Class D, Class E surface, Restricted/MOA — arm or disarm alerting for each airspace type individually. |
+| **Airspace Alerts** | Master switch for the approach frequency alert popup (see "Airspace Frequency Alert" below). Six sub-toggles beneath it — Class B, Class C, Class D, Class E surface, Restricted/MOA, TRSA — arm or disarm alerting for each airspace type individually. |
 | **IFR Area Charts** | High-altitude obstacle/terrain charts |
 | **Runway Extensions** | Dashed extended centerlines for route airports |
 | **TFRs** | Temporary Flight Restrictions — red boundaries with type and altitude |
@@ -302,9 +302,9 @@ Defaults are stored on-device and persist across app restarts. To change the def
 
 ## Airspace Frequency Alert
 
-FlyTab watches your projected ground track and altitude and pops up a banner shortly before you enter Class B, C, D, or E surface airspace, or a Restricted/MOA special use area — a heads-up to get the controlling frequency dialed in before you cross the boundary, without needing to look it up or remember it from the chart.
+FlyTab watches your projected ground track and altitude and pops up a banner shortly before you enter Class B, C, D, or E surface airspace, a Restricted/MOA special use area, or a Terminal Radar Service Area (TRSA) — a heads-up to get the controlling frequency dialed in before you cross the boundary, without needing to look it up or remember it from the chart.
 
-**Enable it from the Layer Panel** — open the **LAYERS tab**, expand **Map Overlays**, and turn on the **Airspace Alerts** master switch. Beneath it are five sub-toggles — **Class B**, **Class C**, **Class D**, **Class E surface**, **Restricted/MOA** — so you can alert on some airspace types and not others (for example, alerting on Class B/C/D but leaving Restricted/MOA off). Both the master switch and the per-type toggles take effect immediately, including mid-flight.
+**Enable it from the Layer Panel** — open the **LAYERS tab**, expand **Map Overlays**, and turn on the **Airspace Alerts** master switch. Beneath it are six sub-toggles — **Class B**, **Class C**, **Class D**, **Class E surface**, **Restricted/MOA**, **TRSA** — so you can alert on some airspace types and not others (for example, alerting on Class B/C/D but leaving Restricted/MOA off). Both the master switch and the per-type toggles take effect immediately, including mid-flight.
 
 #### What triggers it
 
@@ -314,11 +314,19 @@ The popup fires once as you approach a boundary — based on your current ground
 
 | Field | Meaning |
 |-------|---------|
-| Title | `Entering Class B/C/D — <name>` for controlled airspace, or `Approaching <name>` for Class E surface areas and Restricted/MOA |
+| Title | `Entering Class B/C/D — <name>` for controlled airspace, `Entering TRSA — <name>` for a TRSA, or `Approaching <name>` for Class E surface areas and Restricted/MOA |
 | Frequency | The controlling facility name and frequency, when known |
 | Advisory text | Shown instead of (or alongside) a frequency when one isn't available — see below |
 
 For Restricted/MOA areas, the advisory line shows the published active times when known, or a reminder to verify NOTAMs when the schedule isn't in the data. Multiple simultaneous alerts are queued and shown one at a time — dismiss one to see the next.
+
+#### TRSA (Terminal Radar Service Area)
+
+Participation in a TRSA is technically voluntary, but FlyTab treats crossing into one as a call worth making — the alert phrasing ("Entering TRSA") matches Class B/C/D rather than the softer "Approaching" wording used for Class E surface and Restricted/MOA.
+
+Some TRSAs — Wilmington (KILM) among them — publish more than one approach frequency for different arrival sectors, with no published way to tell which one applies to your direction of arrival from the data alone. When that's the case, FlyTab shows **all** of the published frequencies together with a "(sector — verify)" note, rather than guessing at one — confirm the correct one with the controlling facility.
+
+**TRSA boundaries shown on the alert are approximate circles, not the true legal shape.** The FAA does not publish exact TRSA boundary geometry the way it does for Class B/C/D, so FlyTab draws a circle around the primary airport based on the published service radius. Treat the alert as a heads-up to get the frequency ready, not as a precise boundary-crossing indicator — verify against your sectional chart. As of the current data cycle, TRSA coverage is limited to roughly 20 airports nationwide with published NASR remarks that support it; this is not comprehensive nationwide coverage.
 
 #### Frequency data requires an updated NASR bundle
 
