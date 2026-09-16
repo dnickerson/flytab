@@ -365,6 +365,12 @@ class LayerPanel {
                 input.checked = CockpitConfig.get(`airspace_alerts.types.${key}`) ?? false;
                 input.addEventListener('change', () => {
                     CockpitConfig.patch(`airspace_alerts.types.${key}`, input.checked);
+                    // Clear alert state so re-enabling a type that was disabled
+                    // mid-approach doesn't leave a record stranded in 'alerted'
+                    // (only the master switch used to clear this) -- otherwise
+                    // the next genuine approach into that same airspace never
+                    // fires again.
+                    window.app?.airspaceAlert?._states?.clear();
                 });
             }
         }

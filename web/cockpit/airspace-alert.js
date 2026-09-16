@@ -12,7 +12,7 @@ class AirspaceAlert {
     constructor() {
         this._stratux = null;
         this._nasrDb = null;
-        this._states = new Map(); // airspace id -> 'alerted' | 'inside'
+        this._states = new Map(); // airspace id -> 'alerted' | 'inside' | 'not-alerted'
         this._cachedCandidates = null; // { box: {south,west,north,east}, airspace: [...], sua: [...], trsa: [...] }
         this._tickInFlight = false; // re-entrancy guard, see tick()
         this.onAlert = null; // (record, kind: 'airspace'|'sua'|'trsa') => void, set by caller
@@ -83,10 +83,13 @@ class AirspaceAlert {
         // nuisance, silently missing a required call is not acceptable.
         if (typeof lower !== 'number' || Number.isNaN(lower)) return true;
         // upper < 0 is not a malformed value -- it's the pipeline's
-        // _parse_altitude() sentinel for an AIXM UNLIMITED/UNL ceiling
-        // (SUA records only; Class B/C/D/E never emit it). Do not "simplify"
-        // this away as redundant with the NaN check above -- doing so would
-        // silently suppress alerts for any unlimited-ceiling restricted area.
+        // _parse_altitude() sentinel for an AIXM UNLIMITED/UNL ceiling. SUA
+        // records use it for this reason; Class E records also carry this
+        // same -9998-style negative sentinel on the vast majority of records
+        // (4282/4325 in a real bundle) for "no upper limit." Either way the
+        // fail-open behavior below handles both cases identically. Do not
+        // "simplify" this away as redundant with the NaN check above -- doing
+        // so would silently suppress alerts for any unlimited-ceiling area.
         if (typeof upper !== 'number' || Number.isNaN(upper) || upper < 0) return altMsl >= lower;
         return altMsl >= lower && altMsl <= upper;
     }
@@ -193,20 +196,36 @@ class AirspaceAlert {
         // machine updates with inconsistent position snapshots.
         this._tickInFlight = true;
         this._getCandidates(sit.lat, sit.lon, projLat, projLon).then(({ airspace, sua, trsa }) => {
-            const types = CockpitConfig.get('airspace_alerts.types') || {};
-            const classEnabled = { B: types.class_b, C: types.class_c, D: types.class_d, E: types.class_e_surface };
+            // Read each leaf individually rather than destructuring the whole
+            // 'airspace_alerts.types' object. CockpitConfig._mergeUserOverrides
+            // only deep-merges two levels of nesting -- 'types.<key>' is a
+            // three-level patch path, so a saved override touching only one
+            // leaf (e.g. {types: {sua: true}}) would make CockpitConfig.get
+            // ('airspace_alerts.types') return just that one key post-restart,
+            // silently losing the other five leaves' defaults. Reading each
+            // leaf through the dot-path resolver falls back to its own
+            // per-leaf default correctly, same as layer-panel.js already does.
+            const t = (key) => CockpitConfig.get(`airspace_alerts.types.${key}`);
+            const classEnabled = { B: t('class_b'), C: t('class_c'), D: t('class_d'), E: t('class_e_surface') };
             for (const rec of airspace) {
                 if (!classEnabled[rec.class]) continue;
+                // The "Class E surface" toggle/manual only promise surface
+                // areas, but rec.class === 'E' also matches E5 transition
+                // areas (AGL floor, ~77% of all Class E records) whose floor
+                // can't be meaningfully compared against the MSL altitude
+                // this code checks it against. Narrow to true surface areas
+                // (name contains "Class E2") to match what's documented.
+                if (rec.class === 'E' && !rec.name?.includes('Class E2')) continue;
                 const fired = this._evaluateOne(rec, sit.lat, sit.lon, projLat, projLon, altMsl);
                 if (fired && this.onAlert) this.onAlert(fired, 'airspace');
             }
-            if (types.sua) {
+            if (t('sua')) {
                 for (const rec of sua) {
                     const fired = this._evaluateOne(rec, sit.lat, sit.lon, projLat, projLon, altMsl);
                     if (fired && this.onAlert) this.onAlert(fired, 'sua');
                 }
             }
-            if (types.trsa) {
+            if (t('trsa')) {
                 for (const rec of trsa) {
                     const fired = this._evaluateOne(rec, sit.lat, sit.lon, projLat, projLon, altMsl);
                     if (fired && this.onAlert) this.onAlert(fired, 'trsa');
