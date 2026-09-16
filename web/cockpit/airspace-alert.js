@@ -210,12 +210,13 @@ class AirspaceAlert {
             for (const rec of airspace) {
                 if (!classEnabled[rec.class]) continue;
                 // The "Class E surface" toggle/manual only promise surface
-                // areas, but rec.class === 'E' also matches E5 transition
+                // areas, but rec.class === 'E' also matches E5/E6 transition
                 // areas (AGL floor, ~77% of all Class E records) whose floor
                 // can't be meaningfully compared against the MSL altitude
-                // this code checks it against. Narrow to true surface areas
-                // (name contains "Class E2") to match what's documented.
-                if (rec.class === 'E' && !rec.name?.includes('Class E2')) continue;
+                // this code checks it against. E2/E3/E4 are all genuine
+                // surface areas (lower_ft: 0, verified against a real NASR
+                // bundle) -- exclude only E5/E6 to match what's documented.
+                if (rec.class === 'E' && /Class E[56]\b/.test(rec.name || '')) continue;
                 const fired = this._evaluateOne(rec, sit.lat, sit.lon, projLat, projLon, altMsl);
                 if (fired && this.onAlert) this.onAlert(fired, 'airspace');
             }
