@@ -55,10 +55,15 @@ class AirspaceAlertPopup {
                 : `Approaching ${record.name}`;
 
         if (kind === 'trsa') {
-            freqEl.textContent = record.freqs.length > 1
-                ? `${record.facility_name} ${record.freqs.join(' / ')} (sector — verify)`
-                : `${record.facility_name} ${record.freqs[0]}`;
-            freqEl.style.display = '';
+            const freqs = Array.isArray(record.freqs) ? record.freqs : [];
+            if (freqs.length > 0) {
+                freqEl.textContent = freqs.length > 1
+                    ? `${record.facility_name} ${freqs.join(' / ')} (sector — verify)`
+                    : `${record.facility_name} ${freqs[0]}`;
+                freqEl.style.display = '';
+            } else {
+                freqEl.style.display = 'none';
+            }
         } else if (record.controlling_freq) {
             freqEl.textContent = `${record.controlling_freq.facility_name} ${record.controlling_freq.freq}`;
             freqEl.style.display = '';
