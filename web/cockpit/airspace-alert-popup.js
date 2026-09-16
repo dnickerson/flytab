@@ -23,11 +23,22 @@ class AirspaceAlertPopup {
             <div class="aap-freq"></div>
             <div class="aap-advisory"></div>
         `;
-        this._el.querySelector('.aap-dismiss').addEventListener('click', () => this._advance());
+        // wireTap, not addEventListener('click', ...): this popup is mounted
+        // directly into the Leaflet map container, and other cockpit
+        // components (vector-map-layers.js, fisb-weather.js) register
+        // capture:true touchstart listeners on that same container that fire
+        // before any click ever reaches this button -- see mount() and the
+        // guards added to those two files for the other half of the fix.
+        wireTap(this._el.querySelector('.aap-dismiss'), () => this._advance());
     }
 
     mount(container) {
         container.appendChild(this._el);
+        // Stops Leaflet's own click handling from treating a tap that lands
+        // on this popup as a map click (same pattern as approach-charts.js's
+        // plate toggle button, the one other button appended directly into
+        // the map container).
+        L.DomEvent.disableClickPropagation(this._el);
     }
 
     show(record, kind) {

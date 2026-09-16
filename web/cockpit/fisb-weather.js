@@ -75,6 +75,15 @@ class FisbWeatherDisplay {
         // Touch tap handler (Leaflet's tap plugin is disabled — bindPopup click unreliable on tablet)
         this._tapStart = null;
         this._onTapStart = (e) => {
+            // Don't enter tap-detection if the touch starts on a Leaflet
+            // popup or the airspace alert popup (both appended directly into
+            // the same map container this handler is registered on) --
+            // otherwise tapping a popup's own dismiss/close control would
+            // also fall through to this handler's advisory tap logic.
+            if (e.target?.closest?.('.leaflet-popup') || e.target?.closest?.('.airspace-alert-popup')) {
+                this._tapStart = null;
+                return;
+            }
             if (e.touches.length === 1)
                 this._tapStart = { x: e.touches[0].clientX, y: e.touches[0].clientY };
             else
