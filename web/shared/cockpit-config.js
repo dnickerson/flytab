@@ -150,6 +150,7 @@ class CockpitConfig {
                 class_b: true,
                 class_c: true,
                 class_d: true,
+                trsa: true,
                 class_e_surface: false,
                 sua: false,
             },

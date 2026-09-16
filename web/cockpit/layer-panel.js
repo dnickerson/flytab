@@ -359,7 +359,7 @@ class LayerPanel {
         }
 
         // Wire Airspace Alert per-type toggles
-        for (const key of ['class_b', 'class_c', 'class_d', 'class_e_surface', 'sua']) {
+        for (const key of ['class_b', 'class_c', 'class_d', 'class_e_surface', 'sua', 'trsa']) {
             const input = this._panel.querySelector(`.lp-toggle input[data-action="airspace-alert-${key}"]`);
             if (input) {
                 input.checked = CockpitConfig.get(`airspace_alerts.types.${key}`) ?? false;
@@ -566,6 +566,10 @@ class LayerPanel {
                     <div class="lp-row lp-row-sub">
                         <span class="lp-row-label lp-sub-label">Alert: Restricted/MOA</span>
                         <label class="lp-toggle"><input type="checkbox" data-action="airspace-alert-sua"><span class="lp-toggle-track"></span></label>
+                    </div>
+                    <div class="lp-row lp-row-sub">
+                        <span class="lp-row-label lp-sub-label">Alert: TRSA</span>
+                        <label class="lp-toggle"><input type="checkbox" data-action="airspace-alert-trsa"><span class="lp-toggle-track"></span></label>
                     </div>
                     <div class="lp-row">
                         <span class="lp-row-label">Restricted/MOA</span>
