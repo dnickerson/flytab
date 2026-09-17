@@ -210,13 +210,18 @@ class AirspaceAlert {
             for (const rec of airspace) {
                 if (!classEnabled[rec.class]) continue;
                 // The "Class E surface" toggle/manual only promise surface
-                // areas, but rec.class === 'E' also matches E5/E6 transition
-                // areas (AGL floor, ~77% of all Class E records) whose floor
-                // can't be meaningfully compared against the MSL altitude
-                // this code checks it against. E2/E3/E4 are all genuine
-                // surface areas (lower_ft: 0, verified against a real NASR
-                // bundle) -- exclude only E5/E6 to match what's documented.
-                if (rec.class === 'E' && /Class E[56]\b/.test(rec.name || '')) continue;
+                // areas. A name-based E5/E6 regex was tried here but doesn't
+                // hold: verified against the real NASR bundle, 90 Class E
+                // records (e.g. "Woody Island Low", "Atlantic Low", and even
+                // one literally named "Aurora Class E2") have a nonzero
+                // lower_ft (700-14500) with no "Class E5/E6" in the name at
+                // all -- the regex let them through. Checking lower_ft
+                // directly is the actual definition of "surface" this code
+                // needs (0 = surface, >0 = AGL floor that can't be compared
+                // to the MSL altitude this code checks it against) and
+                // covers every case, not just the ones that happen to be
+                // named a certain way.
+                if (rec.class === 'E' && rec.lower_ft > 0) continue;
                 const fired = this._evaluateOne(rec, sit.lat, sit.lon, projLat, projLon, altMsl);
                 if (fired && this.onAlert) this.onAlert(fired, 'airspace');
             }
