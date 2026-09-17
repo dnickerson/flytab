@@ -12,7 +12,7 @@ class AirspaceAlert {
     constructor() {
         this._stratux = null;
         this._nasrDb = null;
-        this._states = new Map(); // airspace id -> 'alerted' | 'inside' | 'not-alerted'
+        this._states = new Map(); // "kind:id" -> 'alerted' | 'inside' | 'not-alerted'
         this._cachedCandidates = null; // { box: {south,west,north,east}, airspace: [...], sua: [...], trsa: [...] }
         this._tickInFlight = false; // re-entrancy guard, see tick()
         this.onAlert = null; // (record, kind: 'airspace'|'sua'|'trsa') => void, set by caller
@@ -28,6 +28,22 @@ class AirspaceAlert {
         this._nasrDb = null;
         this._states.clear();
         this._cachedCandidates = null;
+    }
+
+    /**
+     * Clear cached state for one sub-type only -- call this instead of
+     * reaching into _states.clear() when the pilot toggles a single
+     * airspace_alerts.types.* checkbox, so an unrelated in-progress
+     * approach elsewhere doesn't get a spurious duplicate alert from being
+     * wiped along with the toggled type. typeKey matches _evaluateOne's
+     * per-record prefix: 'B'|'C'|'D'|'E' for airspace classes, 'sua', or
+     * 'trsa'.
+     */
+    clearStatesForType(typeKey) {
+        const prefix = `${typeKey}:`;
+        for (const key of this._states.keys()) {
+            if (key.startsWith(prefix)) this._states.delete(key);
+        }
     }
 
     _altitudeMsl(sit) {
@@ -94,11 +110,27 @@ class AirspaceAlert {
         return altMsl >= lower && altMsl <= upper;
     }
 
-    _evaluateOne(rec, lat, lon, projLat, projLon, altMsl) {
+    _evaluateOne(kind, rec, lat, lon, projLat, projLon, altMsl) {
         const boundary = rec.boundary || rec.points || [];
         if (boundary.length < 3) return null;
 
-        const state = this._states.get(rec.id);
+        // Namespaced, not just rec.id: airspace/sua/trsa are three separate
+        // NASR object stores, each only guaranteed unique ids *within* its
+        // own store -- nothing in this repo (ids are pipeline-generated)
+        // guarantees uniqueness *across* stores, and a collision would
+        // silently corrupt one record's state transitions with another's.
+        // Verified no collision exists in the current real bundle (5638
+        // airspace + 1236 sua ids, zero overlap), but that's pipeline data,
+        // not a structural guarantee -- namespacing costs nothing and
+        // removes the question entirely. Airspace records use their FAA
+        // class letter (B/C/D/E) rather than the generic 'airspace' kind
+        // specifically so clearStatesForType() (below) can clear e.g. just
+        // class_b state when the pilot toggles that one sub-type, without
+        // also wiping class_c/d/e/sua/trsa state for unrelated airspace the
+        // aircraft may already be mid-approach to.
+        const typeKey = kind === 'airspace' ? rec.class : kind;
+        const key = `${typeKey}:${rec.id}`;
+        const state = this._states.get(key);
         const actuallyInside = GeoUtils.pointInPolygon(lat, lon, boundary)
             && this._altitudeInBounds(altMsl, rec);
 
@@ -112,19 +144,19 @@ class AirspaceAlert {
             // that when both are (necessarily) true together, the record
             // is classified as a genuine entry ('inside'), not as an abort.
             if (actuallyInside) {
-                this._states.set(rec.id, 'inside');
+                this._states.set(key, 'inside');
                 return null;
             }
             const stillApproaching = GeoUtils.segmentIntersectsPolygon(lat, lon, projLat, projLon, boundary)
                 && this._altitudeInBounds(altMsl, rec);
             if (!stillApproaching) {
-                this._states.set(rec.id, 'not-alerted');
+                this._states.set(key, 'not-alerted');
             }
             return null;
         }
 
         if (state === 'inside') {
-            if (!actuallyInside) this._states.set(rec.id, 'not-alerted'); // exited -> re-armed
+            if (!actuallyInside) this._states.set(key, 'not-alerted'); // exited -> re-armed
             return null;
         }
 
@@ -138,7 +170,7 @@ class AirspaceAlert {
                 // just initialized while on the ground at a towered field,
                 // or app restarted mid-flight) -- seed straight to
                 // 'inside', never fire.
-                this._states.set(rec.id, 'inside');
+                this._states.set(key, 'inside');
                 return null;
             }
             // Genuine new entry while state was explicitly 'not-alerted':
@@ -148,19 +180,19 @@ class AirspaceAlert {
             // (that case never sets 'approaching', since altitude fails the
             // bounds check the entire time it's outside the band -- this is
             // the only place such an entry can be detected). Must fire.
-            this._states.set(rec.id, 'inside');
+            this._states.set(key, 'inside');
             return rec;
         }
         const approaching = GeoUtils.segmentIntersectsPolygon(lat, lon, projLat, projLon, boundary)
             && this._altitudeInBounds(altMsl, rec);
         if (approaching) {
-            this._states.set(rec.id, 'alerted');
+            this._states.set(key, 'alerted');
             return rec;
         }
         // Evaluated, no match this tick -- record explicit 'not-alerted' so
         // a later tick can tell "evaluated, no match" apart from "never
         // evaluated" (see neverEvaluated above).
-        this._states.set(rec.id, 'not-alerted');
+        this._states.set(key, 'not-alerted');
         return null;
     }
 
@@ -181,10 +213,28 @@ class AirspaceAlert {
         const altMsl = this._altitudeMsl(sit);
         if (altMsl === null) return;
 
+        // Read all six sub-toggles up front so a fully-disabled feature (master
+        // switch on, every type off -- a real, reachable state via the layer
+        // panel) can skip the IDB query below entirely, rather than paying for
+        // three cursor scans plus polygon-overlap geometry every second for
+        // output that's guaranteed to be discarded.
+        const t = (key) => CockpitConfig.get(`airspace_alerts.types.${key}`);
+        const typesEnabled = { class_b: t('class_b'), class_c: t('class_c'), class_d: t('class_d'), class_e_surface: t('class_e_surface'), sua: t('sua'), trsa: t('trsa') };
+        if (!Object.values(typesEnabled).some(Boolean)) return;
+
         const leadTimeMin = CockpitConfig.get('airspace_alerts.lead_time_min') ?? 2;
         const groundSpeedKt = sit.ground_speed || 0;
-        const trueCourseDeg = sit.true_course || 0;
-        const distNm = groundSpeedKt * (leadTimeMin / 60);
+        // A missing/unparseable true_course (e.g. right after GPS fix
+        // acquisition) must not fabricate a due-north heading -- that would
+        // test the wrong projected path and could miss a real approach from
+        // any direction other than north, or falsely flag one to the north.
+        // Skipping the lead-time projection for this tick (distNm=0 collapses
+        // projLat/projLon to the current position) is safe: the record is
+        // still evaluated for "actually inside," and picks up its "approaching"
+        // projection again as soon as a later tick has a valid course.
+        const hasCourse = typeof sit.true_course === 'number' && isFinite(sit.true_course);
+        const trueCourseDeg = hasCourse ? sit.true_course : 0;
+        const distNm = hasCourse ? groundSpeedKt * (leadTimeMin / 60) : 0;
         const rad = trueCourseDeg * Math.PI / 180;
         const projLat = sit.lat + this._nmToDegLat(distNm) * Math.cos(rad);
         const projLon = sit.lon + this._nmToDegLon(distNm, sit.lat) * Math.sin(rad);
@@ -196,17 +246,17 @@ class AirspaceAlert {
         // machine updates with inconsistent position snapshots.
         this._tickInFlight = true;
         this._getCandidates(sit.lat, sit.lon, projLat, projLon).then(({ airspace, sua, trsa }) => {
-            // Read each leaf individually rather than destructuring the whole
-            // 'airspace_alerts.types' object. CockpitConfig._mergeUserOverrides
-            // only deep-merges two levels of nesting -- 'types.<key>' is a
+            // typesEnabled was read once above, before the query, specifically
+            // per-leaf (not by destructuring the whole 'airspace_alerts.types'
+            // object) because CockpitConfig._mergeUserOverrides only
+            // deep-merges two levels of nesting -- 'types.<key>' is a
             // three-level patch path, so a saved override touching only one
             // leaf (e.g. {types: {sua: true}}) would make CockpitConfig.get
             // ('airspace_alerts.types') return just that one key post-restart,
             // silently losing the other five leaves' defaults. Reading each
             // leaf through the dot-path resolver falls back to its own
             // per-leaf default correctly, same as layer-panel.js already does.
-            const t = (key) => CockpitConfig.get(`airspace_alerts.types.${key}`);
-            const classEnabled = { B: t('class_b'), C: t('class_c'), D: t('class_d'), E: t('class_e_surface') };
+            const classEnabled = { B: typesEnabled.class_b, C: typesEnabled.class_c, D: typesEnabled.class_d, E: typesEnabled.class_e_surface };
             for (const rec of airspace) {
                 if (!classEnabled[rec.class]) continue;
                 // The "Class E surface" toggle/manual only promise surface
@@ -222,18 +272,18 @@ class AirspaceAlert {
                 // covers every case, not just the ones that happen to be
                 // named a certain way.
                 if (rec.class === 'E' && rec.lower_ft > 0) continue;
-                const fired = this._evaluateOne(rec, sit.lat, sit.lon, projLat, projLon, altMsl);
+                const fired = this._evaluateOne('airspace', rec, sit.lat, sit.lon, projLat, projLon, altMsl);
                 if (fired && this.onAlert) this.onAlert(fired, 'airspace');
             }
-            if (t('sua')) {
+            if (typesEnabled.sua) {
                 for (const rec of sua) {
-                    const fired = this._evaluateOne(rec, sit.lat, sit.lon, projLat, projLon, altMsl);
+                    const fired = this._evaluateOne('sua', rec, sit.lat, sit.lon, projLat, projLon, altMsl);
                     if (fired && this.onAlert) this.onAlert(fired, 'sua');
                 }
             }
-            if (t('trsa')) {
+            if (typesEnabled.trsa) {
                 for (const rec of trsa) {
-                    const fired = this._evaluateOne(rec, sit.lat, sit.lon, projLat, projLon, altMsl);
+                    const fired = this._evaluateOne('trsa', rec, sit.lat, sit.lon, projLat, projLon, altMsl);
                     if (fired && this.onAlert) this.onAlert(fired, 'trsa');
                 }
             }
