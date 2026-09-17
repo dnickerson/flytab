@@ -55,14 +55,16 @@ public class ShareReceiverPlugin extends Plugin {
             call.resolve(ret);
             return;
         }
-        try {
-            InputStream in = getContext().getContentResolver().openInputStream(uri);
+        // try-with-resources: guarantees `in` closes on every exit path,
+        // including an exception mid-read (I/O error, revoked provider
+        // permission, provider crash) -- a plain in.close() after the read
+        // loop is never reached in that case and leaks the stream/fd.
+        try (InputStream in = getContext().getContentResolver().openInputStream(uri)) {
             if (in == null) throw new Exception("Could not open shared file stream");
             ByteArrayOutputStream buffer = new ByteArrayOutputStream();
             byte[] chunk = new byte[8192];
             int n;
             while ((n = in.read(chunk)) != -1) buffer.write(chunk, 0, n);
-            in.close();
             ret.put("ok", true);
             ret.put("name", meta.name);
             ret.put("base64", Base64.encodeToString(buffer.toByteArray(), Base64.NO_WRAP));

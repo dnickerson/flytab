@@ -84,12 +84,39 @@ class DocumentsPanel {
             this._showMessage(`"${result.name}" is too large to share directly — use Import in the Documents panel instead.`);
             return;
         }
+        if (result?.error) {
+            // Native-side read failure (I/O error, revoked provider
+            // permission, provider crash) -- distinct from the ordinary
+            // "nothing pending" case below, which also has ok:false but no
+            // error field. ShareReceiverPlugin already clears its pending
+            // Uri before attempting the read, so there's no retry path on
+            // the native side; without this the pilot gets zero feedback
+            // that their share silently failed. Same await-then-message
+            // ordering as the tooLarge branch above, for the same reason.
+            this._el.classList.add('visible');
+            await this._renderList();
+            this._showMessage('Could not read the shared file. Please try sharing it again.');
+            return;
+        }
         if (!result?.ok) return;
         const binary = atob(result.base64);
         const bytes = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
         const blob = new Blob([bytes], { type: 'application/pdf' });
-        await this._importFile(blob, result.name || 'shared-document.pdf');
+        try {
+            await this._importFile(blob, result.name || 'shared-document.pdf');
+        } catch (err) {
+            // Matches the file-picker change handler's error handling above --
+            // a malformed/corrupt PDF otherwise propagates unhandled from
+            // _importFile/_indexDocument. Unlike that path the pilot has no
+            // "try again" affordance here (the native side already consumed
+            // the share), so surface it instead of failing silently.
+            console.error('DocumentsPanel: shared file import failed', err);
+            this._el.classList.add('visible');
+            await this._renderList();
+            this._showMessage(`Could not import "${result.name || 'shared-document.pdf'}" — the file may be corrupt or invalid.`);
+            return;
+        }
         this.show();
     }
 
