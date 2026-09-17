@@ -201,8 +201,16 @@ class DocumentsPanel {
     // through here so persistence + indexing + list refresh stay in one place.
     async _importFile(blob, name, type = 'imported') {
         const doc = { name, type, sizeBytes: blob.size, blob };
-        await this._nasrDb.saveDocument(doc);
-        await this._indexDocument(doc);
+        try {
+            await this._nasrDb.saveDocument(doc);
+            await this._indexDocument(doc); // also writes to IndexedDB (the search index) — see context note on why this must be inside the same try
+        } catch (err) {
+            if (err?.name === 'QuotaExceededError') {
+                this._showMessage('Storage full — delete a document (🗑 next to a row) to import more.');
+                return;
+            }
+            throw err;
+        }
         await this._renderList();
     }
 
