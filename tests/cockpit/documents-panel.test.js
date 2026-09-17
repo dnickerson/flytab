@@ -55,6 +55,36 @@ describe('DocumentsPanel shell', () => {
         expect(panel._panZoom.state).toEqual({ scale: 1, tx: 0, ty: 0 });
     });
 
+    // Code-review Fix 1 (Critical): .documents-pan-container stacks every page
+    // of the PDF, unlike .approach-viewer-body (this rule's original template)
+    // which only ever shows one plate. Once the page stack is taller than the
+    // viewer -- true of virtually any real multi-page document -- align-items:
+    // center centers the WHOLE STACK, pushing page 1 far above the visible
+    // area at rest instead of showing it (measured with a real headless-
+    // Chromium layout during code review: page 1 landed ~2300px above the
+    // viewport in a synthetic 6-page-document repro, fully off-screen).
+    // jsdom does not compute real layout (getBoundingClientRect/offsetTop are
+    // always zero here), so this can only guard the CSS source text against a
+    // regression back to align-items:center -- it cannot re-verify the
+    // geometry itself. Follows this repo's established pattern for scoped
+    // style.css text assertions (tests/cockpit/wb-overlay-fuel.test.js).
+    it('CSS regression guard: .documents-viewer top-aligns its content instead of centering it', () => {
+        const css = read('web/style.css');
+        const ruleStart = css.indexOf('.documents-viewer {');
+        expect(ruleStart).toBeGreaterThan(-1);
+        const ruleEnd = css.indexOf('\n}', ruleStart);
+        // Strip /* ... */ comments before asserting -- the explanatory comment
+        // on this rule (in style.css, not this file) discusses the bug in
+        // prose and literally contains the substring "align-items:center" as
+        // part of that explanation, which would otherwise false-fail the
+        // not.toMatch() below against the comment text rather than the actual
+        // declaration. Caught by running this test against its own first
+        // draft.
+        const rule = css.slice(ruleStart, ruleEnd).replace(/\/\*[\s\S]*?\*\//g, '');
+        expect(rule).toMatch(/align-items:\s*flex-start/);
+        expect(rule).not.toMatch(/align-items:\s*center/);
+    });
+
     it('builds its DOM once at construction and appends to document.body', () => {
         expect(document.body.contains(panel._el)).toBe(true);
         expect(panel._el.className).toBe('documents-page');

@@ -207,6 +207,69 @@ describe('DocumentsPanel import + search', () => {
         expect(panel._panZoom.state.ty).toBe(0);
     });
 
+    // Code-review Fix 2 (Important): the touch listeners on this._viewerEl
+    // stay live for the whole renderPdfToContainer() await (panAlways:true
+    // means even the emptied, still-rendering viewer responds to a stray
+    // single-finger touch) -- a gesture landing mid-render could leave
+    // scale/tx non-identity by the time _openDocument's pageNum branch runs,
+    // which only ever writes ty and silently assumed scale/tx were still at
+    // their just-reset values. Simulates the race by having the
+    // renderPdfToContainer mock itself mutate panel._panZoom.state partway
+    // through, exactly where a real touchmove handler would land during the
+    // await -- functionally equivalent to dispatching a real touch event for
+    // this test's purpose, without depending on attachPinchZoom's internal
+    // touch-handler wiring here. Without _openDocument's second reset() (the
+    // fix), these mutated values would still be present in the assertions
+    // below.
+    it('regression guard: a stray gesture during the render await does not survive into the final state', async () => {
+        global.renderPdfToContainer = vi.fn().mockImplementation(async (url, containerEl) => {
+            panel._panZoom.state.scale = 2.5;
+            panel._panZoom.state.tx = 300;
+            panel._panZoom.state.ty = 150;
+
+            const wrapper = document.createElement('div');
+            const canvas = document.createElement('canvas');
+            Object.defineProperty(canvas, 'offsetTop', { value: 0, configurable: true });
+            wrapper.appendChild(canvas);
+            containerEl.appendChild(wrapper);
+            return wrapper;
+        });
+
+        const doc = { id: 'd1', name: 'checklist.pdf', blob: new Blob(['x'], { type: 'application/pdf' }) };
+        await panel._openDocument(doc); // no pageNum -- this path only had the FIRST reset before the fix
+
+        expect(panel._panZoom.state.scale).toBe(1);
+        expect(panel._panZoom.state.tx).toBe(0);
+        expect(panel._panZoom.state.ty).toBe(0);
+    });
+
+    it('regression guard: a stray gesture during the render await does not corrupt a page-jump', async () => {
+        global.renderPdfToContainer = vi.fn().mockImplementation(async (url, containerEl) => {
+            // Simulate a mid-render pinch-zoom, not just a pan -- this is the
+            // exact failure mode the reviewer flagged: a non-identity scale
+            // surviving into a ty-only page-jump write.
+            panel._panZoom.state.scale = 3;
+            panel._panZoom.state.tx = -200;
+
+            const wrapper = document.createElement('div');
+            const offsets = [0, 900];
+            for (const offsetTop of offsets) {
+                const canvas = document.createElement('canvas');
+                Object.defineProperty(canvas, 'offsetTop', { value: offsetTop, configurable: true });
+                wrapper.appendChild(canvas);
+            }
+            containerEl.appendChild(wrapper);
+            return wrapper;
+        });
+
+        const doc = { id: 'd1', name: 'checklist.pdf', blob: new Blob(['x'], { type: 'application/pdf' }) };
+        await panel._openDocument(doc, 2);
+
+        expect(panel._panZoom.state.scale).toBe(1); // the stray mid-render pinch must not survive
+        expect(panel._panZoom.state.tx).toBe(0);
+        expect(panel._panZoom.state.ty).toBe(-900); // page 2 -> children[1] -> offsetTop 900, computed cleanly post-reset
+    });
+
     // Final whole-branch review, Fix 7: fast typing can fire overlapping
     // _applySearch calls, each awaiting an IndexedDB read -- nothing
     // guaranteed an earlier query's results couldn't resolve AFTER a later

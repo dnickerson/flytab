@@ -245,6 +245,19 @@ class DocumentsPanel {
         const url = URL.createObjectURL(doc.blob);
         const wrapper = await renderPdfToContainer(url, this._panContainer, { cssClass: 'documents-pdf' });
         URL.revokeObjectURL(url);
+        // Re-reset after the render await, not just before it: the touch
+        // listeners on this._viewerEl stay live the whole time render is in
+        // flight (panAlways:true means even the emptied/still-rendering
+        // viewer responds to a stray single-finger touch), so a gesture
+        // landing mid-render -- rendering a large multi-page PDF page-by-page
+        // can take a noticeable moment -- could leave scale/tx non-identity
+        // by the time we get here, which the pageNum branch below doesn't
+        // account for (it only ever writes ty). Resetting again here,
+        // synchronously and with no further await before the pageNum branch
+        // runs, guarantees scale/tx are at their just-reset identity values
+        // for both branches below -- nothing can interleave a touch handler
+        // between this line and the final apply().
+        this._panZoom.reset();
         // Search results match a specific page -- jump straight to it instead
         // of always landing on page 1. wrapper's children are the per-page
         // <canvas> elements in page order (see renderPdfToContainer).
