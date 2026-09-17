@@ -112,6 +112,21 @@ class AirspaceAlertPopup {
             advisoryEl.style.display = 'none';
         }
 
+        // Position below the convective-alerts panel's actual current
+        // height rather than trusting the fixed top:160px in style.css.
+        // Both panels are position:absolute in the same map container with
+        // the same z-index:950, and convective-alerts.js can stack multiple
+        // rows (route alerts + up to 3 OAT signals) well past 104px tall --
+        // a fixed offset lets this popup paint over it when both fire
+        // together (e.g. near a Class B shelf during active convective
+        // weather), which has no dismiss button of its own.
+        const convPanel = this._el.parentNode?.querySelector('.conv-alerts-panel');
+        const container = this._el.parentNode;
+        const convBottom = (convPanel && container && convPanel.style.display !== 'none')
+            ? convPanel.getBoundingClientRect().bottom - container.getBoundingClientRect().top
+            : 0;
+        this._el.style.top = `${Math.max(160, convBottom + 8)}px`;
+
         this._el.style.display = '';
     }
 
