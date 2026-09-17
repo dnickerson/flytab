@@ -332,6 +332,21 @@ describe('DocumentsPanel shell', () => {
         panel.hide();
         expect(panel._el.classList.contains('visible')).toBe(false);
     });
+
+    it('deleting a document removes it via NasrDB and does not also open it', async () => {
+        nasrDb.deleteDocument = vi.fn().mockResolvedValue(undefined);
+        panel.show();
+        await Promise.resolve(); await Promise.resolve();
+
+        let opened = false;
+        panel._openDocument = () => { opened = true; };
+        const deleteBtn = panel._listEl.querySelector('.documents-row-delete');
+        deleteBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        await Promise.resolve(); await Promise.resolve();
+
+        expect(nasrDb.deleteDocument).toHaveBeenCalledWith('d1');
+        expect(opened).toBe(false); // stopPropagation must prevent the row's own open handler firing too
+    });
 });
 ```
 
@@ -394,10 +409,32 @@ class DocumentsPanel {
         for (const doc of docs) {
             const row = document.createElement('div');
             row.className = 'documents-row';
-            row.innerHTML = `<span class="documents-row-name">${doc.name}</span>`;
+            // textContent, not innerHTML — doc.name traces back to a
+            // pilot-supplied or (once Task 5 lands) another app's
+            // attacker-controlled display name. Caught in plan review;
+            // this repo's own route-table.js:2350 already uses textContent
+            // for the same class of externally-sourced name.
+            const nameSpan = document.createElement('span');
+            nameSpan.className = 'documents-row-name';
+            nameSpan.textContent = doc.name;
+            const deleteBtn = document.createElement('button');
+            deleteBtn.className = 'documents-row-delete';
+            deleteBtn.textContent = '\u{1F5D1}'; // trash can
+            deleteBtn.setAttribute('aria-label', `Delete ${doc.name}`);
+            row.appendChild(nameSpan);
+            row.appendChild(deleteBtn);
             wireTap(row, () => this._openDocument(doc));
+            wireTap(deleteBtn, (e) => { e.stopPropagation(); this._deleteDocument(doc); });
             this._listEl.appendChild(row);
         }
+    }
+
+    // No search-index cleanup yet at this point in the build-up (Task 4
+    // adds indexing) -- extended there to also remove this document's pages
+    // from the search index once one exists.
+    async _deleteDocument(doc) {
+        await this._nasrDb.deleteDocument(doc.id);
+        await this._renderList();
     }
 
     async _openDocument(doc) {
@@ -452,8 +489,9 @@ In `web/style.css`, add (matching the `logbook-page` full-screen family and this
 .documents-title { font-family: var(--font-ui); font-weight: 800; font-size: 20px; color: var(--text-primary); }
 .documents-close { min-width: var(--touch-min, 56px); min-height: var(--touch-min, 56px); font-size: 28px; font-weight: 800; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; color: var(--text-primary); }
 .documents-list { overflow-y: auto; flex: 0 0 auto; max-height: 40vh; }
-.documents-row { min-height: var(--touch-min, 56px); display: flex; align-items: center; padding: 0 16px; border-bottom: 1px solid var(--border-light); }
+.documents-row { min-height: var(--touch-min, 56px); display: flex; align-items: center; justify-content: space-between; padding: 0 16px; border-bottom: 1px solid var(--border-light); }
 .documents-row-name { font-family: var(--font-ui); font-weight: 700; color: var(--text-secondary); }
+.documents-row-delete { min-width: var(--touch-min, 56px); min-height: var(--touch-min, 56px); font-size: 20px; background: transparent; border: none; color: var(--color-danger-on-light); }
 .documents-empty { padding: 16px; font-family: var(--font-ui); font-weight: 700; color: var(--text-muted); }
 .documents-viewer { flex: 1; overflow-y: auto; }
 ```
@@ -485,9 +523,12 @@ git commit -m "feat: Documents panel shell + MORE drawer wiring"
 
 **Interfaces:**
 - Produces: `DocumentsPanel._importFile(file)` — the shared entry point Task 5 (share-intent) and Task 6 (bundled seeding) both call, given any `File`/`Blob`-like PDF input plus a display name. Persists via `NasrDB.saveDocument` (Task 1), extracts text via PDF.js `getTextContent()`, builds/updates a `lunr.Index`, persists the index via `NasrDB.putAppCache('documents_search_index', {lunrIndexJSON, pages})` / reads via `getAppCache('documents_search_index')` (both already exist, `nasr-db.js:658-665`).
+- Produces: `DocumentsPanel._queueIndexOp(work)` / `_saveIndex(pages)` — see concurrency note below. Task 3's `_deleteDocument` (revised alongside this task — see that task) calls `_queueIndexOp`/`_saveIndex` too, so every read-modify-write of the shared index goes through the same serialization point regardless of which feature triggers it.
 - `pages` shape: `[{id: "<docId>:<pageNum>", docId, pageNum, docName, text}, ...]` — doubles as the lunr document set (indexed on `text`+`docName`) and the lookup table to resolve a search hit's `ref` back to a real page.
 
 **Context:** Reuses `NasrDB`'s generic `app_cache` store (via the already-existing `getAppCache`/`putAppCache` wrappers) for the search index rather than adding a second new IndexedDB store — one combined lunr index spans all documents (so the top search box searches everything at once), not a per-document index. Text extraction is chunked page-by-page (`await` between pages, not one synchronous pass) per the spec's explicit caution about the NASR-import IDB-hang failure mode from exactly this class of mistake.
+
+**Concurrency, caught in plan review:** the search index is a single shared `app_cache` entry — `_indexDocument` does read-modify-write (read the cache, filter/append `pages`, write it back). Task 5 (share-intent) and Task 6 (bundled seeding) both call this from `_buildDOM()` without awaiting each other, so without serialization, two imports landing close together each read the same stale snapshot and the later write silently clobbers the earlier one's page entries — a real document ends up in the list but missing from search, with no error. Fixed by routing every index read-modify-write through an instance-level promise-chain queue (`_queueIndexOp`), so operations from any call site run one at a time regardless of how many fire concurrently.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -560,6 +601,24 @@ describe('DocumentsPanel import + search', () => {
         const hitPage = savedCache.pages.find(p => p.id === results[0].ref);
         expect(hitPage.pageNum).toBe(2);
     });
+
+    it('regression guard: two concurrent imports do not clobber each other\'s index entries', async () => {
+        // Reproduces the race caught in plan review: without serialization,
+        // both imports read the same empty-cache snapshot before either
+        // writes, so the second write silently drops the first import's pages.
+        let idCounter = 0;
+        nasrDb.saveDocument = vi.fn().mockImplementation(async (doc) => { doc.id = doc.id || `doc-${idCounter++}`; savedDocs.push(doc); return doc.id; });
+        const blobA = new Blob(['%PDF-1.4 A'], { type: 'application/pdf' });
+        const blobB = new Blob(['%PDF-1.4 B'], { type: 'application/pdf' });
+
+        await Promise.all([
+            panel._importFile(blobA, 'a.pdf'),
+            panel._importFile(blobB, 'b.pdf'),
+        ]);
+
+        const docIds = new Set(savedCache.pages.map(p => p.docId));
+        expect(docIds.size).toBe(2); // both documents' pages survived, not just the last writer's
+    });
 });
 ```
 
@@ -593,6 +652,11 @@ fileInput.addEventListener('change', async () => {
 });
 ```
 
+Add to the constructor (alongside the existing field assignments in `_buildDOM`'s caller — i.e. the `constructor`, not `_buildDOM` itself):
+```js
+this._indexQueue = Promise.resolve();
+```
+
 Add the import/extraction/indexing methods:
 ```js
 async _importFile(blob, name) {
@@ -602,35 +666,50 @@ async _importFile(blob, name) {
     await this._renderList();
 }
 
-async _indexDocument(doc) {
-    const pdfjs = window.pdfjsLib;
-    if (!pdfjs) return;
-    const url = URL.createObjectURL(doc.blob);
-    const cache = (await this._nasrDb.getAppCache('documents_search_index')) || { lunrIndexJSON: null, pages: [] };
-    // Drop any stale pages for this doc id (re-import/re-index case) before adding fresh ones.
-    cache.pages = cache.pages.filter(p => p.docId !== doc.id);
-    try {
-        const pdf = await pdfjs.getDocument(url).promise;
-        for (let p = 1; p <= pdf.numPages; p++) {
-            // Awaited per-page, not one synchronous pass over every page --
-            // avoids a long blocking JS execution on a large PDF (see this
-            // repo's documented NASR-import IDB-hang failure mode).
-            const page = await pdf.getPage(p);
-            const content = await page.getTextContent();
-            const text = content.items.map(item => item.str).join(' ');
-            cache.pages.push({ id: `${doc.id}:${p}`, docId: doc.id, pageNum: p, docName: doc.name, text });
-        }
-    } finally {
-        URL.revokeObjectURL(url);
-    }
+// Serializes every read-modify-write of the single shared
+// 'documents_search_index' app_cache entry (see the concurrency note
+// above) -- work runs only after every previously-queued op has settled,
+// regardless of which caller queued it. Uses .then(work, work) so a
+// prior failure doesn't permanently wedge the queue for later callers.
+_queueIndexOp(work) {
+    this._indexQueue = this._indexQueue.then(work, work);
+    return this._indexQueue;
+}
+
+async _saveIndex(pages) {
     const idx = lunr(function () {
         this.ref('id');
         this.field('text');
         this.field('docName');
-        for (const page of cache.pages) this.add(page);
+        for (const page of pages) this.add(page);
     });
-    cache.lunrIndexJSON = idx.toJSON();
-    await this._nasrDb.putAppCache('documents_search_index', cache);
+    await this._nasrDb.putAppCache('documents_search_index', { lunrIndexJSON: idx.toJSON(), pages });
+}
+
+async _indexDocument(doc) {
+    return this._queueIndexOp(async () => {
+        const pdfjs = window.pdfjsLib;
+        if (!pdfjs) return;
+        const url = URL.createObjectURL(doc.blob);
+        const cache = (await this._nasrDb.getAppCache('documents_search_index')) || { pages: [] };
+        // Drop any stale pages for this doc id (re-import/re-index case) before adding fresh ones.
+        let pages = cache.pages.filter(p => p.docId !== doc.id);
+        try {
+            const pdf = await pdfjs.getDocument(url).promise;
+            for (let p = 1; p <= pdf.numPages; p++) {
+                // Awaited per-page, not one synchronous pass over every page --
+                // avoids a long blocking JS execution on a large PDF (see this
+                // repo's documented NASR-import IDB-hang failure mode).
+                const page = await pdf.getPage(p);
+                const content = await page.getTextContent();
+                const text = content.items.map(item => item.str).join(' ');
+                pages.push({ id: `${doc.id}:${p}`, docId: doc.id, pageNum: p, docName: doc.name, text });
+            }
+        } finally {
+            URL.revokeObjectURL(url);
+        }
+        await this._saveIndex(pages);
+    });
 }
 
 async _applySearch(query) {
@@ -644,9 +723,17 @@ async _applySearch(query) {
     for (const result of results) {
         const page = cache.pages.find(p => p.id === result.ref);
         if (!page) continue;
+        // textContent, not innerHTML — page.docName traces back to a
+        // pilot-supplied or (for share-intent) another app's attacker-
+        // controlled display name (caught in plan review; this repo's own
+        // route-table.js:2350 already uses textContent for the same class
+        // of externally-sourced name, this was a deviation from precedent).
         const row = document.createElement('div');
         row.className = 'documents-row';
-        row.innerHTML = `<span class="documents-row-name">${page.docName} — p.${page.pageNum}</span>`;
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'documents-row-name';
+        nameSpan.textContent = `${page.docName} — p.${page.pageNum}`;
+        row.appendChild(nameSpan);
         wireTap(row, async () => {
             const doc = await this._nasrDb.getDocument(page.docId);
             if (doc) await this._openDocument(doc);
@@ -655,6 +742,28 @@ async _applySearch(query) {
     }
 }
 ```
+
+Extend Task 3's `_deleteDocument` (it currently only removes the document record — now that an index exists, deleting a document without also removing its pages would leave stale search results pointing at a document that no longer exists). Replace Task 3's version:
+```js
+async _deleteDocument(doc) {
+    await this._nasrDb.deleteDocument(doc.id);
+    await this._renderList();
+}
+```
+with:
+```js
+async _deleteDocument(doc) {
+    await this._nasrDb.deleteDocument(doc.id);
+    await this._queueIndexOp(async () => {
+        const cache = await this._nasrDb.getAppCache('documents_search_index');
+        if (!cache) return;
+        const pages = cache.pages.filter(p => p.docId !== doc.id);
+        await this._saveIndex(pages);
+    });
+    await this._renderList();
+}
+```
+This goes through the same `_queueIndexOp` serialization as `_indexDocument`, so a delete racing an in-flight import can't corrupt the index either.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -680,12 +789,15 @@ git commit -m "feat: file-picker import with per-page text extraction and lunr s
 - Create: `android/app/src/main/java/app/flywhere/flytab/ShareReceiverPlugin.java`
 - Modify: `android/app/src/main/AndroidManifest.xml` (new `SEND` intent-filter)
 - Modify: `android/app/src/main/java/app/flywhere/flytab/MainActivity.java` (register plugin, override `onNewIntent`, check `onCreate`'s initial intent)
-- Modify: `web/cockpit/documents.js` (poll the plugin for a pending share on app init/resume)
+- Modify: `web/cockpit/documents.js` (poll the plugin for a pending share on app init/resume; adds `_showMessage`, reused by Task 7)
+- Modify: `web/style.css` (`.documents-message` style, reused by Task 7)
 - Test: none automated (Java, no test harness in this repo for native code) — `bash build.sh` compile-check + required manual on-device verification
 
 **Interfaces:**
-- Produces (native → JS): `ShareReceiverPlugin.getPendingShare()` — Capacitor plugin method, no args, resolves `{ok: true, name: string, base64: string}` if a share is pending (and clears it), or `{ok: false}` if none.
+- Produces (native → JS): `ShareReceiverPlugin.getPendingShare()` — Capacitor plugin method, no args, resolves `{ok: true, name: string, base64: string}` if a share is pending and under the size limit (and clears it), `{ok: false, tooLarge: true, name: string}` if pending but over the limit, or `{ok: false}` if nothing pending.
 - Consumes (JS side): `web/app.js` or `documents.js` calls `window.Capacitor.Plugins.ShareReceiver.getPendingShare()` on app init and on `App.addListener('resume', ...)` (the app can receive a share while already running, in the background).
+
+**Size limit, added during plan review:** the original design read the whole shared file into memory and base64-encoded it (adding ~33% size) in one pass with no limit — for a large scanned POH or multi-hundred-page manual (tens of MB, a realistic size for exactly the document type this feature is named for), that risks an OOM or a multi-second UI-thread stall parsing the resulting JSON on a tablet. Capped at 25MB (raw file size, before base64 overhead — comfortably above the committed IFR legend's 14.6MB, while still bounding the worst case); a share over that limit is rejected with a name-only response so the JS side can tell the pilot to use the in-app file picker instead (Task 4's path), which reads a `File` directly with no base64/native-bridge round-trip and has no such limit.
 
 **Context, established during planning — read before implementing:** `AndroidManifest.xml`'s `<activity>` has `launchMode="singleTask"` and exactly one existing `<intent-filter>` (the `flytab://plan` VIEW/BROWSABLE one). No `SEND` filter exists. Because of `singleTask`, a new intent arriving while FlyTab is already running does NOT go through `onCreate()` — it goes to `onNewIntent()`, which `MainActivity.java` does not currently override at all. This is real native code to add, not a JS-side extension of the existing `appUrlOpen` deep-link listener (that listener is Capacitor's own machinery for `VIEW`-intent URLs and does not fire for `SEND` intents carrying file data).
 
@@ -732,6 +844,9 @@ import java.io.InputStream;
 @CapacitorPlugin(name = "ShareReceiver")
 public class ShareReceiverPlugin extends Plugin {
     private static final String TAG = "ShareReceiver";
+    // Raw file size, before base64's ~33% overhead — see the size-limit note
+    // in this task's Interfaces section for reasoning.
+    private static final long MAX_SHARE_BYTES = 25L * 1024 * 1024;
     private static Uri pendingUri = null;
 
     /** Called by MainActivity, not by JS. */
@@ -749,6 +864,15 @@ public class ShareReceiverPlugin extends Plugin {
         }
         Uri uri = pendingUri;
         pendingUri = null; // clear so a later poll doesn't re-import the same file
+        UriMeta meta = queryMeta(uri);
+        if (meta.size > MAX_SHARE_BYTES) {
+            Log.w(TAG, "Shared file too large (" + meta.size + " bytes), rejecting: " + meta.name);
+            ret.put("ok", false);
+            ret.put("tooLarge", true);
+            ret.put("name", meta.name);
+            call.resolve(ret);
+            return;
+        }
         try {
             InputStream in = getContext().getContentResolver().openInputStream(uri);
             if (in == null) throw new Exception("Could not open shared file stream");
@@ -757,9 +881,8 @@ public class ShareReceiverPlugin extends Plugin {
             int n;
             while ((n = in.read(chunk)) != -1) buffer.write(chunk, 0, n);
             in.close();
-            String name = queryDisplayName(uri);
             ret.put("ok", true);
-            ret.put("name", name);
+            ret.put("name", meta.name);
             ret.put("base64", Base64.encodeToString(buffer.toByteArray(), Base64.NO_WRAP));
             call.resolve(ret);
         } catch (Exception e) {
@@ -770,20 +893,26 @@ public class ShareReceiverPlugin extends Plugin {
         }
     }
 
-    private String queryDisplayName(Uri uri) {
-        String name = "shared-document.pdf";
+    private static class UriMeta { String name = "shared-document.pdf"; long size = 0; }
+
+    private UriMeta queryMeta(Uri uri) {
+        UriMeta meta = new UriMeta();
         try (android.database.Cursor cursor = getContext().getContentResolver().query(uri, null, null, null, null)) {
             if (cursor != null && cursor.moveToFirst()) {
-                int idx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME);
-                if (idx >= 0) name = cursor.getString(idx);
+                int nameIdx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME);
+                if (nameIdx >= 0) meta.name = cursor.getString(nameIdx);
+                int sizeIdx = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE);
+                if (sizeIdx >= 0 && !cursor.isNull(sizeIdx)) meta.size = cursor.getLong(sizeIdx);
             }
         } catch (Exception e) {
-            Log.w(TAG, "Could not resolve shared file display name, using default", e);
+            Log.w(TAG, "Could not resolve shared file metadata, using defaults", e);
         }
-        return name;
+        return meta;
     }
 }
 ```
+
+**Verify-before-trusting note:** `OpenableColumns.SIZE` is the standard way to get a `content://` URI's size without reading it, but some providers report it as unknown (`cursor.isNull`) — the code above defaults to `0` in that case, which means an unusually-uncooperative content provider could let an oversized file slip through the check. Acceptable given the alternative (refusing to import anything whose size can't be determined) is worse for the common case; flagging so this isn't silently assumed airtight.
 
 **Verify-before-trusting note:** `PluginCall.resolve(JSObject)` never rejecting (matching `SftpPlugin`'s documented `{ok:false, error}` convention per the spec's own APK-update design doc) is followed here deliberately — confirm this matches how other plugins in this exact codebase signal failure before assuming it's universal Capacitor convention rather than this repo's specific one.
 
@@ -832,6 +961,11 @@ async _checkPendingShare() {
     const ShareReceiver = window.Capacitor?.Plugins?.ShareReceiver;
     if (!ShareReceiver) return;
     const result = await ShareReceiver.getPendingShare();
+    if (result?.tooLarge) {
+        this.show();
+        this._showMessage(`"${result.name}" is too large to share directly — use Import in the Documents panel instead.`);
+        return;
+    }
     if (!result?.ok) return;
     const binary = atob(result.base64);
     const bytes = new Uint8Array(binary.length);
@@ -840,6 +974,32 @@ async _checkPendingShare() {
     await this._importFile(blob, result.name || 'shared-document.pdf');
     this.show();
 }
+
+// Small pilot-facing message shown above the list, auto-dismissing.
+// textContent, not innerHTML — callers pass text that can include an
+// externally-controlled document name (see the same XSS note elsewhere
+// in this plan). Reused as-is by Task 7 for the quota-exceeded message.
+_showMessage(text) {
+    const el = document.createElement('div');
+    el.className = 'documents-message';
+    el.textContent = text;
+    this._listEl.prepend(el);
+    setTimeout(() => el.remove(), 4000);
+}
+```
+
+Add the matching style in `web/style.css` (Design Token Standards — danger-on-light for readable warning text, not the raw fill token, per this repo's own documented rule against using the bright fill colors as text):
+```css
+.documents-message {
+    padding: 12px 16px;
+    font-family: var(--font-ui);
+    font-weight: 700;
+    color: var(--color-danger-on-light);
+    background: var(--bg-surface);
+    border: 1px solid var(--color-danger-on-light);
+    border-radius: 8px;
+    margin: 8px;
+}
 ```
 Call `this._checkPendingShare();` at the end of `_buildDOM()` (covers cold start — the panel is constructed once at app startup) and register for the Capacitor `resume` event (covers a share arriving while the app is backgrounded, matching the existing `appUrlOpen` global-bridge-access convention in `app.js`'s `_initDeepLink`):
 ```js
@@ -847,6 +1007,8 @@ window.Capacitor?.Plugins?.App?.addListener('resume', () => this._checkPendingSh
 ```
 
 - [ ] **Step 5: Compile-check**
+
+Per this repo's CLAUDE.md Build Policy, increment `FLYTAB_VERSION` in `web/app.js` before building (caught in plan review — an earlier draft of this step skipped it, which per this repo's own documented worktree-version-drift failure mode produces an APK with a stale/duplicate versionCode that fails to install over a tablet already at an equal-or-higher version).
 
 Run: `bash build.sh`
 Expected: `BUILD SUCCESSFUL` — confirms the new Java compiles and the manifest is well-formed. This does not confirm the intent-handling logic actually works; only that it builds.
@@ -858,7 +1020,7 @@ Not optional — this task cannot be verified any other way. Install the built A
 - [ ] **Step 7: Commit**
 
 ```bash
-git add android/app/src/main/java/app/flywhere/flytab/ShareReceiverPlugin.java android/app/src/main/AndroidManifest.xml android/app/src/main/java/app/flywhere/flytab/MainActivity.java web/cockpit/documents.js
+git add android/app/src/main/java/app/flywhere/flytab/ShareReceiverPlugin.java android/app/src/main/AndroidManifest.xml android/app/src/main/java/app/flywhere/flytab/MainActivity.java web/cockpit/documents.js web/style.css web/app.js android/app/build.gradle
 git commit -m "feat: receive PDFs shared into FlyTab via Android's SEND intent"
 ```
 
@@ -867,13 +1029,18 @@ git commit -m "feat: receive PDFs shared into FlyTab via Android's SEND intent"
 ## Task 6: Seed bundled VFR/IFR legend PDFs on first launch
 
 **Files:**
-- Modify: `web/cockpit/documents.js` (seed check + Android-asset read path)
+- Create: `android/app/src/main/java/app/flywhere/flytab/BundledAssetPlugin.java`
+- Modify: `android/app/src/main/java/app/flywhere/flytab/MainActivity.java` (register the new plugin)
+- Modify: `web/cockpit/documents.js` (seed check + native-asset read path)
 - Test: `tests/cockpit/documents-seed-bundled.test.js` (new)
 
 **Interfaces:**
-- Produces: `DocumentsPanel._seedBundledDocuments()`, called once at app startup (after `_checkPendingShare`, same startup hook). Reads `android/app/src/main/assets/vfr-chart-legend.pdf` / `ifr-chart-legend.pdf` (already committed to this branch) via a `fetch()` against the WebView's own asset-serving (Capacitor's WebView serves `android_asset` content at a reachable local path — see verify-before-trusting note below) and imports them through the same `_importFile` pipeline as Task 4, tagged `type: 'bundled'`.
+- Produces (native → JS): `BundledAssetPlugin.readAsset({path: string})` — resolves `{ok: true, base64: string}` or `{ok: false, error: string}`.
+- Produces: `DocumentsPanel._seedBundledDocuments()`, called once at app startup (after `_checkPendingShare`, same startup hook). Reads `android/app/src/main/assets/vfr-chart-legend.pdf` / `ifr-chart-legend.pdf` (already committed to this branch) via this new plugin and imports them through the same `_importFile` pipeline as Task 4, tagged `type: 'bundled'`.
 
 **Context:** `_importFile` (Task 4) currently always sets `type: 'imported'`. This task needs `type: 'bundled'` for these two specific documents (matters for a future revert/re-seed decision, and so the UI could eventually distinguish them, even though this task doesn't build that UI distinction itself — out of scope here, just don't lose the information).
+
+**Redesigned during plan review — do not use a raw `fetch()` against a `file://` asset URL.** An earlier draft of this task tried `fetch('file:///android_asset/...')`. `capacitor.config.ts` sets `androidScheme: 'http'` with an explicit comment that `WebViewAssetLoader intercepts internally` — the app runs at an `http://localhost` origin, where a raw `file://` fetch is commonly blocked by WebView file-access/mixed-origin restrictions, and this repo has no confirmed precedent either way. Rather than guess at which URL form (if any) is reachable, this task reads the asset natively instead — `android.content.res.AssetManager.open(path)` is a plain, always-reachable Android API regardless of WebView scheme configuration, completely sidestepping the question. This mirrors Task 5's `ShareReceiverPlugin` (read bytes natively, hand them to JS as base64) as a second, single-purpose plugin — kept separate from `ShareReceiverPlugin` since the underlying Android APIs differ (`AssetManager` vs. `ContentResolver`+`Uri`), matching this repo's established one-concern-per-plugin convention.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -903,7 +1070,10 @@ describe('DocumentsPanel bundled-legend seeding', () => {
             putAppCache: vi.fn().mockResolvedValue(undefined),
         };
         global.window.pdfjsLib = { getDocument: () => ({ promise: Promise.resolve({ numPages: 1, getPage: () => Promise.resolve({ getTextContent: () => Promise.resolve({ items: [{ str: 'legend' }] }) }) }) }) };
-        global.fetch = vi.fn().mockResolvedValue({ ok: true, blob: () => Promise.resolve(new Blob(['%PDF-1.4'], { type: 'application/pdf' })) });
+        // btoa of "%PDF-1.4" — the native plugin returns base64, not a Blob.
+        global.window.Capacitor = { Plugins: { BundledAsset: {
+            readAsset: vi.fn().mockResolvedValue({ ok: true, base64: btoa('%PDF-1.4') }),
+        } } };
         panel = new DocumentsPanel(nasrDb);
     });
 
@@ -920,6 +1090,12 @@ describe('DocumentsPanel bundled-legend seeding', () => {
         // Only the missing IFR one should get added, not a duplicate VFR.
         expect(savedDocs.filter(d => d.name.includes('VFR')).length).toBe(1);
     });
+
+    it('fails open (no crash, no seeded docs) if the native plugin is unavailable or errors', async () => {
+        global.window.Capacitor = undefined;
+        await expect(panel._seedBundledDocuments()).resolves.not.toThrow();
+        expect(savedDocs.length).toBe(0);
+    });
 });
 ```
 
@@ -929,6 +1105,70 @@ Run: `npx vitest run tests/cockpit/documents-seed-bundled.test.js`
 Expected: FAIL — `_seedBundledDocuments` doesn't exist yet.
 
 - [ ] **Step 3: Write minimal implementation**
+
+Create `android/app/src/main/java/app/flywhere/flytab/BundledAssetPlugin.java`, modeled on `ThermalMonitorPlugin.java`'s structure:
+```java
+package app.flywhere.flytab;
+
+import android.content.res.AssetManager;
+import android.util.Base64;
+import android.util.Log;
+
+import com.getcapacitor.JSObject;
+import com.getcapacitor.Plugin;
+import com.getcapacitor.PluginCall;
+import com.getcapacitor.PluginMethod;
+import com.getcapacitor.annotation.CapacitorPlugin;
+
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+
+/**
+ * Reads a file bundled as a raw Android asset (android/app/src/main/assets/)
+ * and hands it to JS as base64. Exists because this app's WebView runs at
+ * an http://localhost origin (capacitor.config.ts androidScheme:'http'),
+ * where a raw file:// fetch against android_asset content has no confirmed
+ * reachable path -- AssetManager is a plain native API that works
+ * regardless of WebView scheme configuration.
+ */
+@CapacitorPlugin(name = "BundledAsset")
+public class BundledAssetPlugin extends Plugin {
+    private static final String TAG = "BundledAsset";
+
+    @PluginMethod
+    public void readAsset(PluginCall call) {
+        String path = call.getString("path");
+        JSObject ret = new JSObject();
+        if (path == null) {
+            ret.put("ok", false);
+            ret.put("error", "missing path");
+            call.resolve(ret);
+            return;
+        }
+        try {
+            AssetManager assets = getContext().getAssets();
+            InputStream in = assets.open(path);
+            ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+            byte[] chunk = new byte[8192];
+            int n;
+            while ((n = in.read(chunk)) != -1) buffer.write(chunk, 0, n);
+            in.close();
+            ret.put("ok", true);
+            ret.put("base64", Base64.encodeToString(buffer.toByteArray(), Base64.NO_WRAP));
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to read bundled asset: " + path, e);
+            ret.put("ok", false);
+            ret.put("error", e.getMessage());
+        }
+        call.resolve(ret);
+    }
+}
+```
+
+In `MainActivity.java`, register it alongside the other plugins in `onCreate()` (including `ShareReceiverPlugin` from Task 5, if not already registered there):
+```java
+registerPlugin(BundledAssetPlugin.class);
+```
 
 Refactor `_importFile` (Task 4) to accept a type, defaulting to `'imported'` so existing call sites don't need to change:
 ```js
@@ -943,6 +1183,8 @@ async _importFile(blob, name, type = 'imported') {
 Add the seeding method:
 ```js
 async _seedBundledDocuments() {
+    const BundledAsset = window.Capacitor?.Plugins?.BundledAsset;
+    if (!BundledAsset) return; // e.g. running in a browser dev build with no native bridge
     const BUNDLED = [
         { path: 'vfr-chart-legend.pdf', name: 'VFR Chart Legend.pdf' },
         { path: 'ifr-chart-legend.pdf', name: 'IFR Chart Legend.pdf' },
@@ -951,9 +1193,12 @@ async _seedBundledDocuments() {
     for (const item of BUNDLED) {
         if (existing.some(d => d.type === 'bundled' && d.name === item.name)) continue;
         try {
-            const resp = await fetch(`file:///android_asset/${item.path}`);
-            if (!resp.ok) continue;
-            const blob = await resp.blob();
+            const result = await BundledAsset.readAsset({ path: item.path });
+            if (!result?.ok) { console.warn('[Documents] Failed to seed bundled legend', item.name, result?.error); continue; }
+            const binary = atob(result.base64);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+            const blob = new Blob([bytes], { type: 'application/pdf' });
             await this._importFile(blob, item.name, 'bundled');
         } catch (err) {
             console.warn('[Documents] Failed to seed bundled legend', item.name, err.message);
@@ -963,21 +1208,25 @@ async _seedBundledDocuments() {
 ```
 Call `this._seedBundledDocuments();` in `_buildDOM()`, alongside `_checkPendingShare()`.
 
-**Verify-before-trusting note, flagged rather than assumed:** the exact reachable URL for Android asset files from inside a Capacitor WebView (`file:///android_asset/...` vs. Capacitor's own `Capacitor.convertFileSrc()` helper, which this repo may need for its configured WebView origin — `capacitor.config.ts` sets `androidScheme: 'http'`, and a raw `file://` fetch may be blocked by the WebView's origin policy under that scheme) was not verified against a running instance during planning. Confirm which form actually resolves before trusting the snippet above verbatim — test with `console.log` of the fetch result on-device before relying on it silently failing open (the `try/catch` above means a wrong URL scheme degrades to "legends never appear" with only a console warning, not a crash — acceptable degradation, but confirm it's not silently wrong from day one).
-
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npx vitest run tests/cockpit/documents-seed-bundled.test.js`
 Expected: PASS
 
-- [ ] **Step 5: Required manual on-device verification**
+- [ ] **Step 5: Compile-check**
 
-Fresh install (or clear app data) on-device, open the Documents panel for the first time, confirm both "VFR Chart Legend.pdf" and "IFR Chart Legend.pdf" appear without any import action, and confirm each opens and renders real content (not a blank/error page — this is the step that actually resolves the verify-before-trusting note above). Reopen the app a second time, confirm they don't duplicate.
+This task adds a new Java plugin. Increment `FLYTAB_VERSION` in `web/app.js` first (per this repo's Build Policy), then:
+Run: `bash build.sh`
+Expected: `BUILD SUCCESSFUL`.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Required manual on-device verification**
+
+Fresh install (or clear app data) on-device, open the Documents panel for the first time, confirm both "VFR Chart Legend.pdf" and "IFR Chart Legend.pdf" appear without any import action, and confirm each opens and renders real content (not a blank/error page). Reopen the app a second time, confirm they don't duplicate.
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add web/cockpit/documents.js tests/cockpit/documents-seed-bundled.test.js
+git add android/app/src/main/java/app/flywhere/flytab/BundledAssetPlugin.java android/app/src/main/java/app/flywhere/flytab/MainActivity.java web/cockpit/documents.js web/app.js android/app/build.gradle tests/cockpit/documents-seed-bundled.test.js
 git commit -m "feat: seed bundled VFR/IFR chart legends into the document library on first launch"
 ```
 
@@ -992,7 +1241,9 @@ git commit -m "feat: seed bundled VFR/IFR chart legends into the document librar
 **Interfaces:**
 - Produces: nothing new externally — `_importFile` gains a caught-error path with pilot-facing feedback instead of an unhandled rejection.
 
-**Context:** No IndexedDB quota-handling exists anywhere in this repo today (confirmed during planning — the only "storage full" comments in the whole codebase are bare `localStorage` try/catches that swallow silently, no pilot-facing UI). This task is the first real one. `NasrDB._put` (which `saveDocument` wraps) rejects via the IndexedDB request's `onerror`, which for a quota failure carries `err.name === 'QuotaExceededError'` — `_importFile` needs to catch that specifically and surface it, not let it become an unhandled promise rejection with the import silently not happening.
+**Context:** No IndexedDB quota-handling exists anywhere in this repo today (confirmed during planning — the only "storage full" comments in the whole codebase are bare `localStorage` try/catches that swallow silently, no pilot-facing UI). This task is the first real one. `NasrDB._put` (which both `saveDocument` and `putAppCache` wrap) rejects via the IndexedDB request's `onerror`, which for a quota failure carries `err.name === 'QuotaExceededError'`.
+
+**Correction, caught in plan review:** an earlier draft of this task only wrapped the `saveDocument` call. `_importFile` also calls `_indexDocument` (Task 4), which does its own IndexedDB write (`putAppCache` of the cumulative search index across every document) — and that write is actually the *more* likely one to hit the quota, since the combined index grows with every import while each document's own blob write is a one-time cost. Both calls need to be inside the same catch, or the exact unhandled-rejection this task exists to eliminate still happens on the more probable path.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1008,14 +1259,34 @@ const read = (p) => readFileSync(join(__dirname, '../../', p), 'utf8');
 global.wireTap = (el, handler) => { if (el) el.addEventListener('click', handler); };
 const DocumentsPanel = new Function(read('web/cockpit/documents.js') + '\nreturn DocumentsPanel;')();
 
+function makeQuotaError() {
+    const err = new Error('Quota exceeded');
+    err.name = 'QuotaExceededError';
+    return err;
+}
+
 describe('DocumentsPanel storage-quota handling', () => {
-    it('shows a pilot-facing message instead of throwing when storage is full', async () => {
+    it('shows a pilot-facing message instead of throwing when the document blob write fails', async () => {
         document.body.innerHTML = '';
-        const quotaError = new Error('Quota exceeded');
-        quotaError.name = 'QuotaExceededError';
         const nasrDb = {
             getAllDocuments: vi.fn().mockResolvedValue([]),
-            saveDocument: vi.fn().mockRejectedValue(quotaError),
+            saveDocument: vi.fn().mockRejectedValue(makeQuotaError()),
+        };
+        const panel = new DocumentsPanel(nasrDb);
+        const blob = new Blob(['%PDF-1.4'], { type: 'application/pdf' });
+
+        await expect(panel._importFile(blob, 'big.pdf')).resolves.not.toThrow();
+        expect(panel._el.textContent).toMatch(/storage full/i);
+    });
+
+    it('also catches quota failure on the search-index write — the more likely path (caught in plan review)', async () => {
+        document.body.innerHTML = '';
+        global.window.pdfjsLib = { getDocument: () => ({ promise: Promise.resolve({ numPages: 1, getPage: () => Promise.resolve({ getTextContent: () => Promise.resolve({ items: [{ str: 'x' }] }) }) }) }) };
+        const nasrDb = {
+            getAllDocuments: vi.fn().mockResolvedValue([]),
+            saveDocument: vi.fn().mockImplementation(async (doc) => { doc.id = 'id1'; return doc.id; }), // succeeds
+            getAppCache: vi.fn().mockResolvedValue(null),
+            putAppCache: vi.fn().mockRejectedValue(makeQuotaError()), // the index write fails
         };
         const panel = new DocumentsPanel(nasrDb);
         const blob = new Blob(['%PDF-1.4'], { type: 'application/pdf' });
@@ -1033,43 +1304,21 @@ Expected: FAIL — `saveDocument` rejecting currently propagates as an unhandled
 
 - [ ] **Step 3: Write minimal implementation**
 
-Wrap `_importFile`'s body (all tasks so far have been building this method up — read its current full body before editing):
+Wrap `_importFile`'s body (all tasks so far have been building this method up — read its current full body before editing). Reuses `_showMessage` and `.documents-message` from Task 5 (introduced there since the too-large-to-share case needed pilot-facing feedback first) — no new CSS or helper needed here:
 ```js
 async _importFile(blob, name, type = 'imported') {
     const doc = { name, type, sizeBytes: blob.size, blob };
     try {
         await this._nasrDb.saveDocument(doc);
+        await this._indexDocument(doc); // also writes to IndexedDB (the search index) — see context note on why this must be inside the same try
     } catch (err) {
         if (err?.name === 'QuotaExceededError') {
-            this._showMessage('Storage full — delete a document to import more.');
+            this._showMessage('Storage full — delete a document (🗑 next to a row) to import more.');
             return;
         }
         throw err;
     }
-    await this._indexDocument(doc);
     await this._renderList();
-}
-
-_showMessage(text) {
-    const el = document.createElement('div');
-    el.className = 'documents-message';
-    el.textContent = text;
-    this._listEl.prepend(el);
-    setTimeout(() => el.remove(), 4000);
-}
-```
-
-Add a matching style in `web/style.css` (Design Token Standards — danger-on-light for readable warning text, not the raw fill token, per this repo's own documented rule against using the bright fill colors as text):
-```css
-.documents-message {
-    padding: 12px 16px;
-    font-family: var(--font-ui);
-    font-weight: 700;
-    color: var(--color-danger-on-light);
-    background: var(--bg-surface);
-    border: 1px solid var(--color-danger-on-light);
-    border-radius: 8px;
-    margin: 8px;
 }
 ```
 
@@ -1093,12 +1342,21 @@ Per this repo's CLAUDE.md, this whole feature is user-visible (new MORE drawer i
 
 ## Self-Review
 
+**Critical-review pass (`/code-review high`, before execution):** found 7 real problems across correctness, security, and this repo's own build policy. All fixed in place:
+- **Concurrency (critical).** Task 5's share-check and Task 6's bundled-legend seeding both call into `_indexDocument` unawaited from the same `_buildDOM()`, and that method did an unguarded read-modify-write of the single shared `documents_search_index` cache entry — two imports landing close together could silently clobber each other's search-index pages. Fixed with `_queueIndexOp`, a promise-chain serialization point in Task 4 that every index read-modify-write (including the new delete path) now goes through regardless of caller.
+- **XSS (security).** `_renderList()` and `_applySearch()` interpolated `doc.name`/`page.docName` — sourced from a pilot-supplied filename or, once Task 5 lands, another app's attacker-controlled share display name — directly into `innerHTML`. Fixed to build rows via `textContent`, matching this repo's own existing precedent (`route-table.js:2350`) for the same class of externally-sourced name.
+- **Quota handling gap.** Only wrapped `saveDocument`, not `_indexDocument` — the latter is actually the more likely one to hit the quota (the combined search index grows with every import). Both calls are now inside the same `try`.
+- **No delete UI.** The quota message told pilots to "delete a document," but nothing in the plan wired a delete action anywhere. Added a delete button to Task 3's list rows (with `stopPropagation` so it doesn't also open the document), extended in Task 4 to also clean the document's pages out of the search index.
+- **Missing version bump before `bash build.sh`.** Tasks 5 and 6's compile-check steps didn't mention incrementing `FLYTAB_VERSION` first, which per this repo's own documented worktree-version-drift failure mode produces an APK that fails to install. Added.
+- **Unverified `file://` asset fetch, likely to fail as originally written.** Task 6 tried to `fetch()` a raw Android asset directly; `capacitor.config.ts`'s `androidScheme: 'http'` + WebViewAssetLoader comment makes that reachability genuinely uncertain, not just under-verified. Redesigned to read the asset natively instead (`AssetManager`, a new `BundledAssetPlugin` mirroring Task 5's approach) — sidesteps the WebView-URL question entirely rather than resolving it by guessing.
+- **Unbounded share-intent transfer.** `ShareReceiverPlugin` read the whole shared file into memory and base64-encoded it with no size check — a real OOM/UI-stall risk for a large POH, the exact document type this feature is named for. Capped at 25MB raw size; anything larger is rejected with a message pointing the pilot at the file-picker path (Task 4), which has no such limit since it reads a `File` directly with no native-bridge round-trip.
+
 **Spec coverage:** All 4 spec goals covered — import via both paths (Tasks 4, 5), accessible library (Task 3), full-text search (Task 4), bundled legends (Task 6). All 3 spec open questions resolved during planning: search library/index format (lunr.js, `app_cache`-stored JSON + page lookup — Task 4), storage quota (Task 7), plate-viewer refactor boundary (extracted — Task 2).
 
-**Placeholder scan:** No TBD/TODO markers. Three spots explicitly flagged as unverified-until-manual-check rather than asserted as fact: the `fake-indexeddb/auto` reset mechanism (Task 1), `PluginCall.resolve` never-rejects convention (Task 5), and the Android-asset fetch URL scheme (Task 6) — each has a concrete verification instruction attached, not left vague.
+**Placeholder scan:** No TBD/TODO markers. Spots explicitly flagged as unverified-until-manual-check rather than asserted as fact: the `fake-indexeddb/auto` reset mechanism (Task 1), `PluginCall.resolve` never-rejects convention (Task 5), `OpenableColumns.SIZE` reporting unknown for an uncooperative content provider (Task 5) — each has a concrete verification instruction or accepted-tradeoff reasoning attached, not left vague.
 
-**Type consistency:** `_importFile(blob, name, type = 'imported')`'s signature is introduced in Task 4 and extended (not changed) in Task 6 — existing Task 4/5 call sites keep working unchanged since `type` defaults. `pages` array shape (`{id, docId, pageNum, docName, text}`) is defined once in Task 4 and consumed identically in `_applySearch` — no drift.
+**Type consistency:** `_importFile(blob, name, type = 'imported')`'s signature is introduced in Task 4 and extended (not changed) in Task 6 — existing Task 4/5 call sites keep working unchanged since `type` defaults. `pages` array shape (`{id, docId, pageNum, docName, text}`) is defined once in Task 4 and consumed identically in `_applySearch`, `_deleteDocument`, and `_saveIndex` — no drift. `_showMessage`/`.documents-message` is defined once, in Task 5 (moved there from Task 7 during review, since Task 5's too-large-to-share case needed it first), and reused as-is by Task 7 — not redefined.
 
-**Cross-task dependencies:** Strictly linear — each task's Interfaces section consumes the prior task's Produces. Tasks 5 and 6 both call Task 4's `_importFile`, so both must land after Task 4; Tasks 5 and 6 don't touch each other's files and could run in parallel with each other once Task 4 is done. Task 7 wraps Task 4's `saveDocument` call, so it must come after Task 4 (or after Task 6, since Task 6 also calls the same method — ordering 4→5→6→7 as written avoids any ambiguity about which version of `_importFile` Task 7 is wrapping).
+**Cross-task dependencies:** Tasks 5 and 6 both call Task 4's `_importFile`/`_indexDocument`, so both must land after Task 4. Task 5 must land before Task 7 conceptually (Task 7 reuses Task 5's `_showMessage`), though Task 7's own tests don't exercise Task 5's code so this isn't a hard execution-order requirement, just a code-reuse one — flagging so an implementer doesn't try to write Task 7 before Task 5's `_showMessage` exists. Task 3's `_deleteDocument` is extended (not redefined) in Task 4 once indexing exists to clean up against — same pattern as `_importFile`'s type parameter.
 
 **Known limitation carried forward from the spec, not resolved here:** OCR for scanned/image-only PDFs remains explicitly out of scope (Non-goals) — a scanned POH with no text layer imports and displays fine but won't be found by search, silently (not a bug, matches the spec's stated scope, but worth remembering if a pilot reports "I imported X but can't find it by search").
