@@ -15,6 +15,11 @@ class DocumentsPanel {
         // Promise-chain queue serializing every read-modify-write of the
         // shared 'documents_search_index' app_cache entry -- see _queueIndexOp.
         this._indexQueue = Promise.resolve();
+        // Bumped on every _applySearch call; a call whose own generation no
+        // longer matches this._searchGeneration by the time its awaited work
+        // resolves was superseded by a newer call and must not render --
+        // see _applySearch.
+        this._searchGeneration = 0;
         this._buildDOM();
     }
 
@@ -28,7 +33,7 @@ class DocumentsPanel {
                     <button class="documents-import-btn">Import</button>
                     <input type="file" class="documents-file-input" accept="application/pdf" style="display:none">
                 </div>
-                <button class="documents-close" aria-label="Close">&times;</button>
+                <button class="documents-close btn-close" aria-label="Close">&times;</button>
             </div>
             <div class="documents-search-bar">
                 <input type="search" class="documents-search-input" placeholder="Search documents…" autocomplete="off">
@@ -47,13 +52,20 @@ class DocumentsPanel {
             try {
                 if (fileInput.files[0]) await this._importFile(fileInput.files[0], fileInput.files[0].name);
             } catch (err) {
-                // A malformed/corrupt PDF (or any other import failure) propagates
-                // unhandled from _importFile/_indexDocument otherwise. Caught here
-                // so it doesn't become an unhandled rejection; the input reset in
-                // `finally` below is what actually matters -- without it the pilot
-                // couldn't re-select the same failed file to retry (the browser
-                // won't re-fire 'change' for an unchanged value).
+                // A malformed/corrupt PDF (or any other non-quota import failure --
+                // _importFile's own QuotaExceededError branch already shows a
+                // message and returns without re-throwing, so this catch only
+                // ever sees non-quota errors) propagates unhandled from
+                // _importFile/_indexDocument otherwise. Caught here so it doesn't
+                // become an unhandled rejection, and surfaced to the pilot to
+                // match the share-intent path's equivalent failure handling
+                // (_checkPendingShare) -- without this the Import button would
+                // silently do nothing on a bad file. The input reset in `finally`
+                // below is what makes retry possible -- without it the pilot
+                // couldn't re-select the same failed file (the browser won't
+                // re-fire 'change' for an unchanged value).
                 console.error('DocumentsPanel: import failed', err);
+                this._showMessage(`Could not import "${fileInput.files[0]?.name || 'the file'}" — it may be corrupt or invalid.`);
             } finally {
                 fileInput.value = '';
             }
@@ -72,53 +84,65 @@ class DocumentsPanel {
     async _checkPendingShare() {
         const ShareReceiver = window.Capacitor?.Plugins?.ShareReceiver;
         if (!ShareReceiver) return;
-        const result = await ShareReceiver.getPendingShare();
-        if (result?.tooLarge) {
-            // Awaited directly rather than via show() -- show() fires
-            // _renderList() without awaiting it, and _renderList()'s own
-            // `innerHTML = ''` reset (once its async doc-list read resolves)
-            // would otherwise unconditionally wipe out the message appended
-            // below, every time, since that reset always lands on a later
-            // task than this synchronous continuation.
-            this._el.classList.add('visible');
-            await this._renderList();
-            this._showMessage(`"${result.name}" is too large to share directly — use Import in the Documents panel instead.`);
-            return;
-        }
-        if (result?.error) {
-            // Native-side read failure (I/O error, revoked provider
-            // permission, provider crash) -- distinct from the ordinary
-            // "nothing pending" case below, which also has ok:false but no
-            // error field. ShareReceiverPlugin already clears its pending
-            // Uri before attempting the read, so there's no retry path on
-            // the native side; without this the pilot gets zero feedback
-            // that their share silently failed. Same await-then-message
-            // ordering as the tooLarge branch above, for the same reason.
-            this._el.classList.add('visible');
-            await this._renderList();
-            this._showMessage('Could not read the shared file. Please try sharing it again.');
-            return;
-        }
-        if (!result?.ok) return;
-        const binary = atob(result.base64);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-        const blob = new Blob([bytes], { type: 'application/pdf' });
+        // Outer try/catch is a last-resort net around the whole method body --
+        // distinct from the inner try/catch below, which gives a specific
+        // "could not import" message for that one case. getPendingShare()
+        // itself (a bridge call) and atob() (can throw on malformed base64)
+        // were previously unguarded even though this method is called
+        // unawaited both from _buildDOM() and from a 'resume' listener, so a
+        // bridge-level rejection or bad payload became a silent unhandled
+        // rejection with no pilot-visible symptom at all.
         try {
-            await this._importFile(blob, result.name || 'shared-document.pdf');
+            const result = await ShareReceiver.getPendingShare();
+            if (result?.tooLarge) {
+                // Awaited directly rather than via show() -- show() fires
+                // _renderList() without awaiting it, and _renderList()'s own
+                // `innerHTML = ''` reset (once its async doc-list read resolves)
+                // would otherwise unconditionally wipe out the message appended
+                // below, every time, since that reset always lands on a later
+                // task than this synchronous continuation.
+                this._el.classList.add('visible');
+                await this._renderList();
+                this._showMessage(`"${result.name}" is too large to share directly — use Import in the Documents panel instead.`);
+                return;
+            }
+            if (result?.error) {
+                // Native-side read failure (I/O error, revoked provider
+                // permission, provider crash) -- distinct from the ordinary
+                // "nothing pending" case below, which also has ok:false but no
+                // error field. ShareReceiverPlugin already clears its pending
+                // Uri before attempting the read, so there's no retry path on
+                // the native side; without this the pilot gets zero feedback
+                // that their share silently failed. Same await-then-message
+                // ordering as the tooLarge branch above, for the same reason.
+                this._el.classList.add('visible');
+                await this._renderList();
+                this._showMessage('Could not read the shared file. Please try sharing it again.');
+                return;
+            }
+            if (!result?.ok) return;
+            const binary = atob(result.base64);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+            const blob = new Blob([bytes], { type: 'application/pdf' });
+            try {
+                await this._importFile(blob, result.name || 'shared-document.pdf');
+            } catch (err) {
+                // Matches the file-picker change handler's error handling above --
+                // a malformed/corrupt PDF otherwise propagates unhandled from
+                // _importFile/_indexDocument. Unlike that path the pilot has no
+                // "try again" affordance here (the native side already consumed
+                // the share), so surface it instead of failing silently.
+                console.error('DocumentsPanel: shared file import failed', err);
+                this._el.classList.add('visible');
+                await this._renderList();
+                this._showMessage(`Could not import "${result.name || 'shared-document.pdf'}" — the file may be corrupt or invalid.`);
+                return;
+            }
+            this.show();
         } catch (err) {
-            // Matches the file-picker change handler's error handling above --
-            // a malformed/corrupt PDF otherwise propagates unhandled from
-            // _importFile/_indexDocument. Unlike that path the pilot has no
-            // "try again" affordance here (the native side already consumed
-            // the share), so surface it instead of failing silently.
-            console.error('DocumentsPanel: shared file import failed', err);
-            this._el.classList.add('visible');
-            await this._renderList();
-            this._showMessage(`Could not import "${result.name || 'shared-document.pdf'}" — the file may be corrupt or invalid.`);
-            return;
+            console.error('DocumentsPanel: _checkPendingShare failed', err);
         }
-        this.show();
     }
 
     // Small pilot-facing message shown above the list, auto-dismissing.
@@ -167,7 +191,13 @@ class DocumentsPanel {
             row.appendChild(nameSpan);
             row.appendChild(deleteBtn);
             wireTap(row, () => this._openDocument(doc));
-            wireTap(deleteBtn, (e) => { e.stopPropagation(); this._deleteDocument(doc); });
+            wireTap(deleteBtn, (e) => {
+                e.stopPropagation();
+                // Destructive + irreversible -- matches this repo's established
+                // confirm() convention for the same class of action
+                // (plan-sync.js: "Delete this saved plan?").
+                if (confirm(`Delete "${doc.name}"? This cannot be undone.`)) this._deleteDocument(doc);
+            });
             this._listEl.appendChild(row);
         }
     }
@@ -188,12 +218,18 @@ class DocumentsPanel {
         await this._renderList();
     }
 
-    async _openDocument(doc) {
+    async _openDocument(doc, pageNum) {
         this._viewerEl.innerHTML = '';
         this._viewerEl.style.display = '';
         const url = URL.createObjectURL(doc.blob);
-        await renderPdfToContainer(url, this._viewerEl, { cssClass: 'documents-pdf' });
+        const wrapper = await renderPdfToContainer(url, this._viewerEl, { cssClass: 'documents-pdf' });
         URL.revokeObjectURL(url);
+        // Search results match a specific page -- scroll straight to it
+        // instead of always landing on page 1. wrapper's children are the
+        // per-page <canvas> elements in page order (see renderPdfToContainer).
+        if (pageNum && wrapper?.children[pageNum - 1]) {
+            wrapper.children[pageNum - 1].scrollIntoView();
+        }
     }
 
     // Shared entry point for every import path -- file-picker (this task),
@@ -210,6 +246,14 @@ class DocumentsPanel {
                 this._showMessage('Storage full — delete a document (🗑 next to a row) to import more.');
                 return;
             }
+            // Any other failure (e.g. a corrupt PDF PDF.js can't parse in
+            // _indexDocument) means saveDocument already persisted `doc` but
+            // it was never indexed -- roll it back so it doesn't become an
+            // orphaned, unsearchable record the pilot never asked to keep.
+            // doc.id is only set once saveDocument succeeds (NasrDB.saveDocument
+            // assigns it if missing); if saveDocument itself is what threw,
+            // doc.id is still undefined and this is a safe no-op.
+            try { await this._nasrDb.deleteDocument(doc.id); } catch (_) { /* best-effort cleanup */ }
             throw err;
         }
         await this._renderList();
@@ -245,9 +289,17 @@ class DocumentsPanel {
             { path: 'vfr-chart-legend.pdf', name: 'VFR Chart Legend.pdf' },
             { path: 'ifr-chart-legend.pdf', name: 'IFR Chart Legend.pdf' },
         ];
-        let existing;
+        let existing, seededNames;
         try {
             existing = await this._nasrDb.getAllDocuments();
+            // Durable marker of which bundled docs have EVER been seeded --
+            // distinct from "currently present." Checking presence alone (the
+            // pre-fix behavior) meant a pilot deleting a bundled legend to
+            // free space got it silently re-imported on the very next
+            // launch, defeating the deletion. Persisted via the same
+            // getAppCache/putAppCache wrappers already used for
+            // 'documents_search_index'.
+            seededNames = (await this._nasrDb.getAppCache('documents_bundled_seeded')) || [];
         } catch (err) {
             // Fails open, same as every other failure mode in this method
             // (see the doc comment above) -- an IDB read failure here (this
@@ -259,7 +311,15 @@ class DocumentsPanel {
             return;
         }
         for (const item of BUNDLED) {
-            if (existing.some(d => d.type === 'bundled' && d.name === item.name)) continue;
+            if (seededNames.includes(item.name)) continue; // seeded before (even if since deleted) -- never re-seed
+            if (existing.some(d => d.type === 'bundled' && d.name === item.name)) {
+                // Already present from an install that predates this marker --
+                // record it now (without re-importing, which would create a
+                // duplicate row) so a future delete is respected too.
+                seededNames = [...seededNames, item.name];
+                try { await this._nasrDb.putAppCache('documents_bundled_seeded', seededNames); } catch (_) { /* best-effort; retried next launch */ }
+                continue;
+            }
             try {
                 const result = await BundledAsset.readAsset({ path: item.path });
                 if (!result?.ok) { console.warn('[Documents] Failed to seed bundled legend', item.name, result?.error); continue; }
@@ -268,6 +328,8 @@ class DocumentsPanel {
                 for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
                 const blob = new Blob([bytes], { type: 'application/pdf' });
                 await this._importFile(blob, item.name, 'bundled');
+                seededNames = [...seededNames, item.name];
+                await this._nasrDb.putAppCache('documents_bundled_seeded', seededNames);
             } catch (err) {
                 console.warn('[Documents] Failed to seed bundled legend', item.name, err.message);
             }
@@ -321,8 +383,16 @@ class DocumentsPanel {
     }
 
     async _applySearch(query) {
+        // Fast typing fires overlapping calls, each awaiting an IndexedDB
+        // read -- nothing guarantees an earlier query's results resolve
+        // before a later one's. Bumping the generation before doing any
+        // async work means a call can tell, once its own await resolves,
+        // whether a newer call has since superseded it and bail out instead
+        // of painting stale results over what the pilot currently typed.
+        const gen = ++this._searchGeneration;
         if (!query) { this._renderList(); return; }
         const cache = await this._nasrDb.getAppCache('documents_search_index');
+        if (gen !== this._searchGeneration) return; // a newer call superseded this one
         if (!cache?.lunrIndexJSON) { this._listEl.innerHTML = '<div class="documents-empty">No results.</div>'; return; }
         const idx = lunr.Index.load(cache.lunrIndexJSON);
         let results;
@@ -337,6 +407,7 @@ class DocumentsPanel {
             // unguarded input listener.
             results = [];
         }
+        if (gen !== this._searchGeneration) return; // superseded while searching -- re-check before touching the DOM
         this._listEl.innerHTML = '';
         if (results.length === 0) { this._listEl.innerHTML = '<div class="documents-empty">No results.</div>'; return; }
         for (const result of results) {
@@ -355,7 +426,7 @@ class DocumentsPanel {
             row.appendChild(nameSpan);
             wireTap(row, async () => {
                 const doc = await this._nasrDb.getDocument(page.docId);
-                if (doc) await this._openDocument(doc);
+                if (doc) await this._openDocument(doc, page.pageNum);
             });
             this._listEl.appendChild(row);
         }

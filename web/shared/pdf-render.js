@@ -29,7 +29,20 @@ async function renderPdfToContainer(url, containerEl, { scale, cssClass, errorLa
             await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
         }
     } catch (err) {
-        wrapper.innerHTML = `<div style="color:var(--status-warning);padding:24px">Failed to load ${errorLabel}: ${err.message}</div>`;
+        // textContent, not innerHTML — err.message can come from PDF.js
+        // parsing an externally-shared/externally-sourced PDF and may embed
+        // fragments of the file's own content; writing it into innerHTML is
+        // an HTML-injection sink in a WebView origin holding the app's
+        // IndexedDB/localStorage/Capacitor bridge. --color-danger-on-light
+        // (not --status-warning, a bright fill color unreadable as
+        // foreground text on this repo's light theme) matches how this same
+        // feature already displays externally-sourced text elsewhere
+        // (documents.js's delete button).
+        wrapper.innerHTML = '';
+        const msg = document.createElement('div');
+        msg.style.cssText = 'color:var(--color-danger-on-light);padding:24px';
+        msg.textContent = `Failed to load ${errorLabel}: ${err.message}`;
+        wrapper.appendChild(msg);
     }
     return wrapper;
 }

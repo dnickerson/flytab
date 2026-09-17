@@ -46,3 +46,56 @@ describe('DocumentsPanel storage-quota handling', () => {
         expect(panel._el.textContent).toMatch(/storage full/i);
     });
 });
+
+// Final whole-branch review, Fix 4: a NON-quota _indexDocument failure (e.g.
+// a corrupt PDF PDF.js can't parse) previously left the saveDocument() record
+// orphaned in the store forever, and the file-picker's change handler only
+// console.error'd it with no pilot-facing message (unlike the share-intent
+// path's equivalent failure, which already showed one).
+describe('DocumentsPanel non-quota import failure handling', () => {
+    it('rolls back the saved document record when indexing fails with a non-quota error', async () => {
+        document.body.innerHTML = '';
+        const savedDocs = [];
+        const deletedIds = [];
+        const nasrDb = {
+            getAllDocuments: vi.fn().mockResolvedValue(savedDocs),
+            saveDocument: vi.fn().mockImplementation(async (doc) => { doc.id = 'orphan-id'; savedDocs.push(doc); return doc.id; }),
+            deleteDocument: vi.fn().mockImplementation(async (id) => { deletedIds.push(id); }),
+            getAppCache: vi.fn().mockResolvedValue(null),
+            putAppCache: vi.fn().mockResolvedValue(undefined),
+        };
+        global.window.pdfjsLib = { getDocument: () => ({ promise: Promise.reject(new Error('corrupt PDF -- unexpected EOF')) }) };
+        const panel = new DocumentsPanel(nasrDb);
+        const blob = new Blob(['not really a pdf'], { type: 'application/pdf' });
+
+        await expect(panel._importFile(blob, 'corrupt.pdf')).rejects.toThrow('corrupt PDF');
+        // The orphaned saveDocument() record must be rolled back, not left behind.
+        expect(deletedIds).toEqual(['orphan-id']);
+    });
+
+    it('shows a pilot-facing message when the file-picker import fails for a non-quota reason', async () => {
+        document.body.innerHTML = '';
+        const nasrDb = {
+            getAllDocuments: vi.fn().mockResolvedValue([]),
+            saveDocument: vi.fn().mockImplementation(async (doc) => { doc.id = 'x1'; return doc.id; }),
+            deleteDocument: vi.fn().mockResolvedValue(undefined),
+            getAppCache: vi.fn().mockResolvedValue(null),
+            putAppCache: vi.fn().mockResolvedValue(undefined),
+        };
+        global.window.pdfjsLib = { getDocument: () => ({ promise: Promise.reject(new Error('corrupt')) }) };
+        const panel = new DocumentsPanel(nasrDb);
+
+        const fileInput = panel._el.querySelector('.documents-file-input');
+        const fakeFile = new File(['not a pdf'], 'bad.pdf', { type: 'application/pdf' });
+        Object.defineProperty(fileInput, 'files', { value: [fakeFile], configurable: true });
+        fileInput.dispatchEvent(new Event('change'));
+
+        // Flush the whole pending microtask chain (saveDocument -> queued
+        // indexing -> pdfjs rejection -> rollback -> catch -> _showMessage)
+        // rather than guessing a tick count with chained Promise.resolve().
+        await new Promise((resolve) => setTimeout(resolve, 0));
+
+        expect(panel._el.textContent).toMatch(/could not import "bad\.pdf"/i);
+        expect(fileInput.value).toBe(''); // finally block still resets the input so the pilot can retry
+    });
+});

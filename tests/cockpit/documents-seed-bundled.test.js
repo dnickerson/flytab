@@ -84,4 +84,36 @@ describe('DocumentsPanel bundled-legend seeding', () => {
         await expect(panel._seedBundledDocuments()).resolves.not.toThrow();
         expect(savedDocs.length).toBe(0);
     });
+
+    // Final whole-branch review, Fix 3: existing.some() alone re-seeds a
+    // bundled legend the pilot deliberately deleted, because "currently
+    // present" goes back to false after a delete even though "was ever
+    // seeded" must stay true. This test needs the 'documents_bundled_seeded'
+    // marker to actually persist across the two simulated app launches below,
+    // so (unlike every test above, which relies on this file's shared
+    // beforeEach stubbing getAppCache to always resolve null) it swaps in a
+    // stateful cacheStore for just this test.
+    it('does not re-seed a bundled legend after the pilot deletes it', async () => {
+        const cacheStore = {};
+        nasrDb.getAppCache = vi.fn().mockImplementation(async (key) => (key in cacheStore ? cacheStore[key] : null));
+        nasrDb.putAppCache = vi.fn().mockImplementation(async (key, data) => { cacheStore[key] = data; });
+
+        // First launch: both legends get seeded.
+        const panel1 = new DocumentsPanel(nasrDb);
+        await panel1._seedBundledDocuments();
+        expect(savedDocs.length).toBe(2);
+
+        // Pilot deletes the VFR legend to free space -- simulates what
+        // NasrDB.deleteDocument does to the store (removes the row).
+        const vfrIdx = savedDocs.findIndex(d => d.name.includes('VFR'));
+        savedDocs.splice(vfrIdx, 1);
+        expect(savedDocs.some(d => d.name.includes('VFR'))).toBe(false);
+
+        // Second launch: seeding must NOT bring it back -- only the
+        // persisted marker (not mere current presence) gates re-import.
+        const panel2 = new DocumentsPanel(nasrDb);
+        await panel2._seedBundledDocuments();
+        expect(savedDocs.some(d => d.name.includes('VFR'))).toBe(false);
+        expect(savedDocs.filter(d => d.name.includes('IFR')).length).toBe(1); // and no IFR duplicate either
+    });
 });

@@ -14,7 +14,7 @@ class NasrDB {
     // reading DB_NAME — a rename here must update that too, or the reset
     // button will silently delete a database that no longer exists.
     static DB_NAME = 'flypi';
-    static DB_VERSION = 9;
+    static DB_VERSION = 10;
 
     constructor() {
         this._db = null;
@@ -173,6 +173,7 @@ class NasrDB {
         const db = await this.open();
         return new Promise((resolve, reject) => {
             const tx = db.transaction(storeName, 'readwrite');
+            tx.onabort = () => reject(tx.error || new Error(`Transaction aborted on ${storeName}`));
             const req = tx.objectStore(storeName).put(value);
             req.onsuccess = () => resolve(req.result);
             req.onerror = () => reject(req.error);
@@ -183,6 +184,7 @@ class NasrDB {
         const db = await this.open();
         return new Promise((resolve, reject) => {
             const tx = db.transaction(storeName, 'readwrite');
+            tx.onabort = () => reject(tx.error || new Error(`Transaction aborted on ${storeName}`));
             const req = tx.objectStore(storeName).delete(key);
             req.onsuccess = () => resolve();
             req.onerror = () => reject(req.error);

@@ -4661,8 +4661,8 @@ body {
 }
 .documents-header-left { display: flex; align-items: center; gap: 12px; }
 .documents-title { font-family: var(--font-ui); font-weight: 800; font-size: 20px; color: var(--text-primary); }
-.documents-import-btn { min-height: var(--touch-min, 56px); padding: 0 16px; font-family: var(--font-ui); font-weight: 800; font-size: 16px; background: var(--accent); color: var(--text-on-accent); border: none; border-radius: 8px; }
-.documents-close { min-width: var(--touch-min, 56px); min-height: var(--touch-min, 56px); font-size: 28px; font-weight: 800; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; color: var(--text-primary); }
+.documents-import-btn { min-height: var(--touch-preferred, 64px); padding: 0 16px; font-family: var(--font-ui); font-weight: 800; font-size: 16px; background: var(--accent); color: var(--text-on-accent); border: none; border-radius: 8px; }
+.documents-close { /* sizing via .btn-close */ font-size: 28px; font-weight: 800; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; color: var(--text-primary); }
 .documents-search-bar { padding: 8px 16px; border-bottom: 1px solid var(--border); }
 .documents-search-input { width: 100%; min-height: var(--touch-min, 56px); box-sizing: border-box; padding: 0 12px; font-family: var(--font-ui); font-weight: 700; font-size: 16px; color: var(--text-primary); background: var(--bg-surface); border: 1px solid var(--border-strong); border-radius: 8px; }
 .documents-list { overflow-y: auto; flex: 0 0 auto; max-height: 40vh; }
