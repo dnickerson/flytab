@@ -206,6 +206,7 @@ Opens a right-side drawer with infrequently used actions, organized in three sec
 | **Weather Briefing** | Full weather briefing panel (see below) |
 | **Weight & Balance** | Enter station weights and fuel; shows total weight, CG, and envelope status with a CG diagram. Fuel pre-fills from tracked tank state — see *Fuel on the Weight & Balance page* |
 | **Logbook** | View and edit flight log entries |
+| **Documents** | Library of imported and bundled reference PDFs (POHs, checklists, chart legends) with full-text search |
 | **Flight Upload** | Sync flight logs to the cloud |
 | **User Manual** | This document |
 
@@ -469,6 +470,22 @@ Touch and drag on the chart to scrub, and the detail panel adds a CLOUDS section
 Navigate to an airport using the search field, then select the approach. The plate displays as a PDF. Toggle **Geo Ref** to overlay the plate on the moving map so your own-ship tracks across the plan view.
 
 During the approach, tap **APT** tab instead for quick access to all plates for the route airports.
+
+---
+
+## Document Library
+
+**MORE → Documents** opens a full-screen library of reference PDFs — POHs, checklists, chart legends, or anything else worth having on hand in the cockpit.
+
+Two FAA chart-legend references, **VFR Chart Legend.pdf** and **IFR Chart Legend.pdf**, are bundled with the app and already in the list the first time you open Documents — no import needed.
+
+**Adding a document** — Tap **Import** to choose a PDF from the device's file picker. You can also share a PDF into FlyTab from another app (a file manager, email, etc.) — pick FlyTab as the share target and it lands in the library automatically, whether FlyTab was already running or not. A shared file over 25MB is rejected with a message pointing you at **Import** instead, which has no size limit.
+
+**Search** — The search box at the top of the panel searches the full text of every document in the library, imported or bundled, not just file names. Each result names the document and the page the match was found on; tap a result to open that document. A scanned or photographed PDF with no selectable text will still import and display normally, but won't turn up in search — there's no text on the page for FlyTab to search.
+
+**Viewing and deleting** — Tap any document in the list to open it in the built-in PDF viewer, which stacks every page top to bottom. Pinch to zoom in on fine print or a diagram, and drag with one finger to pan around the page(s) — this works at any zoom level, including the default view, so one finger is all you need to move through a multi-page document. Opening a document always starts back at 1x zoom. Tap **🗑** on a row to delete that document; it's removed from both the list and search.
+
+If device storage fills up, an import fails without crashing: the panel shows "Storage full — delete a document (🗑 next to a row) to import more."
 
 ---
 
