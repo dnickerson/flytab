@@ -9,6 +9,13 @@ class AirspaceAlert {
     // this module only consumes the resulting controlling_freq field.
     static LEAD_TIME_MARGIN_NM = 10; // fixed margin added to the query box
 
+    // Single source of truth for the six airspace_alerts.types.* config
+    // leaves, mapping each to the typeKey _evaluateOne/clearStatesForType
+    // namespace _states by (FAA class letter for airspace records, kind
+    // name for sua/trsa). layer-panel.js's toggle wiring reads this same
+    // map rather than keeping its own independent copy in sync by hand.
+    static TYPE_KEYS = { class_b: 'B', class_c: 'C', class_d: 'D', class_e_surface: 'E', sua: 'sua', trsa: 'trsa' };
+
     constructor() {
         this._stratux = null;
         this._nasrDb = null;
@@ -218,8 +225,10 @@ class AirspaceAlert {
         // panel) can skip the IDB query below entirely, rather than paying for
         // three cursor scans plus polygon-overlap geometry every second for
         // output that's guaranteed to be discarded.
-        const t = (key) => CockpitConfig.get(`airspace_alerts.types.${key}`);
-        const typesEnabled = { class_b: t('class_b'), class_c: t('class_c'), class_d: t('class_d'), class_e_surface: t('class_e_surface'), sua: t('sua'), trsa: t('trsa') };
+        const typesEnabled = {};
+        for (const key of Object.keys(AirspaceAlert.TYPE_KEYS)) {
+            typesEnabled[key] = CockpitConfig.get(`airspace_alerts.types.${key}`);
+        }
         if (!Object.values(typesEnabled).some(Boolean)) return;
 
         const leadTimeMin = CockpitConfig.get('airspace_alerts.lead_time_min') ?? 2;

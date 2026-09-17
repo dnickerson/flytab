@@ -358,11 +358,15 @@ class LayerPanel {
             });
         }
 
-        // Wire Airspace Alert per-type toggles. Maps each config leaf to the
-        // typeKey AirspaceAlert._evaluateOne namespaces its state Map by
-        // (airspace classes keyed by FAA class letter, sua/trsa by name).
-        const AIRSPACE_ALERT_TYPE_KEYS = { class_b: 'B', class_c: 'C', class_d: 'D', class_e_surface: 'E', sua: 'sua', trsa: 'trsa' };
-        for (const key of Object.keys(AIRSPACE_ALERT_TYPE_KEYS)) {
+        // Wire Airspace Alert per-type toggles. AirspaceAlert.TYPE_KEYS is
+        // the single source of truth for these six config leaves and the
+        // typeKey _evaluateOne/clearStatesForType namespace _states by --
+        // read from there rather than keeping an independent copy in sync
+        // by hand (this function runs at panel-wiring time, well after all
+        // scripts have loaded, so load order between the two files doesn't
+        // matter here).
+        const typeKeys = (typeof AirspaceAlert !== 'undefined') ? AirspaceAlert.TYPE_KEYS : {};
+        for (const key of Object.keys(typeKeys)) {
             const input = this._panel.querySelector(`.lp-toggle input[data-action="airspace-alert-${key}"]`);
             if (input) {
                 input.checked = CockpitConfig.get(`airspace_alerts.types.${key}`) ?? false;
@@ -376,7 +380,7 @@ class LayerPanel {
                     // state map) so it doesn't also wipe an unrelated
                     // in-progress approach to a different airspace type the
                     // pilot isn't touching right now.
-                    window.app?.airspaceAlert?.clearStatesForType?.(AIRSPACE_ALERT_TYPE_KEYS[key]);
+                    window.app?.airspaceAlert?.clearStatesForType?.(typeKeys[key]);
                 });
             }
         }
