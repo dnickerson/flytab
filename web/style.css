@@ -4670,6 +4670,16 @@ body {
 .documents-row-name { font-family: var(--font-ui); font-weight: 700; color: var(--text-secondary); }
 .documents-row-delete { min-width: var(--touch-min, 56px); min-height: var(--touch-min, 56px); font-size: 20px; background: transparent; border: none; color: var(--color-danger-on-light); }
 .documents-empty { padding: 16px; font-family: var(--font-ui); font-weight: 700; color: var(--text-muted); }
+.documents-message {
+    padding: 12px 16px;
+    font-family: var(--font-ui);
+    font-weight: 700;
+    color: var(--color-danger-on-light);
+    background: var(--bg-surface);
+    border: 1px solid var(--color-danger-on-light);
+    border-radius: 8px;
+    margin: 8px;
+}
 .documents-viewer { flex: 1; overflow-y: auto; }
 .documents-pdf {
     background: #fff;

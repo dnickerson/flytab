@@ -59,6 +59,50 @@ class DocumentsPanel {
             }
         });
         document.body.appendChild(this._el);
+        this._checkPendingShare();
+        window.Capacitor?.Plugins?.App?.addListener('resume', () => this._checkPendingShare());
+    }
+
+    // Polls the native ShareReceiver plugin for a PDF shared into FlyTab from
+    // another app (file manager, email, etc.) via Android's SEND intent. Called
+    // once at startup (covers cold start -- the panel is built once at app
+    // startup) and on every Capacitor 'resume' event (covers a share arriving
+    // while the app was already running, in the background).
+    async _checkPendingShare() {
+        const ShareReceiver = window.Capacitor?.Plugins?.ShareReceiver;
+        if (!ShareReceiver) return;
+        const result = await ShareReceiver.getPendingShare();
+        if (result?.tooLarge) {
+            // Awaited directly rather than via show() -- show() fires
+            // _renderList() without awaiting it, and _renderList()'s own
+            // `innerHTML = ''` reset (once its async doc-list read resolves)
+            // would otherwise unconditionally wipe out the message appended
+            // below, every time, since that reset always lands on a later
+            // task than this synchronous continuation.
+            this._el.classList.add('visible');
+            await this._renderList();
+            this._showMessage(`"${result.name}" is too large to share directly — use Import in the Documents panel instead.`);
+            return;
+        }
+        if (!result?.ok) return;
+        const binary = atob(result.base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        const blob = new Blob([bytes], { type: 'application/pdf' });
+        await this._importFile(blob, result.name || 'shared-document.pdf');
+        this.show();
+    }
+
+    // Small pilot-facing message shown above the list, auto-dismissing.
+    // textContent, not innerHTML — callers pass text that can include an
+    // externally-controlled document name (see the same XSS note elsewhere
+    // in this plan). Reused as-is by Task 7 for the quota-exceeded message.
+    _showMessage(text) {
+        const el = document.createElement('div');
+        el.className = 'documents-message';
+        el.textContent = text;
+        this._listEl.prepend(el);
+        setTimeout(() => el.remove(), 4000);
     }
 
     show() {

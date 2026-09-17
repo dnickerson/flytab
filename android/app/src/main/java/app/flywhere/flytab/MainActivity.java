@@ -30,7 +30,13 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(StratuxWsPlugin.class);
         registerPlugin(EngineWsPlugin.class);
         registerPlugin(StratuxUdpPlugin.class);
+        registerPlugin(ShareReceiverPlugin.class);
         super.onCreate(savedInstanceState);
+
+        // Capture a share intent that launched a cold start (app not running).
+        // A share arriving while the app is already running goes to onNewIntent
+        // instead, since launchMode is singleTask.
+        handleIncomingIntent(getIntent());
 
         // Request "All files access" (MANAGE_EXTERNAL_STORAGE) — required to read
         // MBTiles databases from Documents/FlyTab/tiles/ via the NanoHTTPD tile server.
@@ -76,6 +82,29 @@ public class MainActivity extends BridgeActivity {
             }
             return ViewCompat.onApplyWindowInsets(v, insets);
         });
+    }
+
+    /**
+     * Stashes an incoming SEND intent's file Uri on ShareReceiverPlugin for the
+     * JS side to poll. Called both from onCreate (cold start) and onNewIntent
+     * (already running — launchMode is singleTask, so a new share does not
+     * re-trigger onCreate).
+     */
+    private void handleIncomingIntent(Intent intent) {
+        if (intent != null && Intent.ACTION_SEND.equals(intent.getAction())) {
+            Uri uri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
+            if (uri != null) {
+                Log.i(TAG, "Received shared file: " + uri);
+                ShareReceiverPlugin.setPendingShare(uri);
+            }
+        }
+    }
+
+    @Override
+    public void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleIncomingIntent(intent);
     }
 
     private void checkStoragePermission() {
