@@ -410,7 +410,14 @@ class NasrDB {
      * Get airspace polygons that overlap a bounding box.
      * Checks if any boundary vertex falls within bounds.
      */
-    async getAirspaceInBounds(south, west, north, east, limit = 500) {
+    // limit raised 500->3000 (here and on getSuaInBounds/getTrsaInBounds):
+    // GeoUtils.polygonOverlapsBox's added edge-clip case (below) matches
+    // more candidates per query than the old vertex/center-only test, so
+    // the cursor cap could now be reached earlier in store-iteration order
+    // and silently truncate results a caller previously always received.
+    // 3000 is comfortably above the current combined nationwide total
+    // (~5638 airspace + ~1236 sua records) for any single geographic box.
+    async getAirspaceInBounds(south, west, north, east, limit = 3000) {
         const db = await this.open();
         return new Promise((resolve, reject) => {
             const tx = db.transaction('airspace', 'readonly');
@@ -431,8 +438,14 @@ class NasrDB {
                 const overlaps = typeof GeoUtils !== 'undefined'
                     ? GeoUtils.polygonOverlapsBox(boundary, south, west, north, east)
                     : boundary.some(pt => {
-                        const lat = pt[0] || pt.lat;
-                        const lon = pt[1] || pt.lon;
+                        // Explicit format check, not `pt[0] || pt.lat`: that
+                        // pattern drops a real vertex sitting exactly at 0.0
+                        // latitude or longitude (falsy 0 falls through to the
+                        // .lat/.lon read on an array, which is undefined).
+                        // Not reachable for a CONUS-only app in practice, but
+                        // cheap to get right.
+                        const lat = Array.isArray(pt) ? pt[0] : pt.lat;
+                        const lon = Array.isArray(pt) ? pt[1] : pt.lon;
                         return lat >= south && lat <= north && lon >= west && lon <= east;
                     });
                 if (overlaps) results.push(v);
@@ -445,7 +458,7 @@ class NasrDB {
     /**
      * Get Special Use Airspace (R/P/W/A/MOA) that overlaps a bounding box.
      */
-    async getSuaInBounds(south, west, north, east, limit = 500) {
+    async getSuaInBounds(south, west, north, east, limit = 3000) {
         const db = await this.open();
         return new Promise((resolve, reject) => {
             const tx = db.transaction('sua', 'readonly');
@@ -474,7 +487,7 @@ class NasrDB {
     /**
      * Get TRSA approximate circular boundaries that overlap a bounding box.
      */
-    async getTrsaInBounds(south, west, north, east, limit = 500) {
+    async getTrsaInBounds(south, west, north, east, limit = 3000) {
         const db = await this.open();
         return new Promise((resolve, reject) => {
             const tx = db.transaction('trsa', 'readonly');
