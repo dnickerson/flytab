@@ -422,20 +422,20 @@ class NasrDB {
                 if (!cursor || results.length >= limit) { resolve(results); return; }
                 const v = cursor.value;
                 const boundary = v.boundary || v.points || [];
-                const vertexInBounds = boundary.some(pt => {
-                    const lat = pt[0] || pt.lat;
-                    const lon = pt[1] || pt.lon;
-                    return lat >= south && lat <= north && lon >= west && lon <= east;
-                });
-                // A vertex inside the query box catches most overlaps, but a
-                // polygon much larger than the box (e.g. a wide Class B
-                // shelf) can fully contain the box without any vertex
-                // falling inside it — check the box's center against the
-                // polygon too, so large airspace isn't silently missed.
-                const centerInPolygon = !vertexInBounds && boundary.length >= 3
-                    && typeof GeoUtils !== 'undefined'
-                    && GeoUtils.pointInPolygon((south + north) / 2, (west + east) / 2, boundary);
-                if (vertexInBounds || centerInPolygon) results.push(v);
+                // A vertex inside the query box or the box's center inside
+                // the polygon catches most overlaps, but neither catches a
+                // polygon edge that clips through the box without either
+                // shape's reference point landing inside the other (e.g. a
+                // wide Class B shelf whose edge crosses a corner of the box)
+                // — see GeoUtils.polygonOverlapsBox for the full 3-case test.
+                const overlaps = typeof GeoUtils !== 'undefined'
+                    ? GeoUtils.polygonOverlapsBox(boundary, south, west, north, east)
+                    : boundary.some(pt => {
+                        const lat = pt[0] || pt.lat;
+                        const lon = pt[1] || pt.lon;
+                        return lat >= south && lat <= north && lon >= west && lon <= east;
+                    });
+                if (overlaps) results.push(v);
                 cursor.continue();
             };
             req.onerror = () => reject(req.error);
@@ -457,16 +457,14 @@ class NasrDB {
                 if (!cursor || results.length >= limit) { resolve(results); return; }
                 const v = cursor.value;
                 const boundary = v.boundary || [];
-                const vertexInBounds = boundary.some(pt => {
-                    const lat = pt[0], lon = pt[1];
-                    return lat >= south && lat <= north && lon >= west && lon <= east;
-                });
-                // See getAirspaceInBounds above: a vertex-only check misses
-                // large SUA polygons that fully contain the query box.
-                const centerInPolygon = !vertexInBounds && boundary.length >= 3
-                    && typeof GeoUtils !== 'undefined'
-                    && GeoUtils.pointInPolygon((south + north) / 2, (west + east) / 2, boundary);
-                if (vertexInBounds || centerInPolygon) results.push(v);
+                // See getAirspaceInBounds above for the full 3-case overlap test.
+                const overlaps = typeof GeoUtils !== 'undefined'
+                    ? GeoUtils.polygonOverlapsBox(boundary, south, west, north, east)
+                    : boundary.some(pt => {
+                        const lat = pt[0], lon = pt[1];
+                        return lat >= south && lat <= north && lon >= west && lon <= east;
+                    });
+                if (overlaps) results.push(v);
                 cursor.continue();
             };
             req.onerror = () => reject(req.error);
@@ -488,14 +486,14 @@ class NasrDB {
                 if (!cursor || results.length >= limit) { resolve(results); return; }
                 const v = cursor.value;
                 const boundary = v.boundary || [];
-                const vertexInBounds = boundary.some(pt => {
-                    const lat = pt[0], lon = pt[1];
-                    return lat >= south && lat <= north && lon >= west && lon <= east;
-                });
-                const centerInPolygon = !vertexInBounds && boundary.length >= 3
-                    && typeof GeoUtils !== 'undefined'
-                    && GeoUtils.pointInPolygon((south + north) / 2, (west + east) / 2, boundary);
-                if (vertexInBounds || centerInPolygon) results.push(v);
+                // See getAirspaceInBounds above for the full 3-case overlap test.
+                const overlaps = typeof GeoUtils !== 'undefined'
+                    ? GeoUtils.polygonOverlapsBox(boundary, south, west, north, east)
+                    : boundary.some(pt => {
+                        const lat = pt[0], lon = pt[1];
+                        return lat >= south && lat <= north && lon >= west && lon <= east;
+                    });
+                if (overlaps) results.push(v);
                 cursor.continue();
             };
             req.onerror = () => reject(req.error);

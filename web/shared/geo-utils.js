@@ -43,4 +43,32 @@ const GeoUtils = {
         }
         return false;
     },
+
+    /**
+     * Does this polygon overlap an axis-aligned lat/lon box at all?
+     * Three cases, in order of cost: (1) a polygon vertex falls inside the
+     * box: (2) the box's own center falls inside the polygon -- catches a
+     * polygon much larger than the box, fully containing it; (3) neither of
+     * those, but a polygon edge still clips through the box (e.g. a large
+     * polygon's edge crosses a corner or side of the box without any vertex
+     * of either shape landing inside the other) -- checked by sampling the
+     * box's own 4 edges against the polygon via segmentIntersectsPolygon,
+     * since by the Jordan curve theorem any nonzero-area overlap between
+     * the box and polygon interiors must cross the box's perimeter too.
+     */
+    polygonOverlapsBox(boundary, south, west, north, east) {
+        if (!boundary || boundary.length < 3) return false;
+        const vertexInBounds = boundary.some(pt => {
+            const lat = Array.isArray(pt) ? pt[0] : pt.lat;
+            const lon = Array.isArray(pt) ? pt[1] : pt.lon;
+            return lat >= south && lat <= north && lon >= west && lon <= east;
+        });
+        if (vertexInBounds) return true;
+        const centerInPolygon = GeoUtils.pointInPolygon((south + north) / 2, (west + east) / 2, boundary);
+        if (centerInPolygon) return true;
+        return GeoUtils.segmentIntersectsPolygon(south, west, south, east, boundary)
+            || GeoUtils.segmentIntersectsPolygon(south, east, north, east, boundary)
+            || GeoUtils.segmentIntersectsPolygon(north, east, north, west, boundary)
+            || GeoUtils.segmentIntersectsPolygon(north, west, south, west, boundary);
+    },
 };
