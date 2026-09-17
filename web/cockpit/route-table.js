@@ -4,26 +4,6 @@
  * Includes inline edit mode: delete, reorder, and smart waypoint insertion.
  */
 
-/**
- * Ray-casting point-in-polygon test.
- * boundary is [[lat, lon], ...] or [{lat, lon}, ...]
- */
-function _pointInPolygon(lat, lon, boundary) {
-    let inside = false;
-    const n = boundary.length;
-    for (let i = 0, j = n - 1; i < n; j = i++) {
-        const pi = boundary[i], pj = boundary[j];
-        const yi = Array.isArray(pi) ? pi[0] : pi.lat;
-        const xi = Array.isArray(pi) ? pi[1] : pi.lon;
-        const yj = Array.isArray(pj) ? pj[0] : pj.lat;
-        const xj = Array.isArray(pj) ? pj[1] : pj.lon;
-        if (((yi > lat) !== (yj > lat)) && (lon < (xj - xi) * (lat - yi) / (yj - yi) + xi)) {
-            inside = !inside;
-        }
-    }
-    return inside;
-}
-
 // ── Terminology hierarchy ───────────────────────────────────────────────────
 //  Trip   — the full plan from departure to final destination
 //   └── Flight  — one airport-to-airport segment (there may be 1 or more)
@@ -2912,7 +2892,7 @@ class RouteTable {
             const intervals = [];
             let currentInterval = null;
             for (const pt of samplePts) {
-                const inside = _pointInPolygon(pt.lat, pt.lon, boundary);
+                const inside = GeoUtils.pointInPolygon(pt.lat, pt.lon, boundary);
                 if (inside && !currentInterval) {
                     currentInterval = { distFrom: pt.dist };
                 } else if (!inside && currentInterval) {

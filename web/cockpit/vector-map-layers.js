@@ -110,10 +110,13 @@ class VectorMapLayers {
         const container = this._map.getContainer();
         container.addEventListener('touchstart', (e) => {
             // Don't enter tap-detection if the touch starts on a Leaflet popup
-            // (close button, content). Otherwise tapping the X to close a traffic
-            // popup would also fire _onMapClick — surfacing the underlying AIRMET
-            // or airport that happened to be at the tap coordinates.
-            if (e.target?.closest?.('.leaflet-popup')) {
+            // (close button, content) or the airspace alert popup (also
+            // appended directly into this container). Otherwise tapping the
+            // X to close a traffic popup, or the dismiss button on an
+            // airspace alert, would also fire _onMapClick — surfacing the
+            // underlying AIRMET or airport that happened to be at the tap
+            // coordinates.
+            if (isTapOnMapOverlay(e.target)) {
                 this._tapStart = null;
                 return;
             }

@@ -1814,22 +1814,10 @@ class WxBriefing {
             if (Math.max(...advLats) < bbox.s || Math.min(...advLats) > bbox.n) return false;
             if (Math.max(...advLons) < bbox.w || Math.min(...advLons) > bbox.e) return false;
             for (const c of coords) {
-                if (this._pointInPolygon(c.lat, c.lon, pts)) return true;
+                if (GeoUtils.pointInPolygon(c.lat, c.lon, pts)) return true;
             }
             return false;
         });
-    }
-
-    _pointInPolygon(lat, lon, polygon) {
-        let inside = false;
-        for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-            const xi = polygon[i][0], yi = polygon[i][1];
-            const xj = polygon[j][0], yj = polygon[j][1];
-            if (((yi > lon) !== (yj > lon)) && (lat < (xj - xi) * (lon - yi) / (yj - yi) + xi)) {
-                inside = !inside;
-            }
-        }
-        return inside;
     }
 
     _statesForPoints(points) {
