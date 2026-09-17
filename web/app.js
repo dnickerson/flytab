@@ -740,11 +740,16 @@ class FlyTabApp {
         if (typeof AirspaceAlert !== 'undefined' && typeof AirspaceAlertPopup !== 'undefined' && this.stratuxClient) {
             this.airspaceAlert = new AirspaceAlert();
             this.airspaceAlert.init(this.stratuxClient, nasrDb);
-            const airspaceAlertPopup = new AirspaceAlertPopup();
+            // Stored on `this` (not a local const) so the popup UI, not just
+            // the evaluator, is externally reachable -- e.g. a future
+            // emergency-glide trigger or tab-switch handler that needs to
+            // force-dismiss non-critical overlays currently has no way to
+            // reach this popup's dismiss() at all.
+            this.airspaceAlertPopup = new AirspaceAlertPopup();
             if (this.cockpitMap?.map) {
-                airspaceAlertPopup.mount(this.cockpitMap.map.getContainer());
+                this.airspaceAlertPopup.mount(this.cockpitMap.map.getContainer());
             }
-            this.airspaceAlert.onAlert = (record, kind) => airspaceAlertPopup.show(record, kind);
+            this.airspaceAlert.onAlert = (record, kind) => this.airspaceAlertPopup.show(record, kind);
             setInterval(() => this.airspaceAlert.tick(), 1000);
         }
 
