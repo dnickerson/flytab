@@ -97,7 +97,7 @@ class TabBar {
         if (c.enginePage?.visible) c.enginePage.hide();
         if (c.checklist?.hide) c.checklist.hide();
         if (c.logbook?.hide) c.logbook.hide();
-        c.documents?.hide();
+        if (c.documents?.hide) c.documents.hide();
         if (c.wxBriefing?.hide) c.wxBriefing.hide();
         if (c.ifrClearance?.hide) c.ifrClearance.hide();
         if (c.dataStatus?.hide) c.dataStatus.hide();

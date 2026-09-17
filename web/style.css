@@ -4667,6 +4667,16 @@ body {
 .documents-row-delete { min-width: var(--touch-min, 56px); min-height: var(--touch-min, 56px); font-size: 20px; background: transparent; border: none; color: var(--color-danger-on-light); }
 .documents-empty { padding: 16px; font-family: var(--font-ui); font-weight: 700; color: var(--text-muted); }
 .documents-viewer { flex: 1; overflow-y: auto; }
+.documents-pdf {
+    background: #fff;
+}
+.documents-pdf canvas {
+    display: block;
+    max-width: 90vw;
+    max-height: calc(100vh - 64px);
+    width: auto;
+    height: auto;
+}
 
 /* Flight Upload panel */
 .fu-toolbar {
