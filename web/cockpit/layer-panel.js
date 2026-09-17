@@ -358,19 +358,25 @@ class LayerPanel {
             });
         }
 
-        // Wire Airspace Alert per-type toggles
-        for (const key of ['class_b', 'class_c', 'class_d', 'class_e_surface', 'sua', 'trsa']) {
+        // Wire Airspace Alert per-type toggles. Maps each config leaf to the
+        // typeKey AirspaceAlert._evaluateOne namespaces its state Map by
+        // (airspace classes keyed by FAA class letter, sua/trsa by name).
+        const AIRSPACE_ALERT_TYPE_KEYS = { class_b: 'B', class_c: 'C', class_d: 'D', class_e_surface: 'E', sua: 'sua', trsa: 'trsa' };
+        for (const key of Object.keys(AIRSPACE_ALERT_TYPE_KEYS)) {
             const input = this._panel.querySelector(`.lp-toggle input[data-action="airspace-alert-${key}"]`);
             if (input) {
                 input.checked = CockpitConfig.get(`airspace_alerts.types.${key}`) ?? false;
                 input.addEventListener('change', () => {
                     CockpitConfig.patch(`airspace_alerts.types.${key}`, input.checked);
-                    // Clear alert state so re-enabling a type that was disabled
-                    // mid-approach doesn't leave a record stranded in 'alerted'
-                    // (only the master switch used to clear this) -- otherwise
-                    // the next genuine approach into that same airspace never
-                    // fires again.
-                    window.app?.airspaceAlert?._states?.clear();
+                    // Clear only this type's alert state so re-enabling it
+                    // after being disabled mid-approach doesn't leave a
+                    // record stranded in 'alerted' -- otherwise the next
+                    // genuine approach into that same airspace never fires
+                    // again. Scoped to this one type (not the whole shared
+                    // state map) so it doesn't also wipe an unrelated
+                    // in-progress approach to a different airspace type the
+                    // pilot isn't touching right now.
+                    window.app?.airspaceAlert?.clearStatesForType?.(AIRSPACE_ALERT_TYPE_KEYS[key]);
                 });
             }
         }
