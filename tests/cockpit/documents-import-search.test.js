@@ -208,4 +208,48 @@ describe('DocumentsPanel import + search', () => {
         expect(panel._listEl.textContent).toMatch(/bravo\.pdf/);
         expect(panel._listEl.textContent).not.toMatch(/alpha\.pdf/);
     });
+
+    // Re-review follow-up on Fix 7: the empty-query early-return branch
+    // bumps the generation counter but historically called the shared,
+    // generation-unaware _renderList() unguarded -- so a pilot clearing the
+    // search box (fires _applySearch('')) and immediately typing a new
+    // query (fires _applySearch('abc')) could see the later, correctly-
+    // filtered search results get silently overwritten by the earlier,
+    // unfiltered full document list if that first getAllDocuments() read
+    // resolved after the second search had already rendered. _renderList
+    // now accepts an optional staleCheck, and _applySearch's empty-query
+    // branch supplies one built from its own captured generation.
+    it('regression guard: a slow empty-query render does not clobber a faster later search\'s results', async () => {
+        mockPdfjs(['alpha content only']);
+        await panel._importFile(new Blob(['%PDF-1.4 A'], { type: 'application/pdf' }), 'alpha.pdf');
+        mockPdfjs(['bravo content only']);
+        await panel._importFile(new Blob(['%PDF-1.4 B'], { type: 'application/pdf' }), 'bravo.pdf');
+
+        let resolveGetAllDocuments;
+        let callCount = 0;
+        const realGetAllDocuments = nasrDb.getAllDocuments;
+        nasrDb.getAllDocuments = vi.fn().mockImplementation(() => {
+            callCount++;
+            if (callCount === 1) {
+                // Hang the empty-query _renderList()'s read until manually released below.
+                return new Promise((resolve) => { resolveGetAllDocuments = () => resolve(savedDocs); });
+            }
+            return realGetAllDocuments();
+        });
+
+        const emptyQuerySearch = panel._applySearch('');    // starts, blocks inside _renderList's getAllDocuments()
+        const nonEmptySearch = panel._applySearch('bravo'); // supersedes it
+        await nonEmptySearch;
+        expect(panel._listEl.textContent).toMatch(/bravo\.pdf/);
+        expect(panel._listEl.textContent).not.toMatch(/alpha\.pdf/);
+
+        resolveGetAllDocuments(); // now let the stale empty-query render try to resume
+        await emptyQuerySearch;
+
+        // The stale empty-query render (the unfiltered full list, which
+        // includes alpha.pdf) must not have overwritten the newer search's
+        // filtered results.
+        expect(panel._listEl.textContent).toMatch(/bravo\.pdf/);
+        expect(panel._listEl.textContent).not.toMatch(/alpha\.pdf/);
+    });
 });

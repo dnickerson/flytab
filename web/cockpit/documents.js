@@ -166,8 +166,16 @@ class DocumentsPanel {
         this._el.classList.remove('visible');
     }
 
-    async _renderList() {
+    // staleCheck is an optional callback, checked right before the list is
+    // actually painted: if it returns true, this call was superseded by
+    // something newer while its own getAllDocuments() read was in flight,
+    // and it must not overwrite whatever that newer call already rendered.
+    // Every call site except _applySearch's empty-query branch omits it, so
+    // staleCheck is undefined and this guard is always a no-op for them --
+    // their behavior is unchanged.
+    async _renderList(staleCheck) {
         const docs = await this._nasrDb.getAllDocuments();
+        if (staleCheck && staleCheck()) return;
         this._listEl.innerHTML = '';
         if (docs.length === 0) {
             this._listEl.innerHTML = '<div class="documents-empty">No documents yet.</div>';
@@ -390,7 +398,16 @@ class DocumentsPanel {
         // whether a newer call has since superseded it and bail out instead
         // of painting stale results over what the pilot currently typed.
         const gen = ++this._searchGeneration;
-        if (!query) { this._renderList(); return; }
+        if (!query) {
+            // Same race as the rest of this method, on the one branch that
+            // didn't already guard against it: this call's own getAllDocuments()
+            // read can resolve AFTER a subsequent non-empty search has already
+            // rendered filtered results (e.g. pilot clears the search box, then
+            // immediately types a new query) -- without a stale check here,
+            // the unfiltered full list would silently overwrite them.
+            await this._renderList(() => gen !== this._searchGeneration);
+            return;
+        }
         const cache = await this._nasrDb.getAppCache('documents_search_index');
         if (gen !== this._searchGeneration) return; // a newer call superseded this one
         if (!cache?.lunrIndexJSON) { this._listEl.innerHTML = '<div class="documents-empty">No results.</div>'; return; }
