@@ -1,0 +1,703 @@
+# Partial-Fix Completion Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Close out the 5 issues from the 2026-09-16 issue-sweep that were left open despite real, partial progress: #112 (config overrides), #52 + #53 (Leaflet tap-handler reliability), #10 (misleading NASR-not-loaded error), and #104 (data-gap hardening — verification only, no code).
+
+**Architecture:** Five independent gaps, no shared code between them except #52/#53 both extending this repo's established custom-touch-handler pattern (CLAUDE.md's "Leaflet Touch Handling" section) to spots that never got it. Each task is self-contained and can be done in any order — no cross-task dependencies.
+
+**Tech Stack:** Vanilla JS, no bundler, `<script>`-tag loading. Vitest (jsdom) for anything not requiring real touch/SVG geometry; Leaflet 1.x (vendored).
+
+**Spec:** No single spec — each task's requirements come directly from this repo's own issue tracker (#112, #52, #53, #10, #104) plus verified current-code research done during planning (exact file:line citations below were re-verified against `main` at plan-writing time, not carried over from memory).
+
+## Global Constraints
+
+- No `flypi_` prefix on any new storage key — that prefix is legacy-only (see this repo's CLAUDE.md). New keys/properties use plain, current naming.
+- Leaflet's `.on('click')` / `.bindPopup()` alone are unreliable on Android tablets — never rely on them without the custom touchstart/touchend + hit-test pattern.
+- **Correction to CLAUDE.md's documented pattern, discovered during planning research:** CLAUDE.md says polygon hit-testing should use SVG `getScreenCTM()`. The actual shipped, working code (`fisb-weather.js:_handleAdvisoryTap`) does NOT use that — it does geographic ray-casting on lat/lon instead, with a code comment explaining `getScreenCTM()` is unreliable on Android WebView under Leaflet's CSS pan transforms. Tasks 3 and 4 below follow the ray-casting approach (proven working), not CLAUDE.md's stale SVG-CTM description. Flag to the user separately that CLAUDE.md's Leaflet Touch Handling section needs a correction — out of scope for this plan to fix the doc itself.
+- Per CLAUDE.md's Tap Handler Regression Rule (which names `onAirportClick`/`onNavaidClick`/`onFixClick` specifically, but the same logic applies to every tap target touched here): **no automated test can verify real touch/SVG hit-testing in this repo today** (verified during planning — grepped all of `tests/` for `touchstart|touchend|dispatchEvent.*Touch|isPointInFill|_findNearestMarker|_handleAdvisoryTap`: zero matches; the one Playwright suite that loads the real map, `tests/smoke/visual-map.spec.js`, only does tile-pixel screenshot diffs). Tasks 3, 4, and 5 each include a source-inspection-style automated test (the `tests/cockpit/route-table-plan-picker.test.js` pattern — regex/string assertions against the source text, not real interaction) as a lightweight regression net, **plus a required manual on-device verification step that is not optional and not satisfied by the automated test passing.**
+- Run `bash build.sh` after code changes are complete (bumping `FLYTAB_VERSION` in `web/app.js` first, per this repo's Build Policy) — not part of individual tasks below since it's a repo-wide post-implementation step, not per-task.
+
+---
+
+## Task 1: Fix `_syncAircraftToPi` to diff against bundle (closes #112, part A)
+
+**Files:**
+- Modify: `web/app.js:1459-1528` (`_syncAircraftToPi`)
+- Test: `tests/shared/sync-aircraft-to-pi.test.js` (new)
+
+**Interfaces:**
+- Consumes: `CockpitConfig._diffAgainstBundle(saved, bundle)` (existing static method, `web/shared/cockpit-config.js:238-252`) — unchanged signature, already proven by the other two shadowing-fix vectors.
+- Produces: no new exports. `_syncAircraftToPi` keeps its existing signature and call site (`web/app.js:1263`); only its internal persistence changes.
+
+**Context:** `_syncAircraftToPi` currently builds a `merged` object (existing fields spread + selective Supabase-sourced overwrites) and writes the **entire** `merged` object to `localStorage['flypi_cfg_aircraft_config_json']` unconditionally, and sets `CockpitConfig._aircraft = merged` directly — with no diffing against the bundled default. This is a third, independent shadowing vector distinct from the two already-fixed ones (which both write to the separate `flypi_user_aircraft` key via `_diffAgainstBundle`). The fix: diff `merged` against the current bundle before persisting, exactly like the other two vectors do, so fields that end up matching the bundle don't get permanently pinned to a stale synced value.
+
+- [ ] **Step 1: Write the failing test**
+
+```js
+// tests/shared/sync-aircraft-to-pi.test.js
+import { describe, it, expect, beforeEach } from 'vitest';
+import { readFileSync } from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const read = (p) => readFileSync(join(__dirname, '../../', p), 'utf8');
+
+// Load the real CockpitConfig (we want the real _diffAgainstBundle, not a stub).
+globalThis.CockpitConfig = new Function(read('web/shared/cockpit-config.js') + '\nreturn CockpitConfig;')();
+// Defining the class (not instantiating it) is safe even though app.js has many
+// other top-level dependencies — class bodies don't execute until called.
+const FlyTabApp = new Function(read('web/app.js') + '\nreturn FlyTabApp;')();
+
+describe('_syncAircraftToPi diffs against bundle', () => {
+    let app;
+
+    beforeEach(() => {
+        localStorage.clear();
+        app = Object.create(FlyTabApp.prototype);
+    });
+
+    it('does not persist fields that end up matching the bundle', () => {
+        const bundle = { id: 'N194JT', performance: { cruise_speed_kt: 140, cruise_gph: 9.5 } };
+        localStorage.setItem('flypi_cfg_aircraft_config_json', JSON.stringify(bundle));
+        app._cockpitBundle = null; // not used by this method directly
+        app._aircraftBundleForSync = bundle; // see Step 3: method needs a bundle reference
+
+        const supaPerf = { cruise_speed_kt: 140 }; // Supabase says the same as bundle
+        app._syncAircraftToPi({ id: 'N194JT', performance: supaPerf });
+
+        const persisted = JSON.parse(localStorage.getItem('flypi_cfg_aircraft_config_json'));
+        // cruise_speed_kt matches the bundle, so a diff-based persist should not
+        // treat it as a real override needing to survive a future bundle update.
+        expect(CockpitConfig._diffAgainstBundle(persisted, bundle).performance?.cruise_speed_kt).toBeUndefined();
+    });
+
+    it('still persists a field that genuinely differs from the bundle', () => {
+        const bundle = { id: 'N194JT', performance: { cruise_speed_kt: 140 } };
+        localStorage.setItem('flypi_cfg_aircraft_config_json', JSON.stringify(bundle));
+        app._aircraftBundleForSync = bundle;
+
+        app._syncAircraftToPi({ id: 'N194JT', performance: { cruise_speed_kt: 148 } });
+
+        const persisted = JSON.parse(localStorage.getItem('flypi_cfg_aircraft_config_json'));
+        expect(persisted.performance.cruise_speed_kt).toBe(148);
+    });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx vitest run tests/shared/sync-aircraft-to-pi.test.js`
+Expected: FAIL — either `app._aircraftBundleForSync` is unused by the current implementation (so the "matches bundle" assertion fails, since today's code persists `cruise_speed_kt: 140` unconditionally) or a `TypeError` if `FlyTabApp` isn't found as a top-level class in `app.js` (see note below).
+
+**Verify-before-trusting note for the implementer:** confirm `app.js` actually declares `class FlyTabApp { ... }` at the top level (not inside an IIFE or assigned to a differently-named const) before relying on this loading pattern — grep `class FlyTabApp` in `web/app.js` first. If it's structured differently, adjust the `new Function(...)` extraction accordingly; the rest of this test is unaffected.
+
+- [ ] **Step 3: Write minimal implementation**
+
+Read the current full body of `_syncAircraftToPi` (`web/app.js:1459-1528`) before editing — this step assumes its existing shape (builds `merged` via spreads, ends with the two lines below) and only changes the persistence tail. Locate these two lines near the end of the method (per plan-time research, ~1518 and ~1523):
+
+```js
+localStorage.setItem('flypi_cfg_aircraft_config_json', JSON.stringify(merged));
+if (typeof CockpitConfig !== 'undefined') CockpitConfig._aircraft = merged;
+```
+
+Replace with:
+
+```js
+const bundle = this._aircraftBundleForSync
+    || JSON.parse(localStorage.getItem('flypi_aircraft_bundle_json') || 'null')
+    || {};
+const toPersist = (typeof CockpitConfig !== 'undefined')
+    ? CockpitConfig._diffAgainstBundle(merged, bundle)
+    : merged;
+localStorage.setItem('flypi_cfg_aircraft_config_json', JSON.stringify(toPersist));
+if (typeof CockpitConfig !== 'undefined') CockpitConfig._aircraft = merged;
+```
+
+**Implementer note, flagged honestly rather than guessed:** `this._aircraftBundleForSync` does not exist yet on `FlyTabApp` — during plan research I could not find where `_syncAircraftToPi` currently sources "the bundle" from (it only reads the previously-cached `merged` result via `existing`, not a pristine bundle). Before writing this step for real, check whether `FlyTabApp` already holds a pristine bundled-aircraft-config reference anywhere (search for where `web/aircraft-config.json` is originally fetched in `app.js` — likely near startup, possibly cached under a different `localStorage` key than `flypi_cfg_aircraft_config_json`, since that key is the offline-cache key that `_syncAircraftToPi` itself overwrites). If no pristine reference exists anywhere in `FlyTabApp`, fetch `web/aircraft-config.json` fresh inside this method (same pattern `config-editor.js._load()` uses to get `this._aircraftBundle`) rather than inventing a new cache key — adjust the test in Step 1 to match whatever the real source turns out to be.
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `npx vitest run tests/shared/sync-aircraft-to-pi.test.js`
+Expected: PASS
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add web/app.js tests/shared/sync-aircraft-to-pi.test.js
+git commit -m "fix(#112): diff _syncAircraftToPi's write against the aircraft bundle"
+```
+
+---
+
+## Task 2: Add "revert to bundled default" UI to config-editor.js (closes #112, part B)
+
+**Files:**
+- Modify: `web/cockpit/config-editor.js` (constructor ~6-15, `_render()` ~71-361, `_save()` ~428-534)
+- Test: `tests/cockpit/config-editor-revert.test.js` (new)
+
+**Interfaces:**
+- Consumes: `CockpitConfig._diffAgainstBundle` (existing, unchanged).
+- Produces: no new public API — this is a self-contained UI addition to an existing panel.
+
+**Context:** Confirmed during planning research: no revert-to-default UI exists anywhere in this repo (`grep -ni "revert|reset.*default|restore.*default"` across all of `web/`: zero matches). The existing RELOAD button (`.ce-reload-btn`) just re-fetches and re-merges — since `_load()` re-applies stored overrides on top of the bundle, RELOAD does **not** clear an override; it just redisplays bundle+override. This task adds a per-field "revert" affordance.
+
+- [ ] **Step 1: Write the failing test**
+
+```js
+// tests/cockpit/config-editor-revert.test.js
+import { describe, it, expect, beforeEach } from 'vitest';
+import { readFileSync } from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const read = (p) => readFileSync(join(__dirname, '../../', p), 'utf8');
+
+globalThis.CockpitConfig = new Function(read('web/shared/cockpit-config.js') + '\nreturn CockpitConfig;')();
+const ConfigEditor = new Function(read('web/cockpit/config-editor.js') + '\nreturn ConfigEditor;')();
+
+describe('ConfigEditor revert-to-default', () => {
+    let editor;
+
+    beforeEach(() => {
+        localStorage.clear();
+        document.body.innerHTML = '<div id="config-editor-root"></div>';
+        editor = Object.create(ConfigEditor.prototype);
+        editor._el = document.getElementById('config-editor-root');
+        editor._cockpitBundle = { someField: 'bundled-value' };
+        editor._aircraftBundle = { performance: { cruise_speed_kt: 140 } };
+        editor._cockpitConfig = { someField: 'pilot-edited-value' };
+        editor._aircraftConfig = { performance: { cruise_speed_kt: 148 } };
+    });
+
+    it('exposes a revert method that restores a single field to its bundled value', () => {
+        expect(typeof editor._revertField).toBe('function');
+        editor._revertField('aircraft', 'performance.cruise_speed_kt');
+        expect(editor._aircraftConfig.performance.cruise_speed_kt).toBe(140);
+    });
+
+    it('revert has no effect on a field that was never overridden', () => {
+        editor._revertField('cockpit', 'someField');
+        editor._revertField('cockpit', 'someField'); // idempotent
+        expect(editor._cockpitConfig.someField).toBe('bundled-value');
+    });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx vitest run tests/cockpit/config-editor-revert.test.js`
+Expected: FAIL with `TypeError: editor._revertField is not a function`
+
+- [ ] **Step 3: Write minimal implementation**
+
+Add a new method to `ConfigEditor` (place near `_save()`, `web/cockpit/config-editor.js:428`):
+
+```js
+_revertField(scope, dottedPath) {
+    const bundle = scope === 'aircraft' ? this._aircraftBundle : this._cockpitBundle;
+    const config = scope === 'aircraft' ? this._aircraftConfig : this._cockpitConfig;
+    const keys = dottedPath.split('.');
+    let bundleNode = bundle;
+    for (const k of keys) bundleNode = bundleNode?.[k];
+    let node = config;
+    for (let i = 0; i < keys.length - 1; i++) node = node[keys[i]];
+    node[keys[keys.length - 1]] = bundleNode;
+}
+```
+
+Then wire a revert control per rendered field inside `_render()` (`web/cockpit/config-editor.js:71-361`). Read the existing field-rendering loop first to match its structure exactly (this plan doesn't assume the loop's precise variable names — implementer fills in the per-field revert button using whatever loop variable currently identifies the field's scope and dotted path, calling `this._revertField(scope, path)` on tap, then re-running the same render call the field's own input's change-handler already triggers). Show the button only when the field's current value differs from its bundled value (reuse `CockpitConfig._diffAgainstBundle({[lastKey]: node[lastKey]}, {[lastKey]: bundleNode})` returning a non-empty object as the "is overridden" check, or a simpler direct `!==`/`JSON.stringify` comparison — either is correct; pick whichever matches the surrounding render loop's existing style most closely).
+
+Follow this repo's Design Token Standards for the button (`min-height: var(--touch-min, 56px)`, no hardcoded hex colors) since this is new cockpit UI.
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `npx vitest run tests/cockpit/config-editor-revert.test.js`
+Expected: PASS
+
+- [ ] **Step 5: Manual verification**
+
+Open the Settings/config editor panel on-device or in the browser dev build, change one aircraft performance field, save, reopen the editor, tap the new revert control on that field, confirm the displayed value returns to the bundled default and Save persists that reversion (re-open once more to confirm it stuck).
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add web/cockpit/config-editor.js tests/cockpit/config-editor-revert.test.js
+git commit -m "feat(#112): add per-field revert-to-bundled-default control to config editor"
+```
+
+---
+
+## Task 3: New CockpitMap touch pipeline — route waypoints, TFR shapes, PIREP markers (closes #52, and 3 of 6 spots in #53)
+
+**Files:**
+- Modify: `web/cockpit/map.js` (constructor ~121-165, `init()` ~195-239, `destroy()` ~308-329, route-waypoint building ~1393-1415, `_addTfrShape` ~642-699, `_addPirepMarker` ~701-749)
+- Test: `tests/cockpit/map-layer-tap-dispatch.test.js` (new, source-inspection style)
+
+**Interfaces:**
+- Consumes: Leaflet's `L.Circle`/`L.Polygon`/`L.Marker` (vendored, already used throughout `map.js`).
+- Produces: no new public API surface for other files — self-contained within `CockpitMap`. Does not touch the existing `_onTrafficTap(containerPt)` method or its external wiring from `VectorMapLayers` (`web/app.js:504-505`) — that path keeps working exactly as today; this task adds a second, independent touch pipeline alongside it.
+
+**Context (verified during planning, not assumed):** `CockpitMap` (the class starting `constructor(container, stratuxClient)` at `map.js:121`, using `this.map` — no underscore, unlike the map-annotation helper class earlier in the same file that uses `this._map`) currently has **no touch pipeline of its own**. It only receives taps via a callback (`_onTrafficTap`) that `VectorMapLayers` invokes as a fallback when nothing in *its own* layers is hit. Extending that same fallback further for 3 more unrelated concerns (route waypoints, TFR, PIREP — all data CockpitMap owns, not VectorMapLayers) would keep piling unrelated responsibilities onto `VectorMapLayers`. This task instead gives `CockpitMap` its own touchstart/touchend pair — matching the precedent already set by `FisbWeatherDisplay`, which owns its own pipeline for its own layers.
+
+Three marker/shape sets, three different hit-test needs:
+- **Route waypoints** (`this._wpMarkers`, a plain array, rebuilt every `setRoute()` call, `map.js:1393-1415`) — point markers, pixel-distance hit-test (matches the existing convention in `vector-map-layers.js:_findNearestMarker`).
+- **TFR shapes** (`this._tfrShapes`, a `Map` keyed by `notam.raw`, populated by `_addTfrShape`, `map.js:642-699`) — **mixed** shape types: `L.polygon` when `notam.points?.length >= 3`, `L.circle` when a radius is known, `L.marker` otherwise. Each needs its own hit-test: polygon → ray-cast (same algorithm as `fisb-weather.js:_pointInPolygon`, duplicated locally rather than introducing a cross-file dependency — `web/shared/geo-utils.js` does not exist on `main` yet, it's only on the still-open PR #145 branch); circle → exact geo-distance (`shape.getLatLng().distanceTo(tapLatLng) <= shape.getRadius()`, both in meters, zoom-invariant and exact — no pixel approximation needed); marker → pixel-distance, same as route waypoints.
+- **PIREP markers** (`this._pirepMarkers`, a `Map` keyed by `pirep.raw`, populated by `_addPirepMarker`, `map.js:701-749`) — point markers, pixel-distance.
+
+- [ ] **Step 1: Write the failing test**
+
+Given no automated test can exercise real Leaflet touch/SVG behavior in this repo today (see Global Constraints), this is a source-inspection test — it asserts the new code exists and is wired, not that taps behave correctly (that's the required manual step, Step 4).
+
+```js
+// tests/cockpit/map-layer-tap-dispatch.test.js
+import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'fs';
+
+const MAP_SRC = readFileSync('web/cockpit/map.js', 'utf8');
+
+describe('CockpitMap owns a touch pipeline for route/TFR/PIREP taps', () => {
+    it('registers its own touchstart/touchend listeners in init()', () => {
+        expect(MAP_SRC).toMatch(/this\.map\.getContainer\(\)\.addEventListener\(\s*['"]touchstart['"]/);
+        expect(MAP_SRC).toMatch(/this\.map\.getContainer\(\)\.addEventListener\(\s*['"]touchend['"]/);
+    });
+
+    it('removes the new listeners in destroy()', () => {
+        const destroyBody = MAP_SRC.slice(MAP_SRC.indexOf('destroy()'), MAP_SRC.indexOf('destroy()') + 1200);
+        expect(destroyBody).toMatch(/removeEventListener\(\s*['"]touchstart['"]/);
+        expect(destroyBody).toMatch(/removeEventListener\(\s*['"]touchend['"]/);
+    });
+
+    it('dispatches to route-waypoint, TFR, and PIREP hit-tests', () => {
+        expect(MAP_SRC).toMatch(/_handleLayerTap\s*\(/);
+        expect(MAP_SRC).toMatch(/_wpMarkers/);
+        expect(MAP_SRC).toMatch(/_tfrShapes/);
+        expect(MAP_SRC).toMatch(/_pirepMarkers/);
+    });
+
+    it('does not remove or alter the existing _onTrafficTap method', () => {
+        expect(MAP_SRC).toMatch(/_onTrafficTap\(containerPt\)\s*\{/);
+    });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx vitest run tests/cockpit/map-layer-tap-dispatch.test.js`
+Expected: FAIL — `_handleLayerTap` doesn't exist yet, no new listeners registered.
+
+- [ ] **Step 3: Write minimal implementation**
+
+In the constructor (after the existing property block ending around `map.js:165`), add:
+
+```js
+this._layerTapStart = null;
+```
+
+In `init()`, insert after the `_guardedSetView` block (`map.js:224-228`, right before the `// Tile layers` comment at line 230):
+
+```js
+// Custom tap handler for route-waypoint / TFR / PIREP markers — Leaflet's
+// .on('click')/.bindPopup() are unreliable on Android tablets (see CLAUDE.md).
+const layerTapContainer = this.map.getContainer();
+this._onLayerTapStart = (e) => {
+    if (e.touches.length === 1) {
+        this._layerTapStart = { x: e.touches[0].clientX, y: e.touches[0].clientY, t: Date.now() };
+    } else {
+        this._layerTapStart = null;
+    }
+};
+this._onLayerTapEnd = (e) => {
+    if (!this._layerTapStart || e.changedTouches.length !== 1) { this._layerTapStart = null; return; }
+    const ts = this._layerTapStart; this._layerTapStart = null;
+    const dx = e.changedTouches[0].clientX - ts.x;
+    const dy = e.changedTouches[0].clientY - ts.y;
+    if (dx * dx + dy * dy > 400) return;       // >20px = drag
+    if (Date.now() - ts.t > 500) return;        // >500ms = long-press, not tap
+    this._handleLayerTap(e.changedTouches[0].clientX, e.changedTouches[0].clientY);
+};
+layerTapContainer.addEventListener('touchstart', this._onLayerTapStart, { capture: true, passive: true });
+layerTapContainer.addEventListener('touchend', this._onLayerTapEnd, { passive: true });
+```
+
+Add the dispatch + hit-test methods (place near `_onTrafficTap`, `map.js:1241`):
+
+```js
+_handleLayerTap(clientX, clientY) {
+    const rect = this.map.getContainer().getBoundingClientRect();
+    const containerPt = L.point(clientX - rect.left, clientY - rect.top);
+    const latlng = this.map.containerPointToLatLng(containerPt);
+
+    const wp = this._findNearestPointMarker(this._wpMarkers.map(m => ({ marker: m })), containerPt, 30);
+    if (wp) { wp.marker.fire('click'); return; }
+
+    for (const shape of this._tfrShapes.values()) {
+        if (shape instanceof L.Circle) {
+            if (shape.getLatLng().distanceTo(latlng) <= shape.getRadius()) { shape.openPopup(); return; }
+        } else if (shape instanceof L.Polygon) {
+            // Leaflet nests polygon rings even for a simple flat-array input —
+            // verify this against the real vendored Leaflet build during Step 5.
+            const ring = shape.getLatLngs()[0];
+            const pts = ring.map(ll => [ll.lat, ll.lng]);
+            if (CockpitMap._pointInPolygon(latlng.lat, latlng.lng, pts)) { shape.openPopup(); return; }
+        } else if (shape instanceof L.Marker) {
+            const pt = this.map.latLngToContainerPoint(shape.getLatLng());
+            if (containerPt.distanceTo(pt) < 30) { shape.openPopup(); return; }
+        }
+    }
+
+    const pirep = this._findNearestPointMarker(
+        [...this._pirepMarkers.values()].map(m => ({ marker: m })), containerPt, 30);
+    if (pirep) { pirep.marker.openPopup(); return; }
+}
+
+_findNearestPointMarker(entries, containerPt, maxPx) {
+    let best = null, bestDist = maxPx;
+    for (const entry of entries) {
+        const pt = this.map.latLngToContainerPoint(entry.marker.getLatLng());
+        const dist = containerPt.distanceTo(pt);
+        if (dist < bestDist) { bestDist = dist; best = entry; }
+    }
+    return best;
+}
+
+// Ray-casting point-in-polygon for [lat, lon] pairs — same proven algorithm as
+// fisb-weather.js's static _pointInPolygon, duplicated here rather than adding
+// a cross-file dependency (no shared geo-utils.js exists on main yet).
+static _pointInPolygon(lat, lon, points) {
+    let inside = false;
+    const n = points.length;
+    for (let i = 0, j = n - 1; i < n; j = i++) {
+        const [yi, xi] = points[i];
+        const [yj, xj] = points[j];
+        if (((yi > lat) !== (yj > lat)) && (lon < (xj - xi) * (lat - yi) / (yj - yi) + xi)) {
+            inside = !inside;
+        }
+    }
+    return inside;
+}
+```
+
+Note on the route-waypoint branch: it calls `wp.marker.fire('click')` rather than duplicating the existing click handler's logic, so the one real behavior (opening the airport popup, `map.js:1408-1411`) stays defined in exactly one place. Confirm `L.Marker`/`L.CircleMarker`'s `.fire('click')` actually invokes a handler registered via `.on('click', ...)` — this is standard Leaflet event-emitter behavior and should work, but verify in Step 5 rather than assuming.
+
+In `destroy()`, add before the existing `if (this.map) { this.map.remove(); ... }` block (`map.js:322`):
+
+```js
+if (this._onLayerTapStart && this.map) {
+    this.map.getContainer().removeEventListener('touchstart', this._onLayerTapStart, { capture: true });
+    this.map.getContainer().removeEventListener('touchend', this._onLayerTapEnd);
+    this._onLayerTapStart = null;
+    this._onLayerTapEnd = null;
+}
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `npx vitest run tests/cockpit/map-layer-tap-dispatch.test.js`
+Expected: PASS
+
+- [ ] **Step 5: Required manual on-device verification**
+
+This is not optional — the automated test in Step 1 only confirms the code exists, not that it works. On-device or in a real browser (not jsdom):
+1. Load a route with at least 2 waypoints; tap a route waypoint marker (not an airport/navaid marker underneath it) — confirm the airport popup opens, same as before this change.
+2. Enable a TFR overlay with at least one polygon-shaped TFR (or simulate via `tools/mock-stratux.py`); tap inside the polygon (not just on its border) — confirm its popup opens. Tap well outside it — confirm nothing opens.
+3. If a circle-shaped TFR is available (radius-only, no polygon points), tap inside and outside its visible circle — confirm correct open/no-open.
+4. Enable PIREPs; tap a PIREP marker — confirm its popup opens.
+5. **Explicitly confirm the existing traffic-tap and normal airport/navaid/fix tap behavior still work** (this task adds a second, independent listener pair on the same container — confirm the two don't interfere with each other, e.g. a single tap doesn't double-fire or get swallowed).
+
+Record the result (pass/fail per sub-case) — do not report this task complete without having actually run through these five checks.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add web/cockpit/map.js tests/cockpit/map-layer-tap-dispatch.test.js
+git commit -m "fix(#52,#53): custom tap handler for route-waypoint, TFR, and PIREP markers in CockpitMap"
+```
+
+---
+
+## Task 4: SUA polygon tap fix in VectorMapLayers (closes 1 of 6 spots in #53)
+
+**Files:**
+- Modify: `web/cockpit/vector-map-layers.js` (`_onMapClick` fallback chain, SUA polygon construction ~1062-1114)
+- Test: `tests/cockpit/vector-map-layers-sua-tap.test.js` (new, source-inspection style)
+
+**Interfaces:**
+- Consumes: `this._suaPolygons` (existing `Map` keyed by `sua.id`, already populated at `vector-map-layers.js:1087`).
+- Produces: nothing new externally — extends the existing `_onMapClick` dispatch that `VectorMapLayers` already owns (no new listener needed; this class already has a working touchstart/touchend pipeline, per its constructor lines 109-143).
+
+**Context:** `VectorMapLayers` already runs a two-pass hit-test (`_findNearestMarker` at 30px, then 60px) inside `_onMapClick` before falling through to `_onTrafficTap`. SUA polygons currently just call `polygon.bindPopup(popupHtml, ...)` (`vector-map-layers.js:1084`) with no tap wiring at all. Add a SUA ray-cast check to the same dispatch chain, using the identical duplicated `_pointInPolygon` approach as Task 3 (same reasoning: no shared `geo-utils.js` on `main` yet).
+
+- [ ] **Step 1: Write the failing test**
+
+```js
+// tests/cockpit/vector-map-layers-sua-tap.test.js
+import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'fs';
+
+const SRC = readFileSync('web/cockpit/vector-map-layers.js', 'utf8');
+
+describe('VectorMapLayers SUA polygon tap dispatch', () => {
+    it('_onMapClick checks SUA polygons before falling through to traffic', () => {
+        const onMapClickStart = SRC.indexOf('_onMapClick(');
+        const onTrafficTapCall = SRC.indexOf('this._onTrafficTap(pt)');
+        const suaCheck = SRC.indexOf('_suaPolygons', onMapClickStart);
+        expect(suaCheck).toBeGreaterThan(onMapClickStart);
+        expect(suaCheck).toBeLessThan(onTrafficTapCall);
+    });
+
+    it('keeps a point-in-polygon helper available for SUA hit-testing', () => {
+        expect(SRC).toMatch(/_pointInPolygon\s*\(/);
+    });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx vitest run tests/cockpit/vector-map-layers-sua-tap.test.js`
+Expected: FAIL — no `_suaPolygons` reference inside `_onMapClick` today, no `_pointInPolygon` helper in this file.
+
+- [ ] **Step 3: Write minimal implementation**
+
+Read `_onMapClick` in full (`vector-map-layers.js:1619-1664` per plan-time research) before editing, to insert correctly relative to the existing two-pass marker check and the `_onTrafficTap` fallback at the end. Add, after the second (60px) marker-search pass and before the `_onTrafficTap(pt)` fallback call:
+
+```js
+for (const polygon of this._suaPolygons.values()) {
+    const latlngs = polygon.getLatLngs()[0]; // Leaflet nests polygon rings — verify in Step 5
+    const pts = latlngs.map(ll => [ll.lat, ll.lng]);
+    if (VectorMapLayers._pointInPolygon(e.latlng.lat, e.latlng.lng, pts)) {
+        polygon.openPopup();
+        return;
+    }
+}
+```
+
+Add the static helper (same algorithm as `fisb-weather.js:_pointInPolygon` and Task 3's `CockpitMap._pointInPolygon` — duplicated per-class rather than shared, consistent with this task's own reasoning above):
+
+```js
+static _pointInPolygon(lat, lon, points) {
+    let inside = false;
+    const n = points.length;
+    for (let i = 0, j = n - 1; i < n; j = i++) {
+        const [yi, xi] = points[i];
+        const [yj, xj] = points[j];
+        if (((yi > lat) !== (yj > lat)) && (lon < (xj - xi) * (lat - yi) / (yj - yi) + xi)) {
+            inside = !inside;
+        }
+    }
+    return inside;
+}
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `npx vitest run tests/cockpit/vector-map-layers-sua-tap.test.js`
+Expected: PASS
+
+- [ ] **Step 5: Required manual on-device verification**
+
+Enable the SUA layer (off by default per `cockpit-config.json`). Tap inside a rendered SUA polygon — confirm its popup opens. Tap outside it, and confirm normal airport/navaid/fix taps still work unaffected (this shares the existing pipeline, so a regression here would be more consequential than Task 3's new one — test airport tap explicitly, per CLAUDE.md's Tap Handler Regression Rule).
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add web/cockpit/vector-map-layers.js tests/cockpit/vector-map-layers-sua-tap.test.js
+git commit -m "fix(#53): add tap hit-testing for SUA polygons"
+```
+
+---
+
+## Task 5: Wind/METAR, PIREP, and NOTAM marker tap fix in FisbWeatherDisplay (closes remaining 3 of 6 spots in #53)
+
+**Files:**
+- Modify: `web/cockpit/fisb-weather.js` (`_handleAdvisoryTap` ~387-417, marker construction at ~255/607/961)
+- Test: `tests/cockpit/fisb-weather-marker-tap.test.js` (new, source-inspection style)
+
+**Interfaces:**
+- Consumes: `this._windMarkers`, `this._pirepMarkers`, `this._notamMarkers` (existing collections — note `_windMarkers` is a `Map` keyed by station, `_pirepMarkers`/`_notamMarkers` are arrays of `{marker, ...}` objects, per plan-time research — do not conflate these with `CockpitMap`'s separately-named, differently-shaped `_pirepMarkers` `Map` from Task 3; they are different classes' own properties).
+- Produces: nothing new externally — extends the existing `_handleAdvisoryTap`, which `FisbWeatherDisplay` already owns a touchstart/touchend pipeline for (no new listener needed).
+
+**Context:** `_handleAdvisoryTap` currently only checks polygon-shaped advisories (SIGMET/AIRMET/CWA). Wind/METAR, PIREP, and NOTAM markers in this same class still use plain `.bindPopup()` with zero tap wiring. Extend the same method to also do a pixel-distance check against these three marker collections when no polygon is hit.
+
+- [ ] **Step 1: Write the failing test**
+
+```js
+// tests/cockpit/fisb-weather-marker-tap.test.js
+import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'fs';
+
+const SRC = readFileSync('web/cockpit/fisb-weather.js', 'utf8');
+
+describe('FisbWeatherDisplay marker tap dispatch', () => {
+    it('_handleAdvisoryTap also checks wind/PIREP/NOTAM markers', () => {
+        const methodStart = SRC.indexOf('_handleAdvisoryTap(');
+        const methodBody = SRC.slice(methodStart, methodStart + 2000);
+        expect(methodBody).toMatch(/_windMarkers/);
+        expect(methodBody).toMatch(/_pirepMarkers/);
+        expect(methodBody).toMatch(/_notamMarkers/);
+    });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx vitest run tests/cockpit/fisb-weather-marker-tap.test.js`
+Expected: FAIL — `_handleAdvisoryTap` today only references polygon collections.
+
+- [ ] **Step 3: Write minimal implementation**
+
+Read `_handleAdvisoryTap` in full (`fisb-weather.js:387-417`) before editing. After the existing polygon-hit check (the `if (hits.length) this._openAdvisoryPopup(...)` block) and before the method returns with no hit, add a marker pixel-distance fallback. This method receives `clientX, clientY` (screen coordinates) and already computes `rect`/`latlng` internally — reuse `rect` to get a container point for pixel-distance marker checks, since the existing polygon path is lat/lon-based but marker hit-testing (matching every other marker-tap precedent in this repo) should be pixel-distance-based:
+
+```js
+const containerPt = L.point(clientX - rect.left, clientY - rect.top);
+const markerHit = (map) => {
+    let best = null, bestDist = 30;
+    for (const entry of map instanceof Map ? map.values() : map) {
+        const marker = entry.marker || entry; // _windMarkers stores markers directly; PIREP/NOTAM store {marker, ...}
+        const pt = this._map.latLngToContainerPoint(marker.getLatLng());
+        const dist = containerPt.distanceTo(pt);
+        if (dist < bestDist) { bestDist = dist; best = marker; }
+    }
+    return best;
+};
+const windHit = markerHit(this._windMarkers);
+if (windHit) { windHit.openPopup(); return; }
+const pirepHit = markerHit(this._pirepMarkers);
+if (pirepHit) { pirepHit.openPopup(); return; }
+const notamHit = markerHit(this._notamMarkers);
+if (notamHit) { notamHit.openPopup(); return; }
+```
+
+Place this immediately after the existing `if (hits.length) { this._openAdvisoryPopup(hits, clientX, clientY); }` line, before the method implicitly returns.
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `npx vitest run tests/cockpit/fisb-weather-marker-tap.test.js`
+Expected: PASS
+
+- [ ] **Step 5: Required manual on-device verification**
+
+With FIS-B data flowing (real or via `tools/mock-stratux.py` replay per `reference_mock_stratux` — see this repo's tooling), tap a wind-barb marker, a PIREP marker, and a NOTAM marker in turn — confirm each opens its popup. Confirm SIGMET/AIRMET polygon tapping (the already-working path) still works unaffected.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add web/cockpit/fisb-weather.js tests/cockpit/fisb-weather-marker-tap.test.js
+git commit -m "fix(#53): add tap hit-testing for wind, PIREP, and NOTAM markers"
+```
+
+---
+
+## Task 6: NASR-readiness guard in route-table.js's paste-route-string path (closes #10)
+
+**Files:**
+- Modify: `web/cockpit/route-table.js` (`_resolveToken` ~893-925, `_parseRouteString` ~927-989)
+- Test: `tests/cockpit/route-table-nasr-guard.test.js` (new)
+
+**Interfaces:**
+- Consumes: `this._nasrDb` (existing property, `null` until `setNasrDb(db)` is called — `route-table.js:90,113-116`).
+- Produces: nothing new externally.
+
+**Context (verified during planning):** `_resolveToken` has no guard on `this._nasrDb`. If it's `null`, every `this._nasrDb.getAirport(t)`-style call throws synchronously, which is swallowed by a bare `catch {}` (5 of them in this method) — so it silently returns `null` for every token, indistinguishable from "genuinely not found." `_parseRouteString` then renders `Not found: KLKR` via `this._resultsEl.innerHTML` (this file has no `_toast` method — confirmed by grep, zero matches). The sibling single-token method `_doSearch` (991-999) does guard (`if (!this._nasrDb) return;`) but fails **silently** with no message at all — a different, milder gap, not this task's target.
+
+- [ ] **Step 1: Write the failing test**
+
+Follow the `tests/cockpit/route-table-planning-guard.test.js` pattern exactly (confirmed during planning as the closest existing behavioral-test precedent for this file): `Object.create(RouteTable.prototype)` + manual field assignment, no real constructor call.
+
+```js
+// tests/cockpit/route-table-nasr-guard.test.js
+import { describe, it, expect, beforeEach } from 'vitest';
+import { readFileSync } from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const read = (p) => readFileSync(join(__dirname, '../../', p), 'utf8');
+const RouteTable = new Function(read('web/cockpit/route-table.js') + '\nreturn RouteTable;')();
+
+describe('_parseRouteString guards against a not-yet-loaded NASR database', () => {
+    let table;
+
+    beforeEach(() => {
+        table = Object.create(RouteTable.prototype);
+        table._nasrDb = null; // simulates NASR still loading
+        table._resultsEl = { innerHTML: '' };
+    });
+
+    it('shows a distinct "still loading" message instead of "Not found"', async () => {
+        await table._parseRouteString('KLKR');
+        expect(table._resultsEl.innerHTML).toMatch(/navigation database.*loading/i);
+        expect(table._resultsEl.innerHTML).not.toMatch(/Not found/);
+    });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx vitest run tests/cockpit/route-table-nasr-guard.test.js`
+Expected: FAIL — current code renders `Not found: KLKR` (or throws, depending on how far the un-guarded null-dereference propagates before being swallowed) rather than a "still loading" message.
+
+- [ ] **Step 3: Write minimal implementation**
+
+Read `_parseRouteString` in full (`route-table.js:927-989`) before editing. Add a guard at its start, before any tokens are resolved:
+
+```js
+if (!this._nasrDb) {
+    this._resultsEl.innerHTML = '<div class="route-search-empty">Navigation database still loading — try again in a moment</div>';
+    return;
+}
+```
+
+This mirrors the existing `route-planner-panel.js:_onAddTap` guard (`if (type !== 'direct' && !this._nasrDb) { this._toast('Navigation database still loading — try again in a moment', 3500); return; }`) — same message text, adapted to this file's `_resultsEl.innerHTML` presentation instead of a toast (route-table.js has no `_toast` method).
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `npx vitest run tests/cockpit/route-table-nasr-guard.test.js`
+Expected: PASS
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add web/cockpit/route-table.js tests/cockpit/route-table-nasr-guard.test.js
+git commit -m "fix(#10): guard paste-route-string parsing against NASR not yet loaded"
+```
+
+---
+
+## Task 7: Real-flight verification of #104's shipped hardening (not a code task)
+
+**Files:** none — this task produces a verification record, not code.
+
+**Context:** #104 ("Intermittent data gaps in flight recordings") already has real hardening shipped: a 2-minute data-gap auto-stop with 10-second freshness gating in `web/cockpit/flight-recorder.js` (`_gapTimer`, confirmed live at plan-writing time), plus half-open-WebSocket detection and reconnect-race fixes in `engine-client.js`/`stratux-client.js`. This is mitigation of the described symptoms, not a fix to the underlying WiFi/environmental cause, and nothing has re-verified it against real flight data since — the original issue was based on a 6-flight sample showing gaps.
+
+This can't be closed by writing more code; it needs actual flight data. This task is a checklist, not a diff.
+
+- [ ] **Step 1: Confirm the baseline to compare against**
+
+Read the original issue #104 in full (`gh issue view 104`) and locate the 6-flight sample it references (check `engine-monitor/` or wherever flight recordings are archived, per this repo's data locations) — note exact flight dates/files and what gap pattern each showed (duration, frequency), so the post-fix comparison is apples-to-apples.
+
+- [ ] **Step 2: Fly with the current build and capture recordings**
+
+Fly at least 2-3 flights (more if the original gaps were infrequent — matching or exceeding the original 6-flight sample size is the honest bar) with the current app build (confirm the build actually includes the `_gapTimer`/half-open-detection commits — check `FLYTAB_VERSION` against the commit history, don't assume). Use normal WiFi/network conditions, not a specially clean environment — the point is to see if real-world intermittency still produces gaps.
+
+- [ ] **Step 3: Compare gap patterns**
+
+For each new flight recording, check for: (a) any gap at all, (b) if present, whether it now shows as a clean stop/resume (the intended new behavior) rather than the old "duplicate rows then silent gap" pattern the original issue described. Compare gap frequency/duration against the Step 1 baseline.
+
+- [ ] **Step 4: Decide and act on the result**
+
+If gaps are meaningfully reduced and/or now show the clean stop/resume pattern: close #104 with a comment citing the specific flights/dates compared and the observed improvement — be specific, not just "seems better." If gaps persist unchanged: leave #104 open, and add a comment with the new data so the next person doesn't have to redo this comparison from scratch — this is genuinely useful even if the answer isn't "it's fixed."
+
+---
+
+## Self-Review
+
+**Spec coverage:** All 5 issues covered — #112 (Tasks 1-2), #52 (Task 3), #53 (Tasks 3-5, all 6 flagged spots), #10 (Task 6), #104 (Task 7).
+
+**Placeholder scan:** No TBD/TODO markers. Two spots are flagged as implementer-must-verify rather than asserted as fact (Task 1's bundle-source location, Task 3/4's Leaflet `getLatLngs()` nesting depth) — these are honest uncertainty flags with a concrete verification instruction attached, not vague hand-waves, per this repo's own "flag uncertainty explicitly" convention.
+
+**Type consistency:** `_pointInPolygon(lat, lon, points)` signature matches across Task 3, Task 4, and the original `fisb-weather.js` reference exactly. `_handleLayerTap`/`_findNearestPointMarker` (Task 3) and the SUA/marker-check additions (Tasks 4-5) are each scoped to their own class — no naming collisions checked: `CockpitMap._pointInPolygon` (Task 3) and `VectorMapLayers._pointInPolygon` (Task 4) are same-named static methods on different classes, which is fine (no shared namespace), not a bug.
+
+**No cross-task dependencies** — all 7 tasks can run in any order, including in parallel via subagent-driven-development, **except** Tasks 3, 4, and 5 all touch files that sit on the same shared Leaflet map container; while they don't edit the same files, running their manual-verification steps (5 in each) together at the end rather than one at a time is more efficient and would also catch any interaction between the three independent touch pipelines they collectively produce.
