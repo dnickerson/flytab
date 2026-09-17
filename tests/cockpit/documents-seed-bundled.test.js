@@ -71,4 +71,17 @@ describe('DocumentsPanel bundled-legend seeding', () => {
         await expect(panel._seedBundledDocuments()).resolves.not.toThrow();
         expect(savedDocs.length).toBe(0);
     });
+
+    // Fix round 1: the existing.some() dedup check's own read was the one
+    // step in this method not covered by any try/catch -- a rejection here
+    // (this repo has a documented IDB transaction-hang failure mode) would
+    // otherwise propagate out of the memoized promise and surface as an
+    // unhandled rejection off the unawaited _buildDOM() call site, which
+    // this method's own doc comment already promises never happens.
+    it('fails open (no crash, no seeded docs) if getAllDocuments itself rejects', async () => {
+        nasrDb.getAllDocuments = vi.fn().mockRejectedValue(new Error('IDB transaction hang'));
+        const panel = new DocumentsPanel(nasrDb);
+        await expect(panel._seedBundledDocuments()).resolves.not.toThrow();
+        expect(savedDocs.length).toBe(0);
+    });
 });

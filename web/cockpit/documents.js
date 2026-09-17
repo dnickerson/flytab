@@ -236,7 +236,19 @@ class DocumentsPanel {
             { path: 'vfr-chart-legend.pdf', name: 'VFR Chart Legend.pdf' },
             { path: 'ifr-chart-legend.pdf', name: 'IFR Chart Legend.pdf' },
         ];
-        const existing = await this._nasrDb.getAllDocuments();
+        let existing;
+        try {
+            existing = await this._nasrDb.getAllDocuments();
+        } catch (err) {
+            // Fails open, same as every other failure mode in this method
+            // (see the doc comment above) -- an IDB read failure here (this
+            // repo has a documented IDB transaction-hang failure mode) must
+            // not become an unhandled rejection off the unawaited _buildDOM()
+            // call site. Nothing to import yet, so there's nothing to retry
+            // here; the next app launch tries again from scratch.
+            console.warn('[Documents] Failed to seed bundled legends', err.message);
+            return;
+        }
         for (const item of BUNDLED) {
             if (existing.some(d => d.type === 'bundled' && d.name === item.name)) continue;
             try {
