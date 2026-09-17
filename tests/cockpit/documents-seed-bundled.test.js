@@ -15,6 +15,11 @@ global.wireTap = (el, handler) => { if (el) el.addEventListener('click', handler
 if (typeof URL.createObjectURL !== 'function') URL.createObjectURL = () => 'blob:mock-url';
 if (typeof URL.revokeObjectURL !== 'function') URL.revokeObjectURL = () => {};
 global.lunr = new Function(read('web/lib/lunr.min.js') + '\nreturn lunr;')();
+// _buildDOM() now wires pinch-to-zoom via attachPinchZoom (web/shared/pinch-zoom.js)
+// as a bare identifier, same mechanism as the lunr/wireTap stubs above -- see
+// documents-panel.test.js for the fuller explanation of why the real
+// implementation is loaded rather than a stub.
+global.attachPinchZoom = new Function(read('web/shared/pinch-zoom.js') + '\nreturn attachPinchZoom;')();
 const DocumentsPanel = new Function(read('web/cockpit/documents.js') + '\nreturn DocumentsPanel;')();
 
 describe('DocumentsPanel bundled-legend seeding', () => {

@@ -6,6 +6,11 @@ import { dirname, join } from 'path';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const read = (p) => readFileSync(join(__dirname, '../../', p), 'utf8');
 global.wireTap = (el, handler) => { if (el) el.addEventListener('click', handler); };
+// _buildDOM() now wires pinch-to-zoom via attachPinchZoom (web/shared/pinch-zoom.js)
+// as a bare identifier, same mechanism as the wireTap stub above -- see
+// documents-panel.test.js for the fuller explanation of why the real
+// implementation is loaded rather than a stub.
+global.attachPinchZoom = new Function(read('web/shared/pinch-zoom.js') + '\nreturn attachPinchZoom;')();
 const DocumentsPanel = new Function(read('web/cockpit/documents.js') + '\nreturn DocumentsPanel;')();
 
 function makeQuotaError() {

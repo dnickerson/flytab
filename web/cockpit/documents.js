@@ -11,6 +11,7 @@ class DocumentsPanel {
         this._el = null;
         this._listEl = null;
         this._viewerEl = null;
+        this._panZoom = null; // set in _buildDOM via attachPinchZoom
         this._searchInput = null;
         // Promise-chain queue serializing every read-modify-write of the
         // shared 'documents_search_index' app_cache entry -- see _queueIndexOp.
@@ -39,10 +40,18 @@ class DocumentsPanel {
                 <input type="search" class="documents-search-input" placeholder="Search documents…" autocomplete="off">
             </div>
             <div class="documents-list"></div>
-            <div class="documents-viewer"></div>
+            <div class="documents-viewer"><div class="documents-pan-container"></div></div>
         `;
         this._listEl = this._el.querySelector('.documents-list');
         this._viewerEl = this._el.querySelector('.documents-viewer');
+        this._panContainer = this._viewerEl.querySelector('.documents-pan-container');
+        // panAlways:true -- unlike the plate viewer (single image/canvas set,
+        // native single-finger swipe reserved for next/prev plate navigation),
+        // this viewer stacks a full multi-page PDF and has no native scroll to
+        // fall back on once touch-action:none takes over (see CSS) -- a single
+        // finger must pan at any zoom level, including the 1x default, or a
+        // multi-page document would be unreachable past the first screenful.
+        this._panZoom = attachPinchZoom(this._viewerEl, this._panContainer, { panAlways: true });
         wireTap(this._el.querySelector('.documents-close'), () => this.hide());
         this._searchInput = this._el.querySelector('.documents-search-input');
         this._searchInput.addEventListener('input', () => this._applySearch(this._searchInput.value));
@@ -227,16 +236,33 @@ class DocumentsPanel {
     }
 
     async _openDocument(doc, pageNum) {
-        this._viewerEl.innerHTML = '';
+        this._panContainer.innerHTML = '';
         this._viewerEl.style.display = '';
+        // Reset zoom/pan before rendering the new document -- otherwise a
+        // pilot who zoomed/panned the previous document would land on this
+        // one already zoomed in on an unrelated part of the page.
+        this._panZoom.reset();
         const url = URL.createObjectURL(doc.blob);
-        const wrapper = await renderPdfToContainer(url, this._viewerEl, { cssClass: 'documents-pdf' });
+        const wrapper = await renderPdfToContainer(url, this._panContainer, { cssClass: 'documents-pdf' });
         URL.revokeObjectURL(url);
-        // Search results match a specific page -- scroll straight to it
-        // instead of always landing on page 1. wrapper's children are the
-        // per-page <canvas> elements in page order (see renderPdfToContainer).
+        // Search results match a specific page -- jump straight to it instead
+        // of always landing on page 1. wrapper's children are the per-page
+        // <canvas> elements in page order (see renderPdfToContainer).
+        //
+        // This used to be wrapper.children[pageNum-1].scrollIntoView(), which
+        // relied on .documents-viewer being a native overflow-y:auto scroll
+        // container. It no longer is one -- panAlways:true (above) replaces
+        // native scroll with a JS-driven transform on .documents-pan-container
+        // (touch-action:none, see CSS), so there is no scrollable ancestor
+        // left for scrollIntoView to act on; it would silently no-op. Pan
+        // there directly instead: offsetTop is relative to .documents-pan-
+        // container (the nearest position:relative ancestor -- .documents-pdf
+        // itself is position:static), and scale is guaranteed to be exactly 1
+        // here (just reset above), so no scale compensation is needed when
+        // converting an offsetTop distance into a ty translation.
         if (pageNum && wrapper?.children[pageNum - 1]) {
-            wrapper.children[pageNum - 1].scrollIntoView();
+            this._panZoom.state.ty = -wrapper.children[pageNum - 1].offsetTop;
+            this._panZoom.apply();
         }
     }
 

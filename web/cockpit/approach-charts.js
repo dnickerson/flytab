@@ -40,7 +40,7 @@ class ApproachCharts {
         this._plates = [];
         this._plateIdx = 0;
         this._loadPromise = null;
-        this._pz = { scale: 1, tx: 0, ty: 0 }; // pan/zoom state
+        this._panZoom = null; // set in _buildDOM via attachPinchZoom
         this._pickerShownAt = 0; // timestamp guard against synthetic click ghost-taps
 
         // Map overlay
@@ -523,87 +523,12 @@ class ApproachCharts {
 
     _setupPanZoom() {
         const body = this._viewerEl.querySelector('.approach-viewer-body');
-        const container = this._panContainer;
-        const pz = this._pz;
-
-        let lastDist = 0;
-        let pinching = false;
-        let panStartX = 0, panStartY = 0, panBaseTx = 0, panBaseTy = 0;
-        let lastTap = 0;
-
-        const apply = () => {
-            container.style.transform = `translate(${pz.tx}px, ${pz.ty}px) scale(${pz.scale})`;
-            this._renderOwnship();
-        };
-
-        body.addEventListener('touchstart', (e) => {
-            if (e.touches.length === 2) {
-                pinching = true;
-                lastDist = Math.hypot(
-                    e.touches[0].clientX - e.touches[1].clientX,
-                    e.touches[0].clientY - e.touches[1].clientY
-                );
-            } else if (e.touches.length === 1) {
-                pinching = false;
-                panStartX = e.touches[0].clientX;
-                panStartY = e.touches[0].clientY;
-                panBaseTx = pz.tx;
-                panBaseTy = pz.ty;
-            }
-        }, { passive: true });
-
-        body.addEventListener('touchmove', (e) => {
-            if (e.touches.length === 2) {
-                const dist = Math.hypot(
-                    e.touches[0].clientX - e.touches[1].clientX,
-                    e.touches[0].clientY - e.touches[1].clientY
-                );
-                const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
-                const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
-
-                const newScale = Math.max(0.8, Math.min(8, pz.scale * (dist / lastDist)));
-                const factor = newScale / pz.scale;
-
-                // Scale around pinch midpoint — focal point stays fixed
-                const rect = container.getBoundingClientRect();
-                pz.tx += (midX - rect.left) * (1 - factor);
-                pz.ty += (midY - rect.top) * (1 - factor);
-                pz.scale = newScale;
-                lastDist = dist;
-                apply();
-            } else if (e.touches.length === 1 && !pinching && pz.scale > 1.05) {
-                pz.tx = panBaseTx + (e.touches[0].clientX - panStartX);
-                pz.ty = panBaseTy + (e.touches[0].clientY - panStartY);
-                apply();
-            }
-        }, { passive: true });
-
-        body.addEventListener('touchend', (e) => {
-            if (e.touches.length === 0) {
-                pinching = false;
-                // Snap back if over-pinched
-                if (pz.scale < 1) {
-                    pz.scale = 1; pz.tx = 0; pz.ty = 0;
-                    apply();
-                }
-                // Double-tap to reset zoom
-                const now = Date.now();
-                if (now - lastTap < 350) {
-                    pz.scale = 1; pz.tx = 0; pz.ty = 0;
-                    apply();
-                }
-                lastTap = now;
-            }
-        });
+        this._panZoom = attachPinchZoom(body, this._panContainer, { onApply: () => this._renderOwnship() });
+        this._pz = this._panZoom.state;
     }
 
     _resetPanZoom() {
-        this._pz.scale = 1;
-        this._pz.tx = 0;
-        this._pz.ty = 0;
-        if (this._panContainer) {
-            this._panContainer.style.transform = '';
-        }
+        this._panZoom?.reset();
     }
 
     _buildPicker(focusIcao) {

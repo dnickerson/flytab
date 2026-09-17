@@ -17,6 +17,11 @@ global.wireTap = (el, handler) => { if (el) el.addEventListener('click', handler
 if (typeof URL.createObjectURL !== 'function') URL.createObjectURL = () => 'blob:mock-url';
 if (typeof URL.revokeObjectURL !== 'function') URL.revokeObjectURL = () => {};
 global.lunr = new Function(read('web/lib/lunr.min.js') + '\nreturn lunr;')();
+// _buildDOM() now wires pinch-to-zoom via attachPinchZoom (web/shared/pinch-zoom.js)
+// as a bare identifier, same mechanism as the lunr/wireTap stubs above -- load the
+// real implementation so _openDocument's reset()/state.ty pan-to-page assertions
+// below exercise actual behavior, not a hand-rolled approximation.
+global.attachPinchZoom = new Function(read('web/shared/pinch-zoom.js') + '\nreturn attachPinchZoom;')();
 const DocumentsPanel = new Function(read('web/cockpit/documents.js') + '\nreturn DocumentsPanel;')();
 
 function mockPdfjs(pageTexts) {
@@ -129,18 +134,24 @@ describe('DocumentsPanel import + search', () => {
         expect(openedWith).toBeUndefined(); // opening from the plain list is always page 1 (no scroll)
     });
 
-    // Fix 2, other half: _openDocument itself must scroll to the requested
-    // page. Stubs the shared renderPdfToContainer global (documents.js calls
-    // it as a bare identifier, same mechanism as the wireTap/lunr stubs
-    // above) so this can assert on scrollIntoView without real PDF.js
-    // rendering.
-    it('_openDocument scrolls to the given page when a pageNum is provided', async () => {
-        const scrollSpies = [vi.fn(), vi.fn(), vi.fn()];
+    // Fix 2, other half, updated for the pinch-zoom refactor: _openDocument
+    // used to scroll to the requested page via wrapper.children[n].scrollIntoView(),
+    // which relied on .documents-viewer being a native overflow-y:auto scroll
+    // container. That container is now overflow:hidden with a JS-panned
+    // .documents-pan-container (attachPinchZoom, panAlways:true) instead --
+    // scrollIntoView has no scrollable ancestor left to act on. _openDocument
+    // now pans directly: state.ty = -offsetTop. jsdom does not compute real
+    // layout (offsetTop is always 0), so each canvas's offsetTop is stubbed
+    // via defineProperty here -- the same technique the old test used to stub
+    // scrollIntoView -- to give the assertion a real, non-trivial value to
+    // check against.
+    it('_openDocument pans to the given page when a pageNum is provided', async () => {
+        const offsets = [0, 850, 1690]; // simulated offsetTop for pages 1, 2, 3
         global.renderPdfToContainer = vi.fn().mockImplementation(async (url, containerEl) => {
             const wrapper = document.createElement('div');
-            for (const spy of scrollSpies) {
+            for (const offsetTop of offsets) {
                 const canvas = document.createElement('canvas');
-                canvas.scrollIntoView = spy;
+                Object.defineProperty(canvas, 'offsetTop', { value: offsetTop, configurable: true });
                 wrapper.appendChild(canvas);
             }
             containerEl.appendChild(wrapper);
@@ -150,17 +161,15 @@ describe('DocumentsPanel import + search', () => {
         const doc = { id: 'd1', name: 'checklist.pdf', blob: new Blob(['x'], { type: 'application/pdf' }) };
         await panel._openDocument(doc, 3);
 
-        expect(scrollSpies[2]).toHaveBeenCalledTimes(1); // page 3 -> children[2]
-        expect(scrollSpies[0]).not.toHaveBeenCalled();
-        expect(scrollSpies[1]).not.toHaveBeenCalled();
+        expect(panel._panZoom.state.ty).toBe(-1690); // page 3 -> children[2] -> offsetTop 1690
+        expect(panel._panZoom.state.scale).toBe(1); // reset() ran before the pan
     });
 
-    it('_openDocument does not scroll when no pageNum is given', async () => {
-        const scrollSpy = vi.fn();
+    it('_openDocument does not pan when no pageNum is given', async () => {
         global.renderPdfToContainer = vi.fn().mockImplementation(async (url, containerEl) => {
             const wrapper = document.createElement('div');
             const canvas = document.createElement('canvas');
-            canvas.scrollIntoView = scrollSpy;
+            Object.defineProperty(canvas, 'offsetTop', { value: 500, configurable: true });
             wrapper.appendChild(canvas);
             containerEl.appendChild(wrapper);
             return wrapper;
@@ -169,7 +178,33 @@ describe('DocumentsPanel import + search', () => {
         const doc = { id: 'd1', name: 'checklist.pdf', blob: new Blob(['x'], { type: 'application/pdf' }) };
         await panel._openDocument(doc);
 
-        expect(scrollSpy).not.toHaveBeenCalled();
+        expect(panel._panZoom.state.ty).toBe(0); // reset() leaves ty at 0; no pageNum means no further pan
+    });
+
+    // New pan/zoom wiring: opening a document must not leak zoom/pan state
+    // from whatever the pilot was previously looking at into the next
+    // document -- otherwise a pilot who zoomed into a chart legend would land
+    // on the next-opened POH already zoomed into an unrelated spot.
+    it('_openDocument resets zoom/pan state before rendering a new document', async () => {
+        global.renderPdfToContainer = vi.fn().mockImplementation(async (url, containerEl) => {
+            const wrapper = document.createElement('div');
+            const canvas = document.createElement('canvas');
+            Object.defineProperty(canvas, 'offsetTop', { value: 0, configurable: true });
+            wrapper.appendChild(canvas);
+            containerEl.appendChild(wrapper);
+            return wrapper;
+        });
+        // Simulate the pilot having zoomed/panned the previously open document.
+        panel._panZoom.state.scale = 2.5;
+        panel._panZoom.state.tx = 120;
+        panel._panZoom.state.ty = 340;
+
+        const doc = { id: 'd1', name: 'checklist.pdf', blob: new Blob(['x'], { type: 'application/pdf' }) };
+        await panel._openDocument(doc);
+
+        expect(panel._panZoom.state.scale).toBe(1);
+        expect(panel._panZoom.state.tx).toBe(0);
+        expect(panel._panZoom.state.ty).toBe(0);
     });
 
     // Final whole-branch review, Fix 7: fast typing can fire overlapping

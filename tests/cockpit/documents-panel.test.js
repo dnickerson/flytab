@@ -18,6 +18,11 @@ import { dirname, join } from 'path';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const read = (p) => readFileSync(join(__dirname, '../../', p), 'utf8');
 global.wireTap = (el, handler) => { if (el) el.addEventListener('click', handler); };
+// _buildDOM() now wires pinch-to-zoom via attachPinchZoom (web/shared/pinch-zoom.js)
+// as a bare identifier, same mechanism as the wireTap stub above -- load the real
+// implementation (not a stub) so construction and the pan/zoom-wiring tests below
+// exercise the actual reset/state semantics, not a hand-rolled approximation.
+global.attachPinchZoom = new Function(read('web/shared/pinch-zoom.js') + '\nreturn attachPinchZoom;')();
 const DocumentsPanel = new Function(read('web/cockpit/documents.js') + '\nreturn DocumentsPanel;')();
 
 describe('DocumentsPanel shell', () => {
@@ -37,6 +42,17 @@ describe('DocumentsPanel shell', () => {
             putAppCache: vi.fn().mockResolvedValue(undefined),
         };
         panel = new DocumentsPanel(nasrDb);
+    });
+
+    // Pinch-zoom refactor: _buildDOM() now wires attachPinchZoom onto the new
+    // .documents-pan-container nested inside .documents-viewer. Confirms
+    // construction doesn't throw (attachPinchZoom just calls addEventListener,
+    // which jsdom supports) and that the panel starts in the identity
+    // (unzoomed, unpanned) state.
+    it('wires pinch-zoom onto a pan-container nested inside the viewer, at rest', () => {
+        expect(panel._panContainer).toBeTruthy();
+        expect(panel._viewerEl.contains(panel._panContainer)).toBe(true);
+        expect(panel._panZoom.state).toEqual({ scale: 1, tx: 0, ty: 0 });
     });
 
     it('builds its DOM once at construction and appends to document.body', () => {

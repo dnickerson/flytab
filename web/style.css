@@ -4680,7 +4680,22 @@ body {
     border-radius: 8px;
     margin: 8px;
 }
-.documents-viewer { flex: 1; overflow-y: auto; }
+.documents-viewer {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.documents-pan-container {
+    position: relative;
+    display: inline-flex;
+    flex-direction: column;
+    transform-origin: 0 0;
+    touch-action: none;
+    flex-shrink: 0;
+}
 .documents-pdf {
     background: #fff;
 }
