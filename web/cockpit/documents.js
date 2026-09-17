@@ -206,6 +206,7 @@ class DocumentsPanel {
             await this._indexDocument(doc); // also writes to IndexedDB (the search index) — see context note on why this must be inside the same try
         } catch (err) {
             if (err?.name === 'QuotaExceededError') {
+                await this._renderList();
                 this._showMessage('Storage full — delete a document (🗑 next to a row) to import more.');
                 return;
             }
