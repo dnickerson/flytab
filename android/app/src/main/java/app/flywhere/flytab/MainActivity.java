@@ -31,6 +31,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(EngineWsPlugin.class);
         registerPlugin(StratuxUdpPlugin.class);
         registerPlugin(ShareReceiverPlugin.class);
+        registerPlugin(BundledAssetPlugin.class);
         super.onCreate(savedInstanceState);
 
         // Capture a share intent that launched a cold start (app not running).

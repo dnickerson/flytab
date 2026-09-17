@@ -60,6 +60,7 @@ class DocumentsPanel {
         });
         document.body.appendChild(this._el);
         this._checkPendingShare();
+        this._seedBundledDocuments();
         window.Capacitor?.Plugins?.App?.addListener('resume', () => this._checkPendingShare());
     }
 
@@ -198,11 +199,58 @@ class DocumentsPanel {
     // Shared entry point for every import path -- file-picker (this task),
     // share-intent (Task 5), and bundled-asset seeding (Task 6) all funnel
     // through here so persistence + indexing + list refresh stay in one place.
-    async _importFile(blob, name) {
-        const doc = { name, type: 'imported', sizeBytes: blob.size, blob };
+    async _importFile(blob, name, type = 'imported') {
+        const doc = { name, type, sizeBytes: blob.size, blob };
         await this._nasrDb.saveDocument(doc);
         await this._indexDocument(doc);
         await this._renderList();
+    }
+
+    // Seeds the two FAA chart-legend PDFs bundled into the APK
+    // (android/app/src/main/assets/) into the document store on first
+    // launch, so a pilot has them without manually importing. Reads via the
+    // native BundledAsset plugin (AssetManager -- see that plugin's doc
+    // comment for why not a file:// fetch) rather than a raw fetch, since
+    // this app's WebView runs at an http://localhost origin. Fails open
+    // (returns/continues silently) if the plugin is missing (browser dev
+    // build with no native bridge) or a read errors -- never blocks panel
+    // construction on this.
+    //
+    // Memoized (single-flight): _buildDOM() fires this once, unawaited, at
+    // construction. Without memoization, a second caller invoking this
+    // directly (production has no second call site today, but tests must
+    // call this explicitly to await/assert on it) would start an
+    // independent read-check-write pass against the same shared IDB-backed
+    // document store concurrently with the first -- the same class of race
+    // _queueIndexOp already guards against for the search-index cache,
+    // here applied to the existing.some() check below instead.
+    _seedBundledDocuments() {
+        if (!this._seedBundledDocumentsPromise) this._seedBundledDocumentsPromise = this._doSeedBundledDocuments();
+        return this._seedBundledDocumentsPromise;
+    }
+
+    async _doSeedBundledDocuments() {
+        const BundledAsset = window.Capacitor?.Plugins?.BundledAsset;
+        if (!BundledAsset) return; // e.g. running in a browser dev build with no native bridge
+        const BUNDLED = [
+            { path: 'vfr-chart-legend.pdf', name: 'VFR Chart Legend.pdf' },
+            { path: 'ifr-chart-legend.pdf', name: 'IFR Chart Legend.pdf' },
+        ];
+        const existing = await this._nasrDb.getAllDocuments();
+        for (const item of BUNDLED) {
+            if (existing.some(d => d.type === 'bundled' && d.name === item.name)) continue;
+            try {
+                const result = await BundledAsset.readAsset({ path: item.path });
+                if (!result?.ok) { console.warn('[Documents] Failed to seed bundled legend', item.name, result?.error); continue; }
+                const binary = atob(result.base64);
+                const bytes = new Uint8Array(binary.length);
+                for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+                const blob = new Blob([bytes], { type: 'application/pdf' });
+                await this._importFile(blob, item.name, 'bundled');
+            } catch (err) {
+                console.warn('[Documents] Failed to seed bundled legend', item.name, err.message);
+            }
+        }
     }
 
     // Serializes every read-modify-write of the single shared
