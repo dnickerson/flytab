@@ -6,13 +6,14 @@
  * navigation between different documents are NOT this function's concern —
  * callers layer those on top, exactly as approach-charts.js already does.
  */
-async function renderPdfToContainer(url, containerEl, { scale, cssClass } = {}) {
+async function renderPdfToContainer(url, containerEl, { scale, cssClass, errorLabel = 'document' } = {}) {
     const pdfjs = window.pdfjsLib;
     const wrapper = document.createElement('div');
     if (cssClass) wrapper.className = cssClass;
     containerEl.appendChild(wrapper);
     if (!pdfjs) {
-        wrapper.innerHTML = '<div class="pdf-render-error">PDF renderer unavailable</div>';
+        wrapper.style.cssText = 'color:var(--text-muted);padding:24px;text-align:center;';
+        wrapper.textContent = 'PDF renderer unavailable';
         return wrapper;
     }
     try {
@@ -28,7 +29,7 @@ async function renderPdfToContainer(url, containerEl, { scale, cssClass } = {}) 
             await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
         }
     } catch (err) {
-        wrapper.innerHTML = `<div class="pdf-render-error">Failed to load document: ${err.message}</div>`;
+        wrapper.innerHTML = `<div style="color:var(--status-warning);padding:24px">Failed to load ${errorLabel}: ${err.message}</div>`;
     }
     return wrapper;
 }

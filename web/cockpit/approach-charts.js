@@ -779,7 +779,7 @@ class ApproachCharts {
     async _renderPdf(url, body) {
         const prev = this._panContainer.querySelector('.approach-plate-pdf');
         if (prev) prev.remove();
-        await renderPdfToContainer(url, this._panContainer, { cssClass: 'approach-plate-pdf' });
+        await renderPdfToContainer(url, this._panContainer, { cssClass: 'approach-plate-pdf', errorLabel: 'plate' });
     }
 
     _navigate(direction) {
