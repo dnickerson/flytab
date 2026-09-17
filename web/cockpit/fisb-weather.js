@@ -80,7 +80,7 @@ class FisbWeatherDisplay {
             // the same map container this handler is registered on) --
             // otherwise tapping a popup's own dismiss/close control would
             // also fall through to this handler's advisory tap logic.
-            if (e.target?.closest?.('.leaflet-popup') || e.target?.closest?.('.airspace-alert-popup')) {
+            if (isTapOnMapOverlay(e.target)) {
                 this._tapStart = null;
                 return;
             }

@@ -116,7 +116,7 @@ class VectorMapLayers {
             // airspace alert, would also fire _onMapClick — surfacing the
             // underlying AIRMET or airport that happened to be at the tap
             // coordinates.
-            if (e.target?.closest?.('.leaflet-popup') || e.target?.closest?.('.airspace-alert-popup')) {
+            if (isTapOnMapOverlay(e.target)) {
                 this._tapStart = null;
                 return;
             }
