@@ -777,40 +777,9 @@ class ApproachCharts {
     }
 
     async _renderPdf(url, body) {
-        // Remove any previous PDF canvas
         const prev = this._panContainer.querySelector('.approach-plate-pdf');
         if (prev) prev.remove();
-
-        const pdfjs = window.pdfjsLib;
-        if (!pdfjs) {
-            const msg = document.createElement('div');
-            msg.className = 'approach-plate-pdf';
-            msg.style.cssText = 'color:var(--text-muted);padding:24px;text-align:center;';
-            this._panContainer.appendChild(msg);
-            msg.textContent = 'PDF renderer unavailable';
-            return;
-        }
-
-        // Append inside _panContainer so the existing pan/zoom transform applies
-        const container = document.createElement('div');
-        container.className = 'approach-plate-pdf';
-        this._panContainer.appendChild(container);
-
-        try {
-            const pdf = await pdfjs.getDocument(url).promise;
-            for (let p = 1; p <= pdf.numPages; p++) {
-                const page = await pdf.getPage(p);
-                const scale = (window.devicePixelRatio || 2);
-                const viewport = page.getViewport({ scale });
-                const canvas = document.createElement('canvas');
-                canvas.width = viewport.width;
-                canvas.height = viewport.height;
-                container.appendChild(canvas);
-                await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
-            }
-        } catch (err) {
-            container.innerHTML = `<div style="color:var(--status-warning);padding:24px">Failed to load plate: ${err.message}</div>`;
-        }
+        await renderPdfToContainer(url, this._panContainer, { cssClass: 'approach-plate-pdf' });
     }
 
     _navigate(direction) {
