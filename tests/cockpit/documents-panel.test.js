@@ -25,9 +25,17 @@ describe('DocumentsPanel shell', () => {
 
     beforeEach(() => {
         document.body.innerHTML = '';
-        nasrDb = { getAllDocuments: vi.fn().mockResolvedValue([
-            { id: 'd1', name: 'Sample POH.pdf', type: 'imported', sizeBytes: 1024, importedAt: '2026-09-17T00:00:00Z' },
-        ]) };
+        nasrDb = {
+            getAllDocuments: vi.fn().mockResolvedValue([
+                { id: 'd1', name: 'Sample POH.pdf', type: 'imported', sizeBytes: 1024, importedAt: '2026-09-17T00:00:00Z' },
+            ]),
+            // Task 4 added search-index cleanup to _deleteDocument, which reads/writes
+            // these via NasrDB.getAppCache/putAppCache -- stub them so the delete test
+            // below (which doesn't itself exercise indexing) doesn't hit a real
+            // "getAppCache is not a function" unhandled rejection off of this mock.
+            getAppCache: vi.fn().mockResolvedValue(null),
+            putAppCache: vi.fn().mockResolvedValue(undefined),
+        };
         panel = new DocumentsPanel(nasrDb);
     });
 

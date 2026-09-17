@@ -1,7 +1,9 @@
 /**
  * FlyTab — Document Library panel. Full-screen MORE-drawer page listing
  * imported + bundled reference documents (POHs, checklists, chart legends).
- * Import and search are added in a later task; this is the list/view shell.
+ * File-picker import extracts text per-page via PDF.js and feeds a single
+ * combined lunr.js index (spanning every imported document) that backs the
+ * top search box -- see _importFile/_indexDocument/_saveIndex/_applySearch.
  */
 class DocumentsPanel {
     constructor(nasrDb) {
@@ -9,6 +11,10 @@ class DocumentsPanel {
         this._el = null;
         this._listEl = null;
         this._viewerEl = null;
+        this._searchInput = null;
+        // Promise-chain queue serializing every read-modify-write of the
+        // shared 'documents_search_index' app_cache entry -- see _queueIndexOp.
+        this._indexQueue = Promise.resolve();
         this._buildDOM();
     }
 
@@ -17,8 +23,15 @@ class DocumentsPanel {
         this._el.className = 'documents-page';
         this._el.innerHTML = `
             <div class="documents-header">
-                <span class="documents-title">Documents</span>
+                <div class="documents-header-left">
+                    <span class="documents-title">Documents</span>
+                    <button class="documents-import-btn">Import</button>
+                    <input type="file" class="documents-file-input" accept="application/pdf" style="display:none">
+                </div>
                 <button class="documents-close" aria-label="Close">&times;</button>
+            </div>
+            <div class="documents-search-bar">
+                <input type="search" class="documents-search-input" placeholder="Search documents…" autocomplete="off">
             </div>
             <div class="documents-list"></div>
             <div class="documents-viewer"></div>
@@ -26,6 +39,14 @@ class DocumentsPanel {
         this._listEl = this._el.querySelector('.documents-list');
         this._viewerEl = this._el.querySelector('.documents-viewer');
         wireTap(this._el.querySelector('.documents-close'), () => this.hide());
+        this._searchInput = this._el.querySelector('.documents-search-input');
+        this._searchInput.addEventListener('input', () => this._applySearch(this._searchInput.value));
+        const fileInput = this._el.querySelector('.documents-file-input');
+        wireTap(this._el.querySelector('.documents-import-btn'), () => fileInput.click());
+        fileInput.addEventListener('change', async () => {
+            if (fileInput.files[0]) await this._importFile(fileInput.files[0], fileInput.files[0].name);
+            fileInput.value = '';
+        });
         document.body.appendChild(this._el);
     }
 
@@ -68,11 +89,19 @@ class DocumentsPanel {
         }
     }
 
-    // No search-index cleanup yet at this point in the build-up (Task 4
-    // adds indexing) -- extended there to also remove this document's pages
-    // from the search index once one exists.
+    // Also removes this document's pages from the shared search index --
+    // otherwise a stale search result would point at a document that no
+    // longer exists. Routed through _queueIndexOp, the same serialization
+    // point _indexDocument uses, so a delete racing an in-flight import
+    // can't corrupt the index.
     async _deleteDocument(doc) {
         await this._nasrDb.deleteDocument(doc.id);
+        await this._queueIndexOp(async () => {
+            const cache = await this._nasrDb.getAppCache('documents_search_index');
+            if (!cache) return;
+            const pages = cache.pages.filter(p => p.docId !== doc.id);
+            await this._saveIndex(pages);
+        });
         await this._renderList();
     }
 
@@ -82,5 +111,91 @@ class DocumentsPanel {
         const url = URL.createObjectURL(doc.blob);
         await renderPdfToContainer(url, this._viewerEl, { cssClass: 'documents-pdf' });
         URL.revokeObjectURL(url);
+    }
+
+    // Shared entry point for every import path -- file-picker (this task),
+    // share-intent (Task 5), and bundled-asset seeding (Task 6) all funnel
+    // through here so persistence + indexing + list refresh stay in one place.
+    async _importFile(blob, name) {
+        const doc = { name, type: 'imported', sizeBytes: blob.size, blob };
+        await this._nasrDb.saveDocument(doc);
+        await this._indexDocument(doc);
+        await this._renderList();
+    }
+
+    // Serializes every read-modify-write of the single shared
+    // 'documents_search_index' app_cache entry (see the concurrency note
+    // above) -- work runs only after every previously-queued op has settled,
+    // regardless of which caller queued it. Uses .then(work, work) so a
+    // prior failure doesn't permanently wedge the queue for later callers.
+    _queueIndexOp(work) {
+        this._indexQueue = this._indexQueue.then(work, work);
+        return this._indexQueue;
+    }
+
+    async _saveIndex(pages) {
+        const idx = lunr(function () {
+            this.ref('id');
+            this.field('text');
+            this.field('docName');
+            for (const page of pages) this.add(page);
+        });
+        await this._nasrDb.putAppCache('documents_search_index', { lunrIndexJSON: idx.toJSON(), pages });
+    }
+
+    async _indexDocument(doc) {
+        return this._queueIndexOp(async () => {
+            const pdfjs = window.pdfjsLib;
+            if (!pdfjs) return;
+            const url = URL.createObjectURL(doc.blob);
+            const cache = (await this._nasrDb.getAppCache('documents_search_index')) || { pages: [] };
+            // Drop any stale pages for this doc id (re-import/re-index case) before adding fresh ones.
+            let pages = cache.pages.filter(p => p.docId !== doc.id);
+            try {
+                const pdf = await pdfjs.getDocument(url).promise;
+                for (let p = 1; p <= pdf.numPages; p++) {
+                    // Awaited per-page, not one synchronous pass over every page --
+                    // avoids a long blocking JS execution on a large PDF (see this
+                    // repo's documented NASR-import IDB-hang failure mode).
+                    const page = await pdf.getPage(p);
+                    const content = await page.getTextContent();
+                    const text = content.items.map(item => item.str).join(' ');
+                    pages.push({ id: `${doc.id}:${p}`, docId: doc.id, pageNum: p, docName: doc.name, text });
+                }
+            } finally {
+                URL.revokeObjectURL(url);
+            }
+            await this._saveIndex(pages);
+        });
+    }
+
+    async _applySearch(query) {
+        if (!query) { this._renderList(); return; }
+        const cache = await this._nasrDb.getAppCache('documents_search_index');
+        if (!cache?.lunrIndexJSON) { this._listEl.innerHTML = '<div class="documents-empty">No results.</div>'; return; }
+        const idx = lunr.Index.load(cache.lunrIndexJSON);
+        const results = idx.search(query);
+        this._listEl.innerHTML = '';
+        if (results.length === 0) { this._listEl.innerHTML = '<div class="documents-empty">No results.</div>'; return; }
+        for (const result of results) {
+            const page = cache.pages.find(p => p.id === result.ref);
+            if (!page) continue;
+            // textContent, not innerHTML — page.docName traces back to a
+            // pilot-supplied or (for share-intent) another app's attacker-
+            // controlled display name (caught in plan review; this repo's own
+            // route-table.js:2350 already uses textContent for the same class
+            // of externally-sourced name, this was a deviation from precedent).
+            const row = document.createElement('div');
+            row.className = 'documents-row';
+            const nameSpan = document.createElement('span');
+            nameSpan.className = 'documents-row-name';
+            nameSpan.textContent = `${page.docName} — p.${page.pageNum}`;
+            row.appendChild(nameSpan);
+            wireTap(row, async () => {
+                const doc = await this._nasrDb.getDocument(page.docId);
+                if (doc) await this._openDocument(doc);
+            });
+            this._listEl.appendChild(row);
+        }
     }
 }
