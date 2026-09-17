@@ -97,6 +97,7 @@ class TabBar {
         if (c.enginePage?.visible) c.enginePage.hide();
         if (c.checklist?.hide) c.checklist.hide();
         if (c.logbook?.hide) c.logbook.hide();
+        c.documents?.hide();
         if (c.wxBriefing?.hide) c.wxBriefing.hide();
         if (c.ifrClearance?.hide) c.ifrClearance.hide();
         if (c.dataStatus?.hide) c.dataStatus.hide();
@@ -192,6 +193,10 @@ class TabBar {
             }},
             { icon: '📋', label: 'Logbook', action: () => {
                 if (c.logbook?.show) c.logbook.show();
+                this._closeMoreDrawer();
+            }},
+            { icon: '📄', label: 'Documents', action: () => {
+                if (c.documents?.show) c.documents.show();
                 this._closeMoreDrawer();
             }},
             { icon: '📤', label: 'Flight Upload', action: () => {
@@ -302,6 +307,7 @@ class TabBar {
      */
     static FS_OVERLAY_SELECTORS = [
         '.fuel-overlay', '.wb-overlay', '.wx-briefing-page', '.logbook-page',
+        '.documents-page',
         '.data-status-page', '.config-editor-page', '.approach-picker',
         '.approach-viewer', '.radar-page', '.engine-page-overlay',
         '.checklist-page', '.clr-overlay', '.fisb-status-page', '.ps-overlay',

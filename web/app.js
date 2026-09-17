@@ -68,6 +68,7 @@ class FlyTabApp {
         this.enginePage = null;
         this.flightSync = null;
         this.logbook = null;
+        this.documents = null;
         this.flightUpload = null;
         this.radarLoop = null;
         this.approachCharts = null;
@@ -648,6 +649,11 @@ class FlyTabApp {
             this.cockpitMap.setLogbook(this.logbook);
         }
 
+        // Document library (POHs, checklists, chart legends)
+        if (typeof DocumentsPanel !== 'undefined') {
+            this.documents = new DocumentsPanel(nasrDb);
+        }
+
         // Flight Upload panel
         if (typeof FlightUpload !== 'undefined') {
             this.flightUpload = new FlightUpload();
@@ -923,6 +929,7 @@ class FlyTabApp {
                 enginePage: this.enginePage,
                 checklist: this.checklist,
                 logbook: this.logbook,
+                documents: this.documents,
                 approachCharts: this.approachCharts,
                 fuelOverlay: this.fuelOverlay,
                 dataStatus: this.dataStatus,
