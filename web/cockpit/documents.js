@@ -44,8 +44,19 @@ class DocumentsPanel {
         const fileInput = this._el.querySelector('.documents-file-input');
         wireTap(this._el.querySelector('.documents-import-btn'), () => fileInput.click());
         fileInput.addEventListener('change', async () => {
-            if (fileInput.files[0]) await this._importFile(fileInput.files[0], fileInput.files[0].name);
-            fileInput.value = '';
+            try {
+                if (fileInput.files[0]) await this._importFile(fileInput.files[0], fileInput.files[0].name);
+            } catch (err) {
+                // A malformed/corrupt PDF (or any other import failure) propagates
+                // unhandled from _importFile/_indexDocument otherwise. Caught here
+                // so it doesn't become an unhandled rejection; the input reset in
+                // `finally` below is what actually matters -- without it the pilot
+                // couldn't re-select the same failed file to retry (the browser
+                // won't re-fire 'change' for an unchanged value).
+                console.error('DocumentsPanel: import failed', err);
+            } finally {
+                fileInput.value = '';
+            }
         });
         document.body.appendChild(this._el);
     }
@@ -174,7 +185,18 @@ class DocumentsPanel {
         const cache = await this._nasrDb.getAppCache('documents_search_index');
         if (!cache?.lunrIndexJSON) { this._listEl.innerHTML = '<div class="documents-empty">No results.</div>'; return; }
         const idx = lunr.Index.load(cache.lunrIndexJSON);
-        const results = idx.search(query);
+        let results;
+        try {
+            results = idx.search(query);
+        } catch (_) {
+            // lunr's query parser throws on ordinary pilot-typed input -- e.g.
+            // "time 12:30" (unrecognised field '12'), "engine~" (edit distance
+            // must be numeric), "engine^" (boost must be numeric), "+" (expecting
+            // term or field). Treat exactly like the zero-results case below
+            // rather than letting it become an unhandled rejection off this
+            // unguarded input listener.
+            results = [];
+        }
         this._listEl.innerHTML = '';
         if (results.length === 0) { this._listEl.innerHTML = '<div class="documents-empty">No results.</div>'; return; }
         for (const result of results) {
