@@ -14,7 +14,7 @@ class NasrDB {
     // reading DB_NAME — a rename here must update that too, or the reset
     // button will silently delete a database that no longer exists.
     static DB_NAME = 'flypi';
-    static DB_VERSION = 8;
+    static DB_VERSION = 9;
 
     constructor() {
         this._db = null;
@@ -88,6 +88,13 @@ class NasrDB {
                     const store = db.createObjectStore('flight_plans', { keyPath: 'id' });
                     store.createIndex('created_at', 'created_at', { unique: false });
                     store.createIndex('active', 'active', { unique: false });
+                }
+
+                // Document library — imported/bundled PDFs (POHs, checklists, chart legends)
+                if (!db.objectStoreNames.contains('flytab_documents')) {
+                    const store = db.createObjectStore('flytab_documents', { keyPath: 'id' });
+                    store.createIndex('type', 'type', { unique: false });
+                    store.createIndex('importedAt', 'importedAt', { unique: false });
                 }
 
                 // W&B saved scenarios
@@ -556,6 +563,26 @@ class NasrDB {
 
     async getFlightPlan(id) {
         return this._get('flight_plans', id);
+    }
+
+    // ========== Documents ==========
+
+    async saveDocument(doc) {
+        if (!doc.id) doc.id = crypto.randomUUID ? crypto.randomUUID() : `doc-${Date.now()}`;
+        doc.importedAt = doc.importedAt || new Date().toISOString();
+        return this._put('flytab_documents', doc);
+    }
+
+    async getDocument(id) {
+        return this._get('flytab_documents', id);
+    }
+
+    async getAllDocuments() {
+        return this._getAll('flytab_documents');
+    }
+
+    async deleteDocument(id) {
+        return this._delete('flytab_documents', id);
     }
 
     // ========== W&B Scenarios ==========
