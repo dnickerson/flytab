@@ -17,6 +17,17 @@
   "homeServer": { "base": "http://192.168.1.77:8090" },
   "plateStates": ["NC", "SC", "VA", "GA", "TN"],
 
+  "frequency_categories": [
+    { "key": "atis",    "label": "ATIS",    "priority": 1, "color": "var(--text-secondary)" },
+    { "key": "twr",     "label": "TWR",     "priority": 2, "color": "var(--text-secondary)" },
+    { "key": "gnd",     "label": "GND",     "priority": 3, "color": "var(--text-secondary)" },
+    { "key": "ctaf",    "label": "UNICOM",  "priority": 4, "color": "var(--text-secondary)" },
+    { "key": "clr_del", "label": "CD",      "priority": 5, "color": "var(--text-secondary)" },
+    { "key": "app",     "label": "APP",     "priority": 6, "color": "var(--text-secondary)" },
+    { "key": "dep",     "label": "DEP",     "priority": 7, "color": "var(--text-secondary)" },
+    { "key": "trsa",    "label": "TRSA",    "priority": 8, "color": "var(--text-secondary)" }
+  ],
+
   "enginePolling": {
     "enabled": true
   },

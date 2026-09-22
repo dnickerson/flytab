@@ -528,6 +528,10 @@ class LayerPanel {
                         <label class="lp-toggle"><input type="checkbox" data-overlay="sua"><span class="lp-toggle-track"></span></label>
                     </div>
                     <div class="lp-row">
+                        <span class="lp-row-label">TRSA</span>
+                        <label class="lp-toggle"><input type="checkbox" data-overlay="trsa"><span class="lp-toggle-track"></span></label>
+                    </div>
+                    <div class="lp-row">
                         <span class="lp-row-label">IFR Area Charts</span>
                         <label class="lp-toggle"><input type="checkbox" data-action="ifr-area"><span class="lp-toggle-track"></span></label>
                     </div>
@@ -659,6 +663,7 @@ class LayerPanel {
             airways: true,
             airspace: true,
             sua: false,
+            trsa: false,
         };
 
         this._panel.querySelectorAll('.lp-toggle input[data-overlay]').forEach(input => {

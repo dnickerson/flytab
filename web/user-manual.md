@@ -248,6 +248,7 @@ The panel has four accordion sections: **Base Chart**, **Map Overlays**, **Traff
 | **Airways** | Victor airways and Jet routes with labels |
 | **Airspace** | Class B/C/D/E boundaries with altitude labels |
 | **Restricted/MOA** | Special use airspace (R/P/W/A/MOA) — amber fill when active |
+| **TRSA** | Terminal Radar Service Area — grey dashed outline, approximate circular boundary. Tap for facility name, frequency, and altitude range. |
 | **IFR Area Charts** | High-altitude obstacle/terrain charts |
 | **Runway Extensions** | Dashed extended centerlines for route airports |
 | **TFRs** | Temporary Flight Restrictions — red boundaries with type and altitude |

@@ -1120,8 +1120,9 @@ class DataStatus {
             const nasrServerDate = nasrServer.effective_date;
             const nasrLocalDate  = nasrLocal?.effective_date;
             const suaUpToDate    = (nasrServer.sua_count ?? null) === null || ((nasrLocal?.sua_count ?? null) !== null && nasrServer.sua_count === nasrLocal.sua_count);
+            const bundleUpToDate = (nasrServer.bundle_version ?? null) === null || nasrServer.bundle_version === nasrLocal?.bundle_version;
 
-            if (nasrLocalDate === nasrServerDate && suaUpToDate) {
+            if (nasrLocalDate === nasrServerDate && suaUpToDate && bundleUpToDate) {
                 setStep('aero', 'running', `NASR current (cycle ${nasrServerDate}) — checking CIFP…`);
             } else {
                 setStep('aero', 'running', `Downloading NASR${nasrLocalDate ? ' (' + nasrLocalDate + ' → ' + nasrServerDate + ')' : ''}…`);

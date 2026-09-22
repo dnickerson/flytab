@@ -3584,6 +3584,12 @@ body {
     cursor: pointer;
 }
 
+.popup-freq-table .freq-sector {
+    color: var(--text-muted);
+    font-weight: 700;
+    font-size: 12px;
+}
+
 .popup-ifr-section {
     margin-top: 8px;
     padding-top: 6px;
@@ -4492,6 +4498,41 @@ body {
     color: var(--text-primary);
 }
 .sua-popup-inactive {
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+/* TRSA label — grey, matching VFR sectional chart convention for TRSA */
+.trsa-lbl { color: var(--text-muted); }
+
+/* TRSA popup styles */
+.trsa-popup-container .leaflet-popup-content-wrapper {
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+}
+.trsa-popup-container .leaflet-popup-tip {
+    background: var(--bg-surface);
+}
+.trsa-popup { font-size: 13px; line-height: 1.4; min-width: 180px; }
+.trsa-popup b { font-size: 14px; }
+.trsa-popup-freq {
+    display: block;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-secondary);
+    margin: 2px 0;
+}
+.trsa-popup-alt {
+    display: block;
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin: 2px 0 4px;
+}
+.trsa-popup-approx {
+    font-size: 11px;
     color: var(--text-muted);
     font-style: italic;
 }

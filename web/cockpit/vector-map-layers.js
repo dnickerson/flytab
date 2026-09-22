@@ -17,6 +17,7 @@ class VectorMapLayers {
         this._lakesLayer = L.layerGroup();         // water fill polygons — only visible in vector mode
         this._airspaceLayer = L.layerGroup();
         this._suaLayer = L.layerGroup();           // special use airspace (R/P/W/A/MOA)
+        this._trsaLayer = L.layerGroup();          // Terminal Radar Service Areas (approximate circles)
         this._airportLayer = L.layerGroup();
         this._navaidLayer = L.layerGroup();
         this._fixLayer = L.layerGroup();
@@ -33,6 +34,7 @@ class VectorMapLayers {
         // Track current markers for diffing
         this._airspacePolygons = new Map();
         this._suaPolygons = new Map();
+        this._trsaPolygons = new Map();
         this._wxDotMarkers = new Map();    // icao → wx dot marker
         this._wxLabelMarkers = new Map();  // icao → wx label marker
         this._cbTcuMarkers = new Map();    // icao → [L.marker|L.polyline, ...]
@@ -183,6 +185,9 @@ class VectorMapLayers {
         // SUA (Restricted/MOA): default off — pilot opts in
         const suaUserSet = localStorage.getItem('flypi_show_sua');
         if (suaUserSet !== null ? JSON.parse(suaUserSet) : overlays.sua?.enabled) this._suaLayer.addTo(this._map);
+        // TRSA: default off — pilot opts in
+        const trsaUserSet = localStorage.getItem('flypi_show_trsa');
+        if (trsaUserSet !== null ? JSON.parse(trsaUserSet) : overlays.trsa?.enabled) this._trsaLayer.addTo(this._map);
         this._geoLayer.addTo(this._map);
         // _lakesLayer is added to the map only in vector mode (enableDarkBackground).
         // In raster modes the tile layer renders water correctly; the dark fill polygons
@@ -670,6 +675,7 @@ class VectorMapLayers {
         return {
             airspace: this._airspaceLayer,
             sua: this._suaLayer,
+            trsa: this._trsaLayer,
             airports: this._airportLayer,
             navaids: this._navaidLayer,
             fixes: this._fixLayer,
@@ -869,6 +875,7 @@ class VectorMapLayers {
             await Promise.all([
                 this._updateAirspace(south, west, north, east, zoom, overlays),
                 this._updateSua(south, west, north, east, zoom),
+                this._updateTrsa(south, west, north, east, zoom),
                 this._updateAirports(south, west, north, east, zoom, overlays),
                 this._updateWxDots(south, west, north, east, zoom, overlays),
                 this._updateNavaids(south, west, north, east, zoom, overlays),
@@ -1147,6 +1154,104 @@ class VectorMapLayers {
         } else {
             el.classList.remove('sua-lbl-active');
             el.querySelector('.sua-act-badge')?.remove();
+        }
+    }
+
+    // Grey dashed outline, no fill -- matches VFR sectional chart convention
+    // for TRSA and stays visually distinct from SUA's solid colored fills
+    // and Class B/C/D/E's existing styling.
+    static TRSA_STYLE = { color: '#888888', fillOpacity: 0, weight: 1.5, dashArray: '6 4' };
+
+    // Shared by both the popup body (joins all entries) and the map label
+    // (uses just the first) so the two can't drift out of sync the way they
+    // did before this was extracted -- see freqs shape note above _updateTrsa.
+    static _formatTrsaFreq(f) {
+        if (f == null) return '';
+        if (typeof f === 'string') return f;
+        return f.sector ? `${f.freq} (${f.sector})` : (f.freq ?? '');
+    }
+
+    async _updateTrsa(south, west, north, east, zoom) {
+        if (!this._map.hasLayer(this._trsaLayer)) return;
+        // Only show from z6 up — same threshold as SUA, below that the
+        // (typically 20-60nm radius) circles are too small to be useful.
+        if (zoom < 6) {
+            this._clearLayer(this._trsaLayer, this._trsaPolygons);
+            return;
+        }
+
+        try {
+            const areas = await this._nasr.getTrsaInBounds(south, west, north, east);
+            const currentIds = new Set();
+
+            for (const trsa of areas) {
+                currentIds.add(trsa.id);
+                if (this._trsaPolygons.has(trsa.id)) continue;
+
+                const boundary = trsa.boundary || [];
+                if (boundary.length < 3) continue;
+
+                const latlngs = boundary.map(pt => [pt[0], pt[1]]);
+                const polygon = L.polygon(latlngs, { ...VectorMapLayers.TRSA_STYLE, interactive: true });
+
+                // Each entry is {freq, sector?} -- 'sector' is the raw NASR
+                // sectorization text (degree range, compass point, altitude
+                // split, etc., no fixed format) and is shown verbatim next
+                // to its frequency, e.g. "118.25 (164-343)". A sectorized
+                // TRSA (e.g. KILM) has one frequency per arrival sector, and
+                // without the sector a pilot can't tell which one to call.
+                // Defensive: a device that hasn't re-synced past bundle_version 9
+                // may still have freqs cached as plain strings (the pre-sector
+                // shape) until the next NASR import -- handle both shapes rather
+                // than rendering "undefined" for stale-but-still-present data.
+                const freqs = (trsa.freqs || [])
+                    .map(f => VectorMapLayers._formatTrsaFreq(f))
+                    .filter(Boolean)
+                    .join(' / ') || '?';
+                const lowerStr = trsa.lower_ft === 0 ? 'SFC' : (trsa.lower_ft != null ? `${trsa.lower_ft} ft` : '?');
+                // TWR4 remarks don't always publish a TRSA ceiling (e.g. real
+                // ILM data: "TRSA CTC APCH CTL WITHIN 20 NM" -- no altitude
+                // clause at all). A bare '?' reads as a parsing error; say
+                // explicitly that it's not published in this data source.
+                const upperStr = trsa.upper_ft != null ? `${trsa.upper_ft} ft` : 'not published — check sectional';
+                const approxNote = trsa.approximate
+                    ? `<div class="trsa-popup-approx">Approximate boundary${trsa.radius_nm ? ` — ${trsa.radius_nm}nm radius` : ''}</div>`
+                    : '';
+                const popupHtml = `<div class="trsa-popup">
+                    <b>${trsa.name ?? trsa.id}</b><br>
+                    <span class="trsa-popup-freq">${freqs}</span><br>
+                    <span class="trsa-popup-alt">${lowerStr} – ${upperStr}</span>
+                    ${approxNote}
+                </div>`;
+                polygon.bindPopup(popupHtml, { maxWidth: 280, className: 'trsa-popup-container' });
+
+                polygon.addTo(this._trsaLayer);
+                this._trsaPolygons.set(trsa.id, polygon);
+
+                const labelPos = VectorMapLayers._polygonCentroid(latlngs);
+                const label = L.marker(labelPos, {
+                    icon: L.divIcon({
+                        className: 'as-alt-label trsa-lbl',
+                        html: VectorMapLayers._formatTrsaFreq((trsa.freqs || [])[0]) || '',
+                        iconSize: [48, 20],
+                        iconAnchor: [24, 10],
+                    }),
+                    interactive: false,
+                    zIndexOffset: -150,
+                });
+                label.addTo(this._trsaLayer);
+                this._trsaPolygons.set(trsa.id + '_lbl', label);
+            }
+
+            for (const [id, poly] of this._trsaPolygons) {
+                const baseId = id.endsWith('_lbl') ? id.slice(0, -4) : id;
+                if (!currentIds.has(baseId)) {
+                    this._trsaLayer.removeLayer(poly);
+                    this._trsaPolygons.delete(id);
+                }
+            }
+        } catch (err) {
+            console.warn('VectorMapLayers: TRSA query failed', err);
         }
     }
 
