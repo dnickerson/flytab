@@ -11478,3 +11478,50 @@ body.route-editing-mode .route-table-sheet {
     font-size: 28px !important; line-height: 44px !important;
 }
 
+.airspace-alert-popup {
+    position: absolute;
+    top: 160px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 950;
+    min-width: 320px;
+    max-width: 480px;
+    background: var(--bg-surface);
+    border: 2px solid var(--border-strong);
+    border-radius: 8px;
+    padding: 12px 16px;
+    pointer-events: auto;
+}
+.airspace-alert-popup .aap-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.airspace-alert-popup .aap-title {
+    font-family: var(--font-ui);
+    font-weight: 800;
+    color: var(--text-secondary);
+}
+.airspace-alert-popup .aap-dismiss {
+    min-width: var(--touch-min, 56px);
+    min-height: var(--touch-min, 56px);
+    font-size: var(--text-xl); /* 26px -- same token .btn-close uses for its glyph elsewhere in the app */
+    font-weight: 700;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+}
+.airspace-alert-popup .aap-freq {
+    font-family: var(--font-instrument);
+    font-weight: 900;
+    font-size: 1.4em;
+    color: var(--text-primary);
+    margin-top: 4px;
+}
+.airspace-alert-popup .aap-advisory {
+    font-family: var(--font-ui);
+    font-weight: 700;
+    color: var(--color-caution-on-light);
+    margin-top: 4px;
+}
+

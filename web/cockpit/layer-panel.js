@@ -349,6 +349,42 @@ class LayerPanel {
             });
         });
 
+        // Wire Airspace Alert master switch
+        const airspaceAlertEnabledInput = this._panel.querySelector('.lp-toggle input[data-action="airspace-alert-enabled"]');
+        if (airspaceAlertEnabledInput) {
+            airspaceAlertEnabledInput.checked = CockpitConfig.get('airspace_alerts.enabled') ?? false;
+            airspaceAlertEnabledInput.addEventListener('change', () => {
+                CockpitConfig.patch('airspace_alerts.enabled', airspaceAlertEnabledInput.checked);
+            });
+        }
+
+        // Wire Airspace Alert per-type toggles. AirspaceAlert.TYPE_KEYS is
+        // the single source of truth for these six config leaves and the
+        // typeKey _evaluateOne/clearStatesForType namespace _states by --
+        // read from there rather than keeping an independent copy in sync
+        // by hand (this function runs at panel-wiring time, well after all
+        // scripts have loaded, so load order between the two files doesn't
+        // matter here).
+        const typeKeys = (typeof AirspaceAlert !== 'undefined') ? AirspaceAlert.TYPE_KEYS : {};
+        for (const key of Object.keys(typeKeys)) {
+            const input = this._panel.querySelector(`.lp-toggle input[data-action="airspace-alert-${key}"]`);
+            if (input) {
+                input.checked = CockpitConfig.get(`airspace_alerts.types.${key}`) ?? false;
+                input.addEventListener('change', () => {
+                    CockpitConfig.patch(`airspace_alerts.types.${key}`, input.checked);
+                    // Clear only this type's alert state so re-enabling it
+                    // after being disabled mid-approach doesn't leave a
+                    // record stranded in 'alerted' -- otherwise the next
+                    // genuine approach into that same airspace never fires
+                    // again. Scoped to this one type (not the whole shared
+                    // state map) so it doesn't also wipe an unrelated
+                    // in-progress approach to a different airspace type the
+                    // pilot isn't touching right now.
+                    window.app?.airspaceAlert?.clearStatesForType?.(typeKeys[key]);
+                });
+            }
+        }
+
         // Wire cancel button
         const cancelBtn = this._panel.querySelector('#lpCancelDownload');
         if (cancelBtn) {
@@ -522,6 +558,34 @@ class LayerPanel {
                     <div class="lp-row">
                         <span class="lp-row-label">Airspace</span>
                         <label class="lp-toggle"><input type="checkbox" data-overlay="airspace"><span class="lp-toggle-track"></span></label>
+                    </div>
+                    <div class="lp-row">
+                        <span class="lp-row-label">Airspace Alerts</span>
+                        <label class="lp-toggle"><input type="checkbox" data-action="airspace-alert-enabled"><span class="lp-toggle-track"></span></label>
+                    </div>
+                    <div class="lp-row lp-row-sub">
+                        <span class="lp-row-label lp-sub-label">Alert: Class B</span>
+                        <label class="lp-toggle"><input type="checkbox" data-action="airspace-alert-class_b"><span class="lp-toggle-track"></span></label>
+                    </div>
+                    <div class="lp-row lp-row-sub">
+                        <span class="lp-row-label lp-sub-label">Alert: Class C</span>
+                        <label class="lp-toggle"><input type="checkbox" data-action="airspace-alert-class_c"><span class="lp-toggle-track"></span></label>
+                    </div>
+                    <div class="lp-row lp-row-sub">
+                        <span class="lp-row-label lp-sub-label">Alert: Class D</span>
+                        <label class="lp-toggle"><input type="checkbox" data-action="airspace-alert-class_d"><span class="lp-toggle-track"></span></label>
+                    </div>
+                    <div class="lp-row lp-row-sub">
+                        <span class="lp-row-label lp-sub-label">Alert: Class E surface</span>
+                        <label class="lp-toggle"><input type="checkbox" data-action="airspace-alert-class_e_surface"><span class="lp-toggle-track"></span></label>
+                    </div>
+                    <div class="lp-row lp-row-sub">
+                        <span class="lp-row-label lp-sub-label">Alert: Restricted/MOA</span>
+                        <label class="lp-toggle"><input type="checkbox" data-action="airspace-alert-sua"><span class="lp-toggle-track"></span></label>
+                    </div>
+                    <div class="lp-row lp-row-sub">
+                        <span class="lp-row-label lp-sub-label">Alert: TRSA</span>
+                        <label class="lp-toggle"><input type="checkbox" data-action="airspace-alert-trsa"><span class="lp-toggle-track"></span></label>
                     </div>
                     <div class="lp-row">
                         <span class="lp-row-label">Restricted/MOA</span>
