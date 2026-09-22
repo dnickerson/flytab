@@ -20,7 +20,7 @@ class AirspaceAlert {
         this._stratux = null;
         this._nasrDb = null;
         this._states = new Map(); // "kind:id" -> 'alerted' | 'inside' | 'not-alerted'
-        this._cachedCandidates = null; // { box: {south,west,north,east}, airspace: [...], sua: [...], trsa: [...] }
+        this._cachedCandidates = null; // { box: {south,west,north,east}, airspace: [...], sua: [...], trsa: [...], fetched: {airspace,sua,trsa} }
         this._tickInFlight = false; // re-entrancy guard, see tick()
         this.onAlert = null; // (record, kind: 'airspace'|'sua'|'trsa') => void, set by caller
     }
@@ -79,22 +79,41 @@ class AirspaceAlert {
         return lat >= box.south && lat <= box.north && lon >= box.west && lon <= box.east;
     }
 
-    async _getCandidates(lat, lon, projLat, projLon) {
+    async _getCandidates(lat, lon, projLat, projLon, typesEnabled) {
+        // Class B/C/D/E-surface all live in one IDB store (airspace), so
+        // the only skippable granularity for that store is "all four off";
+        // sua/trsa each have their own store and can be skipped individually.
+        const needAirspace = !!(typesEnabled.class_b || typesEnabled.class_c || typesEnabled.class_d || typesEnabled.class_e_surface);
+        const needSua = !!typesEnabled.sua;
+        const needTrsa = !!typesEnabled.trsa;
+
         const box = this._boxFor(lat, lon, projLat, projLon, AirspaceAlert.LEAD_TIME_MARGIN_NM);
         const cached = this._cachedCandidates;
         // Re-query if either the current position or the projected position
         // has moved outside the box used for the previous query -- checking
         // current position alone misses a sharp turn that moves the
         // projected point outside stale coverage before current position does.
-        if (cached && this._boxContains(cached.box, lat, lon) && this._boxContains(cached.box, projLat, projLon)) {
+        // Also re-query (even with an unchanged box) if a type this tick
+        // needs wasn't actually fetched last time -- e.g. the pilot just
+        // flipped SUA on after a stretch of it being off, during which this
+        // method never queried getSuaInBounds at all. Without this check the
+        // box-containment test alone would keep "hitting" a cache that was
+        // never given real sua data, silently withholding alerts for the
+        // newly-enabled type until the aircraft happens to cross the box edge.
+        if (cached && this._boxContains(cached.box, lat, lon) && this._boxContains(cached.box, projLat, projLon)
+            && (!needAirspace || cached.fetched.airspace) && (!needSua || cached.fetched.sua) && (!needTrsa || cached.fetched.trsa)) {
             return cached;
         }
+        // Shipped defaults have sua:false -- without these guards, every ~1s
+        // tick ran a full IDB cursor scan + geometry test of the whole sua
+        // store (and trsa's) for output that tick()'s per-type checks below
+        // discard entirely. Skip the query outright when nothing needs it.
         const [airspace, sua, trsa] = await Promise.all([
-            this._nasrDb.getAirspaceInBounds(box.south, box.west, box.north, box.east),
-            this._nasrDb.getSuaInBounds(box.south, box.west, box.north, box.east),
-            this._nasrDb.getTrsaInBounds(box.south, box.west, box.north, box.east),
+            needAirspace ? this._nasrDb.getAirspaceInBounds(box.south, box.west, box.north, box.east) : Promise.resolve([]),
+            needSua ? this._nasrDb.getSuaInBounds(box.south, box.west, box.north, box.east) : Promise.resolve([]),
+            needTrsa ? this._nasrDb.getTrsaInBounds(box.south, box.west, box.north, box.east) : Promise.resolve([]),
         ]);
-        this._cachedCandidates = { box, airspace, sua, trsa };
+        this._cachedCandidates = { box, airspace, sua, trsa, fetched: { airspace: needAirspace, sua: needSua, trsa: needTrsa } };
         return this._cachedCandidates;
     }
 
@@ -105,15 +124,33 @@ class AirspaceAlert {
         // otherwise-valid lateral match -- an extra popup is a minor
         // nuisance, silently missing a required call is not acceptable.
         if (typeof lower !== 'number' || Number.isNaN(lower)) return true;
-        // upper < 0 is not a malformed value -- it's the pipeline's
-        // _parse_altitude() sentinel for an AIXM UNLIMITED/UNL ceiling. SUA
-        // records use it for this reason; Class E records also carry this
-        // same -9998-style negative sentinel on the vast majority of records
-        // (4282/4325 in a real bundle) for "no upper limit." Either way the
-        // fail-open behavior below handles both cases identically. Do not
-        // "simplify" this away as redundant with the NaN check above -- doing
-        // so would silently suppress alerts for any unlimited-ceiling area.
-        if (typeof upper !== 'number' || Number.isNaN(upper) || upper < 0) return altMsl >= lower;
+        // upper <= 0 is not a malformed value -- it's an "unlimited ceiling"
+        // case, from two different sources for two different reasons:
+        //  - Negative (the pipeline's _parse_altitude() sentinel, e.g. -1 or
+        //    -9998-style): SUA and Class E's AIXM-derived records use this
+        //    for a genuine UNLIMITED/UNL ceiling (4282/4325 Class E records
+        //    in a real bundle).
+        //  - Exactly 0: parse_class_airspace() -- the separate code path
+        //    that builds Class B/C/D/E from the FAA Class_Airspace
+        //    shapefile, not AIXM -- has no sentinel of its own and does
+        //    "upper_ft": int(upper) if upper else 0, so a blank/missing
+        //    shapefile UPPER_VAL becomes 0, not negative. A real ceiling of
+        //    0ft MSL never legitimately occurs for this layer: LOWER_VAL/
+        //    UPPER_VAL are MSL, confirmed both by the FAA's AIS Open Data
+        //    Dictionary (Class Airspace's UPPER_CODE/LOWER_CODE domain is
+        //    MSL/SFC/STD/UNLTD/BYNOTAM -- no AGL option exists in the
+        //    schema) and by cross-checking real shapefile data (e.g.
+        //    Aspen's Class D ceiling is 10300 while sea-level fields' are
+        //    ~2500, tracking field elevation + the standard 2500ft AGL
+        //    Class D shelf height -- only possible if the stored value is
+        //    MSL, not AGL). So 0 here only ever means "value missing,"
+        //    never "ceiling at the ground" -- must be treated the same as
+        //    the negative sentinel, or a record with a blank shapefile
+        //    UPPER_VAL would silently defeat the fail-open design for
+        //    exactly the records it exists to protect. Do not "simplify"
+        //    this away as redundant with the NaN check above -- doing so
+        //    would silently suppress alerts for any unlimited-ceiling area.
+        if (typeof upper !== 'number' || Number.isNaN(upper) || upper <= 0) return altMsl >= lower;
         return altMsl >= lower && altMsl <= upper;
     }
 
@@ -254,7 +291,7 @@ class AirspaceAlert {
         // first's .then() resolves, letting two callbacks interleave state
         // machine updates with inconsistent position snapshots.
         this._tickInFlight = true;
-        this._getCandidates(sit.lat, sit.lon, projLat, projLon).then(({ airspace, sua, trsa }) => {
+        this._getCandidates(sit.lat, sit.lon, projLat, projLon, typesEnabled).then(({ airspace, sua, trsa }) => {
             // typesEnabled was read once above, before the query, specifically
             // per-leaf (not by destructuring the whole 'airspace_alerts.types'
             // object) because CockpitConfig._mergeUserOverrides only

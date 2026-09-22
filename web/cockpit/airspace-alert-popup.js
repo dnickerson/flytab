@@ -57,7 +57,7 @@ class AirspaceAlertPopup {
         const titleEl = this._el.querySelector('.aap-title');
         const freqEl = this._el.querySelector('.aap-freq');
         const advisoryEl = this._el.querySelector('.aap-advisory');
-        const mandatoryCall = (kind === 'airspace' && ['B', 'C', 'D'].includes(record.class)) || kind === 'trsa';
+        const mandatoryCall = kind === 'airspace' && ['B', 'C', 'D'].includes(record.class);
 
         titleEl.textContent = kind === 'trsa'
             ? `Entering TRSA — ${record.name}`
@@ -68,16 +68,38 @@ class AirspaceAlertPopup {
         if (kind === 'trsa') {
             const freqs = Array.isArray(record.freqs) ? record.freqs : [];
             if (freqs.length > 0) {
+                // Each entry is {freq, sector?} (build_trsa_records() in
+                // flytab-pipeline) -- sector is the raw TWR3 sectorization
+                // suffix (degree range, compass point, altitude split, or
+                // combined -- no single fixed format) and must not be
+                // discarded: the whole reason this field is a list of
+                // objects instead of a list of strings is so a sectorized
+                // TRSA (e.g. ILM: 118.25 for one arrival sector, 135.75 for
+                // the other) can show which frequency covers which sector.
+                // Joining/template-literal-ing an entry directly renders
+                // "[object Object]" -- always pull .freq (and .sector) out.
+                const freqStrs = freqs.map(f => f.sector ? `${f.freq} (${f.sector})` : f.freq);
                 freqEl.textContent = freqs.length > 1
-                    ? `${record.facility_name} ${freqs.join(' / ')} (sector — verify)`
-                    : `${record.facility_name} ${freqs[0]}`;
+                    ? `${record.facility_name} ${freqStrs.join(' / ')}`
+                    : `${record.facility_name} ${freqStrs[0]}`;
                 freqEl.style.display = '';
             } else {
                 freqEl.style.display = 'none';
             }
         } else if (record.controlling_freq) {
-            freqEl.textContent = `${record.controlling_freq.facility_name} ${record.controlling_freq.freq}`;
-            freqEl.style.display = '';
+            // controlling_freq.freqs is always a list (_pick_freq() in
+            // flytab-pipeline) -- an airport can publish more than one
+            // frequency of the winning type (e.g. multiple APP frequencies).
+            // There is no singular .freq field. Array.isArray guards against
+            // an older bundle built before this pipeline fix, which shipped
+            // controlling_freq.freq as a single string.
+            const cfreqs = Array.isArray(record.controlling_freq.freqs) ? record.controlling_freq.freqs : [];
+            if (cfreqs.length > 0) {
+                freqEl.textContent = `${record.controlling_freq.facility_name} ${cfreqs.join(' / ')}`;
+                freqEl.style.display = '';
+            } else {
+                freqEl.style.display = 'none';
+            }
         } else {
             freqEl.style.display = 'none';
         }

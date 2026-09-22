@@ -11464,7 +11464,7 @@ body.route-editing-mode .route-table-sheet {
 .airspace-alert-popup .aap-dismiss {
     min-width: var(--touch-min, 56px);
     min-height: var(--touch-min, 56px);
-    font-size: 24px;
+    font-size: var(--text-xl); /* 26px -- same token .btn-close uses for its glyph elsewhere in the app */
     font-weight: 700;
     background: transparent;
     border: none;
