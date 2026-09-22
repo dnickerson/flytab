@@ -13,6 +13,14 @@ class DocumentsPanel {
         this._viewerEl = null;
         this._panZoom = null; // set in _buildDOM via attachPinchZoom
         this._searchInput = null;
+        // Lazy-PDF controller + blob URL for whichever document is currently
+        // open (see _openDocument and pdf-render.js's renderPdfToContainer
+        // lazy path). Torn down/revoked at the top of the next _openDocument
+        // call, not right after render -- pdf.js keeps reading from the url
+        // in the background as the pilot scrolls, well past when
+        // renderPdfToContainer's own promise resolves.
+        this._activePdfController = null;
+        this._activePdfUrl = null;
         // Promise-chain queue serializing every read-modify-write of the
         // shared 'documents_search_index' app_cache entry -- see _queueIndexOp.
         this._indexQueue = Promise.resolve();
@@ -51,7 +59,18 @@ class DocumentsPanel {
         // fall back on once touch-action:none takes over (see CSS) -- a single
         // finger must pan at any zoom level, including the 1x default, or a
         // multi-page document would be unreachable past the first screenful.
-        this._panZoom = attachPinchZoom(this._viewerEl, this._panContainer, { panAlways: true });
+        this._panZoom = attachPinchZoom(this._viewerEl, this._panContainer, {
+            panAlways: true,
+            // Drives pdf-render.js's lazy page rendering (see _openDocument
+            // and renderPdfToContainer's `panState` option) -- fires
+            // synchronously on every pinch/pan/reset/page-jump transform
+            // change, so the currently-open document's rendered-page buffer
+            // stays deterministically in sync with wherever the pilot has
+            // scrolled to. this._activePdfController is set by _openDocument
+            // once a document is open; null (a no-op) before that and while
+            // the list view is showing.
+            onApply: () => this._activePdfController?.updateVisibility(),
+        });
         wireTap(this._el.querySelector('.documents-close'), () => this.hide());
         this._searchInput = this._el.querySelector('.documents-search-input');
         this._searchInput.addEventListener('input', () => this._applySearch(this._searchInput.value));
@@ -226,16 +245,41 @@ class DocumentsPanel {
     // can't corrupt the index.
     async _deleteDocument(doc) {
         await this._nasrDb.deleteDocument(doc.id);
-        await this._queueIndexOp(async () => {
+        // Index cleanup is best-effort and must not gate the list re-render
+        // below: deleteDocument() above already succeeded (the doc is really
+        // gone from IndexedDB), so the row must disappear regardless of
+        // whether this chained cleanup step also succeeds. This repo's own
+        // CLAUDE.md documents a real IDB transaction-hang failure mode as a
+        // known risk, and this method is invoked unawaited from a tap
+        // handler (see wireTap(deleteBtn, ...) below) -- before this fix, a
+        // rejection here propagated out of _deleteDocument entirely, so
+        // _renderList() never ran and the deleted row stayed on screen with
+        // no re-render and no pilot-facing error, only a buried DiagLog
+        // entry via the global unhandledrejection handler (window.app.js).
+        const indexCleanup = this._queueIndexOp(async () => {
             const cache = await this._nasrDb.getAppCache('documents_search_index');
             if (!cache) return;
             const pages = cache.pages.filter(p => p.docId !== doc.id);
             await this._saveIndex(pages);
+        }).catch((err) => {
+            console.error('DocumentsPanel: search-index cleanup failed after delete', err);
         });
         await this._renderList();
+        await indexCleanup; // already caught above -- awaited only so callers can rely on both steps having settled
     }
 
     async _openDocument(doc, pageNum) {
+        // Tear down the previous document's lazy-render controller (if any)
+        // before discarding its DOM below -- stops it from trying to
+        // render/tear-down pages for a document we're about to replace, and
+        // lets its blob URL be revoked now that we know pdf.js is truly done
+        // reading from it (see the note below on why that can't just happen
+        // right after renderPdfToContainer() returns).
+        this._activePdfController?.destroy();
+        if (this._activePdfUrl) URL.revokeObjectURL(this._activePdfUrl);
+        this._activePdfController = null;
+        this._activePdfUrl = null;
+
         this._panContainer.innerHTML = '';
         this._viewerEl.style.display = '';
         // Reset zoom/pan before rendering the new document -- otherwise a
@@ -243,8 +287,33 @@ class DocumentsPanel {
         // one already zoomed in on an unrelated part of the page.
         this._panZoom.reset();
         const url = URL.createObjectURL(doc.blob);
-        const wrapper = await renderPdfToContainer(url, this._panContainer, { cssClass: 'documents-pdf' });
-        URL.revokeObjectURL(url);
+        // panState opts renderPdfToContainer into lazy rendering (see its
+        // doc comment in pdf-render.js) -- a real POH commonly runs 100-150
+        // pages, and rendering every page to a full-resolution canvas up
+        // front is a near-certain OOM crash. Only a small buffer of pages
+        // around wherever this._panZoom.state.ty currently points gets
+        // rasterized; attachPinchZoom's onApply (wired in _buildDOM) keeps
+        // that buffer in sync as the pilot scrolls.
+        const wrapper = await renderPdfToContainer(url, this._panContainer, {
+            cssClass: 'documents-pdf',
+            panState: this._panZoom.state,
+        });
+        if (wrapper?._lazyPdf) {
+            // Lazy path: pdf.js keeps reading from `url` in the background
+            // (pages render on demand as the pilot scrolls, well past this
+            // await), so revoking now -- like the old unconditional revoke
+            // right here, before this fix -- risked breaking a not-yet-
+            // rendered page's fetch. Hang onto both and let the NEXT
+            // _openDocument() call revoke, once nothing will read it again.
+            this._activePdfController = wrapper._lazyPdf;
+            this._activePdfUrl = url;
+        } else {
+            // Eager path never engaged (no pdfjsLib, or the try/catch in
+            // renderPdfToContainer failed before creating any lazy state) --
+            // nothing further will read from `url`, so revoke immediately,
+            // exactly as before this fix.
+            URL.revokeObjectURL(url);
+        }
         // Re-reset after the render await, not just before it: the touch
         // listeners on this._viewerEl stay live the whole time render is in
         // flight (panAlways:true means even the emptied/still-rendering
@@ -258,9 +327,25 @@ class DocumentsPanel {
         // for both branches below -- nothing can interleave a touch handler
         // between this line and the final apply().
         this._panZoom.reset();
+        // reset() (unlike apply()) does not fire onApply, so it can't be
+        // relied on to resync the lazy-render buffer itself -- do it
+        // explicitly here. Covers the (rare, benign even without this --
+        // page 1 always renders eagerly regardless, see pdf-render.js) case
+        // where a stray touch during the first reset()-to-render window above
+        // caused pdf-render.js's own initial updateVisibility() call to
+        // buffer around the wrong page before this reset put ty back to 0.
+        // The pageNum branch below re-syncs again via apply() if a jump is
+        // needed -- cheap/idempotent (renderPage/teardownPage both no-op on
+        // an already-correct page), so the overlap costs nothing.
+        this._activePdfController?.updateVisibility();
         // Search results match a specific page -- jump straight to it instead
         // of always landing on page 1. wrapper's children are the per-page
-        // <canvas> elements in page order (see renderPdfToContainer).
+        // nodes in page order -- page 1 is always a real <canvas>; every
+        // other page is either a <canvas> (already lazily rendered) or a
+        // <div class="pdf-lazy-placeholder"> sized to match it (not yet
+        // rendered) -- either way it's positioned correctly, so offsetTop is
+        // accurate regardless of which one it currently is (see
+        // renderPdfToContainer's lazy path in pdf-render.js).
         //
         // This used to be wrapper.children[pageNum-1].scrollIntoView(), which
         // relied on .documents-viewer being a native overflow-y:auto scroll
@@ -275,6 +360,10 @@ class DocumentsPanel {
         // converting an offsetTop distance into a ty translation.
         if (pageNum && wrapper?.children[pageNum - 1]) {
             this._panZoom.state.ty = -wrapper.children[pageNum - 1].offsetTop;
+            // apply() (not a direct style write) -- this fires the onApply
+            // hook wired in _buildDOM, which is what actually rasterizes the
+            // jump target (and its buffer) from its placeholder now that
+            // this._activePdfController is set, above.
             this._panZoom.apply();
         }
     }

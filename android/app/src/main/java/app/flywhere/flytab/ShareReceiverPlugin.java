@@ -13,6 +13,7 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Capacitor plugin receiving a PDF shared into FlyTab via Android's SEND
@@ -29,23 +30,31 @@ public class ShareReceiverPlugin extends Plugin {
     // Raw file size, before base64's ~33% overhead — see the size-limit note
     // in this task's Interfaces section for reasoning.
     private static final long MAX_SHARE_BYTES = 25L * 1024 * 1024;
-    private static Uri pendingUri = null;
+    // AtomicReference, not a plain static Uri: this is written on the UI
+    // thread (MainActivity.onCreate/onNewIntent) and read on Capacitor's
+    // separate plugin-call thread. A plain field has no happens-before edge
+    // between those threads, so the reading thread is not guaranteed to ever
+    // observe the write (a real, if rare, Java Memory Model visibility
+    // hazard) -- and getAndSet(null) below also makes the existing
+    // read-then-clear a single atomic step, closing a second, narrower race
+    // where two near-simultaneous getPendingShare() calls could otherwise
+    // both observe the same non-null Uri before either cleared it.
+    private static final AtomicReference<Uri> pendingUri = new AtomicReference<>();
 
     /** Called by MainActivity, not by JS. */
     public static void setPendingShare(Uri uri) {
-        pendingUri = uri;
+        pendingUri.set(uri);
     }
 
     @PluginMethod
     public void getPendingShare(PluginCall call) {
         JSObject ret = new JSObject();
-        if (pendingUri == null) {
+        Uri uri = pendingUri.getAndSet(null); // clear so a later poll doesn't re-import the same file
+        if (uri == null) {
             ret.put("ok", false);
             call.resolve(ret);
             return;
         }
-        Uri uri = pendingUri;
-        pendingUri = null; // clear so a later poll doesn't re-import the same file
         UriMeta meta = queryMeta(uri);
         if (meta.size > MAX_SHARE_BYTES) {
             Log.w(TAG, "Shared file too large (" + meta.size + " bytes), rejecting: " + meta.name);
@@ -64,7 +73,27 @@ public class ShareReceiverPlugin extends Plugin {
             ByteArrayOutputStream buffer = new ByteArrayOutputStream();
             byte[] chunk = new byte[8192];
             int n;
-            while ((n = in.read(chunk)) != -1) buffer.write(chunk, 0, n);
+            long total = 0;
+            // The MAX_SHARE_BYTES check above trusts the content provider's
+            // reported OpenableColumns.SIZE, which some providers (documented
+            // real behavior, particularly some cloud-storage/SAF providers)
+            // leave unpopulated -- queryMeta() then leaves meta.size at its
+            // default 0, so `0 > MAX_SHARE_BYTES` is false and the guard
+            // above silently does nothing. Enforce the real limit here too,
+            // from bytes actually read, so the cap holds regardless of what
+            // (or whether) the provider reports.
+            while ((n = in.read(chunk)) != -1) {
+                total += n;
+                if (total > MAX_SHARE_BYTES) {
+                    Log.w(TAG, "Shared file exceeded size limit while reading (" + total + "+ bytes), rejecting: " + meta.name);
+                    ret.put("ok", false);
+                    ret.put("tooLarge", true);
+                    ret.put("name", meta.name);
+                    call.resolve(ret);
+                    return;
+                }
+                buffer.write(chunk, 0, n);
+            }
             ret.put("ok", true);
             ret.put("name", meta.name);
             ret.put("base64", Base64.encodeToString(buffer.toByteArray(), Base64.NO_WRAP));

@@ -141,6 +141,38 @@ describe('DocumentsPanel shell', () => {
         expect(global.confirm).toHaveBeenCalled();
         expect(nasrDb.deleteDocument).not.toHaveBeenCalled();
     });
+
+    // Code-review fix: deleteDocument() succeeding (the doc is really gone
+    // from IndexedDB) used to be followed by an unguarded await on chained
+    // search-index cleanup -- this repo's own CLAUDE.md documents a real IDB
+    // transaction-hang failure mode as a known risk. If that chained step
+    // rejected, _renderList() never ran (the whole async function rejected,
+    // unawaited by the tap handler that calls it), so the deleted row stayed
+    // on screen with no re-render and no pilot-facing error -- contradicting
+    // the user manual's claim that deleting removes it from the list. The
+    // fix decouples the list re-render from the index cleanup's outcome.
+    // getAllDocuments/deleteDocument are made stateful here (unlike this
+    // describe block's static beforeEach mocks) so the assertions below can
+    // tell a real re-render from the pre-existing static mock just
+    // happening to still list the "deleted" doc.
+    it('regression guard: the row disappears once delete succeeds, even when chained search-index cleanup rejects', async () => {
+        let docs = [{ id: 'd1', name: 'Sample POH.pdf', type: 'imported', sizeBytes: 1024, importedAt: '2026-09-17T00:00:00Z' }];
+        nasrDb.getAllDocuments = vi.fn().mockImplementation(async () => docs);
+        nasrDb.deleteDocument = vi.fn().mockImplementation(async (id) => { docs = docs.filter(d => d.id !== id); });
+        nasrDb.getAppCache = vi.fn().mockRejectedValue(new Error('IDB transaction hang'));
+        const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+        panel.show();
+        await Promise.resolve(); await Promise.resolve();
+        expect(panel._listEl.textContent).toMatch(/Sample POH\.pdf/);
+
+        await panel._deleteDocument({ id: 'd1', name: 'Sample POH.pdf' });
+
+        expect(nasrDb.deleteDocument).toHaveBeenCalledWith('d1');
+        expect(panel._listEl.textContent).not.toMatch(/Sample POH\.pdf/); // row must be gone from the DOM...
+        expect(panel._listEl.querySelector('.documents-empty')).toBeTruthy(); // ...via a real re-render, not a stale mock
+        expect(consoleErrorSpy).toHaveBeenCalledWith('DocumentsPanel: search-index cleanup failed after delete', expect.any(Error));
+    });
 });
 
 // Final whole-branch review, Fix 8: _checkPendingShare is called unawaited

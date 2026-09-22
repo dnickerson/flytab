@@ -4719,6 +4719,15 @@ body {
     width: auto;
     height: auto;
 }
+/* Stand-in for a not-yet-rasterized page in pdf-render.js's lazy-render path
+   (renderPdfToContainer's `panState` option) -- sized via inline style
+   (per-instance, set in JS to match page 1's measured box) rather than a
+   fixed CSS size. background matches .documents-pdf so a page swapping in
+   right before it's scrolled into view reads as instant, not a color flash. */
+.pdf-lazy-placeholder {
+    display: block;
+    background: #fff;
+}
 
 /* Flight Upload panel */
 .fu-toolbar {
