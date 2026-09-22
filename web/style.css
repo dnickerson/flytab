@@ -4685,6 +4685,91 @@ body {
 }
 .logbook-export-btn:active { opacity: 0.8; }
 
+/* ========== Documents Page ========== */
+
+.documents-page {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: var(--tab-bar-height);
+    z-index: 800;
+    flex-direction: column;
+    background: var(--bg-primary);
+}
+.documents-page.visible { display: flex; }
+.documents-header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 16px; border-bottom: 1px solid var(--border);
+}
+.documents-header-left { display: flex; align-items: center; gap: 12px; }
+.documents-title { font-family: var(--font-ui); font-weight: 800; font-size: 20px; color: var(--text-primary); }
+.documents-import-btn { min-height: var(--touch-preferred, 64px); padding: 0 16px; font-family: var(--font-ui); font-weight: 800; font-size: 16px; background: var(--accent); color: var(--text-on-accent); border: none; border-radius: 8px; }
+.documents-close { /* sizing via .btn-close */ font-size: 28px; font-weight: 800; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; color: var(--text-primary); }
+.documents-search-bar { padding: 8px 16px; border-bottom: 1px solid var(--border); }
+.documents-search-input { width: 100%; min-height: var(--touch-min, 56px); box-sizing: border-box; padding: 0 12px; font-family: var(--font-ui); font-weight: 700; font-size: 16px; color: var(--text-primary); background: var(--bg-surface); border: 1px solid var(--border-strong); border-radius: 8px; }
+.documents-list { overflow-y: auto; flex: 0 0 auto; max-height: 40vh; }
+.documents-row { min-height: var(--touch-min, 56px); display: flex; align-items: center; justify-content: space-between; padding: 0 16px; border-bottom: 1px solid var(--border-light); }
+.documents-row-name { font-family: var(--font-ui); font-weight: 700; color: var(--text-secondary); }
+.documents-row-delete { min-width: var(--touch-min, 56px); min-height: var(--touch-min, 56px); font-size: 20px; background: transparent; border: none; color: var(--color-danger-on-light); }
+.documents-empty { padding: 16px; font-family: var(--font-ui); font-weight: 700; color: var(--text-muted); }
+.documents-message {
+    padding: 12px 16px;
+    font-family: var(--font-ui);
+    font-weight: 700;
+    color: var(--color-danger-on-light);
+    background: var(--bg-surface);
+    border: 1px solid var(--color-danger-on-light);
+    border-radius: 8px;
+    margin: 8px;
+}
+.documents-viewer {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    /* flex-start, not center: .documents-pan-container stacks every page of
+       the PDF (unlike .approach-viewer-body, which this rule was originally
+       copied from and only ever shows one plate at a time). Once the full
+       page stack is taller than the viewer -- true for virtually any real
+       multi-page document -- align-items:center centers the WHOLE STACK
+       vertically, pushing page 1 far above the visible area at rest (ty=0)
+       instead of showing it. flex-start keeps the stack's top edge pinned to
+       the viewer's top edge at rest, matching what the ty=-offsetTop page-jump
+       math in documents.js's _openDocument already assumes. justify-content
+       (horizontal) is unaffected -- canvases are max-width:90vw and never
+       overflow horizontally, so there's no equivalent horizontal problem.
+       Caught in code review; verified with a headless-Chromium layout
+       measurement before and after this change. */
+    align-items: flex-start;
+    justify-content: center;
+}
+.documents-pan-container {
+    position: relative;
+    display: inline-flex;
+    flex-direction: column;
+    transform-origin: 0 0;
+    touch-action: none;
+    flex-shrink: 0;
+}
+.documents-pdf {
+    background: #fff;
+}
+.documents-pdf canvas {
+    display: block;
+    max-width: 90vw;
+    max-height: calc(100vh - 64px);
+    width: auto;
+    height: auto;
+}
+/* Stand-in for a not-yet-rasterized page in pdf-render.js's lazy-render path
+   (renderPdfToContainer's `panState` option) -- sized via inline style
+   (per-instance, set in JS to match page 1's measured box) rather than a
+   fixed CSS size. background matches .documents-pdf so a page swapping in
+   right before it's scrolled into view reads as instant, not a color flash. */
+.pdf-lazy-placeholder {
+    display: block;
+    background: #fff;
+}
+
 /* Flight Upload panel */
 .fu-toolbar {
     display: flex;
