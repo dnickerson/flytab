@@ -25,6 +25,10 @@ class WxBriefing {
 
         this._metarData    = null;
         this._tafData      = null;
+        this._tafFetchFailed = false;
+        this._metarPartialFail = false;
+        this._tafPartialFail = false;
+        this._mosFetchError = null;
         this._airmets      = null;
         this._afds         = null;
         this._notams         = null;
@@ -42,6 +46,7 @@ class WxBriefing {
         this._corridorMi    = [10, 25, 50].includes(savedCorridor) ? savedCorridor : 25;
         this._notamFetchError = null;
         this._enrouteNotamFetchError = null;
+        this._airmetFetchError = null;
         this._lightsExpanded = false;
         this._notamSearch = '';
         this._tafPillOpen = new Set();
@@ -208,12 +213,19 @@ class WxBriefing {
         }
 
         if (!this._mosData) {
-            sec.innerHTML = '<div class="wx-section-empty">No MOS cached. Tap ↻ to fetch.</div>';
+            sec.innerHTML = this._mosFetchError
+                ? `<div class="wx-section-error">⚠ ${this._escHtml(this._mosFetchError)} · tap ↻ to retry</div>`
+                : '<div class="wx-section-empty">No MOS cached. Tap ↻ to fetch.</div>';
             return;
         }
 
         const wrap = document.createElement('div');
         wrap.className = 'wx-mos-wrap';
+
+        if (this._mosFetchError) {
+            wrap.insertAdjacentHTML('beforeend',
+                `<div class="wx-section-error">⚠ ${this._escHtml(this._mosFetchError)} · tap ↻ to retry</div>`);
+        }
 
         if (this._mode === 'day') {
             wrap.appendChild(this._buildDayGrid(stations));
@@ -301,6 +313,18 @@ class WxBriefing {
         `;
         sec.appendChild(hdrDiv);
 
+        if (this._tafFetchFailed) {
+            sec.insertAdjacentHTML('beforeend',
+                '<div class="wx-section-error">⚠ TAFs unavailable — showing METARs only · tap ↻ to retry</div>');
+        } else if (this._tafPartialFail) {
+            sec.insertAdjacentHTML('beforeend',
+                '<div class="wx-section-error">⚠ Some TAFs failed to load · tap ↻ to retry</div>');
+        }
+        if (this._metarPartialFail) {
+            sec.insertAdjacentHTML('beforeend',
+                '<div class="wx-section-error">⚠ Some METARs failed to load — missing stations may just be unreported · tap ↻ to retry</div>');
+        }
+
         for (const icao of sorted) {
             const m = this._metarData[icao];
             if (!m) continue;
@@ -313,6 +337,16 @@ class WxBriefing {
 
         if (this._airmets === null) {
             sec.innerHTML = this._buildRhsHeader('G-AIRMETs', null, 'Fetching…').outerHTML;
+            return;
+        }
+
+        if (this._airmetFetchError) {
+            sec.innerHTML = '';
+            sec.appendChild(this._buildRhsHeader('G-AIRMETs', 'warn', 'UNAVAIL'));
+            const errBody = document.createElement('div');
+            errBody.className = 'wx-rhs-body open';
+            errBody.innerHTML = `<div class="wx-section-error">⚠ ${this._escHtml(this._airmetFetchError)} · tap ↻ to retry</div>`;
+            sec.appendChild(errBody);
             return;
         }
 
@@ -519,10 +553,10 @@ class WxBriefing {
                     <div id="wx-metar-section"></div>
                 </div>
                 <div class="wx-right">
+                    <div id="wx-planning-section"></div>
                     <div id="wx-airmet-section"></div>
                     <div id="wx-afd-section"></div>
                     <div id="wx-notam-section"></div>
-                    <div id="wx-planning-section"></div>
                 </div>
             </div>
         `;
@@ -560,15 +594,47 @@ class WxBriefing {
         }
 
         this._loading = true;
+        this._mosFetchError = null;
         this._renderMos();
 
+        // The /mos endpoint caps each request at 8 stations (each station needs 3
+        // chained NWS gridpoint calls; more per request risked Vercel-timeout 503s).
+        // Route/corridor lists routinely exceed 8, so split into parallel batches
+        // instead of losing every station past the cap.
+        const MOS_BATCH_SIZE = 8;
+        const batches = [];
+        for (let i = 0; i < stations.length; i += MOS_BATCH_SIZE) batches.push(stations.slice(i, i + MOS_BATCH_SIZE));
+
         try {
-            const ids = stations.join(',');
             const base = Settings.workerBase || 'https://www.flywhere.app/api';
-            const resp = await fetch(`${base}/mos?ids=${ids}`, { signal: AbortSignal.timeout(45000) });
-            if (!resp.ok) throw new Error(`Server error ${resp.status}`);
-            const data = await resp.json();
-            this._mosData = this._normalizeMos(data);
+            const results = await Promise.allSettled(batches.map(batch =>
+                fetch(`${base}/mos?ids=${batch.join(',')}`, { signal: AbortSignal.timeout(45000) })
+                    .then(resp => {
+                        if (!resp.ok) throw new Error(`Server error ${resp.status}`);
+                        return resp.json();
+                    })
+            ));
+
+            const merged = { fetched_at: new Date().toISOString(), stations: {} };
+            let anyOk = false;
+            const failedStationIds = [];
+            for (let i = 0; i < results.length; i++) {
+                const r = results[i];
+                if (r.status !== 'fulfilled') { failedStationIds.push(...batches[i]); continue; }
+                anyOk = true;
+                Object.assign(merged.stations, this._normalizeMos(r.value).stations);
+            }
+            // Every batch failed (e.g. proxy/NWS unreachable) — surface it rather than
+            // silently caching an empty result.
+            if (!anyOk) throw results[0].reason;
+            // Some batches ok, some failed: mark the missing stations explicitly so
+            // _buildDayGrid can tell "fetch failed" apart from "no forecast issued"
+            // (stationData.error) instead of rendering both identically as "—".
+            for (const id of failedStationIds) {
+                if (!merged.stations[id]) merged.stations[id] = { error: true };
+            }
+            if (failedStationIds.length) this._mosFetchError = 'Some MOS stations failed to load';
+            this._mosData = merged;
 
             // Cache in flight plan for offline use
             if (this._flightPlan) {
@@ -581,6 +647,7 @@ class WxBriefing {
             }
         } catch (err) {
             console.error('MOS fetch failed:', err);
+            this._mosFetchError = err.message || 'MOS fetch failed';
         } finally {
             this._loading = false;
             this._renderSummaryBar();
@@ -639,18 +706,24 @@ class WxBriefing {
 
             // Day cells
             for (const day of days) {
-                const cat = this._worstCatForDay(stationData, day);
+                const worstP = this._worstPeriodForDay(stationData, day);
+                const cat = worstP?.flight_cat || null;
                 const isToday = this._isSameDay(day, now);
                 const cell = document.createElement('div');
                 cell.className = `wx-grid-cell wx-cat-${(cat || 'unknown').toLowerCase()}${isToday ? ' wx-today-col' : ''}`;
                 if (!stationData || stationData.error) {
                     cell.classList.add('wx-cat-unknown');
                     cell.textContent = '—';
+                    if (stationData?.error) cell.title = 'MOS fetch failed for this airport — tap ↻ to retry';
                 } else if (!cat) {
                     cell.textContent = '—';
                     cell.classList.add('wx-cat-unknown');
                 } else {
-                    cell.textContent = cat === 'MVFR' ? 'MVF' : cat;
+                    const cig = worstP.cig_label ?? (worstP.cld === 'BK' ? 'BKN' : worstP.cld === 'OV' ? 'OVC' : null);
+                    cell.innerHTML = `
+                        <span class="wx-cell-cat">${cat === 'MVFR' ? 'MVF' : cat}</span>
+                        ${cig ? `<span class="wx-cell-detail">${cig}</span>` : ''}
+                    `;
                     // Check reliability (MEX days 4+)
                     const reliable = this._isDayReliable(stationData, day);
                     if (!reliable) cell.classList.add('wx-cell-mex');
@@ -1080,7 +1153,8 @@ class WxBriefing {
      * Worst flight category for a station on a given UTC day,
      * considering only prime flying hours (15Z–03Z, ~11AM–11PM Eastern).
      */
-    _worstCatForDay(stationData, day) {
+    /** Full MOS period (not just category) that produced the worst flight category for a day. */
+    _worstPeriodForDay(stationData, day) {
         if (!stationData?.periods) return null;
         const order = ['LIFR', 'IFR', 'MVFR', 'VFR'];
         let worst = null;
@@ -1094,11 +1168,15 @@ class WxBriefing {
             if (!p.valid_time || !p.flight_cat) continue;
             const vt = new Date(p.valid_time);
             if (vt < dayStart || vt >= dayEnd) continue;
-            if (!worst || order.indexOf(p.flight_cat) < order.indexOf(worst)) {
-                worst = p.flight_cat;
+            if (!worst || order.indexOf(p.flight_cat) < order.indexOf(worst.flight_cat)) {
+                worst = p;
             }
         }
         return worst;
+    }
+
+    _worstCatForDay(stationData, day) {
+        return this._worstPeriodForDay(stationData, day)?.flight_cat || null;
     }
 
     _isDayReliable(stationData, day) {
@@ -1262,7 +1340,8 @@ class WxBriefing {
         const stations = this._getStationList();
         if (!stations.length) return;
 
-        this._metarData = null; this._tafData = null;
+        this._metarData = null; this._tafData = null; this._tafFetchFailed = false;
+        this._metarPartialFail = false; this._tafPartialFail = false;
         this._renderMetarSection();
 
         try {
@@ -1282,8 +1361,12 @@ class WxBriefing {
             }
 
             const [metarRes, tafRes] = await Promise.allSettled([metarPromise, tafPromise]);
-            const metars = metarRes.status === 'fulfilled' ? metarRes.value : {};
-            this._tafData = tafRes.status === 'fulfilled' ? tafRes.value : {};
+            // A rejected METAR fetch means AWC/the proxy was unreachable — this must
+            // surface as an explicit error, not collapse into "0 stations found".
+            if (metarRes.status === 'rejected') throw metarRes.reason;
+            const metars = metarRes.value;
+            this._tafFetchFailed = tafRes.status === 'rejected';
+            this._tafData = this._tafFetchFailed ? {} : tafRes.value;
 
             // Trim to stations within 30nm of any route waypoint so bbox doesn't
             // flood the panel with off-route airports.
@@ -1312,12 +1395,16 @@ class WxBriefing {
         const batches = [];
         for (let i = 0; i < ids.length; i += 50) batches.push(ids.slice(i, i + 50));
         const out = {};
+        let anyOk = false;
+        let anyFailed = false;
+        let lastErr = null;
         for (const batch of batches) {
-            const url = `${base}/weather?type=metar&ids=${batch.join(',')}&format=json&hoursBeforeNow=2`;
+            const url = `${base}/weather?type=metar&ids=${batch.join(',')}&format=json&hours=2`;
             try {
                 const resp = await fetch(url, { signal: AbortSignal.timeout(15000) });
-                if (!resp.ok) continue;
+                if (!resp.ok) throw new Error(`METAR ids failed: ${resp.status}`);
                 const items = await resp.json();
+                anyOk = true;
                 for (const item of (Array.isArray(items) ? items : [])) {
                     const icao = item.icaoId || item.station_id;
                     if (!icao || out[icao]) continue;
@@ -1329,14 +1416,20 @@ class WxBriefing {
                         lon: item.lon,
                     };
                 }
-            } catch (_) {}
+            } catch (err) { lastErr = err; anyFailed = true; }
         }
+        // Every batch failed (e.g. AWC/proxy unreachable) — surface it rather than
+        // silently returning an empty result indistinguishable from "no stations".
+        if (!anyOk && lastErr) throw lastErr;
+        // Some batches ok, some failed: the missing stations would otherwise render
+        // identically to "no METAR reported" with no signal anything went wrong.
+        this._metarPartialFail = anyOk && anyFailed;
         return out;
     }
 
     async _fetchMetarsByBbox(bbox) {
         const base = Settings.workerBase || 'https://www.flywhere.app/api';
-        const url = `${base}/weather?type=metar&bbox=${bbox.s},${bbox.w},${bbox.n},${bbox.e}&format=json&hoursBeforeNow=2`;
+        const url = `${base}/weather?type=metar&bbox=${bbox.s},${bbox.w},${bbox.n},${bbox.e}&format=json&hours=2`;
         const resp = await fetch(url, { signal: AbortSignal.timeout(15000) });
         if (!resp.ok) throw new Error(`METAR bbox failed: ${resp.status}`);
         const items = await resp.json();
@@ -1374,7 +1467,7 @@ class WxBriefing {
 
     async _fetchMetarsById(ids) {
         const base = Settings.workerBase || 'https://www.flywhere.app/api';
-        const url = `${base}/weather?type=metar&ids=${ids.join(',')}&format=json&hoursBeforeNow=2`;
+        const url = `${base}/weather?type=metar&ids=${ids.join(',')}&format=json&hours=2`;
         const resp = await fetch(url, { signal: AbortSignal.timeout(15000) });
         if (!resp.ok) throw new Error(`METAR ids failed: ${resp.status}`);
         const items = await resp.json();
@@ -1392,11 +1485,11 @@ class WxBriefing {
         const base = Settings.workerBase || 'https://www.flywhere.app/api';
         const batches = [];
         for (let i = 0; i < ids.length; i += 50) batches.push(ids.slice(i, i + 50));
-        const results = await Promise.all(batches.map(async batch => {
+        const outcomes = await Promise.all(batches.map(async batch => {
             const url = `${base}/weather?type=taf&ids=${batch.join(',')}&format=json`;
             try {
                 const resp = await fetch(url, { signal: AbortSignal.timeout(15000) });
-                if (!resp.ok) return {};
+                if (!resp.ok) throw new Error(`TAF ids failed: ${resp.status}`);
                 const items = await resp.json();
                 const out = {};
                 for (const item of (Array.isArray(items) ? items : [])) {
@@ -1410,10 +1503,16 @@ class WxBriefing {
                         fcsts: item.fcsts || [],
                     };
                 }
-                return out;
-            } catch (_) { return {}; }
+                return { ok: true, out };
+            } catch (err) { return { ok: false, err }; }
         }));
-        return Object.assign({}, ...results);
+        // Every batch failed (e.g. AWC/proxy unreachable) — surface it rather than
+        // silently returning an empty result indistinguishable from "no TAFs issued".
+        if (outcomes.every(o => !o.ok)) throw outcomes[0].err;
+        // Some batches ok, some failed: the missing stations would otherwise render
+        // identically to "no TAF issued" with no signal anything went wrong.
+        this._tafPartialFail = outcomes.some(o => o.ok) && outcomes.some(o => !o.ok);
+        return Object.assign({}, ...outcomes.map(o => o.out || {}));
     }
 
     // ── Station card rendering ────────────────────────────────────────────────
@@ -1774,6 +1873,7 @@ class WxBriefing {
 
     async _fetchAirmets() {
         this._airmets = null;
+        this._airmetFetchError = null;
         this._renderAirmetSection();
         try {
             const client = new WeatherClient(this._db);
@@ -1786,6 +1886,7 @@ class WxBriefing {
         } catch (err) {
             console.error('AIRMET fetch failed:', err);
             this._airmets = [];
+            this._airmetFetchError = err.message || 'G-AIRMETs unavailable';
         }
         this._renderAgeGroup();
         this._renderAirmetSection();
