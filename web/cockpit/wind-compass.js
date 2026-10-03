@@ -136,11 +136,10 @@ class WindCompass {
         const spd = `${wind.speed}${wind.gust ? `G${wind.gust}` : ''} KT`;
         const t = `${WindCompass._fmtHeading(wind.dir)}°T`;
         const src = this._manualMode ? 'MANUAL' : 'METAR';
-        let dir = t;
-        if (this._decl != null) {
-            const m = `${WindCompass._fmtHeading(WindCompass.norm360(wind.dir - this._decl))}°M`;
-            dir = this._manualMode ? `${m} = ${t}` : `${t} = ${m}`;
-        }
+        // Magnetic first, like the runway numbers and ATIS; true in brackets.
+        const dir = this._decl != null
+            ? `${WindCompass._fmtHeading(this._toDisplay(wind.dir))}°M (${t})`
+            : t;
         // Two unbreakable halves, so a narrow pane wraps between direction and speed.
         return `<div class="wc-wind-line"><span class="wc-nowrap">${src} ${dir}</span> <span class="wc-nowrap">· ${spd}</span></div>`;
     }
@@ -203,6 +202,16 @@ class WindCompass {
         return { cx: 150, cy: 150, r, RWY_R: r - 36, LABEL_R: r - 18, ARROW_TAIL_R: r * 0.62, ARROW_TIP_R: r * 0.14 };
     }
 
+    /**
+     * The rose is drawn in MAGNETIC degrees -- runway numbers are magnetic, so
+     * runway 06 sits near 060 and an ATIS wind points where it says. The
+     * components are computed in true (both wind and runways), which gives the
+     * same numbers; only the drawing is rotated by the variation.
+     */
+    _toDisplay(trueHdg) {
+        return this._decl != null ? WindCompass.norm360(trueHdg - this._decl) : trueHdg;
+    }
+
     _buildSvgMarkup(runways, enrichedEnds, wind) {
         const { cx, cy, r, RWY_R, ARROW_TAIL_R, ARROW_TIP_R } = WindCompass.GEOM;
         const ticks = [];
@@ -221,14 +230,15 @@ class WindCompass {
         const runwayLines = runways.map(rwy => {
             const rwyEnds = WindCompass.parseRunwayEnds([rwy], this._decl);
             if (rwyEnds.length === 0) return '';
-            const p1 = WindCompass.headingToXY(rwyEnds[0].hdg, RWY_R, cx, cy);
+            const p1 = WindCompass.headingToXY(this._toDisplay(rwyEnds[0].hdg), RWY_R, cx, cy);
             const p2 = rwyEnds.length > 1
-                ? WindCompass.headingToXY(rwyEnds[1].hdg, RWY_R, cx, cy)
+                ? WindCompass.headingToXY(this._toDisplay(rwyEnds[1].hdg), RWY_R, cx, cy)
                 : { x: cx, y: cy };
             return `<line class="wc-runway-line" x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}"/>`;
         }).join('');
 
-        const endLabels = WindCompass.layoutEndLabels(enrichedEnds).map(l => `
+        const endLabels = WindCompass.layoutEndLabels(
+            enrichedEnds.map(e => ({ ...e, hdg: this._toDisplay(e.hdg) }))).map(l => `
             <g class="wc-end-label ${l.isBest ? 'wc-best' : ''}">
                 ${l.isBest ? (() => {
                     const w = 13 * l.text.length + 14, h = 28;
@@ -239,8 +249,8 @@ class WindCompass {
 
         // Arrow points FROM the wind direction (tail) IN toward the centre (head).
         const windArrow = wind ? (() => {
-            const tail = WindCompass.headingToXY(wind.dir, ARROW_TAIL_R, cx, cy);
-            const tip = WindCompass.headingToXY(wind.dir, ARROW_TIP_R, cx, cy);
+            const tail = WindCompass.headingToXY(this._toDisplay(wind.dir), ARROW_TAIL_R, cx, cy);
+            const tip = WindCompass.headingToXY(this._toDisplay(wind.dir), ARROW_TIP_R, cx, cy);
             return `<g class="wc-wind-arrow">
                 <line x1="${tail.x}" y1="${tail.y}" x2="${tip.x}" y2="${tip.y}" marker-end="url(#wc-arrowhead)"/>
             </g>`;
@@ -256,6 +266,7 @@ class WindCompass {
                 </marker>
             </defs>
             <circle class="wc-rose-circle" cx="${cx}" cy="${cy}" r="${r}"/>
+            <text class="wc-frame-label" x="8" y="16">${this._decl != null ? 'MAG' : 'TRUE'}</text>
             ${ticks.join('')}
             ${runwayLines}
             ${windArrow}
