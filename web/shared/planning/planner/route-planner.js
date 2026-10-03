@@ -30,6 +30,27 @@ import { PlanError, DestinationUnreachableError } from './route-planner-errors.j
 const AIRWAY_RE = /^[VTJQ]\d+[A-Z]?$/;
 
 /**
+ * Index of the destination in plan.waypoints. Missed-approach fixes may follow
+ * it, so it is not necessarily the last waypoint: the last waypoint flagged
+ * isDest, else the last occurrence of plan.destination (the departure may share
+ * the id), else the last waypoint.
+ * @param {{waypoints: Array<{id?:string, isDest?:boolean}>, destination?: string}} plan
+ * @returns {number}
+ */
+function destinationIndex(plan) {
+    const wps = plan.waypoints || [];
+    for (let i = wps.length - 1; i > 0; i--) {
+        if (wps[i].isDest) return i;
+    }
+    if (plan.destination) {
+        for (let i = wps.length - 1; i > 0; i--) {
+            if (wps[i].id === plan.destination) return i;
+        }
+    }
+    return wps.length - 1;
+}
+
+/**
  * Last-resort profile, used only when no `profiles` adapter is wired up at all
  * (or when a caller passes no `profileOverride` to recomputeLegs()).
  *
@@ -372,12 +393,8 @@ export class RoutePlanner {
         const pctPower = (opts.pctPower ?? 65) / 100;
         let etaMs = (opts.departureTime instanceof Date ? opts.departureTime.getTime() : Date.now());
 
-        // Destination: the waypoint flagged isDest (missed-approach fixes may follow
-        // it), else the last waypoint. The descent to the field ends here.
-        let destIdx = wps.length - 1;
-        for (let i = wps.length - 1; i > 0; i--) {
-            if (wps[i].isDest) { destIdx = i; break; }
-        }
+        // The descent to the field ends at the destination; missed-approach legs may follow it.
+        const destIdx = destinationIndex(plan);
 
         // Resolve cruise altitude: opts override → plan field → VFR auto-select
         const dep  = wps[0];
@@ -507,11 +524,13 @@ export class RoutePlanner {
             });
         }
 
+        // Totals run to the destination: leg i ends at wps[i+1], so missed-approach legs start at destIdx.
+        const toDest = legs.slice(0, destIdx);
         const summary = {
-            totalDistNm:  legs.reduce((s, l) => s + l.distNm, 0),
-            totalEteHrs:  legs.reduce((s, l) => s + l.timeHrs, 0),
-            totalFuelGal: legs.reduce((s, l) => s + l.fuelGal, 0),
-            fuelRemGal:   fuelRem,
+            totalDistNm:  toDest.reduce((s, l) => s + l.distNm, 0),
+            totalEteHrs:  toDest.reduce((s, l) => s + l.timeHrs, 0),
+            totalFuelGal: toDest.reduce((s, l) => s + l.fuelGal, 0),
+            fuelRemGal:   toDest.length ? toDest[toDest.length - 1].fuelRemGal : fuelRem,
             fixCount:     wps.length,
         };
         return { ...plan, legs, summary };
@@ -540,7 +559,9 @@ export class RoutePlanner {
         const fuelStopCandidates = [];
         let cumHrs = 0;
 
-        for (let i = 0; i < plan.legs.length; i++) {
+        // Only legs up to the destination: no fuel stop on a missed approach.
+        const legCount = Math.min(plan.legs.length, destinationIndex(plan));
+        for (let i = 0; i < legCount; i++) {
             const leg = plan.legs[i];
             const isLast = i === plan.legs.length - 1;
             const fromWp = plan.waypoints[i];

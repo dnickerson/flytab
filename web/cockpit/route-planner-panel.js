@@ -269,8 +269,14 @@ class RoutePlannerPanel {
         return wp.icao || wp.id || wp.name;
     }
 
-    /** Index in wps of the destination pill's waypoint; falls back to the last waypoint. */
+    /**
+     * Index in wps of the destination: the waypoint flagged isDest, else the last
+     * match for the dest pill's id, else the last waypoint (same rule as recomputeLegs).
+     */
     _destWaypointIndex(wps) {
+        for (let i = wps.length - 1; i > 0; i--) {
+            if (wps[i].isDest) return i;
+        }
         const destId = this._route[this._destPillIndex()]?.id;
         if (destId) {
             for (let i = wps.length - 1; i > 0; i--) {
@@ -420,6 +426,16 @@ class RoutePlannerPanel {
             for (const pill of this._route) {
                 const alt = altByWpId.get(pill.id);
                 if (alt != null) pill.altFt = alt;
+            }
+        }
+
+        // Restore fuel-stop pills — both load paths type interior pills 'fix', but Plan
+        // and Apply read the stop (waypoint.fuelStop) from the pill type.
+        const fuelIds = new Set(wps.filter(wp => wp.fuelStop).map(wp => wp.icao || wp.name || wp.fix));
+        for (const pill of this._route) {
+            if (pill.type === 'fix' && fuelIds.has(pill.id)) {
+                pill.type = 'fuel';
+                delete pill.airway;
             }
         }
 

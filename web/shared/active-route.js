@@ -26,7 +26,11 @@ const ActiveRoute = (() => {
 
     function _findDestIndex(wps) {
         if (!wps || !wps.length) return -1;
-        // Last waypoint typed APT is the destination; MAP fixes come after it.
+        // The route planner flags the destination isDest when missed-approach fixes follow it.
+        for (let i = wps.length - 1; i > 0; i--) {
+            if (wps[i].isDest) return i;
+        }
+        // Otherwise the last waypoint typed APT is the destination; MAP fixes come after it.
         for (let i = wps.length - 1; i >= 0; i--) {
             if (wps[i].type === 'APT') return i;
         }

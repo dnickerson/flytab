@@ -306,10 +306,11 @@ describe('recomputeLegs — descent ends at the isDest waypoint', () => {
         expect(phases(result.legs[1])).not.toContain('DES');
     });
 
-    it('still descends on the last leg when no waypoint is flagged isDest', () => {
+    it('descends on the last leg when neither isDest nor plan.destination marks an earlier waypoint', () => {
         const planner = new RoutePlanner({ aero: mockAero, plans: mockPlans });
         const result = planner.recomputeLegs({
             ...base,
+            destination: undefined,
             waypoints: [
                 { id: 'KCLT',  lat: 35.214, lon: -80.943 },
                 { id: 'KLKR',  lat: 34.723, lon: -80.855 },
@@ -335,5 +336,49 @@ describe('recomputeLegs — descent ends at the isDest waypoint', () => {
         expect(phases(result.legs[0])).toContain('CLB');
         expect(phases(result.legs[1])).toContain('DES');
         expect(phases(result.legs[2])).not.toContain('DES');
+    });
+});
+
+describe('recomputeLegs / insertFuelStops — totals stop at the destination', () => {
+    const wpsFlagged = [
+        { id: 'KCLT',  lat: 35.214, lon: -80.943 },
+        { id: 'KLKR',  lat: 34.723, lon: -80.855, isDest: true },
+        { id: 'FAR',   lat: 31.000, lon: -84.000 },   // long missed-approach leg
+    ];
+    const base = {
+        departure: 'KCLT', destination: 'KLKR', cruiseAltFt: 6000,
+        options: { routingMode: 'gps-direct', maxLegHrs: 1, selfServeOnly: false, avoidance: [] },
+    };
+
+    it('summary distance, time, fuel and fuel remaining stop at the destination', () => {
+        const planner = new RoutePlanner({ aero: mockAero, plans: mockPlans });
+        const r = planner.recomputeLegs({ ...base, waypoints: wpsFlagged });
+        expect(r.legs).toHaveLength(2);
+        expect(r.summary.totalDistNm).toBeCloseTo(r.legs[0].distNm, 9);
+        expect(r.summary.totalEteHrs).toBeCloseTo(r.legs[0].timeHrs, 9);
+        expect(r.summary.totalFuelGal).toBeCloseTo(r.legs[0].fuelGal, 9);
+        expect(r.summary.fuelRemGal).toBeCloseTo(r.legs[0].fuelRemGal, 9);
+    });
+
+    it('without an isDest flag, plan.destination locates the destination (last occurrence)', () => {
+        const planner = new RoutePlanner({ aero: mockAero, plans: mockPlans });
+        const r = planner.recomputeLegs({
+            ...base, waypoints: wpsFlagged.map(({ isDest, ...w }) => w),
+        });
+        expect(r.legs[0].segments.map(s => s.phase)).toContain('DES');
+        expect(r.legs[1].segments.map(s => s.phase)).not.toContain('DES');
+        expect(r.summary.totalDistNm).toBeCloseTo(r.legs[0].distNm, 9);
+    });
+
+    it('does not propose a fuel stop because of a long missed-approach leg', async () => {
+        const aero = {
+            getAirport: async () => null,
+            nearestAirports: async () => [{ icao: 'KFUEL', lat: 33, lon: -82, hasFuel: true, hasSelfServeFuel: true }],
+        };
+        const planner = new RoutePlanner({ aero, plans: mockPlans });
+        const computed = planner.recomputeLegs({ ...base, waypoints: wpsFlagged });
+        expect(computed.legs[1].timeHrs).toBeGreaterThan(1);   // the missed leg alone exceeds maxLegHrs
+        const r = await planner.insertFuelStops(computed);
+        expect(r.fuelStopCandidates).toEqual([]);
     });
 });

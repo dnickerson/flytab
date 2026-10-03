@@ -509,3 +509,30 @@ test.describe('waypoints handed to the planner @planner-ui', () => {
         expect(wps.findIndex(w => w.isDest)).toBe(6);   // the arrival KLKR, not the departure
     });
 });
+
+test.describe('fuel stops survive reopen @planner-ui', () => {
+    const FUEL_TRIP = {
+        departure: 'KCLT', destination: 'KLWA',
+        waypoints: [
+            { icao: 'KCLT', lat: 35.214, lon: -80.943 },
+            { icao: 'KFGX', lat: 35.500, lon: -80.200, fuelStop: true },
+            { icao: 'KLWA', lat: 36.100, lon: -79.940 },
+        ],
+        flight_plan: { departure: 'KCLT', destination: 'KLWA', route: ['KCLT', 'KFGX', 'KLWA'], legs: [] },
+    };
+
+    test('a saved fuel stop reopens as a fuel-stop pill', async ({ page }) => {
+        await page.goto(HARNESS);
+        await page.evaluate(plan => window.__harness.open(plan), FUEL_TRIP);
+        const route = await page.evaluate(() => window.__harness.getRoute());
+        expect(typed(route)).toEqual(['KCLT:dep', 'KFGX:fuel', 'KLWA:dest']);
+    });
+
+    test('Plan on a reopened trip still plans the fuel stop', async ({ page }) => {
+        await page.goto(HARNESS);
+        await page.evaluate(plan => window.__harness.open(plan), FUEL_TRIP);
+        const { planned, fuelStops } = await page.evaluate(() => window.__harness.tapPlan());
+        expect(planned).toEqual(['KCLT', 'KFGX', 'KLWA']);
+        expect(fuelStops).toEqual(['KFGX']);
+    });
+});

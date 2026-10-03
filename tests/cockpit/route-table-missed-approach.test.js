@@ -152,3 +152,67 @@ describe('route table — destination followed by a missed approach', () => {
 
     });
 });
+
+describe('route table — one destination rule, robust to stale flights and edits', () => {
+    it('an isDest destination wins over a demoted mid-route airport', () => {
+        installGlobals({ currentFuel: 30 });
+        // KAAA → KMID (pilot said "Not a stop") → DESTFX (destination, not an APT).
+        const wps = [
+            { icao: 'KAAA',   type: 'APT', lat: 35.0, lon: -81.0 },
+            { icao: 'KMID',   type: 'APT', is_fuel_stop: false, lat: 35.5, lon: -80.5, _legDist: 120, _liveDist: 60, _segments: seg(10) },
+            { icao: 'DESTFX', type: 'FIX', isDest: true, lat: 36.0, lon: -80.0, _legDist: 120, _segments: seg(10) },
+        ];
+        const rt = makeTable(wps, 1);
+        rt._computeEnroute();
+        rt._updateSummary();
+
+        expect(rt._flights[0].arrWpIndex).toBe(2);
+        expect(handleNm(rt)).toBe(180);                 // 60 + 120 (60 if it stopped at KMID)
+    });
+
+    it('handle distance does not depend on stale flight data', () => {
+        installGlobals({ currentFuel: 30 });
+        const rt = makeTable(klkrWithMissed(), 1);
+        rt._computeEnroute();
+        // _flights left over from an older, shorter route.
+        rt._flights = [{ index: 0, depWpIndex: 0, destWpIndex: 1, arrWpIndex: 1 }];
+        rt._updateSummary();
+
+        expect(handleNm(rt)).toBe(180);
+    });
+
+    it('route-table edits keep isDest and publish the real destination', () => {
+        installGlobals({ currentFuel: 30 });
+        const wps = klkrWithMissed();
+        wps[2].isDest = true;
+        const rt = makeTable(wps, 1);
+        let emitted = null;
+        rt._onRouteChanged = (plan) => { emitted = plan; };
+        rt._emitRouteChange();
+
+        expect(emitted.waypoints.map(w => !!w.isDest)).toEqual([false, false, true, false]);
+        expect(emitted.flight_plan.destination).toBe('KLKR');
+    });
+});
+
+describe('ActiveRoute — destination index', () => {
+    const ActiveRoute = new Function(
+        readFileSync(join(__dirname, '../../web/shared/active-route.js'), 'utf8') + '\nreturn ActiveRoute;')();
+
+    it('uses the isDest waypoint, ahead of the last-airport rule', () => {
+        ActiveRoute.setPlan({ waypoints: [
+            { icao: 'KAAA',   type: 'APT' },
+            { icao: 'KMID',   type: 'APT' },
+            { icao: 'DESTFX', type: 'FIX', isDest: true },
+            { icao: 'HOLD',   type: 'FIX' },
+        ] });
+        expect(ActiveRoute.getDestIndex()).toBe(2);
+    });
+
+    it('still falls back to the last airport when nothing is flagged', () => {
+        ActiveRoute.setPlan({ waypoints: [
+            { icao: 'KCLT', type: 'APT' }, { icao: 'KLKR', type: 'APT' }, { icao: 'CORON', type: 'FIX' },
+        ] });
+        expect(ActiveRoute.getDestIndex()).toBe(1);
+    });
+});

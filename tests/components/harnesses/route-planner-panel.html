@@ -137,16 +137,17 @@
              * Returns the waypoint ids Plan computed and the warnings it raised.
              */
             async tapPlan({ legs = [], reserveGal = 10 } = {}) {
-                let planned = null;
+                let planned = null, fuelStops = null;
                 panel._reserveGal = reserveGal;
                 panel._planner = {
                     recomputeLegs: (plan) => {
                         planned = plan.waypoints.map(w => w.id || w.icao);
+                        fuelStops = plan.waypoints.filter(w => w.fuelStop).map(w => w.id || w.icao);
                         return { ...plan, legs, summary: { fuelRemGal: legs.at(-1)?.fuelRemGal } };
                     },
                 };
                 await panel._onRecomputeTap();
-                return { planned, warnings: panel._windWarnings || [] };
+                return { planned, fuelStops, warnings: panel._windWarnings || [] };
             },
             /** Waypoints _pillsToWaypoints builds from the current pills (id + isDest). */
             async pillsToWaypoints() {
