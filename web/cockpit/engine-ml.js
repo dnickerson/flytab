@@ -98,12 +98,15 @@ class EngineMLBridge {
         this._phaseDetectorReady = window.loadPhaseSpec()
             .then((spec) => { this._phaseDetector = new window.PhaseDetector(spec); })
             .catch((err) => {
-                DiagLog?.error?.('EngineML', `Failed to load phase_spec.json: ${err.message}`);
+                // DiagLog has log(), not error(): the old DiagLog?.error?.() call was a
+                // silent no-op, so a missing phase spec never reached the log.
+                if (typeof DiagLog !== 'undefined') DiagLog.log('error', `EngineML: failed to load phase_spec.json: ${err.message}`);
                 this._phaseDetector = null; // _onEngineData falls back to a fixed phase below
             });
 
-        // Always listen for engine data — Layer 1 physics rules run without the native plugin.
-        // ML inference (Layer 2) is skipped gracefully when _initialized is false.
+        // Always listen for engine data: phase tracking and the Layer 1 physics rules
+        // run without the native plugin; ML inference (Layer 2) is skipped when
+        // _initialized is false (see _onEngineData).
         engineClient.addEventListener('engine:data', (e) => {
             this._onEngineData(e.detail);
         });
@@ -268,7 +271,7 @@ class EngineMLBridge {
     }
 
     async _onEngineData(raw) {
-        if (!this._initialized || !this._plugin) return;
+        if (!raw) return;
 
         // Flatten nested data
         const d = raw.data ? { ...raw, ...raw.data } : raw;
@@ -318,10 +321,19 @@ class EngineMLBridge {
 
         this._updateBaseline(d);
 
-        // Layer 1: physics rules — run before ML (no latency)
+        // Layer 1: physics rules — run before ML (no latency), and whether or not
+        // the ML plugin is up: they used to sit behind an early return on
+        // !_initialized, so a failed or missing EngineML plugin silently took the
+        // oil-pressure / CHT / MAP-drop / RPM-drop / fuel-flow checks with it.
         const physicsAdvisories = this._checkPhysicsRules(d);
         for (const adv of physicsAdvisories) {
             this._dispatchAdvisory(adv);
+        }
+
+        // Layers 2-3 (and the physics + ML emergency trigger) need the plugin.
+        if (!this._initialized || !this._plugin) {
+            this._prevSample = d;
+            return;
         }
 
         try {
