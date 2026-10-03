@@ -37,14 +37,9 @@ public class EngineAdvisor {
     private static final float CHT_CAUTION = 400f;
     private static final float CHT_WARNING = 460f;
 
-    // Sticky/stuck-valve check: a cylinder whose EGT hasn't risen with the
-    // others during startup is the cold-cylinder signature (design spec
-    // 2026-06-21-flight-phase-detection-redesign.md §8). THIS THRESHOLD IS
-    // AN UNVALIDATED PLACEHOLDER — no real sticky-valve flight data has been
-    // used to calibrate it. Do not treat an alert from this check as
-    // confirmed until validated against a known-good vs known-sticky
-    // comparison flight.
-    private static final float STICKY_VALVE_LAG_THRESHOLD_F = 150f; // PLACEHOLDER — see comment above
+    // No sticky-valve check here: it runs in the WebView (web/shared/sticky-valve.js,
+    // the Pi's original rule) so it doesn't depend on the ML model loading or on a
+    // GPS-derived "startup" phase. A rise-lag version that lived here was removed.
 
     // Trend tracking
     private static final int HISTORY_SIZE = 120; // 2 minutes at 1Hz
@@ -75,8 +70,6 @@ public class EngineAdvisor {
     private float currentFuelRemaining = 0;
     private float currentAltitude = 0;
 
-    // Sticky-valve check state
-    private float[] startupEntryEgt = null; // EGT1-4 at the moment phase first became "startup" this cycle
     private String lastPhase = null;
 
     // ── Message output ──────────────────────────────────────
@@ -120,25 +113,11 @@ public class EngineAdvisor {
         currentFuelRemaining = fuelRemaining;
         currentAltitude = altitude;
 
-        // Latch per-cylinder EGT the moment the phase first becomes "startup"
-        // so the sticky-valve check (below) has a baseline to compare rise against.
-        if ("startup".equals(phase) && !"startup".equals(lastPhase)) {
-            startupEntryEgt = new float[4];
-            for (int i = 0; i < 4; i++) {
-                startupEntryEgt[i] = features[IDX_EGT1 + i];
-            }
-        }
         lastPhase = phase;
     }
 
     /**
      * Generate advisories based on current engine state.
-     *
-     * Note: the sticky-valve check is NOT included here — it lives in
-     * {@link #checkStickyValve(float[], String)} so callers can run it
-     * without needing an ML score/anomaly result (see Task 16: this method
-     * is only invoked once the ML-inference window is full, but the
-     * sticky-valve check must run from the very first "startup" samples).
      *
      * @param features     Current 12-feature array (RPM, EGT1-4, CHT1-4, OilTemp, OilPress, FuelFlow)
      * @param phase        Current flight phase
@@ -146,16 +125,10 @@ public class EngineAdvisor {
      * @param isAnomaly    Whether ML flagged anomaly
      * @param distRemainingNm Distance to destination (0 if unknown)
      * @param groundSpeedKts Current ground speed
-     * @param stickyValveAlreadyFired Whether {@link #checkStickyValve(float[], String)} already
-     *                                produced a finding for this same sample. When true, the
-     *                                generic "nothing else fired" fallback below is suppressed
-     *                                so the specific sticky-valve caution isn't diluted by a
-     *                                simultaneous generic "monitoring" info line.
      */
     public List<Advisory> advise(float[] features, String phase,
                                   float anomalyScore, boolean isAnomaly,
-                                  float distRemainingNm, float groundSpeedKts,
-                                  boolean stickyValveAlreadyFired) {
+                                  float distRemainingNm, float groundSpeedKts) {
         List<Advisory> advisories = new ArrayList<>();
 
         float rpm = features[IDX_RPM];
@@ -197,10 +170,7 @@ public class EngineAdvisor {
         }
 
         // ── 7. Phase-specific normal message if nothing else ──
-        // Skip when the standalone sticky-valve check already reported something
-        // for this sample — otherwise the generic "monitoring" info line would
-        // appear alongside (and dilute) the specific sticky-valve caution.
-        if (advisories.isEmpty() && !stickyValveAlreadyFired) {
+        if (advisories.isEmpty()) {
             if (isAnomaly) {
                 advisories.add(new Advisory("Engine pattern unusual — monitor closely",
                         SEVERITY_CAUTION, "engine"));
@@ -210,27 +180,6 @@ public class EngineAdvisor {
         }
 
         return advisories;
-    }
-
-    /**
-     * Sticky-valve check, callable independently of {@link #advise}.
-     *
-     * This is a pure EGT-delta comparison against the baseline latched in
-     * {@link #addSample} — it does not use ML score/anomaly, so it doesn't
-     * need to wait for a full ML-inference window. Callers should invoke
-     * this every sample (not just when the ML window is full) so it can
-     * actually observe the "startup" phase, which normally ends well
-     * before the window fills.
-     *
-     * @param features Current 12-feature array (RPM, EGT1-4, CHT1-4, OilTemp, OilPress, FuelFlow)
-     * @param phase    Current flight phase
-     */
-    public List<Advisory> checkStickyValve(float[] features, String phase) {
-        List<Advisory> out = new ArrayList<>();
-        if ("startup".equals(phase) && startupEntryEgt != null) {
-            addStickyValveCheck(features, out);
-        }
-        return out;
     }
 
     // ── % Power calculation ─────────────────────────────────
@@ -548,34 +497,6 @@ public class EngineAdvisor {
         }
     }
 
-    // ── Sticky-valve check ──────────────────────────────────
-
-    private void addStickyValveCheck(float[] features, List<Advisory> out) {
-        // See STICKY_VALVE_LAG_THRESHOLD_F declaration above for the
-        // unvalidated-placeholder caveat — do not tighten or "fix" this
-        // threshold without real sticky-valve flight data to calibrate against.
-        float[] currentEgt = new float[4];
-        for (int i = 0; i < 4; i++) {
-            currentEgt[i] = features[IDX_EGT1 + i];
-        }
-
-        float maxRise = 0f;
-        for (int i = 0; i < 4; i++) {
-            maxRise = Math.max(maxRise, currentEgt[i] - startupEntryEgt[i]);
-        }
-
-        for (int i = 0; i < 4; i++) {
-            float rise = currentEgt[i] - startupEntryEgt[i];
-            if (maxRise > 100f && (maxRise - rise) > STICKY_VALVE_LAG_THRESHOLD_F) {
-                out.add(new Advisory(
-                        String.format(Locale.US,
-                                "Cylinder %d EGT rise lagging others during startup (possible sticky valve) — UNVALIDATED CHECK, confirm on ground",
-                                i + 1),
-                        SEVERITY_CAUTION, "engine"));
-            }
-        }
-    }
-
     // ── Helpers ─────────────────────────────────────────────
 
     private float egtSpread(float[] features) {
@@ -614,7 +535,6 @@ public class EngineAdvisor {
         currentMP = 0;
         currentCarbTemp = 0;
         currentFuelRemaining = 0;
-        startupEntryEgt = null;
         lastPhase = null;
     }
 }

@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v10.92';
+const FLYTAB_VERSION = 'v10.93';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -509,6 +509,22 @@ class FlyTabApp {
         );
         this.engineClient.connect();
         window.engineClient = this.engineClient;
+
+        // Sticky valve check (the Pi's old rule, now run here), with its warning
+        // over the map; the ENG page shows the same warning (window.stickyValve).
+        if (typeof StickyValveMonitor !== 'undefined') {
+            this.stickyValve = new StickyValveMonitor(this.engineClient);
+            window.stickyValve = this.stickyValve;
+            const mapArea = document.getElementById('mapContainer');
+            if (mapArea && typeof StickyValveBanner !== 'undefined') {
+                this.stickyValveBanner = new StickyValveBanner(mapArea, this.stickyValve, 'map');
+            }
+            this.stickyValve.addEventListener('alert', (e) => {
+                const message = `Sticky valve warning: ${StickyValveMonitor.describe(e.detail)}`;
+                console.warn(`[StickyValve] ${message}`);
+                window.engineML?.recordAdvisory?.({ type: `sticky_valve_cyl${e.detail.cyl}`, message, severity: 'caution' });
+            });
+        }
 
         // Engine GPS bridge — injects engine GPS when Stratux situation WS is unavailable
         if (typeof EngineGpsBridge !== 'undefined') {
