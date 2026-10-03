@@ -516,8 +516,8 @@ class FuelTanksDisplay {
         // aircraft's sender hardware) once tracked tank level drops to the configured
         // threshold; above it the sender reads an invalid/flat value and must not be
         // shown as if it were a real cross-check.
-        const senderL = data.fuel_level_l ?? data.left_fuel ?? null;
-        const senderR = data.fuel_level_r ?? data.right_fuel ?? null;
+        const senderL = data.fuel?.edm_fuel_left ?? null;
+        const senderR = data.fuel?.edm_fuel_right ?? null;
         const trackedState = (typeof FuelTankState !== 'undefined') ? FuelTankState.getState() : null;
         const threshold = this._senderAccurateBelowGal ?? 12;
 

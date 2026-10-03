@@ -89,33 +89,33 @@ describe('FuelTanksDisplay threshold configuration', () => {
 
 describe('_updateSenderDisplay — suppression above the sender-accurate range', () => {
     it('suppresses both senders when both tanks are above the threshold', () => {
-        const out = senderText(17, 17, { fuel_level_l: 16.4, fuel_level_r: 16.1, fuel_flow_gph: 9 });
+        const out = senderText(17, 17, { fuel: { edm_fuel_left: 16.4, edm_fuel_right: 16.1 }, fuel_flow_gph: 9 });
         expect(out).toEqual({ L: SUPPRESSED, R: SUPPRESSED });
     });
 
     it('shows both senders when both tanks are below the threshold', () => {
-        const out = senderText(8, 8, { fuel_level_l: 7.8, fuel_level_r: 7.6, fuel_flow_gph: 9 });
+        const out = senderText(8, 8, { fuel: { edm_fuel_left: 7.8, edm_fuel_right: 7.6 }, fuel_flow_gph: 9 });
         expect(out).toEqual({ L: 's:7.8', R: 's:7.6' });
     });
 
     it('shows the sender at exactly the threshold (boundary is inclusive)', () => {
-        const out = senderText(12, 12, { fuel_level_l: 11.9, fuel_level_r: 12.0, fuel_flow_gph: 9 });
+        const out = senderText(12, 12, { fuel: { edm_fuel_left: 11.9, edm_fuel_right: 12.0 }, fuel_flow_gph: 9 });
         expect(out).toEqual({ L: 's:11.9', R: 's:12.0' });
     });
 
     it('suppresses just above the threshold', () => {
-        const out = senderText(12.1, 12.1, { fuel_level_l: 12.0, fuel_level_r: 12.0, fuel_flow_gph: 9 });
+        const out = senderText(12.1, 12.1, { fuel: { edm_fuel_left: 12.0, edm_fuel_right: 12.0 }, fuel_flow_gph: 9 });
         expect(out).toEqual({ L: SUPPRESSED, R: SUPPRESSED });
     });
 
     it('decides per tank — a low left tank still shows while a full right is suppressed', () => {
-        const out = senderText(8, 17, { fuel_level_l: 7.9, fuel_level_r: 16.2, fuel_flow_gph: 9 });
+        const out = senderText(8, 17, { fuel: { edm_fuel_left: 7.9, edm_fuel_right: 16.2 }, fuel_flow_gph: 9 });
         expect(out).toEqual({ L: 's:7.9', R: SUPPRESSED });
     });
 
     it('tracks a threshold change from config rather than a hardcoded 12', () => {
         // Same 12/12 tanks that are shown at threshold 12 must suppress at threshold 8.
-        const out = senderText(12, 12, { fuel_level_l: 11.9, fuel_level_r: 12.0, fuel_flow_gph: 9 },
+        const out = senderText(12, 12, { fuel: { edm_fuel_left: 11.9, edm_fuel_right: 12.0 }, fuel_flow_gph: 9 },
                                { threshold: 8 });
         expect(out).toEqual({ L: SUPPRESSED, R: SUPPRESSED });
     });
@@ -123,17 +123,17 @@ describe('_updateSenderDisplay — suppression above the sender-accurate range',
 
 describe('_updateSenderDisplay — fuel-critical edge values', () => {
     it('shows a legitimate ZERO sender reading (must not be discarded as falsy)', () => {
-        const out = senderText(6, 6, { fuel_level_l: 0, fuel_level_r: 0, fuel_flow_gph: 9 });
+        const out = senderText(6, 6, { fuel: { edm_fuel_left: 0, edm_fuel_right: 0 }, fuel_flow_gph: 9 });
         expect(out).toEqual({ L: 's:0.0', R: 's:0.0' });
     });
 
     it('treats dry tracked tanks (0 gal) as in range, not as missing state', () => {
-        const out = senderText(0, 0, { fuel_level_l: 0.4, fuel_level_r: 0.3, fuel_flow_gph: 9 });
+        const out = senderText(0, 0, { fuel: { edm_fuel_left: 0.4, edm_fuel_right: 0.3 }, fuel_flow_gph: 9 });
         expect(out).toEqual({ L: 's:0.4', R: 's:0.3' });
     });
 
     it('fails open — shows raw senders when there is no tracked state at all', () => {
-        const out = senderText(null, null, { fuel_level_l: 15.5, fuel_level_r: 15.2, fuel_flow_gph: 9 });
+        const out = senderText(null, null, { fuel: { edm_fuel_left: 15.5, edm_fuel_right: 15.2 }, fuel_flow_gph: 9 });
         expect(out).toEqual({ L: 's:15.5', R: 's:15.2' });
     });
 });
