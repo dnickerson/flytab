@@ -2,24 +2,41 @@
  * FlyTab — Wind compass rose for the Airport Info popup's Wind tab.
  * Renders METAR or manually-entered wind against the airport's runway
  * headings so the pilot can visualize crosswind/headwind at a glance.
+ *
+ * Everything is computed in TRUE degrees:
+ *  - METAR wind direction is true.
+ *  - Runway headings are true: the great-circle bearing between the runway's
+ *    two threshold coordinates from the NASR bundle (base_lat/lon,
+ *    recip_lat/lon). A runway without them falls back to its number x 10
+ *    (magnetic) plus the local variation.
+ *  - MANUAL wind is entered the way ATIS/AWOS/tower give it -- MAGNETIC -- and
+ *    converted to true with the World Magnetic Model (shared/mag-var.js).
+ * Comparing true METAR wind against magnetic runway numbers (the old approach)
+ * is off by the local variation: ~8 deg in the Carolinas, ~15 deg in Maine.
  */
 class WindCompass {
     constructor() {
         this._container = null;
         this._runways = null;
         this._wx = null;
+        this._decl = null;              // magnetic declination at the airport, deg, east positive
         this._manualMode = false;
-        this._manualDir = null;
+        this._manualDir = null;         // MAGNETIC, as typed
         this._manualSpeed = null;
         this._activeNumpad = null;
         this._activeNumpadField = null; // 'dir' | 'speed' | null
     }
 
-    /** Entry point: render into `container`, given NASR runway records and the airport's wx object. */
-    render(container, runways, wx) {
+    /**
+     * Entry point: render into `container`, given NASR runway records, the
+     * airport's wx object, and the airport's position ({lat, lon}) for the
+     * magnetic variation.
+     */
+    render(container, runways, wx, site) {
         this._container = container;
         this._runways = runways;
         this._wx = wx;
+        this._decl = WindCompass.declinationAt(site);
         this._draw();
     }
 
@@ -33,19 +50,34 @@ class WindCompass {
         if (this._container && !this._manualMode && !this._activeNumpad) this._draw();
     }
 
-    /** METAR wind only, independent of manual mode -- used both for the METAR-mode display and to seed Manual mode. */
+    /** Magnetic declination (deg, east positive) at {lat, lon}, or null if unknown. */
+    static declinationAt(site) {
+        if (!site || !Number.isFinite(site.lat) || !Number.isFinite(site.lon)) return null;
+        if (typeof MagVar === 'undefined') return null;
+        try {
+            const d = MagVar.declination(site.lat, site.lon);
+            return Number.isFinite(d) ? d : null;
+        } catch (_) {
+            return null;
+        }
+    }
+
+    /** METAR wind only (TRUE), independent of manual mode. */
     static _metarWind(wx) {
         const d = wx?.metar?.decoded;
         if (!d || d.wind_variable || d.wind_dir == null || !d.wind_speed) return null;
         return { dir: d.wind_dir, speed: d.wind_speed, gust: d.wind_gust || null };
     }
 
-    /** The wind actually driving the current display: manual entry if Manual mode is on and has values, else METAR. */
+    /**
+     * The wind driving the display, direction in TRUE degrees: the manual
+     * (magnetic) entry converted to true in Manual mode, else the METAR.
+     */
     _activeWind() {
         if (this._manualMode) {
-            return (this._manualDir != null && this._manualSpeed)
-                ? { dir: this._manualDir, speed: this._manualSpeed, gust: null }
-                : null;
+            if (this._manualDir == null || !this._manualSpeed) return null;
+            const dir = this._decl != null ? WindCompass.norm360(this._manualDir + this._decl) : this._manualDir;
+            return { dir, speed: this._manualSpeed, gust: null };
         }
         return WindCompass._metarWind(this._wx);
     }
@@ -62,7 +94,7 @@ class WindCompass {
         if (d.wind_variable) {
             if (!d.wind_speed) return 'Wind variable';
             const gust = d.wind_gust ? `G${d.wind_gust}` : '';
-            return `VRB ${d.wind_speed}${gust} kt \u2014 crosswind up to ${d.wind_gust || d.wind_speed} kt on any runway`;
+            return `VRB ${d.wind_speed}${gust} kt — crosswind up to ${d.wind_gust || d.wind_speed} kt on any runway`;
         }
         if (d.wind_speed === 0) return 'CALM';
         return 'No METAR wind';
@@ -80,11 +112,48 @@ class WindCompass {
         const age = ageMin < 60 ? `${ageMin}m ago` : `${Math.floor(ageMin / 60)}h ${ageMin % 60}m ago`;
         const stale = ageMin > 75;
         const src = wx.source ? `${String(wx.source).toUpperCase()} ` : '';
-        return `<div class="wc-metar-age${stale ? ' wc-metar-stale' : ''}">${src}METAR ${hh}${mm}Z (${age})${stale ? ' \u26a0 STALE' : ''}</div>`;
+        return `<div class="wc-metar-age${stale ? ' wc-metar-stale' : ''}">${src}METAR ${hh}${mm}Z (${age})${stale ? ' ⚠ STALE' : ''}</div>`;
     }
 
     static _fmtHeading(h) {
-        return h == null ? '\u2014' : String(h).padStart(3, '0');
+        if (h == null) return '—';
+        const r = Math.round(h);
+        return String(r === 0 ? 360 : r).padStart(3, '0');
+    }
+
+    static norm360(h) {
+        return ((h % 360) + 360) % 360;
+    }
+
+    /** "8.0°W" / "15.1°E" for a declination (east positive). */
+    static _fmtVariation(decl) {
+        return `${Math.abs(decl).toFixed(1)}°${decl < 0 ? 'W' : 'E'}`;
+    }
+
+    /** The line naming the wind being drawn, in true and (when known) magnetic. */
+    _windLineHtml(wind) {
+        if (!wind) return '';
+        const spd = `${wind.speed}${wind.gust ? `G${wind.gust}` : ''} KT`;
+        const t = `${WindCompass._fmtHeading(wind.dir)}°T`;
+        const src = this._manualMode ? 'MANUAL' : 'METAR';
+        let dir = t;
+        if (this._decl != null) {
+            const m = `${WindCompass._fmtHeading(WindCompass.norm360(wind.dir - this._decl))}°M`;
+            dir = this._manualMode ? `${m} = ${t}` : `${t} = ${m}`;
+        }
+        // Two unbreakable halves, so a narrow pane wraps between direction and speed.
+        return `<div class="wc-wind-line"><span class="wc-nowrap">${src} ${dir}</span> <span class="wc-nowrap">· ${spd}</span></div>`;
+    }
+
+    _sourceNoteHtml(ends) {
+        const notes = [];
+        if (this._decl != null) notes.push(`VAR ${WindCompass._fmtVariation(this._decl)}`);
+        if (ends.some(e => e.approx)) {
+            notes.push('Some runway headings estimated from runway numbers');
+        } else if (this._decl == null && ends.some(e => e.fromNumber)) {
+            notes.push('Runway headings from runway numbers — variation unknown');
+        }
+        return notes.length ? `<div class="wc-source-note">${notes.join(' · ')}</div>` : '';
     }
 
     _draw() {
@@ -96,7 +165,7 @@ class WindCompass {
             return;
         }
 
-        const ends = WindCompass.parseRunwayEnds(runways);
+        const ends = WindCompass.parseRunwayEnds(runways, this._decl);
         if (!ends.length) {
             container.innerHTML = '<div class="wc-no-runways">Runway headings not available for this airport</div>';
             return;
@@ -104,23 +173,38 @@ class WindCompass {
         const wind = this._activeWind();
         const enrichedEnds = wind
             ? WindCompass.computeWindComponents(ends, wind.dir, wind.speed, wind.gust)
-            : ends.map(e => ({ ...e, headwind: null, crosswind: null, gustXwind: null, isBest: false }));
+            : ends.map(e => ({ ...e, headwind: null, crosswind: null, gustXwind: null, xwSide: '', isBest: false }));
 
-        const cx = 150, cy = 150, r = 110;
         container.innerHTML = `
             <div class="wc-mode-toggle">
                 <button class="wc-mode-metar ${!this._manualMode ? 'active' : ''}">METAR</button>
                 <button class="wc-mode-manual ${this._manualMode ? 'active' : ''}">MANUAL</button>
             </div>
             ${!this._manualMode ? WindCompass._metarAgeHtml(this._wx) : ''}
-            ${!wind ? `<div class="wc-no-wind">${WindCompass._noWindText(this._wx, this._manualMode, this._manualSpeed)}</div>` : ''}
-            ${this._buildSvgMarkup(runways, enrichedEnds, wind, cx, cy, r)}
-            ${this._buildControlsMarkup(wind)}
+            ${wind
+                ? this._windLineHtml(wind)
+                : `<div class="wc-no-wind">${WindCompass._noWindText(this._wx, this._manualMode, this._manualSpeed)}</div>`}
+            ${this._buildSvgMarkup(runways, enrichedEnds, wind)}
+            ${wind ? WindCompass._componentsTableHtml(enrichedEnds) : ''}
+            ${this._sourceNoteHtml(ends)}
+            ${this._buildControlsMarkup()}
         `;
         this._wireControls();
     }
 
-    _buildSvgMarkup(runways, enrichedEnds, wind, cx, cy, r) {
+    /**
+     * Rose geometry (SVG user units; viewBox 0 0 300 300). Runway lines stop
+     * at RWY_R, runway-end ids sit just outside them at LABEL_R, and the wind
+     * arrow's tail starts at ARROW_TAIL_R -- inside the labels, so an arrow
+     * blowing straight down a runway never covers that runway's number.
+     */
+    static get GEOM() {
+        const r = 118;
+        return { cx: 150, cy: 150, r, RWY_R: r - 36, LABEL_R: r - 18, ARROW_TAIL_R: r * 0.62, ARROW_TIP_R: r * 0.14 };
+    }
+
+    _buildSvgMarkup(runways, enrichedEnds, wind) {
+        const { cx, cy, r, RWY_R, ARROW_TAIL_R, ARROW_TIP_R } = WindCompass.GEOM;
         const ticks = [];
         for (let h = 0; h < 360; h += 30) {
             const outer = WindCompass.headingToXY(h, r, cx, cy);
@@ -133,41 +217,30 @@ class WindCompass {
             }
         }
 
+        // One line per runway, between its two ends' headings (through the centre).
         const runwayLines = runways.map(rwy => {
-            const rwyEnds = WindCompass.parseRunwayEnds([rwy]);
+            const rwyEnds = WindCompass.parseRunwayEnds([rwy], this._decl);
             if (rwyEnds.length === 0) return '';
-            const p1 = WindCompass.headingToXY(rwyEnds[0].hdg, r - 20, cx, cy);
+            const p1 = WindCompass.headingToXY(rwyEnds[0].hdg, RWY_R, cx, cy);
             const p2 = rwyEnds.length > 1
-                ? WindCompass.headingToXY(rwyEnds[1].hdg, r - 20, cx, cy)
+                ? WindCompass.headingToXY(rwyEnds[1].hdg, RWY_R, cx, cy)
                 : { x: cx, y: cy };
             return `<line class="wc-runway-line" x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}"/>`;
         }).join('');
 
-        const endLabels = enrichedEnds.map(end => {
-            const pos = WindCompass.headingToXY(end.hdg, r - 34, cx, cy);
-            const xwText = end.gustXwind > end.crosswind ? `${end.crosswind}G${end.gustXwind}XW` : `${end.crosswind}XW`;
-            const hwText = end.headwind == null ? ''
-                : (end.headwind >= 0 ? `${end.headwind}HW` : `${Math.abs(end.headwind)}TW`) + ` ${xwText}`;
-            return `<g class="wc-end-label ${end.isBest ? 'wc-best' : ''}" transform="translate(${pos.x},${pos.y})">
-                ${end.isBest ? '<circle class="wc-best-dot" cx="-22" cy="-4" r="4"/>' : ''}
-                <text class="wc-end-id" text-anchor="middle">${end.label}</text>
-                ${hwText ? `<text class="wc-end-wind" text-anchor="middle" dy="13">${hwText}</text>` : ''}
-            </g>`;
-        }).join('');
+        const endLabels = WindCompass.layoutEndLabels(enrichedEnds).map(l => `
+            <g class="wc-end-label ${l.isBest ? 'wc-best' : ''}">
+                ${l.isBest ? (() => {
+                    const w = 13 * l.text.length + 14, h = 28;
+                    return `<rect class="wc-best-dot" x="${l.x - w / 2}" y="${l.y - h / 2}" width="${w}" height="${h}" rx="6"/>`;
+                })() : ''}
+                <text class="wc-end-id" x="${l.x}" y="${l.y}" text-anchor="middle" dominant-baseline="central">${l.text}</text>
+            </g>`).join('');
 
-        // Arrow points FROM the rim (where the wind originates) IN toward
-        // center -- the confirmed aviation convention: the arrowhead shows
-        // where the wind is headed (at the aircraft), the tail shows where
-        // it's coming from, anchored at the reported direction.
-        // Long and bold on purpose: a first pass at 38px/3px-wide/light-blue
-        // was structurally correct (the element existed) but nearly
-        // invisible against the rose in an actual rendered screenshot --
-        // this is the single piece of information the whole feature exists
-        // to show, so it needs to visually dominate the diagram, not blend
-        // into the tick marks.
+        // Arrow points FROM the wind direction (tail) IN toward the centre (head).
         const windArrow = wind ? (() => {
-            const tail = WindCompass.headingToXY(wind.dir, r, cx, cy);
-            const tip = WindCompass.headingToXY(wind.dir, r * 0.4, cx, cy);
+            const tail = WindCompass.headingToXY(wind.dir, ARROW_TAIL_R, cx, cy);
+            const tip = WindCompass.headingToXY(wind.dir, ARROW_TIP_R, cx, cy);
             return `<g class="wc-wind-arrow">
                 <line x1="${tail.x}" y1="${tail.y}" x2="${tip.x}" y2="${tip.y}" marker-end="url(#wc-arrowhead)"/>
             </g>`;
@@ -176,12 +249,10 @@ class WindCompass {
         return `<svg class="wc-rose" viewBox="0 0 300 300">
             <defs>
                 <!-- userSpaceOnUse, not the SVG default markerUnits="strokeWidth" --
-                     the default multiplies markerWidth/Height by stroke-width, so a
-                     14-unit marker on a stroke-width:6 line rendered at 84 units and
-                     swallowed the adjacent runway-end label. This keeps the arrowhead
-                     a fixed, predictable size regardless of the line's stroke width. -->
-                <marker id="wc-arrowhead" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="12" refX="6" refY="6" orient="auto">
-                    <path class="wc-arrowhead-path" d="M0,0 L12,6 L0,12 z"/>
+                     the default multiplies markerWidth/Height by stroke-width, so the
+                     arrowhead would scale with the line. -->
+                <marker id="wc-arrowhead" markerUnits="userSpaceOnUse" markerWidth="16" markerHeight="16" refX="8" refY="8" orient="auto">
+                    <path class="wc-arrowhead-path" d="M0,0 L16,8 L0,16 z"/>
                 </marker>
             </defs>
             <circle class="wc-rose-circle" cx="${cx}" cy="${cy}" r="${r}"/>
@@ -192,21 +263,81 @@ class WindCompass {
         </svg>`;
     }
 
-    _buildControlsMarkup(wind) {
+    /**
+     * Place runway-end ids around the rose without overlap.
+     *  - Parallel ends (headings within 4 deg) share one label: 26L + 26R -> "26L/R".
+     *  - A label that would still sit closer than MIN_GAP units to one already
+     *    placed is pulled inward a step (twice at most) so near-parallels like
+     *    13/14 stay readable.
+     * Returns [{ text, x, y, isBest }].
+     */
+    static layoutEndLabels(ends) {
+        const { cx, cy, LABEL_R } = WindCompass.GEOM;
+        const MIN_GAP = 34, STEP = 30;
+        const groups = [];
+        for (const e of ends) {
+            const g = groups.find(gr => Math.abs(((e.hdg - gr.hdg + 540) % 360) - 180) < 4);
+            if (g) g.ends.push(e); else groups.push({ hdg: e.hdg, ends: [e] });
+        }
+        const placed = [];
+        for (const g of groups) {
+            const text = WindCompass._mergeLabels(g.ends.map(e => e.label));
+            let pos = null;
+            for (let k = 0; k < 3; k++) {
+                pos = WindCompass.headingToXY(g.hdg, LABEL_R - k * STEP, cx, cy);
+                if (!placed.some(p => Math.hypot(p.x - pos.x, p.y - pos.y) < MIN_GAP)) break;
+            }
+            placed.push({ text, x: pos.x, y: pos.y, isBest: g.ends.some(e => e.isBest) });
+        }
+        return placed;
+    }
+
+    /** ["26L","26R"] -> "26L/R"; ["26L","26C","26R"] -> "26L/C/R"; unrelated ids joined by a space. */
+    static _mergeLabels(labels) {
+        if (labels.length === 1) return labels[0];
+        const parts = labels.map(l => l.match(/^(\d+)([A-Z]*)$/));
+        if (parts.every(p => p && p[1] === parts[0][1])) {
+            return parts[0][1] + parts.map(p => p[2]).join('/');
+        }
+        return labels.join(' ');
+    }
+
+    /** Head/tail and crosswind per runway end, best first, at a readable size. */
+    static _componentsTableHtml(ends) {
+        const rows = ends.map(e => {
+            const head = e.headwind >= 0
+                ? `<span class="wc-hw">${e.headwind} HW</span>`
+                : `<span class="wc-tw">${Math.abs(e.headwind)} TW</span>`;
+            const xw = e.gustXwind > e.crosswind ? `${e.crosswind}G${e.gustXwind}` : `${e.crosswind}`;
+            const side = e.xwSide ? ` ${e.xwSide}` : '';
+            return `<tr class="${e.isBest ? 'wc-best-row' : ''}">
+                <td class="wc-col-rwy">${e.isBest ? '▶ ' : ''}${e.label}</td>
+                <td class="wc-col-head">${head}</td>
+                <td class="wc-col-xw">${xw}${side}</td>
+            </tr>`;
+        }).join('');
+        return `<table class="wc-table">
+            <thead><tr><th>RWY</th><th>HEAD</th><th>CROSS</th></tr></thead>
+            <tbody>${rows}</tbody>
+        </table>`;
+    }
+
+    _buildControlsMarkup() {
         // Only rendered in Manual mode: the fields are inert in METAR mode, and a
         // `hidden` attribute alone loses to .wc-manual-controls { display:flex }.
         if (!this._manualMode) return '';
         const dirDisplay = WindCompass._fmtHeading(this._manualDir);
-        const spdDisplay = this._manualSpeed ?? '\u2014';
+        const spdDisplay = this._manualSpeed ?? '—';
+        const dirLabel = this._decl != null ? 'DIR °M' : 'DIR';
 
         return `
             <div class="wc-manual-controls">
                 <div class="wc-field">
-                    <span class="wc-field-label">DIR</span>
+                    <span class="wc-field-label">${dirLabel}</span>
                     <button class="wc-dir-value" data-field="dir">${dirDisplay}</button>
                 </div>
                 <div class="wc-field">
-                    <span class="wc-field-label">SPD</span>
+                    <span class="wc-field-label">SPD KT</span>
                     <button class="wc-spd-value" data-field="speed">${spdDisplay}</button>
                 </div>
             </div>
@@ -224,14 +355,9 @@ class WindCompass {
     }
 
     // Every tap target here goes through wireTap (web/shared/tap-utils.js),
-    // not a plain click listener. This isn't stylistic: plain click alone
-    // relies on the browser's synthetic click after touchend, which this
-    // codebase has already hit real bugs from (see CLAUDE.md's wireTap
-    // double-fire note) especially across a DOM rebuild mid-interaction --
-    // exactly what _draw() does on every mode-toggle and DONE tap. Every
-    // other tappable element in airport-popup.js already goes through
-    // wireTap; a plain click handler here was the one exception, not a
-    // deliberate choice.
+    // not a plain click listener: _draw() rebuilds the DOM on every mode
+    // toggle and DONE tap, and the synthetic click after a touchend on a
+    // replaced element is exactly what CLAUDE.md's wireTap note is about.
     _wireControls() {
         const container = this._container;
 
@@ -242,8 +368,12 @@ class WindCompass {
 
         wireTap(container.querySelector('.wc-mode-manual'), () => {
             if (!this._manualMode) {
+                // Seed from the METAR, converted to magnetic to match what's typed.
                 const metarWind = WindCompass._metarWind(this._wx);
-                if (this._manualDir == null && metarWind) this._manualDir = metarWind.dir;
+                if (this._manualDir == null && metarWind) {
+                    const mag = this._decl != null ? WindCompass.norm360(metarWind.dir - this._decl) : metarWind.dir;
+                    this._manualDir = WindCompass.validHeading(Math.round(mag));
+                }
                 if (this._manualSpeed == null && metarWind) this._manualSpeed = metarWind.speed;
             }
             this._manualMode = true;
@@ -295,7 +425,7 @@ class WindCompass {
                     // rather than silently applying a wrapped value.
                     this._activeNumpad.clear();
                     const valueEl = this._container.querySelector('.wc-numpad-value');
-                    if (valueEl) valueEl.textContent = isDir ? '001\u2013360' : '0\u2013150 kt';
+                    if (valueEl) valueEl.textContent = isDir ? '001–360' : '0–150 kt';
                     return;
                 }
                 if (isDir) this._manualDir = value;
@@ -320,55 +450,92 @@ class WindCompass {
         };
     }
 
+    /** Initial great-circle bearing (deg true, 0-360) from point 1 to point 2. */
+    static bearingDeg(lat1, lon1, lat2, lon2) {
+        const toRad = Math.PI / 180;
+        const p1 = lat1 * toRad, p2 = lat2 * toRad, dl = (lon2 - lon1) * toRad;
+        const y = Math.sin(dl) * Math.cos(p2);
+        const x = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl);
+        return WindCompass.norm360(Math.atan2(y, x) / toRad);
+    }
+
+    /** "6" -> "06", "26L" -> "26L", "N" -> "N". */
+    static _endLabel(id) {
+        const s = String(id || '').trim().toUpperCase();
+        const m = s.match(/^(\d{1,2})([A-Z]*)$/);
+        return m ? m[1].padStart(2, '0') + m[2] : s;
+    }
+
     /**
-     * Parse NASR runway records into individual ends with headings.
-     * A runway id like "08L/26R" is two ends (080°, 260°); "18" alone is
-     * one. Same regex/heading math as airport-popup.js's old
-     * _bestRunwayHtml, just without the wind-dependent part.
+     * Parse NASR runway records into individual ends with TRUE headings.
+     *  - With both threshold coordinates (NASR bundle v2+): heading = bearing
+     *    base -> reciprocal threshold, labels from base_id/recip_id. This also
+     *    covers ids with no number (N/S, NE/SW).
+     *  - Otherwise from the id: "08L/26R" is two ends, "18" one; heading =
+     *    number x 10 (magnetic), plus the declination when known (approx: true).
+     *    Without a declination the end is fromNumber: true and the heading is
+     *    the bare number x 10.
+     * @param {object[]} runways
+     * @param {number|null} [declination] deg, east positive
+     * @returns {{label:string, hdg:number, length_ft:number, approx?:boolean, fromNumber?:boolean}[]}
      */
-    static parseRunwayEnds(runways) {
+    static parseRunwayEnds(runways, declination = null) {
         const ends = [];
         for (const rwy of runways || []) {
-            const parts = (rwy.id || '').split('/');
-            for (const part of parts) {
-                const match = part.trim().match(/^(\d{1,2})(L|R|C)?$/i);
+            if (!rwy) continue;
+            const hasCoords = [rwy.base_lat, rwy.base_lon, rwy.recip_lat, rwy.recip_lon].every(Number.isFinite)
+                && (rwy.base_lat !== rwy.recip_lat || rwy.base_lon !== rwy.recip_lon);
+            if (hasCoords && rwy.base_id && rwy.recip_id) {
+                const h = WindCompass.bearingDeg(rwy.base_lat, rwy.base_lon, rwy.recip_lat, rwy.recip_lon);
+                ends.push({ label: WindCompass._endLabel(rwy.base_id), hdg: Math.round(h * 10) / 10, length_ft: rwy.length_ft });
+                ends.push({ label: WindCompass._endLabel(rwy.recip_id), hdg: Math.round(WindCompass.norm360(h + 180) * 10) / 10, length_ft: rwy.length_ft });
+                continue;
+            }
+            for (const part of (rwy.id || '').split('/')) {
+                const match = part.trim().match(/^(\d{1,2})(L|R|C|W)?$/i);
                 if (!match) continue;
-                const hdg = parseInt(match[1], 10) * 10;
-                const suffix = (match[2] || '').toUpperCase();
-                const label = String(match[1]).padStart(2, '0') + suffix;
-                ends.push({ label, hdg, length_ft: rwy.length_ft });
+                const mag = parseInt(match[1], 10) * 10;
+                const label = match[1].padStart(2, '0') + (match[2] || '').toUpperCase();
+                if (declination != null) {
+                    ends.push({ label, hdg: Math.round(WindCompass.norm360(mag + declination) * 10) / 10, length_ft: rwy.length_ft, approx: true });
+                } else {
+                    ends.push({ label, hdg: mag, length_ft: rwy.length_ft, fromNumber: true });
+                }
             }
         }
         return ends;
     }
 
     /**
-     * Enrich parsed runway ends with headwind/crosswind/gust-crosswind for
-     * a given wind, sorted best (highest headwind) first. Same trig as
-     * airport-popup.js's old _bestRunwayHtml: headwind = speed*cos(diff),
-     * crosswind = speed*sin(diff), diff = windDir - runwayHdg. A negative
-     * headwind is a tailwind, not clamped to zero -- callers decide how to
-     * label that.
+     * Enrich runway ends with headwind/crosswind/gust-crosswind for a wind
+     * (direction and runway headings both TRUE), sorted best first.
+     * headwind = speed*cos(diff), crosswind = |speed*sin(diff)|, diff = windDir
+     * - runwayHdg; xwSide 'R' when the wind comes from the right of the runway
+     * heading, 'L' from the left. A negative headwind is a tailwind.
      */
     static computeWindComponents(ends, windDir, windSpd, gustSpd) {
         const gust = gustSpd || windSpd;
+        const raw = (e) => {
+            const diff = (windDir - e.hdg) * Math.PI / 180;
+            return { hw: windSpd * Math.cos(diff), xw: windSpd * Math.sin(diff), gx: gust * Math.sin(diff) };
+        };
         const enriched = ends.map(end => {
-            const diff = (windDir - end.hdg) * Math.PI / 180;
-            const headwind = Math.round(windSpd * Math.cos(diff));
-            const crosswind = Math.abs(Math.round(windSpd * Math.sin(diff)));
-            const gustXwind = Math.abs(Math.round(gust * Math.sin(diff)));
-            return { ...end, headwind, crosswind, gustXwind };
+            const c = raw(end);
+            const crosswind = Math.abs(Math.round(c.xw));
+            return {
+                ...end,
+                headwind: Math.round(c.hw),
+                crosswind,
+                gustXwind: Math.abs(Math.round(c.gx)),
+                xwSide: Math.max(crosswind, Math.abs(Math.round(c.gx))) === 0 ? '' : (c.xw > 0 ? 'R' : 'L'),
+            };
         });
         // Sort on the unrounded components: rounding made 13 (15HW 3XW) tie
         // 14 (15HW 0XW) for a 140 wind and the list order picked 13. Ties then
         // go to the smaller crosswind.
-        const raw = (e) => {
-            const diff = (windDir - e.hdg) * Math.PI / 180;
-            return { hw: windSpd * Math.cos(diff), xw: Math.abs(windSpd * Math.sin(diff)) };
-        };
         enriched.sort((a, b) => {
             const ra = raw(a), rb = raw(b);
-            return (rb.hw - ra.hw) || (ra.xw - rb.xw);
+            return (rb.hw - ra.hw) || (Math.abs(ra.xw) - Math.abs(rb.xw));
         });
         // A tailwind end is never "best" (e.g. a lone "18" with a north wind).
         enriched.forEach((end, i) => { end.isBest = i === 0 && end.headwind >= 0; });

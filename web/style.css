@@ -11700,17 +11700,60 @@ body.route-editing-mode .route-table-sheet {
     fill: var(--text-primary);
     font-family: var(--font-instrument);
     font-weight: 900;
-    font-size: 14px;
+    /* SVG user units; the rose scales to the pane, ~0.8 on the tablet. */
+    font-size: 21px;
+    /* Halo so an id stays legible where it crosses a runway line or tick. */
+    paint-order: stroke;
+    stroke: var(--bg-surface);
+    stroke-width: 5px;
+    stroke-linejoin: round;
 }
-.wc-end-wind {
-    fill: var(--text-secondary);
-    font-family: var(--font-instrument);
-    font-weight: 900;
-    font-size: 11px;
-}
+.wc-best .wc-end-id { stroke: var(--color-success); }
 .wc-best-dot {
     fill: var(--color-success);
 }
+
+.wc-wind-line {
+    color: var(--text-primary);
+    font-family: var(--font-instrument);
+    font-size: var(--text-base);
+    font-weight: 900;
+    text-align: center;
+}
+.wc-source-note {
+    color: var(--text-muted);
+    font-family: var(--font-ui);
+    font-size: var(--text-xs);
+    font-weight: 700;
+    text-align: center;
+}
+.wc-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--font-instrument);
+    font-size: var(--text-base);
+}
+.wc-table th {
+    color: var(--text-label);
+    font-family: var(--font-ui);
+    font-size: var(--text-xs);
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-align: left;
+    padding: 4px 6px;
+    border-bottom: 1.5px solid var(--border-strong);
+}
+.wc-table td {
+    color: var(--text-primary);
+    font-weight: 900;
+    padding: 6px 4px;
+    border-bottom: 1px solid var(--border-light);
+}
+.wc-table td { white-space: nowrap; }
+.wc-tw { color: var(--color-danger-on-light); }
+/* Best end: solid success fill per the status-badge pattern, dark text. */
+.wc-best-row td { background: var(--color-success); }
+.wc-nowrap { white-space: nowrap; }
 
 .wc-manual-controls[hidden] { display: none; }
 .wc-manual-controls {

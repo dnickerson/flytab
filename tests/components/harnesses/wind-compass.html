@@ -19,13 +19,36 @@
     </div>
 </div>
 <script src="../../../web/shared/tap-utils.js"></script>
+<script src="../../../web/shared/mag-var.js"></script>
 <script src="../../../web/cockpit/wind-compass.js"></script>
 <script>
+    // NASR-shaped runways (synthetic thresholds near KLKR, 8 deg W variation):
+    // a parallel pair, a crossing runway, and a near-parallel one.
+    function offset(lat, lon, brg, distM) {
+        const R = 6371000, d = distM / R, t = brg * Math.PI / 180;
+        const p1 = lat * Math.PI / 180, l1 = lon * Math.PI / 180;
+        const p2 = Math.asin(Math.sin(p1) * Math.cos(d) + Math.cos(p1) * Math.sin(d) * Math.cos(t));
+        const l2 = l1 + Math.atan2(Math.sin(t) * Math.sin(d) * Math.cos(p1), Math.cos(d) - Math.sin(p1) * Math.sin(p2));
+        return [p2 * 180 / Math.PI, l2 * 180 / Math.PI];
+    }
+    function rwy(id, baseId, recipId, trueHdg, lat, lon) {
+        const [rlat, rlon] = offset(lat, lon, trueHdg, 1800);
+        return { id, length_ft: 6000, base_id: baseId, base_lat: lat, base_lon: lon, recip_id: recipId, recip_lat: rlat, recip_lon: rlon };
+    }
+    window.__site = { lat: 34.72, lon: -80.85 };
+    window.__runways = [
+        rwy('08L/26R', '08L', '26R', 72.3, 34.720, -80.850),
+        rwy('08R/26L', '08R', '26L', 72.3, 34.716, -80.850),
+        rwy('13/31', '13', '31', 122.1, 34.718, -80.846),
+        rwy('14/32', '14', '32', 131.8, 34.722, -80.842),
+    ];
     window.__wc = new WindCompass();
     window.__wc.render(
         document.getElementById('pane'),
-        [{ id: '16/34', length_ft: 5500 }, { id: '08L/26R', length_ft: 3200 }],
-        { metar: { decoded: { wind_dir: 260, wind_speed: 12, wind_gust: 18, wind_variable: false } } }
+        window.__runways,
+        { source: 'fisb', metar: { decoded: { wind_dir: 250, wind_speed: 12, wind_gust: 22, wind_variable: false,
+            observed_at: new Date(Date.now() - 20 * 60000).toISOString() } } },
+        window.__site
     );
 </script>
 </body>
