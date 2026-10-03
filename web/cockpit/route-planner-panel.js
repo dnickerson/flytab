@@ -249,10 +249,7 @@ class RoutePlannerPanel {
             if (beforePills.length > 0) this._route.splice(airportIdx, 0, ...beforePills);
         } else {
             // Airport not in route — append before the destination pill (or at end)
-            let destIdx = -1;
-            for (let i = this._route.length - 1; i >= 0; i--) {
-                if (this._route[i].type === 'dest') { destIdx = i; break; }
-            }
+            const destIdx = this._destPillIndex();
             const insertAt = destIdx >= 0 ? destIdx : this._route.length;
             this._route.splice(insertAt, 0, ...beforePills, ...afterPills);
         }
@@ -268,12 +265,16 @@ class RoutePlannerPanel {
         return -1;
     }
 
+    _wpId(wp) {
+        return wp.icao || wp.id || wp.name;
+    }
+
     /** Index in wps of the destination pill's waypoint; falls back to the last waypoint. */
     _destWaypointIndex(wps) {
         const destId = this._route[this._destPillIndex()]?.id;
         if (destId) {
             for (let i = wps.length - 1; i > 0; i--) {
-                if ((wps[i].icao || wps[i].id || wps[i].name) === destId) return i;
+                if (this._wpId(wps[i]) === destId) return i;
             }
         }
         return wps.length - 1;
@@ -383,7 +384,8 @@ class RoutePlannerPanel {
             let activeAirway = null;
             for (const pill of this._route) {
                 if (pill.type === 'awy')    activeAirway = pill.id;
-                else if (pill.type === 'direct') activeAirway = null;
+                // No airway continues past the destination; fixes after it are a missed approach.
+                else if (pill.type === 'direct' || pill.type === 'dest') activeAirway = null;
                 else if (pill.type === 'fix' && activeAirway) pill.airway = activeAirway;
             }
         } else {
@@ -2139,8 +2141,9 @@ class RoutePlannerPanel {
             at = this._insertIndex;
             this._insertIndex = null;
         } else {
-            // Default: insert before last pill (destination)
-            at = Math.max(0, this._route.length - 1);
+            // Default: insert before the destination pill (missed-approach fixes may follow it)
+            const destIdx = this._destPillIndex();
+            at = destIdx >= 0 ? destIdx : Math.max(0, this._route.length - 1);
         }
 
         this._route.splice(at, 0, { id: v, type });
@@ -2884,7 +2887,7 @@ class RoutePlannerPanel {
         // pill (insertApproach), so the destination airport is not reliably
         // the last waypoint once an approach with a missed segment is loaded.
         const depPill  = this._route.find(p => p.type === 'dep');
-        const destPill = this._route.find(p => p.type === 'dest');
+        const destPill = this._route[this._destPillIndex()];
         const dep  = depPill?.id  || wps[0].icao || wps[0].name;
         const dest = destPill?.id || wps[wps.length - 1].icao || wps[wps.length - 1].name;
 
@@ -2935,7 +2938,7 @@ class RoutePlannerPanel {
 
         // Full route array (used as fallback for single-leg trips)
         const fullRouteArr = this._route.map(r => r.id);
-        const wpId = (wp) => wp.icao || wp.id || wp.name;
+        const wpId = (wp) => this._wpId(wp);
         const destId = wpId(waypoints[this._destWaypointIndex(waypoints)]);
 
         const tripLegs = [];

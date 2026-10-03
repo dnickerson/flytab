@@ -327,12 +327,70 @@ test.describe('destination with a loaded missed approach @planner-ui', () => {
         expect(route[7]).toEqual({ id: 'CORON', type: 'fix' });
     });
 
-    test('stats and fuel-stop recheck measure to the destination waypoint, not CORON', async ({ page }) => {
+    // KCLT → KLKR with a missed-approach hold placed well away from KLKR, so a
+    // direct distance measured to the hold differs visibly from one to KLKR.
+    const KCLT_KLKR_PILLS = [
+        { id: 'KCLT', type: 'dep' }, { id: 'RW24', type: 'fix' },
+        { id: 'KLKR', type: 'dest' }, { id: 'HOLD1', type: 'fix' },
+    ];
+    const KCLT_KLKR_WPS = [
+        { icao: 'KCLT',  lat: 35.214, lon: -80.943 },
+        { icao: 'RW24',  lat: 34.728, lon: -80.853 },
+        { icao: 'KLKR',  lat: 34.723, lon: -80.855 },
+        { icao: 'HOLD1', lat: 34.400, lon: -81.400 },
+    ];
+
+    test('stats bar measures the direct-distance delta to the destination, not the missed-approach hold', async ({ page }) => {
+        await page.goto(HARNESS);
+        await page.evaluate(pills => window.__harness.setPlannedRoute(pills), KCLT_KLKR_PILLS);
+
+        const text = await page.evaluate(wps => window.__harness.updateStats({
+            waypoints: wps, legs: [], summary: { totalDistNm: 100 },
+        }), KCLT_KLKR_WPS);
+
+        const [toDest, toHold] = await page.evaluate(([a, d, h]) => [
+            Math.round(100 - NasrDB.haversineNm(a.lat, a.lon, d.lat, d.lon)),
+            Math.round(100 - NasrDB.haversineNm(a.lat, a.lon, h.lat, h.lon)),
+        ], [KCLT_KLKR_WPS[0], KCLT_KLKR_WPS[2], KCLT_KLKR_WPS[3]]);
+        expect(toDest).not.toBe(toHold);
+        expect(text).toContain(`+${toDest} nm`);
+    });
+
+    test('fuel-stop recheck plans to the destination, not the missed-approach hold', async ({ page }) => {
+        await page.goto(HARNESS);
+        await page.evaluate(pills => window.__harness.setPlannedRoute(pills), KCLT_KLKR_PILLS);
+        await page.evaluate(wps => window.__harness.setCoords(Object.fromEntries(
+            wps.map(w => [w.icao, { lat: w.lat, lon: w.lon }]))), KCLT_KLKR_WPS);
+
+        const planned = await page.evaluate(() => window.__harness.recheckFuelStops());
+        expect(planned).toEqual({ departure: 'KCLT', destination: 'KLKR' });
+    });
+
+    test('reopening does not tag missed-approach fixes with the enroute airway', async ({ page }) => {
+        await page.goto(HARNESS);
+        await page.evaluate(plan => window.__harness.open(plan), {
+            departure: 'KCLT', destination: 'KLKR',
+            waypoints: [],
+            flight_plan: {
+                departure: 'KCLT', destination: 'KLKR',
+                route: ['KCLT', 'V311', 'FLO', 'KLKR', 'CORON'],
+                legs: [],
+            },
+        });
+
+        const route = await page.evaluate(() => window.__harness.getRouteWithAirways());
+        expect(route.find(p => p.id === 'FLO').airway).toBe('V311');
+        expect(route.find(p => p.id === 'CORON')).toEqual({ id: 'CORON', type: 'fix', airway: null });
+    });
+
+    test('Add inserts a new fix before the destination, not between it and the missed approach', async ({ page }) => {
         await page.goto(HARNESS);
         await page.evaluate(pills => window.__harness.setPlannedRoute(pills), KLKR_LOOP_PILLS);
 
-        const idx = await page.evaluate(wps => window.__harness.destWaypointIndex(wps), KLKR_LOOP_WPS);
-        expect(idx).toBe(6);
+        await page.evaluate(() => window.__harness.addFix('FLO'));
+
+        const route = await page.evaluate(() => window.__harness.getRoute());
+        expect(typed(route).slice(-3)).toEqual(['FLO:fix', 'KLKR:dest', 'CORON:fix']);
     });
 
     test('auto-saved trip is KLKR → KLKR, keeps the missed approach, and reopens with KLKR as destination', async ({ page }) => {

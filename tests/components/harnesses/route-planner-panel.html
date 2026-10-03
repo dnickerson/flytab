@@ -109,9 +109,33 @@
                 await panel._saveCurrentTrip(plan);
                 return window.__lastSavedTrip;
             },
-            /** Index _updateStats / _recheckFuelStops treat as the destination waypoint. */
-            destWaypointIndex(wps) {
-                return panel._destWaypointIndex(wps);
+            /** Route pills including the airway tag _loadPlan re-applies to fix pills. */
+            getRouteWithAirways() {
+                return panel._route.map(p => ({ id: p.id, type: p.type, airway: p.airway ?? null }));
+            },
+            /** Seed the panel's coordinate cache so _pillsToWaypoints resolves pills. */
+            setCoords(coords) {
+                Object.assign(panel._coords, coords);
+            },
+            /** Run _updateStats(result) and return the stats bar text. */
+            updateStats(result) {
+                panel._updateStats(result);
+                return panel._statsEl.textContent;
+            },
+            /** Run _recheckFuelStops() against a stub planner; return the dep/dest it planned. */
+            async recheckFuelStops() {
+                let planned = null;
+                panel._planner = {
+                    recomputeLegs: (plan) => { planned = plan; return { ...plan, legs: [], summary: {} }; },
+                    insertFuelStops: async () => ({ fuelStopCandidates: [] }),
+                };
+                await panel._recheckFuelStops();
+                return planned && { departure: planned.departure, destination: planned.destination };
+            },
+            /** Type an identifier into the Add box and tap Add (default insertion point). */
+            addFix(id) {
+                panel._addInput.value = id;
+                return panel._onAddTap();
             },
             /** Current DEP / DEST input values. */
             inputs() {
