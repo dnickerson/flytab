@@ -24,9 +24,29 @@ const ActiveRoute = (() => {
 
     // ── Internal helpers ────────────────────────────────────────────────────
 
-    function _findDestIndex(wps) {
+    /**
+     * Index of the waypoint the route planner marked as the destination (isDest,
+     * from its DEST pill — missed-approach fixes may follow it), or -1 when there
+     * is none or it is stale (an airport was later moved after it). Callers then
+     * apply their own fallback. Shared by RouteTable and RoutePlannerPanel; the
+     * planning library keeps its own copy (destinationIndex) because it must not
+     * depend on this script.
+     */
+    function markedDestIndex(wps) {
+        if (!wps) return -1;
+        for (let i = wps.length - 1; i > 0; i--) {
+            if (!wps[i].isDest) continue;
+            return wps.slice(i + 1).some(w => w.type === 'APT') ? -1 : i;
+        }
+        return -1;
+    }
+
+    /** The marked destination, else the last APT-typed waypoint, else the last. */
+    function findDestIndex(wps) {
         if (!wps || !wps.length) return -1;
-        // Last waypoint typed APT is the destination; MAP fixes come after it.
+        const marked = markedDestIndex(wps);
+        if (marked >= 0) return marked;
+        // Otherwise the last waypoint typed APT is the destination; MAP fixes come after it.
         for (let i = wps.length - 1; i >= 0; i--) {
             if (wps[i].type === 'APT') return i;
         }
@@ -47,7 +67,7 @@ const ActiveRoute = (() => {
         _plan = plan;
         // Index 0 is the departure airport — pilot starts there, so NEXT = WP[1].
         _index = plan?.waypoints?.length > 1 ? 1 : 0;
-        _destIndex = _findDestIndex(plan?.waypoints);
+        _destIndex = findDestIndex(plan?.waypoints);
         _emit('activeroute:plan', { plan: _plan, index: _index });
     }
 
@@ -81,5 +101,5 @@ const ActiveRoute = (() => {
     function getActiveWp()  { return _plan?.waypoints[_index] || null; }
     function getDestWp()    { return _destIndex >= 0 ? _plan?.waypoints[_destIndex] : null; }
 
-    return { setPlan, advance, setIndex, getPlan, getIndex, getDestIndex, getWaypoints, getActiveWp, getDestWp };
+    return { setPlan, advance, setIndex, getPlan, getIndex, getDestIndex, getWaypoints, getActiveWp, getDestWp, markedDestIndex, findDestIndex };
 })();

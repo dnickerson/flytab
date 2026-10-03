@@ -349,8 +349,13 @@ class PlanSync {
                 }
 
                 if (action === 'replan') {
-                    window.app?.routePlannerPanel?.open(planToLoad);
-                    setTimeout(() => window.app?.routePlannerPanel?._onRecomputeTap(), 100);
+                    // Await open(): it resets and rebuilds the plan asynchronously. Plan then
+                    // waits for open()'s own wind fetch before recomputing, so the two can't race.
+                    const panel = window.app?.routePlannerPanel;
+                    if (panel) {
+                        await panel.open(planToLoad);
+                        await panel._onRecomputeTap();
+                    }
                 }
 
                 // Fix 1: escape trip.name to prevent XSS

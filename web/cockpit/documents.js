@@ -1,0 +1,579 @@
+/**
+ * FlyTab — Document Library panel. Full-screen MORE-drawer page listing
+ * imported + bundled reference documents (POHs, checklists, chart legends).
+ * File-picker import extracts text per-page via PDF.js and feeds a single
+ * combined lunr.js index (spanning every imported document) that backs the
+ * top search box -- see _importFile/_indexDocument/_saveIndex/_applySearch.
+ */
+class DocumentsPanel {
+    constructor(nasrDb) {
+        this._nasrDb = nasrDb;
+        this._el = null;
+        this._listEl = null;
+        this._viewerEl = null;
+        this._panZoom = null; // set in _buildDOM via attachPinchZoom
+        this._searchInput = null;
+        // Lazy-PDF controller + blob URL for whichever document is currently
+        // open (see _openDocument and pdf-render.js's renderPdfToContainer
+        // lazy path). Torn down/revoked at the top of the next _openDocument
+        // call, not right after render -- pdf.js keeps reading from the url
+        // in the background as the pilot scrolls, well past when
+        // renderPdfToContainer's own promise resolves.
+        this._activePdfController = null;
+        this._activePdfUrl = null;
+        // Promise-chain queue serializing every read-modify-write of the
+        // shared 'documents_search_index' app_cache entry -- see _queueIndexOp.
+        this._indexQueue = Promise.resolve();
+        // Bumped on every _applySearch call; a call whose own generation no
+        // longer matches this._searchGeneration by the time its awaited work
+        // resolves was superseded by a newer call and must not render --
+        // see _applySearch.
+        this._searchGeneration = 0;
+        this._buildDOM();
+    }
+
+    _buildDOM() {
+        this._el = document.createElement('div');
+        this._el.className = 'documents-page';
+        this._el.innerHTML = `
+            <div class="documents-header">
+                <div class="documents-header-left">
+                    <span class="documents-title">Documents</span>
+                    <button class="documents-import-btn">Import</button>
+                    <input type="file" class="documents-file-input" accept="application/pdf" style="display:none">
+                </div>
+                <button class="documents-close btn-close" aria-label="Close">&times;</button>
+            </div>
+            <div class="documents-search-bar">
+                <input type="search" class="documents-search-input" placeholder="Search documents…" autocomplete="off">
+            </div>
+            <div class="documents-list"></div>
+            <div class="documents-viewer"><div class="documents-pan-container"></div></div>
+        `;
+        this._listEl = this._el.querySelector('.documents-list');
+        this._viewerEl = this._el.querySelector('.documents-viewer');
+        this._panContainer = this._viewerEl.querySelector('.documents-pan-container');
+        // panAlways:true -- unlike the plate viewer (single image/canvas set,
+        // native single-finger swipe reserved for next/prev plate navigation),
+        // this viewer stacks a full multi-page PDF and has no native scroll to
+        // fall back on once touch-action:none takes over (see CSS) -- a single
+        // finger must pan at any zoom level, including the 1x default, or a
+        // multi-page document would be unreachable past the first screenful.
+        this._panZoom = attachPinchZoom(this._viewerEl, this._panContainer, {
+            panAlways: true,
+            // Drives pdf-render.js's lazy page rendering (see _openDocument
+            // and renderPdfToContainer's `panState` option) -- fires
+            // synchronously on every pinch/pan/reset/page-jump transform
+            // change, so the currently-open document's rendered-page buffer
+            // stays deterministically in sync with wherever the pilot has
+            // scrolled to. this._activePdfController is set by _openDocument
+            // once a document is open; null (a no-op) before that and while
+            // the list view is showing.
+            onApply: () => this._activePdfController?.updateVisibility(),
+        });
+        wireTap(this._el.querySelector('.documents-close'), () => this.hide());
+        this._searchInput = this._el.querySelector('.documents-search-input');
+        this._searchInput.addEventListener('input', () => this._applySearch(this._searchInput.value));
+        const fileInput = this._el.querySelector('.documents-file-input');
+        wireTap(this._el.querySelector('.documents-import-btn'), () => fileInput.click());
+        fileInput.addEventListener('change', async () => {
+            try {
+                if (fileInput.files[0]) await this._importFile(fileInput.files[0], fileInput.files[0].name);
+            } catch (err) {
+                // A malformed/corrupt PDF (or any other non-quota import failure --
+                // _importFile's own QuotaExceededError branch already shows a
+                // message and returns without re-throwing, so this catch only
+                // ever sees non-quota errors) propagates unhandled from
+                // _importFile/_indexDocument otherwise. Caught here so it doesn't
+                // become an unhandled rejection, and surfaced to the pilot to
+                // match the share-intent path's equivalent failure handling
+                // (_checkPendingShare) -- without this the Import button would
+                // silently do nothing on a bad file. The input reset in `finally`
+                // below is what makes retry possible -- without it the pilot
+                // couldn't re-select the same failed file (the browser won't
+                // re-fire 'change' for an unchanged value).
+                console.error('DocumentsPanel: import failed', err);
+                this._showMessage(`Could not import "${fileInput.files[0]?.name || 'the file'}" — it may be corrupt or invalid.`);
+            } finally {
+                fileInput.value = '';
+            }
+        });
+        document.body.appendChild(this._el);
+        this._checkPendingShare();
+        this._seedBundledDocuments();
+        window.Capacitor?.Plugins?.App?.addListener('resume', () => this._checkPendingShare());
+    }
+
+    // Polls the native ShareReceiver plugin for a PDF shared into FlyTab from
+    // another app (file manager, email, etc.) via Android's SEND intent. Called
+    // once at startup (covers cold start -- the panel is built once at app
+    // startup) and on every Capacitor 'resume' event (covers a share arriving
+    // while the app was already running, in the background).
+    async _checkPendingShare() {
+        const ShareReceiver = window.Capacitor?.Plugins?.ShareReceiver;
+        if (!ShareReceiver) return;
+        // Outer try/catch is a last-resort net around the whole method body --
+        // distinct from the inner try/catch below, which gives a specific
+        // "could not import" message for that one case. getPendingShare()
+        // itself (a bridge call) and atob() (can throw on malformed base64)
+        // were previously unguarded even though this method is called
+        // unawaited both from _buildDOM() and from a 'resume' listener, so a
+        // bridge-level rejection or bad payload became a silent unhandled
+        // rejection with no pilot-visible symptom at all.
+        try {
+            const result = await ShareReceiver.getPendingShare();
+            if (result?.tooLarge) {
+                // Awaited directly rather than via show() -- show() fires
+                // _renderList() without awaiting it, and _renderList()'s own
+                // `innerHTML = ''` reset (once its async doc-list read resolves)
+                // would otherwise unconditionally wipe out the message appended
+                // below, every time, since that reset always lands on a later
+                // task than this synchronous continuation.
+                this._el.classList.add('visible');
+                await this._renderList();
+                this._showMessage(`"${result.name}" is too large to share directly — use Import in the Documents panel instead.`);
+                return;
+            }
+            if (result?.error) {
+                // Native-side read failure (I/O error, revoked provider
+                // permission, provider crash) -- distinct from the ordinary
+                // "nothing pending" case below, which also has ok:false but no
+                // error field. ShareReceiverPlugin already clears its pending
+                // Uri before attempting the read, so there's no retry path on
+                // the native side; without this the pilot gets zero feedback
+                // that their share silently failed. Same await-then-message
+                // ordering as the tooLarge branch above, for the same reason.
+                this._el.classList.add('visible');
+                await this._renderList();
+                this._showMessage('Could not read the shared file. Please try sharing it again.');
+                return;
+            }
+            if (!result?.ok) return;
+            const binary = atob(result.base64);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+            const blob = new Blob([bytes], { type: 'application/pdf' });
+            try {
+                await this._importFile(blob, result.name || 'shared-document.pdf');
+            } catch (err) {
+                // Matches the file-picker change handler's error handling above --
+                // a malformed/corrupt PDF otherwise propagates unhandled from
+                // _importFile/_indexDocument. Unlike that path the pilot has no
+                // "try again" affordance here (the native side already consumed
+                // the share), so surface it instead of failing silently.
+                console.error('DocumentsPanel: shared file import failed', err);
+                this._el.classList.add('visible');
+                await this._renderList();
+                this._showMessage(`Could not import "${result.name || 'shared-document.pdf'}" — the file may be corrupt or invalid.`);
+                return;
+            }
+            this.show();
+        } catch (err) {
+            console.error('DocumentsPanel: _checkPendingShare failed', err);
+        }
+    }
+
+    // Small pilot-facing message shown above the list, auto-dismissing.
+    // textContent, not innerHTML — callers pass text that can include an
+    // externally-controlled document name (see the same XSS note elsewhere
+    // in this plan). Reused as-is by Task 7 for the quota-exceeded message.
+    _showMessage(text) {
+        const el = document.createElement('div');
+        el.className = 'documents-message';
+        el.textContent = text;
+        this._listEl.prepend(el);
+        setTimeout(() => el.remove(), 4000);
+    }
+
+    show() {
+        this._el.classList.add('visible');
+        this._renderList();
+    }
+
+    hide() {
+        this._el.classList.remove('visible');
+    }
+
+    // staleCheck is an optional callback, checked right before the list is
+    // actually painted: if it returns true, this call was superseded by
+    // something newer while its own getAllDocuments() read was in flight,
+    // and it must not overwrite whatever that newer call already rendered.
+    // Every call site except _applySearch's empty-query branch omits it, so
+    // staleCheck is undefined and this guard is always a no-op for them --
+    // their behavior is unchanged.
+    async _renderList(staleCheck) {
+        const docs = await this._nasrDb.getAllDocuments();
+        if (staleCheck && staleCheck()) return;
+        this._listEl.innerHTML = '';
+        if (docs.length === 0) {
+            this._listEl.innerHTML = '<div class="documents-empty">No documents yet.</div>';
+            return;
+        }
+        for (const doc of docs) {
+            const row = document.createElement('div');
+            row.className = 'documents-row';
+            // textContent, not innerHTML — doc.name traces back to a
+            // pilot-supplied or (once Task 5 lands) another app's
+            // attacker-controlled display name. Caught in plan review;
+            // this repo's own route-table.js:2350 already uses textContent
+            // for the same class of externally-sourced name.
+            const nameSpan = document.createElement('span');
+            nameSpan.className = 'documents-row-name';
+            nameSpan.textContent = doc.name;
+            const deleteBtn = document.createElement('button');
+            deleteBtn.className = 'documents-row-delete';
+            deleteBtn.textContent = '\u{1F5D1}'; // trash can
+            deleteBtn.setAttribute('aria-label', `Delete ${doc.name}`);
+            row.appendChild(nameSpan);
+            row.appendChild(deleteBtn);
+            wireTap(row, () => this._openDocument(doc));
+            wireTap(deleteBtn, (e) => {
+                e.stopPropagation();
+                // Destructive + irreversible -- matches this repo's established
+                // confirm() convention for the same class of action
+                // (plan-sync.js: "Delete this saved plan?").
+                if (confirm(`Delete "${doc.name}"? This cannot be undone.`)) this._deleteDocument(doc);
+            });
+            this._listEl.appendChild(row);
+        }
+    }
+
+    // Also removes this document's pages from the shared search index --
+    // otherwise a stale search result would point at a document that no
+    // longer exists. Routed through _queueIndexOp, the same serialization
+    // point _indexDocument uses, so a delete racing an in-flight import
+    // can't corrupt the index.
+    async _deleteDocument(doc) {
+        await this._nasrDb.deleteDocument(doc.id);
+        // Index cleanup is best-effort and must not gate the list re-render
+        // below: deleteDocument() above already succeeded (the doc is really
+        // gone from IndexedDB), so the row must disappear regardless of
+        // whether this chained cleanup step also succeeds. This repo's own
+        // CLAUDE.md documents a real IDB transaction-hang failure mode as a
+        // known risk, and this method is invoked unawaited from a tap
+        // handler (see wireTap(deleteBtn, ...) below) -- before this fix, a
+        // rejection here propagated out of _deleteDocument entirely, so
+        // _renderList() never ran and the deleted row stayed on screen with
+        // no re-render and no pilot-facing error, only a buried DiagLog
+        // entry via the global unhandledrejection handler (window.app.js).
+        const indexCleanup = this._queueIndexOp(async () => {
+            const cache = await this._nasrDb.getAppCache('documents_search_index');
+            if (!cache) return;
+            const pages = cache.pages.filter(p => p.docId !== doc.id);
+            await this._saveIndex(pages);
+        }).catch((err) => {
+            console.error('DocumentsPanel: search-index cleanup failed after delete', err);
+        });
+        await this._renderList();
+        await indexCleanup; // already caught above -- awaited only so callers can rely on both steps having settled
+    }
+
+    async _openDocument(doc, pageNum) {
+        // Tear down the previous document's lazy-render controller (if any)
+        // before discarding its DOM below -- stops it from trying to
+        // render/tear-down pages for a document we're about to replace, and
+        // lets its blob URL be revoked now that we know pdf.js is truly done
+        // reading from it (see the note below on why that can't just happen
+        // right after renderPdfToContainer() returns).
+        this._activePdfController?.destroy();
+        if (this._activePdfUrl) URL.revokeObjectURL(this._activePdfUrl);
+        this._activePdfController = null;
+        this._activePdfUrl = null;
+
+        this._panContainer.innerHTML = '';
+        this._viewerEl.style.display = '';
+        // Reset zoom/pan before rendering the new document -- otherwise a
+        // pilot who zoomed/panned the previous document would land on this
+        // one already zoomed in on an unrelated part of the page.
+        this._panZoom.reset();
+        const url = URL.createObjectURL(doc.blob);
+        // panState opts renderPdfToContainer into lazy rendering (see its
+        // doc comment in pdf-render.js) -- a real POH commonly runs 100-150
+        // pages, and rendering every page to a full-resolution canvas up
+        // front is a near-certain OOM crash. Only a small buffer of pages
+        // around wherever this._panZoom.state.ty currently points gets
+        // rasterized; attachPinchZoom's onApply (wired in _buildDOM) keeps
+        // that buffer in sync as the pilot scrolls.
+        const wrapper = await renderPdfToContainer(url, this._panContainer, {
+            cssClass: 'documents-pdf',
+            panState: this._panZoom.state,
+        });
+        if (wrapper?._lazyPdf) {
+            // Lazy path: pdf.js keeps reading from `url` in the background
+            // (pages render on demand as the pilot scrolls, well past this
+            // await), so revoking now -- like the old unconditional revoke
+            // right here, before this fix -- risked breaking a not-yet-
+            // rendered page's fetch. Hang onto both and let the NEXT
+            // _openDocument() call revoke, once nothing will read it again.
+            this._activePdfController = wrapper._lazyPdf;
+            this._activePdfUrl = url;
+        } else {
+            // Eager path never engaged (no pdfjsLib, or the try/catch in
+            // renderPdfToContainer failed before creating any lazy state) --
+            // nothing further will read from `url`, so revoke immediately,
+            // exactly as before this fix.
+            URL.revokeObjectURL(url);
+        }
+        // Re-reset after the render await, not just before it: the touch
+        // listeners on this._viewerEl stay live the whole time render is in
+        // flight (panAlways:true means even the emptied/still-rendering
+        // viewer responds to a stray single-finger touch), so a gesture
+        // landing mid-render -- rendering a large multi-page PDF page-by-page
+        // can take a noticeable moment -- could leave scale/tx non-identity
+        // by the time we get here, which the pageNum branch below doesn't
+        // account for (it only ever writes ty). Resetting again here,
+        // synchronously and with no further await before the pageNum branch
+        // runs, guarantees scale/tx are at their just-reset identity values
+        // for both branches below -- nothing can interleave a touch handler
+        // between this line and the final apply().
+        this._panZoom.reset();
+        // reset() (unlike apply()) does not fire onApply, so it can't be
+        // relied on to resync the lazy-render buffer itself -- do it
+        // explicitly here. Covers the (rare, benign even without this --
+        // page 1 always renders eagerly regardless, see pdf-render.js) case
+        // where a stray touch during the first reset()-to-render window above
+        // caused pdf-render.js's own initial updateVisibility() call to
+        // buffer around the wrong page before this reset put ty back to 0.
+        // The pageNum branch below re-syncs again via apply() if a jump is
+        // needed -- cheap/idempotent (renderPage/teardownPage both no-op on
+        // an already-correct page), so the overlap costs nothing.
+        this._activePdfController?.updateVisibility();
+        // Search results match a specific page -- jump straight to it instead
+        // of always landing on page 1. wrapper's children are the per-page
+        // nodes in page order -- page 1 is always a real <canvas>; every
+        // other page is either a <canvas> (already lazily rendered) or a
+        // <div class="pdf-lazy-placeholder"> sized to match it (not yet
+        // rendered) -- either way it's positioned correctly, so offsetTop is
+        // accurate regardless of which one it currently is (see
+        // renderPdfToContainer's lazy path in pdf-render.js).
+        //
+        // This used to be wrapper.children[pageNum-1].scrollIntoView(), which
+        // relied on .documents-viewer being a native overflow-y:auto scroll
+        // container. It no longer is one -- panAlways:true (above) replaces
+        // native scroll with a JS-driven transform on .documents-pan-container
+        // (touch-action:none, see CSS), so there is no scrollable ancestor
+        // left for scrollIntoView to act on; it would silently no-op. Pan
+        // there directly instead: offsetTop is relative to .documents-pan-
+        // container (the nearest position:relative ancestor -- .documents-pdf
+        // itself is position:static), and scale is guaranteed to be exactly 1
+        // here (just reset above), so no scale compensation is needed when
+        // converting an offsetTop distance into a ty translation.
+        if (pageNum && wrapper?.children[pageNum - 1]) {
+            this._panZoom.state.ty = -wrapper.children[pageNum - 1].offsetTop;
+            // apply() (not a direct style write) -- this fires the onApply
+            // hook wired in _buildDOM, which is what actually rasterizes the
+            // jump target (and its buffer) from its placeholder now that
+            // this._activePdfController is set, above.
+            this._panZoom.apply();
+        }
+    }
+
+    // Shared entry point for every import path -- file-picker (this task),
+    // share-intent (Task 5), and bundled-asset seeding (Task 6) all funnel
+    // through here so persistence + indexing + list refresh stay in one place.
+    async _importFile(blob, name, type = 'imported') {
+        const doc = { name, type, sizeBytes: blob.size, blob };
+        try {
+            await this._nasrDb.saveDocument(doc);
+            await this._indexDocument(doc); // also writes to IndexedDB (the search index) — see context note on why this must be inside the same try
+        } catch (err) {
+            if (err?.name === 'QuotaExceededError') {
+                await this._renderList();
+                this._showMessage('Storage full — delete a document (🗑 next to a row) to import more.');
+                return;
+            }
+            // Any other failure (e.g. a corrupt PDF PDF.js can't parse in
+            // _indexDocument) means saveDocument already persisted `doc` but
+            // it was never indexed -- roll it back so it doesn't become an
+            // orphaned, unsearchable record the pilot never asked to keep.
+            // doc.id is only set once saveDocument succeeds (NasrDB.saveDocument
+            // assigns it if missing); if saveDocument itself is what threw,
+            // doc.id is still undefined and this is a safe no-op.
+            try { await this._nasrDb.deleteDocument(doc.id); } catch (_) { /* best-effort cleanup */ }
+            throw err;
+        }
+        await this._renderList();
+    }
+
+    // Seeds the two FAA chart-legend PDFs bundled into the APK
+    // (android/app/src/main/assets/) into the document store on first
+    // launch, so a pilot has them without manually importing. Reads via the
+    // native BundledAsset plugin (AssetManager -- see that plugin's doc
+    // comment for why not a file:// fetch) rather than a raw fetch, since
+    // this app's WebView runs at an http://localhost origin. Fails open
+    // (returns/continues silently) if the plugin is missing (browser dev
+    // build with no native bridge) or a read errors -- never blocks panel
+    // construction on this.
+    //
+    // Memoized (single-flight): _buildDOM() fires this once, unawaited, at
+    // construction. Without memoization, a second caller invoking this
+    // directly (production has no second call site today, but tests must
+    // call this explicitly to await/assert on it) would start an
+    // independent read-check-write pass against the same shared IDB-backed
+    // document store concurrently with the first -- the same class of race
+    // _queueIndexOp already guards against for the search-index cache,
+    // here applied to the existing.some() check below instead.
+    _seedBundledDocuments() {
+        if (!this._seedBundledDocumentsPromise) this._seedBundledDocumentsPromise = this._doSeedBundledDocuments();
+        return this._seedBundledDocumentsPromise;
+    }
+
+    async _doSeedBundledDocuments() {
+        const BundledAsset = window.Capacitor?.Plugins?.BundledAsset;
+        if (!BundledAsset) return; // e.g. running in a browser dev build with no native bridge
+        const BUNDLED = [
+            { path: 'vfr-chart-legend.pdf', name: 'VFR Chart Legend.pdf' },
+            { path: 'ifr-chart-legend.pdf', name: 'IFR Chart Legend.pdf' },
+        ];
+        let existing, seededNames;
+        try {
+            existing = await this._nasrDb.getAllDocuments();
+            // Durable marker of which bundled docs have EVER been seeded --
+            // distinct from "currently present." Checking presence alone (the
+            // pre-fix behavior) meant a pilot deleting a bundled legend to
+            // free space got it silently re-imported on the very next
+            // launch, defeating the deletion. Persisted via the same
+            // getAppCache/putAppCache wrappers already used for
+            // 'documents_search_index'.
+            seededNames = (await this._nasrDb.getAppCache('documents_bundled_seeded')) || [];
+        } catch (err) {
+            // Fails open, same as every other failure mode in this method
+            // (see the doc comment above) -- an IDB read failure here (this
+            // repo has a documented IDB transaction-hang failure mode) must
+            // not become an unhandled rejection off the unawaited _buildDOM()
+            // call site. Nothing to import yet, so there's nothing to retry
+            // here; the next app launch tries again from scratch.
+            console.warn('[Documents] Failed to seed bundled legends', err.message);
+            return;
+        }
+        for (const item of BUNDLED) {
+            if (seededNames.includes(item.name)) continue; // seeded before (even if since deleted) -- never re-seed
+            if (existing.some(d => d.type === 'bundled' && d.name === item.name)) {
+                // Already present from an install that predates this marker --
+                // record it now (without re-importing, which would create a
+                // duplicate row) so a future delete is respected too.
+                seededNames = [...seededNames, item.name];
+                try { await this._nasrDb.putAppCache('documents_bundled_seeded', seededNames); } catch (_) { /* best-effort; retried next launch */ }
+                continue;
+            }
+            try {
+                const result = await BundledAsset.readAsset({ path: item.path });
+                if (!result?.ok) { console.warn('[Documents] Failed to seed bundled legend', item.name, result?.error); continue; }
+                const binary = atob(result.base64);
+                const bytes = new Uint8Array(binary.length);
+                for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+                const blob = new Blob([bytes], { type: 'application/pdf' });
+                await this._importFile(blob, item.name, 'bundled');
+                seededNames = [...seededNames, item.name];
+                await this._nasrDb.putAppCache('documents_bundled_seeded', seededNames);
+            } catch (err) {
+                console.warn('[Documents] Failed to seed bundled legend', item.name, err.message);
+            }
+        }
+    }
+
+    // Serializes every read-modify-write of the single shared
+    // 'documents_search_index' app_cache entry (see the concurrency note
+    // above) -- work runs only after every previously-queued op has settled,
+    // regardless of which caller queued it. Uses .then(work, work) so a
+    // prior failure doesn't permanently wedge the queue for later callers.
+    _queueIndexOp(work) {
+        this._indexQueue = this._indexQueue.then(work, work);
+        return this._indexQueue;
+    }
+
+    async _saveIndex(pages) {
+        const idx = lunr(function () {
+            this.ref('id');
+            this.field('text');
+            this.field('docName');
+            for (const page of pages) this.add(page);
+        });
+        await this._nasrDb.putAppCache('documents_search_index', { lunrIndexJSON: idx.toJSON(), pages });
+    }
+
+    async _indexDocument(doc) {
+        return this._queueIndexOp(async () => {
+            const pdfjs = window.pdfjsLib;
+            if (!pdfjs) return;
+            const url = URL.createObjectURL(doc.blob);
+            const cache = (await this._nasrDb.getAppCache('documents_search_index')) || { pages: [] };
+            // Drop any stale pages for this doc id (re-import/re-index case) before adding fresh ones.
+            let pages = cache.pages.filter(p => p.docId !== doc.id);
+            try {
+                const pdf = await pdfjs.getDocument(url).promise;
+                for (let p = 1; p <= pdf.numPages; p++) {
+                    // Awaited per-page, not one synchronous pass over every page --
+                    // avoids a long blocking JS execution on a large PDF (see this
+                    // repo's documented NASR-import IDB-hang failure mode).
+                    const page = await pdf.getPage(p);
+                    const content = await page.getTextContent();
+                    const text = content.items.map(item => item.str).join(' ');
+                    pages.push({ id: `${doc.id}:${p}`, docId: doc.id, pageNum: p, docName: doc.name, text });
+                }
+            } finally {
+                URL.revokeObjectURL(url);
+            }
+            await this._saveIndex(pages);
+        });
+    }
+
+    async _applySearch(query) {
+        // Fast typing fires overlapping calls, each awaiting an IndexedDB
+        // read -- nothing guarantees an earlier query's results resolve
+        // before a later one's. Bumping the generation before doing any
+        // async work means a call can tell, once its own await resolves,
+        // whether a newer call has since superseded it and bail out instead
+        // of painting stale results over what the pilot currently typed.
+        const gen = ++this._searchGeneration;
+        if (!query) {
+            // Same race as the rest of this method, on the one branch that
+            // didn't already guard against it: this call's own getAllDocuments()
+            // read can resolve AFTER a subsequent non-empty search has already
+            // rendered filtered results (e.g. pilot clears the search box, then
+            // immediately types a new query) -- without a stale check here,
+            // the unfiltered full list would silently overwrite them.
+            await this._renderList(() => gen !== this._searchGeneration);
+            return;
+        }
+        const cache = await this._nasrDb.getAppCache('documents_search_index');
+        if (gen !== this._searchGeneration) return; // a newer call superseded this one
+        if (!cache?.lunrIndexJSON) { this._listEl.innerHTML = '<div class="documents-empty">No results.</div>'; return; }
+        const idx = lunr.Index.load(cache.lunrIndexJSON);
+        let results;
+        try {
+            results = idx.search(query);
+        } catch (_) {
+            // lunr's query parser throws on ordinary pilot-typed input -- e.g.
+            // "time 12:30" (unrecognised field '12'), "engine~" (edit distance
+            // must be numeric), "engine^" (boost must be numeric), "+" (expecting
+            // term or field). Treat exactly like the zero-results case below
+            // rather than letting it become an unhandled rejection off this
+            // unguarded input listener.
+            results = [];
+        }
+        if (gen !== this._searchGeneration) return; // superseded while searching -- re-check before touching the DOM
+        this._listEl.innerHTML = '';
+        if (results.length === 0) { this._listEl.innerHTML = '<div class="documents-empty">No results.</div>'; return; }
+        for (const result of results) {
+            const page = cache.pages.find(p => p.id === result.ref);
+            if (!page) continue;
+            // textContent, not innerHTML — page.docName traces back to a
+            // pilot-supplied or (for share-intent) another app's attacker-
+            // controlled display name (caught in plan review; this repo's own
+            // route-table.js:2350 already uses textContent for the same class
+            // of externally-sourced name, this was a deviation from precedent).
+            const row = document.createElement('div');
+            row.className = 'documents-row';
+            const nameSpan = document.createElement('span');
+            nameSpan.className = 'documents-row-name';
+            nameSpan.textContent = `${page.docName} — p.${page.pageNum}`;
+            row.appendChild(nameSpan);
+            wireTap(row, async () => {
+                const doc = await this._nasrDb.getDocument(page.docId);
+                if (doc) await this._openDocument(doc, page.pageNum);
+            });
+            this._listEl.appendChild(row);
+        }
+    }
+}

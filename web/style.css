@@ -3584,6 +3584,12 @@ body {
     cursor: pointer;
 }
 
+.popup-freq-table .freq-sector {
+    color: var(--text-muted);
+    font-weight: 700;
+    font-size: 12px;
+}
+
 .popup-ifr-section {
     margin-top: 8px;
     padding-top: 6px;
@@ -4496,6 +4502,41 @@ body {
     font-style: italic;
 }
 
+/* TRSA label — grey, matching VFR sectional chart convention for TRSA */
+.trsa-lbl { color: var(--text-muted); }
+
+/* TRSA popup styles */
+.trsa-popup-container .leaflet-popup-content-wrapper {
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+}
+.trsa-popup-container .leaflet-popup-tip {
+    background: var(--bg-surface);
+}
+.trsa-popup { font-size: 13px; line-height: 1.4; min-width: 180px; }
+.trsa-popup b { font-size: 14px; }
+.trsa-popup-freq {
+    display: block;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-secondary);
+    margin: 2px 0;
+}
+.trsa-popup-alt {
+    display: block;
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin: 2px 0 4px;
+}
+.trsa-popup-approx {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-style: italic;
+}
+
 .airway-label {
     font: 700 9px var(--font-instrument);
     color: rgba(120,120,120,0.9);
@@ -4643,6 +4684,91 @@ body {
     color: var(--bg-primary);
 }
 .logbook-export-btn:active { opacity: 0.8; }
+
+/* ========== Documents Page ========== */
+
+.documents-page {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: var(--tab-bar-height);
+    z-index: 800;
+    flex-direction: column;
+    background: var(--bg-primary);
+}
+.documents-page.visible { display: flex; }
+.documents-header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 16px; border-bottom: 1px solid var(--border);
+}
+.documents-header-left { display: flex; align-items: center; gap: 12px; }
+.documents-title { font-family: var(--font-ui); font-weight: 800; font-size: 20px; color: var(--text-primary); }
+.documents-import-btn { min-height: var(--touch-preferred, 64px); padding: 0 16px; font-family: var(--font-ui); font-weight: 800; font-size: 16px; background: var(--accent); color: var(--text-on-accent); border: none; border-radius: 8px; }
+.documents-close { /* sizing via .btn-close */ font-size: 28px; font-weight: 800; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; color: var(--text-primary); }
+.documents-search-bar { padding: 8px 16px; border-bottom: 1px solid var(--border); }
+.documents-search-input { width: 100%; min-height: var(--touch-min, 56px); box-sizing: border-box; padding: 0 12px; font-family: var(--font-ui); font-weight: 700; font-size: 16px; color: var(--text-primary); background: var(--bg-surface); border: 1px solid var(--border-strong); border-radius: 8px; }
+.documents-list { overflow-y: auto; flex: 0 0 auto; max-height: 40vh; }
+.documents-row { min-height: var(--touch-min, 56px); display: flex; align-items: center; justify-content: space-between; padding: 0 16px; border-bottom: 1px solid var(--border-light); }
+.documents-row-name { font-family: var(--font-ui); font-weight: 700; color: var(--text-secondary); }
+.documents-row-delete { min-width: var(--touch-min, 56px); min-height: var(--touch-min, 56px); font-size: 20px; background: transparent; border: none; color: var(--color-danger-on-light); }
+.documents-empty { padding: 16px; font-family: var(--font-ui); font-weight: 700; color: var(--text-muted); }
+.documents-message {
+    padding: 12px 16px;
+    font-family: var(--font-ui);
+    font-weight: 700;
+    color: var(--color-danger-on-light);
+    background: var(--bg-surface);
+    border: 1px solid var(--color-danger-on-light);
+    border-radius: 8px;
+    margin: 8px;
+}
+.documents-viewer {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    /* flex-start, not center: .documents-pan-container stacks every page of
+       the PDF (unlike .approach-viewer-body, which this rule was originally
+       copied from and only ever shows one plate at a time). Once the full
+       page stack is taller than the viewer -- true for virtually any real
+       multi-page document -- align-items:center centers the WHOLE STACK
+       vertically, pushing page 1 far above the visible area at rest (ty=0)
+       instead of showing it. flex-start keeps the stack's top edge pinned to
+       the viewer's top edge at rest, matching what the ty=-offsetTop page-jump
+       math in documents.js's _openDocument already assumes. justify-content
+       (horizontal) is unaffected -- canvases are max-width:90vw and never
+       overflow horizontally, so there's no equivalent horizontal problem.
+       Caught in code review; verified with a headless-Chromium layout
+       measurement before and after this change. */
+    align-items: flex-start;
+    justify-content: center;
+}
+.documents-pan-container {
+    position: relative;
+    display: inline-flex;
+    flex-direction: column;
+    transform-origin: 0 0;
+    touch-action: none;
+    flex-shrink: 0;
+}
+.documents-pdf {
+    background: #fff;
+}
+.documents-pdf canvas {
+    display: block;
+    max-width: 90vw;
+    max-height: calc(100vh - 64px);
+    width: auto;
+    height: auto;
+}
+/* Stand-in for a not-yet-rasterized page in pdf-render.js's lazy-render path
+   (renderPdfToContainer's `panState` option) -- sized via inline style
+   (per-instance, set in JS to match page 1's measured box) rather than a
+   fixed CSS size. background matches .documents-pdf so a page swapping in
+   right before it's scrolled into view reads as instant, not a color flash. */
+.pdf-lazy-placeholder {
+    display: block;
+    background: #fff;
+}
 
 /* Flight Upload panel */
 .fu-toolbar {
@@ -11439,5 +11565,52 @@ body.route-editing-mode .route-table-sheet {
 .cwa-popup .leaflet-popup-close-button {
     width: 44px !important; height: 44px !important;
     font-size: 28px !important; line-height: 44px !important;
+}
+
+.airspace-alert-popup {
+    position: absolute;
+    top: 160px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 950;
+    min-width: 320px;
+    max-width: 480px;
+    background: var(--bg-surface);
+    border: 2px solid var(--border-strong);
+    border-radius: 8px;
+    padding: 12px 16px;
+    pointer-events: auto;
+}
+.airspace-alert-popup .aap-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.airspace-alert-popup .aap-title {
+    font-family: var(--font-ui);
+    font-weight: 800;
+    color: var(--text-secondary);
+}
+.airspace-alert-popup .aap-dismiss {
+    min-width: var(--touch-min, 56px);
+    min-height: var(--touch-min, 56px);
+    font-size: var(--text-xl); /* 26px -- same token .btn-close uses for its glyph elsewhere in the app */
+    font-weight: 700;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+}
+.airspace-alert-popup .aap-freq {
+    font-family: var(--font-instrument);
+    font-weight: 900;
+    font-size: 1.4em;
+    color: var(--text-primary);
+    margin-top: 4px;
+}
+.airspace-alert-popup .aap-advisory {
+    font-family: var(--font-ui);
+    font-weight: 700;
+    color: var(--color-caution-on-light);
+    margin-top: 4px;
 }
 

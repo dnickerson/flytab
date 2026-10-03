@@ -229,11 +229,12 @@ class RoutePlannerPanel {
         // Find the airport pill — route may use K-prefixed id even if icao is bare (X60 vs KX60)
         const kId  = icao.length <= 3 ? 'K' + icao : icao;
         const bare = icao.length === 4 && icao[0] === 'K' ? icao.slice(1) : icao;
-        let airportIdx = -1;
-        for (let i = 0; i < this._route.length; i++) {
-            const id = this._route[i].id;
-            if (id === icao || id === kId || id === bare) { airportIdx = i; break; }
-        }
+        // Bare id on a plain fix pill is a navaid sharing the name (KGSO vs GSO VOR), not the airport.
+        const isAirport = (p) => p.id === icao || p.id === kId || (p.id === bare && p.type !== 'fix');
+        // Prefer the dest pill: a first-match scan anchors on the dep pill when dep == dest.
+        let airportIdx = this._route.findIndex(p => p.type === 'dest' && isAirport(p));
+        if (airportIdx < 0) airportIdx = this._route.findIndex(p => p.type !== 'dep' && isAirport(p));
+        if (airportIdx < 0) airportIdx = this._route.findIndex(isAirport);
 
         const toPill = (wp) => Object.assign(
             { id: wp.icao, type: 'fix' },
@@ -248,15 +249,41 @@ class RoutePlannerPanel {
             if (beforePills.length > 0) this._route.splice(airportIdx, 0, ...beforePills);
         } else {
             // Airport not in route — append before the destination pill (or at end)
-            let destIdx = -1;
-            for (let i = this._route.length - 1; i >= 0; i--) {
-                if (this._route[i].type === 'dest') { destIdx = i; break; }
-            }
+            const destIdx = this._destPillIndex();
             const insertAt = destIdx >= 0 ? destIdx : this._route.length;
             this._route.splice(insertAt, 0, ...beforePills, ...afterPills);
         }
 
         this._render();
+    }
+
+    /** Index of the 'dest' pill, or -1. Not the last pill: missed-approach fixes follow it. */
+    _destPillIndex() {
+        for (let i = this._route.length - 1; i >= 0; i--) {
+            if (this._route[i].type === 'dest') return i;
+        }
+        return -1;
+    }
+
+    _wpId(wp) {
+        return wp.icao || wp.id || wp.name;
+    }
+
+    /**
+     * Index in wps of the destination: the waypoint marked isDest from the DEST pill
+     * (ActiveRoute.markedDestIndex — missed-approach fixes may follow it), else the
+     * last match for the dest pill's id, else the last waypoint.
+     */
+    _destWaypointIndex(wps) {
+        const marked = typeof ActiveRoute !== 'undefined' ? ActiveRoute.markedDestIndex(wps) : -1;
+        if (marked >= 0) return marked;
+        const destId = this._route[this._destPillIndex()]?.id;
+        if (destId) {
+            for (let i = wps.length - 1; i > 0; i--) {
+                if (this._wpId(wps[i]) === destId) return i;
+            }
+        }
+        return wps.length - 1;
     }
 
     /** Clean up listeners. Call when the panel is permanently removed. */
@@ -340,11 +367,18 @@ class RoutePlannerPanel {
             : (typeof routeIds === 'string' && routeIds.trim()
                 ? routeIds.trim().split(/\s+/).filter(Boolean)
                 : null);
+        // Missed-approach fixes follow the dest; find it by id (last match, as dep may equal dest).
+        const savedDest = plan.flight_plan?.destination || plan.destination || null;
+        const destIndexIn = (ids) => {
+            const j = savedDest ? ids.lastIndexOf(savedDest) : -1;
+            return j > 0 ? j : ids.length - 1;
+        };
         if (routeArr && routeArr.length >= 2) {
+            const destIdx = destIndexIn(routeArr);
             this._route = routeArr.map((id, i) => {
                 let type;
                 if (i === 0)                          type = 'dep';
-                else if (i === routeArr.length - 1)   type = 'dest';
+                else if (i === destIdx)               type = 'dest';
                 else if (/^[VTJQ]\d/.test(id))        type = 'awy';
                 else if (id === 'DIRECT')             type = 'direct';
                 else                                   type = 'fix';
@@ -356,18 +390,20 @@ class RoutePlannerPanel {
             let activeAirway = null;
             for (const pill of this._route) {
                 if (pill.type === 'awy')    activeAirway = pill.id;
-                else if (pill.type === 'direct') activeAirway = null;
+                // No airway continues past the destination; fixes after it are a missed approach.
+                else if (pill.type === 'direct' || pill.type === 'dest') activeAirway = null;
                 else if (pill.type === 'fix' && activeAirway) pill.airway = activeAirway;
             }
         } else {
             const wps = plan.waypoints || [];
             if (wps.length === 0) { this._route = []; return; }
             // Fall back to fix-only pills from waypoints (no airway annotation)
-            this._route = wps.map((wp, i) => {
-                const id   = wp.icao || wp.name || wp.fix || '?';
-                let   type = 'fix';
-                if (i === 0)                   type = 'dep';
-                else if (i === wps.length - 1) type = 'dest';
+            const ids = wps.map(wp => wp.icao || wp.name || wp.fix || '?');
+            const destIdx = destIndexIn(ids);
+            this._route = ids.map((id, i) => {
+                let type = 'fix';
+                if (i === 0)            type = 'dep';
+                else if (i === destIdx) type = 'dest';
                 return { id, type };
             });
         }
@@ -393,11 +429,21 @@ class RoutePlannerPanel {
             }
         }
 
-        // Sync DEP/DEST inputs from the first/last non-airway pill
+        // Restore fuel-stop pills — both load paths type interior pills 'fix', but Plan
+        // and Apply read the stop (waypoint.fuelStop) from the pill type.
+        const fuelIds = new Set(wps.filter(wp => wp.fuelStop).map(wp => wp.icao || wp.name || wp.fix));
+        for (const pill of this._route) {
+            if (pill.type === 'fix' && fuelIds.has(pill.id)) {
+                pill.type = 'fuel';
+                delete pill.airway;
+            }
+        }
+
+        // Sync DEP/DEST inputs from the dep pill and the dest pill (not the last pill)
         const firstFix = this._route.find(p => p.type !== 'awy' && p.type !== 'direct');
-        const lastFix  = [...this._route].reverse().find(p => p.type !== 'awy' && p.type !== 'direct');
+        const destPill = this._route[this._destPillIndex()];
         if (this._depInput  && firstFix) this._depInput.value  = firstFix.id;
-        if (this._destInput && lastFix)  this._destInput.value = lastFix.id;
+        if (this._destInput && destPill) this._destInput.value = destPill.id;
     }
 
     // ── Async planner build ───────────────────────────────────────────────────
@@ -637,7 +683,9 @@ class RoutePlannerPanel {
             const v = this._destInput.value.trim().toUpperCase();
             if (!v) return;
             this._destInput.value = v;
-            if (this._route.length > 1) this._route[this._route.length - 1] = { id: v, type: 'dest' };
+            const destIdx = this._destPillIndex();
+            if (destIdx >= 0) this._route[destIdx] = { id: v, type: 'dest' };
+            else if (this._route.length > 1) this._route[this._route.length - 1] = { id: v, type: 'dest' };
             else this._route.push({ id: v, type: 'dest' });
             this._render();
         });
@@ -1472,7 +1520,38 @@ class RoutePlannerPanel {
         };
         setBtn('Planning…', true);
         try {
-            await this._applyWindsToLastPlan();
+            // Let an in-flight recompute (e.g. open()'s) finish so it can't overwrite this one.
+            if (this._windsPromise) await this._windsPromise.catch(() => {});
+
+            // Plan the route the pills show now, not the last auto-routed or applied trip.
+            const wps = await this._pillsToWaypoints();
+            // A pill that can't be located is skipped; planning without it would compute a
+            // different route than the one shown. Keep no stats rather than the old route's.
+            const pillIds = this._route.filter(p => p.type !== 'awy' && p.type !== 'direct').map(p => p.id);
+            if (wps.length < pillIds.length) {
+                const found = new Set(wps.map(w => w.id));
+                const missing = [...new Set(pillIds.filter(id => !found.has(id)))];
+                this._toast(`Plan not updated — not found: ${missing.join(', ')}`, 4000);
+                if (this._statsEl) this._statsEl.style.display = 'none';
+                return;
+            }
+            if (wps.length < 2) {
+                this._toast('Add at least 2 waypoints');
+                return;
+            }
+            const fuelStops = wps.filter(w => w.fuelStop)
+                .map(w => ({ icao: w.icao, lat: w.lat, lon: w.lon, name: w.name }));
+            this._lastPlan = {
+                departure:   wps[0].id,
+                destination: wps[this._destWaypointIndex(wps)].id,
+                waypoints:   wps,
+                ...(fuelStops.length ? { fuelStops } : {}),
+            };
+            this._lastMos = null;
+            this._syncSaveBtnState();
+            // Stored so Apply (_doApply awaits _windsPromise) uses this plan's winds.
+            this._windsPromise = this._applyWindsToLastPlan();
+            await this._windsPromise;
         } finally {
             setBtn('Plan', false);
         }
@@ -1711,9 +1790,14 @@ class RoutePlannerPanel {
         const wps = result?.waypoints;
         if (!wps?.length) { this._statsEl.style.display = 'none'; return; }
 
+        const destIdx = this._destWaypointIndex(wps);
         const dep  = wps[0];
-        const dest = wps[wps.length - 1];
-        const routeNm = summary?.totalDistNm ?? legs.reduce((s, l) => s + (l.distNm || 0), 0);
+        const dest = wps[destIdx];
+        // recomputeLegs' summary already stops at the destination. The legs up to it
+        // (leg i is wps[i]→wps[i+1]) give the ETA, wind, and totals when there is no summary.
+        const statLegs = legs.length === wps.length - 1 ? legs.slice(0, destIdx) : legs;
+        const sumLegs = (key) => statLegs.reduce((s, l) => s + (l[key] || 0), 0);
+        const routeNm = summary?.totalDistNm ?? sumLegs('distNm');
         if (routeNm == null || dep?.lat == null || dest?.lat == null) { this._statsEl.style.display = 'none'; return; }
 
         const directNm  = NasrDB.haversineNm(dep.lat, dep.lon, dest.lat, dest.lon);
@@ -1721,7 +1805,7 @@ class RoutePlannerPanel {
         const deltaPct  = directNm > 0 ? (deltaNm / directNm * 100) : 0;
 
         // Wind summary: average (GS - TAS) across legs that have wind data
-        const windLegs = legs.filter(l => l.windDir !== undefined && l.gsKt && l.tasKt);
+        const windLegs = statLegs.filter(l => l.windDir !== undefined && l.gsKt && l.tasKt);
         let windLabel = '';
         if (windLegs.length) {
             const avgComp = windLegs.reduce((s, l) => s + (l.gsKt - l.tasKt), 0) / windLegs.length;
@@ -1741,15 +1825,16 @@ class RoutePlannerPanel {
             ? (() => { const h = Math.floor(eteHrs); const m = Math.round((eteHrs - h) * 60); return `${h}h ${String(m).padStart(2,'0')}m`; })()
             : '';
 
-        // ETA — local time from last leg
-        const lastEta = legs.length ? legs[legs.length - 1]?.eta : undefined;
+        // ETA — local time at the destination
+        const lastEta = statLegs.length ? statLegs[statLegs.length - 1]?.eta : undefined;
         const etaLabel = lastEta
             ? new Date(lastEta).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
             : '';
 
         // Fuel
-        const fuelLabel = summary?.totalFuelGal != null
-            ? `<span class="rpp-stat-fuel">${summary.totalFuelGal.toFixed(1)} gal</span>` : '';
+        const fuelGal = summary?.totalFuelGal;
+        const fuelLabel = fuelGal != null
+            ? `<span class="rpp-stat-fuel">${fuelGal.toFixed(1)} gal</span>` : '';
 
         const sign = n => n >= 0 ? '+' : '';
         this._statsEl.innerHTML =
@@ -2109,8 +2194,9 @@ class RoutePlannerPanel {
             at = this._insertIndex;
             this._insertIndex = null;
         } else {
-            // Default: insert before last pill (destination)
-            at = Math.max(0, this._route.length - 1);
+            // Default: insert before the destination pill (missed-approach fixes may follow it)
+            const destIdx = this._destPillIndex();
+            at = destIdx >= 0 ? destIdx : Math.max(0, this._route.length - 1);
         }
 
         this._route.splice(at, 0, { id: v, type });
@@ -2483,7 +2569,13 @@ class RoutePlannerPanel {
             cruiseAltFt:   this._cruiseAltFt ?? undefined,
         };
         this._fetchingWinds = true;
-        if (this._statsEl) this._updateStats(this._lastPlan);
+        // A plan built from waypoints alone has no legs yet — paint calm-air figures
+        // while the winds load (offline this can take a while) rather than 0 nm.
+        if (this._statsEl) {
+            this._updateStats(this._lastPlan.summary
+                ? this._lastPlan
+                : this._planner.recomputeLegs(this._lastPlan, this._profileForPower(this._pctPower), opts));
+        }
         try {
             const fetchWindsFn = (typeof FlyTabPlanning !== 'undefined' && FlyTabPlanning.fetchWinds)
                 ? FlyTabPlanning.fetchWinds
@@ -2514,8 +2606,12 @@ class RoutePlannerPanel {
         if (!opts.winds) {
             this._windWarnings.push('Wind data unavailable — time and fuel use calm-air estimates');
         }
+        // recomputeLegs' summary gives fuel remaining at the destination, not after a missed approach.
         const fuelRem = this._currentPlan?.summary?.fuelRemGal;
-        const hasFuelStops = (this._lastPlan?.fuelStops?.length ?? 0) > 0;
+        // A reopened trip has no fuelStops array, only fuelStop flags on its waypoints.
+        // Endpoints don't count: a leg that ends at its fuel stop has no en-route stop.
+        const hasFuelStops = (this._lastPlan?.fuelStops?.length ?? 0) > 0
+            || !!this._lastPlan?.waypoints?.slice(1, -1).some(w => w.fuelStop);
         if (!hasFuelStops && fuelRem != null && this._reserveGal > 0 && fuelRem < this._reserveGal) {
             this._windWarnings.push(
                 `Fuel below reserve: ${fuelRem.toFixed(1)} gal at dest, ${this._reserveGal} gal reserve required`
@@ -2839,7 +2935,9 @@ class RoutePlannerPanel {
                     cruiseAltFt: this._cruiseAltFt ?? undefined,
                     winds:       this._lastWinds ?? undefined,
                 };
-                appliedPlan = this._planner.recomputeLegs({ waypoints: wps }, this._profileForPower(this._pctPower), recomputeOpts);
+                // destination: the same fallback Plan uses when the isDest marker is stale.
+                const destination = this._route[this._destPillIndex()]?.id;
+                appliedPlan = this._planner.recomputeLegs({ waypoints: wps, destination }, this._profileForPower(this._pctPower), recomputeOpts);
                 legs = appliedPlan.legs;
             } catch (err) {
                 console.warn('[RoutePlannerPanel] recomputeLegs failed, using bare legs:', err);
@@ -2854,7 +2952,7 @@ class RoutePlannerPanel {
         // pill (insertApproach), so the destination airport is not reliably
         // the last waypoint once an approach with a missed segment is loaded.
         const depPill  = this._route.find(p => p.type === 'dep');
-        const destPill = this._route.find(p => p.type === 'dest');
+        const destPill = this._route[this._destPillIndex()];
         const dep  = depPill?.id  || wps[0].icao || wps[0].name;
         const dest = destPill?.id || wps[wps.length - 1].icao || wps[wps.length - 1].name;
 
@@ -2905,21 +3003,28 @@ class RoutePlannerPanel {
 
         // Full route array (used as fallback for single-leg trips)
         const fullRouteArr = this._route.map(r => r.id);
+        const wpId = (wp) => this._wpId(wp);
+        const destId = wpId(waypoints[this._destWaypointIndex(waypoints)]);
 
         const tripLegs = [];
         for (let i = 0; i < boundaries.length - 1; i++) {
             const start = boundaries[i];
             const end   = boundaries[i + 1];
             const legWps = waypoints.slice(start, end + 1);
-            const legDepId  = legWps[0].icao || legWps[0].id || legWps[0].name;
-            const legDestId = legWps[legWps.length - 1].icao || legWps[legWps.length - 1].id || legWps[legWps.length - 1].name;
+            const isLastLeg = i === boundaries.length - 2;
+            const legDepId  = wpId(legWps[0]);
+            // Last leg is named for the destination even when missed-approach fixes follow it.
+            const legDestId = isLastLeg ? destId : wpId(legWps[legWps.length - 1]);
 
             // Slice route pills to just this leg's segment so fuel-stop legs don't
             // inherit the full multi-leg route (which causes wrong dest on reload).
-            const depPillIdx  = this._route.findIndex(p => p.id === legDepId);
-            const destPillIdx = this._route.findIndex((p, j) => j >= Math.max(depPillIdx, 0) && p.id === legDestId);
-            const legRouteArr = (depPillIdx >= 0 && destPillIdx >= depPillIdx)
-                ? this._route.slice(depPillIdx, destPillIdx + 1).map(r => r.id)
+            // The last leg runs to the end so its missed-approach pills are kept.
+            const depPillIdx = this._route.findIndex(p => p.id === legDepId);
+            const endPillIdx = isLastLeg
+                ? this._route.length - 1
+                : this._route.findIndex((p, j) => j > depPillIdx && p.id === wpId(legWps[legWps.length - 1]));
+            const legRouteArr = (depPillIdx >= 0 && endPillIdx > depPillIdx)
+                ? this._route.slice(depPillIdx, endPillIdx + 1).map(r => r.id)
                 : fullRouteArr;
 
             tripLegs.push({
@@ -2938,8 +3043,8 @@ class RoutePlannerPanel {
             });
         }
 
-        const dep  = waypoints[0].icao || waypoints[0].id || waypoints[0].name;
-        const dest = waypoints[waypoints.length - 1].icao || waypoints[waypoints.length - 1].id || waypoints[waypoints.length - 1].name;
+        const dep  = wpId(waypoints[0]);
+        const dest = destId;
         const now = new Date();
         const monthDay = now.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
         const autoName = `${dep} → ${dest} · ${monthDay}`;
@@ -3004,7 +3109,7 @@ class RoutePlannerPanel {
 
         const plan = {
             departure:   wps[0].id,
-            destination: wps[wps.length - 1].id,
+            destination: wps[this._destWaypointIndex(wps)].id,
             cruiseAltFt: this._altitude,
             waypoints:   wps,
             options: {
@@ -3089,6 +3194,9 @@ class RoutePlannerPanel {
                 // fuelStop:true tells recomputeLegs to model descent/climb at
                 // this stop rather than treating it as a level pass-over.
                 ...(pill.type === 'fuel' ? { fuelStop: true } : {}),
+                // isDest: recomputeLegs and the route table end the trip here, ahead of any
+                // missed-approach fixes. Derived from the pill type on every conversion.
+                ...(pill.type === 'dest' ? { isDest: true } : {}),
                 ...(aw ? { airway: aw } : {}),
             });
             pendingAirway = null;

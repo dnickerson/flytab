@@ -68,7 +68,7 @@ FlyTab connects automatically on app launch. The status bar at the top shows con
 |---|---|---|---|
 | **GPS** | 3D fix | 2D fix | No fix |
 | **FIS-B** | UAT radio connected and receiving | — | No UAT data |
-| **OFFL** | Online | — | Offline (always shows) |
+| **FLT / HOME / NET / OFFL** | FLT = Stratux reachable; HOME = home server reachable | NET = internet only | OFFL = no network |
 | **NASR** | Database current | ≥7 days old | Very old |
 | **ML** | Engine anomaly score normal | Elevated | Anomaly detected |
 | **REC** | Flight recording active | — | Not recording |
@@ -206,6 +206,7 @@ Opens a right-side drawer with infrequently used actions, organized in three sec
 | **Weather Briefing** | Full weather briefing panel (see below) |
 | **Weight & Balance** | Enter station weights and fuel; shows total weight, CG, and envelope status with a CG diagram. Fuel pre-fills from tracked tank state — see *Fuel on the Weight & Balance page* |
 | **Logbook** | View and edit flight log entries |
+| **Documents** | Library of imported and bundled reference PDFs (POHs, checklists, chart legends) with full-text search |
 | **Flight Upload** | Sync flight logs to the cloud |
 | **User Manual** | This document |
 
@@ -248,6 +249,8 @@ The panel has four accordion sections: **Base Chart**, **Map Overlays**, **Traff
 | **Airways** | Victor airways and Jet routes with labels |
 | **Airspace** | Class B/C/D/E boundaries with altitude labels |
 | **Restricted/MOA** | Special use airspace (R/P/W/A/MOA) — amber fill when active |
+| **TRSA** | Terminal Radar Service Area — grey dashed outline, approximate circular boundary. Tap for facility name, frequency, and altitude range. |
+| **Airspace Alerts** | Master switch for the approach frequency alert popup (see "Airspace Frequency Alert" below). Six sub-toggles beneath it — Class B, Class C, Class D, Class E surface, Restricted/MOA, TRSA — arm or disarm alerting for each airspace type individually. |
 | **IFR Area Charts** | High-altitude obstacle/terrain charts |
 | **Runway Extensions** | Dashed extended centerlines for route airports |
 | **TFRs** | Temporary Flight Restrictions — red boundaries with type and altitude |
@@ -296,6 +299,42 @@ At the bottom of the layer panel are two buttons:
 Defaults are stored on-device and persist across app restarts. To change the defaults, configure the layers however you want and tap **Save as Defaults** again.
 
 > **Note:** SIGMETs, TFRs, and all AIRMET types (Tango, Zulu, Sierra) always start ON regardless of saved defaults. These overlays are safety-critical and cannot be permanently disabled through the defaults system — if you turn them off, they will be back on at the next app launch or when you tap **Reset to Defaults**.
+
+---
+
+## Airspace Frequency Alert
+
+FlyTab watches your projected ground track and altitude and pops up a banner shortly before you enter Class B, C, D, or E surface airspace, a Restricted/MOA special use area, or a Terminal Radar Service Area (TRSA) — a heads-up to get the controlling frequency dialed in before you cross the boundary, without needing to look it up or remember it from the chart.
+
+**On by default** — Airspace Alerts are already enabled out of the box; you don't need to turn anything on to use it. To check its state or turn it off, open the **LAYERS tab**, expand **Map Overlays**, and find the **Airspace Alerts** master switch. Beneath it are six sub-toggles — **Class B**, **Class C**, **Class D**, **Class E surface**, **Restricted/MOA**, **TRSA** — so you can alert on some airspace types and not others. **Class E surface and Restricted/MOA ship off by default** — the other four (Class B, Class C, Class D, TRSA) ship on. Turn Class E surface and/or Restricted/MOA on in the same panel if you want alerts for those too. Both the master switch and the per-type toggles take effect immediately, including mid-flight.
+
+#### What triggers it
+
+The popup fires once as you approach a boundary — based on your current ground track and speed projected a couple of minutes ahead, not just your current position — so it typically appears before you actually cross in. It does not re-fire while you remain in the same approach, and re-arms once you're clear of the area (either by landing/exiting, or climbing/descending back out of the airspace's altitude band) so a later approach into the same airspace alerts again.
+
+#### What it shows
+
+| Field | Meaning |
+|-------|---------|
+| Title | `Entering Class B/C/D — <name>` for controlled airspace, `Entering TRSA — <name>` for a TRSA, or `Approaching <name>` for Class E surface areas and Restricted/MOA |
+| Frequency | The controlling facility name and frequency, when known |
+| Advisory text | Shown instead of (or alongside) a frequency when one isn't available — see below |
+
+For Restricted/MOA areas, the advisory line shows the published active times when known, or a reminder to verify NOTAMs when the schedule isn't in the data. Multiple simultaneous alerts are queued and shown one at a time — dismiss one to see the next.
+
+#### TRSA (Terminal Radar Service Area)
+
+Participation in a TRSA is technically voluntary, but FlyTab treats crossing into one as a call worth making — the alert phrasing ("Entering TRSA") matches Class B/C/D rather than the softer "Approaching" wording used for Class E surface and Restricted/MOA.
+
+Some TRSAs — Wilmington (KILM) among them — publish more than one approach frequency for different arrival sectors, with no published way to tell which one applies to your direction of arrival from the data alone. When that's the case, FlyTab shows **all** of the published frequencies together with a "(sector — verify)" note, rather than guessing at one — confirm the correct one with the controlling facility.
+
+**TRSA boundaries shown on the alert are approximate circles, not the true legal shape.** The FAA does not publish exact TRSA boundary geometry the way it does for Class B/C/D, so FlyTab draws a circle around the primary airport based on the published service radius. Treat the alert as a heads-up to get the frequency ready, not as a precise boundary-crossing indicator — verify against your sectional chart. As of the current data cycle, TRSA coverage is limited to roughly 20 airports nationwide with published NASR remarks that support it; this is not comprehensive nationwide coverage.
+
+#### Frequency data requires an updated NASR bundle
+
+The controlling frequency for each Class B/C/D area comes from the NASR bundle built by the ground data pipeline — the same bundle used for airport and airspace data elsewhere in FlyTab. If your bundle predates this feature, or an area's tower data isn't in the current cycle, the popup still fires but shows **"No frequency data — update NASR bundle"** instead of a frequency. Class E surface areas without a nearby tower correctly show **"No published frequency for this area"** — that's expected, not a data problem, since Class E surface areas aren't required to have one. Rebuild and re-import the NASR bundle (see **Troubleshooting → "NASR badge is red"**) to get real frequencies for Class B/C/D.
+
+**EXPERIMENTAL — verify frequencies against your chart or ATC before relying on them.** This is a convenience aid, not a substitute for chart review or a standard weather/airspace briefing.
 
 ---
 
@@ -470,6 +509,32 @@ Navigate to an airport using the search field, then select the approach. The pla
 
 During the approach, tap **APT** tab instead for quick access to all plates for the route airports.
 
+### Loading an approach into your route
+
+From a plate, load the procedure and pick the IAF/transition. The route planner opens with the approach spliced around your destination: the transition, IAF, intermediate and final fixes and the runway go **before** the destination airport, and the missed-approach fixes go **after** it, so they are next in line if you go missed. For example, KLKR → KLKR with the RNAV RWY 24 via CTF becomes `KLKR → CTF → LIGLE → SAPSE → WITUR → RW24 → KLKR → CORON`. This works for a round trip that departs and returns to the same airport — the approach is attached to the arrival, never the departure.
+
+**The destination stays the airport, not the missed-approach fix.** Distance, ETE, ETA, fuel and the fuel-remaining check in the planner's stats bar, the route table's TOTAL and per-flight rows, the DEST badge, the handle distance and the instrument strip all stop at the destination airport; the descent is planned into the airport, not into the hold. The missed-approach rows still show in the route table. Once you are flying the missed approach (past the airport), the handle's distance and label switch to the end of the route.
+
+The destination is whatever the planner's **DEST** pill names. A fix you insert after it stays a fix. If you reorder the route in the route table so another airport comes after the old destination, that later airport is treated as the destination. Changing DEST does not remove an approach already loaded for the old destination — delete those pills if you no longer want them. Trips saved before this behaviour (late 2026) may still reopen with the missed-approach fix as the destination; apply the route again to fix them.
+
+**Plan computes the route the pills show.** Tapping **Plan** in the route planner calculates the route exactly as it appears in the pills, including a departure or destination you just typed. If any waypoint can't be found in the navigation database, Plan is not updated — a message names the waypoint and the stats bar is cleared rather than left showing the previous route.
+
+---
+
+## Document Library
+
+**MORE → Documents** opens a full-screen library of reference PDFs — POHs, checklists, chart legends, or anything else worth having on hand in the cockpit.
+
+Two FAA chart-legend references, **VFR Chart Legend.pdf** and **IFR Chart Legend.pdf**, are bundled with the app and already in the list the first time you open Documents — no import needed.
+
+**Adding a document** — Tap **Import** to choose a PDF from the device's file picker. You can also share a PDF into FlyTab from another app (a file manager, email, etc.) — pick FlyTab as the share target and it lands in the library automatically, whether FlyTab was already running or not. A shared file over 25MB is rejected with a message pointing you at **Import** instead, which has no size limit.
+
+**Search** — The search box at the top of the panel searches the full text of every document in the library, imported or bundled, not just file names. Each result names the document and the page the match was found on; tap a result to open that document. A scanned or photographed PDF with no selectable text will still import and display normally, but won't turn up in search — there's no text on the page for FlyTab to search.
+
+**Viewing and deleting** — Tap any document in the list to open it in the built-in PDF viewer, which stacks every page top to bottom. Pinch to zoom in on fine print or a diagram, and drag with one finger to pan around the page(s) — this works at any zoom level, including the default view, so one finger is all you need to move through a multi-page document. Opening a document always starts back at 1x zoom. Tap **🗑** on a row to delete that document; it's removed from both the list and search.
+
+If device storage fills up, an import fails without crashing: the panel shows "Storage full — delete a document (🗑 next to a row) to import more."
+
 ---
 
 ## Fuel Management
@@ -642,7 +707,7 @@ FlyTab receives GPS from Stratux, not from the tablet's internal GPS. The Stratu
 
 If Stratux is not found within about 30 seconds of launch, a banner appears: "SIM MODE — not connected to Stratux." The map will not track position in this state. Verify the tablet is on the Stratux Wi-Fi network (192.168.10.1).
 
-**OFFL badge** shows internet connectivity. Many features work offline (charts, NASR data, saved plans). Weather briefing and internet NEXRAD require internet.
+**Network badge** shows which network FlyTab can reach: **FLT** when Stratux answers (shown on the Stratux Wi-Fi even though it has no internet), **HOME** for the home server, **NET** for internet only, **OFFL** for none. It drops out of FLT only after Stratux has failed to answer for 30–45 seconds. The badge is informational — the Stratux and engine connections stay up and reconnect on their own regardless of what it shows. Many features work offline (charts, NASR data, saved plans). Weather briefing and internet NEXRAD require internet.
 
 ---
 

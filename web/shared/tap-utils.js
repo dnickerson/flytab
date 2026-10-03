@@ -13,6 +13,19 @@
 // rebuilds the DOM between touchend and the browser's synthetic click.
 let _wireTapLastTouchAt = 0;
 
+// Selectors for elements mounted directly into a Leaflet map container whose
+// own taps must not fall through to the map's own tap-detection pipeline
+// (Leaflet's own popups via .leaflet-popup, plus any custom overlay mounted
+// the same way AirspaceAlertPopup is -- a raw div appended straight into the
+// map container rather than going through Leaflet's popup system). Add a new
+// selector HERE, not to each map touch-handler file individually, when a
+// future popup/button mounts directly into the map container the same way.
+const MAP_OVERLAY_SELECTORS = ['.leaflet-popup', '.airspace-alert-popup'];
+
+function isTapOnMapOverlay(target) {
+    return MAP_OVERLAY_SELECTORS.some(sel => target?.closest?.(sel));
+}
+
 function wireTap(el, handler) {
     if (!el) return;
     let tapStart = null;

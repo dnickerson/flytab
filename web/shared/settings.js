@@ -19,6 +19,7 @@ class Settings {
         show_fixes: false,
         show_airports: true,
         show_airways: false,
+        show_trsa: false,
         fuel_measurement: null,
         fuel_manual_override: false,
         gps_source: 'auto',  // 'auto' (Stratux primary, device GPS fallback) | 'stratux' | 'internal'
@@ -99,6 +100,15 @@ class Settings {
 
     static get showAirways() { return Settings.get('show_airways'); }
     static set showAirways(v) { Settings.set('show_airways', v); }
+
+    // Added alongside the TRSA layer (2026-09) — layer-panel.js's generic
+    // _toggleOverlay() does `Settings['show' + Name] = enabled`, which is a
+    // silent no-op for any overlay name without a matching getter/set pair
+    // here (it just sets a plain in-memory property on the class, never
+    // touching localStorage). 'sua' has this same gap and is still broken —
+    // out of scope for this fix, see project notes.
+    static get showTrsa() { return Settings.get('show_trsa'); }
+    static set showTrsa(v) { Settings.set('show_trsa', v); }
 
     static get fuelMeasurement() { return Settings.get('fuel_measurement'); }
     static set fuelMeasurement(v) { Settings.set('fuel_measurement', v); }
