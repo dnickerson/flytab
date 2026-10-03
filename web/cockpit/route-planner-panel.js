@@ -229,7 +229,8 @@ class RoutePlannerPanel {
         // Find the airport pill — route may use K-prefixed id even if icao is bare (X60 vs KX60)
         const kId  = icao.length <= 3 ? 'K' + icao : icao;
         const bare = icao.length === 4 && icao[0] === 'K' ? icao.slice(1) : icao;
-        const isAirport = (p) => p.id === icao || p.id === kId || p.id === bare;
+        // Bare id on a plain fix pill is a navaid sharing the name (KGSO vs GSO VOR), not the airport.
+        const isAirport = (p) => p.id === icao || p.id === kId || (p.id === bare && p.type !== 'fix');
         // Prefer the dest pill: a first-match scan anchors on the dep pill when dep == dest.
         let airportIdx = this._route.findIndex(p => p.type === 'dest' && isAirport(p));
         if (airportIdx < 0) airportIdx = this._route.findIndex(p => p.type !== 'dep' && isAirport(p));

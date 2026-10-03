@@ -197,6 +197,53 @@ test.describe('approach insertion @planner-ui', () => {
         ]);
     });
 
+    test('approach anchors on a mid-route fuel-stop pill when the airport is not the destination', async ({ page }) => {
+        await page.goto(HARNESS);
+        await page.evaluate(() => window.__harness.setPlannedRoute([
+            { id: 'KCLT', type: 'dep' },
+            { id: 'KLKR', type: 'fuel' },
+            { id: 'KMHT', type: 'dest' },
+        ]));
+
+        await page.evaluate(detail => window.__harness.insertApproach(detail), KLKR_RNAV24);
+
+        const route = await page.evaluate(() => window.__harness.getRoute());
+        expect(route.map(p => `${p.id}:${p.type}`)).toEqual([
+            'KCLT:dep',
+            'CTF:fix', 'LIGLE:fix', 'SAPSE:fix', 'WITUR:fix', 'RW24:fix',
+            'KLKR:fuel',
+            'CORON:fix',
+            'KMHT:dest',
+        ]);
+    });
+
+    test('a VOR pill sharing the airport bare id (GSO vs KGSO) is not used as the anchor', async ({ page }) => {
+        await page.goto(HARNESS);
+        await page.evaluate(() => window.__harness.setPlannedRoute([
+            { id: 'KCLT', type: 'dep' },
+            { id: 'GSO',  type: 'fix' },
+            { id: 'KMHT', type: 'dest' },
+        ]));
+
+        await page.evaluate(detail => window.__harness.insertApproach(detail), {
+            icao: 'KGSO',
+            insertBefore: [
+                { icao: 'IAF1', lat: 36.20, lon: -79.70, alt: 3000 },
+                { icao: 'RW05', lat: 36.09, lon: -79.94, alt: 950 },
+            ],
+            insertAfter: [{ icao: 'MAP1', lat: 36.15, lon: -79.85, alt: 3000 }],
+            airportWp: { icao: 'KGSO', lat: 36.10, lon: -79.94, type: 'APT' },
+        });
+
+        const route = await page.evaluate(() => window.__harness.getRoute());
+        expect(route.map(p => `${p.id}:${p.type}`)).toEqual([
+            'KCLT:dep',
+            'GSO:fix',
+            'IAF1:fix', 'RW05:fix', 'MAP1:fix',
+            'KMHT:dest',
+        ]);
+    });
+
     test('KCLT → KLKR: approach and missed approach bracket the destination', async ({ page }) => {
         await page.goto(HARNESS);
         await page.evaluate(() => window.__harness.setPlannedRoute([
