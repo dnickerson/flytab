@@ -5,6 +5,9 @@
  */
 
 class EngineMLBridge {
+    /** Samples further apart than this are not compared (frames come at 1 Hz, or every 2 s on HTTP fallback). */
+    static MAX_SAMPLE_GAP_MS = 5000;
+
     constructor() {
         this._plugin = window.Capacitor?.Plugins?.EngineML;
         this._initialized = false;
@@ -21,6 +24,7 @@ class EngineMLBridge {
 
         // Multi-layer anomaly detection (Scenario 5)
         this._prevSample = null;              // previous engine sample for delta checks
+        this._lastSampleAt = 0;               // Date.now() of the last current EDM sample
         this._baseline = {};                  // rolling parameter averages
         this._baselineWindow = [];            // last 60 samples for baseline computation
         this._baselineWindowMax = 60;
@@ -273,6 +277,25 @@ class EngineMLBridge {
     async _onEngineData(raw) {
         if (!raw) return;
 
+        // Frozen EDM data: engine_monitor.py keeps resending its last parsed row
+        // every second after the EDM goes quiet, flagging it with serial_warning
+        // (or serial_connected false) -- EngineClient.edmCurrent, the same check
+        // the ENG page and the map engine box use. Judging those frames would
+        // repeat an old reading's advisories (e.g. low oil pressure every 5 s) and
+        // feed the ML window copies of one sample, so they are skipped.
+        if (typeof EngineClient !== 'undefined' && !EngineClient.edmCurrent(raw)) {
+            this._forgetPreviousSample();
+            return;
+        }
+        // A hole in the data (frozen EDM, Pi stale or disconnected): the MAP/RPM
+        // drop checks must not compare against a sample from before it -- a power
+        // change made during the hole would read as a sudden drop.
+        const now = Date.now();
+        if (this._lastSampleAt && now - this._lastSampleAt > EngineMLBridge.MAX_SAMPLE_GAP_MS) {
+            this._forgetPreviousSample();
+        }
+        this._lastSampleAt = now;
+
         // Flatten nested data
         const d = raw.data ? { ...raw, ...raw.data } : raw;
         const num = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
@@ -391,6 +414,13 @@ class EngineMLBridge {
 
         // Store sample for next delta checks (after ML call so prev is last complete sample)
         this._prevSample = d;
+    }
+
+    /** Drop the samples the delta checks compare against (after a data gap). */
+    _forgetPreviousSample() {
+        this._prevSample = null;
+        this._prevMAP = null;
+        this._prevRPM = null;
     }
 
     // ========== Layer 1: Physics Rules ==========
