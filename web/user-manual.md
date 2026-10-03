@@ -100,6 +100,8 @@ The primary cockpit view. Shows position, route, weather, traffic, and airspace 
 
 **Airport popup** — Tap any airport symbol for runway data, elevation, frequencies, fuel availability, and direct-to shortcut.
 
+**WIND tab** — A compass rose showing wind against the field's runways, so you can see the crosswind/headwind picture at a glance instead of reading numbers. The arrow points *from* the direction the wind is coming from, same as any wind rose. Each runway end shows its headwind/tailwind and crosswind component, with the best end marked. Defaults to live METAR wind; tap **MANUAL** to enter your own direction and speed instead (e.g. from ATIS, a more current report than a stale METAR, or to explore a forecast wind before you have one) — tap the direction or speed value to open a number pad, type the digits, and tap **DONE**. Manual entry always resets back to METAR the next time you open the popup; it never carries into a different flight.
+
 ---
 
 ### APT — Route Airports
