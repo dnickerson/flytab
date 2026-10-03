@@ -138,6 +138,7 @@ class StratuxClient extends EventTarget {
         // ownship/traffic datagram. Heartbeats don't count: Stratux keeps sending
         // heartbeats to clients it has stopped sending data to.
         this._linkWatchdog = null;
+        this._lastTickAt = 0;
         this._lastSituationMsgAt = 0;
         this._lastDataAt = 0;
         this._udpHeartbeatLogged = false;
@@ -171,6 +172,10 @@ class StratuxClient extends EventTarget {
 
     connect() {
         this._disconnected = false;
+        // Fresh start (also config-editor's disconnect()+connect() on a Stratux IP
+        // change): retry at the base delays, not wherever the old backoff got to.
+        this._reconnectDelay = 2000;
+        this._channelDelay = { ...StratuxClient.CHANNEL_BASE_DELAY_MS };
         // Cancel any pending reconnect timer so the external call and the timer
         // don't both call _connectTraffic() independently.
         if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
@@ -658,12 +663,29 @@ class StratuxClient extends EventTarget {
 
     _startLinkWatchdog() {
         if (this._linkWatchdog) return;
+        this._lastTickAt = Date.now();
         this._linkWatchdog = setInterval(() => this._linkWatchdogTick(), 1000);
     }
 
     /** 1 Hz link-health check. Runs from connect() until disconnect(). */
     _linkWatchdogTick() {
         const now = Date.now();
+
+        // JS was suspended (app backgrounded / screen off): the wall clock moved
+        // but no ticks ran and native messages are still queued behind this
+        // tick. Shift every age reference forward by the lost time so the
+        // suspension itself isn't mistaken for silence or a stuck connect.
+        const lost = this._lastTickAt ? now - this._lastTickAt - 1000 : 0;
+        this._lastTickAt = now;
+        if (lost > StratuxClient.TICK_GAP_MS) {
+            if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', `Watchdog: JS was suspended ~${Math.round(lost / 1000)}s — not counting it as silence`);
+            if (this._lastSituationMsgAt) this._lastSituationMsgAt += lost;
+            if (this._lastDataAt) this._lastDataAt += lost;
+            for (const ws of [this._trafficWs, this._situationWs, this._weatherWs, this._jsonioWs]) {
+                if (ws && ws._createdAt) ws._createdAt += lost;
+            }
+        }
+
         const trafficOpen = this._trafficWs?.readyState === WebSocket.OPEN;
 
         // `connected` follows data: drop it once Stratux data (situation WS or
@@ -756,5 +778,7 @@ StratuxClient.CONNECT_TIMEOUT_MS = 15000;
 // First reconnect delay per companion channel; doubles per failure up to _maxDelay,
 // reset when the channel opens.
 StratuxClient.CHANNEL_BASE_DELAY_MS = { situation: 2000, weather: 5000, jsonio: 5000 };
+// Watchdog ticks further apart than 1 s + this mean JS was suspended.
+StratuxClient.TICK_GAP_MS = 2000;
 // Stratux REST polls (/getStatus, /getTowers).
 StratuxClient.HTTP_TIMEOUT_MS = 3000;

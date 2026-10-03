@@ -146,3 +146,41 @@ describe('NetworkMode — leaving flight requires consecutive failed Stratux pro
         expect(await nm.detect()).toBe('flight');
     });
 });
+
+describe('NetworkMode — overlapping detect() calls share one probe', () => {
+    let onLineSpy;
+
+    beforeEach(() => {
+        stratuxUp = true; homeUp = false; onLine = false;
+        installFetch();
+        onLineSpy = vi.spyOn(window.navigator, 'onLine', 'get').mockImplementation(() => onLine);
+    });
+
+    afterEach(() => {
+        onLineSpy.mockRestore();
+        delete global.fetch;
+    });
+
+    it('concurrent detect() calls (interval + online/offline event) count as one failed probe', async () => {
+        const nm = new NetworkMode();
+        await nm.detect();
+        stratuxUp = false;
+        global.fetch.mockClear();
+
+        await Promise.all([nm.detect(), nm.detect(), nm.detect()]);
+
+        const stratuxCalls = global.fetch.mock.calls.filter(([u]) => u.startsWith('http://192.168.10.1/'));
+        expect(stratuxCalls).toHaveLength(1);
+        expect(nm._flightMisses).toBe(1);
+        expect(nm.mode).toBe('flight');
+    });
+
+    it('a later detect() after the shared one finishes runs a fresh probe', async () => {
+        const nm = new NetworkMode();
+        await nm.detect();
+        global.fetch.mockClear();
+        await nm.detect();
+        await nm.detect();
+        expect(global.fetch.mock.calls.filter(([u]) => u.startsWith('http://192.168.10.1/'))).toHaveLength(2);
+    });
+});

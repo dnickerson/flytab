@@ -366,3 +366,73 @@ describe('Review #5 — Stratux HTTP polls have a timeout', () => {
         client.disconnect();
     });
 });
+
+// ---------------------------------------------------------------------------
+// Second review (PR #150)
+// ---------------------------------------------------------------------------
+
+describe('Review 2 #2 — watchdog tolerates WebView timer suspension', () => {
+    function connectedBySituation() {
+        const client = new (load())();
+        client.connect();
+        const sit = latest('/situation');
+        sit._open();
+        sit._msg(SIT);
+        expect(client.connected).toBe(true);
+        return { client, sit };
+    }
+
+    it('a resume after a 30 s suspension does not declare the link down or replace the situation socket', () => {
+        const { client, sit } = connectedBySituation();
+        const events = [];
+        client.addEventListener('stratux:disconnect', () => events.push('disconnect'));
+        vi.advanceTimersByTime(1000);
+        vi.setSystemTime(Date.now() + 30000);   // JS frozen: wall clock moves, no ticks ran
+        vi.advanceTimersByTime(1000);           // first tick after resume
+        sit._msg(SIT);                          // queued native messages now delivered
+        expect(events).toEqual([]);
+        expect(latest('/situation')).toBe(sit);
+        client.disconnect();
+    });
+
+    it('still detects real silence after a resume', () => {
+        const { client, sit } = connectedBySituation();
+        vi.advanceTimersByTime(1000);
+        vi.setSystemTime(Date.now() + 30000);
+        vi.advanceTimersByTime(8000);           // resumed, but no data ever arrives
+        expect(client.connected).toBe(false);
+        expect(latest('/situation')).not.toBe(sit);
+        client.disconnect();
+    });
+
+    it('a suspension does not count toward a CONNECTING socket’s timeout', () => {
+        const client = new (load())();
+        client.connect();
+        const stuck = latest('/weather');
+        vi.advanceTimersByTime(1000);
+        vi.setSystemTime(Date.now() + 60000);
+        vi.advanceTimersByTime(1000);
+        expect(latest('/weather')).toBe(stuck);
+        client.disconnect();
+    });
+});
+
+describe('Review 2 #4 — connect() resets reconnect backoff', () => {
+    it('after disconnect()+connect(), dropped traffic and situation retry at the base delay', () => {
+        const client = new (load())();
+        client.connect();
+        client._reconnectDelay = 30000;
+        client._channelDelay.situation = 30000;
+        client.disconnect();
+        client.connect();
+
+        const traffic = latest('/traffic');
+        const sit = latest('/situation');
+        traffic._drop();
+        sit._drop();
+        vi.advanceTimersByTime(2100);
+        expect(latest('/traffic')).not.toBe(traffic);
+        expect(latest('/situation')).not.toBe(sit);
+        client.disconnect();
+    });
+});

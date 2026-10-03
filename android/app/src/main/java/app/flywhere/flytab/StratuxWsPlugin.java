@@ -8,9 +8,6 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
-import java.util.concurrent.TimeUnit;
-
-import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
 import okhttp3.WebSocket;
@@ -44,33 +41,14 @@ import okio.ByteString;
 public class StratuxWsPlugin extends Plugin {
     private static final String TAG = "StratuxWS";
 
-    // Send ping every 30 s. Standard for keep-alive — short enough to detect a
-    // half-closed connection in ~60 s, long enough not to load the link.
-    private static final long PING_INTERVAL_SEC = 30;
-
     // Channel → owning socket. Token-based so events that OkHttp delivers before
     // newWebSocket() returns are not dropped (see StratuxChannelRegistry).
     private final StratuxChannelRegistry<WebSocket> channels = new StratuxChannelRegistry<>();
-    private OkHttpClient client;
-    // Same pool/dispatcher, no protocol pings. For Stratux's /situation endpoint,
-    // whose server handler never reads from the socket — golang.org/x/net/websocket
-    // only answers a ping from inside Read(), so a pinged /situation socket is
-    // failed by OkHttp ("didn't receive pong") ~60 s after every connect. JS
-    // detects a dead situation socket by message silence instead (10 Hz stream).
-    private OkHttpClient noPingClient;
+    private StratuxWsClients clients;
 
     @Override
     public void load() {
-        client = new OkHttpClient.Builder()
-            .pingInterval(PING_INTERVAL_SEC, TimeUnit.SECONDS)
-            // Read timeout 0 = no timeout for streaming reads. Pings detect dead conn.
-            .readTimeout(0, TimeUnit.MILLISECONDS)
-            // Allow some time for the initial WS handshake.
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .build();
-        noPingClient = client.newBuilder()
-            .pingInterval(0, TimeUnit.SECONDS)
-            .build();
+        clients = new StratuxWsClients();
     }
 
     @PluginMethod
@@ -88,12 +66,10 @@ public class StratuxWsPlugin extends Plugin {
         // owned it before.
         final StratuxChannelRegistry.Claim<WebSocket> claim = channels.claim(channel);
         final long token = claim.token;
-        if (claim.previous != null) {
-            try { claim.previous.cancel(); } catch (Exception ignored) {}
-        }
+        StratuxWsClients.release(claim.previous);
 
         Request req = new Request.Builder().url(url).build();
-        WebSocket ws = (ping ? client : noPingClient).newWebSocket(req, new WebSocketListener() {
+        WebSocket ws = clients.forChannel(ping).newWebSocket(req, new WebSocketListener() {
             // current() returns true only if THIS listener's claim still owns the
             // channel. Prevents events from a cancelled (replaced) socket from being
             // delivered to JS as if they were a new socket's events. The session
@@ -173,17 +149,12 @@ public class StratuxWsPlugin extends Plugin {
     public void close(PluginCall call) {
         String channel = call.getString("channel");
         if (channel == null) { call.reject("channel required"); return; }
-        WebSocket ws = channels.releaseChannel(channel);
-        if (ws != null) {
-            try { ws.close(1000, "client_close"); } catch (Exception ignored) {}
-        }
+        StratuxWsClients.release(channels.releaseChannel(channel));
         call.resolve();
     }
 
     @Override
     protected void handleOnDestroy() {
-        for (WebSocket ws : channels.releaseAll()) {
-            try { ws.cancel(); } catch (Exception ignored) {}
-        }
+        for (WebSocket ws : channels.releaseAll()) StratuxWsClients.release(ws);
     }
 }
