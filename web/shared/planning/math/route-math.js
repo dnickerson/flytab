@@ -116,24 +116,39 @@ export function formatTime(hrs) {
 }
 
 /**
- * Simplified CONUS magnetic variation (±2° accuracy).
+ * Magnetic declination at a point, degrees, EAST positive (west negative),
+ * from the World Magnetic Model 2025 in web/shared/mag-var.js. That file is a
+ * classic script (index.html loads it before this module), so it is reached as
+ * a global rather than imported. Returns null if it isn't loaded --
+ * callers then show no magnetic heading rather than a wrong one.
+ *
+ * (Replaces a linear "CONUS" approximation that was within ~1 deg in the
+ * Carolinas but 7-16 deg off in New England and the West.)
  * @param {number} lat
  * @param {number} lon
- * @returns {number} degrees (positive = west variation)
+ * @returns {number|null}
  */
-function _magVarConus(lat, lon) {
-    return -6.0 + (lon + 90) * -0.12 + (lat - 35) * 0.05;
+function _declination(lat, lon) {
+    // mag-var.js declares `const MagVar` at the top level of a classic script: a
+    // global *binding*, not a property of globalThis/window. Resolve the bare
+    // name first (works from this module in the app), then globalThis (tests).
+    // @ts-ignore -- MagVar is a global from a classic script
+    const mv = (typeof MagVar !== 'undefined') ? MagVar : /** @type {any} */ (globalThis).MagVar; // eslint-disable-line no-undef
+    if (!mv || typeof mv.declination !== 'function') return null;
+    const d = mv.declination(lat, lon);
+    return Number.isFinite(d) ? d : null;
 }
 
 /**
- * Wind-corrected magnetic heading from a true bearing.
+ * Wind-corrected magnetic heading from a true bearing:
+ * magnetic = true + WCA - declination (east positive).
  * @param {number} brgTrue  true bearing to destination, degrees
- * @param {number} lat      midpoint latitude (for mag var)
- * @param {number} lon      midpoint longitude
+ * @param {number} lat      position for the magnetic variation
+ * @param {number} lon
  * @param {number} tas      true airspeed, kt
  * @param {number} windDir  wind FROM direction, degrees true
  * @param {number} windSpd  wind speed, kt
- * @returns {number} magnetic heading, degrees 0–360
+ * @returns {number|null} magnetic heading, degrees 0–360; null if the variation is unavailable
  */
 export function windCorrectedMagHdg(brgTrue, lat, lon, tas, windDir, windSpd) {
     const toRad = Math.PI / 180;
@@ -142,8 +157,9 @@ export function windCorrectedMagHdg(brgTrue, lat, lon, tas, windDir, windSpd) {
         const sinWca = (windSpd * Math.sin((windDir - brgTrue) * toRad)) / tas;
         wcaDeg = Math.asin(Math.max(-1, Math.min(1, sinWca))) / toRad;
     }
-    const magVar = _magVarConus(lat, lon);
-    return ((brgTrue + wcaDeg - magVar) + 360) % 360;
+    const decl = _declination(lat, lon);
+    if (decl == null) return null;
+    return (((brgTrue + wcaDeg - decl) % 360) + 360) % 360;
 }
 
 /**

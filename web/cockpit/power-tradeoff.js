@@ -96,15 +96,15 @@ class PowerTradeoff {
         const { destDistNm, activeWind, fuelRemaining } = legData;
         if (!destDistNm || destDistNm <= 0) return { valid: false };
 
-        // Wind component along track (headwind negative, tailwind positive)
-        // activeWind = { dir: degrees, spd: knots } — wind FROM direction
-        // active waypoint bearing used as track approximation
+        // Wind component along track: tailwind positive, headwind negative.
+        // activeWind = { dir, spd } -- dir is where the wind blows FROM, degrees
+        // TRUE (winds aloft), so compare it with the TRUE bearing to the active
+        // waypoint (legData.brg), not the magnetic heading. Wind from dead ahead
+        // (dir == track) is a full headwind: -spd * cos(0) = -spd.
         let windComp = 0;
-        if (activeWind && activeWind.spd > 0 && legData.hdg != null) {
-            // Component of wind along track: spd * cos(windDir - track)
-            // Positive = tailwind
-            const angleDiff = (activeWind.dir - legData.hdg) * Math.PI / 180;
-            windComp = activeWind.spd * Math.cos(angleDiff);
+        if (activeWind && activeWind.spd > 0 && legData.brg != null) {
+            const angleDiff = (activeWind.dir - legData.brg) * Math.PI / 180;
+            windComp = -activeWind.spd * Math.cos(angleDiff);
         }
 
         const gsKt    = Math.max(60, ps.tas_kt + windComp);   // floor at 60kt
