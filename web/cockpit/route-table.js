@@ -800,6 +800,7 @@ class RouteTable {
                     alt: wp.alt ?? wp.altitude,
                 };
                 if (wp.type) out.type = wp.type;
+                if (wp.isDest) out.isDest = true;   // destination ahead of any missed-approach fixes
                 if (wp.fuel_add_gal != null) out.fuel_add_gal = wp.fuel_add_gal;
                 if (wp.alt_constraint) out.alt_constraint = wp.alt_constraint;
                 if (wp.alt_constraint_upper != null) out.alt_constraint_upper = wp.alt_constraint_upper;
@@ -814,8 +815,7 @@ class RouteTable {
             flight_plan: {
                 ...(this._trip?.flight_plan || {}),
                 departure: this._waypoints[0]?.icao || '',
-                destination: ([...this._waypoints].reverse().find(wp => wp.type === 'APT')
-                    || this._waypoints[this._waypoints.length - 1])?.icao || '',
+                destination: this._waypoints[this._destLabelIndex()]?.icao || '',
                 // Clear stale legs — they were for the original route, not the edited one
                 legs: [],
                 // Preserve the original airway route array when waypoints are structurally
@@ -1268,12 +1268,18 @@ class RouteTable {
                 // may be a MAP/hold fix rather than the airport itself.
                 const destId = (isLast && this._destIcao) ? this._destIcao
                     : (wps[i].icao || wps[i].name || '?');
+                // Where the flight arrives: on the final flight, the destination the route
+                // planner marked (missed-approach fixes may follow it). Totals and
+                // to-destination figures stop here; rows still run to destWpIndex.
+                const marked = isLast ? this._markedDestIndex() : -1;
+                const arrIdx = (marked > depIdx && marked <= i) ? marked : i;
                 flights.push({
                     index:       flights.length,
                     dep:         wps[depIdx].icao || wps[depIdx].name || '?',
                     dest:        destId,
                     depWpIndex:  depIdx,
                     destWpIndex: i,
+                    arrWpIndex:  arrIdx,
                     // Per-flight computed totals filled by _computeEnroute()
                     _totDist: 0,
                     _totEte:  0,
@@ -1809,10 +1815,12 @@ class RouteTable {
         }
 
         // Compute per-Flight totals for the multi-flight footer rows.
-        // Each Flight sums its Legs (waypoints depWpIndex+1 … destWpIndex).
+        // Each Flight sums its Legs (waypoints depWpIndex+1 … arrWpIndex) — legs past
+        // the arrival airport are a missed approach and not part of the flight.
         for (const flight of this._flights) {
             let flightDist = 0, flightEte = 0, flightFuel = 0;
-            for (let j = flight.depWpIndex + 1; j <= flight.destWpIndex; j++) {
+            const arrIdx = flight.arrWpIndex ?? flight.destWpIndex;
+            for (let j = flight.depWpIndex + 1; j <= arrIdx; j++) {
                 const wp = this._waypoints[j];
                 flightDist += wp._dist || 0;
                 flightEte  += wp._ete  || 0;
@@ -1833,6 +1841,35 @@ class RouteTable {
     }
 
     /**
+     * Index of the destination the route planner marked (isDest), or -1 when there
+     * is none or it is stale — callers keep their own fallback.
+     */
+    _markedDestIndex() {
+        return typeof ActiveRoute !== 'undefined' ? ActiveRoute.markedDestIndex(this._waypoints) : -1;
+    }
+
+    /** Destination for labels and the emitted plan — ActiveRoute's rule (marked, else last APT). */
+    _destLabelIndex() {
+        if (typeof ActiveRoute !== 'undefined') return ActiveRoute.findDestIndex(this._waypoints);
+        for (let i = this._waypoints.length - 1; i >= 0; i--) {
+            if (this._waypoints[i].type === 'APT') return i;
+        }
+        return this._waypoints.length - 1;
+    }
+
+    /**
+     * Index of the airport `flight` arrives at — its arrWpIndex, so trailing
+     * missed-approach fixes are excluded. Once the active waypoint is past it
+     * (flying the missed approach), the flight's last waypoint instead.
+     * With no flight, the last waypoint.
+     */
+    _arrivalIndex(flight) {
+        if (!flight) return this._waypoints.length - 1;
+        const arr = flight.arrWpIndex ?? flight.destWpIndex;
+        return this._activeIndex <= arr ? arr : flight.destWpIndex;
+    }
+
+    /**
      * Publish activeroute:legupdate with nav data for the route nav strip,
      * instrument strip, and power tradeoff panel.
      */
@@ -1844,7 +1881,7 @@ class RouteTable {
         const activeFlight = this._flights?.find(f =>
             this._activeIndex >= f.depWpIndex && this._activeIndex <= f.destWpIndex
         );
-        const destIdx = activeFlight?.destWpIndex ?? (this._waypoints.length - 1);
+        const destIdx = this._arrivalIndex(activeFlight);
         const destWp  = this._waypoints[destIdx];
         if (!destWp) return;
 
@@ -2955,13 +2992,17 @@ class RouteTable {
         }
 
         const dep = this._waypoints[0];
-        // Use last airport waypoint as destination (not MAP or other appended fixes)
-        const dest = [...this._waypoints].reverse().find(wp => wp.type === 'APT')
-                  || this._waypoints[this._waypoints.length - 1];
+        // Destination airport, not MAP or other appended fixes
+        // Remaining distance runs to the marked destination, excluding a loaded missed
+        // approach after it — until the active waypoint is past the destination, when
+        // both the distance and the label run to the end of the route.
+        const marked = this._markedDestIndex();
+        const flyingMissed = marked >= 0 && this._activeIndex > marked;
+        const tripEndIdx = (marked >= 0 && !flyingMissed) ? marked : this._waypoints.length - 1;
+        const dest = this._waypoints[flyingMissed ? this._waypoints.length - 1 : this._destLabelIndex()];
         const active = this._waypoints[this._activeIndex];
-
         let remainDist = 0;
-        for (let i = this._activeIndex; i < this._waypoints.length; i++) {
+        for (let i = this._activeIndex; i <= tripEndIdx; i++) {
             const wp = this._waypoints[i];
             if (i === this._activeIndex) {
                 remainDist += wp._liveDist || wp._legDist || 0;
@@ -3022,7 +3063,8 @@ class RouteTable {
         // sums to the final waypoint, so recompute scoped to the active flight's end index.
         let remainDistToActiveFlightDest = 0;
         if (activeFlight) {
-            for (let i = this._activeIndex; i <= activeFlight.destWpIndex; i++) {
+            const arrIdx = this._arrivalIndex(activeFlight);
+            for (let i = this._activeIndex; i <= arrIdx; i++) {
                 remainDistToActiveFlightDest += (i === this._activeIndex)
                     ? (this._waypoints[i]?._liveDist ?? this._waypoints[i]?._legDist ?? 0)
                     : (this._waypoints[i]?._legDist ?? 0);
@@ -3039,9 +3081,12 @@ class RouteTable {
         // The APT walk-back from Task 9 is preserved inside that scope: the active
         // flight's last waypoint may itself be a missed-approach/hold fix trailing the
         // airport, and a fix's `_fuelRem` is not the arrival figure.
-        const fallbackEndIdx = activeFlight ? activeFlight.destWpIndex : this._waypoints.length - 1;
-        const destWp = this._waypoints.slice(0, fallbackEndIdx + 1).reverse().find(wp => wp.type === 'APT')
-                    || this._waypoints[fallbackEndIdx];
+        const fallbackEndIdx = activeFlight ? this._arrivalIndex(activeFlight) : this._waypoints.length - 1;
+        // Flying the missed approach, the figure is fuel at the route's end, not the airport behind.
+        const destWp = flyingMissed
+            ? this._waypoints[fallbackEndIdx]
+            : (this._waypoints.slice(0, fallbackEndIdx + 1).reverse().find(wp => wp.type === 'APT')
+               || this._waypoints[fallbackEndIdx]);
         let fuelAtDest = null;
         // The badge label must name the airport the figure actually describes. The
         // handle label beside it always names the TRIP's final airport, so on a
@@ -3050,7 +3095,7 @@ class RouteTable {
         // pilot overflies the stop. Show the active flight's identifier instead.
         let fuelDestLabel = 'DEST';
         const headerDestId = dest.icao || '?';
-        if (activeFlight?.dest && activeFlight.dest !== headerDestId) {
+        if (!flyingMissed && activeFlight?.dest && activeFlight.dest !== headerDestId) {
             fuelDestLabel = activeFlight.dest;
         }
         if (currentFuel != null && remainDistToActiveFlightDest > 0 && cruiseSpeed > 0) {

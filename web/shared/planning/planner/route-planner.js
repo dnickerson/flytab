@@ -30,6 +30,30 @@ import { PlanError, DestinationUnreachableError } from './route-planner-errors.j
 const AIRWAY_RE = /^[VTJQ]\d+[A-Z]?$/;
 
 /**
+ * Index of the destination in plan.waypoints — not necessarily the last, since
+ * a loaded approach's missed-approach fixes follow it: the waypoint flagged
+ * isDest (from the route planner's DEST pill), unless an airport now follows it
+ * (a stale marker after a reorder); else the last occurrence of plan.destination
+ * (the departure may share the id); else the last waypoint.
+ * @param {{waypoints: Array<{id?:string, type?:string, isDest?:boolean}>, destination?: string}} plan
+ * @returns {number}
+ */
+function destinationIndex(plan) {
+    const wps = plan.waypoints || [];
+    for (let i = wps.length - 1; i > 0; i--) {
+        if (!wps[i].isDest) continue;
+        if (!wps.slice(i + 1).some(w => w.type === 'APT')) return i;
+        break;
+    }
+    if (plan.destination) {
+        for (let i = wps.length - 1; i > 0; i--) {
+            if (wps[i].id === plan.destination) return i;
+        }
+    }
+    return wps.length - 1;
+}
+
+/**
  * Last-resort profile, used only when no `profiles` adapter is wired up at all
  * (or when a caller passes no `profileOverride` to recomputeLegs()).
  *
@@ -372,9 +396,12 @@ export class RoutePlanner {
         const pctPower = (opts.pctPower ?? 65) / 100;
         let etaMs = (opts.departureTime instanceof Date ? opts.departureTime.getTime() : Date.now());
 
+        // The descent to the field ends at the destination; missed-approach legs may follow it.
+        const destIdx = destinationIndex(plan);
+
         // Resolve cruise altitude: opts override → plan field → VFR auto-select
         const dep  = wps[0];
-        const dest = wps[wps.length - 1];
+        const dest = wps[destIdx];
         let globalCruiseAltFt = opts.cruiseAltFt ?? plan.cruiseAltFt;
         if (!globalCruiseAltFt && dep && dest) {
             const magCourse = bearing(dep.lat, dep.lon, dest.lat, dest.lon);
@@ -423,7 +450,7 @@ export class RoutePlanner {
                 distNm,
                 altFt: legAltFt,
                 departingFromGround: i === 0 || !!a.fuelStop,
-                endingAtGround: i === wps.length - 2 || !!b.fuelStop,
+                endingAtGround: i === destIdx - 1 || !!b.fuelStop,
                 gsKt: gs,
                 tasKt: tas,
                 powerFrac: pctPower,
@@ -500,11 +527,13 @@ export class RoutePlanner {
             });
         }
 
+        // Totals run to the destination: leg i ends at wps[i+1], so missed-approach legs start at destIdx.
+        const toDest = legs.slice(0, destIdx);
         const summary = {
-            totalDistNm:  legs.reduce((s, l) => s + l.distNm, 0),
-            totalEteHrs:  legs.reduce((s, l) => s + l.timeHrs, 0),
-            totalFuelGal: legs.reduce((s, l) => s + l.fuelGal, 0),
-            fuelRemGal:   fuelRem,
+            totalDistNm:  toDest.reduce((s, l) => s + l.distNm, 0),
+            totalEteHrs:  toDest.reduce((s, l) => s + l.timeHrs, 0),
+            totalFuelGal: toDest.reduce((s, l) => s + l.fuelGal, 0),
+            fuelRemGal:   toDest.length ? toDest[toDest.length - 1].fuelRemGal : fuelRem,
             fixCount:     wps.length,
         };
         return { ...plan, legs, summary };
@@ -533,7 +562,9 @@ export class RoutePlanner {
         const fuelStopCandidates = [];
         let cumHrs = 0;
 
-        for (let i = 0; i < plan.legs.length; i++) {
+        // Only legs up to the destination: no fuel stop on a missed approach.
+        const legCount = Math.min(plan.legs.length, destinationIndex(plan));
+        for (let i = 0; i < legCount; i++) {
             const leg = plan.legs[i];
             const isLast = i === plan.legs.length - 1;
             const fromWp = plan.waypoints[i];
