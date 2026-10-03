@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <link rel="stylesheet" href="/web/style.css">
+    <link rel="stylesheet" href="/web/lib/leaflet/leaflet.css">
+    <style>body { background: #fff; } #map { width: 800px; height: 600px; position: relative; }</style>
+</head>
+<body>
+    <div id="map"></div>
+    <script>
+        // A working CockpitConfig: dot-path get() and patch(), seeded with the
+        // shipped engineOverlay default (CARB TEMP only).
+        const CockpitConfig = {
+            _config: { homeServer: { base: 'http://localhost:8090' },
+                engineOverlay: { enabled: true, position: 'top-right',
+                    fields: [{ key: 'carb_temp', label: 'CARB TEMP', unit: '°F', warnBelow: 40, dangerBelow: 32 }] } },
+            get(path) { return path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), this._config); },
+            patch(path, value) {
+                const keys = path.split('.'); let o = this._config;
+                for (const k of keys.slice(0, -1)) { o[k] = o[k] || {}; o = o[k]; }
+                o[keys[keys.length - 1]] = value;
+            },
+        };
+        const Settings = {};
+        const DiagLog  = { log: () => {} };
+        const wireTap  = (el, fn) => el.addEventListener('click', fn);
+    </script>
+    <script src="/web/lib/leaflet/leaflet.js"></script>
+    <script>
+        class VectorMapLayers { constructor(map) { this._map = map; } init() {} destroy() {} show() {} hide() {} }
+    </script>
+    <script src="/web/cockpit/engine-overlay.js"></script>
+    <script src="/web/cockpit/layer-panel.js"></script>
+    <script>
+        const map = L.map('map').setView([34.9, -81.1], 10);
+        const engine = new EventTarget(); engine.connected = true; engine.stale = false; engine.lastData = null;
+        const overlay = new EngineOverlay(document.getElementById('map'), engine);
+        const panel = new LayerPanel(map, new VectorMapLayers(map), { _activeBaseLayer: 'vector' });
+        panel.init();
+        // The Pi's /api/status shape (engine_monitor.py get_status()).
+        const PI = { percent_power: 65, data: { Carb_Temp: 72, RPM: 2420, MP: 23.4, Fuel_Flow: 8.25, Oil_Temp: 185,
+            Oil_Press: 78, Volts: 14.1, CHT1: 341, CHT2: 362, CHT3: 0, CHT4: 355, EGT1: 1290, EGT2: 1312, EGT3: 1301, EGT4: 1288 } };
+        window.__harness = {
+            open() { panel.open(); },
+            data() { engine.dispatchEvent(new CustomEvent('engine:data', { detail: PI })); },
+            cards() {
+                return [...document.querySelectorAll('.engine-overlay-field')].map(r => [
+                    r.querySelector('.engine-overlay-label').textContent, r.querySelector('.engine-overlay-value').textContent]);
+            },
+            saved() { return CockpitConfig.get('engineOverlay.fields').map(f => f.key); },
+        };
+    </script>
+</body>
+</html>

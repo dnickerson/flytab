@@ -134,3 +134,56 @@ describe('app.js wiring', () => {
         expect(app).not.toMatch(/engineOverlay\.update\(this\.enginePanel\.lastData\)/);
     });
 });
+
+describe('EngineOverlay picker support', () => {
+    function liveConfig(fields) {
+        const cfg = { engineOverlay: { enabled: true, position: 'top-right', fields } };
+        globalThis.CockpitConfig = {
+            get: (p) => p.split('.').reduce((o, k) => (o == null ? undefined : o[k]), cfg),
+            patch: (p, v) => { const ks = p.split('.'); let o = cfg; for (const k of ks.slice(0, -1)) o = o[k]; o[ks[ks.length - 1]] = v; },
+        };
+        return cfg;
+    }
+
+    it('every catalog key resolves against the real Pi payload', () => {
+        const d = EngineOverlay.flatten({ percent_power: 65, data: { Carb_Temp: 72, RPM: 2420, MP: 23.4, Fuel_Flow: 8.2,
+            Oil_Temp: 185, Oil_Press: 78, Volts: 14.1, CHT1: 340, CHT2: 362, CHT3: 0, CHT4: 355, EGT1: 1290, EGT2: 1312, EGT3: 1301, EGT4: 1288 } });
+        const got = Object.fromEntries(EngineOverlay.CATALOG.map(c => [c.key, EngineOverlay.valueFor(d, c.key)]));
+        expect(got).toEqual({ carb_temp: 72, rpm: 2420, mp: 23.4, fuel_flow: 8.2, percent_power: 65, oil_temp: 185,
+            oil_press: 78, cht_max: 362, egt_max: 1312, volts: 14.1 });
+    });
+
+    it('CHT/EGT max ignore an unfitted probe reading 0, and are null with no readings', () => {
+        expect(EngineOverlay.valueFor({ CHT1: 0, CHT2: 0, CHT3: 0, CHT4: 0 }, 'cht_max')).toBeNull();
+        expect(EngineOverlay.valueFor({ CHT1: 0, CHT2: 300 }, 'cht_max')).toBe(300);
+    });
+
+    it('shows decimals where the catalog asks (MP 23.4", FF 8.2 gph)', () => {
+        const cfg = liveConfig([]);
+        EngineOverlay.setSelectedKeys(['mp', 'fuel_flow']);
+        const container = document.createElement('div');
+        const ov = new EngineOverlay(container);
+        ov.update({ MP: 23.44, Fuel_Flow: 8.21 });
+        expect([...container.querySelectorAll('.engine-overlay-value')].map(v => v.textContent)).toEqual(['23.4"', '8.2 gph']);
+        expect(cfg.engineOverlay.fields.map(f => f.key)).toEqual(['mp', 'fuel_flow']);
+    });
+
+    it('saves in catalog order, caps at MAX_FIELDS, and keeps hand-added non-catalog fields', () => {
+        const cfg = liveConfig([{ key: 'carb_temp', label: 'CARB TEMP', unit: '°F' }, { key: 'GP2', label: 'GP2', unit: '' }]);
+        EngineOverlay.setSelectedKeys(['volts', 'carb_temp', 'rpm']);
+        expect(cfg.engineOverlay.fields.map(f => f.key)).toEqual(['carb_temp', 'rpm', 'volts', 'GP2']);
+        expect(EngineOverlay.selectedKeys()).toEqual(['carb_temp', 'rpm', 'volts']);
+        EngineOverlay.setSelectedKeys(EngineOverlay.CATALOG.map(c => c.key));
+        expect(cfg.engineOverlay.fields.length).toBe(EngineOverlay.MAX_FIELDS);
+    });
+
+    it('a live overlay rebuilds on engineoverlay:fieldschanged and keeps the last values', () => {
+        liveConfig([{ key: 'carb_temp', label: 'CARB TEMP', unit: '°F' }]);
+        const container = document.createElement('div');
+        const ov = new EngineOverlay(container);
+        ov.update({ Carb_Temp: 70, RPM: 2300 });
+        EngineOverlay.setSelectedKeys(['carb_temp', 'rpm']);
+        expect([...container.querySelectorAll('.engine-overlay-value')].map(v => v.textContent)).toEqual(['70°F', '2300']);
+        ov.destroy();
+    });
+});

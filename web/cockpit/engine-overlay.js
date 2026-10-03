@@ -11,6 +11,71 @@
 
 class EngineOverlay {
     /**
+     * Engine values the pilot can put on the map (layer panel -> Map Engine Box).
+     * Keys resolve against the Pi's /api/status (see valueFor): top-level fields
+     * (percent_power) and the EDM row under `data` (Carb_Temp, RPM, MP, Fuel_Flow,
+     * Oil_Temp, Oil_Press, Volts, CHT1-4, EGT1-4 -- engine_monitor.py parse_line).
+     * Only carb temp carries thresholds: no other engine limits exist in the
+     * config, and inventing redlines here would be worse than showing none.
+     */
+    static CATALOG = [
+        { key: 'carb_temp',     label: 'CARB TEMP', unit: '°F', warnBelow: 40, dangerBelow: 32 },
+        { key: 'rpm',           label: 'RPM',       unit: '' },
+        { key: 'mp',            label: 'MP',        unit: '"',    decimals: 1 },
+        { key: 'fuel_flow',     label: 'FF',        unit: ' gph', decimals: 1 },
+        { key: 'percent_power', label: '% PWR',     unit: '%' },
+        { key: 'oil_temp',      label: 'OIL TEMP',  unit: '°F' },
+        { key: 'oil_press',     label: 'OIL PRESS', unit: ' psi' },
+        { key: 'cht_max',       label: 'CHT MAX',   unit: '°F' },
+        { key: 'egt_max',       label: 'EGT MAX',   unit: '°F' },
+        { key: 'volts',         label: 'VOLTS',     unit: 'V',    decimals: 1 },
+    ];
+
+    /** More than this many cards would cover too much of the map. */
+    static MAX_FIELDS = 6;
+
+    /** Values computed from several EDM fields; a 0 reading is an unfitted probe. */
+    static DERIVED = {
+        chtmax: (d) => EngineOverlay._maxOf(d, ['CHT1', 'CHT2', 'CHT3', 'CHT4']),
+        egtmax: (d) => EngineOverlay._maxOf(d, ['EGT1', 'EGT2', 'EGT3', 'EGT4']),
+    };
+
+    static _maxOf(d, keys) {
+        const vals = keys.map(k => Number(d[k])).filter(v => Number.isFinite(v) && v > 0);
+        return vals.length ? Math.max(...vals) : null;
+    }
+
+    static _norm(s) {
+        return String(s).toLowerCase().replace(/[^a-z0-9]/g, '');
+    }
+
+    /** Catalog keys currently shown (from config), in catalog order. */
+    static selectedKeys() {
+        let fields = [];
+        try { fields = (typeof CockpitConfig !== 'undefined' && CockpitConfig.get('engineOverlay.fields')) || []; } catch (_) { /* none */ }
+        const on = new Set(fields.map(f => EngineOverlay._norm(f.key)));
+        return EngineOverlay.CATALOG.filter(c => on.has(EngineOverlay._norm(c.key))).map(c => c.key);
+    }
+
+    /**
+     * Save which catalog values to show (catalog order, at most MAX_FIELDS) and
+     * tell any live overlay to rebuild. Fields added to cockpit-config.json by hand
+     * that aren't in the catalog are kept, after the catalog ones.
+     */
+    static setSelectedKeys(keys) {
+        const want = new Set((keys || []).map(EngineOverlay._norm));
+        const catalogNorm = new Set(EngineOverlay.CATALOG.map(c => EngineOverlay._norm(c.key)));
+        let current = [];
+        try { current = CockpitConfig.get('engineOverlay.fields') || []; } catch (_) { /* none */ }
+        const custom = current.filter(f => !catalogNorm.has(EngineOverlay._norm(f.key)));
+        const chosen = EngineOverlay.CATALOG.filter(c => want.has(EngineOverlay._norm(c.key))).map(c => ({ ...c }));
+        const fields = [...chosen, ...custom].slice(0, EngineOverlay.MAX_FIELDS);
+        CockpitConfig.patch('engineOverlay.fields', fields);
+        if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('engineoverlay:fieldschanged'));
+        return fields;
+    }
+
+    /**
      * @param {HTMLElement} container
      * @param {EventTarget|null} [engineClient]  EngineClient; when given the overlay
      *        subscribes itself. update() can still be called directly.
@@ -21,8 +86,22 @@ class EngineOverlay {
         this._fields = [];
         this._fieldEls = []; // cached { rowEl, valEl, field } per field
         this._engineClient = null;
+        this._lastData = null;
         this._buildDOM();
         if (engineClient) this._listen(engineClient);
+        // The layer panel's Map Engine Box picker changed the fields: rebuild in place.
+        this._onFieldsChanged = () => this.rebuild();
+        if (typeof window !== 'undefined') window.addEventListener('engineoverlay:fieldschanged', this._onFieldsChanged);
+    }
+
+    /** Re-read the configured fields and redraw with the last data. */
+    rebuild() {
+        if (this._el && this._el.parentNode) this._el.parentNode.removeChild(this._el);
+        this._el = null;
+        this._fields = [];
+        this._fieldEls = [];
+        this._buildDOM();
+        this.update(this._lastData);
     }
 
     _buildDOM() {
@@ -100,8 +179,9 @@ class EngineOverlay {
     static valueFor(data, key) {
         if (!data || !key) return null;
         if (data[key] != null) return data[key];
-        const norm = (s) => String(s).toLowerCase().replace(/[^a-z0-9]/g, '');
+        const norm = EngineOverlay._norm;
         const want = norm(key);
+        if (EngineOverlay.DERIVED[want]) return EngineOverlay.DERIVED[want](data);
         for (const k of Object.keys(data)) {
             if (norm(k) === want && data[k] != null) return data[k];
         }
@@ -124,13 +204,15 @@ class EngineOverlay {
      * @param {Object|null} data — flattened engine data
      */
     update(data) {
+        this._lastData = data;
         if (!this._el) return;
 
         for (const { rowEl, valEl, field } of this._fieldEls) {
             const raw = EngineOverlay.valueFor(data, field.key);
             const value = raw == null || raw === '' ? null : Number(raw);
             const ok = value != null && Number.isFinite(value);
-            valEl.textContent = (ok ? Math.round(value) : '--') + (field.unit || '');
+            const shown = ok ? (field.decimals ? value.toFixed(field.decimals) : Math.round(value)) : '--';
+            valEl.textContent = shown + (field.unit || '');
 
             let cls = 'engine-overlay-value';
             if (ok) {
@@ -146,6 +228,9 @@ class EngineOverlay {
     }
 
     destroy() {
+        if (this._onFieldsChanged && typeof window !== 'undefined') {
+            window.removeEventListener('engineoverlay:fieldschanged', this._onFieldsChanged);
+        }
         if (this._engineClient) {
             this._engineClient.removeEventListener('engine:data', this._onData);
             this._engineClient.removeEventListener('engine:stale', this._onStale);

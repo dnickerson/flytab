@@ -98,7 +98,7 @@ The primary cockpit view. Shows position, route, weather, traffic, and airspace 
 
 **Radar loop** — When radar is enabled, a slider appears (bottom of map area) to scrub through up to 55 minutes of NEXRAD history.
 
-**Engine box (CARB TEMP)** — Top right of the map, under **D→**: live carb temperature from the engine monitor (EDM). It turns amber below 40°F and flashing red below 32°F, and shows **--** whenever the engine monitor isn't sending current data rather than an old reading. The fields are set in `cockpit-config.json` under `engineOverlay.fields` (e.g. add oil temperature or RPM).
+**Engine box** — Top right of the map, under **D→**: live engine values from the engine monitor (EDM), CARB TEMP by default. Choose what it shows in the layer panel under **Map Engine Box** — up to 6 of CARB TEMP, RPM, MP, FF (fuel flow), % PWR, OIL TEMP, OIL PRESS, CHT MAX (hottest cylinder), EGT MAX and VOLTS; the box updates as soon as you flip a toggle and remembers the choice on this tablet. CARB TEMP turns amber below 40°F and flashing red below 32°F (the other values have no limits configured, so they never change color). Every value shows **--** whenever the engine monitor isn't sending current data, rather than an old reading.
 
 **Airport popup** — Tap any airport symbol for runway data, elevation, frequencies, fuel availability, and direct-to shortcut.
 
