@@ -24,6 +24,11 @@
         const DiagLog  = { log: () => {} };
         // wireTap is used extensively in _buildDOM — must be present at init time.
         const wireTap  = (el, fn) => el.addEventListener('click', fn);
+        // In-memory TripStore so _saveCurrentTrip() can run; records the last save.
+        const TripStore = {
+            list: async () => [],
+            save: async (trip) => { window.__lastSavedTrip = trip; },
+        };
         // planSync is referenced in _showPlanSyncUI — optional, guard with typeof.
         // FlyTabPlanning is attempted in _startBuildPlanner — optional, guard is built in.
     </script>
@@ -97,6 +102,27 @@
             /** Call insertApproach() with a cifp:load-procedure event detail. */
             insertApproach(detail) {
                 panel.insertApproach(detail);
+            },
+            /** Run _saveCurrentTrip(plan) and return the trip passed to TripStore.save. */
+            async saveTrip(plan) {
+                window.__lastSavedTrip = null;
+                await panel._saveCurrentTrip(plan);
+                return window.__lastSavedTrip;
+            },
+            /** Index _updateStats / _recheckFuelStops treat as the destination waypoint. */
+            destWaypointIndex(wps) {
+                return panel._destWaypointIndex(wps);
+            },
+            /** Current DEP / DEST input values. */
+            inputs() {
+                const [dep, dest] = panelEl.querySelectorAll('.rpp-icao-inp');
+                return { dep: dep?.value, dest: dest?.value };
+            },
+            /** Type into the DEST input and fire its change handler. */
+            setDest(value) {
+                const dest = panelEl.querySelectorAll('.rpp-icao-inp')[1];
+                dest.value = value;
+                dest.dispatchEvent(new Event('change'));
             },
             /**
              * Extract the route array that _doApply would write to flight_plan.route,

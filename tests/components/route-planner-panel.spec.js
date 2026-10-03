@@ -262,3 +262,94 @@ test.describe('approach insertion @planner-ui', () => {
         ]);
     });
 });
+
+// ── Destination identity once missed-approach fixes follow the dest pill ──
+//
+// insertApproach() places missed-approach fixes AFTER the dest pill, so the
+// destination is no longer the last pill/waypoint. Reload, the DEST input,
+// trip auto-save and the stats/fuel-stop helpers must find it by type, not
+// position — otherwise CORON (the missed-approach hold) becomes the destination.
+
+const KLKR_LOOP_IDS = ['KLKR', 'CTF', 'LIGLE', 'SAPSE', 'WITUR', 'RW24', 'KLKR', 'CORON'];
+const KLKR_LOOP_PILLS = [
+    { id: 'KLKR',  type: 'dep' },
+    { id: 'CTF',   type: 'fix' }, { id: 'LIGLE', type: 'fix' }, { id: 'SAPSE', type: 'fix' },
+    { id: 'WITUR', type: 'fix' }, { id: 'RW24',  type: 'fix' },
+    { id: 'KLKR',  type: 'dest' },
+    { id: 'CORON', type: 'fix' },
+];
+const KLKR_LOOP_WPS = [
+    { icao: 'KLKR',  lat: 34.723, lon: -80.855 },
+    { icao: 'CTF',   lat: 34.650, lon: -80.274 },
+    { icao: 'LIGLE', lat: 34.766, lon: -80.613 },
+    { icao: 'SAPSE', lat: 34.848, lon: -80.665 },
+    { icao: 'WITUR', lat: 34.789, lon: -80.836 },
+    { icao: 'RW24',  lat: 34.728, lon: -80.853 },
+    { icao: 'KLKR',  lat: 34.723, lon: -80.855 },
+    { icao: 'CORON', lat: 34.700, lon: -80.900 },
+];
+const typed = route => route.map(p => `${p.id}:${p.type}`);
+
+test.describe('destination with a loaded missed approach @planner-ui', () => {
+    test('reopening a saved KLKR → KLKR plan keeps KLKR as the destination, not CORON', async ({ page }) => {
+        await page.goto(HARNESS);
+        await page.evaluate(plan => window.__harness.open(plan), {
+            departure: 'KLKR', destination: 'KLKR',
+            waypoints: KLKR_LOOP_WPS,
+            flight_plan: { departure: 'KLKR', destination: 'KLKR', route: KLKR_LOOP_IDS, legs: [] },
+        });
+
+        const route = await page.evaluate(() => window.__harness.getRoute());
+        expect(typed(route)).toEqual(typed(KLKR_LOOP_PILLS));
+        expect(await page.evaluate(() => window.__harness.inputs())).toEqual({ dep: 'KLKR', dest: 'KLKR' });
+    });
+
+    test('reopening a plan saved without a destination field still treats the last id as the destination', async ({ page }) => {
+        await page.goto(HARNESS);
+        await page.evaluate(plan => window.__harness.open(plan), {
+            waypoints: [{ icao: 'KLKR', lat: 34.72, lon: -80.85 }, { icao: 'KCLT', lat: 35.21, lon: -80.94 }],
+            flight_plan: { route: ['KLKR', 'KCLT'], legs: [] },
+        });
+
+        const route = await page.evaluate(() => window.__harness.getRoute());
+        expect(typed(route)).toEqual(['KLKR:dep', 'KCLT:dest']);
+    });
+
+    test('typing a new DEST replaces the destination pill, not the trailing missed-approach fix', async ({ page }) => {
+        await page.goto(HARNESS);
+        await page.evaluate(pills => window.__harness.setPlannedRoute(pills), KLKR_LOOP_PILLS);
+
+        await page.evaluate(() => window.__harness.setDest('KCLT'));
+
+        const route = await page.evaluate(() => window.__harness.getRoute());
+        expect(route.filter(p => p.type === 'dest').map(p => p.id)).toEqual(['KCLT']);
+        expect(route[6]).toEqual({ id: 'KCLT', type: 'dest' });
+        expect(route[7]).toEqual({ id: 'CORON', type: 'fix' });
+    });
+
+    test('stats and fuel-stop recheck measure to the destination waypoint, not CORON', async ({ page }) => {
+        await page.goto(HARNESS);
+        await page.evaluate(pills => window.__harness.setPlannedRoute(pills), KLKR_LOOP_PILLS);
+
+        const idx = await page.evaluate(wps => window.__harness.destWaypointIndex(wps), KLKR_LOOP_WPS);
+        expect(idx).toBe(6);
+    });
+
+    test('auto-saved trip is KLKR → KLKR, keeps the missed approach, and reopens with KLKR as destination', async ({ page }) => {
+        await page.goto(HARNESS);
+        await page.evaluate(pills => window.__harness.setPlannedRoute(pills), KLKR_LOOP_PILLS);
+
+        const trip = await page.evaluate(wps => window.__harness.saveTrip({ waypoints: wps, legs: [] }), KLKR_LOOP_WPS);
+        expect(trip.dep).toBe('KLKR');
+        expect(trip.dest).toBe('KLKR');
+        expect(trip.name).toMatch(/^KLKR → KLKR · /);
+        expect(trip.legs).toHaveLength(1);
+        expect(trip.legs[0].flight_plan.destination).toBe('KLKR');
+        expect(trip.legs[0].flight_plan.route).toEqual(KLKR_LOOP_IDS);
+
+        // Round trip: the saved leg must reopen with the same dest pill.
+        await page.evaluate(leg => window.__harness.open(leg), trip.legs[0]);
+        const route = await page.evaluate(() => window.__harness.getRoute());
+        expect(typed(route)).toEqual(typed(KLKR_LOOP_PILLS));
+    });
+});
