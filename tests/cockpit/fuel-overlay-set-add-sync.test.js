@@ -47,6 +47,9 @@ describe('FuelOverlay._syncFuelSetToEngine', () => {
         const [url, opts] = global.fetch.mock.calls[0];
         expect(url).toBe('http://192.168.1.50:8080/api/fuel/set');
         expect(JSON.parse(opts.body)).toEqual({ fuel_remaining: 24.5, reason: 'Preflight tic mark measurement' });
+        // No Content-Type: application/json forces a CORS preflight the Pi has
+        // no OPTIONS handler for, so the POST would never be sent.
+        expect(opts.headers).toBeUndefined();
     });
 
     it('reports ok:false with a message when the Pi is unreachable', async () => {
@@ -95,6 +98,7 @@ describe('FuelOverlay._syncFuelAddToEngine', () => {
         const [url, opts] = global.fetch.mock.calls[0];
         expect(url).toBe('http://192.168.1.50:8080/api/fuel/add');
         expect(JSON.parse(opts.body)).toEqual({ gallons: 10, airport: 'KPAO', price_per_gallon: 5.99 });
+        expect(opts.headers).toBeUndefined(); // see the /api/fuel/set test
     });
 
     it('reports ok:false with a message when the Pi is unreachable', async () => {
@@ -149,18 +153,63 @@ describe('FuelOverlay._retryFuelStopPiSync', () => {
         expect(fetchSpy).not.toHaveBeenCalled();
     });
 
+    // The retry first reads /api/fuel/history to avoid a double add.
+    const piFetch = ({ history = { fuel_additions: [{ airport: 'KABC', gallons: 20 }] }, add = { ok: true, status: 200 } } = {}) =>
+        vi.spyOn(global, 'fetch').mockImplementation((url) => {
+            if (String(url).endsWith('/api/fuel/history')) {
+                if (history instanceof Error) return Promise.reject(history);
+                if (history instanceof Promise) return history;
+                return Promise.resolve({ ok: true, status: 200, json: async () => history });
+            }
+            if (add instanceof Error) return Promise.reject(add);
+            return Promise.resolve(add);
+        });
+    const addCalls = () => global.fetch.mock.calls.filter(([u]) => String(u).endsWith('/api/fuel/add'));
+
     it('resends the exact pending gallons/airport/price on retry', async () => {
         window.engineClient = { ip: '192.168.1.50' };
         const overlay = makeOverlay();
         overlay._fuelStopPiSyncFailed = true;
         overlay._lastFuelStopPending = { gallons: 12, airport: 'KMYL', price: 5.5, reason: 'Pi sync failed (network down)' };
-        vi.spyOn(global, 'fetch').mockResolvedValue({ ok: true, status: 200 });
+        piFetch();
 
         await overlay._retryFuelStopPiSync();
 
-        const [url, opts] = global.fetch.mock.calls[0];
+        const [url, opts] = addCalls()[0];
         expect(url).toBe('http://192.168.1.50:8080/api/fuel/add');
         expect(JSON.parse(opts.body)).toEqual({ gallons: 12, airport: 'KMYL', price_per_gallon: 5.5 });
+    });
+
+    it('does not resend when the Pi already has the stop (first POST landed but timed out)', async () => {
+        window.engineClient = { ip: '192.168.1.50' };
+        const overlay = makeOverlay();
+        overlay._fuelStopPiSyncFailed = true;
+        overlay._lastFuelStopPending = { gallons: 12, airport: 'kmyl', price: null, reason: 'Pi sync failed (timeout)' };
+        piFetch({ history: { fuel_additions: [{ airport: 'KABC', gallons: 20 }, { airport: 'KMYL', gallons: 12.0 }] } });
+
+        await overlay._retryFuelStopPiSync();
+
+        expect(addCalls()).toHaveLength(0);
+        expect(overlay._fuelStopPiSyncFailed).toBe(false);
+        expect(overlay._lastFuelStopPending).toBe(null);
+        expect(overlay._dom.addStatus.textContent).toMatch(/already has/i);
+        expect(overlay._dom.addRecord.textContent).toBe('RECORD FUEL STOP');
+    });
+
+    it('does not resend when the Pi history cannot be read, and keeps the stop pending', async () => {
+        window.engineClient = { ip: '192.168.1.50' };
+        const overlay = makeOverlay();
+        overlay._fuelStopPiSyncFailed = true;
+        overlay._lastFuelStopPending = { gallons: 12, airport: 'KMYL', price: null, reason: 'network down' };
+        piFetch({ history: new Error('Failed to fetch') });
+
+        await overlay._retryFuelStopPiSync();
+
+        expect(addCalls()).toHaveLength(0);
+        expect(overlay._fuelStopPiSyncFailed).toBe(true);
+        expect(overlay._lastFuelStopPending).toMatchObject({ gallons: 12, airport: 'KMYL' });
+        expect(overlay._dom.addStatus.textContent).toMatch(/Retry not sent/i);
+        expect(overlay._dom.addRecord.textContent).toBe('RETRY PI SYNC');
     });
 
     it('a successful retry clears _fuelStopPiSyncFailed and _lastFuelStopPending', async () => {
@@ -168,7 +217,7 @@ describe('FuelOverlay._retryFuelStopPiSync', () => {
         const overlay = makeOverlay();
         overlay._fuelStopPiSyncFailed = true;
         overlay._lastFuelStopPending = { gallons: 12, airport: 'KMYL', price: null, reason: 'network down' };
-        vi.spyOn(global, 'fetch').mockResolvedValue({ ok: true, status: 200 });
+        piFetch();
 
         await overlay._retryFuelStopPiSync();
 
@@ -184,7 +233,7 @@ describe('FuelOverlay._retryFuelStopPiSync', () => {
         const overlay = makeOverlay();
         overlay._fuelStopPiSyncFailed = true;
         overlay._lastFuelStopPending = { gallons: 12, airport: 'KMYL', price: null, reason: 'network down' };
-        vi.spyOn(global, 'fetch').mockRejectedValue(new Error('still down'));
+        piFetch({ add: new Error('still down') });
 
         await overlay._retryFuelStopPiSync();
 
@@ -200,14 +249,14 @@ describe('FuelOverlay._retryFuelStopPiSync', () => {
         const overlay = makeOverlay();
         overlay._fuelStopPiSyncFailed = true;
         overlay._lastFuelStopPending = { gallons: 12, airport: 'KMYL', price: null, reason: 'network down' };
-        let resolveFetch;
-        vi.spyOn(global, 'fetch').mockReturnValue(new Promise(r => { resolveFetch = r; }));
+        let resolveHistory;
+        piFetch({ history: new Promise(r => { resolveHistory = r; }) });
 
         const p1 = overlay._retryFuelStopPiSync();
-        const p2 = overlay._retryFuelStopPiSync(); // fired before p1's fetch resolves
-        resolveFetch({ ok: true, status: 200 });
+        const p2 = overlay._retryFuelStopPiSync(); // fired before p1's first fetch resolves
+        resolveHistory({ ok: true, status: 200, json: async () => ({ fuel_additions: [] }) });
         await Promise.all([p1, p2]);
 
-        expect(global.fetch).toHaveBeenCalledTimes(1);
+        expect(addCalls()).toHaveLength(1);
     });
 });

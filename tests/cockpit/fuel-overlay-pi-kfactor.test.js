@@ -113,6 +113,8 @@ describe('FuelOverlay._applyPiKFactor', () => {
         const [url, opts] = global.fetch.mock.calls[0];
         expect(url).toBe('http://192.168.1.50:8080/api/fuel/calibration/applied');
         expect(JSON.parse(opts.body)).toEqual({ new_k_factor: 68680 });
+        // No Content-Type: it forces a CORS preflight the Pi cannot answer.
+        expect(opts.headers).toBeUndefined();
         expect(overlay._dom.kfPiStatus.textContent).toMatch(/recorded as applied/);
         expect(overlay._dom.kfPiStatus.className).toContain('fo-add-status-ok');
     });

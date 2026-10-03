@@ -924,6 +924,24 @@ class FuelOverlay {
         if (this._dom.addRecord) this._dom.addRecord.disabled = true;
         try {
             const { gallons, airport, price } = this._lastFuelStopPending;
+            // The Pi's /api/fuel/add is additive with no duplicate check, so a
+            // first attempt that landed but answered after the 4 s timeout would
+            // be added twice by a blind resend. Look first.
+            const onPi = await this._fuelStopAlreadyOnPi(gallons, airport);
+            if (onPi === true) {
+                this._fuelStopPiSyncFailed = false;
+                this._lastFuelStopPending = null;
+                this._setAddStatus(
+                    `The Pi already has the +${gallons.toFixed(1)} gal fuel stop at ${airport || '—'} — not sent again.`,
+                    'ok');
+                return;
+            }
+            if (onPi === null) {
+                const reason = 'Could not check the Pi for this fuel stop.';
+                this._lastFuelStopPending = { gallons, airport, price, reason };
+                this._setAddStatus(`Retry not sent — ${reason} Tap RECORD FUEL STOP again when the Pi is reachable.`, 'error');
+                return;
+            }
             const synced = await this._syncFuelAddToEngine(gallons, airport, price);
             if (synced.ok) {
                 this._fuelStopPiSyncFailed = false;
@@ -939,6 +957,32 @@ class FuelOverlay {
             this._recording = false;
             if (this._dom.addRecord) this._dom.addRecord.disabled = false;
             this._refreshFuelStopButton();
+        }
+    }
+
+    /**
+     * Whether the Pi's most recent fuel addition is this stop (same airport and
+     * gallons): true / false, or null if the Pi's history can't be read. Only the
+     * latest entry is compared. If an earlier identical stop happens to be the
+     * latest, the resend is skipped and the Pi under-counts by one stop -- the
+     * conservative direction, unlike a double add.
+     * @returns {Promise<boolean|null>}
+     */
+    async _fuelStopAlreadyOnPi(gallons, airport) {
+        const base = this._engineBaseUrl();
+        if (!base) return null;
+        try {
+            const resp = await fetch(`${base}/api/fuel/history`, { signal: AbortSignal.timeout(4000) });
+            if (!resp.ok) return null;
+            const data = await resp.json();
+            const additions = Array.isArray(data?.fuel_additions) ? data.fuel_additions : null;
+            if (!additions) return null;
+            const last = additions[additions.length - 1];
+            if (!last) return false;
+            return String(last.airport || '') === String(airport || '').toUpperCase()
+                && Math.abs(Number(last.gallons) - gallons) < 0.06;
+        } catch (_) {
+            return null;
         }
     }
 
@@ -1064,6 +1108,13 @@ class FuelOverlay {
 
     _setDroppedBurnStatus(msg, type) { this._setStatus(this._dom.droppedBurnStatus, msg, type); }
 
+    // The Pi POSTs in this file (/api/fuel/set, /api/fuel/add,
+    // /api/fuel/calibration/applied) must not set Content-Type. Setting it to
+    // application/json makes the request non-simple, so the WebView first sends
+    // a CORS preflight (OPTIONS) that engine_monitor.py has no handler for --
+    // the preflight fails and the POST never goes out ("Failed to fetch").
+    // Without the header fetch sends the CORS-safelisted text/plain, which the
+    // Pi's json.loads(body) parses fine. Same fix as _setAtis in engine-page.js.
     /**
      * Push the pilot-confirmed tic measurement to the Pi as its new authoritative
      * fuel_remaining. Returns {ok, message} instead of swallowing the outcome — a
@@ -1080,7 +1131,7 @@ class FuelOverlay {
         try {
             const resp = await fetch(`${base}/api/fuel/set`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                // No Content-Type -- it forces a CORS preflight the Pi can't answer (see the note above _syncFuelSetToEngine).
                 body: JSON.stringify({ fuel_remaining: gallons, reason }),
                 signal: AbortSignal.timeout(4000),
             });
@@ -1107,7 +1158,7 @@ class FuelOverlay {
         try {
             const resp = await fetch(`${base}/api/fuel/add`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                // No Content-Type -- it forces a CORS preflight the Pi can't answer (see the note above _syncFuelSetToEngine).
                 body: JSON.stringify(body),
                 signal: AbortSignal.timeout(4000),
             });
@@ -1351,7 +1402,7 @@ class FuelOverlay {
         try {
             const resp = await fetch(`${base}/api/fuel/calibration/applied`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                // No Content-Type -- it forces a CORS preflight the Pi can't answer (see the note above _syncFuelSetToEngine).
                 body: JSON.stringify({ new_k_factor: newK }),
                 signal: AbortSignal.timeout(4000),
             });

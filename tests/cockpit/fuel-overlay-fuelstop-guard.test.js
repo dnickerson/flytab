@@ -358,6 +358,10 @@ describe('fuel stop Pi-sync failure — safe retry (Finding 1, 2026-09 whole-bra
                 call++;
                 return typeof outcome === 'function' ? outcome() : Promise.resolve(outcome);
             }
+            // The retry checks the Pi's history first; this stop is not on it.
+            if (typeof url === 'string' && url.includes('/api/fuel/history')) {
+                return Promise.resolve({ ok: true, status: 200, json: async () => ({ fuel_additions: [] }) });
+            }
             return Promise.resolve({ ok: true, status: 200 });
         });
         return () => call;
