@@ -132,6 +132,28 @@
                 await panel._recheckFuelStops();
                 return planned && { departure: planned.departure, destination: planned.destination };
             },
+            /**
+             * Tap Plan against a stub planner whose recomputeLegs returns `legs`.
+             * Returns the waypoint ids Plan computed and the warnings it raised.
+             */
+            async tapPlan({ legs = [], reserveGal = 10 } = {}) {
+                let planned = null;
+                panel._reserveGal = reserveGal;
+                panel._planner = {
+                    recomputeLegs: (plan) => {
+                        planned = plan.waypoints.map(w => w.id || w.icao);
+                        return { ...plan, legs, summary: { fuelRemGal: legs.at(-1)?.fuelRemGal } };
+                    },
+                };
+                await panel._onRecomputeTap();
+                return { planned, warnings: panel._windWarnings || [] };
+            },
+            /** Type into the DEP input and fire its change handler. */
+            setDep(value) {
+                const dep = panelEl.querySelectorAll('.rpp-icao-inp')[0];
+                dep.value = value;
+                dep.dispatchEvent(new Event('change'));
+            },
             /** Type an identifier into the Add box and tap Add (default insertion point). */
             addFix(id) {
                 panel._addInput.value = id;

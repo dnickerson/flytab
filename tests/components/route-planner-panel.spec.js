@@ -435,3 +435,64 @@ test.describe('destination with a loaded missed approach @planner-ui', () => {
         expect(typed(route)).toEqual(typed(KLKR_LOOP_PILLS));
     });
 });
+
+// ── Plan button computes the route the pills show ─────────────────────────
+//
+// Plan used to recompute _lastPlan — the last auto-routed or applied trip — and
+// ignored the pills and the DEP/DEST boxes. Typing KLKR into DEP and tapping
+// Plan therefore planned the previous trip (CTF first).
+
+const PREV_TRIP = {
+    departure: 'CTF', destination: 'KLKR',
+    waypoints: [
+        { icao: 'CTF',   lat: 34.650, lon: -80.274 },
+        { icao: 'LIGLE', lat: 34.766, lon: -80.613 },
+        { icao: 'RW24',  lat: 34.728, lon: -80.853 },
+        { icao: 'CORON', lat: 34.700, lon: -80.900 },
+        { icao: 'KLKR',  lat: 34.723, lon: -80.855 },
+    ],
+    flight_plan: {
+        departure: 'CTF', destination: 'KLKR',
+        route: ['CTF', 'LIGLE', 'RW24', 'CORON', 'KLKR'], legs: [],
+    },
+};
+
+test.describe('Plan button @planner-ui', () => {
+    test('typing KLKR in DEP and tapping Plan plans from KLKR, not the previous trip', async ({ page }) => {
+        await page.goto(HARNESS);
+        await page.evaluate(plan => window.__harness.open(plan), PREV_TRIP);
+        await page.evaluate(() => window.__harness.setDep('KLKR'));
+
+        const { planned } = await page.evaluate(() => window.__harness.tapPlan());
+        expect(planned).toEqual(['KLKR', 'LIGLE', 'RW24', 'CORON', 'KLKR']);
+    });
+
+    test('reserve warning uses fuel at the destination, not after the missed approach', async ({ page }) => {
+        await page.goto(HARNESS);
+        await page.evaluate(pills => window.__harness.setPlannedRoute(pills), KCLT_KLKR_PILLS_FOR_PLAN);
+        await page.evaluate(wps => window.__harness.setCoords(Object.fromEntries(
+            wps.map(w => [w.icao, { lat: w.lat, lon: w.lon }]))), KCLT_KLKR_WPS_FOR_PLAN);
+
+        // 12 gal at KLKR (above the 10 gal reserve); 8 gal after the missed approach.
+        const legs = [{ fuelRemGal: 20 }, { fuelRemGal: 12 }, { fuelRemGal: 8 }];
+        const { planned, warnings } = await page.evaluate(legs => window.__harness.tapPlan({ legs }), legs);
+        expect(planned).toEqual(['KCLT', 'RW24', 'KLKR', 'HOLD1']);
+        expect(warnings.some(w => w.startsWith('Fuel below reserve'))).toBe(false);
+
+        // Below reserve at KLKR itself still warns.
+        const low = [{ fuelRemGal: 15 }, { fuelRemGal: 9 }, { fuelRemGal: 5 }];
+        const again = await page.evaluate(legs => window.__harness.tapPlan({ legs }), low);
+        expect(again.warnings).toContain('Fuel below reserve: 9.0 gal at dest, 10 gal reserve required');
+    });
+});
+
+const KCLT_KLKR_PILLS_FOR_PLAN = [
+    { id: 'KCLT', type: 'dep' }, { id: 'RW24', type: 'fix' },
+    { id: 'KLKR', type: 'dest' }, { id: 'HOLD1', type: 'fix' },
+];
+const KCLT_KLKR_WPS_FOR_PLAN = [
+    { icao: 'KCLT',  lat: 35.214, lon: -80.943 },
+    { icao: 'RW24',  lat: 34.728, lon: -80.853 },
+    { icao: 'KLKR',  lat: 34.723, lon: -80.855 },
+    { icao: 'HOLD1', lat: 34.400, lon: -81.400 },
+];

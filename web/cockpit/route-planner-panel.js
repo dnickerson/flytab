@@ -1504,6 +1504,22 @@ class RoutePlannerPanel {
         };
         setBtn('Planning…', true);
         try {
+            // Plan the route the pills show now, not the last auto-routed or applied trip.
+            const wps = await this._pillsToWaypoints();
+            if (wps.length < 2) {
+                this._toast('Add at least 2 waypoints');
+                return;
+            }
+            const fuelStops = wps.filter(w => w.fuelStop)
+                .map(w => ({ icao: w.icao, lat: w.lat, lon: w.lon, name: w.name }));
+            this._lastPlan = {
+                departure:   wps[0].id,
+                destination: wps[this._destWaypointIndex(wps)].id,
+                waypoints:   wps,
+                ...(fuelStops.length ? { fuelStops } : {}),
+            };
+            this._lastMos = null;
+            this._syncSaveBtnState();
             await this._applyWindsToLastPlan();
         } finally {
             setBtn('Plan', false);
@@ -2553,7 +2569,13 @@ class RoutePlannerPanel {
         if (!opts.winds) {
             this._windWarnings.push('Wind data unavailable — time and fuel use calm-air estimates');
         }
-        const fuelRem = this._currentPlan?.summary?.fuelRemGal;
+        // Fuel remaining at the destination, not after any missed-approach legs that follow it.
+        const cwps  = this._currentPlan?.waypoints || [];
+        const clegs = this._currentPlan?.legs || [];
+        const cDest = cwps.length ? this._destWaypointIndex(cwps) : -1;
+        const fuelRem = (cDest > 0 && clegs.length === cwps.length - 1)
+            ? clegs[cDest - 1]?.fuelRemGal
+            : this._currentPlan?.summary?.fuelRemGal;
         const hasFuelStops = (this._lastPlan?.fuelStops?.length ?? 0) > 0;
         if (!hasFuelStops && fuelRem != null && this._reserveGal > 0 && fuelRem < this._reserveGal) {
             this._windWarnings.push(
