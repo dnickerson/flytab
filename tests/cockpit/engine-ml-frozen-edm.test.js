@@ -63,6 +63,13 @@ describe('EngineMLBridge — frozen EDM frames', () => {
         expect(advisories).toEqual([]);
     });
 
+    it('launch/landing tracking (GPS-driven) keeps going through frozen frames', async () => {
+        bridge._stratuxClient.situation = { lat: 34.7, lon: -80.8, alt_msl: 600, ground_speed: 5 };
+        bridge._hasLaunched = true;                       // was airborne, now rolled out
+        await feed(frame({}, FROZEN));
+        expect(bridge._hasLaunched).toBe(false);
+    });
+
     it('frozen frames are not fed to the ML plugin or the phase detector', async () => {
         await feed(frame({}, FROZEN));
         await feed(frame({}, FROZEN));
@@ -106,12 +113,102 @@ describe('EngineMLBridge — delta checks across a data hole', () => {
         expect(advisories).toContain('map_sudden_drop');
     });
 
-    it("the emergency trigger's MAP/RPM memory is cleared by a frozen frame too", async () => {
+    it('a frozen frame clears the delta reference', async () => {
         await feed(frame({ RPM: 2400, MP: 24.5 }));
-        expect(bridge._prevMAP).toBe(24.5);
+        expect(bridge._prevSample).not.toBeNull();
         await feed(frame({}, FROZEN));
-        expect(bridge._prevMAP).toBeNull();
-        expect(bridge._prevRPM).toBeNull();
         expect(bridge._prevSample).toBeNull();
+    });
+
+    it('a clock stepping backwards is a hole too', async () => {
+        airborne();
+        await feed(frame({ RPM: 2400, MP: 24.5 }));
+        now -= 60_000;
+        await feed(frame({ RPM: 2400, MP: 18.0 }));
+        expect(advisories).not.toContain('map_sudden_drop');
+    });
+});
+
+describe('EngineMLBridge — repeated EDM rows (data_count unchanged)', () => {
+    // serial_warning only appears after 5 s of silence; before that the Pi is
+    // already resending its last row with the same data_count.
+    const counted = (n, row) => ({ ...frame(row), data_count: n });
+
+    it('a copy of the last row is not judged or fed to the ML plugin', async () => {
+        await feed(counted(10, { RPM: 2400, Oil_Press: 15 }));
+        now += 10_000;                                     // past the advisory rate limit
+        await feed(counted(10, { RPM: 2400, Oil_Press: 15 }));
+        await feed(counted(10, { RPM: 2400, Oil_Press: 15 }));
+        expect(advisories).toEqual(['oil_pressure_critical']);
+        expect(processSample).toHaveBeenCalledTimes(1);
+    });
+
+    it('a copy in between does not break the drop check across it', async () => {
+        airborne();
+        await feed(counted(10, { RPM: 2400, MP: 24.5 }));
+        await feed(counted(10, { RPM: 2400, MP: 24.5 }));
+        await feed(counted(11, { RPM: 2400, MP: 18.0 }));
+        expect(advisories).toContain('map_sudden_drop');
+    });
+
+    it('a new row (Pi restarted, count back near 0) is judged', async () => {
+        await feed(counted(500, {}));
+        await feed(counted(1, { RPM: 2400, Oil_Press: 15 }));
+        expect(advisories).toEqual(['oil_pressure_critical']);
+    });
+
+    it('frames without data_count (older Pi) are all judged', async () => {
+        await feed(frame({}));
+        await feed(frame({}));
+        expect(processSample).toHaveBeenCalledTimes(2);
+    });
+});
+
+describe('EngineMLBridge — delta reference and slow plugin calls', () => {
+    function pendingPlugin() {
+        const calls = [];
+        processSample.mockImplementation(() => new Promise(res => calls.push(res)));
+        return calls;
+    }
+    const OK = { phase: 'cruise', anomaly: false, score: 0 };
+
+    it('the next sample compares against this one even while the plugin call is still out', async () => {
+        airborne();
+        pendingPlugin();
+        bridge._onEngineData(frame({ RPM: 2400, MP: 24.5 })); now += 1000;   // not awaited
+        await Promise.resolve();
+        bridge._onEngineData(frame({ RPM: 2400, MP: 18.0 })); now += 1000;
+        await Promise.resolve();
+        expect(advisories).toContain('map_sudden_drop');
+    });
+
+    it('a call that finishes late does not undo a reset made meanwhile', async () => {
+        const calls = pendingPlugin();
+        const first = bridge._onEngineData(frame({ RPM: 2400, MP: 24.5 })); now += 1000;
+        await Promise.resolve();
+        await feed(frame({}, FROZEN));                     // resets the reference
+        calls[0](OK);
+        await first;
+        expect(bridge._prevSample).toBeNull();
+    });
+
+    it('the emergency trigger uses the same reference: fires on a drop between samples, not across a hole', async () => {
+        airborne();
+        const trigger = vi.fn();
+        window.emergencyGlide = { trigger };
+        globalThis.EmergencyGlide = function () {};
+        bridge._altHistory = [5000];
+        processSample.mockResolvedValue({ phase: 'cruise', anomaly: true, score: 1 });
+
+        await feed(frame({ RPM: 2400, MP: 24.5 }));
+        now += 30_000;                                     // hole
+        await feed(frame({ RPM: 2000, MP: 18.0 }));
+        expect(trigger).not.toHaveBeenCalled();
+
+        await feed(frame({ RPM: 2400, MP: 24.5 }));
+        await feed(frame({ RPM: 2000, MP: 18.0 }));
+        expect(trigger).toHaveBeenCalledTimes(1);
+        delete window.emergencyGlide;
+        delete globalThis.EmergencyGlide;
     });
 });

@@ -25,6 +25,7 @@ class EngineMLBridge {
         // Multi-layer anomaly detection (Scenario 5)
         this._prevSample = null;              // previous engine sample for delta checks
         this._lastSampleAt = 0;               // Date.now() of the last current EDM sample
+        this._lastDataCount = null;           // Pi data_count of that sample (one per EDM row)
         this._baseline = {};                  // rolling parameter averages
         this._baselineWindow = [];            // last 60 samples for baseline computation
         this._baselineWindowMax = 60;
@@ -46,8 +47,6 @@ class EngineMLBridge {
         this._lastAdvisoryTime = {};          // type → timestamp, for per-type rate-limiting
 
         // Physics rules state — Scenario 6 emergency trigger
-        this._prevMAP = null;       // previous manifold pressure (inches Hg)
-        this._prevRPM = null;       // previous RPM
         this._physicsAlarm = false; // true when physics rule fired this cycle
 
         // GPS-based phase smoothing — prevents model phase thrashing on turbulence
@@ -88,6 +87,7 @@ class EngineMLBridge {
             }
         } catch (err) {
             console.error('[EngineML] Init failed:', err);
+            if (typeof DiagLog !== 'undefined') DiagLog.log('error', `EngineML init failed: ${err?.message || err}`);
         }
     }
 
@@ -283,25 +283,32 @@ class EngineMLBridge {
         // the ENG page and the map engine box use. Judging those frames would
         // repeat an old reading's advisories (e.g. low oil pressure every 5 s) and
         // feed the ML window copies of one sample, so they are skipped.
+        // Launch/landing state is GPS-driven, so it keeps tracking through them;
+        // phase classification needs real RPM/MP/fuel flow and waits.
+        const d = raw.data ? { ...raw, ...raw.data } : raw;
+        const num = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
+        const sit = this._stratuxClient?.situation;
         if (typeof EngineClient !== 'undefined' && !EngineClient.edmCurrent(raw)) {
             this._forgetPreviousSample();
+            this._updateLaunchState(sit, d);
             return;
         }
-        // A hole in the data (frozen EDM, Pi stale or disconnected): the MAP/RPM
-        // drop checks must not compare against a sample from before it -- a power
-        // change made during the hole would read as a sudden drop.
+        // serial_warning only appears after 5 s of silence. Before that the Pi is
+        // already resending its last row; data_count (one per parsed EDM row) says
+        // so from the first copy. A copy carries nothing new to judge.
+        const count = Number.isFinite(raw.data_count) ? raw.data_count : null;
+        if (count !== null && count === this._lastDataCount) return;
+        this._lastDataCount = count;
+
+        // A hole in the data (frozen EDM, Pi stale or disconnected, or the clock
+        // stepped back): the MAP/RPM drop checks must not compare against a sample
+        // from before it -- a power change made during the hole would read as a
+        // sudden drop.
         const now = Date.now();
-        if (this._lastSampleAt && now - this._lastSampleAt > EngineMLBridge.MAX_SAMPLE_GAP_MS) {
+        if (this._lastSampleAt && (now - this._lastSampleAt > EngineMLBridge.MAX_SAMPLE_GAP_MS || now < this._lastSampleAt)) {
             this._forgetPreviousSample();
         }
         this._lastSampleAt = now;
-
-        // Flatten nested data
-        const d = raw.data ? { ...raw, ...raw.data } : raw;
-        const num = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
-
-        // Get altitude and speed from Stratux situation
-        const sit = this._stratuxClient?.situation;
 
         // Compute the causal flight phase once per sample via the shared PhaseDetector
         // (Tasks 1-6). If the spec hasn't loaded yet or GPS is momentarily unavailable,
@@ -353,11 +360,15 @@ class EngineMLBridge {
             this._dispatchAdvisory(adv);
         }
 
+        // This sample becomes the delta reference now, before the plugin call: an
+        // await can take a while (and calls can overlap), so setting it afterwards
+        // left the MAP/RPM drop checks comparing against an old sample, and let a
+        // late call undo a reset made by _forgetPreviousSample.
+        const prev = this._prevSample;
+        this._prevSample = d;
+
         // Layers 2-3 (and the physics + ML emergency trigger) need the plugin.
-        if (!this._initialized || !this._plugin) {
-            this._prevSample = d;
-            return;
-        }
+        if (!this._initialized || !this._plugin) return;
 
         try {
             const result = await this._plugin.processSample({
@@ -395,7 +406,7 @@ class EngineMLBridge {
             this._updateDisplay(result);
 
             // ── Scenario 6: physics + ML joint trigger ────────────────────
-            this._checkEmergencyTrigger(d, sit, result);
+            this._checkEmergencyTrigger(d, sit, result, prev);
 
             // Append to ring buffer
             if (this._logActive && result) {
@@ -411,16 +422,11 @@ class EngineMLBridge {
         } catch (err) {
             // Don't spam console — plugin may not be ready
         }
-
-        // Store sample for next delta checks (after ML call so prev is last complete sample)
-        this._prevSample = d;
     }
 
-    /** Drop the samples the delta checks compare against (after a data gap). */
+    /** Drop the sample the delta checks compare against (after a data gap). */
     _forgetPreviousSample() {
         this._prevSample = null;
-        this._prevMAP = null;
-        this._prevRPM = null;
     }
 
     // ========== Layer 1: Physics Rules ==========
@@ -831,38 +837,38 @@ class EngineMLBridge {
      *
      * ML confirmation: result.anomaly === true
      */
-    _checkEmergencyTrigger(d, sit, result) {
+    _checkEmergencyTrigger(d, sit, result, prev = null) {
         if (!result) return;
 
         const num = (v) => { const n = Number(v); return isFinite(n) ? n : null; };
 
         const curMAP = num(d.MP ?? d.manifold_pressure ?? d.mp ?? d.MAP);
         const curRPM = num(d.rpm ?? d.RPM);
+        // The previous current sample (null after a data hole) -- the same one the
+        // Layer 1 delta checks use.
+        const prevMAP = prev ? num(prev.MP ?? prev.manifold_pressure ?? prev.mp ?? prev.MAP) : null;
+        const prevRPM = prev ? num(prev.rpm ?? prev.RPM) : null;
         const oilPress = num(d.oil_pressure ?? d.oil_press_psi ?? d.Oil_Press);
 
         // Evaluate physics rules
         let physicsAlarm = false;
 
-        if (curMAP !== null && this._prevMAP !== null) {
-            if ((this._prevMAP - curMAP) > 5) {
+        if (curMAP !== null && prevMAP !== null) {
+            if ((prevMAP - curMAP) > 5) {
                 physicsAlarm = true;
-                console.warn(`[EngineML] Physics: MAP drop ${(this._prevMAP - curMAP).toFixed(1)}" detected`);
+                console.warn(`[EngineML] Physics: MAP drop ${(prevMAP - curMAP).toFixed(1)}" detected`);
             }
         }
-        if (curRPM !== null && this._prevRPM !== null) {
-            if ((this._prevRPM - curRPM) > 300) {
+        if (curRPM !== null && prevRPM !== null) {
+            if ((prevRPM - curRPM) > 300) {
                 physicsAlarm = true;
-                console.warn(`[EngineML] Physics: RPM drop ${Math.round(this._prevRPM - curRPM)} detected`);
+                console.warn(`[EngineML] Physics: RPM drop ${Math.round(prevRPM - curRPM)} detected`);
             }
         }
         if (oilPress !== null && oilPress > 0 && oilPress < 20) {
             physicsAlarm = true;
             console.warn(`[EngineML] Physics: Low oil pressure ${oilPress} PSI`);
         }
-
-        // Update previous values for next cycle
-        if (curMAP !== null) this._prevMAP = curMAP;
-        if (curRPM !== null) this._prevRPM = curRPM;
 
         this._physicsAlarm = physicsAlarm;
 

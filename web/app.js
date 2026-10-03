@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v10.96';
+const FLYTAB_VERSION = 'v10.97';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -548,13 +548,16 @@ class FlyTabApp {
         // Engine ML (anomaly detection + advisories)
         if (typeof EngineMLBridge !== 'undefined') {
             this.engineML = new EngineMLBridge();
-            this.engineML.init().then(() => {
-                this.engineML.setDisplayElements(
-                    document.getElementById('statusML'),
-                    document.getElementById('engineAdvisory')
-                );
-                this.engineML.start(this.engineClient, this.stratuxClient);
-            });
+            // Wired up and listening right away, not after init(): the physics rules
+            // don't need the plugin, and a plugin initialize() that never settles
+            // (model warmup has no timeout) must not take them down with it. ML
+            // inference joins in once init() succeeds (_initialized).
+            this.engineML.setDisplayElements(
+                document.getElementById('statusML'),
+                document.getElementById('engineAdvisory')
+            );
+            this.engineML.start(this.engineClient, this.stratuxClient);
+            this.engineML.init();
         }
 
         // Wire flight recording events to ML logging

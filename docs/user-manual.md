@@ -158,7 +158,17 @@ The total-fuel bar shows fuel remaining against the aircraft's full capacity fro
 
 The **TIC vs EDM** row is unchanged — it still compares your tic-mark measurement against the EDM's own totalizer. Disagreement between those two is exactly what the row exists to show, so it deliberately does not use the tracked figure.
 
-The **engine advisory banner** (below the status bar, on any tab) appears in red if the ML anomaly detector finds an abnormal pattern in the current engine data. Tap it to see which parameters are outside normal for this phase of flight.
+The **engine advisory banner** (below the status bar, on any tab) shows engine warnings for 15 seconds each. There are two kinds:
+- **Rule-based warnings, in red.** These fire on:
+  - oil pressure below 25 psi with the engine above 600 RPM
+  - any CHT above 420°F (440°F in a climb)
+  - fuel flow below 2 GPH above 2000 RPM
+  - once airborne, a sudden MAP drop of more than 3" or an RPM drop of more than 200
+
+  They run even when the ML badge reads **ML:OFF**.
+- **ML anomaly warnings, in amber.** These appear when the ML anomaly detector finds an abnormal pattern, and name the value furthest from normal.
+
+No engine warnings are raised while the ENG page shows **EDM NO DATA**. When the EDM goes quiet the Pi keeps resending its last reading, and judging that would just repeat an old warning.
 
 **Sticky valve warning** — The same red **STICKY VALVE WARNING** banner that appears over the map (see MAP → *Sticky valve warning*) also appears at the top of this page, and DISMISS on either one hides both. The earlier startup caution ("Cylinder N EGT rise lagging others during startup … UNVALIDATED CHECK") has been removed; this warning replaces it.
 
