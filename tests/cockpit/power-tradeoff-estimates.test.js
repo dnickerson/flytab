@@ -41,7 +41,7 @@ globalThis.CockpitConfig = {
 const PowerTradeoff = new Function(read('web/cockpit/power-tradeoff.js') + '\nreturn PowerTradeoff;')();
 
 const LEG = {
-    destDistNm: 200, activeWind: { dir: 270, spd: 10 }, hdg: 90,
+    destDistNm: 200, activeWind: { dir: 270, spd: 10 }, hdg: 90, brg: 90,
     fuelRemaining: 30, fuelRemainingStale: false, destEteMin: 80,
     livePctPower: 65, liveGph: 8.2,
 };
@@ -134,5 +134,33 @@ describe('PowerTradeoff — the config data itself is untouched', () => {
         expect(row.gph).toBe(5);
         expect(row.tas_kt).toBe(97);
         expect(row.samples).toBe(0);
+    });
+});
+
+describe('PowerTradeoff — wind component (winds aloft are FROM, true)', () => {
+    const gsOf = (detail) => {
+        const pt = new PowerTradeoff();
+        pt.init();
+        const calc = pt._calcForPower({ pct: 65, tas_kt: 150, gph: 8 }, detail);
+        pt.destroy();
+        return calc.gsKt;
+    };
+    const base = { destDistNm: 100, fuelRemaining: 30 };
+
+    it('wind from behind (270 while tracking 090) is a tailwind: GS = TAS + 20', () => {
+        expect(gsOf({ ...base, activeWind: { dir: 270, spd: 20 }, brg: 90 })).toBe(170);
+    });
+
+    it('wind from ahead (270 while tracking 270) is a headwind: GS = TAS - 20', () => {
+        expect(gsOf({ ...base, activeWind: { dir: 270, spd: 20 }, brg: 270 })).toBe(130);
+    });
+
+    it('a pure crosswind changes nothing', () => {
+        expect(gsOf({ ...base, activeWind: { dir: 360, spd: 20 }, brg: 90 })).toBe(150);
+    });
+
+    it('uses the TRUE bearing, not the magnetic heading', () => {
+        // hdg (magnetic) is ignored; with no true bearing there is no wind correction.
+        expect(gsOf({ ...base, activeWind: { dir: 270, spd: 20 }, hdg: 270 })).toBe(150);
     });
 });

@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { readFileSync } from 'fs';
 import { haversine, bearing, intermediatePoint, crossTrackDistanceNm, alongTrackFraction, formatTime, windCorrectedMagHdg, iasToTas, groundSpeed, vfrAltitude } from '../../../web/shared/planning/math/route-math.js';
 
 describe('haversine', () => {
@@ -50,12 +51,45 @@ describe('formatTime', () => {
 });
 
 describe('windCorrectedMagHdg', () => {
-    it('with no wind returns bearing minus mag var (CONUS approx)', () => {
-        // At lat=34, lon=-81 (SC): magVar ≈ -6 + (-81+90)*-0.12 + (34-35)*0.05 = -6 + 9*-0.12 + (-0.05) = -6 -1.08 -0.05 ≈ -7.13
-        // bearing 90° true → mag hdg ≈ 90 - (-7.13) = 97.13°
-        const hdg = windCorrectedMagHdg(90, 34, -81, 150, 0, 0);
-        expect(hdg).toBeCloseTo(97.1, 0);
+    // The WMM (web/shared/mag-var.js) is a classic script the app loads before the
+    // planning module; it is reached through globalThis.MagVar.
+    const MagVar = new Function(readFileSync('web/shared/mag-var.js', 'utf8') + '\nreturn MagVar;')();
+    beforeEach(() => { globalThis.MagVar = MagVar; });
+    afterEach(() => { delete globalThis.MagVar; });
+
+    // magnetic = true - declination (east positive), checked against the WMM.
+    it.each([
+        ['KLKR', 34.72, -80.85],
+        ['KBGR (Maine, ~15 W)', 44.81, -68.83],
+        ['KDEN (~7 E)', 39.86, -104.67],
+        ['KSEA (~15 E)', 47.45, -122.31],
+    ])('no wind: %s heading = true course - WMM declination', (_n, lat, lon) => {
+        const decl = MagVar.declination(lat, lon);
+        const hdg = windCorrectedMagHdg(90, lat, lon, 150, 0, 0);
+        expect(hdg).toBeCloseTo(((90 - decl) % 360 + 360) % 360, 6);
     });
+
+    it('west variation adds, east variation subtracts (KLKR ~8 W -> 098; KSEA ~15 E -> ~075)', () => {
+        expect(windCorrectedMagHdg(90, 34.72, -80.85, 150, 0, 0)).toBeGreaterThan(97);
+        expect(windCorrectedMagHdg(90, 34.72, -80.85, 150, 0, 0)).toBeLessThan(99);
+        expect(windCorrectedMagHdg(90, 47.45, -122.31, 150, 0, 0)).toBeGreaterThan(74);
+        expect(windCorrectedMagHdg(90, 47.45, -122.31, 150, 0, 0)).toBeLessThan(77);
+    });
+
+    it('wraps into 0-360', () => {
+        const h = windCorrectedMagHdg(355, 47.45, -122.31, 150, 0, 0);   // 355 - ~15 E
+        expect(h).toBeGreaterThan(339);
+        expect(h).toBeLessThan(342);
+        const h2 = windCorrectedMagHdg(5, 34.72, -80.85, 150, 0, 0);     // 5 + ~8 W
+        expect(h2).toBeGreaterThan(12);
+        expect(h2).toBeLessThan(14);
+    });
+
+    it('returns null, not a guess, when the magnetic model is not loaded', () => {
+        delete globalThis.MagVar;
+        expect(windCorrectedMagHdg(90, 34.72, -80.85, 150, 0, 0)).toBeNull();
+    });
+
     it('direct headwind shifts heading toward track', () => {
         // 270° track, wind from 270° (direct headwind) → no WCA
         const hdg = windCorrectedMagHdg(270, 34, -81, 150, 270, 20);
@@ -65,7 +99,6 @@ describe('windCorrectedMagHdg', () => {
     it('90° crosswind produces WCA', () => {
         // 360° track, wind from 090° (right/easterly crosswind at 30 kt, tas 150)
         // Wind pushes aircraft west; pilot crab right (east). WCA = asin(30/150) ≈ 11.5°
-        // Wind-corrected heading is larger than no-wind heading (crabbing right of 360°→wraps)
         const hdg = windCorrectedMagHdg(360, 34, -81, 150, 90, 30);
         const hdgNoWind = windCorrectedMagHdg(360, 34, -81, 150, 0, 0);
         expect(hdg - hdgNoWind).toBeCloseTo(11.5, 0);
