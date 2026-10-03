@@ -112,7 +112,6 @@ describe('H1 — situation WS silence watchdog', () => {
         traffic.readyState = 0;
         sit._drop();
         traffic.readyState = OPEN;
-        expect(client._situationReconnectTimer).toBeFalsy();
         vi.advanceTimersByTime(3000);
         expect(byPath('/situation').length).toBeGreaterThan(1);
         client.disconnect();
@@ -221,6 +220,149 @@ describe('H2 — connected reflects data actually arriving', () => {
         latest('/traffic')._open();
         vi.advanceTimersByTime(10000);
         expect(client.connected).toBe(true);
+        client.disconnect();
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Review fixes (PR #150 critical review)
+// ---------------------------------------------------------------------------
+
+describe('Review #1 — situation WS data counts as link data', () => {
+    function udpStub() {
+        const listeners = {};
+        global.Capacitor = { Plugins: { StratuxUDP: {
+            addListener: (name, cb) => { listeners[name] = cb; },
+            start: vi.fn(() => Promise.resolve()),
+            stop: vi.fn(() => Promise.resolve()),
+        } } };
+        return listeners;
+    }
+
+    it('stays connected when the traffic WS drops and UDP sends only heartbeats, while /situation keeps streaming', () => {
+        const udp = udpStub();
+        const client = new (load())();
+        const events = [];
+        client.addEventListener('stratux:disconnect', () => events.push('disconnect'));
+        client.connect();
+        latest('/traffic')._open();
+        const sit = latest('/situation');
+        sit._open();
+        sit._msg(SIT);
+        latest('/traffic')._drop();
+        for (let t = 0; t < 20; t++) { udp.heartbeat({ gps_valid: true }); sit._msg(SIT); vi.advanceTimersByTime(500); }
+        expect(client.connected).toBe(true);
+        expect(events).toEqual([]);
+        client.disconnect();
+    });
+
+    it('situation WS data alone marks the link connected', () => {
+        const client = new (load())();
+        client.connect();
+        const sit = latest('/situation');
+        sit._open();
+        expect(client.connected).toBe(false);   // open alone is not data
+        sit._msg(SIT);
+        expect(client.connected).toBe(true);
+        client.disconnect();
+    });
+
+    it('goes disconnected once situation data stops, traffic WS is closed and there is no UDP', () => {
+        const client = new (load())();
+        client.connect();
+        latest('/traffic')._open();
+        const sit = latest('/situation');
+        sit._open();
+        sit._msg(SIT);
+        latest('/traffic')._drop();
+        expect(client.connected).toBe(true);
+        vi.advanceTimersByTime(5000);
+        expect(client.connected).toBe(false);
+        client.disconnect();
+    });
+});
+
+describe('Review #3 — sockets stuck in CONNECTING are replaced', () => {
+    for (const path of ['/traffic', '/situation', '/weather', '/jsonio']) {
+        it(`${path}: a socket still CONNECTING after 15 s is replaced`, () => {
+            const client = new (load())();
+            client.connect();
+            const stuck = latest(path);
+            vi.advanceTimersByTime(10000);
+            expect(latest(path)).toBe(stuck);          // not before the timeout
+            vi.advanceTimersByTime(7000);
+            expect(latest(path)).not.toBe(stuck);
+            expect(stuck.readyState).toBe(CLOSED);
+            client.disconnect();
+        });
+    }
+});
+
+describe('Review #4 — companion channels reconnect on their own, with backoff', () => {
+    for (const path of ['/situation', '/weather', '/jsonio']) {
+        it(`${path}: reconnects after a drop even when the traffic WS is not open (no UDP)`, () => {
+            const client = new (load())();
+            client.connect();
+            const s = latest(path);
+            s._open();
+            s._drop();
+            vi.advanceTimersByTime(6000);
+            expect(latest(path)).not.toBe(s);
+            client.disconnect();
+        });
+    }
+
+    it('repeated failures back off (capped) and a successful open resets the delay', () => {
+        const client = new (load())();
+        client.connect();
+        const times = [];
+        let s = latest('/situation');
+        let t0 = Date.now();
+        for (let i = 0; i < 6; i++) {
+            s._drop();
+            const before = s;
+            let waited = 0;
+            while (latest('/situation') === before) { vi.advanceTimersByTime(100); waited += 100; if (waited > 60000) break; }
+            times.push(waited);
+            s = latest('/situation');
+        }
+        // strictly non-decreasing and capped at 30 s
+        for (let i = 1; i < times.length; i++) expect(times[i]).toBeGreaterThanOrEqual(times[i - 1]);
+        expect(Math.max(...times)).toBeLessThanOrEqual(30100);
+        expect(times.at(-1)).toBeGreaterThan(times[0]);
+        // success resets
+        s._open();
+        s._drop();
+        let waited = 0;
+        const before = s;
+        while (latest('/situation') === before) { vi.advanceTimersByTime(100); waited += 100; }
+        expect(waited).toBeLessThanOrEqual(times[0]);
+        client.disconnect();
+    });
+
+    it('after disconnect() no companion channel reconnects', () => {
+        const client = new (load())();
+        client.connect();
+        const subs = ['/situation', '/weather', '/jsonio'].map(latest);
+        subs.forEach(s => s._open());
+        client.disconnect();
+        subs.forEach(s => s._drop());
+        const n = sockets.length;
+        vi.advanceTimersByTime(60000);
+        expect(sockets.length).toBe(n);
+    });
+});
+
+describe('Review #5 — Stratux HTTP polls have a timeout', () => {
+    it('getStatus and getTowers fetches carry an abort signal', () => {
+        const client = new (load())();
+        client.connect();
+        const calls = global.fetch.mock.calls;
+        for (const ep of ['/getStatus', '/getTowers']) {
+            const call = calls.find(([url]) => url.endsWith(ep));
+            expect(call, ep).toBeTruthy();
+            expect(call[1]?.signal, ep).toBeInstanceOf(AbortSignal);
+        }
         client.disconnect();
     });
 });

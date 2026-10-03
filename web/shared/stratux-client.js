@@ -71,6 +71,12 @@ const _StratuxUdpBus = (() => {
 // WebSocket API used by this client (readyState, onopen, onmessage, onclose,
 // onerror, close()), backed by the native plugin when available.
 function _createStratuxWs(channel, url) {
+    const sock = _createStratuxWsRaw(channel, url);
+    sock._createdAt = Date.now();   // StratuxClient's watchdog times out a stuck CONNECTING socket
+    return sock;
+}
+
+function _createStratuxWsRaw(channel, url) {
     if (!_StratuxNativeBus) return new WebSocket(url);
     const ws = {
         url, readyState: 0,            // CONNECTING
@@ -127,13 +133,16 @@ class StratuxClient extends EventTarget {
         this._disconnected = false;
 
         // Link health (see _linkWatchdogTick). _lastSituationMsgAt: last time the
-        // situation WS opened or delivered a message. _lastUdpDataAt: last GDL 90
-        // ownship/situation/traffic datagram — heartbeats don't count, because
-        // Stratux keeps sending heartbeats to clients it has stopped sending data to.
+        // situation WS opened or delivered a message (silence detection).
+        // _lastDataAt: last real Stratux data — a situation WS message or a GDL 90
+        // ownship/traffic datagram. Heartbeats don't count: Stratux keeps sending
+        // heartbeats to clients it has stopped sending data to.
         this._linkWatchdog = null;
         this._lastSituationMsgAt = 0;
-        this._lastUdpDataAt = 0;
+        this._lastDataAt = 0;
         this._udpHeartbeatLogged = false;
+        // Reconnect backoff for the companion channels (traffic uses _reconnectDelay).
+        this._channelDelay = { ...StratuxClient.CHANNEL_BASE_DELAY_MS };
 
         // Traffic map: icao_addr → target object
         this.traffic = new Map();
@@ -175,8 +184,8 @@ class StratuxClient extends EventTarget {
         // cockpit alive.
         if (this.udpMode) {
             _StratuxUdpBus.attach({
-                onSituation: (msg) => { this._noteUdpData(); this._handleSituation(msg); },
-                onTraffic:   (msg) => { this._noteUdpData(); this._handleTraffic(msg); },
+                onSituation: (msg) => { this._noteData('GDL 90'); this._handleSituation(msg); },
+                onTraffic:   (msg) => { this._noteData('GDL 90'); this._handleTraffic(msg); },
                 // A heartbeat alone does NOT mean connected: Stratux sends only
                 // heartbeats to a client it considers sleeping (no ICMP echo reply
                 // in 10 s, or a recent port-unreachable) — main/network.go
@@ -354,10 +363,12 @@ class StratuxClient extends EventTarget {
 
         this._situationWs.onopen = () => {
             this._lastSituationMsgAt = Date.now();
+            this._channelDelay.situation = StratuxClient.CHANNEL_BASE_DELAY_MS.situation;
         };
 
         this._situationWs.onmessage = (e) => {
             this._lastSituationMsgAt = Date.now();
+            this._noteData('situation WS');
             try {
                 const msg = JSON.parse(e.data);
                 this._handleSituation(msg);
@@ -375,16 +386,18 @@ class StratuxClient extends EventTarget {
         const situationWsRef = this._situationWs;
         this._situationWs.onclose = (e) => {
             if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', `Situation WS closed code=${e?.code} reason=${e?.reason || ''}`);
-            if (!this._disconnected && this._situationWs === situationWsRef && this._trafficWs?.readyState === WebSocket.OPEN) {
+            // Always reconnect (with backoff) while the client is running — not only
+            // when the traffic WS happens to be OPEN at this instant, which used to
+            // strand the situation channel closed with nothing to bring it back.
+            if (!this._disconnected && this._situationWs === situationWsRef) {
                 this._situationReconnectTimer = setTimeout(() => {
                     this._situationReconnectTimer = null;
-                    // Guard: don't create a duplicate if already reconnected, and never
-                    // reconnect if disconnect() ran (or this socket was replaced) while
-                    // this timer was pending.
-                    if (!this._disconnected && this._situationWs === situationWsRef && (!this._situationWs || this._situationWs.readyState !== WebSocket.OPEN)) {
+                    // Guard: never reconnect if disconnect() ran, or this socket was
+                    // replaced (e.g. by the traffic reconnect path), while pending.
+                    if (!this._disconnected && this._situationWs === situationWsRef) {
                         this._connectSituation();
                     }
-                }, 2000);
+                }, this._nextChannelDelay('situation'));
             }
         };
     }
@@ -457,7 +470,7 @@ class StratuxClient extends EventTarget {
         const poll = async () => {
             try {
                 // Direct HTTP to Stratux — no proxy needed on Android
-                const r = await fetch(`http://${this.ip}/getStatus`, { cache: 'no-store' });
+                const r = await fetch(`http://${this.ip}/getStatus`, { cache: 'no-store', signal: AbortSignal.timeout(StratuxClient.HTTP_TIMEOUT_MS) });
                 if (r.ok) this.deviceStatus = await r.json();
             } catch { /* offline */ }
         };
@@ -469,7 +482,7 @@ class StratuxClient extends EventTarget {
         if (this._towerTimer) return;
         const poll = async () => {
             try {
-                const r = await fetch(`http://${this.ip}/getTowers`, { cache: 'no-store' });
+                const r = await fetch(`http://${this.ip}/getTowers`, { cache: 'no-store', signal: AbortSignal.timeout(StratuxClient.HTTP_TIMEOUT_MS) });
                 if (r.ok) {
                     this.towerData = await r.json();
                     this.dispatchEvent(new CustomEvent('stratux:towers', { detail: this.towerData }));
@@ -489,6 +502,10 @@ class StratuxClient extends EventTarget {
             this._weatherWs = _createStratuxWs('weather', url);
         } catch { return; }
 
+        this._weatherWs.onopen = () => {
+            this._channelDelay.weather = StratuxClient.CHANNEL_BASE_DELAY_MS.weather;
+        };
+
         this._weatherWs.onmessage = (e) => {
             try {
                 const msg = JSON.parse(e.data);
@@ -507,25 +524,18 @@ class StratuxClient extends EventTarget {
         const weatherWsRef = this._weatherWs;
         this._weatherWs.onclose = (e) => {
             if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', `Weather WS closed code=${e?.code} reason=${e?.reason || ''}`);
-            // Reconnect after 5s if the overall Stratux connection is still alive
-            // (covers both WS-mode traffic OPEN and UDP-mode where traffic flows
-            // separately). !this._disconnected is required because udpMode reflects
-            // static plugin/config availability, not connection lifecycle — it is
-            // never falsified by disconnect(), so without this check this fires
-            // unconditionally on any hardware with the native UDP plugin present.
-            // The gate must wrap the setTimeout() call itself, not just the code
-            // inside it — a stale onclose from a socket disconnect() already closed
-            // can still fire (queueMicrotask defers it) after connect() runs, and if
-            // only the callback body were gated, an unconditional setTimeout here
-            // would still schedule a spurious reconnect 5s after every disconnect()+
-            // connect() cycle (e.g. config-editor.js's Stratux-IP-change handler).
-            if (!this._disconnected && this._weatherWs === weatherWsRef && (this.udpMode || this._trafficWs?.readyState === WebSocket.OPEN)) {
+            // Reconnect (with backoff) while the client is running. The gate must
+            // wrap the setTimeout() call itself, not just the code inside it — a
+            // stale onclose from a socket disconnect() already closed can still fire
+            // (queueMicrotask defers it) after connect() runs; the identity check
+            // rejects it, and !_disconnected stops reconnects after disconnect().
+            if (!this._disconnected && this._weatherWs === weatherWsRef) {
                 this._weatherReconnectTimer = setTimeout(() => {
                     this._weatherReconnectTimer = null;
-                    if (!this._disconnected && this._weatherWs === weatherWsRef && (this.udpMode || this._trafficWs?.readyState === WebSocket.OPEN)) {
+                    if (!this._disconnected && this._weatherWs === weatherWsRef) {
                         this._connectWeather();
                     }
-                }, 5000);
+                }, this._nextChannelDelay('weather'));
             }
         };
     }
@@ -538,6 +548,10 @@ class StratuxClient extends EventTarget {
         try {
             this._jsonioWs = _createStratuxWs('jsonio', url);
         } catch { return; }
+
+        this._jsonioWs.onopen = () => {
+            this._channelDelay.jsonio = StratuxClient.CHANNEL_BASE_DELAY_MS.jsonio;
+        };
 
         this._jsonioWs.onmessage = (e) => {
             try {
@@ -567,17 +581,14 @@ class StratuxClient extends EventTarget {
         const jsonioWsRef = this._jsonioWs;
         this._jsonioWs.onclose = (e) => {
             if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', `Jsonio WS closed code=${e?.code} reason=${e?.reason || ''}`);
-            // See the matching comment in _weatherWs.onclose above: the gate must
-            // wrap the setTimeout() call itself, not just the code inside it, and
-            // must include the identity check (not just !this._disconnected) since
-            // udpMode alone can't tell a stale onclose from a current one.
-            if (!this._disconnected && this._jsonioWs === jsonioWsRef && (this.udpMode || this._trafficWs?.readyState === WebSocket.OPEN)) {
+            // See the matching comment in _weatherWs.onclose above.
+            if (!this._disconnected && this._jsonioWs === jsonioWsRef) {
                 this._jsonioReconnectTimer = setTimeout(() => {
                     this._jsonioReconnectTimer = null;
-                    if (!this._disconnected && this._jsonioWs === jsonioWsRef && (this.udpMode || this._trafficWs?.readyState === WebSocket.OPEN)) {
+                    if (!this._disconnected && this._jsonioWs === jsonioWsRef) {
                         this._connectJsonio();
                     }
-                }, 5000);
+                }, this._nextChannelDelay('jsonio'));
             }
         };
     }
@@ -586,7 +597,7 @@ class StratuxClient extends EventTarget {
 
     /** Reconnect only the traffic WS — don't tear down situation/weather/jsonio */
     _scheduleTrafficReconnect(trafficWsRef) {
-        if (!this._udpDataFresh()) this._setConnected(false);
+        if (!this._dataFresh()) this._setConnected(false);
         if (this._reconnectTimer) return;
         this._reconnectTimer = setTimeout(() => {
             this._reconnectTimer = null;
@@ -611,7 +622,7 @@ class StratuxClient extends EventTarget {
     }
 
     _scheduleReconnect() {
-        if (!this._udpDataFresh()) this._setConnected(false);
+        if (!this._dataFresh()) this._setConnected(false);
         if (this._reconnectTimer) return;
         this._reconnectTimer = setTimeout(() => {
             this._reconnectTimer = null;
@@ -625,16 +636,24 @@ class StratuxClient extends EventTarget {
 
     // ========== Link Health ==========
 
-    _noteUdpData() {
-        this._lastUdpDataAt = Date.now();
+    /** Real Stratux data arrived (situation WS message or GDL 90 ownship/traffic). */
+    _noteData(source) {
+        this._lastDataAt = Date.now();
         if (!this._connected) {
-            if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', 'GDL 90: data flowing — connected');
+            if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', `${source}: data flowing — connected`);
             this._setConnected(true);
         }
     }
 
-    _udpDataFresh() {
-        return this._lastUdpDataAt > 0 && Date.now() - this._lastUdpDataAt < StratuxClient.UDP_FRESH_MS;
+    _dataFresh() {
+        return this._lastDataAt > 0 && Date.now() - this._lastDataAt < StratuxClient.DATA_FRESH_MS;
+    }
+
+    /** Current backoff delay for a companion channel; doubles it for next time (capped). */
+    _nextChannelDelay(name) {
+        const d = this._channelDelay[name];
+        this._channelDelay[name] = Math.min(d * 2, this._maxDelay);
+        return d;
     }
 
     _startLinkWatchdog() {
@@ -647,25 +666,35 @@ class StratuxClient extends EventTarget {
         const now = Date.now();
         const trafficOpen = this._trafficWs?.readyState === WebSocket.OPEN;
 
-        // `connected` follows data: drop it once UDP data has gone quiet and the
-        // traffic WS (whose onopen is the other thing that sets it) is not open.
-        if (this._connected && !trafficOpen && !this._udpDataFresh()) {
-            if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', 'Link down: traffic WS not open and no GDL 90 data');
+        // `connected` follows data: drop it once Stratux data (situation WS or
+        // GDL 90) has gone quiet and the traffic WS (whose onopen is the other
+        // thing that sets it) is not open.
+        if (this._connected && !trafficOpen && !this._dataFresh()) {
+            if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', 'Link down: traffic WS not open and no Stratux data');
             this._setConnected(false);
         }
 
+        // A socket stuck in CONNECTING (a lost native open/close event, or a
+        // browser socket hanging in SYN) never fires onclose, so nothing would
+        // ever retry it. Replace it. Native connectTimeout is 10 s.
+        const channels = [
+            ['traffic',   this._trafficWs,   () => this._connectTraffic()],
+            ['situation', this._situationWs, () => this._connectSituation()],
+            ['weather',   this._weatherWs,   () => this._connectWeather()],
+            ['jsonio',    this._jsonioWs,    () => this._connectJsonio()],
+        ];
+        for (const [name, ws, reconnect] of channels) {
+            if (ws && ws.readyState === WebSocket.CONNECTING && now - (ws._createdAt ?? now) > StratuxClient.CONNECT_TIMEOUT_MS) {
+                if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', `${name} WS stuck connecting ${now - ws._createdAt}ms — replacing`);
+                reconnect();
+            }
+        }
+
         const sit = this._situationWs;
-        if (sit && sit.readyState === WebSocket.OPEN) {
+        if (sit && sit.readyState === WebSocket.OPEN && now - this._lastSituationMsgAt > StratuxClient.SITUATION_SILENCE_MS) {
             // Stratux pushes situation at 10 Hz unconditionally; silence means a
             // dead (half-open) connection — the situation channel has no pings.
-            if (now - this._lastSituationMsgAt > StratuxClient.SITUATION_SILENCE_MS) {
-                if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', `Situation WS silent ${now - this._lastSituationMsgAt}ms — reconnecting`);
-                this._connectSituation();
-            }
-        } else if ((!sit || sit.readyState === WebSocket.CLOSED) && !this._situationReconnectTimer && this._connected) {
-            // Closed with nothing scheduled to bring it back (its onclose only
-            // reconnects if the traffic WS was OPEN at that instant).
-            if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', 'Situation WS closed with no reconnect pending — reconnecting');
+            if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', `Situation WS silent ${now - this._lastSituationMsgAt}ms — reconnecting`);
             this._connectSituation();
         }
     }
@@ -720,5 +749,12 @@ class StratuxClient extends EventTarget {
 // Situation WS silence that counts as a dead connection. Real Stratux sends at
 // 10 Hz, tools/mock-stratux.py at 1 Hz — 4 s tolerates both.
 StratuxClient.SITUATION_SILENCE_MS = 4000;
-// GDL 90 ownship is sent at 1 Hz; 3 s without any ownship/traffic = UDP not delivering.
-StratuxClient.UDP_FRESH_MS = 3000;
+// Situation WS (10 Hz) / GDL 90 ownship (1 Hz): 3 s with neither = no Stratux data.
+StratuxClient.DATA_FRESH_MS = 3000;
+// A socket still CONNECTING after this is replaced (native connectTimeout is 10 s).
+StratuxClient.CONNECT_TIMEOUT_MS = 15000;
+// First reconnect delay per companion channel; doubles per failure up to _maxDelay,
+// reset when the channel opens.
+StratuxClient.CHANNEL_BASE_DELAY_MS = { situation: 2000, weather: 5000, jsonio: 5000 };
+// Stratux REST polls (/getStatus, /getTowers).
+StratuxClient.HTTP_TIMEOUT_MS = 3000;
