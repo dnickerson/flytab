@@ -193,7 +193,8 @@ class AirportPopup {
         if (windPaneEl && typeof WindCompass !== 'undefined') {
             try {
                 this._windCompass = new WindCompass();
-                this._windCompass.render(windPaneEl, (airport.runways || []).filter(Boolean), wx);
+                this._windCompass.render(windPaneEl, (airport.runways || []).filter(Boolean), wx,
+                    { lat: airport.lat, lon: airport.lon });
             } catch (err) {
                 console.warn('AirportPopup: wind compass render failed', err);
                 this._windCompass = null;

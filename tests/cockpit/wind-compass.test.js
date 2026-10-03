@@ -53,22 +53,22 @@ describe('WindCompass.parseRunwayEnds', () => {
     it('splits a dual-end runway id into two ends with headings', () => {
         const ends = WindCompass.parseRunwayEnds([{ id: '08L/26R', length_ft: 5000 }]);
         expect(ends).toEqual([
-            { label: '08L', hdg: 80, length_ft: 5000 },
-            { label: '26R', hdg: 260, length_ft: 5000 },
+            { label: '08L', hdg: 80, length_ft: 5000, fromNumber: true },
+            { label: '26R', hdg: 260, length_ft: 5000, fromNumber: true },
         ]);
     });
 
     it('handles a runway with no L/R/C suffix', () => {
         const ends = WindCompass.parseRunwayEnds([{ id: '09/27', length_ft: 4000 }]);
         expect(ends).toEqual([
-            { label: '09', hdg: 90, length_ft: 4000 },
-            { label: '27', hdg: 270, length_ft: 4000 },
+            { label: '09', hdg: 90, length_ft: 4000, fromNumber: true },
+            { label: '27', hdg: 270, length_ft: 4000, fromNumber: true },
         ]);
     });
 
     it('handles a single-end-only runway id', () => {
         const ends = WindCompass.parseRunwayEnds([{ id: '18', length_ft: 3000 }]);
-        expect(ends).toEqual([{ label: '18', hdg: 180, length_ft: 3000 }]);
+        expect(ends).toEqual([{ label: '18', hdg: 180, length_ft: 3000, fromNumber: true }]);
     });
 
     it('skips a malformed runway id instead of throwing', () => {
@@ -368,8 +368,8 @@ describe('WindCompass METAR states', () => {
 
     it('shows the gust crosswind next to the steady crosswind', () => {
         const { container } = render({ metar: { decoded: { wind_dir: 300, wind_speed: 10, wind_gust: 20, wind_variable: false } } });
-        const labels = [...container.querySelectorAll('.wc-end-wind')].map(e => e.textContent);
-        expect(labels.some(t => /\d+G\d+XW/.test(t))).toBe(true);
+        const cells = [...container.querySelectorAll('.wc-col-xw')].map(e => e.textContent);
+        expect(cells.some(t => /^\d+G\d+ [LR]$/.test(t))).toBe(true);
     });
 
     it('shows the METAR source and age, flagged STALE when older than 75 min', () => {
@@ -411,5 +411,164 @@ describe('WindCompass.updateWx (live METAR while the popup is open)', () => {
         expect(container.querySelector('.wc-dir-value').textContent).toBe('080');
         container.querySelector('.wc-mode-metar').click();
         expect(container.querySelector('.wc-end-label.wc-best .wc-end-id').textContent).toBe('26');
+    });
+});
+
+// ---- true vs magnetic, threshold-coordinate headings, label layout ----
+
+/** A point `distM` metres from (lat, lon) on true bearing `brg` (spherical earth). */
+function offset(lat, lon, brg, distM) {
+    const R = 6371000, d = distM / R, t = brg * Math.PI / 180;
+    const p1 = lat * Math.PI / 180, l1 = lon * Math.PI / 180;
+    const p2 = Math.asin(Math.sin(p1) * Math.cos(d) + Math.cos(p1) * Math.sin(d) * Math.cos(t));
+    const l2 = l1 + Math.atan2(Math.sin(t) * Math.sin(d) * Math.cos(p1), Math.cos(d) - Math.sin(p1) * Math.sin(p2));
+    return [p2 * 180 / Math.PI, l2 * 180 / Math.PI];
+}
+/** A NASR-shaped runway whose base end points along true bearing `trueHdg`. */
+function nasrRunway(id, baseId, recipId, trueHdg, lat = 34.72, lon = -80.85) {
+    const [rlat, rlon] = offset(lat, lon, trueHdg, 1800);
+    return { id, length_ft: 6000, base_id: baseId, base_lat: lat, base_lon: lon, recip_id: recipId, recip_lat: rlat, recip_lon: rlon };
+}
+
+describe('WindCompass runway headings are TRUE', () => {
+    it('takes each end\'s heading from the threshold coordinates (base -> recip)', () => {
+        const ends = WindCompass.parseRunwayEnds([nasrRunway('06/24', '06', '24', 52.4)]);
+        expect(ends.map(e => e.label)).toEqual(['06', '24']);
+        expect(ends[0].hdg).toBeCloseTo(52.4, 1);
+        expect(ends[1].hdg).toBeCloseTo(232.4, 1);
+        expect(ends.some(e => e.approx || e.fromNumber)).toBe(false);
+    });
+
+    it('handles ids with no number when the thresholds are known (N/S)', () => {
+        const ends = WindCompass.parseRunwayEnds([nasrRunway('N/S', 'N', 'S', 2)]);
+        expect(ends.map(e => e.label)).toEqual(['N', 'S']);
+        expect(ends[0].hdg).toBeCloseTo(2, 1);
+    });
+
+    it('pads a one-digit threshold id ("6" -> "06")', () => {
+        const ends = WindCompass.parseRunwayEnds([nasrRunway('6/24', '6', '24', 52)]);
+        expect(ends[0].label).toBe('06');
+    });
+
+    it('without thresholds, adds the declination to number x 10 and marks the end approximate', () => {
+        const ends = WindCompass.parseRunwayEnds([{ id: '06/24', length_ft: 6000 }], -8);
+        expect(ends[0]).toMatchObject({ label: '06', hdg: 52, approx: true });
+        expect(ends[1]).toMatchObject({ label: '24', hdg: 232, approx: true });
+    });
+
+    it('reports the crosswind side: wind from the right of the runway heading is R', () => {
+        const [end] = WindCompass.computeWindComponents([{ label: '36', hdg: 360 }], 90, 10, null);
+        expect(end.xwSide).toBe('R');
+        const [end2] = WindCompass.computeWindComponents([{ label: '36', hdg: 360 }], 270, 10, null);
+        expect(end2.xwSide).toBe('L');
+    });
+});
+
+describe('WindCompass true/magnetic wind (variation 8 deg W)', () => {
+    // Runway 06/24 with true alignment 052/232 -- magnetic 060/240 at 8W.
+    const runways = [nasrRunway('06/24', '06', '24', 52)];
+    const site = { lat: 34.72, lon: -80.85 };
+    const realMagVar = globalThis.MagVar;
+    const withVar = (fn) => {
+        globalThis.MagVar = { declination: () => -8 };
+        try { fn(); } finally { globalThis.MagVar = realMagVar; }
+    };
+
+    it('METAR (true) wind straight down the true runway reads all headwind', () => {
+        withVar(() => {
+            const container = document.createElement('div');
+            new WindCompass().render(container, runways, { metar: { decoded: { wind_dir: 52, wind_speed: 15 } } }, site);
+            const best = container.querySelector('.wc-best-row');
+            expect(best.querySelector('.wc-col-rwy').textContent).toBe('\u25b6 06');
+            expect(best.querySelector('.wc-col-head').textContent).toBe('15 HW');
+            expect(best.querySelector('.wc-col-xw').textContent).toBe('0');
+        });
+    });
+
+    it('the old number x 10 method would have shown a crosswind for that same wind', () => {
+        const [end] = WindCompass.computeWindComponents([{ label: '06', hdg: 60 }], 52, 15, null);
+        expect(end.crosswind).toBe(2);
+    });
+
+    it('a MANUAL (ATIS, magnetic) 060 wind is converted to 052 true and reads all headwind', () => {
+        withVar(() => {
+            const container = document.createElement('div');
+            const wc = new WindCompass();
+            wc.render(container, runways, { metar: null }, site);
+            container.querySelector('.wc-mode-manual').click();
+            container.querySelector('.wc-dir-value').click();
+            ['0', '6', '0'].forEach(d => container.querySelector(`[data-digit="${d}"]`).click());
+            container.querySelector('.wc-numpad-done').click();
+            container.querySelector('.wc-spd-value').click();
+            ['1', '5'].forEach(d => container.querySelector(`[data-digit="${d}"]`).click());
+            container.querySelector('.wc-numpad-done').click();
+            expect(container.querySelector('.wc-wind-line').textContent).toContain('060\u00b0M = 052\u00b0T');
+            const best = container.querySelector('.wc-best-row');
+            expect(best.querySelector('.wc-col-head').textContent).toBe('15 HW');
+            expect(best.querySelector('.wc-col-xw').textContent).toBe('0');
+        });
+    });
+
+    it('seeds MANUAL from the METAR converted to magnetic', () => {
+        withVar(() => {
+            const container = document.createElement('div');
+            new WindCompass().render(container, runways, { metar: { decoded: { wind_dir: 260, wind_speed: 12 } } }, site);
+            container.querySelector('.wc-mode-manual').click();
+            expect(container.querySelector('.wc-dir-value').textContent).toBe('268');
+            expect(container.querySelector('.wc-field-label').textContent).toContain('\u00b0M');
+        });
+    });
+
+    it('shows the wind in true and magnetic, and the variation', () => {
+        withVar(() => {
+            const container = document.createElement('div');
+            new WindCompass().render(container, runways, { metar: { decoded: { wind_dir: 260, wind_speed: 12, wind_gust: 20 } } }, site);
+            expect(container.querySelector('.wc-wind-line').textContent).toBe('METAR 260\u00b0T = 268\u00b0M \u00b7 12G20 KT');
+            expect(container.querySelector('.wc-source-note').textContent).toContain('VAR 8.0\u00b0W');
+        });
+    });
+
+    it('uses the real WMM when MagVar is loaded', () => {
+        const MagVar = new Function(read('web/shared/mag-var.js') + '\nreturn MagVar;')();
+        globalThis.MagVar = MagVar;
+        try {
+            const d = WindCompass.declinationAt(site);
+            expect(d).toBeLessThan(-7);
+            expect(d).toBeGreaterThan(-9);
+        } finally { globalThis.MagVar = realMagVar; }
+    });
+
+    it('without a position or MagVar, treats MANUAL as entered and says the variation is unknown', () => {
+        const container = document.createElement('div');
+        new WindCompass().render(container, [{ id: '06/24', length_ft: 6000 }], { metar: { decoded: { wind_dir: 60, wind_speed: 10 } } });
+        expect(WindCompass.declinationAt(undefined)).toBeNull();
+        expect(container.querySelector('.wc-source-note').textContent).toContain('variation unknown');
+    });
+});
+
+describe('WindCompass runway-end label layout', () => {
+    const at = (label, hdg) => ({ label, hdg });
+
+    it('merges parallel runway ends into one label (26L + 26R -> 26L/R)', () => {
+        const labels = WindCompass.layoutEndLabels([at('26L', 260), at('26R', 260.4), at('08R', 80), at('08L', 80.4)]);
+        expect(labels.map(l => l.text).sort()).toEqual(['08R/L', '26L/R']);
+    });
+
+    it('keeps near-parallel labels (13 and 14) at least 34 units apart', () => {
+        const labels = WindCompass.layoutEndLabels([at('13', 130), at('31', 310), at('14', 140), at('32', 320)]);
+        for (let i = 0; i < labels.length; i++) {
+            for (let j = i + 1; j < labels.length; j++) {
+                expect(Math.hypot(labels[i].x - labels[j].x, labels[i].y - labels[j].y)).toBeGreaterThanOrEqual(34);
+            }
+        }
+    });
+
+    it('puts the numbers in a table, not in the rose', () => {
+        const container = document.createElement('div');
+        new WindCompass().render(container, [{ id: '08/26' }], { metar: { decoded: { wind_dir: 260, wind_speed: 12 } } });
+        expect(container.querySelectorAll('svg .wc-end-wind').length).toBe(0);
+        expect(container.querySelectorAll('.wc-table tbody tr').length).toBe(2);
+        expect(container.querySelectorAll('.wc-best-row').length).toBe(1);
+        expect(container.querySelector('.wc-best-row .wc-col-rwy').textContent).toBe('\u25b6 26');
     });
 });
