@@ -8,11 +8,6 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.concurrent.TimeUnit;
-
-import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
 import okhttp3.WebSocket;
@@ -31,7 +26,8 @@ import okio.ByteString;
  * in ~30 s and surfaces a real close event so the JS reconnect path runs.
  *
  * JS API:
- *   StratuxWS.open({ channel, url })   // channel = 'traffic'|'situation'|'weather'|'jsonio'
+ *   StratuxWS.open({ channel, url, session, ping })   // channel = 'traffic'|'situation'|'weather'|'jsonio'
+ *                                      // ping (default true) = send WebSocket protocol pings
  *   StratuxWS.close({ channel })
  *   StratuxWS.addListener('message', ({channel, data}) => …)
  *   StratuxWS.addListener('open',    ({channel}) => …)
@@ -45,22 +41,14 @@ import okio.ByteString;
 public class StratuxWsPlugin extends Plugin {
     private static final String TAG = "StratuxWS";
 
-    // Send ping every 30 s. Standard for keep-alive — short enough to detect a
-    // half-closed connection in ~60 s, long enough not to load the link.
-    private static final long PING_INTERVAL_SEC = 30;
-
-    private final Map<String, WebSocket> sockets = new HashMap<>();
-    private OkHttpClient client;
+    // Channel → owning socket. Token-based so events that OkHttp delivers before
+    // newWebSocket() returns are not dropped (see StratuxChannelRegistry).
+    private final StratuxChannelRegistry<WebSocket> channels = new StratuxChannelRegistry<>();
+    private StratuxWsClients clients;
 
     @Override
     public void load() {
-        client = new OkHttpClient.Builder()
-            .pingInterval(PING_INTERVAL_SEC, TimeUnit.SECONDS)
-            // Read timeout 0 = no timeout for streaming reads. Pings detect dead conn.
-            .readTimeout(0, TimeUnit.MILLISECONDS)
-            // Allow some time for the initial WS handshake.
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .build();
+        clients = new StratuxWsClients();
     }
 
     @PluginMethod
@@ -68,26 +56,27 @@ public class StratuxWsPlugin extends Plugin {
         final String channel = call.getString("channel");
         final String url     = call.getString("url");
         final String session = call.getString("session", "");
+        final boolean ping   = Boolean.TRUE.equals(call.getBoolean("ping", true));
         if (channel == null || url == null) {
             call.reject("channel and url are required");
             return;
         }
 
-        // Close any existing socket on this channel before opening a new one.
-        WebSocket old = sockets.remove(channel);
-        if (old != null) {
-            try { old.cancel(); } catch (Exception ignored) {}
-        }
+        // Claim the channel BEFORE creating the socket, and close any socket that
+        // owned it before.
+        final StratuxChannelRegistry.Claim<WebSocket> claim = channels.claim(channel);
+        final long token = claim.token;
+        StratuxWsClients.release(claim.previous);
 
         Request req = new Request.Builder().url(url).build();
-        WebSocket ws = client.newWebSocket(req, new WebSocketListener() {
-            // current() returns true only if THIS listener's socket is still the
-            // active one for this channel. Prevents events from a cancelled
-            // (replaced) socket from being delivered to JS as if they were a new
-            // socket's events. The session field on each event lets the JS side
-            // disambiguate when wrappers are torn down and rebuilt rapidly.
-            private boolean current(WebSocket self) {
-                return sockets.get(channel) == self;
+        WebSocket ws = clients.forChannel(ping).newWebSocket(req, new WebSocketListener() {
+            // current() returns true only if THIS listener's claim still owns the
+            // channel. Prevents events from a cancelled (replaced) socket from being
+            // delivered to JS as if they were a new socket's events. The session
+            // field on each event lets the JS side disambiguate when wrappers are
+            // torn down and rebuilt rapidly.
+            private boolean current() {
+                return channels.isCurrent(channel, token);
             }
 
             private JSObject base() {
@@ -99,14 +88,14 @@ public class StratuxWsPlugin extends Plugin {
 
             @Override
             public void onOpen(WebSocket webSocket, Response response) {
-                if (!current(webSocket)) return;
+                if (!current()) return;
                 Log.i(TAG, channel + " WS opened: " + url);
                 notifyListeners("open", base());
             }
 
             @Override
             public void onMessage(WebSocket webSocket, String text) {
-                if (!current(webSocket)) return;
+                if (!current()) return;
                 JSObject ev = base();
                 ev.put("data", text);
                 notifyListeners("message", ev);
@@ -114,7 +103,7 @@ public class StratuxWsPlugin extends Plugin {
 
             @Override
             public void onMessage(WebSocket webSocket, ByteString bytes) {
-                if (!current(webSocket)) return;
+                if (!current()) return;
                 JSObject ev = base();
                 ev.put("data", bytes.base64());
                 ev.put("binary", true);
@@ -128,9 +117,8 @@ public class StratuxWsPlugin extends Plugin {
 
             @Override
             public void onClosed(WebSocket webSocket, int code, String reason) {
-                if (!current(webSocket)) return;
+                if (!channels.release(channel, token)) return;
                 Log.i(TAG, channel + " WS closed code=" + code + " reason=\"" + reason + "\"");
-                sockets.remove(channel);
                 JSObject ev = base();
                 ev.put("code", code);
                 ev.put("reason", reason == null ? "" : reason);
@@ -139,10 +127,9 @@ public class StratuxWsPlugin extends Plugin {
 
             @Override
             public void onFailure(WebSocket webSocket, Throwable t, Response response) {
-                if (!current(webSocket)) return;
+                if (!channels.release(channel, token)) return;
                 String msg = t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage();
                 Log.w(TAG, channel + " WS failure: " + msg);
-                sockets.remove(channel);
                 JSObject errEv = base();
                 errEv.put("message", msg);
                 notifyListeners("error", errEv);
@@ -152,7 +139,9 @@ public class StratuxWsPlugin extends Plugin {
                 notifyListeners("close", closeEv);
             }
         });
-        sockets.put(channel, ws);
+        // False if the socket already failed/closed (already reported to JS) —
+        // then it simply isn't registered.
+        channels.attach(channel, token, ws);
         call.resolve();
     }
 
@@ -160,18 +149,12 @@ public class StratuxWsPlugin extends Plugin {
     public void close(PluginCall call) {
         String channel = call.getString("channel");
         if (channel == null) { call.reject("channel required"); return; }
-        WebSocket ws = sockets.remove(channel);
-        if (ws != null) {
-            try { ws.close(1000, "client_close"); } catch (Exception ignored) {}
-        }
+        StratuxWsClients.release(channels.releaseChannel(channel));
         call.resolve();
     }
 
     @Override
     protected void handleOnDestroy() {
-        for (WebSocket ws : sockets.values()) {
-            try { ws.cancel(); } catch (Exception ignored) {}
-        }
-        sockets.clear();
+        for (WebSocket ws : channels.releaseAll()) StratuxWsClients.release(ws);
     }
 }

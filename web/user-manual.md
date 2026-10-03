@@ -68,7 +68,7 @@ FlyTab connects automatically on app launch. The status bar at the top shows con
 |---|---|---|---|
 | **GPS** | 3D fix | 2D fix | No fix |
 | **FIS-B** | UAT radio connected and receiving | — | No UAT data |
-| **OFFL** | Online | — | Offline (always shows) |
+| **FLT / HOME / NET / OFFL** | FLT = Stratux reachable; HOME = home server reachable | NET = internet only | OFFL = no network |
 | **NASR** | Database current | ≥7 days old | Very old |
 | **ML** | Engine anomaly score normal | Elevated | Anomaly detected |
 | **REC** | Flight recording active | — | Not recording |
@@ -697,7 +697,7 @@ FlyTab receives GPS from Stratux, not from the tablet's internal GPS. The Stratu
 
 If Stratux is not found within about 30 seconds of launch, a banner appears: "SIM MODE — not connected to Stratux." The map will not track position in this state. Verify the tablet is on the Stratux Wi-Fi network (192.168.10.1).
 
-**OFFL badge** shows internet connectivity. Many features work offline (charts, NASR data, saved plans). Weather briefing and internet NEXRAD require internet.
+**Network badge** shows which network FlyTab can reach: **FLT** when Stratux answers (shown on the Stratux Wi-Fi even though it has no internet), **HOME** for the home server, **NET** for internet only, **OFFL** for none. It drops out of FLT only after Stratux has failed to answer for 30–45 seconds. The badge is informational — the Stratux and engine connections stay up and reconnect on their own regardless of what it shows. Many features work offline (charts, NASR data, saved plans). Weather briefing and internet NEXRAD require internet.
 
 ---
 
