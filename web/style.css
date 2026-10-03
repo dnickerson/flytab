@@ -2939,8 +2939,16 @@ body {
     left: 50%;
     transform: translateX(-50%);
     width: max-content;
-    max-width: calc(100% - 300px);
+    /* Clear of both sides when the map is wide; on a narrow map (route editor
+       open, portrait) take up to 460px and cover the side widgets instead. */
+    max-width: max(calc(100% - 300px), min(calc(100% - 16px), 460px));
     z-index: 550;
+}
+
+/* An approach plate overlaid on the map puts its bar (top 12px, ~88px tall,
+   z-index 700) in the same spot: sit below it rather than under it. */
+#mapContainer:has(.plate-overlay-bar) > .sv-banner--map {
+    top: 108px;
 }
 
 .sv-banner--inline {

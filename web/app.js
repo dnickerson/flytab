@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v10.93';
+const FLYTAB_VERSION = 'v10.94';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -522,6 +522,9 @@ class FlyTabApp {
             this.stickyValve.addEventListener('alert', (e) => {
                 const message = `Sticky valve warning: ${StickyValveMonitor.describe(e.detail)}`;
                 console.warn(`[StickyValve] ${message}`);
+                // Kept across restarts in the diagnostic log (long-press the version
+                // badge); the ML advisory log is in memory only.
+                DiagLog.log('engine', message, { cyl: e.detail.cyl, egt: e.detail.egt, othersAvg: e.detail.othersAvg });
                 window.engineML?.recordAdvisory?.({ type: `sticky_valve_cyl${e.detail.cyl}`, message, severity: 'caution' });
             });
         }
