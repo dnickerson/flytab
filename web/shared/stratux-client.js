@@ -161,10 +161,12 @@ class StratuxClient extends EventTarget {
         this._suppressGpsSituation = false;
         this._lastStratuxAhrs = null;
 
-        // Stale-data detection: mirrors EngineClient pattern.
-        // If no situation message arrives within 5s, mark GPS/AHRS data as stale.
+        // Stale-data detection: if no situation (WS or GDL 90) arrives within
+        // STALE_MS of _staleRefAt, mark GPS/AHRS data stale. Checked by the link
+        // watchdog tick (not a free-running setTimeout) so a JS suspension isn't
+        // mistaken for staleness on resume.
         this._stale = false;
-        this._staleTimer = null;
+        this._staleRefAt = 0;
     }
 
     /** True when GDL 90 UDP transport is available and active. */
@@ -225,15 +227,11 @@ class StratuxClient extends EventTarget {
         this._startPurge();
         this._startLinkWatchdog();
 
-        // Start the stale timer immediately so that if Stratux never connects
-        // (e.g. not on the Stratux Wi-Fi network), stratux:stale fires after 5s
+        // Start the stale window immediately so that if Stratux never connects
+        // (e.g. not on the Stratux Wi-Fi network), stratux:stale fires after ~5s
         // and GpsSource auto-fallback can activate device GPS.
         this._stale = false;
-        clearTimeout(this._staleTimer);
-        this._staleTimer = setTimeout(() => {
-            this._stale = true;
-            this.dispatchEvent(new CustomEvent('stratux:stale', { detail: { ageMs: 5000 } }));
-        }, 5000);
+        this._staleRefAt = Date.now();
     }
 
     disconnect() {
@@ -251,8 +249,6 @@ class StratuxClient extends EventTarget {
         if (this._statusTimer) { clearInterval(this._statusTimer); this._statusTimer = null; }
         if (this._towerTimer) { clearInterval(this._towerTimer); this._towerTimer = null; }
         if (this._linkWatchdog) { clearInterval(this._linkWatchdog); this._linkWatchdog = null; }
-        clearTimeout(this._staleTimer);
-        this._staleTimer = null;
         this._stale = false;
         this._setConnected(false);
     }
@@ -290,6 +286,11 @@ class StratuxClient extends EventTarget {
     // ========== Traffic WebSocket ==========
 
     _connectTraffic() {
+        // A pending traffic reconnect belongs to the socket being replaced. Left
+        // set, it would make _scheduleTrafficReconnect skip scheduling for the
+        // NEW socket (`if (this._reconnectTimer) return`), then no-op on its own
+        // identity check — stranding traffic closed with nothing to retry it.
+        if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
         if (this._trafficWs) {
             this._trafficWs.onclose = null;
             this._trafficWs.onerror = null;
@@ -412,11 +413,7 @@ class StratuxClient extends EventTarget {
         // power-off/restart recovers without requiring a full WebSocket connect cycle.
         const wasStale = this._stale;
         this._stale = false;
-        clearTimeout(this._staleTimer);
-        this._staleTimer = setTimeout(() => {
-            this._stale = true;
-            this.dispatchEvent(new CustomEvent('stratux:stale', { detail: { ageMs: 5000 } }));
-        }, 5000);
+        this._staleRefAt = Date.now();
 
         // When internal GPS is active, only extract AHRS data from Stratux —
         // do NOT overwrite situation or dispatch event (GpsSource handles that).
@@ -465,7 +462,7 @@ class StratuxClient extends EventTarget {
             }
         }
         this.dispatchEvent(new CustomEvent('stratux:situation', { detail: this.situation }));
-        // stale timer already reset at top of this function
+        // stale window already reset at top of this function
     }
 
     // ========== Device Status Polling ==========
@@ -681,9 +678,15 @@ class StratuxClient extends EventTarget {
             if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', `Watchdog: JS was suspended ~${Math.round(lost / 1000)}s — not counting it as silence`);
             if (this._lastSituationMsgAt) this._lastSituationMsgAt += lost;
             if (this._lastDataAt) this._lastDataAt += lost;
+            if (this._staleRefAt) this._staleRefAt += lost;
             for (const ws of [this._trafficWs, this._situationWs, this._weatherWs, this._jsonioWs]) {
                 if (ws && ws._createdAt) ws._createdAt += lost;
             }
+        }
+
+        if (!this._stale && this._staleRefAt && now - this._staleRefAt > StratuxClient.STALE_MS) {
+            this._stale = true;
+            this.dispatchEvent(new CustomEvent('stratux:stale', { detail: { ageMs: now - this._staleRefAt } }));
         }
 
         const trafficOpen = this._trafficWs?.readyState === WebSocket.OPEN;
@@ -714,10 +717,16 @@ class StratuxClient extends EventTarget {
 
         const sit = this._situationWs;
         if (sit && sit.readyState === WebSocket.OPEN && now - this._lastSituationMsgAt > StratuxClient.SITUATION_SILENCE_MS) {
-            // Stratux pushes situation at 10 Hz unconditionally; silence means a
-            // dead (half-open) connection — the situation channel has no pings.
-            if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', `Situation WS silent ${now - this._lastSituationMsgAt}ms — reconnecting`);
+            // Stratux pushes situation at 10 Hz unconditionally; silence means the
+            // TCP path to Stratux is dead (half-open — e.g. Stratux rebooted). The
+            // other channels share that path but can't be silence-checked (traffic
+            // and FIS-B are bursty) and would otherwise sit 'OPEN' until their 30 s
+            // ping cycle fails them (30–60 s). Recycle them all together.
+            if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', `Situation WS silent ${now - this._lastSituationMsgAt}ms — link dead, reconnecting all channels`);
+            this._connectTraffic();
             this._connectSituation();
+            this._connectWeather();
+            this._connectJsonio();
         }
     }
 
@@ -737,11 +746,7 @@ class StratuxClient extends EventTarget {
             // message (e.g. while the Pi is still booting), locking the app in
             // fallback mode even though Stratux is reachable.
             this._stale = false;
-            clearTimeout(this._staleTimer);
-            this._staleTimer = setTimeout(() => {
-                this._stale = true;
-                this.dispatchEvent(new CustomEvent('stratux:stale', { detail: { ageMs: 5000 } }));
-            }, 5000);
+            this._staleRefAt = Date.now();
             // Rescue situation WS if it lost the startup race
             if (!this._situationWs || this._situationWs.readyState === WebSocket.CLOSED) {
                 this._connectSituation();
@@ -771,6 +776,8 @@ class StratuxClient extends EventTarget {
 // Situation WS silence that counts as a dead connection. Real Stratux sends at
 // 10 Hz, tools/mock-stratux.py at 1 Hz — 4 s tolerates both.
 StratuxClient.SITUATION_SILENCE_MS = 4000;
+// No situation (WS or GDL 90) for this long → stratux:stale (checked at 1 Hz).
+StratuxClient.STALE_MS = 5000;
 // Situation WS (10 Hz) / GDL 90 ownship (1 Hz): 3 s with neither = no Stratux data.
 StratuxClient.DATA_FRESH_MS = 3000;
 // A socket still CONNECTING after this is replaced (native connectTimeout is 10 s).

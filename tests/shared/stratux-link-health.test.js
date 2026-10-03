@@ -436,3 +436,110 @@ describe('Review 2 #4 — connect() resets reconnect backoff', () => {
         client.disconnect();
     });
 });
+
+// ---------------------------------------------------------------------------
+// Third review (PR #150)
+// ---------------------------------------------------------------------------
+
+describe('Review 3 #1 — a silent situation socket recycles every channel', () => {
+    it('replaces traffic, weather and jsonio too, not just situation', () => {
+        const client = new (load())();
+        client.connect();
+        const before = {};
+        for (const p of ['/traffic', '/situation', '/weather', '/jsonio']) { before[p] = latest(p); before[p]._open(); }
+        before['/situation']._msg(SIT);
+        vi.advanceTimersByTime(6000);            // whole link dead: situation silent at 10 Hz
+        for (const p of ['/traffic', '/situation', '/weather', '/jsonio']) {
+            expect(latest(p), p).not.toBe(before[p]);
+            expect(before[p].readyState, p).toBe(CLOSED);
+        }
+        client.disconnect();
+    });
+
+    it('a direct _connectTraffic() while a traffic reconnect is pending does not strand traffic', () => {
+        const client = new (load())();
+        client.connect();
+        const t1 = latest('/traffic');
+        t1._open();
+        t1._drop();                               // schedules a 2 s traffic reconnect
+        client._connectTraffic();                 // e.g. the recycle path, before that timer fires
+        const t2 = latest('/traffic');
+        t2._drop();                               // new socket drops before the old timer fires
+        vi.advanceTimersByTime(10000);
+        expect(latest('/traffic')).not.toBe(t2);  // it must still be reconnected
+        client.disconnect();
+    });
+});
+
+describe('Review 3 #2 — staleness is suspension-aware', () => {
+    it('still fires stratux:stale ~5 s after situation data stops', () => {
+        const client = new (load())();
+        const stale = [];
+        client.addEventListener('stratux:stale', () => stale.push(Date.now()));
+        client.connect();
+        const sit = latest('/situation');
+        sit._open();
+        sit._msg(SIT);
+        vi.advanceTimersByTime(4000);
+        expect(stale).toHaveLength(0);
+        vi.advanceTimersByTime(2500);
+        expect(stale).toHaveLength(1);
+        client.disconnect();
+    });
+
+    it('fires stratux:stale when Stratux never answers (device-GPS fallback trigger)', () => {
+        const client = new (load())();
+        const stale = [];
+        client.addEventListener('stratux:stale', () => stale.push(1));
+        client.connect();
+        vi.advanceTimersByTime(6500);
+        expect(stale).toHaveLength(1);
+        client.disconnect();
+    });
+
+    it('a resume after a 30 s suspension does not fire stratux:stale before queued data is delivered', () => {
+        // Fake timers only make a timeout "overdue" on resume if it was already
+        // close to due when JS froze — freeze 0.5 s before the old 5 s stale
+        // deadline, then let the overdue work run, then deliver the queued message.
+        const client = new (load())();
+        const stale = [];
+        client.addEventListener('stratux:stale', () => stale.push(1));
+        client.connect();
+        vi.advanceTimersByTime(500);
+        const sit = latest('/situation');
+        sit._open();
+        sit._msg(SIT);                           // t = 0.5 s
+        vi.advanceTimersByTime(4500);            // t = 5.0 s, normal ticks, data still fresh-ish
+        vi.setSystemTime(Date.now() + 30000);    // JS frozen 30 s
+        vi.advanceTimersByTime(600);             // resume: overdue timers run first
+        sit._msg(SIT);                           // then the queued native message
+        vi.advanceTimersByTime(500);
+        expect(stale).toEqual([]);
+        client.disconnect();
+    });
+
+    it('after a resume with no data at all, stale still fires', () => {
+        const client = new (load())();
+        const stale = [];
+        client.addEventListener('stratux:stale', () => stale.push(1));
+        client.connect();
+        const sit = latest('/situation');
+        sit._open();
+        sit._msg(SIT);
+        vi.advanceTimersByTime(1000);
+        vi.setSystemTime(Date.now() + 30000);
+        vi.advanceTimersByTime(8000);
+        expect(stale).toHaveLength(1);
+        client.disconnect();
+    });
+
+    it('disconnect() stops stale detection', () => {
+        const client = new (load())();
+        const stale = [];
+        client.addEventListener('stratux:stale', () => stale.push(1));
+        client.connect();
+        client.disconnect();
+        vi.advanceTimersByTime(20000);
+        expect(stale).toEqual([]);
+    });
+});
