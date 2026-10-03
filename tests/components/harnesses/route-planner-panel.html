@@ -148,6 +148,11 @@
                 await panel._onRecomputeTap();
                 return { planned, warnings: panel._windWarnings || [] };
             },
+            /** Waypoints _pillsToWaypoints builds from the current pills (id + isDest). */
+            async pillsToWaypoints() {
+                const wps = await panel._pillsToWaypoints();
+                return wps.map(w => ({ id: w.id, isDest: !!w.isDest }));
+            },
             /** Type into the DEP input and fire its change handler. */
             setDep(value) {
                 const dep = panelEl.querySelectorAll('.rpp-icao-inp')[0];

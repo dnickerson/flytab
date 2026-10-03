@@ -372,9 +372,16 @@ export class RoutePlanner {
         const pctPower = (opts.pctPower ?? 65) / 100;
         let etaMs = (opts.departureTime instanceof Date ? opts.departureTime.getTime() : Date.now());
 
+        // Destination: the waypoint flagged isDest (missed-approach fixes may follow
+        // it), else the last waypoint. The descent to the field ends here.
+        let destIdx = wps.length - 1;
+        for (let i = wps.length - 1; i > 0; i--) {
+            if (wps[i].isDest) { destIdx = i; break; }
+        }
+
         // Resolve cruise altitude: opts override → plan field → VFR auto-select
         const dep  = wps[0];
-        const dest = wps[wps.length - 1];
+        const dest = wps[destIdx];
         let globalCruiseAltFt = opts.cruiseAltFt ?? plan.cruiseAltFt;
         if (!globalCruiseAltFt && dep && dest) {
             const magCourse = bearing(dep.lat, dep.lon, dest.lat, dest.lon);
@@ -423,7 +430,7 @@ export class RoutePlanner {
                 distNm,
                 altFt: legAltFt,
                 departingFromGround: i === 0 || !!a.fuelStop,
-                endingAtGround: i === wps.length - 2 || !!b.fuelStop,
+                endingAtGround: i === destIdx - 1 || !!b.fuelStop,
                 gsKt: gs,
                 tasKt: tas,
                 powerFrac: pctPower,

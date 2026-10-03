@@ -3157,6 +3157,8 @@ class RoutePlannerPanel {
                 // fuelStop:true tells recomputeLegs to model descent/climb at
                 // this stop rather than treating it as a level pass-over.
                 ...(pill.type === 'fuel' ? { fuelStop: true } : {}),
+                // isDest tells recomputeLegs to end the descent here, ahead of any missed-approach fixes.
+                ...(pill.type === 'dest' ? { isDest: true } : {}),
                 ...(aw ? { airway: aw } : {}),
             });
             pendingAirway = null;

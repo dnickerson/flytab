@@ -278,3 +278,62 @@ describe('descent_gph sync invariant — all three hand-maintained copies must a
         expect(configGph).toBe(6.9);
     });
 });
+
+// ---------------------------------------------------------------------------
+// Destination followed by missed-approach fixes. The descent to the field must
+// end at the waypoint flagged isDest, not on the last leg into the missed-
+// approach hold.
+// ---------------------------------------------------------------------------
+describe('recomputeLegs — descent ends at the isDest waypoint', () => {
+    const base = {
+        departure: 'KCLT', destination: 'KLKR',
+        cruiseAltFt: 6000,
+        options: { routingMode: 'gps-direct', maxLegHrs: 10, selfServeOnly: false, avoidance: [] },
+    };
+    const phases = leg => leg.segments.map(s => s.phase);
+
+    it('descends on the leg into the destination and not on the missed-approach leg after it', () => {
+        const planner = new RoutePlanner({ aero: mockAero, plans: mockPlans });
+        const result = planner.recomputeLegs({
+            ...base,
+            waypoints: [
+                { id: 'KCLT',  lat: 35.214, lon: -80.943 },
+                { id: 'KLKR',  lat: 34.723, lon: -80.855, isDest: true },
+                { id: 'CORON', lat: 34.600, lon: -81.200 },
+            ],
+        });
+        expect(phases(result.legs[0])).toContain('DES');
+        expect(phases(result.legs[1])).not.toContain('DES');
+    });
+
+    it('still descends on the last leg when no waypoint is flagged isDest', () => {
+        const planner = new RoutePlanner({ aero: mockAero, plans: mockPlans });
+        const result = planner.recomputeLegs({
+            ...base,
+            waypoints: [
+                { id: 'KCLT',  lat: 35.214, lon: -80.943 },
+                { id: 'KLKR',  lat: 34.723, lon: -80.855 },
+                { id: 'CORON', lat: 34.600, lon: -81.200 },
+            ],
+        });
+        expect(phases(result.legs[0])).not.toContain('DES');
+        expect(phases(result.legs[1])).toContain('DES');
+    });
+
+    it('ignores an isDest flag on the departure (KLKR → KLKR loop)', () => {
+        const planner = new RoutePlanner({ aero: mockAero, plans: mockPlans });
+        const result = planner.recomputeLegs({
+            ...base,
+            departure: 'KLKR',
+            waypoints: [
+                { id: 'KLKR',  lat: 34.723, lon: -80.855 },
+                { id: 'CTF',   lat: 34.650, lon: -80.274 },
+                { id: 'KLKR',  lat: 34.723, lon: -80.855, isDest: true },
+                { id: 'CORON', lat: 34.600, lon: -81.200 },
+            ],
+        });
+        expect(phases(result.legs[0])).toContain('CLB');
+        expect(phases(result.legs[1])).toContain('DES');
+        expect(phases(result.legs[2])).not.toContain('DES');
+    });
+});

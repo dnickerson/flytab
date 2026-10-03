@@ -496,3 +496,16 @@ const KCLT_KLKR_WPS_FOR_PLAN = [
     { icao: 'KLKR',  lat: 34.723, lon: -80.855 },
     { icao: 'HOLD1', lat: 34.400, lon: -81.400 },
 ];
+
+test.describe('waypoints handed to the planner @planner-ui', () => {
+    test('only the destination waypoint is flagged isDest, so the descent ends at KLKR', async ({ page }) => {
+        await page.goto(HARNESS);
+        await page.evaluate(pills => window.__harness.setPlannedRoute(pills), KLKR_LOOP_PILLS);
+        await page.evaluate(wps => window.__harness.setCoords(Object.fromEntries(
+            wps.map(w => [w.icao, { lat: w.lat, lon: w.lon }]))), KLKR_LOOP_WPS);
+
+        const wps = await page.evaluate(() => window.__harness.pillsToWaypoints());
+        expect(wps.filter(w => w.isDest).map(w => w.id)).toEqual(['KLKR']);
+        expect(wps.findIndex(w => w.isDest)).toBe(6);   // the arrival KLKR, not the departure
+    });
+});
