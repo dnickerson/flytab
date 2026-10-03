@@ -340,8 +340,9 @@ class ApproachCharts {
         return { plates };
     }
 
+    /** Own-ship on the plate; lat/lon null hides it (no 3D GPS solution). */
     updateOwnship(lat, lon, heading) {
-        this._ownshipPos = { lat, lon };
+        this._ownshipPos = (lat == null || lon == null) ? null : { lat, lon };
         this._ownshipHeading = heading || 0;
         if (this._currentPlate && this._viewerEl.style.display !== 'none') {
             this._renderOwnship();

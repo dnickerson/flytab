@@ -79,7 +79,11 @@ class EngineGpsBridge {
                 pitch:           d.pitch,
                 roll:            d.bank,
                 g_load:          d.acc_vert,
-                gps_fix_quality: 1,
+                // Stratux's own GPSFixQuality as the Pi saw it (engine_monitor.py
+                // 3.4.2+, capability "gps_fix_quality"); an older Pi doesn't send it,
+                // so its position can only be assumed to be a fix (GpsFix still
+                // rejects 0,0). The Pi reports 0 while it can't reach Stratux.
+                gps_fix_quality: Number.isInteger(d.gps_fix_quality) ? d.gps_fix_quality : 1,
                 gps_sats:        null,
                 vertical_speed:  0,
                 _source:         'engine',

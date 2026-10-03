@@ -191,7 +191,7 @@ class StratuxClient extends EventTarget {
         // cockpit alive.
         if (this.udpMode) {
             _StratuxUdpBus.attach({
-                onSituation: (msg) => { this._noteData('GDL 90'); this._handleSituation(msg); },
+                onSituation: (msg) => { this._noteData('GDL 90'); this._handleSituation(msg, 'gdl90'); },
                 onTraffic:   (msg) => { this._noteData('GDL 90'); this._handleTraffic(msg); },
                 // A heartbeat alone does NOT mean connected: Stratux sends only
                 // heartbeats to a client it considers sleeping (no ICMP echo reply
@@ -408,7 +408,11 @@ class StratuxClient extends EventTarget {
         };
     }
 
-    _handleSituation(msg) {
+    /**
+     * @param {object} msg       Stratux /situation JSON, or the GDL 90 plugin's equivalent
+     * @param {'ws'|'gdl90'} [transport]
+     */
+    _handleSituation(msg, transport = 'ws') {
         // Always reset stale timer first — even during GPS suppression — so a Stratux
         // power-off/restart recovers without requiring a full WebSocket connect cycle.
         const wasStale = this._stale;
@@ -435,6 +439,23 @@ class StratuxClient extends EventTarget {
             return;
         }
 
+        // GDL 90 has no fix quality of its own: the plugin maps the heartbeat's
+        // "GPS position valid" bit to 2, and Stratux sets that bit for dead
+        // reckoning too. While the WS is delivering, use its real GPSFixQuality
+        // and satellite count for GDL 90 situations as well, so the two
+        // interleaved transports never disagree about whether there's a fix.
+        let fixQuality = msg.GPSFixQuality;
+        let sats = msg.GPSSatellites;
+        let satsSeen = msg.GPSSatellitesSeen;
+        const now = Date.now();
+        if (transport === 'ws') {
+            this._wsFix = { quality: msg.GPSFixQuality, sats: msg.GPSSatellites, satsSeen: msg.GPSSatellitesSeen, at: now };
+        } else if (this._wsFix && now - this._wsFix.at < StratuxClient.WS_FIX_FRESH_MS) {
+            fixQuality = this._wsFix.quality;
+            sats = this._wsFix.sats;
+            satsSeen = this._wsFix.satsSeen;
+        }
+
         const prevQuality = this.situation?.gps_fix_quality;
         this.situation = {
             lat: msg.GPSLatitude,
@@ -444,21 +465,21 @@ class StratuxClient extends EventTarget {
             ground_speed: msg.GPSGroundSpeed,
             true_course: msg.GPSTrueCourse,
             vertical_speed: msg.GPSVerticalSpeed,
-            gps_fix_quality: msg.GPSFixQuality,
-            gps_sats: msg.GPSSatellites,
-            gps_sats_seen: msg.GPSSatellitesSeen,
+            gps_fix_quality: fixQuality,
+            gps_sats: sats,
+            gps_sats_seen: satsSeen,
             pitch: msg.AHRSPitch,
             roll: msg.AHRSRoll,
             g_load: msg.AHRSGLoad,
             g_load_min: msg.AHRSGLoadMin,
             g_load_max: msg.AHRSGLoadMax,
-            timestamp: Date.now(),
+            timestamp: now,
         };
         if (typeof DiagLog !== 'undefined') {
             if (prevQuality === undefined) {
-                DiagLog.log('stratux', `First situation: fix=${msg.GPSFixQuality} lat=${msg.GPSLatitude} lon=${msg.GPSLongitude} sats=${msg.GPSSatellites}/${msg.GPSSatellitesSeen}`);
-            } else if (prevQuality !== msg.GPSFixQuality) {
-                DiagLog.log('stratux', `GPS fix changed: ${prevQuality} → ${msg.GPSFixQuality} sats=${msg.GPSSatellites}`);
+                DiagLog.log('stratux', `First situation: fix=${fixQuality} lat=${msg.GPSLatitude} lon=${msg.GPSLongitude} sats=${sats}/${satsSeen}`);
+            } else if (prevQuality !== fixQuality) {
+                DiagLog.log('stratux', `GPS fix changed: ${prevQuality} → ${fixQuality} sats=${sats}`);
             }
         }
         this.dispatchEvent(new CustomEvent('stratux:situation', { detail: this.situation }));
@@ -780,6 +801,9 @@ StratuxClient.SITUATION_SILENCE_MS = 4000;
 StratuxClient.STALE_MS = 5000;
 // Situation WS (10 Hz) / GDL 90 ownship (1 Hz): 3 s with neither = no Stratux data.
 StratuxClient.DATA_FRESH_MS = 3000;
+// A GDL 90 situation uses the WS's GPSFixQuality/satellites if the WS delivered
+// one this recently (GDL 90's own "fix" can't tell dead reckoning from a fix).
+StratuxClient.WS_FIX_FRESH_MS = 3000;
 // A socket still CONNECTING after this is replaced (native connectTimeout is 10 s).
 StratuxClient.CONNECT_TIMEOUT_MS = 15000;
 // First reconnect delay per companion channel; doubles per failure up to _maxDelay,
