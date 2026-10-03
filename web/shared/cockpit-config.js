@@ -53,7 +53,7 @@ class CockpitConfig {
             enabled: true,
             position: 'top-right',
             fields: [
-                { key: 'carb_temp', label: 'CARB TEMP', unit: '°F', warnBelow: 40, dangerBelow: 32 },
+                { key: 'carb_temp', label: 'CARB TEMP', unit: '°F' },
             ],
         },
         enginePage: {
@@ -192,6 +192,9 @@ class CockpitConfig {
 
         CockpitConfig._config = config || {};
         CockpitConfig._aircraft = aircraft || {};
+        // The bundle as shipped, before user overrides -- patch() diffs against it so
+        // only what the pilot changed is stored (same rule as the config editor, #112).
+        CockpitConfig._bundle = JSON.parse(JSON.stringify(CockpitConfig._config));
 
         // Merge user overrides saved by the config editor on top of bundled defaults.
         // Uses a separate localStorage key so _fetchJson's offline cache doesn't clobber edits.
@@ -227,16 +230,24 @@ class CockpitConfig {
             if (JSON.stringify(shrunk) !== JSON.stringify(saved)) {
                 try { localStorage.setItem(storageKey, JSON.stringify(shrunk)); } catch { /* quota */ }
             }
-            const merged = { ...base };
-            for (const key of Object.keys(shrunk)) {
-                if (shrunk[key] != null && typeof shrunk[key] === 'object' && !Array.isArray(shrunk[key])) {
-                    merged[key] = Object.assign({}, merged[key] || {}, shrunk[key]);
-                } else {
-                    merged[key] = shrunk[key];
-                }
-            }
-            return merged;
+            return CockpitConfig._deepMerge(base, shrunk);
         } catch { return base; }
+    }
+
+    /**
+     * Recursive merge of `over` onto `base` (neither mutated): plain objects merge
+     * key by key at every depth; arrays and primitives replace. Overrides are stored
+     * as diffs (only the leaves that differ), so a one-level merge would let
+     * {airspace_alerts:{types:{class_b:true}}} wipe out every other alert type.
+     */
+    static _deepMerge(base, over) {
+        const isObj = (v) => v != null && typeof v === 'object' && !Array.isArray(v);
+        if (!isObj(over)) return over;
+        const out = isObj(base) ? { ...base } : {};
+        for (const key of Object.keys(over)) {
+            out[key] = isObj(over[key]) ? CockpitConfig._deepMerge(out[key], over[key]) : over[key];
+        }
+        return out;
     }
 
     /**
@@ -333,11 +344,27 @@ class CockpitConfig {
             obj = obj[keys[i]];
         }
         obj[keys[keys.length - 1]] = value;
-        // Write to flypi_user_cockpit (the user-overrides key read by _mergeUserOverrides on
-        // next load) so patches survive page reloads even when the network fetch succeeds.
+        // Persist to flypi_user_cockpit (read by _mergeUserOverrides on next load) so the
+        // patch survives a reload -- but only what differs from the bundle, like the
+        // config editor (#112). Writing the whole live config froze every other key at
+        // today's value, so a later bundle correction to any of them never took effect.
         try {
-            localStorage.setItem('flypi_user_cockpit', JSON.stringify(CockpitConfig._config));
-        } catch { /* quota */ }
+            const stored = CockpitConfig._bundle
+                ? CockpitConfig._diffAgainstBundle(CockpitConfig._config, CockpitConfig._bundle)
+                : CockpitConfig._withPath(JSON.parse(localStorage.getItem('flypi_user_cockpit') || '{}') || {}, keys, value);
+            localStorage.setItem('flypi_user_cockpit', JSON.stringify(stored));
+        } catch { /* quota / corrupt */ }
+    }
+
+    /** `obj` with `value` set at the key path (creating objects along the way). */
+    static _withPath(obj, keys, value) {
+        let o = obj;
+        for (let i = 0; i < keys.length - 1; i++) {
+            if (o[keys[i]] == null || typeof o[keys[i]] !== 'object' || Array.isArray(o[keys[i]])) o[keys[i]] = {};
+            o = o[keys[i]];
+        }
+        o[keys[keys.length - 1]] = value;
+        return obj;
     }
 
     /**
