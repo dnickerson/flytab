@@ -50,6 +50,52 @@ class LayerPanel {
         this._getRouteBbox = null; // set by app.js: () => { latMin, latMax, lonMin, lonMax, label }
     }
 
+    /**
+     * "Map Engine Box" section: one toggle per EngineOverlay.CATALOG value. The
+     * selection is stored in the cockpit config (engineOverlay.fields) on this
+     * tablet; the overlay rebuilds as soon as a toggle changes.
+     */
+    _engineBoxHtml() {
+        if (typeof EngineOverlay === 'undefined') return '';
+        const rows = EngineOverlay.CATALOG.map(f => `
+                    <div class="lp-row">
+                        <span class="lp-row-label">${f.label}</span>
+                        <label class="lp-toggle"><input type="checkbox" data-engine-field="${f.key}"><span class="lp-toggle-track"></span></label>
+                    </div>`).join('');
+        return `
+            <div class="lp-accordion" id="lp-acc-engine">
+                <button class="lp-accordion-header" data-acc="lp-acc-engine">
+                    <span>Map Engine Box</span><span class="lp-acc-arrow">&#9654;</span>
+                </button>
+                <div class="lp-accordion-body">
+                    <div class="lp-engine-note">Engine values shown top right of the map, under D&rarr;. Up to ${EngineOverlay.MAX_FIELDS}.</div>${rows}
+                </div>
+            </div>`;
+    }
+
+    _wireEngineBox() {
+        const inputs = [...this._panel.querySelectorAll('input[data-engine-field]')];
+        if (!inputs.length || typeof EngineOverlay === 'undefined') return;
+        const refresh = () => {
+            const on = new Set(EngineOverlay.selectedKeys());
+            const full = on.size >= EngineOverlay.MAX_FIELDS;
+            for (const input of inputs) {
+                input.checked = on.has(input.dataset.engineField);
+                // At the limit, the unchecked ones can't be turned on until one is turned off.
+                input.disabled = full && !input.checked;
+                input.closest('.lp-row')?.classList.toggle('lp-row-disabled', input.disabled);
+            }
+        };
+        for (const input of inputs) {
+            input.addEventListener('change', () => {
+                const keys = inputs.filter(i => i.checked).map(i => i.dataset.engineField);
+                EngineOverlay.setSelectedKeys(keys);
+                refresh();
+            });
+        }
+        refresh();
+    }
+
     /** Called by app.js after plan load to wire up route bbox for "Cache Route Area" button. */
     setGetRouteBbox(fn) {
         this._getRouteBbox = fn;
@@ -83,6 +129,8 @@ class LayerPanel {
                 btn.querySelector('.lp-acc-arrow').innerHTML = open ? '&#9660;' : '&#9654;';
             });
         });
+
+        this._wireEngineBox();
 
         // Wire close button
         const closeBtn = this._panel.querySelector('.layer-panel-close');
@@ -625,6 +673,8 @@ class LayerPanel {
                     </div>
                 </div>
             </div>
+
+            ${this._engineBoxHtml()}
 
             <div class="lp-accordion open" id="lp-acc-weather">
                 <button class="lp-accordion-header" data-acc="lp-acc-weather">

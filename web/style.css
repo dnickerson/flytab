@@ -7192,6 +7192,14 @@ body.fs-overlay-open .radar-loop-controls {
 
 /* ── Layer Panel Accordions ─────────────────────────────────────────────────── */
 .lp-accordion { border-bottom: 1px solid var(--border); }
+.lp-engine-note {
+    color: var(--text-muted);
+    font-family: var(--font-ui);
+    font-size: var(--text-xs);
+    font-weight: 700;
+    padding: 6px 0 2px;
+}
+.lp-row.lp-row-disabled .lp-row-label { color: var(--text-muted); }
 
 .lp-accordion-header {
     display: flex;
