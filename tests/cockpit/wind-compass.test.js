@@ -502,7 +502,7 @@ describe('WindCompass true/magnetic wind (variation 8 deg W)', () => {
             container.querySelector('.wc-spd-value').click();
             ['1', '5'].forEach(d => container.querySelector(`[data-digit="${d}"]`).click());
             container.querySelector('.wc-numpad-done').click();
-            expect(container.querySelector('.wc-wind-line').textContent).toContain('060\u00b0M = 052\u00b0T');
+            expect(container.querySelector('.wc-wind-line').textContent).toContain('MANUAL 060\u00b0M (052\u00b0T)');
             const best = container.querySelector('.wc-best-row');
             expect(best.querySelector('.wc-col-head').textContent).toBe('15 HW');
             expect(best.querySelector('.wc-col-xw').textContent).toBe('0');
@@ -523,8 +523,44 @@ describe('WindCompass true/magnetic wind (variation 8 deg W)', () => {
         withVar(() => {
             const container = document.createElement('div');
             new WindCompass().render(container, runways, { metar: { decoded: { wind_dir: 260, wind_speed: 12, wind_gust: 20 } } }, site);
-            expect(container.querySelector('.wc-wind-line').textContent).toBe('METAR 260\u00b0T = 268\u00b0M \u00b7 12G20 KT');
+            expect(container.querySelector('.wc-wind-line').textContent).toBe('METAR 268\u00b0M (260\u00b0T) \u00b7 12G20 KT');
             expect(container.querySelector('.wc-source-note').textContent).toContain('VAR 8.0\u00b0W');
+        });
+    });
+
+    // Bearing (compass degrees) of an SVG point from the rose centre.
+    const svgBearing = (x, y) => (Math.atan2(x - 150, 150 - y) * 180 / Math.PI + 360) % 360;
+
+    it('draws the rose in MAGNETIC: runway 06 (052 true) sits at 060, labelled MAG', () => {
+        withVar(() => {
+            const container = document.createElement('div');
+            new WindCompass().render(container, runways, { metar: { decoded: { wind_dir: 52, wind_speed: 15 } } }, site);
+            const line = container.querySelector('svg .wc-runway-line');
+            const b = svgBearing(+line.getAttribute('x1'), +line.getAttribute('y1'));
+            expect(b).toBeCloseTo(60, 0);
+            const id06 = [...container.querySelectorAll('.wc-end-id')].find(t => t.textContent === '06');
+            expect(svgBearing(+id06.getAttribute('x'), +id06.getAttribute('y'))).toBeCloseTo(60, 0);
+            expect(container.querySelector('.wc-frame-label').textContent).toBe('MAG');
+        });
+    });
+
+    it('draws the wind arrow at the magnetic direction (METAR 250T -> 258M)', () => {
+        withVar(() => {
+            const container = document.createElement('div');
+            new WindCompass().render(container, runways, { metar: { decoded: { wind_dir: 250, wind_speed: 15 } } }, site);
+            const a = container.querySelector('.wc-wind-arrow line');
+            expect(svgBearing(+a.getAttribute('x1'), +a.getAttribute('y1'))).toBeCloseTo(258, 0);
+        });
+    });
+
+    it('an ATIS 060M wind entered in MANUAL is drawn at 060, straight down runway 06', () => {
+        withVar(() => {
+            const container = document.createElement('div');
+            const wc = new WindCompass();
+            wc.render(container, runways, { metar: { decoded: { wind_dir: 52, wind_speed: 15 } } }, site);
+            container.querySelector('.wc-mode-manual').click();   // seeds 060M from the 052T METAR
+            const a = container.querySelector('.wc-wind-arrow line');
+            expect(svgBearing(+a.getAttribute('x1'), +a.getAttribute('y1'))).toBeCloseTo(60, 0);
         });
     });
 

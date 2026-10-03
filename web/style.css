@@ -11709,6 +11709,13 @@ body.route-editing-mode .route-table-sheet {
     stroke-linejoin: round;
 }
 .wc-best .wc-end-id { stroke: var(--color-success); }
+.wc-frame-label {
+    fill: var(--text-label);
+    font-family: var(--font-ui);
+    font-weight: 800;
+    font-size: 14px;
+    letter-spacing: 0.08em;
+}
 .wc-best-dot {
     fill: var(--color-success);
 }
