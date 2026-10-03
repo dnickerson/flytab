@@ -13,6 +13,7 @@ class AirportPopup {
         this._panelOpen = false;
         this._ifrClearance = null;
         this._approachCharts = null;
+        this._windCompass = null;
         this._onDirectTo = null;
         this._fisbClient = null;
         this._vectorLayers = null;
@@ -180,6 +181,25 @@ class AirportPopup {
                 setTimeout(() => phoneEl.style.background = '', 1000);
             });
         });
+
+        // Render the Wind tab. Fresh WindCompass instance every _showPanel
+        // call (same as the rest of this panel's content) so a manual wind
+        // override never survives into a later airport or a later open of
+        // the same one -- it always starts back on live METAR.
+        // Guarded: a throw here would skip the tab wiring below and leave
+        // every tab of an otherwise-open popup dead.
+        this._windCompass = null;
+        const windPaneEl = this._panel.querySelector('.apt-wind-pane');
+        if (windPaneEl && typeof WindCompass !== 'undefined') {
+            try {
+                this._windCompass = new WindCompass();
+                this._windCompass.render(windPaneEl, (airport.runways || []).filter(Boolean), wx);
+            } catch (err) {
+                console.warn('AirportPopup: wind compass render failed', err);
+                this._windCompass = null;
+                windPaneEl.innerHTML = '<div class="wc-no-runways">Wind view unavailable</div>';
+            }
+        }
 
         // Wire tabs
         this._panel.querySelectorAll('.apt-tab[data-tab]').forEach(tab => {
@@ -361,6 +381,7 @@ class AirportPopup {
             <button class="apt-tab active" data-tab="info">INFO</button>
             <button class="apt-tab" data-tab="wx">WX</button>
             <button class="apt-tab" data-tab="rwy">RWY</button>
+            <button class="apt-tab" data-tab="wind">WIND</button>
             <button class="apt-tab" data-tab="diag">DIAG</button>
             <button class="apt-tab" data-tab="afd">A/FD</button>
         </div>
@@ -376,8 +397,10 @@ class AirportPopup {
                 ${wx ? this._weatherHtml(wx) : '<div style="padding:16px;color:var(--text-muted)">No weather data</div>'}
             </div>
             <div class="apt-tab-pane" data-pane="rwy">
-                ${wx && apt.runways?.length ? this._bestRunwayHtml(apt.runways, wx) : ''}
                 ${apt.runways?.length ? this._runwaysHtml(apt.runways) : '<div style="padding:16px;color:var(--text-muted)">No runway data</div>'}
+            </div>
+            <div class="apt-tab-pane" data-pane="wind">
+                <div class="apt-wind-pane"></div>
             </div>
             <div class="apt-tab-pane" data-pane="diag">
                 <div class="apt-plate-pane" data-plate-type="APD"></div>
@@ -423,6 +446,7 @@ class AirportPopup {
                 if (wxPane) {
                     wxPane.innerHTML = this._weatherHtml(wx);
                 }
+                this._updateWindCompass(wx);
             }
             // Update legacy Leaflet popup
             if (this._popup) {
@@ -457,6 +481,15 @@ class AirportPopup {
         this._fisbClient.addEventListener('fisb:taf', this._onFisbTaf);
     }
 
+    /** Keep the WIND tab on the same METAR the WX tab just refreshed to. */
+    _updateWindCompass(wx) {
+        try {
+            this._windCompass?.updateWx(wx);
+        } catch (err) {
+            console.warn('AirportPopup: wind compass update failed', err);
+        }
+    }
+
     _startInternetMetarListener(airport) {
         if (!this._vectorLayers) return;
         this._onInternetMetarBound = (icao, entry) => {
@@ -470,6 +503,7 @@ class AirportPopup {
             if (this._panel && this._panelOpen) {
                 const wxPane = this._panel.querySelector('.apt-tab-pane[data-pane="wx"]');
                 if (wxPane) wxPane.innerHTML = this._weatherHtml(wx);
+                this._updateWindCompass(wx);
             }
         };
         this._vectorLayers._onInternetMetar = this._onInternetMetarBound;
@@ -675,9 +709,11 @@ class AirportPopup {
         // Header
         sections.push(this._headerHtml(apt));
 
-        // Runways + best runway
+        // Runways. The interactive Wind tab (compass rose + headwind/crosswind,
+        // formerly this fallback's "best runway" text block) is only available
+        // in the tabbed sliding-panel view (_buildPanelHtml) -- this flat
+        // Leaflet-popup view has no tab structure to host it in.
         if (apt.runways && apt.runways.length) {
-            if (wx) sections.push(this._bestRunwayHtml(apt.runways, wx));
             sections.push(this._runwaysHtml(apt.runways));
         }
 
@@ -1365,61 +1401,10 @@ class AirportPopup {
         </div>`;
     }
 
-    _bestRunwayHtml(runways, wx) {
-        const metar = wx?.metar;
-        if (!metar?.decoded) return '';
-        const d = metar.decoded;
-        if (d.wind_variable || d.wind_dir == null || !d.wind_speed) return '';
-
-        const windDir = d.wind_dir; // degrees true
-        const windSpd = d.wind_speed;
-        const gustSpd = d.wind_gust || windSpd;
-
-        // Parse each runway end and compute wind components
-        const ends = [];
-        for (const rwy of runways) {
-            // Runway ID like "08L/26R" or "08/26" or just "08L"
-            const parts = (rwy.id || '').split('/');
-            for (const part of parts) {
-                const match = part.trim().match(/^(\d{1,2})(L|R|C)?$/i);
-                if (!match) continue;
-                const hdg = parseInt(match[1]) * 10; // "08" → 80°
-                const suffix = (match[2] || '').toUpperCase();
-                const label = String(match[1]).padStart(2, '0') + suffix;
-
-                // Headwind = wind_speed * cos(wind_dir - runway_hdg)
-                const diff = (windDir - hdg) * Math.PI / 180;
-                const headwind = Math.round(windSpd * Math.cos(diff));
-                const crosswind = Math.abs(Math.round(windSpd * Math.sin(diff)));
-                const gustXwind = Math.abs(Math.round(gustSpd * Math.sin(diff)));
-
-                ends.push({ label, hdg, headwind, crosswind, gustXwind, length: rwy.length_ft });
-            }
-        }
-
-        if (ends.length === 0) return '';
-
-        // Sort by headwind (most positive = best)
-        ends.sort((a, b) => b.headwind - a.headwind);
-        const best = ends[0];
-
-        const rows = ends.slice(0, 4).map(e => {
-            const isBest = e === best;
-            const hwLabel = e.headwind >= 0 ? `${e.headwind} HW` : `${Math.abs(e.headwind)} TW`;
-            const xwLabel = `${e.crosswind} XW`;
-            const cls = isBest ? 'best-rwy' : '';
-            return `<tr class="${cls}">
-                <td>RWY ${e.label}</td>
-                <td>${hwLabel}</td>
-                <td>${xwLabel}</td>
-            </tr>`;
-        }).join('');
-
-        return `<div class="popup-section popup-rwy-wind-section">
-            <div class="popup-section-title">BEST RUNWAY</div>
-            <table class="popup-rwy-wind-table">${rows}</table>
-        </div>`;
-    }
+    // _bestRunwayHtml was replaced by the interactive Wind tab (compass rose
+    // + headwind/crosswind) -- see wind-compass.js. Its math (runway-end
+    // parsing, headwind/crosswind trig, best-end selection) now lives there
+    // as WindCompass.parseRunwayEnds/computeWindComponents.
 
     _actionsHtml(apt) {
         return `<div class="popup-actions">
