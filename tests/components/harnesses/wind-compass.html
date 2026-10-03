@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../../../web/style.css">
+<style>body { background: var(--bg-primary); max-width: 360px; margin: 20px auto; }</style>
+</head>
+<body>
+<!-- Real DOM structure this component actually lives in (airport-popup.js
+     initPanel/_showPanel): .airport-panel is the position:absolute container
+     the numpad's floating bottom sheet anchors to; .apt-tab-content is the
+     actual overflow-y:auto scrolling element. Testing #pane bare (not
+     wrapped like this) gives a false reading for anything position:absolute. -->
+<div class="airport-panel open">
+    <div class="apt-tab-content">
+        <div class="apt-tab-pane active" data-pane="wind">
+            <div id="pane" class="apt-wind-pane"></div>
+        </div>
+    </div>
+</div>
+<script src="../../../web/shared/tap-utils.js"></script>
+<script src="../../../web/cockpit/wind-compass.js"></script>
+<script>
+    window.__wc = new WindCompass();
+    window.__wc.render(
+        document.getElementById('pane'),
+        [{ id: '16/34', length_ft: 5500 }, { id: '08L/26R', length_ft: 3200 }],
+        { metar: { decoded: { wind_dir: 260, wind_speed: 12, wind_gust: 18, wind_variable: false } } }
+    );
+</script>
+</body>
+</html>
