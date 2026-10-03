@@ -31,6 +31,8 @@ globalThis.wireTap = vi.fn((el, fn) => el && el.addEventListener && el.addEventL
 globalThis.FuelEngine = new Function(read('web/shared/fuel-engine.js') + '\nreturn FuelEngine;')();
 globalThis.FuelTankState = new Function(read('web/shared/fuel-tank-state.js') + '\nreturn FuelTankState;')();
 globalThis.FuelState = new Function(read('web/shared/fuel-state.js') + '\nreturn FuelState;')();
+// engine-page.js uses the shared carb-temp rule (index.html loads it first).
+globalThis.EngineLimits = new Function(read('web/shared/engine-limits.js') + '\nreturn EngineLimits;')();
 const EnginePage = new Function(read('web/cockpit/engine-page.js') + '\nreturn EnginePage;')();
 
 const CAPACITY_GAL = 36;   // web/aircraft-config.json performance.fuel_capacity_gal

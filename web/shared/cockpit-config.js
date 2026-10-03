@@ -53,7 +53,7 @@ class CockpitConfig {
             enabled: true,
             position: 'top-right',
             fields: [
-                { key: 'carb_temp', label: 'CARB TEMP', unit: '°F', warnBelow: 40, dangerBelow: 32 },
+                { key: 'carb_temp', label: 'CARB TEMP', unit: '°F' },
             ],
         },
         enginePage: {

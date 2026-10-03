@@ -54,8 +54,6 @@ class EnginePage {
             oilPressCautionLow: 55,  // yellow below — approaching minimum
             oilPressCautionHigh: 95, // yellow above — approaching redline
             oilPressDanger: 100,     // red above — Lycoming redline
-            carbTempCaution: 40,    // icing range upper (degrees F)
-            carbTempDanger: -15,    // icing range lower (degrees F)
             // Fallback only. The canonical capacity lives in aircraft-config.json
             // (performance.fuel_capacity_gal) and is read in _loadConfig(). 36 gal =
             // 2 x 18 gal tanks; the Pi's old 34 gal "usable capacity" is deprecated.
@@ -572,11 +570,9 @@ class EnginePage {
 
         this._setText('ep-volts', volts > 0 ? volts.toFixed(1) : '--.-');
 
-        // Carb temp -- icing range roughly 20-70F (or -7 to 21 C), we use F thresholds
-        const carbDanger  = carbTemp > 0 && carbTemp <= 32;   // at or below freezing
-        const carbCaution = carbTemp > 32 && carbTemp <= 70;  // icing range
-        this._setTextColored('ep-carb', Math.round(carbTemp),
-            carbDanger ? 'danger' : carbCaution ? 'caution' : 'normal');
+        // Carb temp -- shared rule (shared/engine-limits.js) so the map's engine
+        // box colors the same reading the same way.
+        this._setTextColored('ep-carb', Math.round(carbTemp), EngineLimits.carbTempLevel(carbTemp));
 
         /* ---- Section 2: Engine analysis ---- */
         this._setText('ep-pwr', percentPower > 0 ? Math.round(percentPower) + '%' : '--');

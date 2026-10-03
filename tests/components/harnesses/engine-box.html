@@ -14,7 +14,7 @@
         const CockpitConfig = {
             _config: { homeServer: { base: 'http://localhost:8090' },
                 engineOverlay: { enabled: true, position: 'top-right',
-                    fields: [{ key: 'carb_temp', label: 'CARB TEMP', unit: '°F', warnBelow: 40, dangerBelow: 32 }] } },
+                    fields: [{ key: 'carb_temp', label: 'CARB TEMP', unit: '°F' }] } },
             get(path) { return path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), this._config); },
             patch(path, value) {
                 const keys = path.split('.'); let o = this._config;
@@ -30,6 +30,7 @@
     <script>
         class VectorMapLayers { constructor(map) { this._map = map; } init() {} destroy() {} show() {} hide() {} }
     </script>
+    <script src="/web/shared/engine-limits.js"></script>
     <script src="/web/cockpit/engine-overlay.js"></script>
     <script src="/web/cockpit/layer-panel.js"></script>
     <script>

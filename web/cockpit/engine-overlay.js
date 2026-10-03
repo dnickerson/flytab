@@ -15,11 +15,16 @@ class EngineOverlay {
      * Keys resolve against the Pi's /api/status (see valueFor): top-level fields
      * (percent_power) and the EDM row under `data` (Carb_Temp, RPM, MP, Fuel_Flow,
      * Oil_Temp, Oil_Press, Volts, CHT1-4, EGT1-4 -- engine_monitor.py parse_line).
-     * Only carb temp carries thresholds: no other engine limits exist in the
-     * config, and inventing redlines here would be worse than showing none.
+     *
+     * The catalog -- not the saved config -- decides how a catalog value looks
+     * (label, unit, decimals, color rule): saved settings only say WHICH values
+     * are on, so a rule change here reaches tablets whose saved config still
+     * carries older labels or thresholds. `level` names a shared EngineLimits
+     * rule so the map and the ENG page color the same reading the same way;
+     * only carb temp has one so far.
      */
     static CATALOG = [
-        { key: 'carb_temp',     label: 'CARB TEMP', unit: '°F', warnBelow: 40, dangerBelow: 32 },
+        { key: 'carb_temp',     label: 'CARB TEMP', unit: '°F', level: 'carbTemp' },
         { key: 'rpm',           label: 'RPM',       unit: '' },
         { key: 'mp',            label: 'MP',        unit: '"',    decimals: 1 },
         { key: 'fuel_flow',     label: 'FF',        unit: ' gph', decimals: 1 },
@@ -49,6 +54,28 @@ class EngineOverlay {
         return String(s).toLowerCase().replace(/[^a-z0-9]/g, '');
     }
 
+    /**
+     * How to show a configured field: its catalog entry when it is a catalog value
+     * (whatever label/thresholds the saved config holds -- e.g. the first release's
+     * "CARB" with warnBelow 40), else the field as configured (a value added to
+     * cockpit-config.json by hand, which may set its own warnBelow/dangerBelow).
+     */
+    static resolveField(field) {
+        const want = EngineOverlay._norm(field?.key);
+        const entry = EngineOverlay.CATALOG.find(c => EngineOverlay._norm(c.key) === want);
+        return entry ? { ...entry } : { ...field };
+    }
+
+    /** 'danger' | 'caution' | 'normal' for a value of a resolved field. */
+    static levelFor(field, value) {
+        if (field.level === 'carbTemp' && typeof EngineLimits !== 'undefined') {
+            return EngineLimits.carbTempLevel(value);
+        }
+        if (field.dangerBelow != null && value < field.dangerBelow) return 'danger';
+        if (field.warnBelow != null && value < field.warnBelow) return 'caution';
+        return 'normal';
+    }
+
     /** Catalog keys currently shown (from config), in catalog order. */
     static selectedKeys() {
         let fields = [];
@@ -68,7 +95,9 @@ class EngineOverlay {
         let current = [];
         try { current = CockpitConfig.get('engineOverlay.fields') || []; } catch (_) { /* none */ }
         const custom = current.filter(f => !catalogNorm.has(EngineOverlay._norm(f.key)));
-        const chosen = EngineOverlay.CATALOG.filter(c => want.has(EngineOverlay._norm(c.key))).map(c => ({ ...c }));
+        // Only which values are on is saved; how they look comes from the catalog.
+        const chosen = EngineOverlay.CATALOG.filter(c => want.has(EngineOverlay._norm(c.key)))
+            .map(c => ({ key: c.key, label: c.label, unit: c.unit }));
         const fields = [...chosen, ...custom].slice(0, EngineOverlay.MAX_FIELDS);
         CockpitConfig.patch('engineOverlay.fields', fields);
         if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('engineoverlay:fieldschanged'));
@@ -111,7 +140,7 @@ class EngineOverlay {
         } catch (_) { return; }
         if (!config || !config.enabled) return;
 
-        this._fields = config.fields || [];
+        this._fields = (config.fields || []).filter(f => f && f.key).map(EngineOverlay.resolveField);
 
         this._el = document.createElement('div');
         this._el.className = 'engine-overlay';
@@ -137,7 +166,7 @@ class EngineOverlay {
 
             const label = document.createElement('span');
             label.className = 'engine-overlay-label';
-            label.textContent = EngineOverlay.labelFor(field);
+            label.textContent = field.label || field.key;
 
             const val = document.createElement('span');
             val.className = 'engine-overlay-value';
@@ -189,17 +218,6 @@ class EngineOverlay {
     }
 
     /**
-     * Label to show. The field was first shipped labelled "CARB"; a tablet whose saved
-     * config override still holds that label (CockpitConfig keeps overrides that differ
-     * from the bundle) shows "CARB TEMP" too.
-     */
-    static labelFor(field) {
-        const key = String(field.key || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-        if (key === 'carbtemp' && (!field.label || field.label === 'CARB')) return 'CARB TEMP';
-        return field.label || field.key;
-    }
-
-    /**
      * Update with engine data; null (stale/disconnected) shows "--".
      * @param {Object|null} data — flattened engine data
      */
@@ -214,15 +232,8 @@ class EngineOverlay {
             const shown = ok ? (field.decimals ? value.toFixed(field.decimals) : Math.round(value)) : '--';
             valEl.textContent = shown + (field.unit || '');
 
-            let cls = 'engine-overlay-value';
-            if (ok) {
-                if (field.dangerBelow != null && value < field.dangerBelow) {
-                    cls += ' danger';
-                } else if (field.warnBelow != null && value < field.warnBelow) {
-                    cls += ' caution';
-                }
-            }
-            valEl.className = cls;
+            const level = ok ? EngineOverlay.levelFor(field, value) : 'normal';
+            valEl.className = 'engine-overlay-value' + (level === 'normal' ? '' : ' ' + level);
             rowEl.className = 'engine-overlay-field' + (ok ? '' : ' stale');
         }
     }

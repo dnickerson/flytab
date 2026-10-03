@@ -10,6 +10,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { readFileSync } from 'fs';
 
 const read = (p) => readFileSync(p, 'utf8');
+globalThis.EngineLimits = new Function(read('web/shared/engine-limits.js') + '\nreturn EngineLimits;')();
 const EngineOverlay = new Function(read('web/cockpit/engine-overlay.js') + '\nreturn EngineOverlay;')();
 
 const BUNDLE_FIELD = JSON.parse(read('web/cockpit-config.json')).engineOverlay.fields[0];
@@ -93,15 +94,40 @@ describe('EngineOverlay — CARB TEMP', () => {
         expect(value().textContent).toBe('75°F');
     });
 
+    // Same rule as the ENG page (EngineLimits.carbTempLevel): danger 0 < t <= 32,
+    // caution 32 < t <= 70, otherwise normal (0 or below = no probe).
     it.each([
-        [50, ''],
-        [38, 'caution'],
-        [30, 'danger'],
-    ])('%i°F -> %s (config warnBelow 40, dangerBelow 32)', (t, cls) => {
+        [75, ''],
+        [71, ''],
+        [70, 'caution'],
+        [50, 'caution'],
+        [33, 'caution'],
+        [32, 'danger'],
+        [10, 'danger'],
+        [0, ''],
+        [-5, ''],
+    ])('%i°F -> %s', (t, cls) => {
         const client = makeClient();
         new EngineOverlay(container, client);
         client.emit('engine:data', piStatus({ Carb_Temp: t }));
         expect(value().className.trim()).toBe(('engine-overlay-value ' + cls).trim());
+    });
+
+    it('ignores the old 40/32 thresholds a saved config may still hold', () => {
+        setConfig([{ key: 'carb_temp', label: 'CARB', unit: '°F', warnBelow: 40, dangerBelow: 32 }]);
+        const client = makeClient();
+        new EngineOverlay(container, client);
+        client.emit('engine:data', piStatus({ Carb_Temp: 60 }));   // old rule: green; ENG page: amber
+        expect(value().className).toContain('caution');
+        expect(label()).toBe('CARB TEMP');
+    });
+
+    it('a hand-added non-catalog field keeps its own warnBelow/dangerBelow', () => {
+        setConfig([{ key: 'GP2', label: 'GP2', unit: '', warnBelow: 10, dangerBelow: 5 }]);
+        const client = makeClient();
+        new EngineOverlay(container, client);
+        client.emit('engine:data', piStatus({ GP2: 7 }));
+        expect(value().className).toContain('caution');
     });
 
     it('destroy() unsubscribes', () => {
@@ -161,6 +187,8 @@ describe('EngineOverlay picker support', () => {
     it('shows decimals where the catalog asks (MP 23.4", FF 8.2 gph)', () => {
         const cfg = liveConfig([]);
         EngineOverlay.setSelectedKeys(['mp', 'fuel_flow']);
+        // Only which values are on is saved -- not catalog presentation.
+        expect(cfg.engineOverlay.fields[0]).toEqual({ key: 'mp', label: 'MP', unit: '"' });
         const container = document.createElement('div');
         const ov = new EngineOverlay(container);
         ov.update({ MP: 23.44, Fuel_Flow: 8.21 });
