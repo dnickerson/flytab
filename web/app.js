@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v10.88';
+const FLYTAB_VERSION = 'v10.89';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -546,14 +546,11 @@ class FlyTabApp {
             window.engineML?.stopLogging();
         });
 
-        // Engine overlay (reads from EnginePanel, floats on map)
+        // Engine overlay (floats on the map). Fed by the engine client itself --
+        // it used to refresh only on Stratux situation events, so it froze
+        // whenever Stratux GPS did.
         if (typeof EngineOverlay !== 'undefined') {
-            this.engineOverlay = new EngineOverlay(primaryView);
-            this.stratuxClient.addEventListener('stratux:situation', () => {
-                if (this.engineOverlay && this.enginePanel) {
-                    this.engineOverlay.update(this.enginePanel.lastData);
-                }
-            });
+            this.engineOverlay = new EngineOverlay(primaryView, this.engineClient);
         }
 
         // Engine page (full-screen overlay, accessed via [ENG] button)
