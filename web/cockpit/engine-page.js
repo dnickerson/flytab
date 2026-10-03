@@ -26,11 +26,9 @@ class EnginePage {
         // Cached DOM elements (populated in _buildDom)
         this._dom = {};
 
-        // Sticky-valve detection state
-        this._engineStartTime = null;
-        this._stickyStartTimes = [null, null, null, null];
-        this._stickyAlert = null; // cylinder 1-4 or null
-        this._stickyDismissed = false;
+        // Sticky-valve warning: detection runs in shared/sticky-valve.js
+        // (window.stickyValve); this page only shows its banner.
+        this._stickyBanner = null;
 
         // ATIS status error hold: _updateAtisStatus() runs every update() tick
         // (~1Hz) and would otherwise overwrite an error message before the
@@ -58,10 +56,6 @@ class EnginePage {
             // performance.fuel_sender_accurate_below_gal (read in _loadConfig()).
             senderAccurateBelowGal: 12,
             trendChartMinutes: 30,
-            stickyValveWarmupMin: 10,
-            stickyValveEgtRatio: 0.50,
-            stickyValveMinEgt: 200,
-            stickyValvePersistSec: 30,
         };
 
         this._buildDom();
@@ -97,14 +91,8 @@ class EnginePage {
                 </div>
             </div>
 
-            <!-- Sticky valve warning banner -->
-            <div class="ep-sticky-banner" id="ep-sticky-banner" style="display:none;">
-                <div class="ep-sticky-text">
-                    STICKY VALVE WARNING -- Cylinder <span id="ep-sticky-cyl">?</span>
-                    EGT significantly below others (Lycoming SB 388C)
-                </div>
-                <button class="ep-sticky-dismiss" id="ep-sticky-dismiss">DISMISS</button>
-            </div>
+            <!-- Sticky valve warning (StickyValveBanner, filled in _buildDom) -->
+            <div id="ep-sticky-slot"></div>
 
             <!-- Section 1: Primary gauges (7 columns) -->
             <div class="ep-section ep-primary-row">
@@ -274,11 +262,11 @@ class EnginePage {
         // Wire capture stop button
         wireTap(this._el.querySelector('#ep-capture-stop'), () => this._stopCapture());
 
-        // Wire sticky-valve dismiss
-        wireTap(this._el.querySelector('#ep-sticky-dismiss'), () => {
-            this._stickyDismissed = true;
-            this._el.querySelector('#ep-sticky-banner').style.display = 'none';
-        });
+        // Sticky-valve warning, shared with the map's banner (dismiss hides both)
+        if (window.stickyValve && typeof StickyValveBanner !== 'undefined') {
+            this._stickyBanner = new StickyValveBanner(
+                this._el.querySelector('#ep-sticky-slot'), window.stickyValve, 'inline');
+        }
 
         // Wire ATIS override controls
         // SET must never fall through to CLEAR semantics — an empty/unparseable
@@ -326,8 +314,6 @@ class EnginePage {
             fuelBar: this._el.querySelector('#ep-fuel-bar'),
             fuelRem: this._el.querySelector('#ep-fuel-rem'),
             fuelStale: this._el.querySelector('#ep-fuel-stale'),
-            stickyBanner: this._el.querySelector('#ep-sticky-banner'),
-            stickyCyl: this._el.querySelector('#ep-sticky-cyl'),
             contractBanner: this._el.querySelector('#ep-contract-banner'),
             contractRequired: this._el.querySelector('#ep-contract-required'),
             contractPiVersion: this._el.querySelector('#ep-contract-pi-version'),
@@ -731,81 +717,12 @@ class EnginePage {
         /* ---- Section 8: Recording indicator ---- */
         this._updateRecording(d);
 
-        /* ---- Section 9: Sticky valve check ---- */
-        this._checkStickyValve(rpm, egt);
-
         /* ---- Section 10: Pi contract check (#113) ---- */
         this._checkPiContract(d);
 
         /* ---- Render trend charts ---- */
         this._renderEgtChart();
         this._renderChtChart();
-    }
-
-    /* ------------------------------------------------------------------
-     * Sticky valve detection (mirrors capture_v5 logic)
-     * ----------------------------------------------------------------*/
-    _checkStickyValve(rpm, egt) {
-        const now = Date.now() / 1000; // seconds
-
-        // Detect engine start
-        if (this._engineStartTime === null) {
-            if (rpm > 500) {
-                this._engineStartTime = now;
-                this._stickyStartTimes = [null, null, null, null];
-                this._stickyAlert = null;
-                this._stickyDismissed = false;
-            }
-            return;
-        }
-
-        // Engine stopped?
-        if (rpm < 300) {
-            this._engineStartTime = null;
-            this._stickyStartTimes = [null, null, null, null];
-            return;
-        }
-
-        // Only during warmup
-        const elapsed = (now - this._engineStartTime) / 60;
-        if (elapsed > this._cfg.stickyValveWarmupMin) {
-            this._showStickyBanner();
-            return;
-        }
-
-        const avgAll = egt.reduce((a, b) => a + b, 0) / 4;
-        if (avgAll < this._cfg.stickyValveMinEgt) {
-            this._showStickyBanner();
-            return;
-        }
-
-        for (let i = 0; i < 4; i++) {
-            const others = egt.filter((_, j) => j !== i);
-            const avgOthers = others.reduce((a, b) => a + b, 0) / 3;
-            if (avgOthers < this._cfg.stickyValveMinEgt) continue;
-
-            const ratio = avgOthers > 0 ? egt[i] / avgOthers : 1;
-            if (ratio < this._cfg.stickyValveEgtRatio) {
-                if (this._stickyStartTimes[i] === null) this._stickyStartTimes[i] = now;
-                if (now - this._stickyStartTimes[i] >= this._cfg.stickyValvePersistSec) {
-                    this._stickyAlert = i + 1;
-                }
-            } else {
-                if (this._stickyAlert === i + 1) this._stickyAlert = null;
-                this._stickyStartTimes[i] = null;
-            }
-        }
-
-        this._showStickyBanner();
-    }
-
-    _showStickyBanner() {
-        if (this._stickyAlert && !this._stickyDismissed) {
-            this._dom.stickyCyl.textContent = this._stickyAlert;
-            this._dom.stickyBanner.style.display = 'flex';
-        } else {
-            this._dom.stickyBanner.style.display = 'none';
-        }
     }
 
     /**
@@ -1690,41 +1607,9 @@ class EnginePage {
     font-family: var(--font-instrument);
 }
 
-/* Sticky valve banner */
-.ep-sticky-banner {
-    background: var(--color-caution);
-    border: 2px solid var(--color-danger);
-    border-radius: 5px;
-    padding: 8px 10px;
-    margin-bottom: 6px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 8px;
-}
-.ep-sticky-text {
-    font-size:16px;
-    font-weight: 900;
-    color: var(--color-danger);
-}
-.ep-sticky-dismiss {
-    background: var(--bg-primary);
-    color: var(--text-primary);
-    border: 1px solid var(--text-primary);
-    border-radius: 4px;
-    padding: 4px 10px;
-    font-size:14px;
-    font-weight: 700;
-    cursor: pointer;
-    white-space: nowrap;
-}
-
-/* Pi contract mismatch banner (#113). NOTE: color:#000 here, not
-   var(--color-danger) — .ep-sticky-text above uses --color-danger text on
-   this same --color-caution fill and measures 2.24:1 (checked while building
-   this banner, not part of this issue, flagged separately rather than fixed
-   here). The documented Status badge pattern for a --color-caution fill is
-   solid black text; this banner follows that instead of the sibling's. */
+/* Pi contract mismatch banner (#113). Solid black text on the --color-caution
+   fill, per the documented Status badge pattern (--color-danger text on this
+   fill measured 2.24:1). */
 .ep-contract-banner {
     background: var(--color-caution);
     border-radius: 5px;

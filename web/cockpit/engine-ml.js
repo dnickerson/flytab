@@ -281,7 +281,7 @@ class EngineMLBridge {
         // (Tasks 1-6). If the spec hasn't loaded yet or GPS is momentarily unavailable,
         // retain the last phase PhaseDetector actually produced instead of resetting to
         // 'cruise' — a transient GPS dropout mid-climb must not snap phase to 'cruise'
-        // (wrong CHT limit, skipped sticky-valve latch, wrong ML threshold). Only fall
+        // (wrong CHT limit, wrong ML threshold). Only fall
         // back to 'cruise' when there's genuinely no prior phase yet, e.g. the very
         // first sample of the app session before GPS has ever been available. The
         // detector's own internal state (windows/latches) is left undisturbed during
@@ -724,6 +724,17 @@ class EngineMLBridge {
     }
 
     // ========== Advisory Dispatch ==========
+
+    /**
+     * Log an advisory raised elsewhere (e.g. the sticky-valve check, which has
+     * its own banner) in the post-flight advisory log, without the 15 s banner.
+     */
+    recordAdvisory(advisory) {
+        if (!advisory) return;
+        this._advisoryLog.push({ ...advisory, timestamp: Date.now() });
+        if (this._advisoryLog.length > this._advisoryLogMax) this._advisoryLog.shift();
+        document.dispatchEvent(new CustomEvent('engineml:advisory', { detail: advisory }));
+    }
 
     /**
      * Rate-limit, log, dispatch advisory event, and update display.
