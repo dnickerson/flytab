@@ -1743,9 +1743,14 @@ class RoutePlannerPanel {
         const wps = result?.waypoints;
         if (!wps?.length) { this._statsEl.style.display = 'none'; return; }
 
+        const destIdx = this._destWaypointIndex(wps);
         const dep  = wps[0];
-        const dest = wps[this._destWaypointIndex(wps)];
-        const routeNm = summary?.totalDistNm ?? legs.reduce((s, l) => s + (l.distNm || 0), 0);
+        const dest = wps[destIdx];
+        // Totals run to the destination: leg i is wps[i]→wps[i+1], so missed-approach legs start at destIdx.
+        const toDest = destIdx < wps.length - 1 && legs.length === wps.length - 1;
+        const statLegs = toDest ? legs.slice(0, destIdx) : legs;
+        const sumLegs = (key) => statLegs.reduce((s, l) => s + (l[key] || 0), 0);
+        const routeNm = toDest ? sumLegs('distNm') : (summary?.totalDistNm ?? sumLegs('distNm'));
         if (routeNm == null || dep?.lat == null || dest?.lat == null) { this._statsEl.style.display = 'none'; return; }
 
         const directNm  = NasrDB.haversineNm(dep.lat, dep.lon, dest.lat, dest.lon);
@@ -1753,7 +1758,7 @@ class RoutePlannerPanel {
         const deltaPct  = directNm > 0 ? (deltaNm / directNm * 100) : 0;
 
         // Wind summary: average (GS - TAS) across legs that have wind data
-        const windLegs = legs.filter(l => l.windDir !== undefined && l.gsKt && l.tasKt);
+        const windLegs = statLegs.filter(l => l.windDir !== undefined && l.gsKt && l.tasKt);
         let windLabel = '';
         if (windLegs.length) {
             const avgComp = windLegs.reduce((s, l) => s + (l.gsKt - l.tasKt), 0) / windLegs.length;
@@ -1768,20 +1773,21 @@ class RoutePlannerPanel {
         const altLabel = altFt != null ? `<span class="rpp-stat-alt">${altFt.toLocaleString()} ft</span>` : '';
 
         // ETE
-        const eteHrs = summary?.totalEteHrs;
+        const eteHrs = toDest ? sumLegs('timeHrs') : summary?.totalEteHrs;
         const eteLabel = eteHrs != null
             ? (() => { const h = Math.floor(eteHrs); const m = Math.round((eteHrs - h) * 60); return `${h}h ${String(m).padStart(2,'0')}m`; })()
             : '';
 
-        // ETA — local time from last leg
-        const lastEta = legs.length ? legs[legs.length - 1]?.eta : undefined;
+        // ETA — local time at the destination
+        const lastEta = statLegs.length ? statLegs[statLegs.length - 1]?.eta : undefined;
         const etaLabel = lastEta
             ? new Date(lastEta).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
             : '';
 
         // Fuel
-        const fuelLabel = summary?.totalFuelGal != null
-            ? `<span class="rpp-stat-fuel">${summary.totalFuelGal.toFixed(1)} gal</span>` : '';
+        const fuelGal = toDest ? sumLegs('fuelGal') : summary?.totalFuelGal;
+        const fuelLabel = fuelGal != null
+            ? `<span class="rpp-stat-fuel">${fuelGal.toFixed(1)} gal</span>` : '';
 
         const sign = n => n >= 0 ? '+' : '';
         this._statsEl.innerHTML =

@@ -356,6 +356,30 @@ test.describe('destination with a loaded missed approach @planner-ui', () => {
         expect(text).toContain(`+${toDest} nm`);
     });
 
+    test('stats bar route distance, ETE, ETA and fuel stop at the destination, excluding the missed approach', async ({ page }) => {
+        await page.goto(HARNESS);
+        await page.evaluate(pills => window.__harness.setPlannedRoute(pills), KCLT_KLKR_PILLS);
+
+        const T0 = Date.UTC(2026, 9, 3, 14, 0);
+        const legs = [
+            { distNm: 30, timeHrs: 0.25, fuelGal: 2.5, eta: T0 + 15 * 60000 },   // KCLT → RW24
+            { distNm: 1,  timeHrs: 0.01, fuelGal: 0.1, eta: T0 + 16 * 60000 },   // RW24 → KLKR (dest)
+            { distNm: 40, timeHrs: 0.30, fuelGal: 3.0, eta: T0 + 34 * 60000 },   // KLKR → HOLD1 (missed)
+        ];
+        const text = await page.evaluate(([wps, legs]) => window.__harness.updateStats({
+            waypoints: wps, legs, summary: { totalDistNm: 71, totalEteHrs: 0.56, totalFuelGal: 5.6 },
+        }), [KCLT_KLKR_WPS, legs]);
+
+        const etaAtDest = await page.evaluate(t =>
+            new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), legs[1].eta);
+        expect(text).toContain('Route31 nm');
+        expect(text).toContain('0h 16m');
+        expect(text).toContain(`ETA ${etaAtDest}`);
+        expect(text).toContain('2.6 gal');
+        expect(text).not.toContain('71 nm');
+        expect(text).not.toContain('5.6 gal');
+    });
+
     test('fuel-stop recheck plans to the destination, not the missed-approach hold', async ({ page }) => {
         await page.goto(HARNESS);
         await page.evaluate(pills => window.__harness.setPlannedRoute(pills), KCLT_KLKR_PILLS);
