@@ -150,3 +150,68 @@ test.describe('Victor airway retention @airway-retention', () => {
         await expect(page.locator('#rp-mount .rpp-pill-awy').first()).toBeVisible();
     });
 });
+
+// ── Approach insertion: departure == destination ─────────────────────────
+//
+// Regression test for KLKR → KLKR with the RNAV (GPS) RWY 24 approach loaded
+// from the plate. insertApproach() anchored on the FIRST pill matching the
+// airport — the departure — so the approach was spliced in ahead of the
+// departure and the missed approach landed between departure and destination:
+//   CTF LIGLE SAPSE WITUR RW24 KLKR(dep) CORON KLKR(dest)
+
+// Fix sequence for KLKR RNAV (GPS) RWY 24 via the CTF transition, as loaded
+// on-device. Coordinates are approximate — only pill order is under test.
+const KLKR_RNAV24 = {
+    icao: 'KLKR',
+    procName: 'R24',
+    transition: 'CTF',
+    insertBefore: [
+        { icao: 'CTF',   lat: 34.650, lon: -80.274, alt: null },
+        { icao: 'LIGLE', lat: 34.766, lon: -80.613, alt: 2500 },
+        { icao: 'SAPSE', lat: 34.848, lon: -80.665, alt: 2500 },
+        { icao: 'WITUR', lat: 34.789, lon: -80.836, alt: 2100 },
+        { icao: 'RW24',  lat: 34.728, lon: -80.853, alt: 500 },
+    ],
+    insertAfter: [
+        { icao: 'CORON', lat: 34.700, lon: -80.900, alt: 2200 },
+    ],
+    airportWp: { icao: 'KLKR', lat: 34.728, lon: -80.853, type: 'APT' },
+};
+
+test.describe('approach insertion @planner-ui', () => {
+    test('KLKR → KLKR: approach goes before the destination, not the departure', async ({ page }) => {
+        await page.goto(HARNESS);
+        await page.evaluate(() => window.__harness.setPlannedRoute([
+            { id: 'KLKR', type: 'dep' },
+            { id: 'KLKR', type: 'dest' },
+        ]));
+
+        await page.evaluate(detail => window.__harness.insertApproach(detail), KLKR_RNAV24);
+
+        const route = await page.evaluate(() => window.__harness.getRoute());
+        expect(route.map(p => `${p.id}:${p.type}`)).toEqual([
+            'KLKR:dep',
+            'CTF:fix', 'LIGLE:fix', 'SAPSE:fix', 'WITUR:fix', 'RW24:fix',
+            'KLKR:dest',
+            'CORON:fix',
+        ]);
+    });
+
+    test('KCLT → KLKR: approach and missed approach bracket the destination', async ({ page }) => {
+        await page.goto(HARNESS);
+        await page.evaluate(() => window.__harness.setPlannedRoute([
+            { id: 'KCLT', type: 'dep' },
+            { id: 'KLKR', type: 'dest' },
+        ]));
+
+        await page.evaluate(detail => window.__harness.insertApproach(detail), KLKR_RNAV24);
+
+        const route = await page.evaluate(() => window.__harness.getRoute());
+        expect(route.map(p => `${p.id}:${p.type}`)).toEqual([
+            'KCLT:dep',
+            'CTF:fix', 'LIGLE:fix', 'SAPSE:fix', 'WITUR:fix', 'RW24:fix',
+            'KLKR:dest',
+            'CORON:fix',
+        ]);
+    });
+});

@@ -94,6 +94,10 @@
                 panel._route = route;
                 panel._render();
             },
+            /** Call insertApproach() with a cifp:load-procedure event detail. */
+            insertApproach(detail) {
+                panel.insertApproach(detail);
+            },
             /**
              * Extract the route array that _doApply would write to flight_plan.route,
              * packaged as a minimal plan object that open() / _loadPlan() can consume.

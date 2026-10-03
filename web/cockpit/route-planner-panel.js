@@ -229,11 +229,11 @@ class RoutePlannerPanel {
         // Find the airport pill — route may use K-prefixed id even if icao is bare (X60 vs KX60)
         const kId  = icao.length <= 3 ? 'K' + icao : icao;
         const bare = icao.length === 4 && icao[0] === 'K' ? icao.slice(1) : icao;
-        let airportIdx = -1;
-        for (let i = 0; i < this._route.length; i++) {
-            const id = this._route[i].id;
-            if (id === icao || id === kId || id === bare) { airportIdx = i; break; }
-        }
+        const isAirport = (p) => p.id === icao || p.id === kId || p.id === bare;
+        // Prefer the dest pill: a first-match scan anchors on the dep pill when dep == dest.
+        let airportIdx = this._route.findIndex(p => p.type === 'dest' && isAirport(p));
+        if (airportIdx < 0) airportIdx = this._route.findIndex(p => p.type !== 'dep' && isAirport(p));
+        if (airportIdx < 0) airportIdx = this._route.findIndex(isAirport);
 
         const toPill = (wp) => Object.assign(
             { id: wp.icao, type: 'fix' },
