@@ -251,9 +251,7 @@ class CockpitMap {
         this.stratux.addEventListener('stratux:traffic', () => this._updateTraffic());
 
         // Hide ownship when Stratux disconnects or data goes stale — never show stale position
-        const _hideOwnship = () => {
-            if (this.ownshipMarker) this.ownshipMarker.setOpacity(0);
-        };
+        const _hideOwnship = () => this._hideOwnship();
         this.stratux.addEventListener('stratux:disconnect', _hideOwnship);
         this.stratux.addEventListener('stratux:stale', _hideOwnship);
 
@@ -1002,8 +1000,12 @@ class CockpitMap {
     // ========== Own-ship ==========
 
     _updateOwnship(sit) {
-        if (!sit || sit.gps_fix_quality === 0) {
-            if (this.ownshipMarker) this.ownshipMarker.setOpacity(0.3);
+        // No marker without at least a 3D GPS solution (GpsFix, the same rule as
+        // the Stratux status page's "GPS solution"). With no fix Stratux keeps
+        // reporting its last position, and a receiver can report 0,0 -- either
+        // would put the aircraft somewhere it isn't.
+        if (typeof GpsFix === 'undefined' || !GpsFix.has3DFix(sit)) {
+            this._hideOwnship();
             return;
         }
 
@@ -1055,6 +1057,14 @@ class CockpitMap {
 
         // Active leg line
         this._updateActiveLeg(pos);
+    }
+
+    /** Hide everything drawn from own-ship position until the next 3D fix. */
+    _hideOwnship() {
+        if (this.ownshipMarker) this.ownshipMarker.setOpacity(0);
+        if (this._trackVector) this._trackVector.setStyle({ opacity: 0 });
+        if (this.rangeRings) { this.rangeRings.forEach(c => this.map.removeLayer(c)); this.rangeRings = null; }
+        if (this._activeLegLine) { this.map.removeLayer(this._activeLegLine); this._activeLegLine = null; }
     }
 
     _updateActiveLeg(pos) {

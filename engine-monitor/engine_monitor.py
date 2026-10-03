@@ -18,7 +18,7 @@ Usage:
 Access at: http://stratux.local:8080
 """
 
-VERSION = "3.4.1"
+VERSION = "3.4.2"
 
 # Contract version for the payload shape and shared physical constants FlyTab
 # depends on (field names, nesting, units, usable_capacity_gal and similar).
@@ -33,7 +33,7 @@ PI_API_CONTRACT = 2
 # Optional features this build of engine_monitor.py supports, independent of
 # api_contract — a client can check `'fuel_tracker' in capabilities` rather
 # than inferring feature support from a version/contract number comparison.
-PI_CAPABILITIES = ["fuel_tracker", "peak_egt"]
+PI_CAPABILITIES = ["fuel_tracker", "peak_egt", "gps_fix_quality"]
 
 import os
 import sys
@@ -761,6 +761,11 @@ class CaptureState:
         # GPS position and attitude from Stratux (for CSV export)
         self.latitude = None
         self.longitude = None
+        # Stratux GPSFixQuality: 0 no fix, 1 "3D GPS", 2 "3D GPS + SBAS",
+        # 6 dead reckoning. Stratux keeps reporting the LAST lat/lon after the
+        # fix is lost, so the position is only usable with this alongside it.
+        # None until the first poll; 0 while Stratux can't be reached.
+        self.gps_fix_quality = None
         self.course = None
         self.pitch = None
         self.bank = None
@@ -1607,6 +1612,7 @@ def stratux_thread_func():
                     # GPS position and attitude for CSV export
                     state.latitude = situation.get('GPSLatitude', None)
                     state.longitude = situation.get('GPSLongitude', None)
+                    state.gps_fix_quality = situation.get('GPSFixQuality', None)
                     state.course = situation.get('GPSTrueCourse', None)
                     state.pitch = situation.get('AHRSPitch', None)
                     state.bank = situation.get('AHRSRoll', None)
@@ -1642,6 +1648,9 @@ def stratux_thread_func():
 
         except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
             consecutive_failures += 1
+            # The kept lat/lon are no longer a current fix.
+            with state.lock:
+                state.gps_fix_quality = 0
             if state.stratux_connected:
                 log(f"Stratux connection lost: {e}")
                 state.stratux_connected = False
@@ -2155,6 +2164,7 @@ def get_status():
         # GPS position/attitude for CSV export
         latitude = state.latitude
         longitude = state.longitude
+        gps_fix_quality = state.gps_fix_quality
         course = state.course
         pitch = state.pitch
         bank = state.bank
@@ -2201,6 +2211,7 @@ def get_status():
         # GPS position/attitude for CSV export
         'latitude': latitude,
         'longitude': longitude,
+        'gps_fix_quality': gps_fix_quality,
         'course': course,
         'pitch': pitch,
         'bank': bank,

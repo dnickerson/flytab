@@ -280,6 +280,9 @@ class GpsSource {
             true_course: course,
             vertical_speed: this._vsSmoothed,
             gps_fix_quality: c.accuracy < 10 ? 2 : 1, // DGPS if <10m accuracy
+            // No altitude means no 3D solution (a 2D or network fix) -- GpsFix.has3DFix
+            // then keeps own-ship off the map.
+            gps_3d: c.altitude != null,
             gps_sats: null, // not available from Web Geolocation API
             gps_sats_seen: null,
             pitch: ahrs.pitch ?? 0,

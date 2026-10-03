@@ -66,7 +66,7 @@ FlyTab connects automatically on app launch. The status bar at the top shows con
 
 | Badge | Green | Amber | Red / Absent |
 |---|---|---|---|
-| **GPS** | 3D fix | 2D fix | No fix |
+| **GPS** | 3D fix (Stratux "3D GPS" / "3D GPS + SBAS") | ENG GPS (position from the engine monitor's link to Stratux) | No fix, or DEAD RECKONING |
 | **FIS-B** | UAT radio connected and receiving | — | No UAT data |
 | **FLT / HOME / NET / OFFL** | FLT = Stratux reachable; HOME = home server reachable | NET = internet only | OFFL = no network |
 | **NASR** | Database current | ≥7 days old | Very old |
@@ -90,7 +90,7 @@ The primary cockpit view. Shows position, route, weather, traffic, and airspace 
 
 **Airspace** — Class B (solid blue), C (magenta), D (blue dashed) drawn at correct altitude limits. Tap an airspace boundary for the name and altitudes.
 
-**Own-ship** — Blue chevron showing aircraft position and heading. Appears once GPS locks. The instrument strip on the right shows ground speed and altitude at a glance.
+**Own-ship** — Blue chevron showing aircraft position and heading. Shown only while the GPS has at least a 3D solution — the same thing the Stratux status page (192.168.10.1) reports as *GPS solution: 3D GPS* or *3D GPS + SBAS*. With *No Fix* or *Dead Reckoning* the chevron, its track line, range rings and the magenta line to the next waypoint disappear rather than sit at a stale or wrong position, and the map stops following; they come back on the next 3D fix. The same applies to own-ship on the radar page and on geo-referenced approach plates. The instrument strip on the right shows ground speed and altitude at a glance.
 
 **Traffic** — ADS-B targets shown as arrows with callsign and relative altitude (+/−). Tap a target for full details: callsign, altitude, ground speed, squawk. Traffic disappears automatically if stale.
 
@@ -702,8 +702,8 @@ This file is available for post-flight review in fly-debrief as a weather replay
 FlyTab receives GPS from Stratux, not from the tablet's internal GPS. The Stratux provides WAAS-quality position (3D DGPS) when the antenna is properly sited.
 
 **GPS badge states:**
-- **GPS** (green) — 3D fix from Stratux
-- **GPS** (amber) — 2D fix only; altitude unreliable
+- **GPS** (green) — 3D fix from Stratux (*3D GPS* or *3D GPS + SBAS* on the Stratux status page)
+- **DEAD RECKONING** — Stratux is estimating position, not fixing it; own-ship is hidden
 - **SIM** — Using simulated GPS (developer mode)
 - **GPS** (red/absent) — No fix; Stratux may not be connected
 

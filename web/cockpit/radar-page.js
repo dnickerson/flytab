@@ -100,7 +100,12 @@ class RadarPage {
     _drawConus() { if (this._target) this._fisb.draw(this._target, 'conus'); }
 
     _updateOwnship(sit) {
-        if (!sit || sit.lat == null || sit.lon == null) return;
+        // Same rule as the main map: no own-ship without at least a 3D GPS solution.
+        if (typeof GpsFix === 'undefined' || !GpsFix.has3DFix(sit)) {
+            this._ownPos = null;
+            if (this._ownship) this._ownship.setOpacity(0);
+            return;
+        }
         this._ownPos = { lat: sit.lat, lon: sit.lon, course: sit.true_course || 0 };
         if (!this._visible || !this._map) return;
         const pos = [sit.lat, sit.lon];
@@ -114,6 +119,7 @@ class RadarPage {
             this._ownship = L.marker(pos, { icon, zIndexOffset: 1000 }).addTo(this._map);
         } else {
             this._ownship.setLatLng(pos);
+            this._ownship.setOpacity(1);
             const g = this._ownship.getElement()?.querySelector('svg g');
             if (g) g.setAttribute('transform', `rotate(${this._ownPos.course}, 24, 24)`);
         }

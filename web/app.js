@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v10.85';
+const FLYTAB_VERSION = 'v10.86';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -774,10 +774,12 @@ class FlyTabApp {
                 this.airportPopup.setApproachCharts(this.approachCharts);
             }
             this.stratuxClient.addEventListener('stratux:situation', (e) => {
-                if (this.approachCharts && e.detail) {
-                    this.approachCharts.updateOwnship(
-                        e.detail.lat, e.detail.lon, e.detail.true_course
-                    );
+                if (!this.approachCharts) return;
+                // Same rule as the map marker: nothing on the plate without a 3D fix.
+                if (typeof GpsFix !== 'undefined' && GpsFix.has3DFix(e.detail)) {
+                    this.approachCharts.updateOwnship(e.detail.lat, e.detail.lon, e.detail.true_course);
+                } else {
+                    this.approachCharts.updateOwnship(null, null);
                 }
             });
             document.addEventListener('cifp:load-procedure', (e) => {
@@ -1537,7 +1539,9 @@ class FlyTabApp {
                 const src = bridgeActive ? 'ENG'
                     : (this.gpsSource?.label ?? (this.gpsSource?.source === 'internal' ? 'INT' : 'STX'));
                 const q = sit?.gps_fix_quality ?? 0;
-                const gpsOk = !bridgeActive && q >= 1;
+                // A real solution only (GpsFix): dead reckoning (6) is an estimate,
+                // not a fix -- the map hides own-ship for it, so the badge can't be green.
+                const gpsOk = !bridgeActive && (typeof GpsFix !== 'undefined' ? GpsFix.has3DFix(sit) : q >= 1);
                 this.dom.statusGps.classList.toggle('active', gpsOk);
                 this.dom.statusGps.classList.toggle('active-degraded', bridgeActive);
                 if (gpsOk) {
@@ -1547,6 +1551,8 @@ class FlyTabApp {
                     this.dom.statusGps.textContent = `${src} ${sol} ${sats || acc}`.trim();
                 } else if (bridgeActive) {
                     this.dom.statusGps.textContent = 'ENG GPS';
+                } else if (q === 6) {
+                    this.dom.statusGps.textContent = `${src} DEAD RECKONING`;
                 } else {
                     this.dom.statusGps.textContent = `${src} GPS`;
                 }
