@@ -11,6 +11,8 @@ import { readFileSync } from 'fs';
 
 const read = (p) => readFileSync(p, 'utf8');
 globalThis.EngineLimits = new Function(read('web/shared/engine-limits.js') + '\nreturn EngineLimits;')();
+// EngineClient.edmCurrent decides whether a Pi frame's EDM row is current.
+globalThis.EngineClient = new Function(read('web/shared/engine-client.js') + '\nreturn EngineClient;')();
 const EngineOverlay = new Function(read('web/cockpit/engine-overlay.js') + '\nreturn EngineOverlay;')();
 
 const BUNDLE_FIELD = JSON.parse(read('web/cockpit-config.json')).engineOverlay.fields[0];

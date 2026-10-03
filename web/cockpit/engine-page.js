@@ -459,14 +459,28 @@ class EnginePage {
             return;
         }
 
-        if (container) container.classList.remove('ep-stale');
+        // The Pi is answering, but its EDM row may be old: it keeps resending the
+        // last parsed row after the EDM goes quiet, so a fresh poll alone used to
+        // read LIVE over frozen numbers (EngineClient.edmCurrent). Same treatment as
+        // offline: last values stay visible, greyed, never presented as current.
+        if (!EngineClient.edmCurrent(data)) {
+            el.textContent = 'EDM NO DATA';
+            el.className = 'ep-data-age ep-data-age--offline';
+            if (container) container.classList.add('ep-stale');
+            return;
+        }
+
         const ageSec = Math.round((Date.now() - pollTime) / 1000);
         if (ageSec <= 5) {
             el.textContent = 'LIVE';
             el.className = 'ep-data-age ep-data-age--live';
+            if (container) container.classList.remove('ep-stale');
         } else {
+            // No new frame from the Pi for >5 s: the numbers are old -- grey them too,
+            // not just the badge.
             el.textContent = `${ageSec}s ago`;
             el.className = 'ep-data-age ep-data-age--stale';
+            if (container) container.classList.add('ep-stale');
         }
     }
 

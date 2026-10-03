@@ -77,15 +77,9 @@ class EngineOverlay {
         return 'normal';
     }
 
-    /**
-     * Whether a Pi status frame carries a CURRENT EDM row. The Pi keeps resending
-     * its last parsed row every second after the EDM goes quiet (latest_data is
-     * never cleared), so engine:stale never fires for that; instead it sets
-     * serial_warning after 5 s without EDM data (cleared on the next good line)
-     * and serial_connected false when the port closes.
-     */
+    /** Whether a Pi frame carries a current EDM row -- see EngineClient.edmCurrent. */
     static edmCurrent(raw) {
-        return !(raw && (raw.serial_connected === false || raw.serial_warning));
+        return EngineClient.edmCurrent(raw);
     }
 
     /** Configured fields (catalog and hand-added), as saved. */
