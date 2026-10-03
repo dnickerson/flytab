@@ -132,14 +132,25 @@ describe('StickyValveMonitor — the Pi rule', () => {
 });
 
 describe('StickyValveMonitor — dismiss and restart', () => {
-    it('DISMISS hides it; the same cylinder does not bring it back', () => {
+    it('DISMISS hides it; the same cylinder staying low does not bring it back', () => {
         start();
         run(40, 1000, COLD3);
         mon.dismiss();
         expect(mon.state.visible).toBe(false);
-        run(5, 1000, HOT);
-        run(40, 1000, COLD3);
+        run(60, 1000, COLD3);
         expect(mon.state.visible).toBe(false);
+        expect(alerts.length).toBe(1);
+    });
+
+    it('a cylinder that recovered and goes low again shows it again, with a new alert', () => {
+        start();
+        run(40, 1000, COLD3);
+        mon.dismiss();
+        run(5, 1000, HOT);
+        expect(mon.state.cylinders[0].recovered).toBe(true);
+        run(31, 1000, COLD3);
+        expect(mon.state).toMatchObject({ visible: true, cylinders: [{ cyl: 3, recovered: false }] });
+        expect(alerts.map(a => a.cyl)).toEqual([3, 3]);
     });
 
     it('a different cylinder alerting after DISMISS shows it again', () => {
@@ -191,7 +202,7 @@ describe('StickyValveMonitor — RPM dropouts with the engine running', () => {
         start();
         run(40, 1000, COLD3);
         mon.dismiss();
-        run(13, 0, RUNUP);
+        run(13, 0, [1250, 1210, 400, 1230]);   // still cold through the dropout
         run(60, 1700, [1250, 1210, 400, 1230]);
         expect(mon.state.visible).toBe(false);
     });
@@ -212,28 +223,57 @@ describe('StickyValveMonitor — RPM dropouts with the engine running', () => {
         expect(late.state.visible).toBe(false);
     });
 
-    it('the dropout seconds break the 30 s of low EGT', () => {
+    it('the dropout seconds still count toward the 30 s: the EGTs in them are real', () => {
         start();
         run(20, 1000, COLD3);
         run(5, 0, COLD3);
-        run(20, 1000, COLD3);
+        run(5, 1700, COLD3);
         expect(alerts).toEqual([]);
+        run(1, 1700, COLD3);            // 30 s since it went low
+        expect(alerts.map(a => a.cyl)).toEqual([3]);
+    });
+
+    it('repeated mag-check dropouts every 20 s do not hold the alert off', () => {
+        start();
+        for (let k = 0; k < 3; k++) { run(17, 1700, COLD3); run(3, 0, COLD3); }
+        expect(alerts.map(a => a.cyl)).toEqual([3]);
     });
 });
 
 describe('StickyValveMonitor — bad or missing data', () => {
-    it('an EGT of 0 is no reading, not a cold cylinder, and does not drag the average', () => {
+    it('an EGT of 0 is a reading, as on the Pi: a dead cylinder may well read 0', () => {
         start();
-        run(120, 1000, [1200, 1180, 0, 1190]);
-        expect(alerts).toEqual([]);
-        // ...while a real cold cylinder next to a dead probe still alerts
-        run(31, 1000, [1200, 400, 0, 1190]);
-        expect(alerts.map(a => a.cyl)).toEqual([2]);
+        run(31, 1000, [1200, 1180, 0, 1190]);
+        expect(alerts).toMatchObject([{ cyl: 3, egt: 0, othersAvg: 1190 }]);
     });
 
-    it('with fewer than 3 working probes it does not judge', () => {
+    it('a missing EGT value is skipped: the other three are still compared', () => {
         start();
-        run(60, 1000, [1200, 0, 300, 0]);
+        run(31, 1000, [1200, 400, null, 1190]);
+        expect(alerts).toMatchObject([{ cyl: 2, egt: 400, othersAvg: 1195 }]);
+    });
+
+    it('with fewer than 3 EGT values it does not judge', () => {
+        start();
+        run(60, 1000, [1200, null, 300, null]);
+        expect(alerts).toEqual([]);
+    });
+
+    it('time with the engine too cold to judge does not count toward the 30 s', () => {
+        start();
+        run(10, 1000, [400, 400, 100, 400]);   // low, judged
+        run(40, 1000, [150, 150, 20, 150]);    // average under 200: not judged
+        run(5, 1000, [400, 400, 100, 400]);
+        expect(alerts).toEqual([]);
+        run(26, 1000, [400, 400, 100, 400]);   // 30 s of judged low time
+        expect(alerts.map(a => a.cyl)).toEqual([3]);
+    });
+
+    it('a few seconds with no frames at all break the 30 s', () => {
+        start();
+        run(20, 1000, COLD3);
+        clock += 6;                            // nothing arrives for 6 s, no stale event yet
+        run(20, 1000, COLD3);
         expect(alerts).toEqual([]);
     });
 
@@ -253,6 +293,33 @@ describe('StickyValveMonitor — bad or missing data', () => {
         client.emit('engine:stale', { stale: true });
         run(20, 1000, COLD3);
         client.emit('engine:disconnect');
+        run(20, 1000, COLD3);
+        expect(alerts).toEqual([]);
+    });
+
+    it('Pi and EDM powered off at shutdown: the next start, already running when data returns, is watched', () => {
+        start();
+        run(40, 1000, COLD3);
+        mon.dismiss();
+        run(10, 1000, HOT);                    // recovered; then master off -- no frames
+        clock += 40 * 60;
+        run(32, 1000, COLD3);                  // first frame back (engine already running) is the start
+        expect(alerts.map(a => a.cyl)).toEqual([3, 3]);
+        expect(mon.state.visible).toBe(true);
+    });
+
+    it('a Pi dropout longer than 30 s does not clear an unacknowledged warning', () => {
+        start();
+        run(40, 1000, COLD3);
+        clock += 60;                           // WiFi lost for a minute
+        run(10, 2400, HOT);
+        expect(mon.state).toMatchObject({ visible: true, cylinders: [{ cyl: 3 }] });
+    });
+
+    it('a clock stepping backwards is treated as a gap, not as time running', () => {
+        start();
+        run(20, 1000, COLD3);
+        clock -= 100;
         run(20, 1000, COLD3);
         expect(alerts).toEqual([]);
     });
