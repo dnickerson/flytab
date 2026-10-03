@@ -11614,3 +11614,198 @@ body.route-editing-mode .route-table-sheet {
     margin-top: 4px;
 }
 
+/* ===== Wind compass (Airport Info popup, WIND tab) ===== */
+
+.apt-wind-pane {
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+}
+
+.wc-mode-toggle {
+    display: flex;
+    gap: 4px;
+    align-self: stretch;
+}
+.wc-mode-metar, .wc-mode-manual {
+    flex: 1;
+    min-height: var(--touch-min, 56px);
+    border-radius: 6px;
+    border: 1.5px solid var(--border);
+    background: transparent;
+    color: var(--text-secondary);
+    font-family: var(--font-ui);
+    font-size: var(--text-base);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    cursor: pointer;
+}
+.wc-mode-metar.active, .wc-mode-manual.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+}
+
+.wc-no-wind, .wc-no-runways {
+    color: var(--text-muted);
+    font-family: var(--font-ui);
+    font-weight: 700;
+    text-align: center;
+    padding: 8px;
+}
+
+.wc-rose {
+    width: 100%;
+    max-width: 320px;
+    height: auto;
+}
+.wc-rose-circle {
+    fill: var(--bg-surface);
+    stroke: var(--border-strong);
+    stroke-width: 1.5;
+}
+.wc-tick {
+    stroke: var(--border-strong);
+    stroke-width: 1.5;
+}
+.wc-tick-label {
+    fill: var(--text-label);
+    font-family: var(--font-ui);
+    font-weight: 800;
+    font-size: 13px;
+}
+.wc-runway-line {
+    stroke: var(--text-secondary);
+    stroke-width: 4;
+    stroke-linecap: round;
+}
+.wc-wind-arrow line {
+    stroke: var(--accent);
+    stroke-width: 6;
+    stroke-linecap: round;
+}
+.wc-arrowhead-path {
+    fill: var(--accent);
+}
+.wc-end-id {
+    fill: var(--text-primary);
+    font-family: var(--font-instrument);
+    font-weight: 900;
+    font-size: 14px;
+}
+.wc-end-wind {
+    fill: var(--text-secondary);
+    font-family: var(--font-instrument);
+    font-weight: 900;
+    font-size: 11px;
+}
+.wc-best-dot {
+    fill: var(--color-success);
+}
+
+.wc-manual-controls {
+    display: flex;
+    gap: 12px;
+    align-self: stretch;
+}
+.wc-field {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+}
+.wc-field-label {
+    color: var(--text-label);
+    font-family: var(--font-ui);
+    font-weight: 800;
+    font-size: var(--text-xs);
+    letter-spacing: 0.1em;
+}
+.wc-dir-value, .wc-spd-value {
+    width: 100%;
+    /* touch-min, not touch-preferred: this is the field the DONE-button-
+       visibility complaint was about shrinking. touch-min (56px) is this
+       app's documented floor for a touch target, not a default -- do not
+       go below it even to save more space. */
+    min-height: var(--touch-min, 56px);
+    border-radius: 8px;
+    border: 1.5px solid var(--border-strong);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: var(--font-instrument);
+    font-weight: 900;
+    font-size: var(--text-xl);
+    cursor: pointer;
+}
+
+/* Anchored to .airport-panel's bottom edge (the nearest position:absolute
+   ancestor -- .apt-tab-content, the actual scrolling element in between,
+   sets no position of its own), as a floating sheet over the rose rather
+   than stacking in normal flow. Shrinking fonts/gaps alone (see the
+   fields above) saved ~40px but the rose itself is ~320px+ tall --
+   nowhere near enough to get DONE on-screen without this. Matches how
+   ifr-clearance.js's numpad already does this for the same reason. */
+.wc-numpad-sheet {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    background: var(--bg-surface-raised);
+    border-top: 2px solid var(--border-strong);
+    padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+    z-index: 10;
+}
+.wc-numpad-value {
+    color: var(--text-primary);
+    font-family: var(--font-instrument);
+    font-weight: 900;
+    font-size: var(--text-lg);
+    letter-spacing: 0.1em;
+    min-height: 26px;
+}
+.wc-numpad-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+    width: 100%;
+    max-width: 320px;
+}
+.wc-np-key, .wc-np-back {
+    /* Height stays touch-min (56px) -- this app's floor for a touch
+       target, not a default -- do not shrink the tappable area itself.
+       Only the glyph (font-size) shrinks here. */
+    min-height: var(--touch-min, 56px);
+    border-radius: 10px;
+    border: 1.5px solid var(--border);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: var(--font-instrument);
+    font-weight: 900;
+    font-size: var(--text-lg);
+    cursor: pointer;
+}
+.wc-np-key:active, .wc-np-back:active { background: var(--border); }
+.wc-np-back { color: var(--color-danger-on-light); }
+.wc-numpad-done {
+    width: 100%;
+    max-width: 320px;
+    min-height: var(--touch-min, 56px);
+    border-radius: 10px;
+    border: 1.5px solid var(--color-success);
+    background: var(--color-success);
+    color: #000;
+    font-family: var(--font-ui);
+    font-weight: 700;
+    font-size: var(--text-base);
+    letter-spacing: 0.1em;
+    cursor: pointer;
+}
+.wc-numpad-done:active { opacity: 0.8; }
+

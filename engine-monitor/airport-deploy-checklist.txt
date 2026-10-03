@@ -1,0 +1,49 @@
+FlyTab — Airport Deploy Checklist (engine_monitor.py → Pi)
+============================================================
+Use this when you're at the plane and need to push the latest
+engine-monitor code from the flytab repo onto the Pi.
+
+Note: at the airport you're on the Stratux hotspot, NOT home WiFi.
+deploy-pi.sh defaults to the home Pi IP (192.168.1.212), so you must
+override PI_HOST to the hotspot IP every time you run it here.
+
+STEPS
+-----
+1. Connect your laptop to the Stratux Wi-Fi hotspot.
+
+2. Open a terminal:
+     cd ~/flytab
+
+3. Check the Pi is reachable over the hotspot:
+     ssh pi@192.168.10.1 true
+   If this fails ("No route to host"): the Pi isn't booted yet or the
+   hotspot isn't up — power the Pi, wait ~30s, retry.
+
+4. Deploy + restart the service in one shot:
+     PI_HOST=192.168.10.1 bash deploy-pi.sh --full
+
+5. Read the deploy output:
+   - Near the top it prints the VERSION and api_contract it's about to
+     ship — confirm this is the build you expect.
+   - Near the end (from --full) it prints engine-monitor service status,
+     Stratux service status, and a WebSocket check on :8082. Expect:
+       ✓ WebSocket alive — keys: [...]
+     ("⚠ WebSocket not responding" is normal if the EDM isn't plugged
+     in / powered yet — not a deploy failure.)
+
+6. Reconnect the tablet to the Stratux hotspot, open FlyTab, check the
+   ENG page / status bar. An amber "Pi API" mismatch badge means the
+   tablet's installed build needs a newer api_contract than what's now
+   on the Pi — you'll need to rebuild + reinstall the APK too, this
+   script alone won't fix that.
+
+TROUBLESHOOTING
+----------------
+- "No route to host" on step 3 or 4 → wrong network or Pi not booted.
+  Double check you're on the Stratux hotspot, not trying 192.168.1.212.
+- Deploy hangs on the websockets install step → Pi has no internet
+  (expected, it's a closed hotspot) but websockets should already be
+  installed from a prior deploy; if it's genuinely missing you'll need
+  to sideload the wheel — not a field fix.
+- Need to just restart the service without a full re-deploy:
+     ssh pi@192.168.10.1 'sudo systemctl restart engine-monitor'
