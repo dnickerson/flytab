@@ -24,6 +24,11 @@
         const DiagLog  = { log: () => {} };
         // wireTap is used extensively in _buildDOM — must be present at init time.
         const wireTap  = (el, fn) => el.addEventListener('click', fn);
+        // In-memory TripStore so _saveCurrentTrip() can run; records the last save.
+        const TripStore = {
+            list: async () => [],
+            save: async (trip) => { window.__lastSavedTrip = trip; },
+        };
         // planSync is referenced in _showPlanSyncUI — optional, guard with typeof.
         // FlyTabPlanning is attempted in _startBuildPlanner — optional, guard is built in.
     </script>
@@ -32,6 +37,8 @@
          Load the real nasr-db.js so the constructor's DB_NAME is available if needed.
          NasrDb does not open IDB at construction time — safe to include. -->
     <script src="/web/shared/nasr-db.js"></script>
+    <!-- ActiveRoute.arrivalIndex is the shared destination rule the panel uses. -->
+    <script src="/web/shared/active-route.js"></script>
     <script src="/web/cockpit/route-planner-panel.js"></script>
 
     <script>
@@ -93,6 +100,139 @@
             setPlannedRoute(route) {
                 panel._route = route;
                 panel._render();
+            },
+            /** Call insertApproach() with a cifp:load-procedure event detail. */
+            insertApproach(detail) {
+                panel.insertApproach(detail);
+            },
+            /** Run _saveCurrentTrip(plan) and return the trip passed to TripStore.save. */
+            async saveTrip(plan) {
+                window.__lastSavedTrip = null;
+                await panel._saveCurrentTrip(plan);
+                return window.__lastSavedTrip;
+            },
+            /** Route pills including the airway tag _loadPlan re-applies to fix pills. */
+            getRouteWithAirways() {
+                return panel._route.map(p => ({ id: p.id, type: p.type, airway: p.airway ?? null }));
+            },
+            /** Seed the panel's coordinate cache so _pillsToWaypoints resolves pills. */
+            setCoords(coords) {
+                Object.assign(panel._coords, coords);
+            },
+            /** Run _updateStats(result) and return the stats bar text. */
+            updateStats(result) {
+                panel._updateStats(result);
+                return panel._statsEl.textContent;
+            },
+            /** Run _recheckFuelStops() against a stub planner; return the dep/dest it planned. */
+            async recheckFuelStops() {
+                let planned = null;
+                panel._planner = {
+                    recomputeLegs: (plan) => { planned = plan; return { ...plan, legs: [], summary: {} }; },
+                    insertFuelStops: async () => ({ fuelStopCandidates: [] }),
+                };
+                await panel._recheckFuelStops();
+                return planned && { departure: planned.departure, destination: planned.destination };
+            },
+            /**
+             * Tap Plan against a stub planner whose recomputeLegs returns `legs`.
+             * Returns the waypoint ids Plan computed and the warnings it raised.
+             */
+            async tapPlan({ legs = [], summary = {}, reserveGal = 10 } = {}) {
+                let planned = null, fuelStops = null;
+                panel._reserveGal = reserveGal;
+                panel._planner = {
+                    recomputeLegs: (plan) => {
+                        planned = plan.waypoints.map(w => w.id || w.icao);
+                        fuelStops = plan.waypoints.filter(w => w.fuelStop).map(w => w.id || w.icao);
+                        return { ...plan, legs, summary };
+                    },
+                };
+                await panel._onRecomputeTap();
+                return { planned, fuelStops, warnings: panel._windWarnings || [] };
+            },
+            /**
+             * open(plan) with a stub planner already attached, so open()'s own
+             * recompute runs; returns the warnings it raised.
+             */
+            async openWithPlanner(plan, { summary = {}, reserveGal = 10 } = {}) {
+                panel._reserveGal = reserveGal;
+                panel._planner = { recomputeLegs: (p) => ({ ...p, legs: [], summary }) };
+                await panel.open(plan);
+                await panel._windsPromise;
+                return panel._windWarnings || [];
+            },
+            /**
+             * Tap Plan while another recompute (e.g. open()'s) is still in flight.
+             * Returns the order of events and whether Plan left its own promise for Apply.
+             */
+            async planWhileRecomputeInFlight() {
+                const order = [];
+                let release;
+                const inflight = new Promise(r => { release = () => { order.push('inflight-done'); r(); }; });
+                panel._windsPromise = inflight;
+                panel._planner = {
+                    recomputeLegs: (p) => { order.push('recompute'); return { ...p, legs: [], summary: {} }; },
+                };
+                const tap = panel._onRecomputeTap();
+                await new Promise(r => setTimeout(r, 50));
+                order.push('checkpoint');
+                release();
+                await tap;
+                return { order, ownPromise: panel._windsPromise !== inflight };
+            },
+            /** Start Plan with a wind fetch that never returns; report the stats bar meanwhile. */
+            async statsWhileWindsLoad(summary) {
+                window.FlyTabPlanning = { fetchWinds: () => new Promise(() => {}) };
+                panel._planner = { recomputeLegs: (p) => ({ ...p, legs: [], summary }) };
+                panel._onRecomputeTap();
+                await new Promise(r => setTimeout(r, 50));
+                return panel._statsEl.textContent;
+            },
+            /** Text of the panel toast, or null. */
+            toastText() {
+                return document.querySelector('.rpp-toast')?.textContent ?? null;
+            },
+            /** Whether the stats bar is hidden. */
+            statsHidden() {
+                return panel._statsEl.style.display === 'none';
+            },
+            /** Waypoints _pillsToWaypoints builds from the current pills (id + isDest). */
+            async pillsToWaypoints() {
+                const wps = await panel._pillsToWaypoints();
+                return wps.map(w => ({ id: w.id, isDest: !!w.isDest }));
+            },
+            /** Index _updateStats / Plan / trip save treat as the destination waypoint. */
+            async destWaypointIndex() {
+                return panel._destWaypointIndex(await panel._pillsToWaypoints());
+            },
+            /** The context menu's "Insert after" on the DEST pill, then Add `id`. */
+            insertAfterDest(id) {
+                panel._insertIndex = panel._destPillIndex() + 1;
+                panel._addInput.value = id;
+                return panel._onAddTap();
+            },
+            /** Type into the DEP input and fire its change handler. */
+            setDep(value) {
+                const dep = panelEl.querySelectorAll('.rpp-icao-inp')[0];
+                dep.value = value;
+                dep.dispatchEvent(new Event('change'));
+            },
+            /** Type an identifier into the Add box and tap Add (default insertion point). */
+            addFix(id) {
+                panel._addInput.value = id;
+                return panel._onAddTap();
+            },
+            /** Current DEP / DEST input values. */
+            inputs() {
+                const [dep, dest] = panelEl.querySelectorAll('.rpp-icao-inp');
+                return { dep: dep?.value, dest: dest?.value };
+            },
+            /** Type into the DEST input and fire its change handler. */
+            setDest(value) {
+                const dest = panelEl.querySelectorAll('.rpp-icao-inp')[1];
+                dest.value = value;
+                dest.dispatchEvent(new Event('change'));
             },
             /**
              * Extract the route array that _doApply would write to flight_plan.route,

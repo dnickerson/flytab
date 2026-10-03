@@ -509,6 +509,16 @@ Navigate to an airport using the search field, then select the approach. The pla
 
 During the approach, tap **APT** tab instead for quick access to all plates for the route airports.
 
+### Loading an approach into your route
+
+From a plate, load the procedure and pick the IAF/transition. The route planner opens with the approach spliced around your destination: the transition, IAF, intermediate and final fixes and the runway go **before** the destination airport, and the missed-approach fixes go **after** it, so they are next in line if you go missed. For example, KLKR → KLKR with the RNAV RWY 24 via CTF becomes `KLKR → CTF → LIGLE → SAPSE → WITUR → RW24 → KLKR → CORON`. This works for a round trip that departs and returns to the same airport — the approach is attached to the arrival, never the departure.
+
+**The destination stays the airport, not the missed-approach fix.** Distance, ETE, ETA, fuel and the fuel-remaining check in the planner's stats bar, the route table's TOTAL and per-flight rows, the DEST badge, the handle distance and the instrument strip all stop at the destination airport; the descent is planned into the airport, not into the hold. The missed-approach rows still show in the route table. Once you are flying the missed approach (past the airport), the handle's distance and label switch to the end of the route.
+
+The destination is whatever the planner's **DEST** pill names. A fix you insert after it stays a fix. If you reorder the route in the route table so another airport comes after the old destination, that later airport is treated as the destination. Changing DEST does not remove an approach already loaded for the old destination — delete those pills if you no longer want them. Trips saved before this behaviour (late 2026) may still reopen with the missed-approach fix as the destination; apply the route again to fix them.
+
+**Plan computes the route the pills show.** Tapping **Plan** in the route planner calculates the route exactly as it appears in the pills, including a departure or destination you just typed. If any waypoint can't be found in the navigation database, Plan is not updated — a message names the waypoint and the stats bar is cleared rather than left showing the previous route.
+
 ---
 
 ## Document Library
