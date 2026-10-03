@@ -281,13 +281,14 @@ describe('descent_gph sync invariant — all three hand-maintained copies must a
 
 
 // ---------------------------------------------------------------------------
-// Destination followed by a loaded approach's missed-approach fixes (flagged
-// isMissed). The descent, the summary totals and the fuel-stop search end at
-// the last waypoint before the trailing isMissed run.
+// Destination followed by a loaded approach's missed-approach fixes. The route
+// planner flags the DEST pill's waypoint isDest; the descent, the summary totals
+// and the fuel-stop search end there. A marker with an airport after it is stale
+// (the route was reordered) and is ignored.
 // ---------------------------------------------------------------------------
-describe('recomputeLegs — destination before the trailing missed-approach fixes', () => {
+describe('recomputeLegs — destination is the isDest waypoint', () => {
     const base = {
-        departure: 'KCLT', destination: 'KLKR',
+        departure: 'KCLT', destination: undefined,
         cruiseAltFt: 6000,
         options: { routingMode: 'gps-direct', maxLegHrs: 10, selfServeOnly: false, avoidance: [] },
     };
@@ -297,12 +298,11 @@ describe('recomputeLegs — destination before the trailing missed-approach fixe
         const planner = new RoutePlanner({ aero: mockAero, plans: mockPlans });
         const result = planner.recomputeLegs({
             ...base,
-            destination: undefined,
             waypoints: [
-                { id: 'KCLT',  lat: 35.214, lon: -80.943 },
-                { id: 'KLKR',  lat: 34.723, lon: -80.855 },
-                { id: 'MAP1',  lat: 34.680, lon: -80.950, isMissed: true },
-                { id: 'CORON', lat: 34.600, lon: -81.200, isMissed: true },
+                { id: 'KCLT',  type: 'APT', lat: 35.214, lon: -80.943 },
+                { id: 'KLKR',  type: 'APT', lat: 34.723, lon: -80.855, isDest: true },
+                { id: 'MAP1',  lat: 34.680, lon: -80.950 },
+                { id: 'CORON', lat: 34.600, lon: -81.200 },
             ],
         });
         expect(phases(result.legs[0])).toContain('DES');
@@ -310,11 +310,39 @@ describe('recomputeLegs — destination before the trailing missed-approach fixe
         expect(phases(result.legs[2])).not.toContain('DES');
     });
 
+    it('a fix inserted after the destination does not become the destination', () => {
+        const planner = new RoutePlanner({ aero: mockAero, plans: mockPlans });
+        const result = planner.recomputeLegs({
+            ...base,
+            waypoints: [
+                { id: 'KCLT',  type: 'APT', lat: 35.214, lon: -80.943 },
+                { id: 'KLKR',  type: 'APT', lat: 34.723, lon: -80.855, isDest: true },
+                { id: 'WITUR', lat: 34.789, lon: -80.836 },   // Insert After on the DEST pill
+                { id: 'CORON', lat: 34.600, lon: -81.200 },
+            ],
+        });
+        expect(phases(result.legs[0])).toContain('DES');
+        expect(result.summary.totalDistNm).toBeCloseTo(result.legs[0].distNm, 9);
+    });
+
+    it('ignores a stale marker with an airport after it (route reordered)', () => {
+        const planner = new RoutePlanner({ aero: mockAero, plans: mockPlans });
+        const result = planner.recomputeLegs({
+            ...base,
+            waypoints: [
+                { id: 'KCLT', type: 'APT', lat: 35.214, lon: -80.943 },
+                { id: 'KLKR', type: 'APT', lat: 34.723, lon: -80.855, isDest: true },
+                { id: 'KBBB', type: 'APT', lat: 34.400, lon: -81.400 },
+            ],
+        });
+        expect(phases(result.legs[0])).not.toContain('DES');
+        expect(phases(result.legs[1])).toContain('DES');
+    });
+
     it('descends on the last leg when nothing is flagged and plan.destination is absent', () => {
         const planner = new RoutePlanner({ aero: mockAero, plans: mockPlans });
         const result = planner.recomputeLegs({
             ...base,
-            destination: undefined,
             waypoints: [
                 { id: 'KCLT',  lat: 35.214, lon: -80.943 },
                 { id: 'KLKR',  lat: 34.723, lon: -80.855 },
@@ -329,40 +357,25 @@ describe('recomputeLegs — destination before the trailing missed-approach fixe
         const planner = new RoutePlanner({ aero: mockAero, plans: mockPlans });
         const result = planner.recomputeLegs({
             ...base,
-            departure: 'KLKR', destination: 'KLKR',
+            departure: 'KLKR',
             waypoints: [
-                { id: 'KLKR',  lat: 34.723, lon: -80.855 },
+                { id: 'KLKR',  type: 'APT', lat: 34.723, lon: -80.855 },
                 { id: 'CTF',   lat: 34.650, lon: -80.274 },
-                { id: 'KLKR',  lat: 34.723, lon: -80.855 },
-                { id: 'CORON', lat: 34.600, lon: -81.200, isMissed: true },
+                { id: 'KLKR',  type: 'APT', lat: 34.723, lon: -80.855, isDest: true },
+                { id: 'CORON', lat: 34.600, lon: -81.200 },
             ],
         });
         expect(phases(result.legs[0])).toContain('CLB');
         expect(phases(result.legs[1])).toContain('DES');
         expect(phases(result.legs[2])).not.toContain('DES');
     });
-
-    it('a missed-approach fix moved mid-route no longer shortens the route', () => {
-        const planner = new RoutePlanner({ aero: mockAero, plans: mockPlans });
-        const result = planner.recomputeLegs({
-            ...base,
-            destination: undefined,
-            waypoints: [
-                { id: 'KCLT',  lat: 35.214, lon: -80.943 },
-                { id: 'CORON', lat: 34.600, lon: -81.200, isMissed: true },
-                { id: 'KLKR',  lat: 34.723, lon: -80.855 },
-            ],
-        });
-        expect(phases(result.legs[1])).toContain('DES');
-        expect(result.summary.totalDistNm).toBeCloseTo(result.legs[0].distNm + result.legs[1].distNm, 9);
-    });
 });
 
 describe('recomputeLegs / insertFuelStops — totals stop at the destination', () => {
     const wpsFlagged = [
-        { id: 'KCLT',  lat: 35.214, lon: -80.943 },
-        { id: 'KLKR',  lat: 34.723, lon: -80.855 },
-        { id: 'FAR',   lat: 31.000, lon: -84.000, isMissed: true },   // long missed-approach leg
+        { id: 'KCLT', type: 'APT', lat: 35.214, lon: -80.943 },
+        { id: 'KLKR', type: 'APT', lat: 34.723, lon: -80.855, isDest: true },
+        { id: 'FAR',  lat: 31.000, lon: -84.000 },   // long missed-approach leg
     ];
     const base = {
         departure: 'KCLT', destination: 'KLKR', cruiseAltFt: 6000,
@@ -371,7 +384,7 @@ describe('recomputeLegs / insertFuelStops — totals stop at the destination', (
 
     it('summary distance, time, fuel and fuel remaining stop at the destination', () => {
         const planner = new RoutePlanner({ aero: mockAero, plans: mockPlans });
-        const r = planner.recomputeLegs({ ...base, waypoints: wpsFlagged });
+        const r = planner.recomputeLegs({ ...base, destination: undefined, waypoints: wpsFlagged });
         expect(r.legs).toHaveLength(2);
         expect(r.summary.totalDistNm).toBeCloseTo(r.legs[0].distNm, 9);
         expect(r.summary.totalEteHrs).toBeCloseTo(r.legs[0].timeHrs, 9);
@@ -379,10 +392,10 @@ describe('recomputeLegs / insertFuelStops — totals stop at the destination', (
         expect(r.summary.fuelRemGal).toBeCloseTo(r.legs[0].fuelRemGal, 9);
     });
 
-    it('without isMissed flags, plan.destination locates the destination (last occurrence)', () => {
+    it('without an isDest flag, plan.destination locates the destination (last occurrence)', () => {
         const planner = new RoutePlanner({ aero: mockAero, plans: mockPlans });
         const r = planner.recomputeLegs({
-            ...base, waypoints: wpsFlagged.map(({ isMissed, ...w }) => w),
+            ...base, waypoints: wpsFlagged.map(({ isDest, ...w }) => w),
         });
         expect(r.legs[0].segments.map(s => s.phase)).toContain('DES');
         expect(r.legs[1].segments.map(s => s.phase)).not.toContain('DES');

@@ -162,14 +162,55 @@
                 await panel._windsPromise;
                 return panel._windWarnings || [];
             },
-            /** Waypoints _pillsToWaypoints builds from the current pills (id + isMissed). */
+            /**
+             * Tap Plan while another recompute (e.g. open()'s) is still in flight.
+             * Returns the order of events and whether Plan left its own promise for Apply.
+             */
+            async planWhileRecomputeInFlight() {
+                const order = [];
+                let release;
+                const inflight = new Promise(r => { release = () => { order.push('inflight-done'); r(); }; });
+                panel._windsPromise = inflight;
+                panel._planner = {
+                    recomputeLegs: (p) => { order.push('recompute'); return { ...p, legs: [], summary: {} }; },
+                };
+                const tap = panel._onRecomputeTap();
+                await new Promise(r => setTimeout(r, 50));
+                order.push('checkpoint');
+                release();
+                await tap;
+                return { order, ownPromise: panel._windsPromise !== inflight };
+            },
+            /** Start Plan with a wind fetch that never returns; report the stats bar meanwhile. */
+            async statsWhileWindsLoad(summary) {
+                window.FlyTabPlanning = { fetchWinds: () => new Promise(() => {}) };
+                panel._planner = { recomputeLegs: (p) => ({ ...p, legs: [], summary }) };
+                panel._onRecomputeTap();
+                await new Promise(r => setTimeout(r, 50));
+                return panel._statsEl.textContent;
+            },
+            /** Text of the panel toast, or null. */
+            toastText() {
+                return document.querySelector('.rpp-toast')?.textContent ?? null;
+            },
+            /** Whether the stats bar is hidden. */
+            statsHidden() {
+                return panel._statsEl.style.display === 'none';
+            },
+            /** Waypoints _pillsToWaypoints builds from the current pills (id + isDest). */
             async pillsToWaypoints() {
                 const wps = await panel._pillsToWaypoints();
-                return wps.map(w => ({ id: w.id, isMissed: !!w.isMissed }));
+                return wps.map(w => ({ id: w.id, isDest: !!w.isDest }));
             },
-            /** Route pills with their missed-approach flag. */
-            getRouteWithMissed() {
-                return panel._route.map(p => `${p.id}:${p.type}${p.missed ? ':missed' : ''}`);
+            /** Index _updateStats / Plan / trip save treat as the destination waypoint. */
+            async destWaypointIndex() {
+                return panel._destWaypointIndex(await panel._pillsToWaypoints());
+            },
+            /** The context menu's "Insert after" on the DEST pill, then Add `id`. */
+            insertAfterDest(id) {
+                panel._insertIndex = panel._destPillIndex() + 1;
+                panel._addInput.value = id;
+                return panel._onAddTap();
             },
             /** Type into the DEP input and fire its change handler. */
             setDep(value) {

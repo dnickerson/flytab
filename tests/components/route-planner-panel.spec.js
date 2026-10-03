@@ -502,32 +502,30 @@ const KCLT_KLKR_WPS_FOR_PLAN = [
 ];
 
 test.describe('waypoints handed to the planner @planner-ui', () => {
-    test('loading an approach flags only its missed-approach fixes, and their waypoints carry isMissed', async ({ page }) => {
+    test('only the DEST pill\'s waypoint is marked isDest, so the descent ends at the arrival KLKR', async ({ page }) => {
         await page.goto(HARNESS);
+        await page.evaluate(pills => window.__harness.setPlannedRoute(pills), KLKR_LOOP_PILLS);
+        await page.evaluate(wps => window.__harness.setCoords(Object.fromEntries(
+            wps.map(w => [w.icao, { lat: w.lat, lon: w.lon }]))), KLKR_LOOP_WPS);
+
+        const wps = await page.evaluate(() => window.__harness.pillsToWaypoints());
+        expect(wps.filter(w => w.isDest).map(w => w.id)).toEqual(['KLKR']);
+        expect(wps.findIndex(w => w.isDest)).toBe(6);   // the arrival KLKR, not the departure
+    });
+
+    test('a fix inserted after the DEST pill does not become the destination', async ({ page }) => {
+        await page.goto(HARNESS);
+        // Load the approach the way the plate does, so any approach-derived flags are present.
         await page.evaluate(() => window.__harness.setPlannedRoute([
             { id: 'KLKR', type: 'dep' }, { id: 'KLKR', type: 'dest' },
         ]));
         await page.evaluate(detail => window.__harness.insertApproach(detail), KLKR_RNAV24);
-        expect(await page.evaluate(() => window.__harness.getRouteWithMissed())).toEqual([
-            'KLKR:dep', 'CTF:fix', 'LIGLE:fix', 'SAPSE:fix', 'WITUR:fix', 'RW24:fix', 'KLKR:dest', 'CORON:fix:missed',
-        ]);
 
-        await page.evaluate(wps => window.__harness.setCoords(Object.fromEntries(
-            wps.map(w => [w.icao, { lat: w.lat, lon: w.lon }]))), KLKR_LOOP_WPS);
-        const wps = await page.evaluate(() => window.__harness.pillsToWaypoints());
-        expect(wps.filter(w => w.isMissed).map(w => w.id)).toEqual(['CORON']);
-    });
-
-    test('a reopened trip keeps the missed-approach flag on the fixes after the destination', async ({ page }) => {
-        await page.goto(HARNESS);
-        await page.evaluate(plan => window.__harness.open(plan), {
-            departure: 'KLKR', destination: 'KLKR',
-            waypoints: KLKR_LOOP_WPS.map(w => (w.icao === 'CORON' ? { ...w, isMissed: true } : w)),
-            flight_plan: { departure: 'KLKR', destination: 'KLKR', route: KLKR_LOOP_IDS, legs: [] },
-        });
-        const route = await page.evaluate(() => window.__harness.getRouteWithMissed());
-        expect(route.at(-1)).toBe('CORON:fix:missed');
-        expect(route.filter(p => p.endsWith(':missed'))).toHaveLength(1);
+        // Long-press KLKR → Insert after → FLO (resolves through the harness NASR stub).
+        await page.evaluate(() => window.__harness.insertAfterDest('FLO'));
+        const route = await page.evaluate(() => window.__harness.getRoute());
+        expect(typed(route).slice(-3)).toEqual(['KLKR:dest', 'FLO:fix', 'CORON:fix']);
+        expect(await page.evaluate(() => window.__harness.destWaypointIndex())).toBe(6);   // KLKR, not FLO
     });
 
     test('Plan keeps the previous plan when a pill cannot be located', async ({ page }) => {
@@ -538,8 +536,32 @@ test.describe('waypoints handed to the planner @planner-ui', () => {
         await page.evaluate(() => window.__harness.setCoords({
             KCLT: { lat: 35.214, lon: -80.943 }, KLKR: { lat: 34.723, lon: -80.855 },
         }));
+        // Show stats for the current route first, so we can see them cleared.
+        await page.evaluate(() => window.__harness.updateStats({
+            waypoints: [{ icao: 'KCLT', lat: 35.2, lon: -80.9 }, { icao: 'KLKR', lat: 34.7, lon: -80.9 }],
+            legs: [], summary: { totalDistNm: 30 },
+        }));
         const { planned } = await page.evaluate(() => window.__harness.tapPlan());
         expect(planned).toBeNull();   // recomputeLegs never ran on the shortened route
+        expect(await page.evaluate(() => window.__harness.toastText())).toBe('Plan not updated — not found: NOWHR');
+        expect(await page.evaluate(() => window.__harness.statsHidden())).toBe(true);
+    });
+
+    test('Plan waits for a recompute already in flight, and leaves its own for Apply to await', async ({ page }) => {
+        await page.goto(HARNESS);
+        await page.evaluate(plan => window.__harness.open(plan), PREV_TRIP);
+        const { order, ownPromise } = await page.evaluate(() => window.__harness.planWhileRecomputeInFlight());
+        expect(order.slice(0, 3)).toEqual(['checkpoint', 'inflight-done', 'recompute']);
+        expect(ownPromise).toBe(true);
+    });
+
+    test('while the winds load, the stats bar shows calm-air figures, not 0 nm', async ({ page }) => {
+        await page.goto(HARNESS);
+        await page.evaluate(plan => window.__harness.open(plan), PREV_TRIP);
+        const text = await page.evaluate(() => window.__harness.statsWhileWindsLoad(
+            { totalDistNm: 42, totalEteHrs: 0.3, totalFuelGal: 3.1 }));
+        expect(text).toContain('Route42 nm');
+        expect(text).not.toContain('Route0 nm');
     });
 });
 
@@ -567,6 +589,21 @@ test.describe('fuel stops survive reopen @planner-ui', () => {
         const warnings = await page.evaluate(plan =>
             window.__harness.openWithPlanner(plan, { summary: { fuelRemGal: 5 } }), FUEL_TRIP);
         expect(warnings.some(w => w.startsWith('Fuel below reserve'))).toBe(false);
+    });
+
+    test('a leg that ends at its own fuel stop still warns below reserve on arrival', async ({ page }) => {
+        await page.goto(HARNESS);
+        const LEG_TO_STOP = {
+            departure: 'KCLT', destination: 'KFGX',
+            waypoints: [
+                { icao: 'KCLT', lat: 35.214, lon: -80.943 },
+                { icao: 'KFGX', lat: 35.500, lon: -80.200, fuelStop: true },
+            ],
+            flight_plan: { departure: 'KCLT', destination: 'KFGX', route: ['KCLT', 'KFGX'], legs: [] },
+        };
+        const warnings = await page.evaluate(plan =>
+            window.__harness.openWithPlanner(plan, { summary: { fuelRemGal: 5 } }), LEG_TO_STOP);
+        expect(warnings).toContain('Fuel below reserve: 5.0 gal at dest, 10 gal reserve required');
     });
 
     test('Plan on a reopened trip still plans the fuel stop', async ({ page }) => {

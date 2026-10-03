@@ -9,7 +9,8 @@
  * @property {'APT'|'NAV'|'FIX'} [kind]
  * @property {number} [altFt]
  * @property {string} [airway]              parser: airway origin tag for interior fixes
- * @property {boolean} [isMissed]           a loaded approach's missed-approach fix; the destination is the last waypoint before the trailing run of these
+ * @property {string} [type]                'APT' for airports (dep, dest, airport and fuel-stop pills)
+ * @property {boolean} [isDest]             the destination, from the route planner's DEST pill; missed-approach fixes may follow it. Ignored if an APT waypoint follows it (stale after a reorder)
  *
  * @typedef Leg
  * @property {string} from

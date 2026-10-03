@@ -1,18 +1,18 @@
 /**
  * route-table.js — a destination followed by a loaded approach's missed-approach
- * fixes (flagged isMissed by the route planner).
+ * fixes. The route planner marks the DEST pill's waypoint isDest.
  *
- * The flight ARRIVES at the last waypoint before the trailing isMissed run:
- * per-flight totals, the handle's remaining distance and destination label, the
- * DEST fuel badge, the activeroute:legupdate destination and the emitted
- * flight_plan.destination stop there, while the missed-approach rows still
- * render. Once the active waypoint is past the destination, the figures run to
- * the end of the route again. With no isMissed flags, every figure behaves as it
- * did before the flag existed.
+ * The flight ARRIVES at the marked destination: per-flight totals, the handle's
+ * remaining distance and destination label, the DEST fuel badge, the
+ * activeroute:legupdate destination and the emitted flight_plan.destination stop
+ * there, while the missed-approach rows still render. Once the active waypoint is
+ * past the destination, the figures run to the end of the route again. With no
+ * marker — or a stale one, with an airport moved after it — every figure behaves
+ * as it did before the marker existed.
  *
  * Loaded with the `new Function(src + 'return Class;')()` pattern used by
  * route-table-summary.test.js. ActiveRoute (which owns the shared
- * arrivalIndex rule) is loaded as a global, as in the app.
+ * markedDestIndex / findDestIndex rule) is loaded as a global, as in the app.
  */
 import { describe, it, expect, afterEach } from 'vitest';
 import { readFileSync } from 'fs';
@@ -68,20 +68,22 @@ function makeTable(waypoints, activeIndex, { stubLegUpdate = true } = {}) {
     return rt;
 }
 
-/** KCLT → ENO → KLKR (destination) → CORON (missed-approach hold), 120 nm legs. */
+/** KCLT → ENO → KLKR (marked destination) → CORON (missed-approach hold), 120 nm legs. */
 function klkrWithMissed() {
     return [
         { icao: 'KCLT',  type: 'APT', lat: 35.21, lon: -80.94 },
         { icao: 'ENO',   type: 'VOR', lat: 35.00, lon: -80.50, _legDist: 120, _liveDist: 60, _segments: seg(10) },
-        { icao: 'KLKR',  type: 'APT', lat: 34.72, lon: -80.85, _legDist: 120, _segments: seg(10) },
-        { icao: 'CORON', type: 'FIX', isMissed: true, lat: 34.60, lon: -81.20, _legDist: 120, _liveDist: 50, _segments: seg(10) },
+        { icao: 'KLKR',  type: 'APT', isDest: true, lat: 34.72, lon: -80.85, _legDist: 120, _segments: seg(10) },
+        { icao: 'CORON', type: 'FIX', lat: 34.60, lon: -81.20, _legDist: 120, _liveDist: 50, _segments: seg(10) },
     ];
 }
 
+const ARROW = '\u2009\u2192\u2009';   // thin space, arrow, thin space — as rendered in the handle label
+const label = (a, b) => `${a}${ARROW}${b}`;
 const handleNm = rt => Number(/>(\d+)nm</.exec(rt._summaryEl.innerHTML)?.[1]);
-const destBadgeGal = rt => {
-    const m = /font-weight:700">[A-Z0-9?]+:(-?\d+\.\d)</.exec(rt._summaryEl.innerHTML);
-    return m ? parseFloat(m[1]) : null;
+const destBadge = rt => {
+    const m = /font-weight:700">([A-Z0-9?]+):(-?\d+\.\d)</.exec(rt._summaryEl.innerHTML);
+    return m ? { label: m[1], gal: parseFloat(m[2]) } : null;
 };
 
 describe('route table — destination followed by a missed approach', () => {
@@ -105,17 +107,23 @@ describe('route table — destination followed by a missed approach', () => {
         // 60 nm left on the active leg + 120 nm to KLKR = 180 nm (300 with CORON).
         expect(handleNm(rt)).toBe(180);
         // 30 gal − (180 nm / 120 kt) × 10 gph = 15.0 (5.0 if projected to CORON).
-        expect(destBadgeGal(rt)).toBeCloseTo(15.0, 6);
-        expect(rt._summaryEl.innerHTML).toContain('KCLT → KLKR');
+        expect(destBadge(rt)).toEqual({ label: 'DEST', gal: 15.0 });
+        expect(rt._summaryEl.innerHTML).toContain(label('KCLT', 'KLKR'));
     });
 
-    it('while flying the missed approach, the remaining distance runs to the end of the route', () => {
+    it('while flying the missed approach, distance, label and DEST all describe the route end', () => {
         installGlobals({ currentFuel: 30 });
+        window.enginePanel = { lastData: { fuel_flow_gph: 10 } };
         const rt = makeTable(klkrWithMissed(), 3);   // active waypoint is CORON
         rt._computeEnroute();
         rt._updateSummary();
 
         expect(handleNm(rt)).toBe(50);
+        // The label names what the distance measures — CORON, not KLKR behind the aircraft.
+        expect(rt._summaryEl.innerHTML).toContain(label('KCLT', 'CORON'));
+        // 30 − (50 / 120) × 10 = 25.8, under a plain DEST label that matches the header.
+        expect(destBadge(rt).label).toBe('DEST');
+        expect(destBadge(rt).gal).toBeCloseTo(25.8, 1);
     });
 
     it('per-flight totals on a fuel-stop trip exclude the missed-approach leg', () => {
@@ -124,8 +132,8 @@ describe('route table — destination followed by a missed approach', () => {
         const wps = [
             { icao: 'KCLT',  type: 'APT', lat: 35.21, lon: -80.94 },
             { icao: 'KFGX',  type: 'APT', lat: 35.50, lon: -80.20, _legDist: 120, _segments: seg(10) },
-            { icao: 'KLKR',  type: 'APT', lat: 34.72, lon: -80.85, _legDist: 120, _segments: seg(10) },
-            { icao: 'CORON', type: 'FIX', isMissed: true, lat: 34.60, lon: -81.20, _legDist: 120, _segments: seg(10) },
+            { icao: 'KLKR',  type: 'APT', isDest: true, lat: 34.72, lon: -80.85, _legDist: 120, _segments: seg(10) },
+            { icao: 'CORON', type: 'FIX', lat: 34.60, lon: -81.20, _legDist: 120, _segments: seg(10) },
         ];
         const rt = makeTable(wps, 1);
         rt._computeEnroute();
@@ -156,26 +164,38 @@ describe('route table — destination followed by a missed approach', () => {
     });
 });
 
-describe('route table — the missed-approach flag survives edits without going stale', () => {
-    it('after reordering airports, the destination is the last waypoint before the missed approach', () => {
+describe('route table — the destination marker after edits', () => {
+    it('a stale marker (an airport dragged after it) is ignored', () => {
         installGlobals({ currentFuel: 30 });
-        // KAAA → KLKR → KBBB → CORON(missed): the pilot dragged KLKR ahead of KBBB.
+        // KAAA → KLKR(marked) → KBBB: the pilot dragged KBBB after the old destination.
         const wps = [
-            { icao: 'KAAA',  type: 'APT', lat: 35.0, lon: -81.0 },
-            { icao: 'KLKR',  type: 'APT', is_fuel_stop: false, lat: 35.2, lon: -80.8, _legDist: 120, _liveDist: 60, _segments: seg(10) },
-            { icao: 'KBBB',  type: 'APT', lat: 35.4, lon: -80.6, _legDist: 120, _segments: seg(10) },
-            { icao: 'CORON', type: 'FIX', isMissed: true, lat: 35.5, lon: -80.5, _legDist: 120, _segments: seg(10) },
+            { icao: 'KAAA', type: 'APT', lat: 35.0, lon: -81.0 },
+            { icao: 'KLKR', type: 'APT', isDest: true, is_fuel_stop: false, lat: 35.2, lon: -80.8, _legDist: 120, _liveDist: 60, _segments: seg(10) },
+            { icao: 'KBBB', type: 'APT', lat: 35.4, lon: -80.6, _legDist: 120, _segments: seg(10) },
         ];
         const rt = makeTable(wps, 1);
         rt._computeEnroute();
         rt._updateSummary();
 
         expect(rt._flights.at(-1).arrWpIndex).toBe(2);
-        expect(rt._summaryEl.innerHTML).toContain('KAAA → KBBB');
+        expect(rt._summaryEl.innerHTML).toContain(label('KAAA', 'KBBB'));
         expect(handleNm(rt)).toBe(180);
     });
 
-    it('with no missed-approach flags, a route ending at a fix still totals to its end', () => {
+    it('a fix inserted after the marked destination does not become the destination', () => {
+        installGlobals({ currentFuel: 30 });
+        const wps = klkrWithMissed();
+        wps.splice(3, 0, { icao: 'WITUR', type: 'FIX', lat: 34.79, lon: -80.84, _legDist: 120, _segments: seg(10) });
+        const rt = makeTable(wps, 1);
+        rt._computeEnroute();
+        rt._updateSummary();
+
+        expect(rt._flights[0].arrWpIndex).toBe(2);
+        expect(handleNm(rt)).toBe(180);
+        expect(rt._summaryEl.innerHTML).toContain(label('KCLT', 'KLKR'));
+    });
+
+    it('with no marker, a route ending at a fix still totals to its end', () => {
         installGlobals({ currentFuel: 30 });
         // KAAA → KMID (pilot said "Not a stop") → SAX (VOR, end of route).
         const wps = [
@@ -202,39 +222,40 @@ describe('route table — the missed-approach flag survives edits without going 
         expect(handleNm(rt)).toBe(180);
     });
 
-    it('route-table edits keep isMissed and publish the real destination', () => {
+    it('route-table edits keep the marker and publish the real destination', () => {
         installGlobals({ currentFuel: 30 });
         const rt = makeTable(klkrWithMissed(), 1);
         let emitted = null;
         rt._onRouteChanged = (plan) => { emitted = plan; };
         rt._emitRouteChange();
 
-        expect(emitted.waypoints.map(w => !!w.isMissed)).toEqual([false, false, false, true]);
+        expect(emitted.waypoints.map(w => !!w.isDest)).toEqual([false, false, true, false]);
         expect(emitted.flight_plan.destination).toBe('KLKR');
     });
 });
 
 describe('ActiveRoute — destination index', () => {
-    it('arrivalIndex is the last waypoint before the trailing missed-approach run', () => {
+    it('markedDestIndex returns the marked destination, ignoring a stale one', () => {
         const wps = [
-            { icao: 'KLKR' }, { icao: 'CTF' }, { icao: 'KLKR' },
-            { icao: 'MAP1', isMissed: true }, { icao: 'CORON', isMissed: true },
+            { icao: 'KLKR', type: 'APT' }, { icao: 'CTF' },
+            { icao: 'KLKR', type: 'APT', isDest: true }, { icao: 'MAP1' }, { icao: 'CORON' },
         ];
-        expect(ActiveRoute.arrivalIndex(wps)).toBe(2);
-        expect(ActiveRoute.arrivalIndex(wps.slice(0, 3))).toBe(-1);   // no missed approach
+        expect(ActiveRoute.markedDestIndex(wps)).toBe(2);
+        expect(ActiveRoute.markedDestIndex([...wps, { icao: 'KBBB', type: 'APT' }])).toBe(-1);   // stale
+        expect(ActiveRoute.markedDestIndex(wps.map(({ isDest, ...w }) => w))).toBe(-1);         // unmarked
     });
 
-    it('uses the missed-approach flags ahead of the last-airport rule', () => {
+    it('uses the marked destination ahead of the last-airport rule', () => {
         ActiveRoute.setPlan({ waypoints: [
             { icao: 'KAAA',   type: 'APT' },
             { icao: 'KMID',   type: 'APT' },
-            { icao: 'DESTFX', type: 'FIX' },
-            { icao: 'HOLD',   type: 'FIX', isMissed: true },
+            { icao: 'DESTFX', type: 'FIX', isDest: true },
+            { icao: 'HOLD',   type: 'FIX' },
         ] });
         expect(ActiveRoute.getDestIndex()).toBe(2);
     });
 
-    it('still falls back to the last airport when nothing is flagged', () => {
+    it('still falls back to the last airport when nothing is marked', () => {
         ActiveRoute.setPlan({ waypoints: [
             { icao: 'KCLT', type: 'APT' }, { icao: 'KLKR', type: 'APT' }, { icao: 'CORON', type: 'FIX' },
         ] });

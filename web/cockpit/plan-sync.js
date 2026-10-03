@@ -349,8 +349,8 @@ class PlanSync {
                 }
 
                 if (action === 'replan') {
-                    // Await open(): it resets and rebuilds the plan asynchronously, and a
-                    // Plan tap racing it would be overwritten with the saved, wind-less plan.
+                    // Await open(): it resets and rebuilds the plan asynchronously. Plan then
+                    // waits for open()'s own wind fetch before recomputing, so the two can't race.
                     const panel = window.app?.routePlannerPanel;
                     if (panel) {
                         await panel.open(planToLoad);
