@@ -44,16 +44,9 @@ class EnginePage {
 
         // Config defaults (overridden by CockpitConfig.get('enginePage'))
         this._cfg = {
-            egtCaution: 1500,
-            egtDanger: 1650,
-            chtCaution: 380,
-            chtDanger: 435,
-            oilTempCaution: 220,
-            oilTempDanger: 245,
-            oilPressLow: 25,         // red below — Lycoming minimum
-            oilPressCautionLow: 55,  // yellow below — approaching minimum
-            oilPressCautionHigh: 95, // yellow above — approaching redline
-            oilPressDanger: 100,     // red above — Lycoming redline
+            // EGT/CHT/oil limits live in shared/engine-limits.js (one copy, also used
+            // by the map's engine box); `enginePage` config overrides still apply.
+            ...(typeof EngineLimits !== 'undefined' ? EngineLimits.DEFAULTS : {}),
             // Fallback only. The canonical capacity lives in aircraft-config.json
             // (performance.fuel_capacity_gal) and is read in _loadConfig(). 36 gal =
             // 2 x 18 gal tanks; the Pi's old 34 gal "usable capacity" is deprecated.
@@ -558,21 +551,12 @@ class EnginePage {
         this._setText('ep-map', mp > 0 ? mp.toFixed(1) : '--.-');
         this._setText('ep-ff',  fuelFlow > 0 ? fuelFlow.toFixed(1) : '--.-');
 
-        this._setTextColored('ep-oilt', Math.round(oilTemp),
-            oilTemp >= this._cfg.oilTempDanger ? 'danger' :
-            oilTemp >= this._cfg.oilTempCaution ? 'caution' : 'normal');
-
-        this._setTextColored('ep-oilp', Math.round(oilPress),
-            oilPress <= this._cfg.oilPressLow ? 'danger' :
-            oilPress >= this._cfg.oilPressDanger ? 'danger' :
-            oilPress <= this._cfg.oilPressCautionLow ? 'caution' :
-            oilPress >= this._cfg.oilPressCautionHigh ? 'caution' : 'normal');
+        this._setTextColored('ep-oilt', Math.round(oilTemp), this._level('oilTempLevel', oilTemp));
+        this._setTextColored('ep-oilp', Math.round(oilPress), this._level('oilPressLevel', oilPress));
 
         this._setText('ep-volts', volts > 0 ? volts.toFixed(1) : '--.-');
 
-        // Carb temp -- shared rule (shared/engine-limits.js) so the map's engine
-        // box colors the same reading the same way.
-        this._setTextColored('ep-carb', Math.round(carbTemp), EngineLimits.carbTempLevel(carbTemp));
+        this._setTextColored('ep-carb', Math.round(carbTemp), this._level('carbTempLevel', carbTemp));
 
         /* ---- Section 2: Engine analysis ---- */
         this._setText('ep-pwr', percentPower > 0 ? Math.round(percentPower) + '%' : '--');
@@ -591,9 +575,7 @@ class EnginePage {
         /* ---- Section 3: EGT ---- */
         for (let i = 0; i < 4; i++) {
             const val = egt[i];
-            this._setTextColored(`ep-egt-${i + 1}`, val > 0 ? Math.round(val) : '----',
-                val >= this._cfg.egtDanger ? 'danger' :
-                val >= this._cfg.egtCaution ? 'caution' : 'normal');
+            this._setTextColored(`ep-egt-${i + 1}`, val > 0 ? Math.round(val) : '----', this._level('egtLevel', val));
 
             // Trend arrow
             const diff = val - this._prevEgt[i];
@@ -622,9 +604,7 @@ class EnginePage {
         const chtSpread = chtVals.length >= 2 ? Math.max(...chtVals) - Math.min(...chtVals) : 0;
         for (let i = 0; i < 4; i++) {
             const val = cht[i];
-            this._setTextColored(`ep-cht-${i + 1}`, val > 0 ? Math.round(val) : '---',
-                val >= this._cfg.chtDanger ? 'danger' :
-                val >= this._cfg.chtCaution ? 'caution' : 'normal');
+            this._setTextColored(`ep-cht-${i + 1}`, val > 0 ? Math.round(val) : '---', this._level('chtLevel', val));
 
             const diff = val - this._prevCht[i];
             this._setTrend(`ep-cht-${i + 1}-trend`, diff);
@@ -1152,6 +1132,15 @@ class EnginePage {
     _setText(id, val) {
         const el = this._el.querySelector('#' + id);
         if (el) el.textContent = val;
+    }
+
+    /**
+     * Color level from the shared rules (shared/engine-limits.js) -- the same ones
+     * the map's engine box uses -- with this page's limits (incl. `enginePage`
+     * overrides). Without that script loaded, values still render, uncolored.
+     */
+    _level(rule, value) {
+        return (typeof EngineLimits !== 'undefined') ? EngineLimits[rule](value, this._cfg) : 'normal';
     }
 
     _setTextColored(id, val, level) {

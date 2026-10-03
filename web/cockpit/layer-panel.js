@@ -78,7 +78,8 @@ class LayerPanel {
         if (!inputs.length || typeof EngineOverlay === 'undefined') return;
         const refresh = () => {
             const on = new Set(EngineOverlay.selectedKeys());
-            const full = on.size >= EngineOverlay.MAX_FIELDS;
+            // Hand-added (non-catalog) fields take slots too.
+            const full = EngineOverlay.configuredCount() >= EngineOverlay.MAX_FIELDS;
             for (const input of inputs) {
                 input.checked = on.has(input.dataset.engineField);
                 // At the limit, the unchecked ones can't be turned on until one is turned off.

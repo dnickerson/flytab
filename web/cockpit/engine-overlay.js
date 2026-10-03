@@ -19,21 +19,21 @@ class EngineOverlay {
      * The catalog -- not the saved config -- decides how a catalog value looks
      * (label, unit, decimals, color rule): saved settings only say WHICH values
      * are on, so a rule change here reaches tablets whose saved config still
-     * carries older labels or thresholds. `level` names a shared EngineLimits
-     * rule so the map and the ENG page color the same reading the same way;
-     * only carb temp has one so far.
+     * carries older labels or thresholds. `level` names the shared EngineLimits
+     * rule the ENG page uses for the same value, so both color a reading the same
+     * way; `zeroIsBlank` shows "--" for a reading <= 0, as the ENG page does.
      */
     static CATALOG = [
-        { key: 'carb_temp',     label: 'CARB TEMP', unit: '°F', level: 'carbTemp' },
+        { key: 'carb_temp',     label: 'CARB TEMP', unit: '°F',   level: 'carbTempLevel' },
         { key: 'rpm',           label: 'RPM',       unit: '' },
-        { key: 'mp',            label: 'MP',        unit: '"',    decimals: 1 },
-        { key: 'fuel_flow',     label: 'FF',        unit: ' gph', decimals: 1 },
-        { key: 'percent_power', label: '% PWR',     unit: '%' },
-        { key: 'oil_temp',      label: 'OIL TEMP',  unit: '°F' },
-        { key: 'oil_press',     label: 'OIL PRESS', unit: ' psi' },
-        { key: 'cht_max',       label: 'CHT MAX',   unit: '°F' },
-        { key: 'egt_max',       label: 'EGT MAX',   unit: '°F' },
-        { key: 'volts',         label: 'VOLTS',     unit: 'V',    decimals: 1 },
+        { key: 'mp',            label: 'MP',        unit: '"',    decimals: 1, zeroIsBlank: true },
+        { key: 'fuel_flow',     label: 'FF',        unit: ' gph', decimals: 1, zeroIsBlank: true },
+        { key: 'percent_power', label: '% PWR',     unit: '%',    zeroIsBlank: true },
+        { key: 'oil_temp',      label: 'OIL TEMP',  unit: '°F',   level: 'oilTempLevel' },
+        { key: 'oil_press',     label: 'OIL PRESS', unit: ' psi', level: 'oilPressLevel' },
+        { key: 'cht_max',       label: 'CHT MAX',   unit: '°F',   level: 'chtLevel' },
+        { key: 'egt_max',       label: 'EGT MAX',   unit: '°F',   level: 'egtLevel' },
+        { key: 'volts',         label: 'VOLTS',     unit: 'V',    decimals: 1, zeroIsBlank: true },
     ];
 
     /** More than this many cards would cover too much of the map. */
@@ -68,19 +68,42 @@ class EngineOverlay {
 
     /** 'danger' | 'caution' | 'normal' for a value of a resolved field. */
     static levelFor(field, value) {
-        if (field.level === 'carbTemp' && typeof EngineLimits !== 'undefined') {
-            return EngineLimits.carbTempLevel(value);
+        if (field.level) {
+            const rule = (typeof EngineLimits !== 'undefined') ? EngineLimits[field.level] : null;
+            return typeof rule === 'function' ? rule(value, EngineLimits.limits()) : 'normal';
         }
         if (field.dangerBelow != null && value < field.dangerBelow) return 'danger';
         if (field.warnBelow != null && value < field.warnBelow) return 'caution';
         return 'normal';
     }
 
+    /**
+     * Whether a Pi status frame carries a CURRENT EDM row. The Pi keeps resending
+     * its last parsed row every second after the EDM goes quiet (latest_data is
+     * never cleared), so engine:stale never fires for that; instead it sets
+     * serial_warning after 5 s without EDM data (cleared on the next good line)
+     * and serial_connected false when the port closes.
+     */
+    static edmCurrent(raw) {
+        return !(raw && (raw.serial_connected === false || raw.serial_warning));
+    }
+
+    /** Configured fields (catalog and hand-added), as saved. */
+    static _configuredFields() {
+        try {
+            const f = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.get('engineOverlay.fields') : null;
+            return Array.isArray(f) ? f.filter(x => x && x.key) : [];
+        } catch (_) { return []; }
+    }
+
+    /** Fields shown in total (catalog + hand-added) -- what MAX_FIELDS limits. */
+    static configuredCount() {
+        return EngineOverlay._configuredFields().length;
+    }
+
     /** Catalog keys currently shown (from config), in catalog order. */
     static selectedKeys() {
-        let fields = [];
-        try { fields = (typeof CockpitConfig !== 'undefined' && CockpitConfig.get('engineOverlay.fields')) || []; } catch (_) { /* none */ }
-        const on = new Set(fields.map(f => EngineOverlay._norm(f.key)));
+        const on = new Set(EngineOverlay._configuredFields().map(f => EngineOverlay._norm(f.key)));
         return EngineOverlay.CATALOG.filter(c => on.has(EngineOverlay._norm(c.key))).map(c => c.key);
     }
 
@@ -92,13 +115,14 @@ class EngineOverlay {
     static setSelectedKeys(keys) {
         const want = new Set((keys || []).map(EngineOverlay._norm));
         const catalogNorm = new Set(EngineOverlay.CATALOG.map(c => EngineOverlay._norm(c.key)));
-        let current = [];
-        try { current = CockpitConfig.get('engineOverlay.fields') || []; } catch (_) { /* none */ }
-        const custom = current.filter(f => !catalogNorm.has(EngineOverlay._norm(f.key)));
+        const custom = EngineOverlay._configuredFields().filter(f => !catalogNorm.has(EngineOverlay._norm(f.key)));
         // Only which values are on is saved; how they look comes from the catalog.
+        // Hand-added fields keep their slots; the catalog gets what's left of the cap.
+        const room = Math.max(0, EngineOverlay.MAX_FIELDS - custom.length);
         const chosen = EngineOverlay.CATALOG.filter(c => want.has(EngineOverlay._norm(c.key)))
+            .slice(0, room)
             .map(c => ({ key: c.key, label: c.label, unit: c.unit }));
-        const fields = [...chosen, ...custom].slice(0, EngineOverlay.MAX_FIELDS);
+        const fields = [...chosen, ...custom];
         CockpitConfig.patch('engineOverlay.fields', fields);
         if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('engineoverlay:fieldschanged'));
         return fields;
@@ -149,7 +173,9 @@ class EngineOverlay {
         // Position
         const pos = config.position || 'top-right';
         if (pos === 'top-right') {
-            this._el.style.top = '64px';
+            // Below the two 44px map corner buttons (#mapCornerBtns: top 8, gap 4 ->
+            // they end at 100px); at 64px the D-> button covered the first value.
+            this._el.style.top = '108px';
             this._el.style.right = '8px';
         } else if (pos === 'top-left') {
             this._el.style.top = '64px';
@@ -183,15 +209,16 @@ class EngineOverlay {
 
     _listen(engineClient) {
         this._engineClient = engineClient;
-        this._onData = (e) => this.update(EngineOverlay.flatten(e.detail));
+        this._onData = (e) => this.update(EngineOverlay.edmCurrent(e.detail) ? EngineOverlay.flatten(e.detail) : null);
         this._onStale = (e) => { if (e.detail?.stale) this.update(null); };
         this._onDisconnect = () => this.update(null);
         engineClient.addEventListener('engine:data', this._onData);
         engineClient.addEventListener('engine:stale', this._onStale);
         engineClient.addEventListener('engine:disconnect', this._onDisconnect);
         // Data that arrived before the overlay existed.
-        if (engineClient.lastData && engineClient.connected !== false && !engineClient.stale) {
-            this.update(EngineOverlay.flatten(engineClient.lastData));
+        const last = engineClient.lastData;
+        if (last && engineClient.connected !== false && !engineClient.stale && EngineOverlay.edmCurrent(last)) {
+            this.update(EngineOverlay.flatten(last));
         }
     }
 
@@ -228,7 +255,7 @@ class EngineOverlay {
         for (const { rowEl, valEl, field } of this._fieldEls) {
             const raw = EngineOverlay.valueFor(data, field.key);
             const value = raw == null || raw === '' ? null : Number(raw);
-            const ok = value != null && Number.isFinite(value);
+            const ok = value != null && Number.isFinite(value) && !(field.zeroIsBlank && value <= 0);
             const shown = ok ? (field.decimals ? value.toFixed(field.decimals) : Math.round(value)) : '--';
             valEl.textContent = shown + (field.unit || '');
 

@@ -215,3 +215,80 @@ describe('EngineOverlay picker support', () => {
         ov.destroy();
     });
 });
+
+describe('EngineOverlay — code review fixes', () => {
+    const card = (c) => [...c.querySelectorAll('.engine-overlay-field')].map(r => [
+        r.querySelector('.engine-overlay-label').textContent, r.querySelector('.engine-overlay-value').textContent,
+        r.querySelector('.engine-overlay-value').className.replace('engine-overlay-value', '').trim()]);
+
+    it('blanks when the Pi says the EDM has gone quiet (serial_warning), even though frames keep arriving', () => {
+        const client = makeClient();
+        new EngineOverlay(container, client);
+        client.emit('engine:data', piStatus({ Carb_Temp: 75 }));
+        expect(value().textContent).toBe('75°F');
+        // The Pi resends its last row every second; only serial_warning says it is old.
+        client.emit('engine:data', { ...piStatus({ Carb_Temp: 75 }), serial_warning: 'No data received for 7 seconds' });
+        expect(value().textContent).toBe('--°F');
+        client.emit('engine:data', { ...piStatus({ Carb_Temp: 76 }), serial_warning: null });
+        expect(value().textContent).toBe('76°F');
+        client.emit('engine:data', { ...piStatus({ Carb_Temp: 76 }), serial_connected: false });
+        expect(value().textContent).toBe('--°F');
+    });
+
+    it('does not show an old row from lastData when the EDM was already quiet', () => {
+        const client = makeClient();
+        client.lastData = { ...piStatus({ Carb_Temp: 88 }), serial_warning: 'No data received for 30 seconds' };
+        new EngineOverlay(container, client);
+        expect(value().textContent).toBe('--°F');
+    });
+
+    it('colors oil, CHT and EGT with the ENG page limits', () => {
+        setConfig([{ key: 'oil_temp' }, { key: 'oil_press' }, { key: 'cht_max' }, { key: 'egt_max' }]);
+        const client = makeClient();
+        new EngineOverlay(container, client);
+        client.emit('engine:data', piStatus({ Oil_Temp: 230, Oil_Press: 20, CHT1: 440, CHT2: 300, EGT1: 1400 }));
+        expect(card(container)).toEqual([
+            ['OIL TEMP', '230°F', 'caution'],     // >= 220
+            ['OIL PRESS', '20 psi', 'danger'],    // <= 25
+            ['CHT MAX', '440°F', 'danger'],       // >= 435
+            ['EGT MAX', '1400°F', ''],            // < 1500
+        ]);
+    });
+
+    it('honors enginePage config overrides of those limits, like the ENG page', () => {
+        const fields = [{ key: 'cht_max' }];
+        globalThis.CockpitConfig = { get: (p) => p === 'engineOverlay'
+            ? { enabled: true, position: 'top-right', fields }
+            : p === 'enginePage' ? { chtCaution: 350, chtDanger: 400 } : undefined };
+        const client = makeClient();
+        new EngineOverlay(container, client);
+        client.emit('engine:data', piStatus({ CHT1: 410 }));
+        expect(value().className).toContain('danger');
+    });
+
+    it('shows "--" where the ENG page does for a zero reading (MP, FF, % PWR, VOLTS), but 0 for carb/oil', () => {
+        setConfig([{ key: 'carb_temp' }, { key: 'mp' }, { key: 'fuel_flow' }, { key: 'percent_power' }, { key: 'volts' }, { key: 'oil_press' }]);
+        const client = makeClient();
+        new EngineOverlay(container, client);
+        client.emit('engine:data', { percent_power: 0, data: { Carb_Temp: 0, MP: 0, Fuel_Flow: 0, Volts: 0, Oil_Press: 0 } });
+        expect(card(container).map(c => c[1])).toEqual(['0°F', '--"', '-- gph', '--%', '--V', '0 psi']);
+    });
+
+    it('sits below the D-> button (map corner buttons end at 100px)', () => {
+        new EngineOverlay(container);
+        expect(container.querySelector('.engine-overlay').style.top).toBe('108px');
+    });
+
+    it('the cap counts hand-added fields: they keep their slots and are never dropped', () => {
+        const cfg = { engineOverlay: { enabled: true, fields: [{ key: 'GP2', label: 'GP2' }] } };
+        globalThis.CockpitConfig = {
+            get: (p) => p.split('.').reduce((o, k) => (o == null ? undefined : o[k]), cfg),
+            patch: (p, v) => { const ks = p.split('.'); let o = cfg; for (const k of ks.slice(0, -1)) o = o[k]; o[ks[ks.length - 1]] = v; },
+        };
+        EngineOverlay.setSelectedKeys(EngineOverlay.CATALOG.map(c => c.key));
+        const keys = cfg.engineOverlay.fields.map(f => f.key);
+        expect(keys.length).toBe(EngineOverlay.MAX_FIELDS);
+        expect(keys).toContain('GP2');
+        expect(EngineOverlay.configuredCount()).toBe(EngineOverlay.MAX_FIELDS);
+    });
+});
