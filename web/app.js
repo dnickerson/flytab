@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v10.72';
+const FLYTAB_VERSION = 'v10.75';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -389,19 +389,12 @@ class FlyTabApp {
 
     /** Handle network mode transitions */
     _onModeChanged(mode, previous) {
-        if (mode === 'flight') {
-            // Connect to Stratux + engine on Pi hotspot
-            if (this.stratuxClient && !this.stratuxClient.connected) {
-                this.stratuxClient.connect();
-            }
-            if (this.engineClient && !this.engineClient.connected) {
-                this.engineClient.connect();
-            }
-        } else if (previous === 'flight') {
-            // Left flight mode — disconnect live telemetry
-            if (this.stratuxClient) this.stratuxClient.disconnect();
-            if (this.engineClient) this.engineClient.disconnect();
-        }
+        // Never connect()/disconnect() the Stratux or engine clients here. Both
+        // are connected once in _initCockpit and reconnect on their own forever.
+        // Mode is just a periodic HTTP probe: tearing the links down on a mode
+        // change (disconnect() also stops their reconnect loops) lost all GPS,
+        // traffic and engine data until app restart, and connect() on a link
+        // whose sockets were still opening rebuilt them all (field bug 2026-10-02).
 
         // Trigger immediate internet METAR refresh whenever we gain internet access
         if ((mode === 'internet' || mode === 'home') && previous === 'offline') {

@@ -42,7 +42,7 @@ const _StratuxNativeBus = (() => {
             const s = sessions.get(channel);
             if (s && s.id === id) sessions.delete(channel);
         },
-        open(channel, url, session) { native.open({ channel, url, session }); },
+        open(channel, url, session, ping) { native.open({ channel, url, session, ping }); },
         close(channel)              { native.close({ channel }); },
     };
 })();
@@ -99,7 +99,12 @@ function _createStratuxWs(channel, url) {
         },
         onerror:   (ev) => { if (ws.onerror) ws.onerror({ message: ev.message }); },
     });
-    _StratuxNativeBus.open(channel, url, ws._sid);
+    // No WebSocket protocol pings on /situation: Stratux's handleSituationWS
+    // only Write()s and never Read()s, and golang.org/x/net/websocket only
+    // answers a ping from inside Read() — so the pong never comes and OkHttp
+    // kills the socket ~60 s after every connect. The situation channel's dead-
+    // connection detection is StratuxClient's silence watchdog instead.
+    _StratuxNativeBus.open(channel, url, ws._sid, channel !== 'situation');
     return ws;
 }
 
@@ -120,6 +125,15 @@ class StratuxClient extends EventTarget {
         this._weatherReconnectTimer = null;
         this._jsonioReconnectTimer = null;
         this._disconnected = false;
+
+        // Link health (see _linkWatchdogTick). _lastSituationMsgAt: last time the
+        // situation WS opened or delivered a message. _lastUdpDataAt: last GDL 90
+        // ownship/situation/traffic datagram — heartbeats don't count, because
+        // Stratux keeps sending heartbeats to clients it has stopped sending data to.
+        this._linkWatchdog = null;
+        this._lastSituationMsgAt = 0;
+        this._lastUdpDataAt = 0;
+        this._udpHeartbeatLogged = false;
 
         // Traffic map: icao_addr → target object
         this.traffic = new Map();
@@ -161,12 +175,16 @@ class StratuxClient extends EventTarget {
         // cockpit alive.
         if (this.udpMode) {
             _StratuxUdpBus.attach({
-                onSituation: (msg) => this._handleSituation(msg),
-                onTraffic:   (msg) => this._handleTraffic(msg),
+                onSituation: (msg) => { this._noteUdpData(); this._handleSituation(msg); },
+                onTraffic:   (msg) => { this._noteUdpData(); this._handleTraffic(msg); },
+                // A heartbeat alone does NOT mean connected: Stratux sends only
+                // heartbeats to a client it considers sleeping (no ICMP echo reply
+                // in 10 s, or a recent port-unreachable) — main/network.go
+                // collectMessages. Log it once for diagnostics only.
                 onHeartbeat: () => {
-                    if (!this._connected) {
-                        if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', 'GDL 90: first heartbeat — connected');
-                        this._setConnected(true);
+                    if (!this._udpHeartbeatLogged) {
+                        this._udpHeartbeatLogged = true;
+                        if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', 'GDL 90: first heartbeat');
                     }
                 },
             });
@@ -191,6 +209,7 @@ class StratuxClient extends EventTarget {
             this._pollTowers();
         }
         this._startPurge();
+        this._startLinkWatchdog();
 
         // Start the stale timer immediately so that if Stratux never connects
         // (e.g. not on the Stratux Wi-Fi network), stratux:stale fires after 5s
@@ -217,6 +236,7 @@ class StratuxClient extends EventTarget {
         if (this._purgeInterval) { clearInterval(this._purgeInterval); this._purgeInterval = null; }
         if (this._statusTimer) { clearInterval(this._statusTimer); this._statusTimer = null; }
         if (this._towerTimer) { clearInterval(this._towerTimer); this._towerTimer = null; }
+        if (this._linkWatchdog) { clearInterval(this._linkWatchdog); this._linkWatchdog = null; }
         clearTimeout(this._staleTimer);
         this._staleTimer = null;
         this._stale = false;
@@ -333,9 +353,11 @@ class StratuxClient extends EventTarget {
         } catch { return; }
 
         this._situationWs.onopen = () => {
+            this._lastSituationMsgAt = Date.now();
         };
 
         this._situationWs.onmessage = (e) => {
+            this._lastSituationMsgAt = Date.now();
             try {
                 const msg = JSON.parse(e.data);
                 this._handleSituation(msg);
@@ -564,7 +586,7 @@ class StratuxClient extends EventTarget {
 
     /** Reconnect only the traffic WS — don't tear down situation/weather/jsonio */
     _scheduleTrafficReconnect(trafficWsRef) {
-        this._setConnected(false);
+        if (!this._udpDataFresh()) this._setConnected(false);
         if (this._reconnectTimer) return;
         this._reconnectTimer = setTimeout(() => {
             this._reconnectTimer = null;
@@ -589,7 +611,7 @@ class StratuxClient extends EventTarget {
     }
 
     _scheduleReconnect() {
-        this._setConnected(false);
+        if (!this._udpDataFresh()) this._setConnected(false);
         if (this._reconnectTimer) return;
         this._reconnectTimer = setTimeout(() => {
             this._reconnectTimer = null;
@@ -599,6 +621,53 @@ class StratuxClient extends EventTarget {
             this._connectJsonio();
         }, this._reconnectDelay);
         this._reconnectDelay = Math.min(this._reconnectDelay * 2, this._maxDelay);
+    }
+
+    // ========== Link Health ==========
+
+    _noteUdpData() {
+        this._lastUdpDataAt = Date.now();
+        if (!this._connected) {
+            if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', 'GDL 90: data flowing — connected');
+            this._setConnected(true);
+        }
+    }
+
+    _udpDataFresh() {
+        return this._lastUdpDataAt > 0 && Date.now() - this._lastUdpDataAt < StratuxClient.UDP_FRESH_MS;
+    }
+
+    _startLinkWatchdog() {
+        if (this._linkWatchdog) return;
+        this._linkWatchdog = setInterval(() => this._linkWatchdogTick(), 1000);
+    }
+
+    /** 1 Hz link-health check. Runs from connect() until disconnect(). */
+    _linkWatchdogTick() {
+        const now = Date.now();
+        const trafficOpen = this._trafficWs?.readyState === WebSocket.OPEN;
+
+        // `connected` follows data: drop it once UDP data has gone quiet and the
+        // traffic WS (whose onopen is the other thing that sets it) is not open.
+        if (this._connected && !trafficOpen && !this._udpDataFresh()) {
+            if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', 'Link down: traffic WS not open and no GDL 90 data');
+            this._setConnected(false);
+        }
+
+        const sit = this._situationWs;
+        if (sit && sit.readyState === WebSocket.OPEN) {
+            // Stratux pushes situation at 10 Hz unconditionally; silence means a
+            // dead (half-open) connection — the situation channel has no pings.
+            if (now - this._lastSituationMsgAt > StratuxClient.SITUATION_SILENCE_MS) {
+                if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', `Situation WS silent ${now - this._lastSituationMsgAt}ms — reconnecting`);
+                this._connectSituation();
+            }
+        } else if ((!sit || sit.readyState === WebSocket.CLOSED) && !this._situationReconnectTimer && this._connected) {
+            // Closed with nothing scheduled to bring it back (its onclose only
+            // reconnects if the traffic WS was OPEN at that instant).
+            if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', 'Situation WS closed with no reconnect pending — reconnecting');
+            this._connectSituation();
+        }
     }
 
     _setConnected(state) {
@@ -647,3 +716,9 @@ class StratuxClient extends EventTarget {
         }, 5000);
     }
 }
+
+// Situation WS silence that counts as a dead connection. Real Stratux sends at
+// 10 Hz, tools/mock-stratux.py at 1 Hz — 4 s tolerates both.
+StratuxClient.SITUATION_SILENCE_MS = 4000;
+// GDL 90 ownship is sent at 1 Hz; 3 s without any ownship/traffic = UDP not delivering.
+StratuxClient.UDP_FRESH_MS = 3000;

@@ -31,7 +31,8 @@ import okio.ByteString;
  * in ~30 s and surfaces a real close event so the JS reconnect path runs.
  *
  * JS API:
- *   StratuxWS.open({ channel, url })   // channel = 'traffic'|'situation'|'weather'|'jsonio'
+ *   StratuxWS.open({ channel, url, session, ping })   // channel = 'traffic'|'situation'|'weather'|'jsonio'
+ *                                      // ping (default true) = send WebSocket protocol pings
  *   StratuxWS.close({ channel })
  *   StratuxWS.addListener('message', ({channel, data}) => …)
  *   StratuxWS.addListener('open',    ({channel}) => …)
@@ -51,6 +52,12 @@ public class StratuxWsPlugin extends Plugin {
 
     private final Map<String, WebSocket> sockets = new HashMap<>();
     private OkHttpClient client;
+    // Same pool/dispatcher, no protocol pings. For Stratux's /situation endpoint,
+    // whose server handler never reads from the socket — golang.org/x/net/websocket
+    // only answers a ping from inside Read(), so a pinged /situation socket is
+    // failed by OkHttp ("didn't receive pong") ~60 s after every connect. JS
+    // detects a dead situation socket by message silence instead (10 Hz stream).
+    private OkHttpClient noPingClient;
 
     @Override
     public void load() {
@@ -61,6 +68,9 @@ public class StratuxWsPlugin extends Plugin {
             // Allow some time for the initial WS handshake.
             .connectTimeout(10, TimeUnit.SECONDS)
             .build();
+        noPingClient = client.newBuilder()
+            .pingInterval(0, TimeUnit.SECONDS)
+            .build();
     }
 
     @PluginMethod
@@ -68,6 +78,7 @@ public class StratuxWsPlugin extends Plugin {
         final String channel = call.getString("channel");
         final String url     = call.getString("url");
         final String session = call.getString("session", "");
+        final boolean ping   = Boolean.TRUE.equals(call.getBoolean("ping", true));
         if (channel == null || url == null) {
             call.reject("channel and url are required");
             return;
@@ -80,7 +91,7 @@ public class StratuxWsPlugin extends Plugin {
         }
 
         Request req = new Request.Builder().url(url).build();
-        WebSocket ws = client.newWebSocket(req, new WebSocketListener() {
+        WebSocket ws = (ping ? client : noPingClient).newWebSocket(req, new WebSocketListener() {
             // current() returns true only if THIS listener's socket is still the
             // active one for this channel. Prevents events from a cancelled
             // (replaced) socket from being delivered to JS as if they were a new
