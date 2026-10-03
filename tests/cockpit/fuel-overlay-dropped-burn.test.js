@@ -89,6 +89,23 @@ describe('FuelOverlay._applyDroppedBurnCorrection', () => {
         expect(FuelTankState.getState().left_gal).toBe(10);
     });
 
+    it('refuses while a mid-gap tank switch makes the correction ambiguous, without touching FuelTankState or the Pi', async () => {
+        // beforeEach leaves dropped_burn_estimate_gal at 2.14 (L active) — switching
+        // tanks now means the correction can no longer be safely attributed to one.
+        FuelTankState.switchTank('R');
+        const overlay = makeOverlay();
+        overlay._dom.droppedBurnInput.value = '1.7';
+        const fetchSpy = vi.spyOn(global, 'fetch');
+
+        await overlay._applyDroppedBurnCorrection();
+
+        expect(overlay._dom.droppedBurnStatus.textContent).toMatch(/switched tanks/i);
+        expect(fetchSpy).not.toHaveBeenCalled();
+        const state = FuelTankState.getState();
+        expect(state.right_gal).toBe(12); // active (post-switch) tank untouched
+        expect(state.dropped_burn_estimate_gal).toBe(2.14); // not consumed
+    });
+
     it('does not report success or sync to the Pi when applyDroppedBurn() silently refuses (invalid active_tank)', async () => {
         // The precondition check passes going in (requires_confirm is false), but
         // applyDroppedBurn() itself flags requires_confirm as a SIDE EFFECT because

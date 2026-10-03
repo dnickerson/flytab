@@ -28,7 +28,7 @@
  * creates, with the real FuelEngine / FuelState / FuelTankState / Settings and the
  * real shipped aircraft profile.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -66,10 +66,19 @@ beforeEach(() => {
             return undefined;
         },
     };
-    // Every network call the overlay makes is best-effort (Pi sync, flight-CSV EDM
-    // lookup). Offline is the fuel-stop reality and keeps _resolveEdmFuel() at null.
+    // The flight-CSV EDM lookup (_resolveEdmFuel(), localhost:9090) stays offline —
+    // these guard tests don't exercise EDM resolution and rely on it resolving to
+    // null. The Pi fuel-sync endpoints (fuel-overlay.js's _syncFuelSetToEngine /
+    // _syncFuelAddToEngine) are mocked reachable-and-successful instead: since
+    // Pi-sync outcome is now surfaced (rather than swallowed — see
+    // fuel-overlay-set-add-sync.test.js for the outcome-reporting contract itself),
+    // a real "offline" mock here would make every guard-accepted reading also
+    // report a Pi-sync failure, which is not what these tests are checking.
+    window.engineClient = { ip: '192.168.1.50' };
     realFetch = globalThis.fetch;
-    globalThis.fetch = () => Promise.reject(new Error('offline'));
+    globalThis.fetch = (url) => (typeof url === 'string' && url.includes('localhost:9090'))
+        ? Promise.reject(new Error('offline'))
+        : Promise.resolve({ ok: true, status: 200 });
     globalThis.wireTap = (el, fn) => { if (el) el.addEventListener('click', fn); };
 
     overlay = new FuelOverlay(document.body);
@@ -79,6 +88,7 @@ afterEach(() => {
     overlay?._el?.remove();
     overlay = null;
     globalThis.fetch = realFetch;
+    delete window.engineClient;
 });
 
 /* ---------------------------------------------------------------- helpers */
@@ -126,17 +136,20 @@ function departWith(tic) {
     return tank();
 }
 
-/** Fill in the gallons-purchased field and tap RECORD FUEL STOP. */
-function recordStop(gallons = 12) {
+/** Fill in the gallons-purchased field, tap RECORD FUEL STOP, and let its promise
+ *  chain settle (_recordFuelStop() is async — it awaits the Pi sync outcome
+ *  before writing status). */
+async function recordStop(gallons = 12) {
     overlay._dom.addGal.value = String(gallons);
     overlay._dom.addAirport.value = 'KMYL';
     tap('fo-add-record');
+    await new Promise(r => setTimeout(r, 20));
 }
 
 /* ------------------------------------------------------------------ tests */
 
 describe('fuel stop record — requires a reading entered this session', () => {
-    it('refuses the restored departure reading when no tic control was touched', () => {
+    it('refuses the restored departure reading when no tic control was touched', async () => {
         const departure = departWith(MAX_TIC);       // departed full: 36.0 gal
         expect(departure.total).toBe(36);
 
@@ -145,7 +158,7 @@ describe('fuel stop record — requires a reading entered this session', () => {
         expect(overlay._leftTic).toBe(MAX_TIC);
         expect(overlay._rightTic).toBe(MAX_TIC);
 
-        recordStop(12);
+        await recordStop(12);
 
         expect(rejected()).toBe(true);
         expect(status()).toMatch(/tic-mark reading/i);
@@ -156,13 +169,13 @@ describe('fuel stop record — requires a reading entered this session', () => {
         expect(JSON.parse(localStorage.getItem('flytab_fuel_stops') || '[]')).toHaveLength(0);
     });
 
-    it('records the pilot’s own reading, and writes THAT figure to tank state', () => {
+    it('records the pilot’s own reading, and writes THAT figure to tank state', async () => {
         departWith(MAX_TIC);                          // departed 36.0 gal
         const d = open();
         drag(d.leftSlider, 6);
         drag(d.rightSlider, 6);
 
-        recordStop(12);
+        await recordStop(12);
 
         expect(rejected()).toBe(false);
         expect(status()).toMatch(/Recorded:/);
@@ -172,7 +185,7 @@ describe('fuel stop record — requires a reading entered this session', () => {
         expect(JSON.parse(localStorage.getItem('flytab_fuel_stops'))).toHaveLength(1);
     });
 
-    it('accepts a reading that legitimately equals the restored one, once confirmed', () => {
+    it('accepts a reading that legitimately equals the restored one, once confirmed', async () => {
         departWith(8);
         const before = tank().total;
         open();
@@ -185,7 +198,7 @@ describe('fuel stop record — requires a reading entered this session', () => {
         expect(overlay._leftTic).toBe(8);
         expect(overlay._rightTic).toBe(8);
 
-        recordStop(8);
+        await recordStop(8);
 
         expect(rejected()).toBe(false);
         // Same figure, correctly recorded. Not bit-identical to `before` only because
@@ -197,13 +210,13 @@ describe('fuel stop record — requires a reading entered this session', () => {
         expect(Math.abs(tank().total - before)).toBeLessThan(0.15);
     });
 
-    it('counts the number field as entering the reading', () => {
+    it('counts the number field as entering the reading', async () => {
         departWith(MAX_TIC);
         const d = open();
         type(d.leftInput, 5);
         type(d.rightInput, 5);
 
-        recordStop(10);
+        await recordStop(10);
 
         expect(rejected()).toBe(false);
         expect(tank().total).toBe(FuelEngine.createMeasurement(5, 5, overlay._coefficients).total_gal);
@@ -223,12 +236,12 @@ describe('fuel stop record — requires a reading entered this session', () => {
         ['right + button',    () => tap('fo-right-plus')],
     ];
     CONTROLS.forEach(([label, touch]) => {
-        it(`accepts a reading entered with the ${label} alone`, () => {
+        it(`accepts a reading entered with the ${label} alone`, async () => {
             departWith(8);
             const d = open();
             touch(d);
 
-            recordStop(10);
+            await recordStop(10);
 
             expect(rejected()).toBe(false);
             expect(status()).toMatch(/Recorded:/);
@@ -238,7 +251,7 @@ describe('fuel stop record — requires a reading entered this session', () => {
         });
     });
 
-    it('starts every show() untouched — a reading entered before a hide does not carry over', () => {
+    it('starts every show() untouched — a reading entered before a hide does not carry over', async () => {
         departWith(MAX_TIC);
         const d = open();
         drag(d.leftSlider, 6);
@@ -246,29 +259,64 @@ describe('fuel stop record — requires a reading entered this session', () => {
         overlay.hide();
 
         open();                                        // second session, nothing touched
-        recordStop(12);
+        await recordStop(12);
 
         expect(rejected()).toBe(true);
         expect(tank().total).toBe(36);                 // still the departure figure
     });
 
-    it('consumes the reading — a second RECORD tap needs its own measurement', () => {
+    it('consumes the reading — a second RECORD tap needs its own measurement', async () => {
         departWith(MAX_TIC);
         const d = open();
         drag(d.leftSlider, 6);
         drag(d.rightSlider, 6);
 
-        recordStop(12);
+        await recordStop(12);
         expect(rejected()).toBe(false);
         const afterFirst = tank();
 
-        recordStop(12);                                // double tap / second pump
+        await recordStop(12);                          // double tap / second pump
         expect(rejected()).toBe(true);
         expect(tank().stampedAt).toBe(afterFirst.stampedAt);
         expect(JSON.parse(localStorage.getItem('flytab_fuel_stops'))).toHaveLength(1);
     });
 
-    it('still refuses 0/0 after the controls were touched — ticToGallons(0) is not zero', () => {
+    it('refuses a second RECORD tap fired before the first Pi sync settles (double-tap race)', async () => {
+        // Regression test for the async-conversion race: _recordFuelStop() now awaits
+        // a real network round trip (_syncFuelAddToEngine, up to 4000ms) before clearing
+        // _ticsTouchedSinceShow and the add* fields. Without a re-entrancy guard set
+        // BEFORE that await, a second tap fired while the Pi is slow to respond would
+        // sail past every guard — addGal.value unchanged, _ticsTouchedSinceShow still
+        // true — and append a second flytab_fuel_stops entry plus a second
+        // /api/fuel/add call, double-adding gallons to the Pi's authoritative total.
+        departWith(MAX_TIC);
+        const d = open();
+        drag(d.leftSlider, 6);
+        drag(d.rightSlider, 6);
+
+        // Simulate a slow Pi: /api/fuel/add doesn't resolve for 50ms.
+        globalThis.fetch = vi.fn((url) => (typeof url === 'string' && url.includes('localhost:9090'))
+            ? Promise.reject(new Error('offline'))
+            : new Promise(resolve => setTimeout(() => resolve({ ok: true, status: 200 }), 50)));
+
+        overlay._dom.addGal.value = '12';
+        overlay._dom.addAirport.value = 'KMYL';
+        // Fire two taps back-to-back, with no await between them — the async function
+        // only yields at the fetch await, so the second tap's guard check runs
+        // synchronously against the flag the first tap already set.
+        tap('fo-add-record');
+        tap('fo-add-record');
+
+        await new Promise(r => setTimeout(r, 80));
+
+        expect(JSON.parse(localStorage.getItem('flytab_fuel_stops'))).toHaveLength(1);
+        const addCalls = globalThis.fetch.mock.calls
+            .filter(([url]) => typeof url === 'string' && url.includes('/api/fuel/add'));
+        expect(addCalls).toHaveLength(1);
+        expect(overlay._recording).toBe(false);   // latch cleared, not wedged
+    });
+
+    it('still refuses 0/0 after the controls were touched — ticToGallons(0) is not zero', async () => {
         // The reason a computed-gallons check cannot stand in for this guard.
         expect(FuelEngine.ticToGallons(0, overlay._coefficients)).toBeGreaterThan(2);
 
@@ -277,7 +325,7 @@ describe('fuel stop record — requires a reading entered this session', () => {
         drag(d.leftSlider, 0);
         drag(d.rightSlider, 0);
 
-        recordStop(12);
+        await recordStop(12);
 
         expect(rejected()).toBe(true);
         expect(tank().total).toBe(36);                 // 4.5 gal of intercept never written
@@ -295,6 +343,124 @@ describe('fuel stop record — requires a reading entered this session', () => {
         expect(rejected()).toBe(true);
         expect(status()).toMatch(/gallons/i);
         expect(tank().total).toBe(36);
+    });
+});
+
+describe('fuel stop Pi-sync failure — safe retry (Finding 1, 2026-09 whole-branch audit)', () => {
+    /** Route localhost:9090 to reject (as beforeEach does) but let the caller choose
+     *  what /api/fuel/add itself does on each successive call. */
+    function mockFuelAdd(...outcomes) {
+        let call = 0;
+        globalThis.fetch = vi.fn((url) => {
+            if (typeof url === 'string' && url.includes('localhost:9090')) return Promise.reject(new Error('offline'));
+            if (typeof url === 'string' && url.includes('/api/fuel/add')) {
+                const outcome = outcomes[Math.min(call, outcomes.length - 1)];
+                call++;
+                return typeof outcome === 'function' ? outcome() : Promise.resolve(outcome);
+            }
+            return Promise.resolve({ ok: true, status: 200 });
+        });
+        return () => call;
+    }
+
+    it('a failed Pi sync records locally exactly once and does not invite a blind re-entry retry', async () => {
+        departWith(MAX_TIC);
+        const d = open();
+        drag(d.leftSlider, 6);
+        drag(d.rightSlider, 6);
+        mockFuelAdd(() => Promise.reject(new Error('network down')));
+
+        await recordStop(12);
+
+        expect(rejected()).toBe(true);
+        // The local write happened exactly once (record + tank state), same as any
+        // other successful RECORD tap — only the Pi POST failed.
+        expect(JSON.parse(localStorage.getItem('flytab_fuel_stops'))).toHaveLength(1);
+        expect(tank().total).toBe(26);
+        // State tracked for a safe, targeted retry.
+        expect(overlay._fuelStopPiSyncFailed).toBe(true);
+        expect(overlay._lastFuelStopPending).toMatchObject({ gallons: 12, airport: 'KMYL', price: null });
+        expect(overlay._dom.addRecord.textContent).toBe('RETRY PI SYNC');
+        // Message must not read as "go re-measure and tap RECORD again" — that would
+        // append a second flytab_fuel_stops entry and, being additive, could double the
+        // Pi's total if the original POST actually landed despite the client timeout.
+        expect(status()).not.toMatch(/before recording a fuel stop/i);
+        expect(status()).toMatch(/no new reading needed/i);
+        expect(status()).toMatch(/tap RECORD FUEL STOP again to resend/i);
+    });
+
+    it('tapping RECORD FUEL STOP again (no new gallons entered) retries only the Pi sync — no duplicate local record, no re-touched FuelTankState', async () => {
+        departWith(MAX_TIC);
+        const d = open();
+        drag(d.leftSlider, 6);
+        drag(d.rightSlider, 6);
+        const callCount = mockFuelAdd(
+            () => Promise.reject(new Error('network down')),
+            { ok: true, status: 200 },
+        );
+
+        await recordStop(12);
+        expect(overlay._fuelStopPiSyncFailed).toBe(true);
+        const stampAfterFirst = tank().stampedAt;
+        const totalAfterFirst = tank().total;
+
+        // addGal was cleared by the failed attempt — pilot has not entered a new
+        // reading, so the same button now retries instead of recording anew.
+        expect(d.addGal.value).toBe('');
+        tap('fo-add-record');
+        await new Promise(r => setTimeout(r, 20));
+
+        expect(callCount()).toBe(2); // exactly one retry POST, not a second full record
+        const addCalls = globalThis.fetch.mock.calls
+            .filter(([url]) => typeof url === 'string' && url.includes('/api/fuel/add'));
+        expect(addCalls).toHaveLength(2);
+        expect(JSON.parse(addCalls[1][1].body)).toEqual({ gallons: 12, airport: 'KMYL' });
+        // Local state untouched by the retry — same record, same tank state.
+        expect(JSON.parse(localStorage.getItem('flytab_fuel_stops'))).toHaveLength(1);
+        expect(tank().stampedAt).toBe(stampAfterFirst);
+        expect(tank().total).toBe(totalAfterFirst);
+    });
+
+    it('a successful retry clears the failed state and reports success', async () => {
+        departWith(MAX_TIC);
+        const d = open();
+        drag(d.leftSlider, 6);
+        drag(d.rightSlider, 6);
+        mockFuelAdd(
+            () => Promise.reject(new Error('network down')),
+            { ok: true, status: 200 },
+        );
+
+        await recordStop(12);
+        expect(overlay._fuelStopPiSyncFailed).toBe(true);
+
+        tap('fo-add-record');
+        await new Promise(r => setTimeout(r, 20));
+
+        expect(overlay._fuelStopPiSyncFailed).toBe(false);
+        expect(overlay._lastFuelStopPending).toBe(null);
+        expect(overlay._dom.addRecord.textContent).toBe('RECORD FUEL STOP');
+        expect(status()).toMatch(/Pi sync succeeded/i);
+        expect(overlay._dom.addStatus.className).toContain('fo-add-status-ok');
+    });
+
+    it('re-shows the retry reminder across hide()/show() without needing a new reading', async () => {
+        departWith(MAX_TIC);
+        const d = open();
+        drag(d.leftSlider, 6);
+        drag(d.rightSlider, 6);
+        mockFuelAdd(() => Promise.reject(new Error('network down')));
+
+        await recordStop(12);
+        expect(overlay._fuelStopPiSyncFailed).toBe(true);
+
+        overlay.hide();
+        open(); // fresh show() — a plain reopen must not silently drop the pending retry
+
+        expect(overlay._fuelStopPiSyncFailed).toBe(true);
+        expect(overlay._lastFuelStopPending).toMatchObject({ gallons: 12, airport: 'KMYL' });
+        expect(overlay._dom.addRecord.textContent).toBe('RETRY PI SYNC');
+        expect(status()).toMatch(/tap RECORD FUEL STOP to retry/i);
     });
 });
 
