@@ -30,18 +30,18 @@ import { PlanError, DestinationUnreachableError } from './route-planner-errors.j
 const AIRWAY_RE = /^[VTJQ]\d+[A-Z]?$/;
 
 /**
- * Index of the destination in plan.waypoints. Missed-approach fixes may follow
- * it, so it is not necessarily the last waypoint: the last waypoint flagged
- * isDest, else the last occurrence of plan.destination (the departure may share
- * the id), else the last waypoint.
- * @param {{waypoints: Array<{id?:string, isDest?:boolean}>, destination?: string}} plan
+ * Index of the destination in plan.waypoints. A loaded approach's missed-approach
+ * fixes (flagged isMissed) follow it, so: the last waypoint before the trailing
+ * isMissed run, else the last occurrence of plan.destination (the departure may
+ * share the id), else the last waypoint.
+ * @param {{waypoints: Array<{id?:string, isMissed?:boolean}>, destination?: string}} plan
  * @returns {number}
  */
 function destinationIndex(plan) {
     const wps = plan.waypoints || [];
-    for (let i = wps.length - 1; i > 0; i--) {
-        if (wps[i].isDest) return i;
-    }
+    let i = wps.length - 1;
+    while (i > 0 && wps[i].isMissed) i--;
+    if (i < wps.length - 1) return i;
     if (plan.destination) {
         for (let i = wps.length - 1; i > 0; i--) {
             if (wps[i].id === plan.destination) return i;

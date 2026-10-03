@@ -37,6 +37,8 @@
          Load the real nasr-db.js so the constructor's DB_NAME is available if needed.
          NasrDb does not open IDB at construction time — safe to include. -->
     <script src="/web/shared/nasr-db.js"></script>
+    <!-- ActiveRoute.arrivalIndex is the shared destination rule the panel uses. -->
+    <script src="/web/shared/active-route.js"></script>
     <script src="/web/cockpit/route-planner-panel.js"></script>
 
     <script>
@@ -136,23 +138,38 @@
              * Tap Plan against a stub planner whose recomputeLegs returns `legs`.
              * Returns the waypoint ids Plan computed and the warnings it raised.
              */
-            async tapPlan({ legs = [], reserveGal = 10 } = {}) {
+            async tapPlan({ legs = [], summary = {}, reserveGal = 10 } = {}) {
                 let planned = null, fuelStops = null;
                 panel._reserveGal = reserveGal;
                 panel._planner = {
                     recomputeLegs: (plan) => {
                         planned = plan.waypoints.map(w => w.id || w.icao);
                         fuelStops = plan.waypoints.filter(w => w.fuelStop).map(w => w.id || w.icao);
-                        return { ...plan, legs, summary: { fuelRemGal: legs.at(-1)?.fuelRemGal } };
+                        return { ...plan, legs, summary };
                     },
                 };
                 await panel._onRecomputeTap();
                 return { planned, fuelStops, warnings: panel._windWarnings || [] };
             },
-            /** Waypoints _pillsToWaypoints builds from the current pills (id + isDest). */
+            /**
+             * open(plan) with a stub planner already attached, so open()'s own
+             * recompute runs; returns the warnings it raised.
+             */
+            async openWithPlanner(plan, { summary = {}, reserveGal = 10 } = {}) {
+                panel._reserveGal = reserveGal;
+                panel._planner = { recomputeLegs: (p) => ({ ...p, legs: [], summary }) };
+                await panel.open(plan);
+                await panel._windsPromise;
+                return panel._windWarnings || [];
+            },
+            /** Waypoints _pillsToWaypoints builds from the current pills (id + isMissed). */
             async pillsToWaypoints() {
                 const wps = await panel._pillsToWaypoints();
-                return wps.map(w => ({ id: w.id, isDest: !!w.isDest }));
+                return wps.map(w => ({ id: w.id, isMissed: !!w.isMissed }));
+            },
+            /** Route pills with their missed-approach flag. */
+            getRouteWithMissed() {
+                return panel._route.map(p => `${p.id}:${p.type}${p.missed ? ':missed' : ''}`);
             },
             /** Type into the DEP input and fire its change handler. */
             setDep(value) {

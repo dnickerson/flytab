@@ -356,7 +356,7 @@ test.describe('destination with a loaded missed approach @planner-ui', () => {
         expect(text).toContain(`+${toDest} nm`);
     });
 
-    test('stats bar route distance, ETE, ETA and fuel stop at the destination, excluding the missed approach', async ({ page }) => {
+    test('stats bar shows the to-destination summary and the ETA at the destination, not at the hold', async ({ page }) => {
         await page.goto(HARNESS);
         await page.evaluate(pills => window.__harness.setPlannedRoute(pills), KCLT_KLKR_PILLS);
 
@@ -366,8 +366,10 @@ test.describe('destination with a loaded missed approach @planner-ui', () => {
             { distNm: 1,  timeHrs: 0.01, fuelGal: 0.1, eta: T0 + 16 * 60000 },   // RW24 → KLKR (dest)
             { distNm: 40, timeHrs: 0.30, fuelGal: 3.0, eta: T0 + 34 * 60000 },   // KLKR → HOLD1 (missed)
         ];
+        // recomputeLegs' summary stops at the destination (see route-planner.test.js);
+        // the 71 nm / 5.6 gal through-the-hold figures must not appear.
         const text = await page.evaluate(([wps, legs]) => window.__harness.updateStats({
-            waypoints: wps, legs, summary: { totalDistNm: 71, totalEteHrs: 0.56, totalFuelGal: 5.6 },
+            waypoints: wps, legs, summary: { totalDistNm: 31, totalEteHrs: 0.26, totalFuelGal: 2.6 },
         }), [KCLT_KLKR_WPS, legs]);
 
         const etaAtDest = await page.evaluate(t =>
@@ -473,15 +475,17 @@ test.describe('Plan button @planner-ui', () => {
         await page.evaluate(wps => window.__harness.setCoords(Object.fromEntries(
             wps.map(w => [w.icao, { lat: w.lat, lon: w.lon }]))), KCLT_KLKR_WPS_FOR_PLAN);
 
-        // 12 gal at KLKR (above the 10 gal reserve); 8 gal after the missed approach.
+        // 12 gal at KLKR (the summary's figure, above the 10 gal reserve); 8 gal after the missed approach.
         const legs = [{ fuelRemGal: 20 }, { fuelRemGal: 12 }, { fuelRemGal: 8 }];
-        const { planned, warnings } = await page.evaluate(legs => window.__harness.tapPlan({ legs }), legs);
+        const { planned, warnings } = await page.evaluate(legs =>
+            window.__harness.tapPlan({ legs, summary: { fuelRemGal: 12 } }), legs);
         expect(planned).toEqual(['KCLT', 'RW24', 'KLKR', 'HOLD1']);
         expect(warnings.some(w => w.startsWith('Fuel below reserve'))).toBe(false);
 
         // Below reserve at KLKR itself still warns.
         const low = [{ fuelRemGal: 15 }, { fuelRemGal: 9 }, { fuelRemGal: 5 }];
-        const again = await page.evaluate(legs => window.__harness.tapPlan({ legs }), low);
+        const again = await page.evaluate(legs =>
+            window.__harness.tapPlan({ legs, summary: { fuelRemGal: 9 } }), low);
         expect(again.warnings).toContain('Fuel below reserve: 9.0 gal at dest, 10 gal reserve required');
     });
 });
@@ -498,15 +502,44 @@ const KCLT_KLKR_WPS_FOR_PLAN = [
 ];
 
 test.describe('waypoints handed to the planner @planner-ui', () => {
-    test('only the destination waypoint is flagged isDest, so the descent ends at KLKR', async ({ page }) => {
+    test('loading an approach flags only its missed-approach fixes, and their waypoints carry isMissed', async ({ page }) => {
         await page.goto(HARNESS);
-        await page.evaluate(pills => window.__harness.setPlannedRoute(pills), KLKR_LOOP_PILLS);
+        await page.evaluate(() => window.__harness.setPlannedRoute([
+            { id: 'KLKR', type: 'dep' }, { id: 'KLKR', type: 'dest' },
+        ]));
+        await page.evaluate(detail => window.__harness.insertApproach(detail), KLKR_RNAV24);
+        expect(await page.evaluate(() => window.__harness.getRouteWithMissed())).toEqual([
+            'KLKR:dep', 'CTF:fix', 'LIGLE:fix', 'SAPSE:fix', 'WITUR:fix', 'RW24:fix', 'KLKR:dest', 'CORON:fix:missed',
+        ]);
+
         await page.evaluate(wps => window.__harness.setCoords(Object.fromEntries(
             wps.map(w => [w.icao, { lat: w.lat, lon: w.lon }]))), KLKR_LOOP_WPS);
-
         const wps = await page.evaluate(() => window.__harness.pillsToWaypoints());
-        expect(wps.filter(w => w.isDest).map(w => w.id)).toEqual(['KLKR']);
-        expect(wps.findIndex(w => w.isDest)).toBe(6);   // the arrival KLKR, not the departure
+        expect(wps.filter(w => w.isMissed).map(w => w.id)).toEqual(['CORON']);
+    });
+
+    test('a reopened trip keeps the missed-approach flag on the fixes after the destination', async ({ page }) => {
+        await page.goto(HARNESS);
+        await page.evaluate(plan => window.__harness.open(plan), {
+            departure: 'KLKR', destination: 'KLKR',
+            waypoints: KLKR_LOOP_WPS.map(w => (w.icao === 'CORON' ? { ...w, isMissed: true } : w)),
+            flight_plan: { departure: 'KLKR', destination: 'KLKR', route: KLKR_LOOP_IDS, legs: [] },
+        });
+        const route = await page.evaluate(() => window.__harness.getRouteWithMissed());
+        expect(route.at(-1)).toBe('CORON:fix:missed');
+        expect(route.filter(p => p.endsWith(':missed'))).toHaveLength(1);
+    });
+
+    test('Plan keeps the previous plan when a pill cannot be located', async ({ page }) => {
+        await page.goto(HARNESS);
+        await page.evaluate(pills => window.__harness.setPlannedRoute(pills), [
+            { id: 'KCLT', type: 'dep' }, { id: 'NOWHR', type: 'fix' }, { id: 'KLKR', type: 'dest' },
+        ]);
+        await page.evaluate(() => window.__harness.setCoords({
+            KCLT: { lat: 35.214, lon: -80.943 }, KLKR: { lat: 34.723, lon: -80.855 },
+        }));
+        const { planned } = await page.evaluate(() => window.__harness.tapPlan());
+        expect(planned).toBeNull();   // recomputeLegs never ran on the shortened route
     });
 });
 
@@ -526,6 +559,14 @@ test.describe('fuel stops survive reopen @planner-ui', () => {
         await page.evaluate(plan => window.__harness.open(plan), FUEL_TRIP);
         const route = await page.evaluate(() => window.__harness.getRoute());
         expect(typed(route)).toEqual(['KCLT:dep', 'KFGX:fuel', 'KLWA:dest']);
+    });
+
+    test('reopening a fuel-stop trip does not warn below reserve at the final destination', async ({ page }) => {
+        await page.goto(HARNESS);
+        // 5 gal at KLWA would be below the 10 gal reserve — but the trip refuels at KFGX.
+        const warnings = await page.evaluate(plan =>
+            window.__harness.openWithPlanner(plan, { summary: { fuelRemGal: 5 } }), FUEL_TRIP);
+        expect(warnings.some(w => w.startsWith('Fuel below reserve'))).toBe(false);
     });
 
     test('Plan on a reopened trip still plans the fuel stop', async ({ page }) => {

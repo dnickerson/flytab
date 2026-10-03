@@ -800,7 +800,7 @@ class RouteTable {
                     alt: wp.alt ?? wp.altitude,
                 };
                 if (wp.type) out.type = wp.type;
-                if (wp.isDest) out.isDest = true;   // keeps the destination ahead of missed-approach fixes
+                if (wp.isMissed) out.isMissed = true;   // a loaded approach's missed-approach fix
                 if (wp.fuel_add_gal != null) out.fuel_add_gal = wp.fuel_add_gal;
                 if (wp.alt_constraint) out.alt_constraint = wp.alt_constraint;
                 if (wp.alt_constraint_upper != null) out.alt_constraint_upper = wp.alt_constraint_upper;
@@ -815,7 +815,7 @@ class RouteTable {
             flight_plan: {
                 ...(this._trip?.flight_plan || {}),
                 departure: this._waypoints[0]?.icao || '',
-                destination: this._waypoints[this._tripDestIndex()]?.icao || '',
+                destination: this._waypoints[this._destLabelIndex()]?.icao || '',
                 // Clear stale legs — they were for the original route, not the edited one
                 legs: [],
                 // Preserve the original airway route array when waypoints are structurally
@@ -1268,11 +1268,11 @@ class RouteTable {
                 // may be a MAP/hold fix rather than the airport itself.
                 const destId = (isLast && this._destIcao) ? this._destIcao
                     : (wps[i].icao || wps[i].name || '?');
-                // Where the flight arrives: on the final flight, the trip destination,
-                // which missed-approach fixes may follow. Totals and to-destination
-                // figures stop here; rows still run to destWpIndex.
-                const tripDest = isLast ? this._tripDestIndex() : i;
-                const arrIdx = (tripDest > depIdx && tripDest <= i) ? tripDest : i;
+                // Where the flight arrives: on the final flight, the airport before any
+                // trailing missed-approach fixes. Totals and to-destination figures stop
+                // here; rows still run to destWpIndex.
+                const missedArr = isLast ? this._missedArrivalIndex() : -1;
+                const arrIdx = (missedArr > depIdx && missedArr <= i) ? missedArr : i;
                 flights.push({
                     index:       flights.length,
                     dep:         wps[depIdx].icao || wps[depIdx].name || '?',
@@ -1841,19 +1841,24 @@ class RouteTable {
     }
 
     /**
-     * Index of the trip's destination — missed-approach fixes may follow it: the
-     * waypoint flagged isDest (set by the route planner), else the last airport
-     * (ActiveRoute's rule), else the last waypoint. Never the departure.
+     * Index of the destination when the route ends in a loaded approach's
+     * missed-approach fixes (isMissed), else -1 — callers keep their own fallback.
      */
-    _tripDestIndex() {
-        const wps = this._waypoints;
-        for (let i = wps.length - 1; i > 0; i--) {
-            if (wps[i].isDest) return i;
+    _missedArrivalIndex() {
+        return typeof ActiveRoute !== 'undefined' ? ActiveRoute.arrivalIndex(this._waypoints) : -1;
+    }
+
+    /**
+     * Destination for labels and the emitted plan: before any trailing
+     * missed-approach fixes, else the last APT-typed waypoint, else the last.
+     */
+    _destLabelIndex() {
+        const arr = this._missedArrivalIndex();
+        if (arr >= 0) return arr;
+        for (let i = this._waypoints.length - 1; i >= 0; i--) {
+            if (this._waypoints[i].type === 'APT') return i;
         }
-        for (let i = wps.length - 1; i > 0; i--) {
-            if (wps[i].type === 'APT') return i;
-        }
-        return wps.length - 1;
+        return this._waypoints.length - 1;
     }
 
     /**
@@ -2992,13 +2997,14 @@ class RouteTable {
 
         const dep = this._waypoints[0];
         // Destination airport, not MAP or other appended fixes
-        const tripDestIdx = this._tripDestIndex();
-        const dest = this._waypoints[tripDestIdx];
+        const missedArr = this._missedArrivalIndex();
+        const dest = this._waypoints[this._destLabelIndex()];
         const active = this._waypoints[this._activeIndex];
 
-        // Remaining distance to the trip's destination airport; missed-approach legs
-        // after it are excluded until the active waypoint is past it.
-        const tripEndIdx = this._activeIndex <= tripDestIdx ? tripDestIdx : this._waypoints.length - 1;
+        // Remaining distance to the destination; a loaded missed approach after it is
+        // excluded until the active waypoint is past the destination.
+        const tripEndIdx = (missedArr >= 0 && this._activeIndex <= missedArr)
+            ? missedArr : this._waypoints.length - 1;
         let remainDist = 0;
         for (let i = this._activeIndex; i <= tripEndIdx; i++) {
             const wp = this._waypoints[i];

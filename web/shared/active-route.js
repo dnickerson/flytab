@@ -24,12 +24,24 @@ const ActiveRoute = (() => {
 
     // ── Internal helpers ────────────────────────────────────────────────────
 
+    /**
+     * Index of the last waypoint before a trailing run of missed-approach fixes
+     * (isMissed, set when the route planner loads an approach), or -1 when the
+     * route does not end in one — callers then apply their own fallback.
+     * Shared by RouteTable and RoutePlannerPanel; the planning library keeps its
+     * own copy (destinationIndex) because it must not depend on this script.
+     */
+    function arrivalIndex(wps) {
+        if (!wps || wps.length < 2) return -1;
+        let i = wps.length - 1;
+        while (i > 0 && wps[i].isMissed) i--;
+        return i < wps.length - 1 ? i : -1;
+    }
+
     function _findDestIndex(wps) {
         if (!wps || !wps.length) return -1;
-        // The route planner flags the destination isDest when missed-approach fixes follow it.
-        for (let i = wps.length - 1; i > 0; i--) {
-            if (wps[i].isDest) return i;
-        }
+        const arr = arrivalIndex(wps);
+        if (arr >= 0) return arr;
         // Otherwise the last waypoint typed APT is the destination; MAP fixes come after it.
         for (let i = wps.length - 1; i >= 0; i--) {
             if (wps[i].type === 'APT') return i;
@@ -85,5 +97,5 @@ const ActiveRoute = (() => {
     function getActiveWp()  { return _plan?.waypoints[_index] || null; }
     function getDestWp()    { return _destIndex >= 0 ? _plan?.waypoints[_destIndex] : null; }
 
-    return { setPlan, advance, setIndex, getPlan, getIndex, getDestIndex, getWaypoints, getActiveWp, getDestWp };
+    return { setPlan, advance, setIndex, getPlan, getIndex, getDestIndex, getWaypoints, getActiveWp, getDestWp, arrivalIndex };
 })();

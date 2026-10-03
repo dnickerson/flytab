@@ -241,7 +241,9 @@ class RoutePlannerPanel {
             wp.alt != null ? { altFt: wp.alt } : {}
         );
         const beforePills = insertBefore.map(toPill);
-        const afterPills  = insertAfter.map(toPill);
+        // Flagged so everything downstream (planner, route table) knows the destination
+        // is the waypoint before them, however the route is later edited.
+        const afterPills  = insertAfter.map(wp => ({ ...toPill(wp), missed: true }));
 
         if (airportIdx >= 0) {
             // Airport is in the route — splice approach fixes around it
@@ -270,13 +272,13 @@ class RoutePlannerPanel {
     }
 
     /**
-     * Index in wps of the destination: the waypoint flagged isDest, else the last
-     * match for the dest pill's id, else the last waypoint (same rule as recomputeLegs).
+     * Index in wps of the destination: the waypoint before a trailing run of
+     * missed-approach fixes (ActiveRoute.arrivalIndex), else the last match for the
+     * dest pill's id, else the last waypoint.
      */
     _destWaypointIndex(wps) {
-        for (let i = wps.length - 1; i > 0; i--) {
-            if (wps[i].isDest) return i;
-        }
+        const arr = typeof ActiveRoute !== 'undefined' ? ActiveRoute.arrivalIndex(wps) : -1;
+        if (arr >= 0) return arr;
         const destId = this._route[this._destPillIndex()]?.id;
         if (destId) {
             for (let i = wps.length - 1; i > 0; i--) {
@@ -436,6 +438,14 @@ class RoutePlannerPanel {
             if (pill.type === 'fix' && fuelIds.has(pill.id)) {
                 pill.type = 'fuel';
                 delete pill.airway;
+            }
+        }
+        // Restore the missed-approach flag on the pills that follow the destination.
+        const missedIds = new Set(wps.filter(wp => wp.isMissed).map(wp => wp.icao || wp.name || wp.fix));
+        const destPillIdx = this._destPillIndex();
+        if (destPillIdx >= 0) {
+            for (let i = destPillIdx + 1; i < this._route.length; i++) {
+                if (missedIds.has(this._route[i].id)) this._route[i].missed = true;
             }
         }
 
@@ -1522,6 +1532,10 @@ class RoutePlannerPanel {
         try {
             // Plan the route the pills show now, not the last auto-routed or applied trip.
             const wps = await this._pillsToWaypoints();
+            // A pill that can't be located is skipped (and toasted); planning without it
+            // would compute a different route than the one shown, so keep the last plan.
+            const expected = this._route.filter(p => p.type !== 'awy' && p.type !== 'direct').length;
+            if (wps.length < expected) return;
             if (wps.length < 2) {
                 this._toast('Add at least 2 waypoints');
                 return;
@@ -1778,11 +1792,11 @@ class RoutePlannerPanel {
         const destIdx = this._destWaypointIndex(wps);
         const dep  = wps[0];
         const dest = wps[destIdx];
-        // Totals run to the destination: leg i is wps[i]→wps[i+1], so missed-approach legs start at destIdx.
-        const toDest = destIdx < wps.length - 1 && legs.length === wps.length - 1;
-        const statLegs = toDest ? legs.slice(0, destIdx) : legs;
+        // recomputeLegs' summary already stops at the destination. The legs up to it
+        // (leg i is wps[i]→wps[i+1]) give the ETA, wind, and totals when there is no summary.
+        const statLegs = legs.length === wps.length - 1 ? legs.slice(0, destIdx) : legs;
         const sumLegs = (key) => statLegs.reduce((s, l) => s + (l[key] || 0), 0);
-        const routeNm = toDest ? sumLegs('distNm') : (summary?.totalDistNm ?? sumLegs('distNm'));
+        const routeNm = summary?.totalDistNm ?? sumLegs('distNm');
         if (routeNm == null || dep?.lat == null || dest?.lat == null) { this._statsEl.style.display = 'none'; return; }
 
         const directNm  = NasrDB.haversineNm(dep.lat, dep.lon, dest.lat, dest.lon);
@@ -1805,7 +1819,7 @@ class RoutePlannerPanel {
         const altLabel = altFt != null ? `<span class="rpp-stat-alt">${altFt.toLocaleString()} ft</span>` : '';
 
         // ETE
-        const eteHrs = toDest ? sumLegs('timeHrs') : summary?.totalEteHrs;
+        const eteHrs = summary?.totalEteHrs;
         const eteLabel = eteHrs != null
             ? (() => { const h = Math.floor(eteHrs); const m = Math.round((eteHrs - h) * 60); return `${h}h ${String(m).padStart(2,'0')}m`; })()
             : '';
@@ -1817,7 +1831,7 @@ class RoutePlannerPanel {
             : '';
 
         // Fuel
-        const fuelGal = toDest ? sumLegs('fuelGal') : summary?.totalFuelGal;
+        const fuelGal = summary?.totalFuelGal;
         const fuelLabel = fuelGal != null
             ? `<span class="rpp-stat-fuel">${fuelGal.toFixed(1)} gal</span>` : '';
 
@@ -2585,14 +2599,11 @@ class RoutePlannerPanel {
         if (!opts.winds) {
             this._windWarnings.push('Wind data unavailable — time and fuel use calm-air estimates');
         }
-        // Fuel remaining at the destination, not after any missed-approach legs that follow it.
-        const cwps  = this._currentPlan?.waypoints || [];
-        const clegs = this._currentPlan?.legs || [];
-        const cDest = cwps.length ? this._destWaypointIndex(cwps) : -1;
-        const fuelRem = (cDest > 0 && clegs.length === cwps.length - 1)
-            ? clegs[cDest - 1]?.fuelRemGal
-            : this._currentPlan?.summary?.fuelRemGal;
-        const hasFuelStops = (this._lastPlan?.fuelStops?.length ?? 0) > 0;
+        // recomputeLegs' summary gives fuel remaining at the destination, not after a missed approach.
+        const fuelRem = this._currentPlan?.summary?.fuelRemGal;
+        // A reopened trip has no fuelStops array, only fuelStop flags on its waypoints.
+        const hasFuelStops = (this._lastPlan?.fuelStops?.length ?? 0) > 0
+            || !!this._lastPlan?.waypoints?.some(w => w.fuelStop);
         if (!hasFuelStops && fuelRem != null && this._reserveGal > 0 && fuelRem < this._reserveGal) {
             this._windWarnings.push(
                 `Fuel below reserve: ${fuelRem.toFixed(1)} gal at dest, ${this._reserveGal} gal reserve required`
@@ -3173,8 +3184,8 @@ class RoutePlannerPanel {
                 // fuelStop:true tells recomputeLegs to model descent/climb at
                 // this stop rather than treating it as a level pass-over.
                 ...(pill.type === 'fuel' ? { fuelStop: true } : {}),
-                // isDest tells recomputeLegs to end the descent here, ahead of any missed-approach fixes.
-                ...(pill.type === 'dest' ? { isDest: true } : {}),
+                // isMissed: recomputeLegs and the route table end the trip before trailing missed-approach fixes.
+                ...(pill.missed ? { isMissed: true } : {}),
                 ...(aw ? { airway: aw } : {}),
             });
             pendingAirway = null;

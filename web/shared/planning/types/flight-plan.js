@@ -9,7 +9,7 @@
  * @property {'APT'|'NAV'|'FIX'} [kind]
  * @property {number} [altFt]
  * @property {string} [airway]              parser: airway origin tag for interior fixes
- * @property {boolean} [isDest]             the destination airport when missed-approach fixes follow it; recomputeLegs ends the descent here
+ * @property {boolean} [isMissed]           a loaded approach's missed-approach fix; the destination is the last waypoint before the trailing run of these
  *
  * @typedef Leg
  * @property {string} from
