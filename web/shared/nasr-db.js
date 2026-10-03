@@ -14,7 +14,32 @@ class NasrDB {
     // reading DB_NAME — a rename here must update that too, or the reset
     // button will silently delete a database that no longer exists.
     static DB_NAME = 'flypi';
-    static DB_VERSION = 8;
+    // DB_VERSION must never be lower than what's already on a physical device —
+    // IndexedDB throws VersionError on open() if requested version < on-disk
+    // version, with no downgrade path, breaking every NASR-backed query (2026-09-17,
+    // this tablet had version 10 on disk from the unmerged feat/document-library
+    // branch's extra 'flytab_documents' store; main was still declaring 8).
+    // Bumped to 10 to match — verified feat/document-library's v10 schema is
+    // additive-only (adds 'flytab_documents', changes nothing main uses), so this
+    // is a safe no-op upgrade for this device, not a guess. When merging any
+    // branch that bumps this, take the max of the two, never main's stale value.
+    // 11 — added the 'trsa' object store (TRSA boundary rendering, 2026-09-18).
+    //
+    // 2026-09-21 three-way merge: main (uncommitted TRSA work, this file at v11),
+    // airspace-frequency-alert-runtime (independently reached v9, no new store —
+    // just rewrote getAirspaceInBounds/getSuaInBounds/getTrsaInBounds to use
+    // GeoUtils.polygonOverlapsBox instead of the vertex-only test below, which
+    // fixed a real bug: a TRSA vanished whenever the viewport sat entirely
+    // inside its 20-60nm circle, since no boundary vertex was ever in view),
+    // and feat/document-library (independently reached v10 for 'flytab_documents')
+    // all bumped this from the same base (8) without knowing about each other.
+    // Store creation below is existence-gated (`!objectStoreNames.contains(...)`),
+    // not version-gated, so combining is safe — no version number was skipped
+    // or double-assigned; 11 already covers both new stores once this file has
+    // both store blocks, which it now does. Kept the alert branch's query-method
+    // rewrite (below) since it's a strict superset of the old vertex-only test
+    // and fixes the TRSA-visibility bug independently of this merge.
+    static DB_VERSION = 11;
 
     constructor() {
         this._db = null;
@@ -66,6 +91,11 @@ class NasrDB {
                     store.createIndex('type', 'type', { unique: false });
                 }
 
+                // Terminal Radar Service Areas (approximate circular boundaries)
+                if (!db.objectStoreNames.contains('trsa')) {
+                    db.createObjectStore('trsa', { keyPath: 'id' });
+                }
+
                 // Named fixes/waypoints for route parsing
                 if (!db.objectStoreNames.contains('fixes')) {
                     const store = db.createObjectStore('fixes', { keyPath: 'id' });
@@ -88,6 +118,13 @@ class NasrDB {
                     const store = db.createObjectStore('flight_plans', { keyPath: 'id' });
                     store.createIndex('created_at', 'created_at', { unique: false });
                     store.createIndex('active', 'active', { unique: false });
+                }
+
+                // Document library — imported/bundled PDFs (POHs, checklists, chart legends)
+                if (!db.objectStoreNames.contains('flytab_documents')) {
+                    const store = db.createObjectStore('flytab_documents', { keyPath: 'id' });
+                    store.createIndex('type', 'type', { unique: false });
+                    store.createIndex('importedAt', 'importedAt', { unique: false });
                 }
 
                 // W&B saved scenarios
@@ -166,6 +203,7 @@ class NasrDB {
         const db = await this.open();
         return new Promise((resolve, reject) => {
             const tx = db.transaction(storeName, 'readwrite');
+            tx.onabort = () => reject(tx.error || new Error(`Transaction aborted on ${storeName}`));
             const req = tx.objectStore(storeName).put(value);
             req.onsuccess = () => resolve(req.result);
             req.onerror = () => reject(req.error);
@@ -176,6 +214,7 @@ class NasrDB {
         const db = await this.open();
         return new Promise((resolve, reject) => {
             const tx = db.transaction(storeName, 'readwrite');
+            tx.onabort = () => reject(tx.error || new Error(`Transaction aborted on ${storeName}`));
             const req = tx.objectStore(storeName).delete(key);
             req.onsuccess = () => resolve();
             req.onerror = () => reject(req.error);
@@ -401,9 +440,17 @@ class NasrDB {
 
     /**
      * Get airspace polygons that overlap a bounding box.
-     * Checks if any boundary vertex falls within bounds.
      */
-    async getAirspaceInBounds(south, west, north, east, limit = 500) {
+    // limit raised 500->3000 (here and on getSuaInBounds/getTrsaInBounds):
+    // GeoUtils.polygonOverlapsBox's added edge-clip case matches more
+    // candidates per query than the old vertex/center-only test, so the
+    // cursor cap could now be reached earlier in store-iteration order and
+    // silently truncate results a caller previously always received. Each
+    // method queries a single store (airspace: ~5638 records nationwide,
+    // sua: ~1236) — 3000 is comfortably above what any one geographic
+    // bounding-box query could realistically match within a single store,
+    // not a claim about the two stores' combined total.
+    async getAirspaceInBounds(south, west, north, east, limit = 3000) {
         const db = await this.open();
         return new Promise((resolve, reject) => {
             const tx = db.transaction('airspace', 'readonly');
@@ -415,12 +462,26 @@ class NasrDB {
                 if (!cursor || results.length >= limit) { resolve(results); return; }
                 const v = cursor.value;
                 const boundary = v.boundary || v.points || [];
-                const inBounds = boundary.some(pt => {
-                    const lat = pt[0] || pt.lat;
-                    const lon = pt[1] || pt.lon;
-                    return lat >= south && lat <= north && lon >= west && lon <= east;
-                });
-                if (inBounds) results.push(v);
+                // A vertex inside the query box or the box's center inside
+                // the polygon catches most overlaps, but neither catches a
+                // polygon edge that clips through the box without either
+                // shape's reference point landing inside the other (e.g. a
+                // wide Class B shelf whose edge crosses a corner of the box)
+                // — see GeoUtils.polygonOverlapsBox for the full 3-case test.
+                const overlaps = typeof GeoUtils !== 'undefined'
+                    ? GeoUtils.polygonOverlapsBox(boundary, south, west, north, east)
+                    : boundary.some(pt => {
+                        // Explicit format check, not `pt[0] || pt.lat`: that
+                        // pattern drops a real vertex sitting exactly at 0.0
+                        // latitude or longitude (falsy 0 falls through to the
+                        // .lat/.lon read on an array, which is undefined).
+                        // Not reachable for a CONUS-only app in practice, but
+                        // cheap to get right.
+                        const lat = Array.isArray(pt) ? pt[0] : pt.lat;
+                        const lon = Array.isArray(pt) ? pt[1] : pt.lon;
+                        return lat >= south && lat <= north && lon >= west && lon <= east;
+                    });
+                if (overlaps) results.push(v);
                 cursor.continue();
             };
             req.onerror = () => reject(req.error);
@@ -430,7 +491,7 @@ class NasrDB {
     /**
      * Get Special Use Airspace (R/P/W/A/MOA) that overlaps a bounding box.
      */
-    async getSuaInBounds(south, west, north, east, limit = 500) {
+    async getSuaInBounds(south, west, north, east, limit = 3000) {
         const db = await this.open();
         return new Promise((resolve, reject) => {
             const tx = db.transaction('sua', 'readonly');
@@ -442,11 +503,52 @@ class NasrDB {
                 if (!cursor || results.length >= limit) { resolve(results); return; }
                 const v = cursor.value;
                 const boundary = v.boundary || [];
-                const inBounds = boundary.some(pt => {
-                    const lat = pt[0], lon = pt[1];
-                    return lat >= south && lat <= north && lon >= west && lon <= east;
-                });
-                if (inBounds) results.push(v);
+                // See getAirspaceInBounds above for the full 3-case overlap test.
+                const overlaps = typeof GeoUtils !== 'undefined'
+                    ? GeoUtils.polygonOverlapsBox(boundary, south, west, north, east)
+                    : boundary.some(pt => {
+                        const lat = pt[0], lon = pt[1];
+                        return lat >= south && lat <= north && lon >= west && lon <= east;
+                    });
+                if (overlaps) results.push(v);
+                cursor.continue();
+            };
+            req.onerror = () => reject(req.error);
+        });
+    }
+
+    /**
+     * Get Terminal Radar Service Areas whose approximate boundary overlaps a
+     * bounding box. A TRSA record with no published radius has an empty
+     * boundary array and will never match here -- that's correct, not a bug
+     * (build_nasr.py's build_trsa_records() only builds a boundary when a
+     * radius was actually published in the TWR4 remark text).
+     */
+    async getTrsaInBounds(south, west, north, east, limit = 3000) {
+        const db = await this.open();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction('trsa', 'readonly');
+            tx.onabort = () => reject(tx.error || new Error('Transaction aborted'));
+            const results = [];
+            const req = tx.objectStore('trsa').openCursor();
+            req.onsuccess = () => {
+                const cursor = req.result;
+                if (!cursor || results.length >= limit) { resolve(results); return; }
+                const v = cursor.value;
+                const boundary = v.boundary || [];
+                // See getAirspaceInBounds above for the full 3-case overlap test.
+                // TRSA circles are large (20-60nm radius) relative to typical
+                // cockpit zoom, so the vertex-only fallback below would miss a
+                // TRSA whenever the viewport sits entirely inside its circle —
+                // GeoUtils.polygonOverlapsBox's center-in-polygon case (2) is
+                // what actually catches that, not just the edge-clip case (3).
+                const overlaps = typeof GeoUtils !== 'undefined'
+                    ? GeoUtils.polygonOverlapsBox(boundary, south, west, north, east)
+                    : boundary.some(pt => {
+                        const lat = pt[0], lon = pt[1];
+                        return lat >= south && lat <= north && lon >= west && lon <= east;
+                    });
+                if (overlaps) results.push(v);
                 cursor.continue();
             };
             req.onerror = () => reject(req.error);
@@ -556,6 +658,26 @@ class NasrDB {
 
     async getFlightPlan(id) {
         return this._get('flight_plans', id);
+    }
+
+    // ========== Documents ==========
+
+    async saveDocument(doc) {
+        if (!doc.id) doc.id = crypto.randomUUID ? crypto.randomUUID() : `doc-${Date.now()}`;
+        doc.importedAt = doc.importedAt || new Date().toISOString();
+        return this._put('flytab_documents', doc);
+    }
+
+    async getDocument(id) {
+        return this._get('flytab_documents', id);
+    }
+
+    async getAllDocuments() {
+        return this._getAll('flytab_documents');
+    }
+
+    async deleteDocument(id) {
+        return this._delete('flytab_documents', id);
     }
 
     // ========== W&B Scenarios ==========
@@ -671,11 +793,11 @@ class NasrDB {
     // ========== NASR Data Import ==========
 
     async importNasrBundle(bundle) {
-        // Bundle is an object with { airports, navaids, airways, airspace, sua, fixes, cycle_info }
+        // Bundle is an object with { airports, navaids, airways, airspace, sua, trsa, fixes, cycle_info }
         // All stores are written in a single transaction so that a mid-import failure
         // never leaves the DB in a partially-cleared state.
         const db = await this.open();
-        const storeNames = ['airports', 'navaids', 'airways', 'airspace', 'sua', 'fixes'];
+        const storeNames = ['airports', 'navaids', 'airways', 'airspace', 'sua', 'trsa', 'fixes'];
         let count = 0;
 
         await new Promise((resolve, reject) => {
@@ -699,6 +821,7 @@ class NasrDB {
             write('airways', bundle.airways);
             write('airspace', bundle.airspace);
             write('sua', bundle.sua);
+            write('trsa', bundle.trsa);
             write('fixes', bundle.fixes);
         });
 

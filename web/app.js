@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v10.42';
+const FLYTAB_VERSION = 'v10.81';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -389,19 +389,12 @@ class FlyTabApp {
 
     /** Handle network mode transitions */
     _onModeChanged(mode, previous) {
-        if (mode === 'flight') {
-            // Connect to Stratux + engine on Pi hotspot
-            if (this.stratuxClient && !this.stratuxClient.connected) {
-                this.stratuxClient.connect();
-            }
-            if (this.engineClient && !this.engineClient.connected) {
-                this.engineClient.connect();
-            }
-        } else if (previous === 'flight') {
-            // Left flight mode — disconnect live telemetry
-            if (this.stratuxClient) this.stratuxClient.disconnect();
-            if (this.engineClient) this.engineClient.disconnect();
-        }
+        // Never connect()/disconnect() the Stratux or engine clients here. Both
+        // are connected once in _initCockpit and reconnect on their own forever.
+        // Mode is just a periodic HTTP probe: tearing the links down on a mode
+        // change (disconnect() also stops their reconnect loops) lost all GPS,
+        // traffic and engine data until app restart, and connect() on a link
+        // whose sockets were still opening rebuilt them all (field bug 2026-10-02).
 
         // Trigger immediate internet METAR refresh whenever we gain internet access
         if ((mode === 'internet' || mode === 'home') && previous === 'offline') {
@@ -1707,16 +1700,15 @@ class FlyTabApp {
             el.classList.toggle('status-sync-internet', mode === 'internet');
         };
 
-        // Instant check on online/offline events
-        window.addEventListener('online', () => { DiagLog.log('net', 'Browser online event'); check(); });
-        window.addEventListener('offline', () => {
-            DiagLog.log('net', 'Browser offline event');
-            this._piConnected = false;
-            wasConnected = false;
-            el.textContent = 'OFFL';
-            el.classList.remove('active');
-            this._updateVersionBadge();
-        });
+        // On online/offline events, re-probe and show NetworkMode's answer. Never
+        // force OFFL from the browser flag: Android fires 'offline' when it decides
+        // the Stratux WiFi has no internet — i.e. while we are connected in flight.
+        const recheck = () => {
+            check();
+            this.networkMode?.detect?.().then(check, check);
+        };
+        window.addEventListener('online',  () => { DiagLog.log('net', 'Browser online event');  recheck(); });
+        window.addEventListener('offline', () => { DiagLog.log('net', 'Browser offline event'); recheck(); });
 
         check();
         this._connectivityInterval = setInterval(check, 10000);

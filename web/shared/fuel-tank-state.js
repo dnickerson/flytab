@@ -117,22 +117,7 @@ class FuelTankState {
         }
 
         const burned = gph * (dtMs / 1000) / 3600;
-
-        if (FuelTankState._state.active_tank === 'L') {
-            FuelTankState._state.left_gal = Math.max(0, FuelTankState._state.left_gal - burned);
-        } else if (FuelTankState._state.active_tank === 'R') {
-            FuelTankState._state.right_gal = Math.max(0, FuelTankState._state.right_gal - burned);
-        } else {
-            // Fail safe. This airframe feeds from exactly one tank, so an active_tank that
-            // is neither L nor R (legacy 'BOTH' state, or corruption) tells us nothing about
-            // which tank is draining. Splitting the burn would understate the feeding tank —
-            // it could run dry while the gauge still shows fuel — so stop integrating and
-            // make the pilot re-confirm which tank is selected.
-            FuelTankState._state.requires_confirm = true;
-            FuelTankState._save();
-            FuelTankState._fire();
-            return;
-        }
+        if (!FuelTankState._debitActiveTank(burned)) return;
 
         FuelTankState._state.last_sample_at = new Date(nowMs).toISOString();
 
@@ -156,6 +141,30 @@ class FuelTankState {
     }
 
     /**
+     * Debit `gallons` from whichever tank is active. Shared by onSample() and
+     * applyDroppedBurn() so the two burn-accounting paths can't drift apart — an
+     * active_tank that's neither L nor R (legacy 'BOTH' state, or corruption)
+     * tells us nothing about which tank is draining. Splitting the burn would
+     * understate the feeding tank — it could run dry while the gauge still shows
+     * fuel — so this stops and flags requires_confirm instead of guessing.
+     * @param {number} gallons
+     * @returns {boolean} true if the debit was applied
+     */
+    static _debitActiveTank(gallons) {
+        if (FuelTankState._state.active_tank === 'L') {
+            FuelTankState._state.left_gal = Math.max(0, FuelTankState._state.left_gal - gallons);
+            return true;
+        } else if (FuelTankState._state.active_tank === 'R') {
+            FuelTankState._state.right_gal = Math.max(0, FuelTankState._state.right_gal - gallons);
+            return true;
+        }
+        FuelTankState._state.requires_confirm = true;
+        FuelTankState._save();
+        FuelTankState._fire();
+        return false;
+    }
+
+    /**
      * Switch the active fuel tank.
      * @param {'L'|'R'} tank - this airframe has no BOTH selector position
      */
@@ -167,6 +176,34 @@ class FuelTankState {
         FuelTankState._state.tank_switched_at = new Date().toISOString();
         FuelTankState._save();
         FuelTankState._fire();
+    }
+
+    /**
+     * Apply a pilot-confirmed correction for fuel burned during a comms gap
+     * (tracked in dropped_burn_estimate_gal by onSample() but never auto-applied —
+     * the gap-time estimate extrapolates from whatever GPH arrived right after the
+     * gap, which may not represent what was actually happening during it, so this
+     * requires the pilot to review/edit the amount before it touches the gauge).
+     * Subtracts from the active tank and reduces the outstanding estimate by the
+     * same amount; does not touch the inactive tank. Refuses while
+     * requires_confirm is set — same rationale as onSample(): a stale or
+     * unconfirmed tank selection means we can't safely say which tank to charge.
+     * requires_confirm can also become true as a SIDE EFFECT of this very call
+     * (an invalid active_tank caught by _debitActiveTank()), so callers must
+     * check the return value rather than assuming a call that didn't throw
+     * actually applied anything.
+     * @param {number} gallons - pilot-confirmed (or edited) correction amount
+     * @returns {boolean} true if the correction was actually applied
+     */
+    static applyDroppedBurn(gallons) {
+        FuelTankState._load();
+        if (!FuelTankState._state || FuelTankState._state.requires_confirm || !(gallons > 0)) return false;
+        if (!FuelTankState._debitActiveTank(gallons)) return false;
+        FuelTankState._state.dropped_burn_estimate_gal =
+            Math.max(0, (FuelTankState._state.dropped_burn_estimate_gal || 0) - gallons);
+        FuelTankState._save();
+        FuelTankState._fire();
+        return true;
     }
 
     /**

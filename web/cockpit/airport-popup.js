@@ -1141,13 +1141,19 @@ class AirportPopup {
         const rows = sorted.map(freq => {
             const cat = categories.find(c => c.key === freq.type);
             const label = cat?.label || freq.type?.toUpperCase() || '';
-            const color = cat?.color || '#aaa';
+            const color = cat?.color || 'var(--text-secondary)';
             const isPrimary = (!isTowered && freq.type === 'ctaf') || (isTowered && freq.type === 'twr');
             const star = isPrimary ? ' <span class="freq-primary">★</span>' : '';
+            // 'sector' is the raw NASR sectorization suffix (degree range,
+            // compass point, altitude split, etc.) -- currently only
+            // 'trsa'-typed entries carry one (e.g. a sectorized TRSA
+            // publishes one frequency per arrival quadrant), shown verbatim
+            // next to the frequency so a pilot knows which one to call.
+            const sectorSuffix = freq.sector ? ` <span class="freq-sector">(${freq.sector})</span>` : '';
 
             return `<tr class="freq-row" data-freq="${freq.freq}">
                 <td style="color:${color}">${label}${star}</td>
-                <td class="freq-value">${freq.freq}</td>
+                <td class="freq-value">${freq.freq}${sectorSuffix}</td>
             </tr>`;
         }).join('');
 

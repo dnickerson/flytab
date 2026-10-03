@@ -247,6 +247,11 @@ class FuelTracker:
     Integrates fuel flow over time to track fuel remaining.
     """
 
+    # Cap the integrated interval between samples to avoid a stale/huge dt (serial
+    # reconnect, Pi restart) blowing up a single fuel_increment. Excess time past
+    # this is tracked separately in dropped_burn_estimate_gal instead of integrated.
+    MAX_SAMPLE_GAP_HOURS = 10.0 / 3600.0
+
     def __init__(self, data_dir):
         self.lock = threading.RLock()  # RLock allows reentrant locking (same thread can acquire multiple times)
         self.data_dir = data_dir
@@ -282,6 +287,14 @@ class FuelTracker:
         self.edm_fuel_total = 0.0  # Total fuel remaining from EDM
         self.edm_fuel_left = 0.0   # Left tank from EDM
         self.edm_fuel_right = 0.0  # Right tank from EDM
+
+        # Fuel burned during sample gaps >= MAX_SAMPLE_GAP_HOURS (comms drop, serial
+        # reconnect) — tracked but not auto-applied to fuel_remaining, same rationale
+        # as FlyTab's FuelTankState.dropped_burn_estimate_gal: the gap-time GPH is
+        # extrapolated from whatever reading arrives right after the gap, which may
+        # not represent what was actually happening during it, so applying it needs
+        # pilot confirmation (see apply_dropped_burn()).
+        self.dropped_burn_estimate_gal = 0.0
 
         # Load existing state
         self._load_state()
@@ -329,12 +342,17 @@ class FuelTracker:
                 # Convert to hours for GPH calculation
                 dt_hours = dt / 3600.0
 
-                # Only integrate if time delta is reasonable (< 10 seconds)
-                if dt_hours < (10.0 / 3600.0) and dt_hours > 0:
-                    fuel_increment = fuel_flow * dt_hours
-                    self.flight_fuel_used += fuel_increment
-                    self.total_since_fill += fuel_increment
-                    self.fuel_remaining = max(0, self.fuel_remaining - fuel_increment)
+                if dt_hours > 0:
+                    # Cap the integrated portion at MAX_SAMPLE_GAP_HOURS (serial
+                    # reconnect / Pi restart shouldn't blow up a single increment
+                    # from a stale dt). Any excess is tracked, not discarded — see
+                    # dropped_burn_estimate_gal and apply_dropped_burn().
+                    integrated_hours = min(dt_hours, self.MAX_SAMPLE_GAP_HOURS)
+                    self._debit_fuel(fuel_flow * integrated_hours)
+
+                    dropped_hours = dt_hours - integrated_hours
+                    if dropped_hours > 0:
+                        self.dropped_burn_estimate_gal += fuel_flow * dropped_hours
 
             self.last_edm_timestamp = edm_timestamp
             self.last_updated = datetime.now().isoformat()
@@ -461,6 +479,12 @@ class FuelTracker:
         """
         Record fuel addition.
 
+        A fresh fuel-stop entry supersedes any outstanding dropped-burn debt from
+        whatever gap happened before it — mirrors FlyTab's FuelTankState.init(),
+        which resets dropped_burn_estimate_gal to 0 on every fresh measurement.
+        Without this, applying a dropped-burn correction after a fuel stop would
+        double-subtract fuel the fresh total already accounted for.
+
         Args:
             gallons: Gallons added (or total if set_total=True)
             airport: Airport identifier
@@ -481,6 +505,7 @@ class FuelTracker:
 
             # Cap at aircraft capacity (36 gal; "usable capacity" is deprecated)
             self.fuel_remaining = min(self.fuel_remaining, FUEL_CONFIG['capacity_gal'])
+            self.dropped_burn_estimate_gal = 0.0
 
             # Reset total since fill if this was a fill-up
             if set_total or self.fuel_remaining >= FUEL_CONFIG['capacity_gal'] * 0.95:
@@ -513,10 +538,14 @@ class FuelTracker:
             return addition
 
     def set_fuel(self, gallons, reason=''):
-        """Manual override of fuel remaining."""
+        """Manual override of fuel remaining. A fresh ground-truth reading (tic
+        mark, fuel stop) supersedes any outstanding dropped-burn debt from
+        whatever gap happened before it — mirrors FlyTab's FuelTankState.init(),
+        which resets dropped_burn_estimate_gal to 0 on every fresh measurement."""
         with self.lock:
             old_value = self.fuel_remaining
             self.fuel_remaining = max(0, min(gallons, FUEL_CONFIG['capacity_gal']))
+            self.dropped_burn_estimate_gal = 0.0
             self.last_updated = datetime.now().isoformat()
             log(f"FuelTracker: Manual set from {old_value:.1f} to {self.fuel_remaining:.1f} gal - {reason}")
             self._save_state()
@@ -525,6 +554,53 @@ class FuelTracker:
         """Dismiss fuel warning for this flight."""
         with self.lock:
             self.fuel_warning_dismissed = True
+
+    def _debit_fuel(self, gallons):
+        """
+        Shared fuel_remaining/flight_fuel_used/total_since_fill debit, used by
+        both update()'s normal integration and apply_dropped_burn()'s correction
+        so the two accounting paths can't drift apart. Caller holds self.lock.
+        """
+        self.flight_fuel_used += gallons
+        self.total_since_fill += gallons
+        self.fuel_remaining = max(0, self.fuel_remaining - gallons)
+
+    def apply_dropped_burn(self, gallons):
+        """
+        Apply a correction for fuel burned during a comms gap. Mirrors FlyTab's
+        FuelTankState.applyDroppedBurn() — dropped_burn_estimate_gal is tracked
+        automatically in update() but never auto-applied, since it extrapolates
+        from whatever GPH arrived right after the gap and may not reflect what
+        was actually happening during it. Callers pass this tracker's OWN
+        dropped_burn_estimate_gal (see the /api/fuel/apply_dropped_burn handler) —
+        FlyTab's independently-computed estimate is a different quantity from a
+        different sample stream and must not be applied here.
+        """
+        with self.lock:
+            if gallons <= 0:
+                return
+            self._debit_fuel(gallons)
+            self.dropped_burn_estimate_gal = max(0, self.dropped_burn_estimate_gal - gallons)
+            self.last_updated = datetime.now().isoformat()
+            log(f"FuelTracker: Applied dropped-burn correction of {gallons:.1f} gal, now {self.fuel_remaining:.1f} gal")
+            self._save_state()
+
+    def apply_own_dropped_burn(self):
+        """
+        Atomically read-and-apply this tracker's own current
+        dropped_burn_estimate_gal. self.lock is an RLock, so this and the nested
+        apply_dropped_burn() call both hold it for the whole read-then-apply —
+        without that, a read here followed by capture_thread_func's concurrent
+        update() mutating dropped_burn_estimate_gal before apply_dropped_burn()
+        runs would apply a different amount than what gets reported to the caller.
+        Returns the amount actually applied (0.0 if there was nothing to apply).
+        """
+        with self.lock:
+            gallons = self.dropped_burn_estimate_gal
+            if gallons <= 0:
+                return 0.0
+            self.apply_dropped_burn(gallons)
+            return gallons
 
     def get_status(self):
         """Get current fuel status for API response."""
@@ -546,6 +622,7 @@ class FuelTracker:
                 'edm_fuel_total': round(self.edm_fuel_total, 1),
                 'edm_fuel_left': round(self.edm_fuel_left, 1),
                 'edm_fuel_right': round(self.edm_fuel_right, 1),
+                'dropped_burn_estimate_gal': round(self.dropped_burn_estimate_gal, 2),
             }
 
             if efficiency:
@@ -593,7 +670,8 @@ class FuelTracker:
                     'last_updated': self.last_updated,
                     'flight_fuel_used': self.flight_fuel_used,
                     'total_since_fill': self.total_since_fill,
-                    'engine_running': self.engine_running
+                    'engine_running': self.engine_running,
+                    'dropped_burn_estimate_gal': self.dropped_burn_estimate_gal
                 },
                 'fuel_additions': self.fuel_additions[-100:],  # Keep last 100
                 'flight_history': self.flight_history[-50:],   # Keep last 50
@@ -621,6 +699,7 @@ class FuelTracker:
             self.fuel_remaining = state.get('fuel_remaining', 0.0)
             self.last_updated = state.get('last_updated')
             self.total_since_fill = state.get('total_since_fill', 0.0)
+            self.dropped_burn_estimate_gal = state.get('dropped_burn_estimate_gal', 0.0)
             # Don't restore flight_fuel_used - start fresh each session
             self.flight_fuel_used = 0.0
             self.engine_running = False
@@ -2421,6 +2500,28 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.send_json({'success': True, 'addition': addition, 'fuel_remaining': state.fuel_tracker.fuel_remaining})
             except (ValueError, json.JSONDecodeError) as e:
                 self.send_json({'error': str(e)}, 400)
+
+        elif path == '/api/fuel/apply_dropped_burn':
+            # Applies THIS tracker's own dropped_burn_estimate_gal — deliberately
+            # ignores any amount the client might send. FlyTab's FuelTankState
+            # computes its own independent estimate from a different sample
+            # stream (Date.now() polling vs. the EDM serial timestamp here); the
+            # two can diverge, and applying FlyTab's number to the Pi's tracker
+            # would over- or under-correct it. Each tracker corrects itself with
+            # its own truth. A no-op (still 'success') if nothing is tracked.
+            if not state.fuel_tracker:
+                self.send_json({'error': 'Fuel tracker not initialized'}, 500)
+                return
+            # apply_own_dropped_burn() reads-and-applies under one lock acquisition —
+            # reading dropped_burn_estimate_gal separately here would race the
+            # capture thread's concurrent update() calls (see PR #143 review).
+            applied_gal = round(state.fuel_tracker.apply_own_dropped_burn(), 2)
+            self.send_json({
+                'success': True,
+                'applied_gal': applied_gal,
+                'fuel_remaining': state.fuel_tracker.fuel_remaining,
+                'dropped_burn_estimate_gal': state.fuel_tracker.dropped_burn_estimate_gal
+            })
 
         elif path == '/api/fuel/dismiss_warning':
             if state.fuel_tracker:

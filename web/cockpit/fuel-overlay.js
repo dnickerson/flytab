@@ -31,6 +31,12 @@ class FuelOverlay {
         // the DEPARTURE reading, and BOTH write paths into canonical FuelTankState —
         // _applyMeasurement() and _recordFuelStop() — must refuse it.
         this._requireFreshTics = false;
+        // True when the last attempt to sync a dropped-burn correction to the Pi
+        // failed (Pi unreachable, or a non-2xx response) — set/cleared only by
+        // _syncDroppedBurnToPi(). Drives _refreshDroppedBurnRow() to keep the row
+        // visible with a RETRY affordance even after the local correction already
+        // landed, so a failed Pi sync isn't a dead end (see PR #143 review).
+        this._piSyncFailed = false;
         this._buildDOM();
     }
 
@@ -93,7 +99,14 @@ class FuelOverlay {
                 TOTAL: <span id="fo-total-gal" class="fo-total-val">0.0</span> gal
             </div>
             <div class="fo-dropped-burn-row" id="fo-dropped-burn-row" style="display:none;">
-                Possible under-tracked burn during a comms gap: <span id="fo-dropped-burn-val">0.0</span> gal
+                <div>Possible under-tracked burn during a comms gap: <span id="fo-dropped-burn-val">0.0</span> gal</div>
+                <div class="fo-manual-row">
+                    <input type="number" class="fo-manual-input" id="fo-dropped-burn-input"
+                           min="0" max="${this._droppedBurnMaxGal()}" step="0.1" value="0"
+                           aria-label="Correction amount, gallons">
+                    <button class="fo-manual-btn fo-set-btn" id="fo-dropped-burn-apply">APPLY CORRECTION</button>
+                </div>
+                <div class="fo-add-status" id="fo-dropped-burn-status"></div>
             </div>
 
             <!-- B) EDM COMPARISON -->
@@ -223,6 +236,9 @@ class FuelOverlay {
             totalGal: this._el.querySelector('#fo-total-gal'),
             droppedBurnRow: this._el.querySelector('#fo-dropped-burn-row'),
             droppedBurnVal: this._el.querySelector('#fo-dropped-burn-val'),
+            droppedBurnInput: this._el.querySelector('#fo-dropped-burn-input'),
+            droppedBurnApply: this._el.querySelector('#fo-dropped-burn-apply'),
+            droppedBurnStatus: this._el.querySelector('#fo-dropped-burn-status'),
             edmSection: this._el.querySelector('#fo-edm-section'),
             edmTic: this._el.querySelector('#fo-edm-tic'),
             edmEdm: this._el.querySelector('#fo-edm-edm'),
@@ -331,6 +347,17 @@ class FuelOverlay {
             window.dispatchEvent(new CustomEvent('fuelstate:changed'));
         });
 
+        // Wire dropped-burn correction. When only a Pi sync is outstanding (local
+        // side already applied but the Pi never got it), the button retries just
+        // the Pi sync instead of re-touching FuelTankState — see _refreshDroppedBurnRow().
+        wireTap(this._el.querySelector('#fo-dropped-burn-apply'), () => {
+            if (this._piSyncFailed && !(FuelTankState.getState()?.dropped_burn_estimate_gal > 0.05)) {
+                this._retryPiDroppedBurnSync();
+            } else {
+                this._applyDroppedBurnCorrection();
+            }
+        });
+
         // Wire apply
         wireTap(this._el.querySelector('#fo-apply'), () => {
             this._applyMeasurement();
@@ -380,17 +407,7 @@ class FuelOverlay {
             this._dom.manualInput.value = manual;
         }
 
-        // Surface any dropped-burn estimate from FuelTankState (comms-gap tracking)
-        try {
-            const tankState = (typeof FuelTankState !== 'undefined') ? FuelTankState.getState() : null;
-            const dropped = tankState?.dropped_burn_estimate_gal ?? 0;
-            if (dropped > 0.05) {
-                this._dom.droppedBurnVal.textContent = dropped.toFixed(2);
-                this._dom.droppedBurnRow.style.display = '';
-            } else {
-                this._dom.droppedBurnRow.style.display = 'none';
-            }
-        } catch (_) { /* FuelTankState unavailable */ }
+        this._refreshDroppedBurnRow();
 
         // Auto-fill fuel-add date/time with current local time
         const now = new Date();
@@ -454,6 +471,42 @@ class FuelOverlay {
 
         // EDM comparison
         this._updateEdmComparison(total);
+    }
+
+    /**
+     * Surface any dropped-burn estimate from FuelTankState (comms-gap tracking) and
+     * pre-fill the correction input with it. Called on show() and again after
+     * _applyDroppedBurnCorrection() so the row reflects what's actually left to
+     * reconcile rather than the value it had when the overlay was opened.
+     */
+    _refreshDroppedBurnRow() {
+        try {
+            const tankState = (typeof FuelTankState !== 'undefined') ? FuelTankState.getState() : null;
+            const dropped = tankState?.dropped_burn_estimate_gal ?? 0;
+            const localPending = dropped > 0.05;
+
+            if (localPending) {
+                this._dom.droppedBurnVal.textContent = dropped.toFixed(2);
+                this._dom.droppedBurnRow.style.display = '';
+                this._dom.droppedBurnInput.disabled = false;
+                // Don't clobber a value the pilot is actively editing.
+                if (document.activeElement !== this._dom.droppedBurnInput) {
+                    this._dom.droppedBurnInput.value = dropped.toFixed(1);
+                }
+                this._dom.droppedBurnApply.textContent = 'APPLY CORRECTION';
+            } else if (this._piSyncFailed) {
+                // Nothing left to apply locally, but the Pi never got its own
+                // correction — keep the row up as a retry affordance rather than
+                // silently dropping the pilot's confirmed correction (PR #143 review).
+                this._dom.droppedBurnVal.textContent = '0.0';
+                this._dom.droppedBurnRow.style.display = '';
+                this._dom.droppedBurnInput.value = '0.0';
+                this._dom.droppedBurnInput.disabled = true;
+                this._dom.droppedBurnApply.textContent = 'RETRY PI SYNC';
+            } else {
+                this._dom.droppedBurnRow.style.display = 'none';
+            }
+        } catch (_) { /* FuelTankState unavailable */ }
     }
 
     _updateEdmComparison(ticTotal) {
@@ -697,6 +750,124 @@ class FuelOverlay {
         return EngineClient.baseUrl();
     }
 
+    /** Sane ceiling for a single dropped-burn correction: a full tank's worth,
+     *  per side. Catches a decimal-point fat-finger (17 vs 1.7) that would
+     *  otherwise floor an active tank at 0 with no confirmation prompt. */
+    _droppedBurnMaxGal() {
+        try {
+            if (typeof CockpitConfig !== 'undefined') {
+                const cap = CockpitConfig.aircraft('performance.fuel_capacity_gal');
+                if (cap > 0) return cap / 2;
+            }
+        } catch (_) { /* fall through to default */ }
+        return 18;
+    }
+
+    /**
+     * Apply a pilot-confirmed (or edited) dropped-burn correction to FlyTab's own
+     * FuelTankState, then sync the Pi's independent FuelTracker separately.
+     */
+    async _applyDroppedBurnCorrection() {
+        const gallons = parseFloat(this._dom.droppedBurnInput.value);
+        if (!(gallons > 0)) {
+            this._setDroppedBurnStatus('Enter a positive correction amount', 'error');
+            return;
+        }
+        const maxGal = this._droppedBurnMaxGal();
+        if (gallons > maxGal) {
+            this._setDroppedBurnStatus(
+                `${gallons.toFixed(1)} gal exceeds a full tank (${maxGal.toFixed(0)} gal) — check for a typo before applying`, 'error');
+            return;
+        }
+        if (typeof FuelTankState !== 'undefined' && FuelTankState.needsConfirmation()) {
+            this._setDroppedBurnStatus(
+                'Tank state needs confirmation before applying a correction — confirm tank selection first', 'error');
+            return;
+        }
+        this._dom.droppedBurnApply.disabled = true;
+        try {
+            // The precondition check above can't catch every refusal — an invalid
+            // active_tank (legacy 'BOTH', corruption) flags requires_confirm as a
+            // SIDE EFFECT of this call rather than before it, so the return value
+            // is the only reliable signal that anything was actually applied.
+            const applied = FuelTankState.applyDroppedBurn(gallons);
+            if (!applied) {
+                this._setDroppedBurnStatus(
+                    'Could not apply — tank state needs confirmation. Confirm tank selection, then retry.', 'error');
+                return;
+            }
+            await this._syncDroppedBurnToPi();
+        } finally {
+            this._dom.droppedBurnApply.disabled = false;
+            this._refreshDroppedBurnRow();
+        }
+    }
+
+    /** Retry syncing to the Pi only — used when the local correction already
+     *  landed but the earlier Pi sync attempt failed. Does not touch FuelTankState
+     *  again (that would double-subtract from the tank). */
+    async _retryPiDroppedBurnSync() {
+        this._dom.droppedBurnApply.disabled = true;
+        try {
+            await this._syncDroppedBurnToPi();
+        } finally {
+            this._dom.droppedBurnApply.disabled = false;
+            this._refreshDroppedBurnRow();
+        }
+    }
+
+    /**
+     * Tell the Pi to apply ITS OWN tracked dropped_burn_estimate_gal (the server
+     * ignores any amount from the client — see the /api/fuel/apply_dropped_burn
+     * handler comment: FlyTab's estimate is a different quantity from a different
+     * sample stream and must not be pushed onto the Pi's tracker). Unlike
+     * _syncFuelSetToEngine()/_syncFuelAddToEngine(), failure here is reported to
+     * the pilot instead of swallowed, and sets _piSyncFailed so the row stays up
+     * as a retry affordance rather than silently going stale.
+     */
+    async _syncDroppedBurnToPi() {
+        const base = this._engineBaseUrl();
+        if (!base) {
+            this._piSyncFailed = true;
+            this._setDroppedBurnStatus(
+                'Applied locally — Pi unreachable, engine-side total NOT corrected. Retry when back in range.', 'error');
+            return;
+        }
+        try {
+            const resp = await fetch(`${base}/api/fuel/apply_dropped_burn`, {
+                method: 'POST',
+                signal: AbortSignal.timeout(4000),
+            });
+            if (!resp.ok) throw new Error(`Pi returned ${resp.status}`);
+            let result;
+            try {
+                result = await resp.json();
+            } catch (parseErr) {
+                // The Pi's endpoint ran (200 OK, and it applies under a single lock
+                // acquisition — see engine_monitor.py's apply_own_dropped_burn()), so
+                // the correction almost certainly landed. But we can't confirm the
+                // amount, so this must NOT collapse into the same reassuring message
+                // as a verified success (PR #143 review) — flag it and offer a retry.
+                this._piSyncFailed = true;
+                this._setDroppedBurnStatus(
+                    'Pi accepted the correction but its response could not be read — verify the Pi\'s own fuel display, or retry.', 'error');
+                return;
+            }
+            this._piSyncFailed = false;
+            const appliedGal = result?.applied_gal;
+            this._setDroppedBurnStatus(
+                appliedGal != null
+                    ? `Applied locally; Pi applied its own ${appliedGal.toFixed(1)} gal estimate`
+                    : 'Applied to both trackers', 'ok');
+        } catch (err) {
+            this._piSyncFailed = true;
+            this._setDroppedBurnStatus(
+                `Applied locally — Pi sync failed (${err.message}). Retry when back in range.`, 'error');
+        }
+    }
+
+    _setDroppedBurnStatus(msg, type) { this._setStatus(this._dom.droppedBurnStatus, msg, type); }
+
     _syncFuelSetToEngine(gallons, reason = '') {
         const base = this._engineBaseUrl();
         if (!base) { console.warn('FuelOverlay: engineClient.ip unavailable, skipping Pi fuel/set sync'); return; }
@@ -722,14 +893,13 @@ class FuelOverlay {
         }).catch(() => { /* best-effort */ });
     }
 
-    _setAddStatus(msg, type) {
-        const el = this._dom.addStatus;
-        el.textContent = msg;
-        el.className = 'fo-add-status fo-add-status-' + (type || 'ok');
-    }
+    _setAddStatus(msg, type) { this._setStatus(this._dom.addStatus, msg, type); }
 
-    _setApplyStatus(msg, type) {
-        const el = this._dom.applyStatus;
+    _setApplyStatus(msg, type) { this._setStatus(this._dom.applyStatus, msg, type); }
+
+    /** Shared body for _setAddStatus()/_setApplyStatus()/_setDroppedBurnStatus() —
+     *  each targets a different status element with the same textContent/className pattern. */
+    _setStatus(el, msg, type) {
         if (!el) return;
         el.textContent = msg;
         el.className = 'fo-add-status fo-add-status-' + (type || 'ok');
