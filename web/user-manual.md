@@ -116,6 +116,8 @@ Shows all airports on the active route. Tap any entry for the full airport detai
 
 Live engine data from the Pi. Updates approximately every second.
 
+The badge at the top tells you whether the numbers are current: **LIVE** — fresh data; **Ns ago** — the Pi hasn't sent anything for more than 5 seconds; **EDM NO DATA** — the Pi is up but the EDM itself has stopped sending (unplugged, rebooting, serial fault); **ENGINE MON. OFFLINE** — the Pi can't be reached. In every state but LIVE the last values stay on screen **greyed out** so you can see what they were, but they are not current readings.
+
 | Gauge | What it shows |
 |---|---|
 | **RPM** | Engine speed with color-coded bar |

@@ -134,6 +134,18 @@ class EngineClient extends EventTarget {
         return ip ? `http://${ip}:8080` : null;
     }
 
+    /**
+     * Whether a Pi status frame (raw or flattened) carries a CURRENT EDM row.
+     * engine_monitor.py keeps resending its last parsed row every second after the
+     * EDM goes quiet (latest_data is never cleared), so frames keep arriving and
+     * engine:stale never fires for that case. The Pi says so itself: it sets
+     * serial_warning after 5 s without EDM data (cleared on the next good line)
+     * and serial_connected false when the serial port is closed.
+     */
+    static edmCurrent(status) {
+        return !(status && (status.serial_connected === false || status.serial_warning));
+    }
+
     connect() {
         this._doConnect();
     }
