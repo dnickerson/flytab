@@ -186,10 +186,19 @@ class AirportPopup {
         // call (same as the rest of this panel's content) so a manual wind
         // override never survives into a later airport or a later open of
         // the same one -- it always starts back on live METAR.
+        // Guarded: a throw here would skip the tab wiring below and leave
+        // every tab of an otherwise-open popup dead.
+        this._windCompass = null;
         const windPaneEl = this._panel.querySelector('.apt-wind-pane');
-        if (windPaneEl) {
-            this._windCompass = new WindCompass();
-            this._windCompass.render(windPaneEl, airport.runways || [], wx);
+        if (windPaneEl && typeof WindCompass !== 'undefined') {
+            try {
+                this._windCompass = new WindCompass();
+                this._windCompass.render(windPaneEl, (airport.runways || []).filter(Boolean), wx);
+            } catch (err) {
+                console.warn('AirportPopup: wind compass render failed', err);
+                this._windCompass = null;
+                windPaneEl.innerHTML = '<div class="wc-no-runways">Wind view unavailable</div>';
+            }
         }
 
         // Wire tabs
@@ -437,6 +446,7 @@ class AirportPopup {
                 if (wxPane) {
                     wxPane.innerHTML = this._weatherHtml(wx);
                 }
+                this._updateWindCompass(wx);
             }
             // Update legacy Leaflet popup
             if (this._popup) {
@@ -471,6 +481,15 @@ class AirportPopup {
         this._fisbClient.addEventListener('fisb:taf', this._onFisbTaf);
     }
 
+    /** Keep the WIND tab on the same METAR the WX tab just refreshed to. */
+    _updateWindCompass(wx) {
+        try {
+            this._windCompass?.updateWx(wx);
+        } catch (err) {
+            console.warn('AirportPopup: wind compass update failed', err);
+        }
+    }
+
     _startInternetMetarListener(airport) {
         if (!this._vectorLayers) return;
         this._onInternetMetarBound = (icao, entry) => {
@@ -484,6 +503,7 @@ class AirportPopup {
             if (this._panel && this._panelOpen) {
                 const wxPane = this._panel.querySelector('.apt-tab-pane[data-pane="wx"]');
                 if (wxPane) wxPane.innerHTML = this._weatherHtml(wx);
+                this._updateWindCompass(wx);
             }
         };
         this._vectorLayers._onInternetMetar = this._onInternetMetarBound;

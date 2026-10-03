@@ -257,7 +257,38 @@ describe('WindCompass instance manual override', () => {
         container.querySelector('[data-digit="9"]').click();
         container.querySelector('[data-digit="0"]').click();
         container.querySelector('.wc-numpad-done').click();
-        expect(container.querySelector('.wc-dir-value').textContent).toBe('90');
+        expect(container.querySelector('.wc-dir-value').textContent).toBe('090');
+    });
+
+    it('does not render the direction/speed fields in METAR mode (they would be inert)', () => {
+        const container = document.createElement('div');
+        new WindCompass().render(container, runways, wxWithWind);
+        expect(container.querySelector('.wc-manual-controls')).toBeNull();
+        expect(container.querySelector('.wc-dir-value')).toBeNull();
+    });
+
+    it('rejects an out-of-range direction (370) and keeps the numpad open', () => {
+        const container = document.createElement('div');
+        const wc = new WindCompass();
+        wc.render(container, runways, wxWithWind);
+        container.querySelector('.wc-mode-manual').click();
+        container.querySelector('.wc-dir-value').click();
+        ['3', '7', '0'].forEach(d => container.querySelector(`[data-digit="${d}"]`).click());
+        container.querySelector('.wc-numpad-done').click();
+        expect(container.querySelector('.wc-numpad-sheet').style.display).toBe('');
+        expect(container.querySelector('.wc-dir-value').textContent).toBe('260');
+    });
+
+    it('manual speed 0 shows CALM and no arrow', () => {
+        const container = document.createElement('div');
+        const wc = new WindCompass();
+        wc.render(container, runways, wxWithWind);
+        container.querySelector('.wc-mode-manual').click();
+        container.querySelector('.wc-spd-value').click();
+        container.querySelector('[data-digit="0"]').click();
+        container.querySelector('.wc-numpad-done').click();
+        expect(container.querySelectorAll('svg .wc-wind-arrow').length).toBe(0);
+        expect(container.querySelector('.wc-no-wind').textContent).toBe('CALM');
     });
 
     it('switching back to METAR after a manual entry restores the live METAR value', () => {
@@ -274,25 +305,111 @@ describe('WindCompass instance manual override', () => {
     });
 });
 
-describe('WindCompass.clampHeading', () => {
-    it('leaves an in-range heading unchanged', () => {
-        expect(WindCompass.clampHeading(270)).toBe(270);
+describe('WindCompass.validHeading / validSpeed', () => {
+    it('accepts 1-360 unchanged and treats 0 as 360', () => {
+        expect(WindCompass.validHeading(270)).toBe(270);
+        expect(WindCompass.validHeading(360)).toBe(360);
+        expect(WindCompass.validHeading(0)).toBe(360);
     });
 
-    it('wraps 360 down to 0', () => {
-        expect(WindCompass.clampHeading(360)).toBe(0);
-    });
-
-    it('wraps an out-of-range value (e.g. numpad-typed 999) via modulo, not a max clamp', () => {
-        // Consistent with the 360->0 wrap above, rather than an arbitrary
-        // clamp-to-359 -- the numpad UI shows the resulting heading back to
-        // the pilot for confirmation before it's applied, so this only
-        // needs to be a predictable rule, not a guess at what they meant.
-        expect(WindCompass.clampHeading(999)).toBe(279);
+    it('rejects out-of-range directions instead of wrapping them (370 is a slip for 270, not 010)', () => {
+        expect(WindCompass.validHeading(370)).toBeNull();
+        expect(WindCompass.validHeading(999)).toBeNull();
     });
 
     it('treats null/undefined as no heading', () => {
-        expect(WindCompass.clampHeading(null)).toBeNull();
-        expect(WindCompass.clampHeading(undefined)).toBeNull();
+        expect(WindCompass.validHeading(null)).toBeNull();
+        expect(WindCompass.validHeading(undefined)).toBeNull();
+    });
+
+    it('accepts 0-150 kt and rejects higher speeds', () => {
+        expect(WindCompass.validSpeed(0)).toBe(0);
+        expect(WindCompass.validSpeed(150)).toBe(150);
+        expect(WindCompass.validSpeed(151)).toBeNull();
+    });
+});
+
+describe('WindCompass best-end selection', () => {
+    it('breaks a rounded-headwind tie on the unrounded headwind (140 wind: 14 beats 13)', () => {
+        const ends = WindCompass.parseRunwayEnds([{ id: '13/31' }, { id: '14/32' }]);
+        const out = WindCompass.computeWindComponents(ends, 140, 15, null);
+        expect(out[0].label).toBe('14');
+        expect(out[0].isBest).toBe(true);
+    });
+
+    it('never marks a tailwind end as best', () => {
+        const ends = WindCompass.parseRunwayEnds([{ id: '18' }]);
+        const out = WindCompass.computeWindComponents(ends, 360, 15, null);
+        expect(out[0].headwind).toBe(-15);
+        expect(out[0].isBest).toBe(false);
+    });
+});
+
+describe('WindCompass METAR states', () => {
+    const runways = [{ id: '08/26', length_ft: 5000 }];
+    const render = (wx) => {
+        const container = document.createElement('div');
+        const wc = new WindCompass();
+        wc.render(container, runways, wx);
+        return { container, wc };
+    };
+
+    it('shows variable wind with its speed and gust, not "no wind"', () => {
+        const { container } = render({ metar: { decoded: { wind_dir: null, wind_speed: 12, wind_gust: 22, wind_variable: true } } });
+        const text = container.querySelector('.wc-no-wind').textContent;
+        expect(text).toContain('VRB 12G22');
+        expect(text).toContain('22 kt');
+    });
+
+    it('shows CALM for a 00000KT METAR', () => {
+        const { container } = render({ metar: { decoded: { wind_dir: 0, wind_speed: 0, wind_variable: false } } });
+        expect(container.querySelector('.wc-no-wind').textContent).toBe('CALM');
+    });
+
+    it('shows the gust crosswind next to the steady crosswind', () => {
+        const { container } = render({ metar: { decoded: { wind_dir: 300, wind_speed: 10, wind_gust: 20, wind_variable: false } } });
+        const labels = [...container.querySelectorAll('.wc-end-wind')].map(e => e.textContent);
+        expect(labels.some(t => /\d+G\d+XW/.test(t))).toBe(true);
+    });
+
+    it('shows the METAR source and age, flagged STALE when older than 75 min', () => {
+        const old = new Date(Date.now() - 2 * 3600 * 1000).toISOString();
+        const { container } = render({ source: 'fisb', metar: { decoded: { wind_dir: 260, wind_speed: 8, observed_at: old } } });
+        const el = container.querySelector('.wc-metar-age');
+        expect(el.textContent).toContain('FISB METAR');
+        expect(el.textContent).toContain('STALE');
+    });
+
+    it('explains, rather than drawing an empty rose, when no runway id has a heading', () => {
+        const container = document.createElement('div');
+        new WindCompass().render(container, [{ id: 'H1' }], { metar: { decoded: { wind_dir: 260, wind_speed: 8 } } });
+        expect(container.querySelector('svg')).toBeNull();
+        expect(container.querySelector('.wc-no-runways')).not.toBeNull();
+    });
+});
+
+describe('WindCompass.updateWx (live METAR while the popup is open)', () => {
+    const runways = [{ id: '08/26' }];
+    const noWx = { metar: null };
+    const newWx = { metar: { decoded: { wind_dir: 260, wind_speed: 14 } } };
+
+    it('redraws in METAR mode when a METAR arrives after open', () => {
+        const container = document.createElement('div');
+        const wc = new WindCompass();
+        wc.render(container, runways, noWx);
+        expect(container.querySelectorAll('svg .wc-wind-arrow').length).toBe(0);
+        wc.updateWx(newWx);
+        expect(container.querySelectorAll('svg .wc-wind-arrow').length).toBe(1);
+    });
+
+    it('leaves a manual entry on screen, and uses the new METAR on switching back', () => {
+        const container = document.createElement('div');
+        const wc = new WindCompass();
+        wc.render(container, runways, { metar: { decoded: { wind_dir: 80, wind_speed: 5 } } });
+        container.querySelector('.wc-mode-manual').click();
+        wc.updateWx(newWx);
+        expect(container.querySelector('.wc-dir-value').textContent).toBe('080');
+        container.querySelector('.wc-mode-metar').click();
+        expect(container.querySelector('.wc-end-label.wc-best .wc-end-id').textContent).toBe('26');
     });
 });

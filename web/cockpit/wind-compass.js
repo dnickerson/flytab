@@ -23,6 +23,16 @@ class WindCompass {
         this._draw();
     }
 
+    /**
+     * A newer METAR arrived (FIS-B or internet) while the popup is open.
+     * Redraw in METAR mode; in Manual mode just keep it for the next switch
+     * back, so the pilot's own entry and any open numpad aren't disturbed.
+     */
+    updateWx(wx) {
+        this._wx = wx;
+        if (this._container && !this._manualMode && !this._activeNumpad) this._draw();
+    }
+
     /** METAR wind only, independent of manual mode -- used both for the METAR-mode display and to seed Manual mode. */
     static _metarWind(wx) {
         const d = wx?.metar?.decoded;
@@ -33,11 +43,48 @@ class WindCompass {
     /** The wind actually driving the current display: manual entry if Manual mode is on and has values, else METAR. */
     _activeWind() {
         if (this._manualMode) {
-            return (this._manualDir != null && this._manualSpeed != null)
+            return (this._manualDir != null && this._manualSpeed)
                 ? { dir: this._manualDir, speed: this._manualSpeed, gust: null }
                 : null;
         }
         return WindCompass._metarWind(this._wx);
+    }
+
+    /**
+     * What to say when there is no single wind to draw: calm and variable are
+     * real reports, not missing data -- VRB12G22 is exactly when the pilot
+     * needs this tab, so it must not read "no wind".
+     */
+    static _noWindText(wx, manualMode, manualSpeed) {
+        if (manualMode) return manualSpeed === 0 ? 'CALM' : 'Enter wind direction and speed';
+        const d = wx?.metar?.decoded;
+        if (!d) return 'No METAR wind';
+        if (d.wind_variable) {
+            if (!d.wind_speed) return 'Wind variable';
+            const gust = d.wind_gust ? `G${d.wind_gust}` : '';
+            return `VRB ${d.wind_speed}${gust} kt \u2014 crosswind up to ${d.wind_gust || d.wind_speed} kt on any runway`;
+        }
+        if (d.wind_speed === 0) return 'CALM';
+        return 'No METAR wind';
+    }
+
+    /** Source and age of the METAR driving METAR mode, flagged STALE past 75 min like the WX tab. */
+    static _metarAgeHtml(wx) {
+        const obs = wx?.metar?.decoded?.observed_at;
+        if (!obs) return '';
+        const dt = new Date(obs);
+        if (isNaN(dt.getTime())) return '';
+        const hh = String(dt.getUTCHours()).padStart(2, '0');
+        const mm = String(dt.getUTCMinutes()).padStart(2, '0');
+        const ageMin = Math.max(0, Math.round((Date.now() - dt.getTime()) / 60000));
+        const age = ageMin < 60 ? `${ageMin}m ago` : `${Math.floor(ageMin / 60)}h ${ageMin % 60}m ago`;
+        const stale = ageMin > 75;
+        const src = wx.source ? `${String(wx.source).toUpperCase()} ` : '';
+        return `<div class="wc-metar-age${stale ? ' wc-metar-stale' : ''}">${src}METAR ${hh}${mm}Z (${age})${stale ? ' \u26a0 STALE' : ''}</div>`;
+    }
+
+    static _fmtHeading(h) {
+        return h == null ? '\u2014' : String(h).padStart(3, '0');
     }
 
     _draw() {
@@ -50,6 +97,10 @@ class WindCompass {
         }
 
         const ends = WindCompass.parseRunwayEnds(runways);
+        if (!ends.length) {
+            container.innerHTML = '<div class="wc-no-runways">Runway headings not available for this airport</div>';
+            return;
+        }
         const wind = this._activeWind();
         const enrichedEnds = wind
             ? WindCompass.computeWindComponents(ends, wind.dir, wind.speed, wind.gust)
@@ -61,7 +112,8 @@ class WindCompass {
                 <button class="wc-mode-metar ${!this._manualMode ? 'active' : ''}">METAR</button>
                 <button class="wc-mode-manual ${this._manualMode ? 'active' : ''}">MANUAL</button>
             </div>
-            ${!wind ? '<div class="wc-no-wind">No wind reported</div>' : ''}
+            ${!this._manualMode ? WindCompass._metarAgeHtml(this._wx) : ''}
+            ${!wind ? `<div class="wc-no-wind">${WindCompass._noWindText(this._wx, this._manualMode, this._manualSpeed)}</div>` : ''}
             ${this._buildSvgMarkup(runways, enrichedEnds, wind, cx, cy, r)}
             ${this._buildControlsMarkup(wind)}
         `;
@@ -93,8 +145,9 @@ class WindCompass {
 
         const endLabels = enrichedEnds.map(end => {
             const pos = WindCompass.headingToXY(end.hdg, r - 34, cx, cy);
+            const xwText = end.gustXwind > end.crosswind ? `${end.crosswind}G${end.gustXwind}XW` : `${end.crosswind}XW`;
             const hwText = end.headwind == null ? ''
-                : (end.headwind >= 0 ? `${end.headwind}HW` : `${Math.abs(end.headwind)}TW`) + ` ${end.crosswind}XW`;
+                : (end.headwind >= 0 ? `${end.headwind}HW` : `${Math.abs(end.headwind)}TW`) + ` ${xwText}`;
             return `<g class="wc-end-label ${end.isBest ? 'wc-best' : ''}" transform="translate(${pos.x},${pos.y})">
                 ${end.isBest ? '<circle class="wc-best-dot" cx="-22" cy="-4" r="4"/>' : ''}
                 <text class="wc-end-id" text-anchor="middle">${end.label}</text>
@@ -140,11 +193,14 @@ class WindCompass {
     }
 
     _buildControlsMarkup(wind) {
-        const dirDisplay = this._manualMode ? (this._manualDir ?? '—') : (wind ? wind.dir : '—');
-        const spdDisplay = this._manualMode ? (this._manualSpeed ?? '—') : (wind ? wind.speed : '—');
+        // Only rendered in Manual mode: the fields are inert in METAR mode, and a
+        // `hidden` attribute alone loses to .wc-manual-controls { display:flex }.
+        if (!this._manualMode) return '';
+        const dirDisplay = WindCompass._fmtHeading(this._manualDir);
+        const spdDisplay = this._manualSpeed ?? '\u2014';
 
         return `
-            <div class="wc-manual-controls" ${this._manualMode ? '' : 'hidden'}>
+            <div class="wc-manual-controls">
                 <div class="wc-field">
                     <span class="wc-field-label">DIR</span>
                     <button class="wc-dir-value" data-field="dir">${dirDisplay}</button>
@@ -198,9 +254,11 @@ class WindCompass {
             wireTap(btn, () => this._openNumpad(btn.dataset.field));
         });
 
-        wireTap(container.querySelector('.wc-numpad-done'), () => this._closeNumpad(true));
+        const doneBtn = container.querySelector('.wc-numpad-done');
+        if (doneBtn) wireTap(doneBtn, () => this._closeNumpad(true));
 
-        wireTap(container.querySelector('.wc-np-back'), () => {
+        const backBtn = container.querySelector('.wc-np-back');
+        if (backBtn) wireTap(backBtn, () => {
             this._activeNumpad?.backspace();
             this._updateNumpadDisplay();
         });
@@ -230,8 +288,18 @@ class WindCompass {
         if (apply && this._activeNumpad) {
             const raw = this._activeNumpad.value;
             if (raw != null) {
-                if (this._activeNumpadField === 'dir') this._manualDir = WindCompass.clampHeading(raw);
-                else this._manualSpeed = raw;
+                const isDir = this._activeNumpadField === 'dir';
+                const value = isDir ? WindCompass.validHeading(raw) : WindCompass.validSpeed(raw);
+                if (value == null) {
+                    // Out of range (e.g. 370 typed for 270): keep the pad open
+                    // rather than silently applying a wrapped value.
+                    this._activeNumpad.clear();
+                    const valueEl = this._container.querySelector('.wc-numpad-value');
+                    if (valueEl) valueEl.textContent = isDir ? '001\u2013360' : '0\u2013150 kt';
+                    return;
+                }
+                if (isDir) this._manualDir = value;
+                else this._manualSpeed = value;
             }
         }
         this._activeNumpad = null;
@@ -291,21 +359,37 @@ class WindCompass {
             const gustXwind = Math.abs(Math.round(gust * Math.sin(diff)));
             return { ...end, headwind, crosswind, gustXwind };
         });
-        enriched.sort((a, b) => b.headwind - a.headwind);
-        enriched.forEach((end, i) => { end.isBest = i === 0; });
+        // Sort on the unrounded components: rounding made 13 (15HW 3XW) tie
+        // 14 (15HW 0XW) for a 140 wind and the list order picked 13. Ties then
+        // go to the smaller crosswind.
+        const raw = (e) => {
+            const diff = (windDir - e.hdg) * Math.PI / 180;
+            return { hw: windSpd * Math.cos(diff), xw: Math.abs(windSpd * Math.sin(diff)) };
+        };
+        enriched.sort((a, b) => {
+            const ra = raw(a), rb = raw(b);
+            return (rb.hw - ra.hw) || (ra.xw - rb.xw);
+        });
+        // A tailwind end is never "best" (e.g. a lone "18" with a north wind).
+        enriched.forEach((end, i) => { end.isBest = i === 0 && end.headwind >= 0; });
         return enriched;
     }
 
     /**
-     * Normalize a heading to [0, 360). A numpad only enforces digit count,
-     * not range -- 999 is a valid 3-digit entry -- so this is a separate,
-     * explicit clamp applied to whatever the numpad produced for the
-     * direction field specifically (wind speed has no such wraparound).
+     * A manually typed wind direction, or null if out of range. The numpad
+     * only limits digit count, so 999 or 370 (a slip for 270) can arrive
+     * here; reject them instead of wrapping to a plausible-looking wrong
+     * heading. 0 is treated as 360 (wind from north).
      */
-    static clampHeading(n) {
-        if (n == null) return null;
-        const wrapped = n % 360;
-        return wrapped < 0 ? wrapped + 360 : wrapped;
+    static validHeading(n) {
+        if (n == null || !Number.isFinite(n) || n < 0 || n > 360) return null;
+        return n === 0 ? 360 : n;
+    }
+
+    /** A manually typed wind speed in knots, or null if out of range. */
+    static validSpeed(n) {
+        if (n == null || !Number.isFinite(n) || n < 0 || n > 150) return null;
+        return n;
     }
 }
 

@@ -3804,15 +3804,6 @@ body {
 .wx-wind { font-family: var(--font-instrument); }
 .wx-cond { font-size: 15px; color: var(--text-secondary); margin-top: 2px; }
 
-/* Best runway section */
-.popup-rwy-wind-section { margin-top: 6px; }
-.popup-rwy-wind-table {
-    width: 100%; border-collapse: collapse;
-    font-family: var(--font-instrument); font-size: 14px; margin: 4px 0;
-}
-.popup-rwy-wind-table td { padding: 3px 6px; border-bottom: 1px solid var(--border-light); }
-.popup-rwy-wind-table tr.best-rwy { color: #00cc00; font-weight: 700; }
-.popup-rwy-wind-table tr.best-rwy td:first-child::before { content: "▸ "; }
 
 /* ========== Radar Controls ========== */
 
@@ -11655,6 +11646,22 @@ body.route-editing-mode .route-table-sheet {
     text-align: center;
     padding: 8px;
 }
+.wc-no-wind {
+    color: var(--text-primary);
+    font-size: var(--text-sm);
+    font-weight: 800;
+}
+.wc-metar-age {
+    color: var(--text-secondary);
+    font-family: var(--font-ui);
+    font-size: var(--text-xs);
+    font-weight: 700;
+    text-align: center;
+}
+.wc-metar-stale {
+    color: var(--color-caution-on-light);
+    font-weight: 800;
+}
 
 .wc-rose {
     width: 100%;
@@ -11705,6 +11712,7 @@ body.route-editing-mode .route-table-sheet {
     fill: var(--color-success);
 }
 
+.wc-manual-controls[hidden] { display: none; }
 .wc-manual-controls {
     display: flex;
     gap: 12px;

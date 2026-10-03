@@ -752,7 +752,7 @@ class EmergencyGlide {
     /**
      * Select best runway end for given wind.
      * Returns { label, hdg, headwind, crosswind } or null.
-     * Headwind formula mirrors airport-popup.js.
+     * Headwind formula mirrors WindCompass.computeWindComponents (wind-compass.js).
      */
     _bestRunwayForWind(runways, windDir, windSpd) {
         const ends = [];
