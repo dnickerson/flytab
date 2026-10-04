@@ -531,7 +531,7 @@ describe('WindCompass true/magnetic wind (variation 8 deg W)', () => {
     // Bearing (compass degrees) of an SVG point from the rose centre.
     const svgBearing = (x, y) => (Math.atan2(x - 150, 150 - y) * 180 / Math.PI + 360) % 360;
 
-    it('draws the rose in MAGNETIC: runway 06 (052 true) sits at 060, labelled MAG', () => {
+    it('draws the rose in MAGNETIC: runway 06 (052 true) runs 060/240, its number at the 240 approach end, labelled MAG', () => {
         withVar(() => {
             const container = document.createElement('div');
             new WindCompass().render(container, runways, { metar: { decoded: { wind_dir: 52, wind_speed: 15 } } }, site);
@@ -539,7 +539,7 @@ describe('WindCompass true/magnetic wind (variation 8 deg W)', () => {
             const b = svgBearing(+line.getAttribute('x1'), +line.getAttribute('y1'));
             expect(b).toBeCloseTo(60, 0);
             const id06 = [...container.querySelectorAll('.wc-end-id')].find(t => t.textContent === '06');
-            expect(svgBearing(+id06.getAttribute('x'), +id06.getAttribute('y'))).toBeCloseTo(60, 0);
+            expect(svgBearing(+id06.getAttribute('x'), +id06.getAttribute('y'))).toBeCloseTo(240, 0);
             expect(container.querySelector('.wc-frame-label').textContent).toBe('MAG');
         });
     });
@@ -597,6 +597,87 @@ describe('WindCompass runway-end label layout', () => {
                 expect(Math.hypot(labels[i].x - labels[j].x, labels[i].y - labels[j].y)).toBeGreaterThanOrEqual(34);
             }
         }
+    });
+
+    it('puts each runway number at its approach end (05 on the 230 side, like the painted numbers)', () => {
+        const { cx, cy, LABEL_R } = WindCompass.GEOM;
+        const labels = WindCompass.layoutEndLabels([at('05', 50), at('23', 230)]);
+        const byText = Object.fromEntries(labels.map(l => [l.text, l]));
+        const sw = WindCompass.headingToXY(230, LABEL_R, cx, cy);
+        const ne = WindCompass.headingToXY(50, LABEL_R, cx, cy);
+        expect(byText['05'].x).toBeCloseTo(sw.x, 6);
+        expect(byText['05'].y).toBeCloseTo(sw.y, 6);
+        expect(byText['23'].x).toBeCloseTo(ne.x, 6);
+        expect(byText['23'].y).toBeCloseTo(ne.y, 6);
+    });
+
+    it('draws runway 05 in the rose at the southwest (approach) end', () => {
+        const container = document.createElement('div');
+        new WindCompass().render(container, [{ id: '05/23' }], { metar: { decoded: { wind_dir: 50, wind_speed: 10 } } });
+        const ids = [...container.querySelectorAll('svg .wc-end-id')];
+        const r05 = ids.find(t => t.textContent === '05');
+        expect(Number(r05.getAttribute('x'))).toBeLessThan(150);
+        expect(Number(r05.getAttribute('y'))).toBeGreaterThan(150);
+    });
+
+    // Near-parallels 13/31 + 14/32 with the wind straight down one of them: a
+    // label pulled inward to dodge its neighbour must not land on the arrow.
+    // (Before this guard, wind 140 put "32" at r40 exactly on the arrow line.)
+    // Outer-ring labels sit just past the arrow's tail -- a few units from it,
+    // same as before the approach-end change -- so they are only required not
+    // to be covered by the 6-unit stroke (3 each side of the centreline).
+    it.each([130, 140, 310, 320])('keeps every runway number off the wind arrow (13/14 rose, wind %i)', (wind) => {
+        const { cx, cy, LABEL_R } = WindCompass.GEOM;
+        const ends = [at('13', 130), at('31', 310), at('14', 140), at('32', 320)];
+        const arrow = WindCompass._arrowSegment(wind);
+        const labels = WindCompass.layoutEndLabels(ends, wind);
+        expect(labels).toHaveLength(4);
+        for (const l of labels) {
+            const d = WindCompass._segmentBoxDistance(arrow, l, WindCompass._labelBox(l.text));
+            const inward = Math.hypot(l.x - cx, l.y - cy) < LABEL_R - 1;
+            expect(d, `${l.text} vs arrow`).toBeGreaterThanOrEqual(inward ? WindCompass.ARROW_CLEAR : 3);
+        }
+        // ...without giving up the spacing between labels (a first cut of this
+        // fix left "31" on top of "32" for wind 140).
+        for (let i = 0; i < labels.length; i++) {
+            for (let j = i + 1; j < labels.length; j++) {
+                expect(Math.hypot(labels[i].x - labels[j].x, labels[i].y - labels[j].y), `${labels[i].text}/${labels[j].text}`)
+                    .toBeGreaterThanOrEqual(34);
+            }
+        }
+    });
+
+    it('draws the 13/14 rose with wind 140 and no number under the arrow', () => {
+        const container = document.createElement('div');
+        new WindCompass().render(container, [{ id: '13/31' }, { id: '14/32' }],
+            { metar: { decoded: { wind_dir: 140, wind_speed: 15 } } });
+        const a = container.querySelector('.wc-wind-arrow line');
+        const arrow = { x1: +a.getAttribute('x1'), y1: +a.getAttribute('y1'), x2: +a.getAttribute('x2'), y2: +a.getAttribute('y2') };
+        for (const t of container.querySelectorAll('svg .wc-end-id')) {
+            const pos = { x: +t.getAttribute('x'), y: +t.getAttribute('y') };
+            expect(WindCompass._segmentBoxDistance(arrow, pos, WindCompass._labelBox(t.textContent)), t.textContent)
+                .toBeGreaterThan(3);   // not under the 6-unit stroke
+        }
+    });
+
+    it('a lone runway end ("18") draws its half-line on the side its number is on', () => {
+        const container = document.createElement('div');
+        new WindCompass().render(container, [{ id: '18' }], { metar: { decoded: { wind_dir: 180, wind_speed: 10 } } });
+        const line = container.querySelector('svg .wc-runway-line');
+        const id18 = [...container.querySelectorAll('svg .wc-end-id')].find(t => t.textContent === '18');
+        // Approach end of 18 is the north end: number and line both on the north side.
+        expect(+id18.getAttribute('y')).toBeLessThan(150);
+        const ys = [+line.getAttribute('y1'), +line.getAttribute('y2')];
+        expect(Math.min(...ys)).toBeLessThan(150);
+        expect(Math.max(...ys)).toBeCloseTo(150, 6);
+    });
+
+    it('_segmentBoxDistance: 0 when crossing, else the gap to the box edge', () => {
+        const seg = { x1: 0, y1: 0, x2: 100, y2: 0 };
+        expect(WindCompass._segmentBoxDistance(seg, { x: 50, y: 0 }, { w: 10, h: 10 })).toBe(0);    // straddles
+        expect(WindCompass._segmentBoxDistance(seg, { x: 50, y: 20 }, { w: 10, h: 10 })).toBe(15);  // above, 20 - 5
+        expect(WindCompass._segmentBoxDistance(seg, { x: 120, y: 0 }, { w: 10, h: 10 })).toBe(15);  // past the end, 20 - 5
+        expect(WindCompass._segmentBoxDistance({ x1: 40, y1: -50, x2: 60, y2: 50 }, { x: 50, y: 0 }, { w: 4, h: 4 })).toBe(0); // passes through
     });
 
     it('puts the numbers in a table, not in the rose', () => {
