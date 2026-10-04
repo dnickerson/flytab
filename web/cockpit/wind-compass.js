@@ -194,8 +194,9 @@ class WindCompass {
     /**
      * Rose geometry (SVG user units; viewBox 0 0 300 300). Runway lines stop
      * at RWY_R, runway-end ids sit just outside them at LABEL_R, and the wind
-     * arrow's tail starts at ARROW_TAIL_R -- inside the labels, so an arrow
-     * blowing straight down a runway never covers a runway number.
+     * arrow's tail starts at ARROW_TAIL_R -- inside the labels. A label pulled
+     * inward to dodge another one could land on the arrow, so layoutEndLabels
+     * also steers labels clear of it (see there for the last-resort case).
      */
     static get GEOM() {
         const r = 118;
@@ -227,10 +228,14 @@ class WindCompass {
         }
 
         // One line per runway, between its two ends' headings (through the centre).
+        // A runway with a single parsed end (e.g. a lone "18") gets a half-line
+        // on its approach side, where layoutEndLabels puts its number.
         const runwayLines = runways.map(rwy => {
             const rwyEnds = WindCompass.parseRunwayEnds([rwy], this._decl);
             if (rwyEnds.length === 0) return '';
-            const p1 = WindCompass.headingToXY(this._toDisplay(rwyEnds[0].hdg), RWY_R, cx, cy);
+            const p1 = rwyEnds.length > 1
+                ? WindCompass.headingToXY(this._toDisplay(rwyEnds[0].hdg), RWY_R, cx, cy)
+                : WindCompass.headingToXY(this._toDisplay(rwyEnds[0].hdg) + 180, RWY_R, cx, cy);
             const p2 = rwyEnds.length > 1
                 ? WindCompass.headingToXY(this._toDisplay(rwyEnds[1].hdg), RWY_R, cx, cy)
                 : { x: cx, y: cy };
@@ -238,10 +243,11 @@ class WindCompass {
         }).join('');
 
         const endLabels = WindCompass.layoutEndLabels(
-            enrichedEnds.map(e => ({ ...e, hdg: this._toDisplay(e.hdg) }))).map(l => `
+            enrichedEnds.map(e => ({ ...e, hdg: this._toDisplay(e.hdg) })),
+            wind ? this._toDisplay(wind.dir) : null).map(l => `
             <g class="wc-end-label ${l.isBest ? 'wc-best' : ''}">
                 ${l.isBest ? (() => {
-                    const w = 13 * l.text.length + 14, h = 28;
+                    const { w, h } = WindCompass._labelBox(l.text);
                     return `<rect class="wc-best-dot" x="${l.x - w / 2}" y="${l.y - h / 2}" width="${w}" height="${h}" rx="6"/>`;
                 })() : ''}
                 <text class="wc-end-id" x="${l.x}" y="${l.y}" text-anchor="middle" dominant-baseline="central">${l.text}</text>
@@ -283,9 +289,18 @@ class WindCompass {
      *  - A label that would still sit closer than MIN_GAP units to one already
      *    placed is pulled inward a step (twice at most) so near-parallels like
      *    13/14 stay readable.
+     *  - With a wind arrow (windDir, same frame as the headings), no label may
+     *    sit on it: inward positions whose box comes within ARROW_CLEAR of the
+     *    arrow are skipped, and labels nearest the wind direction are placed
+     *    first so they keep the outer ring (the arrow's tail stops inside it).
+     *    The labels on the arrow's side are the tailwind ends, so the old
+     *    best-end-first order would have pulled exactly those onto the arrow.
+     *  - A label that can neither stay put nor move inward (near-parallels with
+     *    the wind straight down them: every inward spot is on the arrow) slides
+     *    along the outer ring instead, away from the arrow first.
      * Returns [{ text, x, y, isBest }].
      */
-    static layoutEndLabels(ends) {
+    static layoutEndLabels(ends, windDir = null) {
         const { cx, cy, LABEL_R } = WindCompass.GEOM;
         const MIN_GAP = 34, STEP = 30;
         const groups = [];
@@ -294,17 +309,77 @@ class WindCompass {
             const g = groups.find(gr => Math.abs(((at - gr.hdg + 540) % 360) - 180) < 4);
             if (g) g.ends.push(e); else groups.push({ hdg: at, ends: [e] });
         }
+        const arrow = windDir == null ? null : WindCompass._arrowSegment(windDir);
+        if (arrow) {
+            const off = h => Math.abs(((h - windDir + 540) % 360) - 180);
+            groups.sort((a, b) => off(a.hdg) - off(b.hdg));
+        }
         const placed = [];
         for (const g of groups) {
             const text = WindCompass._mergeLabels(g.ends.map(e => e.label));
-            let pos = null;
-            for (let k = 0; k < 3; k++) {
-                pos = WindCompass.headingToXY(g.hdg, LABEL_R - k * STEP, cx, cy);
-                if (!placed.some(p => Math.hypot(p.x - pos.x, p.y - pos.y) < MIN_GAP)) break;
-            }
+            const box = WindCompass._labelBox(text);
+            const clearOfArrow = pos => !arrow
+                || WindCompass._segmentBoxDistance(arrow, pos, box) >= WindCompass.ARROW_CLEAR;
+            const gap = pos => Math.min(Infinity, ...placed.map(p => Math.hypot(p.x - pos.x, p.y - pos.y)));
+            const ring = [0, 1, 2].map(k => WindCompass.headingToXY(g.hdg, LABEL_R - k * STEP, cx, cy));
+            // Ring slides, away from the arrow first (ties: clockwise).
+            const away = arrow && ((g.hdg - windDir + 360) % 360) > 180 ? -1 : 1;
+            const slides = [10, 15, 20].flatMap(d => [away * d, -away * d])
+                .map(d => WindCompass.headingToXY(g.hdg + d, LABEL_R, cx, cy));
+            const candidates = [...ring, ...slides].filter(clearOfArrow);
+            const pos = candidates.find(c => gap(c) >= MIN_GAP)
+                // Nowhere fully clear of other labels: least-crowded spot off the arrow.
+                || (candidates.length && candidates.reduce((best, c) => (gap(c) > gap(best) ? c : best)))
+                // Even the outer ring touches the arrow (a wide label like "08L/R"
+                // straight downwind of it): stay on the outer ring, as before.
+                || ring[0];
             placed.push({ text, x: pos.x, y: pos.y, isBest: g.ends.some(e => e.isBest) });
         }
         return placed;
+    }
+
+    /** Clearance (SVG units) kept between a label's box and the wind arrow's centreline:
+     *  the arrowhead is 16 units wide (8 each side), which also covers the 6-unit stroke. */
+    static get ARROW_CLEAR() { return 8; }
+
+    /** Size of a runway-end label's box (also the green best-end highlight). */
+    static _labelBox(text) {
+        return { w: 13 * text.length + 14, h: 28 };
+    }
+
+    /** The wind arrow's centreline, tail to tip, extended past the tip by the
+     *  arrowhead (its marker reaches 8 units beyond the line's end). */
+    static _arrowSegment(windDir) {
+        const { cx, cy, ARROW_TAIL_R, ARROW_TIP_R } = WindCompass.GEOM;
+        const a = WindCompass.headingToXY(windDir, ARROW_TAIL_R, cx, cy);
+        const b = WindCompass.headingToXY(windDir, Math.max(0, ARROW_TIP_R - 8), cx, cy);
+        return { x1: a.x, y1: a.y, x2: b.x, y2: b.y };
+    }
+
+    /** Shortest distance from segment `seg` to the axis-aligned box of size
+     *  `box` centred on `pos`; 0 when they intersect. */
+    static _segmentBoxDistance(seg, pos, box) {
+        const hw = box.w / 2, hh = box.h / 2;
+        const l = pos.x - hw, r = pos.x + hw, t = pos.y - hh, btm = pos.y + hh;
+        const ptBox = (x, y) => Math.hypot(Math.max(l - x, 0, x - r), Math.max(t - y, 0, y - btm));
+        const ptSeg = (x, y) => {
+            const dx = seg.x2 - seg.x1, dy = seg.y2 - seg.y1;
+            const len2 = dx * dx + dy * dy;
+            const u = len2 ? Math.max(0, Math.min(1, ((x - seg.x1) * dx + (y - seg.y1) * dy) / len2)) : 0;
+            return Math.hypot(x - seg.x1 - u * dx, y - seg.y1 - u * dy);
+        };
+        // Intersection: either endpoint inside the box, or the segment crosses an edge.
+        if (ptBox(seg.x1, seg.y1) === 0 || ptBox(seg.x2, seg.y2) === 0) return 0;
+        const cross = (ax, ay, bx, by, px, py, qx, qy) => {
+            const o = (x1, y1, x2, y2, x3, y3) => Math.sign((x2 - x1) * (y3 - y1) - (y2 - y1) * (x3 - x1));
+            return o(ax, ay, bx, by, px, py) !== o(ax, ay, bx, by, qx, qy)
+                && o(px, py, qx, qy, ax, ay) !== o(px, py, qx, qy, bx, by);
+        };
+        const edges = [[l, t, r, t], [r, t, r, btm], [r, btm, l, btm], [l, btm, l, t]];
+        if (edges.some(e => cross(seg.x1, seg.y1, seg.x2, seg.y2, ...e))) return 0;
+        return Math.min(
+            ptBox(seg.x1, seg.y1), ptBox(seg.x2, seg.y2),
+            ...edges.map(([x, y]) => ptSeg(x, y)));
     }
 
     /** ["26L","26R"] -> "26L/R"; ["26L","26C","26R"] -> "26L/C/R"; unrelated ids joined by a space. */
