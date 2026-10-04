@@ -195,7 +195,7 @@ class WindCompass {
      * Rose geometry (SVG user units; viewBox 0 0 300 300). Runway lines stop
      * at RWY_R, runway-end ids sit just outside them at LABEL_R, and the wind
      * arrow's tail starts at ARROW_TAIL_R -- inside the labels, so an arrow
-     * blowing straight down a runway never covers that runway's number.
+     * blowing straight down a runway never covers a runway number.
      */
     static get GEOM() {
         const r = 118;
@@ -276,6 +276,9 @@ class WindCompass {
 
     /**
      * Place runway-end ids around the rose without overlap.
+     *  - Each id sits at its APPROACH end, opposite its heading, the way the
+     *    numbers are painted: landing 05 you touch down at the southwest end,
+     *    so "05" is drawn on the 230 side of the rose and "23" on the 050 side.
      *  - Parallel ends (headings within 4 deg) share one label: 26L + 26R -> "26L/R".
      *  - A label that would still sit closer than MIN_GAP units to one already
      *    placed is pulled inward a step (twice at most) so near-parallels like
@@ -287,8 +290,9 @@ class WindCompass {
         const MIN_GAP = 34, STEP = 30;
         const groups = [];
         for (const e of ends) {
-            const g = groups.find(gr => Math.abs(((e.hdg - gr.hdg + 540) % 360) - 180) < 4);
-            if (g) g.ends.push(e); else groups.push({ hdg: e.hdg, ends: [e] });
+            const at = WindCompass.norm360(e.hdg + 180);
+            const g = groups.find(gr => Math.abs(((at - gr.hdg + 540) % 360) - 180) < 4);
+            if (g) g.ends.push(e); else groups.push({ hdg: at, ends: [e] });
         }
         const placed = [];
         for (const g of groups) {

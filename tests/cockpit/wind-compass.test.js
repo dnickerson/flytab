@@ -531,7 +531,7 @@ describe('WindCompass true/magnetic wind (variation 8 deg W)', () => {
     // Bearing (compass degrees) of an SVG point from the rose centre.
     const svgBearing = (x, y) => (Math.atan2(x - 150, 150 - y) * 180 / Math.PI + 360) % 360;
 
-    it('draws the rose in MAGNETIC: runway 06 (052 true) sits at 060, labelled MAG', () => {
+    it('draws the rose in MAGNETIC: runway 06 (052 true) runs 060/240, its number at the 240 approach end, labelled MAG', () => {
         withVar(() => {
             const container = document.createElement('div');
             new WindCompass().render(container, runways, { metar: { decoded: { wind_dir: 52, wind_speed: 15 } } }, site);
@@ -539,7 +539,7 @@ describe('WindCompass true/magnetic wind (variation 8 deg W)', () => {
             const b = svgBearing(+line.getAttribute('x1'), +line.getAttribute('y1'));
             expect(b).toBeCloseTo(60, 0);
             const id06 = [...container.querySelectorAll('.wc-end-id')].find(t => t.textContent === '06');
-            expect(svgBearing(+id06.getAttribute('x'), +id06.getAttribute('y'))).toBeCloseTo(60, 0);
+            expect(svgBearing(+id06.getAttribute('x'), +id06.getAttribute('y'))).toBeCloseTo(240, 0);
             expect(container.querySelector('.wc-frame-label').textContent).toBe('MAG');
         });
     });
@@ -597,6 +597,27 @@ describe('WindCompass runway-end label layout', () => {
                 expect(Math.hypot(labels[i].x - labels[j].x, labels[i].y - labels[j].y)).toBeGreaterThanOrEqual(34);
             }
         }
+    });
+
+    it('puts each runway number at its approach end (05 on the 230 side, like the painted numbers)', () => {
+        const { cx, cy, LABEL_R } = WindCompass.GEOM;
+        const labels = WindCompass.layoutEndLabels([at('05', 50), at('23', 230)]);
+        const byText = Object.fromEntries(labels.map(l => [l.text, l]));
+        const sw = WindCompass.headingToXY(230, LABEL_R, cx, cy);
+        const ne = WindCompass.headingToXY(50, LABEL_R, cx, cy);
+        expect(byText['05'].x).toBeCloseTo(sw.x, 6);
+        expect(byText['05'].y).toBeCloseTo(sw.y, 6);
+        expect(byText['23'].x).toBeCloseTo(ne.x, 6);
+        expect(byText['23'].y).toBeCloseTo(ne.y, 6);
+    });
+
+    it('draws runway 05 in the rose at the southwest (approach) end', () => {
+        const container = document.createElement('div');
+        new WindCompass().render(container, [{ id: '05/23' }], { metar: { decoded: { wind_dir: 50, wind_speed: 10 } } });
+        const ids = [...container.querySelectorAll('svg .wc-end-id')];
+        const r05 = ids.find(t => t.textContent === '05');
+        expect(Number(r05.getAttribute('x'))).toBeLessThan(150);
+        expect(Number(r05.getAttribute('y'))).toBeGreaterThan(150);
     });
 
     it('puts the numbers in a table, not in the rose', () => {
