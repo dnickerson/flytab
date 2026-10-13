@@ -219,7 +219,8 @@ class LayerPanel {
             convIntelInput.checked = saved?.actions?.['conv-intel'] ?? CockpitConfig.get('convective.enabled') ?? false;
             convIntelInput.addEventListener('change', () => {
                 const on = convIntelInput.checked;
-                CockpitConfig.set('convective.enabled', on);
+                // patch() is CockpitConfig's persisting setter (there is no set()).
+                CockpitConfig.patch('convective.enabled', on);
                 window.app?.convectiveEngine?.setActive(on);
             });
         }
