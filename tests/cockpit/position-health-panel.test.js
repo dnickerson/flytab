@@ -111,6 +111,33 @@ describe('PositionHealthPanel', () => {
         expect(panel.element.querySelector('.php-history li').textContent).toBe('12:08:13 · 5 s · No data from Stratux');
     });
 
+    it('review: opening/closing tells the map to re-measure (it changes the map height)', () => {
+        const onToggle = vi.fn();
+        panel.destroy();
+        panel = new PositionHealthPanel(document.getElementById('statusBar'), monitor, { ...h, onToggle });
+        panel.show(); panel.hide();
+        expect(onToggle.mock.calls.map(c => c[0])).toEqual([true, false]);
+    });
+
+    it('review: GPS source buttons come back -- USE STRATUX GPS / RESET GPS SOURCE', () => {
+        const gps = { _configuredSource: 'internal', _inFallback: false, setSource: vi.fn() };
+        panel.destroy();
+        panel = new PositionHealthPanel(document.getElementById('statusBar'), monitor, { ...h, gpsSource: gps });
+        panel.show();
+        const use = panel.element.querySelector('[data-act="use-stratux"]');
+        expect(use.hidden).toBe(false);
+        touchTap(use);
+        expect(gps.setSource).toHaveBeenCalledWith('stratux');
+        gps._configuredSource = 'auto'; gps._inFallback = true;
+        vi.advanceTimersByTime(1000);
+        panel.render();
+        expect(use.hidden).toBe(true);
+        const reset = panel.element.querySelector('[data-act="reset-gps"]');
+        expect(reset.hidden).toBe(false);
+        touchTap(reset);
+        expect(gps.setSource).toHaveBeenCalledWith('auto');
+    });
+
     it('updates only while open', () => {
         emit({ ...BASE, ownship: 'held', holdRemainingS: 4 });
         expect(text('.php-status')).not.toBe('POSITION HELD · 4 s');

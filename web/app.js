@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v11.5';
+const FLYTAB_VERSION = 'v11.6';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -442,6 +442,7 @@ class FlyTabApp {
             this.positionHealth = new PositionHealthMonitor({
                 stratux: this.stratuxClient,
                 map: this.cockpitMap,
+                gpsSource: this.gpsSource,
                 vpn: typeof VpnStatus !== 'undefined' ? VpnStatus : null,
             });
             if (typeof PositionHealthPanel !== 'undefined') {
@@ -449,6 +450,9 @@ class FlyTabApp {
                     onGpsSettings: () => this.configEditor?.show(),
                     onFullLog: () => this._showDiagLog(),
                     openVpnSettings: () => VpnStatus.openSettings(),
+                    gpsSource: this.gpsSource,
+                    // In the page flow: the map's height changes; Leaflet must re-measure.
+                    onToggle: () => setTimeout(() => this.cockpitMap?.map?.invalidateSize(), 50),
                 });
                 this.dom.statusGps?.addEventListener('click', () => this.positionPanel.toggle());
             }

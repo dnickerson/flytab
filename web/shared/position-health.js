@@ -28,6 +28,7 @@ class PositionHealthMonitor extends EventTarget {
      *   stratux  StratuxClient (EventTarget: .connected .stale .situation .deviceStatus)
      *   engine   EngineClient  (.stale)
      *   bridge   EngineGpsBridge (.active) — optional
+     *   gpsSource GpsSource (.source, ._configuredSource) — optional
      *   map      CockpitMap (.ownshipState) — optional until the map exists
      *   vpn      VpnStatus (query()) — optional (browser has no plugin)
      *   storage  localStorage-like — optional
@@ -62,7 +63,7 @@ class PositionHealthMonitor extends EventTarget {
     start() {
         const s = this._d.stratux;
         const on = (target, type, fn) => { target?.addEventListener?.(type, fn); this._listeners.push([target, type, fn]); };
-        const lost = () => { if (this._feedLostAt == null) this._feedLostAt = this._now(); this.tick(); };
+        const lost = () => { if (this._feedLostAt == null) this._feedLostAt = this._lossStart(); this.tick(); };
         on(s, 'stratux:stale', lost);
         on(s, 'stratux:disconnect', lost);
         // Recovery is the first situation after a loss: evaluate right away so the
@@ -90,7 +91,8 @@ class PositionHealthMonitor extends EventTarget {
      * bridge come up after the map). The monitor runs without them meanwhile:
      * engine state reads "unknown", never "lost".
      */
-    setSources({ engine, bridge, map } = {}) {
+    setSources({ engine, bridge, map, gpsSource } = {}) {
+        if (gpsSource) this._d.gpsSource = gpsSource;
         if (engine) this._d.engine = engine;
         if (bridge) this._d.bridge = bridge;
         if (map) this._d.map = map;
@@ -110,15 +112,31 @@ class PositionHealthMonitor extends EventTarget {
         }
         const s = this._d.stratux;
         if (s && !s.stale && s.connected !== false) this._feedLostAt = null;
-        else if (s && this._feedLostAt == null) this._feedLostAt = now;
+        else if (s && this._feedLostAt == null) this._feedLostAt = this._lossStart();
 
         const st = this._compute();
         this._trackEpisode(st, now);
         st.episodeId = this._episode?.id ?? null;
         st.lastEnded = this._lastEnded;
         this._state = st;
-        this.dispatchEvent(new CustomEvent('change', { detail: st }));
+        // Only tell listeners when something they show changed (not every second).
+        const { at, ...shown } = st;
+        const key = JSON.stringify(shown);
+        if (key !== this._lastKey) {
+            this._lastKey = key;
+            this.dispatchEvent(new CustomEvent('change', { detail: st }));
+        }
         return st;
+    }
+
+    /**
+     * When the data actually stopped: StratuxClient.lastDataAt (stale only fires
+     * STALE_MS later, so counting from detection would read ~5 s short).
+     */
+    _lossStart() {
+        const now = this._now();
+        const last = this._d.stratux?.lastDataAt;
+        return (typeof last === 'number' && last > 0 && last <= now) ? last : now;
     }
 
     async _checkVpn() {
@@ -148,7 +166,12 @@ class PositionHealthMonitor extends EventTarget {
         const flowing = !!s && !s.stale && s.connected !== false;
         const sit = s?.situation;
         const hasFix = typeof GpsFix !== 'undefined' ? GpsFix.has3DFix(sit) : (sit?.gps_fix_quality ?? 0) >= 1;
-        const engineOk = this._d.engine ? this._d.engine.stale === false : null;
+        // EngineClient resets stale to false when it DISCONNECTS, so stale alone
+        // can't mean "OK": the link must also be up.
+        const eng = this._d.engine;
+        const engineOk = eng ? (eng.connected === true && eng.stale === false) : null;
+        const gsrc = this._d.gpsSource;
+        const deviceGps = gsrc?.source === 'internal';
         const bridge = this._d.bridge?.active === true;
         const lostS = this._feedLostAt != null ? Math.max(0, Math.round((now - this._feedLostAt) / 1000)) : 0;
         const dev = s?.deviceStatus;
@@ -156,6 +179,10 @@ class PositionHealthMonitor extends EventTarget {
         let code, text;
         if (this._vpnActive === true) {
             code = 'vpn'; text = 'A VPN is on — it disrupts the Stratux link. Turn it off.';
+        } else if (deviceGps && gsrc._configuredSource === 'internal') {
+            code = 'ok'; text = "Position from the tablet's own GPS (GPS source set to Internal)";
+        } else if (deviceGps) {
+            code = 'device-gps'; text = "No data from Stratux — position from the tablet's own GPS";
         } else if (flowing && !hasFix) {
             const sats = sit?.gps_sats ?? dev?.GPS_satellites_locked;
             const dr = sit?.gps_fix_quality === 6;
@@ -203,13 +230,21 @@ class PositionHealthMonitor extends EventTarget {
     _trackEpisode(st, now) {
         // Before the first fix this session, "no data" is just startup (Stratux
         // booting, tablet joining its Wi-Fi), not a dropout. A VPN always counts.
-        const problem = st.cause.code !== 'ok' && (st.hadFix || st.cause.code === 'vpn');
+        // An episode STARTS only after the first fix this session (or for a VPN):
+        // before that, "no data" is just startup. Once open it lasts until the
+        // cause is clear -- a VPN switched off while the link is still down is
+        // not "restored".
+        const bad = st.cause.code !== 'ok';
+        const problem = this._episode ? bad : bad && (st.hadFix || st.cause.code === 'vpn');
         if (problem && !this._episode) {
-            this._episode = { id: this._nextEpisodeId++, start: now, code: st.cause.code, text: st.cause.text, error: null };
+            const linkCause = st.cause.code.startsWith('link') || st.cause.code === 'engine-gps' || st.cause.code === 'device-gps';
+            const start = linkCause && this._feedLostAt != null ? this._feedLostAt : now;
+            this._episode = { id: this._nextEpisodeId++, start, code: st.cause.code, text: st.cause.text, error: null };
             if (typeof DiagLog !== 'undefined') DiagLog.log('position', `Problem: ${st.cause.text}`);
-        } else if (problem && this._episode) {
-            // Keep the most specific cause seen, and the latest wording/error.
-            this._episode.code = st.cause.code;
+        } else if (problem && this._episode && st.cause.code === 'vpn' && this._episode.code !== 'vpn') {
+            // The episode keeps its ROOT cause (the first one seen); a VPN found
+            // later is the root cause of the link loss, so it takes over.
+            this._episode.code = 'vpn';
             this._episode.text = st.cause.text;
         }
         if (this._episode && this._lastLinkError && this._lastLinkError.at >= this._episode.start - 2000) {

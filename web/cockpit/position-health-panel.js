@@ -41,6 +41,8 @@ class PositionHealthPanel {
             <ul class="php-history"></ul>
             <div class="php-actions">
                 <button type="button" class="php-btn php-btn--danger" data-act="vpn-settings" hidden>OPEN VPN SETTINGS</button>
+                <button type="button" class="php-btn" data-act="use-stratux" hidden>USE STRATUX GPS</button>
+                <button type="button" class="php-btn" data-act="reset-gps" hidden>RESET GPS SOURCE</button>
                 <button type="button" class="php-btn" data-act="gps-settings">GPS SETTINGS</button>
                 <button type="button" class="php-btn" data-act="full-log">FULL LOG</button>
                 <button type="button" class="php-btn" data-act="close">CLOSE</button>
@@ -51,6 +53,10 @@ class PositionHealthPanel {
         const tap = (typeof wireIsolatedTap === 'function') ? wireIsolatedTap : (n, fn) => n.addEventListener('click', fn);
         const act = (name, fn) => tap(el.querySelector(`[data-act="${name}"]`), fn);
         act('vpn-settings', () => this._actions.openVpnSettings?.());
+        // GPS source shortcuts (as the old panel had): back to Stratux from a
+        // configured Internal source, or out of an auto-mode device-GPS fallback.
+        act('use-stratux', () => { this._actions.gpsSource?.setSource('stratux'); this.render(); });
+        act('reset-gps', () => { this._actions.gpsSource?.setSource('auto'); this.render(); });
         act('gps-settings', () => this._actions.onGpsSettings?.());
         act('full-log', () => this._actions.onFullLog?.());
         act('close', () => this.hide());
@@ -62,8 +68,10 @@ class PositionHealthPanel {
     get element() { return this._el; }
     get visible() { return this._visible; }
 
-    show() { this._visible = true; this._el.classList.add('visible'); this.render(); }
-    hide() { this._visible = false; this._el.classList.remove('visible'); }
+    // The panel is in the page flow, so opening/closing changes the map's height:
+    // onToggle lets the app tell Leaflet to re-measure.
+    show() { this._visible = true; this._el.classList.add('visible'); this.render(); this._actions.onToggle?.(true); }
+    hide() { this._visible = false; this._el.classList.remove('visible'); this._actions.onToggle?.(false); }
     toggle() { this._visible ? this.hide() : this.show(); }
 
     render() {
@@ -105,6 +113,9 @@ class PositionHealthPanel {
         row('vpn', v === true ? 'A VPN IS ON' : v === false ? 'Off' : 'Unknown',
             v === true ? 'A VPN breaks the Stratux link. Turn it off.' : '', v === true);
         q('[data-act="vpn-settings"]').hidden = v !== true;
+        const gs = this._actions.gpsSource;
+        q('[data-act="use-stratux"]').hidden = gs?._configuredSource !== 'internal';
+        q('[data-act="reset-gps"]').hidden = !(gs?._configuredSource === 'auto' && gs?._inFallback);
 
         const hist = this._monitor.history || [];
         q('.php-history').innerHTML = '';
@@ -155,4 +166,5 @@ PositionHealthPanel.CAUSE_LABELS = {
     'link-tablet': 'Tablet Wi-Fi (Stratux and engine monitor both lost)',
     'link-stratux': 'At the Stratux (engine monitor still connected)',
     'link': 'No data from Stratux',
+    'device-gps': "Tablet's own GPS in use",
 };

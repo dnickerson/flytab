@@ -22,7 +22,7 @@ class PositionHealthBanner {
         this._container = container;
         this._monitor = monitor;
         this._onOpenDetails = opts.onOpenDetails || null;
-        this._dismissedEpisode = null;   // episodeId the pilot dismissed
+        this._dismissed = null;          // { episodeId, rank } the pilot dismissed
         this._shownEpisode = null;       // last episodeId actually shown (for "restored")
         this._restoredUntil = 0;
         this._restoredText = '';
@@ -60,7 +60,8 @@ class PositionHealthBanner {
 
     dismiss() {
         const st = this._monitor.state;
-        if (st?.episodeId != null) this._dismissedEpisode = st.episodeId;
+        const view = st && this._view(st);
+        if (st?.episodeId != null) this._dismissed = { episodeId: st.episodeId, rank: PositionHealthBanner.rank(view?.severity) };
         this._restoredUntil = 0;
         this._el.style.display = 'none';
     }
@@ -75,7 +76,7 @@ class PositionHealthBanner {
             this._restoredFor = st.lastEnded;
             const ended = st.lastEnded;
             const wasShown = this._shownEpisode != null && (ended.id == null || ended.id === this._shownEpisode);
-            if (wasShown && this._dismissedEpisode !== this._shownEpisode) {
+            if (wasShown && this._dismissed?.episodeId !== this._shownEpisode) {
                 this._restoredText = `POSITION RESTORED · dropout ${ended.durationS} s`;
                 this._restoredUntil = now + PositionHealthBanner.RESTORED_MS;
                 clearTimeout(this._restoredTimer);
@@ -85,7 +86,11 @@ class PositionHealthBanner {
         }
 
         const view = this._view(st);
-        if (view && st.episodeId !== this._dismissedEpisode) {
+        // Dismissed stays dismissed for this problem -- unless it gets WORSE
+        // (amber -> red), which the pilot hasn't seen yet.
+        const dismissed = this._dismissed && st.episodeId === this._dismissed.episodeId
+            && PositionHealthBanner.rank(view?.severity) <= this._dismissed.rank;
+        if (view && !dismissed) {
             this._shownEpisode = st.episodeId;
             this._paint(view.severity, view.title, st.cause.text);
             return;
@@ -104,6 +109,7 @@ class PositionHealthBanner {
         if (code === 'vpn') return { severity: 'danger', title: 'A VPN IS ON' };
         if (!st.hadFix) return null;          // startup, before any fix: the badge covers it
         if (code === 'engine-gps' && st.ownship === 'live') return { severity: 'caution', title: 'POSITION FROM ENGINE MONITOR' };
+        if (code === 'device-gps' && st.ownship === 'live') return { severity: 'caution', title: "POSITION FROM TABLET'S GPS" };
         if (st.ownship === 'held') return { severity: 'caution', title: `POSITION HELD · ${st.holdRemainingS} s` };
         if (st.ownship === 'hidden' || st.ownship === 'none') return { severity: 'danger', title: 'POSITION LOST' };
         return null;
@@ -136,3 +142,4 @@ class PositionHealthBanner {
 }
 
 PositionHealthBanner.RESTORED_MS = 5000;
+PositionHealthBanner.rank = (severity) => ({ caution: 1, danger: 2 })[severity] || 0;

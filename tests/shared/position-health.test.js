@@ -21,7 +21,7 @@ function setup({ vpnActive = false, ownship = 'live' } = {}) {
     const stratux = new EventTarget();
     Object.assign(stratux, { connected: true, stale: false, situation: { ...FIX },
         deviceStatus: { GPS_solution: '3D GPS + SBAS', GPS_satellites_locked: 11, GPS_position_accuracy: 2.5, Uptime: 600000 } });
-    const engine = { stale: false };
+    const engine = { connected: true, stale: false };
     const bridge = { active: false };
     const map = { ownshipState: { state: ownship, holdRemainingMs: 0 } };
     const vpn = { query: vi.fn(async () => ({ vpnActive, installed: true, enabled: true })) };
@@ -32,14 +32,17 @@ function setup({ vpnActive = false, ownship = 'live' } = {}) {
 
 /** Stratux data stops: stale fires, sockets error out. */
 function dropLink(t, { engineToo }) {
+    // StratuxClient: lastDataAt is when data stopped; stale fires STALE_MS later.
     t.stratux.stale = true; t.stratux.connected = false;
-    if (engineToo) t.engine.stale = true;
+    // EngineClient._setConnected(false) also resets stale to false.
+    if (engineToo) { t.engine.connected = false; t.engine.stale = false; }
     t.map.ownshipState = { state: 'held', holdRemainingMs: 10000 };
     t.stratux.dispatchEvent(new Event('stratux:stale'));
 }
 
 function restore(t) {
-    t.stratux.stale = false; t.stratux.connected = true; t.engine.stale = false;
+    t.stratux.stale = false; t.stratux.connected = true; t.engine.connected = true; t.engine.stale = false;
+    t.stratux.lastDataAt = Date.now();
     t.map.ownshipState = { state: 'live', holdRemainingMs: 0 };
     t.stratux.dispatchEvent(new CustomEvent('stratux:situation', { detail: t.stratux.situation }));
 }
@@ -191,12 +194,103 @@ describe('PositionHealthMonitor', () => {
         // Engine state unknown: don't claim it's connected or blame either side.
         expect(mon.state.cause.code).toBe('link');
         expect(mon.state.cause.text).toMatch(/^No data from Stratux for \d+ s$/);
-        const engine = { stale: true }, bridge = { active: false };
+        const engine = { connected: false, stale: false }, bridge = { active: false };
         mon.setSources({ engine, bridge });
         expect(mon.tick().cause.code).toBe('link-tablet');
         bridge.active = true;
         expect(mon.tick().cause.code).toBe('engine-gps');
         mon.stop();
+    });
+
+    it('review: a DISCONNECTED engine monitor (stale=false) is lost, not OK -> tablet Wi-Fi', () => {
+        t = setup(); t.mon.start();
+        dropLink(t, { engineToo: true });
+        expect(t.engine.stale).toBe(false);                 // the real EngineClient's state
+        const s = t.mon.tick();
+        expect(s.engine.ok).toBe(false);
+        expect(s.cause.code).toBe('link-tablet');
+    });
+
+    it('review: times count from when data STOPPED, and the error at that moment is attached', async () => {
+        t = setup(); t.mon.start(); await vi.advanceTimersByTimeAsync(1000);
+        const stoppedAt = Date.now();
+        t.stratux.lastDataAt = stoppedAt;
+        window.dispatchEvent(new CustomEvent('stratux:link-error', { detail: { channel: 'situation', message: 'Software caused connection abort' } }));
+        await vi.advanceTimersByTimeAsync(5000);           // stale fires 5 s after data stopped
+        dropLink(t, { engineToo: true });
+        await vi.advanceTimersByTimeAsync(7000);
+        expect(t.mon.state.stratux.lostS).toBe(12);
+        restore(t);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(t.mon.history[0]).toMatchObject({ durationS: 12, error: 'Software caused connection abort' });
+    });
+
+    it('review: an episode keeps its ROOT cause (first seen), not the last one', async () => {
+        t = setup(); t.mon.start();
+        dropLink(t, { engineToo: false });                  // link-stratux first
+        await vi.advanceTimersByTimeAsync(3000);
+        t.bridge.active = true; t.map.ownshipState = { state: 'live', holdRemainingMs: 0 };
+        await vi.advanceTimersByTimeAsync(3000);            // then engine-gps
+        expect(t.mon.state.cause.code).toBe('engine-gps');
+        restore(t); t.bridge.active = false;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(t.mon.history[0].code).toBe('link-stratux');
+    });
+
+    it('review: a VPN found mid-episode becomes the recorded cause', async () => {
+        t = setup(); t.mon.start(); await vi.advanceTimersByTimeAsync(1000);
+        dropLink(t, { engineToo: true });
+        await vi.advanceTimersByTimeAsync(1000);
+        t.vpn.query.mockImplementation(async () => ({ vpnActive: true, installed: true, enabled: true }));
+        await vi.advanceTimersByTimeAsync(6000);
+        t.vpn.query.mockImplementation(async () => ({ vpnActive: false, installed: true, enabled: true }));
+        await vi.advanceTimersByTimeAsync(5000);
+        restore(t); await vi.advanceTimersByTimeAsync(0);
+        expect(t.mon.history[0].code).toBe('vpn');
+    });
+
+    it('review: VPN off before any fix while the link is still down is NOT "restored"', async () => {
+        t = setup({ vpnActive: true, ownship: 'none' });
+        t.stratux.stale = true; t.stratux.connected = false;
+        t.mon.start(); await vi.advanceTimersByTimeAsync(1000);
+        expect(t.mon.state.cause.code).toBe('vpn');
+        t.vpn.query.mockImplementation(async () => ({ vpnActive: false, installed: true, enabled: true }));
+        await vi.advanceTimersByTimeAsync(6000);
+        expect(t.mon.state.cause.code).not.toBe('ok');
+        expect(t.mon.state.lastEnded).toBeNull();           // nothing "restored" yet
+        expect(t.mon.history).toHaveLength(0);
+        restore(t); await vi.advanceTimersByTimeAsync(0);   // data actually flows
+        expect(t.mon.history.map(h => h.code)).toEqual(['vpn']);
+    });
+
+    it('review: position from a device GPS fallback is named (auto mode)', () => {
+        t = setup(); t.mon.setSources({ gpsSource: { source: 'internal', _configuredSource: 'auto', _inFallback: true } });
+        t.mon.start();
+        dropLink(t, { engineToo: false });
+        t.map.ownshipState = { state: 'live', holdRemainingMs: 0 };
+        const s = t.mon.tick();
+        expect(s.cause.code).toBe('device-gps');
+        expect(s.severity).toBe('caution');
+    });
+
+    it('review: GPS source deliberately set to Internal is not a problem', () => {
+        t = setup(); t.mon.setSources({ gpsSource: { source: 'internal', _configuredSource: 'internal', _inFallback: false } });
+        t.mon.start();
+        dropLink(t, { engineToo: false });
+        t.map.ownshipState = { state: 'live', holdRemainingMs: 0 };
+        const s = t.mon.tick();
+        expect(s.cause.code).toBe('ok');
+        expect(s.cause.text).toMatch(/tablet's own GPS/);
+    });
+
+    it('review: no "change" event when nothing changed', async () => {
+        t = setup(); t.mon.start(); await vi.advanceTimersByTimeAsync(1000);
+        const fn = vi.fn(); t.mon.addEventListener('change', fn);
+        await vi.advanceTimersByTimeAsync(3000);
+        expect(fn).not.toHaveBeenCalled();
+        dropLink(t, { engineToo: true });
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(fn).toHaveBeenCalled();
     });
 
     it('without the VPN plugin (browser) the VPN state is unknown, never "off"', async () => {

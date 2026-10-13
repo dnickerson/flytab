@@ -98,6 +98,24 @@ describe('PositionHealthBanner', () => {
         expect(shown()).toBe(true);
     });
 
+    it('review: a dismissed amber problem that gets WORSE (lost) shows again, red', () => {
+        emit(HELD);
+        const btn = el().querySelector('.ph-banner-dismiss');
+        btn.dispatchEvent(touch('touchstart')); btn.dispatchEvent(touch('touchend'));
+        expect(shown()).toBe(false);
+        emit(LOST);                                        // same episode, escalated
+        expect(shown()).toBe(true);
+        expect(el().querySelector('.ph-banner-title').textContent).toBe('POSITION LOST');
+    });
+
+    it('review: a dismissed red problem stays dismissed if it eases to amber', () => {
+        emit(LOST);
+        const btn = el().querySelector('.ph-banner-dismiss');
+        btn.dispatchEvent(touch('touchstart')); btn.dispatchEvent(touch('touchend'));
+        emit({ ...HELD });
+        expect(shown()).toBe(false);
+    });
+
     it('recovery: brief green "restored" with the dropout length, then gone', () => {
         emit(HELD);
         emit({ ...OK, lastEnded: { id: 1, durationS: 14 } });

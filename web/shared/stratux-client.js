@@ -786,6 +786,8 @@ class StratuxClient extends EventTarget {
     }
 
     get connected() { return this._connected; }
+    /** When real Stratux data last arrived (ms), 0 if never. */
+    get lastDataAt() { return this._lastDataAt; }
     get stale() { return this._stale; }
 
     // ========== Traffic Purge ==========
