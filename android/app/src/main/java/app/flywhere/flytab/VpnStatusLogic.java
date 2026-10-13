@@ -13,7 +13,8 @@ final class VpnStatusLogic {
      * AndroidManifest.xml (Android 11+ package visibility).
      */
     static boolean isAllowed(String pkg) {
-        return "com.expressvpn.vpn".equals(pkg);
+        return "com.expressvpn.vpn".equals(pkg)
+            || "com.tailscale.ipn".equals(pkg);
     }
 
     /** PackageManager.getApplicationEnabledSetting() -> can the app run? */

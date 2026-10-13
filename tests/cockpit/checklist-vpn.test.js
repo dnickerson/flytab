@@ -32,8 +32,8 @@ const DATA = {
 
 describe('VpnStatus.describe — what the item says', () => {
     it.each([
-        ['VPN up, ExpressVPN installed+enabled', { vpnActive: true, installed: true, enabled: true }, 'VPN ON ✗', 'bad', true],
-        ['VPN up, ExpressVPN disabled (another VPN)', { vpnActive: true, installed: true, enabled: false }, 'VPN ON ✗', 'bad', false],
+        ['VPN up, ExpressVPN installed+enabled', { vpnActive: true, installed: true, enabled: true }, 'A VPN IS ON ✗', 'bad', true],
+        ['VPN up, ExpressVPN disabled (another VPN)', { vpnActive: true, installed: true, enabled: false }, 'A VPN IS ON ✗', 'bad', false],
         ['no VPN, ExpressVPN installed+enabled', { vpnActive: false, installed: true, enabled: true }, 'OFF ✓', 'ok', true],
         ['no VPN, ExpressVPN disabled', { vpnActive: false, installed: true, enabled: false }, 'DISABLED ✓', 'ok', false],
         ['no VPN, not installed', { vpnActive: false, installed: false, enabled: false }, 'NOT INSTALLED ✓', 'ok', false],
@@ -48,6 +48,10 @@ describe('VpnStatus.describe — what the item says', () => {
 
 describe('VpnStatus — plugin calls are limited to allowed apps', () => {
     afterEach(() => { delete global.Capacitor; });
+
+    it('ExpressVPN and Tailscale are the allowed apps', () => {
+        expect([...VpnStatus.ALLOWED_APPS].sort()).toEqual(['com.expressvpn.vpn', 'com.tailscale.ipn']);
+    });
 
     it('query/open do nothing for a package not on the allowlist', async () => {
         const status = vi.fn(), openApp = vi.fn();
@@ -88,7 +92,7 @@ describe('Checklist ExpressVPN item', () => {
         await build({ vpnActive: true, installed: true, enabled: true });
         expect(badge().textContent).toBe('CHECKING…');
         cl.show();
-        await vi.waitFor(() => expect(badge().textContent).toBe('VPN ON ✗'));
+        await vi.waitFor(() => expect(badge().textContent).toBe('A VPN IS ON ✗'));
         expect(badge().classList.contains('checklist-vpn-badge--bad')).toBe(true);
         expect(openBtn().hidden).toBe(false);
         expect(status).toHaveBeenCalledWith({ package: PKG });
@@ -178,11 +182,19 @@ describe('Checklist ExpressVPN item', () => {
         await build({ vpnActive: true, installed: true, enabled: true });
         cl.show();
         await vi.advanceTimersByTimeAsync(0);
-        expect(badge().textContent).toBe('VPN ON ✗');
+        expect(badge().textContent).toBe('A VPN IS ON ✗');
         status.mockImplementation(async () => ({ vpnActive: false, installed: true, enabled: true }));
         resumeCb();
         await vi.advanceTimersByTimeAsync(0);         // well before the next 2 s tick
         expect(badge().textContent).toBe('OFF ✓');
+    });
+
+    it('checklist.json marks the Tailscale item as a live VPN item too', () => {
+        const data = JSON.parse(read('web/checklist.json'));
+        const items = data.groups.flatMap(g => g.sections.flatMap(s => s.checklists.flatMap(c => c.items)));
+        const ts = items.filter(i => i.title === 'Tailscale');
+        expect(ts.length).toBeGreaterThan(0);
+        for (const i of ts) { expect(i.statusSource).toBe('vpn'); expect(i.app).toBe('com.tailscale.ipn'); }
     });
 
     it('checklist.json marks the ExpressVPN item as a live VPN item', () => {

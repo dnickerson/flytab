@@ -10,8 +10,9 @@ import org.junit.Test;
 public class VpnStatusLogicTest {
 
     @Test
-    public void onlyExpressVpnIsAllowed() {
+    public void onlyTheChecklistVpnAppsAreAllowed() {
         assertTrue(VpnStatusLogic.isAllowed("com.expressvpn.vpn"));
+        assertTrue(VpnStatusLogic.isAllowed("com.tailscale.ipn"));
         assertFalse(VpnStatusLogic.isAllowed("com.android.settings"));
         assertFalse(VpnStatusLogic.isAllowed(""));
         assertFalse(VpnStatusLogic.isAllowed(null));

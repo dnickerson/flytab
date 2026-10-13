@@ -78,6 +78,31 @@ describe('CockpitMap — own-ship hold through a data gap', () => {
         expect(ctx.ownshipHeld).toBe(true);
     });
 
+    it('range rings and the magenta active leg dim with the marker, and come back on the next fix', () => {
+        const ctx = mapCtx();
+        ctx.rangeRings.forEach(r => r.setStyle({ opacity: 0.3 }));
+        ctx._activeLegLine.setStyle({ opacity: 1 });
+        ctx._updateOwnship(FIX);
+        vi.advanceTimersByTime(5000);
+        ctx._onFeedLost();
+        const held = CockpitMap.OWNSHIP_HELD_OPACITY;
+        ctx.rangeRings.forEach(r => expect(r.options.opacity).toBeCloseTo(0.3 * held));
+        expect(ctx._activeLegLine.options.opacity).toBeCloseTo(1 * held);
+        ctx._updateOwnship({ ...FIX, lat: 34.73 });
+        ctx.rangeRings.forEach(r => expect(r.options.opacity).toBeCloseTo(0.3));
+        expect(ctx._activeLegLine.options.opacity).toBeCloseTo(1);
+    });
+
+    it('repeated feed-lost calls during one hold do not dim twice', () => {
+        const ctx = mapCtx();
+        ctx._activeLegLine.setStyle({ opacity: 1 });
+        ctx._updateOwnship(FIX);
+        vi.advanceTimersByTime(3000);
+        ctx._onFeedLost();
+        ctx._onFeedLost();
+        expect(ctx._activeLegLine.options.opacity).toBeCloseTo(CockpitMap.OWNSHIP_HELD_OPACITY);
+    });
+
     it('hides 15 s after the last fix if no new fix arrives', () => {
         const ctx = mapCtx();
         ctx._updateOwnship(FIX);

@@ -26,8 +26,8 @@
                 { "title": "Breakers", "response": "IN" },
                 { "title": "Master", "response": "ON" },
                 { "title": "Fuel Computer", "response": "SET" },
-                { "title": "ExpressVPN", "response": "OFF", "statusSource": "vpn", "app": "com.expressvpn.vpn", "note": "Live: shows VPN ON in red if any VPN is connected. A VPN breaks the Stratux link. Tap OPEN, then disconnect ExpressVPN." },
-                { "title": "Tailscale", "response": "OFF" },
+                { "title": "ExpressVPN", "response": "OFF", "statusSource": "vpn", "app": "com.expressvpn.vpn", "note": "Live: shows A VPN IS ON in red if any VPN is connected (ExpressVPN or Tailscale). A VPN breaks the Stratux link. Tap OPEN, then disconnect it." },
+                { "title": "Tailscale", "response": "OFF", "statusSource": "vpn", "app": "com.tailscale.ipn", "note": "Live: shows A VPN IS ON in red if any VPN is connected (Tailscale or ExpressVPN). A VPN breaks the Stratux link. Tap OPEN, then disconnect it." },
                 { "title": "Tablet WIFI", "response": "CONNECTED", "statusSource": "connectivity", "note": "Connect to Stratux hotspot" },
                 { "title": "Engine Data", "response": "RECORDING", "note": "Auto-starts when RPM > 500" },
                 { "title": "Fuel Selector", "response": "FULLEST TANK" }

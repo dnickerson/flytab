@@ -92,7 +92,7 @@ The primary cockpit view. Shows position, route, weather, traffic, and airspace 
 
 **Own-ship** — Blue chevron showing aircraft position and heading. Shown only while the GPS has at least a 3D solution — the same thing the Stratux status page (192.168.10.1) reports as *GPS solution: 3D GPS* or *3D GPS + SBAS*. With *No Fix* or *Dead Reckoning* the chevron, its track line, range rings and the magenta line to the next waypoint disappear rather than sit at a stale or wrong position, and the map stops following; they come back on the next 3D fix. The same applies to own-ship on the radar page and on geo-referenced approach plates.
 
-If position simply stops *arriving* — a Wi-Fi or Stratux-link dropout, while the Stratux itself still has its fix — the chevron is not removed at once. It stays at the last known position, **dimmed**, with its range rings and magenta line, and the GPS badge reads **STX GPS STALE**. The track line is removed and the map stops following. If no new fix arrives within **15 seconds of the last one**, the chevron is removed as above (at 150 kt that is up to about 0.6 nm of travel). The next 3D fix restores it at full brightness. This hold is on the moving map. The instrument strip on the right shows ground speed and altitude at a glance.
+If position simply stops *arriving* — a Wi-Fi or Stratux-link dropout, while the Stratux itself still has its fix — the chevron is not removed at once. It stays at the last known position, **dimmed** — and so do its range rings and magenta line, since they are drawn from the same stale position — and the GPS badge reads **STX GPS STALE**. The track line is removed and the map stops following. If no new fix arrives within **15 seconds of the last one**, the chevron is removed as above (at 150 kt that is up to about 0.6 nm of travel). The next 3D fix restores it at full brightness. This hold is on the moving map. The instrument strip on the right shows ground speed and altitude at a glance.
 
 **Traffic** — ADS-B targets shown as arrows with callsign and relative altitude (+/−). Tap a target for full details: callsign, altitude, ground speed, squawk. Traffic disappears automatically if stale.
 
@@ -188,15 +188,15 @@ The **Engine ML** monitor (MORE → Engine ML) shows the real-time anomaly score
 
 Three sections: **Normal**, **Abnormal**, and **Emergency**. Each section contains multiple checklist cards. Tap a card to expand it. Tap individual items to check them off. State is not persisted between flights — items reset when you switch sections.
 
-**ExpressVPN (Before Start) — live check.** This item shows whether a VPN is connected on the tablet, checked every 2 seconds while the checklist is open:
+**ExpressVPN and Tailscale (Before Start) — live check.** These two items show whether a VPN is connected on the tablet, checked every 2 seconds while the checklist is open:
 
-- **VPN ON ✗** (red) — a VPN is connected. A VPN breaks the Stratux link: own-ship, traffic and weather drop out repeatedly. Tap **OPEN** to open ExpressVPN and disconnect it; when you come back to FlyTab the item updates immediately.
-- **OFF ✓** (green) — ExpressVPN is installed but not connected.
-- **DISABLED ✓** (green) — ExpressVPN is disabled in Android settings and cannot start; there is no OPEN button.
-- **NOT INSTALLED ✓** (green) — ExpressVPN is not on this tablet.
+- **A VPN IS ON ✗** (red) — a VPN is connected. A VPN breaks the Stratux link: own-ship, traffic and weather drop out repeatedly. Tap **OPEN** on the item to open that app (ExpressVPN or Tailscale) and disconnect it; when you come back to FlyTab the items update immediately.
+- **OFF ✓** (green) — the app is installed and no VPN is connected.
+- **DISABLED ✓** (green) — the app is disabled in Android settings and cannot start; there is no OPEN button.
+- **NOT INSTALLED ✓** (green) — the app is not on this tablet.
 - **UNKNOWN** — FlyTab could not check (not shown as OK).
 
-Android tells FlyTab *that* a VPN is connected but not *which* app owns it, so **VPN ON** means any VPN. Tapping **OPEN** never checks or unchecks the item; tap the item itself to check it off.
+Android tells FlyTab *that* a VPN is connected but not *which* app owns it, so both items turn red together whenever any VPN is on — open each app and check which one is connected. Tapping **OPEN** never checks or unchecks the item; tap the item itself to check it off.
 
 Swipe left/right or tap the section tabs to move between Normal, Abnormal, and Emergency.
 

@@ -6,12 +6,13 @@
  * won't let FlyTab stop another app's VPN, so the checklist shows whether a VPN
  * is up and opens the VPN app for the pilot.
  *
- * Android says THAT a VPN is up, not which app owns it: "VPN ON" means any VPN.
+ * Android says THAT a VPN is up, not which app owns it, so every VPN item reads
+ * "A VPN IS ON" while any VPN is connected.
  */
 const VpnStatus = {
     /** Packages the checklist may query/open. Must match VpnStatusLogic.isAllowed()
      *  and the <queries> list in AndroidManifest.xml. */
-    ALLOWED_APPS: ['com.expressvpn.vpn'],
+    ALLOWED_APPS: ['com.expressvpn.vpn', 'com.tailscale.ipn'],
 
     _plugin() {
         return (typeof Capacitor !== 'undefined' && Capacitor.Plugins && Capacitor.Plugins.VpnStatus) || null;
@@ -40,7 +41,8 @@ const VpnStatus = {
     describe(st) {
         if (!st) return { text: 'UNKNOWN', state: 'unknown', canOpen: false };
         const canOpen = !!(st.installed && st.enabled);
-        if (st.vpnActive) return { text: 'VPN ON ✗', state: 'bad', canOpen };
+        // Android doesn't say WHICH app owns the VPN, so say "a VPN", not this app.
+        if (st.vpnActive) return { text: 'A VPN IS ON ✗', state: 'bad', canOpen };
         if (!st.installed) return { text: 'NOT INSTALLED ✓', state: 'ok', canOpen: false };
         if (!st.enabled) return { text: 'DISABLED ✓', state: 'ok', canOpen: false };
         return { text: 'OFF ✓', state: 'ok', canOpen: true };

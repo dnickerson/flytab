@@ -1096,6 +1096,15 @@ class CockpitMap {
         if (this._held) return;
         this._held = true;
         this.ownshipMarker.setOpacity(CockpitMap.OWNSHIP_HELD_OPACITY);
+        // Rings and the magenta active leg are drawn from the same stale position:
+        // dim them by the same factor so nothing from it looks live.
+        this._heldLayers = [];
+        for (const l of [...(this.rangeRings || []), this._activeLegLine]) {
+            if (!l?.setStyle) continue;
+            const o = l.options?.opacity ?? 1;
+            this._heldLayers.push([l, o]);
+            l.setStyle({ opacity: o * CockpitMap.OWNSHIP_HELD_OPACITY });
+        }
         // The 3-minute track vector projects a position we no longer have.
         if (this._trackVector) this._trackVector.setStyle({ opacity: 0 });
         this._holdTimer = setTimeout(() => {
@@ -1107,6 +1116,12 @@ class CockpitMap {
     _endHold() {
         if (this._holdTimer) { clearTimeout(this._holdTimer); this._holdTimer = null; }
         this._held = false;
+        // Restore what the hold dimmed (rings/leg keep their creation-time opacity
+        // otherwise; their per-fix updates only move them).
+        if (this._heldLayers) {
+            for (const [l, o] of this._heldLayers) l.setStyle({ opacity: o });
+            this._heldLayers = null;
+        }
     }
 
     /** Hide everything drawn from own-ship position until the next 3D fix. */
