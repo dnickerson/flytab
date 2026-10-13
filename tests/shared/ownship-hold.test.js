@@ -235,6 +235,23 @@ describe('EngineGpsBridge — handing back to a recovered Stratux', () => {
         expect(stratux.situation.gps_fix_quality).toBe(2);
     });
 
+    it('stale cleared by the traffic WS before any Stratux situation: the engine fix is degraded, not left as live', () => {
+        // stratux-client: traffic WS onopen -> _setConnected(true) clears _stale with
+        // stratux.situation still the bridge's engine fix (flight log 12:09:26, 12:10:14,
+        // 12:11:01, 12:27:32: "Traffic WS connected" before any situation).
+        const { stratux, bridge } = setup();
+        bridge._tick();
+        expect(stratux.situation._source).toBe('engine');
+        stratux.stale = false;                            // no new situation yet
+        const events = [];
+        stratux.addEventListener('stratux:situation', (e) => events.push(e.detail));
+        bridge._tick();
+        expect(bridge.active).toBe(false);
+        expect(events).toHaveLength(1);
+        expect(events[0].gps_fix_quality).toBe(0);
+        expect(events[0]._stale).toBe(true);              // map holds it dimmed, then hides
+    });
+
     it('engine GPS lost while Stratux is still stale: still degrades its own injected situation', () => {
         const { stratux, engine, bridge } = setup();
         bridge._tick();

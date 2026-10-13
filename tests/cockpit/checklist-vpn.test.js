@@ -139,6 +139,20 @@ describe('Checklist ExpressVPN item', () => {
         expect(vpnItem().classList.contains('checked')).toBe(false);
     });
 
+    it('a two-finger touch on OPEN launches nothing', async () => {
+        await build({ vpnActive: true, installed: true, enabled: true });
+        cl.show();
+        await vi.waitFor(() => expect(openBtn().hidden).toBe(false));
+        const btn = openBtn();
+        const s = new Event('touchstart', { bubbles: true, cancelable: true });
+        s.touches = s.changedTouches = [{ clientX: 10, clientY: 10 }, { clientX: 60, clientY: 10 }];
+        const e = new Event('touchend', { bubbles: true, cancelable: true });
+        e.touches = [{ clientX: 60, clientY: 10 }]; e.changedTouches = [{ clientX: 10, clientY: 10 }];
+        btn.dispatchEvent(s); btn.dispatchEvent(e);
+        await new Promise(r => setTimeout(r, 20));
+        expect(openApp).not.toHaveBeenCalled();
+    });
+
     it('tapping the item row still checks it (OPEN did not break normal checking)', async () => {
         await build({ vpnActive: false, installed: true, enabled: true });
         cl.show();
@@ -177,5 +191,25 @@ describe('Checklist ExpressVPN item', () => {
         const vpn = items.filter(i => i.title === 'ExpressVPN');
         expect(vpn.length).toBeGreaterThan(0);
         for (const i of vpn) { expect(i.statusSource).toBe('vpn'); expect(i.app).toBe(PKG); }
+    });
+});
+
+describe('the allowed VPN app list is the same everywhere it lives', () => {
+    // A missing <queries> entry makes Android hide the app: the item would read a
+    // green "NOT INSTALLED ✓" while ExpressVPN is installed. Keep all four in step.
+    it('checklist.json apps == VpnStatus.ALLOWED_APPS == VpnStatusLogic.isAllowed == manifest <queries>', () => {
+        const data = JSON.parse(read('web/checklist.json'));
+        const items = data.groups.flatMap(g => g.sections.flatMap(s => s.checklists.flatMap(c => c.items)));
+        const checklistApps = [...new Set(items.filter(i => i.statusSource === 'vpn').map(i => i.app))].sort();
+        const jsApps = [...VpnStatus.ALLOWED_APPS].sort();
+        const javaSrc = read('android/app/src/main/java/app/flywhere/flytab/VpnStatusLogic.java');
+        const javaApps = [...javaSrc.matchAll(/"([a-z0-9_.]+)"\.equals\(pkg\)/g)].map(m => m[1]).sort();
+        const manifest = read('android/app/src/main/AndroidManifest.xml');
+        const queries = manifest.match(/<queries>([\s\S]*?)<\/queries>/)[1];
+        const manifestApps = [...queries.matchAll(/<package android:name="([^"]+)"/g)].map(m => m[1]).sort();
+        expect(checklistApps.length).toBeGreaterThan(0);
+        expect(jsApps).toEqual(checklistApps);
+        expect(javaApps).toEqual(checklistApps);
+        expect(manifestApps).toEqual(checklistApps);
     });
 });

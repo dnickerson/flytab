@@ -260,19 +260,21 @@ class Checklist {
             }
             // Live VPN status (shared/vpn-status.js); OPEN launches the VPN app.
             let vpnOpenBtn = '';
+            let vpnBadgeClass = '';
             if (item.statusSource === 'vpn' && item.app) {
                 const app = this._esc(item.app);
                 const d = this._vpnView(item.app);
                 liveResponse = this._esc(d.text);
                 liveResponseClass = ` data-vpn-app="${app}"`;
                 vpnOpenBtn = `<button type="button" class="checklist-vpn-open" data-vpn-app="${app}"${d.canOpen ? '' : ' hidden'}>OPEN</button>`;
+                vpnBadgeClass = ` checklist-vpn-badge checklist-vpn-badge--${d.state}`;
             }
 
             html += `<div class="checklist-item${checked ? ' checked' : ''}${emergencyClass}${infoClass}${actionClass}" data-idx="${i}">
                 <div class="checklist-item-main">
                     <span class="checklist-item-title">${this._esc(item.title)}</span>
                     <span class="checklist-item-dots"></span>
-                    <span class="checklist-item-response${item.statusSource === 'vpn' && item.app ? ` checklist-vpn-badge checklist-vpn-badge--${this._vpnView(item.app).state}` : ''}"${liveResponseClass}>${liveResponse}</span>
+                    <span class="checklist-item-response${vpnBadgeClass}"${liveResponseClass}>${liveResponse}</span>
                     ${vpnOpenBtn}
                     ${hasAction ? '<span class="checklist-item-action-icon">\u25B6</span>' : ''}
                     ${hasNote ? '<span class="checklist-item-note-icon">\u2139</span>' : ''}
@@ -365,7 +367,8 @@ class Checklist {
         btn.addEventListener('touchstart', (e) => {
             e.stopPropagation();
             lastTouchAt = Date.now();
-            const t = e.touches?.[0];
+            // Single finger only (as wireTap): a two-finger touch launches nothing.
+            const t = e.touches?.length === 1 ? e.touches[0] : null;
             start = t ? { x: t.clientX, y: t.clientY, at: Date.now() } : null;
         }, { passive: true });
         btn.addEventListener('touchend', (e) => {
