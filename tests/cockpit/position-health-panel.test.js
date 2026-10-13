@@ -119,6 +119,21 @@ describe('PositionHealthPanel', () => {
         expect(onToggle.mock.calls.map(c => c[0])).toEqual([true, false]);
     });
 
+    it('review 2: a height change while open (notes/buttons/history) also tells the map', () => {
+        const onToggle = vi.fn();
+        panel.destroy();
+        panel = new PositionHealthPanel(document.getElementById('statusBar'), monitor, { ...h, onToggle });
+        let height = 300;
+        Object.defineProperty(panel.element, 'offsetHeight', { get: () => height });
+        panel.show();
+        onToggle.mockClear();
+        emit({ ...BASE });                                 // same height
+        expect(onToggle).not.toHaveBeenCalled();
+        height = 360;                                      // e.g. VPN row gained a note
+        emit({ ...BASE, vpn: { active: true } });
+        expect(onToggle).toHaveBeenCalledTimes(1);
+    });
+
     it('review: GPS source buttons come back -- USE STRATUX GPS / RESET GPS SOURCE', () => {
         const gps = { _configuredSource: 'internal', _inFallback: false, setSource: vi.fn() };
         panel.destroy();

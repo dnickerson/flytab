@@ -392,10 +392,11 @@ body {
     top: 8px;
     left: 50%;
     transform: translateX(-50%);
-    /* Above Leaflet's panes up to popups (700) and the plate overlay (700), below
-       the full-screen pages (checklist, ENG, briefing, config: 800). #mapContainer
-       is not a stacking context, so a higher value would show through those pages. */
-    z-index: 750;
+    /* Above the Leaflet map pane (400; its transform makes it one stacking context,
+       popups included) and the sticky-valve banner (550, which it moves below),
+       below the airport panel (600) and the full-screen pages (800).
+       #mapContainer is not a stacking context. */
+    z-index: 555;
     width: max-content;
     max-width: max(calc(100% - 300px), min(calc(100% - 16px), 520px));
     display: flex;

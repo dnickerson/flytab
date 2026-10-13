@@ -53,7 +53,31 @@ class PositionHealthBanner {
 
         this._onChange = () => this.render();
         monitor.addEventListener('change', this._onChange);
+        this._watchStickyValve();
         this.render();
+    }
+
+    /**
+     * The sticky-valve warning can appear (or clear) while this banner is static,
+     * with no monitor event. Watch for it so this banner always sits below it.
+     */
+    _watchStickyValve() {
+        if (typeof MutationObserver === 'undefined') return;
+        const reposition = () => { if (this._el.style.display !== 'none') this._placeBelowStickyValve(); };
+        this._svStyleObs = new MutationObserver(reposition);
+        let watched = null;
+        const attach = () => {
+            const sv = this._container.querySelector(':scope > .sv-banner--map');
+            if (sv && sv !== watched) {
+                watched = sv;
+                this._svStyleObs.disconnect();
+                this._svStyleObs.observe(sv, { attributes: true, attributeFilter: ['style', 'class'] });
+            }
+            reposition();
+        };
+        this._svChildObs = new MutationObserver(attach);
+        this._svChildObs.observe(this._container, { childList: true });
+        attach();
     }
 
     get element() { return this._el; }
@@ -135,6 +159,8 @@ class PositionHealthBanner {
     }
 
     destroy() {
+        this._svStyleObs?.disconnect();
+        this._svChildObs?.disconnect();
         clearTimeout(this._restoredTimer);
         this._monitor.removeEventListener('change', this._onChange);
         this._el.remove();

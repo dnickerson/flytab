@@ -23,7 +23,7 @@ const startMonitor = new Function(extractMethod(appSrc, '_startDeviceStatusMonit
 global.GpsFix = new Function(readFileSync('web/shared/gps-fix.js', 'utf8') + '\nreturn GpsFix;')();
 global.GPS_SOLUTION_LABELS = { 1: 'GPS', 2: 'DGPS', 6: 'EST' };
 
-const FIX = { lat: 34.72, lon: -80.85, gps_fix_quality: 2, gps_sats: 10 };
+const FIX = { lat: 34.72, lon: -80.85, gps_fix_quality: 2, gps_sats: 10, timestamp: Date.now() };
 
 describe('GPS badge during an own-ship hold', () => {
     let app, el;
@@ -52,6 +52,19 @@ describe('GPS badge during an own-ship hold', () => {
         startMonitor.call(app);
         expect(el.textContent).toBe('STX DGPS 10sv');
         expect(el.classList.contains('active')).toBe(true);
+    });
+
+    it('review 2: an OLD situation after a traffic-only reconnect is not shown green', () => {
+        app.cockpitMap.ownshipHeld = false;
+        app.stratuxClient.stale = false;                   // cleared by the traffic WS opening
+        app.stratuxClient.situation = { ...FIX, timestamp: Date.now() - 10000 };
+        startMonitor.call(app);
+        expect(el.classList.contains('active')).toBe(false);
+    });
+
+    it('review 2: exposes its refresh so position changes update it at once', () => {
+        startMonitor.call(app);
+        expect(typeof app._refreshStatusBadges).toBe('function');
     });
 
     it('engine GPS bridge active still reads "ENG GPS" (fresh positions, no hold)', () => {

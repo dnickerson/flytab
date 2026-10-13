@@ -19,8 +19,14 @@ function memStorage() {
 
 function setup({ vpnActive = false, ownship = 'live' } = {}) {
     const stratux = new EventTarget();
-    Object.assign(stratux, { connected: true, stale: false, situation: { ...FIX },
+    Object.assign(stratux, { connected: true, stale: false, feeding: true, _sit: { ...FIX },
         deviceStatus: { GPS_solution: '3D GPS + SBAS', GPS_satellites_locked: 11, GPS_position_accuracy: 2.5, Uptime: 600000 } });
+    // Like StratuxClient: while Stratux is feeding, .situation is re-stamped (10 Hz);
+    // when the link drops it freezes at the last one received.
+    Object.defineProperty(stratux, 'situation', {
+        get() { return this._sit && (this.feeding ? { ...this._sit, timestamp: Date.now() } : this._sit); },
+        set(v) { this._sit = v; },
+    });
     const engine = { connected: true, stale: false };
     const bridge = { active: false };
     const map = { ownshipState: { state: ownship, holdRemainingMs: 0 } };
@@ -34,6 +40,7 @@ function setup({ vpnActive = false, ownship = 'live' } = {}) {
 function dropLink(t, { engineToo }) {
     // StratuxClient: lastDataAt is when data stopped; stale fires STALE_MS later.
     t.stratux.stale = true; t.stratux.connected = false;
+    t.stratux._sit = { ...t.stratux._sit, timestamp: Date.now() }; t.stratux.feeding = false;
     // EngineClient._setConnected(false) also resets stale to false.
     if (engineToo) { t.engine.connected = false; t.engine.stale = false; }
     t.map.ownshipState = { state: 'held', holdRemainingMs: 10000 };
@@ -43,6 +50,7 @@ function dropLink(t, { engineToo }) {
 function restore(t) {
     t.stratux.stale = false; t.stratux.connected = true; t.engine.connected = true; t.engine.stale = false;
     t.stratux.lastDataAt = Date.now();
+    t.stratux.feeding = true;
     t.map.ownshipState = { state: 'live', holdRemainingMs: 0 };
     t.stratux.dispatchEvent(new CustomEvent('stratux:situation', { detail: t.stratux.situation }));
 }
@@ -188,14 +196,17 @@ describe('PositionHealthMonitor', () => {
     it('starts before the engine monitor exists; engine and bridge can be attached later', () => {
         const stratux = new EventTarget();
         Object.assign(stratux, { connected: false, stale: true, situation: null, deviceStatus: null });
+        // (no Stratux data at all in this test)
         const mon = new PositionHealthMonitor({ stratux, map: { ownshipState: { state: 'none', holdRemainingMs: 0 } }, storage: memStorage() });
         mon.start();
         expect(mon.state.engine.ok).toBeNull();               // unknown, not "lost"
         // Engine state unknown: don't claim it's connected or blame either side.
         expect(mon.state.cause.code).toBe('link');
         expect(mon.state.cause.text).toMatch(/^No data from Stratux for \d+ s$/);
-        const engine = { connected: false, stale: false }, bridge = { active: false };
+        const engine = { connected: true, stale: false }, bridge = { active: false };
         mon.setSources({ engine, bridge });
+        mon.tick();                                        // engine seen connected once
+        engine.connected = false;                          // ...then lost with the link
         expect(mon.tick().cause.code).toBe('link-tablet');
         bridge.active = true;
         expect(mon.tick().cause.code).toBe('engine-gps');
@@ -267,6 +278,7 @@ describe('PositionHealthMonitor', () => {
         t = setup(); t.mon.setSources({ gpsSource: { source: 'internal', _configuredSource: 'auto', _inFallback: true } });
         t.mon.start();
         dropLink(t, { engineToo: false });
+        t.stratux.situation = { ...FIX, _source: 'internal', gps_3d: true, timestamp: Date.now() };
         t.map.ownshipState = { state: 'live', holdRemainingMs: 0 };
         const s = t.mon.tick();
         expect(s.cause.code).toBe('device-gps');
@@ -277,6 +289,7 @@ describe('PositionHealthMonitor', () => {
         t = setup(); t.mon.setSources({ gpsSource: { source: 'internal', _configuredSource: 'internal', _inFallback: false } });
         t.mon.start();
         dropLink(t, { engineToo: false });
+        t.stratux.situation = { ...FIX, _source: 'internal', gps_3d: true, timestamp: Date.now() };
         t.map.ownshipState = { state: 'live', holdRemainingMs: 0 };
         const s = t.mon.tick();
         expect(s.cause.code).toBe('ok');
@@ -291,6 +304,49 @@ describe('PositionHealthMonitor', () => {
         dropLink(t, { engineToo: true });
         await vi.advanceTimersByTimeAsync(1000);
         expect(fn).toHaveBeenCalled();
+    });
+
+    it('review 2: traffic WS reconnecting first (stale cleared, no NEW situation) is not "restored"', async () => {
+        t = setup(); t.mon.start(); await vi.advanceTimersByTimeAsync(1000);
+        dropLink(t, { engineToo: true });
+        await vi.advanceTimersByTimeAsync(8000);
+        // StratuxClient._setConnected(true) from the traffic WS: stale=false, connected=true,
+        // stratux.situation is still the OLD fix (timestamp 8 s ago).
+        t.stratux.stale = false; t.stratux.connected = true; t.engine.connected = true;
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(t.mon.state.cause.code).not.toBe('ok');
+        expect(t.mon.state.lastEnded).toBeNull();
+        expect(t.mon.history).toHaveLength(0);
+        restore(t);                                        // a fresh situation arrives
+        await vi.advanceTimersByTimeAsync(0);
+        expect(t.mon.history).toHaveLength(1);
+    });
+
+    it('review 2: auto-mode fallback with NO device fix still diagnoses the link', () => {
+        t = setup(); t.mon.setSources({ gpsSource: { source: 'internal', _configuredSource: 'auto', _inFallback: true } });
+        t.mon.start();
+        dropLink(t, { engineToo: true });                  // situation stays the old Stratux one
+        expect(t.mon.tick().cause.code).toBe('link-tablet');
+    });
+
+    it('review 2: auto-mode fallback WITH a device fix is named device-gps', () => {
+        t = setup(); t.mon.setSources({ gpsSource: { source: 'internal', _configuredSource: 'auto', _inFallback: true } });
+        t.mon.start();
+        dropLink(t, { engineToo: true });
+        t.stratux.situation = { ...FIX, _source: 'internal', gps_3d: true, timestamp: Date.now() };
+        t.map.ownshipState = { state: 'live', holdRemainingMs: 0 };
+        expect(t.mon.tick().cause.code).toBe('device-gps');
+    });
+
+    it('review 2: an engine monitor that never connected this session is unknown, not lost', () => {
+        t = setup(); t.engine.connected = false; t.engine.stale = false;
+        const mon = new PositionHealthMonitor({ stratux: t.stratux, engine: t.engine, map: t.map, storage: t.storage });
+        mon.start();
+        t.stratux.stale = true; t.stratux.connected = false;
+        const s = mon.tick();
+        expect(s.engine.ok).toBeNull();
+        expect(s.cause.code).toBe('link');
+        mon.stop();
     });
 
     it('without the VPN plugin (browser) the VPN state is unknown, never "off"', async () => {

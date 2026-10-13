@@ -70,8 +70,8 @@ class PositionHealthPanel {
 
     // The panel is in the page flow, so opening/closing changes the map's height:
     // onToggle lets the app tell Leaflet to re-measure.
-    show() { this._visible = true; this._el.classList.add('visible'); this.render(); this._actions.onToggle?.(true); }
-    hide() { this._visible = false; this._el.classList.remove('visible'); this._actions.onToggle?.(false); }
+    show() { this._visible = true; this._el.classList.add('visible'); this._lastHeight = null; this.render(); this._actions.onToggle?.(true); }
+    hide() { this._visible = false; this._el.classList.remove('visible'); this._lastHeight = null; this._actions.onToggle?.(false); }
     toggle() { this._visible ? this.hide() : this.show(); }
 
     render() {
@@ -130,6 +130,12 @@ class PositionHealthPanel {
             li.textContent = 'None recorded';
             q('.php-history').appendChild(li);
         }
+
+        // Notes, buttons and history rows change the panel's height while it's
+        // open, and with it the map's: tell the app so Leaflet re-measures.
+        const h = this._el.offsetHeight;
+        if (this._visible && this._lastHeight != null && h !== this._lastHeight) this._actions.onToggle?.(true);
+        this._lastHeight = h;
     }
 
     static statusText(st) {

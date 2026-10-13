@@ -41,6 +41,7 @@ class PositionHealthMonitor extends EventTarget {
         this._storage = deps.storage ?? (typeof localStorage !== 'undefined' ? localStorage : null);
 
         this._hadFix = false;          // own-ship was live at least once this session
+        this._engineSeen = false;      // engine monitor connected at least once this session
         this._feedLostAt = null;       // when Stratux data stopped (stale/disconnect)
         this._lastLinkError = null;    // { channel, message, at } from stratux:link-error
         this._vpnActive = null;        // true / false / null (couldn't check)
@@ -69,7 +70,7 @@ class PositionHealthMonitor extends EventTarget {
         // Recovery is the first situation after a loss: evaluate right away so the
         // banner clears and the episode's duration is exact, not a tick late.
         on(s, 'stratux:situation', () => {
-            if (this._feedLostAt != null && !s.stale && s.connected !== false) { this._feedLostAt = null; this.tick(); }
+            if (this._feedLostAt != null && this._stratuxFlowing(this._now())) { this._feedLostAt = null; this.tick(); }
         });
         if (typeof window !== 'undefined') {
             on(window, 'stratux:link-error', (e) => {
@@ -111,7 +112,7 @@ class PositionHealthMonitor extends EventTarget {
             this._checkVpn();               // async; result lands on a later tick
         }
         const s = this._d.stratux;
-        if (s && !s.stale && s.connected !== false) this._feedLostAt = null;
+        if (s && this._stratuxFlowing(now)) this._feedLostAt = null;
         else if (s && this._feedLostAt == null) this._feedLostAt = this._lossStart();
 
         const st = this._compute();
@@ -127,6 +128,21 @@ class PositionHealthMonitor extends EventTarget {
             this.dispatchEvent(new CustomEvent('change', { detail: st }));
         }
         return st;
+    }
+
+    /**
+     * Is Stratux position data actually arriving? Not just "not stale":
+     * StratuxClient._setConnected(true) clears stale as soon as the TRAFFIC socket
+     * opens, before any situation, leaving the old fix in .situation. So require
+     * a Stratux situation (not the engine bridge's or the device's) stamped
+     * within SITUATION_FRESH_MS.
+     */
+    _stratuxFlowing(now) {
+        const s = this._d.stratux;
+        if (!s || s.stale || s.connected === false) return false;
+        const sit = s.situation;
+        return !!sit && !sit._source && typeof sit.timestamp === 'number'
+            && now - sit.timestamp < PositionHealthMonitor.SITUATION_FRESH_MS;
     }
 
     /**
@@ -163,15 +179,22 @@ class PositionHealthMonitor extends EventTarget {
         const own = this._d.map?.ownshipState ?? { state: 'none', holdRemainingMs: 0 };
         if (own.state === 'live') this._hadFix = true;
 
-        const flowing = !!s && !s.stale && s.connected !== false;
+        const flowing = this._stratuxFlowing(now);
         const sit = s?.situation;
         const hasFix = typeof GpsFix !== 'undefined' ? GpsFix.has3DFix(sit) : (sit?.gps_fix_quality ?? 0) >= 1;
         // EngineClient resets stale to false when it DISCONNECTS, so stale alone
         // can't mean "OK": the link must also be up.
+        // Unknown until the engine monitor has connected at least once this session
+        // (Pi off or still booting is not "lost" -- don't blame the tablet for it).
         const eng = this._d.engine;
-        const engineOk = eng ? (eng.connected === true && eng.stale === false) : null;
+        if (eng?.connected === true) this._engineSeen = true;
+        const engineOk = (eng && this._engineSeen) ? (eng.connected === true && eng.stale === false) : null;
         const gsrc = this._d.gpsSource;
         const deviceGps = gsrc?.source === 'internal';
+        // A device fix actually being drawn -- auto-mode fallback starts as soon as
+        // Stratux goes stale, whether or not the tablet ever gets a position.
+        const deviceFix = deviceGps && sit?._source === 'internal'
+            && (typeof GpsFix !== 'undefined' ? GpsFix.has3DFix(sit) : true);
         const bridge = this._d.bridge?.active === true;
         const lostS = this._feedLostAt != null ? Math.max(0, Math.round((now - this._feedLostAt) / 1000)) : 0;
         const dev = s?.deviceStatus;
@@ -180,8 +203,9 @@ class PositionHealthMonitor extends EventTarget {
         if (this._vpnActive === true) {
             code = 'vpn'; text = 'A VPN is on — it disrupts the Stratux link. Turn it off.';
         } else if (deviceGps && gsrc._configuredSource === 'internal') {
-            code = 'ok'; text = "Position from the tablet's own GPS (GPS source set to Internal)";
-        } else if (deviceGps) {
+            if (deviceFix) { code = 'ok'; text = "Position from the tablet's own GPS (GPS source set to Internal)"; }
+            else { code = 'gps-nofix'; text = "Tablet's own GPS has no fix (GPS source set to Internal)"; }
+        } else if (deviceFix && own.state === 'live') {
             code = 'device-gps'; text = "No data from Stratux — position from the tablet's own GPS";
         } else if (flowing && !hasFix) {
             const sats = sit?.gps_sats ?? dev?.GPS_satellites_locked;
@@ -273,6 +297,9 @@ class PositionHealthMonitor extends EventTarget {
 }
 
 PositionHealthMonitor.TICK_MS = 1000;
+// Stratux sends situation at 10 Hz (WS) and ownship at 1 Hz (GDL 90); matches
+// StratuxClient.DATA_FRESH_MS.
+PositionHealthMonitor.SITUATION_FRESH_MS = 3000;
 PositionHealthMonitor.VPN_CHECK_MS = 5000;
 // Any allowed package works: vpnActive is about the whole device.
 PositionHealthMonitor.VPN_PROBE_APP = 'com.expressvpn.vpn';

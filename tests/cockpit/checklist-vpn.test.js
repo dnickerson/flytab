@@ -15,6 +15,8 @@ import { readFileSync } from 'fs';
 
 const read = (p) => readFileSync(p, 'utf8');
 const VpnStatus = new Function(read('web/shared/vpn-status.js') + '\nreturn VpnStatus;')();
+const tapUtils = new Function(read('web/shared/tap-utils.js') + '\nreturn { wireIsolatedTap, lastTouchAt: () => _wireTapLastTouchAt };')();
+global.wireIsolatedTap = tapUtils.wireIsolatedTap;
 global.VpnStatus = VpnStatus;
 const Checklist = new Function(read('web/cockpit/checklist.js') + '\nreturn Checklist;')();
 
@@ -126,6 +128,19 @@ describe('Checklist ExpressVPN item', () => {
         expect(openApp).toHaveBeenCalledWith({ package: PKG });
         expect(vpnItem().classList.contains('checked')).toBe(false);
         expect(Object.values(cl._checked).some(Boolean)).toBe(false);
+    });
+
+    it('review 2: OPEN uses the shared tap guard (sets the global _wireTapLastTouchAt)', async () => {
+        await build({ vpnActive: true, installed: true, enabled: true });
+        cl.show();
+        await vi.waitFor(() => expect(openBtn().hidden).toBe(false));
+        expect(read('web/cockpit/checklist.js')).toMatch(/wireIsolatedTap\(vpnOpen/);
+        const before = tapUtils.lastTouchAt();
+        await new Promise(r => setTimeout(r, 5));
+        const btn = openBtn();
+        const t = (type) => { const e = new Event(type, { bubbles: true, cancelable: true }); const p = [{ clientX: 1, clientY: 1 }]; e.touches = type === 'touchend' ? [] : p; e.changedTouches = p; return e; };
+        btn.dispatchEvent(t('touchstart')); btn.dispatchEvent(t('touchend'));
+        expect(tapUtils.lastTouchAt()).toBeGreaterThan(before);
     });
 
     it('a drag that starts on OPEN does not launch anything', async () => {

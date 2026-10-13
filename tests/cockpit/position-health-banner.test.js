@@ -156,6 +156,27 @@ describe('PositionHealthBanner', () => {
         expect(under).not.toHaveBeenCalled();
     });
 
+    it('review 2: moves below a sticky-valve warning that appears AFTER it (no new state)', async () => {
+        emit(VPN);
+        expect(el().style.top).toBe('');
+        const sv = document.createElement('div');
+        sv.className = 'sv-banner sv-banner--map';
+        sv.style.display = 'none';
+        container.appendChild(sv);
+        Object.defineProperty(sv, 'offsetHeight', { get: () => 60 });
+        Object.defineProperty(sv, 'offsetTop', { get: () => 8 });
+        sv.style.display = 'flex';                         // the alert latches; no monitor event
+        await Promise.resolve(); await vi.advanceTimersByTimeAsync(0);
+        expect(el().style.top).toBe('76px');
+    });
+
+    it('review 2: sits below the airport panel and full-screen pages (z-index < 600)', () => {
+        const css = read('web/style.css');
+        const z = Number(css.match(/\.ph-banner \{[^}]*z-index:\s*(\d+)/)[1]);
+        expect(z).toBeGreaterThan(400);                    // above Leaflet's map pane
+        expect(z).toBeLessThan(600);                       // below airport panel (600) and pages (800)
+    });
+
     it('lives in the map area but not inside the Leaflet map element', () => {
         expect(el().parentElement).toBe(container);
         expect(document.getElementById('primaryView').contains(el())).toBe(false);

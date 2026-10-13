@@ -307,8 +307,10 @@ class Checklist {
             this._wire(el.querySelector('.checklist-item-main'), () => {
                 this._toggleItem(idx);
             });
+            // OPEN must never reach the row (which checks/unchecks the item) nor
+            // produce a synthetic click: the shared isolated tap (shared/tap-utils.js).
             const vpnOpen = el.querySelector('.checklist-vpn-open');
-            if (vpnOpen) this._wireVpnOpen(vpnOpen);
+            if (vpnOpen) wireIsolatedTap(vpnOpen, () => VpnStatus.open(vpnOpen.dataset.vpnApp));
             const noteIcon = el.querySelector('.checklist-item-note-icon');
             const noteEl = el.querySelector('.checklist-item-note');
             if (noteIcon && noteEl) {
@@ -353,42 +355,6 @@ class Checklist {
                 el.className = `checklist-item-response checklist-vpn-badge checklist-vpn-badge--${d.state}`;
             });
         }
-    }
-
-    /**
-     * OPEN never reaches the item row (which would check/uncheck it) and never
-     * produces a synthetic click. It acts on finger-up, and only for a tap: a
-     * drag or long press that starts on the button launches nothing.
-     */
-    _wireVpnOpen(btn) {
-        const open = () => VpnStatus.open(btn.dataset.vpnApp);
-        let start = null;
-        let lastTouchAt = 0;
-        btn.addEventListener('touchstart', (e) => {
-            e.stopPropagation();
-            lastTouchAt = Date.now();
-            // Single finger only (as wireTap): a two-finger touch launches nothing.
-            const t = e.touches?.length === 1 ? e.touches[0] : null;
-            start = t ? { x: t.clientX, y: t.clientY, at: Date.now() } : null;
-        }, { passive: true });
-        btn.addEventListener('touchend', (e) => {
-            e.stopPropagation();
-            e.preventDefault();   // cancels the synthetic click
-            lastTouchAt = Date.now();
-            const t = e.changedTouches?.[0];
-            const s = start; start = null;
-            if (!s || !t) return;
-            const dx = t.clientX - s.x, dy = t.clientY - s.y;
-            if (dx * dx + dy * dy > 400 || Date.now() - s.at > 500) return;
-            open();
-        }, { passive: false });
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            // A click right after a touch is that touch's synthetic click (already
-            // handled, or deliberately not acted on). Otherwise it's mouse/keyboard.
-            if (Date.now() - lastTouchAt < 600) return;
-            open();
-        });
     }
 
     _toggleItem(idx) {

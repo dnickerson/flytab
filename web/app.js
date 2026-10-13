@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v11.6';
+const FLYTAB_VERSION = 'v11.7';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -462,6 +462,7 @@ class FlyTabApp {
                     onOpenDetails: () => this.positionPanel?.show(),
                 });
             }
+            this.positionHealth.addEventListener('change', () => this._refreshStatusBadges?.());
             this.positionHealth.start();
         }
 
@@ -1583,7 +1584,10 @@ class FlyTabApp {
             const stale = this.stratuxClient?.stale;
             // Only use situation/deviceStatus when Stratux is live — never show
             // stale last-session values as if they were current data.
-            const sit = (connected && !stale) ? this.stratuxClient?.situation : null;
+            // ...and only a FRESH situation: the traffic WS reopening clears stale
+            // (StratuxClient._setConnected) while .situation is still the old fix.
+            const raw = (connected && !stale) ? this.stratuxClient?.situation : null;
+            const sit = raw && (typeof raw.timestamp !== 'number' || Date.now() - raw.timestamp < 3000) ? raw : null;
             const status = connected ? this.stratuxClient?.deviceStatus : null;
 
             // GPS: green if fix (quality >= 1), amber if engine bridge active, show solution type + source
@@ -1649,6 +1653,9 @@ class FlyTabApp {
         };
         update();
         this._deviceStatusInterval = setInterval(update, 5000);
+        // Position health changes (hold start/end) refresh the badge at once rather
+        // than at the next 5 s tick, so badge and banner agree.
+        this._refreshStatusBadges = update;
     }
 
     // === Connectivity Monitor ==========
