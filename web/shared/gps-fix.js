@@ -16,6 +16,11 @@
  * (device GPS without an altitude).
  */
 const GpsFix = {
+    /** How long own-ship stays on the map (dimmed) after the last 3D fix when
+     *  position stops ARRIVING (stratux:stale / disconnect, a watchdog-degraded
+     *  situation). A situation that REPORTS no fix still hides at once. */
+    HOLD_MS: 15000,
+
     /** True for fix-quality codes that are real GPS solutions (1-5). */
     isSolution(q) {
         return Number.isInteger(q) && q >= 1 && q <= 5;

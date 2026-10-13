@@ -96,13 +96,17 @@ class EngineGpsBridge {
             this._resetStaleTimer();
         } else if (this._active) {
             this._active = false;
+            if (this._staleTimer) { clearTimeout(this._staleTimer); this._staleTimer = null; }
+            const stratuxRecovered = !this._stratux.stale;
             if (typeof DiagLog !== 'undefined') {
-                const reason = !this._stratux.stale
+                const reason = stratuxRecovered
                     ? 'Stratux situation WS recovered'
                     : 'engine GPS unavailable';
                 DiagLog.log('gps', `Engine GPS bridge inactive — ${reason}`);
             }
-            this._degradeSituation();
+            // Stratux recovered: stratux.situation is now Stratux's own fresh fix.
+            // Degrading it would hide own-ship right after it came back.
+            if (!stratuxRecovered) this._degradeSituation();
         }
     }
 }

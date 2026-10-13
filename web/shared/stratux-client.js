@@ -103,7 +103,12 @@ function _createStratuxWsRaw(channel, url) {
             _StratuxNativeBus.detach(channel, ws._sid);
             if (ws.onclose) ws.onclose({ code: ev.code, reason: ev.reason });
         },
-        onerror:   (ev) => { if (ws.onerror) ws.onerror({ message: ev.message }); },
+        onerror:   (ev) => {
+            // The close that follows carries only a catch-all reason; this is the
+            // real OkHttp cause (ping timeout vs. network change vs. reset).
+            if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', `${channel} WS failure: ${ev.message}`);
+            if (ws.onerror) ws.onerror({ message: ev.message });
+        },
     });
     // No WebSocket protocol pings on /situation: Stratux's handleSituationWS
     // only Write()s and never Read()s, and golang.org/x/net/websocket only

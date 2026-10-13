@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v10.99';
+const FLYTAB_VERSION = 'v11.0';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -1570,6 +1570,9 @@ class FlyTabApp {
                     this.dom.statusGps.textContent = `${src} ${sol} ${sats || acc}`.trim();
                 } else if (bridgeActive) {
                     this.dom.statusGps.textContent = 'ENG GPS';
+                } else if (this.cockpitMap?.ownshipHeld) {
+                    // Own-ship shown dimmed at its last fix while position isn't arriving.
+                    this.dom.statusGps.textContent = `${src} GPS STALE`;
                 } else if (q === 6) {
                     this.dom.statusGps.textContent = `${src} DEAD RECKONING`;
                 } else {

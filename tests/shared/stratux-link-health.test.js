@@ -543,3 +543,25 @@ describe('Review 3 #2 — staleness is suspension-aware', () => {
         expect(stale).toEqual([]);
     });
 });
+
+describe('2026-10-13 — a native socket failure logs its real cause', () => {
+    // StratuxWsPlugin.onFailure sends an 'error' event with the OkHttp exception
+    // message, then a close with the catch-all reason
+    // "ping_timeout_or_network_failure". The close line alone can't tell a
+    // ping timeout from a network change; the error message can.
+    it('writes the native error message to DiagLog with the channel', () => {
+        const listeners = {};
+        const open = vi.fn();
+        global.Capacitor = { Plugins: { StratuxWS: {
+            addListener: (type, cb) => { listeners[type] = cb; }, open, close: vi.fn(),
+        } } };
+        DiagLog.log.mockClear();
+        const client = new (load())();
+        client.connect();
+        const sit = open.mock.calls.map(([a]) => a).find(a => a.channel === 'situation');
+        listeners.error({ channel: 'situation', session: sit.session, message: 'Software caused connection abort' });
+        const lines = DiagLog.log.mock.calls.map(([, msg]) => msg);
+        expect(lines).toContain('situation WS failure: Software caused connection abort');
+        client.disconnect();
+    });
+});
