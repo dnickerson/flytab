@@ -26,7 +26,7 @@
                 { "title": "Breakers", "response": "IN" },
                 { "title": "Master", "response": "ON" },
                 { "title": "Fuel Computer", "response": "SET" },
-                { "title": "ExpressVPN", "response": "OFF" },
+                { "title": "ExpressVPN", "response": "OFF", "statusSource": "vpn", "app": "com.expressvpn.vpn", "note": "Live: shows VPN ON in red if any VPN is connected. A VPN breaks the Stratux link. Tap OPEN, then disconnect ExpressVPN." },
                 { "title": "Tailscale", "response": "OFF" },
                 { "title": "Tablet WIFI", "response": "CONNECTED", "statusSource": "connectivity", "note": "Connect to Stratux hotspot" },
                 { "title": "Engine Data", "response": "RECORDING", "note": "Auto-starts when RPM > 500" },

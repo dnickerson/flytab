@@ -188,6 +188,16 @@ The **Engine ML** monitor (MORE → Engine ML) shows the real-time anomaly score
 
 Three sections: **Normal**, **Abnormal**, and **Emergency**. Each section contains multiple checklist cards. Tap a card to expand it. Tap individual items to check them off. State is not persisted between flights — items reset when you switch sections.
 
+**ExpressVPN (Before Start) — live check.** This item shows whether a VPN is connected on the tablet, checked every 2 seconds while the checklist is open:
+
+- **VPN ON ✗** (red) — a VPN is connected. A VPN breaks the Stratux link: own-ship, traffic and weather drop out repeatedly. Tap **OPEN** to open ExpressVPN and disconnect it; when you come back to FlyTab the item updates immediately.
+- **OFF ✓** (green) — ExpressVPN is installed but not connected.
+- **DISABLED ✓** (green) — ExpressVPN is disabled in Android settings and cannot start; there is no OPEN button.
+- **NOT INSTALLED ✓** (green) — ExpressVPN is not on this tablet.
+- **UNKNOWN** — FlyTab could not check (not shown as OK).
+
+Android tells FlyTab *that* a VPN is connected but not *which* app owns it, so **VPN ON** means any VPN. Tapping **OPEN** never checks or unchecks the item; tap the item itself to check it off.
+
 Swipe left/right or tap the section tabs to move between Normal, Abnormal, and Emergency.
 
 ---
