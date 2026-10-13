@@ -297,40 +297,142 @@ body {
     background: #c00; color: #fff;
 }
 
+/* ========== GPS / position detail panel (cockpit/position-health-panel.js) ==========
+   Light theme, design tokens only (was a dark developer log panel). */
 #gps-diag-panel {
     display: none;
-    background: #1a0000;
-    border-bottom: 2px solid #cc2200;
-    padding: 10px 12px;
-    font-family: monospace;
-    font-size: 11px;
-    color: #ff9999;
     flex-shrink: 0;
+    background: var(--bg-primary);
+    border-bottom: 2px solid var(--border-strong);
+    padding: 12px 14px;
+    font-family: var(--font-ui);
+    color: var(--text-primary);
 }
 #gps-diag-panel.visible { display: block; }
-.gps-diag-status {
-    font-size: 12px;
-    font-weight: 600;
-    color: #ffcc44;
-    margin-bottom: 8px;
+.php-head { margin-bottom: 10px; }
+.php-status {
+    display: inline-block;
+    font-size: var(--text-lg);
+    font-weight: 900;
+    padding: 4px 12px;
+    border-radius: 6px;
 }
-.gps-diag-log {
-    max-height: 120px;
+.php-status--ok      { background: var(--color-success); color: #000; }
+.php-status--caution { background: var(--color-caution); color: #000; }
+.php-status--danger  { background: var(--color-danger);  color: #fff; }
+.php-cause {
+    margin-top: 6px;
+    font-size: var(--text-md);
+    font-weight: 800;
+    color: var(--text-secondary);
+}
+.php-rows { margin: 0 0 10px; }
+.php-row {
+    display: flex;
+    gap: 12px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border-light);
+}
+.php-row dt {
+    flex: 0 0 13em;
+    font-size: var(--text-sm);
+    font-weight: 800;
+    color: var(--text-label);
+}
+.php-row dd { margin: 0; display: flex; flex-direction: column; gap: 2px; }
+.php-val {
+    font-family: var(--font-instrument);
+    font-size: var(--text-md);
+    font-weight: 900;
+    color: var(--text-primary);
+}
+.php-row--bad .php-val { color: var(--color-danger-on-light); }
+.php-note {
+    font-size: var(--text-sm);
+    font-weight: 700;
+    color: var(--text-secondary);
+}
+.php-row--bad .php-note { color: var(--color-danger-on-light); }
+.php-history-title {
+    font-size: var(--text-sm);
+    font-weight: 800;
+    color: var(--text-label);
+    margin-bottom: 4px;
+}
+.php-history {
+    margin: 0 0 10px;
+    padding-left: 18px;
+    max-height: 9em;
     overflow-y: auto;
-    margin-bottom: 8px;
-    line-height: 1.5;
+    font-size: var(--text-sm);
+    font-weight: 700;
+    color: var(--text-secondary);
 }
-.gps-diag-actions { display: flex; gap: 8px; }
-.gps-diag-fix-btn {
-    background: #cc2200; color: #fff;
-    border: none; border-radius: 4px;
-    padding: 8px 14px; font-size: 12px; font-weight: 700;
+.php-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.php-btn {
+    min-height: var(--touch-min, 56px);
+    padding: 0 18px;
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    font-family: var(--font-ui);
+    font-size: var(--text-md);
+    font-weight: 800;
     cursor: pointer;
 }
-.gps-diag-sec-btn {
-    background: #333; color: #ccc;
-    border: 1px solid #555; border-radius: 4px;
-    padding: 8px 14px; font-size: 12px;
+.php-btn[hidden] { display: none; }
+.php-btn--danger { background: var(--color-danger); color: #fff; border-color: var(--color-danger); }
+
+/* ========== Position banner over the map (cockpit/position-health-banner.js) ==========
+   Same placement as the sticky-valve banner: absolute in #mapContainer, outside
+   the Leaflet element. Solid fills (CLAUDE.md badge pattern). */
+.ph-banner {
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    /* Above Leaflet's panes up to popups (700) and the plate overlay (700), below
+       the full-screen pages (checklist, ENG, briefing, config: 800). #mapContainer
+       is not a stacking context, so a higher value would show through those pages. */
+    z-index: 750;
+    width: max-content;
+    max-width: max(calc(100% - 300px), min(calc(100% - 16px), 520px));
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 8px 8px 8px 14px;
+    border-radius: 8px;
+    box-shadow: var(--shadow-raised);
+    font-family: var(--font-ui);
+    touch-action: manipulation;
+}
+.ph-banner--danger  { background: var(--color-danger);  color: #fff; }
+.ph-banner--caution { background: var(--color-caution); color: #000; }
+.ph-banner--ok      { background: var(--color-success); color: #000; }
+#mapContainer:has(.plate-overlay-bar) > .ph-banner { top: 108px; }
+.ph-banner-body {
+    flex: 1 1 auto;
+    min-height: var(--touch-min, 56px);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    cursor: pointer;
+}
+.ph-banner-title { font-size: var(--text-lg); font-weight: 900; }
+.ph-banner-detail { font-size: var(--text-sm); font-weight: 800; }
+.ph-banner-dismiss {
+    flex-shrink: 0;
+    min-height: var(--touch-min, 56px);
+    min-width: 112px;
+    padding: 0 14px;
+    border: 2px solid currentColor;
+    border-radius: 8px;
+    background: transparent;
+    color: inherit;
+    font-family: var(--font-ui);
+    font-size: var(--text-md);
+    font-weight: 800;
     cursor: pointer;
 }
 

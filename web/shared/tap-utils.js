@@ -49,3 +49,49 @@ function wireTap(el, handler) {
         handler(e);
     });
 }
+
+/**
+ * wireIsolatedTap(el, handler)
+ * wireTap for a control layered OVER something tappable -- a banner over the
+ * map, a button inside a tappable row. Same tap rule as wireTap (one finger,
+ * < 20px, < 500ms), plus:
+ * - no touch, mouse or pointer event on el reaches its ancestors, so the map's
+ *   own touch pipeline and any row handler never see it;
+ * - touchend calls preventDefault, which cancels the browser's synthetic click,
+ *   and sets _wireTapLastTouchAt, so a click can't land on whatever is under
+ *   the finger once el has gone (e.g. DISMISS removing the banner).
+ * Nested isolated controls work: the inner one stops the event first.
+ */
+function wireIsolatedTap(el, handler) {
+    if (!el) return;
+    let tapStart = null;
+    const stop = (e) => e.stopPropagation();
+    el.addEventListener('touchstart', (e) => {
+        e.stopPropagation();
+        tapStart = e.touches.length === 1
+            ? { x: e.touches[0].clientX, y: e.touches[0].clientY, t: Date.now() }
+            : null;
+    }, { passive: true });
+    el.addEventListener('touchmove', stop, { passive: true });
+    el.addEventListener('touchcancel', (e) => { e.stopPropagation(); tapStart = null; }, { passive: true });
+    el.addEventListener('touchend', (e) => {
+        e.stopPropagation();
+        if (e.cancelable) e.preventDefault();
+        _wireTapLastTouchAt = Date.now();
+        if (!tapStart || e.changedTouches.length !== 1) { tapStart = null; return; }
+        const ts = tapStart; tapStart = null;
+        const dx = e.changedTouches[0].clientX - ts.x;
+        const dy = e.changedTouches[0].clientY - ts.y;
+        if (dx * dx + dy * dy > 400) return;
+        if (Date.now() - ts.t > 500) return;
+        handler(e);
+    }, { passive: false });
+    for (const type of ['mousedown', 'mouseup', 'pointerdown', 'pointerup', 'pointermove', 'dblclick', 'contextmenu']) {
+        el.addEventListener(type, stop);
+    }
+    el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (Date.now() - _wireTapLastTouchAt < 600) return;
+        handler(e);
+    });
+}

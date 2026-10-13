@@ -94,6 +94,22 @@ The primary cockpit view. Shows position, route, weather, traffic, and airspace 
 
 If position simply stops *arriving* — a Wi-Fi or Stratux-link dropout, while the Stratux itself still has its fix — the chevron is not removed at once. It stays at the last known position, **dimmed** — and so do its range rings and magenta line, since they are drawn from the same stale position — and the GPS badge reads **STX GPS STALE**. The track line is removed and the map stops following. If no new fix arrives within **15 seconds of the last one**, the chevron is removed as above (at 150 kt that is up to about 0.6 nm of travel). The next 3D fix restores it at full brightness. This hold is on the moving map. The instrument strip on the right shows ground speed and altitude at a glance.
 
+**Position banner.** When own-ship can't be trusted, a banner appears at the top of the map saying why, in plain words:
+
+| Banner | Colour | Meaning |
+|---|---|---|
+| **POSITION HELD · 9 s** | amber | Position stopped arriving; own-ship is held dimmed and hides when the count reaches 0 |
+| **POSITION LOST** | red | Own-ship is off the map (no data for 15 s, or the Stratux GPS has no fix) |
+| **POSITION FROM ENGINE MONITOR** | amber | The Stratux link is down; position is coming from the engine monitor's own link to Stratux |
+| **A VPN IS ON** | red | A VPN is connected — it breaks the Stratux link. Shown on the ground too |
+| **POSITION RESTORED · dropout 14 s** | green | Shown for 5 seconds when the problem clears |
+
+The second line names the cause, link by link: *Stratux GPS has no fix (4 satellites)*; *No data from Stratux or the engine monitor for 12 s — tablet Wi-Fi problem* (both lost at once means the tablet's Wi-Fi); *No data from Stratux — engine monitor still connected: problem at the Stratux*; or a VPN. The banner only appears after own-ship has had a fix this session (except for a VPN), so it doesn't nag while the Stratux is starting up.
+
+Tap **DISMISS** to hide it for the current problem; it returns only if a new problem starts. Tap the text to open the GPS detail panel. Touching the banner never does anything to the map underneath it — it can't open an airport, pan the map or start a tap on anything below, even when DISMISS makes it disappear under your finger.
+
+**GPS detail panel.** Tap the GPS badge (or the banner text) for a live panel under the status bar: own-ship status, the cause, and one row per link — **Stratux GPS** (solution, satellites, accuracy, how long the Stratux has been up, and *Stratux restarted at 11:40 — power interruption?* if it rebooted in the last 5 minutes), **Wi-Fi link tablet ↔ Stratux** (OK, or LOST with seconds and the last error Android reported), **Engine monitor link**, and **VPN** (Off / A VPN IS ON / Unknown, with **OPEN VPN SETTINGS** when one is on). Below that is the list of dropouts on this tablet (time, length, cause), kept across restarts. **FULL LOG** opens the diagnostic log; **CLOSE** closes the panel.
+
 **Traffic** — ADS-B targets shown as arrows with callsign and relative altitude (+/−). Tap a target for full details: callsign, altitude, ground speed, squawk. Traffic disappears automatically if stale.
 
 **Route line** — When a route is loaded, the magenta line connects waypoints. Your current leg is highlighted. The nav strip below shows distance and ETE to the next waypoint and destination.
@@ -743,6 +759,7 @@ FlyTab receives GPS from Stratux, not from the tablet's internal GPS. The Stratu
 **GPS badge states:**
 - **GPS** (green) — 3D fix from Stratux (*3D GPS* or *3D GPS + SBAS* on the Stratux status page)
 - **DEAD RECKONING** — Stratux is estimating position, not fixing it; own-ship is hidden
+- Tap the badge for the GPS detail panel (see *Position banner* / *GPS detail panel* above)
 - **GPS STALE** — Position has stopped arriving from Stratux (link dropout). Own-ship is held dimmed at its last fix for up to 15 seconds after that fix, then hidden
 - **SIM** — Using simulated GPS (developer mode)
 - **GPS** (red/absent) — No fix; Stratux may not be connected

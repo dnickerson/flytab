@@ -5,6 +5,7 @@ import android.content.pm.PackageManager;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
+import android.provider.Settings;
 import android.util.Log;
 
 import com.getcapacitor.JSObject;
@@ -27,6 +28,7 @@ import com.getcapacitor.annotation.CapacitorPlugin;
  * JS API:
  *   VpnStatus.status({ package })  -> { vpnActive, installed, enabled }
  *   VpnStatus.openApp({ package }) -> resolves once the app is launched
+ *   VpnStatus.openVpnSettings()     -> Android's VPN settings screen
  * Only packages allowed by VpnStatusLogic.isAllowed() are accepted.
  */
 @CapacitorPlugin(name = "VpnStatus")
@@ -69,6 +71,19 @@ public class VpnStatusPlugin extends Plugin {
         } catch (Exception e) {
             Log.w(TAG, "openApp failed: " + e);
             call.reject("could not open app: " + e.getMessage());
+        }
+    }
+
+    @PluginMethod
+    public void openVpnSettings(PluginCall call) {
+        try {
+            Intent i = new Intent(Settings.ACTION_VPN_SETTINGS);
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(i);
+            call.resolve();
+        } catch (Exception e) {
+            Log.w(TAG, "openVpnSettings failed: " + e);
+            call.reject("could not open VPN settings: " + e.getMessage());
         }
     }
 

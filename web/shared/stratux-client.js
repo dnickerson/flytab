@@ -107,6 +107,10 @@ function _createStratuxWsRaw(channel, url) {
             // The close that follows carries only a catch-all reason; this is the
             // real OkHttp cause (ping timeout vs. network change vs. reset).
             if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', `${channel} WS failure: ${ev.message}`);
+            // PositionHealthMonitor shows the latest one in the GPS detail panel.
+            if (typeof window !== 'undefined' && typeof CustomEvent !== 'undefined') {
+                window.dispatchEvent(new CustomEvent('stratux:link-error', { detail: { channel, message: ev.message } }));
+            }
             if (ws.onerror) ws.onerror({ message: ev.message });
         },
     });
