@@ -26,7 +26,7 @@ describe('_initCockpit wires engine monitoring before the NASR wait (A4)', () =>
         'new EngineClient(', 'this.engineClient.connect()', 'new StickyValveMonitor(', 'new StickyValveBanner(',
         'new EngineGpsBridge(', 'new EnginePanel(', 'new EmergencyGlide(', 'new EngineMLBridge(',
         "addEventListener('flightsync:started'", 'new EngineOverlay(', 'new EnginePage(',
-        'new FlightRecorder(', 'this.flightRecorder.init()', 'new Logbook(',
+        'new FlightRecorder(', 'this.flightRecorder.init()', 'new Logbook(', 'this._recoverAfterRestart()',
     ]) {
         it(`${needle} comes before it`, () => { expect(at(needle)).toBeLessThan(nasrWait); });
     }
@@ -36,10 +36,19 @@ describe('_initCockpit wires engine monitoring before the NASR wait (A4)', () =>
         expect(at('new EnginePanel(')).toBeLessThan(at('new EnginePage('));
         expect(at('new EmergencyGlide(')).toBeLessThan(at('new EngineMLBridge('));
         expect(at('new EngineClient(')).toBeLessThan(at('new FuelTanksDisplay('));
+        // The recovery may emit flightsync:stopped (close-out): the logbook must be listening.
+        expect(at('new Logbook(')).toBeLessThan(at('this._recoverAfterRestart()'));
     });
 
     it('nothing awaits between the map and the engine wiring', () => {
         const between = body.slice(at('this.cockpitMap.init()'), at('this.flightRecorder.init()'));
         expect(between).not.toMatch(/\bawait\b/);
+    });
+
+    it('weather logging starts for a recording resumed before the FIS-B logger existed', () => {
+        const init = at('this.fisbLogger.init()');
+        const kick = at('if (this.flightRecorder?.recording) this.fisbLogger._onFlightStart()');
+        expect(kick).toBeGreaterThan(init);
+        expect(kick - init).toBeLessThan(400);
     });
 });

@@ -32,6 +32,12 @@ class FlightRecorder {
     static LOCAL_TIMEOUT_MS = 10000;
     // The rename's nearest-airport lookups (IndexedDB, which can hang).
     static NASR_TIMEOUT_MS = 5000;
+    // While recording, a marker here names the files and when the recording was
+    // last alive, so a restart (the WebView renderer dying, Android ending FlyTab)
+    // doesn't split or orphan the flight; see recoverUnfinished().
+    static ACTIVE_KEY = 'flytab_recording_active';
+    // A relaunch within this of the last save carries on in the same files.
+    static RESUME_WINDOW_MS = 10 * 60 * 1000;
 
     constructor(engineClient, stratuxClient, nasrDb) {
         this._engine = engineClient;
@@ -63,6 +69,9 @@ class FlightRecorder {
         // First/last GPS for dep/dest naming
         this._firstGps = null;
         this._lastGps = null;
+
+        // recoverUnfinished() is deciding what to do with the previous run's recording
+        this._recovering = false;
 
         // Status callback
         this.onStatusChange = null;
@@ -113,7 +122,7 @@ class FlightRecorder {
 
     /** Manual start */
     async start() {
-        if (this._recording) return;
+        if (this._recording || this._recovering) return;
         this._recording = true;
         this._rowCount = 0;
         this._startTime = Date.now();
@@ -129,22 +138,133 @@ class FlightRecorder {
         this._trafficFileName = `${ymd}_${hm}Z_traffic.ndjson`;
         this._trafficBuffer = [];
 
-        // Record at 1Hz
-        this._recordInterval = setInterval(() => this._recordRow(), 1000);
-        // Flush to disk every 5 seconds (reduces worst-case data loss on crash)
-        this._flushInterval = setInterval(() => {
-            this._flush();
-            this._flushTraffic();
-        }, 5000);
-        this._trafficInterval = setInterval(() => this._recordTrafficSnapshot(), 5000);
+        this._startIntervals();
+        this._saveMarker();
 
         this._emitStatus();
         window.dispatchEvent(new CustomEvent('flightsync:started'));
         if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Started: ${this._fileName}`);
     }
 
-    /** Manual stop */
-    async stop() {
+    _startIntervals() {
+        // Record at 1Hz
+        this._recordInterval = setInterval(() => this._recordRow(), 1000);
+        // Flush to disk every 5 seconds (reduces worst-case data loss on crash)
+        this._flushInterval = setInterval(() => {
+            this._flush();
+            this._flushTraffic();
+            this._saveMarker();
+        }, 5000);
+        this._trafficInterval = setInterval(() => this._recordTrafficSnapshot(), 5000);
+    }
+
+    /**
+     * After a restart: the previous run's recording, if it never reached stop().
+     *  - Last alive within RESUME_WINDOW_MS: carry on in the same files, so the
+     *    flight stays one recording with one logbook entry (10-14: a relaunch
+     *    10 s after the crash started a second file and orphaned the first).
+     *  - Older: close it out (rename + flightsync:stopped -> logbook entry),
+     *    ending at its last save.
+     *  - Its file is gone: forget it. File server can't tell: keep the marker
+     *    for the next launch.
+     * Call once the logbook is listening. Resolves 'resumed' | 'closed' | null.
+     */
+    async recoverUnfinished() {
+        if (this._recording || this._recovering) return null;
+        const raw = FlightRecorder._readStorage();
+        if (raw == null) return null;
+        const m = FlightRecorder.parseMarker(raw);
+        if (!m) {
+            this._clearMarker();
+            if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', 'Ignored a damaged unfinished-recording marker');
+            return null;
+        }
+
+        this._recovering = true;            // auto-start must not open a second file meanwhile
+        try {
+            const status = await this._fileStatus(m.fileName);
+            if (status !== 'exists') {
+                if (status === 'missing') this._clearMarker();
+                if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Unfinished recording ${m.fileName}: file ${status === 'missing' ? 'gone — forgotten' : 'not readable — will retry next launch'}`);
+                return null;
+            }
+
+            this._fileName = m.fileName;
+            this._trafficFileName = m.trafficFileName;
+            this._startTime = m.startTime;
+            this._firstGps = m.firstGps;
+            this._lastGps = m.lastGps;
+            this._rowCount = m.rowCount;
+            this._csvBuffer = [];           // the file already has its header
+            this._trafficBuffer = [];
+            this._recording = true;
+
+            const age = Date.now() - m.savedAt;
+            if (age >= 0 && age < FlightRecorder.RESUME_WINDOW_MS) {
+                this._startIntervals();
+                this._saveMarker();
+                this._emitStatus();
+                window.dispatchEvent(new CustomEvent('flightsync:started', { detail: { resumed: true, fileName: this._fileName } }));
+                if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Resumed after restart: ${this._fileName} (last saved ${Math.round(age / 1000)} s earlier)`);
+                return 'resumed';
+            }
+            if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Closing out unfinished recording ${this._fileName} (last saved ${new Date(m.savedAt).toISOString()})`);
+        } finally {
+            this._recovering = false;
+        }
+        await this.stop({ endMs: m.savedAt });
+        return 'closed';
+    }
+
+    /** The marker as validated data, or null. Names must be bare flights/ file names: they go into a URL. */
+    static parseMarker(raw) {
+        let m;
+        try { m = JSON.parse(raw); } catch { return null; }
+        if (!m || typeof m !== 'object') return null;
+        const csvOk = typeof m.fileName === 'string' && /^[A-Za-z0-9_-]+\.csv$/.test(m.fileName);
+        const trfOk = m.trafficFileName == null
+            || (typeof m.trafficFileName === 'string' && /^[A-Za-z0-9_-]+\.ndjson$/.test(m.trafficFileName));
+        if (!csvOk || !trfOk || !Number.isFinite(m.startTime) || !Number.isFinite(m.savedAt)) return null;
+        const gps = (g) => (g && Number.isFinite(g.lat) && Number.isFinite(g.lon)) ? { lat: g.lat, lon: g.lon, alt: Number.isFinite(g.alt) ? g.alt : 0 } : null;
+        return {
+            fileName: m.fileName,
+            trafficFileName: m.trafficFileName ?? null,
+            startTime: m.startTime,
+            firstGps: gps(m.firstGps),
+            lastGps: gps(m.lastGps),
+            rowCount: Number.isFinite(m.rowCount) ? m.rowCount : 0,
+            savedAt: m.savedAt,
+        };
+    }
+
+    static _readStorage() {
+        try { return localStorage.getItem(FlightRecorder.ACTIVE_KEY); } catch { return null; }
+    }
+
+    _saveMarker() {
+        if (!this._recording || !this._fileName) return;
+        try {
+            localStorage.setItem(FlightRecorder.ACTIVE_KEY, JSON.stringify({
+                fileName: this._fileName,
+                trafficFileName: this._trafficFileName,
+                startTime: this._startTime,
+                firstGps: this._firstGps,
+                lastGps: this._lastGps,
+                rowCount: this._rowCount,
+                savedAt: Date.now(),
+            }));
+        } catch { /* storage full: the recording itself is unaffected */ }
+    }
+
+    _clearMarker() {
+        try { localStorage.removeItem(FlightRecorder.ACTIVE_KEY); } catch { /* ignore */ }
+    }
+
+    /**
+     * Manual stop. `endMs` (closing out a previous run's recording) is when it
+     * was last alive; default now.
+     */
+    async stop({ endMs: endOverride } = {}) {
         if (!this._recording) return;
         this._recording = false;
 
@@ -154,7 +274,7 @@ class FlightRecorder {
         if (this._gapTimer) { clearTimeout(this._gapTimer); this._gapTimer = null; }
 
         const startTime = this._startTime ? new Date(this._startTime).toISOString() : null;
-        const endMs = Date.now();
+        const endMs = Number.isFinite(endOverride) ? endOverride : Date.now();
         const endTime = new Date(endMs).toISOString();
         const durationHours = this._startTime
             ? Math.round((endMs - this._startTime) / 36000) / 100
@@ -169,6 +289,7 @@ class FlightRecorder {
         const route = await this._renameWithRoute();
 
         const finalName = this._fileName;
+        this._clearMarker();
         this._emitStatus();
         window.dispatchEvent(new CustomEvent('flightsync:stopped', {
             detail: {

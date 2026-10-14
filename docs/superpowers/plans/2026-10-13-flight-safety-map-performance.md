@@ -92,6 +92,25 @@ Every task follows the same rules:
     timeout and `onblocked` to the NASR open.
   - **Verify:** a full-app boot in Chromium (where NASR stalls today) shows the engine client,
     sticky-valve and recorder present. Add a test for a hung open.
+- [x] **A4b A WebView renderer crash no longer takes FlyTab down (added 2026-10-14 after the in-flight crash).** Done in v11.15.
+  - Cause of the 12:11:53 EDT crash: the renderer of WebView 155.0.8059.43 (auto-updated 10-13 20:39) hit SIGSEGV. The pointer was V8's `kTracedHandleMinorGCWeakResetZapValue`, a GC bug. Capacitor 8.5's `onRenderProcessGone` returns false unless a listener handles it, so Chromium aborted the app. Evidence is in `~/flights/diag-20261014/`.
+  - `MainActivity` handles it:
+    - on screen: restart in a fresh process (`RestartActivity`, `:restart`, ProcessPhoenix pattern);
+    - off screen: end cleanly (Android blocks background activity starts);
+    - more than 2 restarts in 5 min: give up rather than loop (`RendererRecoveryLogic`).
+    - Events are passed to JS via `AppHealth.takeRendererEvents`.
+  - The recorder keeps a localStorage marker (`flytab_recording_active`). A relaunch within 10 min of the last save carries on in the same file; an older one is closed out (rename + logbook). `_recoverAfterRestart` logs it and shows one toast. The FIS-B logger starts if a resumed recording is already running.
+  - Tests: JUnit `RendererRecoveryLogicTest` (8); vitest `flight-recorder-resume` (9), `app-restart-report` (7), and `app-init-order` (+2). vitest 1510/1510.
+  - On the tablet, crashes forced with CDP `Page.crash`:
+    - on screen: restarted in ~0.2 s to a new process; the recording resumed in the same file with no second header; toast shown;
+    - background: closed; the relaunch resumed the recording;
+    - third crash in 5 min: gave up;
+    - no FlyTab entry in the crash log;
+    - the v11.15 retest confirmed weather logging restarts.
+  - Follow-ups (not done):
+    - a weather logger restarted in the same UTC minute appends a second header line to the same `_weather.ndjson`, and a later restart starts a separate weather file; continuing the weather file properly is still to do;
+    - the 10-14 first segment `20261014_1555Z.csv` was never closed out: v11.13 wrote no marker;
+    - TileServer `Failed to fetch` (hypothesis: NanoHTTPD `SOCKET_READ_TIMEOUT` of 5000 ms racing the 5 s saves) is still to be investigated.
 - [ ] **A5 Overheating must not let the screen time out in flight.**
   - **Where:** `app.js:1458-1463` releases the screen wake lock at surfaceTemp ≥ 50 °C.
   - **Fix:** keep the screen on while airborne, and dim instead. Check first which brightness

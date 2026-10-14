@@ -51,6 +51,15 @@
 
         </activity>
 
+        <!-- Restarts FlyTab in a fresh process after the WebView renderer dies
+             (MainActivity.handleRendererGone). Own process so it can end the old one. -->
+        <activity
+            android:name=".RestartActivity"
+            android:exported="false"
+            android:process=":restart"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

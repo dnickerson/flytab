@@ -740,6 +740,8 @@ Recording stops automatically 60 seconds after engine shutdown (RPM ≤ 100). If
 
 **Multi-leg flights with a fuel stop:** If you power off the Stratux between legs, FlyTab will automatically stop the current recording after 2 minutes with no GPS or engine data. Each flight leg produces its own CSV file. The second leg's recording starts automatically on the next engine start after Stratux is powered back up.
 
+**If FlyTab restarts or closes during a flight:** the recording isn't lost or split. When FlyTab starts again within 10 minutes of its last save, it carries on in the same recording file, so the flight still gets one logbook entry. If it starts again later than that, the unfinished recording is closed out (renamed and saved to the logbook) and a new one starts with the engine. A toast says what happened, e.g. *"FlyTab restarted itself after its display engine crashed at 12:11. Recording resumed."* At most the last 5 seconds before the restart, and the seconds FlyTab was down, are missing from the file.
+
 ### Weather Recording
 
 When a flight is recorded, FlyTab simultaneously logs all FIS-B weather events to a companion file named `YYYYMMDD_HHMMZ_weather.ndjson` (e.g. `20260607_1430Z_weather.ndjson`). The file captures NEXRAD blocks, METARs, PIREPs, SIGMETs, AIRMETs, winds aloft, and NOTAMs received during the flight. At engine-off, the file is renamed to match the engine CSV (e.g. `20260607_KLKR-KFDK_weather.ndjson`). The flight recording itself is renamed the same way (`20260607_KLKR-KFDK.csv`). A second flight on the same route that day gets `_2` (then `_3`, …), so it never overwrites the earlier one (e.g. `20260607_KLKR-KLKR_2.csv`). If the rename can't be confirmed, the recording keeps its start-time name (`20260607_1430Z.csv`); nothing is deleted until the renamed copy has been read back and checked.
@@ -838,6 +840,9 @@ Charts for this area are not downloaded. Either download the region (LAYERS → 
 
 **NASR badge is red:**
 Airport/navaid database is stale. Connect to home Wi-Fi with home server running and restart FlyTab — it auto-downloads fresh NASR data on startup.
+
+**FlyTab restarted or closed on its own:**
+FlyTab's screen runs in Android's WebView ("display engine"). If the WebView crashes, FlyTab restarts itself in a few seconds when it's on screen. A toast gives the time, and the flight recording carries on. If FlyTab was in the background, it closes instead (Android doesn't let it reopen itself): tap FlyTab to start it again. After two restarts within 5 minutes it stops restarting itself, so it can't loop. Each event is in the diagnostic log (long-press the version badge). WebView updates itself through the Play Store, separately from FlyTab; on 2026-10-14 version 155.0.8059.43 crashed in flight the day after it installed.
 
 **App is very slow after a long route import:**
 The NASR import writes ~100,000 records to IndexedDB. If this happens during startup, wait for the progress bar to complete. Force-stopping during import can leave the database in a locked state; force-stop and relaunch to recover.

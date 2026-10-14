@@ -2,24 +2,34 @@ package app.flywhere.flytab;
 
 import android.app.AlertDialog;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.Process;
 import android.provider.Settings;
 import android.util.Log;
+import android.view.ViewGroup;
+import android.view.ViewParent;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import androidx.activity.OnBackPressedCallback;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 import com.getcapacitor.BridgeActivity;
+import com.getcapacitor.WebViewListener;
 import app.flywhere.flytab.tileserver.TileServerPlugin;
 import app.flywhere.flytab.engineml.EngineMLPlugin;
 import app.flywhere.flytab.SftpPlugin;
 
 public class MainActivity extends BridgeActivity {
     private static final String TAG = "FlyTab";
+    /** Between onStart and onStop: FlyTab has a visible window and may start an activity. */
+    private boolean visible = false;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -33,7 +43,18 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(ShareReceiverPlugin.class);
         registerPlugin(BundledAssetPlugin.class);
         registerPlugin(VpnStatusPlugin.class);
+        registerPlugin(AppHealthPlugin.class);
         super.onCreate(savedInstanceState);
+
+        // Without this, a dead WebView renderer takes the whole app down
+        // (Capacitor returns false: "not handled", and Chromium aborts the app).
+        getBridge().addWebViewListener(new WebViewListener() {
+            @Override
+            public boolean onRenderProcessGone(WebView webView, RenderProcessGoneDetail detail) {
+                handleRendererGone(webView, detail);
+                return true;
+            }
+        });
 
         // Capture a share intent that launched a cold start (app not running).
         // A share arriving while the app is already running goes to onNewIntent
@@ -107,6 +128,76 @@ public class MainActivity extends BridgeActivity {
         super.onNewIntent(intent);
         setIntent(intent);
         handleIncomingIntent(intent);
+    }
+
+    @Override
+    public void onStart() {
+        super.onStart();
+        visible = true;
+    }
+
+    @Override
+    public void onStop() {
+        visible = false;
+        super.onStop();
+    }
+
+    /**
+     * The WebView's renderer process died. 2026-10-14 12:11 in flight: a SIGSEGV
+     * inside WebView 155's JavaScript engine. Nobody handled it, so Chromium
+     * aborted FlyTab too. Everything FlyTab does runs in that WebView, and Android
+     * says a WebView whose renderer is gone can't be reused. So:
+     *  - on screen: start FlyTab afresh in a new process (RestartActivity), as the
+     *    pilot did by hand; the web app resumes the flight recording;
+     *  - off screen: Android won't let an app start an activity from the
+     *    background (a foreground service doesn't count), so end the process
+     *    cleanly; the next tap on FlyTab starts it fresh;
+     *  - after MAX_RESTARTS inside WINDOW_MS: stop, don't loop.
+     * Each event is kept for the next launch to log and show the pilot
+     * (AppHealthPlugin).
+     */
+    private void handleRendererGone(WebView view, RenderProcessGoneDetail detail) {
+        long now = System.currentTimeMillis();
+        boolean crashed = detail.didCrash();
+        int priority = detail.rendererPriorityAtExit();
+        SharedPreferences prefs = getSharedPreferences(RendererRecoveryLogic.PREFS, MODE_PRIVATE);
+        String restarts = prefs.getString(RendererRecoveryLogic.KEY_RESTARTS, "");
+        RendererRecoveryLogic.Action action =
+            RendererRecoveryLogic.decide(visible, now, RendererRecoveryLogic.parseTimes(restarts));
+
+        SharedPreferences.Editor edit = prefs.edit().putString(RendererRecoveryLogic.KEY_PENDING,
+            RendererRecoveryLogic.appendEvent(prefs.getString(RendererRecoveryLogic.KEY_PENDING, ""),
+                now, crashed, priority, action));
+        if (action == RendererRecoveryLogic.Action.RESTART) {
+            edit.putString(RendererRecoveryLogic.KEY_RESTARTS, RendererRecoveryLogic.addTime(restarts, now));
+        }
+        edit.commit();   // synchronous: this process is about to end
+        Log.e(TAG, "WebView renderer " + (crashed ? "crashed" : "was killed by Android")
+            + " (priority " + priority + ") -> " + action);
+
+        // Android: remove the dead WebView from the view hierarchy and destroy it.
+        ViewParent parent = view.getParent();
+        if (parent instanceof ViewGroup) ((ViewGroup) parent).removeView(view);
+        view.destroy();
+
+        if (action == RendererRecoveryLogic.Action.RESTART) {
+            try {
+                startActivity(new Intent(this, RestartActivity.class)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    .putExtra(RestartActivity.EXTRA_PID, Process.myPid()));
+                // RestartActivity ends this process. If it never comes up, don't
+                // leave a blank FlyTab on screen.
+                new Handler(Looper.getMainLooper()).postDelayed(MainActivity::endProcess, 5000);
+                return;
+            } catch (RuntimeException e) {
+                Log.e(TAG, "Restart after renderer loss failed", e);
+            }
+        }
+        endProcess();
+    }
+
+    private static void endProcess() {
+        Process.killProcess(Process.myPid());
     }
 
     private void checkStoragePermission() {

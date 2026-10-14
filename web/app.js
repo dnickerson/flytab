@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v11.13';
+const FLYTAB_VERSION = 'v11.15';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -603,6 +603,10 @@ class FlyTabApp {
             this.cockpitMap.setLogbook(this.logbook);
         }
 
+        // After a restart (the WebView renderer died, or Android ended FlyTab):
+        // log it, and carry on or close out the unfinished recording. Needs the
+        // recorder and the logbook; not awaited.
+        this._recoverAfterRestart();
         // ---- end of engine / recording / logbook ----
 
         // NASR data import — must complete before plan load so _applyPlan() can stamp type:'APT'
@@ -821,6 +825,9 @@ class FlyTabApp {
         if (typeof FisbLogger !== 'undefined' && this.fisbClient) {
             this.fisbLogger = new FisbLogger(this.fisbClient);
             this.fisbLogger.init();
+            // A recording resumed after a restart announced itself (flightsync:started)
+            // during startup, before this logger existed: start weather logging now.
+            if (this.flightRecorder?.recording) this.fisbLogger._onFlightStart();
         }
 
         // Lightning strikes (Blitzortung WebSocket)
@@ -2134,6 +2141,61 @@ class FlyTabApp {
             if (this.dataStatus) this.dataStatus.show();
         });
         banner.querySelector('#_drDismissBtn').addEventListener('click', () => banner.remove());
+    }
+
+    /**
+     * What happened to the previous run, in the diagnostic log and one toast:
+     * WebView renderer deaths recorded natively (MainActivity.handleRendererGone,
+     * via AppHealth), and what became of an unfinished recording
+     * (FlightRecorder.recoverUnfinished). 2026-10-14: a renderer crash in flight
+     * took FlyTab down and split the recording.
+     */
+    async _recoverAfterRestart() {
+        const health = window.Capacitor?.Plugins?.AppHealth;
+        const takeEvents = async () => {
+            if (!health?.takeRendererEvents) return [];
+            try { return (await health.takeRendererEvents())?.events || []; }
+            catch (err) { DiagLog.log('error', `AppHealth: ${err?.message || err}`); return []; }
+        };
+        const recover = async () => {
+            if (!this.flightRecorder) return null;
+            try { return await this.flightRecorder.recoverUnfinished(); }
+            catch (err) { DiagLog.log('error', `Recording recovery failed: ${err?.message || err}`); return null; }
+        };
+        const [events, recovery] = await Promise.all([takeEvents(), recover()]);
+        for (const e of events) DiagLog.log('error', FlyTabApp.describeRendererEvent(e), { priority: e.priority });
+        const msg = FlyTabApp.restartMessage(events[events.length - 1] || null, recovery);
+        if (msg) this.showToast(msg);
+    }
+
+    /** One AppHealth renderer event, for the diagnostic log. */
+    static describeRendererEvent(e) {
+        const t = new Date(e.at), p = (n) => String(n).padStart(2, '0');
+        const when = `${p(t.getHours())}:${p(t.getMinutes())}:${p(t.getSeconds())}`;
+        const what = e.didCrash ? 'crashed' : 'was closed by Android';
+        const then = {
+            RESTART: 'FlyTab restarted itself',
+            CLOSE_IN_BACKGROUND: 'FlyTab was in the background and closed',
+            GIVE_UP: 'FlyTab stopped restarting itself (repeated crashes)',
+        }[e.action] || `action ${e.action}`;
+        return `WebView renderer ${what} at ${when} — ${then}`;
+    }
+
+    /** The pilot's toast after a restart, or '' when there's nothing to say. */
+    static restartMessage(lastEvent, recovery) {
+        const parts = [];
+        if (lastEvent) {
+            const t = new Date(lastEvent.at), p = (n) => String(n).padStart(2, '0');
+            const when = `${p(t.getHours())}:${p(t.getMinutes())}`;
+            const what = lastEvent.didCrash ? 'crashed' : 'was closed by Android';
+            parts.push({
+                RESTART: `FlyTab restarted itself after its display engine ${what} at ${when}.`,
+                GIVE_UP: `FlyTab's display engine kept crashing (last at ${when}), so FlyTab stopped restarting itself.`,
+            }[lastEvent.action] || `FlyTab's display engine ${what} at ${when}, so FlyTab closed.`);
+        }
+        if (recovery === 'resumed') parts.push('Recording resumed.');
+        if (recovery === 'closed') parts.push('The previous recording was saved to the logbook.');
+        return parts.join(' ');
     }
 
     showToast(message, actions = []) {
