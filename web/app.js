@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v11.16';
+const FLYTAB_VERSION = 'v11.19';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -182,6 +182,9 @@ class FlyTabApp {
             document.getElementById('simBanner').hidden = false;
         }
 
+        // Real on-screen state (the page always looks visible: KeepAliveWebView)
+        this._initScreenState();
+
         // Keep screen on
         this._acquireWakeLock();
         document.addEventListener('visibilitychange', () => {
@@ -233,6 +236,7 @@ class FlyTabApp {
         console.log(`FlyTab ${FLYTAB_VERSION} initialized`);
 
         this._startWatchdog();
+        this._startPauseDetector();
         window.addEventListener('resize', () => {
             if (document.getElementById('cockpitContainer')?.classList.contains('route-editing')) {
                 this._updateOrientation();
@@ -298,9 +302,14 @@ class FlyTabApp {
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'visible') lastFrame = Date.now();
         });
+        // The page always looks visible now (KeepAliveWebView); MainActivity says
+        // when FlyTab is really back on screen.
+        window.addEventListener('flytab:screen', (e) => { if (e.onScreen) lastFrame = Date.now(); });
 
         setInterval(() => {
-            if (document.visibilityState !== 'visible') return;
+            // Off screen nothing is drawn, so rAF stops: not a hang. On the tablet
+            // that logged a false "JS hang" every few seconds with the screen off.
+            if (document.visibilityState !== 'visible' || this._onScreen === false) return;
             const age = Date.now() - lastFrame;
             if (age > 3000) {
                 DiagLog.log('error', `JS hang: rAF stalled ${age}ms`);
@@ -310,6 +319,39 @@ class FlyTabApp {
                 if (verEl) verEl.style.background = 'var(--status-danger)';
             }
         }, 3000);
+    }
+
+    /**
+     * Is FlyTab really on screen? KeepAliveWebView tells Chromium the page is
+     * always visible (so it isn't frozen when hidden), so document.visibilityState
+     * no longer says. MainActivity sends 'flytab:screen' { onScreen } on every
+     * change; AppHealth.isOnScreen() gives the state at startup.
+     */
+    _initScreenState() {
+        this._onScreen = true;
+        let eventSeen = false;
+        window.addEventListener('flytab:screen', (e) => { eventSeen = true; this._onScreen = !!e.onScreen; });
+        const health = window.Capacitor?.Plugins?.AppHealth;
+        health?.isOnScreen?.()
+            .then((r) => { if (!eventSeen && typeof r?.onScreen === 'boolean') this._onScreen = r.onScreen; })
+            .catch(() => {});
+    }
+
+    /**
+     * Tell the pilot whenever FlyTab's JavaScript wasn't running (engine alerts,
+     * recording and traffic were off). Started after init, so the startup work
+     * itself isn't reported.
+     */
+    _startPauseDetector() {
+        if (typeof PauseDetector === 'undefined') return;
+        this.pauseDetector = new PauseDetector({
+            onPause: (p) => {
+                const msg = PauseDetector.message(p, !!this.flightRecorder?.recording);
+                DiagLog.log('error', msg, { durationMs: Math.round(p.durationMs), onScreen: this._onScreen });
+                this.showToast(msg);
+            },
+        });
+        this.pauseDetector.start();
     }
 
     /** Show diagnostic log overlay */

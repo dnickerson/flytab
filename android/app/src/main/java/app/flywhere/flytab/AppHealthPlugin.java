@@ -11,15 +11,26 @@ import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
 /**
- * Tells the web app what happened to the previous WebView.
+ * Tells the web app what the page itself can't know: whether FlyTab is on
+ * screen, and what happened to the previous WebView.
  *
  * JS API:
+ *   AppHealth.isOnScreen() -> { onScreen }  (MainActivity between onStart and onStop;
+ *     the page can't tell: KeepAliveWebView keeps it "visible". Changes arrive as
+ *     the window event 'flytab:screen' { onScreen }.)
  *   AppHealth.takeRendererEvents() -> { events: [{ at, didCrash, priority, action }] }
  *     Renderer deaths recorded by MainActivity.handleRendererGone since the last
  *     call (oldest first), then cleared. action: RESTART | CLOSE_IN_BACKGROUND | GIVE_UP.
  */
 @CapacitorPlugin(name = "AppHealth")
 public class AppHealthPlugin extends Plugin {
+
+    @PluginMethod
+    public void isOnScreen(PluginCall call) {
+        JSObject ret = new JSObject();
+        ret.put("onScreen", MainActivity.isOnScreen());
+        call.resolve(ret);
+    }
 
     @PluginMethod
     public void takeRendererEvents(PluginCall call) {

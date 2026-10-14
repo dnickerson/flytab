@@ -123,17 +123,24 @@ Every task follows the same rules:
   - Tests: `tests/shared/app-thermal-wakelock.test.js` (8, through the real `_poll` path). Mutation checks: old release rule 3 fail; no flight-start re-check 3 fail; old acquire 2 fail; old text 1 fail. vitest 1518/1518.
   - Tablet, simulated 52/55/40 °C readings, with Android's screen lock checked at each step: ground hot → released; flight start → held; flight hot → held; flight end → released; cooled → held.
   - Not tested: a real hot tablet.
-- [ ] **A6 The pilot knows when FlyTab was paused, and it pauses less.**
-  - **Evidence:** about 90 s after backgrounding, all JS stops: engine alerts, recorder and
-    traffic. Seen 12:13–12:27 in flight (usagestats).
+- [x] **A6 The pilot knows when FlyTab was paused, and it pauses less.** Done in v11.19.
+  - **Root cause (measured on the tablet, v11.16):** it isn't Android. About 30–40 s after FlyTab is hidden (Home, or screen off), **Chromium freezes the page**: a document `freeze` event fires and no JS runs until FlyTab is shown again (`resume`). Meanwhile Android keeps the renderer perceptible (`prcp`), in the foreground cpuset, `isFrozen=false`. Capacitor doesn't pause it either (`KeepRunning` defaults to true).
+  - So (b) `setRendererPriorityPolicy` was **not done**: it only changes process priority, and the renderer wasn't demoted.
   - **Fix:**
-    - (a) On resume, show a banner "FlyTab was paused N min — engine alerts and recording
-      were off" and add it to the position-health history and DiagLog.
-    - (b) Try `WebView.setRendererPriorityPolicy(RENDERER_PRIORITY_IMPORTANT, false)` in
-      `MainActivity`.
-  - **Verify:** (a) a test; (b) on the tablet, background FlyTab for 3 min with ADB attached
-    and check DiagLog for a "JS was suspended" line and that recorder rows keep coming. If (b)
-    doesn't help, say so and keep only (a).
+    - `KeepAliveWebView` (`CapacitorWebView` subclass, via a `res/layout/capacitor_bridge_layout_main.xml` override) always reports its window as VISIBLE to Chromium, so the page isn't frozen. Dana chose "always", not only in flight.
+    - `MainActivity` reports the real on-screen state: event `flytab:screen`, plus `AppHealth.isOnScreen()`. The rAF hang watchdog uses it; without that, the spike logged a false "JS hang" every ~12 s with the screen off (49 in 9 min).
+    - (a) `PauseDetector` (`web/shared/pause-detector.js`): a 1 s tick on `performance.now()`. A gap of 15 s or more gives a DiagLog error plus a toast, e.g. "FlyTab wasn't running for 4 min (12:13–12:17). Engine alerts and the flight recording were off."
+  - Tablet, v11.18/19:
+    - screen off for 3 min: 180/180 heartbeats, no freeze, `_onScreen=false`, 0 hang entries;
+    - `Debugger.pause` for 20 s: toast and log "wasn't running for 21 s";
+    - renderer crash still handled (background path).
+    - Before, v11.16 with Home: frozen at 32 s and 40 s.
+  - Tests: `pause-detector` (6) and `app-watchdog-onscreen` (4; 2 failed before the fix). vitest 1528/1528.
+  - **Not tested on the tablet with the fix:** the screen-on app switch (Home), because the tablet was locked. It's the same window-visibility path as screen off. Also not tested: a real flight.
+  - Side effects:
+    - `document.visibilityState` is always 'visible' now, so the A1 hide-flush and the logbook's hidden-page path no longer trigger. They aren't needed, since JS keeps running.
+    - FlyTab works in the background (FlightService already holds the CPU awake); the manual tells the pilot to close it with Back after flying.
+  - New finding: at home with no Stratux, the Stratux reconnect messages fill the 200-entry DiagLog within minutes, now also in the background. Added to the backlog.
 - [ ] **A7 The FlightService CPU wake lock never silently expires.**
   - **Where:** `FlightService.java:43` acquires it once in `onCreate` with an 8 h timeout.
   - **Fix:** re-acquire in `onStartCommand`, or renew on a schedule.
@@ -249,6 +256,7 @@ should be biased to look for red areas (pixels) building, not random scattered r
 ---
 
 ## Backlog (not scheduled)
+- DiagLog churn: with no Stratux (at home), "Situation WS closed / Failed to connect" lines fill the 200-entry DiagLog within minutes and push out useful entries (crash/pause/recorder). Rate-limit or collapse repeated link messages.
 - Move engine-limit alerts and the flight recorder into the native FlightService, so they
   survive any WebView pause. This is the real fix behind A6, and it's a bigger change.
 - Coalesce queued native WS messages while JS is frozen (`StratuxWsPlugin.java:97-101`), so a

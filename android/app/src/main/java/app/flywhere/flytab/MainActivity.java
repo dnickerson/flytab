@@ -30,6 +30,10 @@ public class MainActivity extends BridgeActivity {
     private static final String TAG = "FlyTab";
     /** Between onStart and onStop: FlyTab has a visible window and may start an activity. */
     private boolean visible = false;
+    /** Same, for AppHealth.isOnScreen (the page can't tell: see KeepAliveWebView). */
+    private static volatile boolean onScreen = false;
+
+    static boolean isOnScreen() { return onScreen; }
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -133,13 +137,26 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onStart() {
         super.onStart();
-        visible = true;
+        reportOnScreen(true);
     }
 
     @Override
     public void onStop() {
-        visible = false;
+        reportOnScreen(false);
         super.onStop();
+    }
+
+    /**
+     * KeepAliveWebView makes the page always look visible to Chromium, so tell
+     * it the real state: window event 'flytab:screen' { onScreen }. (Screen off
+     * also stops the activity.)
+     */
+    private void reportOnScreen(boolean on) {
+        visible = on;
+        onScreen = on;
+        if (getBridge() != null) {
+            getBridge().triggerWindowJSEvent("flytab:screen", "{\"onScreen\":" + on + "}");
+        }
     }
 
     /**

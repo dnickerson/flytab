@@ -848,6 +848,10 @@ Charts for this area are not downloaded. Either download the region (LAYERS → 
 **NASR badge is red:**
 Airport/navaid database is stale. Connect to home Wi-Fi with home server running and restart FlyTab — it auto-downloads fresh NASR data on startup.
 
+**Screen off or another app in front:** FlyTab keeps running: engine alerts are checked, the flight is recorded and traffic is tracked. (Before v11.18, Android's WebView stopped FlyTab about 30–40 seconds after it left the screen.) It keeps the tablet's CPU awake to do this, so close FlyTab with the back button when you're done flying.
+
+**"FlyTab wasn't running for N min":** if anything still stops FlyTab, it tells you when it gets going again, for example *"FlyTab wasn't running for 4 min (12:13–12:17). Engine alerts and the flight recording were off."* The message is also in the diagnostic log. FlyTab only reports gaps of 15 seconds or more.
+
 **FlyTab restarted or closed on its own:**
 FlyTab's screen runs in Android's WebView ("display engine"). If the WebView crashes, FlyTab restarts itself in a few seconds when it's on screen. A toast gives the time, and the flight recording carries on. If FlyTab was in the background, it closes instead (Android doesn't let it reopen itself): tap FlyTab to start it again. After two restarts within 5 minutes it stops restarting itself, so it can't loop. Each event is in the diagnostic log (long-press the version badge). WebView updates itself through the Play Store, separately from FlyTab; on 2026-10-14 version 155.0.8059.43 crashed in flight the day after it installed.
 
