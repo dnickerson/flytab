@@ -25,6 +25,10 @@ class FlightRecorder {
     static RPM_STOP_SECONDS = 60;
     // "Now" for _shutdownEvidenceNow: engine data is ~1 Hz, Stratux situation 10 Hz.
     static FRESH_DATA_MS = 5000;
+    // A save is a ~1 KB append to local storage; 10 s means TileServer is stuck.
+    // If it had in fact written the rows and only answered late, the retry
+    // repeats them: duplicate rows are recoverable, missing ones are not.
+    static FLUSH_TIMEOUT_MS = 10000;
 
     constructor(engineClient, stratuxClient, nasrDb) {
         this._engine = engineClient;
@@ -41,7 +45,9 @@ class FlightRecorder {
         this._trafficFileName = null;
         this._trafficBuffer = [];
         this._trafficInterval = null;
-        this._activeTrafficFlush = null;
+        // One save in flight per file (see _serialFlush)
+        this._csvSave = { active: null, next: null };
+        this._trafficSave = { active: null, next: null };
         this._gapTimer = null;
 
         // Auto-start/stop counters
@@ -125,7 +131,7 @@ class FlightRecorder {
         // Flush to disk every 5 seconds (reduces worst-case data loss on crash)
         this._flushInterval = setInterval(() => {
             this._flush();
-            this._activeTrafficFlush = this._flushTraffic();
+            this._flushTraffic();
         }, 5000);
         this._trafficInterval = setInterval(() => this._recordTrafficSnapshot(), 5000);
 
@@ -151,24 +157,10 @@ class FlightRecorder {
             ? Math.round((endMs - this._startTime) / 36000) / 100
             : 0;
 
-        // Final flush — track success so downstream listeners know if data was saved
-        let flushOk = true;
-        try {
-            await this._flush();
-        } catch (err) {
-            flushOk = false;
-            if (typeof DiagLog !== 'undefined') DiagLog.log('error', `FlightRecorder final flush failed: ${err.message}`);
-        }
-        // Wait for any interval-triggered flush to complete before the final flush
-        if (this._activeTrafficFlush) {
-            try { await this._activeTrafficFlush; } catch (_) {}
-            this._activeTrafficFlush = null;
-        }
-        try {
-            await this._flushTraffic();
-        } catch (err) {
-            if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Traffic flush failed: ${err.message}`);
-        }
+        // Final save. Each waits for a save already in flight, so everything is
+        // written (or reported failed) before the rename reads the files. flushOk
+        // tells downstream listeners whether the CSV's last rows were saved.
+        const [flushOk] = await Promise.all([this._flush(), this._flushTraffic()]);
 
         // Try to rename with dep/dest from NASR — returns { depIcao, destIcao } or null
         const route = await this._renameWithRoute();
@@ -324,43 +316,59 @@ class FlightRecorder {
         this._trafficBuffer.push(JSON.stringify({ t, ts: now, targets }));
     }
 
-    /** Flush buffered rows to NanoHTTPD filesystem */
-    async _flush() {
-        if (this._csvBuffer.length === 0) return;
-
-        const content = this._csvBuffer.join('\n') + '\n';
-        this._csvBuffer = [];
-
-        const path = `${FlightRecorder.FLIGHTS_PATH}/${this._fileName}`;
-        try {
-            const resp = await fetch(`${FlightRecorder.LOCAL_BASE}/${path}`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'text/csv', 'X-Append': 'true' },
-                body: content,
-            });
-            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        } catch (err) {
-            // Re-buffer on failure so data isn't lost
-            this._csvBuffer.unshift(content.trim());
-            if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Flush failed: ${err.message}`);
-        }
+    /** Save buffered CSV rows (append). Resolves true if they were written. */
+    _flush() {
+        return this._serialFlush(this._csvSave, () => this._appendBuffer(this._csvBuffer, this._fileName, 'text/csv', 'Flush'));
     }
 
-    async _flushTraffic() {
-        if (!this._trafficBuffer.length || !this._trafficFileName) return;
-        const snapshot = this._trafficBuffer.splice(0);  // atomically drain, preserve records
-        const content = snapshot.join('\n') + '\n';
-        const path = `${FlightRecorder.FLIGHTS_PATH}/${this._trafficFileName}`;
+    /** Save buffered traffic snapshots (append). Resolves true if they were written. */
+    _flushTraffic() {
+        return this._serialFlush(this._trafficSave, () => this._appendBuffer(this._trafficBuffer, this._trafficFileName, 'application/x-ndjson', 'Traffic flush'));
+    }
+
+    /**
+     * Run one save at a time per file. TileServer (NanoHTTPD) handles each request
+     * on its own thread, so two appends to one file could land interleaved or out
+     * of order, and a failed save would put its rows back behind rows a later
+     * save had already written. A save requested while one is in flight gets one
+     * shared follow-up that starts when it ends and takes whatever is buffered by
+     * then, so saves requested during a stall don't pile up.
+     */
+    _serialFlush(slot, run) {
+        if (slot.active) {
+            if (!slot.next) slot.next = slot.active.then(() => { slot.next = null; return this._serialFlush(slot, run); });
+            return slot.next;
+        }
+        slot.active = run().catch(() => false).finally(() => { slot.active = null; });
+        return slot.active;
+    }
+
+    /**
+     * Append everything in `buf` to flights/`name`. On failure the lines go back
+     * to the front of `buf` (ahead of anything recorded meanwhile) for the next save.
+     */
+    async _appendBuffer(buf, name, contentType, label) {
+        if (!buf.length || !name) return true;
+        const lines = buf.splice(0);
+        const ctrl = new AbortController();
+        let timedOut = false;
+        const timer = setTimeout(() => { timedOut = true; ctrl.abort(); }, FlightRecorder.FLUSH_TIMEOUT_MS);
         try {
-            const resp = await fetch(`${FlightRecorder.LOCAL_BASE}/${path}`, {
+            const resp = await fetch(`${FlightRecorder.LOCAL_BASE}/${FlightRecorder.FLIGHTS_PATH}/${name}`, {
                 method: 'PUT',
-                headers: { 'Content-Type': 'application/x-ndjson', 'X-Append': 'true' },
-                body: content,
+                headers: { 'Content-Type': contentType, 'X-Append': 'true' },
+                body: lines.join('\n') + '\n',
+                signal: ctrl.signal,
             });
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            return true;
         } catch (err) {
-            this._trafficBuffer.unshift(...snapshot);  // restore individual records
-            if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Traffic flush failed: ${err.message}`);
+            buf.unshift(...lines);
+            const why = timedOut ? `timed out after ${FlightRecorder.FLUSH_TIMEOUT_MS / 1000} s` : err.message;
+            if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `${label} failed: ${why}`);
+            return false;
+        } finally {
+            clearTimeout(timer);
         }
     }
 
