@@ -478,6 +478,18 @@ class Logbook {
 
     // ========== Auto-create from Flight Recording ==========
 
+    /**
+     * 'YYYYMMDD_DEP-DEST.csv' (or '..._DEP-DEST_2.csv', a second same-route flight
+     * that day -- FlightRecorder never overwrites) -> { date, dep, dest }, or null.
+     * ICAO/FAA ids are letters and digits only; the _N suffix is not part of dest.
+     */
+    static parseFlightFilename(name) {
+        const m = String(name || '').match(/^(\d{8})_([A-Za-z0-9]+)-([A-Za-z0-9]+)(?:_\d+)?(?:\.csv)?$/i);
+        if (!m) return null;
+        const d = m[1];
+        return { date: `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`, dep: m[2], dest: m[3] };
+    }
+
     async createEntry(csvFilename, flightDetail = {}) {
         // Prefer dep/dest from the recorder event (already resolved via NASR spatial lookup).
         // Fall back to filename parsing for manually-created entries.
@@ -488,13 +500,11 @@ class Logbook {
             : new Date().toISOString().slice(0, 10);
 
         if ((depIcao === 'UNKN' || destIcao === 'UNKN') && csvFilename) {
-            const stem = csvFilename.replace(/\.csv$/i, '');
-            const match = stem.match(/^(\d{8})_(\w+)-(\w+)/);
-            if (match) {
-                const d = match[1];
-                dateStr = `${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}`;
-                if (depIcao === 'UNKN') depIcao = match[2];
-                if (destIcao === 'UNKN') destIcao = match[3];
+            const parsed = Logbook.parseFlightFilename(csvFilename);
+            if (parsed) {
+                dateStr = parsed.date;
+                if (depIcao === 'UNKN') depIcao = parsed.dep;
+                if (destIcao === 'UNKN') destIcao = parsed.dest;
             }
         }
 

@@ -368,6 +368,17 @@ class FlightRecorder {
      * Rename file with departure/destination airports using NASR lookup.
      * Returns { depIcao, destIcao } if successful, null otherwise.
      */
+    /**
+     * Rename the finished recording to YYYYMMDD_DEP-DEST.csv (and its traffic
+     * companion to match). The server has no rename, so it's copy -> verify ->
+     * delete, and it must never lose a flight:
+     *  - the original is deleted only after the copy reads back IDENTICAL --
+     *    TileServer.handlePut answers 201 even when it wrote nothing;
+     *  - an existing file is never overwritten (a non-append PUT truncates):
+     *    a second same-route flight that day becomes _2, _3, ...;
+     *  - anything uncertain leaves the original name in place.
+     * Returns { depIcao, destIcao } when the CSV was renamed, else null.
+     */
     async _renameWithRoute() {
         if (!this._nasrDb || !this._firstGps || !this._lastGps) return null;
 
@@ -377,45 +388,24 @@ class FlightRecorder {
             if (!dep || !dest) return null;
 
             const ymd = this._fileName.split('_')[0];
-            const newName = `${ymd}_${dep}-${dest}.csv`;
-
-            // Rename by reading + writing + deleting old
-            const oldPath = `${FlightRecorder.FLIGHTS_PATH}/${this._fileName}`;
-            const newPath = `${FlightRecorder.FLIGHTS_PATH}/${newName}`;
-
-            const readResp = await fetch(`${FlightRecorder.LOCAL_BASE}/${oldPath}`);
-            if (!readResp.ok) return null;
-            const data = await readResp.text();
-
-            await fetch(`${FlightRecorder.LOCAL_BASE}/${newPath}`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'text/csv' },
-                body: data,
-            });
-
-            // Delete old file
-            await fetch(`${FlightRecorder.LOCAL_BASE}/${oldPath}`, { method: 'DELETE' });
-
+            const stem = await this._freeStem(`${ymd}_${dep}-${dest}`);
+            if (!stem) {
+                if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Rename skipped — no free name for ${ymd}_${dep}-${dest}; kept ${this._fileName}`);
+                return null;
+            }
+            const newName = `${stem}.csv`;
+            if (!(await this._moveFile(this._fileName, newName, 'text/csv'))) {
+                if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Rename to ${newName} not verified — kept ${this._fileName}`);
+                return null;
+            }
             this._fileName = newName;
 
             if (this._trafficFileName) {
-                const oldTrafficPath = `${FlightRecorder.FLIGHTS_PATH}/${this._trafficFileName}`;
-                const newTrafficName = newName.replace(/\.csv$/, '_traffic.ndjson');
-                const newTrafficPath = `${FlightRecorder.FLIGHTS_PATH}/${newTrafficName}`;
-                try {
-                    const tr = await fetch(`${FlightRecorder.LOCAL_BASE}/${oldTrafficPath}`);
-                    if (tr.ok) {
-                        const trafficData = await tr.text();
-                        await fetch(`${FlightRecorder.LOCAL_BASE}/${newTrafficPath}`, {
-                            method: 'PUT',
-                            headers: { 'Content-Type': 'application/x-ndjson' },
-                            body: trafficData,
-                        });
-                        await fetch(`${FlightRecorder.LOCAL_BASE}/${oldTrafficPath}`, { method: 'DELETE' });
-                        this._trafficFileName = newTrafficName;
-                    }
-                } catch (err) {
-                    if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Traffic rename failed: ${err.message}`);
+                const newTrafficName = `${stem}_traffic.ndjson`;
+                if (await this._moveFile(this._trafficFileName, newTrafficName, 'application/x-ndjson')) {
+                    this._trafficFileName = newTrafficName;
+                } else if (typeof DiagLog !== 'undefined') {
+                    DiagLog.log('recorder', `Traffic rename not verified — kept ${this._trafficFileName}`);
                 }
             }
 
@@ -425,6 +415,61 @@ class FlightRecorder {
             if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Rename failed: ${err.message}`);
             return null;
         }
+    }
+
+    /**
+     * First of stem, stem_2 .. stem_9 for which neither the CSV nor its traffic
+     * companion exists (a definite 404). null if none is free or existence can't
+     * be confirmed (server error) -- then we don't rename at all.
+     */
+    async _freeStem(stem) {
+        for (let n = 1; n <= 9; n++) {
+            const candidate = n === 1 ? stem : `${stem}_${n}`;
+            const csv = await this._fileStatus(`${candidate}.csv`);
+            const trf = await this._fileStatus(`${candidate}_traffic.ndjson`);
+            if (csv === 'error' || trf === 'error') return null;
+            if (csv === 'missing' && trf === 'missing') return candidate;
+        }
+        return null;
+    }
+
+    /** 'exists' | 'missing' | 'error' for a file in flights/. */
+    async _fileStatus(name) {
+        try {
+            const r = await fetch(`${FlightRecorder.LOCAL_BASE}/${FlightRecorder.FLIGHTS_PATH}/${name}`);
+            if (r.ok) return 'exists';
+            return r.status === 404 ? 'missing' : 'error';
+        } catch { return 'error'; }
+    }
+
+    /**
+     * Copy flights/from -> flights/to, read the copy back, and delete the original
+     * only if it matches exactly. A wrong copy is removed; the original is kept.
+     * Returns true only when `to` holds the data and `from` is no longer needed.
+     */
+    async _moveFile(from, to, contentType) {
+        const url = (name) => `${FlightRecorder.LOCAL_BASE}/${FlightRecorder.FLIGHTS_PATH}/${name}`;
+        const src = await fetch(url(from));
+        if (!src.ok) return false;
+        const data = await src.text();
+
+        const put = await fetch(url(to), { method: 'PUT', headers: { 'Content-Type': contentType }, body: data });
+        if (!put.ok) return false;
+
+        const check = await fetch(url(to));
+        const copy = check.ok ? await check.text() : null;
+        if (copy !== data) {
+            // The copy is wrong (or unreadable). Remove it only if we could read it,
+            // i.e. we know it's ours and bad; the original stays either way.
+            if (check.ok) await fetch(url(to), { method: 'DELETE' }).catch(() => {});
+            return false;
+        }
+
+        const del = await fetch(url(from), { method: 'DELETE' });
+        if (!del.ok && typeof DiagLog !== 'undefined') {
+            DiagLog.log('recorder', `Renamed copy verified, but deleting ${from} failed (HTTP ${del.status}) — both kept`);
+        }
+        return true;
     }
 
     async _nearestAirport(lat, lon) {

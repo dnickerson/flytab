@@ -57,7 +57,11 @@ Every task follows the same rules:
     data only.
   - **Verify:** a test that hides during a data gap and checks the recording continues; plus
     the normal engine-off stop still works.
-- [ ] **A2 Recorder rename can't delete the flight file.**
+- [x] **A2 Recorder rename can't delete the flight file.** Done in v11.10.
+  - The original is deleted only after the copy reads back identical (TileServer PUT answers 201 even when it wrote nothing).
+  - An existing file is never overwritten: a second same-route flight that day gets `_2`, `_3`, ...
+  - The logbook filename fallback now handles `_2`.
+  - 14 tests; the 6 data-loss cases failed before the fix. vitest 1454/1454.
   - **Where:** `flight-recorder.js:397-404`. It PUTs the copy without checking `resp.ok`, then
     DELETEs the original.
   - **Fix:** check the response, compare sizes, and only then delete.

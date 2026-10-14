@@ -742,7 +742,7 @@ Recording stops automatically 60 seconds after engine shutdown (RPM ≤ 100). If
 
 ### Weather Recording
 
-When a flight is recorded, FlyTab simultaneously logs all FIS-B weather events to a companion file named `YYYYMMDD_HHMMZ_weather.ndjson` (e.g. `20260607_1430Z_weather.ndjson`). The file captures NEXRAD blocks, METARs, PIREPs, SIGMETs, AIRMETs, winds aloft, and NOTAMs received during the flight. At engine-off, the file is renamed to match the engine CSV (e.g. `20260607_KLKR-KFDK_weather.ndjson`).
+When a flight is recorded, FlyTab simultaneously logs all FIS-B weather events to a companion file named `YYYYMMDD_HHMMZ_weather.ndjson` (e.g. `20260607_1430Z_weather.ndjson`). The file captures NEXRAD blocks, METARs, PIREPs, SIGMETs, AIRMETs, winds aloft, and NOTAMs received during the flight. At engine-off, the file is renamed to match the engine CSV (e.g. `20260607_KLKR-KFDK_weather.ndjson`). The flight recording itself is renamed the same way (`20260607_KLKR-KFDK.csv`). A second flight on the same route that day gets `_2` (then `_3`, …), so it never overwrites the earlier one (e.g. `20260607_KLKR-KLKR_2.csv`). If the rename can't be confirmed, the recording keeps its start-time name (`20260607_1430Z.csv`); nothing is deleted until the renamed copy has been read back and checked.
 
 This file is available for post-flight review in fly-debrief as a weather replay layer — scrub through the flight to see what weather looked like at each point in time.
 
