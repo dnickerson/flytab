@@ -8,7 +8,9 @@ import android.app.Service;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.os.PowerManager;
 import android.util.Log;
 
@@ -29,9 +31,9 @@ public class FlightService extends Service {
     private static final String TAG = "FlightService";
     private static final String CHANNEL_ID = "flytab_flight";
     private static final int NOTIFICATION_ID = 1;
-    // Wake lock timeout: 8 hours. Covers the longest GA flight day.
-    private static final long WAKE_LOCK_TIMEOUT_MS = 8 * 60 * 60 * 1000L;
     private PowerManager.WakeLock wakeLock;
+    // Renews the CPU wake lock while the service runs (it used to lapse after 8 h).
+    private WakeLockKeeper wakeLockKeeper;
 
     @Override
     public void onCreate() {
@@ -40,12 +42,32 @@ public class FlightService extends Service {
 
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "FlyTab::Flight");
-        wakeLock.acquire(WAKE_LOCK_TIMEOUT_MS);
-        Log.i(TAG, "Flight service started, CPU wake lock acquired (8h timeout)");
+        // Non-reference-counted: each renewal re-arms the timeout instead of
+        // stacking another hold (see WakeLockKeeper).
+        wakeLock.setReferenceCounted(false);
+        Handler handler = new Handler(Looper.getMainLooper());
+        wakeLockKeeper = new WakeLockKeeper(
+            new WakeLockKeeper.Lock() {
+                @Override public void acquire(long timeoutMs) {
+                    wakeLock.acquire(timeoutMs);
+                    Log.i(TAG, "CPU wake lock held for the next " + timeoutMs / 60000 + " min");
+                }
+                @Override public void release() { if (wakeLock.isHeld()) wakeLock.release(); }
+                @Override public boolean isHeld() { return wakeLock.isHeld(); }
+            },
+            new WakeLockKeeper.Scheduler() {
+                @Override public void postDelayed(Runnable r, long delayMs) { handler.postDelayed(r, delayMs); }
+                @Override public void removeCallbacks(Runnable r) { handler.removeCallbacks(r); }
+            },
+            message -> Log.w(TAG, message));
+        wakeLockKeeper.start();
+        Log.i(TAG, "Flight service started, CPU wake lock held (renewed every "
+            + WakeLockKeeper.RENEW_EVERY_MS / 60000 + " min while running)");
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        if (wakeLockKeeper != null) wakeLockKeeper.renewNow();
         Intent launchIntent = new Intent(this, MainActivity.class);
         launchIntent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
         PendingIntent pendingIntent = PendingIntent.getActivity(
@@ -79,8 +101,8 @@ public class FlightService extends Service {
 
     @Override
     public void onDestroy() {
-        if (wakeLock != null && wakeLock.isHeld()) {
-            wakeLock.release();
+        if (wakeLockKeeper != null) {
+            wakeLockKeeper.stop();
             Log.i(TAG, "CPU wake lock released");
         }
         super.onDestroy();

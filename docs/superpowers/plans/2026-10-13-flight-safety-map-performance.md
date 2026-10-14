@@ -141,10 +141,15 @@ Every task follows the same rules:
     - `document.visibilityState` is always 'visible' now, so the A1 hide-flush and the logbook's hidden-page path no longer trigger. They aren't needed, since JS keeps running.
     - FlyTab works in the background (FlightService already holds the CPU awake); the manual tells the pilot to close it with Back after flying.
   - New finding: at home with no Stratux, the Stratux reconnect messages fill the 200-entry DiagLog within minutes, now also in the background. Added to the backlog.
-- [ ] **A7 The FlightService CPU wake lock never silently expires.**
-  - **Where:** `FlightService.java:43` acquires it once in `onCreate` with an 8 h timeout.
-  - **Fix:** re-acquire in `onStartCommand`, or renew on a schedule.
-  - **Verify:** JUnit test or code-path review; check `dumpsys power` on the tablet.
+- [x] **A7 The FlightService CPU wake lock never silently expires.** Done in v11.20.
+  - It was taken once in `onCreate` with an 8 h timeout. `onCreate` runs only on a cold start, so FlyTab opened at 07:00 had no CPU lock for a 16:00 flight.
+  - `WakeLockKeeper`:
+    - the lock is now non-reference-counted (checked in AOSP `PowerManager.WakeLock`: re-acquiring re-arms the timeout, and one release fully releases);
+    - 60 min timeout as a backstop, renewed every 20 min while the service runs;
+    - also renewed in `onStartCommand`, released in `onDestroy`;
+    - a lapse is logged.
+  - JUnit `WakeLockKeeperTest` (7): held across 24 h; stop releases and cancels. Mutation checks: no re-acquire 2 fail; no release 3 fail.
+  - Tablet: `dumpsys power` shows `FlyTab::Flight` held after install, and logcat shows "CPU wake lock held for the next 60 min".
 - [ ] **A8 EngineML can't run two inferences on one model.**
   - **Where:** `InferenceEngine.java:270-289`. `future.cancel` can't stop a native run, and a
     new thread is started on the same Interpreter.
