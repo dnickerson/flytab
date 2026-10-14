@@ -79,7 +79,12 @@ Every task follows the same rules:
     re-buffered rows go out of order.
   - **Fix:** `AbortSignal.timeout`, a busy flag, and keep row order.
   - **Verify:** a test with a stalled PUT.
-- [ ] **A4 Engine monitoring must not wait on the NASR database.**
+- [x] **A4 Engine monitoring must not wait on the NASR database.** Done in v11.13.
+  - Moved, unchanged and in the same order, before `await this._ensureNasrData`: EngineClient, StickyValve (monitor + banner), EngineGpsBridge, EnginePanel, EmergencyGlide, EngineML (+ flightsync logging hooks), EngineOverlay, EnginePage, FlightRecorder, and the Logbook (it turns the recorder's stopped event into the logbook entry). A dependency sweep found nothing in them that needs anything created after the NASR wait; no stacking change (z-indexes differ).
+  - `NasrDB.open()`: 10 s timeout (`OPEN_TIMEOUT_MS`), `onblocked` logged, concurrent callers share one request, a late success is kept, a failed/stuck request is retried on the next call.
+  - `_ensureNasrData` skips the check/import when the DB can't be opened.
+  - Chromium boot, IDB stuck: before, nothing engine-side existed at 30 s and init never finished; after, all present at 5 s and init completes after the 10 s timeout. Normal boot: engine side at 5 s (was: not at 20 s).
+  - Tests: `tests/shared/nasr-db-open.test.js` (7; the 6 original failed or hung before), `tests/shared/app-init-order.test.js` (17; 15 fail on the old app.js). vitest 1492/1492.
   - **Where:** `app.js:478`, `await this._ensureNasrData()`, runs before EngineClient,
     StickyValve, EngineML and FlightRecorder are created. `NasrDB.open()` has no `onblocked`
     handler and no timeout; CLAUDE.md documents IDB hangs.

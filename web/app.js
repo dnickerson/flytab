@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v11.12';
+const FLYTAB_VERSION = 'v11.13';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -474,64 +474,14 @@ class FlyTabApp {
             this.cockpitMap.switchBaseLayer('vector');
         }
 
-        // NASR data import — must complete before plan load so _applyPlan() can stamp type:'APT'
-        await this._ensureNasrData(nasrDb);
-
-        // Airport info panel (right-side sliding panel — v5)
-        if (typeof AirportPopup !== 'undefined') {
-            this.airportPopup = new AirportPopup(this.cockpitMap.map, nasrDb);
-            // Init panel inside .map-area so it stays within the map bounds
-            const mapAreaEl = document.querySelector('.map-area');
-            if (mapAreaEl && this.airportPopup.initPanel) {
-                this.airportPopup.initPanel(mapAreaEl);
-            }
-            this.cockpitMap.setAirportPopup(this.airportPopup);
-            this.airportPopup.setGetRouteAirports(() => {
-                const wps = this._currentTrip?.waypoints;
-                if (!wps?.length) return {};
-                return { departure: wps[0], destination: wps[wps.length - 1] };
-            });
-
-            this.airportPopup.onDirectTo((apt) => {
-                this.openRoutePlanner();
-                this.routePlannerPanel?.setDirectTo(apt);
-                this.airportPopup.close();
-            });
-
-            if (this.vectorLayers) {
-                this.airportPopup.setVectorLayers(this.vectorLayers);
-                this.vectorLayers._onInternetMetarsFetched = () => this._updateWeatherAge(this._currentTrip);
-                this.vectorLayers.onAirportClick((apt) => {
-                    if (typeof _wireTapLastTouchAt !== 'undefined' && Date.now() - _wireTapLastTouchAt < 500) return;
-                    if (this.routeTable?.isEditing()) {
-                        this.routeTable.addWaypointSmart({ icao: apt.icao, name: apt.name || apt.icao, lat: apt.lat, lon: apt.lon });
-                        return;
-                    }
-                    this.airportPopup.show(apt);
-                });
-
-                this.vectorLayers.onNavaidClick((nav) => {
-                    if (typeof _wireTapLastTouchAt !== 'undefined' && Date.now() - _wireTapLastTouchAt < 500) return;
-                    if (this.routeTable?.isEditing()) {
-                        this.routeTable.addWaypointSmart({ icao: nav.id, name: nav.name || nav.id, lat: nav.lat, lon: nav.lon });
-                        return;
-                    }
-                    this.airportPopup.showNavaid(nav);
-                });
-
-                this.vectorLayers.onFixClick((fix) => {
-                    if (typeof _wireTapLastTouchAt !== 'undefined' && Date.now() - _wireTapLastTouchAt < 500) return;
-                    if (this.routeTable?.isEditing()) {
-                        this.routeTable.addWaypointSmart({ icao: fix.id, name: fix.id, lat: fix.lat, lon: fix.lon });
-                    }
-                });
-
-                // Traffic tap fallback — when no aviation marker is hit
-                this.vectorLayers._onTrafficTap = (containerPt) => {
-                    this.cockpitMap._onTrafficTap(containerPt);
-                };
-            }
-        }
+        // ---- Engine monitoring, flight recording and logbook: before any NASR wait ----
+        // None of this needs NASR at startup (the recorder and logbook only look up
+        // airports when a flight ends, with timeouts). It used to come after
+        // _ensureNasrData, so a NASR import -- 18 MB parse + 98k writes -- or a
+        // stuck IndexedDB left the tablet with no engine data, no engine alerts, no
+        // sticky-valve check and no recording until it finished, or forever (A4).
+        // Keep this order: StickyValve and EnginePanel before EnginePage (it reads
+        // window.stickyValve once at construction), EmergencyGlide before EngineML.
 
         // Engine client (WebSocket to Pi engine monitor)
         const _engCfg = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.raw : {};
@@ -618,6 +568,102 @@ class FlyTabApp {
             this.enginePage.onClose = () => this.tabBar?.selectTab('map');
         }
 
+        // Flight recorder (records engine + GPS to Savvy CSV on device)
+        if (typeof FlightRecorder !== 'undefined') {
+            this.flightRecorder = new FlightRecorder(this.engineClient, this.stratuxClient, nasrDb);
+            this.flightRecorder.init();
+            window.flightRecorder = this.flightRecorder;
+            // Update REC badge from flight recorder
+            this.flightRecorder.onStatusChange = (status) => {
+                const recEl = this.dom.statusRec;
+                if (recEl) {
+                    if (status.recording) {
+                        recEl.textContent = `● REC ${status.rowCount}`;
+                        recEl.hidden = false;
+                    } else {
+                        recEl.hidden = true;
+                    }
+                }
+            };
+            // Also update REC badge every 2s while recording
+            setInterval(() => {
+                const recEl = this.dom.statusRec;
+                if (recEl && this.flightRecorder.recording) {
+                    recEl.textContent = `● REC ${this.flightRecorder.rowCount}`;
+                    recEl.hidden = false;
+                } else if (recEl && !this.flightRecorder.recording) {
+                    recEl.hidden = true;
+                }
+            }, 2000);
+        }
+
+        // Logbook (auto-creates entries from FlightSync)
+        if (typeof Logbook !== 'undefined') {
+            this.logbook = new Logbook(nasrDb);
+            this.cockpitMap.setLogbook(this.logbook);
+        }
+
+        // ---- end of engine / recording / logbook ----
+
+        // NASR data import — must complete before plan load so _applyPlan() can stamp type:'APT'
+        await this._ensureNasrData(nasrDb);
+
+        // Airport info panel (right-side sliding panel — v5)
+        if (typeof AirportPopup !== 'undefined') {
+            this.airportPopup = new AirportPopup(this.cockpitMap.map, nasrDb);
+            // Init panel inside .map-area so it stays within the map bounds
+            const mapAreaEl = document.querySelector('.map-area');
+            if (mapAreaEl && this.airportPopup.initPanel) {
+                this.airportPopup.initPanel(mapAreaEl);
+            }
+            this.cockpitMap.setAirportPopup(this.airportPopup);
+            this.airportPopup.setGetRouteAirports(() => {
+                const wps = this._currentTrip?.waypoints;
+                if (!wps?.length) return {};
+                return { departure: wps[0], destination: wps[wps.length - 1] };
+            });
+
+            this.airportPopup.onDirectTo((apt) => {
+                this.openRoutePlanner();
+                this.routePlannerPanel?.setDirectTo(apt);
+                this.airportPopup.close();
+            });
+
+            if (this.vectorLayers) {
+                this.airportPopup.setVectorLayers(this.vectorLayers);
+                this.vectorLayers._onInternetMetarsFetched = () => this._updateWeatherAge(this._currentTrip);
+                this.vectorLayers.onAirportClick((apt) => {
+                    if (typeof _wireTapLastTouchAt !== 'undefined' && Date.now() - _wireTapLastTouchAt < 500) return;
+                    if (this.routeTable?.isEditing()) {
+                        this.routeTable.addWaypointSmart({ icao: apt.icao, name: apt.name || apt.icao, lat: apt.lat, lon: apt.lon });
+                        return;
+                    }
+                    this.airportPopup.show(apt);
+                });
+
+                this.vectorLayers.onNavaidClick((nav) => {
+                    if (typeof _wireTapLastTouchAt !== 'undefined' && Date.now() - _wireTapLastTouchAt < 500) return;
+                    if (this.routeTable?.isEditing()) {
+                        this.routeTable.addWaypointSmart({ icao: nav.id, name: nav.name || nav.id, lat: nav.lat, lon: nav.lon });
+                        return;
+                    }
+                    this.airportPopup.showNavaid(nav);
+                });
+
+                this.vectorLayers.onFixClick((fix) => {
+                    if (typeof _wireTapLastTouchAt !== 'undefined' && Date.now() - _wireTapLastTouchAt < 500) return;
+                    if (this.routeTable?.isEditing()) {
+                        this.routeTable.addWaypointSmart({ icao: fix.id, name: fix.id, lat: fix.lat, lon: fix.lon });
+                    }
+                });
+
+                // Traffic tap fallback — when no aviation marker is hit
+                this.vectorLayers._onTrafficTap = (containerPt) => {
+                    this.cockpitMap._onTrafficTap(containerPt);
+                };
+            }
+        }
+
         // PlanSync — fetches flight plans from flywhere.app
         if (typeof PlanSync !== 'undefined') {
             this.planSync = new PlanSync();
@@ -649,35 +695,6 @@ class FlyTabApp {
             this.fuelTanksDisplay.init();
         }
 
-        // Flight recorder (records engine + GPS to Savvy CSV on device)
-        if (typeof FlightRecorder !== 'undefined') {
-            this.flightRecorder = new FlightRecorder(this.engineClient, this.stratuxClient, nasrDb);
-            this.flightRecorder.init();
-            window.flightRecorder = this.flightRecorder;
-            // Update REC badge from flight recorder
-            this.flightRecorder.onStatusChange = (status) => {
-                const recEl = this.dom.statusRec;
-                if (recEl) {
-                    if (status.recording) {
-                        recEl.textContent = `● REC ${status.rowCount}`;
-                        recEl.hidden = false;
-                    } else {
-                        recEl.hidden = true;
-                    }
-                }
-            };
-            // Also update REC badge every 2s while recording
-            setInterval(() => {
-                const recEl = this.dom.statusRec;
-                if (recEl && this.flightRecorder.recording) {
-                    recEl.textContent = `● REC ${this.flightRecorder.rowCount}`;
-                    recEl.hidden = false;
-                } else if (recEl && !this.flightRecorder.recording) {
-                    recEl.hidden = true;
-                }
-            }, 2000);
-        }
-
         // Flight sync (monitors capture_v5 recording, syncs CSVs to iPad — legacy)
         if (typeof FlightSync !== 'undefined' && typeof FlightRecorder === 'undefined') {
             this.flightSync = new FlightSync();
@@ -687,12 +704,6 @@ class FlyTabApp {
                 const engineData = this.enginePanel?.lastData || null;
                 this.flightSync.update(engineData);
             }, 2000);
-        }
-
-        // Logbook (auto-creates entries from FlightSync)
-        if (typeof Logbook !== 'undefined') {
-            this.logbook = new Logbook(nasrDb);
-            this.cockpitMap.setLogbook(this.logbook);
         }
 
         // Flight Upload panel
@@ -1018,6 +1029,14 @@ class FlyTabApp {
         // NanoHTTPD (localhost:9090) is the sole local data source.
         // Re-import only if NanoHTTPD has a newer cycle than the DB.
         // Never downgrade: if NanoHTTPD is older than DB, keep DB.
+        try {
+            await nasrDb.open();
+        } catch (err) {
+            // Stuck or failed (open() times out): importing would parse ~18 MB only
+            // to fail writing it. Carry on without; a restart usually clears it.
+            DiagLog.log('error', `NASR database unavailable — ${err?.message || err}; skipping NASR check/import`);
+            return;
+        }
         try {
             const [localFile, dbCycle, testApt] = await Promise.all([
                 fetch('http://localhost:9090/nasr/cycle_info.json', { signal: AbortSignal.timeout(2000) })
