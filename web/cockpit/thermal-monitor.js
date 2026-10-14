@@ -14,7 +14,9 @@
  *   < 40°C = green (normal)
  *   40-45°C = yellow (warm, normal in direct sun)
  *   45-50°C = orange (hot, consider shade/screen dim)
- *   >= 50°C = red (too hot for safe handling, screen off)
+ *   >= 50°C = red (too hot for safe handling). On the ground app.js lets the
+ *     screen time out; in flight it keeps it on (a dark screen pauses FlyTab)
+ *     and the warning says to shade the tablet instead (isInFlight, set by app.js).
  */
 
 class ThermalMonitor {
@@ -27,6 +29,7 @@ class ThermalMonitor {
         this._pollInterval = 30000;  // 30 seconds
         this._plugin = window.Capacitor?.Plugins?.ThermalMonitor;
         this._lastData = null;
+        this.isInFlight = () => false;
     }
 
     start(badge) {
@@ -141,7 +144,7 @@ class ThermalMonitor {
 
     _warningText(data) {
         const t = data.surfaceTemp >= 0 ? ` ${Math.round(data.surfaceTemp)}°C` : '';
-        return `TABLET HOT${t} — SCREEN OFF OK`;
+        return this.isInFlight() ? `TABLET HOT${t} — SHADE THE TABLET` : `TABLET HOT${t} — SCREEN OFF OK`;
     }
 
     /** Show thermal detail popup when badge is tapped */

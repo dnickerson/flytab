@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v11.15';
+const FLYTAB_VERSION = 'v11.16';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -185,7 +185,9 @@ class FlyTabApp {
         // Keep screen on
         this._acquireWakeLock();
         document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'visible') this._acquireWakeLock();
+            // Android drops the lock when FlyTab is hidden. Take it back on return,
+            // unless heat released it on purpose (_applyThermalWakeLock).
+            if (document.visibilityState === 'visible' && !this._thermalWakeLockReleased) this._acquireWakeLock();
         });
 
         // Network mode detection
@@ -1455,14 +1457,23 @@ class FlyTabApp {
 
     // === Wake Lock ==========
 
+    // One lock at most. Requests can overlap (return to FlyTab + flight start):
+    // an older lock is released when a newer one arrives, and a release that
+    // comes while a request is pending wins, so the screen really can time out.
     async _acquireWakeLock() {
         if (!('wakeLock' in navigator)) return;
+        this._wakeLockWanted = true;
         try {
-            this._wakeLock = await navigator.wakeLock.request('screen');
+            const lock = await navigator.wakeLock.request('screen');
+            if (!this._wakeLockWanted) { lock.release().catch(() => {}); return; }
+            const old = this._wakeLock;
+            this._wakeLock = lock;
+            if (old && old !== lock) old.release().catch(() => {});
         } catch { /* denied or not supported — silently ignore */ }
     }
 
     _releaseWakeLock() {
+        this._wakeLockWanted = false;
         if (this._wakeLock) {
             this._wakeLock.release().catch(() => {});
             this._wakeLock = null;
@@ -1477,22 +1488,43 @@ class FlyTabApp {
         const badge = document.getElementById('statusThermal');
         if (badge) this.thermalMonitor.start(badge);
 
-        // When thermal warning fires, release wake lock so pilot can turn screen off
+        // Hot tablet (surface >= 50 °C): on the ground, let the screen time out so
+        // it can cool. Never during a flight (recording: engine start until 60 s
+        // after shutdown): a dark screen gets FlyTab paused -- no engine alerts, no
+        // recording (A5). The warning says what to do in each case.
+        this._thermalHot = false;
         this._thermalWakeLockReleased = false;
+        this.thermalMonitor.isInFlight = () => !!this.flightRecorder?.recording;
         const origUpdate = this.thermalMonitor._updateWarning.bind(this.thermalMonitor);
         this.thermalMonitor._updateWarning = (data) => {
+            this._thermalHot = data.surfaceTemp >= 50;
             origUpdate(data);
-            const hot = data.surfaceTemp >= 50;
-            if (hot && !this._thermalWakeLockReleased) {
-                this._releaseWakeLock();
-                this._thermalWakeLockReleased = true;
-                DiagLog.log('thermal', 'Wake lock released — tablet hot, screen can turn off');
-            } else if (!hot && this._thermalWakeLockReleased) {
-                this._acquireWakeLock();
-                this._thermalWakeLockReleased = false;
-                DiagLog.log('thermal', 'Wake lock re-acquired — tablet cooled');
-            }
+            this._applyThermalWakeLock();
         };
+        // A flight starting or ending changes the answer before the next 30 s poll.
+        const refresh = () => {
+            const d = this.thermalMonitor.lastData;
+            if (d) this.thermalMonitor._updateWarning(d);
+            else this._applyThermalWakeLock();
+        };
+        window.addEventListener('flightsync:started', refresh);
+        window.addEventListener('flightsync:stopped', refresh);
+    }
+
+    _applyThermalWakeLock() {
+        const inFlight = !!this.flightRecorder?.recording;
+        const release = this._thermalHot && !inFlight;
+        if (release && !this._thermalWakeLockReleased) {
+            this._releaseWakeLock();
+            this._thermalWakeLockReleased = true;
+            DiagLog.log('thermal', 'Wake lock released — tablet hot on the ground, screen can turn off');
+        } else if (!release && this._thermalWakeLockReleased) {
+            this._acquireWakeLock();
+            this._thermalWakeLockReleased = false;
+            DiagLog.log('thermal', this._thermalHot
+                ? 'Wake lock re-acquired — flight started, screen kept on although hot'
+                : 'Wake lock re-acquired — tablet cooled');
+        }
     }
 
     // === Clock ==========

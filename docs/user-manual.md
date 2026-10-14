@@ -72,9 +72,16 @@ FlyTab connects automatically on app launch. The status bar at the top shows con
 | **NASR** | Database current | ≥7 days old | Very old |
 | **ML** | Engine anomaly score normal | Elevated | Anomaly detected |
 | **REC** | Flight recording active | — | Not recording |
+| **Temperature (°)** | Tablet surface below 40 °C | 40–50 °C (warm; normal in direct sun) | 50 °C or more: flashing, with a *TABLET HOT* warning |
 | **PI vX.X** | Hidden — Pi build matches what this app requires | Shown — connected Pi's software is older than this app needs | — |
 
 The **advisory** badge appears between GPS and FIS-B when a weather advisory is active along the route.
+
+**Tablet hot (50 °C or more).** FlyTab keeps the screen on, and how it reacts to heat depends on whether a flight is being recorded (engine start until 60 seconds after shutdown):
+- **In flight:** the screen stays on, because a dark screen would pause FlyTab, and with it engine alerts and the recording. The warning reads *TABLET HOT 52°C — SHADE THE TABLET*. Get it out of direct sun or into airflow.
+- **On the ground:** FlyTab lets the screen time out so the tablet can cool, and the warning reads *TABLET HOT 52°C — SCREEN OFF OK*. If the engine starts while it's still hot, the screen is kept on again.
+
+FlyTab never dims the screen for heat. Tap the temperature badge for the readings.
 
 **The PI badge is hidden unless there's a mismatch.** It only appears when the connected Pi's engine monitor software is older than this build of FlyTab expects — a real possibility if the tablet gets updated without also redeploying the Pi (`bash deploy-pi.sh`). Tap it to open the ENG page, which carries the full detail: both version numbers and the exact command to run. Engine data keeps displaying normally either way — a mismatch is a preflight problem to fix on the ground, not a reason to lose the engine page in the air.
 

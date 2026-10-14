@@ -111,11 +111,18 @@ Every task follows the same rules:
     - a weather logger restarted in the same UTC minute appends a second header line to the same `_weather.ndjson`, and a later restart starts a separate weather file; continuing the weather file properly is still to do;
     - the 10-14 first segment `20261014_1555Z.csv` was never closed out: v11.13 wrote no marker;
     - TileServer `Failed to fetch` (hypothesis: NanoHTTPD `SOCKET_READ_TIMEOUT` of 5000 ms racing the 5 s saves) is still to be investigated.
-- [ ] **A5 Overheating must not let the screen time out in flight.**
-  - **Where:** `app.js:1458-1463` releases the screen wake lock at surfaceTemp ≥ 50 °C.
-  - **Fix:** keep the screen on while airborne, and dim instead. Check first which brightness
-    API is available.
-  - **Verify:** a test of the thermal branch while airborne versus on the ground.
+    - Closing out an old unfinished recording names its destination from the last GPS point. If the recording died in the air, that's whichever airport is nearest the cut-off point. The 10-14 segment 1 ended at 2,392 ft, 141 kt. Close-out should drop or flag the destination when the last point was airborne.
+    - When the rename fails, the logbook takes its airports from the active flight plan. On 10-14 that made the draft KCDN→KLKR for a KLKR→KLKR local flight, because the rename copy hit `Failed to fetch`. Dana chose to fix that draft by hand.
+- [x] **A5 Overheating must not let the screen time out in flight.** Done in v11.16.
+  - Screen kept on only by the WebView Screen Wake Lock. Verified on the tablet: `dumpsys power` shows `SCREEN_BRIGHT_WAKE_LOCK 'WindowManager/displayId:0'` for FlyTab. Screen timeout setting: 10 min. No brightness API anywhere in FlyTab.
+  - At ≥ 50 °C, heat now releases the lock only when no flight is being recorded. A flight starting re-takes it; a flight ending while still hot releases it again. Returning to FlyTab no longer re-takes a lock that heat released.
+  - The warning reads *SHADE THE TABLET* in flight, *SCREEN OFF OK* on the ground.
+  - `_acquireWakeLock` holds one lock at most (overlapping requests used to leak one), and a release during a pending request wins.
+  - Dana chose **no dimming** (2026-10-14): heat usually comes with direct sun, when brightness matters most.
+  - Not seen in the saved 10-13/10-14 logs; preventive.
+  - Tests: `tests/shared/app-thermal-wakelock.test.js` (8, through the real `_poll` path). Mutation checks: old release rule 3 fail; no flight-start re-check 3 fail; old acquire 2 fail; old text 1 fail. vitest 1518/1518.
+  - Tablet, simulated 52/55/40 °C readings, with Android's screen lock checked at each step: ground hot → released; flight start → held; flight hot → held; flight end → released; cooled → held.
+  - Not tested: a real hot tablet.
 - [ ] **A6 The pilot knows when FlyTab was paused, and it pauses less.**
   - **Evidence:** about 90 s after backgrounding, all JS stops: engine alerts, recorder and
     traffic. Seen 12:13–12:27 in flight (usagestats).
