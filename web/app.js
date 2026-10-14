@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v11.4';
+const FLYTAB_VERSION = 'v11.7';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -52,7 +52,9 @@ class FlyTabApp {
         // Cockpit components
         this.stratuxClient = null;
         this.engineGpsBridge = null;
-        this._gpsDiagPanel = null;
+        this.positionHealth = null;   // PositionHealthMonitor (shared/position-health.js)
+        this.positionPanel = null;    // GPS detail panel (GPS badge / banner tap)
+        this.positionBanner = null;   // banner over the map
         this.cockpitMap = null;
         this.radarPage = null;
         this.enginePanel = null;
@@ -109,8 +111,6 @@ class FlyTabApp {
             mainContent: document.getElementById('mainContent'),
             cockpitView: document.getElementById('cockpitView'),
         };
-
-        this._initGpsDiagPanel();
 
         this._clockInterval = null;
         this._recorderInterval = null;
@@ -433,6 +433,39 @@ class FlyTabApp {
         this.cockpitMap.init();
         this.cockpitMap.setNasrDB(nasrDb);
 
+        // Position health: why own-ship is (or isn't) trustworthy, in plain words --
+        // a banner over the map and the GPS detail panel (tap the GPS badge).
+        if (typeof PositionHealthMonitor !== 'undefined') {
+            // Created as soon as the map exists, not after the engine monitor: if
+            // startup stalls later, the GPS badge must still open the panel. The
+            // engine monitor and its GPS bridge are attached when they come up.
+            this.positionHealth = new PositionHealthMonitor({
+                stratux: this.stratuxClient,
+                map: this.cockpitMap,
+                gpsSource: this.gpsSource,
+                vpn: typeof VpnStatus !== 'undefined' ? VpnStatus : null,
+            });
+            if (typeof PositionHealthPanel !== 'undefined') {
+                this.positionPanel = new PositionHealthPanel(document.getElementById('statusBar'), this.positionHealth, {
+                    onGpsSettings: () => this.configEditor?.show(),
+                    onFullLog: () => this._showDiagLog(),
+                    openVpnSettings: () => VpnStatus.openSettings(),
+                    gpsSource: this.gpsSource,
+                    // In the page flow: the map's height changes; Leaflet must re-measure.
+                    onToggle: () => setTimeout(() => this.cockpitMap?.map?.invalidateSize(), 50),
+                });
+                this.dom.statusGps?.addEventListener('click', () => this.positionPanel.toggle());
+            }
+            const mapArea = document.getElementById('mapContainer');
+            if (mapArea && typeof PositionHealthBanner !== 'undefined') {
+                this.positionBanner = new PositionHealthBanner(mapArea, this.positionHealth, {
+                    onOpenDetails: () => this.positionPanel?.show(),
+                });
+            }
+            this.positionHealth.addEventListener('change', () => this._refreshStatusBadges?.());
+            this.positionHealth.start();
+        }
+
         // Vector map layers — init synchronously (non-blocking), data loads in background
         if (typeof VectorMapLayers !== 'undefined') {
             this.vectorLayers = new VectorMapLayers(this.cockpitMap.map, nasrDb);
@@ -534,6 +567,8 @@ class FlyTabApp {
             this.engineGpsBridge = new EngineGpsBridge(this.stratuxClient, this.engineClient);
             this.engineGpsBridge.start();
         }
+        this.positionHealth?.setSources({ engine: this.engineClient, bridge: this.engineGpsBridge });
+
 
         // Engine panel (receives data via WebSocket push)
         this.enginePanel = new EnginePanel(document.createElement('div'), this.engineClient);
@@ -1549,7 +1584,10 @@ class FlyTabApp {
             const stale = this.stratuxClient?.stale;
             // Only use situation/deviceStatus when Stratux is live — never show
             // stale last-session values as if they were current data.
-            const sit = (connected && !stale) ? this.stratuxClient?.situation : null;
+            // ...and only a FRESH situation: the traffic WS reopening clears stale
+            // (StratuxClient._setConnected) while .situation is still the old fix.
+            const raw = (connected && !stale) ? this.stratuxClient?.situation : null;
+            const sit = raw && (typeof raw.timestamp !== 'number' || Date.now() - raw.timestamp < 3000) ? raw : null;
             const status = connected ? this.stratuxClient?.deviceStatus : null;
 
             // GPS: green if fix (quality >= 1), amber if engine bridge active, show solution type + source
@@ -1577,10 +1615,6 @@ class FlyTabApp {
                     this.dom.statusGps.textContent = `${src} DEAD RECKONING`;
                 } else {
                     this.dom.statusGps.textContent = `${src} GPS`;
-                }
-                // Auto-dismiss diag panel when GPS resolves
-                if (gpsOk && this._gpsDiagPanel?.classList.contains('visible')) {
-                    this._gpsDiagPanel.classList.remove('visible');
                 }
             }
 
@@ -1619,81 +1653,9 @@ class FlyTabApp {
         };
         update();
         this._deviceStatusInterval = setInterval(update, 5000);
-    }
-
-    // === GPS Diag Panel ==========
-
-    _initGpsDiagPanel() {
-        const panel = document.createElement('div');
-        panel.id = 'gps-diag-panel';
-        const statusBar = document.getElementById('statusBar');
-        if (statusBar) statusBar.insertAdjacentElement('afterend', panel);
-        this._gpsDiagPanel = panel;
-        this.dom.statusGps?.addEventListener('click', () => this._toggleGpsDiagPanel());
-    }
-
-    _toggleGpsDiagPanel() {
-        if (!this._gpsDiagPanel) return;
-        const nowVisible = this._gpsDiagPanel.classList.toggle('visible');
-        if (nowVisible) this._renderGpsDiagPanel();
-    }
-
-    _renderGpsDiagPanel() {
-        const panel = this._gpsDiagPanel;
-        if (!panel) return;
-
-        const bridgeActive = this.engineGpsBridge?.active === true;
-        const stale = this.stratuxClient?.stale;
-        const sit = this.stratuxClient?.situation;
-        const q = sit?.gps_fix_quality ?? 0;
-
-        let statusLine;
-        if (bridgeActive) {
-            statusLine = 'Situation WS unavailable — position from engine monitor. Stratux reconnecting.';
-        } else if (stale) {
-            statusLine = 'Situation WS closed — engine GPS also unavailable';
-        } else if (q === 0) {
-            statusLine = 'Stratux connected — no GPS fix';
-        } else {
-            statusLine = 'GPS nominal';
-        }
-
-        const entries = DiagLog.entries
-            .filter(e => e.cat === 'gps' || e.cat === 'stratux')
-            .slice(-10)
-            .reverse();
-        const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-        const logHtml = entries.length
-            ? entries.map(e =>
-                `<div>${esc(e.t.slice(11, 19))} [${esc(e.cat)}] ${esc(e.msg)}</div>`
-              ).join('')
-            : '<div>No GPS log entries yet</div>';
-
-        const cfgSrc = this.gpsSource?._configuredSource;
-        const inFallback = this.gpsSource?._inFallback;
-        let fixLabel, fixAction;
-        if (cfgSrc === 'internal' && q >= 1) {
-            fixLabel = 'USE STRATUX GPS';
-            fixAction = () => this.gpsSource.setSource('stratux');
-        } else if (cfgSrc === 'auto' && inFallback) {
-            fixLabel = 'RESET GPS SOURCE';
-            fixAction = () => this.gpsSource.setSource('auto');
-        } else {
-            fixLabel = 'GPS SETTINGS';
-            fixAction = () => this.configEditor?.show();
-        }
-
-        panel.innerHTML = `
-            <div class="gps-diag-status">${statusLine}</div>
-            <div class="gps-diag-log">${logHtml}</div>
-            <div class="gps-diag-actions">
-                <button class="gps-diag-fix-btn" id="gpsDiagFixBtn">${fixLabel}</button>
-                <button class="gps-diag-sec-btn" id="gpsDiagSettingsBtn">GPS SETTINGS</button>
-            </div>
-        `;
-
-        document.getElementById('gpsDiagFixBtn')?.addEventListener('click', fixAction);
-        document.getElementById('gpsDiagSettingsBtn')?.addEventListener('click', () => this.configEditor?.show());
+        // Position health changes (hold start/end) refresh the badge at once rather
+        // than at the next 5 s tick, so badge and banner agree.
+        this._refreshStatusBadges = update;
     }
 
     // === Connectivity Monitor ==========

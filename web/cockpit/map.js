@@ -1081,6 +1081,20 @@ class CockpitMap {
     get ownshipHeld() { return this._held; }
 
     /**
+     * For PositionHealthMonitor: 'live' (drawn at full strength), 'held' (dimmed
+     * at the last fix, holdRemainingMs until it hides), 'hidden' (had a fix,
+     * now off the map) or 'none' (no fix yet this session).
+     */
+    get ownshipState() {
+        const holdMs = (typeof GpsFix !== 'undefined' && GpsFix.HOLD_MS) || 0;
+        if (this._held) {
+            return { state: 'held', holdRemainingMs: Math.max(0, this._lastFixAt + holdMs - Date.now()), lastFixAt: this._lastFixAt };
+        }
+        if (this._ownshipVisible) return { state: 'live', holdRemainingMs: 0, lastFixAt: this._lastFixAt };
+        return { state: this._lastFixAt ? 'hidden' : 'none', holdRemainingMs: 0, lastFixAt: this._lastFixAt };
+    }
+
+    /**
      * Position stopped arriving (stratux:stale / stratux:disconnect, or a
      * watchdog-degraded situation). Keep the marker, rings and active leg at the
      * last fix, dimmed, until GpsFix.HOLD_MS after that fix; then hide. A new fix

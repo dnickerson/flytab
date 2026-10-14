@@ -34,6 +34,14 @@ const VpnStatus = {
         catch { return false; }
     },
 
+    /** Open Android's VPN settings screen. True if it opened. */
+    async openSettings() {
+        const plugin = this._plugin();
+        if (!plugin) return false;
+        try { await plugin.openVpnSettings(); return true; }
+        catch { return false; }
+    },
+
     /**
      * What the checklist item shows. state: 'bad' | 'ok' | 'unknown'.
      * canOpen: the app can be launched (installed and enabled).
