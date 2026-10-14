@@ -179,6 +179,49 @@ Every task follows the same rules:
 
 ---
 
+## PR C — CB building detection (added 2026-10-14 at Dana's request)
+
+Dana: "currently it shows CB building when nexrad radar shows slight returns. CB building
+should be biased to look for red areas (pixels) building, not random scattered returns."
+
+- [ ] **C1 CB↑ only for red cores that are building.**
+  - **Where:** `web/cockpit/fisb-nexrad.js`: `_updateCbFromFisb` :651, `_clusterBlocks` :808,
+    `_findBuildingCells` :918, `_expandToLightEchoes` :694, `_sampleInternetTiles` :731.
+  - **Why it fires on light returns:** from reading the code; not yet checked against
+    recorded frames.
+    1. The "core" threshold is level 3 (yellow, 35–40 dBZ; `MIN_LEVEL = 3` at :809 and
+       `>= 3` at :752-753), not red. Red is level 5 (50–55 dBZ) and 6 (55–65 dBZ); see
+       `COLORS` :72 and `_rgbToNexradIntensity` :1050.
+    2. Growth is relative: `max(areaGrowth, intGrowth) >= 0.25` (:944-946). A 2-cell cluster
+       that becomes 3 cells counts as 50 % growth, so tiny clusters trip it.
+    3. Any "new" cluster of ≥ 3 cells with max ≥ 3 is flagged (:933-937). With FIS-B, blocks
+       arrive piecemeal, so an area that simply wasn't received in the previous snapshot may
+       look new. To be confirmed.
+    4. Clusters are matched by nearest centroid within 1.5° (~90 nm, :919). That can pair
+       unrelated cells.
+    5. The outline drawn is expanded into every adjacent light echo, level ≥ 1, by
+       `_expandToLightEchoes` :694. A small yellow core is drawn as a large outline over
+       green returns, which matches "slight returns".
+    6. The cluster grid is 0.25° (~15 nm) cells (:809), and scattered pixels in the same
+       cell merge.
+  - **Fix direction:** to agree with Dana before coding.
+    - Core = red and above (level ≥ 5).
+    - Require a minimum contiguous red area.
+    - "Building" means the red area or its max level grows by an absolute amount between
+      frames that cover the same blocks, not a % of a tiny base.
+    - Ignore clusters only in areas missing from the previous frame.
+    - Draw the outline around the red core, not the light-echo halo.
+    - Same rules for the ground-mode internet tiles.
+  - **Verify:**
+    - Replay real frames: FisbLogger recordings, and the internet n0q 10-min pairs.
+    - Scattered green and yellow returns produce no CB↑.
+    - A growing red core produces CB↑.
+    - Inspect the real FIS-B NEXRAD block data first (CLAUDE.md: inspect external data before
+      fixing display bugs).
+    - Update the manual's CB building description.
+
+---
+
 ## Backlog (not scheduled)
 - Move engine-limit alerts and the flight recorder into the native FlightService, so they
   survive any WebView pause. This is the real fix behind A6, and it's a bigger change.
