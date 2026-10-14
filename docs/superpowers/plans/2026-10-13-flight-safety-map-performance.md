@@ -66,13 +66,15 @@ Every task follows the same rules:
     DELETEs the original.
   - **Fix:** check the response, compare sizes, and only then delete.
   - **Verify:** a test where the PUT returns 500 and the original is kept.
-- [x] **A3 Recorder flush gets a timeout and an in-flight guard.** Done in v11.11.
-  - Each save is abandoned after 10 s (`FLUSH_TIMEOUT_MS`); its rows go back to the front of the buffer.
+- [x] **A3 Recorder flush gets a timeout and an in-flight guard.** Done in v11.11; rename timeouts added in v11.12.
+  - Each save is abandoned after 10 s (`LOCAL_TIMEOUT_MS`); its rows go back to the front of the buffer.
   - One save in flight per file (NanoHTTPD 2.3.1 runs each request on its own thread); requests meanwhile share one follow-up, so a stall doesn't pile up PUTs.
   - `stop()` now reports `flushOk=false` when the final save fails (it was always true), and can't hang on a stuck save.
   - Known trade-off: a save that wrote but answered after 10 s is repeated (duplicate rows, not lost ones).
-  - Not covered: `_renameWithRoute`'s fetches have no timeout, so a stuck TileServer during the rename can still hold up `stop()`. Raised with Dana.
   - 8 tests; 7 failed before the fix. vitest 1462/1462.
+  - v11.12 (Dana: "add to A3 now"): the rename inside `stop()` can't hang either. Every TileServer request goes through `_local()` (10 s, body read included); the nearest-airport NASR lookups time out after 5 s (`NASR_TIMEOUT_MS`).
+  - `_moveFile` never throws. Once the copy is verified, a failed or stuck delete of the original still counts as moved. Before, a throw there (or in the traffic move) made the rename report null after the CSV had already been renamed: the stopped event lost the route.
+  - 6 more tests, all failed before. vitest 1468/1468.
   - **Where:** `flight-recorder.js:133-136, 335-353`. If NanoHTTPD stalls, PUTs pile up and
     re-buffered rows go out of order.
   - **Fix:** `AbortSignal.timeout`, a busy flag, and keep row order.

@@ -25,10 +25,13 @@ class FlightRecorder {
     static RPM_STOP_SECONDS = 60;
     // "Now" for _shutdownEvidenceNow: engine data is ~1 Hz, Stratux situation 10 Hz.
     static FRESH_DATA_MS = 5000;
-    // A save is a ~1 KB append to local storage; 10 s means TileServer is stuck.
-    // If it had in fact written the rows and only answered late, the retry
+    // Every request to TileServer. A save is a ~1 KB append and a rename reads a
+    // few MB at most, all on local storage: 10 s means TileServer is stuck.
+    // If a save had in fact written its rows and only answered late, the retry
     // repeats them: duplicate rows are recoverable, missing ones are not.
-    static FLUSH_TIMEOUT_MS = 10000;
+    static LOCAL_TIMEOUT_MS = 10000;
+    // The rename's nearest-airport lookups (IndexedDB, which can hang).
+    static NASR_TIMEOUT_MS = 5000;
 
     constructor(engineClient, stratuxClient, nasrDb) {
         this._engine = engineClient;
@@ -350,32 +353,42 @@ class FlightRecorder {
     async _appendBuffer(buf, name, contentType, label) {
         if (!buf.length || !name) return true;
         const lines = buf.splice(0);
-        const ctrl = new AbortController();
-        let timedOut = false;
-        const timer = setTimeout(() => { timedOut = true; ctrl.abort(); }, FlightRecorder.FLUSH_TIMEOUT_MS);
         try {
-            const resp = await fetch(`${FlightRecorder.LOCAL_BASE}/${FlightRecorder.FLIGHTS_PATH}/${name}`, {
+            const resp = await this._local(name, {
                 method: 'PUT',
                 headers: { 'Content-Type': contentType, 'X-Append': 'true' },
                 body: lines.join('\n') + '\n',
-                signal: ctrl.signal,
             });
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
             return true;
         } catch (err) {
             buf.unshift(...lines);
-            const why = timedOut ? `timed out after ${FlightRecorder.FLUSH_TIMEOUT_MS / 1000} s` : err.message;
-            if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `${label} failed: ${why}`);
+            if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `${label} failed: ${err.message}`);
             return false;
+        }
+    }
+
+    /**
+     * Request flights/`name` from TileServer; for a GET, read the whole body too.
+     * All of it within LOCAL_TIMEOUT_MS, so nothing in a save or the rename can
+     * hang stop(). Resolves { ok, status, text }; rejects on a network error or
+     * on timeout ("timed out after 10 s").
+     */
+    async _local(name, opts = {}) {
+        const ctrl = new AbortController();
+        let timedOut = false;
+        const timer = setTimeout(() => { timedOut = true; ctrl.abort(); }, FlightRecorder.LOCAL_TIMEOUT_MS);
+        try {
+            const r = await fetch(`${FlightRecorder.LOCAL_BASE}/${FlightRecorder.FLIGHTS_PATH}/${name}`, { ...opts, signal: ctrl.signal });
+            const text = (opts.method || 'GET') === 'GET' ? await r.text() : '';
+            return { ok: r.ok, status: r.status, text };
+        } catch (err) {
+            throw timedOut ? new Error(`timed out after ${FlightRecorder.LOCAL_TIMEOUT_MS / 1000} s`) : err;
         } finally {
             clearTimeout(timer);
         }
     }
 
-    /**
-     * Rename file with departure/destination airports using NASR lookup.
-     * Returns { depIcao, destIcao } if successful, null otherwise.
-     */
     /**
      * Rename the finished recording to YYYYMMDD_DEP-DEST.csv (and its traffic
      * companion to match). The server has no rename, so it's copy -> verify ->
@@ -384,7 +397,9 @@ class FlightRecorder {
      *    TileServer.handlePut answers 201 even when it wrote nothing;
      *  - an existing file is never overwritten (a non-append PUT truncates):
      *    a second same-route flight that day becomes _2, _3, ...;
-     *  - anything uncertain leaves the original name in place.
+     *  - anything uncertain leaves the original name in place;
+     *  - nothing can hang: it runs inside stop(), before the stopped event that
+     *    closes the flight out (TileServer requests and NASR lookups time out).
      * Returns { depIcao, destIcao } when the CSV was renamed, else null.
      */
     async _renameWithRoute() {
@@ -444,7 +459,7 @@ class FlightRecorder {
     /** 'exists' | 'missing' | 'error' for a file in flights/. */
     async _fileStatus(name) {
         try {
-            const r = await fetch(`${FlightRecorder.LOCAL_BASE}/${FlightRecorder.FLIGHTS_PATH}/${name}`);
+            const r = await this._local(name);
             if (r.ok) return 'exists';
             return r.status === 404 ? 'missing' : 'error';
         } catch { return 'error'; }
@@ -454,43 +469,60 @@ class FlightRecorder {
      * Copy flights/from -> flights/to, read the copy back, and delete the original
      * only if it matches exactly. A wrong copy is removed; the original is kept.
      * Returns true only when `to` holds the data and `from` is no longer needed.
+     * Never throws: a failure after the copy is verified still counts as moved.
      */
     async _moveFile(from, to, contentType) {
-        const url = (name) => `${FlightRecorder.LOCAL_BASE}/${FlightRecorder.FLIGHTS_PATH}/${name}`;
-        const src = await fetch(url(from));
-        if (!src.ok) return false;
-        const data = await src.text();
+        const log = (msg) => { if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', msg); };
+        try {
+            const src = await this._local(from);
+            if (!src.ok) return false;
+            const data = src.text;
 
-        const put = await fetch(url(to), { method: 'PUT', headers: { 'Content-Type': contentType }, body: data });
-        if (!put.ok) return false;
+            const put = await this._local(to, { method: 'PUT', headers: { 'Content-Type': contentType }, body: data });
+            if (!put.ok) return false;
 
-        const check = await fetch(url(to));
-        const copy = check.ok ? await check.text() : null;
-        if (copy !== data) {
-            // The copy is wrong (or unreadable). Remove it only if we could read it,
-            // i.e. we know it's ours and bad; the original stays either way.
-            if (check.ok) await fetch(url(to), { method: 'DELETE' }).catch(() => {});
+            const check = await this._local(to);
+            if (!check.ok || check.text !== data) {
+                // The copy is wrong (or unreadable). Remove it only if we could read it,
+                // i.e. we know it's ours and bad; the original stays either way.
+                if (check.ok) await this._local(to, { method: 'DELETE' }).catch(() => {});
+                return false;
+            }
+        } catch (err) {
+            log(`Copying ${from} to ${to} failed: ${err.message} — kept ${from}`);
             return false;
         }
 
-        const del = await fetch(url(from), { method: 'DELETE' });
-        if (!del.ok && typeof DiagLog !== 'undefined') {
-            DiagLog.log('recorder', `Renamed copy verified, but deleting ${from} failed (HTTP ${del.status}) — both kept`);
+        // `to` holds the data: the move has happened whatever becomes of `from`.
+        try {
+            const del = await this._local(from, { method: 'DELETE' });
+            if (!del.ok) log(`Renamed copy verified, but deleting ${from} failed (HTTP ${del.status}) — both kept`);
+        } catch (err) {
+            log(`Renamed copy verified, but deleting ${from} failed: ${err.message} — ${from} may remain`);
         }
         return true;
     }
 
     async _nearestAirport(lat, lon) {
         if (!this._nasrDb) return null;
+        let timer;
         try {
-            const nearby = await this._nasrDb.getAirportsNear(lat, lon, 10);
+            const timeout = new Promise((_, reject) => {
+                timer = setTimeout(() => reject(new Error(`timed out after ${FlightRecorder.NASR_TIMEOUT_MS / 1000} s`)), FlightRecorder.NASR_TIMEOUT_MS);
+            });
+            const nearby = await Promise.race([this._nasrDb.getAirportsNear(lat, lon, 10), timeout]);
             if (!nearby || nearby.length === 0) return null;
             nearby.sort((a, b) =>
                 NasrDB.haversineNm(lat, lon, a.lat, a.lon) -
                 NasrDB.haversineNm(lat, lon, b.lat, b.lon)
             );
             return nearby[0].icao || nearby[0].id || null;
-        } catch { /* NASR not available */ }
+        } catch (err) {
+            // NASR not available, or the lookup hung
+            if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Airport lookup for rename failed: ${err?.message}`);
+        } finally {
+            clearTimeout(timer);
+        }
         return null;
     }
 

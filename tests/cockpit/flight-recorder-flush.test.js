@@ -72,13 +72,13 @@ describe('FlightRecorder saves (A3)', () => {
     beforeEach(() => { vi.useFakeTimers(); DiagLog.log.mockClear(); });
     afterEach(() => { vi.useRealTimers(); });
 
-    it('a PUT that never answers is abandoned after FLUSH_TIMEOUT_MS; its rows are kept and saved next time', async () => {
+    it('a PUT that never answers is abandoned after LOCAL_TIMEOUT_MS; its rows are kept and saved next time', async () => {
         const srv = server((_, n) => (n === 1 ? 'stall' : 'ok')); global.fetch = srv.fetch;
         const rec = recorder();
         rec._csvBuffer.push(...rows(1, 5));
         let done = false;
         const p = rec._flush().then((ok) => { done = true; return ok; });
-        await vi.advanceTimersByTimeAsync(FlightRecorder.FLUSH_TIMEOUT_MS - 1);
+        await vi.advanceTimersByTimeAsync(FlightRecorder.LOCAL_TIMEOUT_MS - 1);
         expect(done).toBe(false);
         await vi.advanceTimersByTimeAsync(1);
         expect(await p).toBe(false);
@@ -129,9 +129,9 @@ describe('FlightRecorder saves (A3)', () => {
         for (let i = 0; i < 10; i++) { rec._csvBuffer.push(`r${i}`); rec._flush(); }
         await vi.advanceTimersByTimeAsync(0);
         expect(puts(srv)).toHaveLength(1);           // one in flight, one follow-up queued, none started
-        await vi.advanceTimersByTimeAsync(FlightRecorder.FLUSH_TIMEOUT_MS);
+        await vi.advanceTimersByTimeAsync(FlightRecorder.LOCAL_TIMEOUT_MS);
         expect(puts(srv)).toHaveLength(2);           // the single follow-up
-        await vi.advanceTimersByTimeAsync(FlightRecorder.FLUSH_TIMEOUT_MS);
+        await vi.advanceTimersByTimeAsync(FlightRecorder.LOCAL_TIMEOUT_MS);
         expect(puts(srv)).toHaveLength(2);
         expect(rec._csvBuffer).toEqual(Array.from({ length: 10 }, (_, i) => `r${i}`));
     });
@@ -145,7 +145,7 @@ describe('FlightRecorder saves (A3)', () => {
         const b = rec._flushTraffic();
         await vi.advanceTimersByTimeAsync(0);
         expect(puts(srv)).toHaveLength(1);
-        await vi.advanceTimersByTimeAsync(FlightRecorder.FLUSH_TIMEOUT_MS);
+        await vi.advanceTimersByTimeAsync(FlightRecorder.LOCAL_TIMEOUT_MS);
         expect(await a).toBe(false);
         expect(await b).toBe(true);
         expect(csvLines(srv.files.get('20261013_1550Z_traffic.ndjson'))).toEqual(['{"t":1}', '{"t":2}', '{"t":3}']);
@@ -160,7 +160,7 @@ describe('FlightRecorder saves (A3)', () => {
         const onStop = (e) => events.push(e.detail);
         window.addEventListener('flightsync:stopped', onStop);
         const p = rec.stop();
-        await vi.advanceTimersByTimeAsync(FlightRecorder.FLUSH_TIMEOUT_MS);
+        await vi.advanceTimersByTimeAsync(FlightRecorder.LOCAL_TIMEOUT_MS);
         await p;
         window.removeEventListener('flightsync:stopped', onStop);
         expect(events).toHaveLength(1);

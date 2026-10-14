@@ -12,7 +12,7 @@
  * Rule: delete the original only after the copy reads back identical, and never
  * write over an existing file.
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { readFileSync } from 'fs';
 
 const read = (p) => readFileSync(p, 'utf8');
@@ -136,5 +136,117 @@ describe('FlightRecorder._renameWithRoute', () => {
         const verify = calls.lastIndexOf('GET 20261013_KCDN-KLKR.csv');
         expect(del).toBeGreaterThan(verify);
         expect(verify).toBeGreaterThan(calls.indexOf('PUT 20261013_KCDN-KLKR.csv'));
+    });
+});
+
+/**
+ * The rename runs inside stop(), before the flightsync:stopped event that closes
+ * the flight out and makes its logbook entry. Nothing in it may hang (A3): every
+ * TileServer request has a timeout and the NASR lookup has one too. A failure
+ * after the CSV copy is verified must not throw the result away.
+ */
+describe('FlightRecorder rename can never hang stop() (A3)', () => {
+    /** fileStore plus: stall(method, name) -> request never answers until aborted;
+     *  stallBody(name) -> GET headers arrive but the body never does. */
+    function stallingStore(files, { stall = () => false, stallBody = () => false, throwOn = () => false } = {}) {
+        const store = new Map(Object.entries(files));
+        const aborted = (opts) => new Promise((_, reject) => opts.signal?.addEventListener('abort', () => {
+            const e = new Error('The user aborted a request.'); e.name = 'AbortError'; reject(e);
+        }));
+        const fetch = vi.fn(async (url, opts = {}) => {
+            const name = url.replace(BASE, '');
+            const m = opts.method || 'GET';
+            if (throwOn(m, name)) throw new TypeError('Failed to fetch');
+            if (stall(m, name)) return aborted(opts);
+            if (m === 'GET') {
+                if (!store.has(name)) return { ok: false, status: 404, text: async () => 'Not found' };
+                const body = store.get(name);
+                return { ok: true, status: 200, text: () => (stallBody(name) ? aborted(opts) : Promise.resolve(body)) };
+            }
+            if (m === 'PUT') { store.set(name, opts.body); return { ok: true, status: 201, text: async () => 'OK' }; }
+            if (m === 'DELETE') { store.delete(name); return { ok: true, status: 200, text: async () => 'Deleted' }; }
+        });
+        return { store, fetch };
+    }
+
+    async function stopAndCollect(rec, ms = 10 * FlightRecorder.LOCAL_TIMEOUT_MS) {
+        const events = [];
+        const on = (e) => events.push(e.detail);
+        window.addEventListener('flightsync:stopped', on);
+        rec._recording = true;
+        rec._csvBuffer = []; rec._trafficBuffer = [];
+        rec._csvSave = { active: null, next: null }; rec._trafficSave = { active: null, next: null };
+        const p = rec.stop();
+        await vi.advanceTimersByTimeAsync(ms);
+        await p;
+        window.removeEventListener('flightsync:stopped', on);
+        return events;
+    }
+
+    beforeEach(() => { vi.useFakeTimers(); DiagLog.log.mockClear(); });
+    afterEach(() => { vi.useRealTimers(); });
+
+    it('existence check never answers: stop() still finishes, original name kept', async () => {
+        const fs = stallingStore({ '20261013_1550Z.csv': CSV }, { stall: (m, n) => m === 'GET' && n === '20261013_KCDN-KLKR.csv' });
+        global.fetch = fs.fetch;
+        const rec = recorder({ traffic: null });
+        const events = await stopAndCollect(rec);
+        expect(events).toHaveLength(1);
+        expect(events[0].csvFilename).toBe('20261013_1550Z.csv');
+        expect(fs.store.get('20261013_1550Z.csv')).toBe(CSV);
+    });
+
+    it('NASR lookup never resolves (IDB hang): stop() still finishes, original name kept', async () => {
+        const fs = stallingStore({ '20261013_1550Z.csv': CSV }); global.fetch = fs.fetch;
+        const rec = new FlightRecorder({ lastData: null, dataAge: Infinity }, { situation: null },
+            { getAirportsNear: () => new Promise(() => {}) });
+        Object.assign(rec, { _firstGps: { lat: 34.7, lon: -80.8 }, _lastGps: { lat: 34.9, lon: -80.6 },
+            _fileName: '20261013_1550Z.csv', _trafficFileName: null });
+        const events = await stopAndCollect(rec);
+        expect(events).toHaveLength(1);
+        expect(events[0].csvFilename).toBe('20261013_1550Z.csv');
+        expect(events[0].depIcao).toBeNull();
+    });
+
+    it('reading the original stalls mid-body: original kept, nothing written', async () => {
+        const fs = stallingStore({ '20261013_1550Z.csv': CSV }, { stallBody: (n) => n === '20261013_1550Z.csv' });
+        global.fetch = fs.fetch;
+        const rec = recorder({ traffic: null });
+        const events = await stopAndCollect(rec);
+        expect(events[0].csvFilename).toBe('20261013_1550Z.csv');
+        expect(fs.store.get('20261013_1550Z.csv')).toBe(CSV);
+        expect(fs.store.has('20261013_KCDN-KLKR.csv')).toBe(false);
+    });
+
+    it('the copy PUT never answers: original kept and never deleted', async () => {
+        const fs = stallingStore({ '20261013_1550Z.csv': CSV }, { stall: (m) => m === 'PUT' });
+        global.fetch = fs.fetch;
+        const rec = recorder({ traffic: null });
+        const events = await stopAndCollect(rec);
+        expect(events[0].csvFilename).toBe('20261013_1550Z.csv');
+        expect(fs.store.get('20261013_1550Z.csv')).toBe(CSV);
+        expect(fs.fetch.mock.calls.some(([u, o]) => o?.method === 'DELETE' && u.endsWith('20261013_1550Z.csv'))).toBe(false);
+    });
+
+    it('copy verified, then deleting the original never answers: the new name and route are reported', async () => {
+        const fs = stallingStore({ '20261013_1550Z.csv': CSV }, { stall: (m, n) => m === 'DELETE' && n === '20261013_1550Z.csv' });
+        global.fetch = fs.fetch;
+        const rec = recorder({ traffic: null });
+        const events = await stopAndCollect(rec);
+        expect(events[0].csvFilename).toBe('20261013_KCDN-KLKR.csv');
+        expect(events[0].depIcao).toBe('KCDN');
+        expect(fs.store.get('20261013_KCDN-KLKR.csv')).toBe(CSV);
+    });
+
+    it('CSV renamed, then the traffic move fails outright: CSV rename and route still reported', async () => {
+        const fs = stallingStore({ '20261013_1550Z.csv': CSV, '20261013_1550Z_traffic.ndjson': TRAFFIC },
+            { throwOn: (m, n) => m === 'GET' && n === '20261013_1550Z_traffic.ndjson' });
+        global.fetch = fs.fetch;
+        const rec = recorder();
+        const events = await stopAndCollect(rec);
+        expect(events[0].csvFilename).toBe('20261013_KCDN-KLKR.csv');
+        expect(events[0].destIcao).toBe('KLKR');
+        expect(rec._trafficFileName).toBe('20261013_1550Z_traffic.ndjson');
+        expect(fs.store.get('20261013_1550Z_traffic.ndjson')).toBe(TRAFFIC);
     });
 });
