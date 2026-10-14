@@ -48,7 +48,7 @@ Every task follows the same rules:
 
 ## PR A — Flight safety (protect recordings and engine alerts)
 
-- [ ] **A1 Recorder must not end a flight when the pilot switches apps.**
+- [x] **A1 Recorder must not end a flight when the pilot switches apps.** Done in v11.9: on hide it always flushes, and stops only on fresh (< 5 s) shutdown evidence. 8 tests; the 10-13 12:11:50 replay failed before the fix. vitest 1440/1440.
   - **Where:** `flight-recorder.js:83-96`. On `visibilitychange: hidden` it calls `stop()` if
     `_gapTimer`, `_rpmZeroCount`, `_gsBelowCount`, `engineOff` or `gsStopped` is set.
   - **Evidence:** the 10-13 recording ended at 12:11:52, 2 s after FlyTab was backgrounded

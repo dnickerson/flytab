@@ -23,6 +23,8 @@ class FlightRecorder {
     static RPM_START_THRESHOLD = 500;
     static RPM_START_SECONDS = 10;
     static RPM_STOP_SECONDS = 60;
+    // "Now" for _shutdownEvidenceNow: engine data is ~1 Hz, Stratux situation 10 Hz.
+    static FRESH_DATA_MS = 5000;
 
     constructor(engineClient, stratuxClient, nasrDb) {
         this._engine = engineClient;
@@ -76,25 +78,16 @@ class FlightRecorder {
         this._autoMonitorInterval = setInterval(() => this._autoMonitor(), 1000);
 
         // When the screen turns off or the app is backgrounded, Android throttles
-        // setInterval — the 60-second auto-stop countdown freezes and stop() never
-        // fires. Guard against this: on hide, flush buffered data immediately, and
-        // if the engine-stop countdown is already underway, finalize the recording
-        // now rather than waiting for the throttled timer to complete.
+        // (then freezes) JS -- the 60-second auto-stop countdown never completes and
+        // the flight never gets its logbook entry (4ef751b). So on hide: always flush,
+        // and end the recording only on FRESH evidence that the flight is over
+        // (_shutdownEvidenceNow). Never on a data gap or stale readings: on 10-13 a
+        // pilot switching apps 27 s into a Wi-Fi dropout ended the recording 10 min
+        // before landing. Anything else is decided by _autoMonitor after resume.
         this._onVisibilityHidden = () => {
             if (document.visibilityState !== 'hidden' || !this._recording) return;
             this._flush().catch(() => {});
-            // Stop immediately if the auto-stop countdown is underway (counter > 0),
-            // OR if the live RPM/GS reading already satisfies the stop condition but
-            // _autoMonitor hasn't fired yet (engine shut down < 1 second ago).
-            const cfg = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.get('flightRecording') : {};
-            const stopThreshold = cfg.rpmStopThreshold ?? 0;
-            const rpm = this._engine?.lastData?.data?.RPM ?? null;
-            const gs  = this._stratux?.situation?.ground_speed ?? null;
-            const engineOff = rpm !== null && rpm <= stopThreshold;
-            const gsStopped = rpm === null && gs !== null && gs < 10;
-            if (this._rpmZeroCount > 0 || this._gsBelowCount > 0 || engineOff || gsStopped || this._gapTimer) {
-                this.stop();
-            }
+            if (this._shutdownEvidenceNow()) this.stop();
         };
         document.addEventListener('visibilitychange', this._onVisibilityHidden);
     }
@@ -449,6 +442,29 @@ class FlightRecorder {
     }
 
     /** Auto-start/stop based on RPM (engine data) or groundspeed (GPS-only) */
+    /**
+     * Is the flight over, judging ONLY by data received in the last
+     * FRESH_DATA_MS? Used when the app is being backgrounded and the normal
+     * 60 s countdown can't be trusted to run.
+     *  - engine monitor reporting: RPM at/below the stop threshold right now;
+     *  - no engine monitor this session (GPS-only recording): ground speed < 10 kt.
+     * A data gap, a stale engine reading (link lost) or a stale situation is not
+     * evidence -- the countdown counters may have been fed by stale values.
+     */
+    _shutdownEvidenceNow() {
+        const cfg = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.get('flightRecording') : {};
+        const stopThreshold = cfg?.rpmStopThreshold ?? 0;
+        const eng = this._engine?.lastData;
+        if (eng) {
+            const fresh = (this._engine?.dataAge ?? Infinity) < FlightRecorder.FRESH_DATA_MS;
+            const rpm = eng.data?.RPM;
+            return fresh && typeof rpm === 'number' && rpm <= stopThreshold;
+        }
+        const sit = this._stratux?.situation;
+        const sitAge = typeof sit?.timestamp === 'number' ? Date.now() - sit.timestamp : Infinity;
+        return sitAge < FlightRecorder.FRESH_DATA_MS && typeof sit?.ground_speed === 'number' && sit.ground_speed < 10;
+    }
+
     _autoMonitor() {
         const eng = this._engine?.lastData;
         const sit = this._stratux?.situation;
