@@ -11976,3 +11976,44 @@ body.route-editing-mode .route-table-sheet {
 }
 .wc-numpad-done:active { opacity: 0.8; }
 
+
+/* ========== Checklist live VPN status (cockpit/checklist.js, shared/vpn-status.js) ==========
+   Solid status badges (CLAUDE.md pattern): the bright fills are never used as text
+   on the light surface. Selectors carry 3 classes so they win over
+   .checklist-item.checked .checklist-item-response (muted text) when ticked. */
+.checklist-item .checklist-item-response.checklist-vpn-badge {
+    font-family: var(--font-ui);
+    font-size: var(--text-md);
+    font-weight: 800;
+    padding: 4px 10px;
+    border-radius: 6px;
+}
+.checklist-item .checklist-item-response.checklist-vpn-badge--ok {
+    background: var(--color-success); color: #000;
+}
+.checklist-item .checklist-item-response.checklist-vpn-badge--bad {
+    background: var(--color-danger); color: #fff;
+}
+.checklist-item .checklist-item-response.checklist-vpn-badge--pending,
+.checklist-item .checklist-item-response.checklist-vpn-badge--unknown {
+    background: var(--bg-surface); color: var(--text-secondary);
+    border: 1px solid var(--border-strong);
+}
+/* Kept well apart from the badge and the checkmark so a fat-finger tap on one
+   can't land on the other. */
+.checklist-vpn-open {
+    flex-shrink: 0;
+    min-height: var(--touch-min, 56px);
+    min-width: 96px;
+    margin: 0 16px;
+    padding: 0 16px;
+    background: var(--accent);
+    color: var(--bg-primary);
+    border: none;
+    border-radius: 8px;
+    font-family: var(--font-ui);
+    font-size: var(--text-md);
+    font-weight: 800;
+    cursor: pointer;
+}
+.checklist-vpn-open[hidden] { display: none; }

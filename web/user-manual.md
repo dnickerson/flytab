@@ -66,7 +66,7 @@ FlyTab connects automatically on app launch. The status bar at the top shows con
 
 | Badge | Green | Amber | Red / Absent |
 |---|---|---|---|
-| **GPS** | 3D fix (Stratux "3D GPS" / "3D GPS + SBAS") | ENG GPS (position from the engine monitor's link to Stratux) | No fix, or DEAD RECKONING |
+| **GPS** | 3D fix (Stratux "3D GPS" / "3D GPS + SBAS") | ENG GPS (position from the engine monitor's link to Stratux) | No fix, DEAD RECKONING, or GPS STALE |
 | **FIS-B** | UAT radio connected and receiving | — | No UAT data |
 | **FLT / HOME / NET / OFFL** | FLT = Stratux reachable; HOME = home server reachable | NET = internet only | OFFL = no network |
 | **NASR** | Database current | ≥7 days old | Very old |
@@ -90,7 +90,9 @@ The primary cockpit view. Shows position, route, weather, traffic, and airspace 
 
 **Airspace** — Class B (solid blue), C (magenta), D (blue dashed) drawn at correct altitude limits. Tap an airspace boundary for the name and altitudes.
 
-**Own-ship** — Blue chevron showing aircraft position and heading. Shown only while the GPS has at least a 3D solution — the same thing the Stratux status page (192.168.10.1) reports as *GPS solution: 3D GPS* or *3D GPS + SBAS*. With *No Fix* or *Dead Reckoning* the chevron, its track line, range rings and the magenta line to the next waypoint disappear rather than sit at a stale or wrong position, and the map stops following; they come back on the next 3D fix. The same applies to own-ship on the radar page and on geo-referenced approach plates. The instrument strip on the right shows ground speed and altitude at a glance.
+**Own-ship** — Blue chevron showing aircraft position and heading. Shown only while the GPS has at least a 3D solution — the same thing the Stratux status page (192.168.10.1) reports as *GPS solution: 3D GPS* or *3D GPS + SBAS*. With *No Fix* or *Dead Reckoning* the chevron, its track line, range rings and the magenta line to the next waypoint disappear rather than sit at a stale or wrong position, and the map stops following; they come back on the next 3D fix. The same applies to own-ship on the radar page and on geo-referenced approach plates.
+
+If position simply stops *arriving* — a Wi-Fi or Stratux-link dropout, while the Stratux itself still has its fix — the chevron is not removed at once. It stays at the last known position, **dimmed** — and so do its range rings and magenta line, since they are drawn from the same stale position — and the GPS badge reads **STX GPS STALE**. The track line is removed and the map stops following. If no new fix arrives within **15 seconds of the last one**, the chevron is removed as above (at 150 kt that is up to about 0.6 nm of travel). The next 3D fix restores it at full brightness. This hold is on the moving map. The instrument strip on the right shows ground speed and altitude at a glance.
 
 **Traffic** — ADS-B targets shown as arrows with callsign and relative altitude (+/−). Tap a target for full details: callsign, altitude, ground speed, squawk. Traffic disappears automatically if stale.
 
@@ -185,6 +187,16 @@ The **Engine ML** monitor (MORE → Engine ML) shows the real-time anomaly score
 ### CHK — Checklists
 
 Three sections: **Normal**, **Abnormal**, and **Emergency**. Each section contains multiple checklist cards. Tap a card to expand it. Tap individual items to check them off. State is not persisted between flights — items reset when you switch sections.
+
+**ExpressVPN and Tailscale (Before Start) — live check.** These two items show whether a VPN is connected on the tablet, checked every 2 seconds while the checklist is open:
+
+- **A VPN IS ON ✗** (red) — a VPN is connected. A VPN breaks the Stratux link: own-ship, traffic and weather drop out repeatedly. Tap **OPEN** on the item to open that app (ExpressVPN or Tailscale) and disconnect it; when you come back to FlyTab the items update immediately.
+- **OFF ✓** (green) — the app is installed and no VPN is connected.
+- **DISABLED ✓** (green) — the app is disabled in Android settings and cannot start; there is no OPEN button.
+- **NOT INSTALLED ✓** (green) — the app is not on this tablet.
+- **UNKNOWN** — FlyTab could not check (not shown as OK).
+
+Android tells FlyTab *that* a VPN is connected but not *which* app owns it, so both items turn red together whenever any VPN is on — open each app and check which one is connected. Tapping **OPEN** never checks or unchecks the item; tap the item itself to check it off.
 
 Swipe left/right or tap the section tabs to move between Normal, Abnormal, and Emergency.
 
@@ -731,6 +743,7 @@ FlyTab receives GPS from Stratux, not from the tablet's internal GPS. The Stratu
 **GPS badge states:**
 - **GPS** (green) — 3D fix from Stratux (*3D GPS* or *3D GPS + SBAS* on the Stratux status page)
 - **DEAD RECKONING** — Stratux is estimating position, not fixing it; own-ship is hidden
+- **GPS STALE** — Position has stopped arriving from Stratux (link dropout). Own-ship is held dimmed at its last fix for up to 15 seconds after that fix, then hidden
 - **SIM** — Using simulated GPS (developer mode)
 - **GPS** (red/absent) — No fix; Stratux may not be connected
 
