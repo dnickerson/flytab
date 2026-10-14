@@ -64,6 +64,14 @@
 
     <!-- Permissions -->
 
+    <!-- Package visibility (Android 11+) for VpnStatusPlugin: lets the checklist see
+         whether ExpressVPN / Tailscale are installed/enabled and open them. Keep in sync with
+         VpnStatusLogic.isAllowed(). -->
+    <queries>
+        <package android:name="com.expressvpn.vpn" />
+        <package android:name="com.tailscale.ipn" />
+    </queries>
+
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />

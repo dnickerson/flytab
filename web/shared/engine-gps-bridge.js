@@ -96,13 +96,20 @@ class EngineGpsBridge {
             this._resetStaleTimer();
         } else if (this._active) {
             this._active = false;
+            if (this._staleTimer) { clearTimeout(this._staleTimer); this._staleTimer = null; }
+            const stratuxRecovered = !this._stratux.stale;
             if (typeof DiagLog !== 'undefined') {
-                const reason = !this._stratux.stale
+                const reason = stratuxRecovered
                     ? 'Stratux situation WS recovered'
                     : 'engine GPS unavailable';
                 DiagLog.log('gps', `Engine GPS bridge inactive — ${reason}`);
             }
-            this._degradeSituation();
+            // Degrade only our own injected fix. If Stratux has already written its
+            // own fresh situation, degrading it would hide own-ship right after it
+            // came back. "Not stale" alone doesn't mean that: the traffic WS opening
+            // clears stale (StratuxClient._setConnected) before any situation arrives,
+            // and our engine fix would be left looking live.
+            if (this._stratux.situation?._source === 'engine') this._degradeSituation();
         }
     }
 }

@@ -124,6 +124,12 @@ class CockpitMap {
         this.map = null;
         this.ownshipMarker = null;
         this._ownshipSvgG = null;
+        // Own-ship hold (GpsFix.HOLD_MS): time of the last 3D fix drawn, and the
+        // timer that hides a held marker HOLD_MS after it.
+        this._lastFixAt = 0;
+        this._holdTimer = null;
+        this._held = false;
+        this._ownshipVisible = false;
         this.trafficMarkers = new Map(); // icao → L.marker
         this._trafficPopup = null;
         this.routeLayer = null;
@@ -250,10 +256,11 @@ class CockpitMap {
         this.stratux.addEventListener('stratux:situation', (e) => this._updateOwnship(e.detail));
         this.stratux.addEventListener('stratux:traffic', () => this._updateTraffic());
 
-        // Hide ownship when Stratux disconnects or data goes stale — never show stale position
-        const _hideOwnship = () => this._hideOwnship();
-        this.stratux.addEventListener('stratux:disconnect', _hideOwnship);
-        this.stratux.addEventListener('stratux:stale', _hideOwnship);
+        // Position stopped arriving: hold own-ship dimmed at the last fix for up to
+        // GpsFix.HOLD_MS, then hide -- a short link drop doesn't blank it.
+        const _onFeedLost = () => this._onFeedLost();
+        this.stratux.addEventListener('stratux:disconnect', _onFeedLost);
+        this.stratux.addEventListener('stratux:stale', _onFeedLost);
 
         // Periodic traffic cleanup
         this._trafficTimer = setInterval(() => this._updateTraffic(), 2000);
@@ -321,6 +328,9 @@ class CockpitMap {
             this.map.remove();
             this.map = null;
         }
+        if (this._holdTimer) { clearTimeout(this._holdTimer); this._holdTimer = null; }
+        this._held = false;
+        this._ownshipVisible = false;
         this.ownshipMarker = null;
         this._ownshipSvgG = null;
         this._initialized = false;
@@ -1004,10 +1014,18 @@ class CockpitMap {
         // the Stratux status page's "GPS solution"). With no fix Stratux keeps
         // reporting its last position, and a receiver can report 0,0 -- either
         // would put the aircraft somewhere it isn't.
+        //
+        // A situation degraded by a staleness watchdog (_stale, gps-staleness.js)
+        // means the feed stopped, not that the GPS lost its fix: hold instead.
         if (typeof GpsFix === 'undefined' || !GpsFix.has3DFix(sit)) {
-            this._hideOwnship();
+            if (sit?._stale) this._onFeedLost();
+            else this._hideOwnship();
             return;
         }
+
+        this._lastFixAt = Date.now();
+        this._endHold();
+        this._ownshipVisible = true;
 
         const pos = [sit.lat, sit.lon];
         const isFirstFix = !this.ownshipMarker;
@@ -1059,8 +1077,57 @@ class CockpitMap {
         this._updateActiveLeg(pos);
     }
 
+    /** True while own-ship is shown dimmed at its last fix after the feed stopped. */
+    get ownshipHeld() { return this._held; }
+
+    /**
+     * Position stopped arriving (stratux:stale / stratux:disconnect, or a
+     * watchdog-degraded situation). Keep the marker, rings and active leg at the
+     * last fix, dimmed, until GpsFix.HOLD_MS after that fix; then hide. A new fix
+     * ends the hold. Repeated calls never move the deadline.
+     */
+    _onFeedLost() {
+        const holdMs = (typeof GpsFix !== 'undefined' && GpsFix.HOLD_MS) || 0;
+        const remaining = this._lastFixAt ? this._lastFixAt + holdMs - Date.now() : 0;
+        if (!this.ownshipMarker || !this._ownshipVisible || remaining <= 0) {
+            this._hideOwnship();
+            return;
+        }
+        if (this._held) return;
+        this._held = true;
+        this.ownshipMarker.setOpacity(CockpitMap.OWNSHIP_HELD_OPACITY);
+        // Rings and the magenta active leg are drawn from the same stale position:
+        // dim them by the same factor so nothing from it looks live.
+        this._heldLayers = [];
+        for (const l of [...(this.rangeRings || []), this._activeLegLine]) {
+            if (!l?.setStyle) continue;
+            const o = l.options?.opacity ?? 1;
+            this._heldLayers.push([l, o]);
+            l.setStyle({ opacity: o * CockpitMap.OWNSHIP_HELD_OPACITY });
+        }
+        // The 3-minute track vector projects a position we no longer have.
+        if (this._trackVector) this._trackVector.setStyle({ opacity: 0 });
+        this._holdTimer = setTimeout(() => {
+            this._holdTimer = null;
+            this._hideOwnship();
+        }, remaining);
+    }
+
+    _endHold() {
+        if (this._holdTimer) { clearTimeout(this._holdTimer); this._holdTimer = null; }
+        this._held = false;
+        // Restore what the hold dimmed (rings/leg keep their creation-time opacity
+        // otherwise; their per-fix updates only move them).
+        if (this._heldLayers) {
+            for (const [l, o] of this._heldLayers) l.setStyle({ opacity: o });
+            this._heldLayers = null;
+        }
+    }
+
     /** Hide everything drawn from own-ship position until the next 3D fix. */
     _hideOwnship() {
+        this._endHold();
+        this._ownshipVisible = false;
         if (this.ownshipMarker) this.ownshipMarker.setOpacity(0);
         if (this._trackVector) this._trackVector.setStyle({ opacity: 0 });
         if (this.rangeRings) { this.rangeRings.forEach(c => this.map.removeLayer(c)); this.rangeRings = null; }
@@ -1910,3 +1977,6 @@ class CockpitMap {
         return ((Math.atan2(y, x) * 180 / Math.PI) + 360) % 360;
     }
 }
+
+// Own-ship marker opacity while held at the last fix after the feed stopped.
+CockpitMap.OWNSHIP_HELD_OPACITY = 0.4;

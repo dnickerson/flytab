@@ -17,6 +17,14 @@ class Checklist {
         catch { this._checked = {}; }
         // Track which item indices have their note expanded (survives _renderItems re-builds)
         this._openNotes = new Set();
+        // Live VPN status for statusSource:'vpn' items (VpnStatus, shared/vpn-status.js):
+        // package -> last answer (null = couldn't check). Polled while visible.
+        this._vpnStatus = {};
+        this._vpnTimer = null;
+        // Coming back from the VPN app: show the new state at once, not at the next tick.
+        window.Capacitor?.Plugins?.App?.addListener?.('resume', () => {
+            if (this._visible) this._refreshVpn();
+        });
 
         this._buildDOM();
         this._load();
@@ -28,12 +36,15 @@ class Checklist {
         this._el.classList.add('visible');
         this._visible = true;
         this._setMapControlsVisible(false);
+        this._refreshVpn();
+        if (!this._vpnTimer) this._vpnTimer = setInterval(() => this._refreshVpn(), Checklist.VPN_POLL_MS);
     }
 
     hide() {
         this._el.classList.remove('visible');
         this._visible = false;
         this._setMapControlsVisible(true);
+        if (this._vpnTimer) { clearInterval(this._vpnTimer); this._vpnTimer = null; }
     }
 
     toggle() {
@@ -247,12 +258,24 @@ class Checklist {
                 liveResponse = isConnected ? txt + ' ✓' : 'OFFL ✗';
                 liveResponseClass = isConnected ? ' style="color:var(--status-ok)"' : ' style="color:var(--status-danger)"';
             }
+            // Live VPN status (shared/vpn-status.js); OPEN launches the VPN app.
+            let vpnOpenBtn = '';
+            let vpnBadgeClass = '';
+            if (item.statusSource === 'vpn' && item.app) {
+                const app = this._esc(item.app);
+                const d = this._vpnView(item.app);
+                liveResponse = this._esc(d.text);
+                liveResponseClass = ` data-vpn-app="${app}"`;
+                vpnOpenBtn = `<button type="button" class="checklist-vpn-open" data-vpn-app="${app}"${d.canOpen ? '' : ' hidden'}>OPEN</button>`;
+                vpnBadgeClass = ` checklist-vpn-badge checklist-vpn-badge--${d.state}`;
+            }
 
             html += `<div class="checklist-item${checked ? ' checked' : ''}${emergencyClass}${infoClass}${actionClass}" data-idx="${i}">
                 <div class="checklist-item-main">
                     <span class="checklist-item-title">${this._esc(item.title)}</span>
                     <span class="checklist-item-dots"></span>
-                    <span class="checklist-item-response"${liveResponseClass}>${liveResponse}</span>
+                    <span class="checklist-item-response${vpnBadgeClass}"${liveResponseClass}>${liveResponse}</span>
+                    ${vpnOpenBtn}
                     ${hasAction ? '<span class="checklist-item-action-icon">\u25B6</span>' : ''}
                     ${hasNote ? '<span class="checklist-item-note-icon">\u2139</span>' : ''}
                     <span class="checklist-item-check">${checked ? '\u2713' : '\u25CB'}</span>
@@ -284,6 +307,8 @@ class Checklist {
             this._wire(el.querySelector('.checklist-item-main'), () => {
                 this._toggleItem(idx);
             });
+            const vpnOpen = el.querySelector('.checklist-vpn-open');
+            if (vpnOpen) this._wireVpnOpen(vpnOpen);
             const noteIcon = el.querySelector('.checklist-item-note-icon');
             const noteEl = el.querySelector('.checklist-item-note');
             if (noteIcon && noteEl) {
@@ -303,6 +328,66 @@ class Checklist {
                     if (!noteTouchFired) this._toggleNote(idx, noteEl);
                 });
             }
+        });
+    }
+
+    // ========== Live VPN status ==========
+
+    /** What a VPN item shows now: CHECKING… until the first answer arrives. */
+    _vpnView(pkg) {
+        if (!(pkg in this._vpnStatus)) return { text: 'CHECKING…', state: 'pending', canOpen: false };
+        return VpnStatus.describe(this._vpnStatus[pkg]);
+    }
+
+    /** Ask the plugin about every VPN app on the visible checklist; update in place. */
+    async _refreshVpn() {
+        if (typeof VpnStatus === 'undefined' || !this._bodyEl) return;
+        const apps = new Set([...this._bodyEl.querySelectorAll('.checklist-vpn-open')].map(b => b.dataset.vpnApp));
+        for (const pkg of apps) {
+            this._vpnStatus[pkg] = await VpnStatus.query(pkg);
+            const d = this._vpnView(pkg);
+            this._bodyEl.querySelectorAll('[data-vpn-app]').forEach(el => {
+                if (el.dataset.vpnApp !== pkg) return;
+                if (el.classList.contains('checklist-vpn-open')) { el.hidden = !d.canOpen; return; }
+                el.textContent = d.text;
+                el.className = `checklist-item-response checklist-vpn-badge checklist-vpn-badge--${d.state}`;
+            });
+        }
+    }
+
+    /**
+     * OPEN never reaches the item row (which would check/uncheck it) and never
+     * produces a synthetic click. It acts on finger-up, and only for a tap: a
+     * drag or long press that starts on the button launches nothing.
+     */
+    _wireVpnOpen(btn) {
+        const open = () => VpnStatus.open(btn.dataset.vpnApp);
+        let start = null;
+        let lastTouchAt = 0;
+        btn.addEventListener('touchstart', (e) => {
+            e.stopPropagation();
+            lastTouchAt = Date.now();
+            // Single finger only (as wireTap): a two-finger touch launches nothing.
+            const t = e.touches?.length === 1 ? e.touches[0] : null;
+            start = t ? { x: t.clientX, y: t.clientY, at: Date.now() } : null;
+        }, { passive: true });
+        btn.addEventListener('touchend', (e) => {
+            e.stopPropagation();
+            e.preventDefault();   // cancels the synthetic click
+            lastTouchAt = Date.now();
+            const t = e.changedTouches?.[0];
+            const s = start; start = null;
+            if (!s || !t) return;
+            const dx = t.clientX - s.x, dy = t.clientY - s.y;
+            if (dx * dx + dy * dy > 400 || Date.now() - s.at > 500) return;
+            open();
+        }, { passive: false });
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            // A click right after a touch is that touch's synthetic click (already
+            // handled, or deliberately not acted on). Otherwise it's mouse/keyboard.
+            if (Date.now() - lastTouchAt < 600) return;
+            open();
         });
     }
 
@@ -442,3 +527,6 @@ class Checklist {
         });
     }
 }
+
+// Live VPN status refresh while the checklist is open.
+Checklist.VPN_POLL_MS = 2000;
