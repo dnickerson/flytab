@@ -530,6 +530,17 @@ To edit the route, expand the strip and tap **EDIT**. From there you can:
 - Tap the **+** button to add a waypoint by identifier
 - Reorder waypoints by dragging
 
+**Changing DEP or DEST** in the Route Planner: type the new identifier and tap **Apply**. One tap is enough, even if the keyboard is still up: what you typed is used. Changing DEP or DEST replaces only the end of the route; waypoints in between stay as they were. To fly the same route home, use **REV** instead.
+
+### Reversing a Route (REV)
+
+**REV** turns the route around: the destination becomes the departure, the waypoints and airways run in reverse order, and the route is applied straight away. It is on the route strip handle, next to **EDIT** (one tap, the planner doesn't open), and in the Route Planner's toolbar. A message confirms it, e.g. *Route reversed: KCDN → KLKR. Check altitude.*
+
+- Performance, winds and fuel are worked out again for the way back.
+- An approach you loaded for the old destination (its fixes and missed approach) is removed, since it doesn't apply to the new departure. An approach loaded before this version can't be told apart from ordinary waypoints, so its fixes stay — remove them in the planner.
+- Fuel stops and altitudes you set on a waypoint stay on that waypoint. Check your cruise altitude for the new direction.
+- Tapped REV by mistake? Tap it again to put the route back.
+
 ### Loading a Route from flywhere.app
 
 1. Open **MORE → Plan on flywhere.app** on a device with internet access.
