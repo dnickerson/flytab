@@ -132,6 +132,77 @@ describe('TrackLog storage (B4)', () => {
     });
 });
 
+// PR B critical review (2026-10-15), track-log findings 1-4.
+describe('TrackLog failure paths (PR B review)', () => {
+    beforeEach(() => { indexedDB = new IDBFactory(); localStorage.clear(); });
+    afterEach(() => vi.restoreAllMocks());
+
+    it('#1 a fallback session after the migration: its points are merged back once IndexedDB works again', async () => {
+        localStorage.setItem(OLD_KEY, JSON.stringify([pt(0)]));
+        const s1 = await started();                           // migrates
+        expect(s1.points).toHaveLength(1);
+        // session 2: IndexedDB won't open -> localStorage, records two points
+        const openSpy = vi.spyOn(indexedDB, 'open').mockImplementation(() => { throw new Error('denied'); });
+        const stratux = { situation: fix() };
+        const s2 = await started(stratux);
+        s2._record();
+        stratux.situation = { ...fix(), lat: 35.6 };
+        await new Promise((r) => setTimeout(r, 2));
+        s2._record();
+        expect(localStorage.getItem('flytab_track_fallback')).toBe('1');
+        openSpy.mockRestore();
+        // session 3: IndexedDB back -> all three points, marker cleared
+        const s3 = await started();
+        expect(s3.points.map((p) => p.lat).sort()).toEqual([pt(0).lat, 35.5, 35.6].sort());   // stored in ts order
+        expect(localStorage.getItem('flytab_track_fallback')).toBeNull();
+        const s4 = await started();                            // and they are in IndexedDB now
+        expect(s4.points).toHaveLength(3);
+    });
+
+    it('#2 writes keep failing after a good open: switch to localStorage, nothing lost', async () => {
+        const stratux = { situation: fix() };
+        const t = await started(stratux);
+        const realTx = TrackLog._tx;
+        vi.spyOn(TrackLog, '_tx').mockImplementation((db, mode, fn) => (mode === 'readwrite' ? Promise.reject(new Error('QuotaExceeded')) : realTx(db, mode, fn)));
+        for (let i = 0; i < TrackLog.MAX_WRITE_FAILURES; i++) {
+            stratux.situation = { ...fix(), lat: 35.5 + i * 0.01 };
+            t._record();
+            await t.idle();
+        }
+        expect(t._useLocal).toBe(true);
+        expect(JSON.parse(localStorage.getItem(OLD_KEY))).toHaveLength(TrackLog.MAX_WRITE_FAILURES);
+        stratux.situation = { ...fix(), lat: 36 };
+        t._record();
+        expect(JSON.parse(localStorage.getItem(OLD_KEY))).toHaveLength(TrackLog.MAX_WRITE_FAILURES + 1);
+    });
+
+    it('#3 the first read never answers: the load gives up after the timeout and falls back', async () => {
+        localStorage.setItem(OLD_KEY, JSON.stringify([pt(0)]));
+        const saved = TrackLog.OPEN_TIMEOUT_MS;
+        TrackLog.OPEN_TIMEOUT_MS = 150;                       // open succeeds well within this
+        const realTx = TrackLog._tx;
+        vi.spyOn(TrackLog, '_tx').mockImplementation((db, mode, fn) => (mode === 'readonly' ? new Promise(() => {}) : realTx(db, mode, fn)));
+        try {
+            const t = new TrackLog({ situation: null }, fakeMap());
+            t.init();
+            await t.ready;                                     // hangs without a read timeout
+            expect(t._useLocal).toBe(true);
+            expect(t.points).toHaveLength(1);
+        } finally {
+            TrackLog.OPEN_TIMEOUT_MS = saved;
+        }
+    }, 3000);
+
+    it('#4 the clock set back: pruning keeps the newest points', async () => {
+        const t = await started();
+        for (const ts of [9_000_000, 9_010_000, 1_000, 2_000]) t._append({ ts, lat: 35, lon: -80, alt: 0, gs: 0, trk: 0 });
+        await t.prune();
+        await t.idle();
+        const again = await started();
+        expect(again.points.map((p) => p.ts).sort((a, b) => a - b)).toEqual([1_000, 2_000, 9_000_000, 9_010_000]);
+    });
+});
+
 describe('map track line (B4)', () => {
     const CockpitMap = new Function(read('web/cockpit/map.js') + '\nreturn CockpitMap;')();
     beforeEach(() => {
