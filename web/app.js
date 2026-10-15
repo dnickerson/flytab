@@ -6,33 +6,51 @@
 const FLYTAB_VERSION = 'v11.24';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
+// Kept in memory and saved at most every FLUSH_MS (errors at once). Every log()
+// used to read, parse, append, stringify and rewrite the whole log -- dozens of
+// times a second while the Stratux link retries -- and the 200-entry cap lost
+// the earlier part of a flight (PR B / B5).
 const DiagLog = (() => {
     const KEY = 'flypi_diag_log';
-    const MAX = 200; // max log entries
+    const MAX = 1000; // max log entries
+    const FLUSH_MS = 3000;
+    let entries = null;     // loaded on first use
+    let timer = null;
 
-    function _read() {
-        try { return JSON.parse(localStorage.getItem(KEY) || '[]'); }
-        catch { return []; }
+    function _load() {
+        if (entries) return entries;
+        try { entries = JSON.parse(localStorage.getItem(KEY) || '[]'); }
+        catch { entries = []; }
+        if (!Array.isArray(entries)) entries = [];
+        return entries;
     }
 
-    function _write(entries) {
-        try { localStorage.setItem(KEY, JSON.stringify(entries)); } catch {}
+    function _flush() {
+        if (timer) { clearTimeout(timer); timer = null; }
+        try { localStorage.setItem(KEY, JSON.stringify(entries || [])); } catch {}
     }
 
     return {
+        MAX, FLUSH_MS,
         log(category, message, data) {
-            const entries = _read();
-            entries.push({
+            const list = _load();
+            list.push({
                 t: new Date().toISOString(),
                 cat: category,
                 msg: message,
                 ...(data !== undefined ? { d: data } : {}),
             });
-            if (entries.length > MAX) entries.splice(0, entries.length - MAX);
-            _write(entries);
+            if (list.length > MAX) list.splice(0, list.length - MAX);
+            // An error is saved at once: if the app dies next, it's still on record.
+            if (category === 'error') _flush();
+            else if (!timer) timer = setTimeout(_flush, FLUSH_MS);
         },
-        get entries() { return _read(); },
-        clear() { localStorage.removeItem(KEY); },
+        get entries() { return _load(); },
+        clear() {
+            if (timer) { clearTimeout(timer); timer = null; }
+            entries = [];
+            localStorage.removeItem(KEY);
+        },
     };
 })();
 
