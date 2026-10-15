@@ -1750,6 +1750,20 @@ class CockpitMap {
 
     // ========== Track Log Overlay ==========
 
+    /**
+     * One new track point (TrackLog, B4): extend the existing line instead of
+     * rebuilding it. `points` (the whole track) is used only when there is no
+     * line yet, e.g. the second point ever.
+     */
+    appendTrackPoint(pt, points) {
+        if (!Settings.showTrackLog) return;
+        if (this.trackLogLine && this.map.hasLayer(this.trackLogLine)) {
+            this.trackLogLine.addLatLng([pt.lat, pt.lon]);
+            return;
+        }
+        if (points) this.setTrackLog(points);
+    }
+
     setTrackLog(points) {
         if (this.trackLogLine && this.map.hasLayer(this.trackLogLine)) { this.map.removeLayer(this.trackLogLine); this.trackLogLine = null; }
         if (!points || points.length < 2 || !Settings.showTrackLog) return;

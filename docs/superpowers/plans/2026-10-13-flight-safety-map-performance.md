@@ -256,7 +256,16 @@ Every task follows the same rules:
   - **Fix:** throttle, skip when collapsed, and compare cached cell strings instead of reading
     `innerHTML`.
   - **Verify:** the route-table tests still pass; B0 numbers.
-- [ ] **B4 Track log stored per flight, appended, not rewritten.**
+- [x] **B4 Track log stored per flight, appended, not rewritten.** Done, with one deviation: **not grouped per flight**. Nothing uses flight grouping (the "GPX export" in the old header never existed), and grouping would change what the map shows. The display is unchanged: the same line, the same 4,320-point / 12 h window.
+  - New IndexedDB database `flytab-track`, store `points` (keyPath `ts`): one put per point, pruned about hourly and at load when it holds more than the window. A separate DB avoids version coupling with `flypi-flights`.
+  - Migration: on the first start the `flypi_track` points are copied in one transaction, then `flytab_track_migrated = '1'` is set. **`flypi_track` is never modified or removed.**
+  - If IDB won't open (5 s timeout) or the first read fails: the old localStorage behaviour, nothing lost. Points recorded during the load are kept, after the stored ones.
+  - Map: `appendTrackPoint` → `polyline.addLatLng` instead of rebuilding the line every 10 s.
+  - Tests: `tests/cockpit/track-log-store.test.js` (10, fake-indexeddb).
+  - Real Chromium check with a seeded 4,320-point `flypi_track`:
+    - migrated 4,320 into IDB and the map; old key byte-identical (323,228 chars);
+    - +3 points in 32 s, appended to memory, IDB and the line (4,323);
+    - after a reload, loaded from IDB with the newest point present, trimmed back to 4,320.
   - **Where:** `track-log.js` rewrites about 400 KB to localStorage every 10 s; `reset()` is
     never called.
   - **Fix:** per-flight IndexedDB, append-only, and `addLatLng` on the map.
