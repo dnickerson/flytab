@@ -271,11 +271,10 @@ Every task follows the same rules:
   - **Fix:** per-flight IndexedDB, append-only, and `addLatLng` on the map.
   - **Must:** migrate the existing `flypi_track` data (dual-read), and don't drop the old key.
   - **Verify:** migration test; the track survives an app restart.
-- [ ] **B5 Smaller items.**
-  - [ ] Skip non-FIS-B `/jsonio` messages before `JSON.parse` (`stratux-client.js:589`).
-  - [ ] DiagLog: buffer in memory, save to localStorage at most every few seconds, and raise
-    the cap. The 10-13 dropouts pushed the earlier flight out of the 200 entries.
-  - [ ] Cache convective clustering per snapshot (`convective-intelligence.js:507`).
+- [x] **B5 Smaller items.** Done.
+  - [x] `/jsonio`: a substring check for `"Product_id"` skips the non-FIS-B broadcasts unparsed (test: 51 parses → 0); what gets dispatched is unchanged.
+  - [x] DiagLog: in memory, saved every 3 s (errors at once), cap 200 → 1000; same key and entry shape. `app-route-edit-queue` now reads the real DiagLog through its API.
+  - [x] `FisbNexrad.clustersForFrame` caches per stored frame (WeakMap). Frames are deep copies, only pushed/shifted. The convective engine used to re-cluster every frame on every NEXRAD block.
 - [ ] **B6 Ship PR B:**
   - [ ] measure again against B0 and record the before/after table here;
   - [ ] update the manual if auto-pan behaviour is noticeably different;

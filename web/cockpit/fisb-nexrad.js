@@ -916,9 +916,22 @@ class FisbNexrad {
 
     clusterBlocks() { return this._clusterBlocks(this._blocks); }
 
+    /**
+     * Clusters of a stored frame, computed once per frame. Stored frames never
+     * change (deep copies, only pushed/shifted), and the convective engine asks
+     * for every frame on every incoming NEXRAD block (PR B / B5). WeakMap: an
+     * entry goes with its frame. Callers must not modify the result.
+     */
     clustersForFrame(frameIndex) {
         if (frameIndex < 0 || frameIndex >= this._frameHistory.length) return [];
-        return this._clusterBlocks(this._frameHistory[frameIndex].blocks);
+        const frame = this._frameHistory[frameIndex];
+        if (!this._frameClusterCache) this._frameClusterCache = new WeakMap();
+        let clusters = this._frameClusterCache.get(frame);
+        if (!clusters) {
+            clusters = this._clusterBlocks(frame.blocks);
+            this._frameClusterCache.set(frame, clusters);
+        }
+        return clusters;
     }
 
     /**
