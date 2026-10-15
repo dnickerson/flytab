@@ -200,7 +200,21 @@ Every task follows the same rules:
 
 ## PR B — Map performance (less work per message)
 
-- [ ] **B0 Baseline measurement before changing anything.**
+- [x] **B0 Baseline measurement before changing anything.** Done 2026-10-15 on v11.24, desktop Chromium (headless, 1280×800), `tools/perf-b0.e2e.js`, 60 s window.
+  - Load: `tools/mock-stratux.py --traffic 100 --situation-hz 10 --traffic-interval 1` (new options), so 10 situations/s and 100 traffic msgs/s; 64 traffic markers on the map; a 3-waypoint route; auto-pan on.
+  - Counts compare before/after; desktop timings aren't the tablet's.
+
+  | Metric | B0 (before) |
+  |---|---|
+  | traffic `setIcon` /s | **6,433** (100 msgs/s × ~64 markers: every message rebuilds every icon) |
+  | map `moveend` /s | **10** (one per situation: animated panTo) |
+  | `_updateDynamicLayers` /min | **1** (debounced on moves that never stop: airspace/airports barely refresh while following own-ship) |
+  | route table `updateLive` /s | 10 |
+  | main-thread script s/min | **20.3** |
+  | main-thread task s/min | 25.8 |
+  | layout / style s/min | 0.45 / 0.80 |
+  | long tasks /min | 0 (many short tasks, not long ones) |
+
   - Run `tools/mock-stratux.py` with about 100 traffic targets and NEXRAD in sim mode
     (see reference_mock_stratux memory).
   - Record: long tasks per minute, `setIcon` calls/s, `moveend` events/s,
