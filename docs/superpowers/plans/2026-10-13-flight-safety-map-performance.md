@@ -163,7 +163,7 @@ Every task follows the same rules:
     - 75 synthetic samples under the made-up phase `a8test` (< 100, so `ThresholdAdapter` saves nothing): 59 filling, 16/16 scored (`mlState: ok`) at 0.9–3.2 ms, no warnings, exactly one `tflite-inference` thread;
     - `threshold_adapter.xml` has the same MD5 before and after; FlyTab was restarted to clear the in-memory samples.
   - Not reproducible on the tablet: a run that never returns (unit tests only).
-- [ ] **A9 Ship PR A:**
+- [x] **A9 Ship PR A:** merged 2026-10-15 as #172 (merge `8c6fe24`, v11.23).
   - [x] update the manual (A1, A5, A6 are user-visible) — done with each step.
   - [x] bump the version and build — v11.22.
   - [x] critical review, then fix findings — 4 parallel reviewers (recorder, native, app/startup, cross-cutting), every finding re-verified against the code. No critical issues. Dana chose "fix 1–15, minimal #8"; all in v11.22:
@@ -185,7 +185,7 @@ Every task follows the same rules:
     - Tests: vitest 1561/1561, JUnit 36/36.
     - Tablet v11.22: `keepAlive: true`; the permission prompt shows; ML scored 11/11 with advisories (carb ice) returned; `threshold_adapter.xml` MD5 unchanged.
   - [x] open the PR — #172 (2026-10-15).
-  - [ ] tablet test (2026-10-15, with Dana):
+  - [x] tablet test (2026-10-15, with Dana):
     - [x] Notification permission: allowed (`POST_NOTIFICATIONS granted=true, USER_SET`).
     - [x] Home → 90 s → back, screen on (v11.22):
       - 94/94 one-second ticks, no freeze;
@@ -294,7 +294,7 @@ should be biased to look for red areas (pixels) building, not random scattered r
 ---
 
 ## Backlog (not scheduled)
-- **DIAG tab: the airport diagram doesn't open (reported by Dana 2026-10-15).** Not caused by PR A: `airport-popup.js` is untouched there.
+- [x] **DIAG tab: the airport diagram doesn't open (reported by Dana 2026-10-15).** Fixed in v11.24 on `fix/diag-viewer`: a tap opens the ApproachCharts viewer at the diagram; with no WebP, the PDF is drawn by `renderPdfToContainer` (the IAP tab's plate rows too). Tablet-checked on KCLT. Not caused by PR A: `airport-popup.js` is untouched there.
   - What the code does (`_loadPlatePane`, `airport-popup.js` ~980–1058): the diagram is shown inline as the pipeline's WebP (checked for KCLT: `00078AD.webp`, 807×1237, loaded) with pinch-zoom and double-tap reset only. A tap doesn't open it full screen or as the PDF, unlike the A/FD tab (`_openAfdFullscreen`, "Tap to open full screen").
   - Second, latent: with no WebP, the fallback is the PDF in an `<iframe>`. Android WebView has no PDF viewer and TileServer serves it as `application/octet-stream`, so that pane is likely blank. `documents.js` already has a pdf.js viewer that could be reused.
   - Fix (Dana: "use an existing PDF renderer"):
