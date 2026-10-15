@@ -184,7 +184,7 @@ Every task follows the same rules:
     - **#15** Manual: v11.19 (not 18), A5 rationale, what a restart does and doesn't carry over, ML:ERR, the FlyTab-closed notification, and off-screen behaviour.
     - Tests: vitest 1561/1561, JUnit 36/36.
     - Tablet v11.22: `keepAlive: true`; the permission prompt shows; ML scored 11/11 with advisories (carb ice) returned; `threshold_adapter.xml` MD5 unchanged.
-  - [x] open the PR — #172 (2026-10-15).
+  - [ ] open the PR;
   - [ ] tablet test (needs Dana: answer the notification prompt, then a screen-off renderer crash shows the "FlyTab closed" notification; Home → back keeps the screen lock).
 
 ---
