@@ -27,7 +27,7 @@ Every task follows the same rules:
       before the merges (`6854771`): same 51 tests, none new, none fixed. The list is at the end.
   - **Versions:** `main` is v11.7 (versionCode 1107). The combined test build was v11.8 (1108).
     The next build must be **v11.9 or later**, or the tablet refuses it as a downgrade.
-- [ ] **0.5 Find out why the Playwright suite fails** (51/53, already failing before today):
+- [x] **0.5 Find out why the Playwright suite fails** — done 2026-10-15. **Cause: port 3000 is Open WebUI (docker) on the dev machine.** It answers 200 for every path, and with `reuseExistingServer` Playwright ran the whole suite against it (harness globals undefined). The config now uses its own port (3117, override `FLYTAB_TEST_PORT`) and never reuses a server: **51/53 pass**. The 2 left are stale screenshot baselines (`visual-map.spec.js`: expected 1236×583, got 1279×408, so the map layout changed since they were recorded). Re-record them only after a visual check. Fixed as the first commit of PR B, not a separate PR, because B0/B6 need the suite. Original notes:
   - 29 in route-planner-panel;
   - plus engine-box, engine-panel, layer-panel, mag-heading, wx-briefing;
   - plus 6 smoke tests.

@@ -3,7 +3,7 @@
 const { test, expect } = require('@playwright/test');
 const { injectTestConfig } = require('./helpers.js');
 
-// Relative to baseURL (http://localhost:3000)
+// Relative to baseURL (playwright.config.js: http://localhost:<PORT>)
 const APP = '/web/index.html';
 
 // Console errors that are expected/harmless when hardware is not present:
