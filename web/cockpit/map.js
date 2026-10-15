@@ -254,7 +254,7 @@ class CockpitMap {
 
         // Listen for stratux events
         this.stratux.addEventListener('stratux:situation', (e) => this._updateOwnship(e.detail));
-        this.stratux.addEventListener('stratux:traffic', () => this._updateTraffic());
+        this.stratux.addEventListener('stratux:traffic', () => this._scheduleTraffic());
 
         // Position stopped arriving: hold own-ship dimmed at the last fix for up to
         // GpsFix.HOLD_MS, then hide -- a short link drop doesn't blank it.
@@ -322,6 +322,7 @@ class CockpitMap {
             this._onNotamTfrs = null;
         }
         if (this._trafficTimer) { clearInterval(this._trafficTimer); this._trafficTimer = null; }
+        if (this._trafficRenderTimer) { clearTimeout(this._trafficRenderTimer); this._trafficRenderTimer = null; }
         if (this._onScreenChangeHandler) {
             window.removeEventListener('flytab:screen', this._onScreenChangeHandler);
             this._onScreenChangeHandler = null;
@@ -1250,10 +1251,27 @@ class CockpitMap {
         this._firstPanPending = false;
     }
 
+    /**
+     * stratux:traffic fires once per target per update: ~100/s with 100 targets,
+     * and each one used to redraw every marker (B0: 6,433 setIcon/s). Draw at
+     * most every TRAFFIC_RENDER_MS: at once if the last draw is older than that,
+     * otherwise once at the end of the window, so the newest positions are drawn.
+     */
+    _scheduleTraffic() {
+        if (this._trafficRenderTimer) return;
+        const wait = (this._lastTrafficRender || 0) + CockpitMap.TRAFFIC_RENDER_MS - Date.now();
+        if (wait <= 0) { this._updateTraffic(); return; }
+        this._trafficRenderTimer = setTimeout(() => {
+            this._trafficRenderTimer = null;
+            this._updateTraffic();
+        }, wait);
+    }
+
     _updateTraffic() {
         // Markers only: nothing else depends on this. Rebuilt on return to screen.
         if (CockpitMap.offScreen()) return;
         const now = Date.now();
+        this._lastTrafficRender = now;
         const seen = new Set();
 
         const trafficCfg = (typeof CockpitConfig !== 'undefined') ? (CockpitConfig.raw?.traffic || {}) : {};
@@ -1292,25 +1310,34 @@ class CockpitMap {
                 altLabel = (dAlt >= 0 ? '+' : '') + dAlt;
             }
             const callsign = showCallsign ? (target.callsign || '').trim() : '';
-            const svgHtml = CockpitMap._trafficSvg(target.track || 0, color, target.extrapolated);
-            const hasLabel = altLabel || callsign;
-            const iconHtml = hasLabel
-                ? `<div class="traffic-icon-wrap">${svgHtml}${altLabel ? `<div class="traffic-alt" style="color:${color};">${altLabel}</div>` : ''}${callsign ? `<div class="traffic-cs" style="color:${color};">${callsign}</div>` : ''}</div>`
-                : svgHtml;
-            const icon = L.divIcon({
-                className: 'traffic-icon',
-                html: iconHtml,
-                iconSize: hasLabel ? [56, 44] : [24, 24],
-                iconAnchor: [12, 12],
-            });
+            // Everything the icon is drawn from. Rebuild the icon (innerHTML) only
+            // when this changes; a position change is just setLatLng.
+            const iconKey = `${target.track || 0}|${color}|${target.extrapolated ? 1 : 0}|${altLabel}|${callsign}`;
+            const makeIcon = () => {
+                const svgHtml = CockpitMap._trafficSvg(target.track || 0, color, target.extrapolated);
+                const hasLabel = altLabel || callsign;
+                const iconHtml = hasLabel
+                    ? `<div class="traffic-icon-wrap">${svgHtml}${altLabel ? `<div class="traffic-alt" style="color:${color};">${altLabel}</div>` : ''}${callsign ? `<div class="traffic-cs" style="color:${color};">${callsign}</div>` : ''}</div>`
+                    : svgHtml;
+                return L.divIcon({
+                    className: 'traffic-icon',
+                    html: iconHtml,
+                    iconSize: hasLabel ? [56, 44] : [24, 24],
+                    iconAnchor: [12, 12],
+                });
+            };
 
             if (this.trafficMarkers.has(icao)) {
                 const m = this.trafficMarkers.get(icao);
                 m.setLatLng([target.lat, target.lon]);
-                m.setIcon(icon);
+                if (m._flytabIconKey !== iconKey) {
+                    m.setIcon(makeIcon());
+                    m._flytabIconKey = iconKey;
+                }
             } else {
-                const m = L.marker([target.lat, target.lon], { icon, zIndexOffset: 500 })
+                const m = L.marker([target.lat, target.lon], { icon: makeIcon(), zIndexOffset: 500 })
                     .addTo(this.map);
+                m._flytabIconKey = iconKey;
                 // Always fetch current target at click time — stale closure causes popup offset
                 m.on('click', () => {
                     if (typeof _wireTapLastTouchAt !== 'undefined' && Date.now() - _wireTapLastTouchAt < 500) return;
@@ -2022,3 +2049,5 @@ class CockpitMap {
 
 // Own-ship marker opacity while held at the last fix after the feed stopped.
 CockpitMap.OWNSHIP_HELD_OPACITY = 0.4;
+// Traffic markers are redrawn at most this often (B1).
+CockpitMap.TRAFFIC_RENDER_MS = 500;

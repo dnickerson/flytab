@@ -435,3 +435,30 @@ describe('StratuxClient — socket-identity check closes the udpMode-permanently
         expect(client._situationReconnectTimer).toBeNull();
     });
 });
+
+// PR B / B1: the own-ship Mode-S code came from Settings (localStorage +
+// JSON.parse) on every traffic message, ~100/s with busy traffic.
+describe('StratuxClient own-ship code lookup', () => {
+    it('is read at most every 5 s, and a changed code is picked up after that', () => {
+        vi.useFakeTimers();
+        let code = '000000';
+        const getter = vi.fn(() => code);
+        const saved = Object.getOwnPropertyDescriptor(Settings, 'ownshipModeS');
+        Object.defineProperty(Settings, 'ownshipModeS', { get: getter, configurable: true });
+        try {
+            const client = new StratuxClient();
+            for (let i = 0; i < 100; i++) client._handleTraffic(TRAFFIC_TARGET);
+            expect(getter).toHaveBeenCalledTimes(1);
+            expect(client.traffic.size).toBe(1);
+            code = TRAFFIC_TARGET.Icao_addr.toString(16);      // it's now "own-ship"
+            vi.advanceTimersByTime(5001);
+            client.traffic.clear();
+            client._handleTraffic(TRAFFIC_TARGET);
+            expect(getter).toHaveBeenCalledTimes(2);
+            expect(client.traffic.size).toBe(0);
+        } finally {
+            Object.defineProperty(Settings, 'ownshipModeS', saved);
+            vi.useRealTimers();
+        }
+    });
+});

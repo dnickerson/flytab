@@ -220,7 +220,11 @@ Every task follows the same rules:
   - Record: long tasks per minute, `setIcon` calls/s, `moveend` events/s,
     `_updateDynamicLayers` calls/min, and the route-table `updateLive` rate.
   - Save the numbers in this file.
-- [ ] **B1 Traffic drawn at most twice a second, only icons that changed.**
+- [x] **B1 Traffic drawn at most twice a second, only icons that changed.** Done.
+  - `stratux:traffic` → `_scheduleTraffic` (≤ 1 draw per 500 ms, leading and trailing). The 2 s cleanup, the layer-panel toggles and return-to-screen still draw immediately.
+  - Each marker keeps an icon key (track, colour, extrapolated, altitude label, callsign); `setIcon` runs only when the key changes. Own Mode-S is read from Settings at most every 5 s.
+  - Tests: `tests/cockpit/traffic-render.test.js` (6; 5 failed before) plus 1 in stratux-client.
+  - Measured (B0 harness): setIcon 6,433/s → **0/s** (no icon had a reason to change; markers still move); script 20.3 → **1.55 s/min**; task 25.8 → **8.3 s/min**.
   - **Where:** `map.js:257` rebuilds every target's icon (`setIcon` → innerHTML) on every
     traffic message.
   - **Fix:** a dirty flag plus rAF/2 Hz render; cache colour, label and track per marker; cache
