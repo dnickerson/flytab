@@ -222,6 +222,17 @@ class ApproachCharts {
         this._pickerEl.style.display = 'flex';
     }
 
+    /**
+     * Open the viewer straight at one of an airport's plates, e.g. the airport
+     * diagram from the airport panel's DIAG tab. `match(plate)` picks it from the
+     * airport's list; with no match the list stays open.
+     */
+    async showPlateForAirport(icao, match) {
+        await this.showForAirport(icao);
+        const idx = (this._plates || []).findIndex(match);
+        if (idx >= 0) this._showPlate(idx);
+    }
+
     async showForRoute() {
         if (this._loadPromise) {
             this._showMessage('Loading plates…');
