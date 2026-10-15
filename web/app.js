@@ -418,7 +418,9 @@ class FlyTabApp {
                 this._checkFuelStopProximity(s);
             }
         };
-        const wait = (this._routeLiveAt || 0) + FlyTabApp.ROUTE_LIVE_MS - Date.now();
+        const since = Date.now() - (this._routeLiveAt || 0);
+        // (since < 0: the clock was set back -- run now, PR B review #6)
+        const wait = since < 0 ? 0 : FlyTabApp.ROUTE_LIVE_MS - since;
         if (wait <= 0) run();
         else this._routeLiveTimer = setTimeout(run, wait);
     }

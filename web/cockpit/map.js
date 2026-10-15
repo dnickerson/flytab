@@ -1249,7 +1249,9 @@ class CockpitMap {
      */
     _followOwnship(pos) {
         const now = Date.now();
-        if (now - (this._lastFollowAt || 0) < CockpitMap.FOLLOW_MIN_MS) return;
+        const since = now - (this._lastFollowAt || 0);
+        // (since < 0: the clock was set back -- treat as long ago, PR B review #6)
+        if (since >= 0 && since < CockpitMap.FOLLOW_MIN_MS) return;
         const size = this.map.getSize();
         const p = this.map.latLngToContainerPoint(pos);
         const dx = p.x - size.x / 2, dy = p.y - size.y / 2;
@@ -1287,7 +1289,9 @@ class CockpitMap {
      */
     _scheduleTraffic() {
         if (this._trafficRenderTimer) return;
-        const wait = (this._lastTrafficRender || 0) + CockpitMap.TRAFFIC_RENDER_MS - Date.now();
+        const since = Date.now() - (this._lastTrafficRender || 0);
+        // (since < 0: the clock was set back -- draw now, PR B review #6)
+        const wait = since < 0 ? 0 : CockpitMap.TRAFFIC_RENDER_MS - since;
         if (wait <= 0) { this._updateTraffic(); return; }
         this._trafficRenderTimer = setTimeout(() => {
             this._trafficRenderTimer = null;
