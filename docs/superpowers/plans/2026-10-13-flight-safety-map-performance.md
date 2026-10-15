@@ -150,12 +150,19 @@ Every task follows the same rules:
     - a lapse is logged.
   - JUnit `WakeLockKeeperTest` (7): held across 24 h; stop releases and cancels. Mutation checks: no re-acquire 2 fail; no release 3 fail.
   - Tablet: `dumpsys power` shows `FlyTab::Flight` held after install, and logcat shows "CPU wake lock held for the next 60 min".
-- [ ] **A8 EngineML can't run two inferences on one model.**
-  - **Where:** `InferenceEngine.java:270-289`. `future.cancel` can't stop a native run, and a
-    new thread is started on the same Interpreter.
-  - **Fix:** one persistent executor, skip the sample if busy, and disable ML after a timeout.
-  - **Verify:** JUnit for the busy/skip logic. On the tablet, logcat shows inference still
-    running (NNAPI line).
+- [x] **A8 EngineML can't run two inferences on one model.** Done in v11.21.
+  - The bug: on a 500 ms timeout, `future.cancel(true)` can't stop a native `interpreter.run()`. The next sample, 1 s later, started a new thread on the same (not thread-safe) Interpreter while the first was still running: a native crash risk in FlyTab's process, and a leaked thread per timeout.
+  - Fix:
+    - one persistent `tflite-inference` thread;
+    - `InferenceGate`: run if idle, skip the sample if a run is still going, and turn ML inference off for the session if a run hasn't returned after 10 s;
+    - the gate is released only when the native run returns; the Interpreter is never closed under a running inference.
+  - The plugin returns `mlState`: ok, busy, timeout, error or disabled. The badge shows **ML:OFF**, logged once, instead of a misleading green when ML is disabled. Rule-based advisories are unaffected.
+  - Tests: JUnit `InferenceGateTest` (5) and vitest `engine-ml-badge-state` (4; the ML:OFF case failed before). vitest 1532/1532.
+  - Tablet:
+    - NNAPI/NPU delegate loaded;
+    - 75 synthetic samples under the made-up phase `a8test` (< 100, so `ThresholdAdapter` saves nothing): 59 filling, 16/16 scored (`mlState: ok`) at 0.9–3.2 ms, no warnings, exactly one `tflite-inference` thread;
+    - `threshold_adapter.xml` has the same MD5 before and after; FlyTab was restarted to clear the in-memory samples.
+  - Not reproducible on the tablet: a run that never returns (unit tests only).
 - [ ] **A9 Ship PR A:**
   - [ ] update the manual (A1, A5, A6 are user-visible);
   - [ ] bump the version and build;

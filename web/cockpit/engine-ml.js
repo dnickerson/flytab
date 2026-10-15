@@ -992,6 +992,24 @@ class EngineMLBridge {
     _updateDisplay(result) {
         if (!result) return;
 
+        // ML inference turned off for this session: a TFLite run never returned
+        // (EngineMLPlugin / InferenceGate). Say so -- with no score, the branches
+        // below would show a healthy green "ML:<phase>". Rule-based advisories
+        // don't depend on it and keep running.
+        if (result.mlState === 'disabled') {
+            if (!this._mlDisabledLogged) {
+                this._mlDisabledLogged = true;
+                if (typeof DiagLog !== 'undefined') DiagLog.log('error', 'ML inference turned off: a model run never returned. Anomaly scores are off until FlyTab restarts; rule-based engine advisories continue.');
+            }
+            if (this._badgeEl) {
+                this._badgeEl.textContent = 'ML:OFF';
+                this._badgeEl.style.color = 'var(--color-caution-on-light)';
+                this._badgeEl.style.animation = '';
+            }
+            document.dispatchEvent(new CustomEvent('engineml:result', { detail: result }));
+            return;
+        }
+
         // Update badge (on engine panel or status bar)
         if (this._badgeEl) {
             if (!result.windowReady) {

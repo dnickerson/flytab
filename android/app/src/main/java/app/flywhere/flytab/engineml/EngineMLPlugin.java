@@ -161,6 +161,7 @@ public class EngineMLPlugin extends Plugin {
                     List<EngineAdvisor.Advisory> advisories = engineAdvisor.advise(
                         features, phase, score, anomaly, distanceNm, groundSpeed);
 
+                    ret.put("mlState", "ok");
                     ret.put("score", score);
                     ret.put("threshold", threshold);
                     ret.put("anomaly", anomaly);
@@ -190,12 +191,18 @@ public class EngineMLPlugin extends Plugin {
                         advArr.put(a);
                     }
 
+                } catch (InferenceGate.SkippedException se) {
+                    // A previous run is still in the Interpreter, or ML was turned off
+                    // because one never returned (see InferenceGate). No score.
+                    ret.put("mlState", se.disabled ? "disabled" : "busy");
                 } catch (TimeoutException te) {
                     // Inference hung — resolve without score so the plugin stays responsive.
                     // The JS side will see phase+windowReady but no score for this sample.
                     Log.w(TAG, "Inference timed out — resolving without score");
+                    ret.put("mlState", "timeout");
                 } catch (Exception ie) {
                     Log.w(TAG, "Inference error — resolving without score", ie);
+                    ret.put("mlState", "error");
                 }
             }
 

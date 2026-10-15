@@ -70,7 +70,7 @@ FlyTab connects automatically on app launch. The status bar at the top shows con
 | **FIS-B** | UAT radio connected and receiving | — | No UAT data |
 | **FLT / HOME / NET / OFFL** | FLT = Stratux reachable; HOME = home server reachable | NET = internet only | OFFL = no network |
 | **NASR** | Database current | ≥7 days old | Very old |
-| **ML** | Engine anomaly score normal | Elevated | Anomaly detected |
+| **ML** | Engine anomaly score normal | **ML:OFF**: anomaly scoring isn't running (ML not available, or a model run never returned and FlyTab turned it off); rule-based engine warnings continue; restart FlyTab on the ground | Anomaly detected |
 | **REC** | Flight recording active | — | Not recording |
 | **Temperature (°)** | Tablet surface below 40 °C | 40–50 °C (warm; normal in direct sun) | 50 °C or more: flashing, with a *TABLET HOT* warning |
 | **PI vX.X** | Hidden — Pi build matches what this app requires | Shown — connected Pi's software is older than this app needs | — |
