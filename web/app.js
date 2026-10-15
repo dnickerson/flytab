@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v11.28';
+const FLYTAB_VERSION = 'v11.29';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 // Kept in memory and saved at most every FLUSH_MS (errors at once). Every log()
@@ -1332,13 +1332,18 @@ class FlyTabApp {
             this.showToast('No route to reverse');
             return;
         }
-        if (this._reversingRoute) return;
+        // A route change still being applied: reversing the old one now would
+        // race it (2026-10-15 review, L5).
+        if (this._reversingRoute || this._applyingPlan || this._pendingPlanEdit) {
+            this.showToast('Route still updating — tap REV again in a moment');
+            return;
+        }
         this._reversingRoute = true;
         this.showToast('Reversing route…');
         try {
+            // Success is announced by the planner ("Route reversed … UNDO").
             const r = await this.routePlannerPanel.reverseAndApply(trip);
-            if (r) this.showToast(`Route reversed: ${r.dep} → ${r.dest}. Check altitude.`);
-            else this.showToast('Could not reverse the route');
+            if (!r || r.error) this.showToast(`Could not reverse the route${r?.error ? ': ' + r.error : ''}`);
         } catch (err) {
             DiagLog.log('error', `reverseActiveRoute: ${err?.message || err}`);
             this.showToast('Could not reverse the route');

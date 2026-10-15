@@ -2483,7 +2483,7 @@ body {
 }
 
 /* Edit mode active state */
-.route-table-editing .route-table-edit-btn,
+.route-table-editing .route-table-edit-btn:not(.rt-rev-btn),
 .rt-edit-active {
     background: var(--accent) !important;
     color: #fff !important;

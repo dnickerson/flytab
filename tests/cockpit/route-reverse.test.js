@@ -84,17 +84,23 @@ describe('RoutePlannerPanel.reversePills', () => {
 });
 
 describe('REV in the planner', () => {
-    it('reverses the pills, updates DEP/DEST, applies, and says what it did', async () => {
-        const p = panel([P('KLKR', 'dep'), P('KCDN', 'dest')]);
+    it('reverses the pills, updates DEP/DEST, applies, and says what it did; UNDO puts it back', async () => {
+        globalThis.app = { showToast: vi.fn(() => ({ remove() {} })) };
+        const p = panel([P('KLKR', 'dep'), P('V1', 'awy'), P('FIX1', 'fix', { airway: 'V1' }), P('KCDN', 'dest')]);
         p._depInput.value = 'KLKR';
         p._destInput.value = 'KCDN';
         p._doApply = vi.fn(async () => true);
         p._toast = vi.fn();
         await p._onReverseTap();
-        expect(show(p._route)).toBe('KCDN:dep KLKR:dest');
+        expect(show(p._route)).toBe('KCDN:dep FIX1:fix V1:awy KLKR:dest/V1');
         expect([p._depInput.value, p._destInput.value]).toEqual(['KCDN', 'KLKR']);
         expect(p._doApply).toHaveBeenCalledTimes(1);
-        expect(p._toast.mock.calls[0][0]).toMatch(/KCDN.*KLKR/);
+        const [msg, actions] = app.showToast.mock.calls[0];
+        expect(msg).toMatch(/KCDN.*KLKR/);
+        await actions[0].action();                                   // UNDO
+        expect(show(p._route)).toBe('KLKR:dep V1:awy FIX1:fix/V1 KCDN:dest');
+        expect([p._depInput.value, p._destInput.value]).toEqual(['KLKR', 'KCDN']);
+        expect(p._doApply).toHaveBeenCalledTimes(2);                 // re-applied
     });
 
     it('nothing to reverse: a message, no apply', async () => {
@@ -184,5 +190,115 @@ describe('REV on the route table', () => {
         const src = read('web/cockpit/route-table.js');
         expect(src).toMatch(/<button class="route-table-edit-btn rt-rev-btn"[^>]*>REV<\/button>/);
         expect(src).toMatch(/wireTap\(this\._revBtn, \(\) => \{[^}]*app\.reverseActiveRoute\(\)/);
+    });
+});
+
+// ── Critical review of the REV change (2026-10-15) ────────────────────────────
+describe('REV review fixes', () => {
+    const W = (icao, lat, lon, extra = {}) => ({ icao, name: icao, lat, lon, ...extra });
+    let appStub;
+    beforeEach(() => {
+        appStub = {
+            applyRouteEdit: vi.fn(async (plan) => { appStub._currentTrip = plan; }),
+            showToast: vi.fn(() => ({ remove() {} })),
+            _currentTrip: null,
+        };
+        globalThis.app = appStub;
+        vi.spyOn(RoutePlannerPanel.prototype, '_saveCurrentTrip').mockResolvedValue(undefined);
+    });
+
+    const trip = () => ({
+        departure: 'KLKR', destination: 'KCDN',
+        waypoints: [W('KLKR', 34.72, -80.85), W('KCDN', 34.28, -80.56, { isDest: true })],
+        flight_plan: { departure: 'KLKR', destination: 'KCDN', route: ['KLKR', 'KCDN'] },
+    });
+
+    it('H1: the route-table REV never touches the planner the pilot may have open', async () => {
+        const p = panel([P('KAAA', 'dep'), P('KBBB', 'dest')]);       // what the pilot is looking at
+        let release;
+        appStub.applyRouteEdit = vi.fn(() => new Promise((r) => { release = r; }));
+        const pending = p.reverseAndApply(trip());
+        // the pilot opens the planner / Direct-To while REV is still applying
+        await new Promise((r) => setTimeout(r, 0));
+        p._route = [P('KXYZ', 'dep'), P('KQQQ', 'dest')];
+        release();
+        const r = await pending;
+        expect(r).toEqual({ dep: 'KCDN', dest: 'KLKR' });
+        const applied = appStub.applyRouteEdit.mock.calls[0][0];
+        expect([applied.departure, applied.destination]).toEqual(['KCDN', 'KLKR']);
+        expect(show(p._route)).toBe('KXYZ:dep KQQQ:dest');            // not emptied, not replaced
+        expect(p._applyAborted).not.toBe(true);
+    });
+
+    it('H2: an en-route fix sharing its name with an approach fix survives a reload and REV', () => {
+        const q = panel();
+        q._loadPlan({
+            departure: 'KA', destination: 'KB',
+            waypoints: [W('KA', 35, -81), W('SPA', 35.1, -81.1, { airway: 'V1' }), W('SPA', 35.2, -81.2, { proc: true, altFt: 3000 }),
+                        W('FAF', 35.3, -81.3, { proc: true }), W('KB', 35.4, -81.4, { isDest: true }), W('SPA', 35.1, -81.1, { proc: true })],
+            flight_plan: { destination: 'KB', route: ['KA', 'V1', 'SPA', 'SPA', 'FAF', 'KB', 'SPA'] },
+        });
+        expect(show(q._route)).toBe('KA:dep V1:awy SPA:fix/V1 SPA:fix/V1! FAF:fix/V1! KB:dest SPA:fix!');
+        expect(q._route[2].altFt).toBeUndefined();                     // the approach's 3000 ft stays on the approach fix
+        expect(q._route[3].altFt).toBe(3000);
+        expect(show(RoutePlannerPanel.reversePills(q._route))).toBe('KB:dep SPA:fix V1:awy KA:dest/V1');
+    });
+
+    it('M1: REV offers UNDO, which restores the exact previous route', async () => {
+        const before = trip();
+        appStub._currentTrip = before;
+        const p = panel();
+        await p.reverseAndApply(before);
+        const call = appStub.showToast.mock.calls.find(([, actions]) => Array.isArray(actions) && actions.length);
+        expect(call[0]).toMatch(/KCDN.*KLKR/);
+        expect(call[1][0].label).toBe('UNDO');
+        appStub.applyRouteEdit.mockClear();
+        await call[1][0].action();
+        expect(appStub.applyRouteEdit).toHaveBeenCalledTimes(1);
+        expect(appStub.applyRouteEdit.mock.calls[0][0]).toEqual(before);
+    });
+
+    it('M2: after Apply (and REV), the planner\'s plan is the applied route', async () => {
+        const p = panel([P('KLKR', 'dep'), P('KCDN', 'dest')]);
+        p._coords = { KLKR: { lat: 34.72, lon: -80.85 }, KCDN: { lat: 34.28, lon: -80.56 } };
+        p._toast = vi.fn();
+        await p._doApply();
+        expect(p._lastPlan.waypoints.map((w) => w.id)).toEqual(['KLKR', 'KCDN']);
+        await p._onReverseTap();
+        expect(p._lastPlan.departure).toBe('KCDN');
+        expect(p._lastPlan.waypoints.map((w) => w.id)).toEqual(['KCDN', 'KLKR']);
+    });
+
+    it('M3: a route-table edit keeps the approach mark', () => {
+        const RouteTable = new Function(read('web/cockpit/route-table.js') + '\nreturn RouteTable;')();
+        const t = Object.create(RouteTable.prototype);
+        let emitted = null;
+        t._onRouteChanged = (plan) => { emitted = plan; };
+        t._waypoints = [W('KA', 35, -81), W('IAF1', 35.1, -81.1, { proc: true }), W('KB', 35.2, -81.2, { isDest: true })];
+        t._flights = [];
+        t._emitRouteChange();
+        expect(emitted.waypoints.map((w) => !!w.proc)).toEqual([false, true, false]);
+    });
+
+    it('L1: the fuel-stop buttons commit typed DEP/DEST first', () => {
+        const src = read('web/cockpit/route-planner-panel.js');
+        const block = src.slice(src.indexOf("[2.0, 2.5, 3.0].forEach"), src.indexOf("legGroup.appendChild(legLbl)"));
+        expect(block).toMatch(/wireTap\(btn, \(\) => \{\s*this\._commitFieldEdits\(\);/);
+    });
+
+    it('L4: route-table REV warnings (e.g. a waypoint not found) reach the pilot', async () => {
+        const p = panel();
+        const t = trip();
+        t.waypoints[0] = { icao: 'ZZZZZ', name: 'ZZZZZ' };              // no coords, no NASR
+        t.flight_plan.route = ['ZZZZZ', 'KCDN'];
+        await p.reverseAndApply(t);
+        expect(appStub.showToast.mock.calls.map((c) => c[0]).join(' | ')).toMatch(/ZZZZZ/);
+    });
+
+    it('L5: REV while another route change is still applying waits instead of racing', async () => {
+        const appSrc = read('web/app.js');
+        const s = appSrc.indexOf('    async reverseActiveRoute() {');
+        const body = appSrc.slice(s, appSrc.indexOf('\n    }\n', s));
+        expect(body).toMatch(/this\._applyingPlan|this\._pendingPlanEdit/);
     });
 });

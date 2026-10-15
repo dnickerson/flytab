@@ -534,12 +534,13 @@ To edit the route, expand the strip and tap **EDIT**. From there you can:
 
 ### Reversing a Route (REV)
 
-**REV** turns the route around: the destination becomes the departure, the waypoints and airways run in reverse order, and the route is applied straight away. It is on the route strip handle, next to **EDIT** (one tap, the planner doesn't open), and in the Route Planner's toolbar. A message confirms it, e.g. *Route reversed: KCDN → KLKR. Check altitude.*
+**REV** turns the route around: the destination becomes the departure, the waypoints and airways run in reverse order, and the route is applied straight away. It is on the route strip handle, next to **EDIT** (one tap, the planner doesn't open), and in the Route Planner's toolbar. A message confirms it, e.g. *Route reversed: KCDN → KLKR. Check altitudes.*, with an **UNDO** button for about 15 seconds.
 
+- **UNDO** puts back exactly the route you had, including an approach REV removed.
 - Performance, winds and fuel are worked out again for the way back.
 - An approach you loaded for the old destination (its fixes and missed approach) is removed, since it doesn't apply to the new departure. An approach loaded before this version can't be told apart from ordinary waypoints, so its fixes stay — remove them in the planner.
-- Fuel stops and altitudes you set on a waypoint stay on that waypoint. Check your cruise altitude for the new direction.
-- Tapped REV by mistake? Tap it again to put the route back.
+- Fuel stops and altitudes you set on a waypoint stay on that waypoint, and cruise altitude is unchanged. Check both for the new direction (VFR and IFR altitudes depend on direction).
+- If a route change is still being applied, REV asks you to tap it again in a moment. If REV can't build the reversed route, the message says why (for example, a waypoint not found).
 
 ### Loading a Route from flywhere.app
 
