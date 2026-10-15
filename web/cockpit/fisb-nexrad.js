@@ -46,7 +46,9 @@ class FisbNexrad {
 
         // Bind
         this._onNexrad = (e) => this._handleNexrad(e.detail);
-        this._onMove = () => { if (!this._loopMode) this._draw(); };
+        // Map moved: redraw at most once per animation frame. It used to redraw
+        // synchronously on every move/zoom/moveend/zoomend event (B2).
+        this._onMove = () => this._scheduleMoveDraw();
         this._onResize = () => this._resizeCanvas();
 
         // Purge timer — start immediately so blocks accumulate before overlay is shown
@@ -66,6 +68,15 @@ class FisbNexrad {
         // Restore persisted frame history so the loop and map show data immediately
         // on reopen (fire-and-forget; live frames augment _blocks/_frameHistory as they arrive).
         this._hydrate();
+    }
+
+    _scheduleMoveDraw() {
+        if (this._moveDrawPending) return;
+        this._moveDrawPending = true;
+        requestAnimationFrame(() => {
+            this._moveDrawPending = false;
+            if (!this._loopMode) this._draw();
+        });
     }
 
     // Standard NEXRAD intensity → color map (0-7+)

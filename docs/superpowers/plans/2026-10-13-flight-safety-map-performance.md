@@ -230,7 +230,12 @@ Every task follows the same rules:
   - **Fix:** a dirty flag plus rAF/2 Hz render; cache colour, label and track per marker; cache
     `Settings.ownshipModeS` (`stratux-client.js:344`).
   - **Verify:** B0 numbers before and after; traffic popups and colours unchanged.
-- [ ] **B2 Re-centre only when needed.**
+- [x] **B2 Re-centre only when needed.** Done (code). The tablet tap check and the visual check of the follow feel are still open (B6).
+  - Follow: no animation, at most every 500 ms (`FOLLOW_MIN_MS`), only once own-ship has drifted 2 px (`FOLLOW_MIN_DRIFT_PX`) from centre. The plan's "20 px" was dropped: at cruise own-ship drifts 0.5–2 px/s, so 20 px would jump visibly every 10–40 s. The first fix still centres at once.
+  - `vector-map-layers.js _scheduleUpdate` and `map.js _scheduleFixUpdate`: still 300 ms after the map settles, but at most 2 s after the first request.
+  - NEXRAD `_onMove` → `_scheduleMoveDraw` (≤ 1 redraw per animation frame).
+  - Tests: `tests/cockpit/map-follow.test.js` (9; 6 failed before). The fake maps in ownship-hold/gps-fix/offscreen-work gained `getSize`/`latLngToContainerPoint`.
+  - Measured: moveend 10 → **0.3/s**; `_updateDynamicLayers` 1 → **16/min** (layers now refresh in flight); script 1.55 (B1) → 4.9 s/min and task 8.3 → 13.9 s/min, the cost of those refreshes (~0.2 s each on desktop), still well below B0's 20.3/25.8.
   - **Where:** `map.js:1054`, an animated `panTo` on every situation (~10–12 Hz). That causes
     a `moveend` storm, a full vector redraw, NEXRAD redrawn every frame, and possibly
     debounced layers that never fire in flight.

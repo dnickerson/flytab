@@ -1063,8 +1063,10 @@ class CockpitMap {
         // Not while off screen: an animated pan ~10x a second redraws vector
         // layers for nobody (_onScreenChange re-centres on return).
         if (isFirstFix && CockpitMap.offScreen()) this._firstPanPending = true;
-        if ((isFirstFix || this._autoPan) && !CockpitMap.offScreen()) {
-            this.map.panTo(pos, { animate: !isFirstFix, duration: 0.5 });
+        if (isFirstFix && !CockpitMap.offScreen()) {
+            this.map.panTo(pos, { animate: false });
+        } else if (this._autoPan && !CockpitMap.offScreen()) {
+            this._followOwnship(pos);
         }
 
         // Track vector — 3-minute lookahead line, only when airborne
@@ -1236,6 +1238,24 @@ class CockpitMap {
     }
 
     // ========== Traffic ==========
+
+    /**
+     * Keep own-ship centred, cheaply. It used to animate a panTo on every
+     * situation (~10 Hz): 10 moveend/s, and every listener on moveend
+     * (vector layers, NEXRAD, fixes) re-ran or was starved (B0). Now no
+     * animation, at most every FOLLOW_MIN_MS, and only once own-ship has drifted
+     * FOLLOW_MIN_DRIFT_PX: at cruise that's a step of a few pixels, twice a second.
+     */
+    _followOwnship(pos) {
+        const now = Date.now();
+        if (now - (this._lastFollowAt || 0) < CockpitMap.FOLLOW_MIN_MS) return;
+        const size = this.map.getSize();
+        const p = this.map.latLngToContainerPoint(pos);
+        const dx = p.x - size.x / 2, dy = p.y - size.y / 2;
+        if (dx * dx + dy * dy < CockpitMap.FOLLOW_MIN_DRIFT_PX * CockpitMap.FOLLOW_MIN_DRIFT_PX) return;
+        this._lastFollowAt = now;
+        this.map.panTo(pos, { animate: false });
+    }
 
     /** FlyTab is not on screen (MainActivity via app._onScreen). Unknown counts as on screen. */
     static offScreen() {
@@ -1829,8 +1849,17 @@ class CockpitMap {
     }
 
     _scheduleFixUpdate() {
+        // 300 ms after the map settles, but at most LAYER_MAX_WAIT_MS after the
+        // first request: while own-ship is followed the map never settles (B2).
         if (this._fixUpdateTimer) clearTimeout(this._fixUpdateTimer);
-        this._fixUpdateTimer = setTimeout(() => this._updateFixOverlay(), 300);
+        const now = Date.now();
+        if (!this._fixPendingSince) this._fixPendingSince = now;
+        const wait = Math.max(0, Math.min(300, this._fixPendingSince + CockpitMap.LAYER_MAX_WAIT_MS - now));
+        this._fixUpdateTimer = setTimeout(() => {
+            this._fixUpdateTimer = null;
+            this._fixPendingSince = 0;
+            this._updateFixOverlay();
+        }, wait);
     }
 
     async _updateFixOverlay() {
@@ -2051,3 +2080,8 @@ class CockpitMap {
 CockpitMap.OWNSHIP_HELD_OPACITY = 0.4;
 // Traffic markers are redrawn at most this often (B1).
 CockpitMap.TRAFFIC_RENDER_MS = 500;
+// Auto-pan: re-centre at most this often, once own-ship is this far off centre (B2).
+CockpitMap.FOLLOW_MIN_MS = 500;
+CockpitMap.FOLLOW_MIN_DRIFT_PX = 2;
+// Debounced map-layer refreshes run at most this long after the first request (B2).
+CockpitMap.LAYER_MAX_WAIT_MS = 2000;

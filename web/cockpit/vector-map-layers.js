@@ -849,8 +849,18 @@ class VectorMapLayers {
     }
 
     _scheduleUpdate() {
+        // 300 ms after the map settles, but at most MAX_WAIT_MS after the first
+        // request. A pure debounce never fired while the map followed own-ship
+        // (a moveend every ~100 ms): B0 measured 1 refresh a minute in flight.
         if (this._updateTimer) clearTimeout(this._updateTimer);
-        this._updateTimer = setTimeout(() => this._updateDynamicLayers(), 300);
+        const now = Date.now();
+        if (!this._updatePendingSince) this._updatePendingSince = now;
+        const wait = Math.max(0, Math.min(300, this._updatePendingSince + VectorMapLayers.MAX_WAIT_MS - now));
+        this._updateTimer = setTimeout(() => {
+            this._updateTimer = null;
+            this._updatePendingSince = 0;
+            this._updateDynamicLayers();
+        }, wait);
     }
 
     async _updateDynamicLayers() {
@@ -1923,3 +1933,6 @@ class VectorMapLayers {
         return cells;
     }
 }
+
+// _scheduleUpdate: longest wait while the map keeps moving (B2).
+VectorMapLayers.MAX_WAIT_MS = 2000;
