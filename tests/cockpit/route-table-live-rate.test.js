@@ -123,3 +123,62 @@ describe('route table: cell compare without reading innerHTML (B3)', () => {
         expect(reads).toEqual([]);
     });
 });
+
+// PR B review #7: the route planner hides the whole sheet (display:none), so
+// the cells go stale without the body ever "opening" through _updateOpenHint.
+describe('route table: stale cells after the route planner closes (PR B review #7)', () => {
+    beforeEach(() => { global.NasrDB = { haversineNm: () => 30 }; });
+
+    function staleTable() {
+        const t = Object.create(RouteTable.prototype);
+        t._waypoints = [{ index: 0, lat: 35, lon: -80.5 }, { index: 1, lat: 35, lon: -79.5 }];
+        t._activeIndex = 1;
+        t._editMode = false;
+        t._bodyEl = { offsetHeight: 0 };                // sheet display:none
+        t._ftpBearing = () => 90;
+        t._advanceWaypoint = vi.fn();
+        t._computeEnroute = vi.fn();
+        t._updateSummary = vi.fn();
+        t._updateTableCells = vi.fn(() => true);
+        t._renderTable = vi.fn();
+        t._openHintEl = null;
+        t.updateLive({ lat: 35, lon: -80.2, ground_speed: 140, true_course: 90 });
+        return t;
+    }
+
+    it('refreshIfStale: shown again -> cells brought up to date once', () => {
+        const t = staleTable();
+        expect(t._updateTableCells).not.toHaveBeenCalled();
+        t._bodyEl.offsetHeight = 120;
+        t.refreshIfStale();
+        t.refreshIfStale();
+        expect(t._updateTableCells).toHaveBeenCalledTimes(1);
+    });
+
+    it('refreshIfStale: still hidden, or in edit mode -> nothing yet', () => {
+        const t = staleTable();
+        t.refreshIfStale();
+        expect(t._updateTableCells).not.toHaveBeenCalled();
+        t._bodyEl.offsetHeight = 120;
+        t._editMode = true;
+        t.refreshIfStale();
+        expect(t._updateTableCells).not.toHaveBeenCalled();
+        t._editMode = false;
+        t.refreshIfStale();
+        expect(t._updateTableCells).toHaveBeenCalledTimes(1);
+    });
+
+    it('closeRoutePlanner refreshes the table after the sheet is shown again', () => {
+        const close = new Function(extractMethod(appSrc, '    closeRoutePlanner() {'));
+        document.body.classList.add('route-editing-mode');
+        let hiddenWhenCalled = null;
+        const app = {
+            routePlannerPanel: { close: vi.fn() },
+            routeTable: { refreshIfStale: vi.fn(() => { hiddenWhenCalled = document.body.classList.contains('route-editing-mode'); }) },
+            cockpitMap: null,
+        };
+        close.call(app);
+        expect(app.routeTable.refreshIfStale).toHaveBeenCalledTimes(1);
+        expect(hiddenWhenCalled).toBe(false);
+    });
+});

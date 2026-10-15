@@ -2108,12 +2108,24 @@ class RouteTable {
     _updateOpenHint(heightPx) {
         // Every way of opening the body (toggle, un-compact, drag) passes here:
         // catch up on cells skipped while it was closed (updateLive, B3).
-        if (heightPx > 0 && this._cellsStale && !this._editMode) {
-            this._cellsStale = false;
-            if (!this._updateTableCells()) this._renderTable();
-        }
+        if (heightPx > 0) this._refreshStaleCells();
         if (!this._openHintEl) return;
         this._openHintEl.hidden = heightPx > 0;
+    }
+
+    /**
+     * The sheet was hidden some other way (the route planner sets it
+     * display:none) and is shown again: catch up on skipped cells now rather
+     * than at the next own-ship update (PR B review #7).
+     */
+    refreshIfStale() {
+        if ((this._bodyEl?.offsetHeight ?? 0) > 0) this._refreshStaleCells();
+    }
+
+    _refreshStaleCells() {
+        if (!this._cellsStale || this._editMode) return;
+        this._cellsStale = false;
+        if (!this._updateTableCells()) this._renderTable();
     }
 
     _autoPanOwnship() {

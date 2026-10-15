@@ -1295,6 +1295,7 @@ class FlyTabApp {
     closeRoutePlanner() {
         document.getElementById('cockpitContainer')?.classList.remove('route-editing', 'landscape');
         document.body.classList.remove('route-editing-mode');
+        this.routeTable?.refreshIfStale();      // the sheet is shown again (PR B review #7)
         this.routePlannerPanel?.close();
         setTimeout(() => this.cockpitMap?.map?.invalidateSize(), 300);
     }
