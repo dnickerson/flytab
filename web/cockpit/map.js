@@ -1879,8 +1879,11 @@ class CockpitMap {
         // 300 ms after the map settles, but at most LAYER_MAX_WAIT_MS after the
         // first request: while own-ship is followed the map never settles (B2).
         // Auto-pan moves refresh at most every LAYER_FOLLOW_MIN_INTERVAL_MS
-        // (PR B review #5), the pilot's own moves after 300 ms.
+        // (PR B review #5), the pilot's own moves after 300 ms -- not pushed
+        // back by a re-centre right after them.
+        if (fromFollow && this._fixUpdateTimer && this._userFixPending) return;
         if (this._fixUpdateTimer) clearTimeout(this._fixUpdateTimer);
+        if (!fromFollow) this._userFixPending = true;
         const now = Date.now();
         if (!this._fixPendingSince) this._fixPendingSince = now;
         let wait = Math.max(0, Math.min(300, this._fixPendingSince + CockpitMap.LAYER_MAX_WAIT_MS - now));
@@ -1891,6 +1894,7 @@ class CockpitMap {
         this._fixUpdateTimer = setTimeout(() => {
             this._fixUpdateTimer = null;
             this._fixPendingSince = 0;
+            this._userFixPending = false;
             this._lastFixRunAt = Date.now();
             this._updateFixOverlay();
         }, wait);

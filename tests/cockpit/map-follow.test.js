@@ -186,6 +186,44 @@ describe('layer refresh while following (PR B review #5)', () => {
     });
 });
 
+// Second PR B review, #3: an auto-pan re-centre arriving just after the pilot's
+// own move must not push the pilot's refresh back to the follow spacing.
+describe('pilot move, then an auto-pan re-centre (second PR B review #3)', () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it('vector layers: the pilot\'s refresh still comes 300 ms after their move', () => {
+        const v = Object.create(VectorMapLayers.prototype);
+        v._updateDynamicLayers = vi.fn();
+        v._scheduleUpdate(false);
+        vi.advanceTimersByTime(300);                  // a refresh 1 s ago...
+        vi.advanceTimersByTime(700);
+        expect(v._updateDynamicLayers).toHaveBeenCalledTimes(1);
+        v._scheduleUpdate(false);                     // ...the pilot zooms
+        vi.advanceTimersByTime(100);
+        v._scheduleUpdate(true);                      // own-ship re-centred 100 ms later
+        vi.advanceTimersByTime(200);
+        expect(v._updateDynamicLayers).toHaveBeenCalledTimes(2);
+        // and follow spacing applies again after that refresh
+        v._scheduleUpdate(true);
+        vi.advanceTimersByTime(300);
+        expect(v._updateDynamicLayers).toHaveBeenCalledTimes(2);
+    });
+
+    it('fix overlay: the same', () => {
+        const c = Object.create(CockpitMap.prototype);
+        c._updateFixOverlay = vi.fn();
+        c._scheduleFixUpdate(false);
+        vi.advanceTimersByTime(1000);
+        expect(c._updateFixOverlay).toHaveBeenCalledTimes(1);
+        c._scheduleFixUpdate(false);
+        vi.advanceTimersByTime(100);
+        c._scheduleFixUpdate(true);
+        vi.advanceTimersByTime(200);
+        expect(c._updateFixOverlay).toHaveBeenCalledTimes(2);
+    });
+});
+
 describe('NEXRAD canvas on map moves (B2)', () => {
     it('many move events in one frame: one redraw, on the next frame', () => {
         const frames = [];

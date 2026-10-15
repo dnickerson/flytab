@@ -857,8 +857,11 @@ class VectorMapLayers {
         // A move made by auto-pan also waits until FOLLOW_MIN_INTERVAL_MS after
         // the last refresh: at z12-14 a re-centre comes every 0.5-1 s, and a full
         // refresh after each one cost more than B0 (PR B review #5). The pilot's
-        // own moves (or anything else) still refresh after 300 ms.
+        // own moves (or anything else) still refresh after 300 ms, and a
+        // re-centre right after one doesn't push that refresh back.
+        if (fromFollow && this._updateTimer && this._userUpdatePending) return;
         if (this._updateTimer) clearTimeout(this._updateTimer);
+        if (!fromFollow) this._userUpdatePending = true;
         const now = Date.now();
         if (!this._updatePendingSince) this._updatePendingSince = now;
         let wait = Math.max(0, Math.min(300, this._updatePendingSince + VectorMapLayers.MAX_WAIT_MS - now));
@@ -870,6 +873,7 @@ class VectorMapLayers {
         this._updateTimer = setTimeout(() => {
             this._updateTimer = null;
             this._updatePendingSince = 0;
+            this._userUpdatePending = false;
             this._lastLayerRunAt = Date.now();
             this._updateDynamicLayers();
         }, wait);
