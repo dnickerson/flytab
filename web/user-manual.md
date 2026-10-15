@@ -70,11 +70,18 @@ FlyTab connects automatically on app launch. The status bar at the top shows con
 | **FIS-B** | UAT radio connected and receiving | — | No UAT data |
 | **FLT / HOME / NET / OFFL** | FLT = Stratux reachable; HOME = home server reachable | NET = internet only | OFFL = no network |
 | **NASR** | Database current | ≥7 days old | Very old |
-| **ML** | Engine anomaly score normal | Elevated | Anomaly detected |
+| **ML** | Engine anomaly score normal | **ML:OFF**: anomaly scoring isn't running (ML not available, or a model run never returned and FlyTab turned it off). **ML:ERR**: scoring has failed 5 samples in a row. Either way the rule-based engine warnings and advisories continue; restart FlyTab on the ground | Anomaly detected |
 | **REC** | Flight recording active | — | Not recording |
+| **Temperature (°)** | Tablet surface below 40 °C | 40–50 °C (warm; normal in direct sun) | 50 °C or more: flashing, with a *TABLET HOT* warning |
 | **PI vX.X** | Hidden — Pi build matches what this app requires | Shown — connected Pi's software is older than this app needs | — |
 
 The **advisory** badge appears between GPS and FIS-B when a weather advisory is active along the route.
+
+**Tablet hot (50 °C or more).** FlyTab keeps the screen on, and how it reacts to heat depends on whether a flight is being recorded (engine start until 60 seconds after shutdown):
+- **In flight:** the screen stays on, so the map and engine data stay in view (FlyTab keeps running either way). The warning reads *TABLET HOT 52°C — SHADE THE TABLET*. Get it out of direct sun or into airflow.
+- **On the ground:** FlyTab lets the screen time out so the tablet can cool, and the warning reads *TABLET HOT 52°C — SCREEN OFF OK*. If the engine starts while it's still hot, the screen is kept on again.
+
+FlyTab never dims the screen for heat. Tap the temperature badge for the readings.
 
 **The PI badge is hidden unless there's a mismatch.** It only appears when the connected Pi's engine monitor software is older than this build of FlyTab expects — a real possibility if the tablet gets updated without also redeploying the Pi (`bash deploy-pi.sh`). Tap it to open the ENG page, which carries the full detail: both version numbers and the exact command to run. Engine data keeps displaying normally either way — a mismatch is a preflight problem to fix on the ground, not a reason to lose the engine page in the air.
 
@@ -740,9 +747,11 @@ Recording stops automatically 60 seconds after engine shutdown (RPM ≤ 100). If
 
 **Multi-leg flights with a fuel stop:** If you power off the Stratux between legs, FlyTab will automatically stop the current recording after 2 minutes with no GPS or engine data. Each flight leg produces its own CSV file. The second leg's recording starts automatically on the next engine start after Stratux is powered back up.
 
+**If FlyTab restarts or closes during a flight:** the engine and GPS recording isn't lost or split. When FlyTab starts again within 10 minutes of its last save, it carries on in the same recording file, so the flight still gets one logbook entry. If it starts again later than that, or the engine had already been shut down, the unfinished recording is closed out (renamed, with a logbook entry) and a new one starts with the engine. A toast says what happened, e.g. *"FlyTab restarted itself after its display engine crashed at 12:11. Recording resumed."* Missing from the file: the seconds FlyTab was down, plus usually the last 5 seconds before it (up to about 15 if saves were failing). Not carried across a restart: the FIS-B weather log starts a new file, and the ML summary in the logbook covers only the part after the restart.
+
 ### Weather Recording
 
-When a flight is recorded, FlyTab simultaneously logs all FIS-B weather events to a companion file named `YYYYMMDD_HHMMZ_weather.ndjson` (e.g. `20260607_1430Z_weather.ndjson`). The file captures NEXRAD blocks, METARs, PIREPs, SIGMETs, AIRMETs, winds aloft, and NOTAMs received during the flight. At engine-off, the file is renamed to match the engine CSV (e.g. `20260607_KLKR-KFDK_weather.ndjson`).
+When a flight is recorded, FlyTab simultaneously logs all FIS-B weather events to a companion file named `YYYYMMDD_HHMMZ_weather.ndjson` (e.g. `20260607_1430Z_weather.ndjson`). The file captures NEXRAD blocks, METARs, PIREPs, SIGMETs, AIRMETs, winds aloft, and NOTAMs received during the flight. At engine-off, the file is renamed to match the engine CSV (e.g. `20260607_KLKR-KFDK_weather.ndjson`). The flight recording itself is renamed the same way (`20260607_KLKR-KFDK.csv`). A second flight on the same route that day gets `_2` (then `_3`, …), so it never overwrites the earlier one (e.g. `20260607_KLKR-KLKR_2.csv`). If the rename can't be confirmed, the recording keeps its start-time name (`20260607_1430Z.csv`); nothing is deleted until the renamed copy has been read back and checked.
 
 This file is available for post-flight review in fly-debrief as a weather replay layer — scrub through the flight to see what weather looked like at each point in time.
 
@@ -838,6 +847,13 @@ Charts for this area are not downloaded. Either download the region (LAYERS → 
 
 **NASR badge is red:**
 Airport/navaid database is stale. Connect to home Wi-Fi with home server running and restart FlyTab — it auto-downloads fresh NASR data on startup.
+
+**Screen off or another app in front:** FlyTab keeps running: engine alerts are checked, the flight is recorded and traffic is tracked. (Before v11.19, Android's WebView stopped FlyTab about 30–40 seconds after it left the screen.) To save work it stops re-centring the map and redrawing traffic while it's off screen, and catches up when you come back. It keeps the tablet's CPU awake to do this, so close FlyTab with the back button when you're done flying.
+
+**"FlyTab wasn't running for N min":** if anything still stops FlyTab, it tells you when it gets going again, for example *"FlyTab wasn't running for 4 min (12:13–12:17). Engine alerts and the flight recording were off."* The message is also in the diagnostic log. FlyTab only reports gaps of 15 seconds or more.
+
+**FlyTab restarted or closed on its own:**
+FlyTab's screen runs in Android's WebView ("display engine"). If the WebView crashes, FlyTab restarts itself in a few seconds when it's on screen. A toast gives the time, and the flight recording carries on. If FlyTab was in the background or the screen was off, it closes instead (Android doesn't let it reopen itself) and posts a **"FlyTab closed — engine monitoring and recording are off — tap to restart"** notification with sound: tap it, or FlyTab, to start again. After two restarts within 5 minutes it stops restarting itself, so it can't loop, and posts the same notification. Notifications need permission: FlyTab asks once at startup (Android 13 and later); if you said no, allow them in Android Settings → Apps → FlyTab → Notifications. Each event is in the diagnostic log (long-press the version badge). WebView updates itself through the Play Store, separately from FlyTab; on 2026-10-14 version 155.0.8059.43 crashed in flight the day after it installed.
 
 **App is very slow after a long route import:**
 The NASR import writes ~100,000 records to IndexedDB. If this happens during startup, wait for the progress bar to complete. Force-stopping during import can leave the database in a locked state; force-stop and relaunch to recover.

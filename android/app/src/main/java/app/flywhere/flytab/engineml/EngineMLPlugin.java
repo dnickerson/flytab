@@ -147,20 +147,22 @@ public class EngineMLPlugin extends Plugin {
                     System.arraycopy(window[idx], 0, orderedWindow[i], 0, N_FEATURES);
                 }
 
+                boolean scored = false;
+                boolean anomaly = false;
+                float score = 0f;
                 try {
                     // Run inference — throws TimeoutException if interpreter.run() hangs
-                    float score = inferenceEngine.runInference(orderedWindow);
+                    score = inferenceEngine.runInference(orderedWindow);
                     float threshold = thresholdAdapter.getThreshold(phase);
-                    boolean anomaly = score > threshold;
+                    anomaly = score > threshold;
+                    scored = true;
 
                     // Adapt threshold with normal scores
                     if (!anomaly) {
                         thresholdAdapter.recordNormalScore(phase, score);
                     }
 
-                    List<EngineAdvisor.Advisory> advisories = engineAdvisor.advise(
-                        features, phase, score, anomaly, distanceNm, groundSpeed);
-
+                    ret.put("mlState", "ok");
                     ret.put("score", score);
                     ret.put("threshold", threshold);
                     ret.put("anomaly", anomaly);
@@ -180,22 +182,32 @@ public class EngineMLPlugin extends Plugin {
                         }
                         ret.put("featureErrors", errArr);
                     }
-
-                    // Advisories from advise()
-                    for (EngineAdvisor.Advisory adv : advisories) {
-                        JSObject a = new JSObject();
-                        a.put("message", adv.message);
-                        a.put("severity", adv.severity);
-                        a.put("category", adv.category);
-                        advArr.put(a);
-                    }
-
+                } catch (InferenceGate.SkippedException se) {
+                    // A previous run is still in the Interpreter, or ML was turned off
+                    // because one never returned (see InferenceGate). No score.
+                    ret.put("mlState", se.disabled ? "disabled" : "busy");
                 } catch (TimeoutException te) {
                     // Inference hung — resolve without score so the plugin stays responsive.
                     // The JS side will see phase+windowReady but no score for this sample.
                     Log.w(TAG, "Inference timed out — resolving without score");
+                    ret.put("mlState", "timeout");
                 } catch (Exception ie) {
                     Log.w(TAG, "Inference error — resolving without score", ie);
+                    ret.put("mlState", "error");
+                }
+
+                // Rule-based advisories (trends, correlated alerts, lead fouling,
+                // mixture, carb ice) don't use the ML score: run them whether or not
+                // this sample was scored. They used to run only after a successful
+                // inference, so they went quiet whenever ML did.
+                List<EngineAdvisor.Advisory> advisories = engineAdvisor.advise(
+                    features, phase, score, anomaly, distanceNm, groundSpeed, scored);
+                for (EngineAdvisor.Advisory adv : advisories) {
+                    JSObject a = new JSObject();
+                    a.put("message", adv.message);
+                    a.put("severity", adv.severity);
+                    a.put("category", adv.category);
+                    advArr.put(a);
                 }
             }
 

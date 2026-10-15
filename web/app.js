@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v11.7';
+const FLYTAB_VERSION = 'v11.23';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -182,10 +182,20 @@ class FlyTabApp {
             document.getElementById('simBanner').hidden = false;
         }
 
+        // Real on-screen state (the page always looks visible: KeepAliveWebView)
+        this._initScreenState();
+
         // Keep screen on
         this._acquireWakeLock();
         document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'visible') this._acquireWakeLock();
+            // Android drops the lock when FlyTab is hidden. Take it back on return,
+            // unless heat released it on purpose (_applyThermalWakeLock).
+            if (document.visibilityState === 'visible' && !this._thermalWakeLockReleased) this._acquireWakeLock();
+        });
+        // The page never looks hidden now (KeepAliveWebView), so also take the lock
+        // back on the real return to screen, in case Android or Chromium dropped it.
+        window.addEventListener('flytab:screen', (e) => {
+            if (e.onScreen && !this._thermalWakeLockReleased) this._acquireWakeLock();
         });
 
         // Network mode detection
@@ -203,6 +213,11 @@ class FlyTabApp {
 
         // Start thermal monitor
         this._initThermalMonitor();
+
+        // Hang watchdog and pause detector before the cockpit: _initCockpit awaits
+        // the NASR load, which can stall (CLAUDE.md: IDB transaction hang).
+        this._startWatchdog();
+        this._startPauseDetector();
 
         // Initialize cockpit
         await this._initCockpit();
@@ -230,7 +245,6 @@ class FlyTabApp {
         DiagLog.log('init', `FlyTab ${FLYTAB_VERSION} initialized`);
         console.log(`FlyTab ${FLYTAB_VERSION} initialized`);
 
-        this._startWatchdog();
         window.addEventListener('resize', () => {
             if (document.getElementById('cockpitContainer')?.classList.contains('route-editing')) {
                 this._updateOrientation();
@@ -296,9 +310,14 @@ class FlyTabApp {
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'visible') lastFrame = Date.now();
         });
+        // The page always looks visible now (KeepAliveWebView); MainActivity says
+        // when FlyTab is really back on screen.
+        window.addEventListener('flytab:screen', (e) => { if (e.onScreen) lastFrame = Date.now(); });
 
         setInterval(() => {
-            if (document.visibilityState !== 'visible') return;
+            // Off screen nothing is drawn, so rAF stops: not a hang. On the tablet
+            // that logged a false "JS hang" every few seconds with the screen off.
+            if (document.visibilityState !== 'visible' || this._onScreen === false) return;
             const age = Date.now() - lastFrame;
             if (age > 3000) {
                 DiagLog.log('error', `JS hang: rAF stalled ${age}ms`);
@@ -308,6 +327,59 @@ class FlyTabApp {
                 if (verEl) verEl.style.background = 'var(--status-danger)';
             }
         }, 3000);
+    }
+
+    /**
+     * Start one subsystem. If it throws, log it and carry on: since A4 the engine
+     * and recording block runs before the NASR load, and one failure there must
+     * not also stop airport data, the airport popup and everything after it.
+     */
+    _guard(name, fn) {
+        try {
+            return fn();
+        } catch (err) {
+            console.error(`[FlyTab] ${name} failed to start:`, err);
+            DiagLog.log('error', `${name} failed to start: ${err?.message || err}`);
+            return undefined;
+        }
+    }
+
+    /**
+     * Is FlyTab really on screen? KeepAliveWebView tells Chromium the page is
+     * always visible (so it isn't frozen when hidden), so document.visibilityState
+     * no longer says. MainActivity sends 'flytab:screen' { onScreen } on every
+     * change; AppHealth.isOnScreen() gives the state at startup.
+     */
+    _initScreenState() {
+        this._onScreen = true;
+        let eventSeen = false;
+        window.addEventListener('flytab:screen', (e) => { eventSeen = true; this._onScreen = !!e.onScreen; });
+        const health = window.Capacitor?.Plugins?.AppHealth;
+        health?.isOnScreen?.()
+            .then((r) => {
+                if (!eventSeen && typeof r?.onScreen === 'boolean') this._onScreen = r.onScreen;
+                if (r?.keepAlive === false) {
+                    DiagLog.log('error', 'KeepAliveWebView not in use: FlyTab will be frozen ~30–40 s after leaving the screen (Capacitor layout override not applied?)');
+                }
+            })
+            .catch(() => {});
+    }
+
+    /**
+     * Tell the pilot whenever FlyTab's JavaScript wasn't running (engine alerts,
+     * recording and traffic were off). Started after init, so the startup work
+     * itself isn't reported.
+     */
+    _startPauseDetector() {
+        if (typeof PauseDetector === 'undefined') return;
+        this.pauseDetector = new PauseDetector({
+            onPause: (p) => {
+                const msg = PauseDetector.message(p, !!this.flightRecorder?.recording);
+                DiagLog.log('error', msg, { durationMs: Math.round(p.durationMs), onScreen: this._onScreen });
+                this.showToast(msg);
+            },
+        });
+        this.pauseDetector.start();
     }
 
     /** Show diagnostic log overlay */
@@ -474,6 +546,161 @@ class FlyTabApp {
             this.cockpitMap.switchBaseLayer('vector');
         }
 
+        // ---- Engine monitoring, flight recording and logbook: before any NASR wait ----
+        // None of this needs NASR at startup (the recorder and logbook only look up
+        // airports when a flight ends, with timeouts). It used to come after
+        // _ensureNasrData, so a NASR import -- 18 MB parse + 98k writes -- or a
+        // stuck IndexedDB left the tablet with no engine data, no engine alerts, no
+        // sticky-valve check and no recording until it finished, or forever (A4).
+        // Keep this order: StickyValve and EnginePanel before EnginePage (it reads
+        // window.stickyValve once at construction), EmergencyGlide before EngineML.
+
+        // Engine client (WebSocket to Pi engine monitor)
+        this._guard('Engine client', () => {
+            const _engCfg = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.raw : {};
+            this.engineClient = new EngineClient(
+                _engCfg.engineIp       ?? '192.168.10.1',
+                _engCfg.engineWsPort   ?? 8082,
+                _engCfg.engineHttpPort ?? 8080,
+            );
+            this.engineClient.connect();
+            window.engineClient = this.engineClient;
+        });
+
+        // Sticky valve check (the Pi's old rule, now run here), with its warning
+        // over the map; the ENG page shows the same warning (window.stickyValve).
+        this._guard('Sticky-valve check', () => {
+            if (typeof StickyValveMonitor !== 'undefined') {
+                this.stickyValve = new StickyValveMonitor(this.engineClient);
+                window.stickyValve = this.stickyValve;
+                const mapArea = document.getElementById('mapContainer');
+                if (mapArea && typeof StickyValveBanner !== 'undefined') {
+                    this.stickyValveBanner = new StickyValveBanner(mapArea, this.stickyValve, 'map');
+                }
+                this.stickyValve.addEventListener('alert', (e) => {
+                    const message = `Sticky valve warning: ${StickyValveMonitor.describe(e.detail)}`;
+                    console.warn(`[StickyValve] ${message}`);
+                    // Kept across restarts in the diagnostic log (long-press the version
+                    // badge); the ML advisory log is in memory only.
+                    DiagLog.log('engine', message, { cyl: e.detail.cyl, egt: e.detail.egt, othersAvg: e.detail.othersAvg });
+                    window.engineML?.recordAdvisory?.({ type: `sticky_valve_cyl${e.detail.cyl}`, message, severity: 'caution' });
+                });
+            }
+        });
+
+        // Engine GPS bridge — injects engine GPS when Stratux situation WS is unavailable
+        this._guard('Engine GPS bridge', () => {
+            if (typeof EngineGpsBridge !== 'undefined') {
+                this.engineGpsBridge = new EngineGpsBridge(this.stratuxClient, this.engineClient);
+                this.engineGpsBridge.start();
+            }
+            this.positionHealth?.setSources({ engine: this.engineClient, bridge: this.engineGpsBridge });
+        });
+
+
+        // Engine panel (receives data via WebSocket push)
+        this._guard('Engine panel', () => {
+            this.enginePanel = new EnginePanel(document.createElement('div'), this.engineClient);
+            this.enginePanel.init();
+            window.enginePanel = this.enginePanel;
+        });
+
+        // Emergency Glide Calculator (must init before EngineML so trigger() is available)
+        this._guard('Emergency glide', () => {
+            if (typeof EmergencyGlide !== 'undefined') {
+                this.emergencyGlide = new EmergencyGlide();
+            }
+        });
+
+        // Engine ML (anomaly detection + advisories)
+        this._guard('Engine ML', () => {
+            if (typeof EngineMLBridge !== 'undefined') {
+                this.engineML = new EngineMLBridge();
+                // Wired up and listening right away, not after init(): the physics rules
+                // don't need the plugin, and a plugin initialize() that never settles
+                // (model warmup has no timeout) must not take them down with it. ML
+                // inference joins in once init() succeeds (_initialized).
+                this.engineML.setDisplayElements(
+                    document.getElementById('statusML'),
+                    document.getElementById('engineAdvisory')
+                );
+                this.engineML.start(this.engineClient, this.stratuxClient);
+                this.engineML.init();
+            }
+        });
+
+        // Wire flight recording events to ML logging
+        window.addEventListener('flightsync:started', () => {
+            window.engineML?.startLogging();
+        });
+        window.addEventListener('flightsync:stopped', () => {
+            window.engineML?.stopLogging();
+        });
+
+        // Engine overlay (floats on the map). Fed by the engine client itself --
+        // it used to refresh only on Stratux situation events, so it froze
+        // whenever Stratux GPS did.
+        this._guard('Engine overlay', () => {
+            if (typeof EngineOverlay !== 'undefined') {
+                this.engineOverlay = new EngineOverlay(primaryView, this.engineClient);
+            }
+        });
+
+        // Engine page (full-screen overlay, accessed via [ENG] button)
+        this._guard('ENG page', () => {
+            if (typeof EnginePage !== 'undefined') {
+                this.enginePage = new EnginePage(document.body, this.enginePanel);
+                this.cockpitMap.setEnginePage(this.enginePage);
+                // Wire close callback so tab bar returns to map when ✕ is tapped
+                this.enginePage.onClose = () => this.tabBar?.selectTab('map');
+            }
+        });
+
+        // Flight recorder (records engine + GPS to Savvy CSV on device)
+        this._guard('Flight recorder', () => {
+            if (typeof FlightRecorder !== 'undefined') {
+                this.flightRecorder = new FlightRecorder(this.engineClient, this.stratuxClient, nasrDb);
+                this.flightRecorder.init();
+                window.flightRecorder = this.flightRecorder;
+                // Update REC badge from flight recorder
+                this.flightRecorder.onStatusChange = (status) => {
+                    const recEl = this.dom.statusRec;
+                    if (recEl) {
+                        if (status.recording) {
+                            recEl.textContent = `● REC ${status.rowCount}`;
+                            recEl.hidden = false;
+                        } else {
+                            recEl.hidden = true;
+                        }
+                    }
+                };
+                // Also update REC badge every 2s while recording
+                setInterval(() => {
+                    const recEl = this.dom.statusRec;
+                    if (recEl && this.flightRecorder.recording) {
+                        recEl.textContent = `● REC ${this.flightRecorder.rowCount}`;
+                        recEl.hidden = false;
+                    } else if (recEl && !this.flightRecorder.recording) {
+                        recEl.hidden = true;
+                    }
+                }, 2000);
+            }
+        });
+
+        // Logbook (auto-creates entries from FlightSync)
+        this._guard('Logbook', () => {
+            if (typeof Logbook !== 'undefined') {
+                this.logbook = new Logbook(nasrDb);
+                this.cockpitMap.setLogbook(this.logbook);
+            }
+        });
+
+        // After a restart (the WebView renderer died, or Android ended FlyTab):
+        // log it, and carry on or close out the unfinished recording. Needs the
+        // recorder and the logbook; not awaited.
+        this._recoverAfterRestart();
+        // ---- end of engine / recording / logbook ----
+
         // NASR data import — must complete before plan load so _applyPlan() can stamp type:'APT'
         await this._ensureNasrData(nasrDb);
 
@@ -533,91 +760,6 @@ class FlyTabApp {
             }
         }
 
-        // Engine client (WebSocket to Pi engine monitor)
-        const _engCfg = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.raw : {};
-        this.engineClient = new EngineClient(
-            _engCfg.engineIp       ?? '192.168.10.1',
-            _engCfg.engineWsPort   ?? 8082,
-            _engCfg.engineHttpPort ?? 8080,
-        );
-        this.engineClient.connect();
-        window.engineClient = this.engineClient;
-
-        // Sticky valve check (the Pi's old rule, now run here), with its warning
-        // over the map; the ENG page shows the same warning (window.stickyValve).
-        if (typeof StickyValveMonitor !== 'undefined') {
-            this.stickyValve = new StickyValveMonitor(this.engineClient);
-            window.stickyValve = this.stickyValve;
-            const mapArea = document.getElementById('mapContainer');
-            if (mapArea && typeof StickyValveBanner !== 'undefined') {
-                this.stickyValveBanner = new StickyValveBanner(mapArea, this.stickyValve, 'map');
-            }
-            this.stickyValve.addEventListener('alert', (e) => {
-                const message = `Sticky valve warning: ${StickyValveMonitor.describe(e.detail)}`;
-                console.warn(`[StickyValve] ${message}`);
-                // Kept across restarts in the diagnostic log (long-press the version
-                // badge); the ML advisory log is in memory only.
-                DiagLog.log('engine', message, { cyl: e.detail.cyl, egt: e.detail.egt, othersAvg: e.detail.othersAvg });
-                window.engineML?.recordAdvisory?.({ type: `sticky_valve_cyl${e.detail.cyl}`, message, severity: 'caution' });
-            });
-        }
-
-        // Engine GPS bridge — injects engine GPS when Stratux situation WS is unavailable
-        if (typeof EngineGpsBridge !== 'undefined') {
-            this.engineGpsBridge = new EngineGpsBridge(this.stratuxClient, this.engineClient);
-            this.engineGpsBridge.start();
-        }
-        this.positionHealth?.setSources({ engine: this.engineClient, bridge: this.engineGpsBridge });
-
-
-        // Engine panel (receives data via WebSocket push)
-        this.enginePanel = new EnginePanel(document.createElement('div'), this.engineClient);
-        this.enginePanel.init();
-        window.enginePanel = this.enginePanel;
-
-        // Emergency Glide Calculator (must init before EngineML so trigger() is available)
-        if (typeof EmergencyGlide !== 'undefined') {
-            this.emergencyGlide = new EmergencyGlide();
-        }
-
-        // Engine ML (anomaly detection + advisories)
-        if (typeof EngineMLBridge !== 'undefined') {
-            this.engineML = new EngineMLBridge();
-            // Wired up and listening right away, not after init(): the physics rules
-            // don't need the plugin, and a plugin initialize() that never settles
-            // (model warmup has no timeout) must not take them down with it. ML
-            // inference joins in once init() succeeds (_initialized).
-            this.engineML.setDisplayElements(
-                document.getElementById('statusML'),
-                document.getElementById('engineAdvisory')
-            );
-            this.engineML.start(this.engineClient, this.stratuxClient);
-            this.engineML.init();
-        }
-
-        // Wire flight recording events to ML logging
-        window.addEventListener('flightsync:started', () => {
-            window.engineML?.startLogging();
-        });
-        window.addEventListener('flightsync:stopped', () => {
-            window.engineML?.stopLogging();
-        });
-
-        // Engine overlay (floats on the map). Fed by the engine client itself --
-        // it used to refresh only on Stratux situation events, so it froze
-        // whenever Stratux GPS did.
-        if (typeof EngineOverlay !== 'undefined') {
-            this.engineOverlay = new EngineOverlay(primaryView, this.engineClient);
-        }
-
-        // Engine page (full-screen overlay, accessed via [ENG] button)
-        if (typeof EnginePage !== 'undefined') {
-            this.enginePage = new EnginePage(document.body, this.enginePanel);
-            this.cockpitMap.setEnginePage(this.enginePage);
-            // Wire close callback so tab bar returns to map when ✕ is tapped
-            this.enginePage.onClose = () => this.tabBar?.selectTab('map');
-        }
-
         // PlanSync — fetches flight plans from flywhere.app
         if (typeof PlanSync !== 'undefined') {
             this.planSync = new PlanSync();
@@ -649,35 +791,6 @@ class FlyTabApp {
             this.fuelTanksDisplay.init();
         }
 
-        // Flight recorder (records engine + GPS to Savvy CSV on device)
-        if (typeof FlightRecorder !== 'undefined') {
-            this.flightRecorder = new FlightRecorder(this.engineClient, this.stratuxClient, nasrDb);
-            this.flightRecorder.init();
-            window.flightRecorder = this.flightRecorder;
-            // Update REC badge from flight recorder
-            this.flightRecorder.onStatusChange = (status) => {
-                const recEl = this.dom.statusRec;
-                if (recEl) {
-                    if (status.recording) {
-                        recEl.textContent = `● REC ${status.rowCount}`;
-                        recEl.hidden = false;
-                    } else {
-                        recEl.hidden = true;
-                    }
-                }
-            };
-            // Also update REC badge every 2s while recording
-            setInterval(() => {
-                const recEl = this.dom.statusRec;
-                if (recEl && this.flightRecorder.recording) {
-                    recEl.textContent = `● REC ${this.flightRecorder.rowCount}`;
-                    recEl.hidden = false;
-                } else if (recEl && !this.flightRecorder.recording) {
-                    recEl.hidden = true;
-                }
-            }, 2000);
-        }
-
         // Flight sync (monitors capture_v5 recording, syncs CSVs to iPad — legacy)
         if (typeof FlightSync !== 'undefined' && typeof FlightRecorder === 'undefined') {
             this.flightSync = new FlightSync();
@@ -687,12 +800,6 @@ class FlyTabApp {
                 const engineData = this.enginePanel?.lastData || null;
                 this.flightSync.update(engineData);
             }, 2000);
-        }
-
-        // Logbook (auto-creates entries from FlightSync)
-        if (typeof Logbook !== 'undefined') {
-            this.logbook = new Logbook(nasrDb);
-            this.cockpitMap.setLogbook(this.logbook);
         }
 
         // Flight Upload panel
@@ -810,6 +917,9 @@ class FlyTabApp {
         if (typeof FisbLogger !== 'undefined' && this.fisbClient) {
             this.fisbLogger = new FisbLogger(this.fisbClient);
             this.fisbLogger.init();
+            // A recording resumed after a restart announced itself (flightsync:started)
+            // during startup, before this logger existed: start weather logging now.
+            if (this.flightRecorder?.recording) this.fisbLogger._onFlightStart();
         }
 
         // Lightning strikes (Blitzortung WebSocket)
@@ -1018,6 +1128,14 @@ class FlyTabApp {
         // NanoHTTPD (localhost:9090) is the sole local data source.
         // Re-import only if NanoHTTPD has a newer cycle than the DB.
         // Never downgrade: if NanoHTTPD is older than DB, keep DB.
+        try {
+            await nasrDb.open();
+        } catch (err) {
+            // Stuck or failed (open() times out): importing would parse ~18 MB only
+            // to fail writing it. Carry on without; a restart usually clears it.
+            DiagLog.log('error', `NASR database unavailable — ${err?.message || err}; skipping NASR check/import`);
+            return;
+        }
         try {
             const [localFile, dbCycle, testApt] = await Promise.all([
                 fetch('http://localhost:9090/nasr/cycle_info.json', { signal: AbortSignal.timeout(2000) })
@@ -1429,14 +1547,23 @@ class FlyTabApp {
 
     // === Wake Lock ==========
 
+    // One lock at most. Requests can overlap (return to FlyTab + flight start):
+    // an older lock is released when a newer one arrives, and a release that
+    // comes while a request is pending wins, so the screen really can time out.
     async _acquireWakeLock() {
         if (!('wakeLock' in navigator)) return;
+        this._wakeLockWanted = true;
         try {
-            this._wakeLock = await navigator.wakeLock.request('screen');
+            const lock = await navigator.wakeLock.request('screen');
+            if (!this._wakeLockWanted) { lock.release().catch(() => {}); return; }
+            const old = this._wakeLock;
+            this._wakeLock = lock;
+            if (old && old !== lock) old.release().catch(() => {});
         } catch { /* denied or not supported — silently ignore */ }
     }
 
     _releaseWakeLock() {
+        this._wakeLockWanted = false;
         if (this._wakeLock) {
             this._wakeLock.release().catch(() => {});
             this._wakeLock = null;
@@ -1451,22 +1578,43 @@ class FlyTabApp {
         const badge = document.getElementById('statusThermal');
         if (badge) this.thermalMonitor.start(badge);
 
-        // When thermal warning fires, release wake lock so pilot can turn screen off
+        // Hot tablet (surface >= 50 °C): on the ground, let the screen time out so
+        // it can cool. Never during a flight (recording: engine start until 60 s
+        // after shutdown): a dark screen gets FlyTab paused -- no engine alerts, no
+        // recording (A5). The warning says what to do in each case.
+        this._thermalHot = false;
         this._thermalWakeLockReleased = false;
+        this.thermalMonitor.isInFlight = () => !!this.flightRecorder?.recording;
         const origUpdate = this.thermalMonitor._updateWarning.bind(this.thermalMonitor);
         this.thermalMonitor._updateWarning = (data) => {
+            this._thermalHot = data.surfaceTemp >= 50;
             origUpdate(data);
-            const hot = data.surfaceTemp >= 50;
-            if (hot && !this._thermalWakeLockReleased) {
-                this._releaseWakeLock();
-                this._thermalWakeLockReleased = true;
-                DiagLog.log('thermal', 'Wake lock released — tablet hot, screen can turn off');
-            } else if (!hot && this._thermalWakeLockReleased) {
-                this._acquireWakeLock();
-                this._thermalWakeLockReleased = false;
-                DiagLog.log('thermal', 'Wake lock re-acquired — tablet cooled');
-            }
+            this._applyThermalWakeLock();
         };
+        // A flight starting or ending changes the answer before the next 30 s poll.
+        const refresh = () => {
+            const d = this.thermalMonitor.lastData;
+            if (d) this.thermalMonitor._updateWarning(d);
+            else this._applyThermalWakeLock();
+        };
+        window.addEventListener('flightsync:started', refresh);
+        window.addEventListener('flightsync:stopped', refresh);
+    }
+
+    _applyThermalWakeLock() {
+        const inFlight = !!this.flightRecorder?.recording;
+        const release = this._thermalHot && !inFlight;
+        if (release && !this._thermalWakeLockReleased) {
+            this._releaseWakeLock();
+            this._thermalWakeLockReleased = true;
+            DiagLog.log('thermal', 'Wake lock released — tablet hot on the ground, screen can turn off');
+        } else if (!release && this._thermalWakeLockReleased) {
+            this._acquireWakeLock();
+            this._thermalWakeLockReleased = false;
+            DiagLog.log('thermal', this._thermalHot
+                ? 'Wake lock re-acquired — flight started, screen kept on although hot'
+                : 'Wake lock re-acquired — tablet cooled');
+        }
     }
 
     // === Clock ==========
@@ -2115,6 +2263,61 @@ class FlyTabApp {
             if (this.dataStatus) this.dataStatus.show();
         });
         banner.querySelector('#_drDismissBtn').addEventListener('click', () => banner.remove());
+    }
+
+    /**
+     * What happened to the previous run, in the diagnostic log and one toast:
+     * WebView renderer deaths recorded natively (MainActivity.handleRendererGone,
+     * via AppHealth), and what became of an unfinished recording
+     * (FlightRecorder.recoverUnfinished). 2026-10-14: a renderer crash in flight
+     * took FlyTab down and split the recording.
+     */
+    async _recoverAfterRestart() {
+        const health = window.Capacitor?.Plugins?.AppHealth;
+        const takeEvents = async () => {
+            if (!health?.takeRendererEvents) return [];
+            try { return (await health.takeRendererEvents())?.events || []; }
+            catch (err) { DiagLog.log('error', `AppHealth: ${err?.message || err}`); return []; }
+        };
+        const recover = async () => {
+            if (!this.flightRecorder) return null;
+            try { return await this.flightRecorder.recoverUnfinished(); }
+            catch (err) { DiagLog.log('error', `Recording recovery failed: ${err?.message || err}`); return null; }
+        };
+        const [events, recovery] = await Promise.all([takeEvents(), recover()]);
+        for (const e of events) DiagLog.log('error', FlyTabApp.describeRendererEvent(e), { priority: e.priority });
+        const msg = FlyTabApp.restartMessage(events[events.length - 1] || null, recovery);
+        if (msg) this.showToast(msg);
+    }
+
+    /** One AppHealth renderer event, for the diagnostic log. */
+    static describeRendererEvent(e) {
+        const t = new Date(e.at), p = (n) => String(n).padStart(2, '0');
+        const when = `${p(t.getHours())}:${p(t.getMinutes())}:${p(t.getSeconds())}`;
+        const what = e.didCrash ? 'crashed' : 'was closed by Android';
+        const then = {
+            RESTART: 'FlyTab restarted itself',
+            CLOSE_IN_BACKGROUND: 'FlyTab was in the background and closed',
+            GIVE_UP: 'FlyTab stopped restarting itself (repeated crashes)',
+        }[e.action] || `action ${e.action}`;
+        return `WebView renderer ${what} at ${when} — ${then}`;
+    }
+
+    /** The pilot's toast after a restart, or '' when there's nothing to say. */
+    static restartMessage(lastEvent, recovery) {
+        const parts = [];
+        if (lastEvent) {
+            const t = new Date(lastEvent.at), p = (n) => String(n).padStart(2, '0');
+            const when = `${p(t.getHours())}:${p(t.getMinutes())}`;
+            const what = lastEvent.didCrash ? 'crashed' : 'was closed by Android';
+            parts.push({
+                RESTART: `FlyTab restarted itself after its display engine ${what} at ${when}.`,
+                GIVE_UP: `FlyTab's display engine kept crashing (last at ${when}), so FlyTab stopped restarting itself.`,
+            }[lastEvent.action] || `FlyTab's display engine ${what} at ${when}, so FlyTab closed.`);
+        }
+        if (recovery === 'resumed') parts.push('Recording resumed.');
+        if (recovery === 'closed') parts.push('The previous recording was closed out; its logbook entry follows.');
+        return parts.join(' ');
     }
 
     showToast(message, actions = []) {

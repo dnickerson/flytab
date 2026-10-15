@@ -265,6 +265,11 @@ class CockpitMap {
         // Periodic traffic cleanup
         this._trafficTimer = setInterval(() => this._updateTraffic(), 2000);
 
+        // Off screen nothing is drawn but FlyTab keeps running (KeepAliveWebView):
+        // re-centring and traffic markers are skipped then, and caught up here.
+        this._onScreenChangeHandler = (e) => this._onScreenChange(e);
+        window.addEventListener('flytab:screen', this._onScreenChangeHandler);
+
         // Suppress synthetic clicks that follow a Leaflet popup close button tap.
         // The X button is inside the map container but outside wireTap, so _wireTapLastTouchAt
         // is never set. Track the last touchend on the map container; on popupclose, if a touch
@@ -317,6 +322,10 @@ class CockpitMap {
             this._onNotamTfrs = null;
         }
         if (this._trafficTimer) { clearInterval(this._trafficTimer); this._trafficTimer = null; }
+        if (this._onScreenChangeHandler) {
+            window.removeEventListener('flytab:screen', this._onScreenChangeHandler);
+            this._onScreenChangeHandler = null;
+        }
         if (this._fixUpdateTimer) { clearTimeout(this._fixUpdateTimer); this._fixUpdateTimer = null; }
         if (this._radarBadgeTimer) { clearInterval(this._radarBadgeTimer); this._radarBadgeTimer = null; }
         if (this._zoomBadgeHandler && this.map) { this.map.off('zoomend', this._zoomBadgeHandler); this._zoomBadgeHandler = null; }
@@ -1050,7 +1059,10 @@ class CockpitMap {
 
         // Always pan to first GPS fix so pilot can find ownship on startup.
         // Continue panning on subsequent updates only if auto-pan is enabled.
-        if (isFirstFix || this._autoPan) {
+        // Not while off screen: an animated pan ~10x a second redraws vector
+        // layers for nobody (_onScreenChange re-centres on return).
+        if (isFirstFix && CockpitMap.offScreen()) this._firstPanPending = true;
+        if ((isFirstFix || this._autoPan) && !CockpitMap.offScreen()) {
             this.map.panTo(pos, { animate: !isFirstFix, duration: 0.5 });
         }
 
@@ -1224,7 +1236,23 @@ class CockpitMap {
 
     // ========== Traffic ==========
 
+    /** FlyTab is not on screen (MainActivity via app._onScreen). Unknown counts as on screen. */
+    static offScreen() {
+        return typeof window !== 'undefined' && window.app?._onScreen === false;
+    }
+
+    /** Back on screen: catch up on what was skipped while off screen. */
+    _onScreenChange(e) {
+        if (!e?.onScreen) return;
+        this._updateTraffic();
+        const pos = this.ownshipMarker?.getLatLng?.();
+        if ((this._autoPan || this._firstPanPending) && pos) this.map.panTo(pos, { animate: false });
+        this._firstPanPending = false;
+    }
+
     _updateTraffic() {
+        // Markers only: nothing else depends on this. Rebuilt on return to screen.
+        if (CockpitMap.offScreen()) return;
         const now = Date.now();
         const seen = new Set();
 

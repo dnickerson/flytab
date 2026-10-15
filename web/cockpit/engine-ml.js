@@ -992,6 +992,45 @@ class EngineMLBridge {
     _updateDisplay(result) {
         if (!result) return;
 
+        // ML inference turned off for this session: a TFLite run never returned
+        // (EngineMLPlugin / InferenceGate). Say so -- with no score, the branches
+        // below would show a healthy green "ML:<phase>". Rule-based advisories
+        // don't depend on it and keep running.
+        if (result.mlState === 'disabled') {
+            if (!this._mlDisabledLogged) {
+                this._mlDisabledLogged = true;
+                if (typeof DiagLog !== 'undefined') DiagLog.log('error', 'ML inference turned off: a model run never returned. Anomaly scores are off until FlyTab restarts; rule-based engine advisories continue.');
+            }
+            if (this._badgeEl) {
+                this._badgeEl.textContent = 'ML:OFF';
+                this._badgeEl.style.color = 'var(--color-caution-on-light)';
+                this._badgeEl.style.animation = '';
+            }
+            document.dispatchEvent(new CustomEvent('engineml:result', { detail: result }));
+            return;
+        }
+
+        // No score this sample: the previous run was still going (busy), it timed
+        // out, or it failed. Keep what the badge shows -- only a real score may
+        // paint it green (a busy sample used to overwrite ML:ALERT with green).
+        // Repeated failures show ML:ERR.
+        if (result.windowReady && result.mlState && result.mlState !== 'ok') {
+            if (result.mlState === 'error') {
+                this._mlErrorCount = (this._mlErrorCount || 0) + 1;
+                if (this._mlErrorCount === EngineMLBridge.ERROR_BADGE_AFTER && typeof DiagLog !== 'undefined') {
+                    DiagLog.log('error', `ML inference failed ${EngineMLBridge.ERROR_BADGE_AFTER} samples in a row`);
+                }
+                if (this._mlErrorCount >= EngineMLBridge.ERROR_BADGE_AFTER && this._badgeEl) {
+                    this._badgeEl.textContent = 'ML:ERR';
+                    this._badgeEl.style.color = 'var(--color-caution-on-light)';
+                    this._badgeEl.style.animation = '';
+                }
+            }
+            document.dispatchEvent(new CustomEvent('engineml:result', { detail: result }));
+            return;
+        }
+        if (result.mlState === 'ok') this._mlErrorCount = 0;
+
         // Update badge (on engine panel or status bar)
         if (this._badgeEl) {
             if (!result.windowReady) {
@@ -1011,3 +1050,6 @@ class EngineMLBridge {
         document.dispatchEvent(new CustomEvent('engineml:result', { detail: result }));
     }
 }
+
+// Consecutive failed inferences (mlState "error") before the badge shows ML:ERR.
+EngineMLBridge.ERROR_BADGE_AFTER = 5;

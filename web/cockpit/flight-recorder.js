@@ -23,6 +23,27 @@ class FlightRecorder {
     static RPM_START_THRESHOLD = 500;
     static RPM_START_SECONDS = 10;
     static RPM_STOP_SECONDS = 60;
+    // "Now" for _shutdownEvidenceNow: engine data is ~1 Hz, Stratux situation 10 Hz.
+    static FRESH_DATA_MS = 5000;
+    // Every request to TileServer. A save is a ~1 KB append and a rename reads a
+    // few MB at most, all on local storage: 10 s means TileServer is stuck.
+    // If a save had in fact written its rows and only answered late, the retry
+    // repeats them: duplicate rows are recoverable, missing ones are not.
+    static LOCAL_TIMEOUT_MS = 10000;
+    // The rename's nearest-airport lookups (IndexedDB, which can hang).
+    static NASR_TIMEOUT_MS = 5000;
+    // While recording, a marker here names the files and when the recording was
+    // last alive, so a restart (the WebView renderer dying, Android ending FlyTab)
+    // doesn't split or orphan the flight; see recoverUnfinished().
+    static ACTIVE_KEY = 'flytab_recording_active';
+    // A relaunch within this of the last save carries on in the same files.
+    static RESUME_WINDOW_MS = 10 * 60 * 1000;
+    // recoverUnfinished: TileServer not answering yet -> retry this often.
+    static RECOVER_RETRIES = 3;
+    static RECOVER_RETRY_MS = 2000;
+    // stop(): a failed final save is retried this many times, this far apart.
+    static FINAL_SAVE_RETRIES = 2;
+    static FINAL_SAVE_RETRY_MS = 1000;
 
     constructor(engineClient, stratuxClient, nasrDb) {
         this._engine = engineClient;
@@ -39,7 +60,9 @@ class FlightRecorder {
         this._trafficFileName = null;
         this._trafficBuffer = [];
         this._trafficInterval = null;
-        this._activeTrafficFlush = null;
+        // One save in flight per file (see _serialFlush)
+        this._csvSave = { active: null, next: null };
+        this._trafficSave = { active: null, next: null };
         this._gapTimer = null;
 
         // Auto-start/stop counters
@@ -52,6 +75,13 @@ class FlightRecorder {
         // First/last GPS for dep/dest naming
         this._firstGps = null;
         this._lastGps = null;
+
+        // recoverUnfinished() is deciding what to do with the previous run's recording
+        this._recovering = false;
+        // stop() in progress (saves, NASR lookups, rename: can take 10+ s). Nothing
+        // may start or recover a recording meanwhile: stop() still works on this
+        // recording's _fileName, buffers and GPS points.
+        this._stopping = null;
 
         // Status callback
         this.onStatusChange = null;
@@ -76,25 +106,16 @@ class FlightRecorder {
         this._autoMonitorInterval = setInterval(() => this._autoMonitor(), 1000);
 
         // When the screen turns off or the app is backgrounded, Android throttles
-        // setInterval — the 60-second auto-stop countdown freezes and stop() never
-        // fires. Guard against this: on hide, flush buffered data immediately, and
-        // if the engine-stop countdown is already underway, finalize the recording
-        // now rather than waiting for the throttled timer to complete.
+        // (then freezes) JS -- the 60-second auto-stop countdown never completes and
+        // the flight never gets its logbook entry (4ef751b). So on hide: always flush,
+        // and end the recording only on FRESH evidence that the flight is over
+        // (_shutdownEvidenceNow). Never on a data gap or stale readings: on 10-13 a
+        // pilot switching apps 27 s into a Wi-Fi dropout ended the recording 10 min
+        // before landing. Anything else is decided by _autoMonitor after resume.
         this._onVisibilityHidden = () => {
             if (document.visibilityState !== 'hidden' || !this._recording) return;
             this._flush().catch(() => {});
-            // Stop immediately if the auto-stop countdown is underway (counter > 0),
-            // OR if the live RPM/GS reading already satisfies the stop condition but
-            // _autoMonitor hasn't fired yet (engine shut down < 1 second ago).
-            const cfg = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.get('flightRecording') : {};
-            const stopThreshold = cfg.rpmStopThreshold ?? 0;
-            const rpm = this._engine?.lastData?.data?.RPM ?? null;
-            const gs  = this._stratux?.situation?.ground_speed ?? null;
-            const engineOff = rpm !== null && rpm <= stopThreshold;
-            const gsStopped = rpm === null && gs !== null && gs < 10;
-            if (this._rpmZeroCount > 0 || this._gsBelowCount > 0 || engineOff || gsStopped || this._gapTimer) {
-                this.stop();
-            }
+            if (this._shutdownEvidenceNow()) this.stop();
         };
         document.addEventListener('visibilitychange', this._onVisibilityHidden);
     }
@@ -111,7 +132,7 @@ class FlightRecorder {
 
     /** Manual start */
     async start() {
-        if (this._recording) return;
+        if (this._recording || this._recovering || this._stopping) return;
         this._recording = true;
         this._rowCount = 0;
         this._startTime = Date.now();
@@ -127,24 +148,160 @@ class FlightRecorder {
         this._trafficFileName = `${ymd}_${hm}Z_traffic.ndjson`;
         this._trafficBuffer = [];
 
-        // Record at 1Hz
-        this._recordInterval = setInterval(() => this._recordRow(), 1000);
-        // Flush to disk every 5 seconds (reduces worst-case data loss on crash)
-        this._flushInterval = setInterval(() => {
-            this._flush();
-            this._activeTrafficFlush = this._flushTraffic();
-        }, 5000);
-        this._trafficInterval = setInterval(() => this._recordTrafficSnapshot(), 5000);
+        this._startIntervals();
+        this._saveMarker();
 
         this._emitStatus();
         window.dispatchEvent(new CustomEvent('flightsync:started'));
         if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Started: ${this._fileName}`);
     }
 
-    /** Manual stop */
-    async stop() {
+    _startIntervals() {
+        // Record at 1Hz
+        this._recordInterval = setInterval(() => this._recordRow(), 1000);
+        // Flush to disk every 5 seconds (reduces worst-case data loss on crash)
+        this._flushInterval = setInterval(() => {
+            this._flush();
+            this._flushTraffic();
+            this._saveMarker();
+        }, 5000);
+        this._trafficInterval = setInterval(() => this._recordTrafficSnapshot(), 5000);
+    }
+
+    /**
+     * After a restart: the previous run's recording, if it never reached stop().
+     *  - Last alive within RESUME_WINDOW_MS: carry on in the same files, so the
+     *    flight stays one recording with one logbook entry (10-14: a relaunch
+     *    10 s after the crash started a second file and orphaned the first).
+     *  - Older: close it out (rename + flightsync:stopped -> logbook entry),
+     *    ending at its last save.
+     *  - Its file is gone: forget it. File server can't tell: keep the marker
+     *    for the next launch.
+     * Call once the logbook is listening. Resolves 'resumed' | 'closed' | null.
+     */
+    async recoverUnfinished() {
+        if (this._recording || this._recovering || this._stopping) return null;
+        const raw = FlightRecorder._readStorage();
+        if (raw == null) return null;
+        const m = FlightRecorder.parseMarker(raw);
+        if (!m) {
+            this._clearMarker();
+            if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', 'Ignored a damaged unfinished-recording marker');
+            return null;
+        }
+
+        this._recovering = true;            // auto-start must not open a second file meanwhile
+        try {
+            // TileServer may not answer yet at startup: retry briefly. Auto-start
+            // needs 10 s of engine/GPS data, so this stays inside that.
+            let status = await this._fileStatus(m.fileName);
+            for (let i = 0; status === 'error' && i < FlightRecorder.RECOVER_RETRIES; i++) {
+                await new Promise((r) => setTimeout(r, FlightRecorder.RECOVER_RETRY_MS));
+                status = await this._fileStatus(m.fileName);
+            }
+            if (status !== 'exists') {
+                if (status === 'missing') this._clearMarker();
+                if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Unfinished recording ${m.fileName}: file ${status === 'missing' ? 'gone — forgotten' : 'not readable — will retry next launch'}`);
+                return null;
+            }
+
+            this._fileName = m.fileName;
+            this._trafficFileName = m.trafficFileName;
+            this._startTime = m.startTime;
+            this._firstGps = m.firstGps;
+            this._lastGps = m.lastGps;
+            this._rowCount = m.rowCount;
+            this._csvBuffer = [];           // the file already has its header
+            this._trafficBuffer = [];
+            this._recording = true;
+
+            // Resume only a flight that was still going at its last save. If that save
+            // already had fresh evidence the engine was stopped (the 60 s countdown
+            // was running), carrying on would add the downtime to flight time and
+            // Hobbs, or merge the next leg in: close it out at that save instead.
+            const age = Date.now() - m.savedAt;
+            if (!m.shutdown && age >= 0 && age < FlightRecorder.RESUME_WINDOW_MS) {
+                this._startIntervals();
+                this._saveMarker();
+                this._emitStatus();
+                window.dispatchEvent(new CustomEvent('flightsync:started', { detail: { resumed: true, fileName: this._fileName } }));
+                if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Resumed after restart: ${this._fileName} (last saved ${Math.round(age / 1000)} s earlier)`);
+                return 'resumed';
+            }
+            if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Closing out unfinished recording ${this._fileName} (last saved ${new Date(m.savedAt).toISOString()}${m.shutdown ? ', engine already stopped' : ''})`);
+        } finally {
+            this._recovering = false;
+        }
+        await this.stop({ endMs: m.savedAt });
+        return 'closed';
+    }
+
+    /** The marker as validated data, or null. Names must be bare flights/ file names: they go into a URL. */
+    static parseMarker(raw) {
+        let m;
+        try { m = JSON.parse(raw); } catch { return null; }
+        if (!m || typeof m !== 'object') return null;
+        const csvOk = typeof m.fileName === 'string' && /^[A-Za-z0-9_-]+\.csv$/.test(m.fileName);
+        const trfOk = m.trafficFileName == null
+            || (typeof m.trafficFileName === 'string' && /^[A-Za-z0-9_-]+\.ndjson$/.test(m.trafficFileName));
+        if (!csvOk || !trfOk || !Number.isFinite(m.startTime) || !Number.isFinite(m.savedAt)) return null;
+        const gps = (g) => (g && Number.isFinite(g.lat) && Number.isFinite(g.lon)) ? { lat: g.lat, lon: g.lon, alt: Number.isFinite(g.alt) ? g.alt : 0 } : null;
+        return {
+            fileName: m.fileName,
+            trafficFileName: m.trafficFileName ?? null,
+            startTime: m.startTime,
+            firstGps: gps(m.firstGps),
+            lastGps: gps(m.lastGps),
+            rowCount: Number.isFinite(m.rowCount) ? m.rowCount : 0,
+            savedAt: m.savedAt,
+            shutdown: m.shutdown === true,
+        };
+    }
+
+    static _readStorage() {
+        try { return localStorage.getItem(FlightRecorder.ACTIVE_KEY); } catch { return null; }
+    }
+
+    _saveMarker() {
+        if (!this._recording || !this._fileName) return;
+        try {
+            localStorage.setItem(FlightRecorder.ACTIVE_KEY, JSON.stringify({
+                fileName: this._fileName,
+                trafficFileName: this._trafficFileName,
+                startTime: this._startTime,
+                firstGps: this._firstGps,
+                lastGps: this._lastGps,
+                rowCount: this._rowCount,
+                savedAt: Date.now(),
+                // Fresh evidence the flight is over (engine stopped / aircraft
+                // stopped): after a restart this recording is closed out, not resumed.
+                shutdown: this._shutdownEvidenceNow(),
+            }));
+        } catch { /* storage full: the recording itself is unaffected */ }
+    }
+
+    _clearMarker() {
+        try { localStorage.removeItem(FlightRecorder.ACTIVE_KEY); } catch { /* ignore */ }
+    }
+
+    /**
+     * Manual stop. `endMs` (closing out a previous run's recording) is when it
+     * was last alive; default now.
+     */
+    async stop(opts = {}) {
         if (!this._recording) return;
         this._recording = false;
+        let done;
+        this._stopping = new Promise((r) => { done = r; });
+        try {
+            return await this._finishStop(opts);
+        } finally {
+            this._stopping = null;
+            done();
+        }
+    }
+
+    async _finishStop({ endMs: endOverride } = {}) {
 
         if (this._recordInterval) { clearInterval(this._recordInterval); this._recordInterval = null; }
         if (this._flushInterval) { clearInterval(this._flushInterval); this._flushInterval = null; }
@@ -152,35 +309,32 @@ class FlightRecorder {
         if (this._gapTimer) { clearTimeout(this._gapTimer); this._gapTimer = null; }
 
         const startTime = this._startTime ? new Date(this._startTime).toISOString() : null;
-        const endMs = Date.now();
+        const endMs = Number.isFinite(endOverride) ? endOverride : Date.now();
         const endTime = new Date(endMs).toISOString();
         const durationHours = this._startTime
             ? Math.round((endMs - this._startTime) / 36000) / 100
             : 0;
 
-        // Final flush — track success so downstream listeners know if data was saved
-        let flushOk = true;
-        try {
-            await this._flush();
-        } catch (err) {
-            flushOk = false;
-            if (typeof DiagLog !== 'undefined') DiagLog.log('error', `FlightRecorder final flush failed: ${err.message}`);
-        }
-        // Wait for any interval-triggered flush to complete before the final flush
-        if (this._activeTrafficFlush) {
-            try { await this._activeTrafficFlush; } catch (_) {}
-            this._activeTrafficFlush = null;
-        }
-        try {
-            await this._flushTraffic();
-        } catch (err) {
-            if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Traffic flush failed: ${err.message}`);
+        // Final save. Each waits for a save already in flight, so everything is
+        // written (or reported failed) before the rename reads the files. flushOk
+        // tells downstream listeners whether the CSV's last rows were saved.
+        let [flushOk] = await Promise.all([this._flush(), this._flushTraffic()]);
+        for (let i = 0; !flushOk && i < FlightRecorder.FINAL_SAVE_RETRIES; i++) {
+            await new Promise((r) => setTimeout(r, FlightRecorder.FINAL_SAVE_RETRY_MS));
+            flushOk = await this._flush();
         }
 
-        // Try to rename with dep/dest from NASR — returns { depIcao, destIcao } or null
-        const route = await this._renameWithRoute();
+        // Try to rename with dep/dest from NASR — returns { depIcao, destIcao } or null.
+        // Not if the last rows couldn't be saved: the file keeps its start-time name.
+        let route = null;
+        if (flushOk) {
+            route = await this._renameWithRoute();
+        } else if (typeof DiagLog !== 'undefined') {
+            DiagLog.log('recorder', `Final save failed: ${this._csvBuffer.length} rows could not be saved to ${this._fileName}; not renamed`);
+        }
 
         const finalName = this._fileName;
+        this._clearMarker();
         this._emitStatus();
         window.dispatchEvent(new CustomEvent('flightsync:stopped', {
             detail: {
@@ -331,49 +485,88 @@ class FlightRecorder {
         this._trafficBuffer.push(JSON.stringify({ t, ts: now, targets }));
     }
 
-    /** Flush buffered rows to NanoHTTPD filesystem */
-    async _flush() {
-        if (this._csvBuffer.length === 0) return;
-
-        const content = this._csvBuffer.join('\n') + '\n';
-        this._csvBuffer = [];
-
-        const path = `${FlightRecorder.FLIGHTS_PATH}/${this._fileName}`;
-        try {
-            const resp = await fetch(`${FlightRecorder.LOCAL_BASE}/${path}`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'text/csv', 'X-Append': 'true' },
-                body: content,
-            });
-            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        } catch (err) {
-            // Re-buffer on failure so data isn't lost
-            this._csvBuffer.unshift(content.trim());
-            if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Flush failed: ${err.message}`);
-        }
+    /** Save buffered CSV rows (append). Resolves true if they were written. */
+    _flush() {
+        return this._serialFlush(this._csvSave, () => this._appendBuffer(this._csvBuffer, this._fileName, 'text/csv', 'Flush'));
     }
 
-    async _flushTraffic() {
-        if (!this._trafficBuffer.length || !this._trafficFileName) return;
-        const snapshot = this._trafficBuffer.splice(0);  // atomically drain, preserve records
-        const content = snapshot.join('\n') + '\n';
-        const path = `${FlightRecorder.FLIGHTS_PATH}/${this._trafficFileName}`;
+    /** Save buffered traffic snapshots (append). Resolves true if they were written. */
+    _flushTraffic() {
+        return this._serialFlush(this._trafficSave, () => this._appendBuffer(this._trafficBuffer, this._trafficFileName, 'application/x-ndjson', 'Traffic flush'));
+    }
+
+    /**
+     * Run one save at a time per file. TileServer (NanoHTTPD) handles each request
+     * on its own thread, so two appends to one file could land interleaved or out
+     * of order, and a failed save would put its rows back behind rows a later
+     * save had already written. A save requested while one is in flight gets one
+     * shared follow-up that starts when it ends and takes whatever is buffered by
+     * then, so saves requested during a stall don't pile up.
+     */
+    _serialFlush(slot, run) {
+        if (slot.active) {
+            if (!slot.next) slot.next = slot.active.then(() => { slot.next = null; return this._serialFlush(slot, run); });
+            return slot.next;
+        }
+        slot.active = run().catch(() => false).finally(() => { slot.active = null; });
+        return slot.active;
+    }
+
+    /**
+     * Append everything in `buf` to flights/`name`. On failure the lines go back
+     * to the front of `buf` (ahead of anything recorded meanwhile) for the next save.
+     */
+    async _appendBuffer(buf, name, contentType, label) {
+        if (!buf.length || !name) return true;
+        const lines = buf.splice(0);
         try {
-            const resp = await fetch(`${FlightRecorder.LOCAL_BASE}/${path}`, {
+            const resp = await this._local(name, {
                 method: 'PUT',
-                headers: { 'Content-Type': 'application/x-ndjson', 'X-Append': 'true' },
-                body: content,
+                headers: { 'Content-Type': contentType, 'X-Append': 'true' },
+                body: lines.join('\n') + '\n',
             });
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            return true;
         } catch (err) {
-            this._trafficBuffer.unshift(...snapshot);  // restore individual records
-            if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Traffic flush failed: ${err.message}`);
+            buf.unshift(...lines);
+            if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `${label} failed: ${err.message}`);
+            return false;
         }
     }
 
     /**
-     * Rename file with departure/destination airports using NASR lookup.
-     * Returns { depIcao, destIcao } if successful, null otherwise.
+     * Request flights/`name` from TileServer; for a GET, read the whole body too.
+     * All of it within LOCAL_TIMEOUT_MS, so nothing in a save or the rename can
+     * hang stop(). Resolves { ok, status, text }; rejects on a network error or
+     * on timeout ("timed out after 10 s").
+     */
+    async _local(name, opts = {}) {
+        const ctrl = new AbortController();
+        let timedOut = false;
+        const timer = setTimeout(() => { timedOut = true; ctrl.abort(); }, FlightRecorder.LOCAL_TIMEOUT_MS);
+        try {
+            const r = await fetch(`${FlightRecorder.LOCAL_BASE}/${FlightRecorder.FLIGHTS_PATH}/${name}`, { ...opts, signal: ctrl.signal });
+            const text = (opts.method || 'GET') === 'GET' ? await r.text() : '';
+            return { ok: r.ok, status: r.status, text };
+        } catch (err) {
+            throw timedOut ? new Error(`timed out after ${FlightRecorder.LOCAL_TIMEOUT_MS / 1000} s`) : err;
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
+    /**
+     * Rename the finished recording to YYYYMMDD_DEP-DEST.csv (and its traffic
+     * companion to match). The server has no rename, so it's copy -> verify ->
+     * delete, and it must never lose a flight:
+     *  - the original is deleted only after the copy reads back IDENTICAL --
+     *    TileServer.handlePut answers 201 even when it wrote nothing;
+     *  - an existing file is never overwritten (a non-append PUT truncates):
+     *    a second same-route flight that day becomes _2, _3, ...;
+     *  - anything uncertain leaves the original name in place;
+     *  - nothing can hang: it runs inside stop(), before the stopped event that
+     *    closes the flight out (TileServer requests and NASR lookups time out).
+     * Returns { depIcao, destIcao } when the CSV was renamed, else null.
      */
     async _renameWithRoute() {
         if (!this._nasrDb || !this._firstGps || !this._lastGps) return null;
@@ -384,45 +577,24 @@ class FlightRecorder {
             if (!dep || !dest) return null;
 
             const ymd = this._fileName.split('_')[0];
-            const newName = `${ymd}_${dep}-${dest}.csv`;
-
-            // Rename by reading + writing + deleting old
-            const oldPath = `${FlightRecorder.FLIGHTS_PATH}/${this._fileName}`;
-            const newPath = `${FlightRecorder.FLIGHTS_PATH}/${newName}`;
-
-            const readResp = await fetch(`${FlightRecorder.LOCAL_BASE}/${oldPath}`);
-            if (!readResp.ok) return null;
-            const data = await readResp.text();
-
-            await fetch(`${FlightRecorder.LOCAL_BASE}/${newPath}`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'text/csv' },
-                body: data,
-            });
-
-            // Delete old file
-            await fetch(`${FlightRecorder.LOCAL_BASE}/${oldPath}`, { method: 'DELETE' });
-
+            const stem = await this._freeStem(`${ymd}_${dep}-${dest}`);
+            if (!stem) {
+                if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Rename skipped — no free name for ${ymd}_${dep}-${dest}; kept ${this._fileName}`);
+                return null;
+            }
+            const newName = `${stem}.csv`;
+            if (!(await this._moveFile(this._fileName, newName, 'text/csv'))) {
+                if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Rename to ${newName} not verified — kept ${this._fileName}`);
+                return null;
+            }
             this._fileName = newName;
 
             if (this._trafficFileName) {
-                const oldTrafficPath = `${FlightRecorder.FLIGHTS_PATH}/${this._trafficFileName}`;
-                const newTrafficName = newName.replace(/\.csv$/, '_traffic.ndjson');
-                const newTrafficPath = `${FlightRecorder.FLIGHTS_PATH}/${newTrafficName}`;
-                try {
-                    const tr = await fetch(`${FlightRecorder.LOCAL_BASE}/${oldTrafficPath}`);
-                    if (tr.ok) {
-                        const trafficData = await tr.text();
-                        await fetch(`${FlightRecorder.LOCAL_BASE}/${newTrafficPath}`, {
-                            method: 'PUT',
-                            headers: { 'Content-Type': 'application/x-ndjson' },
-                            body: trafficData,
-                        });
-                        await fetch(`${FlightRecorder.LOCAL_BASE}/${oldTrafficPath}`, { method: 'DELETE' });
-                        this._trafficFileName = newTrafficName;
-                    }
-                } catch (err) {
-                    if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Traffic rename failed: ${err.message}`);
+                const newTrafficName = `${stem}_traffic.ndjson`;
+                if (await this._moveFile(this._trafficFileName, newTrafficName, 'application/x-ndjson')) {
+                    this._trafficFileName = newTrafficName;
+                } else if (typeof DiagLog !== 'undefined') {
+                    DiagLog.log('recorder', `Traffic rename not verified — kept ${this._trafficFileName}`);
                 }
             }
 
@@ -434,26 +606,125 @@ class FlightRecorder {
         }
     }
 
+    /**
+     * First of stem, stem_2 .. stem_9 for which neither the CSV nor its traffic
+     * companion exists (a definite 404). null if none is free or existence can't
+     * be confirmed (server error) -- then we don't rename at all.
+     */
+    async _freeStem(stem) {
+        for (let n = 1; n <= 9; n++) {
+            const candidate = n === 1 ? stem : `${stem}_${n}`;
+            const csv = await this._fileStatus(`${candidate}.csv`);
+            const trf = await this._fileStatus(`${candidate}_traffic.ndjson`);
+            if (csv === 'error' || trf === 'error') return null;
+            if (csv === 'missing' && trf === 'missing') return candidate;
+        }
+        return null;
+    }
+
+    /** 'exists' | 'missing' | 'error' for a file in flights/. */
+    async _fileStatus(name) {
+        try {
+            const r = await this._local(name);
+            if (r.ok) return 'exists';
+            return r.status === 404 ? 'missing' : 'error';
+        } catch { return 'error'; }
+    }
+
+    /**
+     * Copy flights/from -> flights/to, read the copy back, and delete the original
+     * only if it matches exactly. A wrong copy is removed; the original is kept.
+     * Returns true only when `to` holds the data and `from` is no longer needed.
+     * Never throws: a failure after the copy is verified still counts as moved.
+     */
+    async _moveFile(from, to, contentType) {
+        const log = (msg) => { if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', msg); };
+        try {
+            const src = await this._local(from);
+            if (!src.ok) return false;
+            const data = src.text;
+
+            const put = await this._local(to, { method: 'PUT', headers: { 'Content-Type': contentType }, body: data });
+            if (!put.ok) return false;
+
+            const check = await this._local(to);
+            if (!check.ok || check.text !== data) {
+                // The copy is wrong (or unreadable). Remove it only if we could read it,
+                // i.e. we know it's ours and bad; the original stays either way.
+                if (check.ok) await this._local(to, { method: 'DELETE' }).catch(() => {});
+                return false;
+            }
+        } catch (err) {
+            log(`Copying ${from} to ${to} failed: ${err.message} — kept ${from}`);
+            return false;
+        }
+
+        // `to` holds the data: the move has happened whatever becomes of `from`.
+        try {
+            const del = await this._local(from, { method: 'DELETE' });
+            if (!del.ok) log(`Renamed copy verified, but deleting ${from} failed (HTTP ${del.status}) — both kept`);
+        } catch (err) {
+            log(`Renamed copy verified, but deleting ${from} failed: ${err.message} — ${from} may remain`);
+        }
+        return true;
+    }
+
     async _nearestAirport(lat, lon) {
         if (!this._nasrDb) return null;
+        let timer;
         try {
-            const nearby = await this._nasrDb.getAirportsNear(lat, lon, 10);
+            const timeout = new Promise((_, reject) => {
+                timer = setTimeout(() => reject(new Error(`timed out after ${FlightRecorder.NASR_TIMEOUT_MS / 1000} s`)), FlightRecorder.NASR_TIMEOUT_MS);
+            });
+            const nearby = await Promise.race([this._nasrDb.getAirportsNear(lat, lon, 10), timeout]);
             if (!nearby || nearby.length === 0) return null;
             nearby.sort((a, b) =>
                 NasrDB.haversineNm(lat, lon, a.lat, a.lon) -
                 NasrDB.haversineNm(lat, lon, b.lat, b.lon)
             );
             return nearby[0].icao || nearby[0].id || null;
-        } catch { /* NASR not available */ }
+        } catch (err) {
+            // NASR not available, or the lookup hung
+            if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Airport lookup for rename failed: ${err?.message}`);
+        } finally {
+            clearTimeout(timer);
+        }
         return null;
     }
 
     /** Auto-start/stop based on RPM (engine data) or groundspeed (GPS-only) */
+    /**
+     * Is the flight over, judging ONLY by data received in the last
+     * FRESH_DATA_MS? Used when the app is being backgrounded and the normal
+     * 60 s countdown can't be trusted to run.
+     *  - engine monitor reporting: RPM at/below the stop threshold right now;
+     *  - no engine monitor this session (GPS-only recording): ground speed < 10 kt.
+     * A data gap, a stale engine reading (link lost) or a stale situation is not
+     * evidence -- the countdown counters may have been fed by stale values.
+     */
+    _shutdownEvidenceNow() {
+        const cfg = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.get('flightRecording') : {};
+        const stopThreshold = cfg?.rpmStopThreshold ?? 0;
+        const eng = this._engine?.lastData;
+        if (eng) {
+            const fresh = (this._engine?.dataAge ?? Infinity) < FlightRecorder.FRESH_DATA_MS;
+            const rpm = eng.data?.RPM;
+            return fresh && typeof rpm === 'number' && rpm <= stopThreshold;
+        }
+        const sit = this._stratux?.situation;
+        const sitAge = typeof sit?.timestamp === 'number' ? Date.now() - sit.timestamp : Infinity;
+        return sitAge < FlightRecorder.FRESH_DATA_MS && typeof sit?.ground_speed === 'number' && sit.ground_speed < 10;
+    }
+
     _autoMonitor() {
         const eng = this._engine?.lastData;
         const sit = this._stratux?.situation;
         const rpm = eng?.data?.RPM || 0;
         const gs = sit?.ground_speed || 0;
+        // Ground speed counts only from a fresh situation. After a restart the
+        // situation is null until Stratux reconnects; "no data" is not "0 kt" and
+        // must not auto-stop a resumed recording (the 2-min gap timer handles it).
+        const sitFresh = typeof sit?.timestamp === 'number' && (Date.now() - sit.timestamp) < FlightRecorder.FRESH_DATA_MS;
 
         // Prefer RPM-based trigger when engine data is available.
         // If engine data is unavailable (WebSocket disconnected / app backgrounded),
@@ -467,18 +738,19 @@ class FlightRecorder {
                     this._rpmAboveCount++;
                     if (this._rpmAboveCount >= FlightRecorder.RPM_START_SECONDS) {
                         this.start();
-                        this._rpmAboveCount = 0;
+                        // Refused while a stop/recovery is in progress: try again next second.
+                        if (this._recording) this._rpmAboveCount = 0;
                     }
                 } else {
                     this._rpmAboveCount = 0;
                 }
             } else {
                 // GPS-based auto-start: GS > 30kt for 10s
-                if (gs > 30) {
+                if (sitFresh && gs > 30) {
                     this._gsAboveCount++;
                     if (this._gsAboveCount >= 10) {
                         this.start();
-                        this._gsAboveCount = 0;
+                        if (this._recording) this._gsAboveCount = 0;
                     }
                 } else {
                     this._gsAboveCount = 0;
@@ -502,7 +774,9 @@ class FlightRecorder {
                 // GPS-based auto-stop: GS < 10kt for stopDelaySeconds
                 const cfg = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.get('flightRecording') : {};
                 const stopDelay = cfg.stopDelaySeconds ?? 60;
-                if (gs < 10) {
+                if (!sitFresh) {
+                    // no data: neither counts nor resets
+                } else if (gs < 10) {
                     this._gsBelowCount++;
                     if (this._gsBelowCount >= stopDelay) {
                         this.stop();

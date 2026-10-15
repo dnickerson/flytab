@@ -26,6 +26,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeoutException;
 
 public class InferenceEngine {
@@ -217,13 +218,24 @@ public class InferenceEngine {
     // Safety timeout — catches any future model/delegate hangs without blocking the plugin.
     private static final long INFERENCE_TIMEOUT_MS = 500;
 
+    // Every inference runs on this one thread, and never two at once (InferenceGate):
+    // TFLite's Interpreter is not thread-safe, and a timed-out native run can't be
+    // cancelled -- it keeps going, so the old new-thread-per-sample code could put a
+    // second run on the same Interpreter.
+    private final ExecutorService inferenceExec = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "tflite-inference");
+        t.setDaemon(true);
+        return t;
+    });
+    private final InferenceGate gate = new InferenceGate();
+
     /**
      * Run inference on a (windowSize, nFeatures) window of raw engine data.
      *
      * Float32 models: uses float[][][] Java arrays — compatible with XNNPACK partial delegation.
      * INT8 models: uses ByteBuffer with quantization math.
      */
-    public float runInference(float[][] window) throws TimeoutException {
+    public float runInference(float[][] window) throws TimeoutException, InferenceGate.SkippedException {
         if (window == null || window.length != windowSize || window[0].length != nFeatures) {
             throw new IllegalArgumentException("Window must be (" + windowSize + ", " + nFeatures + ")");
         }
@@ -267,25 +279,44 @@ public class InferenceEngine {
             inferOutput = outBuf;
         }
 
-        ExecutorService exec = Executors.newSingleThreadExecutor(r -> {
-            Thread t = new Thread(r, "tflite-inference");
-            t.setDaemon(true);
-            return t;
-        });
+        switch (gate.tryBegin(System.nanoTime() / 1_000_000L)) {
+            case SKIP_BUSY:
+                throw new InferenceGate.SkippedException(false);
+            case DISABLED_NOW:
+                Log.e(TAG, "TFLite inference stuck for " + InferenceGate.DISABLE_AFTER_MS
+                    + " ms — ML inference off until FlyTab restarts (rule-based advisories continue)");
+                throw new InferenceGate.SkippedException(true);
+            case DISABLED:
+                throw new InferenceGate.SkippedException(true);
+            default:
+                break;
+        }
 
-        Future<?> future = exec.submit(() -> interpreter.run(inferInput, inferOutput));
+        final Interpreter interp = interpreter;
+        Future<?> future;
+        try {
+            future = inferenceExec.submit(() -> {
+                try {
+                    interp.run(inferInput, inferOutput);
+                } finally {
+                    gate.end();   // only when the native run has really returned
+                }
+            });
+        } catch (RejectedExecutionException e) {   // closed
+            gate.end();
+            throw new RuntimeException("Inference engine closed", e);
+        }
 
         try {
             future.get(INFERENCE_TIMEOUT_MS, TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
-            future.cancel(true);
+            // Don't cancel: it can't stop native code. The run carries on and the
+            // gate skips samples until it returns, or turns ML off if it never does.
             Log.w(TAG, "TFLite inference timed out after " + INFERENCE_TIMEOUT_MS + "ms — skipping score");
             throw e;
         } catch (Exception e) {
             Log.e(TAG, "TFLite inference failed", e);
             throw new RuntimeException("Inference failed: " + e.getMessage(), e);
-        } finally {
-            exec.shutdownNow();
         }
 
         // Compute MSE between normalized input and model output
@@ -356,8 +387,12 @@ public class InferenceEngine {
     public float[] getStd() { return std; }
     public boolean isFloat32() { return isFloat32; }
 
+    public boolean isDisabled() { return gate.isDisabled(); }
+
     public void close() {
-        if (interpreter != null) {
+        inferenceExec.shutdown();
+        // Never close the Interpreter under a native run that is still in it.
+        if (interpreter != null && !gate.isRunning()) {
             interpreter.close();
             interpreter = null;
         }

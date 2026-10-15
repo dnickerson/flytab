@@ -1,25 +1,54 @@
 package app.flywhere.flytab;
 
+import android.Manifest;
 import android.app.AlertDialog;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.Process;
 import android.provider.Settings;
 import android.util.Log;
+import android.view.ViewGroup;
+import android.view.ViewParent;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import androidx.activity.OnBackPressedCallback;
+import androidx.core.app.NotificationCompat;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 import com.getcapacitor.BridgeActivity;
+import com.getcapacitor.WebViewListener;
 import app.flywhere.flytab.tileserver.TileServerPlugin;
 import app.flywhere.flytab.engineml.EngineMLPlugin;
 import app.flywhere.flytab.SftpPlugin;
 
 public class MainActivity extends BridgeActivity {
     private static final String TAG = "FlyTab";
+    /** Between onStart and onStop: FlyTab has a visible window and may start an activity. */
+    private boolean visible = false;
+    /** Same, for AppHealth.isOnScreen (the page can't tell: see KeepAliveWebView). */
+    private static volatile boolean onScreen = false;
+    /** Capacitor really built a KeepAliveWebView (our layout override took effect). */
+    private static volatile boolean keepAliveWebView = false;
+
+    static boolean isOnScreen() { return onScreen; }
+    static boolean isKeepAliveWebView() { return keepAliveWebView; }
+
+    // "FlyTab closed" alert, posted when FlyTab has to end without restarting itself.
+    private static final String ALERT_CHANNEL_ID = "flytab_alerts";
+    private static final int ALERT_NOTIFICATION_ID = 2;   // FlightService uses 1
+    private static final int REQ_NOTIFICATIONS = 42;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -33,7 +62,33 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(ShareReceiverPlugin.class);
         registerPlugin(BundledAssetPlugin.class);
         registerPlugin(VpnStatusPlugin.class);
+        registerPlugin(AppHealthPlugin.class);
         super.onCreate(savedInstanceState);
+
+        // If a Capacitor upgrade ever renames its layout or WebView id, our override
+        // silently stops applying and Chromium freezes the hidden page again.
+        // AppHealth.isOnScreen() reports this so the web app logs it.
+        keepAliveWebView = getBridge().getWebView() instanceof KeepAliveWebView;
+        if (!keepAliveWebView) Log.e(TAG, "KeepAliveWebView not in use: the page will be frozen when hidden");
+
+        // A previous run's "FlyTab closed" alert is answered by this launch.
+        getSystemService(NotificationManager.class).cancel(ALERT_NOTIFICATION_ID);
+        // Android 13+: without this no FlyTab notification shows at all (also not
+        // the flight-service one), including the "FlyTab closed" alert.
+        if (Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[] { Manifest.permission.POST_NOTIFICATIONS }, REQ_NOTIFICATIONS);
+        }
+
+        // Without this, a dead WebView renderer takes the whole app down
+        // (Capacitor returns false: "not handled", and Chromium aborts the app).
+        getBridge().addWebViewListener(new WebViewListener() {
+            @Override
+            public boolean onRenderProcessGone(WebView webView, RenderProcessGoneDetail detail) {
+                handleRendererGone(webView, detail);
+                return true;
+            }
+        });
 
         // Capture a share intent that launched a cold start (app not running).
         // A share arriving while the app is already running goes to onNewIntent
@@ -107,6 +162,129 @@ public class MainActivity extends BridgeActivity {
         super.onNewIntent(intent);
         setIntent(intent);
         handleIncomingIntent(intent);
+    }
+
+    @Override
+    public void onStart() {
+        super.onStart();
+        reportOnScreen(true);
+    }
+
+    @Override
+    public void onStop() {
+        reportOnScreen(false);
+        super.onStop();
+    }
+
+    /**
+     * KeepAliveWebView makes the page always look visible to Chromium, so tell
+     * it the real state: window event 'flytab:screen' { onScreen }. (Screen off
+     * also stops the activity.)
+     */
+    private void reportOnScreen(boolean on) {
+        visible = on;
+        onScreen = on;
+        if (getBridge() != null) {
+            getBridge().triggerWindowJSEvent("flytab:screen", "{\"onScreen\":" + on + "}");
+        }
+    }
+
+    /**
+     * The WebView's renderer process died. 2026-10-14 12:11 in flight: a SIGSEGV
+     * inside WebView 155's JavaScript engine. Nobody handled it, so Chromium
+     * aborted FlyTab too. Everything FlyTab does runs in that WebView, and Android
+     * says a WebView whose renderer is gone can't be reused. So:
+     *  - on screen: start FlyTab afresh in a new process (RestartActivity), as the
+     *    pilot did by hand; the web app resumes the flight recording;
+     *  - off screen: Android won't let an app start an activity from the
+     *    background (a foreground service doesn't count), so end the process
+     *    cleanly; the next tap on FlyTab starts it fresh;
+     *  - after MAX_RESTARTS inside WINDOW_MS: stop, don't loop.
+     * Each event is kept for the next launch to log and show the pilot
+     * (AppHealthPlugin).
+     */
+    private void handleRendererGone(WebView view, RenderProcessGoneDetail detail) {
+        long now = System.currentTimeMillis();
+        boolean crashed = detail.didCrash();
+        int priority = detail.rendererPriorityAtExit();
+        SharedPreferences prefs = getSharedPreferences(RendererRecoveryLogic.PREFS, MODE_PRIVATE);
+        String restarts = prefs.getString(RendererRecoveryLogic.KEY_RESTARTS, "");
+        RendererRecoveryLogic.Action action =
+            RendererRecoveryLogic.decide(visible, now, RendererRecoveryLogic.parseTimes(restarts));
+
+        SharedPreferences.Editor edit = prefs.edit().putString(RendererRecoveryLogic.KEY_PENDING,
+            RendererRecoveryLogic.appendEvent(prefs.getString(RendererRecoveryLogic.KEY_PENDING, ""),
+                now, crashed, priority, action));
+        if (action == RendererRecoveryLogic.Action.RESTART) {
+            edit.putString(RendererRecoveryLogic.KEY_RESTARTS, RendererRecoveryLogic.addTime(restarts, now));
+        }
+        edit.commit();   // synchronous: this process is about to end
+        Log.e(TAG, "WebView renderer " + (crashed ? "crashed" : "was killed by Android")
+            + " (priority " + priority + ") -> " + action);
+
+        // Android: remove the dead WebView from the view hierarchy and destroy it.
+        ViewParent parent = view.getParent();
+        if (parent instanceof ViewGroup) ((ViewGroup) parent).removeView(view);
+        view.destroy();
+
+        if (action != RendererRecoveryLogic.Action.RESTART) {
+            // FlyTab is about to end without restarting itself (screen off, or too
+            // many restarts): engine alerts and recording stop. Say so where the
+            // pilot will see or hear it.
+            notifyClosed(crashed);
+        }
+
+        if (action == RendererRecoveryLogic.Action.RESTART) {
+            try {
+                startActivity(new Intent(this, RestartActivity.class)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    .putExtra(RestartActivity.EXTRA_PID, Process.myPid()));
+                // RestartActivity ends this process. If it never comes up, don't
+                // leave a blank FlyTab on screen.
+                new Handler(Looper.getMainLooper()).postDelayed(MainActivity::endProcess, 5000);
+                return;
+            } catch (RuntimeException e) {
+                Log.e(TAG, "Restart after renderer loss failed", e);
+            }
+        }
+        endProcess();
+    }
+
+    /** High-priority "FlyTab closed" notification; it outlives this process. Tap to restart. */
+    private void notifyClosed(boolean crashed) {
+        try {
+            NotificationManager nm = getSystemService(NotificationManager.class);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                NotificationChannel ch = new NotificationChannel(
+                    ALERT_CHANNEL_ID, "FlyTab stopped", NotificationManager.IMPORTANCE_HIGH);
+                ch.setDescription("FlyTab had to close: engine monitoring and recording are off");
+                nm.createNotificationChannel(ch);
+            }
+            PendingIntent open = PendingIntent.getActivity(this, 1,
+                new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                PendingIntent.FLAG_IMMUTABLE);
+            Notification n = new NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
+                .setSmallIcon(R.mipmap.ic_launcher)
+                .setContentTitle("FlyTab closed")
+                .setContentText((crashed ? "Its display engine crashed. " : "Android closed its display engine. ")
+                    + "Engine monitoring and recording are off. Tap to restart.")
+                .setStyle(new NotificationCompat.BigTextStyle().bigText(
+                    (crashed ? "Its display engine crashed. " : "Android closed its display engine. ")
+                    + "Engine monitoring and recording are off. Tap to restart."))
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setCategory(NotificationCompat.CATEGORY_ERROR)
+                .setDefaults(NotificationCompat.DEFAULT_ALL)
+                .setAutoCancel(true)
+                .setContentIntent(open)
+                .build();
+            nm.notify(ALERT_NOTIFICATION_ID, n);
+        } catch (RuntimeException e) {
+            Log.e(TAG, "Could not post the FlyTab-closed alert", e);
+        }
+    }
+
+    private static void endProcess() {
+        Process.killProcess(Process.myPid());
     }
 
     private void checkStoragePermission() {

@@ -40,16 +40,46 @@ class NasrDB {
     // rewrite (below) since it's a strict superset of the old vertex-only test
     // and fixes the TRSA-visibility bug independently of this merge.
     static DB_VERSION = 11;
+    // indexedDB.open() can stay pending forever: an upgrade blocked by a
+    // connection that won't close, or the stuck IDB state in CLAUDE.md. Startup
+    // awaits NASR, so open() gives up after this and callers fall through.
+    static OPEN_TIMEOUT_MS = 10000;
 
     constructor() {
         this._db = null;
+        this._opening = null;
     }
 
+    /**
+     * The shared connection. Callers at the same moment share one request.
+     * Rejects after OPEN_TIMEOUT_MS; if that request still succeeds later, its
+     * connection is kept for the next call. A request that failed or never
+     * answered is retried on the next call.
+     */
     async open() {
         if (this._db) return this._db;
+        if (this._opening) return this._opening;
 
-        return new Promise((resolve, reject) => {
-            const request = indexedDB.open(NasrDB.DB_NAME, NasrDB.DB_VERSION);
+        const opening = new Promise((resolve, reject) => {
+            const log = (msg) => { if (typeof DiagLog !== 'undefined') DiagLog.log('nasr', msg); };
+            let settled = false;
+            const done = () => { if (this._opening === opening) this._opening = null; };
+            let request;
+            try {
+                request = indexedDB.open(NasrDB.DB_NAME, NasrDB.DB_VERSION);
+            } catch (err) {
+                reject(err);
+                return;
+            }
+            const timer = setTimeout(() => {
+                if (settled) return;
+                settled = true;
+                done();
+                log(`IndexedDB open timed out after ${NasrDB.OPEN_TIMEOUT_MS / 1000} s`);
+                reject(new Error(`IndexedDB open timed out after ${NasrDB.OPEN_TIMEOUT_MS / 1000} s`));
+            }, NasrDB.OPEN_TIMEOUT_MS);
+
+            request.onblocked = () => log('IndexedDB upgrade blocked by another open connection — waiting');
 
             request.onupgradeneeded = (event) => {
                 const db = event.target.result;
@@ -173,17 +203,32 @@ class NasrDB {
             };
 
             request.onsuccess = (event) => {
-                this._db = event.target.result;
+                clearTimeout(timer);
+                done();
+                const db = event.target.result;
                 // Reset cached connection if it closes unexpectedly
-                this._db.onclose = () => { this._db = null; };
-                this._db.onversionchange = () => { this._db.close(); this._db = null; };
+                db.onclose = () => { if (this._db === db) this._db = null; };
+                db.onversionchange = () => { db.close(); if (this._db === db) this._db = null; };
+                // Also a late success after the timeout: keep it for the next call.
+                if (!this._db) this._db = db;
+                else if (this._db !== db) db.close();
+                if (settled) { log('IndexedDB opened after the timeout — connection kept'); return; }
+                settled = true;
                 resolve(this._db);
             };
 
             request.onerror = (event) => {
+                clearTimeout(timer);
+                done();
+                if (settled) return;
+                settled = true;
                 reject(new Error('IndexedDB open failed: ' + event.target.error));
             };
         });
+        this._opening = opening;
+        // Whatever rejected it (including a throw above), the next call starts afresh.
+        opening.catch(() => { if (this._opening === opening) this._opening = null; });
+        return opening;
     }
 
     // ========== Generic CRUD Helpers ==========
