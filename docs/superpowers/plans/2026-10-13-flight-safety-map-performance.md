@@ -288,6 +288,13 @@ Every task follows the same rules:
     | main-thread task s/min | 25.8 | **13.6** (−47 %) |
     | layout / style s/min | 0.45 / 0.80 | 0.17 / 0.25 |
     | Playwright | 51/53 (2 stale screenshots) | 51/53 (same 2) |
+  - [x] close zoom (review #5; `perf-b0.e2e.js --zoom`, 30 s runs). Before the fix, follow re-centres at z12–14 triggered a full layer refresh each; now auto-pan moves refresh at most every 3 s:
+
+    | Zoom | layers /min before → after | task s/min before → after | script s/min before → after |
+    |---|---|---|---|
+    | 12 | 122 → **20** | 36.1 → **16.0** | 13.6 → **5.8** |
+    | 14 | 120 → **20** | 42.4 → **17.9** | 15.9 → **6.4** |
+    | default (9.75) | 16 → 16 | 13.6 → 13.6 | 4.8 → 4.8 |
   - [ ] update the manual if auto-pan behaviour is noticeably different;
   - [ ] bump the version and build;
   - [ ] critical review;
