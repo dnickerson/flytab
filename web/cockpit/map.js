@@ -1764,8 +1764,9 @@ class CockpitMap {
 
     /**
      * One new track point (TrackLog, B4): extend the existing line instead of
-     * rebuilding it. `points` (the whole track) is used only when there is no
-     * line yet, e.g. the second point ever.
+     * removing and re-creating it. (Leaflet still re-projects the whole line on
+     * addLatLng; what this saves is the layer churn.) `points` (the whole track)
+     * is used only when there is no line yet, e.g. the second point ever.
      */
     appendTrackPoint(pt, points) {
         if (!Settings.showTrackLog) return;

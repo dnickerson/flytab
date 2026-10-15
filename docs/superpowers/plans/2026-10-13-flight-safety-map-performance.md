@@ -260,7 +260,7 @@ Every task follows the same rules:
   - New IndexedDB database `flytab-track`, store `points` (keyPath `ts`): one put per point, pruned about hourly and at load when it holds more than the window. A separate DB avoids version coupling with `flypi-flights`.
   - Migration: on the first start the `flypi_track` points are copied in one transaction, then `flytab_track_migrated = '1'` is set. **`flypi_track` is never modified or removed.**
   - If IDB won't open (5 s timeout) or the first read fails: the old localStorage behaviour, nothing lost. Points recorded during the load are kept, after the stored ones.
-  - Map: `appendTrackPoint` → `polyline.addLatLng` instead of rebuilding the line every 10 s.
+  - Map: `appendTrackPoint` → `polyline.addLatLng` instead of removing, re-creating and re-adding the line every 10 s. This saves the layer churn, not the per-point work: in Leaflet 1.9.4 `addLatLng` → `redraw()` → `renderer._updatePath()` re-projects and re-clips the whole line (`_project()` + `_update()`, SVG and Canvas alike). About 4,320 points every 10 s is cheap next to the 400 KB localStorage rewrite it replaced (PR B review #10).
   - Tests: `tests/cockpit/track-log-store.test.js` (10, fake-indexeddb).
   - Real Chromium check with a seeded 4,320-point `flypi_track`:
     - migrated 4,320 into IDB and the map; old key byte-identical (323,228 chars);
