@@ -276,7 +276,18 @@ Every task follows the same rules:
   - [x] DiagLog: in memory, saved every 3 s (errors at once), cap 200 → 1000; same key and entry shape. `app-route-edit-queue` now reads the real DiagLog through its API.
   - [x] `FisbNexrad.clustersForFrame` caches per stored frame (WeakMap). Frames are deep copies, only pushed/shifted. The convective engine used to re-cluster every frame on every NEXRAD block.
 - [ ] **B6 Ship PR B:**
-  - [ ] measure again against B0 and record the before/after table here;
+  - [x] measure again against B0 and record the before/after table here (2026-10-15, same harness and load; the marker count was rechecked with a fresh mock: 64, as in B0):
+
+    | Metric | B0 | After B1–B5 |
+    |---|---|---|
+    | traffic `setIcon` /s | 6,433 | **0** |
+    | map `moveend` /s | 10 | **0.3** |
+    | `_updateDynamicLayers` /min | 1 (starved) | **16** |
+    | route table `updateLive` /s | 10 | **1** |
+    | main-thread script s/min | 20.3 | **4.75** (−77 %) |
+    | main-thread task s/min | 25.8 | **13.6** (−47 %) |
+    | layout / style s/min | 0.45 / 0.80 | 0.17 / 0.25 |
+    | Playwright | 51/53 (2 stale screenshots) | 51/53 (same 2) |
   - [ ] update the manual if auto-pan behaviour is noticeably different;
   - [ ] bump the version and build;
   - [ ] critical review;
