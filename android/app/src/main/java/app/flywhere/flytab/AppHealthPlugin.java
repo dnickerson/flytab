@@ -15,7 +15,8 @@ import com.getcapacitor.annotation.CapacitorPlugin;
  * screen, and what happened to the previous WebView.
  *
  * JS API:
- *   AppHealth.isOnScreen() -> { onScreen }  (MainActivity between onStart and onStop;
+ *   AppHealth.isOnScreen() -> { onScreen, keepAlive }  (onScreen: MainActivity between onStart and onStop;
+ *     keepAlive: the KeepAliveWebView is really in use;
  *     the page can't tell: KeepAliveWebView keeps it "visible". Changes arrive as
  *     the window event 'flytab:screen' { onScreen }.)
  *   AppHealth.takeRendererEvents() -> { events: [{ at, didCrash, priority, action }] }
@@ -29,6 +30,7 @@ public class AppHealthPlugin extends Plugin {
     public void isOnScreen(PluginCall call) {
         JSObject ret = new JSObject();
         ret.put("onScreen", MainActivity.isOnScreen());
+        ret.put("keepAlive", MainActivity.isKeepAliveWebView());
         call.resolve(ret);
     }
 

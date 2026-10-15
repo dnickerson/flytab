@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v11.21';
+const FLYTAB_VERSION = 'v11.22';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 const DiagLog = (() => {
@@ -192,6 +192,11 @@ class FlyTabApp {
             // unless heat released it on purpose (_applyThermalWakeLock).
             if (document.visibilityState === 'visible' && !this._thermalWakeLockReleased) this._acquireWakeLock();
         });
+        // The page never looks hidden now (KeepAliveWebView), so also take the lock
+        // back on the real return to screen, in case Android or Chromium dropped it.
+        window.addEventListener('flytab:screen', (e) => {
+            if (e.onScreen && !this._thermalWakeLockReleased) this._acquireWakeLock();
+        });
 
         // Network mode detection
         this.networkMode = new NetworkMode();
@@ -208,6 +213,11 @@ class FlyTabApp {
 
         // Start thermal monitor
         this._initThermalMonitor();
+
+        // Hang watchdog and pause detector before the cockpit: _initCockpit awaits
+        // the NASR load, which can stall (CLAUDE.md: IDB transaction hang).
+        this._startWatchdog();
+        this._startPauseDetector();
 
         // Initialize cockpit
         await this._initCockpit();
@@ -235,8 +245,6 @@ class FlyTabApp {
         DiagLog.log('init', `FlyTab ${FLYTAB_VERSION} initialized`);
         console.log(`FlyTab ${FLYTAB_VERSION} initialized`);
 
-        this._startWatchdog();
-        this._startPauseDetector();
         window.addEventListener('resize', () => {
             if (document.getElementById('cockpitContainer')?.classList.contains('route-editing')) {
                 this._updateOrientation();
@@ -322,6 +330,21 @@ class FlyTabApp {
     }
 
     /**
+     * Start one subsystem. If it throws, log it and carry on: since A4 the engine
+     * and recording block runs before the NASR load, and one failure there must
+     * not also stop airport data, the airport popup and everything after it.
+     */
+    _guard(name, fn) {
+        try {
+            return fn();
+        } catch (err) {
+            console.error(`[FlyTab] ${name} failed to start:`, err);
+            DiagLog.log('error', `${name} failed to start: ${err?.message || err}`);
+            return undefined;
+        }
+    }
+
+    /**
      * Is FlyTab really on screen? KeepAliveWebView tells Chromium the page is
      * always visible (so it isn't frozen when hidden), so document.visibilityState
      * no longer says. MainActivity sends 'flytab:screen' { onScreen } on every
@@ -333,7 +356,12 @@ class FlyTabApp {
         window.addEventListener('flytab:screen', (e) => { eventSeen = true; this._onScreen = !!e.onScreen; });
         const health = window.Capacitor?.Plugins?.AppHealth;
         health?.isOnScreen?.()
-            .then((r) => { if (!eventSeen && typeof r?.onScreen === 'boolean') this._onScreen = r.onScreen; })
+            .then((r) => {
+                if (!eventSeen && typeof r?.onScreen === 'boolean') this._onScreen = r.onScreen;
+                if (r?.keepAlive === false) {
+                    DiagLog.log('error', 'KeepAliveWebView not in use: FlyTab will be frozen ~30–40 s after leaving the screen (Capacitor layout override not applied?)');
+                }
+            })
             .catch(() => {});
     }
 
@@ -528,66 +556,78 @@ class FlyTabApp {
         // window.stickyValve once at construction), EmergencyGlide before EngineML.
 
         // Engine client (WebSocket to Pi engine monitor)
-        const _engCfg = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.raw : {};
-        this.engineClient = new EngineClient(
-            _engCfg.engineIp       ?? '192.168.10.1',
-            _engCfg.engineWsPort   ?? 8082,
-            _engCfg.engineHttpPort ?? 8080,
-        );
-        this.engineClient.connect();
-        window.engineClient = this.engineClient;
+        this._guard('Engine client', () => {
+            const _engCfg = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.raw : {};
+            this.engineClient = new EngineClient(
+                _engCfg.engineIp       ?? '192.168.10.1',
+                _engCfg.engineWsPort   ?? 8082,
+                _engCfg.engineHttpPort ?? 8080,
+            );
+            this.engineClient.connect();
+            window.engineClient = this.engineClient;
+        });
 
         // Sticky valve check (the Pi's old rule, now run here), with its warning
         // over the map; the ENG page shows the same warning (window.stickyValve).
-        if (typeof StickyValveMonitor !== 'undefined') {
-            this.stickyValve = new StickyValveMonitor(this.engineClient);
-            window.stickyValve = this.stickyValve;
-            const mapArea = document.getElementById('mapContainer');
-            if (mapArea && typeof StickyValveBanner !== 'undefined') {
-                this.stickyValveBanner = new StickyValveBanner(mapArea, this.stickyValve, 'map');
+        this._guard('Sticky-valve check', () => {
+            if (typeof StickyValveMonitor !== 'undefined') {
+                this.stickyValve = new StickyValveMonitor(this.engineClient);
+                window.stickyValve = this.stickyValve;
+                const mapArea = document.getElementById('mapContainer');
+                if (mapArea && typeof StickyValveBanner !== 'undefined') {
+                    this.stickyValveBanner = new StickyValveBanner(mapArea, this.stickyValve, 'map');
+                }
+                this.stickyValve.addEventListener('alert', (e) => {
+                    const message = `Sticky valve warning: ${StickyValveMonitor.describe(e.detail)}`;
+                    console.warn(`[StickyValve] ${message}`);
+                    // Kept across restarts in the diagnostic log (long-press the version
+                    // badge); the ML advisory log is in memory only.
+                    DiagLog.log('engine', message, { cyl: e.detail.cyl, egt: e.detail.egt, othersAvg: e.detail.othersAvg });
+                    window.engineML?.recordAdvisory?.({ type: `sticky_valve_cyl${e.detail.cyl}`, message, severity: 'caution' });
+                });
             }
-            this.stickyValve.addEventListener('alert', (e) => {
-                const message = `Sticky valve warning: ${StickyValveMonitor.describe(e.detail)}`;
-                console.warn(`[StickyValve] ${message}`);
-                // Kept across restarts in the diagnostic log (long-press the version
-                // badge); the ML advisory log is in memory only.
-                DiagLog.log('engine', message, { cyl: e.detail.cyl, egt: e.detail.egt, othersAvg: e.detail.othersAvg });
-                window.engineML?.recordAdvisory?.({ type: `sticky_valve_cyl${e.detail.cyl}`, message, severity: 'caution' });
-            });
-        }
+        });
 
         // Engine GPS bridge — injects engine GPS when Stratux situation WS is unavailable
-        if (typeof EngineGpsBridge !== 'undefined') {
-            this.engineGpsBridge = new EngineGpsBridge(this.stratuxClient, this.engineClient);
-            this.engineGpsBridge.start();
-        }
-        this.positionHealth?.setSources({ engine: this.engineClient, bridge: this.engineGpsBridge });
+        this._guard('Engine GPS bridge', () => {
+            if (typeof EngineGpsBridge !== 'undefined') {
+                this.engineGpsBridge = new EngineGpsBridge(this.stratuxClient, this.engineClient);
+                this.engineGpsBridge.start();
+            }
+            this.positionHealth?.setSources({ engine: this.engineClient, bridge: this.engineGpsBridge });
+        });
 
 
         // Engine panel (receives data via WebSocket push)
-        this.enginePanel = new EnginePanel(document.createElement('div'), this.engineClient);
-        this.enginePanel.init();
-        window.enginePanel = this.enginePanel;
+        this._guard('Engine panel', () => {
+            this.enginePanel = new EnginePanel(document.createElement('div'), this.engineClient);
+            this.enginePanel.init();
+            window.enginePanel = this.enginePanel;
+        });
 
         // Emergency Glide Calculator (must init before EngineML so trigger() is available)
-        if (typeof EmergencyGlide !== 'undefined') {
-            this.emergencyGlide = new EmergencyGlide();
-        }
+        this._guard('Emergency glide', () => {
+            if (typeof EmergencyGlide !== 'undefined') {
+                this.emergencyGlide = new EmergencyGlide();
+            }
+        });
 
         // Engine ML (anomaly detection + advisories)
-        if (typeof EngineMLBridge !== 'undefined') {
-            this.engineML = new EngineMLBridge();
-            // Wired up and listening right away, not after init(): the physics rules
-            // don't need the plugin, and a plugin initialize() that never settles
-            // (model warmup has no timeout) must not take them down with it. ML
-            // inference joins in once init() succeeds (_initialized).
-            this.engineML.setDisplayElements(
-                document.getElementById('statusML'),
-                document.getElementById('engineAdvisory')
-            );
-            this.engineML.start(this.engineClient, this.stratuxClient);
-            this.engineML.init();
-        }
+        this._guard('Engine ML', () => {
+            if (typeof EngineMLBridge !== 'undefined') {
+                this.engineML = new EngineMLBridge();
+                // Wired up and listening right away, not after init(): the physics rules
+                // don't need the plugin, and a plugin initialize() that never settles
+                // (model warmup has no timeout) must not take them down with it. ML
+                // inference joins in once init() succeeds (_initialized).
+                this.engineML.setDisplayElements(
+                    document.getElementById('statusML'),
+                    document.getElementById('engineAdvisory')
+                );
+                this.engineML.start(this.engineClient, this.stratuxClient);
+                this.engineML.init();
+            }
+        });
 
         // Wire flight recording events to ML logging
         window.addEventListener('flightsync:started', () => {
@@ -600,52 +640,60 @@ class FlyTabApp {
         // Engine overlay (floats on the map). Fed by the engine client itself --
         // it used to refresh only on Stratux situation events, so it froze
         // whenever Stratux GPS did.
-        if (typeof EngineOverlay !== 'undefined') {
-            this.engineOverlay = new EngineOverlay(primaryView, this.engineClient);
-        }
+        this._guard('Engine overlay', () => {
+            if (typeof EngineOverlay !== 'undefined') {
+                this.engineOverlay = new EngineOverlay(primaryView, this.engineClient);
+            }
+        });
 
         // Engine page (full-screen overlay, accessed via [ENG] button)
-        if (typeof EnginePage !== 'undefined') {
-            this.enginePage = new EnginePage(document.body, this.enginePanel);
-            this.cockpitMap.setEnginePage(this.enginePage);
-            // Wire close callback so tab bar returns to map when ✕ is tapped
-            this.enginePage.onClose = () => this.tabBar?.selectTab('map');
-        }
+        this._guard('ENG page', () => {
+            if (typeof EnginePage !== 'undefined') {
+                this.enginePage = new EnginePage(document.body, this.enginePanel);
+                this.cockpitMap.setEnginePage(this.enginePage);
+                // Wire close callback so tab bar returns to map when ✕ is tapped
+                this.enginePage.onClose = () => this.tabBar?.selectTab('map');
+            }
+        });
 
         // Flight recorder (records engine + GPS to Savvy CSV on device)
-        if (typeof FlightRecorder !== 'undefined') {
-            this.flightRecorder = new FlightRecorder(this.engineClient, this.stratuxClient, nasrDb);
-            this.flightRecorder.init();
-            window.flightRecorder = this.flightRecorder;
-            // Update REC badge from flight recorder
-            this.flightRecorder.onStatusChange = (status) => {
-                const recEl = this.dom.statusRec;
-                if (recEl) {
-                    if (status.recording) {
-                        recEl.textContent = `● REC ${status.rowCount}`;
+        this._guard('Flight recorder', () => {
+            if (typeof FlightRecorder !== 'undefined') {
+                this.flightRecorder = new FlightRecorder(this.engineClient, this.stratuxClient, nasrDb);
+                this.flightRecorder.init();
+                window.flightRecorder = this.flightRecorder;
+                // Update REC badge from flight recorder
+                this.flightRecorder.onStatusChange = (status) => {
+                    const recEl = this.dom.statusRec;
+                    if (recEl) {
+                        if (status.recording) {
+                            recEl.textContent = `● REC ${status.rowCount}`;
+                            recEl.hidden = false;
+                        } else {
+                            recEl.hidden = true;
+                        }
+                    }
+                };
+                // Also update REC badge every 2s while recording
+                setInterval(() => {
+                    const recEl = this.dom.statusRec;
+                    if (recEl && this.flightRecorder.recording) {
+                        recEl.textContent = `● REC ${this.flightRecorder.rowCount}`;
                         recEl.hidden = false;
-                    } else {
+                    } else if (recEl && !this.flightRecorder.recording) {
                         recEl.hidden = true;
                     }
-                }
-            };
-            // Also update REC badge every 2s while recording
-            setInterval(() => {
-                const recEl = this.dom.statusRec;
-                if (recEl && this.flightRecorder.recording) {
-                    recEl.textContent = `● REC ${this.flightRecorder.rowCount}`;
-                    recEl.hidden = false;
-                } else if (recEl && !this.flightRecorder.recording) {
-                    recEl.hidden = true;
-                }
-            }, 2000);
-        }
+                }, 2000);
+            }
+        });
 
         // Logbook (auto-creates entries from FlightSync)
-        if (typeof Logbook !== 'undefined') {
-            this.logbook = new Logbook(nasrDb);
-            this.cockpitMap.setLogbook(this.logbook);
-        }
+        this._guard('Logbook', () => {
+            if (typeof Logbook !== 'undefined') {
+                this.logbook = new Logbook(nasrDb);
+                this.cockpitMap.setLogbook(this.logbook);
+            }
+        });
 
         // After a restart (the WebView renderer died, or Android ended FlyTab):
         // log it, and carry on or close out the unfinished recording. Needs the
@@ -2268,7 +2316,7 @@ class FlyTabApp {
             }[lastEvent.action] || `FlyTab's display engine ${what} at ${when}, so FlyTab closed.`);
         }
         if (recovery === 'resumed') parts.push('Recording resumed.');
-        if (recovery === 'closed') parts.push('The previous recording was saved to the logbook.');
+        if (recovery === 'closed') parts.push('The previous recording was closed out; its logbook entry follows.');
         return parts.join(' ');
     }
 

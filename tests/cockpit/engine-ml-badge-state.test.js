@@ -48,4 +48,32 @@ describe('ML badge vs mlState', () => {
         b._updateDisplay({ windowReady: true, phase: 'cruise', mlState: 'ok', score: 0.9, anomaly: true });
         expect(badge.textContent).toBe('ML:ALERT');
     });
+
+    // PR A review: only a real score may paint the badge green.
+    it('an ML:ALERT is not wiped out by the samples skipped or timed out after it', () => {
+        b._updateDisplay({ windowReady: true, phase: 'cruise', mlState: 'ok', score: 0.9, anomaly: true });
+        b._updateDisplay({ windowReady: true, phase: 'cruise', mlState: 'busy' });
+        b._updateDisplay({ windowReady: true, phase: 'cruise', mlState: 'timeout' });
+        expect(badge.textContent).toBe('ML:ALERT');
+    });
+
+    it('inference failing every sample: ML:ERR after a few, cleared by the next real score', () => {
+        b._updateDisplay({ windowReady: true, phase: 'cruise', mlState: 'ok', score: 0.01, anomaly: false });
+        b._updateDisplay({ windowReady: true, phase: 'cruise', mlState: 'error' });
+        expect(badge.textContent).toBe('ML:cruise');            // one error: not yet
+        for (let i = 1; i < EngineMLBridge.ERROR_BADGE_AFTER; i++) b._updateDisplay({ windowReady: true, phase: 'cruise', mlState: 'error' });
+        expect(badge.textContent).toBe('ML:ERR');
+        expect(badge.style.color).not.toBe('var(--status-ok)');
+        b._updateDisplay({ windowReady: true, phase: 'cruise', mlState: 'ok', score: 0.01, anomaly: false });
+        expect(badge.textContent).toBe('ML:cruise');
+    });
+
+    it('every result is still passed on (engineml:result), scored or not', () => {
+        const seen = [];
+        const on = (e) => seen.push(e.detail.mlState);
+        document.addEventListener('engineml:result', on);
+        for (const mlState of ['ok', 'busy', 'timeout', 'error', 'disabled']) b._updateDisplay({ windowReady: true, phase: 'cruise', mlState, score: mlState === 'ok' ? 0.01 : undefined });
+        document.removeEventListener('engineml:result', on);
+        expect(seen).toEqual(['ok', 'busy', 'timeout', 'error', 'disabled']);
+    });
 });

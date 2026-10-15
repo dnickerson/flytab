@@ -7,6 +7,7 @@
 class TrackLog {
     static MAX_POINTS = 4320; // 12 hours at 10s intervals
     static RECORD_INTERVAL = 10000;
+    static FRESH_MS = 5000;
     static STORAGE_KEY = 'flypi_track';
 
     constructor(stratuxClient, cockpitMap) {
@@ -47,6 +48,11 @@ class TrackLog {
     _record() {
         const sit = this.stratux.situation;
         if (!sit || sit.gps_fix_quality === 0 || !sit.lat || !sit.lon) return;
+        // Only a position received in the last few seconds. The situation keeps
+        // its last values when the feed stops, and FlyTab now keeps running in
+        // the background: without this it appended the same stale point every
+        // 10 s until the 12 h ring was full of it.
+        if (sit._stale || !(Date.now() - sit.timestamp < TrackLog.FRESH_MS)) return;
 
         const pt = {
             ts: Date.now(),

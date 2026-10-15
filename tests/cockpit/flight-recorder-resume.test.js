@@ -145,7 +145,10 @@ describe('FlightRecorder after a restart', () => {
         vi.setSystemTime(marker().savedAt + 10_000);
         global.fetch = vi.fn(async () => { throw new TypeError('Failed to fetch'); });
         const rec = makeRecorder();
-        expect(await rec.recoverUnfinished()).toBeNull();
+        const p = rec.recoverUnfinished();
+        await vi.advanceTimersByTimeAsync(FlightRecorder.RECOVER_RETRIES * FlightRecorder.RECOVER_RETRY_MS);   // it retries first
+        expect(await p).toBeNull();
+        expect(global.fetch).toHaveBeenCalledTimes(FlightRecorder.RECOVER_RETRIES + 1);
         expect(rec.recording).toBe(false);
         expect(events).toEqual([]);
         expect(localStorage.getItem(KEY)).not.toBeNull();

@@ -156,4 +156,12 @@ describe('screen wake lock vs a hot tablet (A5)', () => {
         await heat(52); await flush();
         expect(wl.held.size).toBe(0);
     });
+
+    // PR A review #11: the page never looks hidden (KeepAliveWebView), so the
+    // lock is also taken back on the real return to screen.
+    it('back on screen: the lock is taken again unless heat released it', async () => {
+        const initBody = extractMethod(appSrc, '    async init() {');
+        const listener = initBody.slice(initBody.indexOf("window.addEventListener('flytab:screen'"));
+        expect(listener).toMatch(/e\.onScreen && !this\._thermalWakeLockReleased\) this\._acquireWakeLock\(\)/);
+    });
 });

@@ -46,10 +46,29 @@ describe('PauseDetector', () => {
         expect(onPause).toHaveBeenCalledTimes(1);
     });
 
-    it('the wall clock being set (GPS time sync) is not a pause: only the monotonic clock counts', () => {
+    it('the wall clock set BACK is not a pause', () => {
         const c = clocks(), onPause = vi.fn();
         const d = new PauseDetector({ onPause, now: () => c.mono, wall: () => c.wall });
-        d.check(); c.advance(1000, { wallMs: 3600 * 1000 }); d.check();
+        d.check(); c.advance(1000, { wallMs: -3600 * 1000 }); d.check();
+        expect(onPause).not.toHaveBeenCalled();
+    });
+
+    it('device asleep: the monotonic clock stops, the wall clock does not -> reported (PR A review #9)', () => {
+        // performance.now() (CLOCK_MONOTONIC on Android) doesn't count suspend.
+        const c = clocks(), onPause = vi.fn();
+        const d = new PauseDetector({ onPause, now: () => c.mono, wall: () => c.wall });
+        d.check();
+        const start = c.wall;
+        c.advance(1000, { wallMs: 5 * 60 * 1000 });   // 5 min asleep, 1 s of monotonic time
+        d.check();
+        expect(onPause).toHaveBeenCalledTimes(1);
+        expect(onPause.mock.calls[0][0]).toEqual({ startedAt: start, endedAt: c.wall, durationMs: 5 * 60 * 1000 });
+    });
+
+    it('an absurd wall-clock jump (over a day) is not reported', () => {
+        const c = clocks(), onPause = vi.fn();
+        const d = new PauseDetector({ onPause, now: () => c.mono, wall: () => c.wall });
+        d.check(); c.advance(1000, { wallMs: 3 * 24 * 3600 * 1000 }); d.check();
         expect(onPause).not.toHaveBeenCalled();
     });
 

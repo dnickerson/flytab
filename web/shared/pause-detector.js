@@ -7,9 +7,12 @@
  * now prevents that; anything else that stops the page is caught here, so the
  * pilot is told instead of not knowing.
  *
- * A 1 s tick: a gap of THRESHOLD_MS or more on the monotonic clock
- * (performance.now) means the page wasn't running. The wall clock is used only
- * for the times shown, so a clock change (GPS time sync) isn't a pause.
+ * A 1 s tick: a gap of THRESHOLD_MS or more means the page wasn't running.
+ * Measured on the monotonic clock (performance.now), which a clock change can't
+ * fool -- but on Android it stops while the device is asleep, so a forward
+ * wall-clock gap of THRESHOLD_MS..MAX_WALL_GAP_MS counts too (CPU suspended,
+ * e.g. if the wake lock was ever lost). A wall clock set back is ignored; one
+ * set forward by hand would be reported, which is rare on this tablet.
  */
 class PauseDetector {
     /**
@@ -38,7 +41,10 @@ class PauseDetector {
     check() {
         const mono = this._now(), wall = this._wall();
         if (this._lastMono != null) {
-            const gap = mono - this._lastMono;
+            const monoGap = mono - this._lastMono;
+            const wallGap = wall - this._lastWall;
+            const asleep = wallGap > monoGap && wallGap <= PauseDetector.MAX_WALL_GAP_MS ? wallGap : 0;
+            const gap = Math.max(monoGap, asleep);
             if (gap >= PauseDetector.THRESHOLD_MS) {
                 this._onPause?.({ startedAt: this._lastWall, endedAt: wall, durationMs: gap });
             }
@@ -60,3 +66,4 @@ class PauseDetector {
 }
 
 PauseDetector.THRESHOLD_MS = 15000;
+PauseDetector.MAX_WALL_GAP_MS = 24 * 3600 * 1000;

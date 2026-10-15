@@ -129,6 +129,19 @@ public class EngineAdvisor {
     public List<Advisory> advise(float[] features, String phase,
                                   float anomalyScore, boolean isAnomaly,
                                   float distRemainingNm, float groundSpeedKts) {
+        return advise(features, phase, anomalyScore, isAnomaly, distRemainingNm, groundSpeedKts, true);
+    }
+
+    /**
+     * @param mlScored false when this sample has no ML score (inference busy, timed
+     *     out, failed or disabled). The rule-based advisories below don't use the
+     *     score and still run; only the step-7 fallback line, which speaks for the
+     *     ML ("normal" / "unusual"), is left out.
+     */
+    public List<Advisory> advise(float[] features, String phase,
+                                  float anomalyScore, boolean isAnomaly,
+                                  float distRemainingNm, float groundSpeedKts,
+                                  boolean mlScored) {
         List<Advisory> advisories = new ArrayList<>();
 
         float rpm = features[IDX_RPM];
@@ -170,7 +183,7 @@ public class EngineAdvisor {
         }
 
         // ── 7. Phase-specific normal message if nothing else ──
-        if (advisories.isEmpty()) {
+        if (advisories.isEmpty() && mlScored) {
             if (isAnomaly) {
                 advisories.add(new Advisory("Engine pattern unusual — monitor closely",
                         SEVERITY_CAUTION, "engine"));

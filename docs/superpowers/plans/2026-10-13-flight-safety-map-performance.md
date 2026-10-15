@@ -164,11 +164,28 @@ Every task follows the same rules:
     - `threshold_adapter.xml` has the same MD5 before and after; FlyTab was restarted to clear the in-memory samples.
   - Not reproducible on the tablet: a run that never returns (unit tests only).
 - [ ] **A9 Ship PR A:**
-  - [ ] update the manual (A1, A5, A6 are user-visible);
-  - [ ] bump the version and build;
-  - [ ] critical review, then fix findings;
+  - [x] update the manual (A1, A5, A6 are user-visible) — done with each step.
+  - [x] bump the version and build — v11.22.
+  - [x] critical review, then fix findings — 4 parallel reviewers (recorder, native, app/startup, cross-cutting), every finding re-verified against the code. No critical issues. Dana chose "fix 1–15, minimal #8"; all in v11.22:
+    - **#1 HIGH** start() during stop(): `_stopping` guard. start/recover refuse while stopping, and `_autoMonitor` retries instead of resetting its count. Mutation check: the test fails without the guard.
+    - **#2** GPS auto-start/stop counts only a fresh situation, so a resumed recording with no data yet isn't stopped after 60 s.
+    - **#3** EngineAdvisor's rule-based advisories (trends, carb ice, mixture, lead fouling) now run whether or not the sample was ML-scored. The "normal" fallback line is only shown with a score. Mutation-checked.
+    - **#4** The ML badge: only a real score paints it green; busy/timeout keep it; 5 errors in a row → ML:ERR.
+    - **#5** The marker records `shutdown` evidence; such a recording is closed out at its last save, not resumed.
+    - **#6** Renderer gone, with no restart (screen off / give-up): a high-priority "FlyTab closed — tap to restart" notification. POST_NOTIFICATIONS is now requested at startup (it was not granted on the tablet, so no FlyTab notification ever showed).
+    - **#7** Each engine/recording subsystem is started via `_guard`, so one failure can't block NASR or the airport popup.
+    - **#8 minimal** Off screen: no map `panTo` and no traffic-marker rebuild (`_onScreenChange` catches up; a first-fix pan is kept); the track log records only fresh (< 5 s, not `_stale`) positions.
+    - **#9** PauseDetector also counts a forward wall-clock gap (device asleep), up to 24 h.
+    - **#10** The watchdog and PauseDetector start before `_initCockpit`.
+    - **#11** The screen wake lock is re-taken on `flytab:screen` onScreen.
+    - **#12** `AppHealth.isOnScreen().keepAlive` reports whether KeepAliveWebView is really in use; DiagLog error if not.
+    - **#13** The final save is retried twice; if it still fails there's no rename and the unsaved rows are logged.
+    - **#14** Recovery retries the existence check (3 × 2 s) before giving up.
+    - **#15** Manual: v11.19 (not 18), A5 rationale, what a restart does and doesn't carry over, ML:ERR, the FlyTab-closed notification, and off-screen behaviour.
+    - Tests: vitest 1561/1561, JUnit 36/36.
+    - Tablet v11.22: `keepAlive: true`; the permission prompt shows; ML scored 11/11 with advisories (carb ice) returned; `threshold_adapter.xml` MD5 unchanged.
   - [ ] open the PR;
-  - [ ] tablet test.
+  - [ ] tablet test (needs Dana: answer the notification prompt, then a screen-off renderer crash shows the "FlyTab closed" notification; Home → back keeps the screen lock).
 
 ---
 
@@ -268,6 +285,20 @@ should be biased to look for red areas (pixels) building, not random scattered r
 ---
 
 ## Backlog (not scheduled)
+- From the PR A review (narrow or outside PR A):
+  - fisb-logger rename is still read → PUT (unchecked) → DELETE and can overwrite; a restart splits the weather file;
+  - crash-during-stop windows (marker cleared before the logbook entry; crash between the copy and the delete);
+  - partial copy left behind after a timed-out rename PUT;
+  - an empty (0-byte) file resumed has no header;
+  - no csvFilename dedupe in the logbook;
+  - no timeout on `importNasrBundle`;
+  - ML warmup runs on the shared plugin thread with no timeout; the GPU delegate's thread affinity; delegates never closed;
+  - toasts replace each other (the restart toast can be lost);
+  - ENG page trends tick via rAF (~12 s off screen);
+  - no WifiLock for screen-off Stratux data;
+  - restart budget on the wall clock; a blocked restart is recorded as RESTART;
+  - a close-out during a NASR import loses the route name;
+  - background polling (engine HTTP poll, internet weather, network probes) when off screen and not recording — PR B.
 - DiagLog churn: with no Stratux (at home), "Situation WS closed / Failed to connect" lines fill the 200-entry DiagLog within minutes and push out useful entries (crash/pause/recorder). Rate-limit or collapse repeated link messages.
 - Move engine-limit alerts and the flight recorder into the native FlightService, so they
   survive any WebView pause. This is the real fix behind A6, and it's a bigger change.

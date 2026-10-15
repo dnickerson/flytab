@@ -160,7 +160,8 @@ describe('FlightRecorder saves (A3)', () => {
         const onStop = (e) => events.push(e.detail);
         window.addEventListener('flightsync:stopped', onStop);
         const p = rec.stop();
-        await vi.advanceTimersByTimeAsync(FlightRecorder.LOCAL_TIMEOUT_MS);
+        // The final save is retried (FINAL_SAVE_RETRIES), each try timing out.
+        await vi.advanceTimersByTimeAsync((FlightRecorder.FINAL_SAVE_RETRIES + 1) * (FlightRecorder.LOCAL_TIMEOUT_MS + FlightRecorder.FINAL_SAVE_RETRY_MS));
         await p;
         window.removeEventListener('flightsync:stopped', onStop);
         expect(events).toHaveLength(1);
