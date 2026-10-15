@@ -297,7 +297,9 @@ should be biased to look for red areas (pixels) building, not random scattered r
 - **DIAG tab: the airport diagram doesn't open (reported by Dana 2026-10-15).** Not caused by PR A: `airport-popup.js` is untouched there.
   - What the code does (`_loadPlatePane`, `airport-popup.js` ~980–1058): the diagram is shown inline as the pipeline's WebP (checked for KCLT: `00078AD.webp`, 807×1237, loaded) with pinch-zoom and double-tap reset only. A tap doesn't open it full screen or as the PDF, unlike the A/FD tab (`_openAfdFullscreen`, "Tap to open full screen").
   - Second, latent: with no WebP, the fallback is the PDF in an `<iframe>`. Android WebView has no PDF viewer and TileServer serves it as `application/octet-stream`, so that pane is likely blank. `documents.js` already has a pdf.js viewer that could be reused.
-  - To do: confirm with Dana what "open" should mean (a full-screen diagram, or the PDF), then fix both.
+  - Fix (Dana: "use an existing PDF renderer"):
+    - (1) A tap on the inline diagram opens `ApproachCharts` at the diagram. Add `showPlateForAirport(icao, 'APD')` = `showForAirport` + `_showPlate(idx of the APD plate)`. The viewer already does WebP → `renderPdfToContainer` fallback, pinch-zoom and own-ship on geo-referenced plates. Add a "Tap to open full screen" hint, as on A/FD.
+    - (2) The DIAG pane's PDF fallback: replace the `<iframe>` with `renderPdfToContainer` (`web/shared/pdf-render.js`, used by the Documents panel and the plate viewer).
 - From the PR A review (narrow or outside PR A):
   - fisb-logger rename is still read → PUT (unchecked) → DELETE and can overwrite; a restart splits the weather file;
   - crash-during-stop windows (marker cleared before the logbook entry; crash between the copy and the delete);
