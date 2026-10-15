@@ -261,7 +261,8 @@ Every task follows the same rules:
   - Migration: on the first start the `flypi_track` points are copied in one transaction, then `flytab_track_migrated = '1'` is set. **`flypi_track` is never modified or removed.**
   - If IDB won't open (5 s timeout) or the first read fails: the old localStorage behaviour, nothing lost. Points recorded during the load are kept, after the stored ones.
   - Map: `appendTrackPoint` → `polyline.addLatLng` instead of removing, re-creating and re-adding the line every 10 s. This saves the layer churn, not the per-point work: in Leaflet 1.9.4 `addLatLng` → `redraw()` → `renderer._updatePath()` re-projects and re-clips the whole line (`_project()` + `_update()`, SVG and Canvas alike). About 4,320 points every 10 s is cheap next to the 400 KB localStorage rewrite it replaced (PR B review #10).
-  - Tests: `tests/cockpit/track-log-store.test.js` (10, fake-indexeddb).
+  - Tests: `tests/cockpit/track-log-store.test.js` (now 18 with both reviews' failure paths, fake-indexeddb).
+  - Review fixes: points carry `seq` (recording counter, key `flytab_track_seq`) so a clock step back can't make a restart drop the newest points; prune deletes trimmed points by key; writes time out (5 s) and 3 failures fall back; fallback sessions always marked and merged; a load that fails after reading IndexedDB falls back with that track.
   - Real Chromium check with a seeded 4,320-point `flypi_track`:
     - migrated 4,320 into IDB and the map; old key byte-identical (323,228 chars);
     - +3 points in 32 s, appended to memory, IDB and the line (4,323);
@@ -297,7 +298,7 @@ Every task follows the same rules:
     | default (9.75) | 16 → 16 | 13.6 → 13.6 | 4.8 → 4.8 |
   - [ ] update the manual if auto-pan behaviour is noticeably different;
   - [ ] bump the version and build;
-  - [ ] critical review;
+  - [x] critical review: the first review's 10 findings fixed (commits 262a3dc–ece19d7); a second review of those fixes found 5 more (track-log order after a clock step, hung writes, two fallback-merge gaps; auto-pan delaying a pilot refresh), all fixed (128f4cc, ba4f574). Re-measured after: z12 layers 20/min, task 16.0 s/min; default 16/min, 13.4 s/min;
   - [ ] open the PR;
   - [ ] tablet test, including a manual airport-tap check.
 
