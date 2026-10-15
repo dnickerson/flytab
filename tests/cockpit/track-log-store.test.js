@@ -203,6 +203,84 @@ describe('TrackLog failure paths (PR B review)', () => {
     });
 });
 
+// Second PR B review (2026-10-15), track-log findings 1, 2, 4, 5.
+describe('TrackLog failure paths (second PR B review)', () => {
+    beforeEach(() => { indexedDB = new IDBFactory(); localStorage.clear(); });
+    afterEach(() => vi.restoreAllMocks());
+
+    const at = (ts, lat = 35) => ({ ts, lat, lon: -80, alt: 0, gs: 0, trk: 0 });
+    async function withStatics(over, fn) {
+        const saved = {};
+        for (const k of Object.keys(over)) { saved[k] = TrackLog[k]; TrackLog[k] = over[k]; }
+        try { return await fn(); } finally { Object.assign(TrackLog, saved); }
+    }
+
+    it('#1 clock set back, window full: a restart keeps the newest recorded points, in recording order', async () => {
+        await withStatics({ MAX_POINTS: 5, TRIM_SLACK: 0 }, async () => {
+            const s1 = await started();
+            for (const ts of [9000, 9010, 9020, 9030, 9040]) s1._append(at(ts));
+            for (const ts of [100, 110]) s1._append(at(ts));       // after the clock went back
+            await s1.idle();
+            const order = [9020, 9030, 9040, 100, 110];
+            expect(s1.points.map((p) => p.ts)).toEqual(order);
+            const s2 = await started();
+            await s2.idle();
+            expect(s2.points.map((p) => p.ts)).toEqual(order);
+            const s3 = await started();                         // and nothing was deleted at load
+            expect(s3.points.map((p) => p.ts)).toEqual(order);
+        });
+    });
+
+    it('#2 writes that never answer: they time out, count as failures, and fall back', async () => {
+        await withStatics({ OPEN_TIMEOUT_MS: 50 }, async () => {
+            const stratux = { situation: fix() };
+            const t = await started(stratux);
+            const realTx = TrackLog._tx;
+            vi.spyOn(TrackLog, '_tx').mockImplementation((db, mode, fn) => (mode === 'readwrite' ? new Promise(() => {}) : realTx(db, mode, fn)));
+            for (let i = 0; i < TrackLog.MAX_WRITE_FAILURES; i++) {
+                stratux.situation = { ...fix(), lat: 35.5 + i * 0.01 };
+                await new Promise((r) => setTimeout(r, 2));
+                t._record();
+            }
+            await t.idle();                                     // never resolves without a write timeout
+            expect(t._useLocal).toBe(true);
+            expect(JSON.parse(localStorage.getItem(OLD_KEY))).toHaveLength(TrackLog.MAX_WRITE_FAILURES);
+        });
+    }, 3000);
+
+    it('#4 the first copy times out but commits later: that session\'s points still come back', async () => {
+        localStorage.setItem(OLD_KEY, JSON.stringify([pt(0)]));
+        await withStatics({ OPEN_TIMEOUT_MS: 150 }, async () => {
+            const realTx = TrackLog._tx;
+            const spy = vi.spyOn(TrackLog, '_tx').mockImplementation((db, mode, fn) => {
+                if (mode !== 'readwrite') return realTx(db, mode, fn);
+                realTx(db, mode, fn);                           // commits...
+                return new Promise(() => {});                    // ...but we never hear
+            });
+            const stratux = { situation: fix() };
+            const s1 = await started(stratux);                  // migration times out -> fallback
+            expect(s1._useLocal).toBe(true);
+            s1._record();
+            spy.mockRestore();
+        });
+        const s2 = await started();
+        expect(s2.points.map((p) => p.lat)).toEqual([pt(0).lat, 35.5]);
+    }, 3000);
+
+    it('#5 the stored track was read, then a later load step failed: the fallback keeps it', async () => {
+        const s1 = await started();                             // migrated (nothing to copy)
+        s1._append(at(T0, 36));
+        await s1.idle();
+        localStorage.setItem(OLD_KEY, JSON.stringify([at(T0 - 10_000, 34)]));   // an earlier fallback session's point
+        localStorage.setItem('flytab_track_fallback', '1');
+        const realTx = TrackLog._tx;
+        vi.spyOn(TrackLog, '_tx').mockImplementation((db, mode, fn) => (mode === 'readwrite' ? Promise.reject(new Error('merge failed')) : realTx(db, mode, fn)));
+        const s2 = await started();
+        expect(s2._useLocal).toBe(true);
+        expect(s2.points.map((p) => p.lat)).toEqual([34, 36]);
+    });
+});
+
 describe('map track line (B4)', () => {
     const CockpitMap = new Function(read('web/cockpit/map.js') + '\nreturn CockpitMap;')();
     beforeEach(() => {

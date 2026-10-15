@@ -16,6 +16,11 @@
  * localStorage behaviour carries on, so nothing is lost; flytab_track_fallback
  * then marks the session, and the next good start merges those points back
  * into IndexedDB.
+ *
+ * Order: each point carries `seq`, a recording counter (flytab_track_seq).
+ * The store is keyed by ts, but after the clock is set back ts order is not
+ * recording order, and keeping "the newest 12 h" by ts would drop the newest
+ * points. Points from before seq existed sort first, by ts.
  */
 
 class TrackLog {
@@ -31,7 +36,7 @@ class TrackLog {
     // In memory the window may run this many points over MAX_POINTS before it is
     // trimmed (and the map line rebuilt): about once an hour, not every point.
     static TRIM_SLACK = 360;
-    static PRUNE_EVERY = 360;                      // appends between IndexedDB prunes (~1 h)
+    static SEQ_KEY = 'flytab_track_seq';            // last recording counter used
     static MAX_WRITE_FAILURES = 3;                 // in a row, then fall back to localStorage
 
     constructor(stratuxClient, cockpitMap) {
@@ -43,8 +48,10 @@ class TrackLog {
         this._useLocal = false;        // IndexedDB unavailable: old localStorage behaviour
         this._pending = null;          // while loading (init): points recorded meanwhile
         this._writes = Promise.resolve();
-        this._sincePrune = 0;
         this._writeFailures = 0;
+        this._seq = 0;                 // last seq given to a point
+        this._dropped = [];            // ts of points trimmed from memory, still to delete from IndexedDB
+        this._idbPoints = null;        // the stored track, once read (init's fallback keeps it)
         this.ready = Promise.resolve();
     }
 
@@ -52,13 +59,18 @@ class TrackLog {
         // Start recording at once; points recorded before the stored track has
         // loaded are kept and added after it.
         this._pending = [];
+        this._seq = Math.max(0, Number(TrackLog._getFlag(TrackLog.SEQ_KEY)) || 0);
         this._timer = setInterval(() => this._record(), TrackLog.RECORD_INTERVAL);
         this.ready = this._load()
             .catch((err) => {
                 // Anything failed after the database opened: carry on the old way,
-                // with the old track, and keep the points recorded meanwhile.
+                // and keep the points recorded meanwhile. The track is everything
+                // known: what was read from IndexedDB (if it got that far) plus
+                // flypi_track (any fallback points not yet merged).
                 if (typeof DiagLog !== 'undefined') DiagLog.log('error', `Track log load failed (${err?.message || err}); using localStorage`);
-                this._enterFallback(TrackLog._readLocal().slice(-TrackLog.MAX_POINTS));
+                const known = TrackLog._ordered(TrackLog._union(this._idbPoints || [], TrackLog._readLocal()));
+                this._noteSeq(known);
+                this._enterFallback(known.slice(-TrackLog.MAX_POINTS));
                 const early = this._pending || [];
                 this._pending = null;
                 for (const p of early) this._append(p);
@@ -110,10 +122,16 @@ class TrackLog {
     }
 
     _append(pt) {
+        if (pt.seq == null) {
+            pt.seq = ++this._seq;
+            try { localStorage.setItem(TrackLog.SEQ_KEY, String(this._seq)); } catch { /* ignore */ }
+        }
         this._points.push(pt);
         let trimmed = false;
         if (this._points.length > TrackLog.MAX_POINTS + TrackLog.TRIM_SLACK) {
-            this._points = this._points.slice(-TrackLog.MAX_POINTS);
+            const cut = this._points.length - TrackLog.MAX_POINTS;
+            for (let i = 0; i < cut; i++) this._dropped.push(this._points[i].ts);
+            this._points = this._points.slice(cut);
             trimmed = true;
         }
 
@@ -121,21 +139,26 @@ class TrackLog {
             this._saveLocal();
         } else {
             this._queue((db) => TrackLog._tx(db, 'readwrite', (s) => s.put(pt)));
-            if (++this._sincePrune >= TrackLog.PRUNE_EVERY) { this._sincePrune = 0; this.prune(); }
+            if (trimmed) this.prune();
         }
 
         if (trimmed || !this.map?.appendTrackPoint) this._renderOnMap();
         else this.map.appendTrackPoint(pt, this._points);
     }
 
-    /** Delete stored points older than the oldest one kept in memory. */
+    /**
+     * Delete the points trimmed from memory from IndexedDB: by key, not by a ts
+     * range, since after the clock is set back the oldest ts is not the oldest
+     * point. A key also held in memory (same ts) is kept.
+     */
     prune() {
-        if (this._useLocal || !this._points.length) return this._writes;
-        // The oldest timestamp held, not the first point stored: after the clock
-        // is set back, newer points have smaller timestamps.
-        let oldest = Infinity;
-        for (const p of this._points) if (p.ts < oldest) oldest = p.ts;
-        return this._queue((db) => TrackLog._tx(db, 'readwrite', (s) => s.delete(IDBKeyRange.upperBound(oldest, true))));
+        const dropped = this._dropped;
+        this._dropped = [];
+        if (this._useLocal || !dropped.length) return this._writes;
+        const held = new Set(this._points.map((p) => p.ts));
+        const keys = dropped.filter((ts) => !held.has(ts));
+        if (!keys.length) return this._writes;
+        return this._queue((db) => TrackLog._tx(db, 'readwrite', (s) => { for (const ts of keys) s.delete(ts); }));
     }
 
     async _load() {
@@ -155,6 +178,8 @@ class TrackLog {
             // Every step here can hang (CLAUDE.md: IDB transaction hang): time out
             // and let init() fall back rather than wait forever.
             points = await TrackLog._timed(TrackLog._tx(db, 'readonly', (s) => s.getAll()));
+            this._idbPoints = points;
+            let copied = false;
             if (TrackLog._getFlag(TrackLog.MIGRATED_KEY) !== '1') {
                 // First start with IndexedDB: copy the old localStorage track in,
                 // in one transaction. flypi_track itself is left exactly as it is.
@@ -162,14 +187,18 @@ class TrackLog {
                     points = TrackLog._readLocal();
                     if (points.length) {
                         await TrackLog._timed(TrackLog._tx(db, 'readwrite', (s) => { for (const p of points) s.put(p); }));
+                        copied = true;
                     }
                 }
                 // Only after the copy has committed.
                 try { localStorage.setItem(TrackLog.MIGRATED_KEY, '1'); } catch { /* ignore */ }
-            } else if (TrackLog._getFlag(TrackLog.FALLBACK_KEY) === '1') {
-                // A fallback session since then kept its points in flypi_track only:
-                // merge them back (keyed by ts, so the shared ones just overwrite).
-                const local = TrackLog._readLocal();
+            }
+            if (TrackLog._getFlag(TrackLog.FALLBACK_KEY) === '1') {
+                // A fallback session kept its points in flypi_track only: merge them
+                // back (keyed by ts, so the shared ones just overwrite). Also when
+                // the migration flag wasn't set yet -- a first copy that timed out
+                // may have committed anyway, and then the copy above is skipped.
+                const local = copied ? [] : TrackLog._readLocal();
                 if (local.length) {
                     await TrackLog._timed(TrackLog._tx(db, 'readwrite', (s) => { for (const p of local) s.put(p); }));
                     points = await TrackLog._timed(TrackLog._tx(db, 'readonly', (s) => s.getAll()));
@@ -178,8 +207,15 @@ class TrackLog {
             }
         }
 
-        this._points = points.slice(-TrackLog.MAX_POINTS);
-        if (!this._useLocal && points.length > TrackLog.MAX_POINTS) this.prune();
+        // getAll returns ts order; keep the newest MAX_POINTS in recording order.
+        const ordered = TrackLog._ordered(points);
+        this._noteSeq(ordered);
+        const cut = Math.max(0, ordered.length - TrackLog.MAX_POINTS);
+        this._points = ordered.slice(cut);
+        if (!this._useLocal && cut) {
+            for (let i = 0; i < cut; i++) this._dropped.push(ordered[i].ts);
+            this.prune();
+        }
         const early = this._pending || [];
         this._pending = null;
         for (const p of early) this._append(p);
@@ -189,22 +225,44 @@ class TrackLog {
         try { return localStorage.getItem(key); } catch { return null; }
     }
 
+    /** Recording order: points without seq (from before it existed) first, by ts. */
+    static _ordered(points) {
+        return points.slice().sort((a, b) => ((a.seq ?? 0) - (b.seq ?? 0)) || (a.ts - b.ts));
+    }
+
+    /** a and b combined, one point per ts (a's copy kept unless only b's has seq). */
+    static _union(a, b) {
+        const byTs = new Map();
+        for (const p of a) byTs.set(p.ts, p);
+        for (const p of b) {
+            const had = byTs.get(p.ts);
+            if (!had || (had.seq == null && p.seq != null)) byTs.set(p.ts, p);
+        }
+        return [...byTs.values()];
+    }
+
+    /** New points continue after the highest seq seen (the counter key may be lost). */
+    _noteSeq(points) {
+        for (const p of points) if (p.seq > this._seq) this._seq = p.seq;
+    }
+
     /** Old localStorage behaviour from now on, with `points` as the track. */
     _enterFallback(points) {
         this._db = null;
         this._useLocal = true;
         this._points = points;
-        // After the migration, flypi_track no longer holds everything: mark the
-        // session so the next good start merges its points back into IndexedDB.
-        if (TrackLog._getFlag(TrackLog.MIGRATED_KEY) === '1') {
-            try { localStorage.setItem(TrackLog.FALLBACK_KEY, '1'); } catch { /* ignore */ }
-        }
+        // Mark the session so the next good start merges its points into
+        // IndexedDB. Always, not only after the migration: a first copy that
+        // timed out may still have committed (the merge is harmless if not).
+        try { localStorage.setItem(TrackLog.FALLBACK_KEY, '1'); } catch { /* ignore */ }
     }
 
     _queue(op) {
         if (!this._db) return this._writes;
         const db = this._db;
-        this._writes = this._writes.then(() => op(db)).then(() => { this._writeFailures = 0; }).catch((err) => {
+        // Timed: a write that never answers (CLAUDE.md: IDB transaction hang)
+        // would otherwise hold up every later one, and never count as a failure.
+        this._writes = this._writes.then(() => TrackLog._timed(op(db))).then(() => { this._writeFailures = 0; }).catch((err) => {
             if (typeof DiagLog !== 'undefined') DiagLog.log('error', `Track log write failed: ${err?.message || err}`);
             // Writes keep failing (closed connection, quota...): don't lose the
             // rest of the session -- carry on in localStorage with what's in memory.
