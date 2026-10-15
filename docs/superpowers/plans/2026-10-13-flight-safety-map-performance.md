@@ -194,7 +194,7 @@ Every task follows the same rules:
       - no false JS-hang entries.
     - [x] Renderer crash while off screen: `CLOSE_IN_BACKGROUND`, process ended, nothing in the crash buffer. Notification id 2 posted in `flytab_alerts`, importance HIGH. Dana saw "FlyTab closed — its display engine crashed. Engine monitoring and recording are off." Tapping it reopened FlyTab and cleared the notification; DiagLog has the entry.
     - [x] **Found and fixed (v11.23): every toast was hidden behind the tab bar.** `.toast` used `bottom: 80px`; the tab bar is 72 px tall and lifted by the 60 px nav-bar inset, at z 99999. Now `bottom: calc(var(--tab-bar-height) + 12px)`, measured on the tablet at 651–722 against a tab bar top of 734. Dana confirmed it is visible. A modal on top (e.g. the preflight check, `.pfc-overlay` z 8500) still covers toasts until it's closed.
-    - [ ] Airport tap opens its info panel (CLAUDE.md tap-handler rule).
+    - [x] Airport tap opens its info panel (CLAUDE.md tap-handler rule): confirmed by Dana.
 
 ---
 
@@ -294,6 +294,10 @@ should be biased to look for red areas (pixels) building, not random scattered r
 ---
 
 ## Backlog (not scheduled)
+- **DIAG tab: the airport diagram doesn't open (reported by Dana 2026-10-15).** Not caused by PR A: `airport-popup.js` is untouched there.
+  - What the code does (`_loadPlatePane`, `airport-popup.js` ~980–1058): the diagram is shown inline as the pipeline's WebP (checked for KCLT: `00078AD.webp`, 807×1237, loaded) with pinch-zoom and double-tap reset only. A tap doesn't open it full screen or as the PDF, unlike the A/FD tab (`_openAfdFullscreen`, "Tap to open full screen").
+  - Second, latent: with no WebP, the fallback is the PDF in an `<iframe>`. Android WebView has no PDF viewer and TileServer serves it as `application/octet-stream`, so that pane is likely blank. `documents.js` already has a pdf.js viewer that could be reused.
+  - To do: confirm with Dana what "open" should mean (a full-screen diagram, or the PDF), then fix both.
 - From the PR A review (narrow or outside PR A):
   - fisb-logger rename is still read → PUT (unchecked) → DELETE and can overwrite; a restart splits the weather file;
   - crash-during-stop windows (marker cleared before the logbook entry; crash between the copy and the delete);
