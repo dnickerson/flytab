@@ -185,7 +185,16 @@ Every task follows the same rules:
     - Tests: vitest 1561/1561, JUnit 36/36.
     - Tablet v11.22: `keepAlive: true`; the permission prompt shows; ML scored 11/11 with advisories (carb ice) returned; `threshold_adapter.xml` MD5 unchanged.
   - [x] open the PR — #172 (2026-10-15).
-  - [ ] tablet test (needs Dana: answer the notification prompt, then a screen-off renderer crash shows the "FlyTab closed" notification; Home → back keeps the screen lock).
+  - [ ] tablet test (2026-10-15, with Dana):
+    - [x] Notification permission: allowed (`POST_NOTIFICATIONS granted=true, USER_SET`).
+    - [x] Home → 90 s → back, screen on (v11.22):
+      - 94/94 one-second ticks, no freeze;
+      - `_onScreen` false 1 s after Home, true on return;
+      - the screen lock was dropped by Android while hidden and held again on return;
+      - no false JS-hang entries.
+    - [x] Renderer crash while off screen: `CLOSE_IN_BACKGROUND`, process ended, nothing in the crash buffer. Notification id 2 posted in `flytab_alerts`, importance HIGH. Dana saw "FlyTab closed — its display engine crashed. Engine monitoring and recording are off." Tapping it reopened FlyTab and cleared the notification; DiagLog has the entry.
+    - [x] **Found and fixed (v11.23): every toast was hidden behind the tab bar.** `.toast` used `bottom: 80px`; the tab bar is 72 px tall and lifted by the 60 px nav-bar inset, at z 99999. Now `bottom: calc(var(--tab-bar-height) + 12px)`, measured on the tablet at 651–722 against a tab bar top of 734. Dana confirmed she can see it. A modal on top (e.g. the preflight check, `.pfc-overlay` z 8500) still covers toasts until it's closed.
+    - [ ] Airport tap opens its info panel (CLAUDE.md tap-handler rule).
 
 ---
 

@@ -978,7 +978,11 @@ body {
 /* Toast notifications */
 .toast {
     position: fixed;
-    bottom: 80px;
+    /* Just above the tab bar. It was 80px, which ignored the Android nav-bar
+       inset under the tab bar (--android-nav-height): on the tablet every toast
+       sat behind the tab bar (z 99999), unseen -- found 2026-10-15 testing the
+       "FlyTab closed" restart notice. */
+    bottom: calc(var(--tab-bar-height) + 12px);
     left: 50%;
     transform: translateX(-50%);
     background: var(--bg-surface-raised);
