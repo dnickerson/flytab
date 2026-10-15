@@ -592,6 +592,10 @@ class StratuxClient extends EventTarget {
         };
 
         this._jsonioWs.onmessage = (e) => {
+            // Most of /jsonio is Stratux's traffic/situation/radar broadcasts, which
+            // the other channels already deliver; they never contain Product_id
+            // (see below). Skip them before parsing: ~100/s with busy traffic (B5).
+            if (typeof e.data === 'string' && e.data.indexOf('"Product_id"') === -1) return;
             try {
                 const msg = JSON.parse(e.data);
                 // /jsonio also carries Stratux's trafficUpdate/radarUpdate/situationUpdate

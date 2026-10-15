@@ -462,3 +462,31 @@ describe('StratuxClient own-ship code lookup', () => {
         }
     });
 });
+
+// PR B / B5: /jsonio also carries Stratux's trafficUpdate/situationUpdate/
+// radarUpdate broadcasts (duplicates of the other channels). Each was
+// JSON.parse'd only to be dropped for having no Product_id. Skip them unparsed.
+describe('StratuxClient /jsonio pre-filter', () => {
+    it('messages without "Product_id" are dropped before JSON.parse; FIS-B frames still dispatch', () => {
+        const client = new StratuxClient();
+        client._connectJsonio();
+        const ws = client._jsonioWs;
+        const nexrad = [];
+        client.addEventListener('stratux:nexrad', (e) => nexrad.push(e.detail));
+        const parse = vi.spyOn(JSON, 'parse');
+        try {
+            for (let i = 0; i < 50; i++) ws.onmessage({ data: JSON.stringify({ Icao_addr: 0xABC001 + i, Lat: 35, Lng: -80 }) });
+            ws.onmessage({ data: JSON.stringify({ GPSLatitude: 35, GPSLongitude: -80 }) });
+            expect(parse).not.toHaveBeenCalled();
+            ws.onmessage({ data: JSON.stringify({ Product_id: 63, NEXRAD: [{ LatNorth: 35, LonWest: -81, Height: 0.06, Width: 0.8, Intensity: [1] }] }) });
+            expect(parse).toHaveBeenCalledTimes(1);
+            expect(nexrad).toHaveLength(1);
+            // Go's encoding (no space after the colon) matches too
+            ws.onmessage({ data: '{"Product_id":64,"NEXRAD":[{"LatNorth":35}]}' });
+            expect(nexrad).toHaveLength(2);
+        } finally {
+            parse.mockRestore();
+            client.disconnect?.();
+        }
+    });
+});
