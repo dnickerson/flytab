@@ -361,6 +361,9 @@ should be biased to look for red areas (pixels) building, not random scattered r
   - a close-out during a NASR import loses the route name;
   - background polling (engine HTTP poll, internet weather, network probes) when off screen and not recording — PR B.
 - DiagLog churn: with no Stratux (at home), "Situation WS closed / Failed to connect" lines fill the 200-entry DiagLog within minutes and push out useful entries (crash/pause/recorder). Rate-limit or collapse repeated link messages.
+- From the PR B review (pre-existing, not caused by PR B; Dana chose separate items 2026-10-15):
+  - **Auto-pan doesn't pause while the pilot drags or pinches.** `_autoPan` changes only with its button (`map.js` ~1805); nothing listens for `dragstart`/`zoomstart`. With auto-pan on, follow keeps re-centring during a drag (since B2: at most every 0.5 s once own-ship is 2 px off centre; before B2, an animated `panTo` on every situation). Pause follow from drag/pinch start until a few seconds after it ends, or until the pilot taps re-centre.
+  - **The magenta active leg sticks on a passed waypoint.** `CockpitMap._updateActiveLeg` (`map.js` ~1167) advances only when own-ship comes within 1 nm of the waypoint. Pass it 1.5 nm abeam and the magenta line keeps pointing back at it, while the route table (`updateLive`, which also has a passed-abeam `isPast` test) has moved on. Use one sequencing rule for both, ideally the route table's.
 - Move engine-limit alerts and the flight recorder into the native FlightService, so they
   survive any WebView pause. This is the real fix behind A6, and it's a bigger change.
 - Coalesce queued native WS messages while JS is frozen (`StratuxWsPlugin.java:97-101`), so a
