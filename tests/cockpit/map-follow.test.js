@@ -138,6 +138,54 @@ describe('layer refresh while the map keeps moving (B2)', () => {
     });
 });
 
+// PR B review #5: at z12-14 a follow re-centre came every 0.5-1 s and each one
+// triggered a full 8-layer refresh 300 ms later: 120 refreshes/min, task time
+// 36-42 s/min (worse than B0). Refreshes caused by auto-pan are now spaced
+// FOLLOW_MIN_INTERVAL_MS apart; the pilot's own moves still refresh in 300 ms.
+describe('layer refresh while following (PR B review #5)', () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it('re-centres every 0.5 s for 12 s: refreshes spaced FOLLOW_MIN_INTERVAL_MS apart', () => {
+        const v = Object.create(VectorMapLayers.prototype);
+        v._updateDynamicLayers = vi.fn();
+        for (let i = 0; i < 24; i++) { v._scheduleUpdate(true); vi.advanceTimersByTime(500); }
+        const n = v._updateDynamicLayers.mock.calls.length;
+        expect(n).toBeLessThanOrEqual(Math.ceil(12000 / VectorMapLayers.FOLLOW_MIN_INTERVAL_MS) + 1);
+        expect(n).toBeGreaterThanOrEqual(Math.floor(12000 / VectorMapLayers.FOLLOW_MIN_INTERVAL_MS) - 1);
+    });
+
+    it('a pilot pan right after a follow refresh still refreshes within 300 ms', () => {
+        const v = Object.create(VectorMapLayers.prototype);
+        v._updateDynamicLayers = vi.fn();
+        v._scheduleUpdate(true);
+        vi.advanceTimersByTime(300);
+        expect(v._updateDynamicLayers).toHaveBeenCalledTimes(1);
+        v._scheduleUpdate(true);                      // follow: would wait ~3 s
+        vi.advanceTimersByTime(100);
+        v._scheduleUpdate(false);                     // the pilot drags the map
+        vi.advanceTimersByTime(300);
+        expect(v._updateDynamicLayers).toHaveBeenCalledTimes(2);
+    });
+
+    it('the moveend handlers pass whether the move came from auto-pan', () => {
+        const vsrc = read('web/cockpit/vector-map-layers.js');
+        expect(vsrc).toMatch(/on\('moveend zoomend', \(\) => this\._scheduleUpdate\(this\._map\._flytabFollowMove === true\)\)/);
+        const msrc = read('web/cockpit/map.js');
+        expect(msrc).toMatch(/on\('moveend zoomend', \(\) => this\._scheduleFixUpdate\(this\.map\._flytabFollowMove === true\)\)/);
+    });
+
+    it('_followOwnship marks its own pan, and only for its duration', () => {
+        const c = mapCtx();
+        let flagDuringPan = null;
+        c.map.panTo = vi.fn(() => { flagDuringPan = c.map._flytabFollowMove; });
+        c._lastFollowAt = 0;
+        c._followOwnship([35.0, -79.9]);
+        expect(flagDuringPan).toBe(true);
+        expect(c.map._flytabFollowMove).toBe(false);
+    });
+});
+
 describe('NEXRAD canvas on map moves (B2)', () => {
     it('many move events in one frame: one redraw, on the next frame', () => {
         const frames = [];

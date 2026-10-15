@@ -328,6 +328,7 @@ class CockpitMap {
             this._onScreenChangeHandler = null;
         }
         if (this._fixUpdateTimer) { clearTimeout(this._fixUpdateTimer); this._fixUpdateTimer = null; }
+        this._fixPendingSince = 0;
         if (this._radarBadgeTimer) { clearInterval(this._radarBadgeTimer); this._radarBadgeTimer = null; }
         if (this._zoomBadgeHandler && this.map) { this.map.off('zoomend', this._zoomBadgeHandler); this._zoomBadgeHandler = null; }
         if (this._viewportResizeHandler && window.visualViewport) {
@@ -1254,7 +1255,14 @@ class CockpitMap {
         const dx = p.x - size.x / 2, dy = p.y - size.y / 2;
         if (dx * dx + dy * dy < CockpitMap.FOLLOW_MIN_DRIFT_PX * CockpitMap.FOLLOW_MIN_DRIFT_PX) return;
         this._lastFollowAt = now;
-        this.map.panTo(pos, { animate: false });
+        // panTo without animation fires moveend synchronously: the flag lets the
+        // layers' moveend handlers tell auto-pan from the pilot's own moves.
+        this.map._flytabFollowMove = true;
+        try {
+            this.map.panTo(pos, { animate: false });
+        } finally {
+            this.map._flytabFollowMove = false;
+        }
     }
 
     /** FlyTab is not on screen (MainActivity via app._onScreen). Unknown counts as on screen. */
@@ -1857,21 +1865,28 @@ class CockpitMap {
     _setupFixOverlay() {
         if (!this.map || !this._nasr) return;
         // Bind map movement to overlay updates
-        this.map.on('moveend zoomend', () => this._scheduleFixUpdate());
+        this.map.on('moveend zoomend', () => this._scheduleFixUpdate(this.map._flytabFollowMove === true));
         // Initial render
         this._updateFixOverlay();
     }
 
-    _scheduleFixUpdate() {
+    _scheduleFixUpdate(fromFollow = false) {
         // 300 ms after the map settles, but at most LAYER_MAX_WAIT_MS after the
         // first request: while own-ship is followed the map never settles (B2).
+        // Auto-pan moves refresh at most every LAYER_FOLLOW_MIN_INTERVAL_MS
+        // (PR B review #5), the pilot's own moves after 300 ms.
         if (this._fixUpdateTimer) clearTimeout(this._fixUpdateTimer);
         const now = Date.now();
         if (!this._fixPendingSince) this._fixPendingSince = now;
-        const wait = Math.max(0, Math.min(300, this._fixPendingSince + CockpitMap.LAYER_MAX_WAIT_MS - now));
+        let wait = Math.max(0, Math.min(300, this._fixPendingSince + CockpitMap.LAYER_MAX_WAIT_MS - now));
+        if (fromFollow && this._lastFixRunAt) {
+            const sinceRun = now - this._lastFixRunAt;
+            if (sinceRun >= 0) wait = Math.max(wait, Math.min(CockpitMap.LAYER_FOLLOW_MIN_INTERVAL_MS, CockpitMap.LAYER_FOLLOW_MIN_INTERVAL_MS - sinceRun));
+        }
         this._fixUpdateTimer = setTimeout(() => {
             this._fixUpdateTimer = null;
             this._fixPendingSince = 0;
+            this._lastFixRunAt = Date.now();
             this._updateFixOverlay();
         }, wait);
     }
@@ -2099,3 +2114,5 @@ CockpitMap.FOLLOW_MIN_MS = 500;
 CockpitMap.FOLLOW_MIN_DRIFT_PX = 2;
 // Debounced map-layer refreshes run at most this long after the first request (B2).
 CockpitMap.LAYER_MAX_WAIT_MS = 2000;
+// ...and, when the move was auto-pan's, at most this often (PR B review #5).
+CockpitMap.LAYER_FOLLOW_MIN_INTERVAL_MS = 3000;

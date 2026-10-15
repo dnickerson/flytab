@@ -6,7 +6,7 @@
  *
  *   python3 tools/mock-stratux.py --traffic 100 --situation-hz 10 --traffic-interval 1
  *   (cd web && python3 -m http.server 8124)
- *   NODE_PATH=node_modules node tools/perf-b0.e2e.js [--secs 60] [--out /tmp/b0.json]
+ *   NODE_PATH=node_modules node tools/perf-b0.e2e.js [--secs 60] [--zoom 12] [--out /tmp/b0.json]
  *
  * Sim mode is switched on through the user-override key (flypi_user_cockpit)
  * inside a fresh browser profile -- no repo file is edited. A three-waypoint
@@ -18,6 +18,7 @@ const args = Object.fromEntries(process.argv.slice(2).reduce((a, v, i, arr) => (
 const SECS = Number(args.secs) || 60;
 const BASE = args.base || 'http://localhost:8124';
 const OUT = args.out || null;
+const ZOOM = args.zoom ? Number(args.zoom) : null;   // default: the app's own zoom
 
 (async () => {
     const browser = await chromium.launch();
@@ -42,6 +43,13 @@ const OUT = args.out || null;
         ],
     }));
     await page.waitForTimeout(15_000);   // settle: connections up, traffic populated
+    if (ZOOM != null) {
+        // After the settle: the route's fit-to-bounds would otherwise undo it.
+        await page.evaluate((z) => window.app.cockpitMap.map.setZoom(z, { animate: false }), ZOOM);
+        await page.waitForTimeout(5_000);
+        const z = await page.evaluate(() => window.app.cockpitMap.map.getZoom());
+        if (Math.abs(z - ZOOM) > 0.01) throw new Error(`zoom ${ZOOM} did not hold (map is at ${z})`);
+    }
 
     // Instrument: wrap the hot paths, count calls.
     const setup = await page.evaluate(() => {
@@ -76,7 +84,7 @@ const OUT = args.out || null;
 
     const per = (n) => Math.round((n / SECS) * 10) / 10;
     const result = {
-        version: setup.version, secs: SECS, routeWaypoints: setup.routeWaypoints, autoPan: setup.autoPan,
+        version: setup.version, secs: SECS, zoom: await page.evaluate(() => window.app.cockpitMap.map.getZoom()), routeWaypoints: setup.routeWaypoints, autoPan: setup.autoPan,
         trafficMarkers: c.trafficMarkers,
         in_situation_per_s: per(c.situation),
         in_traffic_per_s: per(c.traffic),
