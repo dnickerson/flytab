@@ -75,3 +75,64 @@ describe('DiagLog buffering (B5)', () => {
         expect('d' in D.entries[1]).toBe(false);
     });
 });
+
+// PR B critical review #9.
+describe('DiagLog buffering: review fixes (#9)', () => {
+    beforeEach(() => { vi.useFakeTimers(); localStorage.clear(); });
+    afterEach(() => vi.useRealTimers());
+
+    it('data is copied when logged: a later change to the object does not alter the entry', () => {
+        const D = makeDiagLog();
+        const obj = { q: 1 };
+        D.log('gps', 'fix', obj);
+        obj.q = 2;
+        vi.advanceTimersByTime(D.FLUSH_MS);
+        expect(D.entries[0].d).toEqual({ q: 1 });
+        expect(stored()[0].d).toEqual({ q: 1 });
+    });
+
+    it('data that cannot be serialised does not stop the log being saved', () => {
+        const D = makeDiagLog();
+        const circular = { a: 1 };
+        circular.self = circular;
+        D.log('x', 'circular', circular);
+        D.log('x', 'after');
+        vi.advanceTimersByTime(D.FLUSH_MS);
+        expect(stored().map((e) => e.msg)).toEqual(['circular', 'after']);
+        expect(typeof stored()[0].d).toBe('string');
+    });
+
+    it('an error storm: at most one save a second, every error saved within a second', () => {
+        const D = makeDiagLog();
+        const setItem = vi.spyOn(Storage.prototype, 'setItem');
+        const saves = () => setItem.mock.calls.filter(([k]) => k === KEY).length;
+        for (let i = 0; i < 50; i++) { D.log('error', `e${i}`); vi.advanceTimersByTime(20); }   // 1 s of errors at 50/s
+        expect(saves()).toBeLessThanOrEqual(2);
+        expect(stored()[0].msg).toBe('e0');                  // the first one went at once
+        vi.advanceTimersByTime(D.ERROR_FLUSH_MS);
+        expect(stored()).toHaveLength(50);
+        expect(saves()).toBeLessThanOrEqual(3);
+        setItem.mockRestore();
+    });
+
+    it('a routine entry is saved when the app goes off screen, and on pagehide', () => {
+        const D = makeDiagLog();
+        D.log('x', 'pending 1');
+        const off = new Event('flytab:screen');
+        off.onScreen = false;
+        window.dispatchEvent(off);
+        expect(stored().map((e) => e.msg)).toEqual(['pending 1']);
+        D.log('x', 'pending 2');
+        window.dispatchEvent(new Event('pagehide'));
+        expect(stored().map((e) => e.msg)).toEqual(['pending 1', 'pending 2']);
+    });
+
+    it('coming back on screen does not save (nothing to do)', () => {
+        const D = makeDiagLog();
+        D.log('x', 'pending');
+        const on = new Event('flytab:screen');
+        on.onScreen = true;
+        window.dispatchEvent(on);
+        expect(localStorage.getItem(KEY)).toBeNull();
+    });
+});

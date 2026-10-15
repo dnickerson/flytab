@@ -14,8 +14,11 @@ const DiagLog = (() => {
     const KEY = 'flypi_diag_log';
     const MAX = 1000; // max log entries
     const FLUSH_MS = 3000;
+    const ERROR_FLUSH_MS = 1000;   // an error storm saves at most this often
     let entries = null;     // loaded on first use
     let timer = null;
+    let timerDue = 0;
+    let lastErrorFlush = 0;
 
     function _load() {
         if (entries) return entries;
@@ -30,20 +33,47 @@ const DiagLog = (() => {
         try { localStorage.setItem(KEY, JSON.stringify(entries || [])); } catch {}
     }
 
+    /** Save within `ms`, keeping a sooner save already scheduled. */
+    function _scheduleFlush(ms) {
+        const due = Date.now() + ms;
+        if (timer && timerDue <= due) return;
+        if (timer) clearTimeout(timer);
+        timerDue = due;
+        timer = setTimeout(_flush, ms);
+    }
+
+    // Entries not yet saved go now if the app may be killed: off screen, or the
+    // page going away. (document.visibilityState is always 'visible' here, see
+    // KeepAliveWebView; 'flytab:screen' is the real on-screen state.)
+    window.addEventListener('flytab:screen', (e) => { if (!e.onScreen && timer) _flush(); });
+    window.addEventListener('pagehide', () => { if (timer) _flush(); });
+
     return {
-        MAX, FLUSH_MS,
+        MAX, FLUSH_MS, ERROR_FLUSH_MS,
         log(category, message, data) {
             const list = _load();
+            // Copied now: the caller may change the object later, and one that
+            // can't be serialised would make every later save fail.
+            let d;
+            if (data !== undefined) {
+                try { d = JSON.parse(JSON.stringify(data)); } catch { d = String(data); }
+            }
             list.push({
                 t: new Date().toISOString(),
                 cat: category,
                 msg: message,
-                ...(data !== undefined ? { d: data } : {}),
+                ...(data !== undefined ? { d } : {}),
             });
             if (list.length > MAX) list.splice(0, list.length - MAX);
-            // An error is saved at once: if the app dies next, it's still on record.
-            if (category === 'error') _flush();
-            else if (!timer) timer = setTimeout(_flush, FLUSH_MS);
+            if (category === 'error') {
+                // An error is saved at once (if the app dies next, it's on record),
+                // but a storm of them at most every ERROR_FLUSH_MS.
+                const since = Date.now() - lastErrorFlush;
+                if (since < 0 || since >= ERROR_FLUSH_MS) { lastErrorFlush = Date.now(); _flush(); }
+                else _scheduleFlush(ERROR_FLUSH_MS - since);
+            } else {
+                _scheduleFlush(FLUSH_MS);
+            }
         },
         get entries() { return _load(); },
         clear() {
