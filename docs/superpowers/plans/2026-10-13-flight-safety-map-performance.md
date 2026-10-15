@@ -246,7 +246,11 @@ Every task follows the same rules:
   - **Verify:** B0 numbers; airspace and airports refresh during a simulated flight. The
     airport popup still opens on a normal tap; that's a manual check (tap-handler rule,
     CLAUDE.md).
-- [ ] **B3 The route table updates at most once a second, only when visible.**
+- [x] **B3 The route table updates at most once a second, only when visible.** Done.
+  - `app._scheduleRouteLive`: situations → `updateLive` + `_checkFuelStopProximity` at most once per second (leading and trailing, so the newest is applied).
+  - Body closed (height 0): legs, sequencing and the handle summary still update; the cells are skipped and marked stale, and `_updateOpenHint` (every open path: toggle, un-compact, drag) refreshes them once.
+  - Cell compare against the last-written string instead of reading `innerHTML`.
+  - Tests: `tests/cockpit/route-table-live-rate.test.js` (7). Measured: updateLive 9.9 → **1/s**; script 4.89 → 4.74 s/min (the route table was a small part of the load in this run).
   - **Where:** `app.js:710-714` → `routeTable.updateLive` and `_checkFuelStopProximity` on
     every situation message.
   - **Fix:** throttle, skip when collapsed, and compare cached cell strings instead of reading

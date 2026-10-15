@@ -382,6 +382,29 @@ class FlyTabApp {
         this.pauseDetector.start();
     }
 
+    /**
+     * Situations arrive ~10/s; the route table recomputes every leg and patches
+     * its table on each one (B0). At most once per ROUTE_LIVE_MS: at once if the
+     * last update is older, else once at the end of the window with the newest
+     * situation, so the table never lags more than that.
+     */
+    _scheduleRouteLive(sit) {
+        this._routeLiveSit = sit;
+        if (this._routeLiveTimer) return;
+        const run = () => {
+            this._routeLiveTimer = null;
+            this._routeLiveAt = Date.now();
+            const s = this._routeLiveSit;
+            if (this.routeTable) {
+                this.routeTable.updateLive(s);
+                this._checkFuelStopProximity(s);
+            }
+        };
+        const wait = (this._routeLiveAt || 0) + FlyTabApp.ROUTE_LIVE_MS - Date.now();
+        if (wait <= 0) run();
+        else this._routeLiveTimer = setTimeout(run, wait);
+    }
+
     /** Show diagnostic log overlay */
     _showDiagLog() {
         // Remove existing
@@ -814,12 +837,7 @@ class FlyTabApp {
             this.routeTable.onRouteChanged((plan) => {
                 this.applyRouteEdit(plan, { fromRouteTable: true });
             });
-            this.stratuxClient.addEventListener('stratux:situation', (e) => {
-                if (this.routeTable) {
-                    this.routeTable.updateLive(e.detail);
-                    this._checkFuelStopProximity(e.detail);
-                }
-            });
+            this.stratuxClient.addEventListener('stratux:situation', (e) => this._scheduleRouteLive(e.detail));
         }
 
         // FIS-B weather client (METARs, TAFs, PIREPs, SIGMETs, winds aloft)
@@ -2347,6 +2365,9 @@ class FlyTabApp {
         return toast;
     }
 }
+
+// Route table live updates: at most one per this many ms (PR B / B3).
+FlyTabApp.ROUTE_LIVE_MS = 1000;
 
 // === Initialize on DOM ready ==========
 
