@@ -7886,11 +7886,20 @@ body.fs-overlay-open .radar-loop-controls {
     user-select: none;
 }
 
-.apt-plate-iframe {
+.apt-plate-hint {
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-secondary);
+    text-align: center;
+    flex-shrink: 0;
+}
+
+/* DIAG pane PDF fallback (renderPdfToContainer canvases) */
+.apt-plate-pdf canvas {
     width: 100%;
-    height: 100%;
-    border: none;
-    min-height: 400px;
+    height: auto;
+    display: block;
 }
 
 /* Plate list (IAP tab) */

@@ -761,7 +761,7 @@ class AirportPopup {
 
     /**
      * Load a plate (APD = airport diagram, MIN = airport info page) into a pane.
-     * Shows the plate inline as an <img> (WebP converted) or <iframe> (PDF fallback).
+     * Shows the plate inline as an <img> (WebP converted), or the PDF drawn by renderPdfToContainer.
      * Uses the approach charts module's plate index if available.
      */
     /**
@@ -950,14 +950,22 @@ class AirportPopup {
                             <button class="apt-plate-back-btn">← Back</button>
                             <div class="apt-plate-title">${name}</div>
                             <div class="apt-plate-img-wrap">
-                                <img class="apt-plate-img" src="${webpUrl}" alt="${name}"
-                                     onerror="this.onerror=null;this.style.display='none';this.nextElementSibling.style.display='block'">
-                                <iframe class="apt-plate-iframe" src="${pdfUrl}" style="display:none" title="${name}"></iframe>
+                                <img class="apt-plate-img" src="${webpUrl}" alt="${name}">
                             </div>
                         </div>`;
 
                     const img = containerEl.querySelector('.apt-plate-img');
-                    if (img) this._enablePinchZoom(img);
+                    if (img) {
+                        this._enablePinchZoom(img);
+                        // No WebP: draw the PDF with the shared PDF.js renderer. A PDF
+                        // in an <iframe> shows nothing in Android's WebView.
+                        img.onerror = () => {
+                            img.onerror = null;
+                            const wrap = img.parentElement;
+                            img.remove();
+                            renderPdfToContainer(pdfUrl, wrap, { cssClass: 'apt-plate-pdf', errorLabel: 'plate' });
+                        };
+                    }
 
                     const backBtn = containerEl.querySelector('.apt-plate-back-btn');
                     if (backBtn) {
@@ -1031,28 +1039,42 @@ class AirportPopup {
             const file = plate.filename || plate.pdf_name;
             const icaoDir = faaId.toUpperCase();
 
-            // Try WebP first (converted by plate pipeline), fallback to PDF in iframe
+            // WebP first (converted by plate pipeline); PDF via renderPdfToContainer if missing
             const webpUrl = `${PLATES_BASE}/${icaoDir}/${file.replace(/\.pdf$/i, '.webp')}`;
             const pdfUrl  = `${PLATES_BASE}/${icaoDir}/${file}`;
 
             const name = plate.name || plate.chart_name || plateType;
 
-            // Build viewer: image with pinch-zoom wrapper
+            // Inline: the diagram image, tap to open it full screen in the
+            // approach-plate viewer (ApproachCharts), which has pinch-zoom and its
+            // own WebP -> PDF.js rendering -- as the A/FD tab opens full screen.
+            // There used to be only inline pinch-zoom here and a tap did nothing.
+            const canOpen = !!this._approachCharts?.showPlateForAirport;
             containerEl.innerHTML = `
                 <div class="apt-plate-viewer">
                     <div class="apt-plate-title">${name}</div>
+                    ${canOpen ? '<div class="apt-plate-hint">Tap to open full screen</div>' : ''}
                     <div class="apt-plate-img-wrap">
-                        <img class="apt-plate-img" src="${webpUrl}" alt="${name}"
-                             onerror="this.onerror=null;this.src='${pdfUrl}';this.style.display='none';
-                                      this.nextElementSibling.style.display='block'">
-                        <iframe class="apt-plate-iframe" src="${pdfUrl}" style="display:none"
-                                title="${name}"></iframe>
+                        <img class="apt-plate-img" src="${webpUrl}" alt="${name}">
                     </div>
                 </div>`;
 
-            // Enable pinch-zoom on the image
-            const img = containerEl.querySelector('.apt-plate-img');
-            if (img) this._enablePinchZoom(img);
+            const wrap = containerEl.querySelector('.apt-plate-img-wrap');
+            const img = wrap.querySelector('.apt-plate-img');
+            // No WebP for this plate: draw the PDF with the shared PDF.js renderer.
+            // The old fallback, a PDF in an <iframe>, shows nothing in Android's
+            // WebView (it has no PDF viewer).
+            img.onerror = () => {
+                img.onerror = null;
+                img.remove();
+                renderPdfToContainer(pdfUrl, wrap, { cssClass: 'apt-plate-pdf', errorLabel: 'airport diagram' });
+            };
+            if (canOpen) {
+                wireTap(wrap, () => {
+                    this._approachCharts.showPlateForAirport(icao, (p) => (p.filename || p.pdf_name) === file);
+                    this.close();
+                });
+            }
 
         } catch (err) {
             containerEl.innerHTML = `<div style="padding:16px;color:var(--text-muted);font-size:13px">Error loading plate: ${err.message}</div>`;
