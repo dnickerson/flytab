@@ -117,6 +117,10 @@ const RV9A_FALLBACK = {
     },
 };
 
+
+/** Fuel stops are searched for at this fraction of the leg-time limit. */
+const FUEL_STOP_AIM = 0.9;
+
 export class RoutePlanner {
     /**
      * @param {Adapters} adapters
@@ -564,20 +568,34 @@ export class RoutePlanner {
 
         // Only legs up to the destination: no fuel stop on a missed approach.
         const legCount = Math.min(plan.legs.length, destinationIndex(plan));
+
+        // Time from leg i to the end of its stretch: the next fuel stop already
+        // in the route, or the destination.
+        const restOfStretch = new Array(legCount + 1).fill(0);
+        for (let i = legCount - 1; i >= 0; i--) {
+            const endsAtStop = !!plan.waypoints[i + 1]?.fuelStop;
+            restOfStretch[i] = plan.legs[i].timeHrs + (endsAtStop ? 0 : restOfStretch[i + 1]);
+        }
+
+        // Search at 90 % of the limit, not at it: turning off to the airport and
+        // descending there add time, and a stop found at the limit made the
+        // stretch go over it (KLKR-KTMB, 2026-10-16: St Augustine gave 2h06m on a
+        // 2h limit). The search point is in whichever leg 90 % falls -- not the
+        // leg that crosses the full limit, by which time it may be behind us.
+        const aim = maxLegHrs * FUEL_STOP_AIM;
+
         for (let i = 0; i < legCount; i++) {
             const leg = plan.legs[i];
-            const isLast = i === plan.legs.length - 1;
             const fromWp = plan.waypoints[i];
             const toWp   = plan.waypoints[i + 1];
 
-            // Fire when this leg would push cumulative time past maxLegHrs.
-            // Works for GPS Direct (single leg) and multi-leg routes.
-            // Interpolate the stop position along the leg so we search near where
-            // the pilot would actually need to land, not at the leg start waypoint.
-            // Note: !isLast guard removed — GPS Direct has only one leg which IS
-            // the last, but still needs a stop if it exceeds maxLegHrs.
-            if (cumHrs + leg.timeHrs > maxLegHrs) {
-                const hoursIntoLeg = Math.max(0, maxLegHrs - cumHrs);
+            // A stop when this stretch (counted from the last stop) is longer
+            // than the limit, in the leg where the aim point falls. Works for
+            // GPS Direct (a single leg) and multi-leg routes. The position is
+            // interpolated along the leg (capped at 85 %) so we search near
+            // where the pilot would land, not at the leg start waypoint.
+            if (cumHrs + restOfStretch[i] > maxLegHrs && cumHrs + leg.timeHrs > aim) {
+                const hoursIntoLeg = Math.max(0, aim - cumHrs);
                 const fraction = leg.timeHrs > 0
                     ? Math.min(hoursIntoLeg / leg.timeHrs, 0.85) : 0.5;
                 const stopLat = fromWp.lat + (toWp.lat - fromWp.lat) * fraction;
@@ -611,11 +629,14 @@ export class RoutePlanner {
                     });
                     // Remaining time on this leg continues accumulating toward next stop
                     cumHrs = leg.timeHrs - hoursIntoLeg;
+                    if (toWp.fuelStop) cumHrs = 0;
                     continue;
                 }
             }
 
             cumHrs += leg.timeHrs;
+            // A fuel stop already in the route: tanks filled, time starts again.
+            if (toWp.fuelStop) cumHrs = 0;
         }
 
         return { ...plan, fuelStops: [], fuelStopCandidates };

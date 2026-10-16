@@ -135,7 +135,19 @@ class RoutePlannerV2 extends RoutePlannerPanel {
             tb.appendChild(b);
             return b;
         };
-        mk('Plan route', () => { this._syncFieldsFromPills(); this._onPlanRouteTap(); });
+        // Plan route takes a few seconds on the tablet: say so on the button.
+        const planBtn = mk('Plan route', async () => {
+            if (planBtn.disabled) return;
+            planBtn.disabled = true;
+            planBtn.textContent = 'Planning…';
+            try {
+                this._syncFieldsFromPills();
+                await this._onPlanRouteTap();
+            } finally {
+                planBtn.disabled = false;
+                planBtn.textContent = 'Plan route';
+            }
+        });
         mk('Routes', () => this._onPlansTap());
         this._saveBtn = mk('Save', () => this._onSaveTap());
         this._saveBtn.disabled = !this._lastPlan;
@@ -491,19 +503,149 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         this._render();
     }
 
-    async _addFuelStop() {
+    async _addFuelStop(depth = 0) {
         if (!this._planner) { this._toast('Route engine still loading — try again in a moment'); return; }
-        const computed = this._computed || await this._compute();
+        const computed = await this._compute();
         if (!computed) { this._toast('Route not complete'); return; }
+        this._computed = computed;
         const dep = this._route.find((p) => p.type === 'dep')?.id;
         const dest = this._route[this._destPillIndex()]?.id;
         const result = await this._planner.insertFuelStops({
             ...computed, departure: dep, destination: dest,
             options: { maxLegHrs: this._maxLegHrs, selfServeOnly: this._selfServeOnly },
         });
-        if (!result.fuelStopCandidates?.length) { this._toast('No airports with fuel found near where the limit is reached', 4000); return; }
-        await this._processFuelStopCandidates(result);
+        if (!result.fuelStopCandidates?.length) { this._toast('No airports with avgas found near where the limit is reached', 4000); return; }
+        await this._processFuelStopCandidates(result, depth);
+    }
+
+    /**
+     * One fuel stop at a time: the engine works out every stop from times
+     * computed WITHOUT stops, so after the first one (with its descent and
+     * climb) the next is in the wrong place -- it suggested a second stop next
+     * to the destination on KLKR-KTMB. Offer the first, add it, re-check, and
+     * offer the next from the new times only if still over the limit.
+     * Used by Add fuel stop and by Plan route.
+     */
+    async _processFuelStopCandidates(result, depth = 0) {
+        const first = (result?.fuelStopCandidates || [])[0];
+        if (!first) return;
+        const chosen = await this._showFuelStopPicker(first);
+        if (!chosen) return;
+        if (this._route.some((p) => p.type === 'fuel' && p.id === chosen.icao)) {
+            this._toast(`${chosen.icao} is already a fuel stop`);
+            return;
+        }
+        this._coords[chosen.icao] = { lat: chosen.lat, lon: chosen.lon };
+        await this._insertFuelStop(first.afterFixId, { id: chosen.icao, type: 'fuel' }, chosen);
         this._render();
+        const problems = await this._runChecks();
+        if (depth < 3 && problems.some((p) => p.code === 'fuel-over-limit')) await this._addFuelStop(depth + 1);
+    }
+
+    /**
+     * Put a fuel stop suggested "after <fix>" into the pills: land there, then
+     * carry on from where the route was left. On an airway, split it at the
+     * airway fix nearest the airport (E entry, X exit, N that fix):
+     *   N = E:  E ⛽ E AWY … X        N = X:  E AWY … X ⛽ X …
+     *   else:   E AWY N ⛽ N AWY X
+     * (KLKR-KTMB: KCRG next to CRG, the V267 entry; K2IS ~150 nm down V157 had
+     * been put after LAL with a rejoin at LAL, flying back north: +43 %.)
+     * Off airways: just after the fix. Never after the destination.
+     */
+    async _insertFuelStop(afterFixId, stop, where) {
+        const r = this._route;
+        const isPoint = (p) => p.type !== 'awy' && p.type !== 'direct';
+        const up = (x) => String(x ?? '').toUpperCase();
+        const seg = this._airwaySegment(afterFixId);
+        const rec = seg ? await this._getAirway(seg.name) : null;
+        if (seg && rec?.waypoints?.length && where && Number.isFinite(where.lat)) {
+            const pts = rec.waypoints.slice().sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
+            const is = (p, id) => up(p.id) === up(id) || up(p.name) === up(id);
+            const iE = pts.findIndex((p) => is(p, r[seg.e].id));
+            const iX = pts.findIndex((p) => is(p, r[seg.x].id));
+            if (iE >= 0 && iX >= 0) {
+                const along = iE <= iX ? pts.slice(iE, iX + 1) : pts.slice(iX, iE + 1).reverse();
+                let best = -1, bestNm = Infinity;
+                along.forEach((p, i) => {
+                    if (!Number.isFinite(p.lat) || !Number.isFinite(p.lon)) return;
+                    const nm = RouteCheck._directNm(where, p);
+                    if (nm < bestNm) { bestNm = nm; best = i; }
+                });
+                // Keep the airway (split at the nearest fix: 2 x the distance to the
+                // airport) unless leaving it -- entry, stop, exit direct -- saves more
+                // than KEEP_AIRWAY_NM. K2IS was ~20 nm off V157, nearest end 60 nm away.
+                const d = (a, b) => RouteCheck._directNm(a, b);
+                let path = 0;
+                for (let i = 1; i < along.length; i++) if (Number.isFinite(along[i].lat) && Number.isFinite(along[i - 1].lat)) path += d(along[i - 1], along[i]);
+                const E = along[0], X = along[along.length - 1];
+                const directExtra = d(E, where) + d(where, X) - path;
+                if (best < 0 || 2 * bestNm > directExtra + RoutePlannerV2.KEEP_AIRWAY_NM) {
+                    const exit = { ...r[seg.x] };
+                    delete exit.airway;
+                    r.splice(seg.a, seg.x - seg.a + 1, stop, exit);
+                    return;
+                }
+                // The destination as the airway's exit: stop at the fix before it.
+                if (best === along.length - 1 && r[seg.x].type === 'dest') best = Math.max(0, best - 1);
+                if (best === 0) { r.splice(seg.e + 1, 0, stop, { id: r[seg.e].id, type: 'fix' }); return; }
+                if (best === along.length - 1) { r.splice(seg.x + 1, 0, stop, { id: r[seg.x].id, type: 'fix' }); return; }
+                if (best > 0) {
+                    const n = up(along[best].id || along[best].name);
+                    for (let i = seg.a + 1; i < seg.x; i++) {
+                        if (isPoint(r[i]) && up(r[i].id) === n) {          // already a bubble on the airway
+                            r.splice(i + 1, 0, stop, { id: r[i].id, type: 'fix' }, { id: seg.name, type: 'awy' });
+                            return;
+                        }
+                    }
+                    let at = seg.x;                                       // before the first bubble past it
+                    for (let i = seg.a + 1; i < seg.x; i++) {
+                        if (isPoint(r[i]) && along.findIndex((p) => is(p, r[i].id)) > best) { at = i; break; }
+                    }
+                    r.splice(at, 0, { id: n, type: 'fix', airway: seg.name }, stop, { id: n, type: 'fix' }, { id: seg.name, type: 'awy' });
+                    return;
+                }
+            }
+        }
+        // Off airways (or no airway data): just after the fix, before the destination at the latest.
+        const own = r.findIndex((p) => isPoint(p) && p.id === afterFixId);
+        const dest = this._destPillIndex();
+        let at = own >= 0 ? own + 1 : dest;
+        if (dest >= 0) at = Math.min(at, dest);
+        if (at < 0) at = r.length;
+        r.splice(at, 0, stop);
+    }
+
+    /**
+     * The airway segment the leg after `afterFixId` is on, in pill indices:
+     * { name, e: entry bubble, a: the airway pill, x: exit bubble }, or null.
+     * Exit: the last point after the airway pill that still carries its tag
+     * (planned routes tag interior fixes), or the first point after it.
+     */
+    _airwaySegment(afterFixId) {
+        const r = this._route;
+        const isPoint = (p) => p.type !== 'awy' && p.type !== 'direct';
+        const wps = this._computed?.waypoints || [];
+        const k = wps.findIndex((w) => w.id === afterFixId);
+        const own = r.findIndex((p) => isPoint(p) && p.id === afterFixId);
+        let name = k >= 0 ? (wps[k + 1]?.airway || null) : null;
+        if (!name && own >= 0 && r[own + 1]?.type === 'awy') name = r[own + 1].id;
+        if (!name) return null;
+        // The pill index to search back from: the anchor bubble, or the next bubble after the anchor.
+        let ref = own;
+        if (ref < 0) {
+            for (let j = k + 1; k >= 0 && j < wps.length && ref < 0; j++) ref = r.findIndex((p) => isPoint(p) && p.id === wps[j].id);
+        }
+        if (ref < 0) return null;
+        let a = -1;
+        if (r[ref + 1]?.type === 'awy' && r[ref + 1].id === name) a = ref + 1;
+        else for (let i = ref; i >= 0; i--) if (r[i].type === 'awy' && r[i].id === name) { a = i; break; }
+        if (a < 1 || !isPoint(r[a - 1])) return null;
+        let x = -1;
+        for (let i = a + 1; i < r.length; i++) {
+            if (!isPoint(r[i])) break;
+            if (x < 0 || r[i].airway === name) x = i; else break;
+        }
+        return x > a ? { name, e: a - 1, a, x } : null;
     }
 
     // ── Checks ───────────────────────────────────────────────────────────────
@@ -675,9 +817,13 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         const a = await this._getAirway(name);
         if (!a?.waypoints?.length) return [];
         const pts = a.waypoints.slice().sort((x, y) => (x.seq ?? 0) - (y.seq ?? 0));
-        const key = (p) => String(p.name ?? p.id ?? '').toUpperCase();
-        const iA = pts.findIndex((p) => key(p) === String(fromId).toUpperCase());
-        const iB = pts.findIndex((p) => key(p) === String(toId).toUpperCase());
+        // Navaids carry an identifier and a name ({id:'CAE', name:'Columbia'}),
+        // fixes only a name: match either, use the identifier.
+        const up = (x) => String(x ?? '').toUpperCase();
+        const is = (p, id) => up(p.id) === up(id) || up(p.name) === up(id);
+        const key = (p) => up(p.id || p.name);
+        const iA = pts.findIndex((p) => is(p, fromId));
+        const iB = pts.findIndex((p) => is(p, toId));
         if (iA < 0 || iB < 0 || Math.abs(iA - iB) <= 1) return [];
         const between = iA < iB ? pts.slice(iA + 1, iB) : pts.slice(iB + 1, iA).reverse();
         return between
@@ -685,3 +831,6 @@ class RoutePlannerV2 extends RoutePlannerPanel {
             .map((p) => ({ id: key(p), lat: p.lat, lon: p.lon }));
     }
 }
+
+/** A fuel stop keeps its airway unless leaving it saves more than this (nm). */
+RoutePlannerV2.KEEP_AIRWAY_NM = 10;

@@ -315,7 +315,10 @@ class RoutePlannerPanel {
             const saved = JSON.parse(localStorage.getItem('flypi_planner_opts') || '{}');
             if (saved.altitude      != null) this._altitude      = saved.altitude;
             if (saved.maxLegHrs     != null) this._maxLegHrs     = saved.maxLegHrs;
-            if (saved.selfServeOnly != null) this._selfServeOnly = saved.selfServeOnly;
+            // Not applied: NASR has no self-serve fuel data (0 of 19,135 airports),
+            // so "self-serve only" rejected every fuel stop, and no screen offers
+            // the option to turn it off (2026-10-16).
+            this._selfServeOnly = false;
             if (saved.reserveGal    != null) this._reserveGal    = saved.reserveGal;
             if (saved.compactView   != null) this._compactView   = saved.compactView;
             if (saved.routingMode   != null) this._routingMode   = saved.routingMode;

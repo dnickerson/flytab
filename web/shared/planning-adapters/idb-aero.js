@@ -45,7 +45,9 @@ export class IdbAeroData {
             lat:  r.lat,
             lon:  r.lon,
             elevFt: r.elev_ft ?? r.elevation_ft,
-            hasFuel: !!(r.has_fuel || fuelStr),
+            // A fuel stop needs avgas (100LL / 100) for the O-360: Jet-A ("A",
+            // "A1+") and MOGAS-only fields don't count (325 in the 2026-10 bundle).
+            hasFuel: !!r.has_fuel || /100/.test(fuelStr),
             hasSelfServeFuel: !!(r.has_self_serve_fuel),
             runways: r.runways || [],
         };

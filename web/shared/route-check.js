@@ -35,6 +35,9 @@ const RouteCheck = (() => {
     }
     const up = (s) => String(s ?? '').toUpperCase();
     const isPoint = (p) => p.type !== 'awy' && p.type !== 'direct';
+    // An airway point: navaids carry an identifier and a name ({id:'CAE',
+    // name:'Columbia'}), fixes only a name ('Great'). Match either; show the id.
+    const ident = (w) => up(w.id || w.name);
     const fmtHrs = (h) => {
         const m = Math.round(h * 60);
         return `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}m`;
@@ -45,7 +48,7 @@ const RouteCheck = (() => {
     function nearestOn(airway, c, n) {
         return (airway.waypoints || [])
             .filter((w) => Number.isFinite(w.lat) && Number.isFinite(w.lon))
-            .map((w) => ({ name: up(w.name ?? w.id), nm: directNm(c, w) }))
+            .map((w) => ({ name: ident(w), nm: directNm(c, w) }))
             .sort((a, b) => a.nm - b.nm)
             .slice(0, n);
     }
@@ -76,7 +79,8 @@ const RouteCheck = (() => {
         const later = [];   // amber airway-type problems, after the airway reds
         for (const [i, awy] of airways) {
             const name = pills[i].id;
-            const on = new Set((awy.waypoints || []).map((w) => up(w.name ?? w.id)));
+            const on = new Set();
+            for (const w of awy.waypoints || []) { if (w.id) on.add(up(w.id)); if (w.name) on.add(up(w.name)); }
             const prev = i - 1 >= 0 && isPoint(pills[i - 1]) ? i - 1 : -1;
             let next = -1;
             for (let k = i + 1; k < pills.length; k++) { if (isPoint(pills[k])) { next = k; break; } if (pills[k].type === 'awy') break; }
@@ -130,8 +134,23 @@ const RouteCheck = (() => {
             }
         }
 
-        // Reserve at the destination.
-        const rem = computed?.summary?.fuelRemGal;
+        // Reserve at the destination. recomputeLegs never refuels at a fuel stop
+        // (fuelRemGal = capacity - the whole trip's burn), so count only the burn
+        // since the last fuel stop, with full tanks there.
+        let rem = computed?.summary?.fuelRemGal;
+        const totalFuel = computed?.summary?.totalFuelGal;
+        if (Number.isFinite(rem) && Number.isFinite(totalFuel) && computed?.legs?.length) {
+            const wps = computed.waypoints || [];
+            let destIdx = wps.findIndex((w) => w.isDest);
+            if (destIdx < 0) destIdx = wps.length - 1;
+            let sinceStop = 0;
+            for (let k = 0; k < Math.min(computed.legs.length, destIdx); k++) {
+                sinceStop += computed.legs[k].fuelGal || 0;
+                if (k + 1 < destIdx && wps[k + 1]?.fuelStop) sinceStop = 0;
+            }
+            const capacity = rem + totalFuel;
+            rem = capacity - sinceStop;
+        }
         if (Number.isFinite(rem) && Number.isFinite(settings.reserveGal) && rem < settings.reserveGal) {
             red('below-reserve', [], `Lands with ${rem.toFixed(1)} gal (reserve ${settings.reserveGal})`);
         }

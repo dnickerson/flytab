@@ -546,6 +546,10 @@ To edit the route, expand the strip and tap **EDIT**. From there you can:
   - amber: a route much longer than direct, or an airway type the ROUTING setting doesn't cover.
 
   Tap the problem line to see every problem and its one-tap fixes. **Apply** asks before applying a route with a red problem (*Fix it* / *Apply anyway*).
+- **Fuel stops, one at a time.** *Add fuel stop* (or Plan route) offers airports with **avgas (100LL)** near 90% of the FUEL STOP limit, which leaves time to turn off and descend. Jet-A-only and MOGAS-only fields aren't offered. After you pick one, the route is worked out again with that stop in, and the next stop is offered only if still needed.
+  - The stop is put where you'd fly it: land, refuel, and rejoin the airway at the fix nearest the airport.
+  - If the airport is well off the airway, the route goes direct from the airway's entry to the stop and on to its exit instead.
+  - "Self-serve only" is no longer applied: the FAA data has no self-serve information, so it used to rule out every airport.
 - **Settings are always on screen:** Altitude, Power, Routing, Depart, Reserve, Fuel stop. Tap one to change it.
 - **Airways are flown along the airway.** After Apply, `GREAT T437 CAYCE` becomes GREAT, BLOTS, BEFTY, CAYCE in the route table and on the map.
 - REV, Clear, Plan route, Routes (your saved plans), Save and Apply work as in the current planner.

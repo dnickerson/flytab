@@ -77,6 +77,14 @@ describe('RouteCheck: airways', () => {
         expect(await run('KLKR GREAT T437 CAYCE KAIK')).toEqual([]);
     });
 
+    it('VORs on an airway are matched by identifier (V37 lists CAE as "Columbia")', async () => {
+        expect(await run('KLKR CAE V37 CLT KAIK', { settings: { routingMode: 'v-airways' } })).toEqual([]);
+        const ps = await run('KLKR MITVE V37 CLT KAIK', { settings: { routingMode: 'v-airways' } });
+        expect(ps[0].code).toBe('entry-not-on-airway');
+        // suggestions name VORs by identifier, not by name
+        expect(ps[0].fixes.map((f) => f.arg?.fix).filter(Boolean).every((id) => !/[a-z]/.test(id) && id !== 'COLUMBIA' && id !== 'CHARLOTTE')).toBe(true);
+    });
+
     it('unknown identifiers and airways are red, never dropped', async () => {
         const ps = await run('KLKR MITVF T999 CAYCE KAIK');
         expect(codes(ps)).toEqual(['red:unknown-id', 'red:unknown-id']);
@@ -125,6 +133,21 @@ describe('RouteCheck: fuel, reserve, detour', () => {
     it('landing below the reserve is red', async () => {
         const ps = await run('KLKR KMDT', { computed: computed([1.0], { fuelRemGal: 6.24 }) });
         expect(ps.find((x) => x.code === 'below-reserve').message).toBe('Lands with 6.2 gal (reserve 10)');
+    });
+
+    it('reserve with a fuel stop: tanks are filled at the stop (the engine does not refuel)', async () => {
+        // 36 gal tanks; legs burn 20 + 12 gal with a stop between them: lands with 24, not 36-32=4.
+        const c = {
+            legs: [{ timeHrs: 1.5, fuelGal: 20 }, { timeHrs: 1.0, fuelGal: 12 }],
+            waypoints: [{ id: 'A' }, { id: 'F', fuelStop: true }, { id: 'B', isDest: true }],
+            summary: { totalEteHrs: 2.5, totalDistNm: 300, totalFuelGal: 32, fuelRemGal: 4 },
+        };
+        const ps = await RouteCheck.run({ pills: pills('KLKR KMDT'), computed: c, settings: settings(), aero });
+        expect(ps.map((p) => p.code)).not.toContain('below-reserve');
+        // without the stop it is a real problem
+        const c2 = { ...c, waypoints: [{ id: 'A' }, { id: 'F' }, { id: 'B', isDest: true }] };
+        const ps2 = await RouteCheck.run({ pills: pills('KLKR KMDT'), computed: c2, settings: settings(), aero });
+        expect(ps2.find((p) => p.code === 'below-reserve').message).toBe('Lands with 4.0 gal (reserve 10)');
     });
 
     it('detour: amber over 25% longer than direct, nothing at 24%', async () => {

@@ -12165,8 +12165,8 @@ body.route-editing-mode .route-table-sheet {
 .rp2-field { border: 2px solid var(--accent); border-radius: 8px; padding: 6px; display: flex; flex-direction: column; gap: 6px; }
 .rp2-bubbles { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-height: var(--touch-min, 56px); }
 .rp2-b {
-    min-height: var(--touch-min, 56px); padding: 0 14px; border-radius: 28px;
-    font-family: var(--font-instrument); font-weight: 900; font-size: 20px;
+    min-height: var(--touch-min, 56px); padding: 0 12px; border-radius: 28px;
+    font-family: var(--font-instrument); font-weight: 900; font-size: 16px;
     background: var(--bg-surface); color: var(--text-primary); border: 2px solid var(--border-strong);
     touch-action: manipulation;
 }
@@ -12179,7 +12179,7 @@ body.route-editing-mode .route-table-sheet {
 .rp2-input {
     flex: 1 0 120px; min-height: var(--touch-min, 56px); border: none; border-left: 3px solid var(--accent);
     background: transparent; outline: none; padding: 0 8px;
-    font-family: var(--font-instrument); font-weight: 900; font-size: 20px; color: var(--text-primary);
+    font-family: var(--font-instrument); font-weight: 900; font-size: 16px; color: var(--text-primary);
     text-transform: uppercase;
 }
 .rp2-input::placeholder { color: var(--text-muted); font-weight: 700; text-transform: none; }
@@ -12190,7 +12190,7 @@ body.route-editing-mode .route-table-sheet {
     font-family: var(--font-ui); font-weight: 800; font-size: 16px; color: var(--text-primary);
 }
 
-.rp2-problem { min-height: 0; font-family: var(--font-ui); font-weight: 800; font-size: 15px; }
+.rp2-problem { min-height: 0; font-family: var(--font-ui); font-weight: 800; font-size: 14px; }
 .rp2-problem-red   { color: var(--color-danger-on-light);  min-height: var(--touch-min, 56px); display: flex; align-items: center; }
 .rp2-problem-amber { color: var(--color-caution-on-light); min-height: var(--touch-min, 56px); display: flex; align-items: center; }
 
@@ -12202,13 +12202,13 @@ body.route-editing-mode .route-table-sheet {
 .rp2-k { font-family: var(--font-ui); font-weight: 800; font-size: 11px; color: var(--text-label); letter-spacing: 0.5px; }
 .rp2-sel {
     border: none; background: transparent; padding: 0; font-family: var(--font-instrument);
-    font-weight: 900; font-size: 17px; color: var(--text-primary); min-height: 30px;
+    font-weight: 900; font-size: 15px; color: var(--text-primary); min-height: 28px;
 }
 
 .rp2-stats { display: grid; grid-template-columns: repeat(5, 1fr); border: 1px solid var(--border); border-radius: 6px; background: var(--bg-surface); }
 .rp2-stats:empty { display: none; }
 .rp2-stats > div { display: flex; flex-direction: column; padding: 4px 8px; border-right: 1px solid var(--border-light); }
-.rp2-v { font-family: var(--font-instrument); font-weight: 900; font-size: 16px; }
+.rp2-v { font-family: var(--font-instrument); font-weight: 900; font-size: 14px; }
 
 .rp2-toolbar { display: flex; gap: 6px; }
 .rp2-tbtn {
@@ -12223,11 +12223,11 @@ body.route-editing-mode .route-table-sheet {
     background: var(--bg-primary); border-top: 3px solid var(--accent); box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.25);
     padding: 8px 10px 12px;
 }
-.rp2-sheet-hdr { display: flex; align-items: center; justify-content: space-between; font-family: var(--font-instrument); font-weight: 900; font-size: 20px; margin-bottom: 6px; }
+.rp2-sheet-hdr { display: flex; align-items: center; justify-content: space-between; font-family: var(--font-instrument); font-weight: 900; font-size: 17px; margin-bottom: 6px; }
 .rp2-acts { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
 .rp2-act {
     min-height: var(--touch-preferred, 64px); border-radius: 8px; border: 1px solid var(--border-strong); background: var(--bg-surface);
-    font-family: var(--font-ui); font-weight: 800; font-size: 16px; color: var(--text-primary);
+    font-family: var(--font-ui); font-weight: 800; font-size: 15px; color: var(--text-primary);
 }
 .rp2-act-primary { border: 2px solid var(--accent); color: var(--accent); }
 .rp2-act-danger  { color: var(--color-danger-on-light); }
