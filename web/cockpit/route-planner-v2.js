@@ -136,11 +136,15 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         // bubble (or with no destination yet) -> the end; anywhere else -> before it.
         this._fieldEl.addEventListener('click', (e) => {
             if (e.target.closest('.rp2-b, .rp2-btn, .rp2-input')) return;
-            this._endAppend();
-            this._insertIndex = null;
-            this._cursorAtEnd = this._tapIsAfterDest(e);
-            this._render();
-            this._inputEl.focus();
+            const atEnd = this._tapIsAfterDest(e);
+            // What was typed goes where it was being typed, then the cursor moves.
+            this._commitTyped().then(() => {
+                this._endAppend();
+                this._insertIndex = null;
+                this._cursorAtEnd = atEnd;
+                this._render();
+                this._inputEl.focus();
+            });
         });
         inner.appendChild(this._fieldEl);
 
@@ -448,7 +452,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
     _cursorIndex() {
         if (this._insertIndex !== null && this._insertIndex !== undefined) return this._insertIndex;
         let d = this._destPillIndex();
-        if (this._cursorAtEnd || d < 0) return this._route.length;
+        if (this._appendMode || this._cursorAtEnd || d < 0) return this._route.length;
         // Before an approach/arrival into the destination, not inside it: after
         // one was inserted the cursor sat between RW25 and KAIK (2026-10-16).
         while (d > 0 && this._route[d - 1].proc) d--;
@@ -527,9 +531,9 @@ class RoutePlannerV2 extends RoutePlannerPanel {
      * (with CAE typed, a tap on KAIK opened CAE's sheet -- 2026-10-16).
      */
     async _onBubbleTap(idx) {
-        this._endAppend();
         const item = this._route[idx];
-        await this._commitTyped();
+        await this._commitTyped();              // first: it is still part of the route being built
+        this._endAppend();
         const i = this._route.indexOf(item);
         if (i < 0) return;
         this._showOnMap(i);
@@ -683,11 +687,15 @@ class RoutePlannerV2 extends RoutePlannerPanel {
      * Remove the approach/arrival fixes of the destination at index d (those just
      * before it and the missed approach after it). Returns the destination's new index.
      */
-    _dropProcedure(d) {
+    _dropProcedure(d, kind = null) {
         const r = this._route;
         if (d < 0) return d;
-        for (let k = r.length - 1; k > d; k--) if (r[k].proc) r.splice(k, 1);
-        while (d > 0 && r[d - 1].proc) { r.splice(d - 1, 1); d--; }
+        // kind: only that kind of procedure (an approach replaces an approach, not
+        // the STAR before it -- pre-merge review, 2026-10-16). proc === true: an
+        // older save without the kind, treated as either.
+        const drop = (p) => p.proc && (kind == null || p.proc === kind || p.proc === true);
+        for (let k = r.length - 1; k > d; k--) if (drop(r[k])) r.splice(k, 1);
+        for (let k = d - 1; k > 0 && r[k].proc; k--) if (drop(r[k])) { r.splice(k, 1); d--; }
         return d;
     }
 
@@ -865,7 +873,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
     async _onSaveTap() {
         this._commitStartFuel();
         await this._commitTyped();
-        if (this._windsLoading) await this._windsLoadP;
+        if (this._windsLoading && this._windsForced) await this._windsLoadP;
         const c = await this._compute();
         if (!c?.waypoints || c.waypoints.length < 2) { this._toast('Route not complete — nothing to save'); return; }
         try {
@@ -911,8 +919,10 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         const ended = this._windsInfo?.useTo instanceof Date && at >= this._windsInfo.useTo.getTime();
         if (!force && ((this._lastWinds && !ended) || Date.now() - (this._windsTriedAt || 0) < RoutePlannerV2.WINDS_RETRY_MS)) return Promise.resolve();
         this._windsLoading = true;
+        this._windsForced = force;
         this._windsTriedAt = Date.now();
         const forDep = this._departureTime ? this._departureTime.getTime() : null;
+        const had = this._lastWinds;
         this._windsLoadP = Promise.resolve()
             .then(() => fn(this._departureTime ?? new Date()))
             .catch(() => null)
@@ -921,13 +931,19 @@ class RoutePlannerV2 extends RoutePlannerPanel {
                 const nowDep = this._departureTime ? this._departureTime.getTime() : null;
                 if (nowDep !== forDep) return this._ensureWinds({ force: true });   // changed meanwhile
                 if (!r) return undefined;
+                // A refresh after the period ended that found nothing newer (in
+                // the air, offline): keep the old forecast rather than calm air;
+                // a note says it has ended (pre-merge review, 2026-10-16).
+                if (!force && !r.winds && had) { this._scheduleCheck(); return undefined; }
                 this._windsInfo = r;
                 // No forecast for this time: calm air, not another period's winds.
                 this._lastWinds = r.winds || null;
                 this._scheduleCheck();
                 return undefined;
             });
-        this._windsPromise = this._windsLoadP;
+        // Apply waits for a load of the departure's winds, not for a background
+        // refresh (in the air its proxy try takes 8 s to fail).
+        if (force) this._windsPromise = this._windsLoadP;
         return this._windsLoadP;
     }
 
@@ -946,6 +962,12 @@ class RoutePlannerV2 extends RoutePlannerPanel {
             return `FD ${String(v.getUTCDate()).padStart(2, '0')}/${String(v.getUTCHours()).padStart(2, '0')}Z`;
         }
         return '';
+    }
+
+    /** REV ends building a route (typing then goes before the new destination). */
+    _onReverseTap() {
+        this._endAppend();
+        return super._onReverseTap();
     }
 
     /**
@@ -976,16 +998,17 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         // both were flown (RNAV 07, then ILS 25 after a runway change -- review, 2026-10-16).
         const icao = String(detail?.icao || '');
         const ids = new Set([icao, icao.length <= 3 ? 'K' + icao : icao, icao.length === 4 && icao[0] === 'K' ? icao.slice(1) : icao]);
+        const kind = detail?.procType === 'STAR' ? 'STAR' : 'APPROACH';
         const d = this._destPillIndex();
         let replaced = false;
         if (d >= 0 && ids.has(this._route[d].id)) {
             const before = this._route.length;
-            this._dropProcedure(d);
+            this._dropProcedure(d, kind);
             replaced = this._route.length !== before;
         }
-        super.insertApproach(detail);
+        super.insertApproach({ ...detail, procType: kind });
         this._inputEl?.blur();
-        if (replaced) this._toast('Approach replaced');
+        if (replaced) this._toast(kind === 'STAR' ? 'Arrival replaced' : 'Approach replaced');
     }
 
     _startInsert(at) {
@@ -1051,9 +1074,9 @@ class RoutePlannerV2 extends RoutePlannerPanel {
 
     _removeAt(i) {
         if (this._route[i]?.type === 'dest') {
-            // Its missed approach goes with it (the last missed-approach fix
-            // became the destination -- review, 2026-10-16).
-            for (let k = this._route.length - 1; k > i; k--) if (this._route[k].proc) this._route.splice(k, 1);
+            // Its approach, arrival and missed approach go with it (the last
+            // missed-approach fix, or the runway, became the destination -- reviews, 2026-10-16).
+            i = this._dropProcedure(i);
         }
         const removed = this._route.splice(i, 1)[0];
         const pts = () => this._route.map((p, k) => ({ p, k })).filter(({ p }) => p.type !== 'awy' && p.type !== 'direct');
@@ -1360,8 +1383,8 @@ class RoutePlannerV2 extends RoutePlannerPanel {
     }
 
     async _loadClearance({ limit = '', route = '' }) {
-        this._endAppend();
         await this._commitTyped();
+        this._endAppend();
         const SKIP = new Set(['DIRECT', 'DCT', 'THEN', 'AS', 'FILED', 'RADAR', 'VECTORS', 'RV', 'TO', 'VIA',
             'CLEARED', 'MAINTAIN', 'EXPECT', 'CLIMB', 'DESCEND', 'AND', 'FLY', 'HEADING', 'THE']);
         const resolveApt = async (id) => {
@@ -1520,6 +1543,13 @@ class RoutePlannerV2 extends RoutePlannerPanel {
                 message: `Plan route avoids ${this._avoidList.join(', ')}`,
                 fixes: [{ label: 'Stop avoiding', apply: 'clearAvoid', arg: {} }] });
         }
+        // The forecast in use has ended and nothing newer loaded.
+        const wi = this._windsInfo;
+        if (wi?.winds && this._lastWinds && wi.useTo instanceof Date && hasEnds
+            && Math.max(this._departureTime ? this._departureTime.getTime() : 0, Date.now()) >= wi.useTo.getTime()) {
+            problems.push({ severity: 'amber', code: 'winds-old', pillIndexes: [], fixes: [],
+                message: `Winds from a forecast that has ended (${this._windsLabel() || 'FD'}) — no newer one loaded` });
+        }
         // Winds tried and none for this departure: say so (calm-air figures).
         if (this._windsInfo && !this._lastWinds && hasEnds) {
             const w = this._windsInfo;
@@ -1661,10 +1691,10 @@ class RoutePlannerV2 extends RoutePlannerPanel {
     }
 
     async _applyOnce() {
-        this._endAppend();
         this._commitStartFuel();
         await this._commitTyped();
-        if (this._windsLoading) await this._windsLoadP;      // a new departure's winds
+        this._endAppend();
+        if (this._windsLoading && this._windsForced) await this._windsLoadP;      // a new departure's winds
         // Checked on the route that is applied: if it changed during the check
         // (a sheet action, Plan route finishing), check again (review, 2026-10-16).
         let problems = [];

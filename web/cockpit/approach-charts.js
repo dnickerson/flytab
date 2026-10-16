@@ -1234,7 +1234,9 @@ class ApproachCharts {
                 : null;
 
             document.dispatchEvent(new CustomEvent('cifp:load-procedure', {
-                detail: { icao, procName, transition, insertBefore, insertAfter, airportWp },
+                // procType: an approach replaces an approach, not the arrival (STAR) before it.
+                detail: { icao, procName, transition, insertBefore, insertAfter, airportWp,
+                          procType: (airportCifp?.procedures || []).find((p) => (p.name || p.proc_name) === procName)?.proc_type || 'APPROACH' },
             }));
 
             const labels = [...insertBefore.map(w => w.icao), icao, ...insertAfter.map(w => w.icao)];

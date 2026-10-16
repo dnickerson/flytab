@@ -147,6 +147,7 @@ class RoutePlannerPanel {
 
     /** Load plan into pill editor and show. Called by app.openRoutePlanner(plan). */
     async open(plan) {
+        this._openSeq = (this._openSeq || 0) + 1;
         this._applyAborted = false;
         this._loadPlan(plan);
         await this._inferAirwaysIntoRoute();
@@ -214,7 +215,7 @@ class RoutePlannerPanel {
      * @param {Array}   insertAfter   Waypoints to insert after the airport: MAP, missed approach fixes
      * @param {Object}  airportWp     Airport waypoint (runway threshold) — used for coord storage only
      */
-    insertApproach({ icao, insertBefore, insertAfter, airportWp }) {
+    insertApproach({ icao, insertBefore, insertAfter, airportWp, procType }) {
         // Cache coordinates so the planner can resolve approach fixes without a NASR lookup
         const storeCoord = (wp) => {
             if (!wp || !Number.isFinite(wp.lat) || !Number.isFinite(wp.lon)) return;
@@ -239,7 +240,8 @@ class RoutePlannerPanel {
         // proc: an approach fix for this airport; REV drops it (it belongs to
         // the old destination's approach, not the way back).
         const toPill = (wp) => Object.assign(
-            { id: wp.icao, type: 'fix', proc: true },
+            // the kind ('APPROACH' / 'STAR'): an approach replaces an approach, not an arrival
+            { id: wp.icao, type: 'fix', proc: procType || true },
             wp.alt != null ? { altFt: wp.alt } : {}
         );
         const beforePills = insertBefore.map(toPill);
@@ -470,7 +472,7 @@ class RoutePlannerPanel {
                 else delete pill.airway;
             }
             if (pill.type === 'fix' && wp.fuelStop) { pill.type = 'fuel'; delete pill.airway; }
-            if (pill.type === 'fix' && wp.proc) pill.proc = true;
+            if (pill.type === 'fix' && wp.proc) pill.proc = wp.proc;      // true, or 'APPROACH' / 'STAR'
         }
         this._normalizeAirwayTags();
 
@@ -3028,6 +3030,7 @@ class RoutePlannerPanel {
                     // The toast outlives the planner: after close() (_applyAborted)
                     // UNDO did nothing and the route stayed reversed (review, 2026-10-16).
                     const closed = this._applyAborted;
+                    const seq = this._openSeq;
                     this._applyAborted = false;
                     try {
                         this._route = before;
@@ -3036,7 +3039,8 @@ class RoutePlannerPanel {
                         this._render();
                         await this._doApply();
                     } finally {
-                        if (closed) { this._applyAborted = true; this._route = []; }
+                        // Closed again only if it was not reopened meanwhile (it would be blanked).
+                        if (closed && this._openSeq === seq) { this._applyAborted = true; this._route = []; }
                     }
                 });
             }
@@ -3454,7 +3458,7 @@ class RoutePlannerPanel {
                 // missed-approach fixes. Derived from the pill type on every conversion.
                 ...(pill.type === 'dest' ? { isDest: true } : {}),
                 // proc: approach fix (insertApproach); kept so REV can drop it after a reload.
-                ...(pill.proc ? { proc: true } : {}),
+                ...(pill.proc ? { proc: pill.proc } : {}),
                 ...(aw ? { airway: aw } : {}),
             });
             pendingAirway = null;

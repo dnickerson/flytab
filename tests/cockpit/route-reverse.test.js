@@ -100,6 +100,29 @@ describe('REV in the planner', () => {
         expect(p._applyAborted).toBe(true);                          // still closed
     });
 
+    it('UNDO running while the planner is reopened does not blank the reopened planner (pre-merge review)', async () => {
+        globalThis.app = { showToast: vi.fn(() => ({ remove() {} })) };
+        const p = panel([P('KLKR', 'dep'), P('FIX1', 'fix'), P('KCDN', 'dest')]);
+        p._depInput.value = 'KLKR';
+        p._destInput.value = 'KCDN';
+        let release = null;
+        p._doApply = vi.fn(async () => { if (p._applyAborted) return false; if (release === null) return true; await new Promise((r) => { release = r; }); return true; });
+        p._toast = vi.fn();
+        await p._onReverseTap();
+        p.close();
+        release = () => {};
+        const [, actions] = app.showToast.mock.calls[0];
+        const undo = actions[0].action();                            // waits inside _doApply
+        await new Promise((r) => setTimeout(r, 0));
+        p._applyAborted = false;                                     // reopened (what open() does)
+        p._openSeq = (p._openSeq || 0) + 1;
+        p._route = [P('KLKR', 'dep'), P('KCDN', 'dest')];
+        release();
+        await undo;
+        expect(p._applyAborted).toBe(false);
+        expect(show(p._route)).not.toBe('');
+    });
+
 
     it('reverses the pills, updates DEP/DEST, applies, and says what it did; UNDO puts it back', async () => {
         globalThis.app = { showToast: vi.fn(() => ({ remove() {} })) };

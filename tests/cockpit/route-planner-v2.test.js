@@ -1209,6 +1209,7 @@ describe('Route Planner (preview): flight-readiness review fixes (2026-10-16)', 
         const p = make();
         await type(p, 'KLKR CAE KAIK');
         p._fieldEl.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 1, clientY: 1 }));
+        await p._typing; await new Promise((r) => setTimeout(r, 0));   // the tap commits typed text first
         p._cursorAtEnd = false;
         await type(p, 'GREAT');
         expect(show(p)).toBe('KLKR:dep CAE:fix GREAT:fix KAIK:dest');
@@ -1250,11 +1251,56 @@ describe('Route Planner (preview): flight-readiness review fixes (2026-10-16)', 
         expect(field(p)).toBe('KLKR:dep CAE:fix KAIK:airport GREAT:fix KCDN:dest');
     });
 
-    it('removing the destination drops its missed approach; the destination is the point before', () => {
+    it('removing the destination drops its approach and missed approach; the destination is the point before', () => {
         const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'CAE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
         p.insertApproach(APP('25'));
         p._removeAt(p._destPillIndex());
-        expect(field(p)).toBe('KLKR:dep CAE:fix IA25:fix* RW25:dest*');
+        expect(field(p)).toBe('KLKR:dep CAE:dest');
+    });
+
+    it('an approach does not remove the arrival (STAR) before it; another approach replaces only the approach (pre-merge review)', () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'CAE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        p.insertApproach({ icao: 'KAIK', procType: 'STAR', insertBefore: [{ icao: 'ST1', lat: 33.8, lon: -81.4 }, { icao: 'ST2', lat: 33.75, lon: -81.45 }], insertAfter: [] });
+        p.insertApproach({ ...APP('07'), procType: 'APPROACH' });
+        expect(field(p)).toBe('KLKR:dep CAE:fix ST1:fix* ST2:fix* IA07:fix* RW07:fix* KAIK:dest MA07:fix*');
+        p.insertApproach({ ...APP('25'), procType: 'APPROACH' });
+        expect(field(p)).toBe('KLKR:dep CAE:fix ST1:fix* ST2:fix* IA25:fix* RW25:fix* KAIK:dest MA25:fix*');
+        expect(p._route.find((r) => r.id === 'ST1').proc).toBe('STAR');
+        expect(p._route.find((r) => r.id === 'IA25').proc).toBe('APPROACH');
+    });
+
+    it('the kind of procedure is saved and reloaded (by position)', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'ST1', type: 'fix', proc: 'STAR' }, { id: 'KAIK', type: 'dest' }]);
+        p._coords = { KLKR: { lat: 34.7, lon: -80.8 }, ST1: { lat: 33.8, lon: -81.4 }, KAIK: { lat: 33.6, lon: -81.7 } };
+        const wps = await Object.getPrototypeOf(RoutePlannerV2.prototype)._pillsToWaypoints.call(p);   // the base: as Apply saves it
+        expect(wps.find((w) => w.id === 'ST1').proc).toBe('STAR');
+        const q = make();
+        await q.open({ flight_plan: { route: ['KLKR', 'ST1', 'KAIK'], destination: 'KAIK' }, waypoints: [{ icao: 'KLKR' }, { icao: 'ST1', proc: 'STAR' }, { icao: 'KAIK' }] });
+        expect(q._route[1].proc).toBe('STAR');
+    });
+
+    it('tapping a bubble while building a route: the typed identifier is added first, in order (pre-merge review)', async () => {
+        const p = make();
+        await type(p, 'KLKR CAE GREAT');
+        p._inputEl.value = 'KAIK';
+        await p._onBubbleTap(1);
+        expect(show(p)).toBe('KLKR:dep CAE:fix GREAT:fix KAIK:dest');
+    });
+
+    it('while building, the text cursor is drawn at the end, where typing goes', async () => {
+        const p = make();
+        await type(p, 'KLKR CAE GREAT');
+        const order = [...p._bubblesEl.children].map((c) => (c === p._inputEl ? '|' : c.textContent.trim()));
+        expect(order).toEqual(['KLKR', 'CAE', 'GREAT', '|']);
+    });
+
+    it('REV ends building: typing then goes before the destination', async () => {
+        const p = make();
+        await type(p, 'KLKR CAE KAIK');
+        p._doApply = vi.fn(async () => false);
+        await p._onReverseTap();
+        await type(p, 'GREAT');
+        expect(show(p)).toBe('KAIK:dep CAE:fix GREAT:fix KLKR:dest');
     });
 
     it('"Route applied" is not hidden by a check running at the same time', async () => {
@@ -1303,6 +1349,30 @@ describe('Route Planner (preview): winds, DEPART and START FUEL review fixes (20
         await p.open({ flight_plan: { route: ['KLKR', 'KAIK'], destination: 'KAIK' }, waypoints: [] });
         await new Promise((r) => setTimeout(r, 0));
         expect(fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('a refresh after the forecast period ended: Apply does not wait for it; no new winds keeps the old ones, with a note', async () => {
+        const p = make(R());
+        const OLD = { OLD: {} };
+        let release;
+        p._windsFn = () => () => new Promise((r) => { release = () => r({ winds: null, reason: 'unavailable' }); });
+        p._lastWinds = OLD;
+        p._windsInfo = { winds: OLD, source: 'fd', validAt: new Date(Date.now() - 4 * 3600000), useTo: new Date(Date.now() - 60000) };
+        p._windsTriedAt = 0;
+        p._ensureWinds();                                     // unforced refresh starts
+        await new Promise((r) => setTimeout(r, 0));
+        p._runChecks = vi.fn(async () => (p._problems = []));
+        p._doApply = vi.fn(async () => true);
+        p._lastPlan = { waypoints: [] };
+        await p._onApplyKeepOpenTap();                        // not held up by the refresh
+        expect(p._doApply).toHaveBeenCalledTimes(1);
+        release();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(p._lastWinds).toBe(OLD);                       // kept
+        delete p._runChecks;
+        p._compute = async () => ({ legs: [], waypoints: [], summary: null });
+        const problems = await RoutePlannerV2.prototype._runChecks.call(p);
+        expect(problems.find((x) => x.code === 'winds-old')?.message).toMatch(/^Winds from a forecast that has ended \(FD \d\d\/\d\dZ\) — no newer one loaded$/);
     });
 
     it('DEPART shows the time used after every change (re-picking a stale entry)', () => {
