@@ -190,16 +190,20 @@ const RouteCheck = (() => {
             const wps = computed.waypoints || [];
             let destIdx = wps.findIndex((w) => w.isDest);
             if (destIdx < 0) destIdx = wps.length - 1;
+            // Each flight named by its ends: "4h27m without a fuel stop" next to
+            // what looked like LKR to Shiflet made no sense (Dana, 2026-10-16).
             const stretches = [];
             let cur = 0;
+            let from = wps[0]?.id;
             for (let k = 0; k < Math.min(computed.legs.length, destIdx); k++) {
                 cur += computed.legs[k].timeHrs || 0;
-                if (wps[k + 1]?.fuelStop) { stretches.push(cur); cur = 0; }
+                if (wps[k + 1]?.fuelStop) { stretches.push({ hrs: cur, from, to: wps[k + 1].id }); cur = 0; from = wps[k + 1].id; }
             }
-            stretches.push(cur);
-            const over = stretches.find((s) => s > maxLeg + EPS_HRS);
+            stretches.push({ hrs: cur, from, to: wps[destIdx]?.id });
+            const over = stretches.find((s) => s.hrs > maxLeg + EPS_HRS);
             if (over != null) {
-                const msg = `${fmtHrs(over)} without a fuel stop (limit ${fmtLimit(maxLeg)})`;
+                const who = over.from && over.to ? `${over.from} → ${over.to}: ` : '';
+                const msg = `${who}${fmtHrs(over.hrs)} without a fuel stop (limit ${fmtLimit(maxLeg)})`;
                 const fixes = [{ label: 'Add fuel stop', apply: 'addFuelStop', arg: {} }];
                 if (settings.fuelStopSkipped) amber('fuel-over-limit', [], msg + ' — fuel stop skipped', fixes);
                 else red('fuel-over-limit', [], msg, fixes);
@@ -228,7 +232,11 @@ const RouteCheck = (() => {
         }
         const rem = computed?.summary?.fuelRemGal;
         if (Number.isFinite(rem) && Number.isFinite(rsv) && rem < rsv) {
-            red('below-reserve', [], `Lands with ${rem.toFixed(1)} gal (reserve ${rsv})`);
+            const wps = computed.waypoints || [];
+            let d = wps.findIndex((w) => w.isDest);
+            if (d < 0) d = wps.length - 1;
+            const at = wps[d]?.id ? ` at ${wps[d].id}` : '';
+            red('below-reserve', [], `Lands${at} with ${rem.toFixed(1)} gal (reserve ${rsv})`);
         }
 
         for (const args of later) amber(...args);

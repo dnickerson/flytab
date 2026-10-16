@@ -635,12 +635,15 @@ describe('Route Planner (preview): Undo (Dana, 2026-10-16)', () => {
         expect(undoBtn(p).disabled).toBe(true);
     });
 
-    it('Clear does not ask (Undo brings the route back), and is one step', async () => {
+    it('Clear keeps the departure only (Dana: "LKR to Shiflet"), does not ask, and is one step', async () => {
         const p = fresh(R());
         p._confirm = vi.fn(async () => false);
         await p._onClearTap();
         expect(p._confirm).not.toHaveBeenCalled();
-        expect(show(p)).toBe('KLKR:dep KTMB:dest');
+        expect(show(p)).toBe('KLKR:dep');
+        await type(p, 'KCDN');                                   // the next airport is the destination
+        expect(show(p)).toBe('KLKR:dep KCDN:dest');
+        await p._onUndoTap();
         await p._onUndoTap();
         expect(show(p)).toBe('KLKR:dep CRG:fix BRADO:fix KTMB:dest');
     });

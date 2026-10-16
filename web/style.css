@@ -12178,7 +12178,9 @@ body.route-editing-mode .route-table-sheet {
 .rp2-b.rp2-amber { border: 3px solid var(--color-caution); color: var(--color-caution-on-light); }
 .rp2-b.rp2-red   { border: 3px solid var(--color-danger);  color: var(--color-danger-on-light); }
 .rp2-input {
-    flex: 1 0 120px; min-height: var(--touch-min, 56px); border: none; border-left: 3px solid var(--accent);
+    /* Not growing: a wide typing area pushed the destination bubble to the far
+       right, where it looked like it wasn't part of the route (2026-10-16). */
+    flex: 0 1 140px; min-width: 120px; min-height: var(--touch-min, 56px); border: none; border-left: 3px solid var(--accent);
     background: transparent; outline: none; padding: 0 8px;
     font-family: var(--font-instrument); font-weight: 900; font-size: var(--text-sm); color: var(--text-primary);
     text-transform: uppercase;

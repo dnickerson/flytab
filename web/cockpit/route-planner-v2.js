@@ -948,14 +948,17 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         return '';
     }
 
-    /** Clear (keeps departure and destination). No question: Undo brings the route back. */
+    /**
+     * Clear: the departure only (Dana, 2026-10-16) -- what is typed next builds
+     * the route and its last airport is the destination. Keeping the old
+     * destination too turned "LKR, Shiflet" into LKR -> Shiflet -> Miami. No
+     * question: Undo brings the route back.
+     */
     async _onClearTap() {
         const dep = this._route.find((p) => p.type === 'dep');
-        const dest = this._route[this._destPillIndex()];
-        this._route = [];
-        if (dep) this._route.push({ id: dep.id, type: 'dep' });
-        if (dest) this._route.push({ id: dest.id, type: 'dest' });
+        this._route = dep ? [{ id: dep.id, type: 'dep' }] : [];
         this._insertIndex = null;
+        this._cursorAtEnd = false;
         this._render();
         this._toast('Route cleared — ↶ Undo brings it back', 3000);
     }

@@ -178,7 +178,7 @@ describe('RouteCheck: fuel, reserve, detour', () => {
         const ps = await run('KLKR KMDT', { computed: computed([1.5, 0.8]) });
         expect(codes(ps)).toContain('red:fuel-over-limit');
         const p = ps.find((x) => x.code === 'fuel-over-limit');
-        expect(p.message).toBe('2h18m without a fuel stop (limit 2h)');
+        expect(p.message).toBe('W0 → W2: 2h18m without a fuel stop (limit 2h)');   // which flight (Dana, 2026-10-16)
         expect(p.fixes[0].apply).toBe('addFuelStop');
     });
 
@@ -187,7 +187,7 @@ describe('RouteCheck: fuel, reserve, detour', () => {
         expect(codes(ps)).toContain('amber:fuel-over-limit');
         expect(codes(ps)).not.toContain('red:fuel-over-limit');
         const p = ps.find((x) => x.code === 'fuel-over-limit');
-        expect(p.message).toBe('2h18m without a fuel stop (limit 2h) — fuel stop skipped');
+        expect(p.message).toBe('W0 → W2: 2h18m without a fuel stop (limit 2h) — fuel stop skipped');
         expect(p.fixes[0].apply).toBe('addFuelStop');
     });
 
@@ -202,12 +202,12 @@ describe('RouteCheck: fuel, reserve, detour', () => {
 
     it('limit 2.5h is written 2.5h', async () => {
         const ps = await run('KLKR KMDT', { computed: computed([1.5, 1.5]), settings: { maxLegHrs: 2.5 } });
-        expect(ps.find((x) => x.code === 'fuel-over-limit').message).toBe('3h00m without a fuel stop (limit 2.5h)');
+        expect(ps.find((x) => x.code === 'fuel-over-limit').message).toBe('W0 → W2: 3h00m without a fuel stop (limit 2.5h)');
     });
 
     it('landing below the reserve is red', async () => {
         const ps = await run('KLKR KMDT', { computed: computed([1.0], { fuelRemGal: 6.24 }) });
-        expect(ps.find((x) => x.code === 'below-reserve').message).toBe('Lands with 6.2 gal (reserve 10)');
+        expect(ps.find((x) => x.code === 'below-reserve').message).toBe('Lands at W1 with 6.2 gal (reserve 10)');
     });
 
     it('reserve is checked on the engine\'s fuel remaining (which refuels at stops)', async () => {
@@ -221,7 +221,7 @@ describe('RouteCheck: fuel, reserve, detour', () => {
         expect(ps.map((p) => p.code)).not.toContain('below-reserve');
         const c2 = { ...c, summary: { ...c.summary, fuelRemGal: 4 } };
         const ps2 = await RouteCheck.run({ pills: pills('KLKR KMDT'), computed: c2, settings: settings(), aero });
-        expect(ps2.find((p) => p.code === 'below-reserve').message).toBe('Lands with 4.0 gal (reserve 10)');
+        expect(ps2.find((p) => p.code === 'below-reserve').message).toBe('Lands at B with 4.0 gal (reserve 10)');
     });
 
     it('a landing at a fuel stop below the reserve is red, naming the stop (review, 2026-10-16)', async () => {
