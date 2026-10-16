@@ -1074,6 +1074,9 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         const iA = pts.findIndex((p) => is(p, fromId));
         const iB = pts.findIndex((p) => is(p, toId));
         if (iA < 0 || iB < 0 || Math.abs(iA - iB) <= 1) return [];
+        // Never along a gap or an unusable segment: leave the leg straight (the route check flags it).
+        const unusable = new Set(a.unusable_from_seqs || []);
+        for (let k = Math.min(iA, iB); k < Math.max(iA, iB); k++) if (unusable.has(pts[k].seq)) return [];
         const between = iA < iB ? pts.slice(iA + 1, iB) : pts.slice(iB + 1, iA).reverse();
         return between
             .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lon))

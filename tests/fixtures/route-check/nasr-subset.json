@@ -883,6 +883,798 @@
    "unusable_from_seqs": [
     310
    ]
+  },
+  {
+   "name": "V157",
+   "type": "V",
+   "waypoints": [
+    {
+     "seq": 10,
+     "name": "Key West",
+     "lat": 24.585878,
+     "lon": -81.800476,
+     "id": "EYW",
+     "type": "VORTAC"
+    },
+    {
+     "seq": 20,
+     "name": "Strap",
+     "lat": 24.831956,
+     "lon": -81.589681,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 30,
+     "name": "Tigar",
+     "lat": 24.946008,
+     "lon": -81.491611,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 40,
+     "name": "Carnu",
+     "lat": 25.138369,
+     "lon": -81.325589,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 50,
+     "name": "Dvall",
+     "lat": 25.514686,
+     "lon": -80.998956,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 60,
+     "name": "Wever",
+     "lat": 25.552381,
+     "lon": -80.913636,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 70,
+     "name": "Famin",
+     "lat": 25.585625,
+     "lon": -80.838356,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 80,
+     "name": "Fogso",
+     "lat": 25.630311,
+     "lon": -80.736703,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 90,
+     "name": "Dolphin",
+     "lat": 25.799963,
+     "lon": -80.349035,
+     "id": "DHP",
+     "type": "VORTAC"
+    },
+    {
+     "seq": 100,
+     "name": "Lakeland",
+     "lat": 27.986197,
+     "lon": -82.013904,
+     "id": "LAL",
+     "type": "VORTAC"
+    },
+    {
+     "seq": 110,
+     "name": "Urive",
+     "lat": 28.134775,
+     "lon": -82.040122,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 120,
+     "name": "Webbs",
+     "lat": 28.513914,
+     "lon": -82.107397,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 130,
+     "name": "Hyzer",
+     "lat": 28.649308,
+     "lon": -82.131542,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 140,
+     "name": "Sadey",
+     "lat": 28.884292,
+     "lon": -82.173583,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 150,
+     "name": "Ocala",
+     "lat": 29.177477,
+     "lon": -82.226334,
+     "id": "OCF",
+     "type": "VORTAC"
+    },
+    {
+     "seq": 160,
+     "name": "Lejko",
+     "lat": 29.344042,
+     "lon": -82.241372,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 170,
+     "name": "Gators",
+     "lat": 29.692115,
+     "lon": -82.272972,
+     "id": "GNV",
+     "type": "VORTAC"
+    },
+    {
+     "seq": 180,
+     "name": "Taalr",
+     "lat": 30.503336,
+     "lon": -82.552706,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 190,
+     "name": "Wiwhe",
+     "lat": 31.053325,
+     "lon": -82.555436,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 200,
+     "name": "Fegop",
+     "lat": 31.135794,
+     "lon": -82.555822,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 210,
+     "name": "Jopxu",
+     "lat": 31.1525,
+     "lon": -82.5559,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 220,
+     "name": "Waycross",
+     "lat": 31.269425,
+     "lon": -82.556446,
+     "id": "AYS",
+     "type": "VORTAC"
+    },
+    {
+     "seq": 230,
+     "name": "Maybe",
+     "lat": 32.468308,
+     "lon": -82.809656,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 240,
+     "name": "Dublin",
+     "lat": 32.56346,
+     "lon": -82.830045,
+     "id": "DBN",
+     "type": "VORTAC"
+    },
+    {
+     "seq": 250,
+     "name": "Florence",
+     "lat": 34.232968,
+     "lon": -79.657161,
+     "id": "FLO",
+     "type": "VORTAC"
+    },
+    {
+     "seq": 260,
+     "name": "Trock",
+     "lat": 34.480461,
+     "lon": -79.402097,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 270,
+     "name": "Rowel",
+     "lat": 34.694911,
+     "lon": -79.179369,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 280,
+     "name": "Cegad",
+     "lat": 34.7899,
+     "lon": -79.080261,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 290,
+     "name": "Fayetteville",
+     "lat": 34.985551,
+     "lon": -78.875064,
+     "id": "FAY",
+     "type": "VOR/DME"
+    },
+    {
+     "seq": 300,
+     "name": "Byrne",
+     "lat": 35.065197,
+     "lon": -78.607942,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 310,
+     "name": "Manwe",
+     "lat": 35.237406,
+     "lon": -78.021556,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 320,
+     "name": "Josch",
+     "lat": 35.281925,
+     "lon": -77.867992,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 330,
+     "name": "Kinston",
+     "lat": 35.370947,
+     "lon": -77.558315,
+     "id": "ISO",
+     "type": "VORTAC"
+    },
+    {
+     "seq": 340,
+     "name": "Wibid",
+     "lat": 35.558561,
+     "lon": -77.603125,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 350,
+     "name": "Tar River",
+     "lat": 35.976724,
+     "lon": -77.703732,
+     "id": "TYI",
+     "type": "VORTAC"
+    },
+    {
+     "seq": 360,
+     "name": "Robbinsville",
+     "lat": 40.202402,
+     "lon": -74.495026,
+     "id": "RBV",
+     "type": "VORTAC"
+    },
+    {
+     "seq": 370,
+     "name": "Tykes",
+     "lat": 40.28955,
+     "lon": -74.385036,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 380,
+     "name": "Minks",
+     "lat": 40.374872,
+     "lon": -74.276972,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 390,
+     "name": "Renue",
+     "lat": 40.518533,
+     "lon": -74.094089,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 400,
+     "name": "Apple",
+     "lat": 40.556136,
+     "lon": -74.062253,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 410,
+     "name": "Tickl",
+     "lat": 40.568072,
+     "lon": -74.052136,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 420,
+     "name": "Proud",
+     "lat": 40.629792,
+     "lon": -73.999756,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 430,
+     "name": "Dials",
+     "lat": 40.715569,
+     "lon": -73.926767,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 440,
+     "name": "La Guardia",
+     "lat": 40.783715,
+     "lon": -73.868599,
+     "id": "LGA",
+     "type": "VOR/DME"
+    },
+    {
+     "seq": 450,
+     "name": "Famma",
+     "lat": 41.009911,
+     "lon": -73.681886,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 460,
+     "name": "Craly",
+     "lat": 41.077211,
+     "lon": -73.626053,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 470,
+     "name": "Haarp",
+     "lat": 41.116353,
+     "lon": -73.593483,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 480,
+     "name": "Basye",
+     "lat": 41.343722,
+     "lon": -73.798608,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 490,
+     "name": "Valre",
+     "lat": 41.435328,
+     "lon": -73.881736,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 500,
+     "name": "Kingston",
+     "lat": 41.665452,
+     "lon": -73.822239,
+     "id": "IGN",
+     "type": "VOR/DME"
+    },
+    {
+     "seq": 510,
+     "name": "Tresa",
+     "lat": 41.880447,
+     "lon": -73.818556,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 520,
+     "name": "Wigan",
+     "lat": 42.085092,
+     "lon": -73.814969,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 530,
+     "name": "Athos",
+     "lat": 42.247081,
+     "lon": -73.8121,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 540,
+     "name": "Group",
+     "lat": 42.563917,
+     "lon": -73.806481,
+     "type": "REP-PT"
+    },
+    {
+     "seq": 550,
+     "name": "Albany",
+     "lat": 42.747281,
+     "lon": -73.803184,
+     "id": "ALB",
+     "type": "VORTAC"
+    }
+   ],
+   "segments": [
+    {
+     "from_seq": 10,
+     "to_seq": 20,
+     "dist_nm": 18.69,
+     "mea_ft": 5000,
+     "mea_gnss_ft": 3000
+    },
+    {
+     "from_seq": 20,
+     "to_seq": 30,
+     "dist_nm": 8.67,
+     "mea_ft": 5000,
+     "mea_gnss_ft": 3000
+    },
+    {
+     "from_seq": 30,
+     "to_seq": 40,
+     "dist_nm": 14.64,
+     "mea_ft": 5000,
+     "mea_gnss_ft": 3000
+    },
+    {
+     "from_seq": 40,
+     "to_seq": 50,
+     "dist_nm": 28.67,
+     "mea_ft": 5000,
+     "mea_gnss_ft": 3000
+    },
+    {
+     "from_seq": 50,
+     "to_seq": 60,
+     "dist_nm": 5.15,
+     "mea_ft": 5000,
+     "mea_gnss_ft": 3000
+    },
+    {
+     "from_seq": 60,
+     "to_seq": 70,
+     "dist_nm": 4.54,
+     "mea_ft": 5000,
+     "mea_gnss_ft": 3000
+    },
+    {
+     "from_seq": 70,
+     "to_seq": 80,
+     "dist_nm": 6.13,
+     "mea_ft": 5000,
+     "mea_gnss_ft": 3000
+    },
+    {
+     "from_seq": 80,
+     "to_seq": 90,
+     "dist_nm": 23.33,
+     "mea_ft": 5000,
+     "mea_gnss_ft": 3000
+    },
+    {
+     "from_seq": 90,
+     "to_seq": 100,
+     "dist_nm": 0,
+     "mea_ft": 0,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 100,
+     "to_seq": 110,
+     "dist_nm": 9,
+     "mea_ft": 2000,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 110,
+     "to_seq": 120,
+     "dist_nm": 22.97,
+     "mea_ft": 2000,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 120,
+     "to_seq": 130,
+     "dist_nm": 8.2,
+     "mea_ft": 2000,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 130,
+     "to_seq": 140,
+     "dist_nm": 14.24,
+     "mea_ft": 2000,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 140,
+     "to_seq": 150,
+     "dist_nm": 17.76,
+     "mea_ft": 2000,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 150,
+     "to_seq": 160,
+     "dist_nm": 10,
+     "mea_ft": 2000,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 160,
+     "to_seq": 170,
+     "dist_nm": 20.9,
+     "mea_ft": 2000,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 170,
+     "to_seq": 180,
+     "dist_nm": 50.69,
+     "mea_ft": 3000,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 180,
+     "to_seq": 190,
+     "dist_nm": 32.93,
+     "mea_ft": 2300,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 190,
+     "to_seq": 200,
+     "dist_nm": 4.94,
+     "mea_ft": 2300,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 200,
+     "to_seq": 210,
+     "dist_nm": 1,
+     "mea_ft": 2300,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 210,
+     "to_seq": 220,
+     "dist_nm": 7,
+     "mea_ft": 2300,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 220,
+     "to_seq": 230,
+     "dist_nm": 72.94,
+     "mea_ft": 2000,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 230,
+     "to_seq": 240,
+     "dist_nm": 5.79,
+     "mea_ft": 2000,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 240,
+     "to_seq": 250,
+     "dist_nm": 0,
+     "mea_ft": 0,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 250,
+     "to_seq": 260,
+     "dist_nm": 19.5,
+     "mea_ft": 2300,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 260,
+     "to_seq": 270,
+     "dist_nm": 16.93,
+     "mea_ft": 2300,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 270,
+     "to_seq": 280,
+     "dist_nm": 7.51,
+     "mea_ft": 2300,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 280,
+     "to_seq": 290,
+     "dist_nm": 15.49,
+     "mea_ft": 2300,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 290,
+     "to_seq": 300,
+     "dist_nm": 14,
+     "mea_ft": 0,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 300,
+     "to_seq": 310,
+     "dist_nm": 30.64,
+     "mea_ft": 0,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 310,
+     "to_seq": 320,
+     "dist_nm": 8,
+     "mea_ft": 2000,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 320,
+     "to_seq": 330,
+     "dist_nm": 16.11,
+     "mea_ft": 2000,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 330,
+     "to_seq": 340,
+     "dist_nm": 11.45,
+     "mea_ft": 2200,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 340,
+     "to_seq": 350,
+     "dist_nm": 25.53,
+     "mea_ft": 2200,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 350,
+     "to_seq": 360,
+     "dist_nm": 0,
+     "mea_ft": 0,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 360,
+     "to_seq": 370,
+     "dist_nm": 7.27,
+     "mea_ft": 2000,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 370,
+     "to_seq": 380,
+     "dist_nm": 7.12,
+     "mea_ft": 2000,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 380,
+     "to_seq": 390,
+     "dist_nm": 12.02,
+     "mea_ft": 2900,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 390,
+     "to_seq": 400,
+     "dist_nm": 2.68,
+     "mea_ft": 2900,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 400,
+     "to_seq": 410,
+     "dist_nm": 0.85,
+     "mea_ft": 2900,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 410,
+     "to_seq": 420,
+     "dist_nm": 4.41,
+     "mea_ft": 2900,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 420,
+     "to_seq": 430,
+     "dist_nm": 6.13,
+     "mea_ft": 2900,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 430,
+     "to_seq": 440,
+     "dist_nm": 4.87,
+     "mea_ft": 2900,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 440,
+     "to_seq": 450,
+     "dist_nm": 16.01,
+     "mea_ft": 2000,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 450,
+     "to_seq": 460,
+     "dist_nm": 4.77,
+     "mea_ft": 3000,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 460,
+     "to_seq": 470,
+     "dist_nm": 2.77,
+     "mea_ft": 3000,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 470,
+     "to_seq": 480,
+     "dist_nm": 16.5,
+     "mea_ft": 7000,
+     "mea_gnss_ft": 4000
+    },
+    {
+     "from_seq": 480,
+     "to_seq": 490,
+     "dist_nm": 6.65,
+     "mea_ft": 7000,
+     "mea_gnss_ft": 4000
+    },
+    {
+     "from_seq": 490,
+     "to_seq": 500,
+     "dist_nm": 14.06,
+     "mea_ft": 7000,
+     "mea_gnss_ft": 4000
+    },
+    {
+     "from_seq": 500,
+     "to_seq": 510,
+     "dist_nm": 12.9,
+     "mea_ft": 3100,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 510,
+     "to_seq": 520,
+     "dist_nm": 12.28,
+     "mea_ft": 3100,
+     "mea_gnss_ft": null
+    },
+    {
+     "from_seq": 520,
+     "to_seq": 530,
+     "dist_nm": 9.72,
+     "mea_ft": 8000,
+     "mea_gnss_ft": 3000
+    },
+    {
+     "from_seq": 530,
+     "to_seq": 540,
+     "dist_nm": 19.01,
+     "mea_ft": 8000,
+     "mea_gnss_ft": 3000
+    },
+    {
+     "from_seq": 540,
+     "to_seq": 550,
+     "dist_nm": 11,
+     "mea_ft": 6000,
+     "mea_gnss_ft": 2800
+    }
+   ],
+   "unusable_from_seqs": [
+    90,
+    240,
+    290,
+    350
+   ]
   }
  ],
  "fixes": [
@@ -957,6 +1749,18 @@
    "lat": 33.012494,
    "lon": -81.292232,
    "type": "VOR"
+  },
+  {
+   "id": "DHP",
+   "lat": 25.799963,
+   "lon": -80.349035,
+   "type": "VORTAC"
+  },
+  {
+   "id": "LAL",
+   "lat": 27.986197,
+   "lon": -82.013904,
+   "type": "VORTAC"
   }
  ],
  "airports": [

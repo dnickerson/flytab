@@ -106,6 +106,15 @@ describe('Route Planner (preview): airways along the airway', () => {
         expect(ids.length).toBeGreaterThan(5);
     });
 
+    it('an airway leg across a gap is not expanded along the airway (stays straight, flagged)', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'URIVE', type: 'fix' }, { id: 'V157', type: 'awy' }, { id: 'FOGSO', type: 'fix' }, { id: 'KTMB', type: 'dest' }]);
+        const v157 = nasr.airways.find((a) => a.name === 'V157').waypoints;
+        for (const n of ['Urive', 'Fogso']) { const w = v157.find((x) => x.name === n); p._coords[n.toUpperCase()] = { lat: w.lat, lon: w.lon }; }
+        p._coords.KTMB = { lat: 25.648, lon: -80.433 };
+        const ids = (await p._pillsToWaypoints()).map((w) => w.id);
+        expect(ids).toEqual(['KLKR', 'URIVE', 'FOGSO', 'KTMB']);
+    });
+
     it('an airway leg whose entry is not on the airway stays straight (and is flagged)', async () => {
         const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'MITVE', type: 'fix' }, { id: 'T437', type: 'awy' }, { id: 'CAYCE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
         const wps = await p._pillsToWaypoints();

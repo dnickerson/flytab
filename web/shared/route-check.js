@@ -103,6 +103,24 @@ const RouteCheck = (() => {
                 ]);
             }
 
+            // Entry and exit both on it: no unusable segment between them -- an
+            // FAA airway gap (V157 stops at DOLPHIN, resumes at LAKELAND) or an
+            // AWY4 unusable segment (bundle v11 lists both in unusable_from_seqs).
+            const unusable = new Set(awy.unusable_from_seqs || []);
+            if (unusable.size && prev >= 0 && next >= 0) {
+                const pts = (awy.waypoints || []).slice().sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
+                const at = (id) => pts.findIndex((w) => up(w.id) === up(id) || up(w.name) === up(id));
+                const a = at(pills[prev].id), b = at(pills[next].id);
+                if (a >= 0 && b >= 0) {
+                    for (let k = Math.min(a, b); k < Math.max(a, b); k++) {
+                        if (unusable.has(pts[k].seq)) {
+                            red('airway-gap', [prev, i, next], `${name} is not usable between ${ident(pts[k])} and ${ident(pts[k + 1])}`, [goDirect]);
+                            break;
+                        }
+                    }
+                }
+            }
+
             const mode = settings.routingMode;
             if (/^T/.test(up(name)) && mode === 'v-airways') {
                 later.push(['airway-type', [i], `${name} is a T-route (Routing: ${ROUTING_LABEL[mode]})`,

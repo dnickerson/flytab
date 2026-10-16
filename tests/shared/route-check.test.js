@@ -85,6 +85,21 @@ describe('RouteCheck: airways', () => {
         expect(ps[0].fixes.map((f) => f.arg?.fix).filter(Boolean).every((id) => !/[a-z]/.test(id) && id !== 'COLUMBIA' && id !== 'CHARLOTTE')).toBe(true);
     });
 
+    it('an airway gap is red: V157 does not run from LAL to DHP (FAA gap flag, bundle v11)', async () => {
+        const ps = await run('KLKR LAL V157 DHP KTMB', { settings: { routingMode: 'v-airways' } });
+        const gap = ps.find((p) => p.code === 'airway-gap');
+        expect(gap.severity).toBe('red');
+        expect(gap.message).toBe('V157 is not usable between DHP and LAL');
+        expect(gap.pillIndexes).toEqual([1, 2, 3]);
+        expect(gap.fixes.map((f) => f.apply)).toEqual(['goDirect']);
+    });
+
+    it('a V157 leg that does not cross a gap is fine', async () => {
+        // LAL -> URIVE: consecutive, same side of the gap
+        const ps = await run('KLKR LAL V157 URIVE KTMB', { settings: { routingMode: 'v-airways' } });
+        expect(ps.map((p) => p.code)).not.toContain('airway-gap');
+    });
+
     it('unknown identifiers and airways are red, never dropped', async () => {
         const ps = await run('KLKR MITVF T999 CAYCE KAIK');
         expect(codes(ps)).toEqual(['red:unknown-id', 'red:unknown-id']);
