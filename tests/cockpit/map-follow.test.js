@@ -247,6 +247,19 @@ describe('show a point, holding own-ship follow', () => {
         expect(c._autoPanBtn.classList.contains('held')).toBe(false);
     });
 
+    it('showPoints fits the whole route and holds follow (Apply, 2026-10-16)', () => {
+        const c = mapCtx();
+        c._autoPanBtn = document.createElement('button');
+        c.map.fitBounds = vi.fn();
+        c.showPoints([{ lat: 33.6, lon: -82.0 }, { lat: NaN, lon: 1 }, { lat: 25.6, lon: -80.4 }]);
+        expect(c.map.fitBounds).toHaveBeenCalledWith([[33.6, -82.0], [25.6, -80.4]], { padding: [40, 40], maxZoom: 11, animate: false });
+        expect(c._followHold).toBe(true);
+        expect(c._autoPanBtn.classList.contains('held')).toBe(true);
+        c.map.fitBounds.mockClear();
+        c.showPoints([{ lat: 33.6, lon: -82.0 }]);              // one point: nothing to fit
+        expect(c.map.fitBounds).not.toHaveBeenCalled();
+    });
+
     it('the auto-pan button, while held, resumes following (does not turn auto-pan off)', () => {
         const src = read('web/cockpit/map.js');
         const btn = src.slice(src.indexOf("autoPanBtn.title = 'Toggle auto-pan';"), src.indexOf('this._autoPanBtn = autoPanBtn;'));

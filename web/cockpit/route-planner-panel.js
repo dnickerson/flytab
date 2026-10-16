@@ -259,6 +259,22 @@ class RoutePlannerPanel {
         this._render();
     }
 
+    /**
+     * Drop airway tags a fix isn't in the run of. The tagging above carries an
+     * airway past a fuel stop (KLKR V37 CRG ⛽KHEG BRADO ORL tagged BRADO and ORL
+     * V37), and compact view then hid BRADO as an interior V37 fix
+     * (2026-10-16). A run starts at an airway pill; departure, destination,
+     * fuel stops, airports and DIRECT end it.
+     */
+    _normalizeAirwayTags() {
+        let run = null;
+        for (const p of this._route) {
+            if (p.type === 'awy') { run = p.id; continue; }
+            if (p.type === 'fix') { if (p.airway && p.airway !== run) delete p.airway; continue; }
+            run = null;
+        }
+    }
+
     /** Index of the 'dest' pill, or -1. Not the last pill: missed-approach fixes follow it. */
     _destPillIndex() {
         for (let i = this._route.length - 1; i >= 0; i--) {
@@ -440,6 +456,7 @@ class RoutePlannerPanel {
             if (pill.type === 'fix' && wp.fuelStop) { pill.type = 'fuel'; delete pill.airway; }
             if (pill.type === 'fix' && wp.proc) pill.proc = true;
         }
+        this._normalizeAirwayTags();
 
         this._syncFieldsFromPills();
     }

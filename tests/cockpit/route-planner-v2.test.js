@@ -127,7 +127,7 @@ describe('Route Planner (preview): Apply', () => {
 
     it('red problems: Apply asks; "Fix it" does not apply, "Apply anyway" does', async () => {
         const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'MITVE', type: 'fix' }, { id: 'T437', type: 'awy' }, { id: 'CAYCE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
-        const applied = vi.spyOn(Object.getPrototypeOf(Object.getPrototypeOf(p)), '_onApplyKeepOpenTap').mockResolvedValue(undefined);
+        const applied = p._doApply = vi.fn(async () => false);
         p._askApplyAnyway = vi.fn(async () => false);
         await p._onApplyKeepOpenTap();
         expect(p._askApplyAnyway).toHaveBeenCalled();
@@ -135,17 +135,15 @@ describe('Route Planner (preview): Apply', () => {
         p._askApplyAnyway = vi.fn(async () => true);
         await p._onApplyKeepOpenTap();
         expect(applied).toHaveBeenCalledTimes(1);
-        applied.mockRestore();
     });
 
     it('no red problems: Apply goes straight through', async () => {
         const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'GREAT', type: 'fix' }, { id: 'T437', type: 'awy' }, { id: 'CAYCE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
-        const applied = vi.spyOn(Object.getPrototypeOf(Object.getPrototypeOf(p)), '_onApplyKeepOpenTap').mockResolvedValue(undefined);
+        const applied = p._doApply = vi.fn(async () => false);
         p._askApplyAnyway = vi.fn(async () => true);
         await p._onApplyKeepOpenTap();
         expect(p._askApplyAnyway).not.toHaveBeenCalled();
         expect(applied).toHaveBeenCalledTimes(1);
-        applied.mockRestore();
     });
 
     it('closing the "Apply anyway?" sheet with ✕ means Fix it (Apply does not hang)', async () => {
@@ -434,5 +432,43 @@ describe('Route Planner (preview): layout (Dana, 2026-10-16)', () => {
         const p = make();
         const order = [...p._el.querySelector('.rp2-inner').children].map((e) => e.className.split(' ')[0]);
         expect(order.slice(0, 7)).toEqual(['rp2-hdr', 'rp2-search', 'rp2-field', 'rp2-toolbar', 'rp2-problem', 'rp2-grid', 'rp2-stats']);
+    });
+});
+
+describe('Route Planner (preview): Apply feedback and stale airway tags (Dana, 2026-10-16)', () => {
+    beforeEach(() => { localStorage.clear(); });
+
+    it('a fuel stop ends an airway run: fixes after it are not tagged with the airway before it (BRADO was hidden)', () => {
+        const q = make();
+        q._loadPlan({
+            departure: 'KLKR', destination: 'KTMB',
+            waypoints: [{ icao: 'KLKR' }, { icao: 'CRG' }, { icao: 'KHEG', fuelStop: true }, { icao: 'BRADO' }, { icao: 'ORL' }, { icao: 'CAMBE' }, { icao: 'KTMB', isDest: true }],
+            flight_plan: { destination: 'KTMB', route: ['KLKR', 'V37', 'CRG', 'KHEG', 'BRADO', 'ORL', 'V533', 'CAMBE', 'KTMB'] },
+        });
+        expect(show(q)).toBe('KLKR:dep V37:awy CRG:fix KHEG:fuel BRADO:fix ORL:fix V533:awy CAMBE:fix KTMB:dest');
+        expect(q._route.find((r) => r.id === 'CRG').airway).toBe('V37');
+        expect(q._route.find((r) => r.id === 'BRADO').airway).toBeUndefined();
+        expect(q._route.find((r) => r.id === 'CAMBE').airway).toBe('V533');
+        q._compactView = true;
+        q._render();
+        expect([...q._bubblesEl.querySelectorAll('.rp2-b')].map((b) => b.textContent)).toContain('BRADO');
+    });
+
+    it('stale tags from earlier edits are cleaned on every render, too', () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'V37', type: 'awy' }, { id: 'CRG', type: 'fix', airway: 'V37' }, { id: 'KHEG', type: 'fuel' }, { id: 'BRADO', type: 'fix', airway: 'V37' }, { id: 'KTMB', type: 'dest' }]);
+        expect(p._route.find((r) => r.id === 'BRADO').airway).toBeUndefined();
+    });
+
+    it('Apply: says so, and shows the whole route on the map', async () => {
+        const showPoints = vi.fn();
+        globalThis.app = { closeRoutePlanner: vi.fn(), cockpitMap: { showPoints } };
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'GREAT', type: 'fix' }, { id: 'T437', type: 'awy' }, { id: 'CAYCE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        const toast = vi.spyOn(p, '_toast');
+        p._routingMode = 't-airways';
+        p._doApply = vi.fn(async () => { p._lastPlan = { waypoints: [{ lat: 34.7, lon: -80.8 }, { lat: 34.4, lon: -81.0 }, { lat: 33.6, lon: -81.7 }] }; return true; });
+        await p._onApplyKeepOpenTap();
+        expect(p._doApply).toHaveBeenCalledTimes(1);
+        expect(toast.mock.calls.map((c) => c[0]).join(' | ')).toMatch(/Route applied: KLKR → KAIK \(3 waypoints\)/);
+        expect(showPoints).toHaveBeenCalledWith([{ lat: 34.7, lon: -80.8 }, { lat: 34.4, lon: -81.0 }, { lat: 33.6, lon: -81.7 }]);
     });
 });

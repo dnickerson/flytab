@@ -287,6 +287,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
     }
 
     _render() {
+        this._normalizeAirwayTags();
         this._syncFieldsFromPills();
         if (this._bubblesEl) {
             // The text cursor (input) is never taken out of the page: a focused
@@ -1086,8 +1087,30 @@ class RoutePlannerV2 extends RoutePlannerPanel {
             const ok = await this._askApplyAnyway(red);
             if (!ok) { this._openProblemSheet(); return; }
         }
-        await super._onApplyKeepOpenTap();
+        let ok = false;
+        try {
+            ok = await this._doApply();
+        } catch (err) {
+            console.error('[RoutePlannerV2] apply failed:', err);
+            this._toast('Apply failed: ' + (err?.message || err), 5000);
+        }
+        if (ok) this._announceApplied();
         this._scheduleCheck();
+    }
+
+    /**
+     * Say the route was applied, and show all of it on the map: the change may
+     * be far from where the map is (it was held on KTMB while BRADO, near
+     * Jacksonville, changed -- "the magenta line does not update", 2026-10-16).
+     */
+    _announceApplied() {
+        const dep = this._route.find((p) => p.type === 'dep')?.id;
+        const dest = this._route[this._destPillIndex()]?.id;
+        const pts = (this._lastPlan?.waypoints || [])
+            .filter((w) => Number.isFinite(w.lat) && Number.isFinite(w.lon))
+            .map((w) => ({ lat: w.lat, lon: w.lon }));
+        this._toast(`Route applied: ${dep} → ${dest} (${pts.length} waypoints)`, 4000);
+        if (pts.length >= 2 && typeof app !== 'undefined') app.cockpitMap?.showPoints?.(pts);
     }
 
     _askApplyAnyway(red) {

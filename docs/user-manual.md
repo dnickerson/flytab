@@ -561,6 +561,7 @@ To edit the route, expand the strip and tap **EDIT**. From there you can:
 - **Settings are always on screen:** Altitude, Power, Routing, Depart, Reserve, Fuel stop. Tap one to change it.
 - **Airways are flown along the airway.** After Apply, `GREAT T437 CAYCE` becomes GREAT, BLOTS, BEFTY, CAYCE in the route table and on the map.
 - REV, Clear, Plan route, Routes (your saved plans), Save and Apply work as in the current planner.
+- **After Apply** the planner says *Route applied: KLKR → KTMB (34 waypoints)* and the map zooms out to show the whole route, so you can see the new magenta line wherever the change was. Own-ship follow is held (✋ on the auto-pan button) until you tap that button or close the planner.
 
 ### Reversing a Route (REV)
 

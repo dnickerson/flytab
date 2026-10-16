@@ -1268,6 +1268,15 @@ class CockpitMap {
         this.map.fitBounds([[a.lat, a.lon], [b.lat, b.lon]], { padding: [40, 40], maxZoom: 11, animate: false });
     }
 
+    /** Like showPoint, fitting a whole route on screen. */
+    showPoints(points) {
+        const ll = (points || []).filter((p) => Number.isFinite(p?.lat) && Number.isFinite(p?.lon)).map((p) => [p.lat, p.lon]);
+        if (ll.length < 2) return;
+        this._followHold = true;
+        this._refreshAutoPanBtn();
+        this.map.fitBounds(ll, { padding: [40, 40], maxZoom: 11, animate: false });
+    }
+
     releaseFollowHold() {
         if (!this._followHold) return;
         this._followHold = false;
