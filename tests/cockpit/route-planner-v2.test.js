@@ -558,3 +558,91 @@ describe('Route Planner (preview): Replace… (Dana, 2026-10-16)', () => {
         expect(show(p)).toBe('KLKR:dep V37:awy CRG:fix MATEO:fix ORL:fix KTMB:dest');   // an ordinary insert there
     });
 });
+
+describe('Route Planner (preview): Undo (Dana, 2026-10-16)', () => {
+    beforeEach(() => { localStorage.clear(); globalThis.app = { showToast: vi.fn(() => ({ remove() {} })), closeRoutePlanner: vi.fn() }; });
+    const R = () => [{ id: 'KLKR', type: 'dep' }, { id: 'CRG', type: 'fix' }, { id: 'BRADO', type: 'fix' }, { id: 'KTMB', type: 'dest' }];
+    const undoBtn = (p) => [...p._fieldEl.querySelectorAll('.rp2-btn')].find((b) => /Undo/.test(b.textContent));
+    const fresh = (route) => { const p = make(route); p._resetUndo(); return p; };
+
+    it('an Undo button next to REV and Clear, disabled until something changes', async () => {
+        const p = fresh(R());
+        expect(undoBtn(p)).toBeTruthy();
+        expect(undoBtn(p).disabled).toBe(true);
+        await type(p, 'ORL');
+        expect(undoBtn(p).disabled).toBe(false);
+    });
+
+    it('steps back one change at a time: typing, remove, replace', async () => {
+        const p = fresh(R());
+        await type(p, 'ORL');
+        p._removeAt(1);
+        p._startReplace(1);
+        await type(p, 'OMN');
+        p._endInsert();
+        expect(show(p)).toBe('KLKR:dep OMN:fix ORL:fix KTMB:dest');
+        await p._onUndoTap();
+        expect(show(p)).toBe('KLKR:dep BRADO:fix ORL:fix KTMB:dest');
+        await p._onUndoTap();
+        expect(show(p)).toBe('KLKR:dep CRG:fix BRADO:fix ORL:fix KTMB:dest');
+        await p._onUndoTap();
+        expect(show(p)).toBe('KLKR:dep CRG:fix BRADO:fix KTMB:dest');
+        expect(undoBtn(p).disabled).toBe(true);
+        await p._onUndoTap();                                        // nothing more: no change
+        expect(show(p)).toBe('KLKR:dep CRG:fix BRADO:fix KTMB:dest');
+    });
+
+    it('restores fuel stops, altitudes and airway tags exactly', async () => {
+        const route = [{ id: 'KLKR', type: 'dep' }, { id: 'V37', type: 'awy' }, { id: 'CRG', type: 'fix', airway: 'V37', altFt: 6000 }, { id: 'KHEG', type: 'fuel' }, { id: 'KTMB', type: 'dest' }];
+        const p = fresh(route);
+        p._removeAt(3);
+        await p._onUndoTap();
+        expect(p._route).toEqual(route);
+    });
+
+    it('undo ends an insert or a replace in progress', async () => {
+        const p = fresh(R());
+        await type(p, 'ORL');
+        p._startReplace(1);
+        await p._onUndoTap();
+        expect(p._replacing).toBeNull();
+        expect(p._insertIndex).toBeNull();
+        expect(p._bubblesEl.querySelector('.rp2-b-replacing')).toBeNull();
+        expect(show(p)).toBe('KLKR:dep CRG:fix BRADO:fix KTMB:dest');
+    });
+
+    it('text typed but not yet a bubble is undone first', async () => {
+        const p = fresh(R());
+        p._inputEl.value = 'BRA';
+        p._onTyping();
+        expect(undoBtn(p).disabled).toBe(false);
+        await p._onUndoTap();
+        expect(p._inputEl.value).toBe('');
+        expect(show(p)).toBe('KLKR:dep CRG:fix BRADO:fix KTMB:dest');
+    });
+
+    it('a clearance load is one step', async () => {
+        const p = fresh([{ id: 'KLKR', type: 'dep' }, { id: 'KAIK', type: 'dest' }]);
+        await p.loadClearance({ limit: 'KAIK', route: 'MITVE T437 CAYCE' });
+        expect(show(p)).toBe('KLKR:dep MITVE:fix T437:awy CAYCE:fix KAIK:dest');
+        await p._onUndoTap();
+        expect(show(p)).toBe('KLKR:dep KAIK:dest');
+        expect(undoBtn(p).disabled).toBe(true);
+    });
+
+    it('Clear does not ask (Undo brings the route back), and is one step', async () => {
+        const p = fresh(R());
+        p._confirm = vi.fn(async () => false);
+        await p._onClearTap();
+        expect(p._confirm).not.toHaveBeenCalled();
+        expect(show(p)).toBe('KLKR:dep KTMB:dest');
+        await p._onUndoTap();
+        expect(show(p)).toBe('KLKR:dep CRG:fix BRADO:fix KTMB:dest');
+    });
+
+    it('opening a plan starts with nothing to undo', async () => {
+        const src = read('web/cockpit/route-planner-v2.js');
+        const open = src.slice(src.indexOf('    async open(plan) {'), src.indexOf('    // ── Route field'));
+        expect(open).toMatch(/await super\.open\(plan\);[\s\S]*this\._resetUndo\(\);/);
+    });
+});

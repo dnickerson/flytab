@@ -23,6 +23,9 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         this._destInput = { value: '' };
         this._cursorAtEnd = false;              // typed tokens go before the destination
         this._replacing = null;                 // Replace…: the bubble the next typed identifier replaces
+        this._undo = [];                        // Undo: earlier routes (JSON), newest last
+        this._undoSnap = null;                  // the route as last shown
+        this._undoHold = 0;                     // > 0: a multi-step action, recorded as one undo step
         this._problems = [];
         this._computed = null;
         this._checkEpoch = 0;
@@ -115,6 +118,13 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         clr.className = 'rp2-btn';
         clr.textContent = 'Clear';
         wireTap(clr, async () => { await this._commitTyped(); this._syncFieldsFromPills(); await this._onClearTap(); this._cursorAtEnd = false; this._render(); });
+        // Undo does not commit what is typed: typed text is the first thing it undoes.
+        this._undoBtn = document.createElement('button');
+        this._undoBtn.className = 'rp2-btn';
+        this._undoBtn.textContent = '↶ Undo';
+        this._undoBtn.disabled = true;
+        wireTap(this._undoBtn, () => this._onUndoTap());
+        fbtns.appendChild(this._undoBtn);
         fbtns.appendChild(rev);
         fbtns.appendChild(clr);
         this._fieldEl.appendChild(fbtns);
@@ -147,7 +157,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
             planBtn.textContent = 'Planning…';
             try {
                 this._syncFieldsFromPills();
-                await this._onPlanRouteTap();
+                await this._asOneUndoStep(() => this._onPlanRouteTap());
             } finally {
                 planBtn.disabled = false;
                 planBtn.textContent = 'Plan route';
@@ -263,8 +273,10 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         this._cursorAtEnd = false;
         this._insertIndex = null;
         this._closeSheet();
+        this._undoHold = 0;
         await super.open(plan);
         this._syncGrid();
+        this._resetUndo();
     }
 
     // ── Route field ──────────────────────────────────────────────────────────
@@ -293,6 +305,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         // tap elsewhere in the field) ends it.
         if (this._replacing && (this._insertIndex == null || this._route[this._insertIndex] !== this._replacing)) this._replacing = null;
         this._normalizeAirwayTags();
+        this._trackUndo();
         this._syncFieldsFromPills();
         if (this._bubblesEl) {
             // The text cursor (input) is never taken out of the page: a focused
@@ -400,6 +413,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
     }
 
     _onTyping() {
+        this._syncUndoBtn();
         const v = this._inputEl.value;
         if (!/\s/.test(v)) return;
         const parts = v.split(/\s+/);
@@ -562,6 +576,69 @@ class RoutePlannerV2 extends RoutePlannerPanel {
             { label: this._compactView ? 'Show all fixes' : 'Compact view', fn: () => { this._compactView = !this._compactView; this._saveOpts(); this._render(); } },
             { note: 'To paste a route, long-press the route field and paste: each identifier becomes a bubble.' },
         ]);
+    }
+
+    // ── Undo ─────────────────────────────────────────────────────────────────
+    // Every change to the bubbles is recorded when it is shown (_render), so no
+    // edit path can forget to. Undo restores the bubbles only: an Apply is not
+    // undone (Apply again after undoing).
+
+    _trackUndo() {
+        if (this._undoHold > 0) return;
+        const now = JSON.stringify(this._route);
+        if (this._undoSnap != null && now !== this._undoSnap) {
+            this._undo.push(this._undoSnap);
+            if (this._undo.length > RoutePlannerV2.UNDO_MAX) this._undo.shift();
+        }
+        this._undoSnap = now;
+        this._syncUndoBtn();
+    }
+
+    /** Run a multi-step action (clearance, Plan route) as one undo step. */
+    async _asOneUndoStep(fn) {
+        this._undoHold++;
+        try {
+            return await fn();
+        } finally {
+            // Never below 0: open() resets it if an action was left waiting (closed mid-picker).
+            this._undoHold = Math.max(0, this._undoHold - 1);
+            if (this._undoHold === 0) this._render();
+        }
+    }
+
+    _resetUndo() {
+        this._undo = [];
+        this._undoSnap = JSON.stringify(this._route);
+        this._syncUndoBtn();
+    }
+
+    _syncUndoBtn() {
+        if (this._undoBtn) this._undoBtn.disabled = !this._undo.length && !this._inputEl?.value;
+    }
+
+    async _onUndoTap() {
+        if (this._inputEl?.value) { this._inputEl.value = ''; this._syncUndoBtn(); return; }
+        await this._typing;
+        if (this._undoHold > 0 || !this._undo.length) return;
+        const prev = this._undo.pop();
+        this._route = JSON.parse(prev);
+        this._undoSnap = prev;
+        this._insertIndex = null;
+        this._replacing = null;
+        this._cursorAtEnd = false;
+        this._render();
+    }
+
+    /** Clear (keeps departure and destination). No question: Undo brings the route back. */
+    async _onClearTap() {
+        const dep = this._route.find((p) => p.type === 'dep');
+        const dest = this._route[this._destPillIndex()];
+        this._route = [];
+        if (dep) this._route.push({ id: dep.id, type: 'dep' });
+        if (dest) this._route.push({ id: dest.id, type: 'dest' });
+        this._insertIndex = null;
+        this._render();
+        this._toast('Route cleared — ↶ Undo brings it back', 3000);
     }
 
     _startInsert(at) {
@@ -870,7 +947,11 @@ class RoutePlannerV2 extends RoutePlannerPanel {
      * changes the destination. The departure is kept. The route checks then
      * flag anything wrong; nothing is applied until Apply.
      */
-    async loadClearance({ limit = '', route = '' }) {
+    loadClearance(clearance) {
+        return this._asOneUndoStep(() => this._loadClearance(clearance));
+    }
+
+    async _loadClearance({ limit = '', route = '' }) {
         await this._commitTyped();
         const SKIP = new Set(['DIRECT', 'DCT', 'THEN', 'AS', 'FILED', 'RADAR', 'VECTORS', 'RV', 'TO', 'VIA',
             'CLEARED', 'MAINTAIN', 'EXPECT', 'CLIMB', 'DESCEND', 'AND', 'FLY', 'HEADING', 'THE']);
@@ -1209,3 +1290,4 @@ class RoutePlannerV2 extends RoutePlannerPanel {
 
 /** A fuel stop keeps its airway unless leaving it saves more than this (nm). */
 RoutePlannerV2.KEEP_AIRWAY_NM = 10;
+RoutePlannerV2.UNDO_MAX = 50;              // undo steps kept
