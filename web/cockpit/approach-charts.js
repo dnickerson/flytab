@@ -9,6 +9,9 @@
 
 const PLATES_BASE = 'http://localhost:9090/plates';
 const CIFP_BUNDLE_URL = 'http://localhost:9090/cifp/cifp_bundle.json';
+// The synced CIFP's cycle (written with it by the sync): the cached bundle is
+// used only if it is of this cycle (2026-10-16 review).
+const CIFP_CYCLE_URL = 'http://localhost:9090/cifp/cifp_cycle_info.json';
 const PLATES_FETCH_TIMEOUT = 3000; // 3s timeout for NanoHTTPD requests
 // v2: pipeline corrected altitude field offset (col 84:89 not 83:88); stale caches show altitudes 10× too small
 const CIFP_BUNDLE_CACHE_KEY = 'cifp_bundle_v2';
@@ -74,13 +77,23 @@ class ApproachCharts {
             } catch { /* IDB not ready */ }
         }
 
-        // Try CIFP bundle from IndexedDB cache
+        // CIFP bundle from the IndexedDB cache -- only if it is the synced cycle.
+        // It was used whatever its cycle and never replaced (2026-10-16 review);
+        // a cache without a recorded cycle is from before and is replaced.
+        const diskCifp = await this._cifpDiskInfo();
         if (this._nasrDb) {
             try {
-                const cachedCifp = await this._nasrDb.getAppCache(CIFP_BUNDLE_CACHE_KEY);
-                if (cachedCifp) {
+                const [cachedCifp, cachedCycle] = await Promise.all([
+                    this._nasrDb.getAppCache(CIFP_BUNDLE_CACHE_KEY),
+                    this._nasrDb.getAppCache(CIFP_BUNDLE_CACHE_KEY + '_cycle'),
+                ]);
+                const current = diskCifp?.cycle_code ? cachedCycle === diskCifp.cycle_code : !!cachedCycle;
+                if (cachedCifp && current) {
                     this._cifpBundle = cachedCifp;
-                    console.log('[ApproachCharts] CIFP bundle from cache:', Object.keys(cachedCifp).length, 'airports');
+                    this._cifpInfo = diskCifp || { cycle_code: cachedCycle };
+                    console.log('[ApproachCharts] CIFP bundle from cache:', Object.keys(cachedCifp).length, 'airports, cycle', cachedCycle);
+                } else if (cachedCifp) {
+                    console.log('[ApproachCharts] Cached CIFP bundle is cycle', cachedCycle, '— the tablet has', diskCifp?.cycle_code, '— reloading');
                 }
             } catch { /* IDB not ready */ }
         }
@@ -125,19 +138,49 @@ class ApproachCharts {
         } catch { /* georef optional */ }
 
         // Load CIFP approach procedure bundle (14MB, all airports in one file)
-        if (!this._cifpBundle) {
-            try {
-                const resp = await _fetchWithTimeout(CIFP_BUNDLE_URL, {}, 30000); // 30s for large file
-                if (resp.ok) {
-                    const data = await resp.json();
-                    this._cifpBundle = data;
-                    console.log('[ApproachCharts] CIFP bundle loaded:', Object.keys(data).length, 'airports');
-                    if (this._nasrDb) this._nasrDb.putAppCache(CIFP_BUNDLE_CACHE_KEY, data).catch(() => {});
-                }
-            } catch (err) {
-                console.warn('[ApproachCharts] CIFP bundle not available:', err.message);
+        if (!this._cifpBundle) await this._loadCifpFromDisk();
+    }
+
+    /** The synced CIFP's cycle info ({ cycle_code, effective_date, expiration_date }), or null. */
+    async _cifpDiskInfo() {
+        try {
+            const resp = await _fetchWithTimeout(CIFP_CYCLE_URL);
+            return resp.ok ? await resp.json() : null;
+        } catch { return null; }
+    }
+
+    /** Load the synced CIFP bundle from the tablet's files and cache it with its cycle. */
+    async _loadCifpFromDisk() {
+        try {
+            const [resp, info] = await Promise.all([_fetchWithTimeout(CIFP_BUNDLE_URL, {}, 30000), this._cifpDiskInfo()]); // 30s: large file
+            if (!resp.ok) return false;
+            const data = await resp.json();
+            this._cifpBundle = data;
+            this._cifpInfo = info;
+            console.log('[ApproachCharts] CIFP bundle loaded:', Object.keys(data).length, 'airports, cycle', info?.cycle_code);
+            if (this._nasrDb) {
+                this._nasrDb.putAppCache(CIFP_BUNDLE_CACHE_KEY, data).catch(() => {});
+                this._nasrDb.putAppCache(CIFP_BUNDLE_CACHE_KEY + '_cycle', info?.cycle_code || null).catch(() => {});
             }
+            return true;
+        } catch (err) {
+            console.warn('[ApproachCharts] CIFP bundle not available:', err.message);
+            return false;
         }
+    }
+
+    /** The cycle of the procedures in use ({ cycle_code, effective_date, expiration_date }), or null. */
+    cifpCycle() { return this._cifpInfo || null; }
+
+    /**
+     * After a sync (Data Status): the new cycle's procedures and plate index now,
+     * not at the next start -- the old ones pointed at files just replaced.
+     */
+    async reloadAfterSync() {
+        this._cifpBundle = null;
+        this._cifpInfo = null;
+        await this._loadCifpFromDisk();
+        await this._refreshIndex();
     }
 
     async ensureLoaded() {
@@ -918,15 +961,7 @@ class ApproachCharts {
      * key (4-letter ids are K-prefixed, 3-character FAA ids are not).
      */
     async proceduresFor(icao) {
-        if (!this._cifpBundle) {
-            try {
-                const resp = await _fetchWithTimeout(CIFP_BUNDLE_URL, {}, 30000);
-                if (resp.ok) {
-                    this._cifpBundle = await resp.json();
-                    if (this._nasrDb) this._nasrDb.putAppCache(CIFP_BUNDLE_CACHE_KEY, this._cifpBundle).catch(() => {});
-                }
-            } catch { /* none available */ }
-        }
+        if (!this._cifpBundle) await this._loadCifpFromDisk();
         const id = String(icao || '').toUpperCase();
         const bare = id.length === 4 && id[0] === 'K' ? id.slice(1) : id;
         const key = this._cifpBundle?.[id] ? id : (this._cifpBundle?.[bare] ? bare : id);
@@ -953,13 +988,7 @@ class ApproachCharts {
             // Ensure CIFP bundle is loaded before checking
             if (!this._cifpBundle) {
                 this._showToast('Loading CIFP data…');
-                try {
-                    const resp = await _fetchWithTimeout(CIFP_BUNDLE_URL, {}, 30000);
-                    if (resp.ok) {
-                        this._cifpBundle = await resp.json();
-                        if (this._nasrDb) this._nasrDb.putAppCache(CIFP_BUNDLE_CACHE_KEY, this._cifpBundle).catch(() => {});
-                    }
-                } catch { /* will fall through to error below */ }
+                await this._loadCifpFromDisk();
             }
             const airportCifp = this._cifpBundle?.[icao];
             if (!airportCifp) {

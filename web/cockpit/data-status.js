@@ -731,20 +731,19 @@ class DataStatus {
      * both sTile and dTile (server/device manifest entries for the layer).
      */
     _tileUpdateAvail(sTile, dTile) {
-        if (!sTile || !dTile) return false;
+        if (!sTile) return false;
+        // A chart file with no record of its edition: get the server's. This
+        // returned false, so the tablet's TAC file from March was never
+        // replaced (2026-10-16 review).
+        if (!dTile) return true;
         // Device cycle behind server cycle always means an update is
         // available, regardless of whether the server's own current
         // cycle has expired yet — a device on an older cycle is stale
         // even if the server hasn't rolled past ITS cycle's expiration.
         if (sTile.cycle_date !== dTile.cycle_date) return true;
-        // Sectional/TAC/IFR tiles run a 56-day cycle; NASR runs 28-day.
-        // When expiration_date is present use it — avoids false positives
-        // after a NASR-only refresh where cycle_date legitimately differs.
-        if (sTile.expiration_date) {
-            const today = new Date().toISOString().slice(0, 10);
-            return today > sTile.expiration_date;
-        }
-        return sTile.built_at !== dTile.built_at;
+        // Same cycle, rebuilt on the server (a fix): get it. Only when both
+        // record a build time.
+        return !!(sTile.built_at && dTile.built_at && sTile.built_at !== dTile.built_at);
     }
 
     _cycleStatus(expDate, now) {
@@ -1236,6 +1235,7 @@ class DataStatus {
                 let done = 0;
                 const pctNow = () => Math.round(done / statesToSync.length * 100);
                 const newlySynced = [...syncedStates];
+                const failed = [];
                 for (const stateInfo of statesToSync) {
                     const st = stateInfo.state;
                     const mb = stateInfo.size_mb;
@@ -1266,8 +1266,21 @@ class DataStatus {
                     } catch (e) {
                         clearInterval(ticker);
                         done++;
+                        // Not synced: its plates are still the previous cycle's (it
+                        // stayed listed as synced and was never retried -- 2026-10-16 review).
+                        failed.push(st);
+                        const i = newlySynced.indexOf(st);
+                        if (i >= 0) newlySynced.splice(i, 1);
                         setStep('plates', 'running', `✗ ${st} failed: ${e.message} — continuing…`, pctNow());
                     }
+                }
+                localStorage.setItem('flypi_plates_synced_states', JSON.stringify(newlySynced));
+                if (failed.length) {
+                    // The new cycle is recorded only when every state has it; the
+                    // next SYNC tries again.
+                    const prev = this._readDeviceManifest().plates || {};
+                    this._saveDeviceSection('plates', { ...prev, synced_states: newlySynced });
+                    throw new Error(`${failed.join(', ')} failed — ${failed.length > 1 ? 'their' : 'its'} plates are still the previous cycle's. SYNC again.`);
                 }
                 if (serverCycle) {
                     await fetch(`${LOCAL}/plates/plates_cycle_info.json`, {
@@ -1275,7 +1288,6 @@ class DataStatus {
                         body: JSON.stringify(serverCycle),
                     }).catch(() => {});
                 }
-                localStorage.setItem('flypi_plates_synced_states', JSON.stringify(newlySynced));
                 localStorage.setItem('flypi_plates_cached_at', Date.now().toString());
                 // Prefer the cycle_code from manifest.json (what _render() compares
                 // against via sPlates.cycle_code) over the one in plates_cycle_info.json.
@@ -1292,6 +1304,10 @@ class DataStatus {
         } catch (e) { failStep('plates', e); }
 
         // ── Done ──────────────────────────────────────────────────────────────
+        // Use what was just synced now: the procedures (CIFP) and plate index in
+        // memory were the previous cycle's until the next start, and the CIFP
+        // cached in IndexedDB was never replaced (2026-10-16 review).
+        try { await window.app?.approachCharts?.reloadAfterSync?.(); } catch (e) { console.warn('[DataStatus] reload after sync failed:', e); }
         this._cacheRunning = false;
         if (btn) { btn.disabled = false; btn.innerHTML = '&#8645; Sync All Outdated'; }
         if (doneProg) doneProg('Sync complete', 'var(--status-ok)');
