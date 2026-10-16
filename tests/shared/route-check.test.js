@@ -94,6 +94,32 @@ describe('RouteCheck: airways', () => {
         expect(gap.fixes.map((f) => f.apply)).toEqual(['goDirect']);
     });
 
+    it('two airways with no fix between them are red, with the fixes where they meet (review, 2026-10-16)', async () => {
+        // Typed "SAV V37 T437 CAYCE": V37 was dropped and SAV-CAYCE flown as one T437 leg, with no problem shown.
+        const ps = await run('KLKR SAV V37 T437 CAYCE KAIK', { settings: { routingMode: 'any' } });
+        const j = ps.find((p) => p.code === 'airway-junction');
+        expect(j?.severity).toBe('red');
+        expect(j.message).toBe('V37 and T437 need the fix where they meet');
+        expect(j.pillIndexes).toEqual([2, 3]);
+        expect(j.fixes.length).toBe(3);
+        expect(j.fixes[0]).toMatchObject({ apply: 'insertJunction', arg: { at: 3 } });
+        expect(j.fixes[0].label).toMatch(/^Change to T437 at [A-Z]+$/);
+        const out = RouteCheck.applyFix(pills('KLKR SAV V37 T437 CAYCE KAIK'), j.fixes[0]);
+        expect(out.map((x) => x.id)).toEqual(['KLKR', 'SAV', 'V37', j.fixes[0].arg.fix, 'T437', 'CAYCE', 'KAIK']);
+        expect(out[3]).toMatchObject({ type: 'fix', airway: 'V37' });
+    });
+
+    it('a gap between two fixes inside a tagged airway run is red too (review, 2026-10-16)', async () => {
+        // Saved routes load as one airway bubble followed by tagged fixes: KLKR URIVE V157 LAL DHP KTMB.
+        const ps = await RouteCheck.run({ pills: [
+            { id: 'KLKR', type: 'dep' }, { id: 'URIVE', type: 'fix' }, { id: 'V157', type: 'awy' },
+            { id: 'LAL', type: 'fix', airway: 'V157' }, { id: 'DHP', type: 'fix', airway: 'V157' }, { id: 'KTMB', type: 'dest' },
+        ], computed: null, settings: settings({ routingMode: 'v-airways' }), aero });
+        const gap = ps.find((p) => p.code === 'airway-gap');
+        expect(gap?.message).toBe('V157 is not usable between DHP and LAL');
+        expect(gap.pillIndexes).toEqual([2, 3, 4]);
+    });
+
     it('a V157 leg that does not cross a gap is fine', async () => {
         // LAL -> URIVE: consecutive, same side of the gap
         const ps = await run('KLKR LAL V157 URIVE KTMB', { settings: { routingMode: 'v-airways' } });
@@ -189,6 +215,19 @@ describe('RouteCheck: fuel, reserve, detour', () => {
         const c2 = { ...c, summary: { ...c.summary, fuelRemGal: 4 } };
         const ps2 = await RouteCheck.run({ pills: pills('KLKR KMDT'), computed: c2, settings: settings(), aero });
         expect(ps2.find((p) => p.code === 'below-reserve').message).toBe('Lands with 4.0 gal (reserve 10)');
+    });
+
+    it('a landing at a fuel stop below the reserve is red, naming the stop (review, 2026-10-16)', async () => {
+        // Tanks are filled at the stop, so the destination figure alone (33.5) hid a 10.7 gal landing at F.
+        const c = {
+            legs: [{ timeHrs: 2.9, fuelGal: 25.3, fuelRemGal: 10.7 }, { timeHrs: 0.2, fuelGal: 2.5, fuelRemGal: 33.5 }],
+            waypoints: [{ id: 'KLKR' }, { id: 'KCDN', fuelStop: true }, { id: 'KMDT', isDest: true }],
+            summary: { totalEteHrs: 3.1, totalDistNm: 400, totalFuelGal: 27.8, fuelRemGal: 33.5 },
+        };
+        const ps = await RouteCheck.run({ pills: [{ id: 'KLKR', type: 'dep' }, { id: 'KCDN', type: 'fuel' }, { id: 'KMDT', type: 'dest' }],
+            computed: c, settings: settings({ maxLegHrs: 3, reserveGal: 15 }), aero });
+        const low = ps.filter((p) => p.code === 'below-reserve');
+        expect(low.map((p) => [p.severity, p.message, p.pillIndexes])).toEqual([['red', 'Lands at KCDN with 10.7 gal (reserve 15)', [1]]]);
     });
 
     it('detour: amber over 25% longer than direct, nothing at 24%', async () => {

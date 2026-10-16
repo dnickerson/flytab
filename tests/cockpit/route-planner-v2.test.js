@@ -79,6 +79,7 @@ describe('Route Planner (preview): the route field', () => {
 
     it('a problem fix from the sheet changes the route (Join T437 at GREAT)', async () => {
         const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'MITVE', type: 'fix' }, { id: 'T437', type: 'awy' }, { id: 'CAYCE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        p._compute = async () => ({ legs: [], waypoints: [], summary: null });   // worked out (no engine in this harness)
         const problems = await p._runChecks();
         expect(problems[0].code).toBe('entry-not-on-airway');
         await p._applyFix(problems[0].fixes[0]);
@@ -139,6 +140,7 @@ describe('Route Planner (preview): Apply', () => {
 
     it('no red problems: Apply goes straight through', async () => {
         const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'GREAT', type: 'fix' }, { id: 'T437', type: 'awy' }, { id: 'CAYCE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        p._compute = async () => ({ legs: [], waypoints: [], summary: null });   // worked out (no engine in this harness)
         const applied = p._doApply = vi.fn(async () => false);
         p._askApplyAnyway = vi.fn(async () => true);
         await p._onApplyKeepOpenTap();
@@ -467,6 +469,7 @@ describe('Route Planner (preview): Apply feedback and stale airway tags (Dana, 2
         const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'GREAT', type: 'fix' }, { id: 'T437', type: 'awy' }, { id: 'CAYCE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
         const toast = vi.spyOn(p, '_toast');
         p._routingMode = 't-airways';
+        p._compute = async () => ({ legs: [], waypoints: [], summary: null });   // worked out (no engine in this harness)
         p._doApply = vi.fn(async () => { p._lastPlan = { waypoints: [{ lat: 34.7, lon: -80.8 }, { lat: 34.4, lon: -81.0 }, { lat: 33.6, lon: -81.7 }] }; return true; });
         await p._onApplyKeepOpenTap();
         expect(p._doApply).toHaveBeenCalledTimes(1);
@@ -656,7 +659,7 @@ describe('Route Planner (preview): a skipped fuel stop stays skipped until the r
 
     it('Skip in the picker: the check is told, so the problem is amber; a route change makes it red again', async () => {
         const p = make(R());
-        p._showFuelStopPicker = vi.fn(async () => null);             // Skip
+        p._showFuelStopPicker = vi.fn(async () => { p._fuelPickSkipped = true; return null; });   // the Skip button
         p._runChecks = vi.fn(async () => (p._problems = []));
         await p._processFuelStopCandidates({ fuelStopCandidates: [{ afterFixId: 'CAE', cumHrsAtStop: 2, options: [] }] });
         expect(p._fuelStopSkipped()).toBe(true);
@@ -666,7 +669,7 @@ describe('Route Planner (preview): a skipped fuel stop stays skipped until the r
 
     it('the skip is for the fuel-stop limit it was made at', async () => {
         const p = make(R());
-        p._showFuelStopPicker = vi.fn(async () => null);
+        p._showFuelStopPicker = vi.fn(async () => { p._fuelPickSkipped = true; return null; });
         p._runChecks = vi.fn(async () => (p._problems = []));
         await p._processFuelStopCandidates({ fuelStopCandidates: [{ afterFixId: 'CAE', cumHrsAtStop: 2, options: [] }] });
         p._maxLegHrs = 1.5;
@@ -736,5 +739,272 @@ describe('Route Planner (preview): tapping a bubble while text is typed (2026-10
         await p._onBubbleTap(1);
         expect(show(p)).toBe('KLKR:dep CAE:fix KAIK:dest');
         expect(p._sheetEl.querySelector('.rp2-sheet-hdr span').textContent).toBe('KAIK');
+    });
+});
+
+describe('Route Planner (preview): critical review fixes (2026-10-16)', () => {
+    beforeEach(() => { localStorage.clear(); document.body.className = ''; globalThis.app = { showToast: vi.fn(() => ({ remove() {} })), closeRoutePlanner: vi.fn() }; });
+    const R = () => [{ id: 'KLKR', type: 'dep' }, { id: 'MITVE', type: 'fix' }, { id: 'KAIK', type: 'dest' }];
+    const tapAct = async (label) => { const b = [...document.querySelectorAll('.rp2-act')].find((x) => x.textContent === label); expect(b, label).toBeTruthy(); b.click(); await new Promise((r) => setTimeout(r, 0)); };
+
+    it('a bubble sheet acts on its bubble even after the route changed under it', async () => {
+        const p = make(R());
+        p._openBubbleSheet(2);                                     // KAIK
+        await type(p, 'GREAT');                                    // goes in before KAIK: KAIK is now at 3
+        await tapAct('Remove');
+        expect(show(p)).toBe('KLKR:dep MITVE:fix GREAT:dest');     // KAIK removed (the point before becomes the destination)
+    });
+
+    it('a bubble sheet whose bubble is gone does nothing', async () => {
+        const p = make(R());
+        p._openBubbleSheet(1);                                     // MITVE
+        p._removeAt(1);
+        await tapAct('Remove');
+        expect(show(p)).toBe('KLKR:dep KAIK:dest');
+    });
+
+    it('a problem fix from a check of an older route is not applied; the route is checked again', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'MITVE', type: 'fix' }, { id: 'T437', type: 'awy' }, { id: 'CAYCE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        await p._runChecks();
+        p._removeAt(1);                                            // MITVE gone: indexes shift
+        const before = show(p);
+        await p._applyFix({ label: 'Go direct', apply: 'goDirect', arg: { awyIndex: 2 } });
+        expect(show(p)).toBe(before);
+    });
+
+    it('a check of an older route does not replace the problems', async () => {
+        const p = make(R());
+        let release;
+        const real = p._compute.bind(p);
+        p._compute = vi.fn(() => new Promise((r) => { release = async () => r(await real()); }));
+        const done = p._runChecks();
+        p._problems = [{ severity: 'amber', code: 'keep', pillIndexes: [], message: 'newer', fixes: [] }];
+        p._route.splice(1, 1);                                     // route changes while the check runs
+        await release();
+        await done;
+        expect(p._problems.map((x) => x.code)).toEqual(['keep']);
+    });
+
+    it("opening a plan clears the old route's problems", async () => {
+        const p = make(R());
+        p._problems = [{ severity: 'red', code: 'old', pillIndexes: [1], message: 'old', fixes: [] }];
+        p._renderProblems();
+        await p.open({ flight_plan: { route: ['KLKR', 'KAIK'], destination: 'KAIK' }, waypoints: [] });
+        expect(p._problems).toEqual([]);
+    });
+
+    it('Apply-anyway question ended by another sheet: no problem sheet pops up over it', async () => {
+        const p = make(R());
+        p._runChecks = vi.fn(async () => (p._problems = [{ severity: 'red', code: 'x', pillIndexes: [], message: 'bad', fixes: [] }]));
+        p._doApply = vi.fn(async () => true);
+        const applying = p._onApplyKeepOpenTap();
+        await new Promise((r) => setTimeout(r, 0));
+        p._openBubbleSheet(1);                                     // the pilot taps MITVE instead
+        await applying;
+        expect(p._doApply).not.toHaveBeenCalled();
+        expect(p._sheetEl.querySelector('.rp2-sheet-hdr span').textContent).toBe('MITVE');
+    });
+
+    it('Apply-anyway "Fix it" opens the problem list', async () => {
+        const p = make(R());
+        p._runChecks = vi.fn(async () => (p._problems = [{ severity: 'red', code: 'x', pillIndexes: [], message: 'bad', fixes: [] }]));
+        p._doApply = vi.fn(async () => true);
+        const applying = p._onApplyKeepOpenTap();
+        await new Promise((r) => setTimeout(r, 0));
+        await tapAct('Fix it');
+        await applying;
+        expect(p._sheetEl.querySelector('.rp2-sheet-hdr span').textContent).toBe('Route check');
+    });
+
+    it('close(): the sheet closes, a question waiting is answered no, typed text is dropped', async () => {
+        const p = make(R());
+        p._runChecks = vi.fn(async () => [{ severity: 'red', code: 'x', pillIndexes: [], message: 'bad', fixes: [] }]);
+        p._doApply = vi.fn(async () => true);
+        const applying = p._onApplyKeepOpenTap();
+        await new Promise((r) => setTimeout(r, 0));
+        p._inputEl.value = 'GRE';
+        p.close();
+        await applying;
+        expect(p._doApply).not.toHaveBeenCalled();
+        expect(p._sheetEl.hidden).toBe(true);
+        expect(p._inputEl.value).toBe('');
+    });
+
+    it('Start/End route here end an insert in progress', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'MITVE', type: 'fix' }, { id: 'CAYCE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        p._startInsert(3);
+        p._endHere(1);
+        expect(p._insertIndex).toBeNull();
+        await type(p, 'BLOTS');
+        expect(show(p)).toBe('KLKR:dep BLOTS:fix MITVE:dest');
+    });
+
+    it('no Start/End route here on missed-approach fixes (after the destination)', () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'KAIK', type: 'dest' }, { id: 'MA1', type: 'fix', proc: true }]);
+        p._openBubbleSheet(2);
+        const labels = [...document.querySelectorAll('.rp2-act')].map((b) => b.textContent);
+        expect(labels).not.toContain('Start route here');
+        expect(labels).not.toContain('End route here');
+    });
+
+    it('altitude: hundreds as on the bubbles, commas, and a sane range', () => {
+        const p = make(R());
+        const item = p._route[1];
+        const ask = (v) => { globalThis.prompt = vi.fn(() => v); p._askAltitude(item); return item.altFt; };
+        expect(ask('55')).toBe(5500);
+        expect(ask('5,500')).toBe(5500);
+        expect(ask('7000')).toBe(7000);
+        expect(ask('')).toBeUndefined();
+        expect(ask('250')).toBeUndefined();                          // FL250: out of range, not set
+        expect(ask('30000')).toBeUndefined();
+        expect(ask('abc')).toBeUndefined();
+    });
+
+    it('search: clearing the box drops a search still running; a pick adds typed text first', async () => {
+        const p = make(R());
+        let release;
+        p._searchAirports = vi.fn(() => new Promise((r) => { release = () => r([]); }));
+        p._nasrDb = { searchAllExtended: async () => ({ navaids: [{ id: 'AIK', name: 'Aiken' }], fixes: [] }) };
+        p._searchInput.value = 'AI';
+        const running = p._runSearch();
+        p._searchInput.value = '';
+        await p._runSearch();
+        release();
+        await running;
+        expect(p._resultsEl.hidden).toBe(true);
+        p._inputEl.value = 'GREAT';
+        await p._pickSearchResult('CAYCE');
+        expect(show(p)).toBe('KLKR:dep MITVE:fix GREAT:fix CAYCE:fix KAIK:dest');
+    });
+
+    it('flight rows escape identifiers (no HTML from route ids)', () => {
+        const p = make(R());
+        const c = { summary: { totalDistNm: 100, totalEteHrs: 1, totalFuelGal: 9, fuelRemGal: 20, groundHrs: 0.5 }, legs: [{ timeHrs: 0.5, fuelRemGal: 30, eta: 0 }, { timeHrs: 0.5, fuelRemGal: 30, eta: 0 }],
+            waypoints: [{ id: 'KLKR' }, { id: '<img src=x onerror=alert(1)>', fuelStop: true }, { id: 'KAIK', isDest: true }] };
+        p._renderStats(c);
+        expect(p._flightsEl.querySelector('img')).toBeNull();
+        expect(p._flightsEl.textContent).toContain('<img src=x onerror=alert(1)>');
+    });
+
+    it('DEPART shows a saved future departure time; a saved past one becomes Now', async () => {
+        const p = make(R());
+        const future = new Date(Date.now() + 90 * 60000);
+        localStorage.setItem('flypi_planner_opts', JSON.stringify({ departureTime: future.toISOString() }));
+        await p.open({ flight_plan: { route: ['KLKR', 'KAIK'], destination: 'KAIK' }, waypoints: [] });
+        expect(p._departureTime?.getTime()).toBe(future.getTime());
+        expect(p._g.dep.selectedOptions[0].textContent).toBe(future.toTimeString().slice(0, 5));
+        localStorage.setItem('flypi_planner_opts', JSON.stringify({ departureTime: new Date(Date.now() - 3600000).toISOString() }));
+        await p.open({ flight_plan: { route: ['KLKR', 'KAIK'], destination: 'KAIK' }, waypoints: [] });
+        expect(p._departureTime).toBeNull();
+        expect(p._g.dep.value).toBe('0');
+    });
+
+    it('the shared settings: a cleared departure time or Auto altitude is cleared in the other planner too', () => {
+        const p = make(R());
+        p._departureTime = new Date(Date.now() + 3600000);
+        p._cruiseAltFt = 7000;
+        localStorage.setItem('flypi_planner_opts', JSON.stringify({ departureTime: null, cruiseAltFt: null }));
+        p._loadOpts();
+        expect(p._departureTime).toBeNull();
+        expect(p._cruiseAltFt).toBeNull();
+    });
+});
+
+describe('Route Planner (preview): critical review fixes, fuel and Apply (2026-10-16)', () => {
+    beforeEach(() => { localStorage.clear(); document.body.className = ''; globalThis.app = { showToast: vi.fn(() => ({ remove() {} })), closeRoutePlanner: vi.fn() }; });
+    const R = () => [{ id: 'KLKR', type: 'dep' }, { id: 'CAE', type: 'fix' }, { id: 'KAIK', type: 'dest' }];
+    const CAND = { afterFixId: 'CAE', cumHrsAtStop: 2, options: [] };
+
+    it('fuel-stop picker: only the Skip button is a skip, not a tap on the dim background', async () => {
+        const p = make(R());
+        p._runChecks = vi.fn(async () => (p._problems = []));
+        let done = p._processFuelStopCandidates({ fuelStopCandidates: [CAND] });
+        await new Promise((r) => setTimeout(r, 0));
+        const bg = document.body.lastElementChild;                // the picker overlay (appended last)
+        expect(bg.contains(document.querySelector('.rpp-fs-skip'))).toBe(true);
+        bg.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        await done;
+        expect(p._fuelStopSkipped()).toBe(false);
+        done = p._processFuelStopCandidates({ fuelStopCandidates: [CAND] });
+        await new Promise((r) => setTimeout(r, 0));
+        document.querySelector('.rpp-fs-skip').click();
+        await done;
+        expect(p._fuelStopSkipped()).toBe(true);
+    });
+
+    it('a skip is undone by a change of power or altitude too (the leg times change)', () => {
+        const p = make(R());
+        p._fuelSkipKey = p._fuelKey();
+        p._pctPower = p._pctPower === 55 ? 75 : 55;
+        expect(p._fuelStopSkipped()).toBe(false);
+        p._fuelSkipKey = p._fuelKey();
+        p._cruiseAltFt = 9000;
+        expect(p._fuelStopSkipped()).toBe(false);
+    });
+
+    it('typing your own fuel stop: a VOR is refused even if its position is known', async () => {
+        const p = make(R());
+        await p._aero().resolve('ALD');                         // the preview cached the VOR's position
+        const picked = p._showFuelStopPicker(CAND);
+        await new Promise((r) => setTimeout(r, 0));
+        document.querySelector('.rpp-fs-manual-input').value = 'ALD';
+        document.querySelector('.rpp-fs-manual-btn').click();
+        await new Promise((r) => setTimeout(r, 20));
+        expect(document.querySelector('.rpp-fs-list')).not.toBeNull();   // still open: refused
+        document.querySelector('.rpp-fs-manual-input').value = 'KCDN';
+        document.querySelector('.rpp-fs-manual-btn').click();
+        expect((await picked).icao).toBe('KCDN');
+    });
+
+    it('Save saves the route as the bubbles show it, not the last Plan/Apply', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'KCDN', type: 'fuel' }, { id: 'KAIK', type: 'dest' }]);
+        p._lastPlan = { waypoints: [{ id: 'KLKR' }, { id: 'KAIK' }] };
+        const computed = { waypoints: [{ id: 'KLKR' }, { id: 'KCDN', fuelStop: true }, { id: 'KAIK', isDest: true }], legs: [], summary: null };
+        p._compute = vi.fn(async () => computed);
+        p._saveCurrentTrip = vi.fn(async () => {});
+        await p._onSaveTap();
+        expect(p._saveCurrentTrip).toHaveBeenCalledWith(computed);
+    });
+
+    it('Apply tapped twice quickly applies once', async () => {
+        const p = make(R());
+        p._runChecks = vi.fn(async () => (p._problems = []));
+        let release;
+        p._doApply = vi.fn(() => new Promise((r) => { release = () => r(false); }));
+        const a = p._onApplyKeepOpenTap();
+        const b = p._onApplyKeepOpenTap();
+        await new Promise((r) => setTimeout(r, 0));
+        release();
+        await a; await b;
+        expect(p._doApply).toHaveBeenCalledTimes(1);
+    });
+
+    it('Route applied: never says "undefined"', () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'CAE', type: 'fix' }]);
+        p._lastPlan = { waypoints: [{ lat: 34, lon: -81 }, { lat: 33.9, lon: -81.1 }] };
+        const t = vi.spyOn(p, '_toast');
+        p._announceApplied();
+        expect(t.mock.calls[0][0]).toBe('Route applied: KLKR → CAE (2 waypoints)');
+    });
+
+    it('winds: loaded for the route in the planner (not only for a stored plan); WIND says — without them', async () => {
+        const p = make(R());
+        const winds = { CAE: { 6000: { dir: 270, spd: 20 } } };
+        globalThis.FlyTabPlanning = { fetchWinds: vi.fn(async () => winds) };
+        p._lastWinds = null; p._windsTriedAt = 0;
+        p._ensureWinds();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(globalThis.FlyTabPlanning.fetchWinds).toHaveBeenCalled();
+        expect(p._lastWinds).toBe(winds);
+        const tried = p._windsTriedAt;
+        p._windsTriedAt = tried - 10 * 60000;                   // even long after: have them, so no new fetch
+        p._ensureWinds();
+        expect(p._windsLoading).toBeFalsy();
+        // (call counts are not used: other planners from earlier tests have checks pending)
+        delete globalThis.FlyTabPlanning;
+        const c = { summary: { totalDistNm: 50, totalEteHrs: 0.4, totalFuelGal: 4, fuelRemGal: 30, groundHrs: 0 },
+            legs: [{ timeHrs: 0.4, gsKt: 130, tasKt: 130, eta: 0 }], waypoints: [{ id: 'KLKR' }, { id: 'KAIK', isDest: true }] };
+        p._renderStats(c);
+        expect(p._statsStripEl.textContent).toMatch(/WIND—/);
     });
 });

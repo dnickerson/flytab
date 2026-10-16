@@ -260,10 +260,47 @@ describe('show a point, holding own-ship follow', () => {
         expect(c.map.fitBounds).not.toHaveBeenCalled();
     });
 
+    it('auto-pan off: showing a point moves the map but holds nothing (one tap turns auto-pan on)', () => {
+        const c = mapCtx();
+        c._autoPan = false;
+        c._autoPanBtn = document.createElement('button');
+        c.map.fitBounds = vi.fn();
+        c.showPoint(34.5, -81.0);
+        c.showBounds({ lat: 34, lon: -81 }, { lat: 35, lon: -80 });
+        c.showPoints([{ lat: 34, lon: -81 }, { lat: 35, lon: -80 }]);
+        expect(c.map.panTo).toHaveBeenCalled();
+        expect(c.map.fitBounds).toHaveBeenCalledTimes(2);
+        expect(c._followHold).toBeFalsy();
+        expect(c._autoPanBtn.classList.contains('held')).toBe(false);
+    });
+
+    it('back on screen while held: no jump back to own-ship', () => {
+        const c = mapCtx();
+        c._autoPanBtn = document.createElement('button');
+        c._updateTraffic = vi.fn();
+        c.ownshipMarker.setLatLng([35.5, -80.5]);
+        c.showPoint(34.5, -81.0);
+        c.map.panTo.mockClear();
+        c._onScreenChange({ onScreen: true });
+        expect(c.map.panTo).not.toHaveBeenCalled();
+        c.releaseFollowHold();
+        c._onScreenChange({ onScreen: true });
+        expect(c.map.panTo).toHaveBeenCalledWith([35.5, -80.5], { animate: false });
+    });
+
     it('the auto-pan button, while held, resumes following (does not turn auto-pan off)', () => {
         const src = read('web/cockpit/map.js');
         const btn = src.slice(src.indexOf("autoPanBtn.title = 'Toggle auto-pan';"), src.indexOf('this._autoPanBtn = autoPanBtn;'));
         expect(btn).toMatch(/if \(this\._followHold\) \{ this\.releaseFollowHold\(\); return; \}/);
+    });
+
+    it('switching planners releases the hold and closes the other planner', () => {
+        const src = read('web/app.js');
+        const old = src.slice(src.indexOf('    openRoutePlanner(plan) {'), src.indexOf('    async reverseActiveRoute('));
+        expect(old).toMatch(/routePlannerPreview\?\.close\(\)/);
+        expect(old).toMatch(/releaseFollowHold/);
+        const pv = src.slice(src.indexOf('    openRoutePlannerPreview(plan) {'), src.indexOf('    async routeFromClearance('));
+        expect(pv).toMatch(/routePlannerPanel\?\.close\(\)/);
     });
 
     it('closing the route planner releases the hold', () => {

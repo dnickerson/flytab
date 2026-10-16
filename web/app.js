@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v11.43';
+const FLYTAB_VERSION = 'v11.44';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 // Kept in memory and saved at most every FLUSH_MS (errors at once). Every log()
@@ -1334,6 +1334,12 @@ class FlyTabApp {
     }
 
     openRoutePlanner(plan) {
+        // From the preview (Direct-To, MORE): close it properly -- its sheet,
+        // a question waiting, its map hold -- not just hide it (review, 2026-10-16).
+        if (document.getElementById('cockpitContainer')?.classList.contains('route-preview')) {
+            this.routePlannerPreview?.close();
+            this.cockpitMap?.releaseFollowHold?.();
+        }
         document.getElementById('cockpitContainer')?.classList.remove('route-preview');
         document.getElementById('cockpitContainer')?.classList.add('route-editing');
         document.body.classList.add('route-editing-mode');
@@ -1375,6 +1381,10 @@ class FlyTabApp {
     /** MORE → Route Planner (preview): the redesigned planner, same route and settings. */
     openRoutePlannerPreview(plan) {
         if (!this.routePlannerPreview) { this.openRoutePlanner(plan); return Promise.resolve(); }
+        // The current planner was open: close it (an Apply of its own still
+        // running would otherwise end by closing this one).
+        const c = document.getElementById('cockpitContainer');
+        if (c?.classList.contains('route-editing') && !c.classList.contains('route-preview')) this.routePlannerPanel?.close();
         document.getElementById('cockpitContainer')?.classList.add('route-editing', 'route-preview');
         document.body.classList.add('route-editing-mode');
         this._updateOrientation();
@@ -1387,16 +1397,23 @@ class FlyTabApp {
      * -- as the route in the Route Planner (preview), to check and Apply.
      */
     async routeFromClearance() {
+        // A second tap while the first is loading interleaved the two (review, 2026-10-16).
+        if (this._loadingClearance) return false;
         const v = (id) => (document.getElementById(id)?.value || '').trim().toUpperCase();
         const limit = v('clr-c');
         const route = v('clr-r');
         if (!limit && !route) { this.showToast('No clearance in the CLR pad yet'); return false; }
         if (!this.routePlannerPreview) return false;
-        if (!document.getElementById('cockpitContainer')?.classList.contains('route-preview')) {
-            await this.openRoutePlannerPreview(this._currentTrip);
+        this._loadingClearance = true;
+        try {
+            if (!document.getElementById('cockpitContainer')?.classList.contains('route-preview')) {
+                await this.openRoutePlannerPreview(this._currentTrip);
+            }
+            await this.routePlannerPreview.loadClearance({ limit, route });
+            return true;
+        } finally {
+            this._loadingClearance = false;
         }
-        await this.routePlannerPreview.loadClearance({ limit, route });
-        return true;
     }
 
     closeRoutePlanner() {

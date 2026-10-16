@@ -99,10 +99,31 @@ const RouteCheck = (() => {
 
         // Airways: the point before an airway must be on it (entry), and the point after it (exit).
         const later = [];   // amber airway-type problems, after the airway reds
-        for (const [i, awy] of airways) {
-            const name = pills[i].id;
+        const onAirway = (awy) => {
             const on = new Set();
             for (const w of awy.waypoints || []) { if (w.id) on.add(up(w.id)); if (w.name) on.add(up(w.name)); }
+            return on;
+        };
+        for (const [i, awy] of airways) {
+            const name = pills[i].id;
+            const on = onAirway(awy);
+
+            // Straight on to another airway: the fix where they meet is needed.
+            // "SAV V37 T437 CAYCE" dropped V37 and flew SAV-CAYCE as one T437 leg
+            // with no problem shown (review, 2026-10-16).
+            const nextAwy = pills[i + 1]?.type === 'awy' ? airways.get(i + 1) : null;
+            if (nextAwy) {
+                const other = pills[i + 1].id;
+                const theirs = onAirway(nextAwy);
+                const ref = coords.get(i - 1);
+                const meet = (awy.waypoints || [])
+                    .filter((w) => theirs.has(ident(w)) && Number.isFinite(w.lat) && Number.isFinite(w.lon))
+                    .map((w) => ({ name: ident(w), nm: ref ? directNm(ref, w) : 0 }))
+                    .sort((a, b) => a.nm - b.nm)
+                    .slice(0, NEAREST);
+                red('airway-junction', [i, i + 1], `${name} and ${other} need the fix where they meet`,
+                    meet.map((f) => ({ label: `Change to ${other} at ${f.name}`, apply: 'insertJunction', arg: { at: i + 1, fix: f.name, airway: name } })));
+            }
             const prev = i - 1 >= 0 && isPoint(pills[i - 1]) ? i - 1 : -1;
             let next = -1;
             for (let k = i + 1; k < pills.length; k++) { if (isPoint(pills[k])) { next = k; break; } if (pills[k].type === 'awy') break; }
@@ -125,19 +146,25 @@ const RouteCheck = (() => {
                 ]);
             }
 
-            // Entry and exit both on it: no unusable segment between them -- an
-            // FAA airway gap (V157 stops at DOLPHIN, resumes at LAKELAND) or an
-            // AWY4 unusable segment (bundle v11 lists both in unusable_from_seqs).
+            // No unusable segment along the run -- an FAA airway gap (V157 stops at
+            // DOLPHIN, resumes at LAKELAND) or an AWY4 unusable segment (bundle v11
+            // lists both in unusable_from_seqs). The run: entry, exit, and the fixes
+            // after the exit still tagged with this airway (saved routes load as
+            // one airway bubble and tagged fixes: V157 LAL DHP).
             const unusable = new Set(awy.unusable_from_seqs || []);
             if (unusable.size && prev >= 0 && next >= 0) {
+                const run = [prev, next];
+                for (let k = next + 1; k < pills.length && isPoint(pills[k]) && pills[k].airway === name; k++) run.push(k);
                 const pts = (awy.waypoints || []).slice().sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
                 const at = (id) => pts.findIndex((w) => up(w.id) === up(id) || up(w.name) === up(id));
-                const a = at(pills[prev].id), b = at(pills[next].id);
-                if (a >= 0 && b >= 0) {
+                gap: for (let j = 0; j + 1 < run.length; j++) {
+                    const a = at(pills[run[j]].id), b = at(pills[run[j + 1]].id);
+                    if (a < 0 || b < 0) continue;
                     for (let k = Math.min(a, b); k < Math.max(a, b); k++) {
                         if (unusable.has(pts[k].seq)) {
-                            red('airway-gap', [prev, i, next], `${name} is not usable between ${ident(pts[k])} and ${ident(pts[k + 1])}`, [goDirect]);
-                            break;
+                            red('airway-gap', [run[j], i, run[j + 1]].sort((x, y) => x - y),
+                                `${name} is not usable between ${ident(pts[k])} and ${ident(pts[k + 1])}`, [goDirect]);
+                            break gap;
                         }
                     }
                 }
@@ -176,11 +203,29 @@ const RouteCheck = (() => {
             }
         }
 
-        // Reserve at the destination (recomputeLegs refuels at fuel stops, so
-        // this is the fuel left on the last flight).
+        // Reserve at every landing: recomputeLegs refuels at fuel stops, so the
+        // destination figure is only the last flight's -- the lowest landing can be
+        // at a stop (review, 2026-10-16: 10.7 gal at the stop, 33.5 at the destination).
+        const rsv = settings.reserveGal;
+        if (Number.isFinite(rsv) && computed?.legs?.length) {
+            const wps = computed.waypoints || [];
+            let destIdx = wps.findIndex((w) => w.isDest);
+            if (destIdx < 0) destIdx = wps.length - 1;
+            let fuelPill = 0;
+            for (let k = 0; k < Math.min(computed.legs.length, destIdx); k++) {
+                const w = wps[k + 1];
+                if (!w?.fuelStop) continue;
+                while (fuelPill < pills.length && !(pills[fuelPill].type === 'fuel' && up(pills[fuelPill].id) === up(w.id))) fuelPill++;
+                const g = computed.legs[k].fuelRemGal;
+                if (Number.isFinite(g) && g < rsv) {
+                    red('below-reserve', fuelPill < pills.length ? [fuelPill] : [], `Lands at ${w.id} with ${g.toFixed(1)} gal (reserve ${rsv})`);
+                }
+                if (fuelPill < pills.length) fuelPill++;
+            }
+        }
         const rem = computed?.summary?.fuelRemGal;
-        if (Number.isFinite(rem) && Number.isFinite(settings.reserveGal) && rem < settings.reserveGal) {
-            red('below-reserve', [], `Lands with ${rem.toFixed(1)} gal (reserve ${settings.reserveGal})`);
+        if (Number.isFinite(rem) && Number.isFinite(rsv) && rem < rsv) {
+            red('below-reserve', [], `Lands with ${rem.toFixed(1)} gal (reserve ${rsv})`);
         }
 
         for (const args of later) amber(...args);
@@ -215,6 +260,9 @@ const RouteCheck = (() => {
                 break;
             case 'goDirect':
                 out.splice(at, 1);
+                break;
+            case 'insertJunction': // V37 T437 -> V37 SALLY T437
+                out.splice(fix.arg.at, 0, { id: fix.arg.fix, type: 'fix', airway: fix.arg.airway });
                 break;
             case 'replaceId':      // BRAD0 -> BRADO
                 out[fix.arg.index] = { ...out[fix.arg.index], id: fix.arg.id };

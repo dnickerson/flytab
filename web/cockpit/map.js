@@ -1255,16 +1255,14 @@ class CockpitMap {
      */
     showPoint(lat, lon) {
         if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
-        this._followHold = true;
-        this._refreshAutoPanBtn();
+        this._holdFollow();
         this.map.panTo([lat, lon], { animate: false });
     }
 
     /** Like showPoint, fitting two points (an airway segment) on screen. */
     showBounds(a, b) {
         if (!a || !b || ![a.lat, a.lon, b.lat, b.lon].every(Number.isFinite)) return;
-        this._followHold = true;
-        this._refreshAutoPanBtn();
+        this._holdFollow();
         this.map.fitBounds([[a.lat, a.lon], [b.lat, b.lon]], { padding: [40, 40], maxZoom: 11, animate: false });
     }
 
@@ -1272,9 +1270,15 @@ class CockpitMap {
     showPoints(points) {
         const ll = (points || []).filter((p) => Number.isFinite(p?.lat) && Number.isFinite(p?.lon)).map((p) => [p.lat, p.lon]);
         if (ll.length < 2) return;
+        this._holdFollow();
+        this.map.fitBounds(ll, { padding: [40, 40], maxZoom: 11, animate: false });
+    }
+
+    /** Stop following own-ship until released. Auto-pan off: nothing to hold (the button would need two taps). */
+    _holdFollow() {
+        if (!this._autoPan) return;
         this._followHold = true;
         this._refreshAutoPanBtn();
-        this.map.fitBounds(ll, { padding: [40, 40], maxZoom: 11, animate: false });
     }
 
     releaseFollowHold() {
@@ -1322,7 +1326,8 @@ class CockpitMap {
         if (!e?.onScreen) return;
         this._updateTraffic();
         const pos = this.ownshipMarker?.getLatLng?.();
-        if ((this._autoPan || this._firstPanPending) && pos) this.map.panTo(pos, { animate: false });
+        // Not while held (a planner is showing a fix): the map jumped back to own-ship.
+        if (((this._autoPan && !this._followHold) || this._firstPanPending) && pos) this.map.panTo(pos, { animate: false });
         this._firstPanPending = false;
     }
 

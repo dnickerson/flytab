@@ -245,8 +245,10 @@ class RoutePlannerV2 extends RoutePlannerPanel {
             this._routingMode, (v) => { this._routingMode = v; });
         box('ROUTING', this._g.mode);
         this._g.dep = mkSel([['0', 'Now'], ['30', '+30 min'], ['60', '+1 h'], ['120', '+2 h'], ['180', '+3 h']], '0', (v) => {
+            if (v === 'at') return;                          // the saved time, unchanged
             const min = parseInt(v, 10);
             this._departureTime = min ? new Date(Date.now() + min * 60000) : null;
+            this._ensureWinds({ force: true });              // another forecast period
             rewind();
         });
         box('DEPART', this._g.dep);
@@ -261,6 +263,18 @@ class RoutePlannerV2 extends RoutePlannerPanel {
 
     _syncGrid() {
         if (!this._g) return;
+        // DEPART: Now, or the saved departure time as a clock time.
+        const dep = this._g.dep;
+        dep.querySelector('option[value="at"]')?.remove();
+        if (this._departureTime) {
+            const o = document.createElement('option');
+            o.value = 'at';
+            o.textContent = this._departureTime.toTimeString().slice(0, 5);
+            dep.appendChild(o);
+            dep.value = 'at';
+        } else {
+            dep.value = '0';
+        }
         this._g.alt.value = this._cruiseAltFt ? String(this._cruiseAltFt) : '';
         this._g.pwr.value = String(this._pctPower);
         this._g.mode.value = this._routingMode;
@@ -271,13 +285,30 @@ class RoutePlannerV2 extends RoutePlannerPanel {
     /** Load a plan and show it (the base open(), then this screen's state). */
     async open(plan) {
         this._loadOpts();
+        // A saved departure time already past is stale (the box showed "Now"
+        // while ETAs and winds used it -- review, 2026-10-16).
+        if (this._departureTime && !(this._departureTime.getTime() > Date.now())) this._departureTime = null;
         this._cursorAtEnd = false;
         this._insertIndex = null;
         this._closeSheet();
         this._undoHold = 0;
+        if (this._inputEl) this._inputEl.value = '';
+        this._problems = [];
+        this._problemsSig = null;
+        this._renderProblems();
         await super.open(plan);
         this._syncGrid();
         this._resetUndo();
+    }
+
+    /** Closed (app.closeRoutePlanner, or the other planner opened). */
+    close() {
+        this._closeSheet();                     // a question waiting is answered "no"
+        if (this._inputEl) this._inputEl.value = '';
+        this._insertIndex = null;
+        this._replacing = null;
+        this._clearSearch();
+        super.close();
     }
 
     // ── Route field ──────────────────────────────────────────────────────────
@@ -387,13 +418,14 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         const aero = this._aero();
         if (isPoint(item)) {
             const c = await aero.resolve(item.id);
-            if (c) map.showPoint?.(c.lat, c.lon);
+            if (c && !this._applyAborted) map.showPoint?.(c.lat, c.lon);   // not if closed meanwhile
             return;
         }
         let a = i - 1; while (a >= 0 && !isPoint(r[a])) a--;
         let b = i + 1; while (b < r.length && !isPoint(r[b])) b++;
         const ca = a >= 0 ? await aero.resolve(r[a].id) : null;
         const cb = b < r.length ? await aero.resolve(r[b].id) : null;
+        if (this._applyAborted) return;
         if (ca && cb) map.showBounds?.(ca, cb);
         else if (ca || cb) map.showPoint?.((ca || cb).lat, (ca || cb).lon);
     }
@@ -562,22 +594,30 @@ class RoutePlannerV2 extends RoutePlannerPanel {
     _openBubbleSheet(i) {
         const item = this._route[i];
         if (!item) return;
+        // The route field stays usable while the sheet is open (typing, Undo, Plan
+        // route finishing): act on this bubble wherever it is by then, or not at
+        // all if it is gone -- not on whatever moved into its old place.
+        const at = (fn) => () => { const k = this._route.indexOf(item); return k < 0 ? undefined : fn(k); };
         const rows = this._fixRows(this._problems.filter((p) => p.pillIndexes.includes(i)));
         const isPoint = item.type !== 'awy' && item.type !== 'direct';
-        if (item.type === 'dest') rows.push({ label: 'Approaches & arrivals…', primary: true, fn: () => this._openProcedures(i) });
-        if (isPoint && item.type !== 'dest' && item.type !== 'fuel') rows.push({ label: 'Fuel stop near here…', fn: () => this._fuelStopNear(i) });
-        rows.push({ label: 'Replace…', fn: () => this._startReplace(i) });
-        rows.push({ label: 'Insert before…', fn: () => this._startInsert(i) });
-        rows.push({ label: 'Insert after…', fn: () => this._startInsert(i + 1) });
+        const destIdx = this._destPillIndex();
+        const missed = destIdx >= 0 && i > destIdx;       // a missed-approach fix
+        if (item.type === 'dest') rows.push({ label: 'Approaches & arrivals…', primary: true, fn: at((k) => this._openProcedures(k)) });
+        if (isPoint && !missed && item.type !== 'dest' && item.type !== 'fuel') rows.push({ label: 'Fuel stop near here…', fn: at((k) => this._fuelStopNear(k)) });
+        rows.push({ label: 'Replace…', fn: at((k) => this._startReplace(k)) });
+        rows.push({ label: 'Insert before…', fn: at((k) => this._startInsert(k)) });
+        rows.push({ label: 'Insert after…', fn: at((k) => this._startInsert(k + 1)) });
         if (item.type === 'airport' || item.type === 'fuel') {
-            rows.push({ label: item.type === 'fuel' ? 'Not a fuel stop' : 'Fuel stop here', fn: () => { item.type = item.type === 'fuel' ? 'airport' : 'fuel'; this._render(); } });
+            rows.push({ label: item.type === 'fuel' ? 'Not a fuel stop' : 'Fuel stop here', fn: at(() => { item.type = item.type === 'fuel' ? 'airport' : 'fuel'; this._render(); }) });
         }
         if (isPoint && item.type !== 'dep' && item.type !== 'dest') {
-            rows.push({ label: 'Altitude…', fn: () => this._askAltitude(item) });
-            rows.push({ label: 'Start route here', fn: () => this._startHere(i) });
-            rows.push({ label: 'End route here', fn: () => this._endHere(i) });
+            rows.push({ label: 'Altitude…', fn: at(() => this._askAltitude(item)) });
+            if (!missed) {
+                rows.push({ label: 'Start route here', fn: at((k) => this._startHere(k)) });
+                rows.push({ label: 'End route here', fn: at((k) => this._endHere(k)) });
+            }
         }
-        rows.push({ label: 'Remove', danger: true, fn: () => this._removeAt(i) });
+        rows.push({ label: 'Remove', danger: true, fn: at((k) => this._removeAt(k)) });
         this._openSheet(item.id, rows);
     }
 
@@ -646,6 +686,52 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         this._render();
     }
 
+    /**
+     * Save the route as the bubbles show it. The base saves _lastPlan, which
+     * only Plan route / Apply set: after adding a fuel stop here it saved the
+     * route without it (review, 2026-10-16).
+     */
+    async _onSaveTap() {
+        await this._commitTyped();
+        const c = await this._compute();
+        if (!c?.waypoints || c.waypoints.length < 2) { this._toast('Route not complete — nothing to save'); return; }
+        try {
+            await this._saveCurrentTrip(c);
+            this._toast('Plan saved.');
+        } catch (err) {
+            this._toast('Save failed: ' + (err?.message || err), 4000);
+        }
+    }
+
+    _syncSaveBtnState() {
+        if (this._saveBtn) this._saveBtn.disabled = false;      // Save works from the bubbles
+    }
+
+    // ── Winds ────────────────────────────────────────────────────────────────
+
+    /**
+     * Winds for the checks and figures. The base only loads them for a stored
+     * plan (_applyWindsToLastPlan), so a route typed here, or a Plan route that
+     * needed a fuel stop, was worked out in calm air (review, 2026-10-16).
+     * fetchWinds: flywhere proxy, else FIS-B from Stratux, else the local cache.
+     * A failed try is not repeated for WINDS_RETRY_MS (in the air the proxy
+     * attempt waits out its 8 s timeout every time).
+     */
+    _ensureWinds({ force = false } = {}) {
+        const fn = typeof FlyTabPlanning !== 'undefined' ? FlyTabPlanning.fetchWinds : null;
+        if (!fn || this._windsLoading) return;
+        if (!force && (this._lastWinds || Date.now() - (this._windsTriedAt || 0) < RoutePlannerV2.WINDS_RETRY_MS)) return;
+        this._windsLoading = true;
+        this._windsTriedAt = Date.now();
+        Promise.resolve()
+            .then(() => fn(this._departureTime ?? new Date()))
+            .catch(() => null)
+            .then((w) => {
+                this._windsLoading = false;
+                if (w) { this._lastWinds = w; this._scheduleCheck(); }
+            });
+    }
+
     /** Clear (keeps departure and destination). No question: Undo brings the route back. */
     async _onClearTap() {
         const dep = this._route.find((p) => p.type === 'dep');
@@ -690,11 +776,26 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         this._inputEl.focus();
     }
 
+    /**
+     * Feet, or hundreds of feet as the bubbles show them ("55" = 5,500 ft);
+     * commas allowed. Outside 500-18,000 ft is refused, not stored: "55" was
+     * stored as 55 ft and went into the fuel and time figures (review, 2026-10-16).
+     */
     _askAltitude(item) {
-        const v = prompt(`Altitude for ${item.id} (ft, blank = route default):`, item.altFt ? String(item.altFt) : '');
+        const v = prompt(`Altitude for ${item.id} (ft, or hundreds: 55 = 5,500; blank = route default):`, item.altFt ? String(item.altFt) : '');
         if (v === null) return;
-        item.altFt = v.trim() ? parseInt(v, 10) : undefined;
-        if (!Number.isFinite(item.altFt)) delete item.altFt;
+        const s = v.replace(/[,\s]/g, '');
+        if (!s) {
+            delete item.altFt;
+        } else {
+            let ft = /^\d+$/.test(s) ? parseInt(s, 10) : NaN;
+            if (ft < 1000) ft *= 100;
+            if (!(ft >= RoutePlannerV2.ALT_MIN_FT && ft <= RoutePlannerV2.ALT_MAX_FT)) {
+                this._toast(`${v.trim()} is not an altitude between ${RoutePlannerV2.ALT_MIN_FT} and ${RoutePlannerV2.ALT_MAX_FT.toLocaleString('en-US')} ft`, 3500);
+                return;
+            }
+            item.altFt = ft;
+        }
         this._render();
     }
 
@@ -702,6 +803,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         const p = this._route[i];
         this._route.splice(0, i);
         p.type = 'dep';
+        this._insertIndex = null;
         this._render();
     }
 
@@ -709,6 +811,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         const p = this._route[i];
         this._route.splice(i + 1);
         p.type = 'dest';
+        this._insertIndex = null;
         this._render();
     }
 
@@ -730,7 +833,16 @@ class RoutePlannerV2 extends RoutePlannerPanel {
             return;
         }
         if (f.apply === 'addFuelStop') { await this._addFuelStop(); return; }
+        // These fixes name bubbles by position: only on the route they were
+        // worked out for. "Go direct" after a bubble was removed deleted the
+        // next fix instead of the airway (review, 2026-10-16).
+        if (this._problemsSig !== JSON.stringify(this._route)) {
+            this._toast('The route changed — checking it again');
+            await this._runChecks();
+            return;
+        }
         this._route = RouteCheck.applyFix(this._route, f);
+        this._insertIndex = null;
         this._render();
     }
 
@@ -765,7 +877,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
             // Skipped: stays skipped (amber, Apply doesn't ask) until the route
             // or the fuel-stop limit changes (Dana, 2026-10-16). Not for a stop
             // the pilot went looking for (Fuel stop near here…).
-            if (!optional) { this._fuelSkipKey = this._fuelKey(); this._scheduleCheck(); }
+            if (!optional && this._fuelPickSkipped) { this._fuelSkipKey = this._fuelKey(); this._scheduleCheck(); }
             return;
         }
         if (this._route.some((p) => p.type === 'fuel' && p.id === chosen.icao)) {
@@ -779,9 +891,9 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         if (depth < 3 && problems.some((p) => p.code === 'fuel-over-limit')) await this._addFuelStop(depth + 1);
     }
 
-    /** The route and fuel-stop limit a skip applies to. */
+    /** What a skip applies to: the route, the fuel-stop limit, and power and altitude (they change the leg times). */
     _fuelKey() {
-        return JSON.stringify(this._route) + '|' + this._maxLegHrs;
+        return JSON.stringify(this._route) + '|' + [this._maxLegHrs, this._pctPower, this._cruiseAltFt ?? 'auto'].join('|');
     }
 
     _fuelStopSkipped() {
@@ -901,10 +1013,17 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         this._searchTimer = setTimeout(() => this._runSearch(), 250);
     }
 
+    /** Hide the results and drop any search still running (its results came back under an empty box). */
+    _clearSearch() {
+        if (this._searchTimer) { clearTimeout(this._searchTimer); this._searchTimer = null; }
+        this._searchSeq = (this._searchSeq || 0) + 1;
+        if (this._resultsEl) { this._resultsEl.hidden = true; this._resultsEl.innerHTML = ''; }
+    }
+
     async _runSearch() {
         const q = this._searchInput.value.trim();
         const box = this._resultsEl;
-        if (q.length < 2 || !this._nasrDb) { box.hidden = true; box.innerHTML = ''; return; }
+        if (q.length < 2 || !this._nasrDb) { this._clearSearch(); return; }
         const seq = (this._searchSeq = (this._searchSeq || 0) + 1);
         const ref = this._searchRef();
         const rows = [];
@@ -976,9 +1095,9 @@ class RoutePlannerV2 extends RoutePlannerPanel {
     /** Add a search result to the route at the cursor. */
     async _pickSearchResult(id) {
         this._searchInput.value = '';
-        this._resultsEl.hidden = true;
-        this._resultsEl.innerHTML = '';
+        this._clearSearch();
         this._searchInput.blur();
+        this._commitTyped();                    // what was typed is queued first, so it goes first
         await this._queueToken(id);
     }
 
@@ -1124,19 +1243,35 @@ class RoutePlannerV2 extends RoutePlannerPanel {
     }
 
     async _runChecks() {
+        this._ensureWinds();
         const epoch = ++this._checkEpoch;
+        const sig = JSON.stringify(this._route);
+        const pills = this._route.map((p) => ({ ...p }));
         const computed = await this._compute();
         let problems = [];
         if (typeof RouteCheck !== 'undefined') {
             problems = await RouteCheck.run({
-                pills: this._route.map((p) => ({ ...p })),
+                pills,
                 computed,
                 settings: { routingMode: this._routingMode, maxLegHrs: this._maxLegHrs, reserveGal: this._reserveGal, fuelStopSkipped: this._fuelStopSkipped() },
                 aero: this._aero(),
             });
         }
+        // A complete route whose fuel and time could not be worked out (engine
+        // not loaded yet, or it failed) passed every fuel check silently and
+        // Apply didn't ask (review, 2026-10-16). Unknown identifiers say why already.
+        const hasEnds = pills.some((p) => p.type === 'dep') && pills.some((p) => p.type === 'dest');
+        if (!computed && hasEnds && !problems.some((p) => p.code === 'unknown-id')) {
+            problems.push({ severity: 'red', code: 'not-computed', pillIndexes: [], fixes: [],
+                message: this._planner ? 'Fuel and time could not be worked out — not checked' : 'Route engine still loading — fuel and time not checked' });
+            problems.sort((x, y) => (x.severity === y.severity ? 0 : x.severity === 'red' ? -1 : 1));
+        }
         if (epoch !== this._checkEpoch) return problems;     // a newer check is running
+        // The route changed while this ran: its bubble numbers are out of date
+        // (a newer check is scheduled by that change).
+        if (sig !== JSON.stringify(this._route)) return problems;
         this._problems = problems;
+        this._problemsSig = sig;
         this._computed = computed;
         this._renderProblems();
         this._markBubbles();
@@ -1193,7 +1328,8 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         const clock = (ms) => new Date(ms).toTimeString().slice(0, 5);
         const etaMs = legs.length ? legs[legs.length - 1].eta : null;
         let wind = '—';
-        const wl = legs.filter((l) => Number.isFinite(l.gsKt) && Number.isFinite(l.tasKt));
+        // Only legs with forecast winds: without them gs == tas and it said "0 tail".
+        const wl = legs.filter((l) => Number.isFinite(l.windKt) && Number.isFinite(l.gsKt) && Number.isFinite(l.tasKt));
         if (wl.length) {
             const d = Math.round(wl.reduce((a, l) => a + (l.gsKt - l.tasKt), 0) / wl.length);
             wind = d >= 0 ? `${d} tail` : `${-d} head`;
@@ -1210,11 +1346,19 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         const flights = RoutePlannerV2.flightsOf(c);
         if (!this._flightsEl) return;
         if (flights.length < 2) { this._flightsEl.innerHTML = ''; return; }
-        this._flightsEl.innerHTML = flights.map((f, n) =>
-            `<div class="rp2-flight"><span class="rp2-flight-n">${n + 1}</span>`
-            + `<span class="rp2-flight-route">${f.from} → ${f.to}</span>`
-            + `<span>${hm(f.hrs)}</span><span>land ${clock(f.landMs)}</span>`
-            + `<span class="${f.landGal < this._reserveGal ? 'rp2-low' : ''}">${f.landGal.toFixed(1)} g left</span></div>`).join('');
+        // textContent: the identifiers can come from a plan downloaded by plan sync.
+        this._flightsEl.innerHTML = '';
+        flights.forEach((f, n) => {
+            const row = document.createElement('div');
+            row.className = 'rp2-flight';
+            const span = (text, cls = '') => { const s = document.createElement('span'); if (cls) s.className = cls; s.textContent = text; row.appendChild(s); };
+            span(String(n + 1), 'rp2-flight-n');
+            span(`${f.from} → ${f.to}`, 'rp2-flight-route');
+            span(hm(f.hrs));
+            span(`land ${clock(f.landMs)}`);
+            span(`${f.landGal.toFixed(1)} g left`, f.landGal < this._reserveGal ? 'rp2-low' : '');
+            this._flightsEl.appendChild(row);
+        });
     }
 
     /** The flights of a computed plan, split at fuel stops: [{ from, to, hrs, landMs, landGal }]. */
@@ -1243,12 +1387,22 @@ class RoutePlannerV2 extends RoutePlannerPanel {
     // ── Apply ────────────────────────────────────────────────────────────────
 
     async _onApplyKeepOpenTap() {
+        if (this._applying) return;             // a second tap while the first runs
+        this._applying = true;
+        try {
+            await this._applyOnce();
+        } finally {
+            this._applying = false;
+        }
+    }
+
+    async _applyOnce() {
         await this._commitTyped();
         const problems = await this._runChecks();
         const red = problems.filter((p) => p.severity === 'red');
         if (red.length) {
-            const ok = await this._askApplyAnyway(red);
-            if (!ok) { this._openProblemSheet(); return; }
+            const answer = await this._askApplyAnyway(red);
+            if (answer !== true) { if (answer === 'fix') this._openProblemSheet(); return; }
         }
         let ok = false;
         try {
@@ -1257,7 +1411,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
             console.error('[RoutePlannerV2] apply failed:', err);
             this._toast('Apply failed: ' + (err?.message || err), 5000);
         }
-        if (ok) this._announceApplied();
+        if (ok && !this._applyAborted) this._announceApplied();   // not if closed meanwhile
         this._scheduleCheck();
     }
 
@@ -1267,8 +1421,9 @@ class RoutePlannerV2 extends RoutePlannerPanel {
      * Jacksonville, changed -- "the magenta line does not update", 2026-10-16).
      */
     _announceApplied() {
-        const dep = this._route.find((p) => p.type === 'dep')?.id;
-        const dest = this._route[this._destPillIndex()]?.id;
+        const points = this._route.filter((p) => p.type !== 'awy' && p.type !== 'direct');
+        const dep = this._route.find((p) => p.type === 'dep')?.id || points[0]?.id || '?';
+        const dest = this._route[this._destPillIndex()]?.id || points[points.length - 1]?.id || '?';
         const pts = (this._lastPlan?.waypoints || [])
             .filter((w) => Number.isFinite(w.lat) && Number.isFinite(w.lon))
             .map((w) => ({ lat: w.lat, lon: w.lon }));
@@ -1281,10 +1436,12 @@ class RoutePlannerV2 extends RoutePlannerPanel {
             const n = red.length;
             this._openSheet(`Route has ${n} problem${n > 1 ? 's' : ''}`, [
                 ...red.map((p) => ({ note: '⚠ ' + p.message, severity: 'red' })),
-                { label: 'Fix it', primary: true, fn: () => resolve(false) },
+                { label: 'Fix it', primary: true, fn: () => resolve('fix') },
                 { label: 'Apply anyway', danger: true, fn: () => resolve(true) },
             ]);
-            this._onSheetClose = () => resolve(false);   // ✕ = Fix it
+            // ✕, another sheet, or the planner closing: not applied, and nothing
+            // else opened over what the pilot went to instead (review, 2026-10-16).
+            this._onSheetClose = () => resolve(false);
         });
     }
 
@@ -1335,3 +1492,6 @@ class RoutePlannerV2 extends RoutePlannerPanel {
 /** A fuel stop keeps its airway unless leaving it saves more than this (nm). */
 RoutePlannerV2.KEEP_AIRWAY_NM = 10;
 RoutePlannerV2.UNDO_MAX = 50;              // undo steps kept
+RoutePlannerV2.ALT_MIN_FT = 500;            // per-fix altitude: refused outside this
+RoutePlannerV2.WINDS_RETRY_MS = 2 * 60 * 1000;   // after a failed winds fetch
+RoutePlannerV2.ALT_MAX_FT = 18000;

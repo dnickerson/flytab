@@ -341,10 +341,16 @@ class RoutePlannerPanel {
             if (saved.terminalRouting != null) this._terminalRouting = saved.terminalRouting;
             if (Array.isArray(saved.avoidList)) this._avoidList  = saved.avoidList;
             if (saved.departureTime) this._departureTime = new Date(saved.departureTime);
+            // Saved as cleared (Now / Auto) -- e.g. by the other planner, which
+            // shares these settings: clear it here too, not keep a stale value.
+            else if ('departureTime' in saved) this._departureTime = null;
             if (saved.cruiseAltFt  != null) {
                 this._cruiseAltFt = saved.cruiseAltFt;
                 this._altitude    = saved.cruiseAltFt;
                 if (this._altSel) this._altSel.value = String(saved.cruiseAltFt);
+            } else if ('cruiseAltFt' in saved) {
+                this._cruiseAltFt = null;
+                if (this._altSel) this._altSel.value = '';
             }
             if (saved.pctPower != null) {
                 this._pctPower = saved.pctPower;
@@ -2537,7 +2543,10 @@ class RoutePlannerPanel {
                 list.appendChild(row);
             }
 
-            wireTap(overlay.querySelector('.rpp-fs-skip'), () => { overlay.remove(); resolve(null); });
+            // Skip is a decision (the preview remembers it); a tap on the dim
+            // background only closes the panel (review, 2026-10-16).
+            this._fuelPickSkipped = false;
+            wireTap(overlay.querySelector('.rpp-fs-skip'), () => { this._fuelPickSkipped = true; overlay.remove(); resolve(null); });
 
             // Manual entry — the suggestion list can miss the field the pilot
             // actually wants (better price, self-serve after hours, a field he
@@ -2557,14 +2566,14 @@ class RoutePlannerPanel {
                 }
                 manualBusy = true;
                 try {
-                    let rec = null;
-                    let coord = this._coords[v];
-                    if (!coord) {
-                        rec = await this._nasrDb.getAirport(v).catch(() => null);
-                        if (Number.isFinite(rec?.lat) && Number.isFinite(rec?.lon)) {
-                            coord = { lat: rec.lat, lon: rec.lon };
-                            this._coords[v] = coord;
-                        }
+                    // Always an airport record: the position cache also holds VORs
+                    // and fixes (the preview caches every bubble), and ALD -- a VOR --
+                    // was accepted as a fuel stop (review, 2026-10-16).
+                    let coord = null;
+                    const rec = await this._nasrDb.getAirport(v).catch(() => null);
+                    if (Number.isFinite(rec?.lat) && Number.isFinite(rec?.lon)) {
+                        coord = { lat: rec.lat, lon: rec.lon };
+                        this._coords[v] = coord;
                     }
                     if (!coord) {
                         // Keep the modal open so the identifier can be corrected.
@@ -3051,8 +3060,11 @@ class RoutePlannerPanel {
         const dest = h._route[h._destPillIndex()]?.id;
         RoutePlannerPanel._announceReverse(dep, dest, async () => {
             await app.applyRouteEdit(before);
-            // The planner opened since: show what is applied now.
-            if (document.body.classList.contains('route-editing-mode')) await this.open(before);
+            // A planner opened since: show what is applied now, in the one on screen.
+            if (document.body.classList.contains('route-editing-mode')) {
+                const preview = document.getElementById('cockpitContainer')?.classList.contains('route-preview');
+                await (preview && app.routePlannerPreview ? app.routePlannerPreview : this).open(before);
+            }
         });
         return { dep, dest };
     }
