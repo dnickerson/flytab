@@ -340,8 +340,14 @@ class StratuxClient extends EventTarget {
         const icao = msg.Icao_addr;
         if (!icao) return;
 
-        // Filter own-ship
-        const ownHex = Settings.ownshipModeS.toUpperCase();
+        // Filter own-ship. Read from Settings (localStorage + JSON.parse) at most
+        // every 5 s, not on every traffic message (~100/s with busy traffic).
+        const now = Date.now();
+        if (this._ownHex == null || now - (this._ownHexAt || 0) > 5000) {
+            this._ownHex = String(Settings.ownshipModeS || '').toUpperCase();
+            this._ownHexAt = now;
+        }
+        const ownHex = this._ownHex;
         if (icao.toString(16).toUpperCase().padStart(6, '0') === ownHex) return;
 
         const target = {
@@ -586,6 +592,10 @@ class StratuxClient extends EventTarget {
         };
 
         this._jsonioWs.onmessage = (e) => {
+            // Most of /jsonio is Stratux's traffic/situation/radar broadcasts, which
+            // the other channels already deliver; they never contain Product_id
+            // (see below). Skip them before parsing: ~100/s with busy traffic (B5).
+            if (typeof e.data === 'string' && e.data.indexOf('"Product_id"') === -1) return;
             try {
                 const msg = JSON.parse(e.data);
                 // /jsonio also carries Stratux's trafficUpdate/radarUpdate/situationUpdate

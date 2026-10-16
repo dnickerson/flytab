@@ -459,8 +459,12 @@ class RouteTable {
         this._computeEnroute(gs);
         this._updateSummary();
         // Skip full DOM rebuild while editing — live updates would destroy
-        // the edit-mode button event listeners mid-interaction (issue #30)
-        if (!this._editMode) {
+        // the edit-mode button event listeners mid-interaction (issue #30).
+        // Table body closed (height 0): leave the cells; _updateOpenHint brings
+        // them up to date as soon as it opens (B3).
+        if ((this._bodyEl?.offsetHeight ?? 1) === 0) {
+            this._cellsStale = true;
+        } else if (!this._editMode) {
             // Try selective cell update first to avoid full innerHTML rebuild every
             // GPS tick (1 Hz). Falls back to full render when structure changes.
             if (!this._updateTableCells()) {
@@ -2102,8 +2106,26 @@ class RouteTable {
     }
 
     _updateOpenHint(heightPx) {
+        // Every way of opening the body (toggle, un-compact, drag) passes here:
+        // catch up on cells skipped while it was closed (updateLive, B3).
+        if (heightPx > 0) this._refreshStaleCells();
         if (!this._openHintEl) return;
         this._openHintEl.hidden = heightPx > 0;
+    }
+
+    /**
+     * The sheet was hidden some other way (the route planner sets it
+     * display:none) and is shown again: catch up on skipped cells now rather
+     * than at the next own-ship update (PR B review #7).
+     */
+    refreshIfStale() {
+        if ((this._bodyEl?.offsetHeight ?? 0) > 0) this._refreshStaleCells();
+    }
+
+    _refreshStaleCells() {
+        if (!this._cellsStale || this._editMode) return;
+        this._cellsStale = false;
+        if (!this._updateTableCells()) this._renderTable();
     }
 
     _autoPanOwnship() {
@@ -3387,8 +3409,11 @@ class RouteTable {
                     ? this._getCellValue(wp, columns[c].key, seg, segIndex)
                     : this._getCellValue(wp, columns[c].key);
                 const valStr = String(val);
-                if (cells[c].innerHTML !== valStr) {
+                // Compare with what we last wrote: reading innerHTML back
+                // serialises the cell's DOM on every update (B3).
+                if (cells[c]._flytabHtml !== valStr) {
                     cells[c].innerHTML = valStr;
+                    cells[c]._flytabHtml = valStr;
                 }
             }
         }

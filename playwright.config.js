@@ -1,6 +1,13 @@
 // playwright.config.js
 const { defineConfig, devices } = require('@playwright/test');
 
+// The test server's own port. It was 3000 with reuseExistingServer: on the dev
+// machine 3000 is Open WebUI (docker), which answers 200 for every path, so
+// Playwright silently ran the whole suite against Open WebUI: 51/53 "failed"
+// with every harness global undefined (found 2026-10-15). A dedicated port, and
+// never reusing a server we didn't start: a busy port now fails loudly instead.
+const PORT = Number(process.env.FLYTAB_TEST_PORT) || 3117;
+
 module.exports = defineConfig({
     testDir: './tests',
     timeout: 30_000,
@@ -10,7 +17,7 @@ module.exports = defineConfig({
     globalTeardown: './tests/fixtures/global-teardown.js',
     snapshotDir:    './tests/snapshots',
     use: {
-        baseURL: 'http://localhost:3000',
+        baseURL: `http://localhost:${PORT}`,
         screenshot: 'only-on-failure',
     },
     projects: [
@@ -37,9 +44,9 @@ module.exports = defineConfig({
         },
     ],
     webServer: {
-        command: 'npx serve . -p 3000 --no-clipboard --cors',
-        url: 'http://localhost:3000/web/index.html',
-        reuseExistingServer: !process.env.CI,
+        command: `npx serve . -p ${PORT} --no-clipboard --cors`,
+        url: `http://localhost:${PORT}/web/index.html`,
+        reuseExistingServer: false,
         timeout: 15_000,
     },
 });

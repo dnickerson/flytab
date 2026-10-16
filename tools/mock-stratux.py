@@ -58,11 +58,33 @@ _TRAFFIC_INIT = [
     {"icao": 0xABC007, "tail": "N999TH", "dlat":  0.008, "dlon":  0.012, "alt": 4900, "track": 270, "speed": 150, "vvel":    0},
 ]
 
-# Runtime state — lat/lon updated each tick
-_traffic = [dict(t) for t in _TRAFFIC_INIT]
-for t in _traffic:
-    t["lat"] = OWN_LAT + t["dlat"]
-    t["lon"] = OWN_LON + t["dlon"]
+# Runtime state — lat/lon updated each tick (built in _init_traffic, so
+# --traffic N can add synthetic targets to the catalog above).
+_traffic = []
+
+
+def _init_traffic(n):
+    """The 7 catalog targets, plus synthetic ones up to n (deterministic)."""
+    import random
+    rng = random.Random(194)
+    targets = [dict(t) for t in _TRAFFIC_INIT]
+    i = 0
+    while len(targets) < n:
+        i += 1
+        targets.append({
+            "icao": 0xAD0000 + i, "tail": f"N{100 + i}SY",
+            "dlat": rng.uniform(-1.2, 1.2), "dlon": rng.uniform(-1.5, 1.5),
+            "alt": rng.choice(range(1500, 18000, 500)), "track": rng.randrange(0, 360, 5),
+            "speed": rng.randrange(90, 280, 5), "vvel": rng.choice([0, 0, 0, 500, -500]),
+        })
+    for t in targets:
+        t["lat"] = OWN_LAT + t["dlat"]
+        t["lon"] = OWN_LON + t["dlon"]
+    _traffic[:] = targets[:n] if n < len(targets) else targets
+
+# Send rates (real Stratux: situation ~10 Hz, each target ~1 Hz). Set in __main__.
+_SITUATION_HZ = 1.0
+_TRAFFIC_INTERVAL = 2.0
 
 _start_time = time.time()
 
@@ -163,8 +185,8 @@ def _situation_msg():
 
 
 def _update_traffic():
-    """Advance each traffic target by one 2-second tick."""
-    dt = 2.0   # seconds per update
+    """Advance each traffic target by one tick (_TRAFFIC_INTERVAL seconds)."""
+    dt = _TRAFFIC_INTERVAL
     for t in _traffic:
         # Convert speed (kts) + track (deg) to lat/lon deltas
         track_rad = math.radians(t["track"])
@@ -216,13 +238,13 @@ async def _traffic_loop():
         _update_traffic()
         for msg in _traffic_msgs():
             await _broadcast(_traffic_clients, msg)
-        await asyncio.sleep(2.0)
+        await asyncio.sleep(_TRAFFIC_INTERVAL)
 
 
 async def _situation_loop():
     while True:
         await _broadcast(_situation_clients, _situation_msg())
-        await asyncio.sleep(1.0)
+        await asyncio.sleep(1.0 / _SITUATION_HZ)
 
 
 # --- Weather-capture replay (FisbLogger *_weather.ndjson) -------------------
@@ -475,6 +497,12 @@ if __name__ == "__main__":
                         help="Replay speed multiplier for --replay-weather (default 1.0)")
     parser.add_argument("--loop", action="store_true",
                         help="Restart weather replay at EOF")
+    parser.add_argument("--traffic", type=int, default=len(_TRAFFIC_INIT),
+                        help="Number of traffic targets: the 7 catalog ones plus synthetic ones (default 7)")
+    parser.add_argument("--situation-hz", type=float, default=1.0,
+                        help="Situation messages per second (real Stratux: ~10; default 1)")
+    parser.add_argument("--traffic-interval", type=float, default=2.0,
+                        help="Seconds between traffic updates per target (real Stratux: ~1; default 2)")
     args = parser.parse_args()
 
     OWN_LAT = args.lat
@@ -483,6 +511,9 @@ if __name__ == "__main__":
     _WX_REPLAY_PATH = args.replay_weather
     _WX_REPLAY_RATE = max(args.rate, 0.001)
     _WX_REPLAY_LOOP = args.loop
+    _SITUATION_HZ = max(args.situation_hz, 0.1)
+    _TRAFFIC_INTERVAL = max(args.traffic_interval, 0.1)
+    _init_traffic(max(args.traffic, 0))
 
     try:
         asyncio.run(main(args.host, args.port))

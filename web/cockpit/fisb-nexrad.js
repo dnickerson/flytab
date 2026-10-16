@@ -46,7 +46,9 @@ class FisbNexrad {
 
         // Bind
         this._onNexrad = (e) => this._handleNexrad(e.detail);
-        this._onMove = () => { if (!this._loopMode) this._draw(); };
+        // Map moved: redraw at most once per animation frame. It used to redraw
+        // synchronously on every move/zoom/moveend/zoomend event (B2).
+        this._onMove = () => this._scheduleMoveDraw();
         this._onResize = () => this._resizeCanvas();
 
         // Purge timer — start immediately so blocks accumulate before overlay is shown
@@ -66,6 +68,15 @@ class FisbNexrad {
         // Restore persisted frame history so the loop and map show data immediately
         // on reopen (fire-and-forget; live frames augment _blocks/_frameHistory as they arrive).
         this._hydrate();
+    }
+
+    _scheduleMoveDraw() {
+        if (this._moveDrawPending) return;
+        this._moveDrawPending = true;
+        requestAnimationFrame(() => {
+            this._moveDrawPending = false;
+            if (!this._loopMode) this._draw();
+        });
     }
 
     // Standard NEXRAD intensity → color map (0-7+)
@@ -905,9 +916,22 @@ class FisbNexrad {
 
     clusterBlocks() { return this._clusterBlocks(this._blocks); }
 
+    /**
+     * Clusters of a stored frame, computed once per frame. Stored frames never
+     * change (deep copies, only pushed/shifted), and the convective engine asks
+     * for every frame on every incoming NEXRAD block (PR B / B5). WeakMap: an
+     * entry goes with its frame. Callers must not modify the result.
+     */
     clustersForFrame(frameIndex) {
         if (frameIndex < 0 || frameIndex >= this._frameHistory.length) return [];
-        return this._clusterBlocks(this._frameHistory[frameIndex].blocks);
+        const frame = this._frameHistory[frameIndex];
+        if (!this._frameClusterCache) this._frameClusterCache = new WeakMap();
+        let clusters = this._frameClusterCache.get(frame);
+        if (!clusters) {
+            clusters = this._clusterBlocks(frame.blocks);
+            this._frameClusterCache.set(frame, clusters);
+        }
+        return clusters;
     }
 
     /**

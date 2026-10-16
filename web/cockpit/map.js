@@ -254,7 +254,7 @@ class CockpitMap {
 
         // Listen for stratux events
         this.stratux.addEventListener('stratux:situation', (e) => this._updateOwnship(e.detail));
-        this.stratux.addEventListener('stratux:traffic', () => this._updateTraffic());
+        this.stratux.addEventListener('stratux:traffic', () => this._scheduleTraffic());
 
         // Position stopped arriving: hold own-ship dimmed at the last fix for up to
         // GpsFix.HOLD_MS, then hide -- a short link drop doesn't blank it.
@@ -322,11 +322,13 @@ class CockpitMap {
             this._onNotamTfrs = null;
         }
         if (this._trafficTimer) { clearInterval(this._trafficTimer); this._trafficTimer = null; }
+        if (this._trafficRenderTimer) { clearTimeout(this._trafficRenderTimer); this._trafficRenderTimer = null; }
         if (this._onScreenChangeHandler) {
             window.removeEventListener('flytab:screen', this._onScreenChangeHandler);
             this._onScreenChangeHandler = null;
         }
         if (this._fixUpdateTimer) { clearTimeout(this._fixUpdateTimer); this._fixUpdateTimer = null; }
+        this._fixPendingSince = 0;
         if (this._radarBadgeTimer) { clearInterval(this._radarBadgeTimer); this._radarBadgeTimer = null; }
         if (this._zoomBadgeHandler && this.map) { this.map.off('zoomend', this._zoomBadgeHandler); this._zoomBadgeHandler = null; }
         if (this._viewportResizeHandler && window.visualViewport) {
@@ -1062,8 +1064,10 @@ class CockpitMap {
         // Not while off screen: an animated pan ~10x a second redraws vector
         // layers for nobody (_onScreenChange re-centres on return).
         if (isFirstFix && CockpitMap.offScreen()) this._firstPanPending = true;
-        if ((isFirstFix || this._autoPan) && !CockpitMap.offScreen()) {
-            this.map.panTo(pos, { animate: !isFirstFix, duration: 0.5 });
+        if (isFirstFix && !CockpitMap.offScreen()) {
+            this.map.panTo(pos, { animate: false });
+        } else if (this._autoPan && !CockpitMap.offScreen()) {
+            this._followOwnship(pos);
         }
 
         // Track vector — 3-minute lookahead line, only when airborne
@@ -1236,6 +1240,33 @@ class CockpitMap {
 
     // ========== Traffic ==========
 
+    /**
+     * Keep own-ship centred, cheaply. It used to animate a panTo on every
+     * situation (~10 Hz): 10 moveend/s, and every listener on moveend
+     * (vector layers, NEXRAD, fixes) re-ran or was starved (B0). Now no
+     * animation, at most every FOLLOW_MIN_MS, and only once own-ship has drifted
+     * FOLLOW_MIN_DRIFT_PX: at cruise that's a step of a few pixels, twice a second.
+     */
+    _followOwnship(pos) {
+        const now = Date.now();
+        const since = now - (this._lastFollowAt || 0);
+        // (since < 0: the clock was set back -- treat as long ago, PR B review #6)
+        if (since >= 0 && since < CockpitMap.FOLLOW_MIN_MS) return;
+        const size = this.map.getSize();
+        const p = this.map.latLngToContainerPoint(pos);
+        const dx = p.x - size.x / 2, dy = p.y - size.y / 2;
+        if (dx * dx + dy * dy < CockpitMap.FOLLOW_MIN_DRIFT_PX * CockpitMap.FOLLOW_MIN_DRIFT_PX) return;
+        this._lastFollowAt = now;
+        // panTo without animation fires moveend synchronously: the flag lets the
+        // layers' moveend handlers tell auto-pan from the pilot's own moves.
+        this.map._flytabFollowMove = true;
+        try {
+            this.map.panTo(pos, { animate: false });
+        } finally {
+            this.map._flytabFollowMove = false;
+        }
+    }
+
     /** FlyTab is not on screen (MainActivity via app._onScreen). Unknown counts as on screen. */
     static offScreen() {
         return typeof window !== 'undefined' && window.app?._onScreen === false;
@@ -1250,10 +1281,29 @@ class CockpitMap {
         this._firstPanPending = false;
     }
 
+    /**
+     * stratux:traffic fires once per target per update: ~100/s with 100 targets,
+     * and each one used to redraw every marker (B0: 6,433 setIcon/s). Draw at
+     * most every TRAFFIC_RENDER_MS: at once if the last draw is older than that,
+     * otherwise once at the end of the window, so the newest positions are drawn.
+     */
+    _scheduleTraffic() {
+        if (this._trafficRenderTimer) return;
+        const since = Date.now() - (this._lastTrafficRender || 0);
+        // (since < 0: the clock was set back -- draw now, PR B review #6)
+        const wait = since < 0 ? 0 : CockpitMap.TRAFFIC_RENDER_MS - since;
+        if (wait <= 0) { this._updateTraffic(); return; }
+        this._trafficRenderTimer = setTimeout(() => {
+            this._trafficRenderTimer = null;
+            this._updateTraffic();
+        }, wait);
+    }
+
     _updateTraffic() {
         // Markers only: nothing else depends on this. Rebuilt on return to screen.
         if (CockpitMap.offScreen()) return;
         const now = Date.now();
+        this._lastTrafficRender = now;
         const seen = new Set();
 
         const trafficCfg = (typeof CockpitConfig !== 'undefined') ? (CockpitConfig.raw?.traffic || {}) : {};
@@ -1292,25 +1342,34 @@ class CockpitMap {
                 altLabel = (dAlt >= 0 ? '+' : '') + dAlt;
             }
             const callsign = showCallsign ? (target.callsign || '').trim() : '';
-            const svgHtml = CockpitMap._trafficSvg(target.track || 0, color, target.extrapolated);
-            const hasLabel = altLabel || callsign;
-            const iconHtml = hasLabel
-                ? `<div class="traffic-icon-wrap">${svgHtml}${altLabel ? `<div class="traffic-alt" style="color:${color};">${altLabel}</div>` : ''}${callsign ? `<div class="traffic-cs" style="color:${color};">${callsign}</div>` : ''}</div>`
-                : svgHtml;
-            const icon = L.divIcon({
-                className: 'traffic-icon',
-                html: iconHtml,
-                iconSize: hasLabel ? [56, 44] : [24, 24],
-                iconAnchor: [12, 12],
-            });
+            // Everything the icon is drawn from. Rebuild the icon (innerHTML) only
+            // when this changes; a position change is just setLatLng.
+            const iconKey = `${target.track || 0}|${color}|${target.extrapolated ? 1 : 0}|${altLabel}|${callsign}`;
+            const makeIcon = () => {
+                const svgHtml = CockpitMap._trafficSvg(target.track || 0, color, target.extrapolated);
+                const hasLabel = altLabel || callsign;
+                const iconHtml = hasLabel
+                    ? `<div class="traffic-icon-wrap">${svgHtml}${altLabel ? `<div class="traffic-alt" style="color:${color};">${altLabel}</div>` : ''}${callsign ? `<div class="traffic-cs" style="color:${color};">${callsign}</div>` : ''}</div>`
+                    : svgHtml;
+                return L.divIcon({
+                    className: 'traffic-icon',
+                    html: iconHtml,
+                    iconSize: hasLabel ? [56, 44] : [24, 24],
+                    iconAnchor: [12, 12],
+                });
+            };
 
             if (this.trafficMarkers.has(icao)) {
                 const m = this.trafficMarkers.get(icao);
                 m.setLatLng([target.lat, target.lon]);
-                m.setIcon(icon);
+                if (m._flytabIconKey !== iconKey) {
+                    m.setIcon(makeIcon());
+                    m._flytabIconKey = iconKey;
+                }
             } else {
-                const m = L.marker([target.lat, target.lon], { icon, zIndexOffset: 500 })
+                const m = L.marker([target.lat, target.lon], { icon: makeIcon(), zIndexOffset: 500 })
                     .addTo(this.map);
+                m._flytabIconKey = iconKey;
                 // Always fetch current target at click time — stale closure causes popup offset
                 m.on('click', () => {
                     if (typeof _wireTapLastTouchAt !== 'undefined' && Date.now() - _wireTapLastTouchAt < 500) return;
@@ -1703,6 +1762,21 @@ class CockpitMap {
 
     // ========== Track Log Overlay ==========
 
+    /**
+     * One new track point (TrackLog, B4): extend the existing line instead of
+     * removing and re-creating it. (Leaflet still re-projects the whole line on
+     * addLatLng; what this saves is the layer churn.) `points` (the whole track)
+     * is used only when there is no line yet, e.g. the second point ever.
+     */
+    appendTrackPoint(pt, points) {
+        if (!Settings.showTrackLog) return;
+        if (this.trackLogLine && this.map.hasLayer(this.trackLogLine)) {
+            this.trackLogLine.addLatLng([pt.lat, pt.lon]);
+            return;
+        }
+        if (points) this.setTrackLog(points);
+    }
+
     setTrackLog(points) {
         if (this.trackLogLine && this.map.hasLayer(this.trackLogLine)) { this.map.removeLayer(this.trackLogLine); this.trackLogLine = null; }
         if (!points || points.length < 2 || !Settings.showTrackLog) return;
@@ -1796,14 +1870,34 @@ class CockpitMap {
     _setupFixOverlay() {
         if (!this.map || !this._nasr) return;
         // Bind map movement to overlay updates
-        this.map.on('moveend zoomend', () => this._scheduleFixUpdate());
+        this.map.on('moveend zoomend', () => this._scheduleFixUpdate(this.map._flytabFollowMove === true));
         // Initial render
         this._updateFixOverlay();
     }
 
-    _scheduleFixUpdate() {
+    _scheduleFixUpdate(fromFollow = false) {
+        // 300 ms after the map settles, but at most LAYER_MAX_WAIT_MS after the
+        // first request: while own-ship is followed the map never settles (B2).
+        // Auto-pan moves refresh at most every LAYER_FOLLOW_MIN_INTERVAL_MS
+        // (PR B review #5), the pilot's own moves after 300 ms -- not pushed
+        // back by a re-centre right after them.
+        if (fromFollow && this._fixUpdateTimer && this._userFixPending) return;
         if (this._fixUpdateTimer) clearTimeout(this._fixUpdateTimer);
-        this._fixUpdateTimer = setTimeout(() => this._updateFixOverlay(), 300);
+        if (!fromFollow) this._userFixPending = true;
+        const now = Date.now();
+        if (!this._fixPendingSince) this._fixPendingSince = now;
+        let wait = Math.max(0, Math.min(300, this._fixPendingSince + CockpitMap.LAYER_MAX_WAIT_MS - now));
+        if (fromFollow && this._lastFixRunAt) {
+            const sinceRun = now - this._lastFixRunAt;
+            if (sinceRun >= 0) wait = Math.max(wait, Math.min(CockpitMap.LAYER_FOLLOW_MIN_INTERVAL_MS, CockpitMap.LAYER_FOLLOW_MIN_INTERVAL_MS - sinceRun));
+        }
+        this._fixUpdateTimer = setTimeout(() => {
+            this._fixUpdateTimer = null;
+            this._fixPendingSince = 0;
+            this._userFixPending = false;
+            this._lastFixRunAt = Date.now();
+            this._updateFixOverlay();
+        }, wait);
     }
 
     async _updateFixOverlay() {
@@ -2022,3 +2116,12 @@ class CockpitMap {
 
 // Own-ship marker opacity while held at the last fix after the feed stopped.
 CockpitMap.OWNSHIP_HELD_OPACITY = 0.4;
+// Traffic markers are redrawn at most this often (B1).
+CockpitMap.TRAFFIC_RENDER_MS = 500;
+// Auto-pan: re-centre at most this often, once own-ship is this far off centre (B2).
+CockpitMap.FOLLOW_MIN_MS = 500;
+CockpitMap.FOLLOW_MIN_DRIFT_PX = 2;
+// Debounced map-layer refreshes run at most this long after the first request (B2).
+CockpitMap.LAYER_MAX_WAIT_MS = 2000;
+// ...and, when the move was auto-pan's, at most this often (PR B review #5).
+CockpitMap.LAYER_FOLLOW_MIN_INTERVAL_MS = 3000;

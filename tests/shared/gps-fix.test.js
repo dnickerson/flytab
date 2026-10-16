@@ -172,7 +172,7 @@ describe('CockpitMap own-ship marker', () => {
     function mapCtx() {
         const removed = [];
         const ctx = Object.create(CockpitMap.prototype);
-        ctx.map = { removeLayer: (l) => removed.push(l), panTo: vi.fn(), hasLayer: () => true };
+        ctx.map = { removeLayer: (l) => removed.push(l), panTo: vi.fn(), getSize: () => ({ x: 1000, y: 600 }), latLngToContainerPoint: () => ({ x: 0, y: 0 }), hasLayer: () => true };
         ctx.ownshipMarker = fakeLayer();
         ctx._ownshipSvgG = null;
         ctx._trackVector = fakeLayer();

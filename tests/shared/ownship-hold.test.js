@@ -47,7 +47,7 @@ describe('CockpitMap — own-ship hold through a data gap', () => {
 
     function mapCtx() {
         const ctx = Object.create(CockpitMap.prototype);
-        ctx.map = { removeLayer: vi.fn(), panTo: vi.fn(), hasLayer: () => true };
+        ctx.map = { removeLayer: vi.fn(), panTo: vi.fn(), getSize: () => ({ x: 1000, y: 600 }), latLngToContainerPoint: () => ({ x: 0, y: 0 }), hasLayer: () => true };
         ctx.ownshipMarker = fakeLayer();
         ctx._ownshipSvgG = null;
         ctx._trackVector = fakeLayer();

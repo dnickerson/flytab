@@ -21,7 +21,7 @@ import { dirname, join } from 'path';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const fullSrc = readFileSync(join(__dirname, '../../web/app.js'), 'utf8');
 const classOnlySrc = fullSrc.slice(0, fullSrc.indexOf('// === Initialize on DOM ready'));
-const FlyTabApp = new Function(classOnlySrc + '\nreturn FlyTabApp;')();
+const { FlyTabApp, DiagLog } = new Function(classOnlySrc + '\nreturn { FlyTabApp, DiagLog };')();
 
 /** A deferred promise so a test can control exactly when a queued
  *  _applyPlan() "finishes its NASR resolution". */
@@ -38,18 +38,16 @@ function makeApp() {
     return a;
 }
 
-// DiagLog is a module-scoped `const` inside app.js itself, defined by an IIFE
-// that reads/writes localStorage directly — the file's `window.DiagLog = DiagLog`
-// export line is part of the excluded bootstrap tail, so app.js's own methods
-// never see a `globalThis.DiagLog` stub; they close over the real one. Read its
-// actual output back from localStorage instead of trying to spy on it.
+// DiagLog is a module-scoped `const` inside app.js itself, so app.js's own
+// methods never see a `globalThis.DiagLog` stub; they close over the real one.
+// The loader above returns that real one: read its entries through its API (it
+// buffers in memory and saves to localStorage every few seconds since PR B / B5).
 function diagLogEntries() {
-    try { return JSON.parse(localStorage.getItem('flypi_diag_log') || '[]'); }
-    catch { return []; }
+    return DiagLog.entries;
 }
 
 beforeEach(() => {
-    localStorage.removeItem('flypi_diag_log');
+    DiagLog.clear();
 });
 
 describe('applyRouteEdit — latest-wins queue (#74)', () => {

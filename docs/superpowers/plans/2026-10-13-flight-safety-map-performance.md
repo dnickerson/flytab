@@ -27,7 +27,7 @@ Every task follows the same rules:
       before the merges (`6854771`): same 51 tests, none new, none fixed. The list is at the end.
   - **Versions:** `main` is v11.7 (versionCode 1107). The combined test build was v11.8 (1108).
     The next build must be **v11.9 or later**, or the tablet refuses it as a downgrade.
-- [ ] **0.5 Find out why the Playwright suite fails** (51/53, already failing before today):
+- [x] **0.5 Find out why the Playwright suite fails** — done 2026-10-15. **Cause: port 3000 is Open WebUI (docker) on the dev machine.** It answers 200 for every path, and with `reuseExistingServer` Playwright ran the whole suite against it (harness globals undefined). The config now uses its own port (3117, override `FLYTAB_TEST_PORT`) and never reuses a server: **51/53 pass**. The 2 left are stale screenshot baselines (`visual-map.spec.js`: expected 1236×583, got 1279×408, so the map layout changed since they were recorded). Re-record them only after a visual check. Fixed as the first commit of PR B, not a separate PR, because B0/B6 need the suite. Original notes:
   - 29 in route-planner-panel;
   - plus engine-box, engine-panel, layer-panel, mag-heading, wx-briefing;
   - plus 6 smoke tests.
@@ -200,19 +200,42 @@ Every task follows the same rules:
 
 ## PR B — Map performance (less work per message)
 
-- [ ] **B0 Baseline measurement before changing anything.**
+- [x] **B0 Baseline measurement before changing anything.** Done 2026-10-15 on v11.24, desktop Chromium (headless, 1280×800), `tools/perf-b0.e2e.js`, 60 s window.
+  - Load: `tools/mock-stratux.py --traffic 100 --situation-hz 10 --traffic-interval 1` (new options), so 10 situations/s and 100 traffic msgs/s; 64 traffic markers on the map; a 3-waypoint route; auto-pan on.
+  - Counts compare before/after; desktop timings aren't the tablet's.
+
+  | Metric | B0 (before) |
+  |---|---|
+  | traffic `setIcon` /s | **6,433** (100 msgs/s × ~64 markers: every message rebuilds every icon) |
+  | map `moveend` /s | **10** (one per situation: animated panTo) |
+  | `_updateDynamicLayers` /min | **1** (debounced on moves that never stop: airspace/airports barely refresh while following own-ship) |
+  | route table `updateLive` /s | 10 |
+  | main-thread script s/min | **20.3** |
+  | main-thread task s/min | 25.8 |
+  | layout / style s/min | 0.45 / 0.80 |
+  | long tasks /min | 0 (many short tasks, not long ones) |
+
   - Run `tools/mock-stratux.py` with about 100 traffic targets and NEXRAD in sim mode
     (see reference_mock_stratux memory).
   - Record: long tasks per minute, `setIcon` calls/s, `moveend` events/s,
     `_updateDynamicLayers` calls/min, and the route-table `updateLive` rate.
   - Save the numbers in this file.
-- [ ] **B1 Traffic drawn at most twice a second, only icons that changed.**
+- [x] **B1 Traffic drawn at most twice a second, only icons that changed.** Done.
+  - `stratux:traffic` → `_scheduleTraffic` (≤ 1 draw per 500 ms, leading and trailing). The 2 s cleanup, the layer-panel toggles and return-to-screen still draw immediately.
+  - Each marker keeps an icon key (track, colour, extrapolated, altitude label, callsign); `setIcon` runs only when the key changes. Own Mode-S is read from Settings at most every 5 s.
+  - Tests: `tests/cockpit/traffic-render.test.js` (6; 5 failed before) plus 1 in stratux-client.
+  - Measured (B0 harness): setIcon 6,433/s → **0/s** (no icon had a reason to change; markers still move); script 20.3 → **1.55 s/min**; task 25.8 → **8.3 s/min**.
   - **Where:** `map.js:257` rebuilds every target's icon (`setIcon` → innerHTML) on every
     traffic message.
   - **Fix:** a dirty flag plus rAF/2 Hz render; cache colour, label and track per marker; cache
     `Settings.ownshipModeS` (`stratux-client.js:344`).
   - **Verify:** B0 numbers before and after; traffic popups and colours unchanged.
-- [ ] **B2 Re-centre only when needed.**
+- [x] **B2 Re-centre only when needed.** Done (code). The tablet tap check and the visual check of the follow feel are still open (B6).
+  - Follow: no animation, at most every 500 ms (`FOLLOW_MIN_MS`), only once own-ship has drifted 2 px (`FOLLOW_MIN_DRIFT_PX`) from centre. The plan's "20 px" was dropped: at cruise own-ship drifts 0.5–2 px/s, so 20 px would jump visibly every 10–40 s. The first fix still centres at once.
+  - `vector-map-layers.js _scheduleUpdate` and `map.js _scheduleFixUpdate`: still 300 ms after the map settles, but at most 2 s after the first request.
+  - NEXRAD `_onMove` → `_scheduleMoveDraw` (≤ 1 redraw per animation frame).
+  - Tests: `tests/cockpit/map-follow.test.js` (9; 6 failed before). The fake maps in ownship-hold/gps-fix/offscreen-work gained `getSize`/`latLngToContainerPoint`.
+  - Measured: moveend 10 → **0.3/s**; `_updateDynamicLayers` 1 → **16/min** (layers now refresh in flight); script 1.55 (B1) → 4.9 s/min and task 8.3 → 13.9 s/min, the cost of those refreshes (~0.2 s each on desktop), still well below B0's 20.3/25.8.
   - **Where:** `map.js:1054`, an animated `panTo` on every situation (~10–12 Hz). That causes
     a `moveend` storm, a full vector redraw, NEXRAD redrawn every frame, and possibly
     debounced layers that never fire in flight.
@@ -223,28 +246,59 @@ Every task follows the same rules:
   - **Verify:** B0 numbers; airspace and airports refresh during a simulated flight. The
     airport popup still opens on a normal tap; that's a manual check (tap-handler rule,
     CLAUDE.md).
-- [ ] **B3 The route table updates at most once a second, only when visible.**
+- [x] **B3 The route table updates at most once a second, only when visible.** Done.
+  - `app._scheduleRouteLive`: situations → `updateLive` + `_checkFuelStopProximity` at most once per second (leading and trailing, so the newest is applied).
+  - Body closed (height 0): legs, sequencing and the handle summary still update; the cells are skipped and marked stale, and `_updateOpenHint` (every open path: toggle, un-compact, drag) refreshes them once.
+  - Cell compare against the last-written string instead of reading `innerHTML`.
+  - Tests: `tests/cockpit/route-table-live-rate.test.js` (7). Measured: updateLive 9.9 → **1/s**; script 4.89 → 4.74 s/min (the route table was a small part of the load in this run).
   - **Where:** `app.js:710-714` → `routeTable.updateLive` and `_checkFuelStopProximity` on
     every situation message.
   - **Fix:** throttle, skip when collapsed, and compare cached cell strings instead of reading
     `innerHTML`.
   - **Verify:** the route-table tests still pass; B0 numbers.
-- [ ] **B4 Track log stored per flight, appended, not rewritten.**
+- [x] **B4 Track log stored per flight, appended, not rewritten.** Done, with one deviation: **not grouped per flight**. Nothing uses flight grouping (the "GPX export" in the old header never existed), and grouping would change what the map shows. The display is unchanged: the same line, the same 4,320-point / 12 h window.
+  - New IndexedDB database `flytab-track`, store `points` (keyPath `ts`): one put per point, pruned about hourly and at load when it holds more than the window. A separate DB avoids version coupling with `flypi-flights`.
+  - Migration: on the first start the `flypi_track` points are copied in one transaction, then `flytab_track_migrated = '1'` is set. **`flypi_track` is never modified or removed.**
+  - If IDB won't open (5 s timeout) or the first read fails: the old localStorage behaviour, nothing lost. Points recorded during the load are kept, after the stored ones.
+  - Map: `appendTrackPoint` → `polyline.addLatLng` instead of removing, re-creating and re-adding the line every 10 s. This saves the layer churn, not the per-point work: in Leaflet 1.9.4 `addLatLng` → `redraw()` → `renderer._updatePath()` re-projects and re-clips the whole line (`_project()` + `_update()`, SVG and Canvas alike). About 4,320 points every 10 s is cheap next to the 400 KB localStorage rewrite it replaced (PR B review #10).
+  - Tests: `tests/cockpit/track-log-store.test.js` (now 18 with both reviews' failure paths, fake-indexeddb).
+  - Review fixes: points carry `seq` (recording counter, key `flytab_track_seq`) so a clock step back can't make a restart drop the newest points; prune deletes trimmed points by key; writes time out (5 s) and 3 failures fall back; fallback sessions always marked and merged; a load that fails after reading IndexedDB falls back with that track.
+  - Real Chromium check with a seeded 4,320-point `flypi_track`:
+    - migrated 4,320 into IDB and the map; old key byte-identical (323,228 chars);
+    - +3 points in 32 s, appended to memory, IDB and the line (4,323);
+    - after a reload, loaded from IDB with the newest point present, trimmed back to 4,320.
   - **Where:** `track-log.js` rewrites about 400 KB to localStorage every 10 s; `reset()` is
     never called.
   - **Fix:** per-flight IndexedDB, append-only, and `addLatLng` on the map.
   - **Must:** migrate the existing `flypi_track` data (dual-read), and don't drop the old key.
   - **Verify:** migration test; the track survives an app restart.
-- [ ] **B5 Smaller items.**
-  - [ ] Skip non-FIS-B `/jsonio` messages before `JSON.parse` (`stratux-client.js:589`).
-  - [ ] DiagLog: buffer in memory, save to localStorage at most every few seconds, and raise
-    the cap. The 10-13 dropouts pushed the earlier flight out of the 200 entries.
-  - [ ] Cache convective clustering per snapshot (`convective-intelligence.js:507`).
+- [x] **B5 Smaller items.** Done.
+  - [x] `/jsonio`: a substring check for `"Product_id"` skips the non-FIS-B broadcasts unparsed (test: 51 parses → 0); what gets dispatched is unchanged.
+  - [x] DiagLog: in memory, saved every 3 s (errors at once), cap 200 → 1000; same key and entry shape. `app-route-edit-queue` now reads the real DiagLog through its API.
+  - [x] `FisbNexrad.clustersForFrame` caches per stored frame (WeakMap). Frames are deep copies, only pushed/shifted. The convective engine used to re-cluster every frame on every NEXRAD block.
 - [ ] **B6 Ship PR B:**
-  - [ ] measure again against B0 and record the before/after table here;
+  - [x] measure again against B0 and record the before/after table here (2026-10-15, same harness and load; the marker count was rechecked with a fresh mock: 64, as in B0):
+
+    | Metric | B0 | After B1–B5 |
+    |---|---|---|
+    | traffic `setIcon` /s | 6,433 | **0** |
+    | map `moveend` /s | 10 | **0.3** |
+    | `_updateDynamicLayers` /min | 1 (starved) | **16** |
+    | route table `updateLive` /s | 10 | **1** |
+    | main-thread script s/min | 20.3 | **4.75** (−77 %) |
+    | main-thread task s/min | 25.8 | **13.6** (−47 %) |
+    | layout / style s/min | 0.45 / 0.80 | 0.17 / 0.25 |
+    | Playwright | 51/53 (2 stale screenshots) | 51/53 (same 2) |
+  - [x] close zoom (review #5; `perf-b0.e2e.js --zoom`, 30 s runs). Before the fix, follow re-centres at z12–14 triggered a full layer refresh each; now auto-pan moves refresh at most every 3 s:
+
+    | Zoom | layers /min before → after | task s/min before → after | script s/min before → after |
+    |---|---|---|---|
+    | 12 | 122 → **20** | 36.1 → **16.0** | 13.6 → **5.8** |
+    | 14 | 120 → **20** | 42.4 → **17.9** | 15.9 → **6.4** |
+    | default (9.75) | 16 → 16 | 13.6 → 13.6 | 4.8 → 4.8 |
   - [ ] update the manual if auto-pan behaviour is noticeably different;
   - [ ] bump the version and build;
-  - [ ] critical review;
+  - [x] critical review: the first review's 10 findings fixed (commits 262a3dc–ece19d7); a second review of those fixes found 5 more (track-log order after a clock step, hung writes, two fallback-merge gaps; auto-pan delaying a pilot refresh), all fixed (128f4cc, ba4f574). Re-measured after: z12 layers 20/min, task 16.0 s/min; default 16/min, 13.4 s/min;
   - [ ] open the PR;
   - [ ] tablet test, including a manual airport-tap check.
 
@@ -315,6 +369,9 @@ should be biased to look for red areas (pixels) building, not random scattered r
   - a close-out during a NASR import loses the route name;
   - background polling (engine HTTP poll, internet weather, network probes) when off screen and not recording — PR B.
 - DiagLog churn: with no Stratux (at home), "Situation WS closed / Failed to connect" lines fill the 200-entry DiagLog within minutes and push out useful entries (crash/pause/recorder). Rate-limit or collapse repeated link messages.
+- From the PR B review (pre-existing, not caused by PR B; Dana chose separate items 2026-10-15):
+  - **Auto-pan doesn't pause while the pilot drags or pinches.** `_autoPan` changes only with its button (`map.js` ~1805); nothing listens for `dragstart`/`zoomstart`. With auto-pan on, follow keeps re-centring during a drag (since B2: at most every 0.5 s once own-ship is 2 px off centre; before B2, an animated `panTo` on every situation). Pause follow from drag/pinch start until a few seconds after it ends, or until the pilot taps re-centre.
+  - **The magenta active leg sticks on a passed waypoint.** `CockpitMap._updateActiveLeg` (`map.js` ~1167) advances only when own-ship comes within 1 nm of the waypoint. Pass it 1.5 nm abeam and the magenta line keeps pointing back at it, while the route table (`updateLive`, which also has a passed-abeam `isPast` test) has moved on. Use one sequencing rule for both, ideally the route table's.
 - Move engine-limit alerts and the flight recorder into the native FlightService, so they
   survive any WebView pause. This is the real fix behind A6, and it's a bigger change.
 - Coalesce queued native WS messages while JS is frozen (`StratuxWsPlugin.java:97-101`), so a

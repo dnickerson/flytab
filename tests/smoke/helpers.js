@@ -65,7 +65,7 @@ async function injectTestConfig(page) {
     };
 
     // cockpit-config.json is fetched relative to the HTML page (/web/index.html),
-    // resolving to http://localhost:3000/web/cockpit-config.json.
+    // resolving to <baseURL>/web/cockpit-config.json.
     await page.route('**/cockpit-config.json', route => {
         route.fulfill({
             status: 200,

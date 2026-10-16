@@ -3,36 +3,84 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v11.24';
+const FLYTAB_VERSION = 'v11.27';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
+// Kept in memory and saved at most every FLUSH_MS (errors at once). Every log()
+// used to read, parse, append, stringify and rewrite the whole log -- dozens of
+// times a second while the Stratux link retries -- and the 200-entry cap lost
+// the earlier part of a flight (PR B / B5).
 const DiagLog = (() => {
     const KEY = 'flypi_diag_log';
-    const MAX = 200; // max log entries
+    const MAX = 1000; // max log entries
+    const FLUSH_MS = 3000;
+    const ERROR_FLUSH_MS = 1000;   // an error storm saves at most this often
+    let entries = null;     // loaded on first use
+    let timer = null;
+    let timerDue = 0;
+    let lastErrorFlush = 0;
 
-    function _read() {
-        try { return JSON.parse(localStorage.getItem(KEY) || '[]'); }
-        catch { return []; }
+    function _load() {
+        if (entries) return entries;
+        try { entries = JSON.parse(localStorage.getItem(KEY) || '[]'); }
+        catch { entries = []; }
+        if (!Array.isArray(entries)) entries = [];
+        return entries;
     }
 
-    function _write(entries) {
-        try { localStorage.setItem(KEY, JSON.stringify(entries)); } catch {}
+    function _flush() {
+        if (timer) { clearTimeout(timer); timer = null; }
+        try { localStorage.setItem(KEY, JSON.stringify(entries || [])); } catch {}
     }
+
+    /** Save within `ms`, keeping a sooner save already scheduled. */
+    function _scheduleFlush(ms) {
+        const due = Date.now() + ms;
+        if (timer && timerDue <= due) return;
+        if (timer) clearTimeout(timer);
+        timerDue = due;
+        timer = setTimeout(_flush, ms);
+    }
+
+    // Entries not yet saved go now if the app may be killed: off screen, or the
+    // page going away. (document.visibilityState is always 'visible' here, see
+    // KeepAliveWebView; 'flytab:screen' is the real on-screen state.)
+    window.addEventListener('flytab:screen', (e) => { if (!e.onScreen && timer) _flush(); });
+    window.addEventListener('pagehide', () => { if (timer) _flush(); });
 
     return {
+        MAX, FLUSH_MS, ERROR_FLUSH_MS,
         log(category, message, data) {
-            const entries = _read();
-            entries.push({
+            const list = _load();
+            // Copied now: the caller may change the object later, and one that
+            // can't be serialised would make every later save fail.
+            let d;
+            if (data !== undefined) {
+                try { d = JSON.parse(JSON.stringify(data)); } catch { d = String(data); }
+            }
+            list.push({
                 t: new Date().toISOString(),
                 cat: category,
                 msg: message,
-                ...(data !== undefined ? { d: data } : {}),
+                ...(data !== undefined ? { d } : {}),
             });
-            if (entries.length > MAX) entries.splice(0, entries.length - MAX);
-            _write(entries);
+            if (list.length > MAX) list.splice(0, list.length - MAX);
+            if (category === 'error') {
+                // An error is saved at once (if the app dies next, it's on record),
+                // but a storm of them at most every ERROR_FLUSH_MS.
+                const since = Date.now() - lastErrorFlush;
+                if (since < 0 || since >= ERROR_FLUSH_MS) { lastErrorFlush = Date.now(); _flush(); }
+                else _scheduleFlush(ERROR_FLUSH_MS - since);
+            } else {
+                _scheduleFlush(FLUSH_MS);
+            }
         },
-        get entries() { return _read(); },
-        clear() { localStorage.removeItem(KEY); },
+        get entries() { return _load(); },
+        clear() {
+            if (timer) { clearTimeout(timer); timer = null; }
+            entries = [];
+            localStorage.removeItem(KEY);
+        },
     };
 })();
 
@@ -380,6 +428,31 @@ class FlyTabApp {
             },
         });
         this.pauseDetector.start();
+    }
+
+    /**
+     * Situations arrive ~10/s; the route table recomputes every leg and patches
+     * its table on each one (B0). At most once per ROUTE_LIVE_MS: at once if the
+     * last update is older, else once at the end of the window with the newest
+     * situation, so the table never lags more than that.
+     */
+    _scheduleRouteLive(sit) {
+        this._routeLiveSit = sit;
+        if (this._routeLiveTimer) return;
+        const run = () => {
+            this._routeLiveTimer = null;
+            this._routeLiveAt = Date.now();
+            const s = this._routeLiveSit;
+            if (this.routeTable) {
+                this.routeTable.updateLive(s);
+                this._checkFuelStopProximity(s);
+            }
+        };
+        const since = Date.now() - (this._routeLiveAt || 0);
+        // (since < 0: the clock was set back -- run now, PR B review #6)
+        const wait = since < 0 ? 0 : FlyTabApp.ROUTE_LIVE_MS - since;
+        if (wait <= 0) run();
+        else this._routeLiveTimer = setTimeout(run, wait);
     }
 
     /** Show diagnostic log overlay */
@@ -814,12 +887,7 @@ class FlyTabApp {
             this.routeTable.onRouteChanged((plan) => {
                 this.applyRouteEdit(plan, { fromRouteTable: true });
             });
-            this.stratuxClient.addEventListener('stratux:situation', (e) => {
-                if (this.routeTable) {
-                    this.routeTable.updateLive(e.detail);
-                    this._checkFuelStopProximity(e.detail);
-                }
-            });
+            this.stratuxClient.addEventListener('stratux:situation', (e) => this._scheduleRouteLive(e.detail));
         }
 
         // FIS-B weather client (METARs, TAFs, PIREPs, SIGMETs, winds aloft)
@@ -1257,6 +1325,7 @@ class FlyTabApp {
     closeRoutePlanner() {
         document.getElementById('cockpitContainer')?.classList.remove('route-editing', 'landscape');
         document.body.classList.remove('route-editing-mode');
+        this.routeTable?.refreshIfStale();      // the sheet is shown again (PR B review #7)
         this.routePlannerPanel?.close();
         setTimeout(() => this.cockpitMap?.map?.invalidateSize(), 300);
     }
@@ -2347,6 +2416,9 @@ class FlyTabApp {
         return toast;
     }
 }
+
+// Route table live updates: at most one per this many ms (PR B / B3).
+FlyTabApp.ROUTE_LIVE_MS = 1000;
 
 // === Initialize on DOM ready ==========
 
