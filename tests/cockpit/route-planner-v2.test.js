@@ -384,7 +384,9 @@ describe('Route Planner (preview): tapping a bubble centres the map (Dana, 2026-
 
     it('tapping a bubble shows it on the map and opens its actions', () => {
         const src = read('web/cockpit/route-planner-v2.js');
-        expect(src).toMatch(/wireTap\(b, async \(\) => \{ await this\._commitTyped\(\); this\._showOnMap\(idx\); this\._openBubbleSheet\(idx\); \}\);/);
+        expect(src).toMatch(/wireTap\(b, \(\) => this\._onBubbleTap\(idx\)\);/);
+        const tap = src.slice(src.indexOf('    async _onBubbleTap('), src.indexOf('    async _onBubbleTap(') + 600);
+        expect(tap).toMatch(/this\._showOnMap\(i\);\s*this\._openBubbleSheet\(i\);/);
     });
 });
 
@@ -644,5 +646,95 @@ describe('Route Planner (preview): Undo (Dana, 2026-10-16)', () => {
         const src = read('web/cockpit/route-planner-v2.js');
         const open = src.slice(src.indexOf('    async open(plan) {'), src.indexOf('    // ── Route field'));
         expect(open).toMatch(/await super\.open\(plan\);[\s\S]*this\._resetUndo\(\);/);
+    });
+});
+
+describe('Route Planner (preview): a skipped fuel stop stays skipped until the route changes (Dana, 2026-10-16)', () => {
+    beforeEach(() => { localStorage.clear(); globalThis.app = { showToast: vi.fn(() => ({ remove() {} })), closeRoutePlanner: vi.fn() }; });
+    const R = () => [{ id: 'KLKR', type: 'dep' }, { id: 'CAE', type: 'fix' }, { id: 'KAIK', type: 'dest' }];
+    const OVER = { severity: 'red', code: 'fuel-over-limit', pillIndexes: [], message: 'x', fixes: [] };
+
+    it('Skip in the picker: the check is told, so the problem is amber; a route change makes it red again', async () => {
+        const p = make(R());
+        p._showFuelStopPicker = vi.fn(async () => null);             // Skip
+        p._runChecks = vi.fn(async () => (p._problems = []));
+        await p._processFuelStopCandidates({ fuelStopCandidates: [{ afterFixId: 'CAE', cumHrsAtStop: 2, options: [] }] });
+        expect(p._fuelStopSkipped()).toBe(true);
+        await type(p, 'ALD');                                         // the route changes
+        expect(p._fuelStopSkipped()).toBe(false);
+    });
+
+    it('the skip is for the fuel-stop limit it was made at', async () => {
+        const p = make(R());
+        p._showFuelStopPicker = vi.fn(async () => null);
+        p._runChecks = vi.fn(async () => (p._problems = []));
+        await p._processFuelStopCandidates({ fuelStopCandidates: [{ afterFixId: 'CAE', cumHrsAtStop: 2, options: [] }] });
+        p._maxLegHrs = 1.5;
+        expect(p._fuelStopSkipped()).toBe(false);
+        p._maxLegHrs = 2;
+        expect(p._fuelStopSkipped()).toBe(true);
+    });
+
+    it('_runChecks passes it to RouteCheck', async () => {
+        const p = make(R());
+        const spy = vi.spyOn(RouteCheck, 'run').mockResolvedValue([]);
+        p._fuelSkipKey = p._fuelKey();
+        await p._runChecks();
+        expect(spy.mock.calls.at(-1)[0].settings.fuelStopSkipped).toBe(true);
+        spy.mockRestore();
+    });
+
+    it('Skip after "Fuel stop near here…" (a stop you chose to look for) does not count', async () => {
+        const p = make(R());
+        p._showFuelStopPicker = vi.fn(async () => null);
+        await p._processFuelStopCandidates({ fuelStopCandidates: [{ afterFixId: 'CAE', cumHrsAtStop: 1, options: [] }] }, 0, { optional: true });
+        expect(p._fuelStopSkipped()).toBe(false);
+    });
+
+    it('Apply does not ask about an amber (skipped) fuel problem', async () => {
+        const p = make(R());
+        p._runChecks = vi.fn(async () => (p._problems = [{ ...OVER, severity: 'amber' }]));
+        p._askApplyAnyway = vi.fn(async () => false);
+        p._doApply = vi.fn(async () => false);
+        await p._onApplyKeepOpenTap();
+        expect(p._askApplyAnyway).not.toHaveBeenCalled();
+        expect(p._doApply).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe('Route Planner (preview): after an approach is inserted (Dana, 2026-10-16)', () => {
+    beforeEach(() => { localStorage.clear(); globalThis.app = { showToast: vi.fn(() => ({ remove() {} })), closeRoutePlanner: vi.fn() }; });
+    const APP = { icao: 'KAIK', insertBefore: [{ icao: 'IAFAA', lat: 33.7, lon: -81.5, alt: 3000 }, { icao: 'RW25', lat: 33.65, lon: -81.68 }],
+        insertAfter: [{ icao: 'MAHPC', lat: 33.6, lon: -81.8 }], airportWp: { icao: 'KAIK', lat: 33.649, lon: -81.685 } };
+    const field = (p) => [...p._bubblesEl.children].map((c) => (c === p._inputEl ? '|' : c.textContent.trim())).join(' ');
+
+    it('the keyboard closes and typing goes before the approach, not inside it', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'CAE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        p._inputEl.focus();
+        p.insertApproach(APP);
+        expect(document.activeElement).not.toBe(p._inputEl);
+        expect(field(p)).toBe('KLKR CAE | IAFAA 30 RW25 KAIK MAHPC');
+        await type(p, 'ALD');
+        expect(show(p)).toBe('KLKR:dep CAE:fix ALD:fix IAFAA:fix RW25:fix KAIK:dest MAHPC:fix');
+    });
+
+    it('an insert in progress ends', () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'CAE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        p._startInsert(1);
+        p.insertApproach(APP);
+        expect(p._insertIndex).toBeNull();
+        expect(p._inputEl.placeholder).toBe('type');
+    });
+});
+
+describe('Route Planner (preview): tapping a bubble while text is typed (2026-10-16)', () => {
+    beforeEach(() => { localStorage.clear(); globalThis.app = { showToast: vi.fn(() => ({ remove() {} })), closeRoutePlanner: vi.fn() }; });
+
+    it('the typed text is added first, and the sheet is for the bubble tapped (not the one now at its old place)', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'KAIK', type: 'dest' }]);
+        p._inputEl.value = 'CAE';
+        await p._onBubbleTap(1);
+        expect(show(p)).toBe('KLKR:dep CAE:fix KAIK:dest');
+        expect(p._sheetEl.querySelector('.rp2-sheet-hdr span').textContent).toBe('KAIK');
     });
 });

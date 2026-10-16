@@ -10,7 +10,9 @@
  *     pills    RoutePlannerPanel._route: [{ id, type: dep|dest|fix|airport|fuel|awy|direct, airway? }]
  *     computed recomputeLegs() result (legs[].timeHrs, waypoints[].fuelStop/isDest,
  *              summary.totalDistNm/fuelRemGal), or null when not computed yet
- *     settings { routingMode, maxLegHrs, reserveGal }
+ *     settings { routingMode, maxLegHrs, reserveGal, fuelStopSkipped? }
+ *              fuelStopSkipped: the pilot skipped the fuel stop for this route
+ *              -> over the limit is amber (shown, Apply doesn't ask), not red
  *     aero     { getAirway(name) -> {name, waypoints:[{name|id, lat, lon}]}|null,
  *                resolve(id) -> {lat, lon}|null }
  *   Problem = { severity: 'red'|'amber', code, pillIndexes: number[], message,
@@ -167,8 +169,10 @@ const RouteCheck = (() => {
             stretches.push(cur);
             const over = stretches.find((s) => s > maxLeg + EPS_HRS);
             if (over != null) {
-                red('fuel-over-limit', [], `${fmtHrs(over)} without a fuel stop (limit ${fmtLimit(maxLeg)})`,
-                    [{ label: 'Add fuel stop', apply: 'addFuelStop', arg: {} }]);
+                const msg = `${fmtHrs(over)} without a fuel stop (limit ${fmtLimit(maxLeg)})`;
+                const fixes = [{ label: 'Add fuel stop', apply: 'addFuelStop', arg: {} }];
+                if (settings.fuelStopSkipped) amber('fuel-over-limit', [], msg + ' — fuel stop skipped', fixes);
+                else red('fuel-over-limit', [], msg, fixes);
             }
         }
 

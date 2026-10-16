@@ -149,6 +149,15 @@ describe('RouteCheck: fuel, reserve, detour', () => {
         expect(p.fixes[0].apply).toBe('addFuelStop');
     });
 
+    it('over the limit with the fuel stop skipped: amber, says so, still offers "Add fuel stop" (Dana, 2026-10-16)', async () => {
+        const ps = await run('KLKR KMDT', { computed: computed([1.5, 0.8]), settings: { fuelStopSkipped: true } });
+        expect(codes(ps)).toContain('amber:fuel-over-limit');
+        expect(codes(ps)).not.toContain('red:fuel-over-limit');
+        const p = ps.find((x) => x.code === 'fuel-over-limit');
+        expect(p.message).toBe('2h18m without a fuel stop (limit 2h) — fuel stop skipped');
+        expect(p.fixes[0].apply).toBe('addFuelStop');
+    });
+
     it('exactly at the limit, and under it: no problem', async () => {
         expect(codes(await run('KLKR KMDT', { computed: computed([1.2, 0.8]) }))).not.toContain('red:fuel-over-limit');
         expect(codes(await run('KLKR KMDT', { computed: computed([1.0, 0.5]) }))).not.toContain('red:fuel-over-limit');

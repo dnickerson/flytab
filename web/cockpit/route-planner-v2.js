@@ -26,6 +26,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         this._undo = [];                        // Undo: earlier routes (JSON), newest last
         this._undoSnap = null;                  // the route as last shown
         this._undoHold = 0;                     // > 0: a multi-step action, recorded as one undo step
+        this._fuelSkipKey = null;               // _fuelKey() when the pilot skipped the fuel stop
         this._problems = [];
         this._computed = null;
         this._checkEpoch = 0;
@@ -284,8 +285,11 @@ class RoutePlannerV2 extends RoutePlannerPanel {
     /** Index in _route where the next typed token goes. */
     _cursorIndex() {
         if (this._insertIndex !== null && this._insertIndex !== undefined) return this._insertIndex;
-        const d = this._destPillIndex();
+        let d = this._destPillIndex();
         if (this._cursorAtEnd || d < 0) return this._route.length;
+        // Before an approach/arrival into the destination, not inside it: after
+        // one was inserted the cursor sat between RW25 and KAIK (2026-10-16).
+        while (d > 0 && this._route[d - 1].proc) d--;
         return d;
     }
 
@@ -352,8 +356,21 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         b.className = `rp2-b rp2-b-${kind}`;
         b.dataset.idx = String(idx);
         b.textContent = (item.type === 'fuel' ? '⛽ ' : '') + item.id + (item.altFt ? ` ${item.altFt / 100 | 0}` : '');
-        wireTap(b, async () => { await this._commitTyped(); this._showOnMap(idx); this._openBubbleSheet(idx); });
+        wireTap(b, () => this._onBubbleTap(idx));
         return b;
+    }
+
+    /**
+     * Typed text is added first, which can move the tapped bubble: find it again
+     * (with CAE typed, a tap on KAIK opened CAE's sheet -- 2026-10-16).
+     */
+    async _onBubbleTap(idx) {
+        const item = this._route[idx];
+        await this._commitTyped();
+        const i = this._route.indexOf(item);
+        if (i < 0) return;
+        this._showOnMap(i);
+        this._openBubbleSheet(i);
     }
 
     /**
@@ -641,6 +658,18 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         this._toast('Route cleared — ↶ Undo brings it back', 3000);
     }
 
+    /**
+     * An approach or arrival from the destination's procedures: the keyboard
+     * closes and typing goes back to its usual place, now before the procedure.
+     */
+    insertApproach(detail) {
+        this._insertIndex = null;
+        this._replacing = null;
+        this._cursorAtEnd = false;
+        super.insertApproach(detail);
+        this._inputEl?.blur();
+    }
+
     _startInsert(at) {
         this._replacing = null;
         this._insertIndex = at;
@@ -728,11 +757,17 @@ class RoutePlannerV2 extends RoutePlannerPanel {
      * offer the next from the new times only if still over the limit.
      * Used by Add fuel stop and by Plan route.
      */
-    async _processFuelStopCandidates(result, depth = 0) {
+    async _processFuelStopCandidates(result, depth = 0, { optional = false } = {}) {
         const first = (result?.fuelStopCandidates || [])[0];
         if (!first) return;
         const chosen = await this._showFuelStopPicker(first);
-        if (!chosen) return;
+        if (!chosen) {
+            // Skipped: stays skipped (amber, Apply doesn't ask) until the route
+            // or the fuel-stop limit changes (Dana, 2026-10-16). Not for a stop
+            // the pilot went looking for (Fuel stop near here…).
+            if (!optional) { this._fuelSkipKey = this._fuelKey(); this._scheduleCheck(); }
+            return;
+        }
         if (this._route.some((p) => p.type === 'fuel' && p.id === chosen.icao)) {
             this._toast(`${chosen.icao} is already a fuel stop`);
             return;
@@ -742,6 +777,15 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         this._render();
         const problems = await this._runChecks();
         if (depth < 3 && problems.some((p) => p.code === 'fuel-over-limit')) await this._addFuelStop(depth + 1);
+    }
+
+    /** The route and fuel-stop limit a skip applies to. */
+    _fuelKey() {
+        return JSON.stringify(this._route) + '|' + this._maxLegHrs;
+    }
+
+    _fuelStopSkipped() {
+        return this._fuelSkipKey != null && this._fuelSkipKey === this._fuelKey();
     }
 
     /**
@@ -1045,7 +1089,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         let hrs = 0;
         const wps = computed?.waypoints || [];
         for (let k = 0; k < (computed?.legs || []).length; k++) { hrs += computed.legs[k].timeHrs || 0; if (wps[k + 1]?.id === item.id) break; }
-        await this._processFuelStopCandidates({ fuelStopCandidates: [{ afterFixId: item.id, cumHrsAtStop: Math.round(hrs * 100) / 100, options: near }] });
+        await this._processFuelStopCandidates({ fuelStopCandidates: [{ afterFixId: item.id, cumHrsAtStop: Math.round(hrs * 100) / 100, options: near }] }, 0, { optional: true });
     }
 
     // ── Checks ───────────────────────────────────────────────────────────────
@@ -1087,7 +1131,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
             problems = await RouteCheck.run({
                 pills: this._route.map((p) => ({ ...p })),
                 computed,
-                settings: { routingMode: this._routingMode, maxLegHrs: this._maxLegHrs, reserveGal: this._reserveGal },
+                settings: { routingMode: this._routingMode, maxLegHrs: this._maxLegHrs, reserveGal: this._reserveGal, fuelStopSkipped: this._fuelStopSkipped() },
                 aero: this._aero(),
             });
         }
