@@ -297,6 +297,11 @@ class RoutePlannerV2 extends RoutePlannerPanel {
                 ? this._collapseSameAirway(this._route)
                 : this._route.map((item, i) => ({ item, originalIdx: i }));
             const at = this._cursorIndex();
+            // Say where typing goes when it isn't the usual place (before the destination).
+            const prev = this._insertIndex != null ? this._route[this._insertIndex - 1] : null;
+            this._inputEl.placeholder = this._insertIndex != null
+                ? (prev ? `insert after ${prev.id}` : `insert before ${this._route[0]?.id || ''}`)
+                : 'type';
             for (const { item, originalIdx } of view) {
                 const b = this._buildBubble(item, originalIdx);
                 if (originalIdx < at) this._bubblesEl.insertBefore(b, this._inputEl);
@@ -389,6 +394,11 @@ class RoutePlannerV2 extends RoutePlannerPanel {
     // ── Sheets ───────────────────────────────────────────────────────────────
 
     _openSheet(title, rows) {
+        // Sheet buttons cancel the browser's follow-on mouse events: the sheet
+        // closes on the tap, and the synthetic mousedown then landed on what was
+        // under it and took the focus from the route field -- Insert after…
+        // focused the field and the keyboard never came up (2026-10-16).
+        const tap = typeof wireIsolatedTap === 'function' ? wireIsolatedTap : wireTap;
         // A sheet replacing one that was waiting for an answer: that one is "no".
         const pending = this._onSheetClose;
         this._onSheetClose = null;
@@ -402,7 +412,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         const x = document.createElement('button');
         x.className = 'rp2-btn';
         x.textContent = '✕';
-        wireTap(x, () => this._closeSheet());
+        tap(x, () => this._closeSheet());
         h.appendChild(t);
         h.appendChild(x);
         s.appendChild(h);
@@ -419,7 +429,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
             const b = document.createElement('button');
             b.className = 'rp2-act' + (r.danger ? ' rp2-act-danger' : '') + (r.primary ? ' rp2-act-primary' : '');
             b.textContent = r.label;
-            wireTap(b, async () => { this._onSheetClose = null; this._closeSheet(); await r.fn(); });
+            tap(b, async () => { this._onSheetClose = null; this._closeSheet(); await r.fn(); });
             grid.appendChild(b);
         }
         s.appendChild(grid);

@@ -349,3 +349,23 @@ describe('Route Planner (preview): search, clearance, procedures, flights (2026-
         expect(src).toMatch(/classList\.contains\('route-preview'\)\) \{\s*this\.routePlannerPreview\.insertApproach\(e\.detail\);/);
     });
 });
+
+describe('Route Planner (preview): Insert before/after (Dana, 2026-10-16)', () => {
+    beforeEach(() => { globalThis.app = { showToast: vi.fn(() => ({ remove() {} })), closeRoutePlanner: vi.fn() }; });
+
+    it('sheet buttons cancel the follow-on mouse events (else focus leaves the route field after Insert after…)', () => {
+        const src = read('web/cockpit/route-planner-v2.js');
+        const sheet = src.slice(src.indexOf('    _openSheet(title, rows) {'), src.indexOf('    _closeSheet() {'));
+        expect(sheet).toMatch(/wireIsolatedTap/);
+    });
+
+    it('Insert after… puts the cursor there, focused, and says where the text goes', () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'CAE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        p._startInsert(2);
+        expect(document.activeElement).toBe(p._inputEl);
+        expect(p._inputEl.nextElementSibling.textContent).toBe('KAIK');
+        expect(p._inputEl.placeholder).toBe('insert after CAE');
+        p._insertIndex = null; p._render();
+        expect(p._inputEl.placeholder).toBe('type');
+    });
+});
