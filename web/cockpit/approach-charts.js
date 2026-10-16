@@ -67,6 +67,7 @@ class ApproachCharts {
                 ]);
                 if (cachedPlates) {
                     this._plateIndex = cachedPlates;
+                    this._hasMasterIndex = true;
                     console.log('[ApproachCharts] Plate index from cache:', Object.keys(cachedPlates).length, 'airports');
                 }
                 if (cachedGeo) this._geoIndex = cachedGeo;
@@ -100,6 +101,7 @@ class ApproachCharts {
                 const data = await resp.json();
                 if (data && typeof data === 'object' && !Array.isArray(data)) {
                     this._plateIndex = data;
+                    this._hasMasterIndex = true;
                     if (this._nasrDb) this._nasrDb.putAppCache('plate_index', data).catch(() => {});
                     console.log('[ApproachCharts] Master plate index loaded:', Object.keys(data).length, 'airports');
                 }
@@ -193,6 +195,18 @@ class ApproachCharts {
         }
 
         let faaId = this._faaId(icao);
+
+        // The master index is this cycle's list of every airport's plates: an
+        // airport it doesn't list has none current. The fallbacks below (an old
+        // per-airport index.json, the folder's files, the geo index) listed
+        // expired charts left on the tablet -- KPBI, dropped from the FAA's
+        // d-TPP, still showed 55 (2026-10-16). Only without a master index.
+        if (this._hasMasterIndex && !this._plateIndex?.[faaId]) {
+            this._showMessage(`No current plates for ${icao} in this cycle's charts`);
+            this._pickerShownAt = Date.now();
+            this._pickerEl.style.display = 'flex';
+            return;
+        }
 
         if (!this._plateIndex?.[faaId]) {
             this._showMessage('Loading plates…');
