@@ -12174,6 +12174,7 @@ body.route-editing-mode .route-table-sheet {
 .rp2-b-awy  { border-color: var(--color-success); }
 .rp2-b-fuel { border-color: var(--color-caution); border-style: dashed; }
 .rp2-b-dct  { border-style: dotted; }
+.rp2-b.rp2-b-replacing { text-decoration: line-through; text-decoration-thickness: 3px; color: var(--text-muted); border-style: dashed; }
 .rp2-b.rp2-amber { border: 3px solid var(--color-caution); color: var(--color-caution-on-light); }
 .rp2-b.rp2-red   { border: 3px solid var(--color-danger);  color: var(--color-danger-on-light); }
 .rp2-input {

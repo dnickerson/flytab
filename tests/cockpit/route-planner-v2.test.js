@@ -472,3 +472,89 @@ describe('Route Planner (preview): Apply feedback and stale airway tags (Dana, 2
         expect(showPoints).toHaveBeenCalledWith([{ lat: 34.7, lon: -80.8 }, { lat: 34.4, lon: -81.0 }, { lat: 33.6, lon: -81.7 }]);
     });
 });
+
+describe('Route Planner (preview): Replace… (Dana, 2026-10-16)', () => {
+    beforeEach(() => { localStorage.clear(); globalThis.app = { showToast: vi.fn(() => ({ remove() {} })), closeRoutePlanner: vi.fn() }; });
+    const R = () => [{ id: 'KLKR', type: 'dep' }, { id: 'V37', type: 'awy' }, { id: 'CRG', type: 'fix', airway: 'V37' }, { id: 'BRADO', type: 'fix', altFt: 6000 }, { id: 'ORL', type: 'fix' }, { id: 'KTMB', type: 'dest' }];
+    const sheetLabels = () => [...document.querySelectorAll('.rp2-act')].map((b) => b.textContent);
+
+    it('the bubble sheet offers Replace…', () => {
+        const p = make(R());
+        p._openBubbleSheet(3);
+        expect(sheetLabels()).toContain('Replace…');
+    });
+
+    it('cursor goes in front of the old bubble, which is marked; the field says what it replaces', () => {
+        const p = make(R());
+        p._startReplace(3);
+        expect(document.activeElement).toBe(p._inputEl);
+        expect(p._inputEl.placeholder).toBe('replace BRADO');
+        const old = p._bubblesEl.querySelector('.rp2-b[data-idx="3"]');
+        expect(old.classList.contains('rp2-b-replacing')).toBe(true);
+        expect(p._inputEl.nextElementSibling.textContent).toBe('✓ Done');
+        expect(p._inputEl.nextElementSibling.nextElementSibling).toBe(old);
+    });
+
+    it('the first identifier takes the old one\'s place; more go after it, in order', async () => {
+        const p = make(R());
+        p._startReplace(3);
+        await type(p, 'MATEO DORAL');
+        expect(show(p)).toBe('KLKR:dep V37:awy CRG:fix MATEO:fix DORAL:fix ORL:fix KTMB:dest');
+        expect(p._route[3].altFt).toBeUndefined();                     // a new fix: no altitude carried over
+        expect(p._bubblesEl.querySelector('.rp2-b-replacing')).toBeNull();
+        expect(p._inputEl.placeholder).toBe('insert after DORAL');
+    });
+
+    it('Done with nothing typed changes nothing', async () => {
+        const p = make(R());
+        p._startReplace(3);
+        await p._finishTyping();
+        expect(show(p)).toBe('KLKR:dep V37:awy CRG:fix BRADO:fix ORL:fix KTMB:dest');
+        expect(p._route[3].altFt).toBe(6000);
+        expect(p._bubblesEl.querySelector('.rp2-b-replacing')).toBeNull();
+        expect(p._inputEl.placeholder).toBe('type');
+    });
+
+    it('departure and destination keep their role; replacing the destination ends there', async () => {
+        const p = make(R());
+        p._startReplace(5);
+        expect(p._inputEl.placeholder).toBe('replace KTMB');
+        await type(p, 'KMIA');
+        expect(show(p)).toBe('KLKR:dep V37:awy CRG:fix BRADO:fix ORL:fix KMIA:dest');
+        expect(p._insertIndex).toBeNull();
+        p._startReplace(0);
+        await type(p, 'KCDN');
+        expect(show(p).startsWith('KCDN:dep V37:awy')).toBe(true);
+    });
+
+    it('an airway cannot replace the departure or destination', async () => {
+        const p = make(R());
+        p._startReplace(5);
+        await type(p, 'V533');
+        expect(show(p)).toBe('KLKR:dep V37:awy CRG:fix BRADO:fix ORL:fix KTMB:dest');
+        expect(p._inputEl.placeholder).toBe('replace KTMB');          // still replacing
+    });
+
+    it('a fuel stop replaced by an airport is still a fuel stop', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'KCDN', type: 'fuel' }, { id: 'KTMB', type: 'dest' }]);
+        p._startReplace(1);
+        await type(p, 'KAIK');
+        expect(show(p)).toBe('KLKR:dep KAIK:fuel KTMB:dest');
+    });
+
+    it('an airway bubble can be replaced by another airway', async () => {
+        const p = make(R());
+        p._startReplace(1);
+        await type(p, 'T437');
+        expect(show(p)).toBe('KLKR:dep T437:awy CRG:fix BRADO:fix ORL:fix KTMB:dest');
+    });
+
+    it('replacing is dropped if the route changes under it (e.g. Clear, or the bubble is removed)', async () => {
+        const p = make(R());
+        p._startReplace(3);
+        p._removeAt(3);
+        expect(p._replacing).toBeNull();
+        await type(p, 'MATEO');
+        expect(show(p)).toBe('KLKR:dep V37:awy CRG:fix MATEO:fix ORL:fix KTMB:dest');   // an ordinary insert there
+    });
+});

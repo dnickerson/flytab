@@ -22,6 +22,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         this._depInput = { value: '' };
         this._destInput = { value: '' };
         this._cursorAtEnd = false;              // typed tokens go before the destination
+        this._replacing = null;                 // Replace…: the bubble the next typed identifier replaces
         this._problems = [];
         this._computed = null;
         this._checkEpoch = 0;
@@ -287,6 +288,10 @@ class RoutePlannerV2 extends RoutePlannerPanel {
     }
 
     _render() {
+        // Replacing is only valid while the cursor is still right in front of the
+        // bubble being replaced; anything else that moved it (Clear, Remove, a
+        // tap elsewhere in the field) ends it.
+        if (this._replacing && (this._insertIndex == null || this._route[this._insertIndex] !== this._replacing)) this._replacing = null;
         this._normalizeAirwayTags();
         this._syncFieldsFromPills();
         if (this._bubblesEl) {
@@ -301,11 +306,13 @@ class RoutePlannerV2 extends RoutePlannerPanel {
             const at = this._cursorIndex();
             // Say where typing goes when it isn't the usual place (before the destination).
             const prev = this._insertIndex != null ? this._route[this._insertIndex - 1] : null;
-            this._inputEl.placeholder = this._insertIndex != null
-                ? (prev ? `insert after ${prev.id}` : `insert before ${this._route[0]?.id || ''}`)
-                : 'type';
+            this._inputEl.placeholder = this._replacing ? `replace ${this._replacing.id}`
+                : this._insertIndex != null
+                    ? (prev ? `insert after ${prev.id}` : `insert before ${this._route[0]?.id || ''}`)
+                    : 'type';
             for (const { item, originalIdx } of view) {
                 const b = this._buildBubble(item, originalIdx);
+                if (item === this._replacing) b.classList.add('rp2-b-replacing');
                 if (originalIdx < at) this._bubblesEl.insertBefore(b, this._inputEl);
                 else this._bubblesEl.appendChild(b);
             }
@@ -386,6 +393,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
     }
 
     _endInsert() {
+        this._replacing = null;
         if (this._insertIndex == null) return;
         this._insertIndex = null;
         this._render();
@@ -421,6 +429,21 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         const isPoint = type !== 'awy' && type !== 'direct';
         const r = this._route;
         const destIdx = this._destPillIndex();
+
+        const old = this._replacing;
+        if (old && this._insertIndex != null && r[this._insertIndex] === old) {
+            // Replace…: the first identifier takes the old bubble's place (and the
+            // departure's / destination's / fuel stop's role); the rest go after it.
+            const ends = old.type === 'dep' || old.type === 'dest';
+            if (ends && !isPoint) { this._toast(`${old.id} must be replaced by an airport or fix`, 3000); return; }
+            const pill = { id, type: ends ? old.type : (old.type === 'fuel' && type === 'airport') ? 'fuel' : type };
+            const at = this._insertIndex;
+            r.splice(at, 1, pill);
+            this._replacing = null;
+            this._insertIndex = old.type === 'dest' ? null : at + 1;   // nothing goes after the destination
+            this._render();
+            return;
+        }
 
         if (isPoint && !r.some((p) => p.type !== 'awy' && p.type !== 'direct')) {
             r.push({ id, type: 'dep' });                          // first point: departure
@@ -512,6 +535,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         const isPoint = item.type !== 'awy' && item.type !== 'direct';
         if (item.type === 'dest') rows.push({ label: 'Approaches & arrivals…', primary: true, fn: () => this._openProcedures(i) });
         if (isPoint && item.type !== 'dest' && item.type !== 'fuel') rows.push({ label: 'Fuel stop near here…', fn: () => this._fuelStopNear(i) });
+        rows.push({ label: 'Replace…', fn: () => this._startReplace(i) });
         rows.push({ label: 'Insert before…', fn: () => this._startInsert(i) });
         rows.push({ label: 'Insert after…', fn: () => this._startInsert(i + 1) });
         if (item.type === 'airport' || item.type === 'fuel') {
@@ -541,7 +565,21 @@ class RoutePlannerV2 extends RoutePlannerPanel {
     }
 
     _startInsert(at) {
+        this._replacing = null;
         this._insertIndex = at;
+        this._render();
+        this._inputEl.focus();
+    }
+
+    /**
+     * Replace a bubble with what is typed next (Dana, 2026-10-16). The cursor goes
+     * in front of it and it is struck through until the first identifier is
+     * committed; Done with nothing typed leaves it as it was.
+     */
+    _startReplace(i) {
+        if (!this._route[i]) return;
+        this._insertIndex = i;
+        this._replacing = this._route[i];
         this._render();
         this._inputEl.focus();
     }
