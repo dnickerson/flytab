@@ -212,3 +212,131 @@ describe('Route Planner (preview): fuel stops one at a time', () => {
         expect(show(p)).toBe('KLKR:dep GREAT:fix T437:awy BEFTY:fix KCUB:fuel BEFTY:fix T437:awy CAYCE:fix KAIK:dest');
     });
 });
+
+describe('Route Planner (preview): search, clearance, procedures, flights (2026-10-16)', () => {
+    beforeEach(() => { localStorage.clear(); globalThis.app = { showToast: vi.fn(() => ({ remove() {} })), closeRoutePlanner: vi.fn() }; });
+
+    it('search: a name or city finds the identifier, nearest first; tapping it adds it before the destination', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'KAIK', type: 'dest' }]);
+        // "Camden" matches airports across the US; the one near us must come first.
+        p._nasrDb = { ...nasrDb, _getAll: vi.fn(async () => [
+            { icao: '71NJ', name: '76Ers Camden', city: 'Camden', state: 'NJ', lat: 39.9, lon: -75.1 },
+            { icao: 'K61A', name: 'Camden Muni', city: 'Camden', state: 'AL', lat: 31.98, lon: -87.3 },
+            { icao: 'KCDN', name: 'Woodward Fld', city: 'Camden', state: 'SC', lat: 34.28, lon: -80.56 },
+            { icao: 'KLKR', name: 'Lancaster County', city: 'Lancaster', state: 'SC', lat: 34.72, lon: -80.85 },
+        ]), searchAllExtended: vi.fn(async () => ({ airports: [], navaids: [], fixes: [] })) };
+        p._searchRef = () => ({ lat: 34.72, lon: -80.85 });           // at KLKR
+        p._searchInput.value = 'Camden';
+        await p._runSearch();
+        const rows = [...p._resultsEl.querySelectorAll('.rp2-result')];
+        expect(rows.map((r) => r.querySelector('.rp2-result-id').textContent)).toEqual(['KCDN', 'K61A', '71NJ']);
+        expect(rows[0].querySelector('.rp2-result-sub').textContent).toMatch(/Camden, SC · 3\d nm/);
+        rows[0].click();
+        await p._typing;
+        expect(show(p)).toBe('KLKR:dep KCDN:airport KAIK:dest');
+        expect(p._resultsEl.hidden).toBe(true);
+    });
+
+    it('search "Aiken": the airport named Aiken before a private strip that is only in Aiken (tablet data)', async () => {
+        const p = make();
+        p._nasrDb = { ...nasrDb, _getAll: vi.fn(async () => [
+            { icao: '4SC7', name: 'Wexford Landing', city: 'Aiken', state: 'SC', lat: 33.6, lon: -81.7, has_paved_rwy: false },
+            { icao: 'KAIK', name: 'Aiken Rgnl', city: 'Aiken', state: 'SC', lat: 33.649, lon: -81.685, has_paved_rwy: true },
+            { icao: 'SC67', name: 'Polecat Aerodrome', city: 'Aiken', state: 'SC', lat: 33.5, lon: -81.6 },
+        ]), searchAllExtended: vi.fn(async () => ({ airports: [], navaids: [], fixes: [] })) };
+        p._searchRef = () => ({ lat: 34.72, lon: -80.85 });
+        p._searchInput.value = 'Aiken';
+        await p._runSearch();
+        expect([...p._resultsEl.querySelectorAll('.rp2-result-id')].map((e) => e.textContent)[0]).toBe('KAIK');
+    });
+
+    it('search: an identifier match comes before name matches', async () => {
+        const p = make();
+        p._nasrDb = { ...nasrDb, _getAll: vi.fn(async () => [
+            { icao: 'KCDN', name: 'Woodward Fld', city: 'Camden', state: 'SC', lat: 34.28, lon: -80.56 },
+            { icao: 'XCDN', name: 'Cdn Field', city: 'Far', state: 'AK', lat: 61, lon: -150 },
+        ]), searchAllExtended: vi.fn(async () => ({ airports: [], navaids: [], fixes: [] })) };
+        p._searchRef = () => ({ lat: 61, lon: -150 });
+        p._searchInput.value = 'CDN';
+        await p._runSearch();
+        expect([...p._resultsEl.querySelectorAll('.rp2-result-id')].map((e) => e.textContent)).toEqual(['KCDN', 'XCDN']);
+    });
+
+    it('clearance: the C field as the app fills it ("KAIK — AIKEN RGNL") gives KAIK', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'KCDN', type: 'dest' }]);
+        await p.loadClearance({ limit: 'KAIK — AIKEN RGNL', route: 'CAYCE' });
+        expect(show(p)).toBe('KLKR:dep CAYCE:fix KAIK:dest');
+    });
+
+    it('clearance: C becomes the destination (AIK -> KAIK), R the route in order, DIRECT dropped', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'KCDN', type: 'dest' }]);
+        await p.loadClearance({ limit: 'AIK', route: 'MITVE T437 CAYCE DIRECT' });
+        expect(show(p)).toBe('KLKR:dep MITVE:fix T437:awy CAYCE:fix KAIK:dest');
+    });
+
+    it('clearance "as filed": only the destination changes', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'GREAT', type: 'fix' }, { id: 'KCDN', type: 'dest' }]);
+        await p.loadClearance({ limit: 'KAIK', route: 'AS FILED' });
+        expect(show(p)).toBe('KLKR:dep GREAT:fix KAIK:dest');
+    });
+
+    it('approach names: CIFP codes in plain words, code kept', () => {
+        expect(RoutePlannerV2.procLabel('R07', 'APPROACH')).toBe('RNAV (GPS) 07 (R07)');
+        expect(RoutePlannerV2.procLabel('I07', 'APPROACH')).toBe('ILS 07 (I07)');
+        expect(RoutePlannerV2.procLabel('R25-Y', 'APPROACH')).toBe('RNAV (GPS) 25 Y (R25-Y)');
+        expect(RoutePlannerV2.procLabel('VDM-A', 'APPROACH')).toBe('VDM-A');      // unknown form: as is
+        expect(RoutePlannerV2.procLabel('CHATT6', 'STAR')).toBe('CHATT6');
+    });
+
+    it('destination bubble: approaches and arrivals listed; a transition loads the procedure', async () => {
+        const loaded = [];
+        globalThis.app.approachCharts = {
+            proceduresFor: vi.fn(async () => ({ key: 'KAIK', loaded: true, procs: [
+                { name: 'R07', type: 'APPROACH', transitions: ['HIBID', 'VIXLY'] },
+                { name: 'CHATT6', type: 'SID', transitions: ['ALL'] },
+            ] })),
+            loadProcedure: vi.fn((...a) => loaded.push(a)),
+        };
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'KAIK', type: 'dest' }]);
+        await p._openProcedures(1);
+        const labels = () => [...p._sheetEl.querySelectorAll('.rp2-act')].map((b) => b.textContent);
+        expect(labels()).toEqual(['RNAV (GPS) 07 (R07)']);                   // departures (SID) not offered
+        p._sheetEl.querySelector('.rp2-act').click();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(labels()).toEqual(['Via HIBID', 'Via VIXLY', 'Vectors (no transition)']);
+        [...p._sheetEl.querySelectorAll('.rp2-act')][1].click();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(loaded).toEqual([['KAIK', 'R07', 'VIXLY']]);
+    });
+
+    it('flights: one row per flight with landing time and fuel', () => {
+        const c = {
+            legs: [{ timeHrs: 1.0, eta: 3_600_000, fuelRemGal: 26 }, { timeHrs: 0.8, eta: 8_280_000, fuelRemGal: 18 }, { timeHrs: 0.5, eta: 11_880_000, fuelRemGal: 30 }],
+            waypoints: [{ id: 'KLKR' }, { id: 'X' }, { id: 'KCRG', fuelStop: true }, { id: 'KTMB', isDest: true }],
+        };
+        expect(RoutePlannerV2.flightsOf(c)).toEqual([
+            { from: 'KLKR', to: 'KCRG', hrs: 1.8, landMs: 8_280_000, landGal: 18 },
+            { from: 'KCRG', to: 'KTMB', hrs: 0.5, landMs: 11_880_000, landGal: 30 },
+        ]);
+    });
+
+    it('"Fuel stop near here…": avgas airports near that bubble; the chosen one goes there', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'CAE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        p._planner = { _adapters: { aero: { nearestAirports: vi.fn(async () => [
+            { icao: 'KCUB', name: 'Columbia Owens', lat: 33.97, lon: -80.99, hasFuel: true },
+            { icao: 'XJET', name: 'Jet-A only', lat: 33.86, lon: -81.05, hasFuel: false },
+        ]) } } };
+        p._compute = vi.fn(async () => null);
+        let offered = null;
+        p._showFuelStopPicker = vi.fn(async (cand) => { offered = cand.options.map((o) => o.icao); return cand.options[0]; });
+        p._runChecks = vi.fn(async () => (p._problems = []));
+        await p._fuelStopNear(1);
+        expect(offered).toEqual(['KCUB']);
+        expect(show(p)).toBe('KLKR:dep CAE:fix KCUB:fuel KAIK:dest');
+    });
+
+    it('a procedure loaded while the preview is open goes to the preview', () => {
+        const src = read('web/app.js');
+        expect(src).toMatch(/classList\.contains\('route-preview'\)\) \{\s*this\.routePlannerPreview\.insertApproach\(e\.detail\);/);
+    });
+});

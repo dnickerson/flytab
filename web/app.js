@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v11.31';
+const FLYTAB_VERSION = 'v11.33';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 // Kept in memory and saved at most every FLUSH_MS (errors at once). Every log()
@@ -1015,7 +1015,14 @@ class FlyTabApp {
                 }
             });
             document.addEventListener('cifp:load-procedure', (e) => {
-                if (!this.routePlannerPanel || !e.detail) return;
+                if (!e.detail) return;
+                // The Route Planner (preview) is open: the procedure goes there.
+                if (this.routePlannerPreview && document.getElementById('cockpitContainer')?.classList.contains('route-preview')) {
+                    this.routePlannerPreview.insertApproach(e.detail);
+                    this.approachCharts?.hide();
+                    return;
+                }
+                if (!this.routePlannerPanel) return;
                 // Open BEFORE inserting — openRoutePlanner calls _loadPlan which resets _route,
                 // so the approach fixes must be spliced in after the plan is loaded.
                 if (!document.getElementById('cockpitContainer')?.classList.contains('route-editing')) {
@@ -1367,12 +1374,29 @@ class FlyTabApp {
 
     /** MORE → Route Planner (preview): the redesigned planner, same route and settings. */
     openRoutePlannerPreview(plan) {
-        if (!this.routePlannerPreview) { this.openRoutePlanner(plan); return; }
+        if (!this.routePlannerPreview) { this.openRoutePlanner(plan); return Promise.resolve(); }
         document.getElementById('cockpitContainer')?.classList.add('route-editing', 'route-preview');
         document.body.classList.add('route-editing-mode');
         this._updateOrientation();
-        this.routePlannerPreview.open(plan || this._currentTrip);
         setTimeout(() => this.cockpitMap?.map?.invalidateSize(), 300);
+        return this.routePlannerPreview.open(plan || this._currentTrip);
+    }
+
+    /**
+     * The clearance copied into the CLR pad -- C (clearance limit) and R (route)
+     * -- as the route in the Route Planner (preview), to check and Apply.
+     */
+    async routeFromClearance() {
+        const v = (id) => (document.getElementById(id)?.value || '').trim().toUpperCase();
+        const limit = v('clr-c');
+        const route = v('clr-r');
+        if (!limit && !route) { this.showToast('No clearance in the CLR pad yet'); return false; }
+        if (!this.routePlannerPreview) return false;
+        if (!document.getElementById('cockpitContainer')?.classList.contains('route-preview')) {
+            await this.openRoutePlannerPreview(this._currentTrip);
+        }
+        await this.routePlannerPreview.loadClearance({ limit, route });
+        return true;
     }
 
     closeRoutePlanner() {

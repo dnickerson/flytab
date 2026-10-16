@@ -120,6 +120,8 @@ const RV9A_FALLBACK = {
 
 /** Fuel stops are searched for at this fraction of the leg-time limit. */
 const FUEL_STOP_AIM = 0.9;
+/** Default time on the ground at a fuel stop, minutes (Dana, 2026-10-16). */
+const FUEL_STOP_GROUND_MIN = 30;
 
 export class RoutePlanner {
     /**
@@ -399,6 +401,11 @@ export class RoutePlanner {
         let fuelRem = profile.fuel_capacity_gal;
         const pctPower = (opts.pctPower ?? 65) / 100;
         let etaMs = (opts.departureTime instanceof Date ? opts.departureTime.getTime() : Date.now());
+        // A fuel stop: full tanks for the next leg, and time on the ground before
+        // it (2026-10-16: fuel remaining and ETAs after a mid-route stop were
+        // computed as if the aircraft never landed).
+        const groundMin = Number.isFinite(opts.fuelStopGroundMin) ? opts.fuelStopGroundMin : FUEL_STOP_GROUND_MIN;
+        let groundHrs = 0;
 
         // The descent to the field ends at the destination; missed-approach legs may follow it.
         const destIdx = destinationIndex(plan);
@@ -417,6 +424,11 @@ export class RoutePlanner {
         for (let i = 0; i < wps.length - 1; i++) {
             const a = wps[i];
             const b = wps[i + 1];
+            if (i > 0 && a.fuelStop && i <= destIdx) {
+                fuelRem = profile.fuel_capacity_gal;
+                etaMs += groundMin * 60000;
+                groundHrs += groundMin / 60;
+            }
 
             // Per-leg altitude: use destination altFt if set, else carry forward the last
             // explicitly-set altitude (step-down/step-up persists until next override).
@@ -538,6 +550,7 @@ export class RoutePlanner {
             totalEteHrs:  toDest.reduce((s, l) => s + l.timeHrs, 0),
             totalFuelGal: toDest.reduce((s, l) => s + l.fuelGal, 0),
             fuelRemGal:   toDest.length ? toDest[toDest.length - 1].fuelRemGal : fuelRem,
+            groundHrs,
             fixCount:     wps.length,
         };
         return { ...plan, legs, summary };

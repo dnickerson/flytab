@@ -67,6 +67,24 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         hdr.appendChild(close);
         inner.appendChild(hdr);
 
+        // Search: airport name, city or identifier -> tap a result to add it at the cursor
+        const search = document.createElement('div');
+        search.className = 'rp2-search';
+        this._searchInput = document.createElement('input');
+        this._searchInput.className = 'rp2-search-input';
+        this._searchInput.type = 'search';
+        this._searchInput.placeholder = '🔍 Airport name, city or identifier';
+        this._searchInput.setAttribute('autocomplete', 'off');
+        this._searchInput.setAttribute('autocorrect', 'off');
+        this._searchInput.spellcheck = false;
+        this._searchInput.addEventListener('input', () => this._onSearchInput());
+        this._resultsEl = document.createElement('div');
+        this._resultsEl.className = 'rp2-results';
+        this._resultsEl.hidden = true;
+        search.appendChild(this._searchInput);
+        search.appendChild(this._resultsEl);
+        inner.appendChild(search);
+
         // Route field
         this._fieldEl = document.createElement('div');
         this._fieldEl.className = 'rp2-field';
@@ -123,6 +141,9 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         this._statsStripEl = document.createElement('div');
         this._statsStripEl.className = 'rp2-stats';
         inner.appendChild(this._statsStripEl);
+        this._flightsEl = document.createElement('div');
+        this._flightsEl.className = 'rp2-flights';
+        inner.appendChild(this._flightsEl);
 
         // Toolbar
         const tb = document.createElement('div');
@@ -426,6 +447,8 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         if (!item) return;
         const rows = this._fixRows(this._problems.filter((p) => p.pillIndexes.includes(i)));
         const isPoint = item.type !== 'awy' && item.type !== 'direct';
+        if (item.type === 'dest') rows.push({ label: 'Approaches & arrivals…', primary: true, fn: () => this._openProcedures(i) });
+        if (isPoint && item.type !== 'dest' && item.type !== 'fuel') rows.push({ label: 'Fuel stop near here…', fn: () => this._fuelStopNear(i) });
         rows.push({ label: 'Insert before…', fn: () => this._startInsert(i) });
         rows.push({ label: 'Insert after…', fn: () => this._startInsert(i + 1) });
         if (item.type === 'airport' || item.type === 'fuel') {
@@ -447,6 +470,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
 
     _openMoreSheet() {
         this._openSheet('More', [
+            { label: 'Use clearance (CLR)', primary: true, fn: () => window.app?.routeFromClearance?.() },
             { label: 'Copy route', fn: () => this._onCopyTap() },
             { label: this._compactView ? 'Show all fixes' : 'Compact view', fn: () => { this._compactView = !this._compactView; this._saveOpts(); this._render(); } },
             { note: 'To paste a route, long-press the route field and paste: each identifier becomes a bubble.' },
@@ -648,6 +672,200 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         return x > a ? { name, e: a - 1, a, x } : null;
     }
 
+    // ── Search ───────────────────────────────────────────────────────────────
+
+    _onSearchInput() {
+        if (this._searchTimer) clearTimeout(this._searchTimer);
+        this._searchTimer = setTimeout(() => this._runSearch(), 250);
+    }
+
+    async _runSearch() {
+        const q = this._searchInput.value.trim();
+        const box = this._resultsEl;
+        if (q.length < 2 || !this._nasrDb) { box.hidden = true; box.innerHTML = ''; return; }
+        const seq = (this._searchSeq = (this._searchSeq || 0) + 1);
+        const ref = this._searchRef();
+        const rows = [];
+        const nmTo = (x) => (ref && Number.isFinite(x?.lat) && Number.isFinite(x?.lon)) ? Math.round(RouteCheck._directNm(ref, x)) : null;
+        for (const { a, nm } of await this._searchAirports(q, ref)) {
+            rows.push({ id: a.icao, main: a.name || '', sub: [[a.city, a.state].filter(Boolean).join(', '), nm != null ? `${nm} nm` : ''].filter(Boolean).join(' · ') });
+        }
+        let r = null;
+        try { r = await this._nasrDb.searchAllExtended?.(q, 6); } catch { r = null; }
+        if (seq !== this._searchSeq) return;                   // a newer search is running
+        const have = new Set(rows.map((x) => x.id));
+        for (const n of r?.navaids || []) if (!have.has(n.id)) rows.push({ id: n.id, main: n.name || '', sub: [n.type || 'Navaid', nmTo(n) != null ? `${nmTo(n)} nm` : ''].filter(Boolean).join(' · ') });
+        for (const f of r?.fixes || []) if (!have.has(f.id)) rows.push({ id: f.id, main: 'Fix', sub: nmTo(f) != null ? `${nmTo(f)} nm` : '' });
+        box.innerHTML = '';
+        if (!rows.length) box.innerHTML = '<div class="rp2-result-none">No match</div>';
+        for (const row of rows.slice(0, 12)) {
+            const b = document.createElement('button');
+            b.className = 'rp2-result';
+            b.innerHTML = '<span class="rp2-result-id"></span><span class="rp2-result-main"></span><span class="rp2-result-sub"></span>';
+            b.children[0].textContent = row.id;
+            b.children[1].textContent = row.main;
+            b.children[2].textContent = row.sub;
+            wireTap(b, () => this._pickSearchResult(row.id));
+            box.appendChild(b);
+        }
+        box.hidden = false;
+    }
+
+    /**
+     * Airports matching an identifier, name or city, best first: exact
+     * identifier, then identifier prefix, then name/city -- each nearest first.
+     * The whole airport list is searched (loaded once): NasrDB's own search
+     * stops at the first N in alphabetical order, so "Camden" gave Camden NJ,
+     * AL and Camdenton MO, never Camden SC.
+     */
+    async _searchAirports(q, ref) {
+        if (!this._airportList) {
+            try { this._airportList = (await this._nasrDb._getAll?.('airports')) || []; } catch { this._airportList = []; }
+        }
+        const Q = q.toUpperCase();
+        const KQ = 'K' + Q;
+        const out = [];
+        for (const a of this._airportList) {
+            const id = String(a.icao || '');
+            let rank = -1;
+            if (id === Q || id === KQ) rank = 0;
+            else if (id.startsWith(Q) || id.startsWith(KQ)) rank = 1;
+            // Name or city alike: KCDN is in Camden but named Woodward Fld.
+            else if (String(a.name || '').toUpperCase().includes(Q) || String(a.city || '').toUpperCase().includes(Q)) rank = 2;
+            if (rank < 0) continue;
+            // Public airports (K + 3) with a paved runway before private strips
+            // ("Aiken" gave 4SC7 Wexford Landing ahead of KAIK Aiken Rgnl).
+            const tier = /^K[A-Z0-9]{3}$/.test(id) && a.has_paved_rwy !== false ? 0 : 1;
+            const nm = ref && Number.isFinite(a.lat) && Number.isFinite(a.lon) ? RouteCheck._directNm(ref, a) : null;
+            out.push({ a, rank, tier, nm: nm != null ? Math.round(nm) : null });
+        }
+        out.sort((x, y) => x.rank - y.rank || x.tier - y.tier || (x.nm ?? 1e9) - (y.nm ?? 1e9));
+        return out.slice(0, 10);
+    }
+
+    /** Where "nearest" is measured from: own-ship if known, else the map centre. */
+    _searchRef() {
+        const s = typeof app !== 'undefined' ? app.stratuxClient?.situation : null;
+        if (s && Number.isFinite(s.lat) && Number.isFinite(s.lon) && s.lat && s.lon && !s._stale) return { lat: s.lat, lon: s.lon };
+        const c = typeof app !== 'undefined' ? app.cockpitMap?.map?.getCenter?.() : null;
+        return c ? { lat: c.lat, lon: c.lng } : null;
+    }
+
+    /** Add a search result to the route at the cursor. */
+    async _pickSearchResult(id) {
+        this._searchInput.value = '';
+        this._resultsEl.hidden = true;
+        this._resultsEl.innerHTML = '';
+        this._searchInput.blur();
+        await this._queueToken(id);
+    }
+
+    // ── Clearance ────────────────────────────────────────────────────────────
+
+    /**
+     * Route from a clearance: `limit` (C) becomes the destination, `route` (R)
+     * the bubbles in between, in order; words that aren't places (DIRECT,
+     * THEN, RADAR VECTORS...) are skipped. "AS FILED" keeps the route and only
+     * changes the destination. The departure is kept. The route checks then
+     * flag anything wrong; nothing is applied until Apply.
+     */
+    async loadClearance({ limit = '', route = '' }) {
+        await this._commitTyped();
+        const SKIP = new Set(['DIRECT', 'DCT', 'THEN', 'AS', 'FILED', 'RADAR', 'VECTORS', 'RV', 'TO', 'VIA',
+            'CLEARED', 'MAINTAIN', 'EXPECT', 'CLIMB', 'DESCEND', 'AND', 'FLY', 'HEADING', 'THE']);
+        const resolveApt = async (id) => {
+            if (!id) return '';
+            if (await this._isAirport(id)) return id;
+            if (id.length === 3 && await this._isAirport('K' + id)) return 'K' + id;
+            return id;
+        };
+        // The app fills C as "KCDN — WOODWARD FLD": the identifier is the first word.
+        const dest = await resolveApt((String(limit).toUpperCase().match(/^[A-Z0-9]{2,5}/) || [''])[0]);
+        const asFiled = /\bAS\s+FILED\b/.test(route);
+        const dep = this._route.find((p) => p.type === 'dep');
+        if (asFiled) {
+            const d = this._destPillIndex();
+            if (dest && d >= 0 && this._route[d].id !== dest) this._route[d] = { id: dest, type: 'dest' };
+            else if (dest && d < 0) this._route.push({ id: dest, type: 'dest' });
+            this._render();
+            this._toast('Clearance: as filed' + (dest ? ` to ${dest}` : ''), 3000);
+            return;
+        }
+        const keepDest = this._route[this._destPillIndex()]?.id;
+        const destId = dest || keepDest || '';
+        this._route = dep ? [{ ...dep }] : [];
+        if (destId) this._route.push({ id: destId, type: 'dest' });
+        this._cursorAtEnd = false;
+        this._insertIndex = null;
+        const tokens = String(route).toUpperCase().split(/[\s,]+/).filter(Boolean)
+            .filter((t) => !SKIP.has(t) && t !== dep?.id && t !== destId && /^[A-Z0-9]{2,5}$/.test(t));
+        for (const t of tokens) await this._queueToken(t);
+        this._render();
+        this._toast('Clearance loaded — check the route, then Apply', 3500);
+    }
+
+    // ── Procedures (destination) ─────────────────────────────────────────────
+
+    /** "RNAV (GPS) 07 (R07)" for CIFP approach codes; anything unrecognised is shown as is. */
+    static procLabel(name, type) {
+        if (type !== 'APPROACH') return name;
+        const m = /^([A-Z])(\d{2}[LRC]?)(?:-?([A-Z]))?$/.exec(name);
+        const T = { I: 'ILS', L: 'LOC', R: 'RNAV (GPS)', H: 'RNAV (RNP)', V: 'VOR', D: 'VOR/DME', N: 'NDB',
+                    B: 'LOC/BC', X: 'LDA', U: 'SDF', P: 'GPS', Q: 'NDB/DME' };
+        if (!m || !T[m[1]]) return name;
+        return `${T[m[1]]} ${m[2]}${m[3] ? ' ' + m[3] : ''} (${name})`;
+    }
+
+    async _openProcedures(i) {
+        const icao = this._route[i]?.id;
+        const ac = typeof app !== 'undefined' ? app.approachCharts : null;
+        if (!icao || !ac?.proceduresFor) { this._toast('Procedures not available'); return; }
+        const { key, loaded, procs } = await ac.proceduresFor(icao);
+        if (!loaded) { this._toast('Procedure data (CIFP) is not on the tablet', 4000); return; }
+        const apps = procs.filter((p) => p.type === 'APPROACH');
+        const stars = procs.filter((p) => p.type === 'STAR');
+        if (!apps.length && !stars.length) { this._toast(`No approaches or arrivals for ${icao}`, 3500); return; }
+        const rows = [];
+        if (apps.length) rows.push({ note: 'Approaches' });
+        for (const p of apps) rows.push({ label: RoutePlannerV2.procLabel(p.name, p.type), primary: true, fn: () => this._pickTransition(key, p) });
+        if (stars.length) rows.push({ note: 'Arrivals' });
+        for (const p of stars) rows.push({ label: p.name, fn: () => this._pickTransition(key, p) });
+        this._openSheet(`${icao} procedures`, rows);
+    }
+
+    _pickTransition(key, p) {
+        const ac = app.approachCharts;
+        const ts = (p.transitions || []).filter(Boolean);
+        const rows = ts.map((t) => ({ label: t === 'ALL' ? 'Common route' : `Via ${t}`, primary: true, fn: () => ac.loadProcedure(key, p.name, t) }));
+        if (p.type === 'APPROACH') rows.push({ label: 'Vectors (no transition)', fn: () => ac.loadProcedure(key, p.name, '') });
+        if (rows.length === 1) { rows[0].fn(); return; }
+        this._openSheet(RoutePlannerV2.procLabel(p.name, p.type), rows);
+    }
+
+    // ── Fuel stop where you choose ───────────────────────────────────────────
+
+    /** "Fuel stop near here…": avgas airports within 30 nm of this bubble, then the usual re-check. */
+    async _fuelStopNear(i) {
+        const item = this._route[i];
+        const aero = this._planner?._adapters?.aero;
+        const c = item ? await this._aero().resolve(item.id) : null;
+        if (!c || !aero?.nearestAirports) { this._toast('Can\'t look for airports near ' + (item?.id || 'here')); return; }
+        const dep = this._route.find((p) => p.type === 'dep')?.id;
+        const dest = this._route[this._destPillIndex()]?.id;
+        const near = (await aero.nearestAirports(c.lat, c.lon, 30))
+            .filter((a) => a.hasFuel && a.icao !== dep && a.icao !== dest && a.icao !== item.id)
+            .map((a) => ({ icao: a.icao, name: a.name || a.icao, lat: a.lat, lon: a.lon, distNm: Math.round(RouteCheck._directNm(c, a) * 10) / 10 }))
+            .sort((x, y) => x.distNm - y.distNm)
+            .slice(0, 8);
+        if (!near.length) { this._toast(`No airports with avgas within 30 nm of ${item.id}`, 3500); return; }
+        const computed = await this._compute();
+        this._computed = computed;
+        let hrs = 0;
+        const wps = computed?.waypoints || [];
+        for (let k = 0; k < (computed?.legs || []).length; k++) { hrs += computed.legs[k].timeHrs || 0; if (wps[k + 1]?.id === item.id) break; }
+        await this._processFuelStopCandidates({ fuelStopCandidates: [{ afterFixId: item.id, cumHrsAtStop: Math.round(hrs * 100) / 100, options: near }] });
+    }
+
     // ── Checks ───────────────────────────────────────────────────────────────
 
     _scheduleCheck() {
@@ -741,25 +959,56 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         const el = this._statsStripEl;
         if (!el) return;
         const s = c?.summary;
-        if (!s) { el.innerHTML = ''; return; }
-        const destIdx = this._destWaypointIndex(c.waypoints || []);
+        if (!s) { el.innerHTML = ''; if (this._flightsEl) this._flightsEl.innerHTML = ''; return; }
+        const wps = c.waypoints || [];
+        const destIdx = this._destWaypointIndex(wps);
         const legs = (c.legs || []).slice(0, destIdx);
-        const ete = s.totalEteHrs;
-        const h = Math.floor(ete), m = Math.round((ete - h) * 60);
-        const dep = this._departureTime ?? new Date();
-        const eta = new Date(dep.getTime() + ete * 3600000);
+        const hm = (hrs) => { const m = Math.round(hrs * 60); return `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}m`; };
+        const clock = (ms) => new Date(ms).toTimeString().slice(0, 5);
+        const etaMs = legs.length ? legs[legs.length - 1].eta : null;
         let wind = '—';
         const wl = legs.filter((l) => Number.isFinite(l.gsKt) && Number.isFinite(l.tasKt));
         if (wl.length) {
             const d = Math.round(wl.reduce((a, l) => a + (l.gsKt - l.tasKt), 0) / wl.length);
             wind = d >= 0 ? `${d} tail` : `${-d} head`;
         }
+        const ground = s.groundHrs > 0 ? ` +${hm(s.groundHrs)} gnd` : '';
         const cell = (k, v) => `<div><span class="rp2-k">${k}</span><span class="rp2-v">${v}</span></div>`;
         el.innerHTML = cell('DIST', `${Math.round(s.totalDistNm)} nm`)
-            + cell('ETE', `${h}h${String(m).padStart(2, '0')}m`)
-            + cell('ETA', eta.toTimeString().slice(0, 5))
+            + cell('ETE', `${hm(s.totalEteHrs)}${ground}`)
+            + cell('ETA', Number.isFinite(etaMs) ? clock(etaMs) : '—')
             + cell('FUEL', `${s.totalFuelGal.toFixed(1)} g`)
             + cell('WIND', wind);
+
+        // With fuel stops: one row per flight -- time, landing time, fuel left.
+        const flights = RoutePlannerV2.flightsOf(c);
+        if (!this._flightsEl) return;
+        if (flights.length < 2) { this._flightsEl.innerHTML = ''; return; }
+        this._flightsEl.innerHTML = flights.map((f, n) =>
+            `<div class="rp2-flight"><span class="rp2-flight-n">${n + 1}</span>`
+            + `<span class="rp2-flight-route">${f.from} → ${f.to}</span>`
+            + `<span>${hm(f.hrs)}</span><span>land ${clock(f.landMs)}</span>`
+            + `<span class="${f.landGal < this._reserveGal ? 'rp2-low' : ''}">${f.landGal.toFixed(1)} g left</span></div>`).join('');
+    }
+
+    /** The flights of a computed plan, split at fuel stops: [{ from, to, hrs, landMs, landGal }]. */
+    static flightsOf(c) {
+        const wps = c?.waypoints || [];
+        let destIdx = wps.findIndex((w) => w.isDest);
+        if (destIdx < 0) destIdx = wps.length - 1;
+        const out = [];
+        let start = 0, hrs = 0;
+        for (let k = 0; k < Math.min((c?.legs || []).length, destIdx); k++) {
+            const l = c.legs[k];
+            hrs += l.timeHrs || 0;
+            const to = wps[k + 1];
+            if (to?.fuelStop || k + 1 === destIdx) {
+                out.push({ from: wps[start].id, to: to.id, hrs, landMs: l.eta, landGal: l.fuelRemGal });
+                start = k + 1;
+                hrs = 0;
+            }
+        }
+        return out;
     }
 
     /** The base stats bar isn't on this screen. */

@@ -532,12 +532,18 @@ To edit the route, expand the strip and tap **EDIT**. From there you can:
 
 **Changing DEP or DEST** in the Route Planner: type the new identifier and tap **Apply**. One tap is enough, even if the keyboard is still up: what you typed is used. Changing DEP or DEST replaces only the end of the route; waypoints in between stay as they were. To fly the same route home, use **REV** instead.
 
+**Fuel stops in the numbers (both planners):** a fuel stop is planned as **full tanks** and **30 minutes on the ground**. Fuel remaining on the next flight starts from full again, and times after the stop include the 30 minutes.
+
 ### Route Planner (preview)
 
 **MORE → Route Planner (preview)** opens a redesigned planner for trying out. It works on the same route, and its settings are shared with the current planner. The current planner (EDIT on the route strip) is unchanged.
 
 - **One route field.** The route is a row of bubbles. Tap the field and type identifiers in clearance order (e.g. `MITVE T437 CAYCE`); a space or Done ends each one. Typing goes in just before the destination. To type a new destination, tap the empty space after the destination bubble first. The first identifier on an empty route is the departure, the next the destination.
-- **Tap a bubble** for its actions: Insert before/after, Fuel stop here (airports), Altitude, Start route here, End route here, Remove.
+- **Search** (the box above the route): type an airport's name, city or identifier ("Camden", "Aiken", "CDN"). Results show the identifier, name, city and distance, nearest to you first (to the map centre when there's no GPS position). Tap one to add it to the route where the cursor is.
+- **Route from your clearance.** Copy the clearance into the **CLR** pad as usual (C = clearance limit, R = route), then tap **TO PLANNER** next to the route, or in the planner, tap **⋯ → Use clearance (CLR)**. The planner gets the route in clearance order, with the clearance limit as the destination. Words like DIRECT or RADAR VECTORS are skipped, and "AS FILED" keeps your route and changes only the destination. The route check then shows anything that doesn't fit (e.g. a fix not on the airway). Nothing changes on the map until you tap Apply.
+- **Tap a bubble** for its actions: Insert before/after, Fuel stop here (airports), Fuel stop near here…, Altitude, Start route here, End route here, Remove. The **destination** bubble also has **Approaches & arrivals…**: its instrument approaches (e.g. *RNAV (GPS) 07 (R07)*, *ILS 07 (I07)*) and arrivals from the CIFP data. Pick one, then a transition (or *Vectors*), and the procedure is added to the route.
+- **Fuel stop near here…** on any bubble lists airports with avgas within 30 nm of that point, nearest first. The stop goes where you'd fly it, and the whole route is worked out again.
+- **Every flight of a trip with fuel stops:** under the totals, one row per flight shows the flight, its time, landing time and fuel left at landing. Fuel left turns red below your reserve. The plan assumes **full tanks** at each stop and **30 minutes on the ground**, which is included in later landing times and the ETA. The totals show air time plus ground time (e.g. *3h26m +0h30m gnd*).
 - **Route check.** Problems show under the field and as red or amber bubbles:
   - an identifier not found;
   - a fix that isn't on the airway it joins or leaves. For example, "MITVE is not on T437" offers *Join T437 at GREAT · 5.7 nm* and the other nearest T437 fixes, or *Go direct*;

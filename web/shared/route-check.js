@@ -134,23 +134,9 @@ const RouteCheck = (() => {
             }
         }
 
-        // Reserve at the destination. recomputeLegs never refuels at a fuel stop
-        // (fuelRemGal = capacity - the whole trip's burn), so count only the burn
-        // since the last fuel stop, with full tanks there.
-        let rem = computed?.summary?.fuelRemGal;
-        const totalFuel = computed?.summary?.totalFuelGal;
-        if (Number.isFinite(rem) && Number.isFinite(totalFuel) && computed?.legs?.length) {
-            const wps = computed.waypoints || [];
-            let destIdx = wps.findIndex((w) => w.isDest);
-            if (destIdx < 0) destIdx = wps.length - 1;
-            let sinceStop = 0;
-            for (let k = 0; k < Math.min(computed.legs.length, destIdx); k++) {
-                sinceStop += computed.legs[k].fuelGal || 0;
-                if (k + 1 < destIdx && wps[k + 1]?.fuelStop) sinceStop = 0;
-            }
-            const capacity = rem + totalFuel;
-            rem = capacity - sinceStop;
-        }
+        // Reserve at the destination (recomputeLegs refuels at fuel stops, so
+        // this is the fuel left on the last flight).
+        const rem = computed?.summary?.fuelRemGal;
         if (Number.isFinite(rem) && Number.isFinite(settings.reserveGal) && rem < settings.reserveGal) {
             red('below-reserve', [], `Lands with ${rem.toFixed(1)} gal (reserve ${settings.reserveGal})`);
         }

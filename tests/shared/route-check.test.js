@@ -135,17 +135,16 @@ describe('RouteCheck: fuel, reserve, detour', () => {
         expect(ps.find((x) => x.code === 'below-reserve').message).toBe('Lands with 6.2 gal (reserve 10)');
     });
 
-    it('reserve with a fuel stop: tanks are filled at the stop (the engine does not refuel)', async () => {
-        // 36 gal tanks; legs burn 20 + 12 gal with a stop between them: lands with 24, not 36-32=4.
+    it('reserve is checked on the engine\'s fuel remaining (which refuels at stops)', async () => {
+        // 36 gal tanks; legs burn 20 + 12 gal with a stop between them: the engine reports 24 left.
         const c = {
-            legs: [{ timeHrs: 1.5, fuelGal: 20 }, { timeHrs: 1.0, fuelGal: 12 }],
+            legs: [{ timeHrs: 1.5, fuelGal: 20, fuelRemGal: 16 }, { timeHrs: 1.0, fuelGal: 12, fuelRemGal: 24 }],
             waypoints: [{ id: 'A' }, { id: 'F', fuelStop: true }, { id: 'B', isDest: true }],
-            summary: { totalEteHrs: 2.5, totalDistNm: 300, totalFuelGal: 32, fuelRemGal: 4 },
+            summary: { totalEteHrs: 2.5, totalDistNm: 300, totalFuelGal: 32, fuelRemGal: 24 },
         };
         const ps = await RouteCheck.run({ pills: pills('KLKR KMDT'), computed: c, settings: settings(), aero });
         expect(ps.map((p) => p.code)).not.toContain('below-reserve');
-        // without the stop it is a real problem
-        const c2 = { ...c, waypoints: [{ id: 'A' }, { id: 'F' }, { id: 'B', isDest: true }] };
+        const c2 = { ...c, summary: { ...c.summary, fuelRemGal: 4 } };
         const ps2 = await RouteCheck.run({ pills: pills('KLKR KMDT'), computed: c2, settings: settings(), aero });
         expect(ps2.find((p) => p.code === 'below-reserve').message).toBe('Lands with 4.0 gal (reserve 10)');
     });

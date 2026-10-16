@@ -12234,3 +12234,31 @@ body.route-editing-mode .route-table-sheet {
 .rp2-sheet-note { grid-column: 1 / -1; font-family: var(--font-ui); font-weight: 800; font-size: 15px; color: var(--text-secondary); padding: 4px 0; }
 .rp2-note-red   { color: var(--color-danger-on-light); }
 .rp2-note-amber { color: var(--color-caution-on-light); }
+
+/* Route Planner (preview): search bar, results, per-flight rows (2026-10-16) */
+.rp2-search { position: relative; }
+.rp2-search-input {
+    width: 100%; min-height: var(--touch-min, 56px); box-sizing: border-box; padding: 0 12px;
+    border: 1px solid var(--border-strong); border-radius: 8px; background: var(--bg-surface);
+    font-family: var(--font-ui); font-weight: 700; font-size: 16px; color: var(--text-primary);
+}
+.rp2-search-input::placeholder { color: var(--text-muted); font-weight: 700; }
+.rp2-results {
+    position: absolute; left: 0; right: 0; top: 100%; z-index: 25; max-height: 50vh; overflow-y: auto;
+    background: var(--bg-primary); border: 2px solid var(--accent); border-radius: 8px; box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25);
+}
+.rp2-result {
+    display: grid; grid-template-columns: 5.5em 1fr; grid-template-rows: auto auto; align-items: center;
+    width: 100%; min-height: var(--touch-min, 56px); padding: 4px 12px; border: none; border-bottom: 1px solid var(--border-light);
+    background: var(--bg-primary); text-align: left;
+}
+.rp2-result-id { grid-row: 1 / 3; font-family: var(--font-instrument); font-weight: 900; font-size: 17px; color: var(--accent); }
+.rp2-result-main { font-family: var(--font-ui); font-weight: 800; font-size: 15px; color: var(--text-primary); }
+.rp2-result-sub { font-family: var(--font-ui); font-weight: 700; font-size: 13px; color: var(--text-secondary); }
+.rp2-result-none { padding: 12px; font-family: var(--font-ui); font-weight: 700; color: var(--text-secondary); }
+.rp2-flights:empty { display: none; }
+.rp2-flights { display: flex; flex-direction: column; gap: 2px; border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; background: var(--bg-surface); }
+.rp2-flight { display: grid; grid-template-columns: 1.5em 1fr auto auto auto; gap: 10px; align-items: center;
+    font-family: var(--font-instrument); font-weight: 900; font-size: 14px; color: var(--text-primary); }
+.rp2-flight-n { color: var(--text-label); }
+.rp2-low { color: var(--color-danger-on-light); }

@@ -473,3 +473,42 @@ describe('insertFuelStops — the search point is in the leg where 90% of the li
     });
 });
 
+describe('recomputeLegs — a fuel stop refuels and takes ground time (2026-10-16)', () => {
+    // Dana: mid-route stops must have every calculation right. Full tanks at
+    // the stop, 30 min on the ground before the next leg.
+    const wps = [
+        { id: 'KLKR', type: 'APT', lat: 34.723, lon: -80.855 },
+        { id: 'KCRG', type: 'APT', lat: 30.336, lon: -81.515, fuelStop: true },
+        { id: 'KTMB', type: 'APT', lat: 25.648, lon: -80.433, isDest: true },
+    ];
+    const dep = new Date('2026-10-16T14:00:00Z');
+    const plan = { departure: 'KLKR', destination: 'KTMB', cruiseAltFt: 6500, waypoints: wps };
+
+    it('fuel remaining after the stop starts from full tanks', () => {
+        const p = new RoutePlanner({ aero: mockAero, plans: mockPlans });
+        const r = p.recomputeLegs(plan, undefined, { departureTime: dep });
+        const cap = r.legs[0].fuelRemGal + r.legs[0].fuelGal;
+        expect(r.legs[1].fuelRemGal).toBeCloseTo(cap - r.legs[1].fuelGal, 6);
+        expect(r.summary.fuelRemGal).toBeCloseTo(r.legs[1].fuelRemGal, 6);
+        expect(r.summary.totalFuelGal).toBeCloseTo(r.legs[0].fuelGal + r.legs[1].fuelGal, 6);   // still the whole trip's burn
+    });
+
+    it('the ETA after the stop includes 30 min on the ground (configurable)', () => {
+        const p = new RoutePlanner({ aero: mockAero, plans: mockPlans });
+        const r = p.recomputeLegs(plan, undefined, { departureTime: dep });
+        expect(r.legs[1].eta - r.legs[0].eta).toBeCloseTo((r.legs[1].timeHrs * 60 + 30) * 60000, -2);
+        expect(r.summary.groundHrs).toBe(0.5);
+        expect(r.summary.totalEteHrs).toBeCloseTo(r.legs[0].timeHrs + r.legs[1].timeHrs, 6);    // air time
+        const r45 = p.recomputeLegs(plan, undefined, { departureTime: dep, fuelStopGroundMin: 45 });
+        expect(r45.legs[1].eta - r45.legs[0].eta).toBeCloseTo((r45.legs[1].timeHrs * 60 + 45) * 60000, -2);
+    });
+
+    it('no fuel stop: nothing changes', () => {
+        const p = new RoutePlanner({ aero: mockAero, plans: mockPlans });
+        const r = p.recomputeLegs({ ...plan, waypoints: wps.map(({ fuelStop, ...w }) => w) }, undefined, { departureTime: dep });
+        expect(r.summary.groundHrs).toBe(0);
+        const cap = r.legs[0].fuelRemGal + r.legs[0].fuelGal;
+        expect(r.legs[1].fuelRemGal).toBeCloseTo(cap - r.legs[0].fuelGal - r.legs[1].fuelGal, 6);
+    });
+});
+
