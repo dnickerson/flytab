@@ -428,3 +428,11 @@ describe('Route Planner (preview): finishing an insert (Dana, 2026-10-16)', () =
         expect(tb).toMatch(/await this\._commitTyped\(\); this\._endInsert\(\);/);
     });
 });
+
+describe('Route Planner (preview): layout (Dana, 2026-10-16)', () => {
+    it('the command buttons sit directly under the route field', () => {
+        const p = make();
+        const order = [...p._el.querySelector('.rp2-inner').children].map((e) => e.className.split(' ')[0]);
+        expect(order.slice(0, 7)).toEqual(['rp2-hdr', 'rp2-search', 'rp2-field', 'rp2-toolbar', 'rp2-problem', 'rp2-grid', 'rp2-stats']);
+    });
+});

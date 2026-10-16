@@ -128,24 +128,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         });
         inner.appendChild(this._fieldEl);
 
-        // Problem line
-        this._problemEl = document.createElement('div');
-        this._problemEl.className = 'rp2-problem';
-        wireTap(this._problemEl, () => this._openProblemSheet());
-        inner.appendChild(this._problemEl);
-
-        // Settings grid
-        inner.appendChild(this._buildGrid());
-
-        // Stats strip
-        this._statsStripEl = document.createElement('div');
-        this._statsStripEl.className = 'rp2-stats';
-        inner.appendChild(this._statsStripEl);
-        this._flightsEl = document.createElement('div');
-        this._flightsEl.className = 'rp2-flights';
-        inner.appendChild(this._flightsEl);
-
-        // Toolbar
+        // Toolbar: right under the route field (Dana: commands next to the route)
         const tb = document.createElement('div');
         tb.className = 'rp2-toolbar';
         const mk = (label, fn, cls = '') => {
@@ -175,6 +158,24 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         mk('⋯', () => this._openMoreSheet());
         mk('Apply', () => this._onApplyKeepOpenTap(), 'rp2-apply');
         inner.appendChild(tb);
+
+        // Problem line
+        this._problemEl = document.createElement('div');
+        this._problemEl.className = 'rp2-problem';
+        wireTap(this._problemEl, () => this._openProblemSheet());
+        inner.appendChild(this._problemEl);
+
+        // Settings grid
+        inner.appendChild(this._buildGrid());
+
+        // Stats strip
+        this._statsStripEl = document.createElement('div');
+        this._statsStripEl.className = 'rp2-stats';
+        inner.appendChild(this._statsStripEl);
+        this._flightsEl = document.createElement('div');
+        this._flightsEl.className = 'rp2-flights';
+        inner.appendChild(this._flightsEl);
+
 
         // Sheet (bubble actions, problems, ⋯)
         this._sheetEl = document.createElement('div');
