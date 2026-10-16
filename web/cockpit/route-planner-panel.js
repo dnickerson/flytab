@@ -236,8 +236,10 @@ class RoutePlannerPanel {
         if (airportIdx < 0) airportIdx = this._route.findIndex(p => p.type !== 'dep' && isAirport(p));
         if (airportIdx < 0) airportIdx = this._route.findIndex(isAirport);
 
+        // proc: an approach fix for this airport; REV drops it (it belongs to
+        // the old destination's approach, not the way back).
         const toPill = (wp) => Object.assign(
-            { id: wp.icao, type: 'fix' },
+            { id: wp.icao, type: 'fix', proc: true },
             wp.alt != null ? { altFt: wp.alt } : {}
         );
         const beforePills = insertBefore.map(toPill);
@@ -416,34 +418,27 @@ class RoutePlannerPanel {
                 this._coords[id] = { lat: wp.lat, lon: wp.lon };
         }
 
-        // Restore per-waypoint altFt onto pills — both load paths build pills
-        // from IDs only and lose altFt stored on the saved waypoints.
-        const altByWpId = new Map(
-            wps.filter(wp => wp.altFt != null)
-               .map(wp => [wp.icao || wp.name || wp.fix, wp.altFt])
-        );
-        if (altByWpId.size > 0) {
-            for (const pill of this._route) {
-                const alt = altByWpId.get(pill.id);
-                if (alt != null) pill.altFt = alt;
-            }
-        }
-
-        // Restore fuel-stop pills — both load paths type interior pills 'fix', but Plan
-        // and Apply read the stop (waypoint.fuelStop) from the pill type.
-        const fuelIds = new Set(wps.filter(wp => wp.fuelStop).map(wp => wp.icao || wp.name || wp.fix));
+        // Restore per-waypoint data the pills lost (both load paths build pills
+        // from IDs only): altFt, fuel stops (Plan and Apply read waypoint.fuelStop
+        // from the pill type), and approach-procedure marks (insertApproach; REV
+        // drops those fixes). By POSITION, walking point pills and waypoints in
+        // order: an id can appear twice (an en-route fix that is also an approach
+        // or missed-approach fix), and by id the en-route one took the approach's
+        // mark and altitude -- REV then deleted it (2026-10-15 review, H2).
+        let wpAt = 0;
         for (const pill of this._route) {
-            if (pill.type === 'fix' && fuelIds.has(pill.id)) {
-                pill.type = 'fuel';
-                delete pill.airway;
-            }
+            if (pill.type === 'awy' || pill.type === 'direct') continue;
+            let k = wpAt;
+            while (k < wps.length && (wps[k].icao || wps[k].name || wps[k].fix) !== pill.id) k++;
+            if (k >= wps.length) continue;            // not among the waypoints: nothing to restore
+            const wp = wps[k];
+            wpAt = k + 1;
+            if (wp.altFt != null) pill.altFt = wp.altFt;
+            if (pill.type === 'fix' && wp.fuelStop) { pill.type = 'fuel'; delete pill.airway; }
+            if (pill.type === 'fix' && wp.proc) pill.proc = true;
         }
 
-        // Sync DEP/DEST inputs from the dep pill and the dest pill (not the last pill)
-        const firstFix = this._route.find(p => p.type !== 'awy' && p.type !== 'direct');
-        const destPill = this._route[this._destPillIndex()];
-        if (this._depInput  && firstFix) this._depInput.value  = firstFix.id;
-        if (this._destInput && destPill) this._destInput.value = destPill.id;
+        this._syncFieldsFromPills();
     }
 
     // ── Async planner build ───────────────────────────────────────────────────
@@ -631,6 +626,7 @@ class RoutePlannerPanel {
             btn.textContent = hrs === 2.0 ? '2h' : hrs === 2.5 ? '2.5h' : '3h';
             btn.dataset.hrs = hrs;
             wireTap(btn, () => {
+                this._commitFieldEdits();      // a DEST typed just before (touchend precedes blur)
                 this._maxLegHrs = hrs;
                 this._saveOpts();
                 this._legBtnsEl.querySelectorAll('.rpp-leg-btn').forEach(b =>
@@ -670,27 +666,68 @@ class RoutePlannerPanel {
         row.appendChild(spacer);
         row.appendChild(settingsBtn);
 
-        // Sync DEP/DEST inputs → first/last pill
-        this._depInput.addEventListener('change', () => {
-            const v = this._depInput.value.trim().toUpperCase();
-            if (!v) return;
-            this._depInput.value = v;
-            if (this._route.length > 0) this._route[0] = { id: v, type: 'dep' };
-            else this._route.unshift({ id: v, type: 'dep' });
-            this._render();
-        });
-        this._destInput.addEventListener('change', () => {
-            const v = this._destInput.value.trim().toUpperCase();
-            if (!v) return;
-            this._destInput.value = v;
-            const destIdx = this._destPillIndex();
-            if (destIdx >= 0) this._route[destIdx] = { id: v, type: 'dest' };
-            else if (this._route.length > 1) this._route[this._route.length - 1] = { id: v, type: 'dest' };
-            else this._route.push({ id: v, type: 'dest' });
-            this._render();
-        });
+        this._wireFieldEdits();
 
         return row;
+    }
+
+    /**
+     * DEP/DEST inputs -> the dep/dest pills. A field commits when it loses focus
+     * ('change'), and also when any toolbar action runs (_commitFieldEdits):
+     * buttons fire on touchend, before the field loses focus, so Apply used to
+     * send the old value -- KCDN -> KCDN after retyping KCDN -> KLKR (2026-10-15).
+     * Only a field the pilot typed in since it was last committed or synced counts.
+     */
+    _wireFieldEdits() {
+        this._depDirty = false;
+        this._destDirty = false;
+        this._depInput.addEventListener('input', () => { this._depDirty = true; });
+        this._destInput.addEventListener('input', () => { this._destDirty = true; });
+        this._depInput.addEventListener('change', () => this._commitFieldEdits());
+        this._destInput.addEventListener('change', () => this._commitFieldEdits());
+    }
+
+    /** Commit typed DEP/DEST text to the pills (see _wireFieldEdits). */
+    _commitFieldEdits() {
+        let changed = false;
+        if (this._depDirty && this._depInput) {
+            this._depDirty = false;
+            const v = this._depInput.value.trim().toUpperCase();
+            if (v) {
+                this._depInput.value = v;
+                if (this._route[0]?.id !== v || this._route[0]?.type !== 'dep') {
+                    if (this._route.length > 0) this._route[0] = { id: v, type: 'dep' };
+                    else this._route.unshift({ id: v, type: 'dep' });
+                    changed = true;
+                }
+            }
+        }
+        if (this._destDirty && this._destInput) {
+            this._destDirty = false;
+            const v = this._destInput.value.trim().toUpperCase();
+            if (v) {
+                this._destInput.value = v;
+                const destIdx = this._destPillIndex();
+                if (destIdx < 0 || this._route[destIdx].id !== v) {
+                    if (destIdx >= 0) this._route[destIdx] = { id: v, type: 'dest' };
+                    else if (this._route.length > 1) this._route[this._route.length - 1] = { id: v, type: 'dest' };
+                    else this._route.push({ id: v, type: 'dest' });
+                    changed = true;
+                }
+            }
+        }
+        if (changed) this._render();
+        return changed;
+    }
+
+    /** DEP/DEST inputs from the dep pill and the dest pill (not the last pill). */
+    _syncFieldsFromPills() {
+        const firstFix = this._route.find(p => p.type !== 'awy' && p.type !== 'direct');
+        const destPill = this._route[this._destPillIndex()];
+        if (this._depInput  && firstFix) this._depInput.value  = firstFix.id;
+        if (this._destInput && destPill) this._destInput.value = destPill.id;
+        this._depDirty = false;
+        this._destDirty = false;
     }
 
     _buildSummaryBar() {
@@ -1450,7 +1487,8 @@ class RoutePlannerPanel {
             const btn = document.createElement('button');
             btn.className = 'rpp-tbtn' + (extraClass ? ' ' + extraClass : '');
             btn.textContent = label;
-            wireTap(btn, handler);
+            // Typed DEP/DEST first: the tap lands before the field loses focus.
+            wireTap(btn, (e) => { this._commitFieldEdits(); handler(e); });
             return btn;
         };
 
@@ -1463,6 +1501,9 @@ class RoutePlannerPanel {
         bar.appendChild(this._planBtn);
 
         bar.appendChild(mkBtn('Clear', () => this._onClearTap()));
+
+        // REV: reverse the route and apply it (the way home)
+        bar.appendChild(mkBtn('REV', () => this._onReverseTap(), 'rpp-tbtn-rev'));
 
         this._compactBtn = mkBtn('Compact',
             () => this._onCompactToggle(),
@@ -2134,6 +2175,7 @@ class RoutePlannerPanel {
     // ── Add input handler ─────────────────────────────────────────────────────
 
     async _onAddTap() {
+        this._commitFieldEdits();      // a DEST typed just before tapping Add
         const v = this._addInput.value.trim().toUpperCase();
         if (!v) return;
 
@@ -2872,6 +2914,152 @@ class RoutePlannerPanel {
         });
     }
 
+    // ── REV ───────────────────────────────────────────────────────────────────
+
+    /**
+     * The route reversed, as new pills (`route` is not modified), or null with
+     * fewer than two points. Dropped: everything after the dest pill (missed
+     * approach) and procedure fixes (proc, from insertApproach) -- both belong
+     * to the old destination. Each leg keeps its airway: a waypoint's airway is
+     * the leg INTO it (an AWY pill just before it, else its own airway tag), so
+     * reversed, a point takes the airway of the leg that originally left it. AWY
+     * pills are emitted where the airway changes; the fixes after one are tagged
+     * with it, as _loadPlan tags them. Fuel stops and pilot altitudes stay on
+     * their waypoint.
+     */
+    static reversePills(route) {
+        let destIdx = -1;
+        for (let i = route.length - 1; i >= 0; i--) if (route[i].type === 'dest') { destIdx = i; break; }
+        const core = (destIdx >= 0 ? route.slice(0, destIdx + 1) : route).filter(p => !p.proc);
+
+        const pts = [];      // { pill, via } -- via: the connector into this point
+        let via = null;
+        for (const p of core) {
+            if (p.type === 'awy')    { via = { awy: p.id }; continue; }
+            if (p.type === 'direct') { via = { direct: p }; continue; }
+            pts.push({ pill: p, via: via || (p.airway ? { awy: p.airway } : null) });
+            via = null;
+        }
+        if (pts.length < 2) return null;
+
+        const out = [];
+        let prevAwy = null;
+        for (let i = pts.length - 1; i >= 0; i--) {
+            const q = { ...pts[i].pill };
+            delete q.airway;
+            const v = i === pts.length - 1 ? null : pts[i + 1].via;
+            if (v?.awy) {
+                if (v.awy !== prevAwy) out.push({ id: v.awy, type: 'awy' });
+                q.airway = v.awy;
+                prevAwy = v.awy;
+            } else {
+                if (v?.direct) out.push({ ...v.direct });
+                prevAwy = null;
+            }
+            if (q.type === 'dep' || q.type === 'dest') q.type = 'fix';
+            out.push(q);
+        }
+        const points = out.filter(p => p.type !== 'awy' && p.type !== 'direct');
+        points[0].type = 'dep';
+        points[points.length - 1].type = 'dest';
+        return out;
+    }
+
+    /** REV: reverse the pills, update DEP/DEST, apply; UNDO puts the pills back and re-applies them. */
+    async _onReverseTap() {
+        const reversed = RoutePlannerPanel.reversePills(this._route);
+        if (!reversed) {
+            this._toast('Need a departure and a destination to reverse');
+            return false;
+        }
+        const before = this._route.map(p => ({ ...p }));
+        this._route = reversed;
+        this._insertIndex = null;
+        this._syncFieldsFromPills();
+        this._render();
+        try {
+            const ok = await this._doApply();
+            if (ok) {
+                const dep = this._route.find(p => p.type === 'dep')?.id;
+                const dest = this._route[this._destPillIndex()]?.id;
+                RoutePlannerPanel._announceReverse(dep, dest, async () => {
+                    this._route = before;
+                    this._insertIndex = null;
+                    this._syncFieldsFromPills();
+                    this._render();
+                    await this._doApply();
+                });
+            }
+            return ok;
+        } catch (err) {
+            console.error('[RoutePlannerPanel] reverse apply failed:', err);
+            this._toast('Reverse failed: ' + (err?.message || err), 5000);
+            return false;
+        }
+    }
+
+    /** How long a REV's UNDO stays offered. */
+    static UNDO_MS = 15000;
+
+    /** "Route reversed" with UNDO (the global toast: visible with or without the panel). */
+    static _announceReverse(dep, dest, undo) {
+        if (typeof app === 'undefined' || !app.showToast) return;
+        const toast = app.showToast(`Route reversed: ${dep} → ${dest}. Check altitudes.`, [{ label: 'UNDO', action: undo }]);
+        setTimeout(() => toast?.remove?.(), RoutePlannerPanel.UNDO_MS);
+    }
+
+    /**
+     * The route table's REV: reverse `plan` (the active trip) and apply it.
+     * Runs on a separate, invisible planner instance (_headless), never on this
+     * one: the pilot may open the planner, Direct-To or load an approach while
+     * it runs, and the shared instance then applied THAT route and was emptied
+     * by close() afterwards (2026-10-15 review, H1). Same Apply path as the
+     * planner's REV (legs recomputed with the winds already fetched). Returns
+     * { dep, dest }, or { error } with the reason.
+     */
+    async reverseAndApply(plan) {
+        const before = JSON.parse(JSON.stringify(plan));
+        const h = this._headless();
+        h._loadPlan(plan);
+        await h._inferAirwaysIntoRoute();
+        const reversed = RoutePlannerPanel.reversePills(h._route);
+        if (!reversed) return { error: 'need a departure and a destination' };
+        h._route = reversed;
+        const ok = await h._doApply();
+        if (!ok) return { error: h._messages.join('; ') || 'apply failed' };
+        const dep = h._route.find(p => p.type === 'dep')?.id;
+        const dest = h._route[h._destPillIndex()]?.id;
+        RoutePlannerPanel._announceReverse(dep, dest, async () => {
+            await app.applyRouteEdit(before);
+            // The planner opened since: show what is applied now.
+            if (document.body.classList.contains('route-editing-mode')) await this.open(before);
+        });
+        return { dep, dest };
+    }
+
+    /**
+     * A planner instance with no DOM that shares this one's route engine,
+     * coordinate cache, airway cache, settings and the winds already fetched.
+     * Its messages go to the global toast (it has no panel to show them in).
+     */
+    _headless() {
+        const h = new RoutePlannerPanel(document.createElement('div'), this._nasrDb, this._adapters);
+        for (const k of ['_planner', '_coords', '_altitude', '_maxLegHrs', '_selfServeOnly', '_reserveGal',
+                         '_routingMode', '_terminalRouting', '_avoidList', '_departureTime', '_cruiseAltFt',
+                         '_pctPower', '_lastWinds']) {
+            h[k] = this[k];
+        }
+        h._getAirwayPairCache = () => this._getAirwayPairCache();
+        h._render = () => {};
+        h._saveOpts = () => {};
+        h._messages = [];
+        h._toast = (msg) => {
+            h._messages.push(msg);
+            if (typeof app !== 'undefined' && app.showToast) app.showToast(msg);
+        };
+        return h;
+    }
+
     // ── Apply button ──────────────────────────────────────────────────────────
 
     /**
@@ -2976,6 +3164,19 @@ class RoutePlannerPanel {
         // Pass appliedPlan so _saveCurrentTrip uses the freshly-built plan, not
         // the potentially-stale _lastPlan (which is set by _plan(), not here).
         this._saveCurrentTrip(appliedPlan || plan).catch(e => console.error('auto-save failed', e));
+
+        // What was applied is now the plan: wind/altitude/power changes, the
+        // altitude table and Save work from it, not from an earlier Plan or the
+        // route before a REV (2026-10-15 review, M2). Same shape as Plan's.
+        const fuelStops = wps.filter(w => w.fuelStop)
+            .map(w => ({ icao: w.icao, lat: w.lat, lon: w.lon, name: w.name }));
+        this._lastPlan = {
+            departure:   dep,
+            destination: dest,
+            waypoints:   wps,
+            ...(fuelStops.length ? { fuelStops } : {}),
+        };
+        this._syncSaveBtnState();
 
         // Update stats bar to reflect exactly what was applied, not the stale
         // A*-planned route which may have a different waypoint count/distance.
@@ -3197,6 +3398,8 @@ class RoutePlannerPanel {
                 // isDest: recomputeLegs and the route table end the trip here, ahead of any
                 // missed-approach fixes. Derived from the pill type on every conversion.
                 ...(pill.type === 'dest' ? { isDest: true } : {}),
+                // proc: approach fix (insertApproach); kept so REV can drop it after a reload.
+                ...(pill.proc ? { proc: true } : {}),
                 ...(aw ? { airway: aw } : {}),
             });
             pendingAirway = null;

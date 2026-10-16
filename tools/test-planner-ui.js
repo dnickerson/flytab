@@ -64,7 +64,7 @@ const log = (label, val) =>
     // Tries the real button first; falls back to programmatic open if the
     // route table handle isn't visible (e.g., no current trip).
     const opened = await page.evaluate(async () => {
-        const editBtn = document.querySelector('.route-table-edit-btn');
+        const editBtn = document.querySelector('.route-table-edit-btn:not(.rt-rev-btn)');
         if (editBtn && editBtn.offsetParent !== null) {
             editBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
             return 'edit-button';

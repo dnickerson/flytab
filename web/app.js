@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v11.27';
+const FLYTAB_VERSION = 'v11.29';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 // Kept in memory and saved at most every FLUSH_MS (errors at once). Every log()
@@ -1320,6 +1320,36 @@ class FlyTabApp {
         this._updateOrientation();
         this.routePlannerPanel?.open(plan || this._currentTrip);
         setTimeout(() => this.cockpitMap?.map?.invalidateSize(), 300);
+    }
+
+    /**
+     * The route table's REV: reverse the active route and apply it, through the
+     * route planner (legs and winds recomputed) without opening it.
+     */
+    async reverseActiveRoute() {
+        const trip = this._currentTrip;
+        if (!trip?.waypoints || trip.waypoints.length < 2 || !this.routePlannerPanel) {
+            this.showToast('No route to reverse');
+            return;
+        }
+        // A route change still being applied: reversing the old one now would
+        // race it (2026-10-15 review, L5).
+        if (this._reversingRoute || this._applyingPlan || this._pendingPlanEdit) {
+            this.showToast('Route still updating — tap REV again in a moment');
+            return;
+        }
+        this._reversingRoute = true;
+        this.showToast('Reversing route…');
+        try {
+            // Success is announced by the planner ("Route reversed … UNDO").
+            const r = await this.routePlannerPanel.reverseAndApply(trip);
+            if (!r || r.error) this.showToast(`Could not reverse the route${r?.error ? ': ' + r.error : ''}`);
+        } catch (err) {
+            DiagLog.log('error', `reverseActiveRoute: ${err?.message || err}`);
+            this.showToast('Could not reverse the route');
+        } finally {
+            this._reversingRoute = false;
+        }
     }
 
     closeRoutePlanner() {

@@ -805,6 +805,7 @@ class RouteTable {
                 };
                 if (wp.type) out.type = wp.type;
                 if (wp.isDest) out.isDest = true;   // destination ahead of any missed-approach fixes
+                if (wp.proc) out.proc = true;       // approach fix: REV drops it (2026-10-15 review, M3)
                 if (wp.fuel_add_gal != null) out.fuel_add_gal = wp.fuel_add_gal;
                 if (wp.alt_constraint) out.alt_constraint = wp.alt_constraint;
                 if (wp.alt_constraint_upper != null) out.alt_constraint_upper = wp.alt_constraint_upper;
@@ -2459,32 +2460,6 @@ class RouteTable {
         });
     }
 
-    _reverseRoute() {
-        if (!this._waypoints?.length || this._waypoints.length < 2) {
-            if (typeof app !== 'undefined') app.showToast('Need at least 2 waypoints to reverse', 'amber');
-            return;
-        }
-        const reversed = [...this._waypoints].reverse();
-        const trip = app?._currentTrip || {};
-        const plan = {
-            ...trip,
-            departure: reversed[0]?.icao || '',
-            destination: reversed[reversed.length - 1]?.icao || '',
-            waypoints: reversed,
-            flight_plan: {
-                ...(trip.flight_plan || {}),
-                departure: reversed[0]?.icao || '',
-                destination: reversed[reversed.length - 1]?.icao || '',
-                route: reversed.map(w => w.icao || w.name).filter(Boolean),
-                legs: [],
-            },
-        };
-        if (typeof app !== 'undefined') {
-            app.applyRouteEdit(plan);
-            app.showToast('Route reversed');
-        }
-    }
-
     // ========== DOM ==========
 
     _buildDOM() {
@@ -2499,14 +2474,20 @@ class RouteTable {
     <div class="rt-handle-row">
         <span class="handle-summary"></span>
         <button class="rt-profile-btn" title="Terrain profile" style="min-width:44px;min-height:44px;font-size:18px;background:none;border:none;color:inherit;cursor:pointer;padding:0 8px">&#x26F0;</button>
+        <button class="route-table-edit-btn rt-rev-btn" title="Reverse the route">REV</button>
         <button class="route-table-edit-btn">EDIT</button>
         <button class="rt-close-btn" title="Close route table">&#x2715;</button>
         <span class="rt-open-hint" hidden>&#x2191;</span>
     </div>
 `;
 
+        // REV: reverse the active route and apply it, in one tap (the way home).
+        // Goes through the route planner so legs and winds are recomputed.
+        this._revBtn = this._handleEl.querySelector('.rt-rev-btn');
+        wireTap(this._revBtn, () => { if (typeof app !== 'undefined') app.reverseActiveRoute(); });
+
         // EDIT button opens the route planner panel
-        this._editBtn = this._handleEl.querySelector('.route-table-edit-btn');
+        this._editBtn = this._handleEl.querySelector('.route-table-edit-btn:not(.rt-rev-btn)');
         wireTap(this._editBtn, () => {
             if (typeof app !== 'undefined') {
                 app.openRoutePlanner(app._currentTrip);
