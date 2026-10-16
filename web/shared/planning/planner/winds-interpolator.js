@@ -2,10 +2,11 @@
 'use strict';
 
 const CACHE_KEY  = 'flypi_winds_cache';
-const CACHE_MINS = 60; // re-fetch after 1 hour
 
 /**
  * Select the AWC FD forecast cycle based on departure UTC hour.
+ * Not used for winds any more: it ignores the date and the issue time (at 20Z
+ * it gave the 12-hour forecast for a departure now). See pickFdPeriod.
  * @param {number} utcHour  0–23
  * @returns {'06'|'12'|'24'}
  */
@@ -59,69 +60,177 @@ export function findNearestFdStation(allWinds, lat, lon, fdLocs) {
     return best;
 }
 
+const FD_PERIODS = ['06', '12', '24'];
+// FIS-B winds are the current forecast: only for a departure this soon.
+const FISB_MAX_AHEAD_MS = 3 * 3600_000;
+// A departure up to this long before the first FOR USE window (between issues) uses that period.
+const BEFORE_FIRST_MS = 60 * 60_000;
+
+/** The UTC date with day-of-month `dd` nearest `ref` (this, last or next month). */
+function dayNear(dd, hh, mm, ref) {
+    let best = null;
+    for (const dm of [-1, 0, 1]) {
+        const d = new Date(Date.UTC(ref.getUTCFullYear(), ref.getUTCMonth() + dm, dd, hh, mm));
+        if (d.getUTCDate() !== dd) continue;               // no such day in that month
+        if (!best || Math.abs(d - ref) < Math.abs(best - ref)) best = d;
+    }
+    return best;
+}
+
 /**
- * Fetch winds aloft, trying flywhere proxy → localStorage cache → null.
- * Direct AWC fetch is CORS-blocked from Capacitor's http://localhost origin;
- * route through the flywhere proxy which mirrors the AWC windtemp endpoint.
- * FIS-B fallback: format investigation required at implementation time (see spec).
- * @param {Date} departureTime  used to select FD cycle
+ * The validity of an FD (winds aloft) product, from its header:
+ * "VALID 170000Z   FOR USE 2000-0300Z" -> { validAt, useFrom, useTo } (Dates, UTC).
+ * The FOR USE window brackets the valid time. `ref` (default now) places the
+ * day of month in a month.
+ * @param {string} text
+ * @param {Date} [ref]
+ * @returns {{validAt: Date, useFrom: Date, useTo: Date}|null}
+ */
+export function parseFdHeader(text, ref = new Date()) {
+    const m = /VALID\s+(\d{2})(\d{2})(\d{2})Z\s+FOR USE\s+(\d{2})(\d{2})-(\d{2})(\d{2})Z/.exec(String(text || ''));
+    if (!m) return null;
+    const [dd, hh, mi, fh, fm, th, tm] = m.slice(1).map(Number);
+    const validAt = dayNear(dd, hh, mi, ref);
+    if (!validAt) return null;
+    const at = (h, mn, days) => new Date(Date.UTC(validAt.getUTCFullYear(), validAt.getUTCMonth(), validAt.getUTCDate() + days, h, mn));
+    let useFrom = at(fh, fm, 0);
+    if (useFrom > validAt) useFrom = at(fh, fm, -1);
+    let useTo = at(th, tm, 0);
+    if (useTo < validAt) useTo = at(th, tm, 1);
+    return { validAt, useFrom, useTo };
+}
+
+/**
+ * The period whose FOR USE window holds the departure, or null (past the last
+ * window, or long before the first).
+ * @template {{header: {validAt: Date, useFrom: Date, useTo: Date}}} P
+ * @param {P[]} periods
+ * @param {Date} departure
+ * @returns {P|null}
+ */
+export function pickFdPeriod(periods, departure) {
+    const t = departure.getTime();
+    const ok = periods.filter((p) => p?.header).sort((a, b) => a.header.useFrom - b.header.useFrom);
+    const hit = ok.find((p) => t >= p.header.useFrom.getTime() && t < p.header.useTo.getTime());
+    if (hit) return hit;
+    const first = ok[0];
+    if (first && t < first.header.useFrom.getTime() && first.header.useFrom.getTime() - t <= BEFORE_FIRST_MS) return first;
+    return null;
+}
+
+function cacheKey(cycle) { return `${CACHE_KEY}_${cycle}`; }
+
+function readCachedPeriods() {
+    const out = [];
+    for (const cycle of FD_PERIODS) {
+        try {
+            const c = JSON.parse(localStorage.getItem(cacheKey(cycle)) || 'null');
+            // Entries from before the FOR USE selection have no header: unusable.
+            if (!c?.winds || !c.header) continue;
+            const h = { validAt: new Date(c.header.validAt), useFrom: new Date(c.header.useFrom), useTo: new Date(c.header.useTo) };
+            if ([h.validAt, h.useFrom, h.useTo].some((d) => !Number.isFinite(d.getTime()))) continue;
+            out.push({ cycle, header: h, winds: c.winds });
+        } catch (_) {}
+    }
+    return out;
+}
+
+async function fetchPeriod(base, cycle) {
+    try {
+        const url = `${base}/weather?type=windtemp&region=all&level=low&fcst=${cycle}`;
+        const resp = await fetch(url, { signal: AbortSignal.timeout(8000) });
+        if (!resp.ok) return null;
+        const text = await resp.text();
+        if (typeof WeatherClient === 'undefined' || !WeatherClient.parseAllWindsAloft) return null;
+        const winds = WeatherClient.parseAllWindsAloft(text);
+        const header = parseFdHeader(text);
+        if (!header || Object.keys(winds).length === 0) return null;
+        try {
+            localStorage.setItem(cacheKey(cycle), JSON.stringify({
+                ts: Date.now(), winds,
+                header: { validAt: header.validAt.toISOString(), useFrom: header.useFrom.toISOString(), useTo: header.useTo.toISOString() },
+            }));
+        } catch (_) {}
+        return { cycle, header, winds };
+    } catch (_) {
+        return null;
+    }
+}
+
+function fisbWinds() {
+    try {
+        const fisb = (typeof window !== 'undefined') ? window.app?.fisbClient?.winds : null;
+        if (!fisb || fisb.size === 0) return null;
+        // fisb-client.winds is Map{ "STATION:altFt" -> {dir,spd,temp} }
+        const canonical = {};
+        for (const [key, wind] of fisb) {
+            if (wind.dir == null || wind.spd == null) continue;
+            const sep = key.lastIndexOf(':');
+            if (sep < 0) continue;
+            const station = key.slice(0, sep);
+            const alt = parseInt(key.slice(sep + 1), 10);
+            if (!canonical[station]) canonical[station] = {};
+            canonical[station][alt] = { dir: wind.dir, spd: wind.spd, temp: wind.temp != null ? wind.temp : undefined };
+        }
+        return Object.keys(canonical).length ? canonical : null;
+    } catch (_) {
+        return null;
+    }
+}
+
+/**
+ * Winds aloft for a departure time, and which forecast they are (2026-10-16).
+ * The FD period is chosen by its FOR USE window, not by the hour of day
+ * (selectFdCycle gave the 12-hour forecast for a departure "now" at 20Z).
+ *   1. flywhere proxy: all three periods (06/12/24 h); direct AWC is CORS-blocked
+ *   2. Stratux FIS-B, for a departure within FISB_MAX_AHEAD_MS (it is the current forecast)
+ *   3. the cached period (localStorage) whose window holds the departure
+ * @param {Date} [departureTime]
+ * @returns {Promise<{winds: object|null, source: 'fd'|'fisb'|'cache'|null, cycle?: string,
+ *   validAt?: Date, useFrom?: Date, useTo?: Date, reason?: 'beyond'|'unavailable', coverTo?: Date}>}
+ */
+export async function fetchWindsDetailed(departureTime) {
+    const dep = departureTime instanceof Date ? departureTime : new Date();
+    const now = Date.now();
+    // A departure already past (a delay): the current forecast is the best there is.
+    const at = new Date(Math.max(dep.getTime(), now));
+    const base = (typeof Settings !== 'undefined' && Settings.workerBase)
+        ? Settings.workerBase
+        : 'https://www.flywhere.app/api';
+    const fetched = (await Promise.all(FD_PERIODS.map((c) => fetchPeriod(base, c)))).filter(Boolean);
+    const found = (p, source) => ({ winds: p.winds, source, cycle: p.cycle, ...p.header });
+
+    // 1. A period fetched just now.
+    const f = pickFdPeriod(fetched, at);
+    if (f) return found(f, 'fd');
+    // 2. Stratux FIS-B for a departure soon.
+    if (at.getTime() - now <= FISB_MAX_AHEAD_MS) {
+        const w = fisbWinds();
+        if (w) return { winds: w, source: 'fisb' };
+    }
+    // 3. A cached period -- also when only some fetches came back (review,
+    //    2026-10-16: the 6-hour alone fetched, the cached 24-hour ignored).
+    const fresh = new Set(fetched.map((p) => p.cycle));
+    const cached = readCachedPeriods().filter((p) => !fresh.has(p.cycle));
+    const c = pickFdPeriod(cached, at);
+    if (c) return found(c, 'cache');
+
+    // None: "beyond" only when the departure is after a forecast that is still
+    // current; a forecast that ended already, or one starting later, is just
+    // "unavailable" (it said "forecast to <yesterday>").
+    const all = [...fetched, ...cached];
+    const coverTo = all.reduce((m, p) => (!m || p.header.useTo > m ? p.header.useTo : m), null);
+    const beyond = coverTo && coverTo.getTime() > now && at.getTime() >= coverTo.getTime();
+    return beyond
+        ? { winds: null, source: null, reason: 'beyond', coverTo }
+        : { winds: null, source: null, reason: 'unavailable' };
+}
+
+/**
+ * Winds aloft for a departure time (the winds only; see fetchWindsDetailed).
+ * @param {Date} departureTime
  * @returns {Promise<Record<string,Record<number,{dir:number,spd:number,temp?:number,variable?:boolean}>>|null>}
  */
 export async function fetchWinds(departureTime) {
-    const cycle = selectFdCycle((departureTime ?? new Date()).getUTCHours());
-    const cacheKey = `${CACHE_KEY}_${cycle}`;
-
-    // 1. Try flywhere proxy (direct AWC is CORS-blocked from Capacitor http://localhost)
-    try {
-        const base = (typeof Settings !== 'undefined' && Settings.workerBase)
-            ? Settings.workerBase
-            : 'https://www.flywhere.app/api';
-        const url = `${base}/weather?type=windtemp&region=all&level=low&fcst=${cycle}`;
-        const resp = await fetch(url, { signal: AbortSignal.timeout(8000) });
-        if (resp.ok) {
-            const text = await resp.text();
-            if (typeof WeatherClient !== 'undefined' && WeatherClient.parseAllWindsAloft) {
-                const winds = WeatherClient.parseAllWindsAloft(text);
-                if (Object.keys(winds).length > 0) {
-                    try {
-                        localStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), winds }));
-                    } catch (_) {}
-                    return winds;
-                }
-            }
-        }
-    } catch (_) {}
-
-    // 2. FIS-B winds from Stratux (live, available in-flight without internet)
-    //    fisb-client.winds is Map{ "STATION:altFt" → {dir,spd,temp} }
-    //    Convert to canonical { station: { altFt: {dir,spd,temp} } } shape.
-    try {
-        const fisbWinds = window.app?.fisbClient?.winds;
-        if (fisbWinds && fisbWinds.size > 0) {
-            const canonical = {};
-            for (const [key, wind] of fisbWinds) {
-                if (wind.dir == null || wind.spd == null) continue;
-                const sep = key.lastIndexOf(':');
-                if (sep < 0) continue;
-                const station = key.slice(0, sep);
-                const alt = parseInt(key.slice(sep + 1), 10);
-                if (!canonical[station]) canonical[station] = {};
-                canonical[station][alt] = {
-                    dir: wind.dir, spd: wind.spd,
-                    temp: wind.temp != null ? wind.temp : undefined,
-                };
-            }
-            if (Object.keys(canonical).length > 0) return canonical;
-        }
-    } catch (_) {}
-
-    // 3. Try localStorage cache
-    try {
-        const cached = JSON.parse(localStorage.getItem(cacheKey) || 'null');
-        if (cached && Date.now() - cached.ts < CACHE_MINS * 60_000) {
-            return cached.winds;
-        }
-    } catch (_) {}
-
-    return null;
+    return (await fetchWindsDetailed(departureTime)).winds;
 }

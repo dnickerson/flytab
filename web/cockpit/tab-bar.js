@@ -160,6 +160,10 @@ class TabBar {
                 }
                 this._closeMoreDrawer();
             }},
+            { icon: '🧭', label: 'Route Planner (preview)', action: () => {
+                this._closeMoreDrawer();
+                window.app?.openRoutePlannerPreview?.(window.app._currentTrip);
+            }},
             { icon: '🌧', label: 'Radar', action: () => {
                 c.radarPage?.show();
                 this._closeMoreDrawer();

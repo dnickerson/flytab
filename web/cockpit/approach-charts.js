@@ -898,6 +898,41 @@ class ApproachCharts {
 
     // ========== CIFP Procedure Loading ==========
 
+    /**
+     * Procedures at an airport, for the route planner: { key, procs: [{ name,
+     * type: 'APPROACH'|'SID'|'STAR', transitions }] }. `key` is the CIFP bundle
+     * key (4-letter ids are K-prefixed, 3-character FAA ids are not).
+     */
+    async proceduresFor(icao) {
+        if (!this._cifpBundle) {
+            try {
+                const resp = await _fetchWithTimeout(CIFP_BUNDLE_URL, {}, 30000);
+                if (resp.ok) {
+                    this._cifpBundle = await resp.json();
+                    if (this._nasrDb) this._nasrDb.putAppCache(CIFP_BUNDLE_CACHE_KEY, this._cifpBundle).catch(() => {});
+                }
+            } catch { /* none available */ }
+        }
+        const id = String(icao || '').toUpperCase();
+        const bare = id.length === 4 && id[0] === 'K' ? id.slice(1) : id;
+        const key = this._cifpBundle?.[id] ? id : (this._cifpBundle?.[bare] ? bare : id);
+        const a = this._cifpBundle?.[key];
+        return {
+            key,
+            loaded: !!this._cifpBundle,
+            procs: (a?.procedures || []).map(p => ({
+                name: p.name || p.proc_name,
+                type: p.proc_type || 'APPROACH',
+                transitions: p.transitions || [],
+            })),
+        };
+    }
+
+    /** Load a procedure into the route (fires cifp:load-procedure, as the plate viewer does). */
+    loadProcedure(icao, procName, transition) {
+        return this._loadProcedure(icao, procName, transition || '');
+    }
+
     async _loadCurrentPlateProc(plate) {
         const icao = plate.icao;
         try {
@@ -1199,7 +1234,9 @@ class ApproachCharts {
                 : null;
 
             document.dispatchEvent(new CustomEvent('cifp:load-procedure', {
-                detail: { icao, procName, transition, insertBefore, insertAfter, airportWp },
+                // procType: an approach replaces an approach, not the arrival (STAR) before it.
+                detail: { icao, procName, transition, insertBefore, insertAfter, airportWp,
+                          procType: (airportCifp?.procedures || []).find((p) => (p.name || p.proc_name) === procName)?.proc_type || 'APPROACH' },
             }));
 
             const labels = [...insertBefore.map(w => w.icao), icao, ...insertAfter.map(w => w.icao)];

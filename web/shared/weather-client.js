@@ -272,10 +272,29 @@ class WeatherClient {
      */
     static parseAllWindsAloft(text) {
         const allStations = {};
-        const lines = text.split('\n');
+        const lines = text.split(/\r?\n/);
 
         // Standard FD low-level altitude columns
         const altLevels = [3000, 6000, 9000, 12000, 18000, 24000, 30000, 34000, 39000];
+
+        // Each group sits in its altitude's column of the "FT" line. Stations
+        // above a level leave its column blank, so the groups must be placed by
+        // column, not by position: TRI's first group is 6000 ft, ALS's 12000 ft
+        // (review, 2026-10-16). A column runs from after the previous label to
+        // the end of its own; groups end at the label, except those with no
+        // temperature (4 characters), which start the column (AMA "0122" at
+        // 6000) -- so a group goes where it STARTS. Columns: [{ alt, from, end }].
+        let columns = null;
+        const ftLine = lines.find((l) => /^FT\s/.test(l));
+        if (ftLine) {
+            columns = [];
+            let from = 3;                                     // after the station identifier
+            for (const m of ftLine.matchAll(/\d+/g)) {
+                const end = m.index + m[0].length;
+                columns.push({ alt: parseInt(m[0], 10), from, end });
+                from = end;
+            }
+        }
 
         for (const line of lines) {
             const trimmed = line.trim();
@@ -291,11 +310,23 @@ class WeatherClient {
             if (!/^[A-Z]{2,3}$/.test(stationId)) continue;
 
             const winds = {};
-            for (let i = 1; i < parts.length && i <= altLevels.length; i++) {
-                const parsed = WeatherClient.parseWindGroup(parts[i]);
-                if (parsed) {
-                    winds[altLevels[i - 1]] = parsed;
+            const put = (alt, group) => {
+                const parsed = WeatherClient.parseWindGroup(group);
+                if (!parsed) return;
+                // "TEMPS NEG ABV 24000": the unsigned temperatures up there are below zero.
+                if (alt > 24000 && parsed.temp != null && parsed.temp > 0) parsed.temp = -parsed.temp;
+                winds[alt] = parsed;
+            };
+            if (columns) {
+                const groups = [...line.matchAll(/\S+/g)].slice(1);
+                for (const g of groups) {
+                    const col = columns.find((c) => g.index >= c.from && g.index < c.end);
+                    if (col) put(col.alt, g[0]);
                 }
+            } else {
+                // No column header: every column present is the only safe assumption.
+                if (parts.length - 1 !== altLevels.length) continue;
+                for (let i = 1; i < parts.length; i++) put(altLevels[i - 1], parts[i]);
             }
 
             if (Object.keys(winds).length > 0) {

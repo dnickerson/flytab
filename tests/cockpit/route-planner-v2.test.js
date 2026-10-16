@@ -1,0 +1,1432 @@
+/**
+ * Route Planner (preview) -- route-planner-v2.js. Spec:
+ * docs/superpowers/specs/2026-10-15-route-planner-redesign-design.md.
+ * Real NASR records for T437 & co (tests/fixtures/route-check/nasr-subset.json).
+ */
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { readFileSync } from 'fs';
+
+const read = (p) => readFileSync(p, 'utf8');
+globalThis.wireTap = (el, fn) => el && el.addEventListener && el.addEventListener('click', fn);
+globalThis.DiagLog = globalThis.DiagLog || { log: vi.fn() };
+globalThis.RouteCheck = new Function(read('web/shared/route-check.js') + '\nreturn RouteCheck;')();
+const RoutePlannerV2 = new Function(read('web/cockpit/route-planner-panel.js') + '\n' + read('web/cockpit/route-planner-v2.js') + '\nreturn RoutePlannerV2;')();
+const nasr = JSON.parse(read('tests/fixtures/route-check/nasr-subset.json'));
+const t437 = (name) => nasr.airways.find((a) => a.name === 'T437').waypoints.find((w) => w.name === name);
+const [GREAT, BLOTS, BEFTY] = ['Great', 'Blots', 'Befty'].map(t437);
+
+const nasrDb = {
+    async getAirport(id) { const a = nasr.airports.find((x) => x.icao === id); return a ? { ...a, id: a.icao } : null; },
+    async getNavaid(id) { return nasr.navaids.find((x) => x.id === id) || null; },
+    async getFix(id) { return nasr.fixes.find((x) => x.id === id) || null; },
+    async getAirway(name) { return nasr.airways.find((x) => x.name === name) || null; },
+};
+const show = (p) => p._route.map((r) => `${r.id}:${r.type}`).join(' ');
+
+function make(route = []) {
+    document.body.innerHTML = '<div id="pv"></div>';
+    const p = new RoutePlannerV2(document.getElementById('pv'), nasrDb, null, null);
+    p.init();
+    p._route = route.map((r) => ({ ...r }));
+    p._render();
+    return p;
+}
+const type = async (p, text) => { p._inputEl.value = text; p._onTyping(); await p._commitTyped(); };
+
+describe('Route Planner (preview): the route field', () => {
+    beforeEach(() => { localStorage.clear(); globalThis.app = { showToast: vi.fn(() => ({ remove() {} })), closeRoutePlanner: vi.fn() }; });
+    afterEach(() => vi.useRealTimers());
+
+    it("typing the reroute goes in clearance order, before the destination", async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'KAIK', type: 'dest' }]);
+        await type(p, 'mitve T437 CAYCE ');
+        expect(show(p)).toBe('KLKR:dep MITVE:fix T437:awy CAYCE:fix KAIK:dest');
+    });
+
+    it('on an empty route the first point is the departure and the next the destination', async () => {
+        const p = make();
+        await type(p, 'KLKR KAIK');
+        expect(show(p)).toBe('KLKR:dep KAIK:dest');
+    });
+
+    it('typing after the destination makes a new destination', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'KCDN', type: 'dest' }]);
+        p._cursorAtEnd = true;
+        await type(p, 'KAIK');
+        expect(show(p)).toBe('KLKR:dep KCDN:airport KAIK:dest');
+    });
+
+    it('Insert after… puts the typed fixes there, in order', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'CAYCE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        p._startInsert(1);
+        await type(p, 'MITVE GREAT');
+        expect(show(p)).toBe('KLKR:dep MITVE:fix GREAT:fix CAYCE:fix KAIK:dest');
+    });
+
+    it('the text cursor is never detached while bubbles are rebuilt (keeps the Android keyboard up)', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'KAIK', type: 'dest' }]);
+        p._inputEl.focus();
+        const removed = vi.fn();
+        new MutationObserver((ms) => { for (const m of ms) for (const n of m.removedNodes) if (n === p._inputEl) removed(); })
+            .observe(p._bubblesEl, { childList: true });
+        await type(p, 'MITVE T437 CAYCE');
+        await new Promise((r) => setTimeout(r, 0));
+        expect(removed).not.toHaveBeenCalled();
+        expect(document.activeElement).toBe(p._inputEl);
+        // and it sits just before the destination bubble
+        expect(p._inputEl.nextElementSibling.dataset.idx).toBe(String(p._destPillIndex()));
+    });
+
+    it('a problem fix from the sheet changes the route (Join T437 at GREAT)', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'MITVE', type: 'fix' }, { id: 'T437', type: 'awy' }, { id: 'CAYCE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        p._compute = async () => ({ legs: [], waypoints: [], summary: null });   // worked out (no engine in this harness)
+        const problems = await p._runChecks();
+        expect(problems[0].code).toBe('entry-not-on-airway');
+        await p._applyFix(problems[0].fixes[0]);
+        expect(show(p)).toBe('KLKR:dep MITVE:fix GREAT:fix T437:awy CAYCE:fix KAIK:dest');
+        // No red left; the default Routing (V-airways) leaves the amber T-route note.
+        expect((await p._runChecks()).map((x) => `${x.severity}:${x.code}`)).toEqual(['amber:airway-type']);
+    });
+});
+
+describe('Route Planner (preview): airways along the airway', () => {
+    it('GREAT T437 CAYCE is expanded into the T437 fixes between them, in NASR order', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'GREAT', type: 'fix' }, { id: 'T437', type: 'awy' }, { id: 'CAYCE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        const wps = await p._pillsToWaypoints();
+        expect(wps.map((w) => w.id)).toEqual(['KLKR', 'GREAT', 'BLOTS', 'BEFTY', 'CAYCE', 'KAIK']);
+        expect(wps.slice(2, 5).every((w) => w.airway === 'T437')).toBe(true);
+    });
+
+    it('a Victor airway between two VORs is expanded with its fixes, VORs by identifier', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'SAV', type: 'fix' }, { id: 'V37', type: 'awy' }, { id: 'CAE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        p._coords.SAV = { lat: 32.146268, lon: -81.199106 };
+        const ids = (await p._pillsToWaypoints()).map((w) => w.id);
+        expect(ids[1]).toBe('SAV');
+        expect(ids).toContain('ALD');
+        expect(ids.indexOf('CAE')).toBe(ids.length - 2);
+        expect(ids.length).toBeGreaterThan(5);
+    });
+
+    it('an airway leg across a gap is not expanded along the airway (stays straight, flagged)', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'URIVE', type: 'fix' }, { id: 'V157', type: 'awy' }, { id: 'FOGSO', type: 'fix' }, { id: 'KTMB', type: 'dest' }]);
+        const v157 = nasr.airways.find((a) => a.name === 'V157').waypoints;
+        for (const n of ['Urive', 'Fogso']) { const w = v157.find((x) => x.name === n); p._coords[n.toUpperCase()] = { lat: w.lat, lon: w.lon }; }
+        p._coords.KTMB = { lat: 25.648, lon: -80.433 };
+        const ids = (await p._pillsToWaypoints()).map((w) => w.id);
+        expect(ids).toEqual(['KLKR', 'URIVE', 'FOGSO', 'KTMB']);
+    });
+
+    it('an airway leg whose entry is not on the airway stays straight (and is flagged)', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'MITVE', type: 'fix' }, { id: 'T437', type: 'awy' }, { id: 'CAYCE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        const wps = await p._pillsToWaypoints();
+        expect(wps.map((w) => w.id)).toEqual(['KLKR', 'MITVE', 'CAYCE', 'KAIK']);
+    });
+});
+
+describe('Route Planner (preview): Apply', () => {
+    beforeEach(() => { globalThis.app = { showToast: vi.fn(() => ({ remove() {} })), closeRoutePlanner: vi.fn() }; });
+
+    it('red problems: Apply asks; "Fix it" does not apply, "Apply anyway" does', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'MITVE', type: 'fix' }, { id: 'T437', type: 'awy' }, { id: 'CAYCE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        const applied = p._doApply = vi.fn(async () => false);
+        p._askApplyAnyway = vi.fn(async () => false);
+        await p._onApplyKeepOpenTap();
+        expect(p._askApplyAnyway).toHaveBeenCalled();
+        expect(applied).not.toHaveBeenCalled();
+        p._askApplyAnyway = vi.fn(async () => true);
+        await p._onApplyKeepOpenTap();
+        expect(applied).toHaveBeenCalledTimes(1);
+    });
+
+    it('no red problems: Apply goes straight through', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'GREAT', type: 'fix' }, { id: 'T437', type: 'awy' }, { id: 'CAYCE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        p._compute = async () => ({ legs: [], waypoints: [], summary: null });   // worked out (no engine in this harness)
+        const applied = p._doApply = vi.fn(async () => false);
+        p._askApplyAnyway = vi.fn(async () => true);
+        await p._onApplyKeepOpenTap();
+        expect(p._askApplyAnyway).not.toHaveBeenCalled();
+        expect(applied).toHaveBeenCalledTimes(1);
+    });
+
+    it('closing the "Apply anyway?" sheet with ✕ means Fix it (Apply does not hang)', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'KAIK', type: 'dest' }]);
+        const answer = p._askApplyAnyway([{ message: 'x', severity: 'red' }]);
+        p._closeSheet();
+        await expect(answer).resolves.toBe(false);
+    });
+
+    it('settings boxes write the same fields the Settings popup did, and save them', () => {
+        const p = make();
+        p._g.mode.value = 'any'; p._g.mode.dispatchEvent(new Event('change'));
+        p._g.fuel.value = '2.5'; p._g.fuel.dispatchEvent(new Event('change'));
+        p._g.alt.value = '7000'; p._g.alt.dispatchEvent(new Event('change'));
+        expect([p._routingMode, p._maxLegHrs, p._cruiseAltFt, p._altitude]).toEqual(['any', 2.5, 7000, 7000]);
+        const saved = JSON.parse(localStorage.getItem('flypi_planner_opts'));
+        expect([saved.routingMode, saved.maxLegHrs, saved.cruiseAltFt]).toEqual(['any', 2.5, 7000]);
+    });
+});
+
+describe('Route Planner (preview): fuel stops one at a time', () => {
+    beforeEach(() => { globalThis.app = { showToast: vi.fn(() => ({ remove() {} })), closeRoutePlanner: vi.fn() }; });
+
+    it('only the first suggestion is offered; the next is worked out again with the stop in', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'CAE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        const shown = [];
+        p._showFuelStopPicker = vi.fn(async (c) => { shown.push(c.afterFixId); return { icao: 'KCDN', name: 'Camden', lat: 34.28, lon: -80.56 }; });
+        p._runChecks = vi.fn(async () => (p._problems = []));          // after the first stop: no longer over the limit
+        await p._processFuelStopCandidates({ fuelStopCandidates: [
+            { afterFixId: 'KLKR', cumHrsAtStop: 2, options: [] },
+            { afterFixId: 'CAE', cumHrsAtStop: 4, options: [] },       // computed without the first stop: not offered
+        ] });
+        expect(shown).toEqual(['KLKR']);
+        expect(show(p)).toBe('KLKR:dep KCDN:fuel CAE:fix KAIK:dest');
+    });
+
+    it('a stop after a fix in the middle of an airway: the airway is split there (land, refuel, rejoin)', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'GREAT', type: 'fix' }, { id: 'T437', type: 'awy' }, { id: 'CAYCE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        p._computed = { waypoints: ['KLKR', 'GREAT', 'BLOTS', 'BEFTY', 'CAYCE', 'KAIK'].map((id) => ({ id, ...(id !== 'KLKR' && id !== 'GREAT' && id !== 'KAIK' ? { airway: 'T437' } : {}) })) };
+        // an airport right by BLOTS (the T437 fix nearest it)
+        p._showFuelStopPicker = vi.fn(async () => ({ icao: 'KCDN', name: 'x', lat: BLOTS.lat + 0.05, lon: BLOTS.lon + 0.05 }));
+        p._runChecks = vi.fn(async () => (p._problems = []));
+        await p._processFuelStopCandidates({ fuelStopCandidates: [{ afterFixId: 'BLOTS', cumHrsAtStop: 2, options: [] }] });
+        expect(show(p)).toBe('KLKR:dep GREAT:fix T437:awy BLOTS:fix KCDN:fuel BLOTS:fix T437:awy CAYCE:fix KAIK:dest');
+        // and the route check is happy with it
+        const problems = await RouteCheck.run({ pills: p._route, computed: null, settings: { routingMode: 'any' }, aero: p._aero() });
+        expect(problems).toEqual([]);
+    });
+
+    it('a stop after an airway entry: land there, then rejoin at the entry', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'GREAT', type: 'fix' }, { id: 'T437', type: 'awy' }, { id: 'CAYCE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        p._showFuelStopPicker = vi.fn(async () => ({ icao: 'KCUB', name: 'x', lat: GREAT.lat - 0.02, lon: GREAT.lon }));
+        p._runChecks = vi.fn(async () => (p._problems = []));
+        await p._processFuelStopCandidates({ fuelStopCandidates: [{ afterFixId: 'GREAT', cumHrsAtStop: 2, options: [] }] });
+        expect(show(p)).toBe('KLKR:dep GREAT:fix KCUB:fuel GREAT:fix T437:awy CAYCE:fix KAIK:dest');
+    });
+
+    it('an airport well off the airway: leave it -- entry, stop, exit direct (KLKR-KTMB: K2IS off V157)', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'SAV', type: 'fix' }, { id: 'V37', type: 'awy' }, { id: 'CAE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        p._showFuelStopPicker = vi.fn(async () => ({ icao: 'KCUB', name: 'x', lat: 33.0, lon: -80.5 }));   // ~40 nm east of ALD
+        p._runChecks = vi.fn(async () => (p._problems = []));
+        await p._processFuelStopCandidates({ fuelStopCandidates: [{ afterFixId: 'SAV', cumHrsAtStop: 2, options: [] }] });
+        expect(show(p)).toBe('KLKR:dep SAV:fix KCUB:fuel CAE:fix KAIK:dest');
+    });
+
+    it('a stop far down a long airway leg: split at the airway fix nearest the airport, never back to the entry', async () => {
+        // KLKR-KTMB put K2IS (150 nm down V157) after LAL and rejoined at LAL: +43 %.
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'GREAT', type: 'fix' }, { id: 'T437', type: 'awy' }, { id: 'CAYCE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        p._computed = { waypoints: [{ id: 'KLKR' }, { id: 'GREAT' }, { id: 'CAYCE', airway: 'T437' }, { id: 'KAIK' }] };   // the leg as the engine sees it
+        p._showFuelStopPicker = vi.fn(async () => ({ icao: 'KCUB', name: 'x', lat: BEFTY.lat, lon: BEFTY.lon + 0.1 }));
+        p._runChecks = vi.fn(async () => (p._problems = []));
+        await p._processFuelStopCandidates({ fuelStopCandidates: [{ afterFixId: 'GREAT', cumHrsAtStop: 2, options: [] }] });
+        expect(show(p)).toBe('KLKR:dep GREAT:fix T437:awy BEFTY:fix KCUB:fuel BEFTY:fix T437:awy CAYCE:fix KAIK:dest');
+    });
+});
+
+describe('Route Planner (preview): search, clearance, procedures, flights (2026-10-16)', () => {
+    beforeEach(() => { localStorage.clear(); globalThis.app = { showToast: vi.fn(() => ({ remove() {} })), closeRoutePlanner: vi.fn() }; });
+
+    it('search: a name or city finds the identifier, nearest first; tapping it adds it before the destination', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'KAIK', type: 'dest' }]);
+        // "Camden" matches airports across the US; the one near us must come first.
+        p._nasrDb = { ...nasrDb, _getAll: vi.fn(async () => [
+            { icao: '71NJ', name: '76Ers Camden', city: 'Camden', state: 'NJ', lat: 39.9, lon: -75.1 },
+            { icao: 'K61A', name: 'Camden Muni', city: 'Camden', state: 'AL', lat: 31.98, lon: -87.3 },
+            { icao: 'KCDN', name: 'Woodward Fld', city: 'Camden', state: 'SC', lat: 34.28, lon: -80.56 },
+            { icao: 'KLKR', name: 'Lancaster County', city: 'Lancaster', state: 'SC', lat: 34.72, lon: -80.85 },
+        ]), searchAllExtended: vi.fn(async () => ({ airports: [], navaids: [], fixes: [] })) };
+        p._searchRef = () => ({ lat: 34.72, lon: -80.85 });           // at KLKR
+        p._searchInput.value = 'Camden';
+        await p._runSearch();
+        const rows = [...p._resultsEl.querySelectorAll('.rp2-result')];
+        expect(rows.map((r) => r.querySelector('.rp2-result-id').textContent)).toEqual(['KCDN', 'K61A', '71NJ']);
+        expect(rows[0].querySelector('.rp2-result-sub').textContent).toMatch(/Camden, SC · 3\d nm/);
+        rows[0].click();
+        await p._typing;
+        expect(show(p)).toBe('KLKR:dep KCDN:airport KAIK:dest');
+        expect(p._resultsEl.hidden).toBe(true);
+    });
+
+    it('search "Aiken": the airport named Aiken before a private strip that is only in Aiken (tablet data)', async () => {
+        const p = make();
+        p._nasrDb = { ...nasrDb, _getAll: vi.fn(async () => [
+            { icao: '4SC7', name: 'Wexford Landing', city: 'Aiken', state: 'SC', lat: 33.6, lon: -81.7, has_paved_rwy: false },
+            { icao: 'KAIK', name: 'Aiken Rgnl', city: 'Aiken', state: 'SC', lat: 33.649, lon: -81.685, has_paved_rwy: true },
+            { icao: 'SC67', name: 'Polecat Aerodrome', city: 'Aiken', state: 'SC', lat: 33.5, lon: -81.6 },
+        ]), searchAllExtended: vi.fn(async () => ({ airports: [], navaids: [], fixes: [] })) };
+        p._searchRef = () => ({ lat: 34.72, lon: -80.85 });
+        p._searchInput.value = 'Aiken';
+        await p._runSearch();
+        expect([...p._resultsEl.querySelectorAll('.rp2-result-id')].map((e) => e.textContent)[0]).toBe('KAIK');
+    });
+
+    it('search: an identifier match comes before name matches', async () => {
+        const p = make();
+        p._nasrDb = { ...nasrDb, _getAll: vi.fn(async () => [
+            { icao: 'KCDN', name: 'Woodward Fld', city: 'Camden', state: 'SC', lat: 34.28, lon: -80.56 },
+            { icao: 'XCDN', name: 'Cdn Field', city: 'Far', state: 'AK', lat: 61, lon: -150 },
+        ]), searchAllExtended: vi.fn(async () => ({ airports: [], navaids: [], fixes: [] })) };
+        p._searchRef = () => ({ lat: 61, lon: -150 });
+        p._searchInput.value = 'CDN';
+        await p._runSearch();
+        expect([...p._resultsEl.querySelectorAll('.rp2-result-id')].map((e) => e.textContent)).toEqual(['KCDN', 'XCDN']);
+    });
+
+    it('clearance: the C field as the app fills it ("KAIK — AIKEN RGNL") gives KAIK', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'KCDN', type: 'dest' }]);
+        await p.loadClearance({ limit: 'KAIK — AIKEN RGNL', route: 'CAYCE' });
+        expect(show(p)).toBe('KLKR:dep CAYCE:fix KAIK:dest');
+    });
+
+    it('clearance: C becomes the destination (AIK -> KAIK), R the route in order, DIRECT dropped', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'KCDN', type: 'dest' }]);
+        await p.loadClearance({ limit: 'AIK', route: 'MITVE T437 CAYCE DIRECT' });
+        expect(show(p)).toBe('KLKR:dep MITVE:fix T437:awy CAYCE:fix KAIK:dest');
+    });
+
+    it('clearance "as filed": only the destination changes', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'GREAT', type: 'fix' }, { id: 'KCDN', type: 'dest' }]);
+        await p.loadClearance({ limit: 'KAIK', route: 'AS FILED' });
+        expect(show(p)).toBe('KLKR:dep GREAT:fix KAIK:dest');
+    });
+
+    it('approach names: CIFP codes in plain words, code kept', () => {
+        expect(RoutePlannerV2.procLabel('R07', 'APPROACH')).toBe('RNAV (GPS) 07 (R07)');
+        expect(RoutePlannerV2.procLabel('I07', 'APPROACH')).toBe('ILS 07 (I07)');
+        expect(RoutePlannerV2.procLabel('R25-Y', 'APPROACH')).toBe('RNAV (GPS) 25 Y (R25-Y)');
+        expect(RoutePlannerV2.procLabel('VDM-A', 'APPROACH')).toBe('VDM-A');      // unknown form: as is
+        expect(RoutePlannerV2.procLabel('CHATT6', 'STAR')).toBe('CHATT6');
+    });
+
+    it('destination bubble: approaches and arrivals listed; a transition loads the procedure', async () => {
+        const loaded = [];
+        globalThis.app.approachCharts = {
+            proceduresFor: vi.fn(async () => ({ key: 'KAIK', loaded: true, procs: [
+                { name: 'R07', type: 'APPROACH', transitions: ['HIBID', 'VIXLY'] },
+                { name: 'CHATT6', type: 'SID', transitions: ['ALL'] },
+            ] })),
+            loadProcedure: vi.fn((...a) => loaded.push(a)),
+        };
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'KAIK', type: 'dest' }]);
+        await p._openProcedures(1);
+        const labels = () => [...p._sheetEl.querySelectorAll('.rp2-act')].map((b) => b.textContent);
+        expect(labels()).toEqual(['RNAV (GPS) 07 (R07)']);                   // departures (SID) not offered
+        p._sheetEl.querySelector('.rp2-act').click();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(labels()).toEqual(['Via HIBID', 'Via VIXLY', 'Vectors (no transition)']);
+        [...p._sheetEl.querySelectorAll('.rp2-act')][1].click();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(loaded).toEqual([['KAIK', 'R07', 'VIXLY']]);
+    });
+
+    it('flights: one row per flight with landing time and fuel', () => {
+        const c = {
+            legs: [{ timeHrs: 1.0, eta: 3_600_000, fuelRemGal: 26 }, { timeHrs: 0.8, eta: 8_280_000, fuelRemGal: 18 }, { timeHrs: 0.5, eta: 11_880_000, fuelRemGal: 30 }],
+            waypoints: [{ id: 'KLKR' }, { id: 'X' }, { id: 'KCRG', fuelStop: true }, { id: 'KTMB', isDest: true }],
+        };
+        expect(RoutePlannerV2.flightsOf(c)).toEqual([
+            { from: 'KLKR', to: 'KCRG', hrs: 1.8, landMs: 8_280_000, landGal: 18 },
+            { from: 'KCRG', to: 'KTMB', hrs: 0.5, landMs: 11_880_000, landGal: 30 },
+        ]);
+    });
+
+    it('"Fuel stop near here…": avgas airports near that bubble; the chosen one goes there', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'CAE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        p._planner = { _adapters: { aero: { nearestAirports: vi.fn(async () => [
+            { icao: 'KCUB', name: 'Columbia Owens', lat: 33.97, lon: -80.99, hasFuel: true },
+            { icao: 'XJET', name: 'Jet-A only', lat: 33.86, lon: -81.05, hasFuel: false },
+        ]) } } };
+        p._compute = vi.fn(async () => null);
+        let offered = null;
+        p._showFuelStopPicker = vi.fn(async (cand) => { offered = cand.options.map((o) => o.icao); return cand.options[0]; });
+        p._runChecks = vi.fn(async () => (p._problems = []));
+        await p._fuelStopNear(1);
+        expect(offered).toEqual(['KCUB']);
+        expect(show(p)).toBe('KLKR:dep CAE:fix KCUB:fuel KAIK:dest');
+    });
+
+    it('a procedure loaded while the preview is open goes to the preview', () => {
+        const src = read('web/app.js');
+        expect(src).toMatch(/classList\.contains\('route-preview'\)\) \{\s*this\.routePlannerPreview\.insertApproach\(e\.detail\);/);
+    });
+});
+
+describe('Route Planner (preview): Insert before/after (Dana, 2026-10-16)', () => {
+    beforeEach(() => { globalThis.app = { showToast: vi.fn(() => ({ remove() {} })), closeRoutePlanner: vi.fn() }; });
+
+    it('sheet buttons cancel the follow-on mouse events (else focus leaves the route field after Insert after…)', () => {
+        const src = read('web/cockpit/route-planner-v2.js');
+        const sheet = src.slice(src.indexOf('    _openSheet(title, rows, { cols = 2 } = {}) {'), src.indexOf('    _closeSheet() {'));
+        expect(sheet).toMatch(/wireIsolatedTap/);
+    });
+
+    it('Insert after… puts the cursor there, focused, and says where the text goes', () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'CAE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        p._startInsert(2);
+        expect(document.activeElement).toBe(p._inputEl);
+        expect(p._inputEl.nextElementSibling.textContent).toBe('✓ Done');
+        expect(p._inputEl.nextElementSibling.nextElementSibling.textContent).toBe('KAIK');
+        expect(p._inputEl.placeholder).toBe('insert after CAE');
+        p._insertIndex = null; p._render();
+        expect(p._inputEl.placeholder).toBe('type');
+    });
+});
+
+describe('Route Planner (preview): tapping a bubble centres the map (Dana, 2026-10-16)', () => {
+    it('a point bubble: the map centres on it; an airway bubble: its segment is fitted', async () => {
+        const showPoint = vi.fn(), showBounds = vi.fn();
+        globalThis.app = { showToast: vi.fn(() => ({ remove() {} })), closeRoutePlanner: vi.fn(), cockpitMap: { showPoint, showBounds } };
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'GREAT', type: 'fix' }, { id: 'T437', type: 'awy' }, { id: 'CAYCE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        await p._showOnMap(1);
+        expect(showPoint).toHaveBeenCalledWith(GREAT.lat, GREAT.lon);
+        await p._showOnMap(2);
+        const [[a, b]] = showBounds.mock.calls;
+        expect([a.lat, a.lon]).toEqual([GREAT.lat, GREAT.lon]);
+        expect(b.lat).toBeCloseTo(33.857, 2);                        // CAYCE
+    });
+
+    it('tapping a bubble shows it on the map and opens its actions', () => {
+        const src = read('web/cockpit/route-planner-v2.js');
+        expect(src).toMatch(/wireTap\(b, \(\) => this\._onBubbleTap\(idx\)\);/);
+        const tap = src.slice(src.indexOf('    async _onBubbleTap('), src.indexOf('    async _onBubbleTap(') + 600);
+        expect(tap).toMatch(/this\._showOnMap\(i\);\s*this\._openBubbleSheet\(i\);/);
+    });
+});
+
+
+describe('Route Planner (preview): finishing an insert (Dana, 2026-10-16)', () => {
+    beforeEach(() => { globalThis.app = { showToast: vi.fn(() => ({ remove() {} })), closeRoutePlanner: vi.fn() }; });
+    const enter = (p) => p._inputEl.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+
+    it('Done (Enter) adds what was typed at the insert point, then ends inserting and closes the keyboard', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'CAE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        p._startInsert(2);
+        p._inputEl.value = 'BRADO MATEO';
+        enter(p);
+        await p._typing;
+        expect(show(p)).toBe('KLKR:dep CAE:fix BRADO:fix MATEO:fix KAIK:dest');
+        expect(p._insertIndex).toBeNull();
+        expect(document.activeElement).not.toBe(p._inputEl);
+        expect(p._inputEl.placeholder).toBe('type');
+        expect(p._inputEl.nextElementSibling.textContent).toBe('KAIK');      // back before the destination
+    });
+
+    it('a ✓ Done button is shown while inserting, and does the same', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'CAE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        expect(p._bubblesEl.querySelector('.rp2-insert-done')).toBeNull();
+        p._startInsert(2);
+        const done = p._bubblesEl.querySelector('.rp2-insert-done');
+        expect(done.textContent).toBe('✓ Done');
+        p._inputEl.value = 'BRADO';
+        done.click();
+        await p._typing;
+        expect(show(p)).toBe('KLKR:dep CAE:fix BRADO:fix KAIK:dest');
+        expect(p._insertIndex).toBeNull();
+        expect(p._bubblesEl.querySelector('.rp2-insert-done')).toBeNull();
+    });
+
+    it('a toolbar action (e.g. Apply) also ends inserting', () => {
+        const src = read('web/cockpit/route-planner-v2.js');
+        const tb = src.slice(src.indexOf("        tb.className = 'rp2-toolbar';"), src.indexOf("        inner.appendChild(tb);"));
+        expect(tb).toMatch(/await this\._commitTyped\(\); this\._endInsert\(\);/);
+    });
+});
+
+describe('Route Planner (preview): layout (Dana, 2026-10-16)', () => {
+    it('the command buttons sit directly under the route field', () => {
+        const p = make();
+        const order = [...p._el.querySelector('.rp2-inner').children].map((e) => e.className.split(' ')[0]);
+        expect(order.slice(0, 7)).toEqual(['rp2-hdr', 'rp2-search', 'rp2-field', 'rp2-toolbar', 'rp2-problem', 'rp2-grid', 'rp2-stats']);
+    });
+});
+
+describe('Route Planner (preview): Apply feedback and stale airway tags (Dana, 2026-10-16)', () => {
+    beforeEach(() => { localStorage.clear(); });
+
+    it('a fuel stop ends an airway run: fixes after it are not tagged with the airway before it (BRADO was hidden)', () => {
+        const q = make();
+        q._loadPlan({
+            departure: 'KLKR', destination: 'KTMB',
+            waypoints: [{ icao: 'KLKR' }, { icao: 'CRG' }, { icao: 'KHEG', fuelStop: true }, { icao: 'BRADO' }, { icao: 'ORL' }, { icao: 'CAMBE' }, { icao: 'KTMB', isDest: true }],
+            flight_plan: { destination: 'KTMB', route: ['KLKR', 'V37', 'CRG', 'KHEG', 'BRADO', 'ORL', 'V533', 'CAMBE', 'KTMB'] },
+        });
+        expect(show(q)).toBe('KLKR:dep V37:awy CRG:fix KHEG:fuel BRADO:fix ORL:fix V533:awy CAMBE:fix KTMB:dest');
+        expect(q._route.find((r) => r.id === 'CRG').airway).toBe('V37');
+        expect(q._route.find((r) => r.id === 'BRADO').airway).toBeUndefined();
+        expect(q._route.find((r) => r.id === 'CAMBE').airway).toBe('V533');
+        q._compactView = true;
+        q._render();
+        expect([...q._bubblesEl.querySelectorAll('.rp2-b')].map((b) => b.textContent)).toContain('BRADO');
+    });
+
+    it('stale tags from earlier edits are cleaned on every render, too', () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'V37', type: 'awy' }, { id: 'CRG', type: 'fix', airway: 'V37' }, { id: 'KHEG', type: 'fuel' }, { id: 'BRADO', type: 'fix', airway: 'V37' }, { id: 'KTMB', type: 'dest' }]);
+        expect(p._route.find((r) => r.id === 'BRADO').airway).toBeUndefined();
+    });
+
+    it('Apply: says so, and shows the whole route on the map', async () => {
+        const showPoints = vi.fn();
+        globalThis.app = { closeRoutePlanner: vi.fn(), cockpitMap: { showPoints } };
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'GREAT', type: 'fix' }, { id: 'T437', type: 'awy' }, { id: 'CAYCE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        const toast = vi.spyOn(p, '_toast');
+        p._routingMode = 't-airways';
+        p._compute = async () => ({ legs: [], waypoints: [], summary: null });   // worked out (no engine in this harness)
+        p._doApply = vi.fn(async () => { p._lastPlan = { waypoints: [{ lat: 34.7, lon: -80.8 }, { lat: 34.4, lon: -81.0 }, { lat: 33.6, lon: -81.7 }] }; return true; });
+        await p._onApplyKeepOpenTap();
+        expect(p._doApply).toHaveBeenCalledTimes(1);
+        expect(toast.mock.calls.map((c) => c[0]).join(' | ')).toMatch(/Route applied: KLKR → KAIK \(3 waypoints\)/);
+        expect(showPoints).toHaveBeenCalledWith([{ lat: 34.7, lon: -80.8 }, { lat: 34.4, lon: -81.0 }, { lat: 33.6, lon: -81.7 }]);
+    });
+});
+
+describe('Route Planner (preview): Replace… (Dana, 2026-10-16)', () => {
+    beforeEach(() => { localStorage.clear(); globalThis.app = { showToast: vi.fn(() => ({ remove() {} })), closeRoutePlanner: vi.fn() }; });
+    const R = () => [{ id: 'KLKR', type: 'dep' }, { id: 'V37', type: 'awy' }, { id: 'CRG', type: 'fix', airway: 'V37' }, { id: 'BRADO', type: 'fix', altFt: 6000 }, { id: 'ORL', type: 'fix' }, { id: 'KTMB', type: 'dest' }];
+    const sheetLabels = () => [...document.querySelectorAll('.rp2-act')].map((b) => b.textContent);
+
+    it('the bubble sheet offers Replace…', () => {
+        const p = make(R());
+        p._openBubbleSheet(3);
+        expect(sheetLabels()).toContain('Replace…');
+    });
+
+    it('cursor goes in front of the old bubble, which is marked; the field says what it replaces', () => {
+        const p = make(R());
+        p._startReplace(3);
+        expect(document.activeElement).toBe(p._inputEl);
+        expect(p._inputEl.placeholder).toBe('replace BRADO');
+        const old = p._bubblesEl.querySelector('.rp2-b[data-idx="3"]');
+        expect(old.classList.contains('rp2-b-replacing')).toBe(true);
+        expect(p._inputEl.nextElementSibling.textContent).toBe('✓ Done');
+        expect(p._inputEl.nextElementSibling.nextElementSibling).toBe(old);
+    });
+
+    it('the first identifier takes the old one\'s place; more go after it, in order', async () => {
+        const p = make(R());
+        p._startReplace(3);
+        await type(p, 'MATEO DORAL');
+        expect(show(p)).toBe('KLKR:dep V37:awy CRG:fix MATEO:fix DORAL:fix ORL:fix KTMB:dest');
+        expect(p._route[3].altFt).toBeUndefined();                     // a new fix: no altitude carried over
+        expect(p._bubblesEl.querySelector('.rp2-b-replacing')).toBeNull();
+        expect(p._inputEl.placeholder).toBe('insert after DORAL');
+    });
+
+    it('Done with nothing typed changes nothing', async () => {
+        const p = make(R());
+        p._startReplace(3);
+        await p._finishTyping();
+        expect(show(p)).toBe('KLKR:dep V37:awy CRG:fix BRADO:fix ORL:fix KTMB:dest');
+        expect(p._route[3].altFt).toBe(6000);
+        expect(p._bubblesEl.querySelector('.rp2-b-replacing')).toBeNull();
+        expect(p._inputEl.placeholder).toBe('type');
+    });
+
+    it('departure and destination keep their role; replacing the destination ends there', async () => {
+        const p = make(R());
+        p._startReplace(5);
+        expect(p._inputEl.placeholder).toBe('replace KTMB');
+        await type(p, 'KMIA');
+        expect(show(p)).toBe('KLKR:dep V37:awy CRG:fix BRADO:fix ORL:fix KMIA:dest');
+        expect(p._insertIndex).toBeNull();
+        p._startReplace(0);
+        await type(p, 'KCDN');
+        expect(show(p).startsWith('KCDN:dep V37:awy')).toBe(true);
+    });
+
+    it('an airway cannot replace the departure or destination', async () => {
+        const p = make(R());
+        p._startReplace(5);
+        await type(p, 'V533');
+        expect(show(p)).toBe('KLKR:dep V37:awy CRG:fix BRADO:fix ORL:fix KTMB:dest');
+        expect(p._inputEl.placeholder).toBe('replace KTMB');          // still replacing
+    });
+
+    it('a fuel stop replaced by an airport is still a fuel stop', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'KCDN', type: 'fuel' }, { id: 'KTMB', type: 'dest' }]);
+        p._startReplace(1);
+        await type(p, 'KAIK');
+        expect(show(p)).toBe('KLKR:dep KAIK:fuel KTMB:dest');
+    });
+
+    it('an airway bubble can be replaced by another airway', async () => {
+        const p = make(R());
+        p._startReplace(1);
+        await type(p, 'T437');
+        expect(show(p)).toBe('KLKR:dep T437:awy CRG:fix BRADO:fix ORL:fix KTMB:dest');
+    });
+
+    it('replacing is dropped if the route changes under it (e.g. Clear, or the bubble is removed)', async () => {
+        const p = make(R());
+        p._startReplace(3);
+        p._removeAt(3);
+        expect(p._replacing).toBeNull();
+        await type(p, 'MATEO');
+        expect(show(p)).toBe('KLKR:dep V37:awy CRG:fix MATEO:fix ORL:fix KTMB:dest');   // an ordinary insert there
+    });
+});
+
+describe('Route Planner (preview): Undo (Dana, 2026-10-16)', () => {
+    beforeEach(() => { localStorage.clear(); globalThis.app = { showToast: vi.fn(() => ({ remove() {} })), closeRoutePlanner: vi.fn() }; });
+    const R = () => [{ id: 'KLKR', type: 'dep' }, { id: 'CRG', type: 'fix' }, { id: 'BRADO', type: 'fix' }, { id: 'KTMB', type: 'dest' }];
+    const undoBtn = (p) => [...p._fieldEl.querySelectorAll('.rp2-btn')].find((b) => /Undo/.test(b.textContent));
+    const fresh = (route) => { const p = make(route); p._resetUndo(); return p; };
+
+    it('an Undo button next to REV and Clear, disabled until something changes', async () => {
+        const p = fresh(R());
+        expect(undoBtn(p)).toBeTruthy();
+        expect(undoBtn(p).disabled).toBe(true);
+        await type(p, 'ORL');
+        expect(undoBtn(p).disabled).toBe(false);
+    });
+
+    it('steps back one change at a time: typing, remove, replace', async () => {
+        const p = fresh(R());
+        await type(p, 'ORL');
+        p._removeAt(1);
+        p._startReplace(1);
+        await type(p, 'OMN');
+        p._endInsert();
+        expect(show(p)).toBe('KLKR:dep OMN:fix ORL:fix KTMB:dest');
+        await p._onUndoTap();
+        expect(show(p)).toBe('KLKR:dep BRADO:fix ORL:fix KTMB:dest');
+        await p._onUndoTap();
+        expect(show(p)).toBe('KLKR:dep CRG:fix BRADO:fix ORL:fix KTMB:dest');
+        await p._onUndoTap();
+        expect(show(p)).toBe('KLKR:dep CRG:fix BRADO:fix KTMB:dest');
+        expect(undoBtn(p).disabled).toBe(true);
+        await p._onUndoTap();                                        // nothing more: no change
+        expect(show(p)).toBe('KLKR:dep CRG:fix BRADO:fix KTMB:dest');
+    });
+
+    it('restores fuel stops, altitudes and airway tags exactly', async () => {
+        const route = [{ id: 'KLKR', type: 'dep' }, { id: 'V37', type: 'awy' }, { id: 'CRG', type: 'fix', airway: 'V37', altFt: 6000 }, { id: 'KHEG', type: 'fuel' }, { id: 'KTMB', type: 'dest' }];
+        const p = fresh(route);
+        p._removeAt(3);
+        await p._onUndoTap();
+        expect(p._route).toEqual(route);
+    });
+
+    it('undo ends an insert or a replace in progress', async () => {
+        const p = fresh(R());
+        await type(p, 'ORL');
+        p._startReplace(1);
+        await p._onUndoTap();
+        expect(p._replacing).toBeNull();
+        expect(p._insertIndex).toBeNull();
+        expect(p._bubblesEl.querySelector('.rp2-b-replacing')).toBeNull();
+        expect(show(p)).toBe('KLKR:dep CRG:fix BRADO:fix KTMB:dest');
+    });
+
+    it('text typed but not yet a bubble is undone first', async () => {
+        const p = fresh(R());
+        p._inputEl.value = 'BRA';
+        p._onTyping();
+        expect(undoBtn(p).disabled).toBe(false);
+        await p._onUndoTap();
+        expect(p._inputEl.value).toBe('');
+        expect(show(p)).toBe('KLKR:dep CRG:fix BRADO:fix KTMB:dest');
+    });
+
+    it('a clearance load is one step', async () => {
+        const p = fresh([{ id: 'KLKR', type: 'dep' }, { id: 'KAIK', type: 'dest' }]);
+        await p.loadClearance({ limit: 'KAIK', route: 'MITVE T437 CAYCE' });
+        expect(show(p)).toBe('KLKR:dep MITVE:fix T437:awy CAYCE:fix KAIK:dest');
+        await p._onUndoTap();
+        expect(show(p)).toBe('KLKR:dep KAIK:dest');
+        expect(undoBtn(p).disabled).toBe(true);
+    });
+
+    it('Clear keeps the departure only (Dana: "LKR to Shiflet"), does not ask, and is one step', async () => {
+        const p = fresh(R());
+        p._confirm = vi.fn(async () => false);
+        await p._onClearTap();
+        expect(p._confirm).not.toHaveBeenCalled();
+        expect(show(p)).toBe('KLKR:dep');
+        await type(p, 'KCDN');                                   // the next airport is the destination
+        expect(show(p)).toBe('KLKR:dep KCDN:dest');
+        await p._onUndoTap();
+        await p._onUndoTap();
+        expect(show(p)).toBe('KLKR:dep CRG:fix BRADO:fix KTMB:dest');
+    });
+
+    it('opening a plan starts with nothing to undo', async () => {
+        const src = read('web/cockpit/route-planner-v2.js');
+        const open = src.slice(src.indexOf('    async open(plan) {'), src.indexOf('    // ── Route field'));
+        expect(open).toMatch(/await super\.open\(plan\);[\s\S]*this\._resetUndo\(\);/);
+    });
+});
+
+describe('Route Planner (preview): a skipped fuel stop stays skipped until the route changes (Dana, 2026-10-16)', () => {
+    beforeEach(() => { localStorage.clear(); globalThis.app = { showToast: vi.fn(() => ({ remove() {} })), closeRoutePlanner: vi.fn() }; });
+    const R = () => [{ id: 'KLKR', type: 'dep' }, { id: 'CAE', type: 'fix' }, { id: 'KAIK', type: 'dest' }];
+    const OVER = { severity: 'red', code: 'fuel-over-limit', pillIndexes: [], message: 'x', fixes: [] };
+
+    it('Skip in the picker: the check is told, so the problem is amber; a route change makes it red again', async () => {
+        const p = make(R());
+        p._showFuelStopPicker = vi.fn(async () => { p._fuelPickSkipped = true; return null; });   // the Skip button
+        p._runChecks = vi.fn(async () => (p._problems = []));
+        await p._processFuelStopCandidates({ fuelStopCandidates: [{ afterFixId: 'CAE', cumHrsAtStop: 2, options: [] }] });
+        expect(p._fuelStopSkipped()).toBe(true);
+        await type(p, 'ALD');                                         // the route changes
+        expect(p._fuelStopSkipped()).toBe(false);
+    });
+
+    it('the skip is for the fuel-stop limit it was made at', async () => {
+        const p = make(R());
+        p._showFuelStopPicker = vi.fn(async () => { p._fuelPickSkipped = true; return null; });
+        p._runChecks = vi.fn(async () => (p._problems = []));
+        await p._processFuelStopCandidates({ fuelStopCandidates: [{ afterFixId: 'CAE', cumHrsAtStop: 2, options: [] }] });
+        p._maxLegHrs = 1.5;
+        expect(p._fuelStopSkipped()).toBe(false);
+        p._maxLegHrs = 2;
+        expect(p._fuelStopSkipped()).toBe(true);
+    });
+
+    it('_runChecks passes it to RouteCheck', async () => {
+        const p = make(R());
+        const spy = vi.spyOn(RouteCheck, 'run').mockResolvedValue([]);
+        p._fuelSkipKey = p._fuelKey();
+        await p._runChecks();
+        expect(spy.mock.calls.at(-1)[0].settings.fuelStopSkipped).toBe(true);
+        spy.mockRestore();
+    });
+
+    it('Skip after "Fuel stop near here…" (a stop you chose to look for) does not count', async () => {
+        const p = make(R());
+        p._showFuelStopPicker = vi.fn(async () => null);
+        await p._processFuelStopCandidates({ fuelStopCandidates: [{ afterFixId: 'CAE', cumHrsAtStop: 1, options: [] }] }, 0, { optional: true });
+        expect(p._fuelStopSkipped()).toBe(false);
+    });
+
+    it('Apply does not ask about an amber (skipped) fuel problem', async () => {
+        const p = make(R());
+        p._runChecks = vi.fn(async () => (p._problems = [{ ...OVER, severity: 'amber' }]));
+        p._askApplyAnyway = vi.fn(async () => false);
+        p._doApply = vi.fn(async () => false);
+        await p._onApplyKeepOpenTap();
+        expect(p._askApplyAnyway).not.toHaveBeenCalled();
+        expect(p._doApply).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe('Route Planner (preview): after an approach is inserted (Dana, 2026-10-16)', () => {
+    beforeEach(() => { localStorage.clear(); globalThis.app = { showToast: vi.fn(() => ({ remove() {} })), closeRoutePlanner: vi.fn() }; });
+    const APP = { icao: 'KAIK', insertBefore: [{ icao: 'IAFAA', lat: 33.7, lon: -81.5, alt: 3000 }, { icao: 'RW25', lat: 33.65, lon: -81.68 }],
+        insertAfter: [{ icao: 'MAHPC', lat: 33.6, lon: -81.8 }], airportWp: { icao: 'KAIK', lat: 33.649, lon: -81.685 } };
+    const field = (p) => [...p._bubblesEl.children].map((c) => (c === p._inputEl ? '|' : c.textContent.trim())).join(' ');
+
+    it('the keyboard closes and typing goes before the approach, not inside it', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'CAE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        p._inputEl.focus();
+        p.insertApproach(APP);
+        expect(document.activeElement).not.toBe(p._inputEl);
+        expect(field(p)).toBe('KLKR CAE | IAFAA 30 RW25 KAIK MAHPC');
+        await type(p, 'ALD');
+        expect(show(p)).toBe('KLKR:dep CAE:fix ALD:fix IAFAA:fix RW25:fix KAIK:dest MAHPC:fix');
+    });
+
+    it('an insert in progress ends', () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'CAE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        p._startInsert(1);
+        p.insertApproach(APP);
+        expect(p._insertIndex).toBeNull();
+        expect(p._inputEl.placeholder).toBe('type');
+    });
+});
+
+describe('Route Planner (preview): tapping a bubble while text is typed (2026-10-16)', () => {
+    beforeEach(() => { localStorage.clear(); globalThis.app = { showToast: vi.fn(() => ({ remove() {} })), closeRoutePlanner: vi.fn() }; });
+
+    it('the typed text is added first, and the sheet is for the bubble tapped (not the one now at its old place)', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'KAIK', type: 'dest' }]);
+        p._inputEl.value = 'CAE';
+        await p._onBubbleTap(1);
+        expect(show(p)).toBe('KLKR:dep CAE:fix KAIK:dest');
+        expect(p._sheetEl.querySelector('.rp2-sheet-hdr span').textContent).toBe('KAIK');
+    });
+});
+
+describe('Route Planner (preview): critical review fixes (2026-10-16)', () => {
+    beforeEach(() => { localStorage.clear(); document.body.className = ''; globalThis.app = { showToast: vi.fn(() => ({ remove() {} })), closeRoutePlanner: vi.fn() }; });
+    const R = () => [{ id: 'KLKR', type: 'dep' }, { id: 'MITVE', type: 'fix' }, { id: 'KAIK', type: 'dest' }];
+    const tapAct = async (label) => { const b = [...document.querySelectorAll('.rp2-act')].find((x) => x.textContent === label); expect(b, label).toBeTruthy(); b.click(); await new Promise((r) => setTimeout(r, 0)); };
+
+    it('a bubble sheet acts on its bubble even after the route changed under it', async () => {
+        const p = make(R());
+        p._openBubbleSheet(2);                                     // KAIK
+        await type(p, 'GREAT');                                    // goes in before KAIK: KAIK is now at 3
+        await tapAct('Remove');
+        expect(show(p)).toBe('KLKR:dep MITVE:fix GREAT:dest');     // KAIK removed (the point before becomes the destination)
+    });
+
+    it('a bubble sheet whose bubble is gone does nothing', async () => {
+        const p = make(R());
+        p._openBubbleSheet(1);                                     // MITVE
+        p._removeAt(1);
+        await tapAct('Remove');
+        expect(show(p)).toBe('KLKR:dep KAIK:dest');
+    });
+
+    it('a problem fix from a check of an older route is not applied; the route is checked again', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'MITVE', type: 'fix' }, { id: 'T437', type: 'awy' }, { id: 'CAYCE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        await p._runChecks();
+        p._removeAt(1);                                            // MITVE gone: indexes shift
+        const before = show(p);
+        await p._applyFix({ label: 'Go direct', apply: 'goDirect', arg: { awyIndex: 2 } });
+        expect(show(p)).toBe(before);
+    });
+
+    it('a check of an older route does not replace the problems', async () => {
+        const p = make(R());
+        let release;
+        const real = p._compute.bind(p);
+        p._compute = vi.fn(() => new Promise((r) => { release = async () => r(await real()); }));
+        const done = p._runChecks();
+        p._problems = [{ severity: 'amber', code: 'keep', pillIndexes: [], message: 'newer', fixes: [] }];
+        p._route.splice(1, 1);                                     // route changes while the check runs
+        await release();
+        await done;
+        expect(p._problems.map((x) => x.code)).toEqual(['keep']);
+    });
+
+    it("opening a plan clears the old route's problems", async () => {
+        const p = make(R());
+        p._problems = [{ severity: 'red', code: 'old', pillIndexes: [1], message: 'old', fixes: [] }];
+        p._renderProblems();
+        await p.open({ flight_plan: { route: ['KLKR', 'KAIK'], destination: 'KAIK' }, waypoints: [] });
+        expect(p._problems).toEqual([]);
+    });
+
+    it('Apply-anyway question ended by another sheet: no problem sheet pops up over it', async () => {
+        const p = make(R());
+        p._runChecks = vi.fn(async () => (p._problems = [{ severity: 'red', code: 'x', pillIndexes: [], message: 'bad', fixes: [] }]));
+        p._doApply = vi.fn(async () => true);
+        const applying = p._onApplyKeepOpenTap();
+        await new Promise((r) => setTimeout(r, 0));
+        p._openBubbleSheet(1);                                     // the pilot taps MITVE instead
+        await applying;
+        expect(p._doApply).not.toHaveBeenCalled();
+        expect(p._sheetEl.querySelector('.rp2-sheet-hdr span').textContent).toBe('MITVE');
+    });
+
+    it('Apply-anyway "Fix it" opens the problem list', async () => {
+        const p = make(R());
+        p._runChecks = vi.fn(async () => (p._problems = [{ severity: 'red', code: 'x', pillIndexes: [], message: 'bad', fixes: [] }]));
+        p._doApply = vi.fn(async () => true);
+        const applying = p._onApplyKeepOpenTap();
+        await new Promise((r) => setTimeout(r, 0));
+        await tapAct('Fix it');
+        await applying;
+        expect(p._sheetEl.querySelector('.rp2-sheet-hdr span').textContent).toBe('Route check');
+    });
+
+    it('close(): the sheet closes, a question waiting is answered no, typed text is dropped', async () => {
+        const p = make(R());
+        p._runChecks = vi.fn(async () => [{ severity: 'red', code: 'x', pillIndexes: [], message: 'bad', fixes: [] }]);
+        p._doApply = vi.fn(async () => true);
+        const applying = p._onApplyKeepOpenTap();
+        await new Promise((r) => setTimeout(r, 0));
+        p._inputEl.value = 'GRE';
+        p.close();
+        await applying;
+        expect(p._doApply).not.toHaveBeenCalled();
+        expect(p._sheetEl.hidden).toBe(true);
+        expect(p._inputEl.value).toBe('');
+    });
+
+    it('Start/End route here end an insert in progress', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'MITVE', type: 'fix' }, { id: 'CAYCE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        p._startInsert(3);
+        p._endHere(1);
+        expect(p._insertIndex).toBeNull();
+        await type(p, 'BLOTS');
+        expect(show(p)).toBe('KLKR:dep BLOTS:fix MITVE:dest');
+    });
+
+    it('no Start/End route here on missed-approach fixes (after the destination)', () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'KAIK', type: 'dest' }, { id: 'MA1', type: 'fix', proc: true }]);
+        p._openBubbleSheet(2);
+        const labels = [...document.querySelectorAll('.rp2-act')].map((b) => b.textContent);
+        expect(labels).not.toContain('Start route here');
+        expect(labels).not.toContain('End route here');
+    });
+
+    it('altitude: hundreds as on the bubbles, commas, and a sane range', () => {
+        const p = make(R());
+        const item = p._route[1];
+        const ask = (v) => { globalThis.prompt = vi.fn(() => v); p._askAltitude(item); return item.altFt; };
+        expect(ask('55')).toBe(5500);
+        expect(ask('5,500')).toBe(5500);
+        expect(ask('7000')).toBe(7000);
+        expect(ask('')).toBeUndefined();
+        expect(ask('250')).toBeUndefined();                          // FL250: out of range, not set
+        expect(ask('30000')).toBeUndefined();
+        expect(ask('abc')).toBeUndefined();
+    });
+
+    it('search: clearing the box drops a search still running; a pick adds typed text first', async () => {
+        const p = make(R());
+        let release;
+        p._searchAirports = vi.fn(() => new Promise((r) => { release = () => r([]); }));
+        p._nasrDb = { searchAllExtended: async () => ({ navaids: [{ id: 'AIK', name: 'Aiken' }], fixes: [] }) };
+        p._searchInput.value = 'AI';
+        const running = p._runSearch();
+        p._searchInput.value = '';
+        await p._runSearch();
+        release();
+        await running;
+        expect(p._resultsEl.hidden).toBe(true);
+        p._inputEl.value = 'GREAT';
+        await p._pickSearchResult('CAYCE');
+        expect(show(p)).toBe('KLKR:dep MITVE:fix GREAT:fix CAYCE:fix KAIK:dest');
+    });
+
+    it('flight rows escape identifiers (no HTML from route ids)', () => {
+        const p = make(R());
+        const c = { summary: { totalDistNm: 100, totalEteHrs: 1, totalFuelGal: 9, fuelRemGal: 20, groundHrs: 0.5 }, legs: [{ timeHrs: 0.5, fuelRemGal: 30, eta: 0 }, { timeHrs: 0.5, fuelRemGal: 30, eta: 0 }],
+            waypoints: [{ id: 'KLKR' }, { id: '<img src=x onerror=alert(1)>', fuelStop: true }, { id: 'KAIK', isDest: true }] };
+        p._renderStats(c);
+        expect(p._flightsEl.querySelector('img')).toBeNull();
+        expect(p._flightsEl.textContent).toContain('<img src=x onerror=alert(1)>');
+    });
+
+    it('DEPART shows a saved future departure time; a saved past one becomes Now', async () => {
+        const p = make(R());
+        const future = new Date(Date.now() + 90 * 60000);
+        localStorage.setItem('flypi_planner_opts', JSON.stringify({ departureTime: future.toISOString() }));
+        await p.open({ flight_plan: { route: ['KLKR', 'KAIK'], destination: 'KAIK' }, waypoints: [] });
+        expect(p._departureTime?.getTime()).toBe(future.getTime());
+        expect(p._g.dep.selectedOptions[0].textContent).toBe(RoutePlannerV2.dayTimeLabel(future, new Date(), { short: true }));
+        localStorage.setItem('flypi_planner_opts', JSON.stringify({ departureTime: new Date(Date.now() - 3600000).toISOString() }));
+        await p.open({ flight_plan: { route: ['KLKR', 'KAIK'], destination: 'KAIK' }, waypoints: [] });
+        expect(p._departureTime).toBeNull();
+        expect(p._g.dep.value).toBe('0');
+    });
+
+    it('the shared settings: a cleared departure time or Auto altitude is cleared in the other planner too', () => {
+        const p = make(R());
+        p._departureTime = new Date(Date.now() + 3600000);
+        p._cruiseAltFt = 7000;
+        localStorage.setItem('flypi_planner_opts', JSON.stringify({ departureTime: null, cruiseAltFt: null }));
+        p._loadOpts();
+        expect(p._departureTime).toBeNull();
+        expect(p._cruiseAltFt).toBeNull();
+    });
+});
+
+describe('Route Planner (preview): critical review fixes, fuel and Apply (2026-10-16)', () => {
+    beforeEach(() => { localStorage.clear(); document.body.className = ''; globalThis.app = { showToast: vi.fn(() => ({ remove() {} })), closeRoutePlanner: vi.fn() }; });
+    const R = () => [{ id: 'KLKR', type: 'dep' }, { id: 'CAE', type: 'fix' }, { id: 'KAIK', type: 'dest' }];
+    const CAND = { afterFixId: 'CAE', cumHrsAtStop: 2, options: [] };
+
+    it('fuel-stop picker: only the Skip button is a skip, not a tap on the dim background', async () => {
+        const p = make(R());
+        p._runChecks = vi.fn(async () => (p._problems = []));
+        let done = p._processFuelStopCandidates({ fuelStopCandidates: [CAND] });
+        await new Promise((r) => setTimeout(r, 0));
+        const bg = document.body.lastElementChild;                // the picker overlay (appended last)
+        expect(bg.contains(document.querySelector('.rpp-fs-skip'))).toBe(true);
+        bg.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        await done;
+        expect(p._fuelStopSkipped()).toBe(false);
+        done = p._processFuelStopCandidates({ fuelStopCandidates: [CAND] });
+        await new Promise((r) => setTimeout(r, 0));
+        document.querySelector('.rpp-fs-skip').click();
+        await done;
+        expect(p._fuelStopSkipped()).toBe(true);
+    });
+
+    it('a skip is undone by a change of power or altitude too (the leg times change)', () => {
+        const p = make(R());
+        p._fuelSkipKey = p._fuelKey();
+        p._pctPower = p._pctPower === 55 ? 75 : 55;
+        expect(p._fuelStopSkipped()).toBe(false);
+        p._fuelSkipKey = p._fuelKey();
+        p._cruiseAltFt = 9000;
+        expect(p._fuelStopSkipped()).toBe(false);
+    });
+
+    it('typing your own fuel stop: a VOR is refused even if its position is known', async () => {
+        const p = make(R());
+        await p._aero().resolve('ALD');                         // the preview cached the VOR's position
+        const picked = p._showFuelStopPicker(CAND);
+        await new Promise((r) => setTimeout(r, 0));
+        document.querySelector('.rpp-fs-manual-input').value = 'ALD';
+        document.querySelector('.rpp-fs-manual-btn').click();
+        await new Promise((r) => setTimeout(r, 20));
+        expect(document.querySelector('.rpp-fs-list')).not.toBeNull();   // still open: refused
+        document.querySelector('.rpp-fs-manual-input').value = 'KCDN';
+        document.querySelector('.rpp-fs-manual-btn').click();
+        expect((await picked).icao).toBe('KCDN');
+    });
+
+    it('Save saves the route as the bubbles show it, not the last Plan/Apply', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'KCDN', type: 'fuel' }, { id: 'KAIK', type: 'dest' }]);
+        p._lastPlan = { waypoints: [{ id: 'KLKR' }, { id: 'KAIK' }] };
+        const computed = { waypoints: [{ id: 'KLKR' }, { id: 'KCDN', fuelStop: true }, { id: 'KAIK', isDest: true }], legs: [], summary: null };
+        p._compute = vi.fn(async () => computed);
+        p._saveCurrentTrip = vi.fn(async () => {});
+        await p._onSaveTap();
+        expect(p._saveCurrentTrip).toHaveBeenCalledWith(computed);
+    });
+
+    it('Apply tapped twice quickly applies once', async () => {
+        const p = make(R());
+        p._runChecks = vi.fn(async () => (p._problems = []));
+        let release;
+        p._doApply = vi.fn(() => new Promise((r) => { release = () => r(false); }));
+        const a = p._onApplyKeepOpenTap();
+        const b = p._onApplyKeepOpenTap();
+        await new Promise((r) => setTimeout(r, 0));
+        release();
+        await a; await b;
+        expect(p._doApply).toHaveBeenCalledTimes(1);
+    });
+
+    it('Route applied: never says "undefined"', () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'CAE', type: 'fix' }]);
+        p._lastPlan = { waypoints: [{ lat: 34, lon: -81 }, { lat: 33.9, lon: -81.1 }] };
+        const t = vi.spyOn(p, '_toast');
+        p._announceApplied();
+        expect(t.mock.calls[0][0]).toBe('Route applied: KLKR → CAE (2 waypoints)');
+    });
+
+    it('winds: loaded for the route in the planner (not only for a stored plan); WIND says — without them', async () => {
+        const p = make(R());
+        const winds = { CAE: { 6000: { dir: 270, spd: 20 } } };
+        globalThis.FlyTabPlanning = { fetchWinds: vi.fn(async () => winds) };
+        p._lastWinds = null; p._windsTriedAt = 0;
+        p._ensureWinds();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(globalThis.FlyTabPlanning.fetchWinds).toHaveBeenCalled();
+        expect(p._lastWinds).toBe(winds);
+        const tried = p._windsTriedAt;
+        p._windsTriedAt = tried - 10 * 60000;                   // even long after: have them, so no new fetch
+        p._ensureWinds();
+        expect(p._windsLoading).toBeFalsy();
+        // (call counts are not used: other planners from earlier tests have checks pending)
+        delete globalThis.FlyTabPlanning;
+        const c = { summary: { totalDistNm: 50, totalEteHrs: 0.4, totalFuelGal: 4, fuelRemGal: 30, groundHrs: 0 },
+            legs: [{ timeHrs: 0.4, gsKt: 130, tasKt: 130, eta: 0 }], waypoints: [{ id: 'KLKR' }, { id: 'KAIK', isDest: true }] };
+        p._renderStats(c);
+        expect(p._statsStripEl.textContent).toMatch(/WIND—/);
+    });
+});
+
+describe('Route Planner (preview): START FUEL (Dana, 2026-10-16)', () => {
+    beforeEach(() => { localStorage.clear(); globalThis.app = { showToast: vi.fn(() => ({ remove() {} })), closeRoutePlanner: vi.fn() }; });
+    const R = () => [{ id: 'KLKR', type: 'dep' }, { id: 'CAE', type: 'fix' }, { id: 'KAIK', type: 'dest' }];
+    const cellOf = (p, label) => [...p._el.querySelectorAll('.rp2-cell')].find((c) => c.querySelector('.rp2-k').textContent === label);
+    const enter = (p, v) => { const i = p._g.startFuel; i.value = v; i.dispatchEvent(new Event('change')); };
+
+    it('a START FUEL box in the grid, gallons typed in; empty means full tanks', () => {
+        const p = make(R());
+        const cell = cellOf(p, 'START FUEL');
+        expect(cell).toBeTruthy();
+        const input = cell.querySelector('input');
+        expect(input).toBe(p._g.startFuel);
+        expect(input.getAttribute('inputmode')).toBe('decimal');
+        expect(input.value).toBe('');
+        expect(input.placeholder).toBe('Full (36)');
+        expect(p._startFuelGal).toBeNull();
+        const labels = [...p._el.querySelectorAll('.rp2-cell .rp2-k')].map((k) => k.textContent);
+        expect(labels).toEqual(['ALTITUDE', 'POWER', 'ROUTING', 'DEPART', 'START FUEL', 'RESERVE', 'FUEL STOP']);
+    });
+
+    it('typed gallons are used and kept (own key: the other planner rewrites the shared settings)', () => {
+        const p = make(R());
+        enter(p, '25.5');
+        expect(p._startFuelGal).toBe(25.5);
+        expect(p._g.startFuel.value).toBe('25.5');
+        expect(JSON.parse(localStorage.getItem('flypi_planner_start_fuel'))).toBe(25.5);
+        p._saveOpts();                                          // the shared settings saved again
+        expect(JSON.parse(localStorage.getItem('flypi_planner_start_fuel'))).toBe(25.5);
+        const q = make(R());
+        expect(q._startFuelGal).toBe(25.5);
+        expect(q._g.startFuel.value).toBe('25.5');
+        enter(q, '');
+        expect(q._startFuelGal).toBeNull();
+        expect(localStorage.getItem('flypi_planner_start_fuel')).toBeNull();
+    });
+
+    it('not a number, zero, or more than the tanks hold: refused, the box shows what is used', () => {
+        const p = make(R());
+        enter(p, '20');
+        const t = vi.spyOn(p, '_toast');
+        for (const bad of ['abc', '0', '-5', '40']) {
+            enter(p, bad);
+            expect(p._startFuelGal).toBe(20);
+            expect(p._g.startFuel.value).toBe('20');
+        }
+        expect(t).toHaveBeenCalledTimes(4);
+        expect(t.mock.calls[3][0]).toMatch(/36/);
+    });
+
+    it('the plan uses it (checks, figures, Apply)', async () => {
+        const p = make(R());
+        enter(p, '12');
+        const calls = [];
+        p._planner = { recomputeLegs: vi.fn((plan, prof, opts) => { calls.push(opts); return { waypoints: plan.waypoints, legs: [], summary: null }; }) };
+        p._profileForPower = () => ({ fuel_capacity_gal: 36 });
+        await p._compute();
+        expect(calls.at(-1).startFuelGal).toBe(12);
+        const src = read('web/cockpit/route-planner-panel.js');
+        const apply = src.slice(src.indexOf('    async _doApply() {'), src.indexOf('    async _saveCurrentTrip('));
+        expect(apply).toMatch(/startFuelGal:\s*this\._startFuelGal \?\? undefined/);
+    });
+
+    it('a low start fuel shows as the first landing below the reserve', async () => {
+        const c = {
+            legs: [{ timeHrs: 1.5, fuelGal: 14, fuelRemGal: 6 }], waypoints: [{ id: 'KLKR' }, { id: 'KAIK', isDest: true }],
+            summary: { totalEteHrs: 1.5, totalDistNm: 200, totalFuelGal: 14, fuelRemGal: 6 },
+        };
+        const p = make(R());
+        p._compute = async () => c;
+        const problems = await p._runChecks();
+        expect(problems.some((x) => x.code === 'below-reserve')).toBe(true);
+    });
+});
+
+describe('Route Planner (preview): DEPART today or tomorrow, with that time\'s winds (Dana, 2026-10-16)', () => {
+    const NOW = new Date(2026, 9, 16, 16, 11);                  // 16:11 local
+    beforeEach(() => {
+        localStorage.clear();
+        vi.useFakeTimers({ now: NOW, toFake: ['Date'] });
+        globalThis.app = { showToast: vi.fn(() => ({ remove() {} })), closeRoutePlanner: vi.fn() };
+    });
+    afterEach(() => { vi.useRealTimers(); delete globalThis.FlyTabPlanning; });
+    const R = () => [{ id: 'KLKR', type: 'dep' }, { id: 'KAIK', type: 'dest' }];
+    const acts = () => [...document.querySelectorAll('.rp2-act')].map((b) => b.textContent);
+    const tap = async (label) => { [...document.querySelectorAll('.rp2-act')].find((b) => b.textContent === label).click(); await new Promise((r) => setTimeout(r, 0)); };
+    const choose = (p, v) => { p._g.dep.value = v; p._g.dep.dispatchEvent(new Event('change')); };
+
+    it('DEPART offers "Day & time…": Today / Tomorrow, then whole hours (local)', async () => {
+        const p = make(R());
+        expect([...p._g.dep.options].map((o) => o.textContent)).toContain('Day & time…');
+        choose(p, 'pick');
+        expect(acts()).toEqual(['Today', 'Tomorrow']);
+        await tap('Tomorrow');
+        expect(acts()[0]).toBe('05:00');
+        expect(acts().at(-1)).toBe('21:00');
+        await tap('09:00');
+        const t = p._departureTime;
+        expect([t.getFullYear(), t.getMonth(), t.getDate(), t.getHours(), t.getMinutes()]).toEqual([2026, 9, 17, 9, 0]);
+        expect(p._g.dep.selectedOptions[0].textContent).toBe('Tmrw 09:00');      // fits the box in landscape
+        expect(JSON.parse(localStorage.getItem('flypi_planner_opts')).departureTime).toBe(t.toISOString());
+    });
+
+    it('today: only hours still ahead', async () => {
+        const p = make(R());
+        choose(p, 'pick');
+        await tap('Today');
+        expect(acts()[0]).toBe('17:00');
+    });
+
+    it('closing the picker keeps the departure as it was', async () => {
+        const p = make(R());
+        choose(p, '60');
+        const before = p._departureTime.getTime();
+        choose(p, 'pick');
+        p._closeSheet();
+        expect(p._departureTime.getTime()).toBe(before);
+        expect(p._g.dep.value).toBe('at');
+    });
+
+    it('a new departure fetches the winds for it; WIND says which forecast', async () => {
+        const p = make(R());
+        const r = { winds: { CLT: {} }, source: 'fd', cycle: '24', validAt: new Date('2026-10-17T18:00:00Z'), useFrom: new Date('2026-10-17T12:00:00Z'), useTo: new Date('2026-10-18T00:00:00Z') };
+        globalThis.FlyTabPlanning = { fetchWindsDetailed: vi.fn(async () => r), fetchWinds: vi.fn() };
+        choose(p, 'pick');
+        await tap('Tomorrow');
+        await tap('09:00');
+        await new Promise((res) => setTimeout(res, 0));
+        expect(globalThis.FlyTabPlanning.fetchWindsDetailed).toHaveBeenCalledWith(p._departureTime);
+        expect(p._lastWinds).toBe(r.winds);
+        const c = { summary: { totalDistNm: 50, totalEteHrs: 0.4, totalFuelGal: 4, fuelRemGal: 30, groundHrs: 0 },
+            legs: [{ timeHrs: 0.4, gsKt: 120, tasKt: 130, windKt: -10, eta: 0 }], waypoints: [{ id: 'KLKR' }, { id: 'KAIK', isDest: true }] };
+        p._renderStats(c);
+        expect(p._statsStripEl.textContent).toMatch(/WIND FD 17\/18Z/);
+        expect(p._statsStripEl.textContent).toMatch(/10 head/);
+    });
+
+    it('no forecast for the departure yet: amber note, calm air (not the wrong period)', async () => {
+        const p = make(R());
+        globalThis.FlyTabPlanning = { fetchWindsDetailed: vi.fn(async () => ({ winds: null, source: null, reason: 'beyond', coverTo: new Date(2026, 9, 17, 20, 0) })) };
+        p._lastWinds = { OLD: {} };
+        p._departureTime = new Date(2026, 9, 17, 21, 0);
+        p._ensureWinds({ force: true });
+        await new Promise((res) => setTimeout(res, 0));
+        expect(p._lastWinds).toBeNull();
+        p._compute = async () => ({ legs: [], waypoints: [], summary: null });
+        const problems = await p._runChecks();
+        const n = problems.find((x) => x.code === 'no-winds');
+        expect(n?.severity).toBe('amber');
+        expect(n.message).toBe('No winds forecast for Tomorrow 21:00 yet (forecast to Tomorrow 20:00) — figures use calm air');
+    });
+});
+
+describe('Route Planner (preview): an avoid list saved by the current planner is shown (review, 2026-10-16)', () => {
+    beforeEach(() => { localStorage.clear(); globalThis.app = { showToast: vi.fn(() => ({ remove() {} })), closeRoutePlanner: vi.fn() }; });
+
+    it('amber "Plan route avoids …" with Stop avoiding, which clears and saves it', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'KAIK', type: 'dest' }]);
+        p._avoidList = ['R-2901', 'KCAE'];
+        p._compute = async () => ({ legs: [], waypoints: [], summary: null });
+        let problems = await p._runChecks();
+        const a = problems.find((x) => x.code === 'avoid-list');
+        expect(a?.severity).toBe('amber');
+        expect(a.message).toBe('Plan route avoids R-2901, KCAE');
+        await p._applyFix(a.fixes[0]);
+        expect(p._avoidList).toEqual([]);
+        expect(JSON.parse(localStorage.getItem('flypi_planner_opts')).avoidList).toEqual([]);
+        problems = await p._runChecks();
+        expect(problems.some((x) => x.code === 'avoid-list')).toBe(false);
+    });
+});
+
+describe('Route Planner (preview): flight-readiness review fixes (2026-10-16)', () => {
+    beforeEach(() => { localStorage.clear(); globalThis.app = { showToast: vi.fn(() => ({ remove() {} })), closeRoutePlanner: vi.fn() }; });
+    const field = (p) => p._route.map((r) => `${r.id}:${r.type}${r.proc ? '*' : ''}`).join(' ');
+    const APP = (rw) => ({ icao: 'KAIK', insertBefore: [{ icao: `IA${rw}`, lat: 33.7, lon: -81.5 }, { icao: `RW${rw}`, lat: 33.65, lon: -81.68 }],
+        insertAfter: [{ icao: `MA${rw}`, lat: 33.6, lon: -81.8 }], airportWp: { icao: 'KAIK', lat: 33.649, lon: -81.685 } });
+
+    it('a second approach replaces the first (both were flown)', () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'CAE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        p.insertApproach(APP('07'));
+        p.insertApproach(APP('25'));
+        expect(field(p)).toBe('KLKR:dep CAE:fix IA25:fix* RW25:fix* KAIK:dest MA25:fix*');
+    });
+
+    it('typing a whole route into an empty field: first is the departure, last the destination, in order', async () => {
+        const p = make();
+        await type(p, 'KLKR CAE GREAT KAIK');
+        expect(show(p)).toBe('KLKR:dep CAE:fix GREAT:fix KAIK:dest');
+        const q = make();
+        await type(q, 'KLKR GREAT T437 CAYCE KAIK');
+        expect(show(q)).toBe('KLKR:dep GREAT:fix T437:awy CAYCE:fix KAIK:dest');
+    });
+
+    it('then a tap in the field: typing goes before the destination again', async () => {
+        const p = make();
+        await type(p, 'KLKR CAE KAIK');
+        p._fieldEl.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 1, clientY: 1 }));
+        await p._typing; await new Promise((r) => setTimeout(r, 0));   // the tap commits typed text first
+        p._cursorAtEnd = false;
+        await type(p, 'GREAT');
+        expect(show(p)).toBe('KLKR:dep CAE:fix GREAT:fix KAIK:dest');
+    });
+
+    it('pasting a route over the same departure and destination does not repeat them', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'KAIK', type: 'dest' }]);
+        await type(p, 'KLKR CAE GREAT KAIK');
+        expect(show(p)).toBe('KLKR:dep CAE:fix GREAT:fix KAIK:dest');
+    });
+
+    it('DCT is kept as DIRECT (reloads as a direct, not an unknown fix)', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'KAIK', type: 'dest' }]);
+        await type(p, 'CAE DCT KCDN');
+        expect(show(p)).toBe('KLKR:dep CAE:fix DIRECT:direct KCDN:airport KAIK:dest');
+    });
+
+    it('reopening a saved route: airways as they were applied (BLOTS -> CAYCE stays direct)', async () => {
+        const p = make();
+        await p.open({ flight_plan: { route: ['KLKR', 'GREAT', 'T437', 'BLOTS', 'CAYCE', 'KAIK'], destination: 'KAIK' },
+            waypoints: [{ icao: 'KLKR' }, { icao: 'GREAT' }, { icao: 'BLOTS', airway: 'T437' }, { icao: 'CAYCE' }, { icao: 'KAIK' }] });
+        expect(p._route.find((r) => r.id === 'BLOTS').airway).toBe('T437');
+        expect(p._route.find((r) => r.id === 'CAYCE').airway).toBeUndefined();
+        // a plan with no airway information (older, or from plan sync): tagged as before
+        const q = make();
+        await q.open({ flight_plan: { route: ['KLKR', 'GREAT', 'T437', 'BLOTS', 'CAYCE', 'KAIK'], destination: 'KAIK' },
+            waypoints: [{ icao: 'KLKR' }, { icao: 'GREAT' }, { icao: 'BLOTS' }, { icao: 'CAYCE' }, { icao: 'KAIK' }] });
+        expect(q._route.find((r) => r.id === 'CAYCE').airway).toBe('T437');
+    });
+
+    it('diverting: a new destination typed after the old one drops the old approach and missed approach', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'CAE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        p.insertApproach(APP('25'));
+        p._cursorAtEnd = true;
+        await type(p, 'KCDN');
+        expect(field(p)).toBe('KLKR:dep CAE:fix KAIK:airport KCDN:dest');
+        p._cursorAtEnd = false;
+        await type(p, 'GREAT');
+        expect(field(p)).toBe('KLKR:dep CAE:fix KAIK:airport GREAT:fix KCDN:dest');
+    });
+
+    it('removing the destination drops its approach and missed approach; the destination is the point before', () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'CAE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        p.insertApproach(APP('25'));
+        p._removeAt(p._destPillIndex());
+        expect(field(p)).toBe('KLKR:dep CAE:dest');
+    });
+
+    it('an approach does not remove the arrival (STAR) before it; another approach replaces only the approach (pre-merge review)', () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'CAE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        p.insertApproach({ icao: 'KAIK', procType: 'STAR', insertBefore: [{ icao: 'ST1', lat: 33.8, lon: -81.4 }, { icao: 'ST2', lat: 33.75, lon: -81.45 }], insertAfter: [] });
+        p.insertApproach({ ...APP('07'), procType: 'APPROACH' });
+        expect(field(p)).toBe('KLKR:dep CAE:fix ST1:fix* ST2:fix* IA07:fix* RW07:fix* KAIK:dest MA07:fix*');
+        p.insertApproach({ ...APP('25'), procType: 'APPROACH' });
+        expect(field(p)).toBe('KLKR:dep CAE:fix ST1:fix* ST2:fix* IA25:fix* RW25:fix* KAIK:dest MA25:fix*');
+        expect(p._route.find((r) => r.id === 'ST1').proc).toBe('STAR');
+        expect(p._route.find((r) => r.id === 'IA25').proc).toBe('APPROACH');
+    });
+
+    it('the kind of procedure is saved and reloaded (by position)', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'ST1', type: 'fix', proc: 'STAR' }, { id: 'KAIK', type: 'dest' }]);
+        p._coords = { KLKR: { lat: 34.7, lon: -80.8 }, ST1: { lat: 33.8, lon: -81.4 }, KAIK: { lat: 33.6, lon: -81.7 } };
+        const wps = await Object.getPrototypeOf(RoutePlannerV2.prototype)._pillsToWaypoints.call(p);   // the base: as Apply saves it
+        expect(wps.find((w) => w.id === 'ST1').proc).toBe('STAR');
+        const q = make();
+        await q.open({ flight_plan: { route: ['KLKR', 'ST1', 'KAIK'], destination: 'KAIK' }, waypoints: [{ icao: 'KLKR' }, { icao: 'ST1', proc: 'STAR' }, { icao: 'KAIK' }] });
+        expect(q._route[1].proc).toBe('STAR');
+    });
+
+    it('tapping a bubble while building a route: the typed identifier is added first, in order (pre-merge review)', async () => {
+        const p = make();
+        await type(p, 'KLKR CAE GREAT');
+        p._inputEl.value = 'KAIK';
+        await p._onBubbleTap(1);
+        expect(show(p)).toBe('KLKR:dep CAE:fix GREAT:fix KAIK:dest');
+    });
+
+    it('while building, the text cursor is drawn at the end, where typing goes', async () => {
+        const p = make();
+        await type(p, 'KLKR CAE GREAT');
+        const order = [...p._bubblesEl.children].map((c) => (c === p._inputEl ? '|' : c.textContent.trim()));
+        expect(order).toEqual(['KLKR', 'CAE', 'GREAT', '|']);
+    });
+
+    it('REV ends building: typing then goes before the destination', async () => {
+        const p = make();
+        await type(p, 'KLKR CAE KAIK');
+        p._doApply = vi.fn(async () => false);
+        await p._onReverseTap();
+        await type(p, 'GREAT');
+        expect(show(p)).toBe('KAIK:dep CAE:fix GREAT:fix KLKR:dest');
+    });
+
+    it('"Route applied" is not hidden by a check running at the same time', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'KAIK', type: 'dest' }]);
+        p._quiet = 1;                                            // a check is computing
+        p._lastPlan = { waypoints: [{ lat: 34, lon: -81 }, { lat: 33.6, lon: -81.7 }] };
+        p._announceApplied();
+        expect(p._el.querySelector('.rpp-toast')?.textContent).toMatch(/^Route applied/);
+        p._toast('Skipped (not found): XYZ');                    // the check's own message stays quiet
+        expect(p._el.querySelector('.rpp-toast').textContent).toMatch(/^Route applied/);
+    });
+});
+
+describe('Route Planner (preview): winds, DEPART and START FUEL review fixes (2026-10-16)', () => {
+    beforeEach(() => { localStorage.clear(); globalThis.app = { showToast: vi.fn(() => ({ remove() {} })), closeRoutePlanner: vi.fn() }; });
+    afterEach(() => { delete globalThis.FlyTabPlanning; });
+    const R = () => [{ id: 'KLKR', type: 'dep' }, { id: 'KAIK', type: 'dest' }];
+
+    it('Apply waits for winds still loading for a new departure', async () => {
+        const p = make(R());
+        let release;
+        const NEW = { NEW: {} };
+        p._windsFn = () => () => new Promise((r) => { release = () => r({ winds: NEW, source: 'fd' }); });
+        p._lastWinds = { OLD: {} };
+        p._setDeparture(new Date(Date.now() + 3 * 3600000));
+        const seen = [];
+        p._runChecks = vi.fn(async () => { seen.push(p._lastWinds); return (p._problems = []); });
+        p._doApply = vi.fn(async () => { seen.push(p._lastWinds); return false; });
+        const applying = p._onApplyKeepOpenTap();
+        await new Promise((r) => setTimeout(r, 0));
+        release();
+        await applying;
+        expect(seen).toEqual([NEW, NEW]);
+    });
+
+    it('winds for Now are fetched again when their forecast period has ended, and on open', async () => {
+        const p = make(R());
+        const r1 = { winds: { A: {} }, source: 'fd', useTo: new Date(Date.now() - 60000) };     // ended a minute ago
+        const fetch = vi.fn(async () => r1);
+        p._windsFn = () => fetch;
+        p._lastWinds = r1.winds; p._windsInfo = r1; p._windsTriedAt = 0;
+        p._ensureWinds();
+        expect(fetch).toHaveBeenCalledTimes(0);                     // called on the next microtask
+        await new Promise((r) => setTimeout(r, 0));
+        expect(fetch).toHaveBeenCalledTimes(1);
+        await p.open({ flight_plan: { route: ['KLKR', 'KAIK'], destination: 'KAIK' }, waypoints: [] });
+        await new Promise((r) => setTimeout(r, 0));
+        expect(fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('a refresh after the forecast period ended: Apply does not wait for it; no new winds keeps the old ones, with a note', async () => {
+        const p = make(R());
+        const OLD = { OLD: {} };
+        let release;
+        p._windsFn = () => () => new Promise((r) => { release = () => r({ winds: null, reason: 'unavailable' }); });
+        p._lastWinds = OLD;
+        p._windsInfo = { winds: OLD, source: 'fd', validAt: new Date(Date.now() - 4 * 3600000), useTo: new Date(Date.now() - 60000) };
+        p._windsTriedAt = 0;
+        p._ensureWinds();                                     // unforced refresh starts
+        await new Promise((r) => setTimeout(r, 0));
+        p._runChecks = vi.fn(async () => (p._problems = []));
+        p._doApply = vi.fn(async () => true);
+        p._lastPlan = { waypoints: [] };
+        await p._onApplyKeepOpenTap();                        // not held up by the refresh
+        expect(p._doApply).toHaveBeenCalledTimes(1);
+        release();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(p._lastWinds).toBe(OLD);                       // kept
+        delete p._runChecks;
+        p._compute = async () => ({ legs: [], waypoints: [], summary: null });
+        const problems = await RoutePlannerV2.prototype._runChecks.call(p);
+        expect(problems.find((x) => x.code === 'winds-old')?.message).toMatch(/^Winds from a forecast that has ended \(FD \d\d\/\d\dZ\) — no newer one loaded$/);
+    });
+
+    it('DEPART shows the time used after every change (re-picking a stale entry)', () => {
+        const p = make(R());
+        p._departureTime = new Date(Date.now() + 3600000); p._syncGrid();
+        p._g.dep.value = '0'; p._g.dep.dispatchEvent(new Event('change'));
+        expect(p._departureTime).toBeNull();
+        expect([...p._g.dep.options].some((o) => o.value === 'at')).toBe(false);
+        expect(p._g.dep.value).toBe('0');
+    });
+
+    it('START FUEL typed and Apply tapped straight away: the typed fuel is used', async () => {
+        const p = make(R());
+        p._g.startFuel.value = '15';                             // no change event yet (blur comes later)
+        p._runChecks = vi.fn(async () => (p._problems = []));
+        let used;
+        p._doApply = vi.fn(async () => { used = p._startFuelGal; return false; });
+        await p._onApplyKeepOpenTap();
+        expect(used).toBe(15);
+    });
+
+    it('START FUEL accepts 20,5  .5  20.  (min 1 gal)', () => {
+        const p = make(R());
+        const enter = (v) => { p._g.startFuel.value = v; p._g.startFuel.dispatchEvent(new Event('change')); return p._startFuelGal; };
+        expect(enter('20,5')).toBe(20.5);
+        expect(enter('20.')).toBe(20);
+        expect(enter('.5')).toBe(20);                            // under 1 gal: refused
+        expect(enter('1')).toBe(1);
+    });
+
+    it('Apply: if the route changed while it was being checked, it is checked again first', async () => {
+        const p = make(R());
+        let n = 0;
+        p._runChecks = vi.fn(async () => { if (n++ === 0) p._route.splice(1, 0, { id: 'CAE', type: 'fix' }); return (p._problems = []); });
+        p._doApply = vi.fn(async () => false);
+        await p._onApplyKeepOpenTap();
+        expect(p._runChecks).toHaveBeenCalledTimes(2);
+        expect(p._doApply).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe('Fuel-stop picker: no HTML from identifiers or names (review, 2026-10-16)', () => {
+    it('a crafted bubble id or airport name is shown as text', async () => {
+        globalThis.app = { showToast: vi.fn(() => ({ remove() {} })), closeRoutePlanner: vi.fn() };
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'KAIK', type: 'dest' }]);
+        const picked = p._showFuelStopPicker({ afterFixId: '<img src=x onerror=alert(1)>', cumHrsAtStop: 2,
+            options: [{ icao: '<b>X</b>', name: '<img src=y onerror=alert(2)>', distNm: 3, lat: 34, lon: -81 }] });
+        await new Promise((r) => setTimeout(r, 0));
+        const overlay = document.body.lastElementChild;
+        expect(overlay.querySelector('img')).toBeNull();
+        expect(overlay.querySelector('.rpp-fs-list b')).toBeNull();
+        expect(overlay.textContent).toContain('<img src=x onerror=alert(1)>');
+        expect(overlay.textContent).toContain('<img src=y onerror=alert(2)>');
+        document.querySelector('.rpp-fs-skip').click();
+        await picked;
+    });
+});

@@ -1,0 +1,288 @@
+/**
+ * FlyTab — Route checks for the Route Planner (redesign, see
+ * docs/superpowers/specs/2026-10-15-route-planner-redesign-design.md §2).
+ *
+ * Pure: no DOM, no app state. Given the planner's pills and the plan Apply
+ * would use, returns the problems to show, each with its reason and one-tap
+ * fixes. Red problems make Apply ask first; amber ones are shown only.
+ *
+ *   RouteCheck.run({ pills, computed, settings, aero }) -> Promise<Problem[]>
+ *     pills    RoutePlannerPanel._route: [{ id, type: dep|dest|fix|airport|fuel|awy|direct, airway? }]
+ *     computed recomputeLegs() result (legs[].timeHrs, waypoints[].fuelStop/isDest,
+ *              summary.totalDistNm/fuelRemGal), or null when not computed yet
+ *     settings { routingMode, maxLegHrs, reserveGal, fuelStopSkipped? }
+ *              fuelStopSkipped: the pilot skipped the fuel stop for this route
+ *              -> over the limit is amber (shown, Apply doesn't ask), not red
+ *     aero     { getAirway(name) -> {name, waypoints:[{name|id, lat, lon}]}|null,
+ *                resolve(id) -> {lat, lon}|null }
+ *   Problem = { severity: 'red'|'amber', code, pillIndexes: number[], message,
+ *               fixes: [{ label, apply, arg }] }
+ *   RouteCheck.applyFix(pills, fix) -> new pills (for the pill-changing fixes)
+ */
+const RouteCheck = (() => {
+    const R_NM = 3440.065;
+    const DETOUR_AMBER = 1.25;          // route more than 25 % longer than direct
+    const NEAREST = 3;                  // fix suggestions per airway problem
+    const EPS_HRS = 1e-6;
+    const ROUTING_LABEL = {
+        'v-airways': 'V-airways', 't-airways': 'T-airways', 'any': 'Any airway',
+        'gps-direct': 'GPS Direct', 'vors-direct': 'VORs Direct',
+    };
+
+    const rad = (d) => d * Math.PI / 180;
+    function directNm(a, b) {
+        const h = Math.sin(rad(b.lat - a.lat) / 2) ** 2
+            + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(rad(b.lon - a.lon) / 2) ** 2;
+        return 2 * R_NM * Math.asin(Math.sqrt(h));
+    }
+    const up = (s) => String(s ?? '').toUpperCase();
+    const isPoint = (p) => p.type !== 'awy' && p.type !== 'direct';
+    // An airway point: navaids carry an identifier and a name ({id:'CAE',
+    // name:'Columbia'}), fixes only a name ('Great'). Match either; show the id.
+    const ident = (w) => up(w.id || w.name);
+    const fmtHrs = (h) => {
+        const m = Math.round(h * 60);
+        return `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}m`;
+    };
+    const fmtLimit = (h) => `${h}h`;
+
+    /** The n airway fixes nearest `c`, as { name, nm }. */
+    function nearestOn(airway, c, n) {
+        return (airway.waypoints || [])
+            .filter((w) => Number.isFinite(w.lat) && Number.isFinite(w.lon))
+            .map((w) => ({ name: ident(w), nm: directNm(c, w) }))
+            .sort((a, b) => a.nm - b.nm)
+            .slice(0, n);
+    }
+
+    /** An identifier that exists when 0/O and 1/I are swapped, or null. */
+    async function lookalike(id, aero) {
+        const SWAP = { '0': 'O', 'O': '0', '1': 'I', 'I': '1' };
+        const chars = up(id).split('');
+        const at = chars.map((ch, i) => (SWAP[ch] ? i : -1)).filter((i) => i >= 0).slice(0, 4);
+        for (let mask = 1; mask < (1 << at.length); mask++) {
+            const v = chars.slice();
+            at.forEach((pos, b) => { if (mask & (1 << b)) v[pos] = SWAP[v[pos]]; });
+            const cand = v.join('');
+            if (await aero.resolve(cand)) return cand;
+        }
+        return null;
+    }
+
+    async function run({ pills, computed = null, settings = {}, aero }) {
+        const problems = [];
+        const red = (code, pillIndexes, message, fixes = []) => problems.push({ severity: 'red', code, pillIndexes, message, fixes });
+        const amber = (code, pillIndexes, message, fixes = []) => problems.push({ severity: 'amber', code, pillIndexes, message, fixes });
+
+        // Identifiers: every pill must be found; nothing is dropped.
+        const coords = new Map();
+        const airways = new Map();
+        for (let i = 0; i < pills.length; i++) {
+            const p = pills[i];
+            if (p.type === 'direct') continue;
+            if (p.type === 'awy') {
+                const a = await aero.getAirway(up(p.id));
+                if (a) airways.set(i, a);
+                else red('unknown-id', [i], `Airway ${p.id} not found`);
+                continue;
+            }
+            const c = await aero.resolve(p.id);
+            coords.set(i, c);
+            if (!c) {
+                // A zero typed for the letter O (or 1 for I): the keys are next to
+                // each other and look alike in the bubbles (BRAD0, 2026-10-16).
+                const alt = await lookalike(p.id, aero);
+                if (alt) red('unknown-id', [i], `${p.id} not found — did you mean ${alt}?`, [{ label: `Use ${alt}`, apply: 'replaceId', arg: { index: i, id: alt } }]);
+                else red('unknown-id', [i], `${p.id} not found`);
+            }
+        }
+
+        // Airways: the point before an airway must be on it (entry), and the point after it (exit).
+        const later = [];   // amber airway-type problems, after the airway reds
+        const onAirway = (awy) => {
+            const on = new Set();
+            for (const w of awy.waypoints || []) { if (w.id) on.add(up(w.id)); if (w.name) on.add(up(w.name)); }
+            return on;
+        };
+        for (const [i, awy] of airways) {
+            const name = pills[i].id;
+            const on = onAirway(awy);
+
+            // Straight on to another airway: the fix where they meet is needed.
+            // "SAV V37 T437 CAYCE" dropped V37 and flew SAV-CAYCE as one T437 leg
+            // with no problem shown (review, 2026-10-16).
+            const nextAwy = pills[i + 1]?.type === 'awy' ? airways.get(i + 1) : null;
+            if (nextAwy) {
+                const other = pills[i + 1].id;
+                const theirs = onAirway(nextAwy);
+                let ref = null;                              // the nearest point before
+                for (let k = i - 1; k >= 0 && !ref; k--) ref = coords.get(k) || null;
+                const meet = (awy.waypoints || [])
+                    .filter((w) => theirs.has(ident(w)) && Number.isFinite(w.lat) && Number.isFinite(w.lon))
+                    .map((w) => ({ name: ident(w), nm: ref ? directNm(ref, w) : 0 }))
+                    .sort((a, b) => a.nm - b.nm)
+                    .slice(0, NEAREST);
+                red('airway-junction', [i, i + 1], meet.length
+                    ? `${name} and ${other} need the fix where they meet`
+                    : `${name} and ${other} do not meet — put a fix between them`,
+                    meet.map((f) => ({ label: `Change to ${other} at ${f.name}`, apply: 'insertJunction', arg: { at: i + 1, fix: f.name, airway: name } })));
+            }
+            const prev = i - 1 >= 0 && isPoint(pills[i - 1]) ? i - 1 : -1;
+            let next = -1;
+            for (let k = i + 1; k < pills.length; k++) { if (isPoint(pills[k])) { next = k; break; } if (pills[k].type === 'awy') break; }
+            const goDirect = { label: `Go direct (no ${name})`, apply: 'goDirect', arg: { awyIndex: i } };
+
+            if (prev >= 0 && coords.get(prev) && !on.has(up(pills[prev].id))) {
+                red('entry-not-on-airway', [prev, i], `${pills[prev].id} is not on ${name}`, [
+                    ...nearestOn(awy, coords.get(prev), NEAREST).map((f) => ({
+                        label: `Join ${name} at ${f.name} · ${f.nm.toFixed(1)} nm`, apply: 'joinAirwayAt', arg: { airway: name, fix: f.name, awyIndex: i },
+                    })),
+                    goDirect,
+                ]);
+            }
+            if (next >= 0 && coords.get(next) && !on.has(up(pills[next].id))) {
+                red('exit-not-on-airway', [i, next], `${name} needs an exit fix before ${pills[next].id}`, [
+                    ...nearestOn(awy, coords.get(next), NEAREST).map((f) => ({
+                        label: `Leave ${name} at ${f.name} · ${f.nm.toFixed(1)} nm`, apply: 'exitAirwayAt', arg: { airway: name, fix: f.name, awyIndex: i },
+                    })),
+                    goDirect,
+                ]);
+            }
+
+            // No unusable segment along the run -- an FAA airway gap (V157 stops at
+            // DOLPHIN, resumes at LAKELAND) or an AWY4 unusable segment (bundle v11
+            // lists both in unusable_from_seqs). The run: entry, exit, and the fixes
+            // after the exit still tagged with this airway (saved routes load as
+            // one airway bubble and tagged fixes: V157 LAL DHP).
+            const unusable = new Set(awy.unusable_from_seqs || []);
+            if (unusable.size && prev >= 0 && next >= 0) {
+                const run = [prev, next];
+                for (let k = next + 1; k < pills.length && isPoint(pills[k]) && pills[k].airway === name; k++) run.push(k);
+                const pts = (awy.waypoints || []).slice().sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
+                const at = (id) => pts.findIndex((w) => up(w.id) === up(id) || up(w.name) === up(id));
+                gap: for (let j = 0; j + 1 < run.length; j++) {
+                    const a = at(pills[run[j]].id), b = at(pills[run[j + 1]].id);
+                    if (a < 0 || b < 0) continue;
+                    for (let k = Math.min(a, b); k < Math.max(a, b); k++) {
+                        if (unusable.has(pts[k].seq)) {
+                            red('airway-gap', [run[j], i, run[j + 1]].sort((x, y) => x - y),
+                                `${name} is not usable between ${ident(pts[k])} and ${ident(pts[k + 1])}`, [goDirect]);
+                            break gap;
+                        }
+                    }
+                }
+            }
+
+            const mode = settings.routingMode;
+            if (/^T/.test(up(name)) && mode === 'v-airways') {
+                later.push(['airway-type', [i], `${name} is a T-route (Routing: ${ROUTING_LABEL[mode]})`,
+                    [{ label: 'Switch Routing to T-airways', apply: 'setRouting', arg: { mode: 't-airways' } }]]);
+            } else if (/^V/.test(up(name)) && mode === 't-airways') {
+                later.push(['airway-type', [i], `${name} is a V-airway (Routing: ${ROUTING_LABEL[mode]})`,
+                    [{ label: 'Switch Routing to V-airways', apply: 'setRouting', arg: { mode: 'v-airways' } }]]);
+            }
+        }
+
+        // Fuel: no stretch between fuel stops longer than the limit (strictly
+        // longer), wind-corrected -- the same computed plan Apply uses.
+        const maxLeg = settings.maxLegHrs;
+        if (computed?.legs?.length && Number.isFinite(maxLeg) && maxLeg > 0) {
+            const wps = computed.waypoints || [];
+            let destIdx = wps.findIndex((w) => w.isDest);
+            if (destIdx < 0) destIdx = wps.length - 1;
+            // Each flight named by its ends: "4h27m without a fuel stop" next to
+            // what looked like LKR to Shiflet made no sense (Dana, 2026-10-16).
+            const stretches = [];
+            let cur = 0;
+            let from = wps[0]?.id;
+            for (let k = 0; k < Math.min(computed.legs.length, destIdx); k++) {
+                cur += computed.legs[k].timeHrs || 0;
+                if (wps[k + 1]?.fuelStop) { stretches.push({ hrs: cur, from, to: wps[k + 1].id }); cur = 0; from = wps[k + 1].id; }
+            }
+            stretches.push({ hrs: cur, from, to: wps[destIdx]?.id });
+            const over = stretches.find((s) => s.hrs > maxLeg + EPS_HRS);
+            if (over != null) {
+                const who = over.from && over.to ? `${over.from} → ${over.to}: ` : '';
+                const msg = `${who}${fmtHrs(over.hrs)} without a fuel stop (limit ${fmtLimit(maxLeg)})`;
+                const fixes = [{ label: 'Add fuel stop', apply: 'addFuelStop', arg: {} }];
+                if (settings.fuelStopSkipped) amber('fuel-over-limit', [], msg + ' — fuel stop skipped', fixes);
+                else red('fuel-over-limit', [], msg, fixes);
+            }
+        }
+
+        // Reserve at every landing: recomputeLegs refuels at fuel stops, so the
+        // destination figure is only the last flight's -- the lowest landing can be
+        // at a stop (review, 2026-10-16: 10.7 gal at the stop, 33.5 at the destination).
+        const rsv = settings.reserveGal;
+        if (Number.isFinite(rsv) && computed?.legs?.length) {
+            const wps = computed.waypoints || [];
+            let destIdx = wps.findIndex((w) => w.isDest);
+            if (destIdx < 0) destIdx = wps.length - 1;
+            let fuelPill = 0;
+            for (let k = 0; k < Math.min(computed.legs.length, destIdx); k++) {
+                const w = wps[k + 1];
+                if (!w?.fuelStop) continue;
+                while (fuelPill < pills.length && !(pills[fuelPill].type === 'fuel' && up(pills[fuelPill].id) === up(w.id))) fuelPill++;
+                const g = computed.legs[k].fuelRemGal;
+                if (Number.isFinite(g) && g < rsv) {
+                    red('below-reserve', fuelPill < pills.length ? [fuelPill] : [], `Lands at ${w.id} with ${g.toFixed(1)} gal (reserve ${rsv})`);
+                }
+                if (fuelPill < pills.length) fuelPill++;
+            }
+        }
+        const rem = computed?.summary?.fuelRemGal;
+        if (Number.isFinite(rem) && Number.isFinite(rsv) && rem < rsv) {
+            const wps = computed.waypoints || [];
+            let d = wps.findIndex((w) => w.isDest);
+            if (d < 0) d = wps.length - 1;
+            const at = wps[d]?.id ? ` at ${wps[d].id}` : '';
+            red('below-reserve', [], `Lands${at} with ${rem.toFixed(1)} gal (reserve ${rsv})`);
+        }
+
+        for (const args of later) amber(...args);
+
+        // Detour vs direct departure -> destination.
+        const depIdx = pills.findIndex(isPoint);
+        let destPill = -1;
+        for (let k = pills.length - 1; k >= 0; k--) if (pills[k].type === 'dest') { destPill = k; break; }
+        const total = computed?.summary?.totalDistNm;
+        const a = coords.get(depIdx), b = coords.get(destPill);
+        if (a && b && Number.isFinite(total)) {
+            const direct = directNm(a, b);
+            if (direct > 1 && total > direct * DETOUR_AMBER) {
+                amber('detour', [], `+${Math.round((total / direct - 1) * 100)}% longer than direct`);
+            }
+        }
+
+        // Red first (stable within each severity).
+        return problems.sort((x, y) => (x.severity === y.severity ? 0 : x.severity === 'red' ? -1 : 1));
+    }
+
+    /** New pills with a pill-changing fix applied (setRouting / addFuelStop: unchanged). */
+    function applyFix(pills, fix) {
+        const out = pills.map((p) => ({ ...p }));
+        const at = fix?.arg?.awyIndex;
+        switch (fix?.apply) {
+            case 'joinAirwayAt':   // MITVE T437 -> MITVE GREAT T437 (the cleared point is kept)
+                out.splice(at, 0, { id: fix.arg.fix, type: 'fix' });
+                break;
+            case 'exitAirwayAt':   // T437 KAIK -> T437 CAYCE KAIK
+                out.splice(at + 1, 0, { id: fix.arg.fix, type: 'fix', airway: fix.arg.airway });
+                break;
+            case 'goDirect':
+                out.splice(at, 1);
+                break;
+            case 'insertJunction': // V37 T437 -> V37 SALLY T437
+                out.splice(fix.arg.at, 0, { id: fix.arg.fix, type: 'fix', airway: fix.arg.airway });
+                break;
+            case 'replaceId':      // BRAD0 -> BRADO
+                out[fix.arg.index] = { ...out[fix.arg.index], id: fix.arg.id };
+                break;
+            default:
+                break;
+        }
+        return out;
+    }
+
+    return { run, applyFix, _directNm: directNm };
+})();

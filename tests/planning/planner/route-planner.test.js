@@ -414,3 +414,130 @@ describe('recomputeLegs / insertFuelStops — totals stop at the destination', (
         expect(r.fuelStopCandidates).toEqual([]);
     });
 });
+
+describe('insertFuelStops — a fuel stop already in the route resets the time (2026-10-16)', () => {
+    // KLKR-KTMB on the tablet: with St Augustine already a fuel stop, it was
+    // offered again (and again): time was counted from the departure, past the stop.
+    const aero = {
+        getAirport: async () => null,
+        nearestAirports: async () => [{ icao: 'KFUEL', name: 'Fuel', lat: 30, lon: -81, hasFuel: true, hasSelfServeFuel: false }],
+    };
+    const plan = (legHrs) => ({
+        departure: 'A', destination: 'B',
+        options: { maxLegHrs: 2, selfServeOnly: false },
+        waypoints: [{ id: 'A', lat: 34, lon: -81 }, { id: 'F', lat: 31, lon: -81, fuelStop: true }, { id: 'B', lat: 26, lon: -80, isDest: true }],
+        legs: legHrs.map((h) => ({ timeHrs: h })),
+        summary: { totalEteHrs: legHrs.reduce((a, b) => a + b, 0) },
+    });
+
+    it('each stretch within the limit: no new stop', async () => {
+        const r = await new RoutePlanner({ aero, plans: mockPlans }).insertFuelStops(plan([1.5, 1.5]));
+        expect(r.fuelStopCandidates).toEqual([]);
+    });
+
+    it('the stretch after the stop over the limit: one stop, counted from the stop', async () => {
+        const r = await new RoutePlanner({ aero, plans: mockPlans }).insertFuelStops(plan([1.0, 2.5]));
+        expect(r.fuelStopCandidates.map((c) => [c.afterFixId, c.cumHrsAtStop])).toEqual([['F', 1.8]]);
+    });
+
+    it('stops are searched for at 90% of the limit, so the turn-off and descent still fit', async () => {
+        // KLKR-KTMB: searched at exactly 2:00, St Augustine (11.7 nm off) made the stretch 2h06m.
+        const one = { ...plan([3.0]), waypoints: [{ id: 'A', lat: 34, lon: -81 }, { id: 'B', lat: 26, lon: -80, isDest: true }] };
+        const r = await new RoutePlanner({ aero, plans: mockPlans }).insertFuelStops(one);
+        expect(r.fuelStopCandidates.map((c) => c.cumHrsAtStop)).toEqual([1.8]);
+    });
+});
+
+describe('insertFuelStops — the search point is in the leg where 90% of the limit falls', () => {
+    const aero = {
+        getAirport: async () => null,
+        nearestAirports: async () => [{ icao: 'KFUEL', name: 'Fuel', lat: 30, lon: -81, hasFuel: true }],
+    };
+    const route = (legHrs) => ({
+        departure: 'W0', destination: `W${legHrs.length}`,
+        options: { maxLegHrs: 2, selfServeOnly: false },
+        waypoints: [...Array(legHrs.length + 1)].map((_, i) => ({ id: `W${i}`, lat: 34 - i, lon: -81, ...(i === legHrs.length ? { isDest: true } : {}) })),
+        legs: legHrs.map((h) => ({ timeHrs: h })),
+        summary: { totalEteHrs: legHrs.reduce((a, b) => a + b, 0) },
+    });
+
+    it('KLKR-KTMB shape: 1:48 falls in the leg before the one that crosses 2:00', async () => {
+        // W1 at 1.0 h, W2 at 1.9 h (like BRADO at 1h52m), W3 at 2.4 h: search after W1, at 1.8 h.
+        const r = await new RoutePlanner({ aero, plans: mockPlans }).insertFuelStops(route([1.0, 0.9, 0.5]));
+        expect(r.fuelStopCandidates.map((c) => [c.afterFixId, c.cumHrsAtStop])).toEqual([['W1', 1.8]]);
+    });
+
+    it('a route within the limit needs no stop, even though it passes 90% of it', async () => {
+        const r = await new RoutePlanner({ aero, plans: mockPlans }).insertFuelStops(route([1.0, 0.9]));
+        expect(r.fuelStopCandidates).toEqual([]);
+    });
+});
+
+describe('recomputeLegs — a fuel stop refuels and takes ground time (2026-10-16)', () => {
+    // Dana: mid-route stops must have every calculation right. Full tanks at
+    // the stop, 30 min on the ground before the next leg.
+    const wps = [
+        { id: 'KLKR', type: 'APT', lat: 34.723, lon: -80.855 },
+        { id: 'KCRG', type: 'APT', lat: 30.336, lon: -81.515, fuelStop: true },
+        { id: 'KTMB', type: 'APT', lat: 25.648, lon: -80.433, isDest: true },
+    ];
+    const dep = new Date('2026-10-16T14:00:00Z');
+    const plan = { departure: 'KLKR', destination: 'KTMB', cruiseAltFt: 6500, waypoints: wps };
+
+    it('fuel remaining after the stop starts from full tanks', () => {
+        const p = new RoutePlanner({ aero: mockAero, plans: mockPlans });
+        const r = p.recomputeLegs(plan, undefined, { departureTime: dep });
+        const cap = r.legs[0].fuelRemGal + r.legs[0].fuelGal;
+        expect(r.legs[1].fuelRemGal).toBeCloseTo(cap - r.legs[1].fuelGal, 6);
+        expect(r.summary.fuelRemGal).toBeCloseTo(r.legs[1].fuelRemGal, 6);
+        expect(r.summary.totalFuelGal).toBeCloseTo(r.legs[0].fuelGal + r.legs[1].fuelGal, 6);   // still the whole trip's burn
+    });
+
+    it('the ETA after the stop includes 30 min on the ground (configurable)', () => {
+        const p = new RoutePlanner({ aero: mockAero, plans: mockPlans });
+        const r = p.recomputeLegs(plan, undefined, { departureTime: dep });
+        expect(r.legs[1].eta - r.legs[0].eta).toBeCloseTo((r.legs[1].timeHrs * 60 + 30) * 60000, -2);
+        expect(r.summary.groundHrs).toBe(0.5);
+        expect(r.summary.totalEteHrs).toBeCloseTo(r.legs[0].timeHrs + r.legs[1].timeHrs, 6);    // air time
+        const r45 = p.recomputeLegs(plan, undefined, { departureTime: dep, fuelStopGroundMin: 45 });
+        expect(r45.legs[1].eta - r45.legs[0].eta).toBeCloseTo((r45.legs[1].timeHrs * 60 + 45) * 60000, -2);
+    });
+
+    it('no fuel stop: nothing changes', () => {
+        const p = new RoutePlanner({ aero: mockAero, plans: mockPlans });
+        const r = p.recomputeLegs({ ...plan, waypoints: wps.map(({ fuelStop, ...w }) => w) }, undefined, { departureTime: dep });
+        expect(r.summary.groundHrs).toBe(0);
+        const cap = r.legs[0].fuelRemGal + r.legs[0].fuelGal;
+        expect(r.legs[1].fuelRemGal).toBeCloseTo(cap - r.legs[0].fuelGal - r.legs[1].fuelGal, 6);
+    });
+});
+
+
+describe('recomputeLegs — start fuel (Dana, 2026-10-16)', () => {
+    const wps = [
+        { id: 'KLKR', type: 'APT', lat: 34.723, lon: -80.855 },
+        { id: 'KCRG', type: 'APT', lat: 30.336, lon: -81.515, fuelStop: true },
+        { id: 'KTMB', type: 'APT', lat: 25.648, lon: -80.433, isDest: true },
+    ];
+    const dep = new Date('2026-10-16T14:00:00Z');
+    const plan = { departure: 'KLKR', destination: 'KTMB', cruiseAltFt: 6500, waypoints: wps };
+
+    it('the first flight starts with startFuelGal; a fuel stop still fills the tanks', () => {
+        const p = new RoutePlanner({ aero: mockAero, plans: mockPlans });
+        const full = p.recomputeLegs(plan, undefined, { departureTime: dep });
+        const r = p.recomputeLegs(plan, undefined, { departureTime: dep, startFuelGal: 25 });
+        expect(r.legs[0].fuelRemGal).toBeCloseTo(25 - r.legs[0].fuelGal, 6);
+        expect(r.legs[1].fuelRemGal).toBeCloseTo(full.legs[1].fuelRemGal, 6);       // after the stop: as with full tanks
+        expect(r.legs.map((l) => l.fuelGal)).toEqual(full.legs.map((l) => l.fuelGal)); // burn and times unchanged
+        expect(r.legs.map((l) => l.timeHrs)).toEqual(full.legs.map((l) => l.timeHrs));
+    });
+
+    it('missing, zero or more than the tanks hold: full tanks / capacity', () => {
+        const p = new RoutePlanner({ aero: mockAero, plans: mockPlans });
+        const full = p.recomputeLegs(plan, undefined, { departureTime: dep });
+        for (const s of [undefined, null, 0, -3, NaN]) {
+            expect(p.recomputeLegs(plan, undefined, { departureTime: dep, startFuelGal: s }).legs[0].fuelRemGal).toBeCloseTo(full.legs[0].fuelRemGal, 6);
+        }
+        expect(p.recomputeLegs(plan, undefined, { departureTime: dep, startFuelGal: 99 }).legs[0].fuelRemGal).toBeCloseTo(full.legs[0].fuelRemGal, 6);
+    });
+});

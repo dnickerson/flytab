@@ -84,6 +84,46 @@ describe('RoutePlannerPanel.reversePills', () => {
 });
 
 describe('REV in the planner', () => {
+    it('UNDO after the planner was closed still puts the route back (review, 2026-10-16)', async () => {
+        globalThis.app = { showToast: vi.fn(() => ({ remove() {} })) };
+        const p = panel([P('KLKR', 'dep'), P('FIX1', 'fix'), P('KCDN', 'dest')]);
+        p._depInput.value = 'KLKR';
+        p._destInput.value = 'KCDN';
+        const applied = [];
+        p._doApply = vi.fn(async () => { if (p._applyAborted) return false; applied.push(show(p._route)); return true; });
+        p._toast = vi.fn();
+        await p._onReverseTap();
+        p.close();                                                   // closed before UNDO
+        const [, actions] = app.showToast.mock.calls[0];
+        await actions[0].action();
+        expect(applied).toEqual(['KCDN:dep FIX1:fix KLKR:dest', 'KLKR:dep FIX1:fix KCDN:dest']);
+        expect(p._applyAborted).toBe(true);                          // still closed
+    });
+
+    it('UNDO running while the planner is reopened does not blank the reopened planner (pre-merge review)', async () => {
+        globalThis.app = { showToast: vi.fn(() => ({ remove() {} })) };
+        const p = panel([P('KLKR', 'dep'), P('FIX1', 'fix'), P('KCDN', 'dest')]);
+        p._depInput.value = 'KLKR';
+        p._destInput.value = 'KCDN';
+        let release = null;
+        p._doApply = vi.fn(async () => { if (p._applyAborted) return false; if (release === null) return true; await new Promise((r) => { release = r; }); return true; });
+        p._toast = vi.fn();
+        await p._onReverseTap();
+        p.close();
+        release = () => {};
+        const [, actions] = app.showToast.mock.calls[0];
+        const undo = actions[0].action();                            // waits inside _doApply
+        await new Promise((r) => setTimeout(r, 0));
+        p._applyAborted = false;                                     // reopened (what open() does)
+        p._openSeq = (p._openSeq || 0) + 1;
+        p._route = [P('KLKR', 'dep'), P('KCDN', 'dest')];
+        release();
+        await undo;
+        expect(p._applyAborted).toBe(false);
+        expect(show(p._route)).not.toBe('');
+    });
+
+
     it('reverses the pills, updates DEP/DEST, applies, and says what it did; UNDO puts it back', async () => {
         globalThis.app = { showToast: vi.fn(() => ({ remove() {} })) };
         const p = panel([P('KLKR', 'dep'), P('V1', 'awy'), P('FIX1', 'fix', { airway: 'V1' }), P('KCDN', 'dest')]);
@@ -238,7 +278,9 @@ describe('REV review fixes', () => {
                         W('FAF', 35.3, -81.3, { proc: true }), W('KB', 35.4, -81.4, { isDest: true }), W('SPA', 35.1, -81.1, { proc: true })],
             flight_plan: { destination: 'KB', route: ['KA', 'V1', 'SPA', 'SPA', 'FAF', 'KB', 'SPA'] },
         });
-        expect(show(q._route)).toBe('KA:dep V1:awy SPA:fix/V1 SPA:fix/V1! FAF:fix/V1! KB:dest SPA:fix!');
+        // The approach fixes are not on V1: the saved waypoints say so (they were tagged V1
+        // by the reload carrying the airway forward, until 2026-10-16).
+        expect(show(q._route)).toBe('KA:dep V1:awy SPA:fix/V1 SPA:fix! FAF:fix! KB:dest SPA:fix!');
         expect(q._route[2].altFt).toBeUndefined();                     // the approach's 3000 ft stays on the approach fix
         expect(q._route[3].altFt).toBe(3000);
         expect(show(RoutePlannerPanel.reversePills(q._route))).toBe('KB:dep SPA:fix V1:awy KA:dest/V1');

@@ -164,6 +164,7 @@ class IfrClearance {
                                 <input class="clr-input" id="clr-r" type="text" inputmode="text" style="flex:1"
                                     placeholder="As filed" autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false">
                                 <button class="clr-pill-btn" id="clr-as-filed">AS FILED</button>
+                                <button class="clr-pill-btn" id="clr-to-planner">TO PLANNER</button>
                             </div>
                         </div>
                     </div>
@@ -387,6 +388,10 @@ class IfrClearance {
 
         // "As Filed" button
         this._tap(el.querySelector('#clr-as-filed'), () => this._fillAsFiledRoute());
+        // C + R into the Route Planner (preview), to check and Apply.
+        this._tap(el.querySelector('#clr-to-planner'), async () => {
+            if (await window.app?.routeFromClearance?.()) this.hide?.();
+        });
 
         // DEP field inputs — live readback update
         ['clr-c', 'clr-r', 'clr-a', 'clr-expect', 'clr-expect-min', 'clr-f', 'clr-t', 'clr-void'].forEach(id => {

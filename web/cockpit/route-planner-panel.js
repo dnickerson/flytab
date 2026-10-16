@@ -147,6 +147,7 @@ class RoutePlannerPanel {
 
     /** Load plan into pill editor and show. Called by app.openRoutePlanner(plan). */
     async open(plan) {
+        this._openSeq = (this._openSeq || 0) + 1;
         this._applyAborted = false;
         this._loadPlan(plan);
         await this._inferAirwaysIntoRoute();
@@ -214,7 +215,7 @@ class RoutePlannerPanel {
      * @param {Array}   insertAfter   Waypoints to insert after the airport: MAP, missed approach fixes
      * @param {Object}  airportWp     Airport waypoint (runway threshold) — used for coord storage only
      */
-    insertApproach({ icao, insertBefore, insertAfter, airportWp }) {
+    insertApproach({ icao, insertBefore, insertAfter, airportWp, procType }) {
         // Cache coordinates so the planner can resolve approach fixes without a NASR lookup
         const storeCoord = (wp) => {
             if (!wp || !Number.isFinite(wp.lat) || !Number.isFinite(wp.lon)) return;
@@ -239,7 +240,8 @@ class RoutePlannerPanel {
         // proc: an approach fix for this airport; REV drops it (it belongs to
         // the old destination's approach, not the way back).
         const toPill = (wp) => Object.assign(
-            { id: wp.icao, type: 'fix', proc: true },
+            // the kind ('APPROACH' / 'STAR'): an approach replaces an approach, not an arrival
+            { id: wp.icao, type: 'fix', proc: procType || true },
             wp.alt != null ? { altFt: wp.alt } : {}
         );
         const beforePills = insertBefore.map(toPill);
@@ -257,6 +259,22 @@ class RoutePlannerPanel {
         }
 
         this._render();
+    }
+
+    /**
+     * Drop airway tags a fix isn't in the run of. The tagging above carries an
+     * airway past a fuel stop (KLKR V37 CRG ⛽KHEG BRADO ORL tagged BRADO and ORL
+     * V37), and compact view then hid BRADO as an interior V37 fix
+     * (2026-10-16). A run starts at an airway pill; departure, destination,
+     * fuel stops, airports and DIRECT end it.
+     */
+    _normalizeAirwayTags() {
+        let run = null;
+        for (const p of this._route) {
+            if (p.type === 'awy') { run = p.id; continue; }
+            if (p.type === 'fix') { if (p.airway && p.airway !== run) delete p.airway; continue; }
+            run = null;
+        }
     }
 
     /** Index of the 'dest' pill, or -1. Not the last pill: missed-approach fixes follow it. */
@@ -315,17 +333,26 @@ class RoutePlannerPanel {
             const saved = JSON.parse(localStorage.getItem('flypi_planner_opts') || '{}');
             if (saved.altitude      != null) this._altitude      = saved.altitude;
             if (saved.maxLegHrs     != null) this._maxLegHrs     = saved.maxLegHrs;
-            if (saved.selfServeOnly != null) this._selfServeOnly = saved.selfServeOnly;
+            // Not applied: NASR has no self-serve fuel data (0 of 19,135 airports),
+            // so "self-serve only" rejected every fuel stop, and no screen offers
+            // the option to turn it off (2026-10-16).
+            this._selfServeOnly = false;
             if (saved.reserveGal    != null) this._reserveGal    = saved.reserveGal;
             if (saved.compactView   != null) this._compactView   = saved.compactView;
             if (saved.routingMode   != null) this._routingMode   = saved.routingMode;
             if (saved.terminalRouting != null) this._terminalRouting = saved.terminalRouting;
             if (Array.isArray(saved.avoidList)) this._avoidList  = saved.avoidList;
             if (saved.departureTime) this._departureTime = new Date(saved.departureTime);
+            // Saved as cleared (Now / Auto) -- e.g. by the other planner, which
+            // shares these settings: clear it here too, not keep a stale value.
+            else if ('departureTime' in saved) this._departureTime = null;
             if (saved.cruiseAltFt  != null) {
                 this._cruiseAltFt = saved.cruiseAltFt;
                 this._altitude    = saved.cruiseAltFt;
                 if (this._altSel) this._altSel.value = String(saved.cruiseAltFt);
+            } else if ('cruiseAltFt' in saved) {
+                this._cruiseAltFt = null;
+                if (this._altSel) this._altSel.value = '';
             }
             if (saved.pctPower != null) {
                 this._pctPower = saved.pctPower;
@@ -382,7 +409,7 @@ class RoutePlannerPanel {
                 if (i === 0)                          type = 'dep';
                 else if (i === destIdx)               type = 'dest';
                 else if (/^[VTJQ]\d/.test(id))        type = 'awy';
-                else if (id === 'DIRECT')             type = 'direct';
+                else if (id === 'DIRECT' || id === 'DCT') type = 'direct';
                 else                                   type = 'fix';
                 return { id, type };
             });
@@ -425,6 +452,12 @@ class RoutePlannerPanel {
         // order: an id can appear twice (an en-route fix that is also an approach
         // or missed-approach fix), and by id the en-route one took the approach's
         // mark and altitude -- REV then deleted it (2026-10-15 review, H2).
+        // Airways as applied, when the saved waypoints record them (the airway
+        // each fix was reached on): the tagging above carried an airway to every
+        // fix after it, so a direct leg after an airway exit reloaded as airway
+        // and BLOTS (the exit) was hidden in compact view (review, 2026-10-16).
+        // Plans without that record (older, or from plan sync) keep the tagging.
+        const savedAirways = wps.some(w => w && w.airway);
         let wpAt = 0;
         for (const pill of this._route) {
             if (pill.type === 'awy' || pill.type === 'direct') continue;
@@ -434,9 +467,14 @@ class RoutePlannerPanel {
             const wp = wps[k];
             wpAt = k + 1;
             if (wp.altFt != null) pill.altFt = wp.altFt;
+            if (savedAirways && pill.type === 'fix') {
+                if (wp.airway && wp.airway !== 'DIRECT') pill.airway = wp.airway;
+                else delete pill.airway;
+            }
             if (pill.type === 'fix' && wp.fuelStop) { pill.type = 'fuel'; delete pill.airway; }
-            if (pill.type === 'fix' && wp.proc) pill.proc = true;
+            if (pill.type === 'fix' && wp.proc) pill.proc = wp.proc;      // true, or 'APPROACH' / 'STAR'
         }
+        this._normalizeAirwayTags();
 
         this._syncFieldsFromPills();
     }
@@ -2444,6 +2482,9 @@ class RoutePlannerPanel {
     }
 
     _showFuelStopPicker(candidate) {
+        // Identifiers and names as text: a bubble's id can come from a plan
+        // downloaded by plan sync (review, 2026-10-16).
+        const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
         return new Promise(resolve => {
             const hh = Math.floor(candidate.cumHrsAtStop);
             const mm = String(Math.round((candidate.cumHrsAtStop - hh) * 60)).padStart(2, '0');
@@ -2465,7 +2506,7 @@ class RoutePlannerPanel {
                   <div>
                     <div style="font-size:17px;font-weight:800;color:var(--text-primary,#1a1a2e)">⛽ Fuel Stop Required</div>
                     <div style="font-size:13px;font-weight:700;color:var(--text-secondary,#444444);margin-top:4px">
-                      Near ${candidate.afterFixId} · ${hh}:${mm} flight time
+                      Near ${esc(candidate.afterFixId)} · ${hh}:${mm} flight time
                     </div>
                   </div>
                   <button class="rpp-fs-skip" style="background:var(--bg-surface,#f5f5f5);
@@ -2503,13 +2544,13 @@ class RoutePlannerPanel {
                     'display:flex;justify-content:space-between;align-items:center';
                 row.innerHTML = `
                   <div>
-                    <div style="font-size:17px;font-weight:800;color:var(--text-primary,#1a1a2e)">${apt.icao}</div>
+                    <div style="font-size:17px;font-weight:800;color:var(--text-primary,#1a1a2e)">${esc(apt.icao)}</div>
                     <div style="font-size:13px;font-weight:700;color:var(--text-secondary,#444444);margin-top:2px">
-                      ${apt.name}${apt.hasSelfServeFuel ? ' · <span style="color:var(--accent,#0066cc);font-weight:800">Self-serve</span>' : ''}
+                      ${esc(apt.name)}${apt.hasSelfServeFuel ? ' · <span style="color:var(--accent,#0066cc);font-weight:800">Self-serve</span>' : ''}
                     </div>
                   </div>
                   <div style="font-size:15px;font-weight:700;color:var(--text-secondary,#444444);white-space:nowrap;margin-left:12px">
-                    ${apt.distNm != null ? apt.distNm + ' nm' : ''}
+                    ${Number.isFinite(apt.distNm) ? apt.distNm + ' nm' : ''}
                   </div>`;
                 row.addEventListener('touchstart', () => { row.style.background = 'var(--bg-surface,#f5f5f5)'; }, { passive: true });
                 row.addEventListener('touchend',   () => { row.style.background = ''; }, { passive: true });
@@ -2517,7 +2558,10 @@ class RoutePlannerPanel {
                 list.appendChild(row);
             }
 
-            wireTap(overlay.querySelector('.rpp-fs-skip'), () => { overlay.remove(); resolve(null); });
+            // Skip is a decision (the preview remembers it); a tap on the dim
+            // background only closes the panel (review, 2026-10-16).
+            this._fuelPickSkipped = false;
+            wireTap(overlay.querySelector('.rpp-fs-skip'), () => { this._fuelPickSkipped = true; overlay.remove(); resolve(null); });
 
             // Manual entry — the suggestion list can miss the field the pilot
             // actually wants (better price, self-serve after hours, a field he
@@ -2537,14 +2581,14 @@ class RoutePlannerPanel {
                 }
                 manualBusy = true;
                 try {
-                    let rec = null;
-                    let coord = this._coords[v];
-                    if (!coord) {
-                        rec = await this._nasrDb.getAirport(v).catch(() => null);
-                        if (Number.isFinite(rec?.lat) && Number.isFinite(rec?.lon)) {
-                            coord = { lat: rec.lat, lon: rec.lon };
-                            this._coords[v] = coord;
-                        }
+                    // Always an airport record: the position cache also holds VORs
+                    // and fixes (the preview caches every bubble), and ALD -- a VOR --
+                    // was accepted as a fuel stop (review, 2026-10-16).
+                    let coord = null;
+                    const rec = await this._nasrDb.getAirport(v).catch(() => null);
+                    if (Number.isFinite(rec?.lat) && Number.isFinite(rec?.lon)) {
+                        coord = { lat: rec.lat, lon: rec.lon };
+                        this._coords[v] = coord;
                     }
                     if (!coord) {
                         // Keep the modal open so the identifier can be corrected.
@@ -2983,11 +3027,21 @@ class RoutePlannerPanel {
                 const dep = this._route.find(p => p.type === 'dep')?.id;
                 const dest = this._route[this._destPillIndex()]?.id;
                 RoutePlannerPanel._announceReverse(dep, dest, async () => {
-                    this._route = before;
-                    this._insertIndex = null;
-                    this._syncFieldsFromPills();
-                    this._render();
-                    await this._doApply();
+                    // The toast outlives the planner: after close() (_applyAborted)
+                    // UNDO did nothing and the route stayed reversed (review, 2026-10-16).
+                    const closed = this._applyAborted;
+                    const seq = this._openSeq;
+                    this._applyAborted = false;
+                    try {
+                        this._route = before;
+                        this._insertIndex = null;
+                        this._syncFieldsFromPills();
+                        this._render();
+                        await this._doApply();
+                    } finally {
+                        // Closed again only if it was not reopened meanwhile (it would be blanked).
+                        if (closed && this._openSeq === seq) { this._applyAborted = true; this._route = []; }
+                    }
                 });
             }
             return ok;
@@ -3031,8 +3085,11 @@ class RoutePlannerPanel {
         const dest = h._route[h._destPillIndex()]?.id;
         RoutePlannerPanel._announceReverse(dep, dest, async () => {
             await app.applyRouteEdit(before);
-            // The planner opened since: show what is applied now.
-            if (document.body.classList.contains('route-editing-mode')) await this.open(before);
+            // A planner opened since: show what is applied now, in the one on screen.
+            if (document.body.classList.contains('route-editing-mode')) {
+                const preview = document.getElementById('cockpitContainer')?.classList.contains('route-preview');
+                await (preview && app.routePlannerPreview ? app.routePlannerPreview : this).open(before);
+            }
         });
         return { dep, dest };
     }
@@ -3122,6 +3179,8 @@ class RoutePlannerPanel {
                     pctPower:    this._pctPower,
                     cruiseAltFt: this._cruiseAltFt ?? undefined,
                     winds:       this._lastWinds ?? undefined,
+                    // The preview's START FUEL (planning only; this planner has none: full tanks).
+                    startFuelGal: this._startFuelGal ?? undefined,
                 };
                 // destination: the same fallback Plan uses when the isDest marker is stale.
                 const destination = this._route[this._destPillIndex()]?.id;
@@ -3399,7 +3458,7 @@ class RoutePlannerPanel {
                 // missed-approach fixes. Derived from the pill type on every conversion.
                 ...(pill.type === 'dest' ? { isDest: true } : {}),
                 // proc: approach fix (insertApproach); kept so REV can drop it after a reload.
-                ...(pill.proc ? { proc: true } : {}),
+                ...(pill.proc ? { proc: pill.proc } : {}),
                 ...(aw ? { airway: aw } : {}),
             });
             pendingAirway = null;

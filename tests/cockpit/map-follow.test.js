@@ -224,6 +224,92 @@ describe('pilot move, then an auto-pan re-centre (second PR B review #3)', () =>
     });
 });
 
+// Route Planner (preview): tapping a bubble centres the map on it (Dana,
+// 2026-10-16). With auto-pan on, following own-ship would undo that within
+// 0.5 s, so it is held until the planner closes or the pilot taps auto-pan.
+describe('show a point, holding own-ship follow', () => {
+    beforeEach(() => { vi.useFakeTimers(); delete window.app; });
+    afterEach(() => vi.useRealTimers());
+
+    it('showPoint centres the map and stops following until released', () => {
+        const c = mapCtx();
+        c._autoPanBtn = document.createElement('button');
+        c.showPoint(34.5, -81.0);
+        expect(c.map.panTo).toHaveBeenLastCalledWith([34.5, -81.0], { animate: false });
+        c.map.panTo.mockClear();
+        let lon = -80.0;
+        for (let i = 0; i < 20; i++) { lon += 0.01; c._updateOwnship(FIX(lon)); vi.advanceTimersByTime(600); }
+        expect(c.map.panTo).not.toHaveBeenCalled();                 // held
+        expect(c._autoPanBtn.classList.contains('held')).toBe(true);
+        c.releaseFollowHold();
+        c._updateOwnship(FIX(lon + 0.01));
+        expect(c.map.panTo).toHaveBeenCalled();                     // following again
+        expect(c._autoPanBtn.classList.contains('held')).toBe(false);
+    });
+
+    it('showPoints fits the whole route and holds follow (Apply, 2026-10-16)', () => {
+        const c = mapCtx();
+        c._autoPanBtn = document.createElement('button');
+        c.map.fitBounds = vi.fn();
+        c.showPoints([{ lat: 33.6, lon: -82.0 }, { lat: NaN, lon: 1 }, { lat: 25.6, lon: -80.4 }]);
+        expect(c.map.fitBounds).toHaveBeenCalledWith([[33.6, -82.0], [25.6, -80.4]], { padding: [40, 40], maxZoom: 11, animate: false });
+        expect(c._followHold).toBe(true);
+        expect(c._autoPanBtn.classList.contains('held')).toBe(true);
+        c.map.fitBounds.mockClear();
+        c.showPoints([{ lat: 33.6, lon: -82.0 }]);              // one point: nothing to fit
+        expect(c.map.fitBounds).not.toHaveBeenCalled();
+    });
+
+    it('auto-pan off: showing a point moves the map but holds nothing (one tap turns auto-pan on)', () => {
+        const c = mapCtx();
+        c._autoPan = false;
+        c._autoPanBtn = document.createElement('button');
+        c.map.fitBounds = vi.fn();
+        c.showPoint(34.5, -81.0);
+        c.showBounds({ lat: 34, lon: -81 }, { lat: 35, lon: -80 });
+        c.showPoints([{ lat: 34, lon: -81 }, { lat: 35, lon: -80 }]);
+        expect(c.map.panTo).toHaveBeenCalled();
+        expect(c.map.fitBounds).toHaveBeenCalledTimes(2);
+        expect(c._followHold).toBeFalsy();
+        expect(c._autoPanBtn.classList.contains('held')).toBe(false);
+    });
+
+    it('back on screen while held: no jump back to own-ship', () => {
+        const c = mapCtx();
+        c._autoPanBtn = document.createElement('button');
+        c._updateTraffic = vi.fn();
+        c.ownshipMarker.setLatLng([35.5, -80.5]);
+        c.showPoint(34.5, -81.0);
+        c.map.panTo.mockClear();
+        c._onScreenChange({ onScreen: true });
+        expect(c.map.panTo).not.toHaveBeenCalled();
+        c.releaseFollowHold();
+        c._onScreenChange({ onScreen: true });
+        expect(c.map.panTo).toHaveBeenCalledWith([35.5, -80.5], { animate: false });
+    });
+
+    it('the auto-pan button, while held, resumes following (does not turn auto-pan off)', () => {
+        const src = read('web/cockpit/map.js');
+        const btn = src.slice(src.indexOf("autoPanBtn.title = 'Toggle auto-pan';"), src.indexOf('this._autoPanBtn = autoPanBtn;'));
+        expect(btn).toMatch(/if \(this\._followHold\) \{ this\.releaseFollowHold\(\); return; \}/);
+    });
+
+    it('switching planners releases the hold and closes the other planner', () => {
+        const src = read('web/app.js');
+        const old = src.slice(src.indexOf('    openRoutePlanner(plan) {'), src.indexOf('    async reverseActiveRoute('));
+        expect(old).toMatch(/routePlannerPreview\?\.close\(\)/);
+        expect(old).toMatch(/releaseFollowHold/);
+        const pv = src.slice(src.indexOf('    openRoutePlannerPreview(plan) {'), src.indexOf('    async routeFromClearance('));
+        expect(pv).toMatch(/routePlannerPanel\?\.close\(\)/);
+    });
+
+    it('closing the route planner releases the hold', () => {
+        const src = read('web/app.js');
+        const close = src.slice(src.indexOf('    closeRoutePlanner() {'), src.indexOf('    async applyRouteEdit('));
+        expect(close).toMatch(/this\.cockpitMap\?\.releaseFollowHold\?\.\(\)/);
+    });
+});
+
 describe('NEXRAD canvas on map moves (B2)', () => {
     it('many move events in one frame: one redraw, on the next frame', () => {
         const frames = [];
