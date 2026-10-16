@@ -305,7 +305,9 @@ public class TileServer extends NanoHTTPD {
      * Downloads a ZIP from the home server (trust-all TLS for self-signed cert),
      * streams it to a temp file, then extracts all entries relative to baseDir.
      * Used for bulk plate and data sync (e.g. plates_NC.zip → plates/KLKR/…).
-     * Returns JSON: {"extracted": N, "bytes": B}
+     * After a complete extraction, the plates/<AIRPORT>/ folders the zip has lose
+     * the files it no longer has (PlatePrune: expired charts were left behind).
+     * Returns JSON: {"extracted": N, "bytes": B, "pruned": P}
      */
     private Response handleFetchZip(IHTTPSession session) {
         Map<String, java.util.List<String>> params = session.getParameters();
@@ -366,12 +368,14 @@ public class TileServer extends NanoHTTPD {
             // Extract zip relative to baseDir
             int extracted = 0;
             byte[] xbuf = new byte[8192];
+            PlatePrune prune = new PlatePrune();
             try (ZipInputStream zis = new ZipInputStream(new FileInputStream(tempFile))) {
                 ZipEntry entry;
                 while ((entry = zis.getNextEntry()) != null) {
                     if (entry.isDirectory()) { zis.closeEntry(); continue; }
                     String name = entry.getName();
                     if (name.contains("..")) { zis.closeEntry(); continue; }
+                    prune.saw(name);
 
                     File outFile = new File(baseDir, name);
                     File parent = outFile.getParentFile();
@@ -388,8 +392,12 @@ public class TileServer extends NanoHTTPD {
             Log.i(TAG, "fetch-zip: extracted " + extracted + " files");
             tempFile.delete();
 
+            // Only reached when every entry extracted: a failed download prunes nothing.
+            int pruned = prune.prune(baseDir);
+            Log.i(TAG, "fetch-zip: removed " + pruned + " plates no longer in " + prune.folders().size() + " airport folders");
+
             return newFixedLengthResponse(Response.Status.OK, "application/json",
-                "{\"extracted\":" + extracted + ",\"bytes\":" + bytes + "}");
+                "{\"extracted\":" + extracted + ",\"bytes\":" + bytes + ",\"pruned\":" + pruned + "}");
 
         } catch (Exception e) {
             if (tempFile.exists()) tempFile.delete();

@@ -1261,7 +1261,8 @@ class DataStatus {
                         const result = await resp.json();
                         done++;
                         if (!newlySynced.includes(st)) newlySynced.push(st);
-                        setStep('plates', 'running', `✓ ${st} done (${result.extracted?.toLocaleString() ?? '?'} files) — ${done}/${statesToSync.length} complete`, pctNow());
+                        const removed = result.pruned ? `, ${result.pruned.toLocaleString()} expired removed` : '';
+                        setStep('plates', 'running', `✓ ${st} done (${result.extracted?.toLocaleString() ?? '?'} files${removed}) — ${done}/${statesToSync.length} complete`, pctNow());
                     } catch (e) {
                         clearInterval(ticker);
                         done++;
