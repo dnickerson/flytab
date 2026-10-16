@@ -1,7 +1,12 @@
 # Replacing the current Route Planner with the new one (preview → main)
 
 Date: 2026-10-16. Branch: `feat/route-planner-redesign` (stacked on `fix/route-reverse` → `perf/map-load`, PR #174).
-Status: **plan for approval — nothing switched yet.**
+Status: **approved direction — nothing switched yet.**
+
+**Decisions (Dana, 2026-10-16):**
+- All four gap features are required before the switch: altitude comparison table (+MOS), MEA check (amber route
+  check), avoid-list editing (Avoid in a bubble's sheet), terminal T-route wizard.
+- Order: Dana tests v11.47 on the tablet first; then land the PR stack (step 0) and start steps 1-2.
 
 ## Where things stand
 
@@ -53,7 +58,8 @@ self-serve fuel (no NASR data).
    Load procedure, Replan, REV headless via `this.constructor`, the #74 check). Flipping the setting back restores today's
    behaviour exactly. Tests per entry point. **Airport-popup tap check on the tablet** (CLAUDE.md rule) since Direct-To
    is touched.
-3. **Parity items you choose** (see the questions below), each with tests.
+3. **Parity items (all four required):** altitude comparison table (+MOS), MEA amber check, Avoid in the bubble sheet,
+   terminal T-route wizard — each with tests.
 4. **Default `new`.** Tablet test (ground, then a flight), user manual rewritten for the new planner in the same commit,
    "(preview)" dropped, MORE entry removed. The current planner stays in the code behind `legacy` for a while.
 5. **Later, remove the old screen:** split `RoutePlannerPanel` into a base without UI (keep `_doApply`, `_saveCurrentTrip`,
