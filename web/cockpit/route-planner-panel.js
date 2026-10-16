@@ -3100,10 +3100,12 @@ class RoutePlannerPanel {
      * Its messages go to the global toast (it has no panel to show them in).
      */
     _headless() {
-        const h = new RoutePlannerPanel(document.createElement('div'), this._nasrDb, this._adapters);
+        // The same class as this planner: the new one's REV expands airways and
+        // uses START FUEL like its Apply (the current planner passes no 4th argument).
+        const h = new this.constructor(document.createElement('div'), this._nasrDb, this._adapters, this._main ?? null);
         for (const k of ['_planner', '_coords', '_altitude', '_maxLegHrs', '_selfServeOnly', '_reserveGal',
                          '_routingMode', '_terminalRouting', '_avoidList', '_departureTime', '_cruiseAltFt',
-                         '_pctPower', '_lastWinds']) {
+                         '_pctPower', '_lastWinds', '_startFuelGal']) {
             h[k] = this[k];
         }
         h._getAirwayPairCache = () => this._getAirwayPairCache();

@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v11.67';
+const FLYTAB_VERSION = 'v11.68';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 // Kept in memory and saved at most every FLUSH_MS (errors at once). Every log()
@@ -798,8 +798,7 @@ class FlyTabApp {
             });
 
             this.airportPopup.onDirectTo((apt) => {
-                this.openRoutePlanner();
-                this.routePlannerPanel?.setDirectTo(apt);
+                this._directTo(apt);
                 this.airportPopup.close();
             });
 
@@ -1020,21 +1019,7 @@ class FlyTabApp {
                 }
             });
             document.addEventListener('cifp:load-procedure', (e) => {
-                if (!e.detail) return;
-                // The Route Planner (preview) is open: the procedure goes there.
-                if (this.routePlannerPreview && document.getElementById('cockpitContainer')?.classList.contains('route-preview')) {
-                    this.routePlannerPreview.insertApproach(e.detail);
-                    this.approachCharts?.hide();
-                    return;
-                }
-                if (!this.routePlannerPanel) return;
-                // Open BEFORE inserting — openRoutePlanner calls _loadPlan which resets _route,
-                // so the approach fixes must be spliced in after the plan is loaded.
-                if (!document.getElementById('cockpitContainer')?.classList.contains('route-editing')) {
-                    this.openRoutePlanner();
-                }
-                this.routePlannerPanel.insertApproach(e.detail);
-                this.approachCharts?.hide();
+                if (e.detail) this._loadProcedureIntoPlanner(e.detail);
             });
         }
 
@@ -1101,12 +1086,13 @@ class FlyTabApp {
 
         // Route Planner (preview): the redesign, beside the current planner
         // (MORE → Route Planner (preview)). Shares the current planner's engine.
-        if (typeof RoutePlannerV2 !== 'undefined' && this.routePlannerPanel) {
+        // Without the current planner (it is being replaced) it builds its own engine.
+        if (typeof RoutePlannerV2 !== 'undefined') {
             this.routePlannerPreview = new RoutePlannerV2(
                 document.getElementById('routePlannerPreview'),
                 nasrDb,
                 this._planningAdapters,
-                this.routePlannerPanel,
+                this.routePlannerPanel || null,
             );
             this.routePlannerPreview.init();
         }
@@ -1338,7 +1324,79 @@ class FlyTabApp {
             ?.classList.toggle('landscape', window.innerWidth > window.innerHeight);
     }
 
+    // ── Which route planner (replacing the current one with the new one) ──
+    // docs/superpowers/plans/2026-10-16-route-planner-replacement.md, step 2.
+
+    /**
+     * 'legacy' (the current planner) or 'new' (the Route Planner that was the
+     * preview): what EDIT, a new route, Direct-To, Load procedure, plan sync's
+     * Replan and the route table's REV open. cockpit-config.json `routePlanner`
+     * (the config editor changes it on the tablet; read each time, no restart).
+     */
+    routePlannerMode() {
+        const v = (typeof CockpitConfig !== 'undefined' && CockpitConfig.get) ? CockpitConfig.get('routePlanner') : null;
+        return v === 'new' ? 'new' : 'legacy';
+    }
+
+    /** The planner the entry points use (whichever exists if the chosen one doesn't). */
+    activeRoutePlanner() {
+        if (this.routePlannerMode() === 'new') return this.routePlannerPreview || this.routePlannerPanel || null;
+        return this.routePlannerPanel || this.routePlannerPreview || null;
+    }
+
+    /** The planner on screen, or null. */
+    openRoutePlannerInstance() {
+        const c = document.getElementById('cockpitContainer');
+        if (!c?.classList.contains('route-editing')) return null;
+        return c.classList.contains('route-preview') ? (this.routePlannerPreview || null) : (this.routePlannerPanel || null);
+    }
+
+    /** EDIT, a new route (route table), Direct-To, Load procedure: the planner chosen. */
     openRoutePlanner(plan) {
+        if (this.activeRoutePlanner() === this.routePlannerPreview && this.routePlannerPreview) {
+            return this.openRoutePlannerPreview(plan);
+        }
+        return this._openLegacyPlanner(plan);
+    }
+
+    /** Direct-To from the airport popup. The new planner's open is async: set it after. */
+    async _directTo(apt) {
+        const p = this.activeRoutePlanner();
+        const opening = this.openRoutePlanner();
+        if (p === this.routePlannerPreview) await opening;
+        p?.setDirectTo(apt);
+    }
+
+    /**
+     * An approach/arrival from the charts: into the planner on screen, or open the
+     * one chosen first (open loads the plan, which would replace the fixes).
+     */
+    async _loadProcedureIntoPlanner(detail) {
+        let p = this.openRoutePlannerInstance();
+        if (!p) {
+            p = this.activeRoutePlanner();
+            if (!p) return;
+            const opening = this.openRoutePlanner();
+            if (p === this.routePlannerPreview) await opening;
+        }
+        p.insertApproach(detail);
+        this.approachCharts?.hide();
+    }
+
+    /**
+     * Plan sync → Replan with current winds. Current planner: as before (a hidden
+     * recompute). New planner: open it with the plan -- open loads the current
+     * winds and checks the route; the pilot sees it and decides to Apply.
+     */
+    async replanWithCurrentWinds(plan) {
+        const p = this.activeRoutePlanner();
+        if (!p) return;
+        if (p === this.routePlannerPreview) { await this.openRoutePlannerPreview(plan); return; }
+        await p.open(plan);
+        await p._onRecomputeTap();
+    }
+
+    _openLegacyPlanner(plan) {
         // From the preview (Direct-To, MORE): close it properly -- its sheet,
         // a question waiting, its map hold -- not just hide it (review, 2026-10-16).
         if (document.getElementById('cockpitContainer')?.classList.contains('route-preview')) {
@@ -1349,8 +1407,9 @@ class FlyTabApp {
         document.getElementById('cockpitContainer')?.classList.add('route-editing');
         document.body.classList.add('route-editing-mode');
         this._updateOrientation();
-        this.routePlannerPanel?.open(plan || this._currentTrip);
+        const opening = this.routePlannerPanel?.open(plan || this._currentTrip);
         setTimeout(() => this.cockpitMap?.map?.invalidateSize(), 300);
+        return opening;
     }
 
     /**
@@ -1359,7 +1418,8 @@ class FlyTabApp {
      */
     async reverseActiveRoute() {
         const trip = this._currentTrip;
-        if (!trip?.waypoints || trip.waypoints.length < 2 || !this.routePlannerPanel) {
+        const planner = this.activeRoutePlanner();
+        if (!trip?.waypoints || trip.waypoints.length < 2 || !planner) {
             this.showToast('No route to reverse');
             return;
         }
@@ -1373,7 +1433,7 @@ class FlyTabApp {
         this.showToast('Reversing route…');
         try {
             // Success is announced by the planner ("Route reversed … UNDO").
-            const r = await this.routePlannerPanel.reverseAndApply(trip);
+            const r = await planner.reverseAndApply(trip);
             if (!r || r.error) this.showToast(`Could not reverse the route${r?.error ? ': ' + r.error : ''}`);
         } catch (err) {
             DiagLog.log('error', `reverseActiveRoute: ${err?.message || err}`);
@@ -1385,7 +1445,7 @@ class FlyTabApp {
 
     /** MORE → Route Planner (preview): the redesigned planner, same route and settings. */
     openRoutePlannerPreview(plan) {
-        if (!this.routePlannerPreview) { this.openRoutePlanner(plan); return Promise.resolve(); }
+        if (!this.routePlannerPreview) return Promise.resolve(this._openLegacyPlanner(plan));
         // The current planner was open: close it (an Apply of its own still
         // running would otherwise end by closing this one).
         const c = document.getElementById('cockpitContainer');
@@ -1630,9 +1690,9 @@ class FlyTabApp {
         // bug this issue describes; a one-off is more likely a normal resolution
         // difference. AWY pills are metadata on the following fix, not their own
         // waypoint, so they're excluded to match how _pillsToWaypoints() counts.
-        if (this.routePlannerPanel
-                && document.getElementById('cockpitContainer')?.classList.contains('route-editing')) {
-            const panelCount = this.routePlannerPanel._route.filter(p => p.type !== 'awy').length;
+        const onScreen = this.openRoutePlannerInstance();
+        if (onScreen) {
+            const panelCount = onScreen._route.filter(p => p.type !== 'awy').length;
             const tableCount = normalized.waypoints.length;
             if (panelCount !== tableCount && typeof DiagLog !== 'undefined') {
                 DiagLog.log('route', `#74 state check: routePlannerPanel shows ${panelCount} waypoints, routeTable resolved ${tableCount}`);

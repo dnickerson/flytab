@@ -1,6 +1,8 @@
 {
   "version": 5,
 
+  "routePlanner": "legacy",
+
   "simMode": false,
   "simBridgeIp": "10.0.2.2",
   "simBridgePort": 5678,

@@ -805,7 +805,9 @@ class RouteTable {
                 };
                 if (wp.type) out.type = wp.type;
                 if (wp.isDest) out.isDest = true;   // destination ahead of any missed-approach fixes
-                if (wp.proc) out.proc = true;       // approach fix: REV drops it (2026-10-15 review, M3)
+                // approach/arrival fix: REV drops it (2026-10-15 review, M3). Its kind
+                // ('APPROACH' / 'STAR') kept: an approach replaces an approach, not the STAR.
+                if (wp.proc) out.proc = wp.proc;
                 if (wp.fuel_add_gal != null) out.fuel_add_gal = wp.fuel_add_gal;
                 if (wp.alt_constraint) out.alt_constraint = wp.alt_constraint;
                 if (wp.alt_constraint_upper != null) out.alt_constraint_upper = wp.alt_constraint_upper;

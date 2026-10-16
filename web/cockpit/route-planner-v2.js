@@ -37,10 +37,13 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         this._quiet = 0;
     }
 
-    // Route engine: the current planner's (built once), never a second one.
+    // Route engine and terminal analyzer: the current planner's when it exists
+    // (built once, never a second one); without it (it is being replaced), our own.
     get _planner() { return this._main?._planner ?? this.__planner ?? null; }
     set _planner(v) { this.__planner = v; }
-    _startBuildPlanner() {}
+    get _terminalAnalyzer() { return this._main?._terminalAnalyzer ?? this.__terminalAnalyzer ?? null; }
+    set _terminalAnalyzer(v) { this.__terminalAnalyzer = v; }
+    _startBuildPlanner() { if (!this._main) super._startBuildPlanner(); }
     _getAirwayPairCache() { return this._main ? this._main._getAirwayPairCache() : super._getAirwayPairCache(); }
 
     // Settings are shared (same localStorage key): keep the current planner in step.
@@ -962,6 +965,13 @@ class RoutePlannerV2 extends RoutePlannerPanel {
             return `FD ${String(v.getUTCDate()).padStart(2, '0')}/${String(v.getUTCHours()).padStart(2, '0')}Z`;
         }
         return '';
+    }
+
+    /** Direct-To (airport popup): ends building; the route is then dep -> that airport. */
+    setDirectTo(apt) {
+        this._endAppend();
+        this._cursorAtEnd = false;
+        super.setDirectTo(apt);
     }
 
     /** REV ends building a route (typing then goes before the new destination). */

@@ -345,8 +345,10 @@ describe('Route Planner (preview): search, clearance, procedures, flights (2026-
     });
 
     it('a procedure loaded while the preview is open goes to the preview', () => {
+        // The listener hands it to _loadProcedureIntoPlanner: into the planner on
+        // screen -- tested with the real method in planner-switch.test.js.
         const src = read('web/app.js');
-        expect(src).toMatch(/classList\.contains\('route-preview'\)\) \{\s*this\.routePlannerPreview\.insertApproach\(e\.detail\);/);
+        expect(src).toMatch(/'cifp:load-procedure', \(e\) => \{\s*if \(e\.detail\) this\._loadProcedureIntoPlanner\(e\.detail\);/);
     });
 });
 
