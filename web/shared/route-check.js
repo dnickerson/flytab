@@ -53,6 +53,20 @@ const RouteCheck = (() => {
             .slice(0, n);
     }
 
+    /** An identifier that exists when 0/O and 1/I are swapped, or null. */
+    async function lookalike(id, aero) {
+        const SWAP = { '0': 'O', 'O': '0', '1': 'I', 'I': '1' };
+        const chars = up(id).split('');
+        const at = chars.map((ch, i) => (SWAP[ch] ? i : -1)).filter((i) => i >= 0).slice(0, 4);
+        for (let mask = 1; mask < (1 << at.length); mask++) {
+            const v = chars.slice();
+            at.forEach((pos, b) => { if (mask & (1 << b)) v[pos] = SWAP[v[pos]]; });
+            const cand = v.join('');
+            if (await aero.resolve(cand)) return cand;
+        }
+        return null;
+    }
+
     async function run({ pills, computed = null, settings = {}, aero }) {
         const problems = [];
         const red = (code, pillIndexes, message, fixes = []) => problems.push({ severity: 'red', code, pillIndexes, message, fixes });
@@ -72,7 +86,13 @@ const RouteCheck = (() => {
             }
             const c = await aero.resolve(p.id);
             coords.set(i, c);
-            if (!c) red('unknown-id', [i], `${p.id} not found`);
+            if (!c) {
+                // A zero typed for the letter O (or 1 for I): the keys are next to
+                // each other and look alike in the bubbles (BRAD0, 2026-10-16).
+                const alt = await lookalike(p.id, aero);
+                if (alt) red('unknown-id', [i], `${p.id} not found — did you mean ${alt}?`, [{ label: `Use ${alt}`, apply: 'replaceId', arg: { index: i, id: alt } }]);
+                else red('unknown-id', [i], `${p.id} not found`);
+            }
         }
 
         // Airways: the point before an airway must be on it (entry), and the point after it (exit).
@@ -191,6 +211,9 @@ const RouteCheck = (() => {
                 break;
             case 'goDirect':
                 out.splice(at, 1);
+                break;
+            case 'replaceId':      // BRAD0 -> BRADO
+                out[fix.arg.index] = { ...out[fix.arg.index], id: fix.arg.id };
                 break;
             default:
                 break;

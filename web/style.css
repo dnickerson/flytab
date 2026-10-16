@@ -12272,3 +12272,6 @@ body.route-editing-mode .route-table-sheet {
     border: 2px solid var(--accent); background: var(--accent); color: #fff;
     font-family: var(--font-ui); font-weight: 800; font-size: 15px;
 }
+
+/* Zero vs letter O in identifiers (BRAD0 vs BRADO, 2026-10-16): slashed zero where the font has one */
+.rp2-b, .rp2-input, .rp2-result-id, .rp2-search-input { font-variant-numeric: slashed-zero; font-feature-settings: "zero" 1; }

@@ -100,6 +100,24 @@ describe('RouteCheck: airways', () => {
         expect(ps.map((p) => p.code)).not.toContain('airway-gap');
     });
 
+    it('a zero typed for the letter O: "did you mean" with a one-tap fix (BRAD0 on the tablet, 2026-10-16)', async () => {
+        const ps = await run('KLKR BL0TS CAYCE KAIK');
+        const p = ps.find((x) => x.code === 'unknown-id');
+        expect(p.message).toBe('BL0TS not found — did you mean BLOTS?');
+        expect(p.fixes[0]).toMatchObject({ label: 'Use BLOTS', apply: 'replaceId', arg: { index: 1, id: 'BLOTS' } });
+        const fixed = RouteCheck.applyFix(pills('KLKR BL0TS CAYCE KAIK'), p.fixes[0]);
+        expect(fixed.map((x) => x.id).join(' ')).toBe('KLKR BLOTS CAYCE KAIK');
+        expect(await RouteCheck.run({ pills: fixed, computed: null, settings: settings(), aero })).toEqual([]);
+    });
+
+    it('a one typed for the letter I is caught the same way; nothing similar: no suggestion', async () => {
+        const p = (await run('KLKR R1CHE KAIK')).find((x) => x.code === 'unknown-id');
+        expect(p.message).toBe('R1CHE not found — did you mean RICHE?');
+        const none = (await run('KLKR SP4 KAIK')).find((x) => x.code === 'unknown-id');
+        expect(none.message).toBe('SP4 not found');
+        expect(none.fixes).toEqual([]);
+    });
+
     it('unknown identifiers and airways are red, never dropped', async () => {
         const ps = await run('KLKR MITVF T999 CAYCE KAIK');
         expect(codes(ps)).toEqual(['red:unknown-id', 'red:unknown-id']);
