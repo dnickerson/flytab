@@ -1066,7 +1066,7 @@ class CockpitMap {
         if (isFirstFix && CockpitMap.offScreen()) this._firstPanPending = true;
         if (isFirstFix && !CockpitMap.offScreen()) {
             this.map.panTo(pos, { animate: false });
-        } else if (this._autoPan && !CockpitMap.offScreen()) {
+        } else if (this._autoPan && !this._followHold && !CockpitMap.offScreen()) {
             this._followOwnship(pos);
         }
 
@@ -1247,6 +1247,42 @@ class CockpitMap {
      * animation, at most every FOLLOW_MIN_MS, and only once own-ship has drifted
      * FOLLOW_MIN_DRIFT_PX: at cruise that's a step of a few pixels, twice a second.
      */
+    /**
+     * Centre the map on a point the pilot asked to see (a route planner
+     * bubble). Following own-ship is held meanwhile -- with auto-pan on it
+     * would re-centre within 0.5 s -- until releaseFollowHold(): the planner
+     * closes, or the pilot taps auto-pan (which shows ✋ while held).
+     */
+    showPoint(lat, lon) {
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+        this._followHold = true;
+        this._refreshAutoPanBtn();
+        this.map.panTo([lat, lon], { animate: false });
+    }
+
+    /** Like showPoint, fitting two points (an airway segment) on screen. */
+    showBounds(a, b) {
+        if (!a || !b || ![a.lat, a.lon, b.lat, b.lon].every(Number.isFinite)) return;
+        this._followHold = true;
+        this._refreshAutoPanBtn();
+        this.map.fitBounds([[a.lat, a.lon], [b.lat, b.lon]], { padding: [40, 40], maxZoom: 11, animate: false });
+    }
+
+    releaseFollowHold() {
+        if (!this._followHold) return;
+        this._followHold = false;
+        this._refreshAutoPanBtn();
+    }
+
+    _refreshAutoPanBtn() {
+        const b = this._autoPanBtn;
+        if (!b) return;
+        const following = this._autoPan && !this._followHold;
+        b.innerHTML = following ? '&#x1F4CD;' : '&#x270B;';
+        b.classList.toggle('active', following);
+        b.classList.toggle('held', !!this._followHold);
+    }
+
     _followOwnship(pos) {
         const now = Date.now();
         const since = now - (this._lastFollowAt || 0);
@@ -1802,10 +1838,11 @@ class CockpitMap {
         autoPanBtn.innerHTML = this._autoPan ? '&#x1F4CD;' : '&#x270B;';
         autoPanBtn.classList.toggle('active', this._autoPan);
         wireTap(autoPanBtn, () => {
+            // Held by showPoint (route planner): one tap resumes following.
+            if (this._followHold) { this.releaseFollowHold(); return; }
             this._autoPan = !this._autoPan;
             Settings.autoPan = this._autoPan;
-            autoPanBtn.innerHTML = this._autoPan ? '&#x1F4CD;' : '&#x270B;';
-            autoPanBtn.classList.toggle('active', this._autoPan);
+            this._refreshAutoPanBtn();
         });
         L.DomEvent.disableClickPropagation(autoPanBtn);
         L.DomEvent.disableScrollPropagation(autoPanBtn);

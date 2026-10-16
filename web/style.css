@@ -12262,3 +12262,6 @@ body.route-editing-mode .route-table-sheet {
     font-family: var(--font-instrument); font-weight: 900; font-size: 14px; color: var(--text-primary); }
 .rp2-flight-n { color: var(--text-label); }
 .rp2-low { color: var(--color-danger-on-light); }
+
+/* Auto-pan held while the pilot looks at a route-planner bubble (CockpitMap.showPoint) */
+.map-corner-btn.auto-pan-btn.held { outline: 3px solid var(--color-caution); outline-offset: -3px; }

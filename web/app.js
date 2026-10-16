@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v11.35';
+const FLYTAB_VERSION = 'v11.36';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 // Kept in memory and saved at most every FLUSH_MS (errors at once). Every log()
@@ -1406,6 +1406,7 @@ class FlyTabApp {
         this.routeTable?.refreshIfStale();      // the sheet is shown again (PR B review #7)
         if (preview) this.routePlannerPreview?.close();
         this.routePlannerPanel?.close();
+        this.cockpitMap?.releaseFollowHold?.();   // a bubble tap held own-ship follow
         setTimeout(() => this.cockpitMap?.map?.invalidateSize(), 300);
     }
 

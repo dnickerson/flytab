@@ -224,6 +224,42 @@ describe('pilot move, then an auto-pan re-centre (second PR B review #3)', () =>
     });
 });
 
+// Route Planner (preview): tapping a bubble centres the map on it (Dana,
+// 2026-10-16). With auto-pan on, following own-ship would undo that within
+// 0.5 s, so it is held until the planner closes or the pilot taps auto-pan.
+describe('show a point, holding own-ship follow', () => {
+    beforeEach(() => { vi.useFakeTimers(); delete window.app; });
+    afterEach(() => vi.useRealTimers());
+
+    it('showPoint centres the map and stops following until released', () => {
+        const c = mapCtx();
+        c._autoPanBtn = document.createElement('button');
+        c.showPoint(34.5, -81.0);
+        expect(c.map.panTo).toHaveBeenLastCalledWith([34.5, -81.0], { animate: false });
+        c.map.panTo.mockClear();
+        let lon = -80.0;
+        for (let i = 0; i < 20; i++) { lon += 0.01; c._updateOwnship(FIX(lon)); vi.advanceTimersByTime(600); }
+        expect(c.map.panTo).not.toHaveBeenCalled();                 // held
+        expect(c._autoPanBtn.classList.contains('held')).toBe(true);
+        c.releaseFollowHold();
+        c._updateOwnship(FIX(lon + 0.01));
+        expect(c.map.panTo).toHaveBeenCalled();                     // following again
+        expect(c._autoPanBtn.classList.contains('held')).toBe(false);
+    });
+
+    it('the auto-pan button, while held, resumes following (does not turn auto-pan off)', () => {
+        const src = read('web/cockpit/map.js');
+        const btn = src.slice(src.indexOf("autoPanBtn.title = 'Toggle auto-pan';"), src.indexOf('this._autoPanBtn = autoPanBtn;'));
+        expect(btn).toMatch(/if \(this\._followHold\) \{ this\.releaseFollowHold\(\); return; \}/);
+    });
+
+    it('closing the route planner releases the hold', () => {
+        const src = read('web/app.js');
+        const close = src.slice(src.indexOf('    closeRoutePlanner() {'), src.indexOf('    async applyRouteEdit('));
+        expect(close).toMatch(/this\.cockpitMap\?\.releaseFollowHold\?\.\(\)/);
+    });
+});
+
 describe('NEXRAD canvas on map moves (B2)', () => {
     it('many move events in one frame: one redraw, on the next frame', () => {
         const frames = [];

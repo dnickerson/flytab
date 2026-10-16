@@ -321,8 +321,33 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         b.className = `rp2-b rp2-b-${kind}`;
         b.dataset.idx = String(idx);
         b.textContent = (item.type === 'fuel' ? '⛽ ' : '') + item.id + (item.altFt ? ` ${item.altFt / 100 | 0}` : '');
-        wireTap(b, async () => { await this._commitTyped(); this._openBubbleSheet(idx); });
+        wireTap(b, async () => { await this._commitTyped(); this._showOnMap(idx); this._openBubbleSheet(idx); });
         return b;
+    }
+
+    /**
+     * Centre the map on a bubble: a fix, airport or navaid; an airway bubble
+     * fits its segment (entry to exit). Following own-ship is held meanwhile
+     * (CockpitMap.showPoint).
+     */
+    async _showOnMap(i) {
+        const map = typeof app !== 'undefined' ? app.cockpitMap : null;
+        const r = this._route;
+        const item = r[i];
+        if (!map || !item) return;
+        const isPoint = (p) => p && p.type !== 'awy' && p.type !== 'direct';
+        const aero = this._aero();
+        if (isPoint(item)) {
+            const c = await aero.resolve(item.id);
+            if (c) map.showPoint?.(c.lat, c.lon);
+            return;
+        }
+        let a = i - 1; while (a >= 0 && !isPoint(r[a])) a--;
+        let b = i + 1; while (b < r.length && !isPoint(r[b])) b++;
+        const ca = a >= 0 ? await aero.resolve(r[a].id) : null;
+        const cb = b < r.length ? await aero.resolve(r[b].id) : null;
+        if (ca && cb) map.showBounds?.(ca, cb);
+        else if (ca || cb) map.showPoint?.((ca || cb).lat, (ca || cb).lon);
     }
 
     _markBubbles() {

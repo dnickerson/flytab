@@ -369,3 +369,23 @@ describe('Route Planner (preview): Insert before/after (Dana, 2026-10-16)', () =
         expect(p._inputEl.placeholder).toBe('type');
     });
 });
+
+describe('Route Planner (preview): tapping a bubble centres the map (Dana, 2026-10-16)', () => {
+    it('a point bubble: the map centres on it; an airway bubble: its segment is fitted', async () => {
+        const showPoint = vi.fn(), showBounds = vi.fn();
+        globalThis.app = { showToast: vi.fn(() => ({ remove() {} })), closeRoutePlanner: vi.fn(), cockpitMap: { showPoint, showBounds } };
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'GREAT', type: 'fix' }, { id: 'T437', type: 'awy' }, { id: 'CAYCE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        await p._showOnMap(1);
+        expect(showPoint).toHaveBeenCalledWith(GREAT.lat, GREAT.lon);
+        await p._showOnMap(2);
+        const [[a, b]] = showBounds.mock.calls;
+        expect([a.lat, a.lon]).toEqual([GREAT.lat, GREAT.lon]);
+        expect(b.lat).toBeCloseTo(33.857, 2);                        // CAYCE
+    });
+
+    it('tapping a bubble shows it on the map and opens its actions', () => {
+        const src = read('web/cockpit/route-planner-v2.js');
+        expect(src).toMatch(/wireTap\(b, async \(\) => \{ await this\._commitTyped\(\); this\._showOnMap\(idx\); this\._openBubbleSheet\(idx\); \}\);/);
+    });
+});
+
