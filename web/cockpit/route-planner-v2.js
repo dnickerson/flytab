@@ -102,7 +102,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         this._inputEl.placeholder = 'type';
         this._inputEl.addEventListener('input', () => this._onTyping());
         this._inputEl.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') { e.preventDefault(); this._commitTyped(); }
+            if (e.key === 'Enter') { e.preventDefault(); this._finishTyping(); }
         });
         const fbtns = document.createElement('div');
         fbtns.className = 'rp2-fbtns';
@@ -152,7 +152,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
             const b = document.createElement('button');
             b.className = 'rp2-tbtn' + (cls ? ' ' + cls : '');
             b.textContent = label;
-            wireTap(b, async () => { await this._commitTyped(); fn(); });
+            wireTap(b, async () => { await this._commitTyped(); this._endInsert(); fn(); });
             tb.appendChild(b);
             return b;
         };
@@ -307,6 +307,15 @@ class RoutePlannerV2 extends RoutePlannerPanel {
                 if (originalIdx < at) this._bubblesEl.insertBefore(b, this._inputEl);
                 else this._bubblesEl.appendChild(b);
             }
+            // While inserting: a ✓ Done button right after the cursor.
+            if (this._insertIndex != null) {
+                const done = document.createElement('button');
+                done.className = 'rp2-insert-done';
+                done.textContent = '✓ Done';
+                const tap = typeof wireIsolatedTap === 'function' ? wireIsolatedTap : wireTap;
+                tap(done, () => this._finishTyping());
+                this._bubblesEl.insertBefore(done, this._inputEl.nextSibling);
+            }
             this._markBubbles();
         }
         this._scheduleCheck();
@@ -361,6 +370,23 @@ class RoutePlannerV2 extends RoutePlannerPanel {
             b.classList.toggle('rp2-red', s === 'red');
             b.classList.toggle('rp2-amber', s === 'amber');
         }
+    }
+
+    /**
+     * Done (keyboard Done/Enter, or ✓ Done while inserting): add what was typed,
+     * end an insert (typing goes back to before the destination), and close
+     * the keyboard -- there was no clear way to finish an insert (2026-10-16).
+     */
+    async _finishTyping() {
+        await this._commitTyped();
+        this._endInsert();
+        this._inputEl?.blur();
+    }
+
+    _endInsert() {
+        if (this._insertIndex == null) return;
+        this._insertIndex = null;
+        this._render();
     }
 
     _onTyping() {

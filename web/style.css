@@ -12265,3 +12265,10 @@ body.route-editing-mode .route-table-sheet {
 
 /* Auto-pan held while the pilot looks at a route-planner bubble (CockpitMap.showPoint) */
 .map-corner-btn.auto-pan-btn.held { outline: 3px solid var(--color-caution); outline-offset: -3px; }
+
+/* Route Planner (preview): ✓ Done next to the cursor while inserting */
+.rp2-insert-done {
+    min-height: var(--touch-min, 56px); padding: 0 14px; border-radius: 28px;
+    border: 2px solid var(--accent); background: var(--accent); color: #fff;
+    font-family: var(--font-ui); font-weight: 800; font-size: 15px;
+}

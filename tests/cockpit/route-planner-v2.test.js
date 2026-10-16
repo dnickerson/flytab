@@ -363,7 +363,8 @@ describe('Route Planner (preview): Insert before/after (Dana, 2026-10-16)', () =
         const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'CAE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
         p._startInsert(2);
         expect(document.activeElement).toBe(p._inputEl);
-        expect(p._inputEl.nextElementSibling.textContent).toBe('KAIK');
+        expect(p._inputEl.nextElementSibling.textContent).toBe('✓ Done');
+        expect(p._inputEl.nextElementSibling.nextElementSibling.textContent).toBe('KAIK');
         expect(p._inputEl.placeholder).toBe('insert after CAE');
         p._insertIndex = null; p._render();
         expect(p._inputEl.placeholder).toBe('type');
@@ -389,3 +390,41 @@ describe('Route Planner (preview): tapping a bubble centres the map (Dana, 2026-
     });
 });
 
+
+describe('Route Planner (preview): finishing an insert (Dana, 2026-10-16)', () => {
+    beforeEach(() => { globalThis.app = { showToast: vi.fn(() => ({ remove() {} })), closeRoutePlanner: vi.fn() }; });
+    const enter = (p) => p._inputEl.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+
+    it('Done (Enter) adds what was typed at the insert point, then ends inserting and closes the keyboard', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'CAE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        p._startInsert(2);
+        p._inputEl.value = 'BRADO MATEO';
+        enter(p);
+        await p._typing;
+        expect(show(p)).toBe('KLKR:dep CAE:fix BRADO:fix MATEO:fix KAIK:dest');
+        expect(p._insertIndex).toBeNull();
+        expect(document.activeElement).not.toBe(p._inputEl);
+        expect(p._inputEl.placeholder).toBe('type');
+        expect(p._inputEl.nextElementSibling.textContent).toBe('KAIK');      // back before the destination
+    });
+
+    it('a ✓ Done button is shown while inserting, and does the same', async () => {
+        const p = make([{ id: 'KLKR', type: 'dep' }, { id: 'CAE', type: 'fix' }, { id: 'KAIK', type: 'dest' }]);
+        expect(p._bubblesEl.querySelector('.rp2-insert-done')).toBeNull();
+        p._startInsert(2);
+        const done = p._bubblesEl.querySelector('.rp2-insert-done');
+        expect(done.textContent).toBe('✓ Done');
+        p._inputEl.value = 'BRADO';
+        done.click();
+        await p._typing;
+        expect(show(p)).toBe('KLKR:dep CAE:fix BRADO:fix KAIK:dest');
+        expect(p._insertIndex).toBeNull();
+        expect(p._bubblesEl.querySelector('.rp2-insert-done')).toBeNull();
+    });
+
+    it('a toolbar action (e.g. Apply) also ends inserting', () => {
+        const src = read('web/cockpit/route-planner-v2.js');
+        const tb = src.slice(src.indexOf("        tb.className = 'rp2-toolbar';"), src.indexOf("        inner.appendChild(tb);"));
+        expect(tb).toMatch(/await this\._commitTyped\(\); this\._endInsert\(\);/);
+    });
+});
