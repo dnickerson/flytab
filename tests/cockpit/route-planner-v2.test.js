@@ -355,7 +355,7 @@ describe('Route Planner (preview): Insert before/after (Dana, 2026-10-16)', () =
 
     it('sheet buttons cancel the follow-on mouse events (else focus leaves the route field after Insert after…)', () => {
         const src = read('web/cockpit/route-planner-v2.js');
-        const sheet = src.slice(src.indexOf('    _openSheet(title, rows) {'), src.indexOf('    _closeSheet() {'));
+        const sheet = src.slice(src.indexOf('    _openSheet(title, rows, { cols = 2 } = {}) {'), src.indexOf('    _closeSheet() {'));
         expect(sheet).toMatch(/wireIsolatedTap/);
     });
 
@@ -892,7 +892,7 @@ describe('Route Planner (preview): critical review fixes (2026-10-16)', () => {
         localStorage.setItem('flypi_planner_opts', JSON.stringify({ departureTime: future.toISOString() }));
         await p.open({ flight_plan: { route: ['KLKR', 'KAIK'], destination: 'KAIK' }, waypoints: [] });
         expect(p._departureTime?.getTime()).toBe(future.getTime());
-        expect(p._g.dep.selectedOptions[0].textContent).toBe(future.toTimeString().slice(0, 5));
+        expect(p._g.dep.selectedOptions[0].textContent).toBe(RoutePlannerV2.dayTimeLabel(future, new Date(), { short: true }));
         localStorage.setItem('flypi_planner_opts', JSON.stringify({ departureTime: new Date(Date.now() - 3600000).toISOString() }));
         await p.open({ flight_plan: { route: ['KLKR', 'KAIK'], destination: 'KAIK' }, waypoints: [] });
         expect(p._departureTime).toBeNull();
@@ -1080,5 +1080,83 @@ describe('Route Planner (preview): START FUEL (Dana, 2026-10-16)', () => {
         p._compute = async () => c;
         const problems = await p._runChecks();
         expect(problems.some((x) => x.code === 'below-reserve')).toBe(true);
+    });
+});
+
+describe('Route Planner (preview): DEPART today or tomorrow, with that time\'s winds (Dana, 2026-10-16)', () => {
+    const NOW = new Date(2026, 9, 16, 16, 11);                  // 16:11 local
+    beforeEach(() => {
+        localStorage.clear();
+        vi.useFakeTimers({ now: NOW, toFake: ['Date'] });
+        globalThis.app = { showToast: vi.fn(() => ({ remove() {} })), closeRoutePlanner: vi.fn() };
+    });
+    afterEach(() => { vi.useRealTimers(); delete globalThis.FlyTabPlanning; });
+    const R = () => [{ id: 'KLKR', type: 'dep' }, { id: 'KAIK', type: 'dest' }];
+    const acts = () => [...document.querySelectorAll('.rp2-act')].map((b) => b.textContent);
+    const tap = async (label) => { [...document.querySelectorAll('.rp2-act')].find((b) => b.textContent === label).click(); await new Promise((r) => setTimeout(r, 0)); };
+    const choose = (p, v) => { p._g.dep.value = v; p._g.dep.dispatchEvent(new Event('change')); };
+
+    it('DEPART offers "Day & time…": Today / Tomorrow, then whole hours (local)', async () => {
+        const p = make(R());
+        expect([...p._g.dep.options].map((o) => o.textContent)).toContain('Day & time…');
+        choose(p, 'pick');
+        expect(acts()).toEqual(['Today', 'Tomorrow']);
+        await tap('Tomorrow');
+        expect(acts()[0]).toBe('05:00');
+        expect(acts().at(-1)).toBe('21:00');
+        await tap('09:00');
+        const t = p._departureTime;
+        expect([t.getFullYear(), t.getMonth(), t.getDate(), t.getHours(), t.getMinutes()]).toEqual([2026, 9, 17, 9, 0]);
+        expect(p._g.dep.selectedOptions[0].textContent).toBe('Tmrw 09:00');      // fits the box in landscape
+        expect(JSON.parse(localStorage.getItem('flypi_planner_opts')).departureTime).toBe(t.toISOString());
+    });
+
+    it('today: only hours still ahead', async () => {
+        const p = make(R());
+        choose(p, 'pick');
+        await tap('Today');
+        expect(acts()[0]).toBe('17:00');
+    });
+
+    it('closing the picker keeps the departure as it was', async () => {
+        const p = make(R());
+        choose(p, '60');
+        const before = p._departureTime.getTime();
+        choose(p, 'pick');
+        p._closeSheet();
+        expect(p._departureTime.getTime()).toBe(before);
+        expect(p._g.dep.value).toBe('at');
+    });
+
+    it('a new departure fetches the winds for it; WIND says which forecast', async () => {
+        const p = make(R());
+        const r = { winds: { CLT: {} }, source: 'fd', cycle: '24', validAt: new Date('2026-10-17T18:00:00Z'), useFrom: new Date('2026-10-17T12:00:00Z'), useTo: new Date('2026-10-18T00:00:00Z') };
+        globalThis.FlyTabPlanning = { fetchWindsDetailed: vi.fn(async () => r), fetchWinds: vi.fn() };
+        choose(p, 'pick');
+        await tap('Tomorrow');
+        await tap('09:00');
+        await new Promise((res) => setTimeout(res, 0));
+        expect(globalThis.FlyTabPlanning.fetchWindsDetailed).toHaveBeenCalledWith(p._departureTime);
+        expect(p._lastWinds).toBe(r.winds);
+        const c = { summary: { totalDistNm: 50, totalEteHrs: 0.4, totalFuelGal: 4, fuelRemGal: 30, groundHrs: 0 },
+            legs: [{ timeHrs: 0.4, gsKt: 120, tasKt: 130, windKt: -10, eta: 0 }], waypoints: [{ id: 'KLKR' }, { id: 'KAIK', isDest: true }] };
+        p._renderStats(c);
+        expect(p._statsStripEl.textContent).toMatch(/WIND FD 17\/18Z/);
+        expect(p._statsStripEl.textContent).toMatch(/10 head/);
+    });
+
+    it('no forecast for the departure yet: amber note, calm air (not the wrong period)', async () => {
+        const p = make(R());
+        globalThis.FlyTabPlanning = { fetchWindsDetailed: vi.fn(async () => ({ winds: null, source: null, reason: 'beyond', coverTo: new Date(2026, 9, 17, 20, 0) })) };
+        p._lastWinds = { OLD: {} };
+        p._departureTime = new Date(2026, 9, 17, 21, 0);
+        p._ensureWinds({ force: true });
+        await new Promise((res) => setTimeout(res, 0));
+        expect(p._lastWinds).toBeNull();
+        p._compute = async () => ({ legs: [], waypoints: [], summary: null });
+        const problems = await p._runChecks();
+        const n = problems.find((x) => x.code === 'no-winds');
+        expect(n?.severity).toBe('amber');
+        expect(n.message).toBe('No winds forecast for Tomorrow 21:00 yet (forecast to Tomorrow 20:00) — figures use calm air');
     });
 });

@@ -245,8 +245,9 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         this._g.mode = mkSel([['v-airways', 'V-airways'], ['t-airways', 'T-airways'], ['any', 'Any airway'], ['gps-direct', 'GPS Direct'], ['vors-direct', 'VORs Direct']],
             this._routingMode, (v) => { this._routingMode = v; });
         box('ROUTING', this._g.mode);
-        this._g.dep = mkSel([['0', 'Now'], ['30', '+30 min'], ['60', '+1 h'], ['120', '+2 h'], ['180', '+3 h']], '0', (v) => {
+        this._g.dep = mkSel([['0', 'Now'], ['30', '+30 min'], ['60', '+1 h'], ['120', '+2 h'], ['180', '+3 h'], ['pick', 'Day & time…']], '0', (v) => {
             if (v === 'at') return;                          // the saved time, unchanged
+            if (v === 'pick') { this._openDepartSheet(); return; }
             const min = parseInt(v, 10);
             this._departureTime = min ? new Date(Date.now() + min * 60000) : null;
             this._ensureWinds({ force: true });              // another forecast period
@@ -287,7 +288,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         if (this._departureTime) {
             const o = document.createElement('option');
             o.value = 'at';
-            o.textContent = this._departureTime.toTimeString().slice(0, 5);
+            o.textContent = RoutePlannerV2.dayTimeLabel(this._departureTime, new Date(), { short: true });
             dep.appendChild(o);
             dep.value = 'at';
         } else {
@@ -298,6 +299,52 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         this._g.mode.value = this._routingMode;
         this._g.rsv.value = String(Math.min(20, Math.max(5, this._reserveGal || 10)));
         this._g.fuel.value = String(this._maxLegHrs);
+    }
+
+    // ── Departure day and time ───────────────────────────────────────────────
+
+    /**
+     * "Today 09:00", "Tomorrow 09:00", else "Sat 09:00" (local time). short:
+     * "Tmrw" -- the DEPART box is 128 px wide in landscape and "Tomorrow 09:00"
+     * ran into its arrow.
+     */
+    static dayTimeLabel(d, now = new Date(), { short = false } = {}) {
+        const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+        const days = Math.round((day(d) - day(now)) / 86400000);
+        const hm = d.toTimeString().slice(0, 5);
+        if (days === 0) return `Today ${hm}`;
+        if (days === 1) return `${short ? 'Tmrw' : 'Tomorrow'} ${hm}`;
+        return `${d.toLocaleDateString('en-US', { weekday: 'short' })} ${hm}`;
+    }
+
+    /** DEPART → Day & time…: Today or Tomorrow, then the hour (Dana, 2026-10-16). */
+    _openDepartSheet() {
+        this._openSheet('Departure day', [
+            { label: 'Today', primary: true, fn: () => this._openHourSheet(0) },
+            { label: 'Tomorrow', primary: true, fn: () => this._openHourSheet(1) },
+        ]);
+        this._onSheetClose = () => this._syncGrid();     // ✕: the departure as it was
+    }
+
+    _openHourSheet(days) {
+        const now = new Date();
+        const rows = [];
+        for (let h = RoutePlannerV2.DEPART_FIRST_HOUR; h <= RoutePlannerV2.DEPART_LAST_HOUR; h++) {
+            const t = new Date(now.getFullYear(), now.getMonth(), now.getDate() + days, h, 0);
+            if (t <= now) continue;
+            rows.push({ label: `${String(h).padStart(2, '0')}:00`, fn: () => this._setDeparture(t) });
+        }
+        if (!rows.length) { this._toast('No departure hours left today — pick Tomorrow'); this._syncGrid(); return; }
+        this._openSheet(days === 0 ? 'Depart today at' : 'Depart tomorrow at', rows, { cols: 4 });
+        this._onSheetClose = () => this._syncGrid();
+    }
+
+    _setDeparture(t) {
+        this._departureTime = t;
+        this._saveOpts();
+        this._syncGrid();
+        this._ensureWinds({ force: true });              // that time's forecast
+        this._scheduleCheck();
     }
 
     /** Usable fuel the tanks hold: the planning profile's, as the route engine uses it. */
@@ -595,7 +642,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
 
     // ── Sheets ───────────────────────────────────────────────────────────────
 
-    _openSheet(title, rows) {
+    _openSheet(title, rows, { cols = 2 } = {}) {
         // Sheet buttons cancel the browser's follow-on mouse events: the sheet
         // closes on the tap, and the synthetic mousedown then landed on what was
         // under it and took the focus from the route field -- Insert after…
@@ -620,6 +667,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         s.appendChild(h);
         const grid = document.createElement('div');
         grid.className = 'rp2-acts';
+        if (cols !== 2) grid.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
         for (const r of rows) {
             if (r.note) {
                 const n = document.createElement('div');
@@ -781,18 +829,39 @@ class RoutePlannerV2 extends RoutePlannerPanel {
      * attempt waits out its 8 s timeout every time).
      */
     _ensureWinds({ force = false } = {}) {
-        const fn = typeof FlyTabPlanning !== 'undefined' ? FlyTabPlanning.fetchWinds : null;
-        if (!fn || this._windsLoading) return;
+        const P = typeof FlyTabPlanning !== 'undefined' ? FlyTabPlanning : null;
+        // fetchWindsDetailed: the forecast period for the departure, and which it is.
+        const fn = P?.fetchWindsDetailed || (P?.fetchWinds ? async (t) => ({ winds: await P.fetchWinds(t) }) : null);
+        if (!fn || this._windsLoading) return;              // a load running re-checks the departure when done
         if (!force && (this._lastWinds || Date.now() - (this._windsTriedAt || 0) < RoutePlannerV2.WINDS_RETRY_MS)) return;
         this._windsLoading = true;
         this._windsTriedAt = Date.now();
+        const forDep = this._departureTime ? this._departureTime.getTime() : null;
         Promise.resolve()
             .then(() => fn(this._departureTime ?? new Date()))
             .catch(() => null)
-            .then((w) => {
+            .then((r) => {
                 this._windsLoading = false;
-                if (w) { this._lastWinds = w; this._scheduleCheck(); }
+                const nowDep = this._departureTime ? this._departureTime.getTime() : null;
+                if (nowDep !== forDep) { this._ensureWinds({ force: true }); return; }   // changed meanwhile
+                if (!r) return;
+                this._windsInfo = r;
+                // No forecast for this time: calm air, not another period's winds.
+                this._lastWinds = r.winds || null;
+                this._scheduleCheck();
             });
+    }
+
+    /** "FD 17/18Z" (the forecast's valid time, UTC), "FIS-B", or ''. */
+    _windsLabel() {
+        const w = this._windsInfo;
+        if (!w?.winds) return '';
+        if (w.source === 'fisb') return 'FIS-B';
+        const v = w.validAt;
+        if (v instanceof Date && Number.isFinite(v.getTime())) {
+            return `FD ${String(v.getUTCDate()).padStart(2, '0')}/${String(v.getUTCHours()).padStart(2, '0')}Z`;
+        }
+        return '';
     }
 
     /** Clear (keeps departure and destination). No question: Undo brings the route back. */
@@ -1330,6 +1399,16 @@ class RoutePlannerV2 extends RoutePlannerPanel {
                 message: this._planner ? 'Fuel and time could not be worked out — not checked' : 'Route engine still loading — fuel and time not checked' });
             problems.sort((x, y) => (x.severity === y.severity ? 0 : x.severity === 'red' ? -1 : 1));
         }
+        // Winds tried and none for this departure: say so (calm-air figures).
+        if (this._windsInfo && !this._lastWinds && hasEnds) {
+            const w = this._windsInfo;
+            const dep = this._departureTime ?? new Date();
+            const lbl = (d) => RoutePlannerV2.dayTimeLabel(d);
+            const message = w.reason === 'beyond'
+                ? `No winds forecast for ${lbl(dep)} yet${w.coverTo instanceof Date ? ` (forecast to ${lbl(w.coverTo)})` : ''} — figures use calm air`
+                : 'No winds available — figures use calm air';
+            problems.push({ severity: 'amber', code: 'no-winds', pillIndexes: [], fixes: [], message });
+        }
         if (epoch !== this._checkEpoch) return problems;     // a newer check is running
         // The route changed while this ran: its bubble numbers are out of date
         // (a newer check is scheduled by that change).
@@ -1404,7 +1483,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
             + cell('ETE', `${hm(s.totalEteHrs)}${ground}`)
             + cell('ETA', Number.isFinite(etaMs) ? clock(etaMs) : '—')
             + cell('FUEL', `${s.totalFuelGal.toFixed(1)} g`)
-            + cell('WIND', wind);
+            + cell(['WIND', this._windsLabel()].filter(Boolean).join(' '), wind);
 
         // With fuel stops: one row per flight -- time, landing time, fuel left.
         const flights = RoutePlannerV2.flightsOf(c);
@@ -1559,5 +1638,7 @@ RoutePlannerV2.UNDO_MAX = 50;              // undo steps kept
 RoutePlannerV2.ALT_MIN_FT = 500;            // per-fix altitude: refused outside this
 RoutePlannerV2.WINDS_RETRY_MS = 2 * 60 * 1000;   // after a failed winds fetch
 RoutePlannerV2.START_FUEL_KEY = 'flypi_planner_start_fuel';
+RoutePlannerV2.DEPART_FIRST_HOUR = 5;       // Day & time…: whole hours offered, local
+RoutePlannerV2.DEPART_LAST_HOUR = 21;
 RoutePlannerV2.DEFAULT_TANK_GAL = 36;       // the route engine's RV-9A fallback capacity
 RoutePlannerV2.ALT_MAX_FT = 18000;
