@@ -115,13 +115,16 @@ const RouteCheck = (() => {
             if (nextAwy) {
                 const other = pills[i + 1].id;
                 const theirs = onAirway(nextAwy);
-                const ref = coords.get(i - 1);
+                let ref = null;                              // the nearest point before
+                for (let k = i - 1; k >= 0 && !ref; k--) ref = coords.get(k) || null;
                 const meet = (awy.waypoints || [])
                     .filter((w) => theirs.has(ident(w)) && Number.isFinite(w.lat) && Number.isFinite(w.lon))
                     .map((w) => ({ name: ident(w), nm: ref ? directNm(ref, w) : 0 }))
                     .sort((a, b) => a.nm - b.nm)
                     .slice(0, NEAREST);
-                red('airway-junction', [i, i + 1], `${name} and ${other} need the fix where they meet`,
+                red('airway-junction', [i, i + 1], meet.length
+                    ? `${name} and ${other} need the fix where they meet`
+                    : `${name} and ${other} do not meet — put a fix between them`,
                     meet.map((f) => ({ label: `Change to ${other} at ${f.name}`, apply: 'insertJunction', arg: { at: i + 1, fix: f.name, airway: name } })));
             }
             const prev = i - 1 >= 0 && isPoint(pills[i - 1]) ? i - 1 : -1;

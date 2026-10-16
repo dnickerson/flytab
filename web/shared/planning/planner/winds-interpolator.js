@@ -191,26 +191,39 @@ function fisbWinds() {
  */
 export async function fetchWindsDetailed(departureTime) {
     const dep = departureTime instanceof Date ? departureTime : new Date();
+    const now = Date.now();
+    // A departure already past (a delay): the current forecast is the best there is.
+    const at = new Date(Math.max(dep.getTime(), now));
     const base = (typeof Settings !== 'undefined' && Settings.workerBase)
         ? Settings.workerBase
         : 'https://www.flywhere.app/api';
     const fetched = (await Promise.all(FD_PERIODS.map((c) => fetchPeriod(base, c)))).filter(Boolean);
     const found = (p, source) => ({ winds: p.winds, source, cycle: p.cycle, ...p.header });
-    const coverTo = (ps) => ps.reduce((m, p) => (!m || p.header.useTo > m ? p.header.useTo : m), null);
 
-    if (fetched.length) {
-        const p = pickFdPeriod(fetched, dep);
-        if (p) return found(p, 'fd');
-        return { winds: null, source: null, reason: 'beyond', coverTo: coverTo(fetched) };
-    }
-    if (dep.getTime() - Date.now() <= FISB_MAX_AHEAD_MS) {
+    // 1. A period fetched just now.
+    const f = pickFdPeriod(fetched, at);
+    if (f) return found(f, 'fd');
+    // 2. Stratux FIS-B for a departure soon.
+    if (at.getTime() - now <= FISB_MAX_AHEAD_MS) {
         const w = fisbWinds();
         if (w) return { winds: w, source: 'fisb' };
     }
-    const cached = readCachedPeriods();
-    const p = pickFdPeriod(cached, dep);
-    if (p) return found(p, 'cache');
-    return { winds: null, source: null, reason: cached.length ? 'beyond' : 'unavailable', coverTo: coverTo(cached) || undefined };
+    // 3. A cached period -- also when only some fetches came back (review,
+    //    2026-10-16: the 6-hour alone fetched, the cached 24-hour ignored).
+    const fresh = new Set(fetched.map((p) => p.cycle));
+    const cached = readCachedPeriods().filter((p) => !fresh.has(p.cycle));
+    const c = pickFdPeriod(cached, at);
+    if (c) return found(c, 'cache');
+
+    // None: "beyond" only when the departure is after a forecast that is still
+    // current; a forecast that ended already, or one starting later, is just
+    // "unavailable" (it said "forecast to <yesterday>").
+    const all = [...fetched, ...cached];
+    const coverTo = all.reduce((m, p) => (!m || p.header.useTo > m ? p.header.useTo : m), null);
+    const beyond = coverTo && coverTo.getTime() > now && at.getTime() >= coverTo.getTime();
+    return beyond
+        ? { winds: null, source: null, reason: 'beyond', coverTo }
+        : { winds: null, source: null, reason: 'unavailable' };
 }
 
 /**

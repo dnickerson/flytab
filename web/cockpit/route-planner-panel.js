@@ -407,7 +407,7 @@ class RoutePlannerPanel {
                 if (i === 0)                          type = 'dep';
                 else if (i === destIdx)               type = 'dest';
                 else if (/^[VTJQ]\d/.test(id))        type = 'awy';
-                else if (id === 'DIRECT')             type = 'direct';
+                else if (id === 'DIRECT' || id === 'DCT') type = 'direct';
                 else                                   type = 'fix';
                 return { id, type };
             });
@@ -450,6 +450,12 @@ class RoutePlannerPanel {
         // order: an id can appear twice (an en-route fix that is also an approach
         // or missed-approach fix), and by id the en-route one took the approach's
         // mark and altitude -- REV then deleted it (2026-10-15 review, H2).
+        // Airways as applied, when the saved waypoints record them (the airway
+        // each fix was reached on): the tagging above carried an airway to every
+        // fix after it, so a direct leg after an airway exit reloaded as airway
+        // and BLOTS (the exit) was hidden in compact view (review, 2026-10-16).
+        // Plans without that record (older, or from plan sync) keep the tagging.
+        const savedAirways = wps.some(w => w && w.airway);
         let wpAt = 0;
         for (const pill of this._route) {
             if (pill.type === 'awy' || pill.type === 'direct') continue;
@@ -459,6 +465,10 @@ class RoutePlannerPanel {
             const wp = wps[k];
             wpAt = k + 1;
             if (wp.altFt != null) pill.altFt = wp.altFt;
+            if (savedAirways && pill.type === 'fix') {
+                if (wp.airway && wp.airway !== 'DIRECT') pill.airway = wp.airway;
+                else delete pill.airway;
+            }
             if (pill.type === 'fix' && wp.fuelStop) { pill.type = 'fuel'; delete pill.airway; }
             if (pill.type === 'fix' && wp.proc) pill.proc = true;
         }
@@ -2470,6 +2480,9 @@ class RoutePlannerPanel {
     }
 
     _showFuelStopPicker(candidate) {
+        // Identifiers and names as text: a bubble's id can come from a plan
+        // downloaded by plan sync (review, 2026-10-16).
+        const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
         return new Promise(resolve => {
             const hh = Math.floor(candidate.cumHrsAtStop);
             const mm = String(Math.round((candidate.cumHrsAtStop - hh) * 60)).padStart(2, '0');
@@ -2491,7 +2504,7 @@ class RoutePlannerPanel {
                   <div>
                     <div style="font-size:17px;font-weight:800;color:var(--text-primary,#1a1a2e)">⛽ Fuel Stop Required</div>
                     <div style="font-size:13px;font-weight:700;color:var(--text-secondary,#444444);margin-top:4px">
-                      Near ${candidate.afterFixId} · ${hh}:${mm} flight time
+                      Near ${esc(candidate.afterFixId)} · ${hh}:${mm} flight time
                     </div>
                   </div>
                   <button class="rpp-fs-skip" style="background:var(--bg-surface,#f5f5f5);
@@ -2529,13 +2542,13 @@ class RoutePlannerPanel {
                     'display:flex;justify-content:space-between;align-items:center';
                 row.innerHTML = `
                   <div>
-                    <div style="font-size:17px;font-weight:800;color:var(--text-primary,#1a1a2e)">${apt.icao}</div>
+                    <div style="font-size:17px;font-weight:800;color:var(--text-primary,#1a1a2e)">${esc(apt.icao)}</div>
                     <div style="font-size:13px;font-weight:700;color:var(--text-secondary,#444444);margin-top:2px">
-                      ${apt.name}${apt.hasSelfServeFuel ? ' · <span style="color:var(--accent,#0066cc);font-weight:800">Self-serve</span>' : ''}
+                      ${esc(apt.name)}${apt.hasSelfServeFuel ? ' · <span style="color:var(--accent,#0066cc);font-weight:800">Self-serve</span>' : ''}
                     </div>
                   </div>
                   <div style="font-size:15px;font-weight:700;color:var(--text-secondary,#444444);white-space:nowrap;margin-left:12px">
-                    ${apt.distNm != null ? apt.distNm + ' nm' : ''}
+                    ${Number.isFinite(apt.distNm) ? apt.distNm + ' nm' : ''}
                   </div>`;
                 row.addEventListener('touchstart', () => { row.style.background = 'var(--bg-surface,#f5f5f5)'; }, { passive: true });
                 row.addEventListener('touchend',   () => { row.style.background = ''; }, { passive: true });
@@ -3012,11 +3025,19 @@ class RoutePlannerPanel {
                 const dep = this._route.find(p => p.type === 'dep')?.id;
                 const dest = this._route[this._destPillIndex()]?.id;
                 RoutePlannerPanel._announceReverse(dep, dest, async () => {
-                    this._route = before;
-                    this._insertIndex = null;
-                    this._syncFieldsFromPills();
-                    this._render();
-                    await this._doApply();
+                    // The toast outlives the planner: after close() (_applyAborted)
+                    // UNDO did nothing and the route stayed reversed (review, 2026-10-16).
+                    const closed = this._applyAborted;
+                    this._applyAborted = false;
+                    try {
+                        this._route = before;
+                        this._insertIndex = null;
+                        this._syncFieldsFromPills();
+                        this._render();
+                        await this._doApply();
+                    } finally {
+                        if (closed) { this._applyAborted = true; this._route = []; }
+                    }
                 });
             }
             return ok;

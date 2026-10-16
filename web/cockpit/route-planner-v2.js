@@ -50,7 +50,9 @@ class RoutePlannerV2 extends RoutePlannerPanel {
     }
 
     _toast(msg, duration) {
-        if (this._quiet) return;                // checks run quietly; Apply/actions speak
+        // A check's own lookups run quietly; anything else (Apply's "Route
+        // applied") must not be hidden by a check that happens to be running.
+        if (this._quiet && /^Skipped \(not found\)/.test(String(msg))) return;
         super._toast(msg, duration);
     }
 
@@ -134,6 +136,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         // bubble (or with no destination yet) -> the end; anywhere else -> before it.
         this._fieldEl.addEventListener('click', (e) => {
             if (e.target.closest('.rp2-b, .rp2-btn, .rp2-input')) return;
+            this._endAppend();
             this._insertIndex = null;
             this._cursorAtEnd = this._tapIsAfterDest(e);
             this._render();
@@ -148,7 +151,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
             const b = document.createElement('button');
             b.className = 'rp2-tbtn' + (cls ? ' ' + cls : '');
             b.textContent = label;
-            wireTap(b, async () => { await this._commitTyped(); this._endInsert(); fn(); });
+            wireTap(b, async () => { this._commitStartFuel(); await this._commitTyped(); this._endInsert(); fn(); });
             tb.appendChild(b);
             return b;
         };
@@ -225,7 +228,9 @@ class RoutePlannerV2 extends RoutePlannerPanel {
             s.addEventListener('change', () => { onChange(s.value); this._saveOpts(); this._scheduleCheck(); });
             return s;
         };
-        const rewind = () => { if (this._lastPlan) this._windsPromise = (this._windsPromise || Promise.resolve()).then(() => this._applyWindsToLastPlan()); };
+        // Winds depend only on the departure time (DEPART fetches them); other
+        // settings just recheck.
+        const rewind = () => this._scheduleCheck();
 
         const alts = [['', 'Auto']];
         for (let a = 3000; a <= 13000; a += 1000) alts.push([String(a), a.toLocaleString()]);
@@ -251,6 +256,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
             const min = parseInt(v, 10);
             this._departureTime = min ? new Date(Date.now() + min * 60000) : null;
             this._ensureWinds({ force: true });              // another forecast period
+            this._syncGrid();                                // the box shows what is used
             rewind();
         });
         box('DEPART', this._g.dep);
@@ -363,8 +369,9 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         if (!s) {
             this._startFuelGal = null;
         } else {
-            const g = /^\d+(\.\d+)?$/.test(s) ? parseFloat(s) : NaN;
-            if (!(g > 0 && g <= cap)) {
+            const t = s.replace(',', '.');                       // a comma decimal keyboard
+            const g = /^(\d+\.?\d*|\.\d+)$/.test(t) ? parseFloat(t) : NaN;
+            if (!(g >= 1 && g <= cap)) {
                 this._toast(`Start fuel: gallons between 1 and ${cap} (the tanks hold ${cap})`, 3500);
                 this._syncGrid();
                 return;
@@ -374,6 +381,17 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         RoutePlannerV2._saveStartFuel(this._startFuelGal);
         this._syncGrid();
         this._scheduleCheck();
+    }
+
+    /**
+     * START FUEL typed but not yet committed (the box commits on blur, which
+     * comes after a tap on Apply has already run): commit it now.
+     */
+    _commitStartFuel() {
+        const box = this._g?.startFuel;
+        if (!box) return;
+        const shown = this._startFuelGal != null ? String(this._startFuelGal) : '';
+        if (box.value.trim() !== shown) this._onStartFuel(box.value);
     }
 
     // Its own key: both planners rewrite flypi_planner_opts from a fixed list
@@ -406,13 +424,16 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         this._problems = [];
         this._problemsSig = null;
         this._renderProblems();
+        this._endAppend();
         await super.open(plan);
         this._syncGrid();
         this._resetUndo();
+        this._ensureWinds({ force: true });          // the forecast may have moved on since last time
     }
 
     /** Closed (app.closeRoutePlanner, or the other planner opened). */
     close() {
+        this._endAppend();
         this._closeSheet();                     // a question waiting is answered "no"
         if (this._inputEl) this._inputEl.value = '';
         this._insertIndex = null;
@@ -506,6 +527,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
      * (with CAE typed, a tap on KAIK opened CAE's sheet -- 2026-10-16).
      */
     async _onBubbleTap(idx) {
+        this._endAppend();
         const item = this._route[idx];
         await this._commitTyped();
         const i = this._route.indexOf(item);
@@ -565,6 +587,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
     }
 
     _endInsert() {
+        this._endAppend();
         this._replacing = null;
         if (this._insertIndex == null) return;
         this._insertIndex = null;
@@ -596,7 +619,8 @@ class RoutePlannerV2 extends RoutePlannerPanel {
     async _insertToken(id) {
         if (!id) return;
         let type;
-        if (id === 'DIRECT' || id === 'DCT') type = 'direct';
+        if (id === 'DCT') id = 'DIRECT';                       // _loadPlan knows DIRECT
+        if (id === 'DIRECT') type = 'direct';
         else if (/^[VTJQ]\d/.test(id)) type = 'awy';
         else type = (await this._isAirport(id)) ? 'airport' : 'fix';
         const isPoint = type !== 'awy' && type !== 'direct';
@@ -618,22 +642,57 @@ class RoutePlannerV2 extends RoutePlannerPanel {
             return;
         }
 
-        if (isPoint && !r.some((p) => p.type !== 'awy' && p.type !== 'direct')) {
-            r.push({ id, type: 'dep' });                          // first point: departure
-        } else if (isPoint && destIdx < 0 && this._insertIndex == null) {
-            r.push({ id, type: 'dest' });                         // then the destination
-        } else if (isPoint && this._cursorAtEnd && this._insertIndex == null) {
-            // Typed after the destination: it becomes the new destination.
-            const old = r[destIdx];
-            old.type = (await this._isAirport(old.id)) ? 'airport' : 'fix';
+        const isPt = (p) => p.type !== 'awy' && p.type !== 'direct';
+        // Building a route in a field with no destination (typed or pasted
+        // "KLKR CAE GREAT KAIK"): everything goes on the end and the newest point
+        // is the destination. Before, the second point became the destination and
+        // the rest went in front of it: KLKR GREAT KAIK CAE (review, 2026-10-16).
+        // Until the pilot taps elsewhere (_endAppend).
+        if (this._insertIndex == null && (this._appendMode || destIdx < 0)) {
+            this._appendMode = true;
+            if (isPoint && !r.some(isPt)) {
+                r.push({ id, type: 'dep' });
+            } else if (isPoint) {
+                if (destIdx >= 0) r[destIdx].type = (await this._isAirport(r[destIdx].id)) ? 'airport' : 'fix';
+                r.push({ id, type: 'dest' });
+            } else {
+                r.push({ id, type });
+            }
+            this._render();
+            return;
+        }
+        if (isPoint && this._cursorAtEnd && this._insertIndex == null) {
+            // Typed after the destination: it becomes the new destination (a
+            // diversion). The old destination's approach and missed approach go.
+            const d = this._dropProcedure(destIdx);
+            r[d].type = (await this._isAirport(r[d].id)) ? 'airport' : 'fix';
             r.push({ id, type: 'dest' });
         } else {
             const at = this._cursorIndex();
+            // The same point as the bubble beside it: a zero-length leg (a pasted
+            // route repeating the departure and destination) -- skipped.
+            const same = (p) => p && isPt(p) && p.id === id;
+            if (isPoint && (same(r[at - 1]) || same(r[at]))) { this._render(); return; }
             r.splice(at, 0, { id, type });
             if (this._insertIndex != null) this._insertIndex = at + 1;   // keep typing in order
         }
         this._render();
     }
+
+    /**
+     * Remove the approach/arrival fixes of the destination at index d (those just
+     * before it and the missed approach after it). Returns the destination's new index.
+     */
+    _dropProcedure(d) {
+        const r = this._route;
+        if (d < 0) return d;
+        for (let k = r.length - 1; k > d; k--) if (r[k].proc) r.splice(k, 1);
+        while (d > 0 && r[d - 1].proc) { r.splice(d - 1, 1); d--; }
+        return d;
+    }
+
+    /** Stop building at the end of the field (see _insertToken). */
+    _endAppend() { this._appendMode = false; }
 
     async _isAirport(id) {
         if (!this._nasrDb) return /^K[A-Z0-9]{3}$/.test(id);
@@ -785,6 +844,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
     }
 
     async _onUndoTap() {
+        this._endAppend();
         if (this._inputEl?.value) { this._inputEl.value = ''; this._syncUndoBtn(); return; }
         await this._typing;
         if (this._undoHold > 0 || !this._undo.length) return;
@@ -803,7 +863,9 @@ class RoutePlannerV2 extends RoutePlannerPanel {
      * route without it (review, 2026-10-16).
      */
     async _onSaveTap() {
+        this._commitStartFuel();
         await this._commitTyped();
+        if (this._windsLoading) await this._windsLoadP;
         const c = await this._compute();
         if (!c?.waypoints || c.waypoints.length < 2) { this._toast('Route not complete — nothing to save'); return; }
         try {
@@ -828,28 +890,50 @@ class RoutePlannerV2 extends RoutePlannerPanel {
      * A failed try is not repeated for WINDS_RETRY_MS (in the air the proxy
      * attempt waits out its 8 s timeout every time).
      */
-    _ensureWinds({ force = false } = {}) {
+    /**
+     * Load the winds; returns the load running (Apply and Save wait for it, and
+     * the base _doApply waits for _windsPromise). Fetched again when: forced (a
+     * new departure, open), none yet, or their FOR USE period has ended -- winds
+     * for "Now" were fetched once and kept for the whole flight (review, 2026-10-16).
+     * Not forced: at most once per WINDS_RETRY_MS.
+     */
+    /** The winds fetch: fetchWindsDetailed (the forecast period for the departure, and which it is). */
+    _windsFn() {
         const P = typeof FlyTabPlanning !== 'undefined' ? FlyTabPlanning : null;
-        // fetchWindsDetailed: the forecast period for the departure, and which it is.
-        const fn = P?.fetchWindsDetailed || (P?.fetchWinds ? async (t) => ({ winds: await P.fetchWinds(t) }) : null);
-        if (!fn || this._windsLoading) return;              // a load running re-checks the departure when done
-        if (!force && (this._lastWinds || Date.now() - (this._windsTriedAt || 0) < RoutePlannerV2.WINDS_RETRY_MS)) return;
+        return P?.fetchWindsDetailed || (P?.fetchWinds ? async (t) => ({ winds: await P.fetchWinds(t) }) : null);
+    }
+
+    _ensureWinds({ force = false } = {}) {
+        const fn = this._windsFn();
+        if (!fn) return Promise.resolve();
+        if (this._windsLoading) return this._windsLoadP;       // re-checks the departure when done
+        const at = Math.max(this._departureTime ? this._departureTime.getTime() : 0, Date.now());
+        const ended = this._windsInfo?.useTo instanceof Date && at >= this._windsInfo.useTo.getTime();
+        if (!force && ((this._lastWinds && !ended) || Date.now() - (this._windsTriedAt || 0) < RoutePlannerV2.WINDS_RETRY_MS)) return Promise.resolve();
         this._windsLoading = true;
         this._windsTriedAt = Date.now();
         const forDep = this._departureTime ? this._departureTime.getTime() : null;
-        Promise.resolve()
+        this._windsLoadP = Promise.resolve()
             .then(() => fn(this._departureTime ?? new Date()))
             .catch(() => null)
             .then((r) => {
                 this._windsLoading = false;
                 const nowDep = this._departureTime ? this._departureTime.getTime() : null;
-                if (nowDep !== forDep) { this._ensureWinds({ force: true }); return; }   // changed meanwhile
-                if (!r) return;
+                if (nowDep !== forDep) return this._ensureWinds({ force: true });   // changed meanwhile
+                if (!r) return undefined;
                 this._windsInfo = r;
                 // No forecast for this time: calm air, not another period's winds.
                 this._lastWinds = r.winds || null;
                 this._scheduleCheck();
+                return undefined;
             });
+        this._windsPromise = this._windsLoadP;
+        return this._windsLoadP;
+    }
+
+    /** The base loads winds for a stored plan; here the winds follow the departure (and say which). */
+    _applyWindsToLastPlan() {
+        return this._ensureWinds({ force: true });
     }
 
     /** "FD 17/18Z" (the forecast's valid time, UTC), "FIS-B", or ''. */
@@ -884,11 +968,25 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         this._insertIndex = null;
         this._replacing = null;
         this._cursorAtEnd = false;
+        this._endAppend();
+        // A new approach into the destination replaces the one loaded before:
+        // both were flown (RNAV 07, then ILS 25 after a runway change -- review, 2026-10-16).
+        const icao = String(detail?.icao || '');
+        const ids = new Set([icao, icao.length <= 3 ? 'K' + icao : icao, icao.length === 4 && icao[0] === 'K' ? icao.slice(1) : icao]);
+        const d = this._destPillIndex();
+        let replaced = false;
+        if (d >= 0 && ids.has(this._route[d].id)) {
+            const before = this._route.length;
+            this._dropProcedure(d);
+            replaced = this._route.length !== before;
+        }
         super.insertApproach(detail);
         this._inputEl?.blur();
+        if (replaced) this._toast('Approach replaced');
     }
 
     _startInsert(at) {
+        this._endAppend();
         this._replacing = null;
         this._insertIndex = at;
         this._render();
@@ -902,6 +1000,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
      */
     _startReplace(i) {
         if (!this._route[i]) return;
+        this._endAppend();
         this._insertIndex = i;
         this._replacing = this._route[i];
         this._render();
@@ -948,6 +1047,11 @@ class RoutePlannerV2 extends RoutePlannerPanel {
     }
 
     _removeAt(i) {
+        if (this._route[i]?.type === 'dest') {
+            // Its missed approach goes with it (the last missed-approach fix
+            // became the destination -- review, 2026-10-16).
+            for (let k = this._route.length - 1; k > i; k--) if (this._route[k].proc) this._route.splice(k, 1);
+        }
         const removed = this._route.splice(i, 1)[0];
         const pts = () => this._route.map((p, k) => ({ p, k })).filter(({ p }) => p.type !== 'awy' && p.type !== 'direct');
         if (removed?.type === 'dep' && pts().length) pts()[0].p.type = 'dep';
@@ -965,6 +1069,12 @@ class RoutePlannerV2 extends RoutePlannerPanel {
             return;
         }
         if (f.apply === 'addFuelStop') { await this._addFuelStop(); return; }
+        if (f.apply === 'clearAvoid') {
+            this._avoidList = [];
+            this._saveOpts();
+            this._scheduleCheck();
+            return;
+        }
         // These fixes name bubbles by position: only on the route they were
         // worked out for. "Go direct" after a bubble was removed deleted the
         // next fix instead of the airway (review, 2026-10-16).
@@ -1247,6 +1357,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
     }
 
     async _loadClearance({ limit = '', route = '' }) {
+        this._endAppend();
         await this._commitTyped();
         const SKIP = new Set(['DIRECT', 'DCT', 'THEN', 'AS', 'FILED', 'RADAR', 'VECTORS', 'RV', 'TO', 'VIA',
             'CLEARED', 'MAINTAIN', 'EXPECT', 'CLIMB', 'DESCEND', 'AND', 'FLY', 'HEADING', 'THE']);
@@ -1399,6 +1510,13 @@ class RoutePlannerV2 extends RoutePlannerPanel {
                 message: this._planner ? 'Fuel and time could not be worked out — not checked' : 'Route engine still loading — fuel and time not checked' });
             problems.sort((x, y) => (x.severity === y.severity ? 0 : x.severity === 'red' ? -1 : 1));
         }
+        // An avoid list (set in the current planner, shared settings) steers Plan
+        // route here too, where it couldn't be seen or cleared (review, 2026-10-16).
+        if (this._avoidList?.length) {
+            problems.push({ severity: 'amber', code: 'avoid-list', pillIndexes: [],
+                message: `Plan route avoids ${this._avoidList.join(', ')}`,
+                fixes: [{ label: 'Stop avoiding', apply: 'clearAvoid', arg: {} }] });
+        }
         // Winds tried and none for this departure: say so (calm-air figures).
         if (this._windsInfo && !this._lastWinds && hasEnds) {
             const w = this._windsInfo;
@@ -1540,8 +1658,18 @@ class RoutePlannerV2 extends RoutePlannerPanel {
     }
 
     async _applyOnce() {
+        this._endAppend();
+        this._commitStartFuel();
         await this._commitTyped();
-        const problems = await this._runChecks();
+        if (this._windsLoading) await this._windsLoadP;      // a new departure's winds
+        // Checked on the route that is applied: if it changed during the check
+        // (a sheet action, Plan route finishing), check again (review, 2026-10-16).
+        let problems = [];
+        for (let tries = 0; tries < 3; tries++) {
+            const sig = JSON.stringify(this._route);
+            problems = await this._runChecks();
+            if (sig === JSON.stringify(this._route)) break;
+        }
         const red = problems.filter((p) => p.severity === 'red');
         if (red.length) {
             const answer = await this._askApplyAnyway(red);

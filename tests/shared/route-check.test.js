@@ -109,6 +109,13 @@ describe('RouteCheck: airways', () => {
         expect(out[3]).toMatchObject({ type: 'fix', airway: 'V37' });
     });
 
+    it('two airways that do not meet: says so (no fixes to offer)', async () => {
+        const ps = await run('KLKR LAL V157 T437 CAYCE KAIK', { settings: { routingMode: 'any' } });
+        const j = ps.find((p) => p.code === 'airway-junction');
+        expect(j.message).toBe('V157 and T437 do not meet — put a fix between them');
+        expect(j.fixes).toEqual([]);
+    });
+
     it('a gap between two fixes inside a tagged airway run is red too (review, 2026-10-16)', async () => {
         // Saved routes load as one airway bubble followed by tagged fixes: KLKR URIVE V157 LAL DHP KTMB.
         const ps = await RouteCheck.run({ pills: [

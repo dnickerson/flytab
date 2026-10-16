@@ -146,6 +146,39 @@ describe('fetchWindsDetailed: all three periods, the right one for the departure
         expect(tomorrow.reason).toBe('unavailable');
     });
 
+    it('a partial fetch (only the 6-hour came back): the cached period that covers tomorrow is used (review, 2026-10-16)', async () => {
+        online();
+        await fetchWindsDetailed(new Date());                    // caches all three
+        globalThis.fetch = vi.fn(async (url) => (/fcst=06/.test(url) ? { ok: true, text: async () => FD['06'] } : (() => { throw new Error('timeout'); })()));
+        const r = await fetchWindsDetailed(new Date('2026-10-17T13:00:00Z'));
+        expect([r.source, r.cycle]).toEqual(['cache', '24']);
+    });
+
+    it('a departure time already past (a delay): the current forecast, not "no winds" (review, 2026-10-16)', async () => {
+        online();
+        const r = await fetchWindsDetailed(new Date('2026-10-16T14:00:00Z'));     // 6 h ago
+        expect([r.source, r.cycle]).toEqual(['fd', '06']);
+        const old = await fetchWindsDetailed(new Date('2026-10-12T14:00:00Z'));   // days ago
+        expect(old.cycle).toBe('06');
+    });
+
+    it('offline with only yesterday\'s cache: "unavailable", not "no forecast yet" ending yesterday', async () => {
+        online();
+        await fetchWindsDetailed(new Date());
+        vi.setSystemTime(new Date('2026-10-18T15:00:00Z'));      // a day later, all periods ended
+        globalThis.fetch = vi.fn(async () => { throw new Error('offline'); });
+        const r = await fetchWindsDetailed(new Date('2026-10-18T16:00:00Z'));
+        expect(r.winds).toBeNull();
+        expect(r.reason).toBe('unavailable');
+    });
+
+    it('only the 24-hour period fetched, departure now, nothing cached: not "beyond" (the forecast starts later)', async () => {
+        globalThis.fetch = vi.fn(async (url) => (/fcst=24/.test(url) ? { ok: true, text: async () => FD['24'] } : (() => { throw new Error('timeout'); })()));
+        const r = await fetchWindsDetailed(new Date());
+        expect(r.winds).toBeNull();
+        expect(r.reason).toBe('unavailable');
+    });
+
     it('a cache entry from before this change (no header) is not used', async () => {
         store['flypi_winds_cache_12'] = JSON.stringify({ ts: Date.now(), winds: { OLD: {} } });
         globalThis.fetch = vi.fn(async () => { throw new Error('offline'); });
