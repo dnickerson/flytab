@@ -392,13 +392,16 @@ export class RoutePlanner {
      * @param {number} [opts.cruiseAltFt]      override plan.cruiseAltFt
      * @param {Record<string,Record<number,{dir:number,spd:number,temp?:number,variable?:boolean}>>} [opts.winds]
      * @param {Record<string,[number,number]>} [opts.fdLocs]  FD station coords override (for testing)
+     * @param {number} [opts.startFuelGal]     fuel at departure; missing, <= 0 or over capacity: full tanks.
+     *                                         Fuel stops still fill the tanks.
      * @returns {import('../types/flight-plan.js').FlightPlan}
      */
     recomputeLegs(plan, profileOverride, opts = {}) {
         const profile = profileOverride || RV9A_FALLBACK;
         const wps = plan.waypoints;
         const legs = [];
-        let fuelRem = profile.fuel_capacity_gal;
+        const cap = profile.fuel_capacity_gal;
+        let fuelRem = (Number.isFinite(opts.startFuelGal) && opts.startFuelGal > 0) ? Math.min(opts.startFuelGal, cap) : cap;
         const pctPower = (opts.pctPower ?? 65) / 100;
         let etaMs = (opts.departureTime instanceof Date ? opts.departureTime.getTime() : Date.now());
         // A fuel stop: full tanks for the next leg, and time on the ground before

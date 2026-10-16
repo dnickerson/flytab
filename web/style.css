@@ -12195,7 +12195,7 @@ body.route-editing-mode .route-table-sheet {
 .rp2-problem-red   { color: var(--color-danger-on-light);  min-height: var(--touch-min, 56px); display: flex; align-items: center; }
 .rp2-problem-amber { color: var(--color-caution-on-light); min-height: var(--touch-min, 56px); display: flex; align-items: center; }
 
-.rp2-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.rp2-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
 .rp2-cell {
     display: flex; flex-direction: column; justify-content: center; min-height: var(--touch-min, 56px);
     border: 1px solid var(--border-strong); border-radius: 6px; background: var(--bg-surface); padding: 2px 8px;
@@ -12205,6 +12205,10 @@ body.route-editing-mode .route-table-sheet {
     border: none; background: transparent; padding: 0; font-family: var(--font-instrument);
     font-weight: 900; font-size: var(--text-sm); color: var(--text-primary); min-height: 28px;
 }
+/* Equal columns: a select or text box must not size its column (the START FUEL
+   box's default ~20-character width pushed DEPART past the panel edge). */
+.rp2-sel { width: 100%; min-width: 0; box-sizing: border-box; }
+.rp2-num::placeholder { color: var(--text-muted); }
 
 .rp2-stats { display: grid; grid-template-columns: repeat(5, 1fr); border: 1px solid var(--border); border-radius: 6px; background: var(--bg-surface); }
 .rp2-stats:empty { display: none; }

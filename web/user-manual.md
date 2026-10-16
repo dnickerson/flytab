@@ -562,7 +562,8 @@ To edit the route, expand the strip and tap **EDIT**. From there you can:
   - The stop is put where you'd fly it: land, refuel, and rejoin the airway at the fix nearest the airport.
   - If the airport is well off the airway, the route goes direct from the airway's entry to the stop and on to its exit instead.
   - "Self-serve only" is no longer applied: the FAA data has no self-serve information, so it used to rule out every airport.
-- **Settings are always on screen:** Altitude, Power, Routing, Depart, Reserve, Fuel stop. Tap one to change it.
+- **Settings are always on screen:** Altitude, Power, Routing, Depart, Start fuel, Reserve, Fuel stop. Tap one to change it.
+- **START FUEL** is the fuel on board at departure, in gallons: tap it and type the amount (empty = full tanks). The first flight's fuel left, the reserve check (*Lands at KCRG with 5.4 gal (reserve 10)*) and the flight rows use it; a fuel stop still fills the tanks. It is for planning only: in flight, fuel remaining on the route table still comes from your tic-mark measurement and the fuel flow. More than the tanks hold is refused.
 - **Airways are flown along the airway.** After Apply, `GREAT T437 CAYCE` becomes GREAT, BLOTS, BEFTY, CAYCE in the route table and on the map.
 - REV, Clear, Plan route, Routes (your saved plans), Save and Apply work as in the current planner.
 - **After Apply** the planner says *Route applied: KLKR → KTMB (34 waypoints)* and the map zooms out to show the whole route, so you can see the new magenta line wherever the change was. Own-ship follow is held (✋ on the auto-pan button) until you tap that button or close the planner.

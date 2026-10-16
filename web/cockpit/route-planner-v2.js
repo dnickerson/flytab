@@ -27,6 +27,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         this._undoSnap = null;                  // the route as last shown
         this._undoHold = 0;                     // > 0: a multi-step action, recorded as one undo step
         this._fuelSkipKey = null;               // _fuelKey() when the pilot skipped the fuel stop
+        this._startFuelGal = RoutePlannerV2._loadStartFuel();   // START FUEL (gal); null = full tanks
         this._problems = [];
         this._computed = null;
         this._checkEpoch = 0;
@@ -252,6 +253,21 @@ class RoutePlannerV2 extends RoutePlannerPanel {
             rewind();
         });
         box('DEPART', this._g.dep);
+        // START FUEL: gallons at departure, typed (Dana, 2026-10-16). Planning
+        // only -- in flight the route table's fuel comes from the tic-mark start
+        // and fuel flow, as before. Empty = full tanks.
+        const sf = document.createElement('input');
+        sf.className = 'rp2-sel rp2-num';
+        sf.type = 'text';
+        sf.setAttribute('inputmode', 'decimal');
+        sf.setAttribute('autocomplete', 'off');
+        sf.setAttribute('enterkeyhint', 'done');
+        sf.value = this._startFuelGal != null ? String(this._startFuelGal) : '';
+        sf.placeholder = `Full (${this._tankCapacityGal()})`;
+        sf.addEventListener('change', () => this._onStartFuel(sf.value));
+        sf.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); sf.blur(); } });
+        this._g.startFuel = sf;
+        box('START FUEL', sf);
         const rsv = [];
         for (let g = 5; g <= 20; g++) rsv.push([String(g), `${g} gal`]);
         this._g.rsv = mkSel(rsv, String(Math.min(20, Math.max(5, this._reserveGal || 10))), (v) => { this._reserveGal = parseInt(v, 10); });
@@ -263,6 +279,8 @@ class RoutePlannerV2 extends RoutePlannerPanel {
 
     _syncGrid() {
         if (!this._g) return;
+        this._g.startFuel.value = this._startFuelGal != null ? String(this._startFuelGal) : '';
+        this._g.startFuel.placeholder = `Full (${this._tankCapacityGal()})`;
         // DEPART: Now, or the saved departure time as a clock time.
         const dep = this._g.dep;
         dep.querySelector('option[value="at"]')?.remove();
@@ -280,6 +298,51 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         this._g.mode.value = this._routingMode;
         this._g.rsv.value = String(Math.min(20, Math.max(5, this._reserveGal || 10)));
         this._g.fuel.value = String(this._maxLegHrs);
+    }
+
+    /** Usable fuel the tanks hold: the planning profile's, as the route engine uses it. */
+    _tankCapacityGal() {
+        try {
+            const c = this._profileForPower(this._pctPower)?.fuel_capacity_gal;
+            if (Number.isFinite(c) && c > 0) return c;
+        } catch { /* no aircraft config yet */ }
+        return RoutePlannerV2.DEFAULT_TANK_GAL;
+    }
+
+    /** START FUEL typed: gallons, empty = full tanks; anything else is refused and the box shows what is used. */
+    _onStartFuel(text) {
+        const s = String(text ?? '').trim();
+        const cap = this._tankCapacityGal();
+        if (!s) {
+            this._startFuelGal = null;
+        } else {
+            const g = /^\d+(\.\d+)?$/.test(s) ? parseFloat(s) : NaN;
+            if (!(g > 0 && g <= cap)) {
+                this._toast(`Start fuel: gallons between 1 and ${cap} (the tanks hold ${cap})`, 3500);
+                this._syncGrid();
+                return;
+            }
+            this._startFuelGal = g;
+        }
+        RoutePlannerV2._saveStartFuel(this._startFuelGal);
+        this._syncGrid();
+        this._scheduleCheck();
+    }
+
+    // Its own key: both planners rewrite flypi_planner_opts from a fixed list
+    // of fields, which would drop this one.
+    static _loadStartFuel() {
+        try {
+            const v = JSON.parse(localStorage.getItem(RoutePlannerV2.START_FUEL_KEY) || 'null');
+            return Number.isFinite(v) && v > 0 ? v : null;
+        } catch { return null; }
+    }
+
+    static _saveStartFuel(gal) {
+        try {
+            if (gal == null) localStorage.removeItem(RoutePlannerV2.START_FUEL_KEY);
+            else localStorage.setItem(RoutePlannerV2.START_FUEL_KEY, JSON.stringify(gal));
+        } catch { /* storage full or unavailable: kept for this session */ }
     }
 
     /** Load a plan and show it (the base open(), then this screen's state). */
@@ -1233,6 +1296,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
                 pctPower: this._pctPower,
                 cruiseAltFt: this._cruiseAltFt ?? undefined,
                 winds: this._lastWinds ?? undefined,
+                startFuelGal: this._startFuelGal ?? undefined,
             });
         } catch (err) {
             console.warn('[RoutePlannerV2] compute failed:', err);
@@ -1494,4 +1558,6 @@ RoutePlannerV2.KEEP_AIRWAY_NM = 10;
 RoutePlannerV2.UNDO_MAX = 50;              // undo steps kept
 RoutePlannerV2.ALT_MIN_FT = 500;            // per-fix altitude: refused outside this
 RoutePlannerV2.WINDS_RETRY_MS = 2 * 60 * 1000;   // after a failed winds fetch
+RoutePlannerV2.START_FUEL_KEY = 'flypi_planner_start_fuel';
+RoutePlannerV2.DEFAULT_TANK_GAL = 36;       // the route engine's RV-9A fallback capacity
 RoutePlannerV2.ALT_MAX_FT = 18000;

@@ -1008,3 +1008,77 @@ describe('Route Planner (preview): critical review fixes, fuel and Apply (2026-1
         expect(p._statsStripEl.textContent).toMatch(/WIND—/);
     });
 });
+
+describe('Route Planner (preview): START FUEL (Dana, 2026-10-16)', () => {
+    beforeEach(() => { localStorage.clear(); globalThis.app = { showToast: vi.fn(() => ({ remove() {} })), closeRoutePlanner: vi.fn() }; });
+    const R = () => [{ id: 'KLKR', type: 'dep' }, { id: 'CAE', type: 'fix' }, { id: 'KAIK', type: 'dest' }];
+    const cellOf = (p, label) => [...p._el.querySelectorAll('.rp2-cell')].find((c) => c.querySelector('.rp2-k').textContent === label);
+    const enter = (p, v) => { const i = p._g.startFuel; i.value = v; i.dispatchEvent(new Event('change')); };
+
+    it('a START FUEL box in the grid, gallons typed in; empty means full tanks', () => {
+        const p = make(R());
+        const cell = cellOf(p, 'START FUEL');
+        expect(cell).toBeTruthy();
+        const input = cell.querySelector('input');
+        expect(input).toBe(p._g.startFuel);
+        expect(input.getAttribute('inputmode')).toBe('decimal');
+        expect(input.value).toBe('');
+        expect(input.placeholder).toBe('Full (36)');
+        expect(p._startFuelGal).toBeNull();
+        const labels = [...p._el.querySelectorAll('.rp2-cell .rp2-k')].map((k) => k.textContent);
+        expect(labels).toEqual(['ALTITUDE', 'POWER', 'ROUTING', 'DEPART', 'START FUEL', 'RESERVE', 'FUEL STOP']);
+    });
+
+    it('typed gallons are used and kept (own key: the other planner rewrites the shared settings)', () => {
+        const p = make(R());
+        enter(p, '25.5');
+        expect(p._startFuelGal).toBe(25.5);
+        expect(p._g.startFuel.value).toBe('25.5');
+        expect(JSON.parse(localStorage.getItem('flypi_planner_start_fuel'))).toBe(25.5);
+        p._saveOpts();                                          // the shared settings saved again
+        expect(JSON.parse(localStorage.getItem('flypi_planner_start_fuel'))).toBe(25.5);
+        const q = make(R());
+        expect(q._startFuelGal).toBe(25.5);
+        expect(q._g.startFuel.value).toBe('25.5');
+        enter(q, '');
+        expect(q._startFuelGal).toBeNull();
+        expect(localStorage.getItem('flypi_planner_start_fuel')).toBeNull();
+    });
+
+    it('not a number, zero, or more than the tanks hold: refused, the box shows what is used', () => {
+        const p = make(R());
+        enter(p, '20');
+        const t = vi.spyOn(p, '_toast');
+        for (const bad of ['abc', '0', '-5', '40']) {
+            enter(p, bad);
+            expect(p._startFuelGal).toBe(20);
+            expect(p._g.startFuel.value).toBe('20');
+        }
+        expect(t).toHaveBeenCalledTimes(4);
+        expect(t.mock.calls[3][0]).toMatch(/36/);
+    });
+
+    it('the plan uses it (checks, figures, Apply)', async () => {
+        const p = make(R());
+        enter(p, '12');
+        const calls = [];
+        p._planner = { recomputeLegs: vi.fn((plan, prof, opts) => { calls.push(opts); return { waypoints: plan.waypoints, legs: [], summary: null }; }) };
+        p._profileForPower = () => ({ fuel_capacity_gal: 36 });
+        await p._compute();
+        expect(calls.at(-1).startFuelGal).toBe(12);
+        const src = read('web/cockpit/route-planner-panel.js');
+        const apply = src.slice(src.indexOf('    async _doApply() {'), src.indexOf('    async _saveCurrentTrip('));
+        expect(apply).toMatch(/startFuelGal:\s*this\._startFuelGal \?\? undefined/);
+    });
+
+    it('a low start fuel shows as the first landing below the reserve', async () => {
+        const c = {
+            legs: [{ timeHrs: 1.5, fuelGal: 14, fuelRemGal: 6 }], waypoints: [{ id: 'KLKR' }, { id: 'KAIK', isDest: true }],
+            summary: { totalEteHrs: 1.5, totalDistNm: 200, totalFuelGal: 14, fuelRemGal: 6 },
+        };
+        const p = make(R());
+        p._compute = async () => c;
+        const problems = await p._runChecks();
+        expect(problems.some((x) => x.code === 'below-reserve')).toBe(true);
+    });
+});

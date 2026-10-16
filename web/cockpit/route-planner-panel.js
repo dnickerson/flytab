@@ -3154,6 +3154,8 @@ class RoutePlannerPanel {
                     pctPower:    this._pctPower,
                     cruiseAltFt: this._cruiseAltFt ?? undefined,
                     winds:       this._lastWinds ?? undefined,
+                    // The preview's START FUEL (planning only; this planner has none: full tanks).
+                    startFuelGal: this._startFuelGal ?? undefined,
                 };
                 // destination: the same fallback Plan uses when the isDest marker is stale.
                 const destination = this._route[this._destPillIndex()]?.id;

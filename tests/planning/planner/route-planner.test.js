@@ -512,3 +512,32 @@ describe('recomputeLegs — a fuel stop refuels and takes ground time (2026-10-1
     });
 });
 
+
+describe('recomputeLegs — start fuel (Dana, 2026-10-16)', () => {
+    const wps = [
+        { id: 'KLKR', type: 'APT', lat: 34.723, lon: -80.855 },
+        { id: 'KCRG', type: 'APT', lat: 30.336, lon: -81.515, fuelStop: true },
+        { id: 'KTMB', type: 'APT', lat: 25.648, lon: -80.433, isDest: true },
+    ];
+    const dep = new Date('2026-10-16T14:00:00Z');
+    const plan = { departure: 'KLKR', destination: 'KTMB', cruiseAltFt: 6500, waypoints: wps };
+
+    it('the first flight starts with startFuelGal; a fuel stop still fills the tanks', () => {
+        const p = new RoutePlanner({ aero: mockAero, plans: mockPlans });
+        const full = p.recomputeLegs(plan, undefined, { departureTime: dep });
+        const r = p.recomputeLegs(plan, undefined, { departureTime: dep, startFuelGal: 25 });
+        expect(r.legs[0].fuelRemGal).toBeCloseTo(25 - r.legs[0].fuelGal, 6);
+        expect(r.legs[1].fuelRemGal).toBeCloseTo(full.legs[1].fuelRemGal, 6);       // after the stop: as with full tanks
+        expect(r.legs.map((l) => l.fuelGal)).toEqual(full.legs.map((l) => l.fuelGal)); // burn and times unchanged
+        expect(r.legs.map((l) => l.timeHrs)).toEqual(full.legs.map((l) => l.timeHrs));
+    });
+
+    it('missing, zero or more than the tanks hold: full tanks / capacity', () => {
+        const p = new RoutePlanner({ aero: mockAero, plans: mockPlans });
+        const full = p.recomputeLegs(plan, undefined, { departureTime: dep });
+        for (const s of [undefined, null, 0, -3, NaN]) {
+            expect(p.recomputeLegs(plan, undefined, { departureTime: dep, startFuelGal: s }).legs[0].fuelRemGal).toBeCloseTo(full.legs[0].fuelRemGal, 6);
+        }
+        expect(p.recomputeLegs(plan, undefined, { departureTime: dep, startFuelGal: 99 }).legs[0].fuelRemGal).toBeCloseTo(full.legs[0].fuelRemGal, 6);
+    });
+});
