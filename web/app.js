@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v11.29';
+const FLYTAB_VERSION = 'v11.30';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 // Kept in memory and saved at most every FLUSH_MS (errors at once). Every log()
@@ -1087,6 +1087,18 @@ class FlyTabApp {
             this.routePlannerPanel.init();
         }
 
+        // Route Planner (preview): the redesign, beside the current planner
+        // (MORE → Route Planner (preview)). Shares the current planner's engine.
+        if (typeof RoutePlannerV2 !== 'undefined' && this.routePlannerPanel) {
+            this.routePlannerPreview = new RoutePlannerV2(
+                document.getElementById('routePlannerPreview'),
+                nasrDb,
+                this._planningAdapters,
+                this.routePlannerPanel,
+            );
+            this.routePlannerPreview.init();
+        }
+
         // Device status (headless — only shown on demand)
         this.deviceStatus = new DeviceStatus(
             document.createElement('div'), this.stratuxClient, this.enginePanel
@@ -1315,6 +1327,7 @@ class FlyTabApp {
     }
 
     openRoutePlanner(plan) {
+        document.getElementById('cockpitContainer')?.classList.remove('route-preview');
         document.getElementById('cockpitContainer')?.classList.add('route-editing');
         document.body.classList.add('route-editing-mode');
         this._updateOrientation();
@@ -1352,10 +1365,22 @@ class FlyTabApp {
         }
     }
 
+    /** MORE → Route Planner (preview): the redesigned planner, same route and settings. */
+    openRoutePlannerPreview(plan) {
+        if (!this.routePlannerPreview) { this.openRoutePlanner(plan); return; }
+        document.getElementById('cockpitContainer')?.classList.add('route-editing', 'route-preview');
+        document.body.classList.add('route-editing-mode');
+        this._updateOrientation();
+        this.routePlannerPreview.open(plan || this._currentTrip);
+        setTimeout(() => this.cockpitMap?.map?.invalidateSize(), 300);
+    }
+
     closeRoutePlanner() {
-        document.getElementById('cockpitContainer')?.classList.remove('route-editing', 'landscape');
+        const preview = document.getElementById('cockpitContainer')?.classList.contains('route-preview');
+        document.getElementById('cockpitContainer')?.classList.remove('route-editing', 'route-preview', 'landscape');
         document.body.classList.remove('route-editing-mode');
         this.routeTable?.refreshIfStale();      // the sheet is shown again (PR B review #7)
+        if (preview) this.routePlannerPreview?.close();
         this.routePlannerPanel?.close();
         setTimeout(() => this.cockpitMap?.map?.invalidateSize(), 300);
     }
