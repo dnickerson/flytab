@@ -74,3 +74,24 @@ describe('after the upgrade, before the first sync: "expiry not recorded", not "
     });
 });
 
+
+describe('the day before a new cycle', () => {
+    afterEach(() => { vi.useRealTimers(); localStorage.clear(); delete globalThis.fetch; document.body.innerHTML = ''; });
+    it('one reminder with the local changeover time, instead of "expires in 0d"', async () => {
+        vi.useFakeTimers({ now: new Date('2026-10-28T20:00:00Z') });          // 16:00 EDT, 13 h before
+        localStorage.setItem('flytab_device_manifest', JSON.stringify({
+            cifp: { expiration_date: '2026-10-29' }, plates: { expiration_date: '2026-10-29' }, afd: { expiration_date: '2026-12-24' } }));
+        globalThis.fetch = vi.fn(async (u) => ({ ok: true, json: async () => (String(u).includes('cifp') ? { cycle_code: '261001' }
+            : { effective_date: '2026-10-01', expiration_date: '2026-10-29' }) }));
+        await FlyTabApp.prototype._checkDataReadiness.call({ dataStatus: null });
+        const t = document.getElementById('dataReadinessBanner').textContent;
+        expect(t.match(/New FAA cycle at/g)).toHaveLength(1);
+        expect(t).toMatch(new RegExp(`New FAA cycle at ${FaaCurrency.changeoverLocal('2026-10-29')} tomorrow \\(0901Z\\) — sync on home WiFi before flying`));
+        expect(t).not.toMatch(/expires in 0d/);
+    });
+    it('changeoverLocal is the device\'s local time of 0901Z', () => {
+        const d = new Date('2026-10-29T09:01:00Z');
+        const hhmm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+        expect(FaaCurrency.changeoverLocal('2026-10-29')).toBe(hhmm);
+    });
+});

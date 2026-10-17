@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v11.58';
+const FLYTAB_VERSION = 'v11.59';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 // Kept in memory and saved at most every FLUSH_MS (errors at once). Every log()
@@ -2379,6 +2379,11 @@ class FlyTabApp {
             if (p.key === 'nasr' && !nasr) continue;
             if (p.state === 'expired') {
                 issues.push({ severity: 'critical', text: `${p.label} EXPIRED (${FaaCurrency.describe(p)})` });
+            } else if (p.state === 'expiring' && p.expiresAt - Date.now() < 24 * 3600 * 1000) {
+                if (!issues.some((i) => i.newCycle)) {
+                    issues.push({ severity: 'warn', newCycle: true,
+                        text: `New FAA cycle at ${FaaCurrency.changeoverLocal(p.expiration)} tomorrow (0901Z) — sync on home WiFi before flying` });
+                }
             } else if (p.state === 'expiring') {
                 issues.push({ severity: 'warn', text: `${p.label} expires in ${p.daysLeft}d` });
             } else if (p.state === 'stale') {

@@ -19,6 +19,12 @@ const FaaCurrency = {
         return Number.isFinite(t) ? t : null;
     },
 
+    /** Local HH:MM of the 0901Z changeover on this expiration date (05:01 EDT, 04:01 EST). */
+    changeoverLocal(expiration) {
+        const d = new Date(this.expiresAt(expiration));
+        return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    },
+
     /** { state: current|expiring|expired|unknown, daysLeft, expiresAt } */
     status(expiration, now = Date.now()) {
         const expiresAt = this.expiresAt(expiration);
