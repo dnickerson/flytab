@@ -130,12 +130,24 @@ audit is written, a few minutes later.
 ### 3. Temporary FAA files (server)
 
 **Evidence at download.** When a source passes `download_file`'s check, the
-product's builder writes what the audit needs into the product's existing
-cycle info:
-- `cifp_cycle_info.json`: `source_header_cycle`, `source_sha256`;
-- `nasr/cycle_info.json`: `source_edition` (e.g. `01_Oct_2026`), `source_sha256`.
+product's builder writes a server-only `source.json` in the product folder.
+It moves with the product at the swap and is never shipped:
 
-`audit_cifp` and `audit_nasr` check these fields instead of opening `tmp/`.
+- `cifp.zip` contains only the bundle and the cycle info;
+- `nasr.zip` contains named files;
+- `checksums.json` lists named files.
+
+Contents:
+- `cifp/source.json`: `{header_cycle, source_sha256, bundle_sha256}`;
+- `nasr/source.json`: `{edition, source_sha256, bundle_sha256}` (edition e.g. `01_Oct_2026`).
+
+`audit_cifp` and `audit_nasr` check these instead of opening `tmp/`. The
+bundle hash ties the served bundle to the checked source.
+
+*(Changed while planning: the conversation said "the existing cycle_info
+files", but `cycle_info.json` ships to the tablet inside `nasr.zip`. Changing
+it would make every tablet's verify step report the current NASR as
+different.)*
 
 **Kept in `tmp/`:**
 - the d-TPP metafile (a few MB, used to rebuild the plate index and by the
@@ -219,14 +231,14 @@ No other tablet change. The status-bar badge already shows amber
 - `audit_currency.py --data-dir <dir> --for-date <YYYY-MM-DD>`.
 - `data-next/manifest.json`: same sections as `data/manifest.json`, with
   `audit.products.<product>.ok` deciding promotion.
-- `nasr/cycle_info.json`: `source_edition`, `source_sha256`.
-- `cifp/cifp_cycle_info.json`: `source_header_cycle`, `source_sha256`.
+- `nasr/source.json`: `{edition, source_sha256, bundle_sha256}`.
+- `cifp/source.json`: `{header_cycle, source_sha256, bundle_sha256}`.
 
 ## Not included (deleted from the earlier draft)
 
 - `data-prev/` rollback: the previous cycle is expired after 0901Z.
 - A separate "is it posted yet?" check: the download itself answers it.
-- `sources.json`: the evidence goes into the existing cycle info files.
+- One shared `sources.json`: each product folder carries its own `source.json`.
 - A separate cleanup of older cycles: covered by the one tmp rule.
 - A "building" mark during the swap.
 - A `next` manifest entry and a Data Status "Next:" line.
