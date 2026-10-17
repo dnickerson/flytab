@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v11.62';
+const FLYTAB_VERSION = 'v11.63';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 // Kept in memory and saved at most every FLUSH_MS (errors at once). Every log()
@@ -275,6 +275,11 @@ class FlyTabApp {
 
         // Update NASR age badge after data is loaded
         this._updateNasrBadge();
+
+        // Weather Cache: entries older than 12 h are deleted, now and hourly
+        // (Dana, 2026-10-17 -- nothing ever pruned it; entries from June remained).
+        this._pruneWeatherCache();
+        setInterval(() => this._pruneWeatherCache(), 60 * 60 * 1000);
 
         // Long-press version badge to show diagnostic log
         const verBadge = document.getElementById('statusVersion');
@@ -2043,6 +2048,16 @@ class FlyTabApp {
             } catch { /* storage full */ }
         } catch (err) {
             DiagLog.log('error', 'Diag save failed', err?.message);
+        }
+    }
+
+    /** Delete Weather Cache entries older than 12 h (see init). */
+    async _pruneWeatherCache() {
+        try {
+            const n = await this._nasrDb?.clearOldWeather(12 * 3600 * 1000);
+            if (n) DiagLog.log('info', `Weather cache: ${n} entries older than 12 h removed`);
+        } catch (err) {
+            DiagLog.log('error', `Weather cache prune failed: ${err?.message || err}`);
         }
     }
 

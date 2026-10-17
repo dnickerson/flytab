@@ -18,7 +18,7 @@ function makeCheck() {
     // db is only used for NASR/tiles checks (getCycleInfo/getAirport), unrelated
     // to the active-plan question — a stub is fine here.
     return Object.create(PreflightCheck.prototype, {
-        db: { value: { open: async () => {}, getCycleInfo: async () => null, getAirport: async () => null } },
+        db: { value: { open: async () => {}, getCycleInfo: async () => null, getAirport: async () => null, getWeather: async () => null } },
     });
 }
 
@@ -46,49 +46,40 @@ describe('PreflightCheck._getActivePlan reads the real active-plan source (Findi
     });
 });
 
-describe('PreflightCheck._checkWeather — missing weather_cache is a warn, not a fail (whole-branch Finding 1)', () => {
+describe('PreflightCheck._checkWeather — missing weather is a warn, not a fail (whole-branch Finding 1)', () => {
     // Reading the real active-plan source (Finding 6, above) surfaced this
     // overlay on every cockpit load with an active plan — including plans
     // built locally via route-table.js's Save Route flow, which never attach
     // weather_cache by design. That must not read as a hard preflight FAIL.
 
-    it('reports warn (not fail) when weather_cache is entirely absent', () => {
+    // Since 2026-10-17 the row reads the per-airport Weather Cache (Dana: "the
+    // weather is actually cached, you can see it in the data and maps page");
+    // tests/cockpit/preflight-weather.test.js covers it. These keep the intent.
+    it('reports warn (not fail) when nothing is cached for the route airports', async () => {
         const pc = makeCheck();
-        const result = pc._checkWeather({ flight_plan: { departure: 'KLKR', destination: 'KFGX' } });
+        const result = await pc._checkWeather({ flight_plan: { departure: 'KLKR', destination: 'KFGX' } });
         expect(result.status).toBe('warn');
-        expect(result.status).not.toBe('fail');
     });
 
-    it('still reports fail when weather_cache exists but is genuinely stale (>=180min)', () => {
+    it('still reports fail when the cached METAR is genuinely stale (>=180min)', async () => {
         const pc = makeCheck();
-        const staleFetchedAt = new Date(Date.now() - 200 * 60000).toISOString();
-        const result = pc._checkWeather({ weather_cache: { fetched_at: staleFetchedAt } });
+        const old = new Date(Date.now() - 200 * 60000).toISOString();
+        pc.db.getWeather = async () => ({ metar: { decoded: { observed_at: old }, fetched_at: old } });
+        const result = await pc._checkWeather({ flight_plan: { departure: 'KLKR', destination: 'KFGX' } });
         expect(result.status).toBe('fail');
     });
 
-    it('still reports fail when there is no active plan at all', () => {
+    it('still reports fail when there is no active plan at all', async () => {
         const pc = makeCheck();
-        const result = pc._checkWeather(null);
+        const result = await pc._checkWeather(null);
         expect(result.status).toBe('fail');
-    });
-
-    it('distinguishes a cloud-synced plan (plan.id set) from a locally-built one when weather_cache is missing', () => {
-        const pc = makeCheck();
-        const local = pc._checkWeather({ flight_plan: { departure: 'KLKR', destination: 'KFGX' } });
-        expect(local.status).toBe('warn');
-        expect(local.msg).toBe('Not cached — route built locally');
-
-        const synced = pc._checkWeather({ id: 'abc123', flight_plan: { departure: 'KLKR', destination: 'KFGX' } });
-        expect(synced.status).toBe('warn');
-        expect(synced.msg).not.toBe('Not cached — route built locally');
-        expect(synced.msg).toBe('Not cached — verify weather before departure');
     });
 
     it('a warn-only weather check does not flip the aggregate verdict to fail', async () => {
         // Mirrors _runChecks' aggregation: hasFailure ? 'fail' : hasCaution ? 'warn' : 'ok'.
         const items = [
             { label: 'Flight Plan', status: 'ok' },
-            { label: 'Weather', status: 'warn', msg: 'Not cached — route built locally' },
+            { label: 'Weather', status: 'warn', msg: 'K9A9 no METAR cached' },
             { label: 'NASR Data', status: 'ok' },
             { label: 'Offline Maps', status: 'ok' },
         ];

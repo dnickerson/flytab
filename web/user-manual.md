@@ -844,6 +844,8 @@ If Stratux is not found within about 30 seconds of launch, a banner appears: "SI
 6. **MORE → Weather Briefing** — review METARs, TAFs, G-AIRMETs, NOTAMs.
 7. **MORE → Fuel Entry** — set fuel quantities if you know them.
 
+The pre-flight check's **Weather** row shows how old the cached METAR is at your departure and destination, from the **Weather Cache** section of the Data & Maps page (MORE → Data Status). That cache fills on its own while the moving map is open on WiFi, and from FIS-B. Example: *KLKR 12m · K9A9 1h05m — check before departure*. Under 1 hour is **FRESH**, 1 to 3 hours is a caution, and older is **STALE** (red). An airport with no METAR cached is a caution. Cached weather older than 12 hours is removed when FlyTab starts and every hour after.
+
 **At the airport:**
 
 1. Power on Stratux, wait for GPS lock (status bar GPS turns green).
