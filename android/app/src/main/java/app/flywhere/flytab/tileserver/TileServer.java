@@ -52,9 +52,17 @@ public class TileServer extends NanoHTTPD {
         Pattern.compile("^/tiles/([\\w-]+)/(\\d+)/(\\d+)/(\\d+)\\.webp$");
 
     public TileServer(int port, File baseDir) {
-        super(port);
+        // Loopback only: FlyTab's WebView is the only client. Bound to every
+        // interface, any device on the Stratux or home WiFi could PUT, DELETE,
+        // fetch-zip or /verify (pre-merge review, 2026-10-16).
+        super("127.0.0.1", port);
         this.baseDir = baseDir;
     }
+
+    /** One data download at a time: a timed-out request kept running beside the next one. */
+    private static final Object FETCH_LOCK = new Object();
+    /** checksums.json is ~2 MB; anything far larger is not ours (and would exhaust memory). */
+    private static final int MAX_CHECKSUMS_BYTES = 32 * 1024 * 1024;
 
     /** Close all open MBTiles databases. Call from plugin handleOnDestroy. */
     public void closeDatabases() {
@@ -134,6 +142,14 @@ public class TileServer extends NanoHTTPD {
         String uri = session.getUri();
         String method = session.getMethod().name();
 
+        // Writes only from FlyTab's own WebView (see allowed()).
+        if (!allowed(method, session.getHeaders().get("origin"))) {
+            Log.w(TAG, "refused " + method + " " + uri + " from origin " + session.getHeaders().get("origin"));
+            Response r = newFixedLengthResponse(Response.Status.FORBIDDEN, "text/plain", "Forbidden");
+            addCors(r);
+            return r;
+        }
+
         // CORS preflight
         if ("OPTIONS".equals(method)) {
             Response r = newFixedLengthResponse(Response.Status.NO_CONTENT, "text/plain", "");
@@ -160,6 +176,8 @@ public class TileServer extends NanoHTTPD {
             response = handleFetchMbtiles(session);
         } else if ("POST".equals(method) && "/fetch-zip".equals(uri)) {
             response = handleFetchZip(session);
+        } else if ("POST".equals(method) && "/verify".equals(uri)) {
+            response = handleVerify(session);
         } else if ("POST".equals(method) && "/unzip".equals(uri)) {
             response = handleUnzip(session);
         } else if ("GET".equals(method) && uri.matches("^/plates/[^/]+/list$")) {
@@ -187,8 +205,35 @@ public class TileServer extends NanoHTTPD {
         return response;
     }
 
+    /** FlyTab's WebView (Capacitor, androidScheme http). */
+    static final String APP_ORIGIN = "http://localhost";
+
+    /**
+     * Reads are open; POST, PUT and DELETE change the FAA data, flight recordings
+     * and logbook files, so only FlyTab's own WebView may send them. Binding to
+     * 127.0.0.1 kept the LAN out, but any app on the tablet, or a web page in the
+     * browser, could still write, delete, unzip, or point fetch-zip at its own
+     * zip, which now also prunes plates (final review 2026-10-17). A browser
+     * always sends Origin on these methods and a page cannot fake it.
+     */
+    static boolean allowed(String method, String origin) {
+        if (!"POST".equals(method) && !"PUT".equals(method) && !"DELETE".equals(method)) return true;
+        return APP_ORIGIN.equals(origin);
+    }
+
+    /** fetch-zip / fetch-mbtiles / verify download from the home server: http(s) only. */
+    static boolean fetchUrlAllowed(String url) {
+        if (url == null) return false;
+        try {
+            String p = new java.net.URL(url).getProtocol();
+            return "http".equals(p) || "https".equals(p);
+        } catch (java.net.MalformedURLException e) {
+            return false;
+        }
+    }
+
     private void addCors(Response r) {
-        r.addHeader("Access-Control-Allow-Origin", "*");
+        r.addHeader("Access-Control-Allow-Origin", APP_ORIGIN);
         r.addHeader("Access-Control-Allow-Methods", "GET, PUT, POST, DELETE, OPTIONS");
         r.addHeader("Access-Control-Allow-Headers", "Content-Type, X-Append");
     }
@@ -226,7 +271,7 @@ public class TileServer extends NanoHTTPD {
         String layer = (layerList != null && !layerList.isEmpty()) ? layerList.get(0) : null;
         String url   = (urlList   != null && !urlList.isEmpty())   ? urlList.get(0)   : null;
 
-        if (layer == null || url == null || layer.contains("..") || layer.contains("/")) {
+        if (layer == null || !fetchUrlAllowed(url) || layer.contains("..") || layer.contains("/")) {
             return newFixedLengthResponse(Response.Status.BAD_REQUEST, "text/plain",
                 "Missing or invalid layer/url params");
         }
@@ -301,11 +346,91 @@ public class TileServer extends NanoHTTPD {
     }
 
     /**
+     * POST /verify?url={checksums.json url}
+     * The tablet's FAA files against the home server's checksums.json (size +
+     * SHA-256 per file, from the pipeline's audit): changed / missing / extra.
+     * Returns JSON {"count", "checked", "matched", "rejected",
+     *               "changed": {"count", "examples"}, "missing": {...}, "extra": {...}}
+     */
+    private Response handleVerify(IHTTPSession session) {
+        java.util.List<String> urlList = session.getParameters().get("url");
+        String url = (urlList != null && !urlList.isEmpty()) ? urlList.get(0) : null;
+        if (url == null) return newFixedLengthResponse(Response.Status.BAD_REQUEST, "text/plain", "Missing url param");
+        if (!fetchUrlAllowed(url)) return newFixedLengthResponse(Response.Status.BAD_REQUEST, "text/plain", "url must be http(s)");
+        // Not while a fetch-zip is extracting or pruning (a timed-out request's
+        // thread can still be): hashing then reports false differences.
+        synchronized (FETCH_LOCK) {
+            return verifyLocked(url);
+        }
+    }
+
+    private Response verifyLocked(String url) {
+        java.net.HttpURLConnection conn = null;
+        try {
+            java.net.URL parsed = new java.net.URL(url);
+            conn = (java.net.HttpURLConnection) parsed.openConnection();
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(60000);
+            if (conn.getResponseCode() != 200) {
+                return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "text/plain", "checksums.json: HTTP " + conn.getResponseCode());
+            }
+            StringBuilder sb = new StringBuilder();
+            try (java.io.BufferedReader rd = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(conn.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
+                char[] buf = new char[65536];
+                int n;
+                while ((n = rd.read(buf)) > 0) {
+                    sb.append(buf, 0, n);
+                    if (sb.length() > MAX_CHECKSUMS_BYTES) {
+                        return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "text/plain", "checksums.json too large");
+                    }
+                }
+            }
+            org.json.JSONObject files = new org.json.JSONObject(sb.toString()).getJSONObject("files");
+            Map<String, ChecksumVerify.Expected> expected = new java.util.HashMap<>();
+            java.util.Iterator<String> keys = files.keys();
+            while (keys.hasNext()) {
+                String k = keys.next();
+                org.json.JSONArray e = files.getJSONArray(k);
+                expected.put(k, new ChecksumVerify.Expected(e.getLong(0), e.getString(1)));
+            }
+            ChecksumVerify.Result r = ChecksumVerify.verify(baseDir, expected);
+            Log.i(TAG, "verify: " + r.matched + "/" + r.checked + " match, " + r.changed.size() + " changed, "
+                    + r.missing.size() + " missing, " + r.extra.size() + " extra");
+            org.json.JSONObject out = new org.json.JSONObject();
+            out.put("count", expected.size());
+            out.put("checked", r.checked);
+            out.put("matched", r.matched);
+            out.put("rejected", r.rejected);
+            out.put("changed", listJson(r.changed));
+            out.put("missing", listJson(r.missing));
+            out.put("extra", listJson(r.extra));
+            return newFixedLengthResponse(Response.Status.OK, "application/json", out.toString());
+        } catch (Exception e) {
+            Log.e(TAG, "verify failed", e);
+            return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "text/plain", "verify failed: " + e.getMessage());
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    private static org.json.JSONObject listJson(java.util.List<String> items) throws org.json.JSONException {
+        org.json.JSONObject o = new org.json.JSONObject();
+        o.put("count", items.size());
+        org.json.JSONArray ex = new org.json.JSONArray();
+        for (int i = 0; i < Math.min(10, items.size()); i++) ex.put(items.get(i));
+        o.put("examples", ex);
+        return o;
+    }
+
+    /**
      * POST /fetch-zip?url={url}
      * Downloads a ZIP from the home server (trust-all TLS for self-signed cert),
      * streams it to a temp file, then extracts all entries relative to baseDir.
      * Used for bulk plate and data sync (e.g. plates_NC.zip → plates/KLKR/…).
-     * Returns JSON: {"extracted": N, "bytes": B}
+     * After a complete extraction, the plates/<AIRPORT>/ folders the zip has lose
+     * the files it no longer has (PlatePrune: expired charts were left behind).
+     * Returns JSON: {"extracted": N, "bytes": B, "pruned": P}
      */
     private Response handleFetchZip(IHTTPSession session) {
         Map<String, java.util.List<String>> params = session.getParameters();
@@ -315,9 +440,25 @@ public class TileServer extends NanoHTTPD {
         if (url == null) {
             return newFixedLengthResponse(Response.Status.BAD_REQUEST, "text/plain", "Missing url param");
         }
+        if (!fetchUrlAllowed(url)) {
+            return newFixedLengthResponse(Response.Status.BAD_REQUEST, "text/plain", "url must be http(s)");
+        }
 
-        File tempFile = new File(baseDir, "_fetch_zip_tmp.zip");
+        synchronized (FETCH_LOCK) {
+            return fetchZipLocked(url);
+        }
+    }
+
+    private Response fetchZipLocked(String url) {
+        // Downloads run one at a time (FETCH_LOCK): any temp zip here now was left
+        // by a download the app was killed during -- up to 400 MB each.
+        File[] stale = baseDir.listFiles((d, n) -> n.startsWith("_fetch_zip_") && n.endsWith(".zip"));
+        if (stale != null) for (File f : stale) f.delete();
+        File tempFile = null;
         try {
+            // Its own temp file: a timed-out request's thread could still be
+            // writing the old shared _fetch_zip_tmp.zip (pre-merge review).
+            tempFile = File.createTempFile("_fetch_zip_", ".zip", baseDir);
             // Download zip to temp file using trust-all TLS (same as fetch-mbtiles)
             java.net.URL parsedUrl = new java.net.URL(url);
             java.net.URLConnection rawConn = parsedUrl.openConnection();
@@ -363,39 +504,20 @@ public class TileServer extends NanoHTTPD {
             }
             Log.i(TAG, "fetch-zip: downloaded " + bytes + " bytes to " + tempFile.getAbsolutePath());
 
-            // Extract zip relative to baseDir
-            int extracted = 0;
-            byte[] xbuf = new byte[8192];
-            try (ZipInputStream zis = new ZipInputStream(new FileInputStream(tempFile))) {
-                ZipEntry entry;
-                while ((entry = zis.getNextEntry()) != null) {
-                    if (entry.isDirectory()) { zis.closeEntry(); continue; }
-                    String name = entry.getName();
-                    if (name.contains("..")) { zis.closeEntry(); continue; }
-
-                    File outFile = new File(baseDir, name);
-                    File parent = outFile.getParentFile();
-                    if (parent != null && !parent.exists()) parent.mkdirs();
-
-                    try (FileOutputStream fos = new FileOutputStream(outFile)) {
-                        int n;
-                        while ((n = zis.read(xbuf)) > 0) fos.write(xbuf, 0, n);
-                    }
-                    extracted++;
-                    zis.closeEntry();
-                }
-            }
-            Log.i(TAG, "fetch-zip: extracted " + extracted + " files");
-            tempFile.delete();
+            // Complete zips only (central directory), then prune: ZipSync.
+            ZipSync.Result r = ZipSync.extract(tempFile, baseDir);
+            Log.i(TAG, "fetch-zip: extracted " + r.extracted + " files; removed " + r.pruned
+                    + " plates no longer in " + r.folders + " airport folders");
 
             return newFixedLengthResponse(Response.Status.OK, "application/json",
-                "{\"extracted\":" + extracted + ",\"bytes\":" + bytes + "}");
+                "{\"extracted\":" + r.extracted + ",\"bytes\":" + bytes + ",\"pruned\":" + r.pruned + "}");
 
         } catch (Exception e) {
-            if (tempFile.exists()) tempFile.delete();
             Log.e(TAG, "fetch-zip failed", e);
             return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "text/plain",
                 "fetch-zip failed: " + e.getMessage());
+        } finally {
+            if (tempFile != null && tempFile.exists()) tempFile.delete();
         }
     }
 

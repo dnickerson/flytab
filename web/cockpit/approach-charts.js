@@ -9,6 +9,9 @@
 
 const PLATES_BASE = 'http://localhost:9090/plates';
 const CIFP_BUNDLE_URL = 'http://localhost:9090/cifp/cifp_bundle.json';
+// The synced CIFP's cycle (written with it by the sync): the cached bundle is
+// used only if it is of this cycle (2026-10-16 review).
+const CIFP_CYCLE_URL = 'http://localhost:9090/cifp/cifp_cycle_info.json';
 const PLATES_FETCH_TIMEOUT = 3000; // 3s timeout for NanoHTTPD requests
 // v2: pipeline corrected altitude field offset (col 84:89 not 83:88); stale caches show altitudes 10× too small
 const CIFP_BUNDLE_CACHE_KEY = 'cifp_bundle_v2';
@@ -67,19 +70,30 @@ class ApproachCharts {
                 ]);
                 if (cachedPlates) {
                     this._plateIndex = cachedPlates;
+                    this._hasMasterIndex = true;
                     console.log('[ApproachCharts] Plate index from cache:', Object.keys(cachedPlates).length, 'airports');
                 }
                 if (cachedGeo) this._geoIndex = cachedGeo;
             } catch { /* IDB not ready */ }
         }
 
-        // Try CIFP bundle from IndexedDB cache
+        // CIFP bundle from the IndexedDB cache -- only if it is the synced cycle.
+        // It was used whatever its cycle and never replaced (2026-10-16 review);
+        // a cache without a recorded cycle is from before and is replaced.
+        const diskCifp = await this._cifpDiskInfo();
         if (this._nasrDb) {
             try {
-                const cachedCifp = await this._nasrDb.getAppCache(CIFP_BUNDLE_CACHE_KEY);
-                if (cachedCifp) {
+                const [cachedCifp, cachedCycle] = await Promise.all([
+                    this._nasrDb.getAppCache(CIFP_BUNDLE_CACHE_KEY),
+                    this._nasrDb.getAppCache(CIFP_BUNDLE_CACHE_KEY + '_cycle'),
+                ]);
+                const current = diskCifp?.cycle_code ? cachedCycle === diskCifp.cycle_code : !!cachedCycle;
+                if (cachedCifp && current) {
                     this._cifpBundle = cachedCifp;
-                    console.log('[ApproachCharts] CIFP bundle from cache:', Object.keys(cachedCifp).length, 'airports');
+                    this._cifpInfo = diskCifp || { cycle_code: cachedCycle };
+                    console.log('[ApproachCharts] CIFP bundle from cache:', Object.keys(cachedCifp).length, 'airports, cycle', cachedCycle);
+                } else if (cachedCifp) {
+                    console.log('[ApproachCharts] Cached CIFP bundle is cycle', cachedCycle, '— the tablet has', diskCifp?.cycle_code, '— reloading');
                 }
             } catch { /* IDB not ready */ }
         }
@@ -100,6 +114,7 @@ class ApproachCharts {
                 const data = await resp.json();
                 if (data && typeof data === 'object' && !Array.isArray(data)) {
                     this._plateIndex = data;
+                    this._hasMasterIndex = true;
                     if (this._nasrDb) this._nasrDb.putAppCache('plate_index', data).catch(() => {});
                     console.log('[ApproachCharts] Master plate index loaded:', Object.keys(data).length, 'airports');
                 }
@@ -123,19 +138,49 @@ class ApproachCharts {
         } catch { /* georef optional */ }
 
         // Load CIFP approach procedure bundle (14MB, all airports in one file)
-        if (!this._cifpBundle) {
-            try {
-                const resp = await _fetchWithTimeout(CIFP_BUNDLE_URL, {}, 30000); // 30s for large file
-                if (resp.ok) {
-                    const data = await resp.json();
-                    this._cifpBundle = data;
-                    console.log('[ApproachCharts] CIFP bundle loaded:', Object.keys(data).length, 'airports');
-                    if (this._nasrDb) this._nasrDb.putAppCache(CIFP_BUNDLE_CACHE_KEY, data).catch(() => {});
-                }
-            } catch (err) {
-                console.warn('[ApproachCharts] CIFP bundle not available:', err.message);
+        if (!this._cifpBundle) await this._loadCifpFromDisk();
+    }
+
+    /** The synced CIFP's cycle info ({ cycle_code, effective_date, expiration_date }), or null. */
+    async _cifpDiskInfo() {
+        try {
+            const resp = await _fetchWithTimeout(CIFP_CYCLE_URL);
+            return resp.ok ? await resp.json() : null;
+        } catch { return null; }
+    }
+
+    /** Load the synced CIFP bundle from the tablet's files and cache it with its cycle. */
+    async _loadCifpFromDisk() {
+        try {
+            const [resp, info] = await Promise.all([_fetchWithTimeout(CIFP_BUNDLE_URL, {}, 30000), this._cifpDiskInfo()]); // 30s: large file
+            if (!resp.ok) return false;
+            const data = await resp.json();
+            this._cifpBundle = data;
+            this._cifpInfo = info;
+            console.log('[ApproachCharts] CIFP bundle loaded:', Object.keys(data).length, 'airports, cycle', info?.cycle_code);
+            if (this._nasrDb) {
+                this._nasrDb.putAppCache(CIFP_BUNDLE_CACHE_KEY, data).catch(() => {});
+                this._nasrDb.putAppCache(CIFP_BUNDLE_CACHE_KEY + '_cycle', info?.cycle_code || null).catch(() => {});
             }
+            return true;
+        } catch (err) {
+            console.warn('[ApproachCharts] CIFP bundle not available:', err.message);
+            return false;
         }
+    }
+
+    /** The cycle of the procedures in use ({ cycle_code, effective_date, expiration_date }), or null. */
+    cifpCycle() { return this._cifpInfo || null; }
+
+    /**
+     * After a sync (Data Status): the new cycle's procedures and plate index now,
+     * not at the next start -- the old ones pointed at files just replaced.
+     */
+    async reloadAfterSync() {
+        this._cifpBundle = null;
+        this._cifpInfo = null;
+        await this._loadCifpFromDisk();
+        await this._refreshIndex();
     }
 
     async ensureLoaded() {
@@ -193,6 +238,18 @@ class ApproachCharts {
         }
 
         let faaId = this._faaId(icao);
+
+        // The master index is this cycle's list of every airport's plates: an
+        // airport it doesn't list has none current. The fallbacks below (an old
+        // per-airport index.json, the folder's files, the geo index) listed
+        // expired charts left on the tablet -- KPBI, dropped from the FAA's
+        // d-TPP, still showed 55 (2026-10-16). Only without a master index.
+        if (this._hasMasterIndex && !this._plateIndex?.[faaId]) {
+            this._showMessage(`No current plates for ${icao} in this cycle's charts`);
+            this._pickerShownAt = Date.now();
+            this._pickerEl.style.display = 'flex';
+            return;
+        }
 
         if (!this._plateIndex?.[faaId]) {
             this._showMessage('Loading plates…');
@@ -586,8 +643,11 @@ class ApproachCharts {
             });
 
             const aptName = entry?.name || '';
+            const cur = this._plateCurrency(icao);
+            const escTxt = (v) => String(v).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
             html += `<div class="approach-airport-group">
-                <div class="approach-airport-header"><span class="approach-chevron">\u25bc</span> ${icao} ${aptName}</div>`;
+                <div class="approach-airport-header"><span class="approach-chevron">\u25bc</span> ${icao} ${aptName}</div>
+                <div class="approach-currency${cur.bad ? ' is-bad' : ''}">${escTxt(cur.text)}</div>`;
 
             for (const plate of sorted) {
                 const idx = this._plates.length;
@@ -655,6 +715,25 @@ class ApproachCharts {
         });
     }
 
+    /**
+     * This airport's charts: cycle and expiry from what the tablet recorded at
+     * sync (FaaCurrency, offline, 0901Z) -- the viewer showed none, so expired
+     * charts looked current in flight (round 2 review, 2026-10-17). An airport
+     * in a state whose sync failed has the previous cycle's files under this
+     * cycle's index: said so.
+     */
+    _plateCurrency(icao) {
+        const dev = FaaCurrency.deviceManifest();
+        const p = FaaCurrency.products(dev, null, Date.now()).find((x) => x.key === 'plates');
+        const entry = this._plateIndex?.[icao] || {};
+        const st = String(entry.state || '').toUpperCase();
+        if (st && (dev.plates?.failed_states || []).includes(st)) {
+            return { text: `${st} charts not updated — previous cycle's; sync in MORE → Data Status`, bad: true };
+        }
+        return { text: FaaCurrency.describe({ ...p, cycle: entry.cycle || p.cycle }),
+                 bad: p.state === 'expired' || p.state === 'unknown' };
+    }
+
     _showPlate(idx) {
         if (idx < 0 || idx >= this._plates.length) return;
 
@@ -675,18 +754,34 @@ class ApproachCharts {
         // All plates served from local NanoHTTPD at Documents/FlyTab/plates/
         const plateUrl = (f) => `${PLATES_BASE}/${plate.icao}/${encodeURIComponent(f)}`;
 
-        if (georef?.webp) {
+        // Takeoff/alternate minimums are one FAA document per volume (SE3TO.PDF:
+        // 49 pages, every SE-3 airport); the pipeline's image is this airport's
+        // own page(s). Drawing the PDF started at page 1 -- another airport
+        // (2026-10-16, KTMB).
+        const isMin = (plate.chart_code || plate.type || '').toUpperCase() === 'MIN';
+
+        if (georef?.webp || (isMin && file)) {
             // Use WebP raster — pinch zoom works via _setupPinchZoom
             // webp path in geoIndex is relative to plates dir (e.g. "KLKR/05853R6.webp")
-            const webpUrl = `${PLATES_BASE}/${georef.webp.split('/').map(encodeURIComponent).join('/')}`;
+            const webpUrl = georef?.webp
+                ? `${PLATES_BASE}/${georef.webp.split('/').map(encodeURIComponent).join('/')}`
+                : plateUrl(file.replace(/\.pdf$/i, '.webp'));
             this._imgEl.style.display = '';
             this._imgEl.src = webpUrl;
             this._imgEl.style.transform = '';
-            // If the webp file doesn't exist on device, fall back to PDF rendering
+            // If the webp file doesn't exist on device, fall back to PDF rendering --
+            // except minimums: the volume PDF's first page is another airport's,
+            // so say the page is missing instead (pre-merge review).
             this._imgEl.onerror = () => {
                 this._imgEl.onerror = null;
                 this._imgEl.style.display = 'none';
-                if (file && file.toLowerCase().endsWith('.pdf')) {
+                if (isMin) {
+                    const msg = document.createElement('div');
+                    msg.className = 'approach-plate-pdf';
+                    msg.style.cssText = 'padding:24px;background:var(--bg-primary);color:var(--text-primary);font-family:var(--font-ui);font-size:var(--text-md);font-weight:700;text-align:center;';
+                    msg.textContent = `${plate.icao} ${plate.name || plate.chart_name || 'minimums'}: this airport's minimums page is not on this tablet — sync plates in MORE → Data Status.`;
+                    this._panContainer.appendChild(msg);
+                } else if (file && file.toLowerCase().endsWith('.pdf')) {
                     this._renderPdf(plateUrl(file), body);
                 }
             };
@@ -706,6 +801,17 @@ class ApproachCharts {
         // Update title
         const titleEl = this._viewerEl.querySelector('.approach-viewer-title');
         titleEl.textContent = `${plate.icao} — ${plate.name || plate.chart_name || file}  (${idx + 1}/${this._plates.length})`;
+        // The chart's cycle and expiry, red when expired or not updated.
+        let cur = this._viewerEl.querySelector('.approach-currency');
+        if (!cur) {
+            cur = document.createElement('div');
+            cur.className = 'approach-currency';
+            const hdr = this._viewerEl.querySelector('.approach-viewer-header');
+            if (hdr) hdr.after(cur); else this._viewerEl.prepend(cur);
+        }
+        const c = this._plateCurrency(plate.icao);
+        cur.textContent = c.text;
+        cur.classList.toggle('is-bad', c.bad);
 
         this._pickerEl.style.display = 'none';
         this._viewerEl.style.display = 'flex';
@@ -904,15 +1010,7 @@ class ApproachCharts {
      * key (4-letter ids are K-prefixed, 3-character FAA ids are not).
      */
     async proceduresFor(icao) {
-        if (!this._cifpBundle) {
-            try {
-                const resp = await _fetchWithTimeout(CIFP_BUNDLE_URL, {}, 30000);
-                if (resp.ok) {
-                    this._cifpBundle = await resp.json();
-                    if (this._nasrDb) this._nasrDb.putAppCache(CIFP_BUNDLE_CACHE_KEY, this._cifpBundle).catch(() => {});
-                }
-            } catch { /* none available */ }
-        }
+        if (!this._cifpBundle) await this._loadCifpFromDisk();
         const id = String(icao || '').toUpperCase();
         const bare = id.length === 4 && id[0] === 'K' ? id.slice(1) : id;
         const key = this._cifpBundle?.[id] ? id : (this._cifpBundle?.[bare] ? bare : id);
@@ -939,13 +1037,7 @@ class ApproachCharts {
             // Ensure CIFP bundle is loaded before checking
             if (!this._cifpBundle) {
                 this._showToast('Loading CIFP data…');
-                try {
-                    const resp = await _fetchWithTimeout(CIFP_BUNDLE_URL, {}, 30000);
-                    if (resp.ok) {
-                        this._cifpBundle = await resp.json();
-                        if (this._nasrDb) this._nasrDb.putAppCache(CIFP_BUNDLE_CACHE_KEY, this._cifpBundle).catch(() => {});
-                    }
-                } catch { /* will fall through to error below */ }
+                await this._loadCifpFromDisk();
             }
             const airportCifp = this._cifpBundle?.[icao];
             if (!airportCifp) {

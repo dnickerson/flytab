@@ -229,7 +229,7 @@ class AirportPopup {
                     const afdPaneEl = pane?.querySelector('.apt-afd-pane');
                     if (afdPaneEl && !afdPaneEl.dataset.loaded) {
                         afdPaneEl.dataset.loaded = '1';
-                        this._loadAfdPane(afdPaneEl, airport.icao);
+                        this._loadAfdPane(afdPaneEl, airport.icao, airport.state);
                     }
                 }
             });
@@ -769,7 +769,7 @@ class AirportPopup {
      * The pipeline downloads per-airport pages from the FAA Chart Supplement and stores
      * them as AFD_PAGE.webp in data/plates/{ICAO}/AFD_PAGE.webp via NanoHTTPD.
      */
-    async _loadAfdPane(containerEl, icao) {
+    async _loadAfdPane(containerEl, icao, state) {
         containerEl.innerHTML = '<div style="padding:16px;color:var(--text-muted);font-size:13px">Loading A/FD…</div>';
         const PLATES_BASE = 'http://localhost:9090/plates';
         const strippedId = icao.replace(/^K/, '');
@@ -782,6 +782,32 @@ class AirportPopup {
 
         thumb.onload = () => {
             containerEl.innerHTML = '';
+            // Whether the A/FD pages on the tablet are current (FaaCurrency,
+            // as recorded at sync): stale pages showed with no sign (round 2).
+            if (typeof FaaCurrency !== 'undefined') {
+                const dm = FaaCurrency.deviceManifest();
+                const a = FaaCurrency.products(dm, null, Date.now()).find((x) => x.key === 'afd');
+                const line = document.createElement('div');
+                line.className = 'approach-currency';
+                const note = dm.afd?.note;
+                // A state the last sync did not update keeps its last pages (sync
+                // prunes only the folders a zip has): not covered by the sync's
+                // expiry (final review 2026-10-17). server_states: the states the
+                // server had at that sync (synced_states keeps dropped ones).
+                const pl = dm.plates || {};
+                const st = String(state || '').toUpperCase();
+                const why = !st ? null
+                    : (pl.failed_states || []).includes(st) ? `${st} plates are the previous cycle's (last download failed)`
+                    : (pl.server_states || []).length && !pl.server_states.includes(st) ? `${st} is no longer on the home server`
+                    : (pl.synced_states || []).length && !pl.synced_states.includes(st) ? `${st} is not synced to this tablet`
+                    : null;
+                const orphan = !!why;
+                line.textContent = orphan ? `A/FD page not current — ${why}`
+                                 : a.state === 'stale' ? `A/FD page not current${note ? ` — ${note}` : ''}; sync when the home server has rebuilt it`
+                                 : FaaCurrency.describe(a);
+                line.classList.toggle('is-bad', orphan || a.state === 'stale' || a.state === 'expired' || a.state === 'unknown');
+                containerEl.appendChild(line);
+            }
             const hint = document.createElement('div');
             hint.style.cssText = 'padding:6px 12px;font-size:11px;color:var(--text-muted);text-align:center;';
             hint.textContent = 'Tap to open full screen';
@@ -1064,9 +1090,18 @@ class AirportPopup {
             // No WebP for this plate: draw the PDF with the shared PDF.js renderer.
             // The old fallback, a PDF in an <iframe>, shows nothing in Android's
             // WebView (it has no PDF viewer).
+            // Except minimums: one FAA document per volume, whose first page is
+            // another airport's -- say the page is missing (pre-merge review).
             img.onerror = () => {
                 img.onerror = null;
                 img.remove();
+                if (plateType === 'MIN') {
+                    const msg = document.createElement('div');
+                    msg.style.cssText = 'padding:16px;background:var(--bg-primary);color:var(--text-primary);font-family:var(--font-ui);font-size:var(--text-md);font-weight:700;text-align:center;';
+                    msg.textContent = `${icao}: this airport's minimums page is not on this tablet — sync plates in MORE → Data Status.`;
+                    wrap.appendChild(msg);
+                    return;
+                }
                 renderPdfToContainer(pdfUrl, wrap, { cssClass: 'apt-plate-pdf', errorLabel: 'airport diagram' });
             };
             if (canOpen) {

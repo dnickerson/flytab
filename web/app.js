@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v11.49';
+const FLYTAB_VERSION = 'v11.67';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 // Kept in memory and saved at most every FLUSH_MS (errors at once). Every log()
@@ -276,8 +276,13 @@ class FlyTabApp {
         // Update NASR age badge after data is loaded
         this._updateNasrBadge();
 
-        // Startup data readiness check — runs in background, shows banner if data is missing/expired
-        setTimeout(() => this._checkDataReadiness(), 3000);
+        // Weather Cache: entries fetched more than 30 h ago are deleted, now and
+        // hourly (Dana, 2026-10-17 -- nothing ever pruned it; entries from June
+        // remained). 30 h, not less: a TAF is valid at most 30 h from issue, so an
+        // older entry's TAF has expired, while a younger one may still be needed
+        // in flight, where only FIS-B could replace it.
+        this._pruneWeatherCache();
+        setInterval(() => this._pruneWeatherCache(), 60 * 60 * 1000);
 
         // Long-press version badge to show diagnostic log
         const verBadge = document.getElementById('statusVersion');
@@ -2049,43 +2054,41 @@ class FlyTabApp {
         }
     }
 
+    /** Delete Weather Cache entries fetched more than 30 h ago (see init). */
+    async _pruneWeatherCache() {
+        try {
+            const n = await this._nasrDb?.clearOldWeather(30 * 3600 * 1000);
+            if (n) DiagLog.log('info', `Weather cache: ${n} entries older than 30 h removed`);
+        } catch (err) {
+            DiagLog.log('error', `Weather cache prune failed: ${err?.message || err}`);
+        }
+    }
+
     // === NASR Age Badge ==========
 
+    /**
+     * The FAA data badge: the most urgent of NASR (what the app has loaded),
+     * CIFP, approach plates and A/FD (what the tablet recorded at sync), each
+     * expiring at the 0901Z changeover (FaaCurrency). It covered NASR only and
+     * read "NASR 0d" all of expiry day (round 2 review, 2026-10-17). Refreshed
+     * every 10 minutes: an app left running crossed expiry showing days left.
+     */
     async _updateNasrBadge() {
         const el = this.dom.statusNasr;
         if (!el || !this._nasrDb) return;
+        if (!this._faaBadgeTimer && typeof setInterval === 'function' && this.constructor === FlyTabApp) {
+            this._faaBadgeTimer = setInterval(() => this._updateNasrBadge(), 10 * 60 * 1000);
+        }
 
         try {
             const cycleInfo = await this._nasrDb.getCycleInfo();
-            if (!cycleInfo || !cycleInfo.effective_date) {
-                el.textContent = 'NASR ??';
-                el.className = 'status-item status-nasr nasr-expired';
-                return;
-            }
-
-            // Compute days until expiration (NASR cycles are 28 days)
-            const effective = new Date(cycleInfo.effective_date);
-            const expiration = cycleInfo.expiration_date
-                ? new Date(cycleInfo.expiration_date)
-                : new Date(effective.getTime() + 28 * 86400000);
-            const now = new Date();
-            const daysLeft = Math.ceil((expiration - now) / 86400000);
-
-            let text, cls;
-            if (daysLeft < 0) {
-                text = 'NASR EXP';
-                cls = 'nasr-expired';
-            } else if (daysLeft <= 7) {
-                text = `NASR ${daysLeft}d`;
-                cls = 'nasr-aging';
-            } else {
-                text = `NASR ${daysLeft}d`;
-                cls = 'nasr-fresh';
-            }
+            const products = FaaCurrency.products(FaaCurrency.deviceManifest(), cycleInfo, Date.now());
+            const { text, cls } = FaaCurrency.badge(products);
             el.textContent = text;
             el.className = `status-item status-nasr ${cls}`;
+            el.title = products.map(p => `${p.label}: ${FaaCurrency.describe(p)}`).join('\n');
         } catch {
-            el.textContent = 'NASR ??';
+            el.textContent = 'FAA ??';
             el.className = 'status-item status-nasr nasr-expired';
         }
     }
@@ -2362,74 +2365,6 @@ class FlyTabApp {
     }
 
     // === Toast Notifications ==========
-
-    async _checkDataReadiness() {
-        const LOCAL = 'http://localhost:9090';
-        const issues = [];
-
-        const fetchJson = async (url) => {
-            try {
-                const r = await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(3000) });
-                return r.ok ? r.json() : null;
-            } catch { return null; }
-        };
-
-        const [nasr, cifp] = await Promise.all([
-            fetchJson(`${LOCAL}/nasr/cycle_info.json`),
-            fetchJson(`${LOCAL}/cifp/cifp_cycle_info.json`),
-        ]);
-
-        if (!nasr) {
-            issues.push({ severity: 'critical', text: 'NASR aeronautical data not on tablet' });
-        } else {
-            const exp = nasr.expiration_date ? new Date(nasr.expiration_date)
-                : new Date(new Date(nasr.effective_date).getTime() + 28 * 86400000);
-            const daysLeft = Math.ceil((exp - Date.now()) / 86400000);
-            if (daysLeft < 0) {
-                issues.push({ severity: 'critical', text: `NASR data expired ${Math.abs(daysLeft)}d ago (cycle ${nasr.effective_date})` });
-            } else if (daysLeft <= 7) {
-                issues.push({ severity: 'warn', text: `NASR data expires in ${daysLeft}d (cycle ${nasr.effective_date})` });
-            }
-        }
-
-        if (!cifp) {
-            issues.push({ severity: 'warn', text: 'CIFP approach procedures not on tablet' });
-        }
-
-        if (issues.length === 0) return;
-
-        const hasCritical = issues.some(i => i.severity === 'critical');
-        const banner = document.createElement('div');
-        banner.id = 'dataReadinessBanner';
-        banner.style.cssText = `
-            background:${hasCritical ? '#b91c1c' : '#92400e'};
-            color:#fff; font-size:13px; font-weight:600;
-            padding:6px 12px; display:flex; align-items:center; gap:8px;
-            width:100%; box-sizing:border-box;
-        `;
-        banner.innerHTML = `
-            <span style="flex:1">⚠ ${issues.map(i => i.text).join(' · ')}</span>
-            <button style="background:rgba(255,255,255,0.2);border:none;color:#fff;padding:4px 10px;border-radius:4px;font-weight:700;font-size:13px;cursor:pointer;touch-action:manipulation" id="_drFixBtn">Fix Now</button>
-            <button style="background:none;border:none;color:#fff;font-size:18px;cursor:pointer;padding:0 4px;touch-action:manipulation" id="_drDismissBtn">✕</button>
-        `;
-
-        // Insert into the flex column after the engine advisory (below status bar, above map)
-        const advisory = document.getElementById('engineAdvisory');
-        const mainContent = document.getElementById('mainContent');
-        if (advisory) {
-            advisory.parentNode.insertBefore(banner, advisory.nextSibling);
-        } else if (mainContent) {
-            mainContent.parentNode.insertBefore(banner, mainContent);
-        } else {
-            document.body.appendChild(banner);
-        }
-
-        banner.querySelector('#_drFixBtn').addEventListener('click', () => {
-            banner.remove();
-            if (this.dataStatus) this.dataStatus.show();
-        });
-        banner.querySelector('#_drDismissBtn').addEventListener('click', () => banner.remove());
-    }
 
     /**
      * What happened to the previous run, in the diagnostic log and one toast:

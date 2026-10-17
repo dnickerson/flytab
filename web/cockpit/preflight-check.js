@@ -64,11 +64,8 @@ class PreflightCheck {
      * route-table.js's Save Route / Plan Picker flows — same key/shape
      * app.js, logbook.js, and plan-sync.js already read.
      *
-     * Note: locally-built routes (route-table.js "Save Route") don't carry a
-     * weather_cache field — that's a deliberate design gap, not a bug.
-     * _checkWeather() below reports 'warn' (not 'fail') when weather_cache is
-     * simply absent, so a pilot-built local route doesn't trip the overall
-     * verdict to FAIL just because it was never routed through weather fetch.
+     * _checkWeather() reads the Weather Cache (IndexedDB), not the plan, so a
+     * locally-built route is checked the same as a flywhere.app one.
      */
     _getActivePlan() {
         try {
@@ -95,41 +92,88 @@ class PreflightCheck {
         return { items, verdict, plan };
     }
 
-    _checkWeather(plan) {
-        if (!plan) return { label: 'Weather', status: 'fail', msg: 'No flight plan' };
-        const fetchedAt = plan.weather_cache?.fetched_at;
-        if (!fetchedAt) {
-            // plan.id is only ever set by PlanSync._normalizePlan() for a
-            // flywhere.app cloud-synced plan (see plan-sync.js) — a locally-built
-            // route (route-table.js "Save Route") never has an id. Both cases
-            // leave weather_cache absent/empty, but they aren't the same risk:
-            // a local route never went through weather fetch by design, while a
-            // synced plan missing weather_cache means its fetch never ran or
-            // failed — worth a more pointed warning since this app has zero
-            // in-flight internet to retry.
-            return plan.id
-                ? { label: 'Weather', status: 'warn', msg: 'Not cached — verify weather before departure' }
-                : { label: 'Weather', status: 'warn', msg: 'Not cached — route built locally' };
-        }
-        const ageMin = (Date.now() - new Date(fetchedAt).getTime()) / 60000;
-        if (ageMin < 60)  return { label: 'Weather', status: 'ok',   msg: `${Math.round(ageMin)}m old — FRESH` };
-        if (ageMin < 180) return { label: 'Weather', status: 'warn', msg: `${Math.round(ageMin)}m old — AGING` };
-        const ageHr = (ageMin / 60).toFixed(1);
-        return { label: 'Weather', status: 'fail', msg: `${ageHr}h old — STALE` };
+    /** True only when NASR shows the airport has no weather station (see _checkWeather). */
+    static async _hasNoWeatherStation(db, icao) {
+        let apt = null;
+        try {
+            apt = await db.getAirport(icao)
+                || (icao.length === 3 ? await db.getAirport(`K${icao}`) : null);
+        } catch { return false; }
+        const types = (apt?.frequencies || []).map(f => f.type);
+        if (!types.length || apt.tower) return false;
+        return !types.some(t => t === 'awos' || t === 'asos' || t === 'atis');
     }
 
+    /**
+     * Weather at the route's departure and destination, from the Weather Cache
+     * (Data & Maps; filled by the moving map on WiFi and by FIS-B in flight).
+     * It read only plan.weather_cache, which only flywhere.app plans carry, so
+     * a route built on the tablet always said "Not cached" (Dana, 2026-10-17).
+     * Age is from the METAR's observation time: under 1 h ok, under 3 h
+     * caution, older fail; an airport with no METAR cached is a caution.
+     * An airport that has no weather station (NASR lists its frequencies but
+     * no AWOS/ASOS, ATIS or tower, e.g. K9A9) says "no weather station", not
+     * "no METAR cached" (Dana, 2026-10-17). Military fields list no frequencies
+     * in NASR, so an empty list proves nothing and keeps "no METAR cached".
+     */
+    async _checkWeather(plan) {
+        if (!plan) return { label: 'Weather', status: 'fail', msg: 'No flight plan' };
+        const fp = plan.flight_plan || {};
+        const airports = [...new Set([fp.departure || plan.departure, fp.destination || plan.destination]
+            .filter(Boolean).map(a => String(a).toUpperCase()))];
+        if (!airports.length) return { label: 'Weather', status: 'warn', msg: 'No departure or destination' };
+        const fmt = (min) => min < 60 ? `${min}m` : `${Math.floor(min / 60)}h${String(min % 60).padStart(2, '0')}m`;
+        let worst = 'ok';
+        const parts = [];
+        for (const icao of airports) {
+            let e = null;
+            try {
+                e = await this.db.getWeather(icao)
+                    || (icao.length === 4 && icao.startsWith('K') ? await this.db.getWeather(icao.slice(1)) : null);
+            } catch { e = null; }
+            const t = e?.metar ? Date.parse(e.metar.decoded?.observed_at || e.metar.fetched_at || e.fetched_at) : NaN;
+            if (!Number.isFinite(t)) {
+                parts.push(`${icao} ${await PreflightCheck._hasNoWeatherStation(this.db, icao) ? 'no weather station' : 'no METAR cached'}`);
+                if (worst === 'ok') worst = 'warn';
+                continue;
+            }
+            const min = Math.max(0, Math.round((Date.now() - t) / 60000));
+            parts.push(`${icao} ${fmt(min)}`);
+            if (min >= 180) worst = 'fail';
+            else if (min >= 60 && worst === 'ok') worst = 'warn';
+        }
+        const tail = worst === 'ok' ? ' — FRESH' : worst === 'warn' ? ' — check before departure' : ' — STALE';
+        return { label: 'Weather', status: worst, msg: parts.join(' · ') + tail };
+    }
+
+    /**
+     * FAA data: NASR (loaded), CIFP, approach plates and A/FD (as synced), at
+     * the 0901Z changeover (FaaCurrency). It checked NASR only (round 2 review).
+     */
     async _checkNasr() {
         try {
             const cycle = await this.db.getCycleInfo();
-            if (!cycle) return { label: 'NASR Data', status: 'fail', msg: 'Not loaded' };
-            const exp = cycle.expiration_date ? new Date(cycle.expiration_date) : null;
-            if (!exp) return { label: 'NASR Data', status: 'warn', msg: `Cycle ${cycle.effective_date || '?'} — no expiry` };
-            const daysLeft = (exp - Date.now()) / 86400000;
-            if (daysLeft < 0)  return { label: 'NASR Data', status: 'fail', msg: `Expired ${Math.abs(Math.round(daysLeft))}d ago` };
-            if (daysLeft <= 3) return { label: 'NASR Data', status: 'warn', msg: `Expires in ${Math.round(daysLeft)}d` };
-            return { label: 'NASR Data', status: 'ok', msg: `Current — ${Math.round(daysLeft)}d remaining` };
+            if (!cycle) return { label: 'FAA Data', status: 'fail', msg: 'NASR not loaded' };
+            const products = FaaCurrency.products(FaaCurrency.deviceManifest(), cycle, Date.now());
+            const failed = products.filter(p => p.state === 'expired' || p.state === 'unknown');
+            if (failed.length) {
+                return { label: 'FAA Data', status: 'fail',
+                         msg: failed.map(p => p.state === 'expired' ? `${p.label} expired`
+                                              : `${p.label} expiry not recorded — sync in Data Status`).join(' · ') };
+            }
+            const warn = products.filter(p => p.state === 'expiring' || p.state === 'stale');
+            if (warn.length) {
+                // Less than a day before the changeover: one "New FAA cycle at
+                // 05:01 tomorrow" message instead of each product's "0d left".
+                const now = Date.now();
+                const newCycle = warn.map(p => FaaCurrency.newCycleMessage(p, now)).find(Boolean);
+                const msgs = warn.filter(p => !FaaCurrency.newCycleMessage(p, now))
+                    .map(p => p.state === 'stale' ? `${p.label} not current` : `${p.label} ${p.daysLeft}d left`);
+                return { label: 'FAA Data', status: 'warn', msg: [newCycle, ...msgs].filter(Boolean).join(' · ') };
+            }
+            return { label: 'FAA Data', status: 'ok', msg: `Current — ${Math.min(...products.map(p => p.daysLeft))}d remaining` };
         } catch {
-            return { label: 'NASR Data', status: 'warn', msg: 'Could not verify' };
+            return { label: 'FAA Data', status: 'warn', msg: 'Could not verify' };
         }
     }
 

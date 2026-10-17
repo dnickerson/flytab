@@ -121,7 +121,9 @@ class DataStatus {
         try {
             const r = await fetch(`${base}/manifest.json`,
                 { cache: 'no-store', signal: AbortSignal.timeout(5000) });
-            return r.ok ? r.json() : null;
+            // awaited here: a non-JSON body (captive page) rejects inside the
+            // try, not in the caller -- Sync stayed stuck on "Syncing…".
+            return r.ok ? await r.json() : null;
         } catch { return null; }
     }
 
@@ -144,6 +146,27 @@ class DataStatus {
         const m = this._readDeviceManifest();
         m[section] = data;
         localStorage.setItem('flytab_device_manifest', JSON.stringify(m));
+    }
+
+    /** Add fields to a device-manifest section, keeping the rest. */
+    _mergeDeviceSection(section, fields) {
+        this._saveDeviceSection(section, { ...(this._readDeviceManifest()[section] || {}), ...fields });
+    }
+
+    /**
+     * The A/FD pages the plate zips just delivered: until when they hold, and
+     * whether the server's check passed them (FaaCurrency, offline; Dana
+     * 2026-10-17: "Sync plates, warn on A/FD").
+     */
+    _recordAfd(stale) {
+        const a = this._serverManifest?.audit?.products?.afd;
+        const warn = DataStatus.auditWarnings(this._serverManifest, 'plates');
+        this._saveDeviceSection('afd', {
+            expiration_date: (a?.valid_until || '').slice(0, 10) || null,
+            stale: !!stale || warn.length > 0,
+            note: warn[0] || null,
+        });
+        return warn;
     }
 
     async _readOrMigrateDeviceManifest() {
@@ -259,10 +282,13 @@ class DataStatus {
             aeroPrimary   = `<button class="ds-action-btn ds-update" id="dsAeroBtn">SYNC</button>`;
             aeroSecondary = `<button class="ds-action-btn ds-secondary" id="dsAeroRedownloadBtn">RE-DOWNLOAD</button>${reimportBtn}`;
         } else {
-            const expDate = sNasr?.expiration_date ? new Date(sNasr.expiration_date)
-                          : dNasr?.expiration_date ? new Date(dNasr.expiration_date)
-                          : null;
-            aeroBadge     = expDate ? this._cycleStatus(expDate, now) : this._badge('ON DEVICE', 'green');
+            // The tablet's own copy decides (offline too): the earlier of its
+            // NASR and CIFP expiry, at the 0901Z changeover. The server's date
+            // only when the tablet has none recorded and holds the same cycle.
+            const aeroExp = [dNasr?.expiration_date || (nasrDevDate && nasrDevDate === nasrServerDate ? sNasr?.expiration_date : null),
+                             dCifp?.expiration_date].filter(Boolean).sort()[0];
+            aeroBadge     = aeroExp ? this._cycleStatus(new Date(FaaCurrency.expiresAt(aeroExp)), now)
+                                    : this._badge('ON DEVICE — EXPIRY UNKNOWN, SYNC', 'yellow');
             aeroPrimary   = `<button class="ds-action-btn ds-secondary" id="dsAeroBtn">SYNC</button>`;
             aeroSecondary = `<button class="ds-action-btn ds-secondary" id="dsAeroRedownloadBtn">RE-DOWNLOAD</button>${reimportBtn}`;
         }
@@ -300,6 +326,8 @@ class DataStatus {
         const allDisplayStates = serverHasPlates
             ? [...serverStates, ...syncedStates.filter(s => !serverStateSet.has(s))]
             : syncedStates;
+        // State names come from the server's manifest: escaped (final review 2026-10-17).
+        const escS = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
         const stateChips = allDisplayStates.map(st => {
             const onDevice = syncedStates.includes(st);
             const onServer = serverHasPlates ? serverStateSet.has(st) : true;
@@ -308,8 +336,9 @@ class DataStatus {
             const cls = ok ? 'ds-state-ok' : 'ds-state-missing';
             const icon = ok ? '&#10003;' : '&#9675;';
             const note = (serverHasPlates && !onServer) ? ' <span class="ds-muted">(removed from server)</span>' : '';
-            return `<span class="ds-state-chip ${cls}">${icon} ${st}${sizeTxt}${note}</span>`;
-        }).join('');
+            return `<span class="ds-state-chip ${cls}">${icon} ${escS(st)}${escS(sizeTxt)}${note}</span>`;
+        }).join('') + (dPlates?.failed_states || []).filter(st => !allDisplayStates.includes(st)).map(st =>
+            `<span class="ds-state-chip ds-state-missing">&#10007; ${escS(st)} (previous cycle — not updated)</span>`).join('');
 
         const platesIncludesNote = '<span class="ds-muted">Includes: IAP &middot; DP &middot; STAR &middot; Airport Diagrams (DIAG) &middot; Airport Info (A/FD)</span>';
 
@@ -324,9 +353,13 @@ class DataStatus {
                 platesBadge   = this._badge('UPDATE AVAILABLE', 'yellow');
                 if (base) platesPrimary = `<button class="ds-action-btn ds-update" id="dsPlatesBtn">SYNC</button>`;
             } else {
-                const expDate = sPlates?.expiration_date ? new Date(sPlates.expiration_date)
-                              : sNasr?.expiration_date   ? new Date(sNasr.expiration_date) : null;
-                platesBadge   = expDate ? this._cycleStatus(expDate, now) : this._badge('CURRENT', 'green');
+                const failedStates = dPlates?.failed_states || [];
+                const platesExp = dPlates?.expiration_date || (plateDCode && plateDCode === plateSCode ? sPlates?.expiration_date : null);
+                const platesExpired = platesExp && now >= FaaCurrency.expiresAt(platesExp);
+                platesBadge   = (failedStates.length && !platesExpired)
+                              ? this._badge(`PARTLY UPDATED — ${failedStates.join(', ')} previous cycle`, 'red')
+                              : platesExp ? this._cycleStatus(new Date(FaaCurrency.expiresAt(platesExp)), now)
+                              : this._badge('ON DEVICE — EXPIRY UNKNOWN, SYNC', 'yellow');
                 if (base) platesPrimary = `<button class="ds-action-btn ds-secondary" id="dsPlatesBtn">SYNC</button>`;
             }
             if (base) platesSecondary = `<button class="ds-action-btn ds-secondary" id="dsPlatesRedownloadBtn">RE-DOWNLOAD</button>`;
@@ -366,8 +399,8 @@ class DataStatus {
                     // so server/device expiration_date agree whenever we reach here. Prefer
                     // the device's own recorded expiration — what's actually on the tablet —
                     // falling back to the server's only if the device manifest lacks one.
-                    const expDate = dTile?.expiration_date ? new Date(dTile.expiration_date)
-                                  : sTile?.expiration_date ? new Date(sTile.expiration_date) : null;
+                    const expDate = dTile?.expiration_date ? new Date(FaaCurrency.expiresAt(dTile.expiration_date))
+                                  : sTile?.expiration_date ? new Date(FaaCurrency.expiresAt(sTile.expiration_date)) : null;
                     badge  = expDate ? this._cycleStatus(expDate, now) : this._badge('ON DEVICE', 'green');
                     action = base ? `<button class="ds-action-btn ds-secondary ds-mbt-dl-btn" data-layer="${layer}">SYNC</button>` : '';
                 }
@@ -576,9 +609,21 @@ class DataStatus {
         const stickyFooter = this._el.querySelector('#dsStickyFooter');
         if (stickyFooter) {
             const needsSync = this._needsSync;
+            // Never "All Data Current" over expired or partly updated FAA data
+            // (offline it said so with everything expired -- round 2 review).
+            const faa = FaaCurrency.products(this._readDeviceManifest(), this._readDeviceManifest().nasr, Date.now());
+            // Expiry unknown (never recorded, e.g. right after an upgrade) is not
+            // current either; a sync records it, so the button stays enabled
+            // (final review 2026-10-17: "All Data Current" with Sync disabled).
+            const bad = faa.filter(p => p.state === 'expired' || p.state === 'stale' || p.state === 'unknown');
+            const what = bad.some(p => p.state === 'expired') ? 'expired'
+                       : bad.some(p => p.state === 'stale') ? 'not current' : 'expiry unknown';
+            const label = needsSync ? 'Sync All Outdated'
+                        : bad.length ? `FAA data ${what}: ${bad.map(p => p.label).join(', ')} — sync on home WiFi`
+                        : 'All Data Current';
             stickyFooter.innerHTML = `
-                <button class="ds-sync-btn" id="dsSyncAllBtn" ${!needsSync ? 'disabled' : ''}>
-                    &#8645; ${needsSync ? 'Sync All Outdated' : 'All Data Current'}
+                <button class="ds-sync-btn" id="dsSyncAllBtn" ${!needsSync && !bad.length ? 'disabled' : ''}>
+                    &#8645; ${label}
                 </button>
             `;
         }
@@ -731,31 +776,37 @@ class DataStatus {
      * both sTile and dTile (server/device manifest entries for the layer).
      */
     _tileUpdateAvail(sTile, dTile) {
-        if (!sTile || !dTile) return false;
+        if (!sTile) return false;
+        // A chart file with no record of its edition: get the server's. This
+        // returned false, so the tablet's TAC file from March was never
+        // replaced (2026-10-16 review).
+        if (!dTile) return true;
         // Device cycle behind server cycle always means an update is
         // available, regardless of whether the server's own current
         // cycle has expired yet — a device on an older cycle is stale
         // even if the server hasn't rolled past ITS cycle's expiration.
         if (sTile.cycle_date !== dTile.cycle_date) return true;
-        // Sectional/TAC/IFR tiles run a 56-day cycle; NASR runs 28-day.
-        // When expiration_date is present use it — avoids false positives
-        // after a NASR-only refresh where cycle_date legitimately differs.
-        if (sTile.expiration_date) {
-            const today = new Date().toISOString().slice(0, 10);
-            return today > sTile.expiration_date;
-        }
-        return sTile.built_at !== dTile.built_at;
+        // Same cycle, rebuilt on the server (a fix): get it. Only when both
+        // record a build time.
+        if (sTile.built_at && dTile.built_at && sTile.built_at !== dTile.built_at) return true;
+        // Repacked on the server (the .mbtiles the tablet downloads was rebuilt).
+        return !!(sTile.packed_at && dTile.packed_at && sTile.packed_at !== dTile.packed_at);
     }
 
     _cycleStatus(expDate, now) {
         if (!expDate) return this._badge('UNKNOWN', 'gray');
-        const daysLeft = (expDate - now) / 86400000;
-        if (daysLeft < 0) {
-            return this._badge(`EXPIRED (${Math.abs(Math.round(daysLeft))}d ago)`, 'red');
-        } else if (daysLeft <= 3) {
-            return this._badge(`EXPIRING (${Math.round(daysLeft)}d)`, 'yellow');
+        // Whole days left, rounded down -- as the status-bar badge (FaaCurrency):
+        // it said 11d while this said 12d. Understating the time left is the
+        // safe direction.
+        const ms = expDate - now;
+        if (ms <= 0) {
+            return this._badge(`EXPIRED (${Math.floor(-ms / 86400000)}d ago)`, 'red');
         }
-        return this._badge(`CURRENT (${Math.round(daysLeft)}d left)`, 'green');
+        const daysLeft = Math.floor(ms / 86400000);
+        if (daysLeft <= 3) {
+            return this._badge(`EXPIRING (${daysLeft}d)`, 'yellow');
+        }
+        return this._badge(`CURRENT (${daysLeft}d left)`, 'green');
     }
 
     _badge(text, color) {
@@ -1054,9 +1105,13 @@ class DataStatus {
         }
         const homeBase = this._resolvedBase;
         const LOCAL    = DataStatus.LOCAL_BASE;
+        // The audit verdict as of now, not from when the page was opened: the
+        // pipeline may have re-audited (and failed) since (pre-merge review).
+        // Unreadable: nothing is synced (_throwIfAuditFailed).
+        this._serverManifest = homeBase ? await this._probeServerManifest(homeBase) : null;
 
         const body = this._el.querySelector('.data-status-body');
-        const stepIds    = ['aero', 'sec', 'ifr', 'ifr-area', 'tac', 'plates'];
+        const stepIds    = ['aero', 'sec', 'ifr', 'ifr-area', 'tac', 'plates', 'verify'];
         const stepLabels = {
             aero:      'Aeronautical Database',
             sec:       'Sectional MBTiles',
@@ -1064,8 +1119,12 @@ class DataStatus {
             'ifr-area': 'IFR Area MBTiles',
             tac:       'TAC MBTiles',
             plates:    'Approach Plates & A/FD',
+            verify:    'Check against home server',
         };
 
+        // Step messages carry text from the home server (audit failures, file
+        // names): shown as text, not HTML.
+        const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
         const renderSteps = (states) => {
             const icons  = { pending: '&#9675;', running: '&#8987;', ok: '&#10003;', skip: '&#8594;', fail: '&#10007;' };
             const colors = { pending: 'var(--text-muted)', running: 'var(--status-caution)', ok: 'var(--status-ok)', skip: 'var(--text-muted)', fail: 'var(--status-danger)' };
@@ -1084,7 +1143,7 @@ class DataStatus {
                             <span style="font-size:18px;color:${colors[s.status]};width:20px;text-align:center">${icons[s.status]}</span>
                             <span style="flex:1">
                                 <span style="font-weight:600">${stepLabels[id]}</span>
-                                ${s.msg ? `<span style="color:var(--text-muted);font-size:13px;display:block">${s.msg}</span>` : ''}
+                                ${s.msg ? `<span style="color:var(--text-muted);font-size:13px;display:block">${esc(s.msg)}</span>` : ''}
                             </span>
                         </div>
                         ${bar}
@@ -1093,7 +1152,7 @@ class DataStatus {
                 `</div><button class="ds-sync-btn" id="dsSyncDoneBtn" style="margin-top:12px">Done — Refresh</button>`;
         };
 
-        const states = { aero: { status: 'pending' }, sec: { status: 'pending' }, ifr: { status: 'pending' }, 'ifr-area': { status: 'pending' }, tac: { status: 'pending' }, plates: { status: 'pending' } };
+        const states = { aero: { status: 'pending' }, sec: { status: 'pending' }, ifr: { status: 'pending' }, 'ifr-area': { status: 'pending' }, tac: { status: 'pending' }, plates: { status: 'pending' }, verify: { status: 'pending' } };
         const setStep   = (id, status, msg, pct = null) => { states[id] = { status, msg, pct }; body.innerHTML = renderSteps(states); this._wireDoneBtn(); };
         const failStep  = (id, err)                     => setStep(id, 'fail', err?.message || String(err));
 
@@ -1111,18 +1170,39 @@ class DataStatus {
 
                 // ── Aeronautical Database (NASR + CIFP) ──────────────────────────────
         setStep('aero', 'running', 'Checking NASR cycle…');
+        // NASR and CIFP each on their own: a NASR refusal or failure no longer
+        // skips the CIFP check (final review 2026-10-17); the step fails naming NASR.
+        let nasrErr = null;
+        let nasrServerDate = null;
+        // NASR is current only once the app has loaded it (IndexedDB), not when
+        // its files are on the tablet: a failed reimport (CLAUDE.md: IDB hang,
+        // 60 s timeout on the 18 MB parse) left Data Status saying CURRENT over
+        // the old cycle (final review 2026-10-17).
+        const loadNasr = async () => {
+            try { await DataStatus._reimportNasr(); }
+            catch (e) { throw new Error(`NASR downloaded but not loaded into the app (${e?.message || e}) — tap Force reimport or restart FlyTab`); }
+        };
         try {
+            this._throwIfAuditFailed('nasr');               // CIFP is gated on its own, below
             const [nasrServer, nasrLocal] = await Promise.all([
-                fetch(`${homeBase}/nasr/cycle_info.json`, { signal: AbortSignal.timeout(8000) }).then(r => r.ok ? r.json() : null),
+                fetch(`${homeBase}/nasr/cycle_info.json`, { cache: 'no-store', signal: AbortSignal.timeout(8000) }).then(r => r.ok ? r.json() : null),
                 fetch(`${LOCAL}/nasr/cycle_info.json`, { cache: 'no-store', signal: AbortSignal.timeout(2000) }).then(r => r.ok ? r.json() : null).catch(() => null),
             ]);
             if (!nasrServer) throw new Error('Home server not reachable');
-            const nasrServerDate = nasrServer.effective_date;
+            nasrServerDate = nasrServer.effective_date;
             const nasrLocalDate  = nasrLocal?.effective_date;
             const suaUpToDate    = (nasrServer.sua_count ?? null) === null || ((nasrLocal?.sua_count ?? null) !== null && nasrServer.sua_count === nasrLocal.sua_count);
             const bundleUpToDate = (nasrServer.bundle_version ?? null) === null || nasrServer.bundle_version === nasrLocal?.bundle_version;
 
             if (nasrLocalDate === nasrServerDate && suaUpToDate && bundleUpToDate) {
+                const loaded = await window.app?._nasrDb?.getCycleInfo?.().catch(() => null);
+                if (window.app?._nasrDb && (loaded?.effective_date !== nasrServerDate
+                        || ((nasrServer.bundle_version ?? null) !== null && loaded?.bundle_version !== nasrServer.bundle_version))) {
+                    setStep('aero', 'running', `NASR files current — loading cycle ${nasrServerDate} into the app…`);
+                    await loadNasr();
+                }
+                // Expiry recorded for offline currency (FaaCurrency), also when current.
+                this._mergeDeviceSection('nasr', { effective_date: nasrServerDate, expiration_date: nasrServer.expiration_date || null });
                 setStep('aero', 'running', `NASR current (cycle ${nasrServerDate}) — checking CIFP…`);
             } else {
                 setStep('aero', 'running', `Downloading NASR${nasrLocalDate ? ' (' + nasrLocalDate + ' → ' + nasrServerDate + ')' : ''}…`);
@@ -1134,24 +1214,31 @@ class DataStatus {
                     const msg = await zipResp.text().catch(() => `HTTP ${zipResp.status}`);
                     throw new Error(`fetch-zip failed: ${msg}`);
                 }
+                const nasrRes = await zipResp.json().catch(() => null);
+                if (!(nasrRes?.extracted > 0)) throw new Error('NASR download had no files');
                 setStep('aero', 'running', `NASR updated — reimporting into app…`);
-                try { await DataStatus._reimportNasr(); }
-                catch (e) { console.warn('[DataStatus] post-sync NASR reimport failed:', e?.message); }
+                await loadNasr();
                 this._saveDeviceSection('nasr', {
                     effective_date: nasrServer.effective_date,
+                    expiration_date: nasrServer.expiration_date || null,
                     bundle_version: nasrServer.bundle_version,
                 });
             }
 
+        } catch (e) { nasrErr = e; }
+        try {
             // CIFP — runs within the same aero step
             setStep('aero', 'running', 'Checking CIFP cycle…');
+            this._throwIfAuditFailed('cifp');
             const [cifpServer, cifpLocal] = await Promise.all([
-                fetch(`${homeBase}/cifp/cifp_cycle_info.json`, { signal: AbortSignal.timeout(8000) }).then(r => r.ok ? r.json() : null),
+                fetch(`${homeBase}/cifp/cifp_cycle_info.json`, { cache: 'no-store', signal: AbortSignal.timeout(8000) }).then(r => r.ok ? r.json() : null),
                 fetch(`${LOCAL}/cifp/cifp_cycle_info.json`, { cache: 'no-store', signal: AbortSignal.timeout(2000) }).then(r => r.ok ? r.json() : null).catch(() => null),
             ]);
             const cifpServerCode = cifpServer?.cycle_code || cifpServer?.effective_date;
             const cifpLocalCode  = cifpLocal?.cycle_code  || cifpLocal?.effective_date;
             if (!cifpServerCode || (cifpLocalCode && cifpLocalCode === cifpServerCode)) {
+                if (cifpServerCode) this._mergeDeviceSection('cifp', { cycle_code: cifpServerCode, expiration_date: cifpServer.expiration_date || null });
+                if (nasrErr) throw new Error(`NASR not synced: ${nasrErr.message} — CIFP current`);
                 setStep('aero', 'ok', `Cycle ${nasrServerDate} — NASR + CIFP current`);
             } else {
                 setStep('aero', 'running', 'Downloading CIFP bundle…');
@@ -1163,10 +1250,16 @@ class DataStatus {
                     const msg = await cifpResp.text().catch(() => `HTTP ${cifpResp.status}`);
                     throw new Error(`CIFP fetch-zip failed: ${msg}`);
                 }
-                this._saveDeviceSection('cifp', { cycle_code: cifpServerCode });
+                const cifpRes = await cifpResp.json().catch(() => null);
+                if (!(cifpRes?.extracted > 0)) throw new Error('CIFP download had no files');
+                this._saveDeviceSection('cifp', { cycle_code: cifpServerCode, expiration_date: cifpServer.expiration_date || null });
+                if (nasrErr) throw new Error(`NASR not synced: ${nasrErr.message} — CIFP updated to ${cifpServerCode}`);
                 setStep('aero', 'ok', `Updated to cycle ${nasrServerDate} — NASR + CIFP`);
             }
-        } catch (e) { failStep('aero', e); }
+        } catch (e) {
+            failStep('aero', nasrErr && !String(e?.message).startsWith('NASR not synced')
+                ? new Error(`NASR not synced: ${nasrErr.message}; CIFP: ${e?.message || e}`) : e);
+        }
 
         // ── MBTiles ───────────────────────────────────────────────────────────
         let mbStatus = [];
@@ -1186,6 +1279,10 @@ class DataStatus {
             }
             setStep(stepId, 'running', `Downloading ${label} — this may take 10–20 min…`);
             try {
+                // Re-read before each step: a sync runs long, and a build may
+                // have started since (round 2 review). Unreadable: refused.
+                this._serverManifest = await this._probeServerManifest(homeBase);
+                this._throwIfAuditFailed(`charts:${layer}`);
                 const mbUrl  = `${homeBase}/mbtiles/${layer}.mbtiles`;
                 const resp   = await fetch(
                     `${LOCAL}/fetch-mbtiles?layer=${encodeURIComponent(layer)}&url=${encodeURIComponent(mbUrl)}`,
@@ -1204,8 +1301,10 @@ class DataStatus {
         // ── Plates ───────────────────────────────────────────────────────────
         setStep('plates', 'running', 'Checking plate cycle…');
         try {
+            this._serverManifest = await this._probeServerManifest(homeBase);   // as of now (see charts)
+            this._throwIfAuditFailed('plates');            // includes A/FD: its pages travel in the plate zips
             const [serverCycle, localCycle] = await Promise.all([
-                fetch(`${homeBase}/plates/plates_cycle_info.json`, { signal: AbortSignal.timeout(8000) }).then(r => r.ok ? r.json() : null),
+                fetch(`${homeBase}/plates/plates_cycle_info.json`, { cache: 'no-store', signal: AbortSignal.timeout(8000) }).then(r => r.ok ? r.json() : null),
                 fetch(`${LOCAL}/plates/plates_cycle_info.json`, { cache: 'no-store', signal: AbortSignal.timeout(2000) }).then(r => r.ok ? r.json() : null).catch(() => null),
             ]);
             // Prefer state_sizes (has real MB values) over states string array
@@ -1222,9 +1321,15 @@ class DataStatus {
             const dBuiltAt = this._readDeviceManifest().plates?.built_at || null;
             const builtAtMatch = !sBuiltAt || (dBuiltAt && dBuiltAt >= sBuiltAt);
             const needsUpdate = !cycleMatch || !allStatesSynced || !builtAtMatch;
+            // The states the server has now: synced_states keeps a state the
+            // server dropped (its chip says "removed from server"), so the A/FD
+            // tab tests against this list (re-review 2026-10-17).
+            const serverStates = statesResp.map(s => s.state);
 
             if (!needsUpdate) {
-                setStep('plates', 'skip', `Current — cycle ${serverDate}`);
+                this._mergeDeviceSection('plates', { expiration_date: serverCycle?.expiration_date || null, failed_states: [], server_states: serverStates });
+                const warn = this._recordAfd(false);
+                setStep('plates', 'skip', `Current — cycle ${serverDate}${warn.length ? ` · ⚠ ${warn[0]}` : ''}`);
             } else if (!statesResp.length) {
                 setStep('plates', 'skip', 'No plate states available on server');
             } else {
@@ -1236,6 +1341,8 @@ class DataStatus {
                 let done = 0;
                 const pctNow = () => Math.round(done / statesToSync.length * 100);
                 const newlySynced = [...syncedStates];
+                const failed = [];
+                let firstFailure = null;
                 for (const stateInfo of statesToSync) {
                     const st = stateInfo.state;
                     const mb = stateInfo.size_mb;
@@ -1259,14 +1366,31 @@ class DataStatus {
                         clearInterval(ticker);
                         if (!resp.ok) throw new Error(`${st}: ${await resp.text()}`);
                         const result = await resp.json();
+                        if (!(result.extracted > 0)) throw new Error(`${st}: the download had no files`);
                         done++;
                         if (!newlySynced.includes(st)) newlySynced.push(st);
-                        setStep('plates', 'running', `✓ ${st} done (${result.extracted?.toLocaleString() ?? '?'} files) — ${done}/${statesToSync.length} complete`, pctNow());
+                        const removed = result.pruned ? `, ${result.pruned.toLocaleString()} expired removed` : '';
+                        setStep('plates', 'running', `✓ ${st} done (${result.extracted?.toLocaleString() ?? '?'} files${removed}) — ${done}/${statesToSync.length} complete`, pctNow());
                     } catch (e) {
                         clearInterval(ticker);
                         done++;
+                        // Not synced: its plates are still the previous cycle's (it
+                        // stayed listed as synced and was never retried -- 2026-10-16 review).
+                        failed.push(st);
+                        if (!firstFailure) firstFailure = e.message;
+                        const i = newlySynced.indexOf(st);
+                        if (i >= 0) newlySynced.splice(i, 1);
                         setStep('plates', 'running', `✗ ${st} failed: ${e.message} — continuing…`, pctNow());
                     }
+                }
+                localStorage.setItem('flypi_plates_synced_states', JSON.stringify(newlySynced));
+                if (failed.length) {
+                    // The new cycle is recorded only when every state has it; the
+                    // next SYNC tries again.
+                    const prev = this._readDeviceManifest().plates || {};
+                    this._saveDeviceSection('plates', { ...prev, synced_states: newlySynced, failed_states: failed, server_states: serverStates });
+                    this._recordAfd(true);
+                    throw new Error(`${failed.join(', ')} failed (${firstFailure}) — ${failed.length > 1 ? 'their' : 'its'} plates are still the previous cycle's. SYNC again.`);
                 }
                 if (serverCycle) {
                     await fetch(`${LOCAL}/plates/plates_cycle_info.json`, {
@@ -1274,7 +1398,6 @@ class DataStatus {
                         body: JSON.stringify(serverCycle),
                     }).catch(() => {});
                 }
-                localStorage.setItem('flypi_plates_synced_states', JSON.stringify(newlySynced));
                 localStorage.setItem('flypi_plates_cached_at', Date.now().toString());
                 // Prefer the cycle_code from manifest.json (what _render() compares
                 // against via sPlates.cycle_code) over the one in plates_cycle_info.json.
@@ -1284,17 +1407,131 @@ class DataStatus {
                                 || serverCycle.cycle_code
                                 || serverCycle.effective_date,
                     built_at: this._serverManifest?.plates?.built_at || null,
+                    expiration_date: serverCycle?.expiration_date || null,
                     synced_states: newlySynced,
+                    failed_states: [],
+                    server_states: serverStates,
                 });
-                setStep('plates', 'ok', `${done} states downloaded — cycle ${serverDate}`);
+                const warn = this._recordAfd(false);
+                setStep('plates', 'ok', `${done} states downloaded — cycle ${serverDate}${warn.length ? ` · ⚠ ${warn[0]}` : ''}`);
             }
         } catch (e) { failStep('plates', e); }
 
+        // ── Check the tablet's files against the home server ─────────────────
+        // checksums.json (pipeline audit): every plate, index and NASR/CIFP file,
+        // size + SHA-256. The review found 2,461 plates on the tablet differing
+        // from the server, 130 missing, 4,060 leftovers -- nothing could tell.
+        // Skipped after a failed step: it would only list what didn't sync.
+        const anyFailed = () => Object.values(states).some((st) => st.status === 'fail');
+        if (anyFailed()) {
+            setStep('verify', 'skip', 'Skipped — a step above did not complete');
+        } else try {
+            setStep('verify', 'running', 'Checking every file against the home server…');
+            const r = await fetch(`${LOCAL}/verify?url=${encodeURIComponent(`${homeBase}/checksums.json`)}`,
+                { method: 'POST', signal: AbortSignal.timeout(900000) });
+            if (!r.ok) throw new Error(await r.text());
+            const v = await r.json();
+            const n = (x) => (x || 0).toLocaleString();
+            const extra = v.extra?.count ? ` · ${n(v.extra.count)} old files not on the server (not shown)` : '';
+            if (!(v.checked > 0)) {
+                throw new Error("the home server's file list had no files to check");
+            } else if (!v.changed?.count && !v.missing?.count) {
+                setStep('verify', 'ok', `All ${n(v.matched)} files match the home server${extra}`);
+            } else {
+                // SYNC skips data whose cycle already matches; RE-DOWNLOAD fetches it again.
+                const eg = [...(v.changed?.examples || []), ...(v.missing?.examples || [])].slice(0, 3).join(', ');
+                throw new Error(`${n(v.changed?.count)} differ, ${n(v.missing?.count)} missing (e.g. ${eg}) — tap RE-DOWNLOAD for that data${extra}`);
+            }
+        } catch (e) { failStep('verify', e); }
+
         // ── Done ──────────────────────────────────────────────────────────────
+        // Use what was just synced now: the procedures (CIFP) and plate index in
+        // memory were the previous cycle's until the next start, and the CIFP
+        // cached in IndexedDB was never replaced (2026-10-16 review).
+        try { await window.app?.approachCharts?.reloadAfterSync?.(); } catch (e) { console.warn('[DataStatus] reload after sync failed:', e); }
         this._cacheRunning = false;
         if (btn) { btn.disabled = false; btn.innerHTML = '&#8645; Sync All Outdated'; }
-        if (doneProg) doneProg('Sync complete', 'var(--status-ok)');
+        if (doneProg) {
+            if (anyFailed()) doneProg('Sync finished with problems — see the steps above', 'var(--status-danger)');
+            else doneProg('Sync complete', 'var(--status-ok)');
+        }
         this._wireDoneBtn();
+    }
+
+    /**
+     * The home server's FAA currency audit (audit_currency.py, manifest.audit):
+     * a product is synced only under a verdict that passed it and still
+     * describes it. Otherwise the tablet keeps what it has.
+     */
+    _throwIfAuditFailed(...products) {
+        const today = new Date().toLocaleDateString('en-CA');      // YYYY-MM-DD, tablet's local date
+        for (const p of products) {
+            const problem = DataStatus.auditProblem(this._serverManifest, p, today);
+            if (problem) throw new Error(`Not synced — ${problem}. Your current data is kept.`);
+        }
+    }
+
+    /**
+     * Why `product` ('nasr', 'cifp', 'plates' -- with A/FD, 'charts:<layer>')
+     * must not be synced under this manifest's audit verdict, or null.
+     * Pre-merge review (2026-10-16): the tablet synced with no manifest or no
+     * verdict, and on any old "ok" -- a failed build or a crashed audit left
+     * yesterday's pass, builds from the admin page were never audited, and the
+     * expiry check was never consulted.
+     */
+    static auditProblem(manifest, product, today, nowMs = Date.now()) {
+        if (!manifest) return "the home server's data list (manifest.json) could not be read";
+        const a = manifest.audit;
+        if (!a) return "the home server's data has not been checked by its FAA currency audit";
+        const [name, layer] = String(product).split(':');
+        // Each product on its own (round 2 review, 2026-10-17): one product's
+        // failure, expiry or rebuild blocked unrelated current ones -- an A/FD
+        // failure blocked plates (now a warning: auditWarnings), an expired
+        // chart layer blocked NASR, a chart build blocked NASR and plates.
+        if (a.pending === true || (a.pending_products || []).includes(product)) {
+            return `the home server is building new ${name === 'charts' ? layer : name.toUpperCase()} data — sync when it has finished`;
+        }
+        if (a.error && !a.products) return `the home server's FAA check did not complete (${a.error})`;
+        const r = a.products?.[product] || (name === 'charts' ? a.products?.charts : null);
+        if (!r) return `the home server's ${name.toUpperCase()} data has not been checked by its FAA currency audit`;
+        if (r.ok === false) return `the home server's ${name === 'charts' ? layer : name.toUpperCase()} data failed its FAA check (${r.failures?.[0] || 'see the pipeline log'})`;
+        if (!a.per_product) {
+            // An older verdict: one expiry check for everything (kept strict).
+            const e = a.products?.expiry;
+            if (!e) return "the home server's data has not been checked by its FAA currency audit";
+            if (e.ok === false) return `the home server's EXPIRY data failed its FAA check (${e.failures?.[0] || 'see the pipeline log'})`;
+        }
+        // Until when the check holds: the next changeover, 0901Z on the
+        // effective date (a date alone: from that local day). None: not trusted.
+        const until = r.valid_until || a.valid_until;
+        if (!until) return "the home server's FAA check has no expiry — it is not trusted";
+        const expired = until.includes('T') ? nowMs >= Date.parse(until) : today >= until;
+        if (expired) {
+            return `the home server's FAA check was for cycle ${a.cycle || '?'}, valid until ${until} — it has not checked the current data yet`;
+        }
+        const sec = name === 'charts' ? manifest.tiles?.[layer] : manifest[name];
+        const built = [sec?.built_at, sec?.packed_at].filter(Boolean).sort().pop();
+        if (built && a.checked_at && built > a.checked_at) {
+            return `the home server's ${name === 'charts' ? layer : name.toUpperCase()} data was built after its last FAA check (${built}) — sync after the next check`;
+        }
+        return null;
+    }
+
+    /**
+     * Problems that don't block `product` but the pilot must see: A/FD pages
+     * travel in the plate zips -- when they failed the check, current plates
+     * are still synced and the A/FD pages are flagged not current (Dana,
+     * 2026-10-17: "Sync plates, warn on A/FD").
+     */
+    static auditWarnings(manifest, product) {
+        const a = manifest?.audit;
+        if (product !== 'plates' || !a?.products) return [];
+        const afd = a.products.afd;
+        if (!afd) return ['A/FD pages not checked — not current'];
+        if (afd.ok === false || (a.pending_products || []).includes('afd')) {
+            return [`A/FD pages not current (${afd.failures?.[0] || 'being rebuilt'})`];
+        }
+        return [];
     }
 
     /** Wire the "Done — Refresh" button that appears after _syncAll completes. */
@@ -1326,10 +1563,18 @@ class DataStatus {
                 if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                 const bundle = await resp.json();
                 await app._nasrDb.importNasrBundle(bundle);
+            } catch (e) {
+                // Thrown, not swallowed: the sync step and Force reimport report it
+                // instead of a green "App data reloaded" over the old cycle.
+                console.warn('[DataStatus] NASR reimport failed:', e?.message);
+                throw e;
+            }
+            // Loaded: a failure redrawing the badge or map is not a failed import (re-review).
+            try {
                 await app._updateNasrBadge?.();
                 app.vectorLayers?._updateDynamicLayers?.();
             } catch (e) {
-                console.warn('[DataStatus] NASR reimport failed:', e?.message);
+                console.warn('[DataStatus] NASR loaded; refreshing the badge/map failed:', e?.message);
             }
             return;
         }
@@ -1439,6 +1684,18 @@ class DataStatus {
         const mbtilesUrl  = `${homeBase}/mbtiles/${layer}.mbtiles`;
 
         showProg(`Connecting to home server for ${layer}.mbtiles…`);
+        // Same audit gate as Sync All (round 2 review: this button skipped it
+        // and could take a chart file mid-rebuild).
+        this._serverManifest = homeBase ? await this._probeServerManifest(homeBase) : null;
+        try {
+            this._throwIfAuditFailed(`charts:${layer}`);
+        } catch (err) {
+            doneProg(err.message, 'var(--status-danger)');
+            this._cacheRunning = false;
+            btn.disabled = false;
+            btn.textContent = 'Re-download';
+            return;
+        }
 
         let pollInterval = null;
         const startPoll = () => {
