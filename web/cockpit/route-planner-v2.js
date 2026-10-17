@@ -37,16 +37,14 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         this._quiet = 0;
     }
 
-    // Route engine: the current planner's when it exists (built once, never a
-    // second one); without it (it is being replaced), our own.
+    // Route engine and terminal analyzer: the current planner's when it exists
+    // (built once, never a second one); without it (it is being replaced), our own.
+    // With T-routes set, Plan route offers the current planner's T-route wizard
+    // here too (Dana, 2026-10-17: keep it; she uses it since v11.51).
     get _planner() { return this._main?._planner ?? this.__planner ?? null; }
     set _planner(v) { this.__planner = v; }
-    // No terminal analyzer: the T-route wizard is a step-3 decision (drop or
-    // port, plan 2026-10-16); until then this planner ignores terminalRouting,
-    // as it always has (review 2026-10-17: borrowing the current planner's
-    // opened the old wizard here for a pilot with T-routes set).
-    get _terminalAnalyzer() { return null; }
-    set _terminalAnalyzer(_v) { /* step 3 */ }
+    get _terminalAnalyzer() { return this._main?._terminalAnalyzer ?? this.__terminalAnalyzer ?? null; }
+    set _terminalAnalyzer(v) { this.__terminalAnalyzer = v; }
     _startBuildPlanner() { if (!this._main) super._startBuildPlanner(); }
     // A NASR import mid-session: the engine to rebuild is the current
     // planner's when we use it (review 2026-10-17: ours was nulled, its kept

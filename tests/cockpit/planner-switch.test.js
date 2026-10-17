@@ -25,29 +25,32 @@ describe('step 1: the new planner stands alone', () => {
     beforeEach(() => { document.body.innerHTML = '<div id="pv"></div>'; window.FlyTabPlanning = { RoutePlanner: FakeEngine, TerminalAnalyzer: FakeTerminal }; });
     afterEach(() => { delete window.FlyTabPlanning; });
 
-    it('without the current planner it builds its own route engine', () => {
+    it('without the current planner it builds its own route engine and terminal analyzer', () => {
         const p = new RoutePlannerV2(document.getElementById('pv'), nasrDb, { aero: { a: 1 } }, null);
         p.init();
         expect(p._planner).toBeInstanceOf(FakeEngine);
+        expect(p._terminalAnalyzer).toBeInstanceOf(FakeTerminal);
     });
 
-    it('beside the current planner it uses that one\'s engine (not a second)', () => {
+    it('beside the current planner it uses that one\'s engine and terminal analyzer (not a second)', () => {
         const main = { _planner: { main: 1 }, _terminalAnalyzer: { main: 2 }, _getAirwayPairCache: vi.fn(async () => new Map()) };
         const p = new RoutePlannerV2(document.getElementById('pv'), nasrDb, { aero: {} }, main);
         p.init();
         expect(p._planner).toBe(main._planner);
+        expect(p._terminalAnalyzer).toBe(main._terminalAnalyzer);
     });
 
-    it('no T-route wizard in the new planner until step 3, with or without the current planner', () => {
-        // terminalRouting is shared (flypi_planner_opts): borrowing the current
-        // planner's analyzer opened the old wizard here (review 2026-10-17).
-        const main = { _planner: { main: 1 }, _terminalAnalyzer: { main: 2 }, _getAirwayPairCache: vi.fn(async () => new Map()) };
-        const beside = new RoutePlannerV2(document.getElementById('pv'), nasrDb, { aero: {} }, main);
-        beside.init();
-        expect(beside._terminalAnalyzer).toBeNull();
-        const alone = new RoutePlannerV2(document.getElementById('pv'), nasrDb, { aero: { a: 1 } }, null);
-        alone.init();
-        expect(alone._terminalAnalyzer).toBeNull();
+    it('with T-routes set, the T-route wizard opens inside the new planner (Dana, 2026-10-17: keep it)', async () => {
+        const main = { _planner: {}, _terminalAnalyzer: {}, _getAirwayPairCache: vi.fn(async () => new Map()) };
+        const p = new RoutePlannerV2(document.getElementById('pv'), nasrDb, { aero: {} }, main);
+        p.init();
+        const areas = [{ icao: 'KCLT', name: 'Charlotte', distFromTrack: 4, options: [{ id: 'direct', label: 'Direct', recommended: true }, { id: 't', label: 'T-route' }] }];
+        const shown = p._showTerminalWizard(areas);
+        const overlay = document.querySelector('#pv .rpp-wizard-overlay');
+        expect(overlay).not.toBeNull();                                // in the new planner, not elsewhere
+        expect(overlay.textContent).toMatch(/CLASS B: Charlotte/);
+        overlay.remove();
+        void shown;
     });
 
     it('a NASR import mid-session rebuilds the engine it uses (the current planner\'s)', () => {
