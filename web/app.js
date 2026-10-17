@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v11.63';
+const FLYTAB_VERSION = 'v11.64';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 // Kept in memory and saved at most every FLUSH_MS (errors at once). Every log()
@@ -276,8 +276,11 @@ class FlyTabApp {
         // Update NASR age badge after data is loaded
         this._updateNasrBadge();
 
-        // Weather Cache: entries older than 12 h are deleted, now and hourly
-        // (Dana, 2026-10-17 -- nothing ever pruned it; entries from June remained).
+        // Weather Cache: entries fetched more than 30 h ago are deleted, now and
+        // hourly (Dana, 2026-10-17 -- nothing ever pruned it; entries from June
+        // remained). 30 h, not less: a TAF is valid at most 30 h from issue, so an
+        // older entry's TAF has expired, while a younger one may still be needed
+        // in flight, where only FIS-B could replace it.
         this._pruneWeatherCache();
         setInterval(() => this._pruneWeatherCache(), 60 * 60 * 1000);
 
@@ -2051,11 +2054,11 @@ class FlyTabApp {
         }
     }
 
-    /** Delete Weather Cache entries older than 12 h (see init). */
+    /** Delete Weather Cache entries fetched more than 30 h ago (see init). */
     async _pruneWeatherCache() {
         try {
-            const n = await this._nasrDb?.clearOldWeather(12 * 3600 * 1000);
-            if (n) DiagLog.log('info', `Weather cache: ${n} entries older than 12 h removed`);
+            const n = await this._nasrDb?.clearOldWeather(30 * 3600 * 1000);
+            if (n) DiagLog.log('info', `Weather cache: ${n} entries older than 30 h removed`);
         } catch (err) {
             DiagLog.log('error', `Weather cache prune failed: ${err?.message || err}`);
         }

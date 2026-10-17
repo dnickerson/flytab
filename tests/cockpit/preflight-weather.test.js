@@ -4,7 +4,8 @@
  * It read only a plan's weather_cache, which only flywhere.app plans carry, so
  * a route built on the tablet always said "Not cached" while the per-airport
  * cache (moving map on WiFi, FIS-B in flight) had minutes-old METARs.
- * The cache is also pruned: entries older than 12 h are deleted at start and hourly.
+ * The cache is also pruned: entries fetched more than 30 h ago (a TAF's longest
+ * validity) are deleted at start and hourly.
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { readFileSync } from 'fs';
@@ -13,6 +14,7 @@ const read = (p) => readFileSync(p, 'utf8');
 globalThis.FaaCurrency = new Function(read('web/shared/faa-currency.js') + '\nreturn FaaCurrency;')();
 const PreflightCheck = new Function(read('web/cockpit/preflight-check.js') + '\nreturn PreflightCheck;')();
 globalThis.RouteCheck = globalThis.RouteCheck || {};
+const NasrDB = new Function(read('web/shared/nasr-db.js') + '\nreturn NasrDB;')();
 const FlyTabApp = new Function(read('web/app.js') + '\nreturn FlyTabApp;')();
 
 const NOW = Date.parse('2026-10-17T17:30:00Z');
@@ -66,10 +68,23 @@ describe('pre-flight Weather row: the route airports\' cached METARs', () => {
 });
 
 describe('weather cache pruning', () => {
-    it('deletes entries older than 12 h', async () => {
+    it('deletes entries fetched more than 30 h ago', async () => {
         const clearOldWeather = vi.fn(async () => 3);
         await FlyTabApp.prototype._pruneWeatherCache.call({ _nasrDb: { clearOldWeather } });
-        expect(clearOldWeather).toHaveBeenCalledWith(12 * 3600 * 1000);
+        expect(clearOldWeather).toHaveBeenCalledWith(30 * 3600 * 1000);
+    });
+    it('clearOldWeather keeps a 13 h old entry (TAF may be valid), deletes 31 h and June ones', async () => {
+        vi.useFakeTimers({ now: NOW });
+        const iso = (h) => new Date(NOW - h * 3600000).toISOString();
+        const rows = [{ icao: 'KLKR', fetched_at: iso(0.2) }, { icao: 'KCLT', fetched_at: iso(13) },
+                      { icao: 'KGSO', fetched_at: iso(31) }, { icao: 'KROA', fetched_at: '2026-06-02T14:00:00.000Z' },
+                      { icao: 'KAVL' }];
+        const deleted = [];
+        const n = await NasrDB.prototype.clearOldWeather.call(
+            { _getAll: async () => rows, _delete: async (_s, k) => { deleted.push(k); } }, 30 * 3600000);
+        expect(deleted.sort()).toEqual(['KGSO', 'KROA']);
+        expect(n).toBe(2);
+        vi.useRealTimers();
     });
     it('runs at start and every hour', () => {
         const src = read('web/app.js');
