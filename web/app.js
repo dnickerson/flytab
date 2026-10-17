@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v11.61';
+const FLYTAB_VERSION = 'v11.62';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 // Kept in memory and saved at most every FLUSH_MS (errors at once). Every log()
@@ -275,9 +275,6 @@ class FlyTabApp {
 
         // Update NASR age badge after data is loaded
         this._updateNasrBadge();
-
-        // Startup data readiness check — runs in background, shows banner if data is missing/expired
-        setTimeout(() => this._checkDataReadiness(), 3000);
 
         // Long-press version badge to show diagnostic log
         const verBadge = document.getElementById('statusVersion');
@@ -2350,84 +2347,6 @@ class FlyTabApp {
     }
 
     // === Toast Notifications ==========
-
-    async _checkDataReadiness() {
-        const LOCAL = 'http://localhost:9090';
-        const issues = [];
-
-        const fetchJson = async (url) => {
-            try {
-                const r = await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(3000) });
-                return r.ok ? r.json() : null;
-            } catch { return null; }
-        };
-
-        const [nasr, cifp] = await Promise.all([
-            fetchJson(`${LOCAL}/nasr/cycle_info.json`),
-            fetchJson(`${LOCAL}/cifp/cifp_cycle_info.json`),
-        ]);
-
-        if (!nasr) {
-            issues.push({ severity: 'critical', text: 'NASR aeronautical data not on tablet' });
-        }
-        if (!cifp) {
-            issues.push({ severity: 'warn', text: 'CIFP approach procedures not on tablet' });
-        }
-        // Every FAA product's expiry, at the 0901Z changeover (FaaCurrency):
-        // this covered NASR only (round 2 review).
-        for (const p of FaaCurrency.products(FaaCurrency.deviceManifest(), nasr, Date.now())) {
-            if (p.key === 'nasr' && !nasr) continue;
-            if (p.state === 'expired') {
-                issues.push({ severity: 'critical', text: `${p.label} EXPIRED (${FaaCurrency.describe(p)})` });
-            } else if (p.state === 'expiring' && p.expiresAt - Date.now() < 24 * 3600 * 1000) {
-                if (!issues.some((i) => i.newCycle)) {
-                    // Always < 24 h away: after local midnight on the cycle date it is "today".
-                    const day = new Date(p.expiresAt).toDateString() === new Date().toDateString() ? 'today' : 'tomorrow';
-                    issues.push({ severity: 'warn', newCycle: true,
-                        text: `New FAA cycle at ${FaaCurrency.changeoverLocal(p.expiration)} ${day} (0901Z) — sync on home WiFi before flying` });
-                }
-            } else if (p.state === 'expiring') {
-                issues.push({ severity: 'warn', text: `${p.label} expires in ${p.daysLeft}d` });
-            } else if (p.state === 'stale') {
-                issues.push({ severity: 'warn', text: p.failedStates?.length
-                    ? `${p.label}: ${p.failedStates.join(', ')} not updated (previous cycle)` : `${p.label} pages not current` });
-            }
-        }
-
-        if (issues.length === 0) return;
-
-        const hasCritical = issues.some(i => i.severity === 'critical');
-        const banner = document.createElement('div');
-        banner.id = 'dataReadinessBanner';
-        banner.style.cssText = `
-            background:${hasCritical ? '#b91c1c' : '#92400e'};
-            color:#fff; font-size:13px; font-weight:600;
-            padding:6px 12px; display:flex; align-items:center; gap:8px;
-            width:100%; box-sizing:border-box;
-        `;
-        banner.innerHTML = `
-            <span style="flex:1">⚠ ${issues.map(i => i.text).join(' · ')}</span>
-            <button style="background:rgba(255,255,255,0.2);border:none;color:#fff;padding:4px 10px;border-radius:4px;font-weight:700;font-size:13px;cursor:pointer;touch-action:manipulation" id="_drFixBtn">Fix Now</button>
-            <button style="background:none;border:none;color:#fff;font-size:18px;cursor:pointer;padding:0 4px;touch-action:manipulation" id="_drDismissBtn">✕</button>
-        `;
-
-        // Insert into the flex column after the engine advisory (below status bar, above map)
-        const advisory = document.getElementById('engineAdvisory');
-        const mainContent = document.getElementById('mainContent');
-        if (advisory) {
-            advisory.parentNode.insertBefore(banner, advisory.nextSibling);
-        } else if (mainContent) {
-            mainContent.parentNode.insertBefore(banner, mainContent);
-        } else {
-            document.body.appendChild(banner);
-        }
-
-        banner.querySelector('#_drFixBtn').addEventListener('click', () => {
-            banner.remove();
-            if (this.dataStatus) this.dataStatus.show();
-        });
-        banner.querySelector('#_drDismissBtn').addEventListener('click', () => banner.remove());
-    }
 
     /**
      * What happened to the previous run, in the diagnostic log and one toast:

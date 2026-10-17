@@ -19,6 +19,18 @@ const FaaCurrency = {
         return Number.isFinite(t) ? t : null;
     },
 
+    /**
+     * Less than a day before a product's changeover: "New FAA cycle at 05:01
+     * tomorrow (0901Z) — sync on home WiFi before flying" ("today" after local
+     * midnight on the cycle date), else null. Shown in the pre-flight check's
+     * FAA Data row (Dana, 2026-10-17: no startup banner).
+     */
+    newCycleMessage(p, now = Date.now()) {
+        if (!p || p.state !== 'expiring' || !(p.expiresAt - now < 24 * 3600 * 1000)) return null;
+        const day = new Date(p.expiresAt).toDateString() === new Date(now).toDateString() ? 'today' : 'tomorrow';
+        return `New FAA cycle at ${this.changeoverLocal(p.expiration)} ${day} (0901Z) — sync on home WiFi before flying`;
+    },
+
     /** Local HH:MM of the 0901Z changeover on this expiration date (05:01 EDT, 04:01 EST). */
     changeoverLocal(expiration) {
         const d = new Date(this.expiresAt(expiration));

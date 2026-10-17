@@ -43,15 +43,12 @@ describe('status-bar badge: every FAA product', () => {
     });
 });
 
-describe('startup banner and preflight: plates and procedures too', () => {
+describe('pre-flight check: plates and procedures too', () => {
     afterEach(() => { vi.useRealTimers(); localStorage.clear(); delete globalThis.fetch; document.body.innerHTML = ''; });
 
-    it('startup banner names expired approach plates', async () => {
-        vi.useFakeTimers({ now: new Date('2026-10-30T12:00:00Z') });
-        localStorage.setItem('flytab_device_manifest', JSON.stringify(DEV));
-        globalThis.fetch = vi.fn(async (u) => ({ ok: true, json: async () => (String(u).includes('cifp') ? { cycle_code: '261029' } : NASR_IDB) }));
-        await FlyTabApp.prototype._checkDataReadiness.call({ dataStatus: null });
-        expect(document.getElementById('dataReadinessBanner').textContent).toMatch(/PLATES.*EXPIRED/i);
+    it('there is no startup banner any more: the pre-flight check covers FAA data (Dana, 2026-10-17)', () => {
+        expect(FlyTabApp.prototype._checkDataReadiness).toBeUndefined();
+        expect(readFileSync('web/app.js', 'utf8')).not.toMatch(/_checkDataReadiness|dataReadinessBanner/);
     });
 
     it('preflight FAA Data row fails on expired plates', async () => {
@@ -75,44 +72,37 @@ describe('after the upgrade, before the first sync: "expiry not recorded", not "
 });
 
 
-describe('the day before a new cycle', () => {
+describe('the day before a new cycle: the pre-flight FAA Data row says so', () => {
     const TZ0 = process.env.TZ;
     beforeEach(() => { process.env.TZ = 'America/New_York'; });
     afterEach(() => { if (TZ0 === undefined) delete process.env.TZ; else process.env.TZ = TZ0; });
-    afterEach(() => { vi.useRealTimers(); localStorage.clear(); delete globalThis.fetch; document.body.innerHTML = ''; });
-    it('one reminder with the local changeover time, instead of "expires in 0d"', async () => {
-        vi.useFakeTimers({ now: new Date('2026-10-28T20:00:00Z') });          // 16:00 EDT, 13 h before
+    afterEach(() => { vi.useRealTimers(); localStorage.clear(); });
+    const rowAt = async (iso) => {
+        vi.useFakeTimers({ now: new Date(iso) });
         localStorage.setItem('flytab_device_manifest', JSON.stringify({
             cifp: { expiration_date: '2026-10-29' }, plates: { expiration_date: '2026-10-29' }, afd: { expiration_date: '2026-12-24' } }));
-        globalThis.fetch = vi.fn(async (u) => ({ ok: true, json: async () => (String(u).includes('cifp') ? { cycle_code: '261001' }
-            : { effective_date: '2026-10-01', expiration_date: '2026-10-29' }) }));
-        await FlyTabApp.prototype._checkDataReadiness.call({ dataStatus: null });
-        const t = document.getElementById('dataReadinessBanner').textContent;
-        expect(t.match(/New FAA cycle at/g)).toHaveLength(1);
-        expect(t).toMatch(new RegExp(`New FAA cycle at ${FaaCurrency.changeoverLocal('2026-10-29')} tomorrow \\(0901Z\\) — sync on home WiFi before flying`));
-        expect(t).not.toMatch(/expires in 0d/);
+        return PreflightCheck.prototype._checkNasr.call({ db: { getCycleInfo: async () => ({ effective_date: '2026-10-01', expiration_date: '2026-10-29' }) } });
+    };
+    it('one message with the local changeover time, instead of "0d left"', async () => {
+        const r = await rowAt('2026-10-28T20:00:00Z');                       // 16:00 EDT, 13 h before
+        expect(r.status).toBe('warn');
+        expect(r.msg.match(/New FAA cycle at/g)).toHaveLength(1);
+        expect(r.msg).toContain('New FAA cycle at 05:01 tomorrow (0901Z) — sync on home WiFi before flying');
+        expect(r.msg).not.toMatch(/0d left/);
+    });
+    it('says "today" after local midnight on the cycle date (01:00 EDT, change at 05:01)', async () => {
+        const r = await rowAt('2026-10-29T05:00:00Z');
+        expect(r.msg).toContain('New FAA cycle at 05:01 today (0901Z) — sync on home WiFi before flying');
+        expect(r.msg).not.toMatch(/tomorrow/);
+    });
+    it('more than a day ahead: days left as before', async () => {
+        const r = await rowAt('2026-10-26T12:00:00Z');
+        expect(r.msg).toMatch(/2d left/);
+        expect(r.msg).not.toMatch(/New FAA cycle/);
     });
     it('changeoverLocal is the device\'s local time of 0901Z', () => {
         const d = new Date('2026-10-29T09:01:00Z');
         const hhmm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
         expect(FaaCurrency.changeoverLocal('2026-10-29')).toBe(hhmm);
-    });
-    const bannerAt = async (iso) => {
-        vi.useFakeTimers({ now: new Date(iso) });
-        localStorage.setItem('flytab_device_manifest', JSON.stringify({
-            cifp: { expiration_date: '2026-10-29' }, plates: { expiration_date: '2026-10-29' }, afd: { expiration_date: '2026-12-24' } }));
-        globalThis.fetch = vi.fn(async (u) => ({ ok: true, json: async () => (String(u).includes('cifp') ? { cycle_code: '261001' }
-            : { effective_date: '2026-10-01', expiration_date: '2026-10-29' }) }));
-        await FlyTabApp.prototype._checkDataReadiness.call({ dataStatus: null });
-        return document.getElementById('dataReadinessBanner').textContent;
-    };
-    it('says "today" after local midnight on the cycle date (01:00 EDT, change at 05:01)', async () => {
-        const t = await bannerAt('2026-10-29T05:00:00Z');
-        expect(t).toContain('New FAA cycle at 05:01 today (0901Z) — sync on home WiFi before flying');
-        expect(t).not.toMatch(/tomorrow/);
-    });
-    it('says "tomorrow" the afternoon before (16:00 EDT)', async () => {
-        const t = await bannerAt('2026-10-28T20:00:00Z');
-        expect(t).toContain('New FAA cycle at 05:01 tomorrow (0901Z) — sync on home WiFi before flying');
     });
 });

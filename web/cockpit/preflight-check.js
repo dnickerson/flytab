@@ -135,8 +135,13 @@ class PreflightCheck {
             }
             const warn = products.filter(p => p.state === 'expiring' || p.state === 'stale');
             if (warn.length) {
-                return { label: 'FAA Data', status: 'warn',
-                         msg: warn.map(p => p.state === 'stale' ? `${p.label} not current` : `${p.label} ${p.daysLeft}d left`).join(' · ') };
+                // Less than a day before the changeover: one "New FAA cycle at
+                // 05:01 tomorrow" message instead of each product's "0d left".
+                const now = Date.now();
+                const newCycle = warn.map(p => FaaCurrency.newCycleMessage(p, now)).find(Boolean);
+                const msgs = warn.filter(p => !FaaCurrency.newCycleMessage(p, now))
+                    .map(p => p.state === 'stale' ? `${p.label} not current` : `${p.label} ${p.daysLeft}d left`);
+                return { label: 'FAA Data', status: 'warn', msg: [newCycle, ...msgs].filter(Boolean).join(' · ') };
             }
             return { label: 'FAA Data', status: 'ok', msg: `Current — ${Math.min(...products.map(p => p.daysLeft))}d remaining` };
         } catch {
