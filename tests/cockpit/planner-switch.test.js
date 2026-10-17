@@ -25,19 +25,44 @@ describe('step 1: the new planner stands alone', () => {
     beforeEach(() => { document.body.innerHTML = '<div id="pv"></div>'; window.FlyTabPlanning = { RoutePlanner: FakeEngine, TerminalAnalyzer: FakeTerminal }; });
     afterEach(() => { delete window.FlyTabPlanning; });
 
-    it('without the current planner it builds its own route engine and terminal analyzer', () => {
+    it('without the current planner it builds its own route engine', () => {
         const p = new RoutePlannerV2(document.getElementById('pv'), nasrDb, { aero: { a: 1 } }, null);
         p.init();
         expect(p._planner).toBeInstanceOf(FakeEngine);
-        expect(p._terminalAnalyzer).toBeInstanceOf(FakeTerminal);
     });
 
-    it('beside the current planner it uses that one\'s engine and terminal analyzer (not a second)', () => {
+    it('beside the current planner it uses that one\'s engine (not a second)', () => {
         const main = { _planner: { main: 1 }, _terminalAnalyzer: { main: 2 }, _getAirwayPairCache: vi.fn(async () => new Map()) };
         const p = new RoutePlannerV2(document.getElementById('pv'), nasrDb, { aero: {} }, main);
         p.init();
         expect(p._planner).toBe(main._planner);
-        expect(p._terminalAnalyzer).toBe(main._terminalAnalyzer);
+    });
+
+    it('no T-route wizard in the new planner until step 3, with or without the current planner', () => {
+        // terminalRouting is shared (flypi_planner_opts): borrowing the current
+        // planner's analyzer opened the old wizard here (review 2026-10-17).
+        const main = { _planner: { main: 1 }, _terminalAnalyzer: { main: 2 }, _getAirwayPairCache: vi.fn(async () => new Map()) };
+        const beside = new RoutePlannerV2(document.getElementById('pv'), nasrDb, { aero: {} }, main);
+        beside.init();
+        expect(beside._terminalAnalyzer).toBeNull();
+        const alone = new RoutePlannerV2(document.getElementById('pv'), nasrDb, { aero: { a: 1 } }, null);
+        alone.init();
+        expect(alone._terminalAnalyzer).toBeNull();
+    });
+
+    it('a NASR import mid-session rebuilds the engine it uses (the current planner\'s)', () => {
+        const main = { _planner: { main: 1 }, _checkPlannerVersion: vi.fn(), _getAirwayPairCache: vi.fn(async () => new Map()) };
+        const p = new RoutePlannerV2(document.getElementById('pv'), nasrDb, { aero: {} }, main);
+        p._checkPlannerVersion();
+        expect(main._checkPlannerVersion).toHaveBeenCalledTimes(1);
+        const alone = new RoutePlannerV2(document.getElementById('pv'), nasrDb, { aero: { a: 1 } }, null);
+        alone.init();
+        const first = alone._planner;
+        localStorage.setItem('flypi_nasr_version', 'v2');          // a NASR import after the planner started
+        alone._checkPlannerVersion();
+        expect(alone._planner).toBeInstanceOf(FakeEngine);
+        expect(alone._planner).not.toBe(first);                     // its own engine rebuilt
+        localStorage.removeItem('flypi_nasr_version');
     });
 
     it('the app builds it whether or not the current planner exists', () => {

@@ -203,13 +203,13 @@ class ConfigEditor {
             <div class="ce-fields">
                 <div class="ce-field-row">
                     <label class="ce-label" for="ce-route-planner">Planner</label>
-                    <select id="ce-route-planner" class="ce-input">
+                    <select id="ce-route-planner" class="ce-input ce-input--wide" style="min-height:var(--touch-min, 56px);font-family:var(--font-ui);font-weight:700">
                         <option value="legacy"${rpNew ? '' : ' selected'}>Current planner</option>
                         <option value="new"${rpNew ? ' selected' : ''}>New planner</option>
                     </select>
                 </div>
-                <div class="ce-field-row" style="font-size:14px;color:var(--text-secondary)">
-                    Opened by EDIT, Direct-To, Load procedure, Replan and the route table's REV.
+                <div class="ce-field-row" style="font-family:var(--font-ui);font-size:var(--text-xs);font-weight:700;color:var(--text-secondary)">
+                    EDIT, Direct-To, Load procedure and Replan open it; the route table's REV plans with it.
                     The new one is also in MORE → Route Planner (preview).
                 </div>
             </div>
