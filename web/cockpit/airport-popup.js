@@ -1064,9 +1064,18 @@ class AirportPopup {
             // No WebP for this plate: draw the PDF with the shared PDF.js renderer.
             // The old fallback, a PDF in an <iframe>, shows nothing in Android's
             // WebView (it has no PDF viewer).
+            // Except minimums: one FAA document per volume, whose first page is
+            // another airport's -- say the page is missing (pre-merge review).
             img.onerror = () => {
                 img.onerror = null;
                 img.remove();
+                if (plateType === 'MIN') {
+                    const msg = document.createElement('div');
+                    msg.style.cssText = 'padding:16px;background:var(--bg-primary);color:var(--text-primary);font-weight:700;text-align:center;';
+                    msg.textContent = `${icao}: this airport's minimums page is not on this tablet — sync plates in MORE → Data Status.`;
+                    wrap.appendChild(msg);
+                    return;
+                }
                 renderPdfToContainer(pdfUrl, wrap, { cssClass: 'apt-plate-pdf', errorLabel: 'airport diagram' });
             };
             if (canOpen) {

@@ -747,11 +747,19 @@ class ApproachCharts {
             this._imgEl.style.display = '';
             this._imgEl.src = webpUrl;
             this._imgEl.style.transform = '';
-            // If the webp file doesn't exist on device, fall back to PDF rendering
+            // If the webp file doesn't exist on device, fall back to PDF rendering --
+            // except minimums: the volume PDF's first page is another airport's,
+            // so say the page is missing instead (pre-merge review).
             this._imgEl.onerror = () => {
                 this._imgEl.onerror = null;
                 this._imgEl.style.display = 'none';
-                if (file && file.toLowerCase().endsWith('.pdf')) {
+                if (isMin) {
+                    const msg = document.createElement('div');
+                    msg.className = 'approach-plate-pdf';
+                    msg.style.cssText = 'padding:24px;background:var(--bg-primary);color:var(--text-primary);font-weight:700;text-align:center;';
+                    msg.textContent = `${plate.icao} ${plate.name || plate.chart_name || 'minimums'}: this airport's minimums page is not on this tablet — sync plates in MORE → Data Status.`;
+                    this._panContainer.appendChild(msg);
+                } else if (file && file.toLowerCase().endsWith('.pdf')) {
                     this._renderPdf(plateUrl(file), body);
                 }
             };

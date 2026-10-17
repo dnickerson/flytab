@@ -52,9 +52,17 @@ public class TileServer extends NanoHTTPD {
         Pattern.compile("^/tiles/([\\w-]+)/(\\d+)/(\\d+)/(\\d+)\\.webp$");
 
     public TileServer(int port, File baseDir) {
-        super(port);
+        // Loopback only: FlyTab's WebView is the only client. Bound to every
+        // interface, any device on the Stratux or home WiFi could PUT, DELETE,
+        // fetch-zip or /verify (pre-merge review, 2026-10-16).
+        super("127.0.0.1", port);
         this.baseDir = baseDir;
     }
+
+    /** One data download at a time: a timed-out request kept running beside the next one. */
+    private static final Object FETCH_LOCK = new Object();
+    /** checksums.json is ~2 MB; anything far larger is not ours (and would exhaust memory). */
+    private static final int MAX_CHECKSUMS_BYTES = 32 * 1024 * 1024;
 
     /** Close all open MBTiles databases. Call from plugin handleOnDestroy. */
     public void closeDatabases() {
@@ -314,7 +322,11 @@ public class TileServer extends NanoHTTPD {
         String url = (urlList != null && !urlList.isEmpty()) ? urlList.get(0) : null;
         if (url == null) return newFixedLengthResponse(Response.Status.BAD_REQUEST, "text/plain", "Missing url param");
         try {
-            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
+            java.net.URL parsed = new java.net.URL(url);
+            if (!"http".equals(parsed.getProtocol()) && !"https".equals(parsed.getProtocol())) {
+                return newFixedLengthResponse(Response.Status.BAD_REQUEST, "text/plain", "url must be http(s)");
+            }
+            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) parsed.openConnection();
             conn.setConnectTimeout(15000);
             conn.setReadTimeout(60000);
             if (conn.getResponseCode() != 200) {
@@ -325,7 +337,12 @@ public class TileServer extends NanoHTTPD {
                     new java.io.InputStreamReader(conn.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
                 char[] buf = new char[65536];
                 int n;
-                while ((n = rd.read(buf)) > 0) sb.append(buf, 0, n);
+                while ((n = rd.read(buf)) > 0) {
+                    sb.append(buf, 0, n);
+                    if (sb.length() > MAX_CHECKSUMS_BYTES) {
+                        return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "text/plain", "checksums.json too large");
+                    }
+                }
             }
             org.json.JSONObject files = new org.json.JSONObject(sb.toString()).getJSONObject("files");
             Map<String, ChecksumVerify.Expected> expected = new java.util.HashMap<>();
@@ -380,8 +397,21 @@ public class TileServer extends NanoHTTPD {
             return newFixedLengthResponse(Response.Status.BAD_REQUEST, "text/plain", "Missing url param");
         }
 
-        File tempFile = new File(baseDir, "_fetch_zip_tmp.zip");
+        synchronized (FETCH_LOCK) {
+            return fetchZipLocked(url);
+        }
+    }
+
+    private Response fetchZipLocked(String url) {
+        // Downloads run one at a time (FETCH_LOCK): any temp zip here now was left
+        // by a download the app was killed during -- up to 400 MB each.
+        File[] stale = baseDir.listFiles((d, n) -> n.startsWith("_fetch_zip_") && n.endsWith(".zip"));
+        if (stale != null) for (File f : stale) f.delete();
+        File tempFile = null;
         try {
+            // Its own temp file: a timed-out request's thread could still be
+            // writing the old shared _fetch_zip_tmp.zip (pre-merge review).
+            tempFile = File.createTempFile("_fetch_zip_", ".zip", baseDir);
             // Download zip to temp file using trust-all TLS (same as fetch-mbtiles)
             java.net.URL parsedUrl = new java.net.URL(url);
             java.net.URLConnection rawConn = parsedUrl.openConnection();
@@ -427,45 +457,20 @@ public class TileServer extends NanoHTTPD {
             }
             Log.i(TAG, "fetch-zip: downloaded " + bytes + " bytes to " + tempFile.getAbsolutePath());
 
-            // Extract zip relative to baseDir
-            int extracted = 0;
-            byte[] xbuf = new byte[8192];
-            PlatePrune prune = new PlatePrune();
-            try (ZipInputStream zis = new ZipInputStream(new FileInputStream(tempFile))) {
-                ZipEntry entry;
-                while ((entry = zis.getNextEntry()) != null) {
-                    if (entry.isDirectory()) { zis.closeEntry(); continue; }
-                    String name = entry.getName();
-                    if (name.contains("..")) { zis.closeEntry(); continue; }
-                    prune.saw(name);
-
-                    File outFile = new File(baseDir, name);
-                    File parent = outFile.getParentFile();
-                    if (parent != null && !parent.exists()) parent.mkdirs();
-
-                    try (FileOutputStream fos = new FileOutputStream(outFile)) {
-                        int n;
-                        while ((n = zis.read(xbuf)) > 0) fos.write(xbuf, 0, n);
-                    }
-                    extracted++;
-                    zis.closeEntry();
-                }
-            }
-            Log.i(TAG, "fetch-zip: extracted " + extracted + " files");
-            tempFile.delete();
-
-            // Only reached when every entry extracted: a failed download prunes nothing.
-            int pruned = prune.prune(baseDir);
-            Log.i(TAG, "fetch-zip: removed " + pruned + " plates no longer in " + prune.folders().size() + " airport folders");
+            // Complete zips only (central directory), then prune: ZipSync.
+            ZipSync.Result r = ZipSync.extract(tempFile, baseDir);
+            Log.i(TAG, "fetch-zip: extracted " + r.extracted + " files; removed " + r.pruned
+                    + " plates no longer in " + r.folders + " airport folders");
 
             return newFixedLengthResponse(Response.Status.OK, "application/json",
-                "{\"extracted\":" + extracted + ",\"bytes\":" + bytes + ",\"pruned\":" + pruned + "}");
+                "{\"extracted\":" + r.extracted + ",\"bytes\":" + bytes + ",\"pruned\":" + r.pruned + "}");
 
         } catch (Exception e) {
-            if (tempFile.exists()) tempFile.delete();
             Log.e(TAG, "fetch-zip failed", e);
             return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "text/plain",
                 "fetch-zip failed: " + e.getMessage());
+        } finally {
+            if (tempFile != null && tempFile.exists()) tempFile.delete();
         }
     }
 

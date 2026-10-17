@@ -1053,6 +1053,10 @@ class DataStatus {
         }
         const homeBase = this._resolvedBase;
         const LOCAL    = DataStatus.LOCAL_BASE;
+        // The audit verdict as of now, not from when the page was opened: the
+        // pipeline may have re-audited (and failed) since (pre-merge review).
+        // Unreadable: nothing is synced (_throwIfAuditFailed).
+        this._serverManifest = homeBase ? await this._probeServerManifest(homeBase) : null;
 
         const body = this._el.querySelector('.data-status-body');
         const stepIds    = ['aero', 'sec', 'ifr', 'ifr-area', 'tac', 'plates', 'verify'];
@@ -1138,6 +1142,8 @@ class DataStatus {
                     const msg = await zipResp.text().catch(() => `HTTP ${zipResp.status}`);
                     throw new Error(`fetch-zip failed: ${msg}`);
                 }
+                const nasrRes = await zipResp.json().catch(() => null);
+                if (!(nasrRes?.extracted > 0)) throw new Error('NASR download had no files');
                 setStep('aero', 'running', `NASR updated — reimporting into app…`);
                 try { await DataStatus._reimportNasr(); }
                 catch (e) { console.warn('[DataStatus] post-sync NASR reimport failed:', e?.message); }
@@ -1167,6 +1173,8 @@ class DataStatus {
                     const msg = await cifpResp.text().catch(() => `HTTP ${cifpResp.status}`);
                     throw new Error(`CIFP fetch-zip failed: ${msg}`);
                 }
+                const cifpRes = await cifpResp.json().catch(() => null);
+                if (!(cifpRes?.extracted > 0)) throw new Error('CIFP download had no files');
                 this._saveDeviceSection('cifp', { cycle_code: cifpServerCode });
                 setStep('aero', 'ok', `Updated to cycle ${nasrServerDate} — NASR + CIFP`);
             }
@@ -1190,7 +1198,7 @@ class DataStatus {
             }
             setStep(stepId, 'running', `Downloading ${label} — this may take 10–20 min…`);
             try {
-                this._throwIfAuditFailed('charts');
+                this._throwIfAuditFailed(`charts:${layer}`);
                 const mbUrl  = `${homeBase}/mbtiles/${layer}.mbtiles`;
                 const resp   = await fetch(
                     `${LOCAL}/fetch-mbtiles?layer=${encodeURIComponent(layer)}&url=${encodeURIComponent(mbUrl)}`,
@@ -1209,7 +1217,7 @@ class DataStatus {
         // ── Plates ───────────────────────────────────────────────────────────
         setStep('plates', 'running', 'Checking plate cycle…');
         try {
-            this._throwIfAuditFailed('plates', 'afd');     // A/FD pages travel in the plate zips
+            this._throwIfAuditFailed('plates');            // includes A/FD: its pages travel in the plate zips
             const [serverCycle, localCycle] = await Promise.all([
                 fetch(`${homeBase}/plates/plates_cycle_info.json`, { signal: AbortSignal.timeout(8000) }).then(r => r.ok ? r.json() : null),
                 fetch(`${LOCAL}/plates/plates_cycle_info.json`, { cache: 'no-store', signal: AbortSignal.timeout(2000) }).then(r => r.ok ? r.json() : null).catch(() => null),
@@ -1243,6 +1251,7 @@ class DataStatus {
                 const pctNow = () => Math.round(done / statesToSync.length * 100);
                 const newlySynced = [...syncedStates];
                 const failed = [];
+                let firstFailure = null;
                 for (const stateInfo of statesToSync) {
                     const st = stateInfo.state;
                     const mb = stateInfo.size_mb;
@@ -1266,6 +1275,7 @@ class DataStatus {
                         clearInterval(ticker);
                         if (!resp.ok) throw new Error(`${st}: ${await resp.text()}`);
                         const result = await resp.json();
+                        if (!(result.extracted > 0)) throw new Error(`${st}: the download had no files`);
                         done++;
                         if (!newlySynced.includes(st)) newlySynced.push(st);
                         const removed = result.pruned ? `, ${result.pruned.toLocaleString()} expired removed` : '';
@@ -1276,6 +1286,7 @@ class DataStatus {
                         // Not synced: its plates are still the previous cycle's (it
                         // stayed listed as synced and was never retried -- 2026-10-16 review).
                         failed.push(st);
+                        if (!firstFailure) firstFailure = e.message;
                         const i = newlySynced.indexOf(st);
                         if (i >= 0) newlySynced.splice(i, 1);
                         setStep('plates', 'running', `✗ ${st} failed: ${e.message} — continuing…`, pctNow());
@@ -1287,7 +1298,7 @@ class DataStatus {
                     // next SYNC tries again.
                     const prev = this._readDeviceManifest().plates || {};
                     this._saveDeviceSection('plates', { ...prev, synced_states: newlySynced });
-                    throw new Error(`${failed.join(', ')} failed — ${failed.length > 1 ? 'their' : 'its'} plates are still the previous cycle's. SYNC again.`);
+                    throw new Error(`${failed.join(', ')} failed (${firstFailure}) — ${failed.length > 1 ? 'their' : 'its'} plates are still the previous cycle's. SYNC again.`);
                 }
                 if (serverCycle) {
                     await fetch(`${LOCAL}/plates/plates_cycle_info.json`, {
@@ -1314,19 +1325,26 @@ class DataStatus {
         // checksums.json (pipeline audit): every plate, index and NASR/CIFP file,
         // size + SHA-256. The review found 2,461 plates on the tablet differing
         // from the server, 130 missing, 4,060 leftovers -- nothing could tell.
-        setStep('verify', 'running', 'Checking every file against the home server…');
-        try {
+        // Skipped after a failed step: it would only list what didn't sync.
+        const anyFailed = () => Object.values(states).some((st) => st.status === 'fail');
+        if (anyFailed()) {
+            setStep('verify', 'skip', 'Skipped — a step above did not complete');
+        } else try {
+            setStep('verify', 'running', 'Checking every file against the home server…');
             const r = await fetch(`${LOCAL}/verify?url=${encodeURIComponent(`${homeBase}/checksums.json`)}`,
                 { method: 'POST', signal: AbortSignal.timeout(900000) });
             if (!r.ok) throw new Error(await r.text());
             const v = await r.json();
             const n = (x) => (x || 0).toLocaleString();
             const extra = v.extra?.count ? ` · ${n(v.extra.count)} old files not on the server (not shown)` : '';
-            if (!v.changed?.count && !v.missing?.count) {
+            if (!(v.checked > 0)) {
+                throw new Error("the home server's file list had no files to check");
+            } else if (!v.changed?.count && !v.missing?.count) {
                 setStep('verify', 'ok', `All ${n(v.matched)} files match the home server${extra}`);
             } else {
+                // SYNC skips data whose cycle already matches; RE-DOWNLOAD fetches it again.
                 const eg = [...(v.changed?.examples || []), ...(v.missing?.examples || [])].slice(0, 3).join(', ');
-                throw new Error(`${n(v.changed?.count)} differ, ${n(v.missing?.count)} missing (e.g. ${eg}) — SYNC again${extra}`);
+                throw new Error(`${n(v.changed?.count)} differ, ${n(v.missing?.count)} missing (e.g. ${eg}) — tap RE-DOWNLOAD for that data${extra}`);
             }
         } catch (e) { failStep('verify', e); }
 
@@ -1337,24 +1355,55 @@ class DataStatus {
         try { await window.app?.approachCharts?.reloadAfterSync?.(); } catch (e) { console.warn('[DataStatus] reload after sync failed:', e); }
         this._cacheRunning = false;
         if (btn) { btn.disabled = false; btn.innerHTML = '&#8645; Sync All Outdated'; }
-        if (doneProg) doneProg('Sync complete', 'var(--status-ok)');
+        if (doneProg) {
+            if (anyFailed()) doneProg('Sync finished with problems — see the steps above', 'var(--status-danger)');
+            else doneProg('Sync complete', 'var(--status-ok)');
+        }
         this._wireDoneBtn();
     }
 
     /**
      * The home server's FAA currency audit (audit_currency.py, manifest.audit):
-     * a product that failed it is not synced -- the tablet keeps what it has.
-     * A server without an audit (older pipeline) is synced as before.
+     * a product is synced only under a verdict that passed it and still
+     * describes it. Otherwise the tablet keeps what it has.
      */
     _throwIfAuditFailed(...products) {
-        const a = this._serverManifest?.audit?.products;
-        if (!a) return;
+        const today = new Date().toLocaleDateString('en-CA');      // YYYY-MM-DD, tablet's local date
         for (const p of products) {
-            if (a[p] && a[p].ok === false) {
-                throw new Error(`Not synced — the home server's ${p.toUpperCase()} data failed its FAA check `
-                    + `(${a[p].failures?.[0] || 'see the pipeline log'}). Your current data is kept.`);
-            }
+            const problem = DataStatus.auditProblem(this._serverManifest, p, today);
+            if (problem) throw new Error(`Not synced — ${problem}. Your current data is kept.`);
         }
+    }
+
+    /**
+     * Why `product` ('nasr', 'cifp', 'plates' -- with A/FD, 'charts:<layer>')
+     * must not be synced under this manifest's audit verdict, or null.
+     * Pre-merge review (2026-10-16): the tablet synced with no manifest or no
+     * verdict, and on any old "ok" -- a failed build or a crashed audit left
+     * yesterday's pass, builds from the admin page were never audited, and the
+     * expiry check was never consulted.
+     */
+    static auditProblem(manifest, product, today) {
+        if (!manifest) return "the home server's data list (manifest.json) could not be read";
+        const a = manifest.audit;
+        if (!a) return "the home server's data has not been checked by its FAA currency audit";
+        if (a.pending) return `the home server is building new data (${a.error || 'in progress'}) — sync when it has finished`;
+        if (a.error) return `the home server's FAA check did not complete (${a.error})`;
+        if (a.valid_until && today >= a.valid_until) {
+            return `the home server's FAA check was for cycle ${a.cycle || '?'}, valid until ${a.valid_until} — it has not checked the current data yet`;
+        }
+        const [name, layer] = String(product).split(':');
+        for (const c of [...(name === 'plates' ? ['plates', 'afd'] : [name]), 'expiry']) {
+            const r = a.products?.[c];
+            if (!r) return `the home server's ${c.toUpperCase()} data has not been checked by its FAA currency audit`;
+            if (r.ok === false) return `the home server's ${c.toUpperCase()} data failed its FAA check (${r.failures?.[0] || 'see the pipeline log'})`;
+        }
+        const sec = name === 'charts' ? manifest.tiles?.[layer] : manifest[name];
+        const built = [sec?.built_at, sec?.packed_at].filter(Boolean).sort().pop();
+        if (built && a.checked_at && built > a.checked_at) {
+            return `the home server's ${name === 'charts' ? layer : name.toUpperCase()} data was built after its last FAA check (${built}) — sync after the next check`;
+        }
+        return null;
     }
 
     /** Wire the "Done — Refresh" button that appears after _syncAll completes. */

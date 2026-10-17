@@ -19,6 +19,10 @@ const SERVER = {
     plates: { cycle_code: '261001', effective_date: '2026-10-01', expiration_date: '2026-10-29', built_at: '2026-10-17T00:00:00Z',
               state_sizes: [{ state: 'NC', size_mb: 1 }, { state: 'GA', size_mb: 1 }] },
     tiles: {},
+    // A passing verdict that still holds (valid_until far ahead: the tests run on any date).
+    audit: { ok: true, checked_at: '2026-10-17T02:00:00Z', cycle: '2610', valid_until: '2099-01-01', products: {
+        plates: { ok: true, failures: [] }, cifp: { ok: true, failures: [] }, nasr: { ok: true, failures: [] },
+        charts: { ok: true, failures: [] }, afd: { ok: true, failures: [] }, expiry: { ok: true, failures: [] } } },
 };
 
 function setup({ failState = null } = {}) {
@@ -29,19 +33,23 @@ function setup({ failState = null } = {}) {
         const J = (o, ok = true, status = 200) => ({ ok, status, json: async () => o, text: async () => JSON.stringify(o), blob: async () => ({ size: 1 }) });
         if (url.endsWith('/nasr/cycle_info.json')) return J({ effective_date: '2026-10-01', sua_count: 1236, bundle_version: 11 });
         if (url.endsWith('/cifp/cifp_cycle_info.json')) return J({ cycle_code: '261001' });
-        if (url.includes('/mbtiles/status')) return J([]);
+        // Charts on the tablet and nothing newer on the server: those steps skip.
+        if (url.includes('/mbtiles/status')) return J(['sectional', 'ifr-low', 'ifr-area', 'tac'].map((layer) => ({ layer, exists: true, size_mb: 1 })));
         if (url.startsWith('http://home:8090/plates/plates_cycle_info.json')) return J({ effective_date: '2026-10-01', expiration_date: '2026-10-29', cycle_code: '261001', state_sizes: SERVER.plates.state_sizes });
         if (url.startsWith('http://localhost:9090/plates/plates_cycle_info.json')) return opts.method === 'PUT' ? J({}) : J({ effective_date: '2026-09-03' });
+        // The sync reads the manifest itself: serve the test's (ds._serverManifest).
+        if (url === 'http://home:8090/manifest.json') return J(ds._serverManifest);
         if (url.includes('/verify')) return J(globalThis.__verify || { count: 3, checked: 3, matched: 3, rejected: 0, changed: { count: 0, examples: [] }, missing: { count: 0, examples: [] }, extra: { count: 0, examples: [] } });
         if (url.includes('/fetch-zip')) {
             if (failState && decodeURIComponent(url).includes(`${failState}.zip`)) return { ok: false, status: 500, text: async () => 'fetch-zip failed: Connection reset' };
-            return J({ extracted: 10, bytes: 1, pruned: 3 });
+            return J({ extracted: globalThis.__extracted ?? 10, bytes: 1, pruned: 3 });
         }
         return J(null, false, 404);
     });
     document.body.innerHTML = '';
     localStorage.clear();
-    const ds = new DataStatus(document.body);
+    let ds = null;
+    ds = new DataStatus(document.body);
     ds._serverManifest = JSON.parse(JSON.stringify(SERVER));
     ds._resolvedBase = 'http://home:8090';
     localStorage.setItem('flytab_device_manifest', JSON.stringify({
@@ -117,9 +125,8 @@ describe('the home server\'s FAA currency audit gates the sync', () => {
         expect(document.body.textContent).toMatch(/failed its FAA check/);
     });
 
-    it('audit passed (or a server without one): syncs as before', async () => {
+    it('audit passed: syncs (no verdict at all: see data-sync-audit-gate.test.js -- not synced)', async () => {
         const { ds, calls } = setup();
-        ds._serverManifest.audit = { ok: true, products: {} };
         await ds._syncAll(null, () => {}, () => {}, () => {});
         expect(calls.some((c) => c.includes('/fetch-zip'))).toBe(true);
     });
@@ -158,5 +165,45 @@ describe('sync step messages are text', () => {
         await ds._syncAll(null, () => {}, () => {}, () => {});
         expect(document.querySelector('img')).toBeNull();
         expect(document.body.textContent).toMatch(/<img src=x onerror=alert\(1\)>/);
+    });
+});
+
+describe('pre-merge review: no false "done"', () => {
+    afterEach(() => { delete globalThis.fetch; delete globalThis.__verify; delete globalThis.__extracted; });
+
+    it('a zip with no files is a failed state, not a synced one', async () => {
+        globalThis.__extracted = 0;
+        const { ds } = setup();
+        await ds._syncAll(null, () => {}, () => {}, () => {});
+        expect(ds._readDeviceManifest().plates.cycle_code).toBe('260903');
+        expect(document.body.textContent).toMatch(/no files/);
+    });
+
+    it('a step failed: the file check is skipped (it would only report what did not sync), and the end is not green', async () => {
+        const { ds, calls } = setup({ failState: 'GA' });
+        let done = null;
+        await ds._syncAll(null, () => {}, () => {}, (msg, color) => { done = { msg, color }; });
+        expect(calls.some((c) => c.includes('/verify'))).toBe(false);
+        expect(document.body.textContent).toMatch(/Skipped/);
+        expect(done.color).not.toBe('var(--status-ok)');
+        expect(done.msg).toMatch(/problem|fail/i);
+    });
+
+    it('differences point to RE-DOWNLOAD (SYNC skips data whose cycle already matches)', async () => {
+        globalThis.__verify = { count: 3, checked: 3, matched: 2, rejected: 0, changed: { count: 1, examples: ['nasr/bundle.json'] },
+            missing: { count: 0, examples: [] }, extra: { count: 0, examples: [] } };
+        const { ds } = setup();
+        await ds._syncAll(null, () => {}, () => {}, () => {});
+        expect(document.body.textContent).toMatch(/RE-DOWNLOAD/);
+        expect(document.body.textContent).not.toMatch(/SYNC again/);
+    });
+
+    it('a list with no files checked is not "all match"', async () => {
+        globalThis.__verify = { count: 0, checked: 0, matched: 0, rejected: 0, changed: { count: 0, examples: [] },
+            missing: { count: 0, examples: [] }, extra: { count: 0, examples: [] } };
+        const { ds } = setup();
+        await ds._syncAll(null, () => {}, () => {}, () => {});
+        expect(document.body.textContent).not.toMatch(/All 0 files match/);
+        expect(document.body.textContent).toMatch(/no files/);
     });
 });
