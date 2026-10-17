@@ -76,6 +76,9 @@ describe('after the upgrade, before the first sync: "expiry not recorded", not "
 
 
 describe('the day before a new cycle', () => {
+    const TZ0 = process.env.TZ;
+    beforeEach(() => { process.env.TZ = 'America/New_York'; });
+    afterEach(() => { if (TZ0 === undefined) delete process.env.TZ; else process.env.TZ = TZ0; });
     afterEach(() => { vi.useRealTimers(); localStorage.clear(); delete globalThis.fetch; document.body.innerHTML = ''; });
     it('one reminder with the local changeover time, instead of "expires in 0d"', async () => {
         vi.useFakeTimers({ now: new Date('2026-10-28T20:00:00Z') });          // 16:00 EDT, 13 h before
@@ -93,5 +96,23 @@ describe('the day before a new cycle', () => {
         const d = new Date('2026-10-29T09:01:00Z');
         const hhmm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
         expect(FaaCurrency.changeoverLocal('2026-10-29')).toBe(hhmm);
+    });
+    const bannerAt = async (iso) => {
+        vi.useFakeTimers({ now: new Date(iso) });
+        localStorage.setItem('flytab_device_manifest', JSON.stringify({
+            cifp: { expiration_date: '2026-10-29' }, plates: { expiration_date: '2026-10-29' }, afd: { expiration_date: '2026-12-24' } }));
+        globalThis.fetch = vi.fn(async (u) => ({ ok: true, json: async () => (String(u).includes('cifp') ? { cycle_code: '261001' }
+            : { effective_date: '2026-10-01', expiration_date: '2026-10-29' }) }));
+        await FlyTabApp.prototype._checkDataReadiness.call({ dataStatus: null });
+        return document.getElementById('dataReadinessBanner').textContent;
+    };
+    it('says "today" after local midnight on the cycle date (01:00 EDT, change at 05:01)', async () => {
+        const t = await bannerAt('2026-10-29T05:00:00Z');
+        expect(t).toContain('New FAA cycle at 05:01 today (0901Z) — sync on home WiFi before flying');
+        expect(t).not.toMatch(/tomorrow/);
+    });
+    it('says "tomorrow" the afternoon before (16:00 EDT)', async () => {
+        const t = await bannerAt('2026-10-28T20:00:00Z');
+        expect(t).toContain('New FAA cycle at 05:01 tomorrow (0901Z) — sync on home WiFi before flying');
     });
 });
