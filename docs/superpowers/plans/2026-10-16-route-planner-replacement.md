@@ -50,10 +50,10 @@ self-serve fuel (no NASR data).
 
 0. **Land the stack first.** Merge PR #174, then `fix/route-reverse`, then this branch (rebased), after a tablet test of
    the current build. Both stacked branches touch `app.js` and `route-table.js`, so the switch must not start on stale code.
-1. **New planner stands alone.** It builds its own route engine and airway cache when there is no current planner;
+1. **[done v11.68]** **New planner stands alone.** It builds its own route engine and airway cache when there is no current planner;
    `app.js` builds it without depending on `routePlannerPanel`. No visible change. Tests: engine built, Plan route works
    with no `main`.
-2. **One switch, `cockpit-config.json` → `routePlanner: "legacy" | "new"` (default `legacy`).** `app.activeRoutePlanner()`
+2. **[done v11.68 — also a Route Planner choice in the config editor; T-route wizard borrowed from the current planner, kept by Dana 2026-10-17]** **One switch, `cockpit-config.json` → `routePlanner: "legacy" | "new"` (default `legacy`).** `app.activeRoutePlanner()`
    and `app.openRoutePlanner(plan)` dispatch on it; all entry points above go through it (EDIT, CLEAR, Direct-To,
    Load procedure, Replan, REV headless via `this.constructor`, the #74 check). Flipping the setting back restores today's
    behaviour exactly. Tests per entry point. **Airport-popup tap check on the tablet** (CLAUDE.md rule) since Direct-To

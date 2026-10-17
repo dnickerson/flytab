@@ -345,8 +345,10 @@ describe('Route Planner (preview): search, clearance, procedures, flights (2026-
     });
 
     it('a procedure loaded while the preview is open goes to the preview', () => {
+        // The listener hands it to _loadProcedureIntoPlanner: into the planner on
+        // screen -- tested with the real method in planner-switch.test.js.
         const src = read('web/app.js');
-        expect(src).toMatch(/classList\.contains\('route-preview'\)\) \{\s*this\.routePlannerPreview\.insertApproach\(e\.detail\);/);
+        expect(src).toMatch(/'cifp:load-procedure', \(e\) => \{\s*if \(e\.detail\) this\._loadProcedureIntoPlanner\(e\.detail\);/);
     });
 });
 
@@ -867,7 +869,9 @@ describe('Route Planner (preview): critical review fixes (2026-10-16)', () => {
         const p = make(R());
         let release;
         p._searchAirports = vi.fn(() => new Promise((r) => { release = () => r([]); }));
-        p._nasrDb = { searchAllExtended: async () => ({ navaids: [{ id: 'AIK', name: 'Aiken' }], fixes: [] }) };
+        // The whole mock db: the route checks this pick schedules (300 ms) still
+        // look airports up after the test ends (it left an unhandled rejection).
+        p._nasrDb = { ...nasrDb, searchAllExtended: async () => ({ navaids: [{ id: 'AIK', name: 'Aiken' }], fixes: [] }) };
         p._searchInput.value = 'AI';
         const running = p._runSearch();
         p._searchInput.value = '';

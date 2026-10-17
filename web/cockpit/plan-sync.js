@@ -351,10 +351,16 @@ class PlanSync {
                 if (action === 'replan') {
                     // Await open(): it resets and rebuilds the plan asynchronously. Plan then
                     // waits for open()'s own wind fetch before recomputing, so the two can't race.
-                    const panel = window.app?.routePlannerPanel;
-                    if (panel) {
-                        await panel.open(planToLoad);
-                        await panel._onRecomputeTap();
+                    // The planner chosen (app.routePlannerMode): the current one as
+                    // before, or the new one opened with the plan.
+                    if (window.app?.replanWithCurrentWinds) {
+                        await window.app.replanWithCurrentWinds(planToLoad);
+                    } else {
+                        const panel = window.app?.routePlannerPanel;
+                        if (panel) {
+                            await panel.open(planToLoad);
+                            await panel._onRecomputeTap();
+                        }
                     }
                 }
 

@@ -37,10 +37,19 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         this._quiet = 0;
     }
 
-    // Route engine: the current planner's (built once), never a second one.
+    // Route engine and terminal analyzer: the current planner's when it exists
+    // (built once, never a second one); without it (it is being replaced), our own.
+    // With T-routes set, Plan route offers the current planner's T-route wizard
+    // here too (Dana, 2026-10-17: keep it; she uses it since v11.51).
     get _planner() { return this._main?._planner ?? this.__planner ?? null; }
     set _planner(v) { this.__planner = v; }
-    _startBuildPlanner() {}
+    get _terminalAnalyzer() { return this._main?._terminalAnalyzer ?? this.__terminalAnalyzer ?? null; }
+    set _terminalAnalyzer(v) { this.__terminalAnalyzer = v; }
+    _startBuildPlanner() { if (!this._main) super._startBuildPlanner(); }
+    // A NASR import mid-session: the engine to rebuild is the current
+    // planner's when we use it (review 2026-10-17: ours was nulled, its kept
+    // the old cycle until restart).
+    _checkPlannerVersion() { if (this._main?._checkPlannerVersion) this._main._checkPlannerVersion(); else super._checkPlannerVersion(); }
     _getAirwayPairCache() { return this._main ? this._main._getAirwayPairCache() : super._getAirwayPairCache(); }
 
     // Settings are shared (same localStorage key): keep the current planner in step.
@@ -962,6 +971,13 @@ class RoutePlannerV2 extends RoutePlannerPanel {
             return `FD ${String(v.getUTCDate()).padStart(2, '0')}/${String(v.getUTCHours()).padStart(2, '0')}Z`;
         }
         return '';
+    }
+
+    /** Direct-To (airport popup): ends building; the route is then dep -> that airport. */
+    setDirectTo(apt) {
+        this._endAppend();
+        this._cursorAtEnd = false;
+        super.setDirectTo(apt);
     }
 
     /** REV ends building a route (typing then goes before the new destination). */

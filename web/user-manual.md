@@ -536,7 +536,7 @@ To edit the route, expand the strip and tap **EDIT**. From there you can:
 
 ### Route Planner (preview)
 
-**MORE → Route Planner (preview)** opens a redesigned planner for trying out. It works on the same route, and its settings are shared with the current planner. The current planner (EDIT on the route strip) is unchanged.
+**MORE → Route Planner (preview)** opens a redesigned planner for trying out. To make it **the** planner, open **MORE → Configuration** → **Route Planner** → **New planner** → **SAVE CONFIGURATION**: EDIT on the route strip, a new route, Direct-To from an airport, Load procedure from a chart, plan sync's Replan and the route table's REV then all use it (REV then lays airways out along their fixes and uses START FUEL). **Current planner** (the default) switches back, and everything then works as before. It works on the same route, and its settings are shared with the current planner. With T-routes set, its Plan route offers the same T-route wizard as the current planner.
 
 - **One route field.** The route is a row of bubbles. Tap the field and type identifiers in clearance order (e.g. `MITVE T437 CAYCE`); a space or Done ends each one. Typing goes in just before the destination. To type a new destination, tap the empty space after the destination bubble first. The first identifier on an empty route is the departure, the next the destination.
 - **Search** (the box above the route): type an airport's name, city or identifier ("Camden", "Aiken", "CDN"). Results show the identifier, name, city and distance, nearest to you first (to the map centre when there's no GPS position). Tap one to add it to the route where the cursor is.

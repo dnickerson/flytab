@@ -195,6 +195,25 @@ class ConfigEditor {
                 </div>
             </div>
         </div>`);
+        // Which route planner EDIT, Direct-To, procedures, Replan and REV open
+        // (docs/superpowers/plans/2026-10-16-route-planner-replacement.md, step 2).
+        const rpNew = this._cockpitConfig.routePlanner === 'new';
+        sections.push(`<div class="ds-card">
+            <div class="ds-card-title">Route Planner</div>
+            <div class="ce-fields">
+                <div class="ce-field-row">
+                    <label class="ce-label" for="ce-route-planner">Planner</label>
+                    <select id="ce-route-planner" class="ce-input ce-input--wide" style="min-height:var(--touch-min, 56px);font-family:var(--font-ui);font-weight:700">
+                        <option value="legacy"${rpNew ? '' : ' selected'}>Current planner</option>
+                        <option value="new"${rpNew ? ' selected' : ''}>New planner</option>
+                    </select>
+                </div>
+                <div class="ce-field-row" style="font-family:var(--font-ui);font-size:var(--text-xs);font-weight:700;color:var(--text-secondary)">
+                    EDIT, Direct-To, Load procedure and Replan open it; the route table's REV plans with it.
+                    The new one is also in MORE → Route Planner (preview).
+                </div>
+            </div>
+        </div>`);
         const fu = this._cockpitConfig.flightUpload || {};
         sections.push(`<div class="ds-card">
             <div class="ds-card-title">Flight Upload (SFTP)</div>
@@ -445,6 +464,10 @@ class ConfigEditor {
                     }
                 }
             }
+
+            // Route planner (current / new)
+            const rpEl = body.querySelector('#ce-route-planner');
+            if (rpEl) this._cockpitConfig.routePlanner = rpEl.value === 'new' ? 'new' : 'legacy';
 
             // Flight Upload settings
             const fuHost = body.querySelector('#ce-fu-host');
