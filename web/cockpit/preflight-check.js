@@ -118,18 +118,28 @@ class PreflightCheck {
         return { label: 'Weather', status: 'fail', msg: `${ageHr}h old — STALE` };
     }
 
+    /**
+     * FAA data: NASR (loaded), CIFP, approach plates and A/FD (as synced), at
+     * the 0901Z changeover (FaaCurrency). It checked NASR only (round 2 review).
+     */
     async _checkNasr() {
         try {
             const cycle = await this.db.getCycleInfo();
-            if (!cycle) return { label: 'NASR Data', status: 'fail', msg: 'Not loaded' };
-            const exp = cycle.expiration_date ? new Date(cycle.expiration_date) : null;
-            if (!exp) return { label: 'NASR Data', status: 'warn', msg: `Cycle ${cycle.effective_date || '?'} — no expiry` };
-            const daysLeft = (exp - Date.now()) / 86400000;
-            if (daysLeft < 0)  return { label: 'NASR Data', status: 'fail', msg: `Expired ${Math.abs(Math.round(daysLeft))}d ago` };
-            if (daysLeft <= 3) return { label: 'NASR Data', status: 'warn', msg: `Expires in ${Math.round(daysLeft)}d` };
-            return { label: 'NASR Data', status: 'ok', msg: `Current — ${Math.round(daysLeft)}d remaining` };
+            if (!cycle) return { label: 'FAA Data', status: 'fail', msg: 'NASR not loaded' };
+            const products = FaaCurrency.products(FaaCurrency.deviceManifest(), cycle, Date.now());
+            const failed = products.filter(p => p.state === 'expired' || p.state === 'unknown');
+            if (failed.length) {
+                return { label: 'FAA Data', status: 'fail',
+                         msg: failed.map(p => p.state === 'expired' ? `${p.label} expired` : `${p.label} not synced`).join(' · ') };
+            }
+            const warn = products.filter(p => p.state === 'expiring' || p.state === 'stale');
+            if (warn.length) {
+                return { label: 'FAA Data', status: 'warn',
+                         msg: warn.map(p => p.state === 'stale' ? `${p.label} not current` : `${p.label} ${p.daysLeft}d left`).join(' · ') };
+            }
+            return { label: 'FAA Data', status: 'ok', msg: `Current — ${Math.min(...products.map(p => p.daysLeft))}d remaining` };
         } catch {
-            return { label: 'NASR Data', status: 'warn', msg: 'Could not verify' };
+            return { label: 'FAA Data', status: 'warn', msg: 'Could not verify' };
         }
     }
 

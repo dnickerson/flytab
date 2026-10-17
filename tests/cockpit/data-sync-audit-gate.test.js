@@ -41,7 +41,10 @@ describe('audit gate', () => {
     });
     it('the product, or the expiry check, failed: not synced', () => {
         const m = MANIFEST(); m.audit.products.afd = { ok: false, failures: ['A/FD page images not rendered'] };
-        expect(P(m, 'plates')).toMatch(/A\/FD page images not rendered/);     // A/FD travels in the plate zips
+        expect(P(m, 'plates')).toBe(null);                                     // A/FD: a warning (Dana, 10-17)
+        expect(DataStatus.auditWarnings(m, 'plates')[0]).toMatch(/A\/FD page images not rendered/);
+        m.audit.products.plates = { ok: false, failures: ['current FAA charts missing'] };
+        expect(P(m, 'plates')).toMatch(/current FAA charts missing/);
         expect(P(m, 'nasr')).toBe(null);
         const e = MANIFEST(); e.audit.products.expiry = { ok: false, failures: ['tac expired 2026-09-03'] };
         expect(P(e, 'nasr')).toMatch(/tac expired/);
@@ -54,6 +57,53 @@ describe('audit gate', () => {
         expect(P(m, 'nasr')).toBe(null);
         const t = MANIFEST(); t.tiles.sectional.packed_at = '2026-10-17T05:00:00Z';
         expect(P(t, 'charts:sectional')).toMatch(/built after/);
+    });
+});
+
+// Round 2 review (2026-10-17): one product's failure blocked unrelated current
+// ones -- an A/FD failure blocked plates, an expired chart layer blocked NASR,
+// one bad layer all four; a chart build's "building" mark blocked NASR/plates.
+const V2 = () => {
+    const m = MANIFEST();
+    m.audit = { ok: false, per_product: true, checked_at: '2026-10-29T12:00:00Z', cycle: '2611', valid_until: '2026-11-26T09:01:00Z',
+        products: {
+            nasr: { ok: true, failures: [], valid_until: '2026-11-26T09:01:00Z' },
+            cifp: { ok: true, failures: [], valid_until: '2026-11-26T09:01:00Z' },
+            plates: { ok: true, failures: [], valid_until: '2026-11-26T09:01:00Z' },
+            afd: { ok: false, failures: ['A/FD page images not rendered from the indexed page: 3'] },
+            'charts:sectional': { ok: false, failures: ['sectional expired 2026-10-29'] },
+            'charts:tac': { ok: true, failures: [], valid_until: '2026-12-24T09:01:00Z' },
+        } };
+    m.tiles.tac = { built_at: '2026-10-29T11:00:00Z' };
+    return m;
+};
+const T = (m, product, now) => DataStatus.auditProblem(m, product, now.slice(0, 10), Date.parse(now));
+
+describe('audit gate: each product on its own', () => {
+    it('A/FD failing does not block plates -- it is a warning', () => {
+        expect(T(V2(), 'plates', '2026-10-29T14:00:00Z')).toBe(null);
+        expect(DataStatus.auditWarnings(V2(), 'plates')).toEqual([expect.stringMatching(/A\/FD.*not current/)]);
+        expect(DataStatus.auditWarnings(V2(), 'nasr')).toEqual([]);
+    });
+    it('one chart layer failing blocks only that layer; NASR and CIFP are not blocked by charts', () => {
+        expect(T(V2(), 'charts:sectional', '2026-10-29T14:00:00Z')).toMatch(/sectional expired/);
+        expect(T(V2(), 'charts:tac', '2026-10-29T14:00:00Z')).toBe(null);
+        expect(T(V2(), 'nasr', '2026-10-29T14:00:00Z')).toBe(null);
+        expect(T(V2(), 'cifp', '2026-10-29T14:00:00Z')).toBe(null);
+    });
+    it('a build marks only its products as building', () => {
+        const m = V2(); m.audit.pending_products = ['charts:sectional', 'charts:tac'];
+        expect(T(m, 'charts:tac', '2026-10-29T14:00:00Z')).toMatch(/building/);
+        expect(T(m, 'nasr', '2026-10-29T14:00:00Z')).toBe(null);
+        expect(T(m, 'plates', '2026-10-29T14:00:00Z')).toBe(null);
+    });
+    it('a verdict holds until the 0901Z changeover, not local midnight', () => {
+        expect(T(V2(), 'nasr', '2026-11-26T09:00:00Z')).toBe(null);
+        expect(T(V2(), 'nasr', '2026-11-26T09:01:00Z')).toMatch(/2026-11-26/);
+    });
+    it('a verdict with no valid_until at all is not trusted', () => {
+        const m = MANIFEST(); delete m.audit.valid_until;
+        expect(P(m, 'nasr')).toMatch(/not been checked|no expiry/);
     });
 });
 

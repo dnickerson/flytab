@@ -48,7 +48,7 @@ FlyTab connects automatically on app launch. The status bar at the top shows con
        ↑ LAYERS (far left, opens layer panel)        ↑ MORE
 ```
 
-**Status bar** — always visible at the top. Badges show connection state and alerts from left to right: GPS fix, weather advisory (⚠, when active), FIS-B, internet, NASR age, engine ML, flight recording, UTC clock, map zoom level, app version.
+**Status bar** — always visible at the top. Badges show connection state and alerts from left to right: GPS fix, weather advisory (⚠, when active), FIS-B, internet, FAA data currency, engine ML, flight recording, UTC clock, map zoom level, app version.
 
 **Map area** — fills most of the screen. Key floating elements:
 - **Fuel tanks widget** (top-left) — L/R tank bars, GPH, endurance. Tap **L**/**R** to switch active tank; tap **✎** to edit quantities.
@@ -69,7 +69,7 @@ FlyTab connects automatically on app launch. The status bar at the top shows con
 | **GPS** | 3D fix (Stratux "3D GPS" / "3D GPS + SBAS") | ENG GPS (position from the engine monitor's link to Stratux) | No fix, DEAD RECKONING, or GPS STALE |
 | **FIS-B** | UAT radio connected and receiving | — | No UAT data |
 | **FLT / HOME / NET / OFFL** | FLT = Stratux reachable; HOME = home server reachable | NET = internet only | OFFL = no network |
-| **NASR** | Database current | ≥7 days old | Very old |
+| **FAA data** (NASR / CIFP / PLATES / A/FD) | **FAA 12d** — every FAA product on the tablet current; days until the first one expires | Under 7 days left on one (**PLATES 4d**), A/FD pages not current (**A/FD OLD**) or a plate state not updated (**PLATES OLD**) | **PLATES EXP** (or NASR/CIFP/A/FD) — expired; **CIFP ??** — never synced. FAA data changes at 0901Z on the cycle date: that is when it turns red. Works offline, from what the tablet recorded at its last sync; refreshed every 10 minutes |
 | **ML** | Engine anomaly score normal | **ML:OFF**: anomaly scoring isn't running (ML not available, or a model run never returned and FlyTab turned it off). **ML:ERR**: scoring has failed 5 samples in a row. Either way the rule-based engine warnings and advisories continue; restart FlyTab on the ground | Anomaly detected |
 | **REC** | Flight recording active | — | Not recording |
 | **Temperature (°)** | Tablet surface below 40 °C | 40–50 °C (warm; normal in direct sun) | 50 °C or more: flashing, with a *TABLET HOT* warning |
@@ -278,7 +278,7 @@ Opens a right-side drawer with infrequently used actions, organized in three sec
 
 | Item | What it does |
 |---|---|
-| **Data Status** | Shows local database age and tile cache status, with a per-item CURRENT/EXPIRING/UPDATE AVAILABLE badge and days-remaining count; a current, already-downloaded layer shows a SYNC button (RE-DOWNLOAD forces a fresh copy). **Sync All Outdated** only takes FAA data the home server has checked against the FAA (its daily currency audit) — and only while that check still describes the data: nothing is synced if the server's data list can't be read, while the server is building, after its check has expired with the cycle, or for data built after the check. A product that is refused is not synced and the step says why — your current data is kept. Its last step, **Check against home server**, compares every plate, index, NASR and CIFP file on the tablet with the server (size and checksum) and reports anything different, missing or left over (tap that item's RE-DOWNLOAD to fix it); it is skipped when a step above did not complete, and the sync then ends in red, not "Sync complete". A plate state that fails to download is not counted as current and is retried on the next SYNC. If a minimums (takeoff/alternate) page is missing on the tablet, the plate viewer says so instead of showing the regional document |
+| **Data Status** | Shows local database age and tile cache status, with a per-item CURRENT/EXPIRING/UPDATE AVAILABLE badge and days-remaining count; a current, already-downloaded layer shows a SYNC button (RE-DOWNLOAD forces a fresh copy). **Sync All Outdated** only takes FAA data the home server has checked against the FAA (its daily currency audit) — and only while that check still describes the data: nothing is synced if the server's data list can't be read, while the server is building, after its check has expired with the cycle, or for data built after the check. A product that is refused is not synced and the step says why — your current data is kept. Its last step, **Check against home server**, compares every plate, index, NASR and CIFP file on the tablet with the server (size and checksum) and reports anything different, missing or left over (tap that item's RE-DOWNLOAD to fix it); it is skipped when a step above did not complete, and the sync then ends in red, not "Sync complete". A plate state that fails to download is not counted as current and is retried on the next SYNC. If a minimums (takeoff/alternate) page is missing on the tablet, the plate viewer says so instead of showing the regional document. Each product is judged on its own: a failed chart layer or A/FD check does not hold back current NASR, CIFP or plates, and plates still sync when only the A/FD pages failed — the plate step then says the A/FD pages are not current. Away from the home server the badges use the tablet's own expiry dates: **EXPIRED** after the 0901Z changeover, **PARTLY UPDATED** when a plate state's download failed (that state shows *previous cycle — not updated*), and the footer says which FAA data has expired instead of "All Data Current" |
 | **Configuration** | Aircraft, engine, and system settings |
 | **Reset NASR Data** | Forces a full re-download of the airport/navaid database |
 
@@ -396,7 +396,7 @@ Some TRSAs — Wilmington (KILM) among them — publish more than one approach f
 
 #### Frequency data requires an updated NASR bundle
 
-The controlling frequency for each Class B/C/D area comes from the NASR bundle built by the ground data pipeline — the same bundle used for airport and airspace data elsewhere in FlyTab. If your bundle predates this feature, or an area's tower data isn't in the current cycle, the popup still fires but shows **"No frequency data — update NASR bundle"** instead of a frequency. Class E surface areas without a nearby tower correctly show **"No published frequency for this area"** — that's expected, not a data problem, since Class E surface areas aren't required to have one. Rebuild and re-import the NASR bundle (see **Troubleshooting → "NASR badge is red"**) to get real frequencies for Class B/C/D.
+The controlling frequency for each Class B/C/D area comes from the NASR bundle built by the ground data pipeline — the same bundle used for airport and airspace data elsewhere in FlyTab. If your bundle predates this feature, or an area's tower data isn't in the current cycle, the popup still fires but shows **"No frequency data — update NASR bundle"** instead of a frequency. Class E surface areas without a nearby tower correctly show **"No published frequency for this area"** — that's expected, not a data problem, since Class E surface areas aren't required to have one. Rebuild and re-import the NASR bundle (see **Troubleshooting → "FAA data badge is red"**) to get real frequencies for Class B/C/D.
 
 **EXPERIMENTAL — verify frequencies against your chart or ATC before relying on them.** This is a convenience aid, not a substitute for chart review or a standard weather/airspace briefing.
 
@@ -621,6 +621,8 @@ Touch and drag on the chart to scrub, and the detail panel adds a CLOUDS section
 **MORE → Approach Charts** opens the plate viewer. Plates are fetched from the home server (requires home Wi-Fi on first use).
 
 Navigate to an airport using the search field, then select the approach. The plate displays as a PDF. Toggle **Geo Ref** to overlay the plate on the moving map so your own-ship tracks across the plan view.
+
+**Chart currency.** A line under the viewer's title, and under each airport in the plate list, shows the charts' cycle and expiry (*Cycle 2610 · expires 29 OCT 2026*). It turns solid red with **EXPIRED** after the 0901Z changeover, and with **charts not updated — previous cycle's** for an airport in a state whose last plate download failed. The A/FD tab of the airport popup shows the same line for its Chart Supplement page, red when the page is not current. It works offline, from the tablet's last sync. The preflight check's **FAA Data** row and the startup banner cover NASR, CIFP (procedures), approach plates and A/FD.
 
 During the approach, tap **APT** tab instead for quick access to all plates for the route airports.
 
@@ -896,8 +898,8 @@ Check that the Pi is powered and the tablet is on the same network segment. Pi u
 **Tiles are missing / grey squares:**
 Charts for this area are not downloaded. Either download the region (LAYERS → Base Chart → Region Download) or use the Vector base layer, which requires no tile data.
 
-**NASR badge is red:**
-Airport/navaid database is stale. Connect to home Wi-Fi with home server running and restart FlyTab — it auto-downloads fresh NASR data on startup.
+**FAA data badge is red (NASR / CIFP / PLATES / A/FD EXP or ??):**
+That FAA data on the tablet has expired or was never synced. On home Wi-Fi with the home server running, open **MORE → Data Status** and tap **Sync All Outdated** (NASR also refreshes on its own when FlyTab restarts on home Wi-Fi). If the server hasn't built the new cycle yet, the sync step says so — the home server builds it from 05:15 on the cycle date.
 
 **Screen off or another app in front:** FlyTab keeps running: engine alerts are checked, the flight is recorded and traffic is tracked. (Before v11.19, Android's WebView stopped FlyTab about 30–40 seconds after it left the screen.) To save work it stops re-centring the map and redrawing traffic while it's off screen, and catches up when you come back. It keeps the tablet's CPU awake to do this, so close FlyTab with the back button when you're done flying.
 

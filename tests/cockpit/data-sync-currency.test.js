@@ -11,6 +11,7 @@ import { readFileSync } from 'fs';
 const read = (p) => readFileSync(p, 'utf8');
 globalThis.wireTap = (el, fn) => { if (el) el._tap = fn; };
 globalThis.CockpitConfig = { homeBases: ['http://home:8090'], homeBase: 'http://home:8090', raw: {} };
+globalThis.FaaCurrency = new Function(read('web/shared/faa-currency.js') + '\nreturn FaaCurrency;')();
 const DataStatus = new Function(read('web/cockpit/data-status.js') + '\nreturn DataStatus;')();
 
 const SERVER = {
@@ -31,8 +32,8 @@ function setup({ failState = null } = {}) {
         url = String(url);
         calls.push(`${opts.method || 'GET'} ${url}`);
         const J = (o, ok = true, status = 200) => ({ ok, status, json: async () => o, text: async () => JSON.stringify(o), blob: async () => ({ size: 1 }) });
-        if (url.endsWith('/nasr/cycle_info.json')) return J({ effective_date: '2026-10-01', sua_count: 1236, bundle_version: 11 });
-        if (url.endsWith('/cifp/cifp_cycle_info.json')) return J({ cycle_code: '261001' });
+        if (url.endsWith('/nasr/cycle_info.json')) return J({ effective_date: '2026-10-01', expiration_date: '2026-10-29', sua_count: 1236, bundle_version: 11 });
+        if (url.endsWith('/cifp/cifp_cycle_info.json')) return J({ cycle_code: '261001', effective_date: '2026-10-01', expiration_date: '2026-10-29' });
         // Charts on the tablet and nothing newer on the server: those steps skip.
         if (url.includes('/mbtiles/status')) return J(['sectional', 'ifr-low', 'ifr-area', 'tac'].map((layer) => ({ layer, exists: true, size_mb: 1 })));
         if (url.startsWith('http://home:8090/plates/plates_cycle_info.json')) return J({ effective_date: '2026-10-01', expiration_date: '2026-10-29', cycle_code: '261001', state_sizes: SERVER.plates.state_sizes });
@@ -104,7 +105,7 @@ describe('charts: an update when the tablet doesn\'t know its edition, or the se
 
 describe('the home server\'s FAA currency audit gates the sync', () => {
     afterEach(() => { delete globalThis.fetch; });
-    const audit = (products) => ({ ok: false, cycle: '2610', products: {
+    const audit = (products) => ({ ok: false, cycle: '2610', checked_at: '2026-10-17T02:00:00Z', valid_until: '2099-01-01', products: {
         plates: { ok: true, failures: [] }, cifp: { ok: true, failures: [] }, nasr: { ok: true, failures: [] },
         charts: { ok: true, failures: [] }, afd: { ok: true, failures: [] }, expiry: { ok: true, failures: [] }, ...products } });
 
@@ -117,12 +118,13 @@ describe('the home server\'s FAA currency audit gates the sync', () => {
         expect(document.body.textContent).toMatch(/failed its FAA check.*in no state zip/);
     });
 
-    it('CIFP failed the audit: no aeronautical download', async () => {
+    it('CIFP failed the audit: no CIFP download; NASR is still checked (gated on its own)', async () => {
         const { ds, calls } = setup();
         ds._serverManifest.audit = audit({ cifp: { ok: false, failures: ['FAA CIFP header says cycle \'2609\''] } });
         await ds._syncAll(null, () => {}, () => {}, () => {});
-        expect(calls.some((c) => /cifp\.zip|nasr\.zip|\/nasr\/cycle_info/.test(c) && c.includes('home:8090'))).toBe(false);
-        expect(document.body.textContent).toMatch(/failed its FAA check/);
+        expect(calls.some((c) => /cifp\.zip|\/cifp\/cifp_cycle_info/.test(c) && c.includes('home:8090'))).toBe(false);
+        expect(calls.some((c) => c.includes('home:8090/nasr/cycle_info.json'))).toBe(true);
+        expect(document.body.textContent).toMatch(/CIFP data failed its FAA check/);
     });
 
     it('audit passed: syncs (no verdict at all: see data-sync-audit-gate.test.js -- not synced)', async () => {
@@ -205,5 +207,141 @@ describe('pre-merge review: no false "done"', () => {
         await ds._syncAll(null, () => {}, () => {}, () => {});
         expect(document.body.textContent).not.toMatch(/All 0 files match/);
         expect(document.body.textContent).toMatch(/no files/);
+    });
+});
+
+describe('round 2 review: chart downloads and server reads', () => {
+    afterEach(() => { delete globalThis.fetch; });
+
+    it('a single chart layer download goes through the audit gate', async () => {
+        const { ds, calls } = setup();
+        ds._serverManifest.tiles = { sectional: { cycle_date: '2026-10-29', built_at: '2026-10-29T13:00:00Z' } };
+        ds._serverManifest.audit.pending_products = ['charts:sectional'];
+        let done = null;
+        const btn = document.createElement('button');
+        await ds._downloadMbtiles('sectional', btn, () => {}, (msg, color) => { done = { msg, color }; });
+        expect(calls.some((c) => c.includes('/fetch-mbtiles'))).toBe(false);
+        expect(done.msg).toMatch(/building/);
+        expect(done.color).toBe('var(--status-danger)');
+    });
+
+    it('same edition and build but repacked on the server: update', () => {
+        const { ds } = setup();
+        const S = { cycle_date: '2026-09-03', built_at: '2026-09-06T02:00:00Z', packed_at: '2026-09-06T02:45:44Z' };
+        expect(ds._tileUpdateAvail(S, { ...S })).toBe(false);
+        expect(ds._tileUpdateAvail({ ...S, packed_at: '2026-10-29T14:00:00Z' }, S)).toBe(true);
+    });
+
+    it('a manifest that is not JSON reads as unavailable (Sync must not stay stuck)', async () => {
+        globalThis.fetch = vi.fn(async () => ({ ok: true, json: async () => { throw new SyntaxError('Unexpected token <'); } }));
+        const ds = new DataStatus(document.body);
+        await expect(ds._probeServerManifest('http://home:8090')).resolves.toBe(null);
+    });
+
+    it('cycle info from the home server is read uncached', async () => {
+        const { ds, calls } = setup();
+        const seen = [];
+        const f = globalThis.fetch;
+        globalThis.fetch = vi.fn((url, opts = {}) => { seen.push([String(url), opts.cache]); return f(url, opts); });
+        await ds._syncAll(null, () => {}, () => {}, () => {});
+        for (const [u, c] of seen.filter(([u]) => /home:8090\/(nasr\/cycle_info|cifp\/cifp_cycle_info|plates\/plates_cycle_info|manifest)\.json/.test(u))) {
+            expect([u, c]).toEqual([u, 'no-store']);
+        }
+    });
+});
+
+
+describe('the tablet records what it holds, with expiry, for offline currency', () => {
+    afterEach(() => { delete globalThis.fetch; });
+
+    it('after a sync: each product\'s cycle and expiration; A/FD with its own', async () => {
+        const { ds } = setup();
+        ds._serverManifest.audit.products.afd = { ok: true, failures: [], valid_until: '2026-10-29T09:01:00Z' };
+        await ds._syncAll(null, () => {}, () => {}, () => {});
+        const m = ds._readDeviceManifest();
+        expect(m.nasr.expiration_date).toBe('2026-10-29');
+        expect(m.cifp).toMatchObject({ cycle_code: '261001', expiration_date: '2026-10-29' });
+        expect(m.plates).toMatchObject({ cycle_code: '261001', expiration_date: '2026-10-29', failed_states: [] });
+        expect(m.afd).toMatchObject({ expiration_date: '2026-10-29', stale: false });
+    });
+
+    it('a failed state is recorded; A/FD failing its check is recorded stale', async () => {
+        const { ds } = setup({ failState: 'GA' });
+        ds._serverManifest.audit.products.afd = { ok: false, failures: ['A/FD page images not rendered: 3'] };
+        await ds._syncAll(null, () => {}, () => {}, () => {});
+        const m = ds._readDeviceManifest();
+        expect(m.plates.failed_states).toEqual(['GA']);
+        expect(m.plates.cycle_code).toBe('260903');
+        expect(m.afd.stale).toBe(true);
+    });
+
+    it('already current: the expiry is still recorded (tablets synced before this version)', async () => {
+        const { ds } = setup();
+        localStorage.setItem('flytab_device_manifest', JSON.stringify({
+            nasr: { effective_date: '2026-10-01', bundle_version: 11 }, cifp: { cycle_code: '261001' }, tiles: {},
+            plates: { cycle_code: '261001', built_at: '2026-10-17T00:00:00Z', synced_states: ['NC', 'GA'] } }));
+        globalThis.fetch = ((f) => vi.fn((url, o) => String(url).startsWith('http://localhost:9090/plates/plates_cycle_info.json') && !(o && o.method)
+            ? Promise.resolve({ ok: true, json: async () => ({ effective_date: '2026-10-01' }) }) : f(url, o)))(globalThis.fetch);
+        await ds._syncAll(null, () => {}, () => {}, () => {});
+        const m = ds._readDeviceManifest();
+        expect(m.nasr.expiration_date).toBe('2026-10-29');
+        expect(m.cifp.expiration_date).toBe('2026-10-29');
+        expect(m.plates.expiration_date).toBe('2026-10-29');
+        expect(m.afd).toBeTruthy();
+    });
+});
+
+describe('Data Status offline: the tablet\'s own expiry', () => {
+    afterEach(() => { vi.useRealTimers(); delete globalThis.fetch; });
+
+    const DEV = {
+        nasr: { effective_date: '2026-10-01', expiration_date: '2026-10-29', bundle_version: 11 },
+        cifp: { cycle_code: '261001', expiration_date: '2026-10-29' },
+        plates: { cycle_code: '261001', expiration_date: '2026-10-29', synced_states: ['NC'], failed_states: ['GA'] },
+        afd: { expiration_date: '2026-10-29', stale: false }, tiles: {},
+    };
+
+    it('in flight after expiry: EXPIRED, the failed state shown, no "All Data Current"', () => {
+        vi.useFakeTimers({ now: new Date('2026-10-30T15:00:00Z') });
+        const { ds } = setup();
+        document.body.innerHTML = '<div><div class="data-status-body"></div><div id="dsStickyFooter"></div></div>';
+        ds._el = document.body;
+        ds._render(null, JSON.parse(JSON.stringify(DEV)), []);
+        const t = document.body.textContent.replace(/\s+/g, ' ');
+        expect((t.match(/EXPIRED/g) || []).length).toBeGreaterThanOrEqual(2);       // aero and plates
+        expect(t).not.toMatch(/● CURRENT|ON DEVICE/);
+        expect(t).toMatch(/GA.*previous cycle/);
+        expect(t).not.toMatch(/All Data Current/);
+        expect(t).toMatch(/expired/i);
+    });
+
+    it('expiry is at the 0901Z changeover', () => {
+        vi.useFakeTimers({ now: new Date('2026-10-29T08:00:00Z') });
+        const { ds } = setup();
+        document.body.innerHTML = '<div><div class="data-status-body"></div><div id="dsStickyFooter"></div></div>';
+        ds._el = document.body;
+        const dev = JSON.parse(JSON.stringify(DEV)); dev.plates.failed_states = [];
+        ds._render(null, dev, []);
+        expect(document.body.textContent).not.toMatch(/EXPIRED/);
+    });
+});
+
+describe('the verdict is re-read before each step of a long sync', () => {
+    afterEach(() => { delete globalThis.fetch; });
+    it('a build starting after the aero step: plates are not taken', async () => {
+        const { ds, calls } = setup();
+        let reads = 0;
+        const f = globalThis.fetch;
+        globalThis.fetch = vi.fn((url, o) => {
+            if (String(url) === 'http://home:8090/manifest.json') {
+                reads++;
+                if (reads > 1) ds._serverManifest.audit.pending_products = ['plates'];
+            }
+            return f(url, o);
+        });
+        await ds._syncAll(null, () => {}, () => {}, () => {});
+        expect(reads).toBeGreaterThan(1);
+        expect(calls.some((c) => c.includes('/fetch-zip') && c.includes('state_zips'))).toBe(false);
+        expect(document.body.textContent).toMatch(/building new PLATES/);
     });
 });

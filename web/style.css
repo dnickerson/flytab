@@ -12282,3 +12282,23 @@ body.route-editing-mode .route-table-sheet {
 
 /* Zero vs letter O in identifiers (BRAD0 vs BRADO, 2026-10-16): slashed zero where the font has one */
 .rp2-b, .rp2-input, .rp2-result-id, .rp2-search-input { font-variant-numeric: slashed-zero; font-feature-settings: "zero" 1; }
+
+/* FAA currency line under the plate viewer header and each picker airport
+   (round 2 review, 2026-10-17): cycle and expiry; solid red when expired or
+   not updated: dark red fill (--color-danger-on-light, ~8:1 with white --
+   the bright --color-danger fill is ~3.6:1, too low for sunlight). */
+.approach-currency {
+    padding: 4px 12px;
+    font-family: var(--font-ui);
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text-secondary);
+    background: var(--bg-surface);
+    border-bottom: 1px solid var(--border);
+    text-align: center;
+}
+.approach-currency.is-bad {
+    background: var(--color-danger-on-light);
+    color: #fff;
+    font-weight: 800;
+}

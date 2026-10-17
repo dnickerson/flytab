@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v11.56';
+const FLYTAB_VERSION = 'v11.57';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 // Kept in memory and saved at most every FLUSH_MS (errors at once). Every log()
@@ -2051,41 +2051,29 @@ class FlyTabApp {
 
     // === NASR Age Badge ==========
 
+    /**
+     * The FAA data badge: the most urgent of NASR (what the app has loaded),
+     * CIFP, approach plates and A/FD (what the tablet recorded at sync), each
+     * expiring at the 0901Z changeover (FaaCurrency). It covered NASR only and
+     * read "NASR 0d" all of expiry day (round 2 review, 2026-10-17). Refreshed
+     * every 10 minutes: an app left running crossed expiry showing days left.
+     */
     async _updateNasrBadge() {
         const el = this.dom.statusNasr;
         if (!el || !this._nasrDb) return;
+        if (!this._faaBadgeTimer && typeof setInterval === 'function' && this.constructor === FlyTabApp) {
+            this._faaBadgeTimer = setInterval(() => this._updateNasrBadge(), 10 * 60 * 1000);
+        }
 
         try {
             const cycleInfo = await this._nasrDb.getCycleInfo();
-            if (!cycleInfo || !cycleInfo.effective_date) {
-                el.textContent = 'NASR ??';
-                el.className = 'status-item status-nasr nasr-expired';
-                return;
-            }
-
-            // Compute days until expiration (NASR cycles are 28 days)
-            const effective = new Date(cycleInfo.effective_date);
-            const expiration = cycleInfo.expiration_date
-                ? new Date(cycleInfo.expiration_date)
-                : new Date(effective.getTime() + 28 * 86400000);
-            const now = new Date();
-            const daysLeft = Math.ceil((expiration - now) / 86400000);
-
-            let text, cls;
-            if (daysLeft < 0) {
-                text = 'NASR EXP';
-                cls = 'nasr-expired';
-            } else if (daysLeft <= 7) {
-                text = `NASR ${daysLeft}d`;
-                cls = 'nasr-aging';
-            } else {
-                text = `NASR ${daysLeft}d`;
-                cls = 'nasr-fresh';
-            }
+            const products = FaaCurrency.products(FaaCurrency.deviceManifest(), cycleInfo, Date.now());
+            const { text, cls } = FaaCurrency.badge(products);
             el.textContent = text;
             el.className = `status-item status-nasr ${cls}`;
+            el.title = products.map(p => `${p.label}: ${FaaCurrency.describe(p)}`).join('\n');
         } catch {
-            el.textContent = 'NASR ??';
+            el.textContent = 'FAA ??';
             el.className = 'status-item status-nasr nasr-expired';
         }
     }
@@ -2381,19 +2369,22 @@ class FlyTabApp {
 
         if (!nasr) {
             issues.push({ severity: 'critical', text: 'NASR aeronautical data not on tablet' });
-        } else {
-            const exp = nasr.expiration_date ? new Date(nasr.expiration_date)
-                : new Date(new Date(nasr.effective_date).getTime() + 28 * 86400000);
-            const daysLeft = Math.ceil((exp - Date.now()) / 86400000);
-            if (daysLeft < 0) {
-                issues.push({ severity: 'critical', text: `NASR data expired ${Math.abs(daysLeft)}d ago (cycle ${nasr.effective_date})` });
-            } else if (daysLeft <= 7) {
-                issues.push({ severity: 'warn', text: `NASR data expires in ${daysLeft}d (cycle ${nasr.effective_date})` });
-            }
         }
-
         if (!cifp) {
             issues.push({ severity: 'warn', text: 'CIFP approach procedures not on tablet' });
+        }
+        // Every FAA product's expiry, at the 0901Z changeover (FaaCurrency):
+        // this covered NASR only (round 2 review).
+        for (const p of FaaCurrency.products(FaaCurrency.deviceManifest(), nasr, Date.now())) {
+            if (p.key === 'nasr' && !nasr) continue;
+            if (p.state === 'expired') {
+                issues.push({ severity: 'critical', text: `${p.label} EXPIRED (${FaaCurrency.describe(p)})` });
+            } else if (p.state === 'expiring') {
+                issues.push({ severity: 'warn', text: `${p.label} expires in ${p.daysLeft}d` });
+            } else if (p.state === 'stale') {
+                issues.push({ severity: 'warn', text: p.failedStates?.length
+                    ? `${p.label}: ${p.failedStates.join(', ')} not updated (previous cycle)` : `${p.label} pages not current` });
+            }
         }
 
         if (issues.length === 0) return;

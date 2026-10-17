@@ -782,6 +782,18 @@ class AirportPopup {
 
         thumb.onload = () => {
             containerEl.innerHTML = '';
+            // Whether the A/FD pages on the tablet are current (FaaCurrency,
+            // as recorded at sync): stale pages showed with no sign (round 2).
+            if (typeof FaaCurrency !== 'undefined') {
+                const a = FaaCurrency.products(FaaCurrency.deviceManifest(), null, Date.now()).find((x) => x.key === 'afd');
+                const line = document.createElement('div');
+                line.className = 'approach-currency';
+                const note = FaaCurrency.deviceManifest().afd?.note;
+                line.textContent = a.state === 'stale' ? `A/FD page not current${note ? ` — ${note}` : ''}; sync when the home server has rebuilt it`
+                                                       : FaaCurrency.describe(a);
+                line.classList.toggle('is-bad', a.state === 'stale' || a.state === 'expired' || a.state === 'unknown');
+                containerEl.appendChild(line);
+            }
             const hint = document.createElement('div');
             hint.style.cssText = 'padding:6px 12px;font-size:11px;color:var(--text-muted);text-align:center;';
             hint.textContent = 'Tap to open full screen';

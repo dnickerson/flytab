@@ -643,8 +643,11 @@ class ApproachCharts {
             });
 
             const aptName = entry?.name || '';
+            const cur = this._plateCurrency(icao);
+            const escTxt = (v) => String(v).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
             html += `<div class="approach-airport-group">
-                <div class="approach-airport-header"><span class="approach-chevron">\u25bc</span> ${icao} ${aptName}</div>`;
+                <div class="approach-airport-header"><span class="approach-chevron">\u25bc</span> ${icao} ${aptName}</div>
+                <div class="approach-currency${cur.bad ? ' is-bad' : ''}">${escTxt(cur.text)}</div>`;
 
             for (const plate of sorted) {
                 const idx = this._plates.length;
@@ -710,6 +713,25 @@ class ApproachCharts {
                 this._showPlate(parseInt(btn.dataset.idx));
             });
         });
+    }
+
+    /**
+     * This airport's charts: cycle and expiry from what the tablet recorded at
+     * sync (FaaCurrency, offline, 0901Z) -- the viewer showed none, so expired
+     * charts looked current in flight (round 2 review, 2026-10-17). An airport
+     * in a state whose sync failed has the previous cycle's files under this
+     * cycle's index: said so.
+     */
+    _plateCurrency(icao) {
+        const dev = FaaCurrency.deviceManifest();
+        const p = FaaCurrency.products(dev, null, Date.now()).find((x) => x.key === 'plates');
+        const entry = this._plateIndex?.[icao] || {};
+        const st = String(entry.state || '').toUpperCase();
+        if (st && (dev.plates?.failed_states || []).includes(st)) {
+            return { text: `${st} charts not updated — previous cycle's; sync in MORE → Data Status`, bad: true };
+        }
+        return { text: FaaCurrency.describe({ ...p, cycle: entry.cycle || p.cycle }),
+                 bad: p.state === 'expired' || p.state === 'unknown' };
     }
 
     _showPlate(idx) {
@@ -779,6 +801,17 @@ class ApproachCharts {
         // Update title
         const titleEl = this._viewerEl.querySelector('.approach-viewer-title');
         titleEl.textContent = `${plate.icao} — ${plate.name || plate.chart_name || file}  (${idx + 1}/${this._plates.length})`;
+        // The chart's cycle and expiry, red when expired or not updated.
+        let cur = this._viewerEl.querySelector('.approach-currency');
+        if (!cur) {
+            cur = document.createElement('div');
+            cur.className = 'approach-currency';
+            const hdr = this._viewerEl.querySelector('.approach-viewer-header');
+            if (hdr) hdr.after(cur); else this._viewerEl.prepend(cur);
+        }
+        const c = this._plateCurrency(plate.icao);
+        cur.textContent = c.text;
+        cur.classList.toggle('is-bad', c.bad);
 
         this._pickerEl.style.display = 'none';
         this._viewerEl.style.display = 'flex';
