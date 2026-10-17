@@ -12290,7 +12290,7 @@ body.route-editing-mode .route-table-sheet {
 .approach-currency {
     padding: 4px 12px;
     font-family: var(--font-ui);
-    font-size: 14px;
+    font-size: var(--text-xs);
     font-weight: 700;
     color: var(--text-secondary);
     background: var(--bg-surface);

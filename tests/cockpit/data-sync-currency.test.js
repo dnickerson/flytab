@@ -32,7 +32,9 @@ function setup({ failState = null } = {}) {
         url = String(url);
         calls.push(`${opts.method || 'GET'} ${url}`);
         const J = (o, ok = true, status = 200) => ({ ok, status, json: async () => o, text: async () => JSON.stringify(o), blob: async () => ({ size: 1 }) });
+        if (url.startsWith('http://home:8090/nasr/cycle_info.json') && globalThis.__homeNasr) return J(globalThis.__homeNasr);
         if (url.endsWith('/nasr/cycle_info.json')) return J({ effective_date: '2026-10-01', expiration_date: '2026-10-29', sua_count: 1236, bundle_version: 11 });
+        if (url === 'http://localhost:9090/nasr/bundle.json') return J({ cycle_info: {} });
         if (url.endsWith('/cifp/cifp_cycle_info.json')) return J({ cycle_code: '261001', effective_date: '2026-10-01', expiration_date: '2026-10-29' });
         // Charts on the tablet and nothing newer on the server: those steps skip.
         if (url.includes('/mbtiles/status')) return J(['sectional', 'ifr-low', 'ifr-area', 'tac'].map((layer) => ({ layer, exists: true, size_mb: 1 })));
@@ -356,5 +358,97 @@ describe('Data Status days agree with the status-bar badge', () => {
     });
     it('chart layers expire at the 0901Z changeover too', () => {
         expect(read('web/cockpit/data-status.js')).toMatch(/FaaCurrency\.expiresAt\(dTile\.expiration_date\)/);
+    });
+});
+
+
+describe('final review 2026-10-17: NASR is current only once the app has loaded it', () => {
+    afterEach(() => { delete globalThis.fetch; delete window.app; delete window.Capacitor; delete globalThis.__homeNasr; });
+    const NEW = { effective_date: '2026-10-29', expiration_date: '2026-11-26', sua_count: 1236, bundle_version: 11 };
+    const native = (nasrDb) => { window.Capacitor = { isNativePlatform: () => true }; window.app = { _nasrDb: nasrDb }; };
+
+    it('new NASR downloaded but the import into the app fails: the step fails and NASR is not recorded current', async () => {
+        const { ds } = setup();
+        globalThis.__homeNasr = NEW;
+        native({ importNasrBundle: async () => { throw new Error('IDB blocked'); }, getCycleInfo: async () => null });
+        await ds._syncAll(null, () => {}, () => {}, () => {});
+        expect(document.body.textContent).toMatch(/NASR downloaded but not loaded into the app \(IDB blocked\)/);
+        expect(ds._readDeviceManifest().nasr.effective_date).toBe('2026-10-01');       // still the old cycle
+    });
+
+    it('NASR files current but the app still holds the old cycle: it is loaded, then recorded', async () => {
+        const { ds } = setup();
+        const imported = [];
+        native({ importNasrBundle: async (b) => { imported.push(b); return 1; },
+                 getCycleInfo: async () => ({ effective_date: '2026-09-03', bundle_version: 11 }) });
+        await ds._syncAll(null, () => {}, () => {}, () => {});
+        expect(imported).toHaveLength(1);
+        expect(ds._readDeviceManifest().nasr.expiration_date).toBe('2026-10-29');
+    });
+
+    it('NASR files current and loaded: no reimport', async () => {
+        const { ds } = setup();
+        const imported = [];
+        native({ importNasrBundle: async (b) => { imported.push(b); return 1; },
+                 getCycleInfo: async () => ({ effective_date: '2026-10-01', bundle_version: 11 }) });
+        await ds._syncAll(null, () => {}, () => {}, () => {});
+        expect(imported).toHaveLength(0);
+    });
+
+    it('Force reimport reports a failed import instead of "App data reloaded"', async () => {
+        setup();
+        native({ importNasrBundle: async () => { throw new Error('quota'); } });
+        await expect(DataStatus._reimportNasr()).rejects.toThrow('quota');
+    });
+});
+
+describe('final review 2026-10-17: NASR refused by the audit does not skip CIFP', () => {
+    afterEach(() => { delete globalThis.fetch; });
+    it('NASR failed its check: CIFP is still checked and recorded; the step fails naming NASR', async () => {
+        const { ds, calls } = setup();
+        ds._serverManifest.audit.products.nasr = { ok: false, failures: ['SUA count 0'] };
+        ds._serverManifest.audit.ok = false;
+        await ds._syncAll(null, () => {}, () => {}, () => {});
+        expect(calls.some((c) => c.includes('home:8090/cifp/cifp_cycle_info.json'))).toBe(true);
+        expect(ds._readDeviceManifest().cifp.expiration_date).toBe('2026-10-29');
+        expect(document.body.textContent).toMatch(/NASR not synced: .*SUA count 0.*CIFP current/);
+    });
+});
+
+describe('final review 2026-10-17: Data Status footer and state names', () => {
+    afterEach(() => { vi.useRealTimers(); delete globalThis.fetch; });
+    const DEV = {
+        nasr: { effective_date: '2026-10-01', expiration_date: '2026-10-29', bundle_version: 11 },
+        cifp: { cycle_code: '261001' },                                      // expiry never recorded
+        plates: { cycle_code: '261001', expiration_date: '2026-10-29', synced_states: ['NC'] },
+        afd: { expiration_date: '2026-10-29', stale: false }, tiles: {},
+    };
+    const render = (ds, dev, server = null) => {
+        document.body.innerHTML = '<div><div class="data-status-body"></div><div id="dsStickyFooter"></div></div>';
+        ds._el = document.body;
+        ds._render(server, JSON.parse(JSON.stringify(dev)), []);
+    };
+
+    it('an expiry not recorded is not "All Data Current"; Sync stays enabled to record it', () => {
+        vi.useFakeTimers({ now: new Date('2026-10-20T15:00:00Z') });
+        const { ds } = setup();
+        localStorage.setItem('flytab_device_manifest', JSON.stringify(DEV));
+        ds._resolvedBase = null;                                         // away from home: nothing "outdated" to compare
+        render(ds, DEV);
+        const btn = document.querySelector('#dsSyncAllBtn');
+        expect(btn.textContent).toMatch(/FAA data expiry unknown: CIFP — sync on home WiFi/);
+        expect(btn.disabled).toBe(false);
+    });
+
+    it('state names from the server are text, not HTML', () => {
+        vi.useFakeTimers({ now: new Date('2026-10-20T15:00:00Z') });
+        const { ds } = setup();
+        const server = JSON.parse(JSON.stringify(SERVER));
+        server.plates.state_sizes = [{ state: '<img src=x onerror="window.__pwned=1">', size_mb: 1 }];
+        const dev = { ...DEV, plates: { ...DEV.plates, failed_states: ['<b id="evil">GA</b>'] } };
+        render(ds, dev, server);
+        expect(document.querySelector('.data-status-body img')).toBeNull();
+        expect(document.getElementById('evil')).toBeNull();
+        expect(document.body.textContent).toMatch(/<img src=x/);
     });
 });

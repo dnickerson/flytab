@@ -326,6 +326,8 @@ class DataStatus {
         const allDisplayStates = serverHasPlates
             ? [...serverStates, ...syncedStates.filter(s => !serverStateSet.has(s))]
             : syncedStates;
+        // State names come from the server's manifest: escaped (final review 2026-10-17).
+        const escS = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
         const stateChips = allDisplayStates.map(st => {
             const onDevice = syncedStates.includes(st);
             const onServer = serverHasPlates ? serverStateSet.has(st) : true;
@@ -334,9 +336,9 @@ class DataStatus {
             const cls = ok ? 'ds-state-ok' : 'ds-state-missing';
             const icon = ok ? '&#10003;' : '&#9675;';
             const note = (serverHasPlates && !onServer) ? ' <span class="ds-muted">(removed from server)</span>' : '';
-            return `<span class="ds-state-chip ${cls}">${icon} ${st}${sizeTxt}${note}</span>`;
+            return `<span class="ds-state-chip ${cls}">${icon} ${escS(st)}${escS(sizeTxt)}${note}</span>`;
         }).join('') + (dPlates?.failed_states || []).filter(st => !allDisplayStates.includes(st)).map(st =>
-            `<span class="ds-state-chip ds-state-missing">&#10007; ${st} (previous cycle — not updated)</span>`).join('');
+            `<span class="ds-state-chip ds-state-missing">&#10007; ${escS(st)} (previous cycle — not updated)</span>`).join('');
 
         const platesIncludesNote = '<span class="ds-muted">Includes: IAP &middot; DP &middot; STAR &middot; Airport Diagrams (DIAG) &middot; Airport Info (A/FD)</span>';
 
@@ -610,12 +612,17 @@ class DataStatus {
             // Never "All Data Current" over expired or partly updated FAA data
             // (offline it said so with everything expired -- round 2 review).
             const faa = FaaCurrency.products(this._readDeviceManifest(), this._readDeviceManifest().nasr, Date.now());
-            const bad = faa.filter(p => p.state === 'expired' || p.state === 'stale');
+            // Expiry unknown (never recorded, e.g. right after an upgrade) is not
+            // current either; a sync records it, so the button stays enabled
+            // (final review 2026-10-17: "All Data Current" with Sync disabled).
+            const bad = faa.filter(p => p.state === 'expired' || p.state === 'stale' || p.state === 'unknown');
+            const what = bad.some(p => p.state === 'expired') ? 'expired'
+                       : bad.some(p => p.state === 'stale') ? 'not current' : 'expiry unknown';
             const label = needsSync ? 'Sync All Outdated'
-                        : bad.length ? `FAA data ${bad.some(p => p.state === 'expired') ? 'expired' : 'not current'}: ${bad.map(p => p.label).join(', ')} — sync on home WiFi`
+                        : bad.length ? `FAA data ${what}: ${bad.map(p => p.label).join(', ')} — sync on home WiFi`
                         : 'All Data Current';
             stickyFooter.innerHTML = `
-                <button class="ds-sync-btn" id="dsSyncAllBtn" ${!needsSync ? 'disabled' : ''}>
+                <button class="ds-sync-btn" id="dsSyncAllBtn" ${!needsSync && !bad.length ? 'disabled' : ''}>
                     &#8645; ${label}
                 </button>
             `;
@@ -1163,6 +1170,18 @@ class DataStatus {
 
                 // ── Aeronautical Database (NASR + CIFP) ──────────────────────────────
         setStep('aero', 'running', 'Checking NASR cycle…');
+        // NASR and CIFP each on their own: a NASR refusal or failure no longer
+        // skips the CIFP check (final review 2026-10-17); the step fails naming NASR.
+        let nasrErr = null;
+        let nasrServerDate = null;
+        // NASR is current only once the app has loaded it (IndexedDB), not when
+        // its files are on the tablet: a failed reimport (CLAUDE.md: IDB hang,
+        // 60 s timeout on the 18 MB parse) left Data Status saying CURRENT over
+        // the old cycle (final review 2026-10-17).
+        const loadNasr = async () => {
+            try { await DataStatus._reimportNasr(); }
+            catch (e) { throw new Error(`NASR downloaded but not loaded into the app (${e?.message || e}) — tap Force reimport or restart FlyTab`); }
+        };
         try {
             this._throwIfAuditFailed('nasr');               // CIFP is gated on its own, below
             const [nasrServer, nasrLocal] = await Promise.all([
@@ -1170,12 +1189,18 @@ class DataStatus {
                 fetch(`${LOCAL}/nasr/cycle_info.json`, { cache: 'no-store', signal: AbortSignal.timeout(2000) }).then(r => r.ok ? r.json() : null).catch(() => null),
             ]);
             if (!nasrServer) throw new Error('Home server not reachable');
-            const nasrServerDate = nasrServer.effective_date;
+            nasrServerDate = nasrServer.effective_date;
             const nasrLocalDate  = nasrLocal?.effective_date;
             const suaUpToDate    = (nasrServer.sua_count ?? null) === null || ((nasrLocal?.sua_count ?? null) !== null && nasrServer.sua_count === nasrLocal.sua_count);
             const bundleUpToDate = (nasrServer.bundle_version ?? null) === null || nasrServer.bundle_version === nasrLocal?.bundle_version;
 
             if (nasrLocalDate === nasrServerDate && suaUpToDate && bundleUpToDate) {
+                const loaded = await window.app?._nasrDb?.getCycleInfo?.().catch(() => null);
+                if (window.app?._nasrDb && (loaded?.effective_date !== nasrServerDate
+                        || ((nasrServer.bundle_version ?? null) !== null && loaded?.bundle_version !== nasrServer.bundle_version))) {
+                    setStep('aero', 'running', `NASR files current — loading cycle ${nasrServerDate} into the app…`);
+                    await loadNasr();
+                }
                 // Expiry recorded for offline currency (FaaCurrency), also when current.
                 this._mergeDeviceSection('nasr', { effective_date: nasrServerDate, expiration_date: nasrServer.expiration_date || null });
                 setStep('aero', 'running', `NASR current (cycle ${nasrServerDate}) — checking CIFP…`);
@@ -1192,8 +1217,7 @@ class DataStatus {
                 const nasrRes = await zipResp.json().catch(() => null);
                 if (!(nasrRes?.extracted > 0)) throw new Error('NASR download had no files');
                 setStep('aero', 'running', `NASR updated — reimporting into app…`);
-                try { await DataStatus._reimportNasr(); }
-                catch (e) { console.warn('[DataStatus] post-sync NASR reimport failed:', e?.message); }
+                await loadNasr();
                 this._saveDeviceSection('nasr', {
                     effective_date: nasrServer.effective_date,
                     expiration_date: nasrServer.expiration_date || null,
@@ -1201,6 +1225,8 @@ class DataStatus {
                 });
             }
 
+        } catch (e) { nasrErr = e; }
+        try {
             // CIFP — runs within the same aero step
             setStep('aero', 'running', 'Checking CIFP cycle…');
             this._throwIfAuditFailed('cifp');
@@ -1212,6 +1238,7 @@ class DataStatus {
             const cifpLocalCode  = cifpLocal?.cycle_code  || cifpLocal?.effective_date;
             if (!cifpServerCode || (cifpLocalCode && cifpLocalCode === cifpServerCode)) {
                 if (cifpServerCode) this._mergeDeviceSection('cifp', { cycle_code: cifpServerCode, expiration_date: cifpServer.expiration_date || null });
+                if (nasrErr) throw new Error(`NASR not synced: ${nasrErr.message} — CIFP current`);
                 setStep('aero', 'ok', `Cycle ${nasrServerDate} — NASR + CIFP current`);
             } else {
                 setStep('aero', 'running', 'Downloading CIFP bundle…');
@@ -1226,9 +1253,13 @@ class DataStatus {
                 const cifpRes = await cifpResp.json().catch(() => null);
                 if (!(cifpRes?.extracted > 0)) throw new Error('CIFP download had no files');
                 this._saveDeviceSection('cifp', { cycle_code: cifpServerCode, expiration_date: cifpServer.expiration_date || null });
+                if (nasrErr) throw new Error(`NASR not synced: ${nasrErr.message} — CIFP updated to ${cifpServerCode}`);
                 setStep('aero', 'ok', `Updated to cycle ${nasrServerDate} — NASR + CIFP`);
             }
-        } catch (e) { failStep('aero', e); }
+        } catch (e) {
+            failStep('aero', nasrErr && !String(e?.message).startsWith('NASR not synced')
+                ? new Error(`NASR not synced: ${nasrErr.message}; CIFP: ${e?.message || e}`) : e);
+        }
 
         // ── MBTiles ───────────────────────────────────────────────────────────
         let mbStatus = [];
@@ -1530,7 +1561,10 @@ class DataStatus {
                 await app._updateNasrBadge?.();
                 app.vectorLayers?._updateDynamicLayers?.();
             } catch (e) {
+                // Thrown, not swallowed: the sync step and Force reimport report it
+                // instead of a green "App data reloaded" over the old cycle.
                 console.warn('[DataStatus] NASR reimport failed:', e?.message);
+                throw e;
             }
             return;
         }

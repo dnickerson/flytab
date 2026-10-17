@@ -56,6 +56,10 @@ final class ChecksumVerify {
             }
             r.matched++;
         }
+        // Case-insensitive storage: a name differing only in case is the listed
+        // file (PlatePrune keeps it), not a leftover.
+        java.util.Set<String> listed = new java.util.HashSet<>();
+        for (String k : expected.keySet()) listed.add(k.toUpperCase(java.util.Locale.ROOT));
         File plates = new File(baseDir, "plates");
         File[] airports = plates.listFiles(File::isDirectory);
         if (airports != null) {
@@ -67,7 +71,7 @@ final class ChecksumVerify {
                     String n = f.getName().toLowerCase();
                     if (!n.endsWith(".pdf") && !n.endsWith(".webp")) continue;
                     String rel = "plates/" + dir.getName() + "/" + f.getName();
-                    if (!expected.containsKey(rel)) r.extra.add(rel);
+                    if (!listed.contains(rel.toUpperCase(java.util.Locale.ROOT))) r.extra.add(rel);
                 }
             }
         }

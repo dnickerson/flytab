@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
@@ -22,7 +23,12 @@ import java.util.TreeMap;
  */
 final class PlatePrune {
 
-    /** "plates/KTMB" -> names in the zip ("05349AD.PDF", ...). */
+    /**
+     * "plates/KTMB" -> names in the zip, upper-cased ("05349AD.PDF", ...): shared
+     * storage is case-insensitive, so extracting 05349AD.PDF over 05349ad.pdf
+     * rewrites that file under its old name, which must not count as a leftover
+     * (final review 2026-10-17).
+     */
     private final Map<String, Set<String>> keep = new TreeMap<>();
 
     /** An entry of the zip (its name as in the zip). */
@@ -31,7 +37,7 @@ final class PlatePrune {
         String[] p = entryName.split("/", -1);
         if (p.length != 3 || !"plates".equals(p[0])) return;
         for (String s : p) if (s.isEmpty() || ".".equals(s) || "..".equals(s)) return;
-        keep.computeIfAbsent(p[0] + "/" + p[1], k -> new HashSet<>()).add(p[2]);
+        keep.computeIfAbsent(p[0] + "/" + p[1], k -> new HashSet<>()).add(p[2].toUpperCase(Locale.ROOT));
     }
 
     /** The airport folders the zip has (for tests and the log). */
@@ -49,7 +55,7 @@ final class PlatePrune {
             File[] files = dir.listFiles();
             if (files == null) continue;
             for (File f : files) {
-                if (!f.isFile() || e.getValue().contains(f.getName())) continue;
+                if (!f.isFile() || e.getValue().contains(f.getName().toUpperCase(Locale.ROOT))) continue;
                 if (f.delete()) deleted++;
             }
         }

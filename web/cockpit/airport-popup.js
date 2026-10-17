@@ -229,7 +229,7 @@ class AirportPopup {
                     const afdPaneEl = pane?.querySelector('.apt-afd-pane');
                     if (afdPaneEl && !afdPaneEl.dataset.loaded) {
                         afdPaneEl.dataset.loaded = '1';
-                        this._loadAfdPane(afdPaneEl, airport.icao);
+                        this._loadAfdPane(afdPaneEl, airport.icao, airport.state);
                     }
                 }
             });
@@ -769,7 +769,7 @@ class AirportPopup {
      * The pipeline downloads per-airport pages from the FAA Chart Supplement and stores
      * them as AFD_PAGE.webp in data/plates/{ICAO}/AFD_PAGE.webp via NanoHTTPD.
      */
-    async _loadAfdPane(containerEl, icao) {
+    async _loadAfdPane(containerEl, icao, state) {
         containerEl.innerHTML = '<div style="padding:16px;color:var(--text-muted);font-size:13px">Loading A/FD…</div>';
         const PLATES_BASE = 'http://localhost:9090/plates';
         const strippedId = icao.replace(/^K/, '');
@@ -785,13 +785,21 @@ class AirportPopup {
             // Whether the A/FD pages on the tablet are current (FaaCurrency,
             // as recorded at sync): stale pages showed with no sign (round 2).
             if (typeof FaaCurrency !== 'undefined') {
-                const a = FaaCurrency.products(FaaCurrency.deviceManifest(), null, Date.now()).find((x) => x.key === 'afd');
+                const dm = FaaCurrency.deviceManifest();
+                const a = FaaCurrency.products(dm, null, Date.now()).find((x) => x.key === 'afd');
                 const line = document.createElement('div');
                 line.className = 'approach-currency';
-                const note = FaaCurrency.deviceManifest().afd?.note;
-                line.textContent = a.state === 'stale' ? `A/FD page not current${note ? ` — ${note}` : ''}; sync when the home server has rebuilt it`
-                                                       : FaaCurrency.describe(a);
-                line.classList.toggle('is-bad', a.state === 'stale' || a.state === 'expired' || a.state === 'unknown');
+                const note = dm.afd?.note;
+                // A state no longer synced keeps its last pages (sync prunes only
+                // the folders a zip has): not covered by the sync's expiry (final
+                // review 2026-10-17).
+                const synced = dm.plates?.synced_states || [];
+                const st = String(state || '').toUpperCase();
+                const orphan = !!st && synced.length > 0 && !synced.includes(st);
+                line.textContent = orphan ? `A/FD page not current — ${st} is not synced to this tablet`
+                                 : a.state === 'stale' ? `A/FD page not current${note ? ` — ${note}` : ''}; sync when the home server has rebuilt it`
+                                 : FaaCurrency.describe(a);
+                line.classList.toggle('is-bad', orphan || a.state === 'stale' || a.state === 'expired' || a.state === 'unknown');
                 containerEl.appendChild(line);
             }
             const hint = document.createElement('div');
@@ -1083,7 +1091,7 @@ class AirportPopup {
                 img.remove();
                 if (plateType === 'MIN') {
                     const msg = document.createElement('div');
-                    msg.style.cssText = 'padding:16px;background:var(--bg-primary);color:var(--text-primary);font-weight:700;text-align:center;';
+                    msg.style.cssText = 'padding:16px;background:var(--bg-primary);color:var(--text-primary);font-family:var(--font-ui);font-size:var(--text-md);font-weight:700;text-align:center;';
                     msg.textContent = `${icao}: this airport's minimums page is not on this tablet — sync plates in MORE → Data Status.`;
                     wrap.appendChild(msg);
                     return;

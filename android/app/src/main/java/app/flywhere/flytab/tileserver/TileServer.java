@@ -142,6 +142,14 @@ public class TileServer extends NanoHTTPD {
         String uri = session.getUri();
         String method = session.getMethod().name();
 
+        // Writes only from FlyTab's own WebView (see allowed()).
+        if (!allowed(method, session.getHeaders().get("origin"))) {
+            Log.w(TAG, "refused " + method + " " + uri + " from origin " + session.getHeaders().get("origin"));
+            Response r = newFixedLengthResponse(Response.Status.FORBIDDEN, "text/plain", "Forbidden");
+            addCors(r);
+            return r;
+        }
+
         // CORS preflight
         if ("OPTIONS".equals(method)) {
             Response r = newFixedLengthResponse(Response.Status.NO_CONTENT, "text/plain", "");
@@ -197,8 +205,35 @@ public class TileServer extends NanoHTTPD {
         return response;
     }
 
+    /** FlyTab's WebView (Capacitor, androidScheme http). */
+    static final String APP_ORIGIN = "http://localhost";
+
+    /**
+     * Reads are open; POST, PUT and DELETE change the FAA data, flight recordings
+     * and logbook files, so only FlyTab's own WebView may send them. Binding to
+     * 127.0.0.1 kept the LAN out, but any app on the tablet, or a web page in the
+     * browser, could still write, delete, unzip, or point fetch-zip at its own
+     * zip, which now also prunes plates (final review 2026-10-17). A browser
+     * always sends Origin on these methods and a page cannot fake it.
+     */
+    static boolean allowed(String method, String origin) {
+        if (!"POST".equals(method) && !"PUT".equals(method) && !"DELETE".equals(method)) return true;
+        return APP_ORIGIN.equals(origin);
+    }
+
+    /** fetch-zip / fetch-mbtiles / verify download from the home server: http(s) only. */
+    static boolean fetchUrlAllowed(String url) {
+        if (url == null) return false;
+        try {
+            String p = new java.net.URL(url).getProtocol();
+            return "http".equals(p) || "https".equals(p);
+        } catch (java.net.MalformedURLException e) {
+            return false;
+        }
+    }
+
     private void addCors(Response r) {
-        r.addHeader("Access-Control-Allow-Origin", "*");
+        r.addHeader("Access-Control-Allow-Origin", APP_ORIGIN);
         r.addHeader("Access-Control-Allow-Methods", "GET, PUT, POST, DELETE, OPTIONS");
         r.addHeader("Access-Control-Allow-Headers", "Content-Type, X-Append");
     }
@@ -236,7 +271,7 @@ public class TileServer extends NanoHTTPD {
         String layer = (layerList != null && !layerList.isEmpty()) ? layerList.get(0) : null;
         String url   = (urlList   != null && !urlList.isEmpty())   ? urlList.get(0)   : null;
 
-        if (layer == null || url == null || layer.contains("..") || layer.contains("/")) {
+        if (layer == null || !fetchUrlAllowed(url) || layer.contains("..") || layer.contains("/")) {
             return newFixedLengthResponse(Response.Status.BAD_REQUEST, "text/plain",
                 "Missing or invalid layer/url params");
         }
@@ -321,12 +356,19 @@ public class TileServer extends NanoHTTPD {
         java.util.List<String> urlList = session.getParameters().get("url");
         String url = (urlList != null && !urlList.isEmpty()) ? urlList.get(0) : null;
         if (url == null) return newFixedLengthResponse(Response.Status.BAD_REQUEST, "text/plain", "Missing url param");
+        if (!fetchUrlAllowed(url)) return newFixedLengthResponse(Response.Status.BAD_REQUEST, "text/plain", "url must be http(s)");
+        // Not while a fetch-zip is extracting or pruning (a timed-out request's
+        // thread can still be): hashing then reports false differences.
+        synchronized (FETCH_LOCK) {
+            return verifyLocked(url);
+        }
+    }
+
+    private Response verifyLocked(String url) {
+        java.net.HttpURLConnection conn = null;
         try {
             java.net.URL parsed = new java.net.URL(url);
-            if (!"http".equals(parsed.getProtocol()) && !"https".equals(parsed.getProtocol())) {
-                return newFixedLengthResponse(Response.Status.BAD_REQUEST, "text/plain", "url must be http(s)");
-            }
-            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) parsed.openConnection();
+            conn = (java.net.HttpURLConnection) parsed.openConnection();
             conn.setConnectTimeout(15000);
             conn.setReadTimeout(60000);
             if (conn.getResponseCode() != 200) {
@@ -367,6 +409,8 @@ public class TileServer extends NanoHTTPD {
         } catch (Exception e) {
             Log.e(TAG, "verify failed", e);
             return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "text/plain", "verify failed: " + e.getMessage());
+        } finally {
+            if (conn != null) conn.disconnect();
         }
     }
 
@@ -395,6 +439,9 @@ public class TileServer extends NanoHTTPD {
 
         if (url == null) {
             return newFixedLengthResponse(Response.Status.BAD_REQUEST, "text/plain", "Missing url param");
+        }
+        if (!fetchUrlAllowed(url)) {
+            return newFixedLengthResponse(Response.Status.BAD_REQUEST, "text/plain", "url must be http(s)");
         }
 
         synchronized (FETCH_LOCK) {

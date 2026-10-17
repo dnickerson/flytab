@@ -90,4 +90,21 @@ public class PlatePruneTest {
         assertTrue(outside.exists());
         assertEquals(Arrays.asList(), p.folders());
     }
+
+    /**
+     * Shared storage on the tablet is case-insensitive: extracting 05349AD.PDF over
+     * an existing 05349ad.pdf rewrites that file and keeps its old name. Comparing
+     * names case-sensitively deleted the plate just written (final review 2026-10-17).
+     */
+    @Test
+    public void aFileWhoseNameDiffersOnlyInCaseIsKept() throws IOException {
+        File base = tmp.newFolder("FlyTab");
+        File sameFile = file(base, "plates/KTMB/05349ad.pdf");
+        File old = file(base, "plates/KTMB/00257FROGZ.PDF");
+        PlatePrune p = new PlatePrune();
+        p.saw("plates/KTMB/05349AD.PDF");
+        assertEquals(1, p.prune(base));
+        assertTrue(sameFile.exists());
+        assertFalse(old.exists());
+    }
 }

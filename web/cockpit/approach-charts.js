@@ -778,7 +778,7 @@ class ApproachCharts {
                 if (isMin) {
                     const msg = document.createElement('div');
                     msg.className = 'approach-plate-pdf';
-                    msg.style.cssText = 'padding:24px;background:var(--bg-primary);color:var(--text-primary);font-weight:700;text-align:center;';
+                    msg.style.cssText = 'padding:24px;background:var(--bg-primary);color:var(--text-primary);font-family:var(--font-ui);font-size:var(--text-md);font-weight:700;text-align:center;';
                     msg.textContent = `${plate.icao} ${plate.name || plate.chart_name || 'minimums'}: this airport's minimums page is not on this tablet — sync plates in MORE → Data Status.`;
                     this._panContainer.appendChild(msg);
                 } else if (file && file.toLowerCase().endsWith('.pdf')) {

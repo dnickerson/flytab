@@ -93,4 +93,13 @@ public class ChecksumVerifyTest {
         assertEquals(0, r.checked);
         assertEquals(2, r.rejected);
     }
+
+    /** Case-insensitive storage: a name differing only in case is the listed file, not a leftover. */
+    @Test
+    public void aPlateWhoseNameDiffersOnlyInCaseIsNotExtra() throws Exception {
+        File base = tmp.newFolder("FlyTab");
+        write(base, "plates/KTMB/05349ad.pdf", "current");
+        ChecksumVerify.Result r = ChecksumVerify.verify(base, expected("plates/KTMB/05349AD.PDF", "current"));
+        assertTrue(r.extra.isEmpty());
+    }
 }
