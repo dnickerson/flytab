@@ -732,10 +732,18 @@ class ApproachCharts {
         // All plates served from local NanoHTTPD at Documents/FlyTab/plates/
         const plateUrl = (f) => `${PLATES_BASE}/${plate.icao}/${encodeURIComponent(f)}`;
 
-        if (georef?.webp) {
+        // Takeoff/alternate minimums are one FAA document per volume (SE3TO.PDF:
+        // 49 pages, every SE-3 airport); the pipeline's image is this airport's
+        // own page(s). Drawing the PDF started at page 1 -- another airport
+        // (2026-10-16, KTMB).
+        const isMin = (plate.chart_code || plate.type || '').toUpperCase() === 'MIN';
+
+        if (georef?.webp || (isMin && file)) {
             // Use WebP raster — pinch zoom works via _setupPinchZoom
             // webp path in geoIndex is relative to plates dir (e.g. "KLKR/05853R6.webp")
-            const webpUrl = `${PLATES_BASE}/${georef.webp.split('/').map(encodeURIComponent).join('/')}`;
+            const webpUrl = georef?.webp
+                ? `${PLATES_BASE}/${georef.webp.split('/').map(encodeURIComponent).join('/')}`
+                : plateUrl(file.replace(/\.pdf$/i, '.webp'));
             this._imgEl.style.display = '';
             this._imgEl.src = webpUrl;
             this._imgEl.style.transform = '';
