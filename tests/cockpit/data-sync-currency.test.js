@@ -345,3 +345,16 @@ describe('the verdict is re-read before each step of a long sync', () => {
         expect(document.body.textContent).toMatch(/building new PLATES/);
     });
 });
+
+describe('Data Status days agree with the status-bar badge', () => {
+    it('whole days left, rounded down (11.9 days is 11d, as the badge says)', () => {
+        const { ds } = setup();
+        const exp = new Date('2026-10-29T09:01:00Z');
+        expect(ds._cycleStatus(exp, new Date('2026-10-17T12:00:00Z'))).toMatch(/CURRENT \(11d left\)/);
+        expect(ds._cycleStatus(exp, new Date('2026-10-26T12:00:00Z'))).toMatch(/EXPIRING \(2d\)/);
+        expect(ds._cycleStatus(exp, new Date('2026-10-29T09:02:00Z'))).toMatch(/EXPIRED/);
+    });
+    it('chart layers expire at the 0901Z changeover too', () => {
+        expect(read('web/cockpit/data-status.js')).toMatch(/FaaCurrency\.expiresAt\(dTile\.expiration_date\)/);
+    });
+});

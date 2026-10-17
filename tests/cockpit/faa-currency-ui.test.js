@@ -62,3 +62,15 @@ describe('startup banner and preflight: plates and procedures too', () => {
         expect(r.msg).toMatch(/PLATES/);
     });
 });
+
+describe('after the upgrade, before the first sync: "expiry not recorded", not "not synced"', () => {
+    afterEach(() => { vi.useRealTimers(); localStorage.clear(); });
+    it('preflight wording', async () => {
+        vi.useFakeTimers({ now: new Date('2026-10-17T15:00:00Z') });
+        localStorage.setItem('flytab_device_manifest', JSON.stringify({ cifp: { cycle_code: '261001' }, plates: { cycle_code: '261001' } }));
+        const r = await PreflightCheck.prototype._checkNasr.call({ db: { getCycleInfo: async () => ({ effective_date: '2026-10-01', expiration_date: '2026-10-29' }) } });
+        expect(r.msg).toMatch(/CIFP expiry not recorded/);
+        expect(r.msg).not.toMatch(/not synced/);
+    });
+});
+

@@ -130,7 +130,8 @@ class PreflightCheck {
             const failed = products.filter(p => p.state === 'expired' || p.state === 'unknown');
             if (failed.length) {
                 return { label: 'FAA Data', status: 'fail',
-                         msg: failed.map(p => p.state === 'expired' ? `${p.label} expired` : `${p.label} not synced`).join(' · ') };
+                         msg: failed.map(p => p.state === 'expired' ? `${p.label} expired`
+                                              : `${p.label} expiry not recorded — sync in Data Status`).join(' · ') };
             }
             const warn = products.filter(p => p.state === 'expiring' || p.state === 'stale');
             if (warn.length) {

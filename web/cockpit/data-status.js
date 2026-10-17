@@ -397,8 +397,8 @@ class DataStatus {
                     // so server/device expiration_date agree whenever we reach here. Prefer
                     // the device's own recorded expiration — what's actually on the tablet —
                     // falling back to the server's only if the device manifest lacks one.
-                    const expDate = dTile?.expiration_date ? new Date(dTile.expiration_date)
-                                  : sTile?.expiration_date ? new Date(sTile.expiration_date) : null;
+                    const expDate = dTile?.expiration_date ? new Date(FaaCurrency.expiresAt(dTile.expiration_date))
+                                  : sTile?.expiration_date ? new Date(FaaCurrency.expiresAt(sTile.expiration_date)) : null;
                     badge  = expDate ? this._cycleStatus(expDate, now) : this._badge('ON DEVICE', 'green');
                     action = base ? `<button class="ds-action-btn ds-secondary ds-mbt-dl-btn" data-layer="${layer}">SYNC</button>` : '';
                 }
@@ -788,13 +788,18 @@ class DataStatus {
 
     _cycleStatus(expDate, now) {
         if (!expDate) return this._badge('UNKNOWN', 'gray');
-        const daysLeft = (expDate - now) / 86400000;
-        if (daysLeft < 0) {
-            return this._badge(`EXPIRED (${Math.abs(Math.round(daysLeft))}d ago)`, 'red');
-        } else if (daysLeft <= 3) {
-            return this._badge(`EXPIRING (${Math.round(daysLeft)}d)`, 'yellow');
+        // Whole days left, rounded down -- as the status-bar badge (FaaCurrency):
+        // it said 11d while this said 12d. Understating the time left is the
+        // safe direction.
+        const ms = expDate - now;
+        if (ms <= 0) {
+            return this._badge(`EXPIRED (${Math.floor(-ms / 86400000)}d ago)`, 'red');
         }
-        return this._badge(`CURRENT (${Math.round(daysLeft)}d left)`, 'green');
+        const daysLeft = Math.floor(ms / 86400000);
+        if (daysLeft <= 3) {
+            return this._badge(`EXPIRING (${daysLeft}d)`, 'yellow');
+        }
+        return this._badge(`CURRENT (${daysLeft}d left)`, 'green');
     }
 
     _badge(text, color) {
