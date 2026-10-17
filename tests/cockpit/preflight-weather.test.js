@@ -21,8 +21,17 @@ const NOW = Date.parse('2026-10-17T17:30:00Z');
 const metar = (minAgo) => ({ metar: { raw: 'x', decoded: { observed_at: new Date(NOW - minAgo * 60000).toISOString() },
                                       fetched_at: new Date(NOW - 2 * 60000).toISOString() } });
 const plan = { departure: 'KLKR', destination: 'KCLT', flight_plan: { departure: 'KLKR', destination: 'KCLT' } };
+// NASR airport records, shaped as on the tablet (2026-10-17): K9A9 lists only
+// CTAF; KNFE (military) lists no frequencies at all.
+const AIRPORTS = {
+    KLKR: { icao: 'KLKR', tower: false, frequencies: [{ type: 'ctaf', freq: '122.725' }, { type: 'awos', freq: '120.825' }] },
+    KCLT: { icao: 'KCLT', tower: true, frequencies: [{ type: 'twr', freq: '118.1' }, { type: 'atis', freq: '121.15' }] },
+    K9A9: { icao: 'K9A9', tower: false, frequencies: [{ type: 'ctaf', freq: '122.900' }] },
+    KNFE: { icao: 'KNFE', tower: false, frequencies: [] },
+};
 const check = (cache, p = plan) => PreflightCheck.prototype._checkWeather.call(
-    { db: { getWeather: async (icao) => cache[icao] || null } }, p);
+    { db: { getWeather: async (icao) => cache[icao] || null, getAirport: async (icao) => AIRPORTS[icao] || null } }, p);
+const route = (dep, dest) => ({ flight_plan: { departure: dep, destination: dest } });
 
 describe('pre-flight Weather row: the route airports\' cached METARs', () => {
     afterEach(() => vi.useRealTimers());
@@ -49,10 +58,37 @@ describe('pre-flight Weather row: the route airports\' cached METARs', () => {
         expect(r.msg).toMatch(/KLKR 3h20m/);
     });
 
-    it('an airport without a cached METAR (no weather station): caution naming it', async () => {
+    it('an airport with no weather station (K9A9: CTAF only) says so, not "no METAR cached"', async () => {
         vi.useFakeTimers({ now: NOW });
-        const r = await check({ KLKR: metar(5) }, { departure: 'KLKR', destination: 'K9A9', flight_plan: { departure: 'KLKR', destination: 'K9A9' } });
+        const r = await check({ KLKR: metar(5) }, route('KLKR', 'K9A9'));
         expect(r.status).toBe('warn');
+        expect(r.msg).toMatch(/K9A9 no weather station/);
+        expect(r.msg).not.toMatch(/no METAR cached/);
+    });
+
+    it('an airport with a weather station but nothing cached: "no METAR cached"', async () => {
+        vi.useFakeTimers({ now: NOW });
+        for (const icao of ['KCLT', 'KLKR']) {                          // ATIS + tower; AWOS
+            const r = await check({ K9A9: metar(5) }, route(icao, 'K9A9'));
+            expect(r.status).toBe('warn');
+            expect(r.msg).toMatch(new RegExp(`${icao} no METAR cached`));
+        }
+    });
+
+    it('NASR lists no frequencies (military) or no record: "no METAR cached", never "no weather station"', async () => {
+        vi.useFakeTimers({ now: NOW });
+        for (const icao of ['KNFE', 'KZZZ']) {
+            const r = await check({ KLKR: metar(5) }, route('KLKR', icao));
+            expect(r.msg).toMatch(new RegExp(`${icao} no METAR cached`));
+            expect(r.msg).not.toMatch(/no weather station/);
+        }
+    });
+
+    it('an airport lookup that throws still gives "no METAR cached"', async () => {
+        vi.useFakeTimers({ now: NOW });
+        const r = await PreflightCheck.prototype._checkWeather.call(
+            { db: { getWeather: async () => null, getAirport: async () => { throw new Error('idb'); } } }, route('K9A9', 'K9A9'));
+        expect(r).toMatchObject({ status: 'warn' });
         expect(r.msg).toMatch(/K9A9 no METAR cached/);
     });
 

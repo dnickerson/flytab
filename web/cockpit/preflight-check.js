@@ -92,6 +92,18 @@ class PreflightCheck {
         return { items, verdict, plan };
     }
 
+    /** True only when NASR shows the airport has no weather station (see _checkWeather). */
+    static async _hasNoWeatherStation(db, icao) {
+        let apt = null;
+        try {
+            apt = await db.getAirport(icao)
+                || (icao.length === 3 ? await db.getAirport(`K${icao}`) : null);
+        } catch { return false; }
+        const types = (apt?.frequencies || []).map(f => f.type);
+        if (!types.length || apt.tower) return false;
+        return !types.some(t => t === 'awos' || t === 'asos' || t === 'atis');
+    }
+
     /**
      * Weather at the route's departure and destination, from the Weather Cache
      * (Data & Maps; filled by the moving map on WiFi and by FIS-B in flight).
@@ -99,6 +111,10 @@ class PreflightCheck {
      * a route built on the tablet always said "Not cached" (Dana, 2026-10-17).
      * Age is from the METAR's observation time: under 1 h ok, under 3 h
      * caution, older fail; an airport with no METAR cached is a caution.
+     * An airport that has no weather station (NASR lists its frequencies but
+     * no AWOS/ASOS, ATIS or tower, e.g. K9A9) says "no weather station", not
+     * "no METAR cached" (Dana, 2026-10-17). Military fields list no frequencies
+     * in NASR, so an empty list proves nothing and keeps "no METAR cached".
      */
     async _checkWeather(plan) {
         if (!plan) return { label: 'Weather', status: 'fail', msg: 'No flight plan' };
@@ -117,7 +133,7 @@ class PreflightCheck {
             } catch { e = null; }
             const t = e?.metar ? Date.parse(e.metar.decoded?.observed_at || e.metar.fetched_at || e.fetched_at) : NaN;
             if (!Number.isFinite(t)) {
-                parts.push(`${icao} no METAR cached`);
+                parts.push(`${icao} ${await PreflightCheck._hasNoWeatherStation(this.db, icao) ? 'no weather station' : 'no METAR cached'}`);
                 if (worst === 'ok') worst = 'warn';
                 continue;
             }
