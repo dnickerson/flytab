@@ -81,8 +81,21 @@ on the next daily run, until the effective date.
 
 ### 2. The swap at 0901Z (server)
 
-**Cron:** 05:05 local, changed from 05:15. That is 0901Z + 4 min under EDT,
-and 0901Z + 64 min under EST (from 11-01).
+**Schedule:** a systemd user timer replaces the cron entry, because the home
+server is sometimes switched off at night (Dana, 2026-10-17).
+
+- `~/.config/systemd/user/flytab-pipeline.timer`: `OnCalendar=*-*-* 05:05`,
+  `Persistent=true`. A run missed while the PC was off happens at the next
+  boot. Linger is on for the user (checked: `Linger=yes`), so it runs before
+  login.
+- `flytab-pipeline.service`: `ExecStart=run_pipeline.sh`, logging to
+  `logs/cron.log` as now. It first waits up to 2 minutes for the network
+  (`ExecStartPre` polls DNS for aeronav.faa.gov), because a run at boot can
+  start before WiFi is up.
+- The cron line is removed once the timer is installed. Only one scheduler
+  ever runs the pipeline; `run_pipeline.sh`'s lock covers an overlap anyway.
+- 05:05 local is 0901Z + 4 min under EDT, and + 64 min under EST (from
+  11-01).
 
 **First step of `run_pipeline.sh`:** when today's 28-day effective date
 equals `data-next`'s cycle, `stage_next.py --promote` runs:
@@ -160,7 +173,7 @@ No other tablet change. The status-bar badge already shows amber
 | Not staged by the effective date | Built on the day at 05:05, as today. The tablet keeps expired-red data until synced |
 | A staged product fails its audit | Not promoted, built on the day |
 | Swap fails partway | Products are independent. One not swapped is built on the day; one swapped and broken fails the live audit, and the tablet refuses it |
-| Server PC asleep at 05:05 on cycle day | The swap waits for the next run (the next day). **Open question for Dana:** does that PC sleep? If yes, switch cron to a systemd timer with `Persistent=true` so a missed run happens on wake |
+| Server PC off at 05:05 on cycle day | The timer's `Persistent=true` runs the missed job at the next boot (before login, linger on). The swap happens then, and you sync after it |
 
 ## Testing (no FAA requests in tests)
 
@@ -185,6 +198,13 @@ No other tablet change. The status-bar badge already shows amber
   and A/FD XML are kept.
 - **Tablet:** the banner appears less than 24 h before expiry, with local
   05:01 (EDT) or 04:01 (EST).
+- **Timer:**
+  - `systemd-analyze calendar` and `systemctl --user list-timers` show the
+    next run;
+  - a test start (`systemctl --user start flytab-pipeline.service`) runs one
+    real pipeline pass;
+  - a missed run is simulated by stopping the timer past 05:05 and starting
+    it again, after which it fires.
 - **Rehearsal on the real server before 10-29:**
   1. stage 2611 for real (from 10-22);
   2. run the audit on `data-next`;
@@ -211,4 +231,4 @@ No other tablet change. The status-bar badge already shows amber
 - A "building" mark during the swap.
 - A `next` manifest entry and a Data Status "Next:" line.
 - Banner repeats.
-- A login catch-up check (open question above instead).
+- A login catch-up check: the timer's `Persistent=true` does this.
