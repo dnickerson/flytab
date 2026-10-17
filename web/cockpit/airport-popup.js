@@ -790,13 +790,19 @@ class AirportPopup {
                 const line = document.createElement('div');
                 line.className = 'approach-currency';
                 const note = dm.afd?.note;
-                // A state no longer synced keeps its last pages (sync prunes only
-                // the folders a zip has): not covered by the sync's expiry (final
-                // review 2026-10-17).
-                const synced = dm.plates?.synced_states || [];
+                // A state the last sync did not update keeps its last pages (sync
+                // prunes only the folders a zip has): not covered by the sync's
+                // expiry (final review 2026-10-17). server_states: the states the
+                // server had at that sync (synced_states keeps dropped ones).
+                const pl = dm.plates || {};
                 const st = String(state || '').toUpperCase();
-                const orphan = !!st && synced.length > 0 && !synced.includes(st);
-                line.textContent = orphan ? `A/FD page not current — ${st} is not synced to this tablet`
+                const why = !st ? null
+                    : (pl.failed_states || []).includes(st) ? `${st} plates are the previous cycle's (last download failed)`
+                    : (pl.server_states || []).length && !pl.server_states.includes(st) ? `${st} is no longer on the home server`
+                    : (pl.synced_states || []).length && !pl.synced_states.includes(st) ? `${st} is not synced to this tablet`
+                    : null;
+                const orphan = !!why;
+                line.textContent = orphan ? `A/FD page not current — ${why}`
                                  : a.state === 'stale' ? `A/FD page not current${note ? ` — ${note}` : ''}; sync when the home server has rebuilt it`
                                  : FaaCurrency.describe(a);
                 line.classList.toggle('is-bad', orphan || a.state === 'stale' || a.state === 'expired' || a.state === 'unknown');

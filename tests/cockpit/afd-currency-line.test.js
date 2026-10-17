@@ -49,6 +49,25 @@ describe('A/FD tab currency line', () => {
         expect(l.classList.contains('is-bad')).toBe(true);
     });
 
+    it('a state the server dropped (still in synced_states): not current', () => {
+        vi.useFakeTimers({ now: new Date('2026-10-20T12:00:00Z') });
+        localStorage.setItem('flytab_device_manifest', JSON.stringify({
+            afd: { expiration_date: '2026-10-29', stale: false },
+            plates: { cycle_code: '261001', expiration_date: '2026-10-29', synced_states: ['NC', 'FL'], server_states: ['NC'] } }));
+        const l = afdLine('KTMB', 'FL');
+        expect(l.textContent).toBe('A/FD page not current — FL is no longer on the home server');
+        expect(l.classList.contains('is-bad')).toBe(true);
+    });
+
+    it('a state whose last plate download failed: the previous cycle\'s page', () => {
+        vi.useFakeTimers({ now: new Date('2026-10-20T12:00:00Z') });
+        localStorage.setItem('flytab_device_manifest', JSON.stringify({
+            afd: { expiration_date: '2026-10-29', stale: false },
+            plates: { cycle_code: '261001', expiration_date: '2026-10-29', synced_states: ['NC', 'GA'], failed_states: ['GA'], server_states: ['NC', 'GA'] } }));
+        expect(afdLine('KATL', 'GA').textContent).toBe("A/FD page not current — GA plates are the previous cycle's (last download failed)");
+        expect(afdLine('K9A9', 'NC').textContent).toMatch(/expires 29 OCT 2026/);
+    });
+
     it('no state known or nothing synced yet: unchanged behaviour', () => {
         vi.useFakeTimers({ now: new Date('2026-10-20T12:00:00Z') });
         dm(['NC']);

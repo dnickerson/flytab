@@ -1321,9 +1321,13 @@ class DataStatus {
             const dBuiltAt = this._readDeviceManifest().plates?.built_at || null;
             const builtAtMatch = !sBuiltAt || (dBuiltAt && dBuiltAt >= sBuiltAt);
             const needsUpdate = !cycleMatch || !allStatesSynced || !builtAtMatch;
+            // The states the server has now: synced_states keeps a state the
+            // server dropped (its chip says "removed from server"), so the A/FD
+            // tab tests against this list (re-review 2026-10-17).
+            const serverStates = statesResp.map(s => s.state);
 
             if (!needsUpdate) {
-                this._mergeDeviceSection('plates', { expiration_date: serverCycle?.expiration_date || null, failed_states: [] });
+                this._mergeDeviceSection('plates', { expiration_date: serverCycle?.expiration_date || null, failed_states: [], server_states: serverStates });
                 const warn = this._recordAfd(false);
                 setStep('plates', 'skip', `Current — cycle ${serverDate}${warn.length ? ` · ⚠ ${warn[0]}` : ''}`);
             } else if (!statesResp.length) {
@@ -1384,7 +1388,7 @@ class DataStatus {
                     // The new cycle is recorded only when every state has it; the
                     // next SYNC tries again.
                     const prev = this._readDeviceManifest().plates || {};
-                    this._saveDeviceSection('plates', { ...prev, synced_states: newlySynced, failed_states: failed });
+                    this._saveDeviceSection('plates', { ...prev, synced_states: newlySynced, failed_states: failed, server_states: serverStates });
                     this._recordAfd(true);
                     throw new Error(`${failed.join(', ')} failed (${firstFailure}) — ${failed.length > 1 ? 'their' : 'its'} plates are still the previous cycle's. SYNC again.`);
                 }
@@ -1406,6 +1410,7 @@ class DataStatus {
                     expiration_date: serverCycle?.expiration_date || null,
                     synced_states: newlySynced,
                     failed_states: [],
+                    server_states: serverStates,
                 });
                 const warn = this._recordAfd(false);
                 setStep('plates', 'ok', `${done} states downloaded — cycle ${serverDate}${warn.length ? ` · ⚠ ${warn[0]}` : ''}`);
@@ -1558,13 +1563,18 @@ class DataStatus {
                 if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                 const bundle = await resp.json();
                 await app._nasrDb.importNasrBundle(bundle);
-                await app._updateNasrBadge?.();
-                app.vectorLayers?._updateDynamicLayers?.();
             } catch (e) {
                 // Thrown, not swallowed: the sync step and Force reimport report it
                 // instead of a green "App data reloaded" over the old cycle.
                 console.warn('[DataStatus] NASR reimport failed:', e?.message);
                 throw e;
+            }
+            // Loaded: a failure redrawing the badge or map is not a failed import (re-review).
+            try {
+                await app._updateNasrBadge?.();
+                app.vectorLayers?._updateDynamicLayers?.();
+            } catch (e) {
+                console.warn('[DataStatus] NASR loaded; refreshing the badge/map failed:', e?.message);
             }
             return;
         }

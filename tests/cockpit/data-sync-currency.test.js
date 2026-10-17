@@ -395,6 +395,13 @@ describe('final review 2026-10-17: NASR is current only once the app has loaded 
         expect(imported).toHaveLength(0);
     });
 
+    it('a failure redrawing the map after a good import is not a failed import', async () => {
+        setup();
+        native({ importNasrBundle: async () => 5 });
+        window.app._updateNasrBadge = async () => { throw new Error('badge'); };
+        await expect(DataStatus._reimportNasr()).resolves.toBeUndefined();
+    });
+
     it('Force reimport reports a failed import instead of "App data reloaded"', async () => {
         setup();
         native({ importNasrBundle: async () => { throw new Error('quota'); } });
@@ -450,5 +457,15 @@ describe('final review 2026-10-17: Data Status footer and state names', () => {
         expect(document.querySelector('.data-status-body img')).toBeNull();
         expect(document.getElementById('evil')).toBeNull();
         expect(document.body.textContent).toMatch(/<img src=x/);
+    });
+});
+
+
+describe('re-review 2026-10-17: the sync records the server\'s plate states', () => {
+    afterEach(() => { delete globalThis.fetch; });
+    it('after a plate sync, server_states is the server\'s list', async () => {
+        const { ds } = setup();
+        await ds._syncAll(null, () => {}, () => {}, () => {});
+        expect(ds._readDeviceManifest().plates.server_states).toEqual(['NC', 'GA']);
     });
 });
