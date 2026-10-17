@@ -869,7 +869,9 @@ describe('Route Planner (preview): critical review fixes (2026-10-16)', () => {
         const p = make(R());
         let release;
         p._searchAirports = vi.fn(() => new Promise((r) => { release = () => r([]); }));
-        p._nasrDb = { searchAllExtended: async () => ({ navaids: [{ id: 'AIK', name: 'Aiken' }], fixes: [] }) };
+        // The whole mock db: the route checks this pick schedules (300 ms) still
+        // look airports up after the test ends (it left an unhandled rejection).
+        p._nasrDb = { ...nasrDb, searchAllExtended: async () => ({ navaids: [{ id: 'AIK', name: 'Aiken' }], fixes: [] }) };
         p._searchInput.value = 'AI';
         const running = p._runSearch();
         p._searchInput.value = '';
