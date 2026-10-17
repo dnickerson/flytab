@@ -160,6 +160,8 @@ public class TileServer extends NanoHTTPD {
             response = handleFetchMbtiles(session);
         } else if ("POST".equals(method) && "/fetch-zip".equals(uri)) {
             response = handleFetchZip(session);
+        } else if ("POST".equals(method) && "/verify".equals(uri)) {
+            response = handleVerify(session);
         } else if ("POST".equals(method) && "/unzip".equals(uri)) {
             response = handleUnzip(session);
         } else if ("GET".equals(method) && uri.matches("^/plates/[^/]+/list$")) {
@@ -298,6 +300,66 @@ public class TileServer extends NanoHTTPD {
             return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "text/plain",
                 "Download failed: " + e.getMessage());
         }
+    }
+
+    /**
+     * POST /verify?url={checksums.json url}
+     * The tablet's FAA files against the home server's checksums.json (size +
+     * SHA-256 per file, from the pipeline's audit): changed / missing / extra.
+     * Returns JSON {"count", "checked", "matched", "rejected",
+     *               "changed": {"count", "examples"}, "missing": {...}, "extra": {...}}
+     */
+    private Response handleVerify(IHTTPSession session) {
+        java.util.List<String> urlList = session.getParameters().get("url");
+        String url = (urlList != null && !urlList.isEmpty()) ? urlList.get(0) : null;
+        if (url == null) return newFixedLengthResponse(Response.Status.BAD_REQUEST, "text/plain", "Missing url param");
+        try {
+            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(60000);
+            if (conn.getResponseCode() != 200) {
+                return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "text/plain", "checksums.json: HTTP " + conn.getResponseCode());
+            }
+            StringBuilder sb = new StringBuilder();
+            try (java.io.BufferedReader rd = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(conn.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
+                char[] buf = new char[65536];
+                int n;
+                while ((n = rd.read(buf)) > 0) sb.append(buf, 0, n);
+            }
+            org.json.JSONObject files = new org.json.JSONObject(sb.toString()).getJSONObject("files");
+            Map<String, ChecksumVerify.Expected> expected = new java.util.HashMap<>();
+            java.util.Iterator<String> keys = files.keys();
+            while (keys.hasNext()) {
+                String k = keys.next();
+                org.json.JSONArray e = files.getJSONArray(k);
+                expected.put(k, new ChecksumVerify.Expected(e.getLong(0), e.getString(1)));
+            }
+            ChecksumVerify.Result r = ChecksumVerify.verify(baseDir, expected);
+            Log.i(TAG, "verify: " + r.matched + "/" + r.checked + " match, " + r.changed.size() + " changed, "
+                    + r.missing.size() + " missing, " + r.extra.size() + " extra");
+            org.json.JSONObject out = new org.json.JSONObject();
+            out.put("count", expected.size());
+            out.put("checked", r.checked);
+            out.put("matched", r.matched);
+            out.put("rejected", r.rejected);
+            out.put("changed", listJson(r.changed));
+            out.put("missing", listJson(r.missing));
+            out.put("extra", listJson(r.extra));
+            return newFixedLengthResponse(Response.Status.OK, "application/json", out.toString());
+        } catch (Exception e) {
+            Log.e(TAG, "verify failed", e);
+            return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "text/plain", "verify failed: " + e.getMessage());
+        }
+    }
+
+    private static org.json.JSONObject listJson(java.util.List<String> items) throws org.json.JSONException {
+        org.json.JSONObject o = new org.json.JSONObject();
+        o.put("count", items.size());
+        org.json.JSONArray ex = new org.json.JSONArray();
+        for (int i = 0; i < Math.min(10, items.size()); i++) ex.put(items.get(i));
+        o.put("examples", ex);
+        return o;
     }
 
     /**

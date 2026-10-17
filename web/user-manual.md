@@ -278,7 +278,7 @@ Opens a right-side drawer with infrequently used actions, organized in three sec
 
 | Item | What it does |
 |---|---|
-| **Data Status** | Shows local database age and tile cache status, with a per-item CURRENT/EXPIRING/UPDATE AVAILABLE badge and days-remaining count; a current, already-downloaded layer shows a SYNC button (RE-DOWNLOAD forces a fresh copy) |
+| **Data Status** | Shows local database age and tile cache status, with a per-item CURRENT/EXPIRING/UPDATE AVAILABLE badge and days-remaining count; a current, already-downloaded layer shows a SYNC button (RE-DOWNLOAD forces a fresh copy). **Sync All Outdated** only takes FAA data the home server has checked against the FAA (its daily currency audit): a product that failed is not synced and the step says why — your current data is kept. Its last step, **Check against home server**, compares every plate, index, NASR and CIFP file on the tablet with the server (size and checksum) and reports anything different, missing or left over; a plate state that fails to download is not counted as current and is retried on the next SYNC |
 | **Configuration** | Aircraft, engine, and system settings |
 | **Reset NASR Data** | Forces a full re-download of the airport/navaid database |
 

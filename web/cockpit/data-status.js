@@ -1055,7 +1055,7 @@ class DataStatus {
         const LOCAL    = DataStatus.LOCAL_BASE;
 
         const body = this._el.querySelector('.data-status-body');
-        const stepIds    = ['aero', 'sec', 'ifr', 'ifr-area', 'tac', 'plates'];
+        const stepIds    = ['aero', 'sec', 'ifr', 'ifr-area', 'tac', 'plates', 'verify'];
         const stepLabels = {
             aero:      'Aeronautical Database',
             sec:       'Sectional MBTiles',
@@ -1063,8 +1063,12 @@ class DataStatus {
             'ifr-area': 'IFR Area MBTiles',
             tac:       'TAC MBTiles',
             plates:    'Approach Plates & A/FD',
+            verify:    'Check against home server',
         };
 
+        // Step messages carry text from the home server (audit failures, file
+        // names): shown as text, not HTML.
+        const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
         const renderSteps = (states) => {
             const icons  = { pending: '&#9675;', running: '&#8987;', ok: '&#10003;', skip: '&#8594;', fail: '&#10007;' };
             const colors = { pending: 'var(--text-muted)', running: 'var(--status-caution)', ok: 'var(--status-ok)', skip: 'var(--text-muted)', fail: 'var(--status-danger)' };
@@ -1083,7 +1087,7 @@ class DataStatus {
                             <span style="font-size:18px;color:${colors[s.status]};width:20px;text-align:center">${icons[s.status]}</span>
                             <span style="flex:1">
                                 <span style="font-weight:600">${stepLabels[id]}</span>
-                                ${s.msg ? `<span style="color:var(--text-muted);font-size:13px;display:block">${s.msg}</span>` : ''}
+                                ${s.msg ? `<span style="color:var(--text-muted);font-size:13px;display:block">${esc(s.msg)}</span>` : ''}
                             </span>
                         </div>
                         ${bar}
@@ -1092,7 +1096,7 @@ class DataStatus {
                 `</div><button class="ds-sync-btn" id="dsSyncDoneBtn" style="margin-top:12px">Done — Refresh</button>`;
         };
 
-        const states = { aero: { status: 'pending' }, sec: { status: 'pending' }, ifr: { status: 'pending' }, 'ifr-area': { status: 'pending' }, tac: { status: 'pending' }, plates: { status: 'pending' } };
+        const states = { aero: { status: 'pending' }, sec: { status: 'pending' }, ifr: { status: 'pending' }, 'ifr-area': { status: 'pending' }, tac: { status: 'pending' }, plates: { status: 'pending' }, verify: { status: 'pending' } };
         const setStep   = (id, status, msg, pct = null) => { states[id] = { status, msg, pct }; body.innerHTML = renderSteps(states); this._wireDoneBtn(); };
         const failStep  = (id, err)                     => setStep(id, 'fail', err?.message || String(err));
 
@@ -1111,6 +1115,7 @@ class DataStatus {
                 // ── Aeronautical Database (NASR + CIFP) ──────────────────────────────
         setStep('aero', 'running', 'Checking NASR cycle…');
         try {
+            this._throwIfAuditFailed('nasr', 'cifp');
             const [nasrServer, nasrLocal] = await Promise.all([
                 fetch(`${homeBase}/nasr/cycle_info.json`, { signal: AbortSignal.timeout(8000) }).then(r => r.ok ? r.json() : null),
                 fetch(`${LOCAL}/nasr/cycle_info.json`, { cache: 'no-store', signal: AbortSignal.timeout(2000) }).then(r => r.ok ? r.json() : null).catch(() => null),
@@ -1185,6 +1190,7 @@ class DataStatus {
             }
             setStep(stepId, 'running', `Downloading ${label} — this may take 10–20 min…`);
             try {
+                this._throwIfAuditFailed('charts');
                 const mbUrl  = `${homeBase}/mbtiles/${layer}.mbtiles`;
                 const resp   = await fetch(
                     `${LOCAL}/fetch-mbtiles?layer=${encodeURIComponent(layer)}&url=${encodeURIComponent(mbUrl)}`,
@@ -1203,6 +1209,7 @@ class DataStatus {
         // ── Plates ───────────────────────────────────────────────────────────
         setStep('plates', 'running', 'Checking plate cycle…');
         try {
+            this._throwIfAuditFailed('plates', 'afd');     // A/FD pages travel in the plate zips
             const [serverCycle, localCycle] = await Promise.all([
                 fetch(`${homeBase}/plates/plates_cycle_info.json`, { signal: AbortSignal.timeout(8000) }).then(r => r.ok ? r.json() : null),
                 fetch(`${LOCAL}/plates/plates_cycle_info.json`, { cache: 'no-store', signal: AbortSignal.timeout(2000) }).then(r => r.ok ? r.json() : null).catch(() => null),
@@ -1303,6 +1310,26 @@ class DataStatus {
             }
         } catch (e) { failStep('plates', e); }
 
+        // ── Check the tablet's files against the home server ─────────────────
+        // checksums.json (pipeline audit): every plate, index and NASR/CIFP file,
+        // size + SHA-256. The review found 2,461 plates on the tablet differing
+        // from the server, 130 missing, 4,060 leftovers -- nothing could tell.
+        setStep('verify', 'running', 'Checking every file against the home server…');
+        try {
+            const r = await fetch(`${LOCAL}/verify?url=${encodeURIComponent(`${homeBase}/checksums.json`)}`,
+                { method: 'POST', signal: AbortSignal.timeout(900000) });
+            if (!r.ok) throw new Error(await r.text());
+            const v = await r.json();
+            const n = (x) => (x || 0).toLocaleString();
+            const extra = v.extra?.count ? ` · ${n(v.extra.count)} old files not on the server (not shown)` : '';
+            if (!v.changed?.count && !v.missing?.count) {
+                setStep('verify', 'ok', `All ${n(v.matched)} files match the home server${extra}`);
+            } else {
+                const eg = [...(v.changed?.examples || []), ...(v.missing?.examples || [])].slice(0, 3).join(', ');
+                throw new Error(`${n(v.changed?.count)} differ, ${n(v.missing?.count)} missing (e.g. ${eg}) — SYNC again${extra}`);
+            }
+        } catch (e) { failStep('verify', e); }
+
         // ── Done ──────────────────────────────────────────────────────────────
         // Use what was just synced now: the procedures (CIFP) and plate index in
         // memory were the previous cycle's until the next start, and the CIFP
@@ -1312,6 +1339,22 @@ class DataStatus {
         if (btn) { btn.disabled = false; btn.innerHTML = '&#8645; Sync All Outdated'; }
         if (doneProg) doneProg('Sync complete', 'var(--status-ok)');
         this._wireDoneBtn();
+    }
+
+    /**
+     * The home server's FAA currency audit (audit_currency.py, manifest.audit):
+     * a product that failed it is not synced -- the tablet keeps what it has.
+     * A server without an audit (older pipeline) is synced as before.
+     */
+    _throwIfAuditFailed(...products) {
+        const a = this._serverManifest?.audit?.products;
+        if (!a) return;
+        for (const p of products) {
+            if (a[p] && a[p].ok === false) {
+                throw new Error(`Not synced — the home server's ${p.toUpperCase()} data failed its FAA check `
+                    + `(${a[p].failures?.[0] || 'see the pipeline log'}). Your current data is kept.`);
+            }
+        }
     }
 
     /** Wire the "Done — Refresh" button that appears after _syncAll completes. */
