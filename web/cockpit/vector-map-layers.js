@@ -1074,6 +1074,19 @@ class VectorMapLayers {
             const areas = await this._nasr.getSuaInBounds(south, west, north, east);
             const currentIds = new Set();
             const usedLabelPos = [];
+            // Ceiling/floor labels only from Z9 (the zoom badge's rounding): at
+            // Z8 and out they cluttered the screen and couldn't be read (Dana,
+            // 2026-10-18). Polygons, colours and the tap popup stay.
+            const showLabels = Math.round(zoom) >= VectorMapLayers.SUA_LABEL_MIN_ZOOM;
+            const label = (sua, isActive) => {
+                const key = sua.id + '_lbl';
+                const has = this._suaPolygons.get(key);
+                if (!showLabels) {
+                    if (has) { this._suaLayer.removeLayer(has); this._suaPolygons.delete(key); }
+                } else if (!has) {
+                    this._addSuaLabel(sua, isActive, usedLabelPos);
+                }
+            };
 
             for (const sua of areas) {
                 currentIds.add(sua.id);
@@ -1092,6 +1105,7 @@ class VectorMapLayers {
                         // Redraw "ACT" badge label
                         this._updateSuaActLabel(sua, isActive, center => center);
                     }
+                    label(sua, isActive);
                     continue;
                 }
 
@@ -1122,33 +1136,7 @@ class VectorMapLayers {
                 polygon.addTo(this._suaLayer);
                 this._suaPolygons.set(sua.id, polygon);
 
-                // Altitude label at centroid with collision offset
-                let labelPos = VectorMapLayers._polygonCentroid(latlngs);
-                const altLower = sua.lower_ft === 0 ? 'SFC' : (sua.lower_ft >= 1000 ? `${Math.round(sua.lower_ft / 100)}` : sua.lower_ft);
-                const altUpper = sua.upper_ft != null ? (sua.upper_ft >= 1000 ? `${Math.round(sua.upper_ft / 100)}` : sua.upper_ft) : '?';
-                const actBadge = isActive ? '<span class="sua-act-badge">ACT</span>' : '';
-                const altHtml  = `${altUpper}<br><span class="as-alt-floor">${altLower}</span>${actBadge}`;
-                const typeClass = `sua-lbl-${(sua.type || 'moa').toLowerCase()}`;
-
-                // Offset label vertically if another label is within ~0.05° of this pos
-                const SUA_CLOSE = 0.05;
-                const stackCount = usedLabelPos.filter(p =>
-                    Math.abs(p[0] - labelPos[0]) < SUA_CLOSE && Math.abs(p[1] - labelPos[1]) < SUA_CLOSE
-                ).length;
-                usedLabelPos.push(labelPos);
-
-                const label = L.marker(labelPos, {
-                    icon: L.divIcon({
-                        className: `as-alt-label ${typeClass}${isActive ? ' sua-lbl-active' : ''}`,
-                        html: altHtml,
-                        iconSize: [48, 34],
-                        iconAnchor: [24, 17 - stackCount * 38],
-                    }),
-                    interactive: false,
-                    zIndexOffset: -150,
-                });
-                label.addTo(this._suaLayer);
-                this._suaPolygons.set(sua.id + '_lbl', label);
+                label(sua, isActive);
             }
 
             // Remove out-of-view
@@ -1162,6 +1150,37 @@ class VectorMapLayers {
         } catch (err) {
             console.warn('VectorMapLayers: SUA query failed', err);
         }
+    }
+
+    /** The ceiling/floor (and ACT) label at the area's centroid, stacked off labels nearby. */
+    _addSuaLabel(sua, isActive, usedLabelPos) {
+        // Altitude label at centroid with collision offset
+        let labelPos = VectorMapLayers._polygonCentroid((sua.boundary || []).map(pt => [pt[0], pt[1]]));
+        const altLower = sua.lower_ft === 0 ? 'SFC' : (sua.lower_ft >= 1000 ? `${Math.round(sua.lower_ft / 100)}` : sua.lower_ft);
+        const altUpper = sua.upper_ft != null ? (sua.upper_ft >= 1000 ? `${Math.round(sua.upper_ft / 100)}` : sua.upper_ft) : '?';
+        const actBadge = isActive ? '<span class="sua-act-badge">ACT</span>' : '';
+        const altHtml  = `${altUpper}<br><span class="as-alt-floor">${altLower}</span>${actBadge}`;
+        const typeClass = `sua-lbl-${(sua.type || 'moa').toLowerCase()}`;
+
+        // Offset label vertically if another label is within ~0.05° of this pos
+        const SUA_CLOSE = 0.05;
+        const stackCount = usedLabelPos.filter(p =>
+            Math.abs(p[0] - labelPos[0]) < SUA_CLOSE && Math.abs(p[1] - labelPos[1]) < SUA_CLOSE
+        ).length;
+        usedLabelPos.push(labelPos);
+
+        const marker = L.marker(labelPos, {
+            icon: L.divIcon({
+                className: `as-alt-label ${typeClass}${isActive ? ' sua-lbl-active' : ''}`,
+                html: altHtml,
+                iconSize: [48, 34],
+                iconAnchor: [24, 17 - stackCount * 38],
+            }),
+            interactive: false,
+            zIndexOffset: -150,
+        });
+        marker.addTo(this._suaLayer);
+        this._suaPolygons.set(sua.id + '_lbl', marker);
     }
 
     _updateSuaActLabel(sua, isActive, _getCenterFn) {
@@ -1189,6 +1208,8 @@ class VectorMapLayers {
     // Grey dashed outline, no fill -- matches VFR sectional chart convention
     // for TRSA and stays visually distinct from SUA's solid colored fills
     // and Class B/C/D/E's existing styling.
+    static SUA_LABEL_MIN_ZOOM = 9;   // the zoom badge's Z9; Z8 and out: no SUA altitude labels
+
     static TRSA_STYLE = { color: '#888888', fillOpacity: 0, weight: 1.5, dashArray: '6 4' };
 
     // Shared by both the popup body (joins all entries) and the map label

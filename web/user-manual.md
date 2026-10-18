@@ -315,7 +315,7 @@ The panel has four accordion sections: **Base Chart**, **Map Overlays**, **Traff
 | **Fixes** | Named intersections and reporting points |
 | **Airways** | Victor airways and Jet routes with labels |
 | **Airspace** | Class B/C/D/E boundaries with altitude labels |
-| **Restricted/MOA** | Special use airspace (R/P/W/A/MOA) — amber fill when active |
+| **Restricted/MOA** | Special use airspace (R/P/W/A/MOA) — amber fill when active. Ceiling/floor labels show from **Z9** in (the zoom badge); at Z8 and further out only the shaded areas are drawn, to keep the map readable — tap an area for its name and altitudes |
 | **TRSA** | Terminal Radar Service Area — grey dashed outline, approximate circular boundary. Tap for facility name, frequency, and altitude range. |
 | **Airspace Alerts** | Master switch for the approach frequency alert popup (see "Airspace Frequency Alert" below). Six sub-toggles beneath it — Class B, Class C, Class D, Class E surface, Restricted/MOA, TRSA — arm or disarm alerting for each airspace type individually. |
 | **IFR Area Charts** | High-altitude obstacle/terrain charts |
