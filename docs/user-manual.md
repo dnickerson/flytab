@@ -96,7 +96,7 @@ The primary cockpit view. Shows position, route, weather, traffic, and airspace 
 
 **Base chart** — Switch between Vector (clean low-clutter), Sectional, IFR Low, and TAC using the **LAYERS tab** (far left of the tab bar).
 
-**Airspace** — Class B (solid blue), C (magenta), D (blue dashed) drawn at correct altitude limits. Tap an airspace boundary for the name and altitudes.
+**Airspace** — Class B (solid blue), C (magenta), D (blue dashed) drawn at correct altitude limits. Their altitude labels (e.g. 100 over SFC), the TRSA frequency labels and the Restricted/MOA labels show from **Z9** in; at Z8 and further out only the boundaries are drawn, to keep the map readable. Tap an airspace boundary for the name and altitudes.
 
 **Own-ship** — Blue chevron showing aircraft position and heading. Shown only while the GPS has at least a 3D solution — the same thing the Stratux status page (192.168.10.1) reports as *GPS solution: 3D GPS* or *3D GPS + SBAS*. With *No Fix* or *Dead Reckoning* the chevron, its track line, range rings and the magenta line to the next waypoint disappear rather than sit at a stale or wrong position, and the map stops following; they come back on the next 3D fix. The same applies to own-ship on the radar page and on geo-referenced approach plates.
 
@@ -314,9 +314,9 @@ The panel has four accordion sections: **Base Chart**, **Map Overlays**, **Traff
 | **Navaids** | VORs, NDBs, DMEs with identifier labels |
 | **Fixes** | Named intersections and reporting points |
 | **Airways** | Victor airways and Jet routes with labels |
-| **Airspace** | Class B/C/D/E boundaries with altitude labels |
-| **Restricted/MOA** | Special use airspace (R/P/W/A/MOA) — amber fill when active |
-| **TRSA** | Terminal Radar Service Area — grey dashed outline, approximate circular boundary. Tap for facility name, frequency, and altitude range. |
+| **Airspace** | Class B/C/D/E boundaries; Class B/C/D altitude labels from **Z9** in (none at Z8 and out) |
+| **Restricted/MOA** | Special use airspace (R/P/W/A/MOA) — amber fill when active. Ceiling/floor labels show from **Z9** in (the zoom badge); at Z8 and further out only the shaded areas are drawn, to keep the map readable — tap an area for its name and altitudes |
+| **TRSA** | Terminal Radar Service Area — grey dashed outline, approximate circular boundary. Frequency label from **Z9** in (none at Z8 and out). Tap for facility name, frequency, and altitude range. |
 | **Airspace Alerts** | Master switch for the approach frequency alert popup (see "Airspace Frequency Alert" below). Six sub-toggles beneath it — Class B, Class C, Class D, Class E surface, Restricted/MOA, TRSA — arm or disarm alerting for each airspace type individually. |
 | **IFR Area Charts** | High-altitude obstacle/terrain charts |
 | **Runway Extensions** | Dashed extended centerlines for route airports |

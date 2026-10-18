@@ -1,0 +1,116 @@
+/**
+ * Restricted/MOA ceiling and floor labels at low zoom (Dana, 2026-10-18):
+ * "at Z8 ... the text adds clutter to the screen and is not readable. Remove
+ * the text when displaying at Z8 - Z4." Labels show from the zoom badge's Z9
+ * (badge = Math.round(zoom)); the polygons, colours and tap popups stay at
+ * every zoom from 6. Labels used to be created once with the polygon and
+ * never removed on zooming out.
+ */
+import { describe, it, expect, beforeEach } from 'vitest';
+import { readFileSync } from 'fs';
+
+const read = (p) => readFileSync(p, 'utf8');
+new Function(read('web/lib/leaflet/leaflet.js')).call(globalThis);
+globalThis.CockpitConfig = { get: () => ({}) };
+const VectorMapLayers = new Function(read('web/cockpit/vector-map-layers.js') + '\nreturn VectorMapLayers;')();
+
+const box = (la, lo, d = 0.3) => [[la - d, lo - d], [la - d, lo + d], [la + d, lo + d], [la + d, lo - d]];
+const AREAS = [
+    { id: 'R-5314A', name: 'R-5314A', type: 'R', lower_ft: 0, upper_ft: 18000, boundary: box(35.2, -79.2) },
+    { id: 'BULL', name: 'BULLDOG A MOA', type: 'MOA', lower_ft: 500, upper_ft: 10000, boundary: box(33.4, -80.4) },
+];
+
+function layers() {
+    const v = Object.create(VectorMapLayers.prototype);
+    v._suaLayer = L.layerGroup();
+    v._map = { hasLayer: () => true };
+    v._suaPolygons = new Map();
+    v._nasr = { getSuaInBounds: async () => AREAS.map((a) => ({ ...a })) };
+    return v;
+}
+const labels = (v) => [...v._suaPolygons.keys()].filter((k) => k.endsWith('_lbl')).sort();
+const polys = (v) => [...v._suaPolygons.keys()].filter((k) => !k.endsWith('_lbl')).sort();
+const at = (v, z) => v._updateSua(32, -82, 37, -77, z);
+
+describe('SUA altitude labels: none at Z8 and below', () => {
+    beforeEach(() => { delete window.SuaNotams; });
+
+    for (const z of [6, 7, 7.5, 8, 8.25]) {
+        it(`zoom ${z} (badge Z${Math.round(z)}): polygons, no labels`, async () => {
+            const v = layers(); await at(v, z);
+            expect(polys(v)).toEqual(['BULL', 'R-5314A']);
+            expect(labels(v)).toEqual([]);
+            expect(v._suaLayer.getLayers()).toHaveLength(2);
+        });
+    }
+
+    for (const z of [8.5, 9, 12]) {
+        it(`zoom ${z} (badge Z${Math.round(z)}): polygons and their labels`, async () => {
+            const v = layers(); await at(v, z);
+            expect(labels(v)).toEqual(['BULL_lbl', 'R-5314A_lbl']);
+            const html = v._suaPolygons.get('R-5314A_lbl').options.icon.options.html;
+            expect(html).toMatch(/^180<br><span class="as-alt-floor">SFC<\/span>$/);
+        });
+    }
+
+    it('zooming out from Z10 to Z8 removes the labels; back in to Z9 brings them back', async () => {
+        const v = layers();
+        await at(v, 10); expect(labels(v)).toHaveLength(2);
+        await at(v, 8); expect(labels(v)).toEqual([]);
+        expect(v._suaLayer.getLayers()).toHaveLength(2);
+        await at(v, 9); expect(labels(v)).toHaveLength(2);
+        expect(v._suaLayer.getLayers()).toHaveLength(4);
+    });
+
+    it('below Z6 nothing, as before', async () => {
+        const v = layers(); await at(v, 10); await at(v, 5);
+        expect(v._suaPolygons.size).toBe(0);
+    });
+});
+
+describe('Class B/C/D altitude and TRSA frequency labels: same rule (Dana, 2026-10-18)', () => {
+    const SPACES = [
+        { id: 'CLT-B1', name: 'CHARLOTTE Class B', class: 'B', lower_ft: 0, upper_ft: 10000, boundary: box(35.21, -80.94, 0.1) },
+        { id: 'CAE-C', name: 'COLUMBIA Class C', class: 'C', lower_ft: 0, upper_ft: 4200, boundary: box(33.94, -81.12, 0.1) },
+        { id: 'X-E', name: 'E', class: 'E', lower_ft: 700, upper_ft: 18000, boundary: box(34.5, -80.5, 0.2) },
+    ];
+    const TRSAS = [{ id: 'MYR', name: 'MYRTLE BEACH TRSA', freqs: [{ freq: '119.85' }], boundary: box(33.68, -78.93, 0.3) }];
+    function both() {
+        const v = Object.create(VectorMapLayers.prototype);
+        v._map = { hasLayer: () => true };
+        v._airspaceLayer = L.layerGroup(); v._airspacePolygons = new Map();
+        v._trsaLayer = L.layerGroup(); v._trsaPolygons = new Map();
+        v._nasr = { getAirspaceInBounds: async () => SPACES.map((a) => ({ ...a })), getTrsaInBounds: async () => TRSAS.map((a) => ({ ...a })) };
+        return v;
+    }
+    const run = async (v, z) => { await v._updateAirspace(32, -82, 37, -77, z, {}); await v._updateTrsa(32, -82, 37, -77, z); };
+    const lbl = (m, suffix) => [...m.keys()].filter((k) => k.endsWith(suffix)).sort();
+
+    it('Z8 and out: the areas, no labels', async () => {
+        for (const z of [6, 7, 8, 8.25]) {
+            const v = both(); await run(v, z);
+            expect(lbl(v._airspacePolygons, '_alt'), `z${z}`).toEqual([]);
+            expect(lbl(v._trsaPolygons, '_lbl'), `z${z}`).toEqual([]);
+            expect(v._airspaceLayer.getLayers()).toHaveLength(3);
+            expect(v._trsaLayer.getLayers()).toHaveLength(1);
+        }
+    });
+
+    it('Z9 in: B and C altitude labels (not E), the TRSA frequency', async () => {
+        const v = both(); await run(v, 9);
+        expect(lbl(v._airspacePolygons, '_alt')).toEqual(['CAE-C_alt', 'CLT-B1_alt']);
+        expect(v._airspacePolygons.get('CLT-B1_alt').options.icon.options.html).toBe('100<br><span class="as-alt-floor">SFC</span>');
+        expect(v._trsaPolygons.get('MYR_lbl').options.icon.options.html).toBe('119.85');
+    });
+
+    it('zooming out removes them, zooming back in restores them', async () => {
+        const v = both();
+        await run(v, 10); expect(lbl(v._airspacePolygons, '_alt')).toHaveLength(2);
+        await run(v, 8);
+        expect(lbl(v._airspacePolygons, '_alt')).toEqual([]); expect(lbl(v._trsaPolygons, '_lbl')).toEqual([]);
+        expect(v._airspaceLayer.getLayers()).toHaveLength(3); expect(v._trsaLayer.getLayers()).toHaveLength(1);
+        await run(v, 9);
+        expect(lbl(v._airspacePolygons, '_alt')).toHaveLength(2); expect(lbl(v._trsaPolygons, '_lbl')).toHaveLength(1);
+        expect(v._airspaceLayer.getLayers()).toHaveLength(5);
+    });
+});
