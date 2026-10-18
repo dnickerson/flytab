@@ -578,12 +578,8 @@ class AirportPopup {
                                     const [len, wid] = (r.dimension || '').split('x').map(Number);
                                     return { id: r.id, length_ft: len || 0, width_ft: wid || 0, surface: r.surface || '' };
                                 });
-                                // Cache on the NASR record
-                                try {
-                                    const db = await this._nasr.open();
-                                    const tx = db.transaction('airports', 'readwrite');
-                                    tx.objectStore('airports').put(apt);
-                                } catch { /* non-critical */ }
+                                // Cache on the NASR record (putAirport: the map's area queries see it too)
+                                try { await this._nasr.putAirport(apt); } catch { /* non-critical */ }
                             }
                         }
                     } catch { /* offline */ }
