@@ -1,6 +1,7 @@
 package app.flywhere.flytab;
 
 import android.content.Context;
+import android.content.ContextWrapper;
 import android.util.AttributeSet;
 import android.view.View;
 
@@ -22,10 +23,39 @@ import com.getcapacitor.CapacitorWebView;
  * on-screen state comes from MainActivity ('flytab:screen' event,
  * AppHealth.isOnScreen). Used via res/layout/capacitor_bridge_layout_main.xml,
  * which overrides Capacitor's layout of the same name.
+ *
+ * Also: no Android autofill. The autofill service (LastPass on this tablet)
+ * opened its suggestion window on the first character typed in the route
+ * planner's search box; that window took the input focus and the keyboard
+ * closed (logcat "setInputFocusLw : Window{... Autofill UI}", Dana
+ * 2026-10-17). Neither autocomplete="off" nor the WebView's
+ * importantForAutofill stops it: Chromium's AutofillProvider takes
+ * AutofillManager from this view's Context (AutofillManagerWrapper:
+ * context.getSystemService(AutofillManager.class)) and checks only that the
+ * service is enabled. A Context that has no AutofillManager disables it
+ * (isDisabled() when the manager is null) for this WebView only -- the
+ * Activity's own autofill bookkeeping is untouched. Dana chose off
+ * everywhere, the SFTP password prompts too.
  */
 public class KeepAliveWebView extends CapacitorWebView {
     public KeepAliveWebView(Context context, AttributeSet attrs) {
-        super(context, attrs);
+        super(withoutAutofill(context), attrs);
+    }
+
+    /** The service name this WebView's Context hides. */
+    static final String HIDDEN_SERVICE = "autofill";      // Context.AUTOFILL_MANAGER_SERVICE (API 26)
+
+    static boolean hides(String serviceName) {
+        return HIDDEN_SERVICE.equals(serviceName);
+    }
+
+    private static Context withoutAutofill(Context base) {
+        return new ContextWrapper(base) {
+            @Override
+            public Object getSystemService(String name) {
+                return hides(name) ? null : super.getSystemService(name);
+            }
+        };
     }
 
     @Override
