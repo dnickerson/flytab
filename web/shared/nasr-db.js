@@ -92,7 +92,10 @@ class NasrDB {
     }
 
     static _copies(rows) {
-        return rows.map((r) => structuredClone(r));
+        // structuredClone: Chromium 98+ (the tablet runs WebView 155); JSON for an
+        // older WebView -- the records are plain JSON from the NASR bundle.
+        const clone = typeof structuredClone === 'function' ? structuredClone : (r) => JSON.parse(JSON.stringify(r));
+        return rows.map((r) => clone(r));
     }
 
     /** Point-in-box filter, stopping at limit -- the cursors' order and stop rule. */
@@ -827,8 +830,9 @@ class NasrDB {
         const db = await this.open();
         const storeNames = ['airports', 'navaids', 'airways', 'airspace', 'sua', 'trsa', 'fixes'];
         let count = 0;
-        // The in-memory copies: dropped now, and again when the write is done
-        // (a load started while it runs read the old data).
+        // The in-memory copies: dropped now (a load already running read the old
+        // data; its result is not kept), and again when the write is done (costs
+        // one extra read after an import; cheap insurance, imports are rare).
         this._memInvalidate(storeNames);
 
         await new Promise((resolve, reject) => {

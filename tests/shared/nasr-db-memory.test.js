@@ -126,6 +126,17 @@ describe('the copies follow the database', () => {
         expect((await db.getNavaidsinBounds(29, -91, 43, -74)).map((n) => n.id)).toEqual(['NEW']);
     });
 
+    it('a load that finishes after a write is not kept (the generation check)', async () => {
+        const db = await fresh();
+        let release;
+        vi.spyOn(db, '_getAll').mockImplementationOnce(() => new Promise((r) => { release = () => r([{ id: 'OLD', type: 'VOR', lat: 35, lon: -80 }]); }));
+        const loading = db.getNavaidsinBounds(29, -91, 43, -74);
+        db._memInvalidate(['navaids']);                     // a write while the load runs
+        release();
+        expect((await loading).map((n) => n.id)).toEqual(['OLD']);          // that caller: its snapshot, as a cursor gave
+        expect((await db.getNavaidsinBounds(29, -91, 43, -74)).map((n) => n.id)).not.toContain('OLD');
+    });
+
     it('putAirport writes the record and the next area query has it', async () => {
         const db = await fresh();
         const [apt] = await db.getAirportsInBounds(29, -91, 43, -74);
