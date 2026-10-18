@@ -12302,3 +12302,54 @@ body.route-editing-mode .route-table-sheet {
     color: #fff;
     font-weight: 800;
 }
+
+/* Direct-To panel (map D→; 2026-10-18). Light, high-contrast; tokens only. */
+.dto-overlay {
+    position: fixed; inset: 0; z-index: 9990;
+    background: rgba(0, 0, 0, 0.6);
+    display: flex; align-items: flex-start; justify-content: center;
+    padding-top: 8vh;
+}
+.dto-card {
+    width: min(520px, 94vw); max-height: 80vh;
+    display: flex; flex-direction: column; overflow: hidden;
+    background: var(--bg-primary); border: 1px solid var(--border-strong); border-radius: 10px;
+}
+.dto-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 4px 4px 4px 16px; border-bottom: 1px solid var(--border-strong);
+}
+.dto-title { font-family: var(--font-ui); font-size: var(--text-lg); font-weight: 800; color: var(--text-primary); }
+.dto-close {
+    min-width: var(--touch-min, 56px); min-height: var(--touch-min, 56px);
+    background: none; border: none; font-size: var(--text-lg); font-weight: 800; color: var(--text-primary);
+}
+.dto-entry { display: flex; gap: 8px; padding: 12px 16px; }
+.dto-input {
+    flex: 1; min-height: var(--touch-min, 56px); padding: 0 12px;
+    font-family: var(--font-instrument); font-size: var(--text-lg); font-weight: 900;
+    text-transform: uppercase; color: var(--text-primary);
+    background: var(--bg-surface); border: 1px solid var(--border-strong); border-radius: 6px;
+}
+.dto-go {
+    min-width: var(--touch-preferred, 64px); min-height: var(--touch-min, 56px);
+    font-family: var(--font-ui); font-size: var(--text-md); font-weight: 800;
+    color: var(--bg-primary); background: var(--accent); border: none; border-radius: 6px;
+}
+.dto-msg {
+    margin: 0 16px 8px; font-family: var(--font-ui); font-size: var(--text-sm); font-weight: 700;
+    color: var(--color-danger-on-light);
+}
+.dto-list { overflow-y: auto; border-top: 1px solid var(--border); }
+.dto-none { padding: 16px; font-family: var(--font-ui); font-size: var(--text-sm); font-weight: 700; color: var(--text-secondary); }
+.dto-row {
+    display: grid; grid-template-columns: 7.5em 1fr auto; align-items: center; gap: 8px;
+    width: 100%; min-height: var(--touch-min, 56px); padding: 0 16px; text-align: left;
+    background: var(--bg-primary); border: none; border-bottom: 1px solid var(--border-light);
+}
+.dto-row.is-next { background: var(--bg-surface); }
+.dto-row-id { font-family: var(--font-instrument); font-size: var(--text-md); font-weight: 900; color: var(--text-primary); }
+.dto-row-name { font-family: var(--font-ui); font-size: var(--text-sm); font-weight: 700; color: var(--text-secondary);
+                overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dto-row-dist { font-family: var(--font-instrument); font-size: var(--text-sm); font-weight: 900; color: var(--text-secondary); }
+.dto-row.is-passed .dto-row-id, .dto-row.is-passed .dto-row-name { color: var(--text-label); }

@@ -341,11 +341,11 @@ class RouteTable {
             if (!this._onActiveRouteAdvance) {
                 this._onActiveRouteAdvance = (e) => {
                     const newIdx = e.detail.index;
-                    if (newIdx !== this._activeIndex && newIdx < this._waypoints.length) {
-                        this._waypoints[this._activeIndex].active = false;
-                        this._waypoints[this._activeIndex].passed = true;
+                    if (newIdx !== this._activeIndex && newIdx >= 0 && newIdx < this._waypoints.length) {
+                        // Direct-To can jump ahead or back: everything before the
+                        // new active waypoint is passed, nothing after it.
+                        this._waypoints.forEach((wp, i) => { wp.passed = i < newIdx; wp.active = i === newIdx; });
                         this._activeIndex = newIdx;
-                        this._waypoints[this._activeIndex].active = true;
                     }
                 };
                 window.addEventListener('activeroute:advance', this._onActiveRouteAdvance);
@@ -435,7 +435,8 @@ class RouteTable {
                 // passed every waypoint in turn -- replayed on four recorded
                 // cross-countries, all en-route waypoints went early, up to 120 nm
                 // (KLKR runway 06, route south: all three within 3 s at 38-50 kt).
-                const prev = this._activeIndex > 0 ? this._waypoints[this._activeIndex - 1] : null;
+                // After a Direct-To the leg starts where the pilot pressed it.
+                const prev = this._directOrigin() || (this._activeIndex > 0 ? this._waypoints[this._activeIndex - 1] : null);
                 const isPast = dist < 1.0 || this._pastAbeam(prev, wp, lat, lon);
 
                 if (isPast && this._activeIndex < this._waypoints.length - 1) {
@@ -1357,6 +1358,44 @@ class RouteTable {
      * when the lib hasn't finished loading; callers already treat a null
      * bearing/heading as "no data yet".
      */
+    /** The Direct-To leg's start (ActiveRoute), if it is for this route's active waypoint. */
+    _directOrigin() {
+        if (typeof ActiveRoute === 'undefined' || !ActiveRoute.getLegOrigin) return null;
+        if (ActiveRoute.getWaypoints?.() !== this._waypoints || ActiveRoute.getIndex() !== this._activeIndex) return null;
+        return ActiveRoute.getLegOrigin();
+    }
+
+    /**
+     * Direct-To (Dana, 2026-10-18; map D→ button). target: a waypoint object of
+     * this route, or any point ({ icao, name, type, lat, lon }) -- the
+     * latter is inserted as the next waypoint, before the one we were heading
+     * to (an ordinary edit, saved with the route). pos: { lat, lon } present
+     * position, where the new leg starts. Returns false if nothing changed.
+     */
+    directTo(target, pos) {
+        if (typeof ActiveRoute === 'undefined' || !target || !pos) return false;
+        if (this._waypoints.length < 2) return false;                    // no route: app.directTo builds one
+        let idx = this._waypoints.indexOf(target);           // one of this route's waypoints
+        if (idx < 0) {
+            if (!Number.isFinite(target.lat) || !Number.isFinite(target.lon)) return false;
+            idx = Math.max(1, Math.min(this._activeIndex, this._waypoints.length - 1));
+            this._pushUndo();
+            this._waypoints.splice(idx, 0, {
+                icao: target.icao, name: target.name || target.icao, lat: target.lat, lon: target.lon,
+                ...(target.type ? { type: target.type } : {}), is_fuel_stop: false,
+            });
+            this._reindex();
+            this._onEdited();
+        }
+        // The plan ActiveRoute holds must be this list (undo or LOAD replace the array).
+        if (ActiveRoute.getWaypoints() !== this._waypoints) ActiveRoute.setPlan({ waypoints: this._waypoints });
+        if (!ActiveRoute.directTo(idx, pos)) return false;
+        this._waypoints.forEach((wp, i) => { wp.passed = i < idx; wp.active = i === idx; });
+        this._activeIndex = idx;
+        if (this._lastSituation) this.updateLive(this._lastSituation); else this._renderTable();
+        return true;
+    }
+
     /**
      * Beyond the line through wp square to the leg from -> wp: the bearing
      * from wp to us is within 90° of the leg's course. False while the

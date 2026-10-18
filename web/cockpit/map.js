@@ -1103,6 +1103,13 @@ class CockpitMap {
      * at the last fix, holdRemainingMs until it hides), 'hidden' (had a fix,
      * now off the map) or 'none' (no fix yet this session).
      */
+    /** Present position for a Direct-To: the live 3D fix only (not held or hidden), else null. */
+    ownPosition() {
+        if (!this._ownshipVisible || this._held || !this.ownshipMarker) return null;
+        const ll = this.ownshipMarker.getLatLng?.();
+        return ll && Number.isFinite(ll.lat) && Number.isFinite(ll.lng) ? { lat: ll.lat, lon: ll.lng } : null;
+    }
+
     get ownshipState() {
         const holdMs = (typeof GpsFix !== 'undefined' && GpsFix.HOLD_MS) || 0;
         if (this._held) {
@@ -1200,8 +1207,11 @@ class CockpitMap {
         const nextWp = wps[this._activeWpIdx];
         if (!nextWp) return;
 
-        // Active leg: solid magenta from ownship to next waypoint
-        const latlngs = [pos, [nextWp.lat, nextWp.lon]];
+        // Active leg: solid magenta from ownship to next waypoint -- after a
+        // Direct-To, the fixed course from where it was pressed (Dana's choice),
+        // so drifting off it shows as being off course.
+        const origin = fromRoute != null && typeof ActiveRoute !== 'undefined' ? ActiveRoute.getLegOrigin?.() : null;
+        const latlngs = origin ? [[origin.lat, origin.lon], [nextWp.lat, nextWp.lon]] : [pos, [nextWp.lat, nextWp.lon]];
         if (this._activeLegLine) {
             this._activeLegLine.setLatLngs(latlngs);
         } else {
@@ -1925,10 +1935,8 @@ class CockpitMap {
         directToBtn.className = 'map-corner-btn direct-to-btn';
         directToBtn.title = 'Direct To';
         directToBtn.innerHTML = 'D&rarr;';
-        wireTap(directToBtn, () => {
-            // Direct-To via route planner not yet implemented (Stage 2)
-            console.log('[FlyTab] Direct-To — Stage 2 feature');
-        });
+        // Opens the Direct-To panel (app wires onDirectToTap; Dana 2026-10-18).
+        wireTap(directToBtn, () => { if (this.onDirectToTap) this.onDirectToTap(); });
         L.DomEvent.disableClickPropagation(directToBtn);
         L.DomEvent.disableScrollPropagation(directToBtn);
         container.appendChild(directToBtn);
