@@ -69,7 +69,7 @@ bash deploy-pi.sh --clean  # Also removes old tiles/NASR/plates
 bash deploy-pi.sh --full   # Also restarts services
 
 # Start home server (tiles, plates, NASR, CIFP) on port 8090
-bash ~/fly-pipeline/start-home-server.sh
+bash ~/flytab-pipeline/start-home-server.sh
 
 # Test the full data pipeline (serial → engine monitor → FlyTab)
 bash test-pipeline.sh
@@ -127,6 +127,8 @@ Home server (:8090)  ──HTTP──▶  map tiles, approach plates, NASR, CIFP
 
 Standard Capacitor/Gradle project. Mixed HTTP content is explicitly allowed in the Capacitor config so the WebView can reach the Pi and home server over HTTP.
 
+**On-tablet file server** (`tileserver/TileServer.java`, NanoHTTPD on `127.0.0.1:9090`): serves tiles, plates, NASR/CIFP, terrain and flight files to the WebView, and writes them (sync, flight recorder, logbook). It listens on 127.0.0.1 only. **POST, PUT and DELETE are accepted only with `Origin: http://localhost`** (FlyTab's WebView; `CapacitorHttp` is disabled, so every `fetch` sends it); anything else gets 403, and `Access-Control-Allow-Origin` is `http://localhost`, not `*`. Reads stay open. A new write path from native code or another origin will be refused: send the app origin or extend `TileServer.allowed()` deliberately. `fetch-zip`, `fetch-mbtiles` and `/verify` take http(s) URLs only. Plate prune and verify compare file names case-insensitively, because shared storage is case-insensitive. Known limit: another app on the tablet can forge the Origin header; a web page cannot.
+
 ## Configuration Files
 
 | File | Purpose |
@@ -138,8 +140,8 @@ Standard Capacitor/Gradle project. Mixed HTTP content is explicitly allowed in t
 
 ## Data Pipeline Dependencies
 
-- **`pyshp` required for Class B/C/D/E airspace**: `~/fly-pipeline/build_nasr.py` parses Class B/C/D/E airspace from FAA shapefiles (`Additional_Data/Shape_Files/Class_Airspace.*` inside the NASR zip). Without `pyshp` installed, the step is silently skipped and the bundle only contains 26 ARTCC boundaries — no controlled airspace around airports. Install with `pip install pyshp --break-system-packages`.
-- **Home server data directory**: `start-home-server.sh` serves directly from `~/fly-pipeline/data/`. All data (NASR, CIFP, plates, terrain, tiles, mbtiles) lives there — no symlinks needed in `~/flytab/data/`. If the pipeline directory is missing the server fails at startup.
+- **`pyshp` required for Class B/C/D/E airspace**: `~/flytab-pipeline/build_nasr.py` parses Class B/C/D/E airspace from FAA shapefiles (`Additional_Data/Shape_Files/Class_Airspace.*` inside the NASR zip). Without `pyshp` installed, the class-airspace step is skipped, and `require_complete()` then stops the NASR build without writing the bundle (since Oct 2026; before that, a bundle with only the 26 ARTCC boundaries — no controlled airspace around airports — was published). Install with `pip install pyshp --break-system-packages`.
+- **Home server data directory**: `start-home-server.sh` serves directly from `~/flytab-pipeline/data/`. All data (NASR, CIFP, plates, terrain, tiles, mbtiles) lives there — no symlinks needed in `~/flytab/data/`. If the pipeline directory is missing the server fails at startup.
 - **NASR update on tablet**: After rebuilding the bundle, start the home server and restart FlyTab on the tablet while on home WiFi — the app fetches and imports the bundle automatically at startup. The staleness check compares `sua_count` in the home server's `cycle_info.json` against what's stored in IDB meta — if they differ, it re-imports from the home server automatically.
 - **Do not import data into the tablet via CDP/DevTools** — writing directly to the WebView's IndexedDB bypasses app integrity checks and can cause protection errors.
 - **SAA AIXM boundary parsing**: All 1234 SUA XML files have `gml:PolygonPatch/LinearRing/pos` with pre-computed coordinates — use this as primary boundary source. `gml:Curve` (arcs/circles) is only present in 795 files; keep as fallback only. Files without `Curve` (e.g. R-6001A/B) were silently skipped before this fix.
@@ -481,6 +483,7 @@ When writing a new cockpit overlay or panel, verify:
 - [ ] The panel works in the light theme (do NOT set `data-mode="cockpit"` — see memory)
 - **Storage**: App state uses `localStorage` and `IndexedDB` on the client. No cloud storage.
 - **`wireTap` double-fire guard**: `tap-utils.js` uses a module-level `_wireTapLastTouchAt` timestamp to suppress synthetic clicks for 350ms after any touch. This is required because DOM rebuilds in `_renderWaypoints()` / `_onEdited()` replace the original element before the browser fires its synthetic click — a per-element flag doesn't survive the rebuild. Do not revert to per-closure `touchHandled` flags. `route-table.js` touchend delegation also updates this global.
-- **Route editor map lock**: `app.js` `onAirportClick` / `onNavaidClick` / `onFixClick` each guard with `if (this.routeEditor?.isVisible()) return;`. This is intentional — the map is read-only while the route editor panel is open. Do not remove these guards during refactoring.
+- **Map taps while the route table is editing**: `app.js` `onAirportClick` / `onNavaidClick` / `onFixClick` each check `if (this.routeTable?.isEditing())` and then **add the tapped airport, navaid or fix to the route** (`routeTable.addWaypointSmart`) instead of opening its popup; a fix tap does nothing otherwise. Each also ignores a tap within 500 ms of a `wireTap` touch (`_wireTapLastTouchAt`). Intentional — keep these checks when refactoring. (The old route editor, and its `routeEditor?.isVisible()` read-only lock, were removed in `e341715`.)
+- **Two route planners, one switch**: `cockpit-config.json` `routePlanner: "legacy" | "new"` (default `legacy`; the pilot sets it in MORE → Configuration → Route Planner, saved in `flypi_user_cockpit`). EDIT, a new route, Direct-To, Load procedure and plan sync's Replan open `app.activeRoutePlanner()`; the route table's REV plans with it. The new planner (`RoutePlannerV2`, `route-planner-v2.js`) is a subclass of the current one (`RoutePlannerPanel`) and, beside it, uses its route engine, airway cache and T-route wizard (the pilot uses "new" with T-routes on). Do not remove the current planner until step 3 of `docs/superpowers/plans/2026-10-16-route-planner-replacement.md` is done and tablet-tested.
 - **Worktree build artifact**: Building from a git worktree rewrites `android/capacitor.settings.gradle` with worktree-relative paths (`../../../node_modules/`). Never stage or commit this file from a worktree — it will break the main build.
 - **Worktree version drift**: A worktree only sees the *committed* `FLYTAB_VERSION`. If `web/app.js` has an uncommitted version bump on main, the worktree builds from a stale lower version. The merged APK then fails to install ("cannot install this app") because the tablet has a higher versionCode. Always commit the version bump before creating a worktree, or verify the version after creation. `versionCode` is derived by stripping `v` and removing the dot (e.g. `v5.99` → `599`, `v5.100` → `5100`). Note: `v6.0` → `60` — a major version reset produces a *lower* code than `v5.99`.
