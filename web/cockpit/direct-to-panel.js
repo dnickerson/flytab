@@ -60,6 +60,7 @@ class DirectToPanel {
     close() {
         if (this._el) this._el.remove();
         this._el = null;
+        this._busy = false;
     }
 
     _position() { return this._app?.cockpitMap?.ownPosition?.() || null; }
@@ -122,8 +123,9 @@ class DirectToPanel {
         const raw = this._el?.querySelector('.dto-input')?.value || '';
         const id = raw.trim().toUpperCase();
         if (!id) { this._say('Type an identifier'); return; }
-        // On the route already (also KCDN for CDN): that waypoint, not a copy.
-        const onRoute = this._onRoute([id, /^[A-Z0-9]{3}$/.test(id) ? 'K' + id : null]);
+        // Exactly this id on the route: that waypoint. (KCAE on the route for a
+        // typed CAE is decided below: CAE may mean the VORTAC.)
+        const onRoute = this._onRoute([id]);
         if (onRoute) { await this._go(onRoute); return; }
         let found = [];
         try { found = await DirectToPanel.lookupAll(this._nasr, id); } catch { found = []; }
@@ -161,6 +163,8 @@ class DirectToPanel {
             const t = this._app.routeTable?._waypoints?.includes(target) ? target : (this._onRoute([target.icao]) || target);
             const r = await this._app.directTo(t);
             if (r?.ok) this.close(); else this._say(r?.msg || 'Direct-To failed');
+        } catch (err) {
+            this._say(`Direct-To failed: ${err?.message || err}`);
         } finally {
             this._busy = false;
         }

@@ -354,3 +354,31 @@ describe('pre-merge review fixes (2026-10-18)', () => {
         expect(rt._waypoints.map((w) => w.icao)).toEqual(['PPOS', 'KCDN']);
     });
 });
+
+
+describe('re-review (2026-10-18)', () => {
+    const nasr = {
+        getAirport: async (id) => ({ KCAE: { icao: 'KCAE', name: 'Columbia Metro', lat: 33.94, lon: -81.12 } })[id] || null,
+        getNavaid: async (id) => (id === 'CAE' ? { id: 'CAE', name: 'Columbia', type: 'VORTAC', lat: 33.86, lon: -81.05 } : null),
+        getFix: async () => null,
+    };
+    const app = (rt) => ({ routeTable: rt, cockpitMap: { ownPosition: () => ({ lat: 34.6, lon: -80.85 }) }, directTo: vi.fn(async () => ({ ok: true })) });
+
+    it('CAE typed with KCAE on the route: still asks (CAE may mean the VORTAC); KCAE picked is the route waypoint', async () => {
+        const wps = SOUTH(); wps.splice(2, 0, W('KCAE', [33.94, -81.12], 'APT'));
+        const rt = mk(wps); const a = app(rt); const p = new DirectToPanel(a, nasr); p.open();
+        document.querySelector('.dto-input').value = 'CAE';
+        document.querySelector('.dto-go').click();
+        await vi.waitFor(() => expect(document.querySelector('.dto-msg').textContent).toBe('More than one match — choose'));
+        document.querySelectorAll('.dto-row')[0].click();                // KCAE airport
+        await vi.waitFor(() => expect(a.directTo).toHaveBeenCalledWith(rt._waypoints[2]));
+    });
+
+    it('an error inside Direct-To is shown, and GO works again', async () => {
+        const a = app(mk()); a.directTo = vi.fn(async () => { throw new Error('boom'); });
+        const p = new DirectToPanel(a, nasr); p.open();
+        document.querySelectorAll('.dto-row')[0].click();
+        await vi.waitFor(() => expect(document.querySelector('.dto-msg').textContent).toBe('Direct-To failed: boom'));
+        expect(p._busy).toBe(false);
+    });
+});
