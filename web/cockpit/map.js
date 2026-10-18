@@ -1309,12 +1309,26 @@ class CockpitMap {
      * The pilot's own drag or pinch holds following own-ship until the auto-pan
      * button (then ✋) is tapped: with auto-pan on, follow re-centred within
      * 0.5 s and fought the drag (PR B review; Dana 2026-10-17: "Tap ✋ to
-     * resume"). Leaflet fires dragstart only for a real drag, never for
-     * FlyTab's own panTo or a tap; a pinch is two fingers down (capture: the
-     * markers' handlers stop the event in the bubble phase, see CLAUDE.md).
+     * resume"). Leaflet fires drag events only for a finger drag, never for
+     * FlyTab's own panTo; but it starts one at 3 px, while the tap handlers
+     * accept up to 20 px as a tap (CLAUDE.md), so a tap that slid in
+     * turbulence opened the popup and stopped following (review). Held only
+     * once the drag has moved PILOT_DRAG_PX. A pinch is two fingers down
+     * (capture: the markers' handlers stop the event in the bubble phase).
      */
     _wirePilotMoveHold(map, el) {
-        map.on('dragstart', () => this._holdFollow());
+        let start = null;                    // the map centre when this drag began
+        map.on('dragstart', () => { start = map.getCenter(); });
+        map.on('drag', () => {
+            if (!start) return;
+            const p = map.latLngToContainerPoint(start), size = map.getSize();
+            const dx = p.x - size.x / 2, dy = p.y - size.y / 2;
+            if (dx * dx + dy * dy >= CockpitMap.PILOT_DRAG_PX * CockpitMap.PILOT_DRAG_PX) {
+                start = null;
+                this._holdFollow();
+            }
+        });
+        map.on('dragend', () => { start = null; });
         el.addEventListener('touchstart', (e) => {
             if (e.touches && e.touches.length >= 2) this._holdFollow();
         }, { capture: true, passive: true });
@@ -2215,6 +2229,7 @@ CockpitMap.TRAFFIC_RENDER_MS = 500;
 // Auto-pan: re-centre at most this often, once own-ship is this far off centre (B2).
 CockpitMap.FOLLOW_MIN_MS = 500;
 CockpitMap.FOLLOW_MIN_DRIFT_PX = 2;
+CockpitMap.PILOT_DRAG_PX = 20;       // a drag this far holds follow; less is a tap (CLAUDE.md: >20 px = drag)
 // Debounced map-layer refreshes run at most this long after the first request (B2).
 CockpitMap.LAYER_MAX_WAIT_MS = 2000;
 // ...and, when the move was auto-pan's, at most this often (PR B review #5).

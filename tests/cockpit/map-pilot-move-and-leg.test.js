@@ -26,6 +26,9 @@ function fakeMap() {
         center: [35.0, -80.0], handlers,
         on: (ev, fn) => { for (const e of ev.split(' ')) (handlers[e] = handlers[e] || []).push(fn); return m; },
         fire: (ev) => (handlers[ev] || []).forEach((fn) => fn({})),
+        getCenter: () => [...m.center],
+        /** The pilot drags the map by px (the centre moves the other way). */
+        dragBy: (px) => { m.fire('dragstart'); m.center = [m.center[0], m.center[1] - px / PX_PER_DEG]; m.fire('drag'); m.fire('dragend'); },
         getSize: () => ({ x: 1000, y: 600 }),
         latLngToContainerPoint: ([lat, lon]) => ({ x: 500 + (lon - m.center[1]) * PX_PER_DEG, y: 300 - (lat - m.center[0]) * PX_PER_DEG }),
         panTo: vi.fn((p) => { m.center = [p[0], p[1]]; }),
@@ -67,8 +70,9 @@ describe('the pilot\'s drag or pinch holds auto-pan until ✋ is tapped', () => 
     it('a drag: following stops (no re-centring) until the hold is released', () => {
         const c = mapCtx(); const el = fakeEl();
         c._wirePilotMoveHold(c.map, el);
-        c.map.fire('dragstart');
+        c.map.dragBy(60);
         expect(c._followHold).toBe(true);
+        c.map.center = [35.0, -80.0];
         flyEast(c);
         expect(c.map.panTo).not.toHaveBeenCalled();
         c.releaseFollowHold();                               // the ✋ tap
@@ -87,10 +91,21 @@ describe('the pilot\'s drag or pinch holds auto-pan until ✋ is tapped', () => 
         expect(opts).toMatchObject({ capture: true, passive: true });   // Leaflet's handlers can't swallow it
     });
 
+    it('a tap that slides a few px (turbulence) is not a drag: following continues', () => {
+        // Leaflet starts a drag at 3 px; FlyTab's tap handlers accept up to 20 px
+        // as a tap (CLAUDE.md), so the popup opens -- following must not stop too.
+        const c = mapCtx(); const el = fakeEl();
+        c._wirePilotMoveHold(c.map, el);
+        c.map.dragBy(5); c.map.dragBy(19);
+        expect(c._followHold).toBeFalsy();
+        c.map.dragBy(21);
+        expect(c._followHold).toBe(true);
+    });
+
     it('auto-pan off: a drag holds nothing (the button would need two taps)', () => {
         const c = mapCtx(); c._autoPan = false; const el = fakeEl();
         c._wirePilotMoveHold(c.map, el);
-        c.map.fire('dragstart'); el.touch(2);
+        c.map.dragBy(60); el.touch(2);
         expect(c._followHold).toBeFalsy();
     });
 
@@ -102,12 +117,12 @@ describe('the pilot\'s drag or pinch holds auto-pan until ✋ is tapped', () => 
         expect(c._followHold).toBeFalsy();
     });
 
-    it('the map wires it at construction', () => {
+    it('the map wires it where it creates the Leaflet map (CockpitMap.init)', () => {
         const src = read('web/cockpit/map.js');
-        const ctor = src.slice(src.indexOf('    constructor('), src.indexOf('this._zoomBadgeHandler'));
-        expect(src).toMatch(/this\._wirePilotMoveHold\(this\.map, mapDiv\)/);
-        expect(src.indexOf('this._wirePilotMoveHold(this.map, mapDiv)')).toBeLessThan(src.indexOf('    // ========== Traffic =========='));
-        void ctor;
+        const at = src.indexOf('    init() {', src.indexOf('class CockpitMap'));
+        const init = src.slice(at, src.indexOf('\n    }\n', at));
+        expect(init).toMatch(/this\.map = L\.map\(mapDiv/);
+        expect(init).toMatch(/this\._wirePilotMoveHold\(this\.map, mapDiv\);/);
     });
 });
 
