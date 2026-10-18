@@ -952,9 +952,25 @@ class VectorMapLayers {
                 bravoCenters.set(name, VectorMapLayers._polygonCentroid(latlngs));
             }
 
+            // Altitude labels only from Z9, as SUA (Dana, 2026-10-18).
+            const showLabels = Math.round(zoom) >= VectorMapLayers.SUA_LABEL_MIN_ZOOM;
+            const altLabel = (as, latlngs) => {
+                const key = as.id + '_alt';
+                const has = this._airspacePolygons.get(key);
+                if (!showLabels) {
+                    if (has) { this._airspaceLayer.removeLayer(has); this._airspacePolygons.delete(key); }
+                } else if (!has) {
+                    this._addAirspaceLabel(as, latlngs, bravoCenters, usedLabelPos);
+                }
+            };
+
             for (const as of airspaces) {
                 currentIds.add(as.id);
-                if (this._airspacePolygons.has(as.id)) continue;
+                if (this._airspacePolygons.has(as.id)) {
+                    const b = as.boundary || as.points || [];
+                    altLabel(as, b.map(pt => [pt[0] ?? pt.lat, pt[1] ?? pt.lon]));
+                    continue;
+                }
 
                 const boundary = as.boundary || as.points || [];
                 if (boundary.length < 3) continue;
@@ -979,45 +995,8 @@ class VectorMapLayers {
 
                 polygon.addTo(this._airspaceLayer);
 
-                // Sectional-style altitude label at polygon center: B: 100 / 60
-                if ((as.class === 'B' || as.class === 'C' || as.class === 'D') && upper != null) {
-                    const ceil = lower === 0 || lower == null
-                        ? 'SFC'
-                        : (lower >= 1000 ? Math.round(lower / 100) : lower);
-                    const top = (upper != null && upper <= -1000) ? 'UNL'
-                        : (upper >= 1000 ? Math.round(upper / 100) : upper);
-                    const altHtml = `${top}<br><span class="as-alt-floor">${ceil}</span>`;
-
-                    let labelPos;
-                    if (as.class === 'B') {
-                        const name = (as.name || '').replace(/\s*Class\s*B\s*/i, '').trim();
-                        const aptCenter = bravoCenters.get(name) || VectorMapLayers._polygonCentroid(latlngs);
-                        labelPos = VectorMapLayers._shelfLabelPosition(latlngs, aptCenter);
-                    } else {
-                        labelPos = VectorMapLayers._polygonCentroid(latlngs);
-                    }
-
-                    // Offset label vertically if another label is within ~0.03° of this pos
-                    const CLOSE = 0.03;
-                    const stackCount = usedLabelPos.filter(p =>
-                        Math.abs(p[0] - labelPos[0]) < CLOSE && Math.abs(p[1] - labelPos[1]) < CLOSE
-                    ).length;
-                    usedLabelPos.push(labelPos);
-                    const altLabel = L.marker(labelPos, {
-                        icon: L.divIcon({
-                            className: `as-alt-label as-alt-${as.class.toLowerCase()}`,
-                            html: altHtml,
-                            iconSize: [40, 30],
-                            iconAnchor: [20, 15 - stackCount * 32],
-                        }),
-                        interactive: false,
-                        zIndexOffset: -100,
-                    });
-                    altLabel.addTo(this._airspaceLayer);
-                    this._airspacePolygons.set(as.id + '_alt', altLabel);
-                }
-
                 this._airspacePolygons.set(as.id, polygon);
+                altLabel(as, latlngs);
             }
 
             // Remove out-of-view
@@ -1030,6 +1009,49 @@ class VectorMapLayers {
             }
         } catch (err) {
             console.warn('VectorMapLayers: airspace query failed', err);
+        }
+    }
+
+    /** Sectional-style altitude label for a Class B/C/D area (B: 100 / 60). */
+    _addAirspaceLabel(as, latlngs, bravoCenters, usedLabelPos) {
+        const upper = as.upper_ft ?? as.upper;
+        const lower = as.lower_ft ?? as.lower;
+        // Sectional-style altitude label at polygon center: B: 100 / 60
+        if ((as.class === 'B' || as.class === 'C' || as.class === 'D') && upper != null) {
+            const ceil = lower === 0 || lower == null
+                ? 'SFC'
+                : (lower >= 1000 ? Math.round(lower / 100) : lower);
+            const top = (upper != null && upper <= -1000) ? 'UNL'
+                : (upper >= 1000 ? Math.round(upper / 100) : upper);
+            const altHtml = `${top}<br><span class="as-alt-floor">${ceil}</span>`;
+
+            let labelPos;
+            if (as.class === 'B') {
+                const name = (as.name || '').replace(/\s*Class\s*B\s*/i, '').trim();
+                const aptCenter = bravoCenters.get(name) || VectorMapLayers._polygonCentroid(latlngs);
+                labelPos = VectorMapLayers._shelfLabelPosition(latlngs, aptCenter);
+            } else {
+                labelPos = VectorMapLayers._polygonCentroid(latlngs);
+            }
+
+            // Offset label vertically if another label is within ~0.03° of this pos
+            const CLOSE = 0.03;
+            const stackCount = usedLabelPos.filter(p =>
+                Math.abs(p[0] - labelPos[0]) < CLOSE && Math.abs(p[1] - labelPos[1]) < CLOSE
+            ).length;
+            usedLabelPos.push(labelPos);
+            const altLabel = L.marker(labelPos, {
+                icon: L.divIcon({
+                    className: `as-alt-label as-alt-${as.class.toLowerCase()}`,
+                    html: altHtml,
+                    iconSize: [40, 30],
+                    iconAnchor: [20, 15 - stackCount * 32],
+                }),
+                interactive: false,
+                zIndexOffset: -100,
+            });
+            altLabel.addTo(this._airspaceLayer);
+            this._airspacePolygons.set(as.id + '_alt', altLabel);
         }
     }
 
@@ -1208,7 +1230,7 @@ class VectorMapLayers {
     // Grey dashed outline, no fill -- matches VFR sectional chart convention
     // for TRSA and stays visually distinct from SUA's solid colored fills
     // and Class B/C/D/E's existing styling.
-    static SUA_LABEL_MIN_ZOOM = 9;   // the zoom badge's Z9; Z8 and out: no SUA altitude labels
+    static SUA_LABEL_MIN_ZOOM = 9;   // the zoom badge's Z9; Z8 and out: no SUA, Class B/C/D or TRSA labels
 
     static TRSA_STYLE = { color: '#888888', fillOpacity: 0, weight: 1.5, dashArray: '6 4' };
 
@@ -1233,10 +1255,32 @@ class VectorMapLayers {
         try {
             const areas = await this._nasr.getTrsaInBounds(south, west, north, east);
             const currentIds = new Set();
+            // Frequency labels only from Z9, as SUA (Dana, 2026-10-18: airspace text too).
+            const showLabels = Math.round(zoom) >= VectorMapLayers.SUA_LABEL_MIN_ZOOM;
+            const freqLabel = (trsa) => {
+                const key = trsa.id + '_lbl';
+                const has = this._trsaPolygons.get(key);
+                if (!showLabels) {
+                    if (has) { this._trsaLayer.removeLayer(has); this._trsaPolygons.delete(key); }
+                } else if (!has && (trsa.boundary || []).length >= 3) {
+                    const label = L.marker(VectorMapLayers._polygonCentroid(trsa.boundary.map(pt => [pt[0], pt[1]])), {
+                        icon: L.divIcon({
+                            className: 'as-alt-label trsa-lbl',
+                            html: VectorMapLayers._formatTrsaFreq((trsa.freqs || [])[0]) || '',
+                            iconSize: [48, 20],
+                            iconAnchor: [24, 10],
+                        }),
+                        interactive: false,
+                        zIndexOffset: -150,
+                    });
+                    label.addTo(this._trsaLayer);
+                    this._trsaPolygons.set(key, label);
+                }
+            };
 
             for (const trsa of areas) {
                 currentIds.add(trsa.id);
-                if (this._trsaPolygons.has(trsa.id)) continue;
+                if (this._trsaPolygons.has(trsa.id)) { freqLabel(trsa); continue; }
 
                 const boundary = trsa.boundary || [];
                 if (boundary.length < 3) continue;
@@ -1277,20 +1321,7 @@ class VectorMapLayers {
 
                 polygon.addTo(this._trsaLayer);
                 this._trsaPolygons.set(trsa.id, polygon);
-
-                const labelPos = VectorMapLayers._polygonCentroid(latlngs);
-                const label = L.marker(labelPos, {
-                    icon: L.divIcon({
-                        className: 'as-alt-label trsa-lbl',
-                        html: VectorMapLayers._formatTrsaFreq((trsa.freqs || [])[0]) || '',
-                        iconSize: [48, 20],
-                        iconAnchor: [24, 10],
-                    }),
-                    interactive: false,
-                    zIndexOffset: -150,
-                });
-                label.addTo(this._trsaLayer);
-                this._trsaPolygons.set(trsa.id + '_lbl', label);
+                freqLabel(trsa);
             }
 
             for (const [id, poly] of this._trsaPolygons) {

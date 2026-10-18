@@ -67,3 +67,50 @@ describe('SUA altitude labels: none at Z8 and below', () => {
         expect(v._suaPolygons.size).toBe(0);
     });
 });
+
+describe('Class B/C/D altitude and TRSA frequency labels: same rule (Dana, 2026-10-18)', () => {
+    const SPACES = [
+        { id: 'CLT-B1', name: 'CHARLOTTE Class B', class: 'B', lower_ft: 0, upper_ft: 10000, boundary: box(35.21, -80.94, 0.1) },
+        { id: 'CAE-C', name: 'COLUMBIA Class C', class: 'C', lower_ft: 0, upper_ft: 4200, boundary: box(33.94, -81.12, 0.1) },
+        { id: 'X-E', name: 'E', class: 'E', lower_ft: 700, upper_ft: 18000, boundary: box(34.5, -80.5, 0.2) },
+    ];
+    const TRSAS = [{ id: 'MYR', name: 'MYRTLE BEACH TRSA', freqs: [{ freq: '119.85' }], boundary: box(33.68, -78.93, 0.3) }];
+    function both() {
+        const v = Object.create(VectorMapLayers.prototype);
+        v._map = { hasLayer: () => true };
+        v._airspaceLayer = L.layerGroup(); v._airspacePolygons = new Map();
+        v._trsaLayer = L.layerGroup(); v._trsaPolygons = new Map();
+        v._nasr = { getAirspaceInBounds: async () => SPACES.map((a) => ({ ...a })), getTrsaInBounds: async () => TRSAS.map((a) => ({ ...a })) };
+        return v;
+    }
+    const run = async (v, z) => { await v._updateAirspace(32, -82, 37, -77, z, {}); await v._updateTrsa(32, -82, 37, -77, z); };
+    const lbl = (m, suffix) => [...m.keys()].filter((k) => k.endsWith(suffix)).sort();
+
+    it('Z8 and out: the areas, no labels', async () => {
+        for (const z of [6, 7, 8, 8.25]) {
+            const v = both(); await run(v, z);
+            expect(lbl(v._airspacePolygons, '_alt'), `z${z}`).toEqual([]);
+            expect(lbl(v._trsaPolygons, '_lbl'), `z${z}`).toEqual([]);
+            expect(v._airspaceLayer.getLayers()).toHaveLength(3);
+            expect(v._trsaLayer.getLayers()).toHaveLength(1);
+        }
+    });
+
+    it('Z9 in: B and C altitude labels (not E), the TRSA frequency', async () => {
+        const v = both(); await run(v, 9);
+        expect(lbl(v._airspacePolygons, '_alt')).toEqual(['CAE-C_alt', 'CLT-B1_alt']);
+        expect(v._airspacePolygons.get('CLT-B1_alt').options.icon.options.html).toBe('100<br><span class="as-alt-floor">SFC</span>');
+        expect(v._trsaPolygons.get('MYR_lbl').options.icon.options.html).toBe('119.85');
+    });
+
+    it('zooming out removes them, zooming back in restores them', async () => {
+        const v = both();
+        await run(v, 10); expect(lbl(v._airspacePolygons, '_alt')).toHaveLength(2);
+        await run(v, 8);
+        expect(lbl(v._airspacePolygons, '_alt')).toEqual([]); expect(lbl(v._trsaPolygons, '_lbl')).toEqual([]);
+        expect(v._airspaceLayer.getLayers()).toHaveLength(3); expect(v._trsaLayer.getLayers()).toHaveLength(1);
+        await run(v, 9);
+        expect(lbl(v._airspacePolygons, '_alt')).toHaveLength(2); expect(lbl(v._trsaPolygons, '_lbl')).toHaveLength(1);
+        expect(v._airspaceLayer.getLayers()).toHaveLength(5);
+    });
+});
