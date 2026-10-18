@@ -48,6 +48,61 @@ class NasrDB {
     constructor() {
         this._db = null;
         this._opening = null;
+        this._mem = new Map();      // store -> { gen, rows } or { gen, promise } (see _memRows)
+        this._memGen = new Map();   // store -> generation, bumped by every write to the store
+    }
+
+    // ========== In-memory copies for the area queries ==========
+    //
+    // Profiled on main (v11.71, 2026-10-17, PR B harness): every map refresh
+    // scanned whole stores through IndexedDB cursors, one task per record --
+    // airports 1,205 ms for 51 rows, airspace 633 ms, navaids 240, airways 207,
+    // 21 refreshes a minute. Each store below is now read once (getAll, 3-294 ms
+    // on the tablet) and the *InBounds queries filter the array with the same
+    // tests, limits, key order and sort as the cursors did. They return copies of
+    // the matched rows, as the cursor did, so a caller can't change the copy.
+    // Every write to these stores goes through NasrDB (importNasrBundle, _clear,
+    // putAirport) and bumps the store's generation; a load still running from
+    // before a write is not kept. About 19 MB of records on the tablet.
+    static MEMORY_STORES = ['airports', 'airspace', 'sua', 'trsa', 'navaids', 'fixes', 'airways'];
+
+    /** All rows of a store, in key order, read from IndexedDB once per generation. */
+    _memRows(store) {
+        const gen = this._memGen.get(store) || 0;
+        const hit = this._mem.get(store);
+        if (hit && hit.gen === gen) return hit.rows ? Promise.resolve(hit.rows) : hit.promise;
+        const promise = this._getAll(store).then((rows) => {
+            if ((this._memGen.get(store) || 0) === gen) this._mem.set(store, { gen, rows });
+            return rows;
+        }, (err) => {
+            if (this._mem.get(store)?.promise === promise) this._mem.delete(store);   // the next query tries again
+            throw err;
+        });
+        this._mem.set(store, { gen, promise });
+        return promise;
+    }
+
+    /** The stores changed: drop their copies (and any load in flight). */
+    _memInvalidate(stores) {
+        for (const st of stores) {
+            if (!NasrDB.MEMORY_STORES.includes(st)) continue;
+            this._memGen.set(st, (this._memGen.get(st) || 0) + 1);
+            this._mem.delete(st);
+        }
+    }
+
+    static _copies(rows) {
+        return rows.map((r) => structuredClone(r));
+    }
+
+    /** Point-in-box filter, stopping at limit -- the cursors' order and stop rule. */
+    static _pointsInBox(rows, south, west, north, east, limit) {
+        const out = [];
+        for (const v of rows) {
+            if (out.length >= limit) break;
+            if (v.lat >= south && v.lat <= north && v.lon >= west && v.lon <= east) out.push(v);
+        }
+        return out;
     }
 
     /**
@@ -309,6 +364,7 @@ class NasrDB {
     }
 
     async _clear(storeName) {
+        this._memInvalidate([storeName]);
         const db = await this.open();
         return new Promise((resolve, reject) => {
             const tx = db.transaction(storeName, 'readwrite');
@@ -336,6 +392,15 @@ class NasrDB {
 
     async getAirport(icao) {
         return this._get('airports', icao.toUpperCase());
+    }
+
+    /** Write one airport record (e.g. runways filled in); the area queries see it next. */
+    async putAirport(apt) {
+        try {
+            return await this._put('airports', apt);
+        } finally {
+            this._memInvalidate(['airports']);
+        }
     }
 
     async searchAirports(query) {
@@ -397,90 +462,40 @@ class NasrDB {
     // ========== Spatial Queries (Bounding Box) ==========
 
     /**
-     * Get navaids within a lat/lon bounding box.
-     * Uses cursor scan with in-memory filtering — fast enough for ~2,300 records.
+     * Get navaids within a lat/lon bounding box (from the in-memory copy).
      */
     async getNavaidsinBounds(south, west, north, east, limit = 200) {
-        const db = await this.open();
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction('navaids', 'readonly');
-            tx.onabort = () => reject(tx.error || new Error('Transaction aborted'));
-            const results = [];
-            const req = tx.objectStore('navaids').openCursor();
-            req.onsuccess = () => {
-                const cursor = req.result;
-                if (!cursor || results.length >= limit) { resolve(results); return; }
-                const v = cursor.value;
-                if (v.lat >= south && v.lat <= north && v.lon >= west && v.lon <= east) {
-                    results.push(v);
-                }
-                cursor.continue();
-            };
-            req.onerror = () => reject(req.error);
-        });
+        const rows = await this._memRows('navaids');
+        return NasrDB._copies(NasrDB._pointsInBox(rows, south, west, north, east, limit));
     }
 
     /**
-     * Get fixes within a lat/lon bounding box.
-     * Uses cursor scan with in-memory filtering — ~70K records in <50ms.
+     * Get fixes within a lat/lon bounding box (from the in-memory copy, ~70K records).
      */
     async getFixesInBounds(south, west, north, east, limit = 500) {
-        const db = await this.open();
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction('fixes', 'readonly');
-            tx.onabort = () => reject(tx.error || new Error('Transaction aborted'));
-            const results = [];
-            const req = tx.objectStore('fixes').openCursor();
-            req.onsuccess = () => {
-                const cursor = req.result;
-                if (!cursor || results.length >= limit) { resolve(results); return; }
-                const v = cursor.value;
-                if (v.lat >= south && v.lat <= north && v.lon >= west && v.lon <= east) {
-                    results.push(v);
-                }
-                cursor.continue();
-            };
-            req.onerror = () => reject(req.error);
-        });
+        const rows = await this._memRows('fixes');
+        return NasrDB._copies(NasrDB._pointsInBox(rows, south, west, north, east, limit));
     }
 
     // ========== Spatial Queries (Bounding Box) — Airports, Airspace, Airways ==========
 
     /**
-     * Get airports within a lat/lon bounding box.
-     * Uses cursor scan with in-memory filtering — fast enough for ~19K records.
+     * Get airports within a lat/lon bounding box (from the in-memory copy, ~19K records).
      */
     async getAirportsInBounds(south, west, north, east, limit = 500) {
-        const db = await this.open();
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction('airports', 'readonly');
-            tx.onabort = () => reject(tx.error || new Error('Transaction aborted'));
-            const all = [];
-            // Scan all airports — do NOT stop early on count since private strips
-            // (sorted before K-prefix ICAO airports) would fill the limit first,
-            // hiding weather-capable airports like KMCO from the results.
-            const req = tx.objectStore('airports').openCursor();
-            req.onsuccess = () => {
-                const cursor = req.result;
-                if (!cursor) {
-                    // Sort: K-prefix ICAO first (have weather data), then towered, then rest
-                    all.sort((a, b) => {
-                        const aK = a.icao?.startsWith('K') ? 0 : 1;
-                        const bK = b.icao?.startsWith('K') ? 0 : 1;
-                        if (aK !== bK) return aK - bK;
-                        return (b.tower ? 1 : 0) - (a.tower ? 1 : 0);
-                    });
-                    resolve(all.slice(0, limit));
-                    return;
-                }
-                const v = cursor.value;
-                if (v.lat >= south && v.lat <= north && v.lon >= west && v.lon <= east) {
-                    all.push(v);
-                }
-                cursor.continue();
-            };
-            req.onerror = () => reject(req.error);
+        const rows = await this._memRows('airports');
+        // All airports in the box -- do NOT stop early on count since private
+        // strips (sorted before K-prefix ICAO airports) would fill the limit
+        // first, hiding weather-capable airports like KMCO from the results.
+        const all = NasrDB._pointsInBox(rows, south, west, north, east, Infinity);
+        // Sort: K-prefix ICAO first (have weather data), then towered, then rest
+        all.sort((a, b) => {
+            const aK = a.icao?.startsWith('K') ? 0 : 1;
+            const bK = b.icao?.startsWith('K') ? 0 : 1;
+            if (aK !== bK) return aK - bK;
+            return (b.tower ? 1 : 0) - (a.tower ? 1 : 0);
         });
+        return NasrDB._copies(all.slice(0, limit));
     }
 
     /**
@@ -496,70 +511,54 @@ class NasrDB {
     // bounding-box query could realistically match within a single store,
     // not a claim about the two stores' combined total.
     async getAirspaceInBounds(south, west, north, east, limit = 3000) {
-        const db = await this.open();
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction('airspace', 'readonly');
-            tx.onabort = () => reject(tx.error || new Error('Transaction aborted'));
-            const results = [];
-            const req = tx.objectStore('airspace').openCursor();
-            req.onsuccess = () => {
-                const cursor = req.result;
-                if (!cursor || results.length >= limit) { resolve(results); return; }
-                const v = cursor.value;
-                const boundary = v.boundary || v.points || [];
-                // A vertex inside the query box or the box's center inside
-                // the polygon catches most overlaps, but neither catches a
-                // polygon edge that clips through the box without either
-                // shape's reference point landing inside the other (e.g. a
-                // wide Class B shelf whose edge crosses a corner of the box)
-                // — see GeoUtils.polygonOverlapsBox for the full 3-case test.
-                const overlaps = typeof GeoUtils !== 'undefined'
-                    ? GeoUtils.polygonOverlapsBox(boundary, south, west, north, east)
-                    : boundary.some(pt => {
-                        // Explicit format check, not `pt[0] || pt.lat`: that
-                        // pattern drops a real vertex sitting exactly at 0.0
-                        // latitude or longitude (falsy 0 falls through to the
-                        // .lat/.lon read on an array, which is undefined).
-                        // Not reachable for a CONUS-only app in practice, but
-                        // cheap to get right.
-                        const lat = Array.isArray(pt) ? pt[0] : pt.lat;
-                        const lon = Array.isArray(pt) ? pt[1] : pt.lon;
-                        return lat >= south && lat <= north && lon >= west && lon <= east;
-                    });
-                if (overlaps) results.push(v);
-                cursor.continue();
-            };
-            req.onerror = () => reject(req.error);
-        });
+        const rows = await this._memRows('airspace');
+        const results = [];
+        for (const v of rows) {
+            if (results.length >= limit) break;
+            const boundary = v.boundary || v.points || [];
+            // A vertex inside the query box or the box's center inside
+            // the polygon catches most overlaps, but neither catches a
+            // polygon edge that clips through the box without either
+            // shape's reference point landing inside the other (e.g. a
+            // wide Class B shelf whose edge crosses a corner of the box)
+            // — see GeoUtils.polygonOverlapsBox for the full 3-case test.
+            const overlaps = typeof GeoUtils !== 'undefined'
+                ? GeoUtils.polygonOverlapsBox(boundary, south, west, north, east)
+                : boundary.some(pt => {
+                    // Explicit format check, not `pt[0] || pt.lat`: that
+                    // pattern drops a real vertex sitting exactly at 0.0
+                    // latitude or longitude (falsy 0 falls through to the
+                    // .lat/.lon read on an array, which is undefined).
+                    // Not reachable for a CONUS-only app in practice, but
+                    // cheap to get right.
+                    const lat = Array.isArray(pt) ? pt[0] : pt.lat;
+                    const lon = Array.isArray(pt) ? pt[1] : pt.lon;
+                    return lat >= south && lat <= north && lon >= west && lon <= east;
+                });
+            if (overlaps) results.push(v);
+        }
+        return NasrDB._copies(results);
     }
 
     /**
      * Get Special Use Airspace (R/P/W/A/MOA) that overlaps a bounding box.
      */
     async getSuaInBounds(south, west, north, east, limit = 3000) {
-        const db = await this.open();
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction('sua', 'readonly');
-            tx.onabort = () => reject(tx.error || new Error('Transaction aborted'));
-            const results = [];
-            const req = tx.objectStore('sua').openCursor();
-            req.onsuccess = () => {
-                const cursor = req.result;
-                if (!cursor || results.length >= limit) { resolve(results); return; }
-                const v = cursor.value;
-                const boundary = v.boundary || [];
-                // See getAirspaceInBounds above for the full 3-case overlap test.
-                const overlaps = typeof GeoUtils !== 'undefined'
-                    ? GeoUtils.polygonOverlapsBox(boundary, south, west, north, east)
-                    : boundary.some(pt => {
-                        const lat = pt[0], lon = pt[1];
-                        return lat >= south && lat <= north && lon >= west && lon <= east;
-                    });
-                if (overlaps) results.push(v);
-                cursor.continue();
-            };
-            req.onerror = () => reject(req.error);
-        });
+        const rows = await this._memRows('sua');
+        const results = [];
+        for (const v of rows) {
+            if (results.length >= limit) break;
+            const boundary = v.boundary || [];
+            // See getAirspaceInBounds above for the full 3-case overlap test.
+            const overlaps = typeof GeoUtils !== 'undefined'
+                ? GeoUtils.polygonOverlapsBox(boundary, south, west, north, east)
+                : boundary.some(pt => {
+                    const lat = pt[0], lon = pt[1];
+                    return lat >= south && lat <= north && lon >= west && lon <= east;
+                });
+            if (overlaps) results.push(v);
+        }
+        return NasrDB._copies(results);
     }
 
     /**
@@ -570,61 +569,45 @@ class NasrDB {
      * radius was actually published in the TWR4 remark text).
      */
     async getTrsaInBounds(south, west, north, east, limit = 3000) {
-        const db = await this.open();
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction('trsa', 'readonly');
-            tx.onabort = () => reject(tx.error || new Error('Transaction aborted'));
-            const results = [];
-            const req = tx.objectStore('trsa').openCursor();
-            req.onsuccess = () => {
-                const cursor = req.result;
-                if (!cursor || results.length >= limit) { resolve(results); return; }
-                const v = cursor.value;
-                const boundary = v.boundary || [];
-                // See getAirspaceInBounds above for the full 3-case overlap test.
-                // TRSA circles are large (20-60nm radius) relative to typical
-                // cockpit zoom, so the vertex-only fallback below would miss a
-                // TRSA whenever the viewport sits entirely inside its circle —
-                // GeoUtils.polygonOverlapsBox's center-in-polygon case (2) is
-                // what actually catches that, not just the edge-clip case (3).
-                const overlaps = typeof GeoUtils !== 'undefined'
-                    ? GeoUtils.polygonOverlapsBox(boundary, south, west, north, east)
-                    : boundary.some(pt => {
-                        const lat = pt[0], lon = pt[1];
-                        return lat >= south && lat <= north && lon >= west && lon <= east;
-                    });
-                if (overlaps) results.push(v);
-                cursor.continue();
-            };
-            req.onerror = () => reject(req.error);
-        });
+        const rows = await this._memRows('trsa');
+        const results = [];
+        for (const v of rows) {
+            if (results.length >= limit) break;
+            const boundary = v.boundary || [];
+            // See getAirspaceInBounds above for the full 3-case overlap test.
+            // TRSA circles are large (20-60nm radius) relative to typical
+            // cockpit zoom, so the vertex-only fallback below would miss a
+            // TRSA whenever the viewport sits entirely inside its circle —
+            // GeoUtils.polygonOverlapsBox's center-in-polygon case (2) is
+            // what actually catches that, not just the edge-clip case (3).
+            const overlaps = typeof GeoUtils !== 'undefined'
+                ? GeoUtils.polygonOverlapsBox(boundary, south, west, north, east)
+                : boundary.some(pt => {
+                    const lat = pt[0], lon = pt[1];
+                    return lat >= south && lat <= north && lon >= west && lon <= east;
+                });
+            if (overlaps) results.push(v);
+        }
+        return NasrDB._copies(results);
     }
 
     /**
      * Get airways that have at least one waypoint within bounds.
      */
     async getAirwaysInBounds(south, west, north, east, limit = 100) {
-        const db = await this.open();
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction('airways', 'readonly');
-            tx.onabort = () => reject(tx.error || new Error('Transaction aborted'));
-            const results = [];
-            const req = tx.objectStore('airways').openCursor();
-            req.onsuccess = () => {
-                const cursor = req.result;
-                if (!cursor || results.length >= limit) { resolve(results); return; }
-                const v = cursor.value;
-                const waypoints = v.waypoints || v.fixes || [];
-                const inBounds = waypoints.some(wp => {
-                    const lat = wp.lat;
-                    const lon = wp.lon;
-                    return lat >= south && lat <= north && lon >= west && lon <= east;
-                });
-                if (inBounds) results.push(v);
-                cursor.continue();
-            };
-            req.onerror = () => reject(req.error);
-        });
+        const rows = await this._memRows('airways');
+        const results = [];
+        for (const v of rows) {
+            if (results.length >= limit) break;
+            const waypoints = v.waypoints || v.fixes || [];
+            const inBounds = waypoints.some(wp => {
+                const lat = wp.lat;
+                const lon = wp.lon;
+                return lat >= south && lat <= north && lon >= west && lon <= east;
+            });
+            if (inBounds) results.push(v);
+        }
+        return NasrDB._copies(results);
     }
 
     // ========== Airway Operations ==========
@@ -844,6 +827,9 @@ class NasrDB {
         const db = await this.open();
         const storeNames = ['airports', 'navaids', 'airways', 'airspace', 'sua', 'trsa', 'fixes'];
         let count = 0;
+        // The in-memory copies: dropped now, and again when the write is done
+        // (a load started while it runs read the old data).
+        this._memInvalidate(storeNames);
 
         await new Promise((resolve, reject) => {
             const tx = db.transaction(storeNames, 'readwrite');
@@ -868,7 +854,7 @@ class NasrDB {
             write('sua', bundle.sua);
             write('trsa', bundle.trsa);
             write('fixes', bundle.fixes);
-        });
+        }).finally(() => this._memInvalidate(storeNames));
 
         if (bundle.cycle_info) {
             // Always persist sua_count so staleness check can detect missing SUA on next startup

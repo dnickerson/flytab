@@ -276,7 +276,7 @@ Every task follows the same rules:
   - [x] `/jsonio`: a substring check for `"Product_id"` skips the non-FIS-B broadcasts unparsed (test: 51 parses → 0); what gets dispatched is unchanged.
   - [x] DiagLog: in memory, saved every 3 s (errors at once), cap 200 → 1000; same key and entry shape. `app-route-edit-queue` now reads the real DiagLog through its API.
   - [x] `FisbNexrad.clustersForFrame` caches per stored frame (WeakMap). Frames are deep copies, only pushed/shifted. The convective engine used to re-cluster every frame on every NEXRAD block.
-- [ ] **B6 Ship PR B:**
+- [x] **B6 Ship PR B:** merged 2026-10-16 as #174. Still owed on the tablet: airport-tap check, pan/zoom feel, stepped follow (needs Stratux, in flight).
   - [x] measure again against B0 and record the before/after table here (2026-10-15, same harness and load; the marker count was rechecked with a fresh mock: 64, as in B0):
 
     | Metric | B0 | After B1–B5 |
@@ -296,11 +296,11 @@ Every task follows the same rules:
     | 12 | 122 → **20** | 36.1 → **16.0** | 13.6 → **5.8** |
     | 14 | 120 → **20** | 42.4 → **17.9** | 15.9 → **6.4** |
     | default (9.75) | 16 → 16 | 13.6 → 13.6 | 4.8 → 4.8 |
-  - [ ] update the manual if auto-pan behaviour is noticeably different;
-  - [ ] bump the version and build;
+  - [x] update the manual if auto-pan behaviour is noticeably different (not needed: no visible change);
+  - [x] bump the version and build;
   - [x] critical review: the first review's 10 findings fixed (commits 262a3dc–ece19d7); a second review of those fixes found 5 more (track-log order after a clock step, hung writes, two fallback-merge gaps; auto-pan delaying a pilot refresh), all fixed (128f4cc, ba4f574). Re-measured after: z12 layers 20/min, task 16.0 s/min; default 16/min, 13.4 s/min;
-  - [ ] open the PR;
-  - [ ] tablet test, including a manual airport-tap check.
+  - [x] open the PR (#174, merged);
+  - [ ] tablet test, including a manual airport-tap check (owed, see above).
 
 ---
 
@@ -377,7 +377,20 @@ should be biased to look for red areas (pixels) building, not random scattered r
 - Coalesce queued native WS messages while JS is frozen (`StratuxWsPlugin.java:97-101`), so a
   resume doesn't replay a burst of old positions.
 - Back-off in the UDP receive loop (`StratuxUdpPlugin.java:118-136`).
-- A spatial index for `getAirspaceInBounds` / `getSuaInBounds` (`nasr-db.js:450-520`).
+- [x] **B7 Area queries from memory (2026-10-17, v11.72).** Profiling main (v11.71) with the B0 harness found the
+  largest remaining cost: every map refresh scanned whole stores through IndexedDB cursors (airports 1,205 ms for 51
+  rows, for the weather dots; airspace 633 ms; navaids 240; airways 207), 21 refreshes/min. NasrDB now reads each
+  store once and filters the array with the same tests, limits, order and sort (704 results compared against the
+  cursor version, `tests/shared/nasr-db-memory.test.js`). Same harness, desktop:
+
+  | Metric | v11.71 | v11.72 |
+  |---|---|---|
+  | script s/min (default zoom) | 4.55 | **0.55** |
+  | task s/min (default zoom) | 13.13 | **3.74** |
+  | task s/min (zoom 12) | 16.0 | **3.68** |
+  | each area query | 207–1,205 ms | ~46 ms (wall, the four together) |
+
+  Memory: ~19 MB of records on the tablet. Owed: the tablet airport-tap and pan/zoom checks.
 - Pause map rendering while the ENG or other full-screen pages cover the map.
 - Guard `Settings.set` and fuel-overlay localStorage writes against quota errors.
 - Pilot: check for a Lenovo ZUI update. `vendor.qti.qvirt-service_rs` fails every 5 s

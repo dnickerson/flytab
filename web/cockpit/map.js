@@ -1722,12 +1722,9 @@ class CockpitMap {
                                 surface: r.surface || '',
                             };
                         });
-                        if (this._nasr?.open) {
-                            try {
-                                const db = await this._nasr.open();
-                                const tx = db.transaction('airports', 'readwrite');
-                                tx.objectStore('airports').put(apt);
-                            } catch { /* non-critical */ }
+                        // putAirport: the map's area queries see it too
+                        if (this._nasr?.putAirport) {
+                            try { await this._nasr.putAirport(apt); } catch { /* non-critical */ }
                         }
                     }
                 }
