@@ -423,22 +423,20 @@ class RouteTable {
         const lon = situation.lon;
         const gs = situation.ground_speed || 0;
 
-        // Check waypoint passage — advance on proximity OR if waypoint is behind us
+        // Check waypoint passage — advance within 1 nm, or once past it abeam
         if (this._activeIndex >= 0 && this._activeIndex < this._waypoints.length) {
             const wp = this._waypoints[this._activeIndex];
             if (wp.lat && wp.lon && lat && lon) {
                 const dist = NasrDB.haversineNm(lat, lon, wp.lat, wp.lon);
-                const track = situation.true_course ?? situation.gps_track ?? null;
-                const bearingToWpt = this._ftpBearing(lat, lon, wp.lat, wp.lon);
-
-                // Passed if within 1nm, OR if waypoint is >90° behind our track
-                // (handles flying past without getting within 1nm of it).
-                // bearingToWpt != null guards the planning lib not being ready — without
-                // it, `null - track` coerces to 0 and can falsely satisfy the >90° test,
-                // advancing the active waypoint on bad data instead of just skipping this tick.
-                const isPast = dist < 1.0 ||
-                    (track !== null && gs > 30 && bearingToWpt != null &&
-                     Math.abs(((bearingToWpt - track + 540) % 360) - 180) > 90);
+                // Passed if within 1 nm, OR beyond the line through the waypoint
+                // square to the leg flown into it (a GPS's "passed abeam"). It
+                // used to be "waypoint > 90° off our track above 30 kt": on a
+                // takeoff roll away from the route, or any turn > 90°, that
+                // passed every waypoint in turn -- replayed on four recorded
+                // cross-countries, all en-route waypoints went early, up to 120 nm
+                // (KLKR runway 06, route south: all three within 3 s at 38-50 kt).
+                const prev = this._activeIndex > 0 ? this._waypoints[this._activeIndex - 1] : null;
+                const isPast = dist < 1.0 || this._pastAbeam(prev, wp, lat, lon);
 
                 if (isPast && this._activeIndex < this._waypoints.length - 1) {
                     this._advanceWaypoint();
@@ -1359,6 +1357,20 @@ class RouteTable {
      * when the lib hasn't finished loading; callers already treat a null
      * bearing/heading as "no data yet".
      */
+    /**
+     * Beyond the line through wp square to the leg from -> wp: the bearing
+     * from wp to us is within 90° of the leg's course. False while the
+     * planning lib (bearings) loads, without a leg, or for a zero-length leg.
+     */
+    _pastAbeam(from, wp, lat, lon) {
+        if (!from || !Number.isFinite(from.lat) || !Number.isFinite(from.lon)) return false;
+        if (NasrDB.haversineNm(from.lat, from.lon, wp.lat, wp.lon) < 0.05) return false;
+        const leg = this._ftpBearing(from.lat, from.lon, wp.lat, wp.lon);
+        const out = this._ftpBearing(wp.lat, wp.lon, lat, lon);
+        if (leg == null || out == null) return false;
+        return Math.abs(((out - leg + 540) % 360) - 180) < 90;
+    }
+
     _ftpBearing(lat1, lon1, lat2, lon2) {
         if (typeof FlyTabPlanning !== 'undefined' && FlyTabPlanning.bearing) {
             return FlyTabPlanning.bearing(lat1, lon1, lat2, lon2);
