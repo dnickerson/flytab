@@ -18,6 +18,7 @@ import android.os.Looper;
 import android.os.Process;
 import android.provider.Settings;
 import android.util.Log;
+import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewParent;
 import android.webkit.RenderProcessGoneDetail;
@@ -125,6 +126,17 @@ public class MainActivity extends BridgeActivity {
         // Allow HTTP requests from the HTTPS localhost origin (home server, NanoHTTPD on 9090)
         WebView wv = getBridge().getWebView();
         wv.getSettings().setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+
+        // No Android autofill in FlyTab's fields. The autofill service (LastPass
+        // on this tablet) opened its suggestion window on the first character
+        // typed in the route planner's search box; that window took the input
+        // focus, so the keyboard closed (logcat: "setInputFocusLw : Window{...
+        // Autofill UI}", Dana 2026-10-17). autocomplete="off" on the field does
+        // not stop it. Dana chose off everywhere, the SFTP password prompts too
+        // (they can save the password on the device).
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            wv.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
+        }
 
         // Inject Android nav bar height as CSS variable
         ViewCompat.setOnApplyWindowInsetsListener(wv, (v, insets) -> {
