@@ -810,7 +810,7 @@ This file is available for post-flight review in fly-debrief as a weather replay
 
 **CWA polygons** — Center Weather Advisories issued during the flight appear as orange polygons on the map when the SIGMETs/AIRMETs overlay is enabled.
 
-**MORE → Flight Upload** syncs entries to the cloud.
+**MORE → Flight Upload** syncs entries to the cloud. FlyTab's text fields don't use the tablet's password manager (LastPass) — its pop-up took the keyboard away while typing — so type the SFTP password once and tick **Save password on device (encrypted)**.
 
 ---
 
