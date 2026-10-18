@@ -14,13 +14,22 @@
  *
  * Events dispatched on window:
  *   activeroute:plan     { detail: { plan, index } }   — new plan loaded
- *   activeroute:advance  { detail: { index, waypoint } } — waypoint advanced
+ *   activeroute:advance  { detail: { index, waypoint, origin } } — waypoint advanced;
+ *                        origin set only by directTo()
+ *
+ * Direct-To (Dana, 2026-10-18): directTo(index, origin) makes a waypoint the
+ * next one with the leg starting at origin (the present position when the
+ * pilot pressed it) instead of the previous waypoint. The route table passes
+ * the waypoint on that leg and the map draws it as a fixed course. Any other
+ * change of the active waypoint (setPlan, advance, setIndex) ends it.
  */
 
 const ActiveRoute = (() => {
     let _plan = null;       // normalized plan object (has .waypoints[])
     let _index = 0;         // active waypoint index
     let _destIndex = -1;    // index of destination airport waypoint
+    let _origin = null;     // { lat, lon }: the active leg's start after a Direct-To, else null
+    let _target = null;     // the waypoint object that Direct-To is to (the origin holds only for it)
 
     // ── Internal helpers ────────────────────────────────────────────────────
 
@@ -65,6 +74,7 @@ const ActiveRoute = (() => {
      */
     function setPlan(plan) {
         _plan = plan;
+        _origin = null;
         // Index 0 is the departure airport — pilot starts there, so NEXT = WP[1].
         _index = plan?.waypoints?.length > 1 ? 1 : 0;
         _destIndex = findDestIndex(plan?.waypoints);
@@ -78,6 +88,7 @@ const ActiveRoute = (() => {
     function advance() {
         if (!_plan || _index >= _plan.waypoints.length - 1) return;
         _index++;
+        _origin = null;
         _emit('activeroute:advance', { index: _index, waypoint: _plan.waypoints[_index] });
     }
 
@@ -87,9 +98,26 @@ const ActiveRoute = (() => {
     function setIndex(i) {
         if (!_plan) return;
         const clamped = Math.max(0, Math.min(i, _plan.waypoints.length - 1));
-        if (clamped === _index) return;
+        if (clamped === _index && !_origin) return;
         _index = clamped;
+        _origin = null;
         _emit('activeroute:advance', { index: _index, waypoint: _plan.waypoints[_index] });
+    }
+
+    /**
+     * Direct-To: waypoint i becomes the next one, its leg starting at origin
+     * ({ lat, lon }, the present position). Also re-arms a Direct-To to the
+     * waypoint already active. False if there is no plan, no such waypoint or
+     * no usable origin.
+     */
+    function directTo(i, origin) {
+        if (!_plan || !Number.isInteger(i) || i < 0 || i >= _plan.waypoints.length) return false;
+        if (!origin || !Number.isFinite(origin.lat) || !Number.isFinite(origin.lon)) return false;
+        _index = i;
+        _origin = { lat: origin.lat, lon: origin.lon };
+        _target = _plan.waypoints[i];
+        _emit('activeroute:advance', { index: _index, waypoint: _plan.waypoints[_index], origin: { ..._origin } });
+        return true;
     }
 
     // ── Getters ──────────────────────────────────────────────────────────────
@@ -100,6 +128,14 @@ const ActiveRoute = (() => {
     function getWaypoints() { return _plan?.waypoints || []; }
     function getActiveWp()  { return _plan?.waypoints[_index] || null; }
     function getDestWp()    { return _destIndex >= 0 ? _plan?.waypoints[_destIndex] : null; }
+    /**
+     * The Direct-To leg's start, while the active waypoint is still the one it
+     * was to: an edit in place (deleting or moving waypoints ahead) can put
+     * another waypoint at this index, and the old start must not apply to it.
+     */
+    function getLegOrigin() {
+        return _origin && _plan?.waypoints?.[_index] === _target ? { ..._origin } : null;
+    }
 
-    return { setPlan, advance, setIndex, getPlan, getIndex, getDestIndex, getWaypoints, getActiveWp, getDestWp, markedDestIndex, findDestIndex };
+    return { setPlan, advance, setIndex, directTo, getLegOrigin, getPlan, getIndex, getDestIndex, getWaypoints, getActiveWp, getDestWp, markedDestIndex, findDestIndex };
 })();

@@ -95,6 +95,7 @@ class InstrumentStrip {
         // Route leg updates from RouteTable — HDG, destination ETE/fuel deltas
         this._onLegUpdate = (e) => {
             this._legData = e.detail;
+            this._legDataAt = Date.now();
             this._updateLegFields();
         };
         window.addEventListener('activeroute:legupdate', this._onLegUpdate);
@@ -403,6 +404,11 @@ class InstrumentStrip {
             }
         }
 
+        // While the route table's leg updates arrive (1 Hz), they own ETE: this
+        // ran on every situation and wrote '—' at 10 kt or less over the leg
+        // update's planned ETE, so ETE flashed once a second on the ground
+        // (Dana, 2026-10-18; Stratux GS 0.2-1.9 kt standing still).
+        if (this._legData && Date.now() - (this._legDataAt || 0) < 5000) return;
         this._set('dist', totalDist.toFixed(0));
         if (gs > 10 && totalDist > 0) {
             this._set('ete', InstrumentStrip._formatEte(totalDist / gs * 60));

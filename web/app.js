@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v11.75';
+const FLYTAB_VERSION = 'v11.79';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 // Kept in memory and saved at most every FLUSH_MS (errors at once). Every log()
@@ -894,6 +894,12 @@ class FlyTabApp {
             this.stratuxClient.addEventListener('stratux:situation', (e) => this._scheduleRouteLive(e.detail));
         }
 
+        // Direct-To (map D→ button; Dana 2026-10-18)
+        if (typeof DirectToPanel !== 'undefined') {
+            this.directToPanel = new DirectToPanel(this, nasrDb);
+            this.cockpitMap.onDirectToTap = () => this.directToPanel.open();
+        }
+
         // FIS-B weather client (METARs, TAFs, PIREPs, SIGMETs, winds aloft)
         if (typeof FisbClient !== 'undefined') {
             this.fisbClient = new FisbClient(this.stratuxClient, nasrDb);
@@ -1357,6 +1363,37 @@ class FlyTabApp {
             return this.openRoutePlannerPreview(plan);
         }
         return this._openLegacyPlanner(plan);
+    }
+
+    /**
+     * Direct-To from the present position (D→ panel). target: a route
+     * waypoint, or any point ({ icao, name, type?, lat, lon }). On a route:
+     * routeTable.directTo (a point off the route is inserted as the next
+     * waypoint). No route: a two-point route from a present-position point
+     * ("PPOS") to the target. Returns { ok, msg }.
+     */
+    async directTo(target) {
+        const pos = this.cockpitMap?.ownPosition?.();
+        if (!pos) return { ok: false, msg: 'No GPS position — direct-to needs a fix' };
+        const rt = this.routeTable;
+        if (!rt) return { ok: false, msg: 'Route table not available' };
+        if ((rt._waypoints?.length || 0) >= 2) {
+            return rt.directTo(target, pos) ? { ok: true } : { ok: false, msg: 'Direct-To failed — try again' };
+        }
+        if (!Number.isFinite(target?.lat) || !Number.isFinite(target?.lon)) return { ok: false, msg: 'That point has no position' };
+        const id = target.icao || target.name || 'WPT';
+        await this.applyRouteEdit({
+            name: `Direct ${id}`,
+            waypoints: [
+                { icao: 'PPOS', name: 'Present position', lat: pos.lat, lon: pos.lon },
+                { icao: id, name: target.name || id, lat: target.lat, lon: target.lon, ...(target.type ? { type: target.type } : {}) },
+            ],
+        });
+        // Another apply was running: ours is queued behind it (latest wins).
+        for (let t = 0; this._applyingPlan && t < 100; t++) await new Promise((r) => setTimeout(r, 50));
+        const wps = rt._waypoints || [];
+        if (wps.length < 2 || wps[0].icao !== 'PPOS') return { ok: false, msg: 'Direct-To failed — try again' };
+        return rt.directTo(wps[1], pos) ? { ok: true } : { ok: false, msg: 'Direct-To failed — try again' };
     }
 
     /** Direct-To from the airport popup. The new planner's open is async: set it after. */
