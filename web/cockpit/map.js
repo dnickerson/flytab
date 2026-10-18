@@ -242,6 +242,8 @@ class CockpitMap {
         // Zoom level in header
         this._zoomBadgeHandler = () => this._updateZoomBadge();
         this.map.on('zoomend', this._zoomBadgeHandler);
+
+        this._wirePilotMoveHold(this.map, mapDiv);
         this._updateZoomBadge();
 
         // Resize map when virtual keyboard opens/closes (Android)
@@ -1170,14 +1172,23 @@ class CockpitMap {
 
         const prevIdx = this._activeWpIdx;
 
-        // Advance active waypoint if we're within ~1nm of it
-        while (this._activeWpIdx < wps.length - 1) {
-            const wp = wps[this._activeWpIdx];
-            const dist = this._distNm(pos[0], pos[1], wp.lat, wp.lon);
-            if (dist < 1.0) {
-                this._activeWpIdx++;
-            } else {
-                break;
+        // The route table's active waypoint (ActiveRoute): it also advances once
+        // a waypoint is behind (passed abeam) and when the pilot skips ahead, and
+        // starts at the first en-route waypoint. The map advanced only within
+        // 1 nm and started at the departure, so the magenta line pointed back
+        // (PR B review, 2026-10-17). Without a route-table plan: the 1 nm rule.
+        const fromRoute = this._activeIdxFromRoute(wps);
+        if (fromRoute != null) {
+            this._activeWpIdx = fromRoute;
+        } else {
+            while (this._activeWpIdx < wps.length - 1) {
+                const wp = wps[this._activeWpIdx];
+                const dist = this._distNm(pos[0], pos[1], wp.lat, wp.lon);
+                if (dist < 1.0) {
+                    this._activeWpIdx++;
+                } else {
+                    break;
+                }
             }
         }
 
@@ -1198,6 +1209,26 @@ class CockpitMap {
                 color: '#ff44ff', weight: 4, opacity: 1,
             }).addTo(this.map);
         }
+    }
+
+    /**
+     * ActiveRoute's active waypoint as an index into the map's list, or null
+     * (no plan, or it isn't on this route). Same list from _applyPlan, so the
+     * index matches when the waypoint there is at the same position; otherwise
+     * the position match nearest that index (a fix flown twice stays right).
+     */
+    _activeIdxFromRoute(wps) {
+        if (typeof ActiveRoute === 'undefined' || !ActiveRoute.getPlan?.()) return null;
+        const a = ActiveRoute.getActiveWp?.();
+        if (!a || !Number.isFinite(a.lat) || !Number.isFinite(a.lon)) return null;
+        const i = ActiveRoute.getIndex();
+        const same = (w) => w && Math.abs(w.lat - a.lat) < 1e-6 && Math.abs(w.lon - a.lon) < 1e-6;
+        if (same(wps[i])) return i;
+        let best = null;
+        for (let j = 0; j < wps.length; j++) {
+            if (same(wps[j]) && (best === null || Math.abs(j - i) < Math.abs(best - i))) best = j;
+        }
+        return best;
     }
 
     _restyleLegLines() {
@@ -1272,6 +1303,21 @@ class CockpitMap {
         if (ll.length < 2) return;
         this._holdFollow();
         this.map.fitBounds(ll, { padding: [40, 40], maxZoom: 11, animate: false });
+    }
+
+    /**
+     * The pilot's own drag or pinch holds following own-ship until the auto-pan
+     * button (then ✋) is tapped: with auto-pan on, follow re-centred within
+     * 0.5 s and fought the drag (PR B review; Dana 2026-10-17: "Tap ✋ to
+     * resume"). Leaflet fires dragstart only for a real drag, never for
+     * FlyTab's own panTo or a tap; a pinch is two fingers down (capture: the
+     * markers' handlers stop the event in the bubble phase, see CLAUDE.md).
+     */
+    _wirePilotMoveHold(map, el) {
+        map.on('dragstart', () => this._holdFollow());
+        el.addEventListener('touchstart', (e) => {
+            if (e.touches && e.touches.length >= 2) this._holdFollow();
+        }, { capture: true, passive: true });
     }
 
     /** Stop following own-ship until released. Auto-pan off: nothing to hold (the button would need two taps). */

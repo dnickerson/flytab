@@ -55,6 +55,7 @@ FlyTab connects automatically on app launch. The status bar at the top shows con
 - **Instrument strip** (right edge) — ground speed and altitude at a glance.
 - **Radar source badge** (bottom-left, when radar is active) — shows active source (FIS-B or INET) with a `⇄` tap target to switch.
 - **Corner buttons** (bottom-right of map): **⊙** auto-pan toggle, **→** direct-to, **⋮** map menu.
+- **Dragging or pinching the map with auto-pan on** pauses following your aircraft, so the map stays where you put it: the auto-pan button shows ✋ with an amber outline. Tap it once to follow again.
 
 **Instrument strip** — always visible below the map. Shows the configured numeric fields (default: ground speed, altitude, nearest altimeter setting, course, fuel, distance to destination, ETE). Tap **FUEL** to open the fuel overlay; tap **DEST** or **ETE** to open the power tradeoff panel. The field list itself is set in `cockpit-config.json`, not from the strip.
 
@@ -119,7 +120,7 @@ Tap **DISMISS** to hide it for the current problem; it returns only if a new pro
 
 **Traffic** — ADS-B targets shown as arrows with callsign and relative altitude (+/−). Tap a target for full details: callsign, altitude, ground speed, squawk. Traffic disappears automatically if stale.
 
-**Route line** — When a route is loaded, the magenta line connects waypoints. Your current leg is highlighted. The nav strip below shows distance and ETE to the next waypoint and destination.
+**Route line** — When a route is loaded, the magenta line connects waypoints. Your current leg is highlighted: a solid magenta line from your aircraft to the next waypoint — the same next waypoint as the route table and instrument strip. It moves on when you pass within 1 nm of a waypoint or once the waypoint is behind you (passed abeam), and when you skip ahead in the route table; after takeoff it points to the first en-route waypoint, not back at the departure airport. The nav strip below shows distance and ETE to the next waypoint and destination.
 
 **Radar loop** — When radar is enabled, a slider appears (bottom of map area) to scrub through up to 55 minutes of NEXRAD history.
 
