@@ -804,6 +804,9 @@ class RouteTable {
                 };
                 if (wp.type) out.type = wp.type;
                 if (wp.isDest) out.isDest = true;   // destination ahead of any missed-approach fixes
+                // The pilot's "not a fuel stop" (or Direct-To's insert) must reach the
+                // app's fuel-stop alert and the saved plan (review 2026-10-18).
+                if (typeof wp.is_fuel_stop === 'boolean') out.is_fuel_stop = wp.is_fuel_stop;
                 // approach/arrival fix: REV drops it (2026-10-15 review, M3). Its kind
                 // ('APPROACH' / 'STAR') kept: an approach replaces an approach, not the STAR.
                 if (wp.proc) out.proc = wp.proc;
@@ -1351,13 +1354,6 @@ class RouteTable {
         return null;
     }
 
-    /**
-     * Guarded wrapper for FlyTabPlanning.bearing() — the planning lib loads
-     * asynchronously (11 dynamic imports in shared/planning/index.js) and
-     * window.FlyTabPlanning starts as {}. Returns null instead of throwing
-     * when the lib hasn't finished loading; callers already treat a null
-     * bearing/heading as "no data yet".
-     */
     /** The Direct-To leg's start (ActiveRoute), if it is for this route's active waypoint. */
     _directOrigin() {
         if (typeof ActiveRoute === 'undefined' || !ActiveRoute.getLegOrigin) return null;
@@ -1376,7 +1372,8 @@ class RouteTable {
         if (typeof ActiveRoute === 'undefined' || !target || !pos) return false;
         if (this._waypoints.length < 2) return false;                    // no route: app.directTo builds one
         let idx = this._waypoints.indexOf(target);           // one of this route's waypoints
-        if (idx < 0) {
+        const inserted = idx < 0;
+        if (inserted) {
             if (!Number.isFinite(target.lat) || !Number.isFinite(target.lon)) return false;
             idx = Math.max(1, Math.min(this._activeIndex, this._waypoints.length - 1));
             this._pushUndo();
@@ -1387,8 +1384,9 @@ class RouteTable {
             this._reindex();
             this._onEdited();
         }
-        // The plan ActiveRoute holds must be this list (undo or LOAD replace the array).
-        if (ActiveRoute.getWaypoints() !== this._waypoints) ActiveRoute.setPlan({ waypoints: this._waypoints });
+        // The plan ActiveRoute holds must be this list (undo or LOAD replace the
+        // array), and after an insert its destination index is one short.
+        if (inserted || ActiveRoute.getWaypoints() !== this._waypoints) ActiveRoute.setPlan({ waypoints: this._waypoints });
         if (!ActiveRoute.directTo(idx, pos)) return false;
         this._waypoints.forEach((wp, i) => { wp.passed = i < idx; wp.active = i === idx; });
         this._activeIndex = idx;
@@ -1410,6 +1408,13 @@ class RouteTable {
         return Math.abs(((out - leg + 540) % 360) - 180) < 90;
     }
 
+    /**
+     * Guarded wrapper for FlyTabPlanning.bearing() — the planning lib loads
+     * asynchronously (11 dynamic imports in shared/planning/index.js) and
+     * window.FlyTabPlanning starts as {}. Returns null instead of throwing
+     * when the lib hasn't finished loading; callers already treat a null
+     * bearing/heading as "no data yet".
+     */
     _ftpBearing(lat1, lon1, lat2, lon2) {
         if (typeof FlyTabPlanning !== 'undefined' && FlyTabPlanning.bearing) {
             return FlyTabPlanning.bearing(lat1, lon1, lat2, lon2);

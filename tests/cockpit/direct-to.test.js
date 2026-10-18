@@ -173,8 +173,9 @@ describe('the map draws the Direct-To leg as a fixed course', () => {
 
 describe('the D→ panel', () => {
     const nasr = {
-        getAirport: async (id) => ({ KCDN: { icao: 'KCDN', name: 'Woodward Fld', lat: 34.28, lon: -80.56 } })[id] || null,
-        getNavaid: async (id) => (id === 'CAE' ? { id: 'CAE', name: 'Columbia', lat: 33.86, lon: -81.05 } : null),
+        getAirport: async (id) => ({ KCDN: { icao: 'KCDN', name: 'Woodward Fld', lat: 34.28, lon: -80.56 },
+                                     KCAE: { icao: 'KCAE', name: 'Columbia Metro', lat: 33.94, lon: -81.12 } })[id] || null,
+        getNavaid: async (id) => (id === 'CAE' ? { id: 'CAE', name: 'Columbia', type: 'VORTAC', lat: 33.86, lon: -81.05 } : null),
         getFix: async (id) => (id === 'GREAT' ? { id: 'GREAT', lat: 34.1, lon: -80.9 } : null),
     };
     const app = (rt, pos = { lat: 34.6, lon: -80.85 }) => ({ routeTable: rt, cockpitMap: { ownPosition: () => pos }, directTo: vi.fn(async () => ({ ok: true })) });
@@ -196,10 +197,10 @@ describe('the D→ panel', () => {
     });
 
     it('an identifier: airport (also without K), navaid or fix; one on the route is that waypoint', async () => {
-        expect(await DirectToPanel.lookup(nasr, 'CDN')).toMatchObject({ icao: 'KCDN', type: 'APT', lat: 34.28 });
-        expect(await DirectToPanel.lookup(nasr, 'CAE')).toMatchObject({ icao: 'CAE', lat: 33.86 });
-        expect((await DirectToPanel.lookup(nasr, 'GREAT')).type).toBeUndefined();
-        expect(await DirectToPanel.lookup(nasr, 'ZZZZZ')).toBeNull();
+        expect(await DirectToPanel.lookupAll(nasr, 'CDN')).toEqual([expect.objectContaining({ icao: 'KCDN', type: 'APT', lat: 34.28, kind: 'airport' })]);
+        expect(await DirectToPanel.lookupAll(nasr, 'GREAT')).toEqual([expect.objectContaining({ icao: 'GREAT', kind: 'fix' })]);
+        expect((await DirectToPanel.lookupAll(nasr, 'GREAT'))[0].type).toBeUndefined();
+        expect(await DirectToPanel.lookupAll(nasr, 'ZZZZZ')).toEqual([]);
         const rt = mk(); const a = app(rt); const p = new DirectToPanel(a, nasr); p.open();
         document.querySelector('.dto-input').value = 'w2';
         document.querySelector('.dto-go').click();
@@ -255,5 +256,101 @@ describe('app.directTo', () => {
         expect(plan.waypoints[0]).toMatchObject({ lat: 34.6, lon: -80.85 });
         expect(ActiveRoute.getIndex()).toBe(1);
         expect(ActiveRoute.getLegOrigin()).toEqual({ lat: 34.6, lon: -80.85 });
+    });
+});
+
+
+describe('pre-merge review fixes (2026-10-18)', () => {
+    const nasr = {
+        getAirport: async (id) => ({ KCDN: { icao: 'KCDN', name: 'Woodward Fld', lat: 34.28, lon: -80.56 },
+                                     KCAE: { icao: 'KCAE', name: 'Columbia Metro', lat: 33.94, lon: -81.12 } })[id] || null,
+        getNavaid: async (id) => (id === 'CAE' ? { id: 'CAE', name: 'Columbia', type: 'VORTAC', lat: 33.86, lon: -81.05 } : null),
+        getFix: async () => null,
+    };
+    const app = (rt) => ({ routeTable: rt, cockpitMap: { ownPosition: () => ({ lat: 34.6, lon: -80.85 }) }, directTo: vi.fn(async () => ({ ok: true })) });
+
+    it('1. the click that follows the D→ tap does not close the panel; a later backdrop tap does', () => {
+        const p = new DirectToPanel(app(mk()), nasr); p.open();
+        document.querySelector('.dto-overlay').click();                 // the opening tap's synthetic click
+        expect(p.isOpen()).toBe(true);
+        p._openedAt -= 1000;
+        document.querySelector('.dto-overlay').click();
+        expect(p.isOpen()).toBe(false);
+    });
+
+    it('2. an inserted airport keeps "not a fuel stop" in the plan the app gets (no fuel-stop overlay in flight)', () => {
+        const rt = mk();
+        rt.directTo(W('KCDN', dest(DEP, 150, 15), 'APT'), { lat: 34.6, lon: -80.8 });
+        const plan = rt._onRouteChanged.mock.calls.at(-1)[0];
+        const k = plan.waypoints.findIndex((w) => w.icao === 'KCDN');
+        expect(plan.waypoints[k].is_fuel_stop).toBe(false);
+        const isFuelStop = new Function(read('web/cockpit/route-table.js') + '\nreturn isFuelStop;')();
+        expect(isFuelStop(plan.waypoints[k], k, plan.waypoints)).toBe(false);
+    });
+
+    it('3. CAE is both a VORTAC and KCAE: the panel asks; nothing happens until one is picked', async () => {
+        expect((await DirectToPanel.lookupAll(nasr, 'CAE')).map((f) => `${f.icao} ${f.kind}`)).toEqual(['KCAE airport', 'CAE navaid (VORTAC)']);
+        const a = app(mk()); const p = new DirectToPanel(a, nasr); p.open();
+        document.querySelector('.dto-input').value = 'CAE';
+        document.querySelector('.dto-go').click();
+        await vi.waitFor(() => expect(document.querySelector('.dto-msg').textContent).toBe('More than one match — choose'));
+        expect(a.directTo).not.toHaveBeenCalled();
+        expect([...document.querySelectorAll('.dto-row-name')].map((e) => e.textContent)).toEqual(['Columbia Metro — airport', 'Columbia — navaid (VORTAC)']);
+        document.querySelectorAll('.dto-row')[1].click();
+        await vi.waitFor(() => expect(a.directTo).toHaveBeenCalledWith(expect.objectContaining({ icao: 'CAE', lat: 33.86 })));
+    });
+
+    it('4. after an insert the destination index still points at the destination', () => {
+        const rt = mk();
+        rt.directTo(W('KCDN', dest(DEP, 150, 15), 'APT'), { lat: 34.6, lon: -80.8 });
+        expect(ActiveRoute.getDestIndex()).toBe(4);
+        expect(ActiveRoute.getDestWp().icao).toBe('KDST');
+        expect(ActiveRoute.getIndex()).toBe(1);
+        expect(ActiveRoute.getLegOrigin()).toEqual({ lat: 34.6, lon: -80.8 });
+    });
+
+    it('5. deleting the inserted waypoint: the old Direct-To start is not used for the next one', () => {
+        const rt = mk();
+        rt.directTo(W('KCDN', dest(DEP, 150, 15), 'APT'), { lat: 34.6, lon: -80.8 });
+        rt._reindex = () => {}; rt._removeWaypoint(1);
+        expect(rt._waypoints[1].icao).toBe('W1');
+        expect(ActiveRoute.getLegOrigin()).toBeNull();
+        expect(rt._directOrigin()).toBeNull();
+    });
+
+    it('6. GO twice (or Enter then GO): one Direct-To', async () => {
+        const rt = mk(); const a = app(rt);
+        a.directTo = vi.fn(() => new Promise((res) => setTimeout(() => res({ ok: true }), 20)));
+        const p = new DirectToPanel(a, nasr); p.open();
+        document.querySelector('.dto-input').value = 'CDN';
+        document.querySelector('.dto-go').click(); document.querySelector('.dto-go').click();
+        document.querySelector('.dto-input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+        await vi.waitFor(() => expect(p.isOpen()).toBe(false));
+        await new Promise((r2) => setTimeout(r2, 40));
+        expect(a.directTo).toHaveBeenCalledTimes(1);
+    });
+
+    it('7. typing CDN when KCDN is on the route: that waypoint, not a second KCDN', async () => {
+        const wps = SOUTH(); wps.splice(2, 0, W('KCDN', [34.28, -80.56], 'APT'));
+        const rt = mk(wps); const a = app(rt); const p = new DirectToPanel(a, nasr); p.open();
+        document.querySelector('.dto-input').value = 'cdn';
+        document.querySelector('.dto-go').click();
+        await vi.waitFor(() => expect(a.directTo).toHaveBeenCalledWith(rt._waypoints[2]));
+    });
+
+    it('9. no route while another plan is being applied: waits for it, then flies direct', async () => {
+        const rt = Object.create(RouteTable.prototype); rt._waypoints = []; tables.push(rt);
+        const a = Object.create(FlyTabApp.prototype); a.routeTable = rt; a.cockpitMap = { ownPosition: () => ({ lat: 34.6, lon: -80.85 }) };
+        a.applyRouteEdit = vi.fn(async (plan) => {
+            a._applyingPlan = true;                                      // queued behind a running apply
+            setTimeout(() => {
+                const t = mk(plan.waypoints.map((w) => ({ ...w })));
+                Object.assign(rt, t, { _waypoints: t._waypoints });
+                rt._activeIndex = 1; a._applyingPlan = false;
+            }, 120);
+        });
+        const r = await a.directTo({ icao: 'KCDN', name: 'Woodward Fld', type: 'APT', lat: 34.28, lon: -80.56 });
+        expect(r.ok).toBe(true);
+        expect(rt._waypoints.map((w) => w.icao)).toEqual(['PPOS', 'KCDN']);
     });
 });

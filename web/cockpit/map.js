@@ -1098,17 +1098,18 @@ class CockpitMap {
     /** True while own-ship is shown dimmed at its last fix after the feed stopped. */
     get ownshipHeld() { return this._held; }
 
-    /**
-     * For PositionHealthMonitor: 'live' (drawn at full strength), 'held' (dimmed
-     * at the last fix, holdRemainingMs until it hides), 'hidden' (had a fix,
-     * now off the map) or 'none' (no fix yet this session).
-     */
     /** Present position for a Direct-To: the live 3D fix only (not held or hidden), else null. */
     ownPosition() {
         if (!this._ownshipVisible || this._held || !this.ownshipMarker) return null;
         const ll = this.ownshipMarker.getLatLng?.();
         return ll && Number.isFinite(ll.lat) && Number.isFinite(ll.lng) ? { lat: ll.lat, lon: ll.lng } : null;
     }
+
+    /**
+     * For PositionHealthMonitor: 'live' (drawn at full strength), 'held' (dimmed
+     * at the last fix, holdRemainingMs until it hides), 'hidden' (had a fix,
+     * now off the map) or 'none' (no fix yet this session).
+     */
 
     get ownshipState() {
         const holdMs = (typeof GpsFix !== 'undefined' && GpsFix.HOLD_MS) || 0;

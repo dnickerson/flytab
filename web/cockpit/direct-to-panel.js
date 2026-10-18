@@ -14,6 +14,7 @@ class DirectToPanel {
         this._app = app;
         this._nasr = nasrDb;
         this._el = null;
+        this._busy = false;
     }
 
     isOpen() { return !!this._el; }
@@ -38,11 +39,20 @@ class DirectToPanel {
             </div>`;
         document.body.appendChild(el);
         this._el = el;
+        this._openedAt = Date.now();
         const input = el.querySelector('.dto-input');
         wireTap(el.querySelector('.dto-close'), () => this.close());
         wireTap(el.querySelector('.dto-go'), () => this._goTyped());
         input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); this._goTyped(); } });
-        el.addEventListener('click', (e) => { if (e.target === el) this.close(); });
+        // Backdrop tap closes -- but not the synthetic click that follows the
+        // D→ tap itself (D→ is outside the card, so it lands on the backdrop):
+        // the panel closed as it opened (review 2026-10-18).
+        el.addEventListener('click', (e) => {
+            if (e.target !== el) return;
+            if (Date.now() - this._openedAt < 500) return;
+            if (typeof _wireTapLastTouchAt !== 'undefined' && Date.now() - _wireTapLastTouchAt < 350) return;
+            this.close();
+        });
         this._renderList();
         if (!this._position()) this._say('No GPS position — direct-to needs a fix');
     }
@@ -99,40 +109,85 @@ class DirectToPanel {
         }
     }
 
+    /** The route waypoint for these ids (first one still ahead), else null. */
+    _onRoute(ids) {
+        const want = new Set(ids.filter(Boolean).map((x) => String(x).toUpperCase()));
+        const rows = this._ordered();
+        const is = (r) => [r.wp.icao, r.wp.id].some((x) => x && want.has(String(x).toUpperCase()));
+        return (rows.find((r) => !r.passed && is(r)) || rows.find(is))?.wp || null;
+    }
+
     async _goTyped() {
+        if (this._busy) return;
         const raw = this._el?.querySelector('.dto-input')?.value || '';
         const id = raw.trim().toUpperCase();
         if (!id) { this._say('Type an identifier'); return; }
-        // On the route already: that waypoint (the first one still ahead), not a copy.
-        const rows = this._ordered();
-        const hit = rows.find((r) => !r.passed && [r.wp.icao, r.wp.id].includes(id))
-                 || rows.find((r) => [r.wp.icao, r.wp.id].includes(id));
-        if (hit) { await this._go(hit.wp); return; }
-        let found = null;
-        try { found = await DirectToPanel.lookup(this._nasr, id); } catch { found = null; }
-        if (!found) { this._say(`${id} not found in the airport, navaid or fix data`); return; }
-        await this._go(found);
+        // On the route already (also KCDN for CDN): that waypoint, not a copy.
+        const onRoute = this._onRoute([id, /^[A-Z0-9]{3}$/.test(id) ? 'K' + id : null]);
+        if (onRoute) { await this._go(onRoute); return; }
+        let found = [];
+        try { found = await DirectToPanel.lookupAll(this._nasr, id); } catch { found = []; }
+        if (!this._el) return;
+        if (!found.length) { this._say(`${id} not found in the airport, navaid or fix data`); return; }
+        if (found.length === 1) { await this._go(found[0]); return; }
+        this._showChoices(found);       // CAE: the VOR or KCAE, 6 nm apart -- the pilot picks
+    }
+
+    _showChoices(found) {
+        const list = this._el?.querySelector('.dto-list');
+        if (!list) return;
+        this._say('More than one match — choose');
+        list.textContent = '';
+        const pos = this._position();
+        for (const f of found) {
+            const b = document.createElement('button');
+            b.className = 'dto-row';
+            const id = document.createElement('span'); id.className = 'dto-row-id'; id.textContent = f.icao;
+            const name = document.createElement('span'); name.className = 'dto-row-name'; name.textContent = `${f.name} — ${f.kind}`;
+            const dist = document.createElement('span'); dist.className = 'dto-row-dist';
+            dist.textContent = pos ? `${Math.round(NasrDB.haversineNm(pos.lat, pos.lon, f.lat, f.lon))} nm` : '';
+            b.append(id, name, dist);
+            wireTap(b, () => this._go(f));
+            list.appendChild(b);
+        }
     }
 
     async _go(target) {
+        if (this._busy || !this._el) return;          // one Direct-To per panel (GO twice, Enter + GO)
         if (!this._position()) { this._say('No GPS position — direct-to needs a fix'); return; }
-        const r = await this._app.directTo(target);
-        if (r?.ok) this.close(); else this._say(r?.msg || 'Direct-To failed');
+        this._busy = true;
+        try {
+            // A looked-up point already on the route: that waypoint, not a copy.
+            const t = this._app.routeTable?._waypoints?.includes(target) ? target : (this._onRoute([target.icao]) || target);
+            const r = await this._app.directTo(t);
+            if (r?.ok) this.close(); else this._say(r?.msg || 'Direct-To failed');
+        } finally {
+            this._busy = false;
+        }
     }
 
-    /** An airport (also K + 3 letters), navaid or fix from NASR: { icao, name, type?, lat, lon } or null. */
-    static async lookup(nasr, id) {
-        if (!nasr || !id) return null;
-        const pt = (r, icao, type) => (r && Number.isFinite(r.lat) && Number.isFinite(r.lon)
-            ? { icao, name: r.name || icao, lat: r.lat, lon: r.lon, ...(type ? { type } : {}) } : null);
-        let apt = await nasr.getAirport(id);
-        if (!apt && /^[A-Z0-9]{3}$/.test(id)) apt = await nasr.getAirport('K' + id);
-        if (apt) return pt(apt, apt.icao || id, 'APT');
+    /**
+     * Every NASR point with this identifier: the airport as typed, the airport
+     * with K added (3 characters), the navaid and the fix. CAE is both the
+     * Columbia VOR and KCAE, 6 nm apart, so the panel asks rather than guess
+     * (review 2026-10-18). Each: { icao, name, type?, kind, lat, lon }.
+     */
+    static async lookupAll(nasr, id) {
+        if (!nasr || !id) return [];
+        const out = [];
+        const add = (r, icao, kind, type) => {
+            if (!r || !Number.isFinite(r.lat) || !Number.isFinite(r.lon)) return;
+            if (out.some((o) => o.icao === icao && o.kind === kind)) return;
+            out.push({ icao, name: r.name || icao, kind, lat: r.lat, lon: r.lon, ...(type ? { type } : {}) });
+        };
+        const apt = await nasr.getAirport(id);
+        add(apt, apt?.icao || id, 'airport', 'APT');
+        if (/^[A-Z0-9]{3}$/.test(id)) { const k = await nasr.getAirport('K' + id); add(k, k?.icao || 'K' + id, 'airport', 'APT'); }
         const nav = await nasr.getNavaid?.(id);
-        if (nav) return pt(nav, nav.id || id);
+        add(nav, nav?.id || id, nav?.type ? `navaid (${nav.type})` : 'navaid');
         const fix = await nasr.getFix?.(id);
-        if (fix) return pt(fix, fix.id || id);
-        return null;
+        add(fix, fix?.id || id, 'fix');
+        return out;
     }
 }
 

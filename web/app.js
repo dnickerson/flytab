@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v11.76';
+const FLYTAB_VERSION = 'v11.77';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 // Kept in memory and saved at most every FLUSH_MS (errors at once). Every log()
@@ -1365,7 +1365,6 @@ class FlyTabApp {
         return this._openLegacyPlanner(plan);
     }
 
-    /** Direct-To from the airport popup. The new planner's open is async: set it after. */
     /**
      * Direct-To from the present position (D→ panel). target: a route
      * waypoint, or any point ({ icao, name, type?, lat, lon }). On a route:
@@ -1390,11 +1389,14 @@ class FlyTabApp {
                 { icao: id, name: target.name || id, lat: target.lat, lon: target.lon, ...(target.type ? { type: target.type } : {}) },
             ],
         });
+        // Another apply was running: ours is queued behind it (latest wins).
+        for (let t = 0; this._applyingPlan && t < 100; t++) await new Promise((r) => setTimeout(r, 50));
         const wps = rt._waypoints || [];
-        if (wps.length < 2) return { ok: false, msg: 'Direct-To failed — try again' };
+        if (wps.length < 2 || wps[0].icao !== 'PPOS') return { ok: false, msg: 'Direct-To failed — try again' };
         return rt.directTo(wps[1], pos) ? { ok: true } : { ok: false, msg: 'Direct-To failed — try again' };
     }
 
+    /** Direct-To from the airport popup. The new planner's open is async: set it after. */
     async _directTo(apt) {
         const p = this.activeRoutePlanner();
         const opening = this.openRoutePlanner();

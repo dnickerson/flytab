@@ -12352,4 +12352,4 @@ body.route-editing-mode .route-table-sheet {
 .dto-row-name { font-family: var(--font-ui); font-size: var(--text-sm); font-weight: 700; color: var(--text-secondary);
                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dto-row-dist { font-family: var(--font-instrument); font-size: var(--text-sm); font-weight: 900; color: var(--text-secondary); }
-.dto-row.is-passed .dto-row-id, .dto-row.is-passed .dto-row-name { color: var(--text-label); }
+.dto-row.is-passed { background: var(--bg-surface); }   /* text stays at full contrast; "passed" says it */

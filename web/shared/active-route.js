@@ -29,6 +29,7 @@ const ActiveRoute = (() => {
     let _index = 0;         // active waypoint index
     let _destIndex = -1;    // index of destination airport waypoint
     let _origin = null;     // { lat, lon }: the active leg's start after a Direct-To, else null
+    let _target = null;     // the waypoint object that Direct-To is to (the origin holds only for it)
 
     // ── Internal helpers ────────────────────────────────────────────────────
 
@@ -114,6 +115,7 @@ const ActiveRoute = (() => {
         if (!origin || !Number.isFinite(origin.lat) || !Number.isFinite(origin.lon)) return false;
         _index = i;
         _origin = { lat: origin.lat, lon: origin.lon };
+        _target = _plan.waypoints[i];
         _emit('activeroute:advance', { index: _index, waypoint: _plan.waypoints[_index], origin: { ..._origin } });
         return true;
     }
@@ -126,7 +128,14 @@ const ActiveRoute = (() => {
     function getWaypoints() { return _plan?.waypoints || []; }
     function getActiveWp()  { return _plan?.waypoints[_index] || null; }
     function getDestWp()    { return _destIndex >= 0 ? _plan?.waypoints[_destIndex] : null; }
-    function getLegOrigin() { return _origin ? { ..._origin } : null; }
+    /**
+     * The Direct-To leg's start, while the active waypoint is still the one it
+     * was to: an edit in place (deleting or moving waypoints ahead) can put
+     * another waypoint at this index, and the old start must not apply to it.
+     */
+    function getLegOrigin() {
+        return _origin && _plan?.waypoints?.[_index] === _target ? { ..._origin } : null;
+    }
 
     return { setPlan, advance, setIndex, directTo, getLegOrigin, getPlan, getIndex, getDestIndex, getWaypoints, getActiveWp, getDestWp, markedDestIndex, findDestIndex };
 })();
