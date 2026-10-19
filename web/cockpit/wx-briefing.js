@@ -46,6 +46,9 @@ class WxBriefing {
         this._corridorMi    = [10, 25, 50].includes(savedCorridor) ? savedCorridor : 25;
         this._notamFetchError = null;
         this._enrouteNotamFetchError = null;
+        this._notamPartial = null;          // stations the NOTAM proxy could not fetch (their NOTAMs missing)
+        this._enrouteNotamPartial = null;
+        this._notamCachedAt = null;         // when the cached briefing being shown was downloaded
         this._airmetFetchError = null;
         this._lightsExpanded = false;
         this._notamSearch = '';
@@ -464,9 +467,10 @@ class WxBriefing {
         const critical = all.filter(n => this._notamTier(n) === 0);
         const fetchErr = !loading && this._notamFetchError && !this._notams?.length;
         const anyErr = fetchErr || (!loading && (this._notamFetchError || this._enrouteNotamFetchError));
+        const missing = !loading && (anyErr || this._notamPartial || this._enrouteNotamPartial);
 
         const badgeClass = loading ? null
-            : (fetchErr ? 'warn' : critical.length ? 'warn' : all.length ? 'info' : 'ok');
+            : (fetchErr || missing ? 'warn' : critical.length ? 'warn' : all.length ? 'info' : 'ok');
         const badgeText = loading ? 'Fetching…'
             : (anyErr && !all.length) ? 'UNAVAIL'
             : critical.length ? `${critical.length} CRITICAL`
@@ -486,9 +490,18 @@ class WxBriefing {
             sec.appendChild(body);
             return;
         }
+        const warn = (t) => body.insertAdjacentHTML('beforeend', `<div class="wx-section-error">⚠ ${this._escHtml(t)} · tap ↻ to retry</div>`);
+        const z = (ms) => { const d = new Date(ms), p = (n) => String(n).padStart(2, '0'); return `${p(d.getUTCDate())} ${p(d.getUTCHours())}${p(d.getUTCMinutes())}Z`; };
         if (!loading && this._notamFetchError && this._notams?.length) {
-            body.insertAdjacentHTML('beforeend',
-                `<div class="wx-section-error">⚠ Refresh failed — showing cached data · tap ↻ to retry</div>`);
+            warn(`Refresh failed — showing NOTAMs downloaded ${this._notamCachedAt ? z(this._notamCachedAt) : 'earlier'}`);
+        }
+        if (!loading && this._notamPartial?.length) {
+            warn(`Not fetched: ${this._notamPartial.join(', ')} — their NOTAMs are missing`);
+        }
+        if (!loading && this._enrouteNotamFetchError) {
+            warn('En-route NOTAMs not fetched — TFRs and en-route restrictions may be missing');
+        } else if (!loading && this._enrouteNotamPartial?.length) {
+            warn(`En-route NOTAMs not fetched for ${this._enrouteNotamPartial.join(', ')} — TFRs may be missing`);
         }
 
         // Search bar
@@ -2133,10 +2146,11 @@ class WxBriefing {
                 throw new Error(errMsg);
             }
             const data = await resp.json();
-            // The NOTAM proxy lists locations it could not fetch (an FAA error,
+            // The NOTAM proxy lists stations it could not fetch (an FAA error,
             // or its 25 s deadline -- the destination is last, so first lost).
-            // A partial answer is not a briefing: keep the cached one and say so.
-            if (Array.isArray(data.failed) && data.failed.length) throw new Error(`NOTAMs not fetched for ${data.failed.join(', ')}`);
+            // Their NOTAMs are missing: shown with a warning, not cached as
+            // the briefing, and asked again next time (reviews 2026-10-19).
+            const notFetched = Array.isArray(data.failed) ? data.failed : [];
             const features = data.features || [];
 
             const wpGeoMap = new Map();
@@ -2171,10 +2185,16 @@ class WxBriefing {
             });
 
             this._notams = notams;
-            this._notamFetchedAt = Date.now();
-            try {
-                localStorage.setItem('flytab_notam_cache', JSON.stringify({ fetched_at: Date.now(), data: notams }));
-            } catch (_) {}
+            this._notamFetchError = null;
+            this._notamCachedAt = null;
+            this._notamPartial = notFetched.length ? notFetched : null;
+            if (!notFetched.length) {
+                this._notamFetchedAt = Date.now();
+                try {
+                    // With its stations: a cached briefing is only shown for the same route.
+                    localStorage.setItem('flytab_notam_cache', JSON.stringify({ fetched_at: Date.now(), stations, data: notams }));
+                } catch (_) {}
+            }
 
             const airportTfrShapes = notams
                 .filter(n => n.type === 'TFR')
@@ -2190,10 +2210,16 @@ class WxBriefing {
         } catch (err) {
             console.error('NOTAM fetch failed:', err);
             this._notamFetchError = err.message;
+            this._notamPartial = null;
+            this._notamCachedAt = null;
             try {
+                // The last briefing -- only if it was for these stations (it was
+                // shown for another route's; review 2026-10-19).
                 const raw = localStorage.getItem('flytab_notam_cache');
-                if (raw) { const c = JSON.parse(raw); this._notams = c.data || []; }
-                else this._notams = [];
+                const c = raw ? JSON.parse(raw) : null;
+                const same = Array.isArray(c?.stations) && c.stations.join(',') === stations.join(',');
+                this._notams = same ? (c.data || []) : [];
+                if (same) this._notamCachedAt = c.fetched_at || null;
             } catch (_) { this._notams = []; }
         }
 
@@ -2228,7 +2254,7 @@ class WxBriefing {
                 throw new Error(errMsg);
             }
             const data = await resp.json();
-            if (Array.isArray(data.failed) && data.failed.length) throw new Error(`En-route NOTAMs not fetched for ${data.failed.join(', ')}`);
+            const notFetched = Array.isArray(data.failed) ? data.failed : [];   // shown with a warning
             const features = data.features || [];
 
             const seen = new Set();
@@ -2274,7 +2300,9 @@ class WxBriefing {
             });
 
             this._enrouteNotams = notams;
-            this._enrouteNotamFetchedAt = Date.now();
+            this._enrouteNotamFetchError = null;
+            this._enrouteNotamPartial = notFetched.length ? notFetched : null;
+            if (!notFetched.length) this._enrouteNotamFetchedAt = Date.now();   // partial: asked again next time
 
             // Dispatch parsed TFR shapes to map layer
             const tfrShapes = notams
@@ -2285,10 +2313,13 @@ class WxBriefing {
                     return { raw: n.raw, summary: n.summary, validFrom: n.validFrom, validTo: n.validTo, ...geo };
                 })
                 .filter(Boolean);
-            document.dispatchEvent(new CustomEvent('notam:tfrs', { detail: { shapes: tfrShapes } }));
+            // Complete: the map's NOTAM TFRs are replaced. Partial: added to (the
+            // map's add-only event), so a TFR from a location not fetched stays.
+            document.dispatchEvent(new CustomEvent(notFetched.length ? 'notam:tfrs-apt' : 'notam:tfrs', { detail: { shapes: tfrShapes } }));
         } catch (err) {
             console.error('En-route NOTAM fetch failed:', err);
             this._enrouteNotamFetchError = err.message;
+            this._enrouteNotamPartial = null;
             this._enrouteNotams = [];
             // The TFRs already on the map stay: this cleared every NOTAM TFR
             // (airport ones too) whenever the fetch failed -- in flight, with no

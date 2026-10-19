@@ -67,12 +67,13 @@ def drop_token(rejected):
             _token, _token_expiry = None, 0
 
 
-def get_token() -> str:
+def get_token(deadline=None) -> str:
     with _token_lock:
-        return _get_token()
+        left = 15 if deadline is None else max(1, min(15, deadline - time.monotonic()))
+        return _get_token(left)
 
 
-def _get_token() -> str:
+def _get_token(timeout=15) -> str:
     global _token, _token_expiry
     if _token and time.time() < _token_expiry:
         return _token
@@ -87,7 +88,7 @@ def _get_token() -> str:
         },
         method='POST',
     )
-    with urllib.request.urlopen(req, timeout=15) as resp:
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
         data = json.load(resp)
 
     _token        = data['access_token']
@@ -101,7 +102,7 @@ def fetch_notams(locations, deadline=None):
     deadline: time.monotonic() by which to stop (default: 25 s from now)."""
     if deadline is None:
         deadline = time.monotonic() + REQUEST_DEADLINE_S
-    token    = get_token()
+    token    = get_token(deadline)
     features = []
     failed   = []
     for n, icao in enumerate(locations):
@@ -118,13 +119,18 @@ def fetch_notams(locations, deadline=None):
         try:
             with urllib.request.urlopen(req, timeout=min(20, left)) as resp:
                 data = json.load(resp)
-            geo = (data.get('data') or {}).get('geojson') if isinstance(data, dict) else None
-            if not isinstance(geo, list):
-                # No list is not "no NOTAMs": the client would clear what it has.
-                print(f'[notam-proxy] {icao} → no geojson list in the answer')
+            body = data.get('data') if isinstance(data, dict) else None
+            if not isinstance(body, dict):
+                # No data object (the API requires one): not an answer.
+                print(f'[notam-proxy] {icao} → no data in the answer')
                 failed.append(icao)
                 continue
-            features.extend(geo)
+            # data without a geojson list: taken as no NOTAMs (the API does not
+            # require the list; a quiet VOR id or field must not fail WX
+            # Briefing -- review 10). FlyTab's Restricted/MOA check never
+            # counts an ARTCC with no NOTAMs as downloaded, so it stays safe.
+            geo = body.get('geojson')
+            features.extend(geo if isinstance(geo, list) else [])
         except urllib.error.HTTPError as e:
             print(f'[notam-proxy] {icao} → HTTP {e.code}')
             failed.append(icao)
