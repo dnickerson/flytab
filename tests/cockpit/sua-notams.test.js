@@ -206,9 +206,6 @@ describe('review fixes (2026-10-19)', () => {
         expect(calls).toHaveLength(0);
         at('2026-10-19T19:00:30Z');
         await s.refresh(nasr, [MOODY_VIEW]);
-        expect(calls).toHaveLength(0);                                        // looks again once a minute
-        at('2026-10-19T19:01:01Z');
-        await s.refresh(nasr, [MOODY_VIEW]);
         expect(calls).toHaveLength(1);
         expect(s.hasActiveNotam(sua('MMOODY2N'))).toBe(true);
     });
@@ -441,5 +438,40 @@ describe('review 5 fixes (2026-10-19)', () => {
         at('2026-10-19T19:00:05Z');
         await s.refresh(nasr, [{ south: 42.5, west: -121.5, north: 43.5, east: -119.5 }]);   // Oregon
         expect(asked(calls).at(-1)).toContain('ZSE');
+    });
+});
+
+describe('review 7 fixes (2026-10-19)', () => {
+    it('an ARTCC the FAA keeps failing is asked after 1, 2, 4, 8, then every 15 min; success resets it', async () => {
+        const times = []; let fail = true;
+        globalThis.fetch = vi.fn(async (url) => {
+            const locs = new URL(String(url)).searchParams.get('location').split(',');
+            if (locs.includes('ZJX')) times.push(Date.now());
+            return { ok: true, json: async () => ({ failed: fail ? ['ZJX'] : [], features: locs.filter((z) => !fail || z !== 'ZJX').map(filler) }) };
+        });
+        const s = new SuaNotams(); const t0 = Date.now();
+        for (let m = 0; m <= 60; m += 0.5) { at(new Date(t0 + m * 60000).toISOString()); await s.refresh(nasr, [MOODY_VIEW]); }
+        const mins = times.map((t) => (t - t0) / 60000);
+        expect(mins.slice(0, 6)).toEqual([0, 1, 3, 7, 15, 30]);              // gaps 1, 2, 4, 8, 15
+        fail = false; at(new Date(t0 + 61 * 60000).toISOString()); s._retryAt.delete('ZJX');
+        await s.refresh(nasr, [MOODY_VIEW]);
+        expect(s._failCount.has('ZJX')).toBe(false);
+    });
+
+    it('fresh install: the first download follows the NASR import at once (no minute\'s wait while empty)', async () => {
+        const calls = proxy(); const s = new SuaNotams();
+        const empty = { getSuaInBounds: async () => [], getAirspaceInBounds: async () => [] };
+        await s.refresh(empty, [MOODY_VIEW]);
+        at('2026-10-19T19:00:20Z');                                           // NASR imported 20 s later
+        await s.refresh(nasr, [MOODY_VIEW]);
+        expect(calls).toHaveLength(1);
+    });
+
+    it('airspace without ARTCCs: the store is read again at most once a minute', async () => {
+        let reads = 0;
+        const noArtcc = { getSuaInBounds: nasr.getSuaInBounds, getAirspaceInBounds: async () => { reads++; return [{ id: 'X', class: 'B', boundary: [[1, 1]] }]; } };
+        const s = new SuaNotams();
+        for (let k = 0; k < 10; k++) { at(new Date(Date.parse('2026-10-19T19:00:00Z') + k * 3000).toISOString()); await s.refresh(noArtcc, [MOODY_VIEW]); }
+        expect(reads).toBe(1);
     });
 });

@@ -39,7 +39,8 @@ class SuaNotams {
         this._artccLoadedAt = 0;
         this._fetching = null;
         this._failedAt = 0;
-        this._retryAt = new Map();       // ARTCC -> ms before which it is not asked again (empty: 15 min, FAA error: 1 min)
+        this._retryAt = new Map();       // ARTCC -> ms before which it is not asked again (empty: 15 min, FAA error: 1, 2, 4, 8, 15 min)
+        this._failCount = new Map();     // ARTCC -> FAA errors in a row
         this._lastError = null;
         this._timer = null;
         this._load();
@@ -152,8 +153,13 @@ class SuaNotams {
             const ok = due.filter((z) => !failed.has(z) && got.has(z));
             const t = Date.now();
             for (const z of due) {
-                if (ok.includes(z)) this._retryAt.delete(z);
-                else this._retryAt.set(z, t + (failed.has(z) ? SuaNotams.RETRY_MS : SuaNotams.STALE_MS));
+                if (ok.includes(z)) { this._retryAt.delete(z); this._failCount.delete(z); continue; }
+                if (!failed.has(z)) { this._retryAt.set(z, t + SuaNotams.STALE_MS); continue; }
+                // An FAA error: 1 min, then 2, 4, 8, 15 -- a refused token or an FAA
+                // outage is not asked about 20 times a minute (review 7).
+                const n = (this._failCount.get(z) || 0) + 1;
+                this._failCount.set(z, n);
+                this._retryAt.set(z, t + Math.min(SuaNotams.RETRY_MS * 2 ** (n - 1), SuaNotams.STALE_MS));
             }
             if (!ok.length) { this._lastError = `no NOTAMs returned for ${due.join(',')}`; return true; }
             await this._buildIndex(nasr);        // the NASR cycle may have changed since the last fetch
@@ -241,10 +247,13 @@ class SuaNotams {
         // Empty (NASR not imported, or a bundle without ARTCCs): look again at
         // most once a minute -- it reads the whole airspace store (review 6).
         if (this._artccBoxes && Date.now() - this._artccLoadedAt >= 0 && Date.now() - this._artccLoadedAt < SuaNotams.RETRY_MS) return;
-        this._artccLoadedAt = Date.now();
         // Not kept while empty: the map starts before NASR is imported (a new
         // install, Reset NASR Data) -- it latched [] and never fetched (review).
         const all = await nasr.getAirspaceInBounds(-90, -180, 90, 180, 100000);
+        // The minute's wait only when there is airspace but no ARTCC in it: an
+        // empty store (NASR still importing) is cheap to look at, and the first
+        // download should follow the import, not wait for a pan (review 7).
+        this._artccLoadedAt = all.length ? Date.now() : 0;
         this._artccBoxes = all.filter((a) => a.class === 'ARTCC')
             .map((a) => ({ id: SuaNotams._artccId(a.id), ...SuaNotams._bbox((a.boundary || []).filter((p) => p[1] < 0)) }))
             .filter((a) => a.id && Number.isFinite(a.south) && !SuaNotams.NOT_NMS.has(a.id));

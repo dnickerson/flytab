@@ -23,11 +23,12 @@ import argparse
 import base64
 import json
 import os
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 CGI_BASE   = 'https://api-staging.cgifederal-aim.com'
 CGI_KEY    = os.environ.get('CGI_NOTAM_API_KEY',    'Zul4Ap9oAusAGINDA1naAQrXYBD4CDVromZ3dEUAv0C3XGxA')
@@ -43,7 +44,26 @@ _token        = None
 _token_expiry = 0
 
 
+_token_lock   = threading.Lock()
+
+# One request's FAA calls stop after this (the FlyTab client gives up at 30 s);
+# the locations not reached are listed as failed.
+REQUEST_DEADLINE_S = 25
+
+
+def drop_token():
+    """After a 401: the next request gets a new token, not the rejected one."""
+    global _token, _token_expiry
+    with _token_lock:
+        _token, _token_expiry = None, 0
+
+
 def get_token() -> str:
+    with _token_lock:
+        return _get_token()
+
+
+def _get_token() -> str:
     global _token, _token_expiry
     if _token and time.time() < _token_expiry:
         return _token
@@ -72,14 +92,20 @@ def fetch_notams(locations):
     token    = get_token()
     features = []
     failed   = []
-    for icao in locations:
+    deadline = time.monotonic() + REQUEST_DEADLINE_S
+    for n, icao in enumerate(locations):
+        left = deadline - time.monotonic()
+        if left < 2:
+            print(f'[notam-proxy] deadline: not asked {",".join(locations[n:])}')
+            failed.extend(locations[n:])
+            break
         url = f'{CGI_BASE}/nmsapi/v1/notams?location={urllib.parse.quote(icao)}'
         req = urllib.request.Request(url, headers={
             'Authorization':     f'Bearer {token}',
             'nmsResponseFormat': 'GEOJSON',
         })
         try:
-            with urllib.request.urlopen(req, timeout=20) as resp:
+            with urllib.request.urlopen(req, timeout=min(20, left)) as resp:
                 data = json.load(resp)
             geo = (data.get('data') or {}).get('geojson') if isinstance(data, dict) else None
             if not isinstance(geo, list):
@@ -91,6 +117,11 @@ def fetch_notams(locations):
         except urllib.error.HTTPError as e:
             print(f'[notam-proxy] {icao} → HTTP {e.code}')
             failed.append(icao)
+            if e.code == 401:
+                # The token was refused: every other location would be too.
+                drop_token()
+                failed.extend(locations[n + 1:])
+                break
         except Exception as e:
             print(f'[notam-proxy] {icao} → {e}')
             failed.append(icao)
@@ -147,7 +178,10 @@ def main():
 
     print(f'[notam-proxy] listening on :{args.port}')
     print(f'[notam-proxy] expose with: tailscale funnel {args.port}')
-    HTTPServer(('', args.port), Handler).serve_forever()
+    # Threads: WX Briefing's request is not queued behind a slow SUA one.
+    server = ThreadingHTTPServer(('', args.port), Handler)
+    server.daemon_threads = True
+    server.serve_forever()
 
 
 if __name__ == '__main__':
