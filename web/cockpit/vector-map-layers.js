@@ -941,34 +941,40 @@ class VectorMapLayers {
                 }
             }
 
-            // Find airport center for each Class B group (centroid of lowest-floor ring)
+            // Find airport center for each Class B group (centroid of lowest-floor ring).
+            // The surface ring's centre is remembered across refreshes: zoomed in on
+            // a shelf with the surface ring off screen, the lowest ring in view is
+            // another shelf, and the label was placed off screen (review 2026-10-18).
             const bravoCenters = new Map(); // name → [lat, lon]
+            if (!this._bravoSfcCenters) this._bravoSfcCenters = new Map();
             for (const [name, rings] of bravoGroups) {
                 const sfc = rings.reduce((a, b) =>
                     (a.lower_ft ?? a.lower ?? 99999) < (b.lower_ft ?? b.lower ?? 99999) ? a : b
                 );
                 const boundary = sfc.boundary || sfc.points || [];
                 const latlngs = boundary.map(pt => [pt[0] ?? pt.lat, pt[1] ?? pt.lon]);
-                bravoCenters.set(name, VectorMapLayers._polygonCentroid(latlngs));
+                const centre = VectorMapLayers._polygonCentroid(latlngs);
+                if ((sfc.lower_ft ?? sfc.lower) === 0) this._bravoSfcCenters.set(name, centre);
+                bravoCenters.set(name, this._bravoSfcCenters.get(name) || centre);
             }
 
             // Altitude labels only from Z9, as SUA (Dana, 2026-10-18).
             const showLabels = Math.round(zoom) >= VectorMapLayers.SUA_LABEL_MIN_ZOOM;
-            const altLabel = (as, latlngs) => {
+            const labelled = (as) => ['B', 'C', 'D'].includes(as.class) && (as.upper_ft ?? as.upper) != null;
+            const altLabel = (as, latlngs) => {       // latlngs: array, or a function making it
                 const key = as.id + '_alt';
                 const has = this._airspacePolygons.get(key);
                 if (!showLabels) {
                     if (has) { this._airspaceLayer.removeLayer(has); this._airspacePolygons.delete(key); }
-                } else if (!has) {
-                    this._addAirspaceLabel(as, latlngs, bravoCenters, usedLabelPos);
+                } else if (!has && labelled(as)) {
+                    this._addAirspaceLabel(as, typeof latlngs === 'function' ? latlngs() : latlngs, bravoCenters, usedLabelPos);
                 }
             };
 
             for (const as of airspaces) {
                 currentIds.add(as.id);
                 if (this._airspacePolygons.has(as.id)) {
-                    const b = as.boundary || as.points || [];
-                    altLabel(as, b.map(pt => [pt[0] ?? pt.lat, pt[1] ?? pt.lon]));
+                    altLabel(as, () => (as.boundary || as.points || []).map(pt => [pt[0] ?? pt.lat, pt[1] ?? pt.lon]));
                     continue;
                 }
 
@@ -983,14 +989,10 @@ class VectorMapLayers {
                     weight: style.weight || 1,
                     fillOpacity: style.fillOpacity || 0.04,
                     dashArray: style.dashArray || null,
+                    interactive: false,          // taps: _showAirspacePopup (one tap path)
                 });
+                polygon._flyArea = { kind: 'class', rec: as };
 
-                const label = `${as.name || ''} Class ${as.class || ''}`;
-                const upper = as.upper_ft ?? as.upper;
-                const lower = as.lower_ft ?? as.lower;
-                const upperStr = (upper != null && upper <= -1000) ? 'UNL' : upper;
-                const lowerStr = (lower === 0 || lower == null) ? 'SFC' : lower;
-                const altRange = upper != null ? `${upperStr} - ${lowerStr} ft` : '';
                 // No tooltip — sticky tooltips interfere with touch interactions on Android
 
                 polygon.addTo(this._airspaceLayer);
@@ -1138,22 +1140,12 @@ class VectorMapLayers {
                 const style = isActive ? { ...base, ...VectorMapLayers.SUA_ACTIVE_OVERRIDES } : base;
                 const latlngs = boundary.map(pt => [pt[0], pt[1]]);
 
-                const polygon = L.polygon(latlngs, { ...style, interactive: true });
+                // Not a Leaflet popup: its click raced the tap path's popup where
+                // areas overlap (a MOA under a Class B shelf); _showAirspacePopup
+                // lists every area at the tap (Dana, 2026-10-18).
+                const polygon = L.polygon(latlngs, { ...style, interactive: false });
                 polygon._suaActive = isActive;
-
-                // Tap popup: name, type, altitudes, NOTAM status
-                const notam = suaNotams ? suaNotams.getNotam(sua) : null;
-                const lowerStr = sua.lower_ft === 0 ? 'SFC' : (sua.lower_ft >= 1000 ? `${Math.round(sua.lower_ft / 100) * 100} ft` : `${sua.lower_ft} ft`);
-                const upperStr = sua.upper_ft != null ? (sua.upper_ft >= 1000 ? `${Math.round(sua.upper_ft / 100) * 100} ft` : `${sua.upper_ft} ft`) : '?';
-                const notamHtml = notam
-                    ? `<div class="sua-popup-notam sua-popup-active">⚠ ACTIVE per NOTAM<br><small>${notam.text?.slice(0, 120) ?? ''}</small></div>`
-                    : `<div class="sua-popup-notam sua-popup-inactive">No active NOTAM found</div>`;
-                const popupHtml = `<div class="sua-popup">
-                    <b>${sua.name ?? sua.id}</b> <span class="sua-popup-type">${sua.type}</span><br>
-                    <span class="sua-popup-alt">${lowerStr} – ${upperStr}</span>
-                    ${notamHtml}
-                </div>`;
-                polygon.bindPopup(popupHtml, { maxWidth: 280, className: 'sua-popup-container' });
+                polygon._flyArea = { kind: 'sua', rec: sua };
 
                 polygon.addTo(this._suaLayer);
                 this._suaPolygons.set(sua.id, polygon);
@@ -1236,7 +1228,7 @@ class VectorMapLayers {
 
     // Shared by both the popup body (joins all entries) and the map label
     // (uses just the first) so the two can't drift out of sync the way they
-    // did before this was extracted -- see freqs shape note above _updateTrsa.
+    // did before this was extracted -- see the freqs shape note in _airspacePopupHtml.
     static _formatTrsaFreq(f) {
         if (f == null) return '';
         if (typeof f === 'string') return f;
@@ -1286,38 +1278,8 @@ class VectorMapLayers {
                 if (boundary.length < 3) continue;
 
                 const latlngs = boundary.map(pt => [pt[0], pt[1]]);
-                const polygon = L.polygon(latlngs, { ...VectorMapLayers.TRSA_STYLE, interactive: true });
-
-                // Each entry is {freq, sector?} -- 'sector' is the raw NASR
-                // sectorization text (degree range, compass point, altitude
-                // split, etc., no fixed format) and is shown verbatim next
-                // to its frequency, e.g. "118.25 (164-343)". A sectorized
-                // TRSA (e.g. KILM) has one frequency per arrival sector, and
-                // without the sector a pilot can't tell which one to call.
-                // Defensive: a device that hasn't re-synced past bundle_version 9
-                // may still have freqs cached as plain strings (the pre-sector
-                // shape) until the next NASR import -- handle both shapes rather
-                // than rendering "undefined" for stale-but-still-present data.
-                const freqs = (trsa.freqs || [])
-                    .map(f => VectorMapLayers._formatTrsaFreq(f))
-                    .filter(Boolean)
-                    .join(' / ') || '?';
-                const lowerStr = trsa.lower_ft === 0 ? 'SFC' : (trsa.lower_ft != null ? `${trsa.lower_ft} ft` : '?');
-                // TWR4 remarks don't always publish a TRSA ceiling (e.g. real
-                // ILM data: "TRSA CTC APCH CTL WITHIN 20 NM" -- no altitude
-                // clause at all). A bare '?' reads as a parsing error; say
-                // explicitly that it's not published in this data source.
-                const upperStr = trsa.upper_ft != null ? `${trsa.upper_ft} ft` : 'not published — check sectional';
-                const approxNote = trsa.approximate
-                    ? `<div class="trsa-popup-approx">Approximate boundary${trsa.radius_nm ? ` — ${trsa.radius_nm}nm radius` : ''}</div>`
-                    : '';
-                const popupHtml = `<div class="trsa-popup">
-                    <b>${trsa.name ?? trsa.id}</b><br>
-                    <span class="trsa-popup-freq">${freqs}</span><br>
-                    <span class="trsa-popup-alt">${lowerStr} – ${upperStr}</span>
-                    ${approxNote}
-                </div>`;
-                polygon.bindPopup(popupHtml, { maxWidth: 280, className: 'trsa-popup-container' });
+                const polygon = L.polygon(latlngs, { ...VectorMapLayers.TRSA_STYLE, interactive: false });
+                polygon._flyArea = { kind: 'trsa', rec: trsa };   // tap: _showAirspacePopup
 
                 polygon.addTo(this._trsaLayer);
                 this._trsaPolygons.set(trsa.id, polygon);
@@ -1843,10 +1805,90 @@ class VectorMapLayers {
             return;
         }
 
-        // No aviation marker hit — check traffic markers
-        if (this._onTrafficTap) {
-            this._onTrafficTap(pt);
-        }
+        // No aviation marker hit — traffic, then the airspace at the tap
+        if (this._onTrafficTap && this._onTrafficTap(pt)) return;
+        this._showAirspacePopup(e.latlng);
+    }
+
+    /**
+     * Every airspace drawn at this point -- Class B/C/D (Dana, 2026-10-18:
+     * tapping a Class B showed nothing), Restricted/MOA/etc. with NOTAM
+     * status, TRSA with frequencies -- lowest floor first. Only layers on the
+     * map, only areas drawn (in view, zoom allows). Class E is drawn but not
+     * listed (it is not what a tap is after).
+     */
+    _areasAt(lat, lon) {
+        const out = [];
+        const scan = (layer, polys) => {
+            if (!layer || !polys || !this._map.hasLayer(layer)) return;
+            for (const [key, poly] of polys) {
+                const a = poly?._flyArea;
+                if (!a || key.endsWith('_lbl') || key.endsWith('_alt')) continue;
+                if (a.kind === 'class' && !['B', 'C', 'D'].includes(a.rec.class)) continue;
+                const b = a.rec.boundary || a.rec.points || [];
+                if (b.length >= 3 && GeoUtils.pointInPolygon(lat, lon, b)) out.push(a);
+            }
+        };
+        scan(this._airspaceLayer, this._airspacePolygons);
+        scan(this._suaLayer, this._suaPolygons);
+        scan(this._trsaLayer, this._trsaPolygons);
+        const floor = (a) => { const f = a.rec.lower_ft ?? a.rec.lower; return Number.isFinite(f) ? f : 0; };
+        return out.sort((x, y) => floor(x) - floor(y));
+    }
+
+    /** "SFC", "UNL", or "10,000 ft" (MSL as published). */
+    static _fmtAltFt(ft, isFloor) {
+        if (ft == null || !Number.isFinite(ft)) return isFloor ? 'SFC' : '?';
+        if (ft <= -1000) return 'UNL';
+        if (ft === 0) return 'SFC';
+        return `${Math.round(ft).toLocaleString('en-US')} ft`;
+    }
+
+    /** The popup's HTML for these areas (all text escaped: names come from NASR, NOTAM text from the FAA). */
+    _airspacePopupHtml(areas) {
+        const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        const alt = (r) => `${VectorMapLayers._fmtAltFt(r.upper_ft ?? r.upper, false)} – ${VectorMapLayers._fmtAltFt(r.lower_ft ?? r.lower, true)}`;
+        const notams = window.SuaNotams;
+        const rows = areas.map(({ kind, rec }) => {
+            if (kind === 'class') {
+                const name = String(rec.name || '').replace(/\s*Class\s*[BCD]\s*$/i, '').trim() || rec.id;
+                return `<div class="as-pop-row as-pop-${esc(rec.class).toLowerCase()}">
+                    <div class="as-pop-head"><span class="as-pop-name">${esc(name)}</span><span class="as-pop-kind">CLASS ${esc(rec.class)}</span></div>
+                    <div class="as-pop-alt">${esc(alt(rec))}</div></div>`;
+            }
+            if (kind === 'sua') {
+                const n = notams ? notams.getNotam(rec) : null;
+                const status = n
+                    ? `<div class="as-pop-notam is-active">⚠ ACTIVE per NOTAM${n.text ? `<br><span class="as-pop-notam-text">${esc(String(n.text).slice(0, 120))}</span>` : ''}</div>`
+                    : `<div class="as-pop-notam">No active NOTAM found</div>`;
+                return `<div class="as-pop-row as-pop-sua">
+                    <div class="as-pop-head"><span class="as-pop-name">${esc(rec.name ?? rec.id)}</span><span class="as-pop-kind">${esc(rec.type || 'SUA')}</span></div>
+                    <div class="as-pop-alt">${esc(alt(rec))}</div>${status}</div>`;
+            }
+            // Each freq is {freq, sector?} -- the sector (raw NASR text, e.g. "164-343") says
+            // which arrival sector calls which frequency (KILM); _formatTrsaFreq also takes
+            // the pre-sector plain-string shape a device not re-synced past bundle 9 may hold.
+            const freqs = (rec.freqs || []).map((f) => VectorMapLayers._formatTrsaFreq(f)).filter(Boolean).join(' / ') || '?';
+            const upper = rec.upper_ft != null ? VectorMapLayers._fmtAltFt(rec.upper_ft, false) : 'ceiling not published — check sectional';
+            const approx = rec.approximate ? `<div class="as-pop-note">Approximate boundary${rec.radius_nm ? ` — ${esc(rec.radius_nm)} nm radius` : ''}</div>` : '';
+            return `<div class="as-pop-row as-pop-trsa">
+                <div class="as-pop-head"><span class="as-pop-name">${esc(rec.name ?? rec.id)}</span><span class="as-pop-kind">TRSA</span></div>
+                <div class="as-pop-freq">${esc(freqs)}</div>
+                <div class="as-pop-alt">${esc(`${upper} – ${VectorMapLayers._fmtAltFt(rec.lower_ft, true)}`)}</div>${approx}</div>`;
+        });
+        return `<div class="as-pop">${rows.join('')}</div>`;
+    }
+
+    /** Open the airspace popup at the tap, if any airspace is drawn there. True if it opened. */
+    _showAirspacePopup(latlng) {
+        if (!latlng) return false;
+        const areas = this._areasAt(latlng.lat, latlng.lng);
+        if (!areas.length) return false;
+        L.popup({ minWidth: 260, maxWidth: 360, className: 'as-popup-container', autoPanPadding: [16, 16] })
+            .setLatLng(latlng)
+            .setContent(this._airspacePopupHtml(areas))
+            .openOn(this._map);
+        return true;
     }
 
     /**
