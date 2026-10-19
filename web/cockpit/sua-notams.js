@@ -22,14 +22,14 @@
 class SuaNotams {
     static STORE_KEY = 'flytab_sua_notams';
     static STALE_MS = 15 * 60 * 1000;      // refetch an ARTCC after this (when online)
-    static ARTCC_MARGIN_DEG = 1;
+    static ARTCC_MARGIN_DEG = 2;     // 1 held the issuing ARTCC for 364/364 on 10-19; 2 for margin (review)
     static RETRY_MS = 60 * 1000;           // after a failed fetch
     static KEEP_TEXT = 300;                // chars of NOTAM text kept
 
     constructor() {
         this._acts = new Map();          // suaId -> [{ number, start, end, text, artcc }]
         this._fetchedAt = new Map();     // ARTCC ('ZJX') -> ms of its last good fetch
-        this._index = null;              // { byId: Map, moaNames: [[name, id]] } from NASR
+        this._index = null;              // { byKey: Map<key, ids[]>, moaNames: [[name, ids[]]] } from NASR
         this._artccBoxes = null;         // [{ id: 'ZJX', south, west, north, east }] -- loaded once
         this._checkedBoxesAt = 0;
         this._fetching = null;
@@ -43,7 +43,9 @@ class SuaNotams {
 
     /** The activation in force now, or null. */
     getNotam(sua, now = Date.now()) {
-        return (this._acts.get(sua?.id) || []).find((a) => a.start <= now && now < a.end) || null;
+        // Overlapping activations: the one that runs longest ("until" its end).
+        return (this._acts.get(sua?.id) || []).filter((a) => a.start <= now && now < a.end)
+            .sort((x, y) => y.end - x.end)[0] || null;
     }
 
     hasActiveNotam(sua, now = Date.now()) { return !!this.getNotam(sua, now); }
@@ -60,11 +62,23 @@ class SuaNotams {
      * the ARTCCs that may issue them; 0 if one of those was never downloaded.
      */
     checkedAt(sua) {
+        if (!SuaNotams.matchable(sua)) return 0;
         const b = SuaNotams._bbox(sua?.boundary);
         if (!b || !this._artccBoxes) return 0;
         const zs = this._artccsFor(b);
         if (!zs.length) return 0;
         return Math.min(...zs.map((z) => this._fetchedAt.get(z) || 0));
+    }
+
+    /**
+     * False for areas no !SUA NOTAM names in a form matched here -- National
+     * Security Areas ("NEVERETT", typed A in NASR). Their popup says to check
+     * the NOTAMs instead of "no activation NOTAM".
+     */
+    static matchable(sua) {
+        if (!sua?.id) return false;
+        if (sua.type === 'MOA') return /\bMOA\b/i.test(sua.name || '');
+        return /^[RWAP]\d/.test(String(sua.id).toUpperCase());
     }
 
     // ── Fetching ──────────────────────────────────────────────────────────
@@ -90,9 +104,10 @@ class SuaNotams {
         const artccs = new Set();
         for (const b of boxes) for (const z of this._artccsFor(b)) artccs.add(z);
         const now = Date.now();
-        const due = [...artccs].filter((z) => now - (this._fetchedAt.get(z) || 0) > SuaNotams.STALE_MS).sort();
-        if (!due.length || now - this._failedAt < SuaNotams.RETRY_MS) return;
-        await this._buildIndex(nasr);            // the NASR cycle may have changed since the last fetch
+        const age = (z) => now - (this._fetchedAt.get(z) || 0);   // < 0: the clock was set back
+        const due = [...artccs].filter((z) => age(z) > SuaNotams.STALE_MS || age(z) < 0).sort();
+        const sinceFail = now - this._failedAt;
+        if (!due.length || (sinceFail >= 0 && sinceFail < SuaNotams.RETRY_MS)) return;
 
         const base = (typeof CockpitConfig !== 'undefined' && CockpitConfig.notamBase)
             || (typeof Settings !== 'undefined' && Settings.workerBase) || 'https://www.flywhere.app/api';
@@ -100,9 +115,18 @@ class SuaNotams {
             const resp = await fetch(`${base}/notams?location=${due.join(',')}`, { signal: AbortSignal.timeout(30000) });
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
             const data = await resp.json();
-            this._apply(due, data.features || [], Date.now());
-            this._lastError = null;
-            this._failedAt = 0;
+            const features = data.features || [];
+            // The proxy skips an ARTCC the FAA refused (and still answers 200):
+            // every ARTCC has dozens of NOTAMs (fewest on 10-19: ZAU, 21), so
+            // none back means it was not fetched -- keep what it had, not
+            // "no activation NOTAM" (review 2026-10-19).
+            const got = new Set(features.map((f) => SuaNotams._artccId(f?.properties?.coreNOTAMData?.notam?.location)));
+            const ok = due.filter((z) => got.has(z));
+            if (!ok.length) throw new Error(`no NOTAMs returned for ${due.join(',')}`);
+            await this._buildIndex(nasr);        // the NASR cycle may have changed since the last fetch
+            this._apply(ok, features.filter((f) => ok.includes(SuaNotams._artccId(f?.properties?.coreNOTAMData?.notam?.location))), Date.now());
+            this._lastError = ok.length < due.length ? `no NOTAMs returned for ${due.filter((z) => !got.has(z)).join(',')}` : null;
+            this._failedAt = ok.length < due.length ? Date.now() : 0;
             this._save();
             this._changed();
         } catch (err) {
@@ -124,16 +148,16 @@ class SuaNotams {
         for (const f of features) {
             const act = SuaNotams.parseActivation(f);
             if (!act) continue;
-            const id = this._match(act.designator);
-            if (!id) continue;
-            const key = `${id}|${act.start}|${act.end}`;
-            if (seen.has(key)) continue;            // the DOM and INTL copies
-            seen.add(key);
-            // Tagged with the ARTCC it was fetched for, so the next fetch of that ARTCC replaces it.
-            const artcc = fetched.has(act.artcc) ? act.artcc : artccs[0];
-            const list = this._acts.get(id) || [];
-            list.push({ number: act.number, start: act.start, end: act.end, text: act.text, artcc });
-            this._acts.set(id, list);
+            for (const id of this._match(act.designator)) {
+                const key = `${id}|${act.start}|${act.end}`;
+                if (seen.has(key)) continue;            // the DOM and INTL copies
+                seen.add(key);
+                // Tagged with the ARTCC it was fetched for, so the next fetch of that ARTCC replaces it.
+                const artcc = fetched.has(act.artcc) ? act.artcc : artccs[0];
+                const list = this._acts.get(id) || [];
+                list.push({ number: act.number, start: act.start, end: act.end, text: act.text, artcc });
+                this._acts.set(id, list);
+            }
         }
         for (const z of artccs) this._fetchedAt.set(z, fetchedAt);
         this._prune(fetchedAt);
@@ -146,9 +170,9 @@ class SuaNotams {
     static parseActivation(feature) {
         const n = feature?.properties?.coreNOTAMData?.notam;
         if (!n) return null;
-        const text = String(n.text || '');
+        const text = String(n.text || '').replace(/\s+/g, ' ').trim();   // NOTAM text can wrap
         if (n.type === 'C' || /\bNOTAMC\b/.test(text)) return null;          // a cancellation
-        if (/TEMPORARY FLIGHT RESTRICTION/.test(text)) return null;
+        if (/TEMPORARY FLIGHT RESTRICTION/i.test(text)) return null;
         const m = /\bAIRSPACE\s+(.+?)\s+ACT\b/.exec(text);
         if (!m) return null;
         const start = Date.parse(n.effectiveStart);
@@ -175,7 +199,9 @@ class SuaNotams {
      * ZOA/ZAK/ZAP run past 180 deg and their box would cover the world.
      */
     async _loadArtccs(nasr) {
-        if (this._artccBoxes) return;
+        if (this._artccBoxes?.length) return;
+        // Not kept while empty: the map starts before NASR is imported (a new
+        // install, Reset NASR Data) -- it latched [] and never fetched (review).
         const all = await nasr.getAirspaceInBounds(-90, -180, 90, 180, 100000);
         this._artccBoxes = all.filter((a) => a.class === 'ARTCC')
             .map((a) => ({ id: SuaNotams._artccId(a.id), ...SuaNotams._bbox((a.boundary || []).filter((p) => p[1] < 0)) }))
@@ -185,7 +211,8 @@ class SuaNotams {
     /**
      * The ARTCCs that may issue NOTAMs for this box: those whose box, 1 deg
      * wider, overlaps it. On 2026-10-19's 364 matched NOTAMs this always held
-     * the issuing ARTCC (0.5 deg missed one: JUNIPER MOA, ZLC), ~3.3 per area.
+     * the issuing ARTCC (0.5 deg missed one: JUNIPER MOA, ZLC), ~3.3 per area;
+     * ARTCC_MARGIN_DEG is 2 to leave room (~3.8 per area).
      */
     _artccsFor(b) {
         const M = SuaNotams.ARTCC_MARGIN_DEG;
@@ -204,37 +231,61 @@ class SuaNotams {
         return south <= north ? { south, west, north, east } : null;
     }
 
-    /** NASR SUA ids and MOA names to match NOTAMs against. */
+    /**
+     * NASR areas by the keys a NOTAM can name them by. R/W/A/P: the id, also
+     * without a "_2" split-polygon suffix (R4804A_2) and without a HIGH/LOW/
+     * NORTH/SOUTH word (R3202HIGH, W93NORTH). MOAs: the name up to "MOA"
+     * ("MOODY 2 NORTH MOA, GA", "SNAKE LOW MOA GULFPORT, MS").
+     */
     async _buildIndex(nasr) {
         const rows = await nasr.getSuaInBounds(-90, -180, 90, 180, 100000);
-        const byId = new Map();
-        const moaNames = [];
+        const byKey = new Map();
+        const add = (k, id) => { if (!k) return; const l = byKey.get(k) || []; if (!l.includes(id)) l.push(id); byKey.set(k, l); };
+        const moaNames = new Map();
         for (const r of rows) {
-            if (!r?.id) continue;
+            if (!SuaNotams.matchable(r)) continue;
             if (r.type === 'MOA') {
                 const name = SuaNotams._moaName(r.name);
-                if (name) moaNames.push([name, r.id]);
-            } else {
-                byId.set(SuaNotams._norm(r.id).replace(/ /g, ''), r.id);
+                if (name) moaNames.set(name, [...(moaNames.get(name) || []), r.id]);
+                continue;
             }
+            const id = String(r.id).toUpperCase();
+            const bare = id.replace(/_\d+$/, '');
+            add(bare, r.id);
+            const w = /^([RWAP]\d+[A-Z]?)(HIGH|LOW|NORTH|SOUTH|EAST|WEST)$/.exec(bare);
+            if (w) { add(w[1] + ' ' + w[2], r.id); add(w[1], r.id); }
         }
-        moaNames.sort((a, b) => b[0].length - a[0].length);   // the longest name that fits wins
-        this._index = { byId, moaNames };
+        this._index = { byKey, moaNames: [...moaNames].sort((a, b) => b[0].length - a[0].length) };
     }
 
-    /** NASR id for the area a NOTAM's "AIRSPACE <designator> ACT" names, or null. */
+    /**
+     * NASR ids of every area a NOTAM's "AIRSPACE <designator> ACT" names ([]
+     * if none). "R4401A/B", "R4401A B C" and "X MOA AND Y MOA" name several.
+     * A designator NASR only has sub-areas of (W161A -> W161AN, W161AS) lights
+     * all of them: shown active rather than missed.
+     */
     _match(designator) {
-        if (!this._index) return null;
-        const seg = ` ${SuaNotams._norm(designator)} `;
-        // R2904A, W-470F, A-292, P-56A (the FAA writes them without the hyphen)
-        for (const m of seg.matchAll(/ ([RWAP]) ?(\d{2,4}[A-Z]{0,2}) /g)) {
-            const id = this._index.byId.get(m[1] + m[2]);
-            if (id) return id;
+        if (!this._index) return [];
+        const { byKey, moaNames } = this._index;
+        const out = new Set();
+        let seg = ` ${SuaNotams._norm(designator)} `;
+        const lookup = (k, word) => {
+            const hit = (word && byKey.get(`${k} ${word}`)) || byKey.get(k)
+                || [...byKey].filter(([key]) => key.length > k.length && key.startsWith(k) && /^[A-Z]+$/.test(key.slice(k.length))).flatMap(([, ids]) => ids);
+            for (const id of hit) out.add(id);
+        };
+        for (const m of seg.matchAll(/ ([RWAP]) ?(\d{1,4})([A-Z]{0,2})((?: [A-Z](?= ))*)(?: (HIGH|LOW|NORTH|SOUTH|EAST|WEST)(?= ))?/g)) {
+            const [, kind, num, letters, more, word] = m;
+            lookup(kind + num + letters, word);
+            for (const extra of (more || '').trim().split(' ').filter(Boolean)) lookup(kind + num + extra, word);   // R4401A B C, R4401A/B
         }
-        for (const [name, id] of this._index.moaNames) {
-            if (seg.includes(` ${name} `)) return id;
+        for (const [name, ids] of moaNames) {                      // longest first; a matched name is blanked out
+            const at = seg.indexOf(` ${name} `);
+            if (at < 0) continue;
+            ids.forEach((id) => out.add(id));
+            seg = seg.slice(0, at) + ' ' + '#'.repeat(name.length) + ' ' + seg.slice(at + name.length + 2);
         }
-        return null;
+        return [...out];
     }
 
     static _artccId(s) {
@@ -246,9 +297,10 @@ class SuaNotams {
         return String(s || '').toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim();
     }
 
-    /** "MOODY 2 NORTH MOA, GA" -> "MOODY 2 NORTH MOA" */
+    /** "MOODY 2 NORTH MOA, GA" -> "MOODY 2 NORTH MOA"; "SNAKE LOW MOA GULFPORT, MS" -> "SNAKE LOW MOA" */
     static _moaName(name) {
-        return SuaNotams._norm(String(name || '').replace(/(,\s*[A-Z]{2})+\s*$/i, ''));
+        const m = /^(.*?\bMOA)\b/i.exec(String(name || ''));
+        return m ? SuaNotams._norm(m[1]) : '';
     }
 
     // ── Keeping it for the flight ────────────────────────────────────────

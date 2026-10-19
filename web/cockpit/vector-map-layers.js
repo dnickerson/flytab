@@ -1917,8 +1917,11 @@ class VectorMapLayers {
         if (act) return { active: true, line: `⚠ ACTIVE per NOTAM until ${z(act.end)}`, text: act.text ? String(act.text) : '' };
         const next = notams?.getUpcoming?.(rec, now);
         if (next) return { active: false, line: `NOTAM: active ${z(next.start)} – ${z(next.end)}`, text: next.text ? String(next.text) : '' };
+        if (notams?.constructor?.matchable && !notams.constructor.matchable(rec)) {
+            return { active: false, line: 'NOTAM status not tracked for this area — check the NOTAMs' };   // NSAs
+        }
         const at = notams?.checkedAt?.(rec) || 0;
-        if (at) return { active: false, line: `No activation NOTAM (downloaded ${z(at)})` };
+        if (at) return { active: false, line: `No activation NOTAM found (downloaded ${z(at)})` };
         return { active: false, line: 'NOTAM status unknown — not downloaded (needs internet on the ground)' };
     }
 

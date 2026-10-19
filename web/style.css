@@ -4648,10 +4648,13 @@ body {
 /* "ACT" badge on active SUA labels */
 .sua-act-badge {
     display: block;
-    font: 700 10px var(--font-ui);
+    font: 900 var(--text-xs) var(--font-ui);
     letter-spacing: 0.05em;
-    background: var(--status-warning);
-    color: var(--bg-primary);
+    /* Solid caution fill, black text (CLAUDE.md badge pattern): white on
+       --status-warning was ~2.9:1, unreadable in sun -- never seen until
+       NOTAM activation worked (review 2026-10-19). */
+    background: var(--color-caution);
+    color: #000;
     border-radius: 2px;
     padding: 0 3px;
     margin-top: 2px;

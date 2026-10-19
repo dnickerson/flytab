@@ -412,12 +412,20 @@ describe('Restricted/MOA NOTAM line (2026-10-19: activation by NOTAM now works)'
 
     it('none: as of the download; never downloaded: unknown', () => {
         expect(line({ getNotam: () => null, getUpcoming: () => null, checkedAt: () => Date.parse('2026-10-19T18:52:00Z') }).line)
-            .toBe('No activation NOTAM (downloaded 1852Z)');
+            .toBe('No activation NOTAM found (downloaded 1852Z)');
         expect(line({ getNotam: () => null, getUpcoming: () => null, checkedAt: () => Date.parse('2026-10-18T22:05:00Z') }).line)
-            .toBe('No activation NOTAM (downloaded 18 Oct 2205Z)');
+            .toBe('No activation NOTAM found (downloaded 18 Oct 2205Z)');
         expect(line({ getNotam: () => null, getUpcoming: () => null, checkedAt: () => 0 }).line)
             .toBe('NOTAM status unknown — not downloaded (needs internet on the ground)');
         expect(line(undefined).line).toBe('NOTAM status unknown — not downloaded (needs internet on the ground)');
+    });
+
+    it('an area no NOTAM is matched for (a National Security Area): says to check the NOTAMs', () => {
+        const SN = new Function(read('web/cockpit/sua-notams.js') + '\nreturn SuaNotams;')();
+        const n = new SN(); n.checkedAt = () => Date.parse('2026-10-19T18:52:00Z');
+        expect(VectorMapLayers._suaNotamStatus({ id: 'NOAKRIDGE', type: 'A', name: 'OAK RIDGE NSA, TN' }, n, NOW).line)
+            .toBe('NOTAM status not tracked for this area — check the NOTAMs');
+        expect(VectorMapLayers._suaNotamStatus(MOODY, n, NOW).line).toBe('No activation NOTAM found (downloaded 1852Z)');
     });
 
     it('the popup row: the active class, the published times, all escaped', async () => {

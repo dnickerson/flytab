@@ -22,13 +22,17 @@ const nasr = {
     getAirspaceInBounds: async (s, w, n, e) => FIX.artcc.filter((r) => GeoUtils.polygonOverlapsBox(r.boundary, s, w, n, e) || (s <= -89 && n >= 89)).map((r) => ({ ...r })),
 };
 const sua = (id) => FIX.sua.find((r) => r.id === id);
+// Every ARTCC has dozens of NOTAMs (fewest on 10-19: ZAU, 21); the fixture
+// keeps only the SUA ones, so each ARTCC asked for also gets one route NOTAM.
+const filler = (z) => ({ properties: { coreNOTAMData: { notam: { number: `F-${z}`, location: z, classification: 'FDC',
+    text: `ROUTE ${z}. V70 MEA 3000.`, effectiveStart: '2026-01-01T00:00:00Z', effectiveEnd: '2027-01-01T00:00:00Z' } } } });
 // The proxy: one request, the locations it was asked for.
 function proxy() {
     const calls = [];
     globalThis.fetch = vi.fn(async (url) => {
         calls.push(String(url));
         const locs = new URL(String(url)).searchParams.get('location').split(',');
-        return { ok: true, json: async () => ({ features: FIX.features.filter((f) => locs.includes(f.properties.coreNOTAMData.notam.location)) }) };
+        return { ok: true, json: async () => ({ features: [...locs.map(filler), ...FIX.features.filter((f) => locs.includes(f.properties.coreNOTAMData.notam.location))] }) };
     });
     return calls;
 }
@@ -168,5 +172,98 @@ describe('ARTCCs from boxes', () => {
         expect(zoa.east).toBeLessThan(0);                                     // not 165 (past the date line)
         expect(s._artccsFor({ south: 31, west: -82.8, north: 31.1, east: -82.7 })).toContain('ZJX');
         expect(s._artccsFor({ south: 31, west: -82.8, north: 31.1, east: -82.7 })).not.toContain('ZSE');
+    });
+});
+
+describe('review fixes (2026-10-19)', () => {
+    it('the proxy skipped an ARTCC (FAA error, still 200): that ARTCC keeps its activations and is not "downloaded"', async () => {
+        proxy(); const s = new SuaNotams();
+        await s.refresh(nasr, [MOODY_VIEW]);
+        expect(s.hasActiveNotam(sua('MMOODY2N'))).toBe(true);
+        const t1 = s.checkedAt(sua('MMOODY2N'));
+        // 20 min later the proxy answers 200 with nothing for ZJX
+        globalThis.fetch = vi.fn(async (url) => {
+            const locs = new URL(String(url)).searchParams.get('location').split(',').filter((z) => z !== 'ZJX');
+            return { ok: true, json: async () => ({ features: [...locs.map(filler), ...FIX.features.filter((f) => locs.includes(f.properties.coreNOTAMData.notam.location))] }) };
+        });
+        at('2026-10-19T19:20:00Z');
+        await s.refresh(nasr, [MOODY_VIEW]);
+        expect(s.hasActiveNotam(sua('MMOODY2N'))).toBe(true);
+        expect(s.checkedAt(sua('MMOODY2N'))).toBe(t1);                       // not stamped 19:20
+        expect(s._lastError).toMatch(/ZJX/);
+        // nothing at all back: a failure
+        globalThis.fetch = vi.fn(async () => ({ ok: true, json: async () => ({ features: [] }) }));
+        at('2026-10-19T19:40:00Z');
+        await s.refresh(nasr, [MOODY_VIEW]);
+        expect(s.hasActiveNotam(sua('MMOODY2N'))).toBe(true);
+        expect(s.checkedAt(sua('MMOODY2N'))).toBe(t1);
+    });
+
+    it('NASR not imported yet when the map starts: tries again once it is (no latch)', async () => {
+        const calls = proxy(); const s = new SuaNotams();
+        const empty = { getSuaInBounds: async () => [], getAirspaceInBounds: async () => [] };
+        await s.refresh(empty, [MOODY_VIEW]);
+        expect(calls).toHaveLength(0);
+        at('2026-10-19T19:00:30Z');
+        await s.refresh(nasr, [MOODY_VIEW]);
+        expect(calls).toHaveLength(1);
+        expect(s.hasActiveNotam(sua('MMOODY2N'))).toBe(true);
+    });
+
+    it('designators: several areas in one NOTAM, split polygons, HIGH/LOW, sub-areas, odd MOA names', async () => {
+        const s = new SuaNotams();
+        const rows = [
+            { id: 'R4401A', type: 'R', name: 'R-4401A CAMP SHELBY, MS' }, { id: 'R4401B', type: 'R', name: 'R-4401B CAMP SHELBY, MS' },
+            { id: 'R4401C', type: 'R', name: 'R-4401C CAMP SHELBY, MS' }, { id: 'R4804A', type: 'R', name: 'R-4804A TWIN PEAKS, NV' },
+            { id: 'R4804A_2', type: 'R', name: 'R-4804A TWIN PEAKS, NV' }, { id: 'R3202HIGH', type: 'R', name: 'R-3202 HIGH, SAYLOR CREEK, ID' },
+            { id: 'R3202LOW', type: 'R', name: 'R-3202 LOW, SAYLOR CREEK, ID' }, { id: 'W161AN', type: 'W', name: 'W-161A NORTH, SC' },
+            { id: 'W161AS', type: 'W', name: 'W-161A SOUTH, SC' }, { id: 'MSNAKEL', type: 'MOA', name: 'SNAKE LOW MOA GULFPORT, MS' },
+            { id: 'MPOWDER1CL', type: 'MOA', name: 'POWDER RIVER 1C LOW MOA. MT' }, { id: 'MHUNTERH', type: 'MOA', name: 'HUNTER HIGH MOA, CA' },
+            { id: 'MHUNTERLA', type: 'MOA', name: 'HUNTER LOW A MOA, CA' }, { id: 'MMOODY2N', type: 'MOA', name: 'MOODY 2 NORTH MOA, GA' },
+            { id: 'NOAKRIDGE', type: 'A', name: 'OAK RIDGE NSA, TN' },
+        ];
+        await s._buildIndex({ getSuaInBounds: async () => rows });
+        const m = (d) => s._match(d).sort();
+        expect(m('R4401A/B')).toEqual(['R4401A', 'R4401B']);
+        expect(m('R4401A B C')).toEqual(['R4401A', 'R4401B', 'R4401C']);
+        expect(m('R4804A')).toEqual(['R4804A', 'R4804A_2']);
+        expect(m('R3202 HIGH')).toEqual(['R3202HIGH']);
+        expect(m('R3202HIGH')).toEqual(['R3202HIGH']);
+        expect(m('R3202')).toEqual(['R3202HIGH', 'R3202LOW']);
+        expect(m('W161A')).toEqual(['W161AN', 'W161AS']);
+        expect(m('W161AN')).toEqual(['W161AN']);
+        expect(m('SNAKE LOW MOA')).toEqual(['MSNAKEL']);
+        expect(m('POWDER RIVER 1C LOW MOA')).toEqual(['MPOWDER1CL']);
+        expect(m('HUNTER HIGH MOA AND HUNTER LOW A MOA')).toEqual(['MHUNTERH', 'MHUNTERLA']);
+        expect(m('LGT OUT/NIGHT VISION GOGGLE TRAINING MOODY 2 NORTH MOA')).toEqual(['MMOODY2N']);
+        expect(m('MOODY 2 MOA')).toEqual([]);
+        expect(m('AR602')).toEqual([]);
+        expect(SuaNotams.matchable(rows.at(-1))).toBe(false);                // an NSA
+        expect(s.checkedAt({ ...rows.at(-1), boundary: [[36, -84]] })).toBe(0);
+    });
+
+    it('a wrapped NOTAM line still parses; a wrapped TFR is still not SUA', () => {
+        const f = (text) => ({ properties: { coreNOTAMData: { notam: { text, effectiveStart: '2026-10-19T12:00:00Z', effectiveEnd: '2026-10-19T23:59:00Z', location: 'ZJX' } } } });
+        expect(SuaNotams.parseActivation(f('!SUAE 10/050 ZJX AIRSPACE\nR2904A ACT\nSFC-1700FT'))?.designator).toBe('R2904A');
+        expect(SuaNotams.parseActivation(f('FL..MAYPORT, FL..TEMPORARY\nFLIGHT RESTRICTIONS. WI AN AREA ... AIRSPACE R2904A ACT'))).toBe(null);
+    });
+
+    it('a PERM activation (no end) survives a restart; the clock set back does not block a refetch', async () => {
+        const s = new SuaNotams();
+        s._acts.set('R2904A', [{ number: '1', start: 0, end: Infinity, text: 'x', artcc: 'ZJX' }]); s._save();
+        const t = new SuaNotams();
+        expect(t._acts.get('R2904A')[0].end).toBe(Infinity);
+        expect(t.hasActiveNotam({ id: 'R2904A' })).toBe(true);
+        const calls = proxy(); const u = new SuaNotams();
+        u._fetchedAt.set('ZJX', Date.parse('2026-10-20T19:00:00Z')); u._fetchedAt.set('ZTL', Date.parse('2026-10-20T19:00:00Z'));
+        u._fetchedAt.set('ZMA', Date.parse('2026-10-20T19:00:00Z'));          // a day ahead of the clock
+        await u.refresh(nasr, [MOODY_VIEW]);
+        expect(calls).toHaveLength(1);
+    });
+
+    it('overlapping activations: "until" the later end', () => {
+        const s = new SuaNotams();
+        s._acts.set('X', [{ start: 0, end: Date.parse('2026-10-19T20:00:00Z') }, { start: 0, end: Date.parse('2026-10-20T01:20:00Z') }]);
+        expect(s.getNotam({ id: 'X' }).end).toBe(Date.parse('2026-10-20T01:20:00Z'));
     });
 });
