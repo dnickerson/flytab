@@ -153,7 +153,9 @@ class VectorMapLayers {
                 const pt = L.point(endX - rect.left, endY - rect.top);
                 const latlng = this._map.containerPointToLatLng(pt);
                 this._lastTouchTap = Date.now();
-                this._onMapClick({ latlng });
+                this._lastClickHandled = false;
+                try { this._onMapClick({ latlng }); }
+                finally { this._touchHandled = this._lastClickHandled; }   // for this touch's polygon click
             }
         }, { passive: true });
     }
@@ -1780,7 +1782,9 @@ class VectorMapLayers {
         const pt = this._map.latLngToContainerPoint(e.latlng);
         const hit = this._findNearestMarker(pt, HIT_PX);
 
+        this._lastClickHandled = false;
         if (hit) {
+            this._lastClickHandled = hit.type !== 'fix';
             if (hit.type === 'airport' && this._onAirportClick) {
                 this._onAirportClick(hit.data);
             } else if (hit.type === 'navaid' && this._onNavaidClick) {
@@ -1801,6 +1805,7 @@ class VectorMapLayers {
         // ensuring any aviation feature beats a traffic marker in the 31–60px range.
         const fallback = this._findNearestMarker(pt, 60);
         if (fallback) {
+            this._lastClickHandled = fallback.type !== 'fix';
             if (fallback.type === 'airport' && this._onAirportClick) {
                 this._onAirportClick(fallback.data);
             } else if (fallback.type === 'navaid' && this._onNavaidClick) {
@@ -1817,8 +1822,7 @@ class VectorMapLayers {
         }
 
         // No aviation marker hit — check traffic markers
-        // A traffic hit: the airspace polygon click that follows is skipped.
-        if (this._onTrafficTap && this._onTrafficTap(pt)) this._touchHandledAt = Date.now();
+        if (this._onTrafficTap && this._onTrafficTap(pt)) this._lastClickHandled = true;
     }
 
 
@@ -1848,13 +1852,21 @@ class VectorMapLayers {
         // Class B/C shelves are stored as outer rings without their holes, so a
         // point in the surface area is also "inside" the shelves around it (KCLT
         // listed 10,000-1,800 too). The lowest floor of a name is the right one.
-        const seen = new Set();
-        return out.sort((x, y) => floor(x) - floor(y)).filter((a) => {
-            if (a.kind !== 'class') return true;
+        // Names are shared by separate areas (7 "Columbus Class D"): every area at
+        // the name's lowest floor is kept, not only the first (review 6).
+        const low = new Map();
+        for (const a of out) if (a.kind === 'class') {
             const k = `${a.rec.class}|${a.rec.name}`;
-            if (seen.has(k)) return false;
-            seen.add(k); return true;
-        });
+            low.set(k, Math.min(low.get(k) ?? Infinity, floor(a)));
+        }
+        const shown = new Set();   // two areas that would print the same row: one row
+        return out.filter((a) => {
+            if (a.kind !== 'class') return true;
+            if (floor(a) !== low.get(`${a.rec.class}|${a.rec.name}`)) return false;
+            const row = `${a.rec.class}|${a.rec.name}|${floor(a)}|${a.rec.upper_ft ?? a.rec.upper}`;
+            if (shown.has(row)) return false;
+            shown.add(row); return true;
+        }).sort((x, y) => floor(x) - floor(y));
     }
 
     /** "SFC", "UNL", or "10,000 ft" (MSL as published). */
@@ -1917,15 +1929,20 @@ class VectorMapLayers {
         // itself under the finger): not a map tap.
         if (Date.now() - this._anyTouchAt < 1000 && this._mapTouchAt < this._anyTouchAt) return;
         if (window.app?.routeTable?.isEditing?.()) return;
-        // The tap is (or was, on the touch path) an airport, navaid or CB tap, or
-        // traffic: that wins, no airspace popup beside it. Checked from the point,
-        // not a timestamp: on desktop this click comes first, and a real airspace
-        // tap soon after a marker tap was dropped (review 2026-10-18). A fix tap
-        // does nothing outside route editing, so a fix nearby does not count.
-        const pt = this._map.latLngToContainerPoint(e.latlng);
-        const near = this._findNearestMarker(pt, 60);
-        if (near && near.type !== 'fix') return;
-        if (Date.now() - (this._touchHandledAt || 0) < 600) return;   // traffic (touch path)
+        // An airport, navaid or CB tap, or traffic, wins: no airspace popup beside
+        // it. For a touch, what the touch path did for THIS touch decides (the
+        // click's point can differ from touchend's by the finger's slide; a
+        // timestamp dropped real airspace taps after a marker tap -- reviews 5/6).
+        // A desktop click comes first: decided from the point. A fix does not
+        // count (a fix tap does nothing outside route editing).
+        const touchRanForThis = this._mapTouchAt > 0 && this._lastTouchTap >= this._mapTouchAt
+            && Date.now() - this._lastTouchTap < 1000;
+        if (touchRanForThis) {
+            if (this._touchHandled) return;
+        } else {
+            const near = this._findNearestMarker(this._map.latLngToContainerPoint(e.latlng), 60);
+            if (near && near.type !== 'fix') return;
+        }
         this._showAirspacePopup(e.latlng);
     }
 

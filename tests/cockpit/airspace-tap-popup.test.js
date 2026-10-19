@@ -43,6 +43,15 @@ async function layers() {
     return v;
 }
 const names = (areas) => areas.map((a) => a.rec.id);
+/** A finger tap as the constructor's touch handlers run it (touchstart on the map, touchend's
+ *  _onMapClick), then -- when `click` -- the polygon click Leaflet sends ~300 ms later. */
+function touchTap(v, latlng, { click = latlng } = {}) {
+    v._anyTouchAt = v._mapTouchAt = Date.now();
+    v._lastTouchTap = Date.now();
+    v._lastClickHandled = false;
+    try { v._onMapClick({ latlng }); } finally { v._touchHandled = v._lastClickHandled; }
+    if (click) v._onAirspaceClick({ latlng: click });
+}
 // The text a pilot reads: each leaf element's text, space-separated.
 const words = (el) => { const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT); const out = []; while (w.nextNode()) { const t = w.currentNode.textContent.trim(); if (t) out.push(t); } return out.join(' '); };
 
@@ -175,8 +184,7 @@ describe('the MOA method (2026-10-18): Leaflet polygon click, the app tap path u
         expect(v._showAirspacePopup).not.toHaveBeenCalled();
         const w = await layers(); w._showAirspacePopup = vi.fn(() => true);
         w._findNearestMarker = () => null; w._onTrafficTap = () => true;
-        w._onMapClick({ latlng: L.latLng(35.4, -81.2) });
-        w._onAirspaceClick({ latlng: L.latLng(35.4, -81.2) });
+        touchTap(w, L.latLng(35.4, -81.2));
         expect(w._showAirspacePopup).not.toHaveBeenCalled();
     });
 
@@ -252,5 +260,71 @@ describe('round 5 fixes (2026-10-18)', () => {
         el.innerHTML = v._airspacePopupHtml([{ kind: 'trsa', rec: { id: 't', name: 'T TRSA', freqs: [], lower_ft: 0, upper_ft: null } }]);
         expect(el.querySelector('.as-pop-alt').textContent).toBe('ceiling not published – SFC');
         expect(el.textContent).toMatch(/Check the sectional for the ceiling/);
+    });
+});
+
+describe('round 6 fixes (2026-10-18)', () => {
+    beforeEach(() => { delete window.app; });
+
+    it('the touch path\'s own result decides, not a re-test at the click (the finger slid)', async () => {
+        // touchend lands on the airport (opens it); the click comes from where the finger
+        // slid, just past 60 px: no airspace popup beside the airport panel
+        const v = await layers(); v._showAirspacePopup = vi.fn(() => true); v._onAirportClick = vi.fn();
+        const A = L.latLng(35.21, -80.94), B = L.latLng(35.22, -80.94);
+        v._findNearestMarker = (pt) => (v._at === A ? { type: 'airport', data: {} } : null);
+        v._map.latLngToContainerPoint = (ll) => { v._at = ll; return L.point(0, 0); };
+        touchTap(v, A, { click: B });
+        expect(v._onAirportClick).toHaveBeenCalledTimes(1);
+        expect(v._showAirspacePopup).not.toHaveBeenCalled();
+        // the other way: touchend found nothing, the click point is near the airport -> the popup
+        v._onAirportClick.mockClear();
+        touchTap(v, B, { click: A });
+        expect(v._onAirportClick).not.toHaveBeenCalled();
+        expect(v._showAirspacePopup).toHaveBeenCalledTimes(1);
+    });
+
+    it('a fix at touchend does not count (a fix tap does nothing outside editing)', async () => {
+        const v = await layers(); v._showAirspacePopup = vi.fn(() => true); v._onFixClick = vi.fn();
+        v._findNearestMarker = () => ({ type: 'fix', data: {} });
+        touchTap(v, L.latLng(35.4, -81.2));
+        expect(v._showAirspacePopup).toHaveBeenCalledTimes(1);
+    });
+
+    it('an airspace tap 300 ms after a traffic tap opens (was a 600 ms window)', async () => {
+        vi.useFakeTimers({ now: new Date('2026-10-18T22:00:00Z') });
+        const v = await layers(); v._showAirspacePopup = vi.fn(() => true); v._findNearestMarker = () => null;
+        let traffic = true; v._onTrafficTap = () => traffic;
+        touchTap(v, L.latLng(35.4, -81.2));
+        expect(v._showAirspacePopup).not.toHaveBeenCalled();                  // same touch: traffic wins
+        vi.advanceTimersByTime(300); traffic = false;
+        touchTap(v, L.latLng(35.4, -81.2));
+        expect(v._showAirspacePopup).toHaveBeenCalledTimes(1);
+        vi.useRealTimers();
+    });
+
+    it('a marker handler that throws still records this touch as handled', async () => {
+        const v = await layers(); v._showAirspacePopup = vi.fn(() => true);
+        v._findNearestMarker = () => ({ type: 'airport', data: {} });
+        v._onAirportClick = () => { throw new Error('boom'); };
+        expect(() => touchTap(v, L.latLng(35.4, -81.2), { click: null })).toThrow('boom');
+        v._findNearestMarker = () => null;
+        v._onAirspaceClick({ latlng: L.latLng(35.4, -81.2) });
+        expect(v._showAirspacePopup).not.toHaveBeenCalled();
+    });
+
+    it('the constructor\'s touchend records the result the way touchTap does', () => {
+        const src = read('web/cockpit/vector-map-layers.js');
+        expect(src).toMatch(/this\._lastTouchTap = Date\.now\(\);\s*this\._lastClickHandled = false;\s*try \{ this\._onMapClick\(\{ latlng \}\); \}\s*finally \{ this\._touchHandled = this\._lastClickHandled; \}/);
+        expect(src).not.toMatch(/_touchHandledAt/);
+    });
+
+    it('two areas with one name at the lowest floor: both listed; one that prints the same row: once', async () => {
+        const v = await layers();
+        const add = (id, d, lower, upper) => {
+            const p = L.polygon(box(36.0, -79.0, d)); p._flyArea = { kind: 'class', rec: { id, name: 'Greensboro Class D', class: 'D', lower_ft: lower, upper_ft: upper, boundary: box(36.0, -79.0, d) } };
+            v._airspacePolygons.set(id, p);
+        };
+        add('D-a', 0.05, 0, 3400); add('D-b', 0.1, 0, 2500); add('D-c', 0.2, 0, 3400); add('D-hi', 0.3, 1500, 3400);
+        expect(names(v._areasAt(36.0, -79.0))).toEqual(['D-a', 'D-b']);       // D-c same row as D-a; D-hi higher floor
     });
 });
