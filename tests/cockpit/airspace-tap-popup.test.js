@@ -13,6 +13,7 @@ const read = (p) => readFileSync(p, 'utf8');
 new Function(read('web/lib/leaflet/leaflet.js')).call(globalThis);
 globalThis.GeoUtils = new Function(read('web/shared/geo-utils.js') + '\nreturn GeoUtils;')();
 globalThis.CockpitConfig = { get: () => ({}) };
+globalThis.isTapOnMapOverlay = new Function(read('web/shared/tap-utils.js') + '\nreturn isTapOnMapOverlay;')();   // the real one
 const VectorMapLayers = new Function(read('web/cockpit/vector-map-layers.js') + '\nreturn VectorMapLayers;')();
 
 const box = (la, lo, d) => [[la - d, lo - d], [la - d, lo + d], [la + d, lo + d], [la + d, lo - d]];
@@ -158,7 +159,7 @@ describe('full review fixes (2026-10-18)', () => {
         expect(el.querySelector('.as-pop-notam-text').textContent).toBe('X'.repeat(120) + '…');
         window.SuaNotams = { getNotam: () => null };
         el.innerHTML = v._airspacePopupHtml([{ kind: 'sua', rec: { id: 'm', name: 'M', type: 'MOA', lower_ft: 500, upper_ft: 10000 } }]);
-        expect(el.querySelector('.as-pop-notam').textContent).toBe('No activating NOTAM found (NOTAMs are fetched on the ground)');
+        expect(el.querySelector('.as-pop-notam').textContent).toBe('Activation not confirmed — check NOTAMs (fetched on the ground)');
     });
 
     it('9. a TRSA map label is text, not HTML', async () => {
@@ -326,5 +327,64 @@ describe('round 6 fixes (2026-10-18)', () => {
         };
         add('D-a', 0.05, 0, 3400); add('D-b', 0.1, 0, 2500); add('D-c', 0.2, 0, 3400); add('D-hi', 0.3, 1500, 3400);
         expect(names(v._areasAt(36.0, -79.0))).toEqual(['D-a', 'D-b']);       // D-c same row as D-a; D-hi higher floor
+    });
+});
+
+describe('review 7 (2026-10-18): the constructor\'s real touch listeners', () => {
+    beforeEach(() => { delete window.app; document.body.innerHTML = ''; });
+
+    /** A real VectorMapLayers on a real Leaflet map (jsdom: zero size, so container point 0,0 is the centre). */
+    function realLayers() {
+        const div = document.createElement('div'); document.body.appendChild(div);
+        const map = L.map(div, { zoomControl: false }).setView([35.4, -81.2], 10);
+        const v = new VectorMapLayers(map, {});
+        v._showAirspacePopup = vi.fn(() => true);
+        v._findNearestMarker = () => null; v._onTrafficTap = () => false;
+        return { v, map, container: map.getContainer() };
+    }
+    const touch = (type, el, x = 0, y = 0) => {
+        const ev = new Event(type, { bubbles: true, cancelable: true });
+        const t = [{ clientX: x, clientY: y, target: el }];
+        Object.defineProperty(ev, 'touches', { value: type === 'touchend' ? [] : t });
+        Object.defineProperty(ev, 'changedTouches', { value: t });
+        el.dispatchEvent(ev);
+    };
+    const polygonClick = (v) => v._onAirspaceClick({ latlng: L.latLng(35.4, -81.2) });
+
+    it('a tap on the map: touchend runs the tap path, the polygon click opens the popup', () => {
+        const { v, map } = realLayers();
+        const onMap = map.getPane('overlayPane');
+        touch('touchstart', onMap); touch('touchend', onMap);
+        expect(v._lastTouchTap).toBeGreaterThan(0);
+        polygonClick(v);
+        expect(v._showAirspacePopup).toHaveBeenCalledTimes(1);
+    });
+
+    it('the same tap on an airport: the airport opens, the polygon click opens nothing', () => {
+        const { v, map } = realLayers();
+        v._onAirportClick = vi.fn(); v._findNearestMarker = () => ({ type: 'airport', data: {} });
+        const onMap = map.getPane('markerPane');
+        touch('touchstart', onMap); touch('touchend', onMap);
+        expect(v._onAirportClick).toHaveBeenCalledTimes(1);
+        polygonClick(v);
+        expect(v._showAirspacePopup).not.toHaveBeenCalled();
+    });
+
+    it('PLATE / the plate bar ✕ (in the map container, hidden on touchstart): its click opens nothing', () => {
+        const { v, container } = realLayers();
+        const btn = document.createElement('button'); btn.className = 'plate-toggle-btn';
+        container.appendChild(btn);
+        touch('touchstart', btn); btn.remove();                // touchend goes to the removed button
+        polygonClick(v);
+        expect(v._showAirspacePopup).not.toHaveBeenCalled();
+    });
+
+    it('a touch that starts on a Leaflet popup is not a map touch', () => {
+        const { v, map } = realLayers();
+        const pop = document.createElement('div'); pop.className = 'leaflet-popup';
+        map.getPane('popupPane').appendChild(pop);
+        touch('touchstart', pop);
+        polygonClick(v);
+        expect(v._showAirspacePopup).not.toHaveBeenCalled();
     });
 });

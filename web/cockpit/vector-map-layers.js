@@ -113,12 +113,13 @@ class VectorMapLayers {
         this._tapStart = null;
         const container = this._map.getContainer();
         // Where the latest touch started, for _onAirspaceClick: a touch on a
-        // button that hides itself (an alert's ✕) sends its click to the map
-        // underneath (review 2026-10-18).
+        // button that hides itself (an alert's ✕, PLATE, the plate bar's ✕ --
+        // those two sit in this container, outside the map pane) sends its
+        // click to the map underneath (reviews 5 and 7, 2026-10-18).
         this._anyTouchAt = 0; this._mapTouchAt = 0;
         document.addEventListener('touchstart', () => { this._anyTouchAt = Date.now(); }, { capture: true, passive: true });
         container.addEventListener('touchstart', (e) => {
-            if (!isTapOnMapOverlay(e.target)) this._mapTouchAt = Date.now();
+            if (VectorMapLayers._isMapTouch(e.target, container)) this._mapTouchAt = Date.now();
         }, { capture: true, passive: true });
         container.addEventListener('touchstart', (e) => {
             // Don't enter tap-detection if the touch starts on a Leaflet popup
@@ -158,6 +159,13 @@ class VectorMapLayers {
                 finally { this._touchHandled = this._lastClickHandled; }   // for this touch's polygon click
             }
         }, { passive: true });
+    }
+
+    /** A touch that starts on the map itself (tiles, airspace, markers), not a popup or a control over it. */
+    static _isMapTouch(target, container) {
+        if (!target || isTapOnMapOverlay(target)) return false;
+        if (target === container) return true;
+        return !!(target.closest && target.closest('.leaflet-map-pane'));
     }
 
     /** True if the cache covers the requested bounds at the same zoom. */
@@ -1869,7 +1877,8 @@ class VectorMapLayers {
         }).sort((x, y) => floor(x) - floor(y));
     }
 
-    /** "SFC", "UNL", or "10,000 ft" (MSL as published). */
+    /** "SFC", "UNL", or "10,000 ft" -- the NASR number as is. The bundle does not
+     *  say MSL or AGL (build_nasr ignores the reference; some MOA floors are AGL). */
     static _fmtAltFt(ft, isFloor) {
         if (ft == null || !Number.isFinite(ft)) return isFloor ? 'SFC' : '?';
         // NASR "unlimited": -1 for SUA (build_nasr _parse_altitude; 121 areas,
@@ -1895,7 +1904,8 @@ class VectorMapLayers {
                 const n = notams ? notams.getNotam(rec) : null;
                 const status = n
                     ? `<div class="as-pop-notam is-active">⚠ ACTIVE per NOTAM${n.text ? `<br><span class="as-pop-notam-text">${esc(String(n.text).length > 120 ? String(n.text).slice(0, 120) + '…' : String(n.text))}</span>` : ''}</div>`
-                    : `<div class="as-pop-notam">No activating NOTAM found (NOTAMs are fetched on the ground)</div>`;
+                    // Not "not active": NOTAM matching misses most SUA names (review 7) -- see the NOTAMs.
+                    : `<div class="as-pop-notam">Activation not confirmed — check NOTAMs (fetched on the ground)</div>`;
                 return `<div class="as-pop-row as-pop-sua">
                     <div class="as-pop-head"><span class="as-pop-name">${esc(rec.name ?? rec.id)}</span><span class="as-pop-kind">${esc(rec.type || 'SUA')}</span></div>
                     <div class="as-pop-alt">${esc(alt(rec))}</div>${status}</div>`;

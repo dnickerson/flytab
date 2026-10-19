@@ -4671,10 +4671,10 @@ body {
 .as-popup-container .leaflet-popup-content { margin: 10px 12px; }
 .as-popup-container .leaflet-popup-tip { background: var(--bg-primary); }
 .as-popup-container .leaflet-popup-close-button {
-    width: 44px !important; height: 44px !important;
-    font-size: 28px !important; line-height: 44px !important;
+    width: var(--touch-min, 56px) !important; height: var(--touch-min, 56px) !important;
+    font-size: 28px !important; line-height: var(--touch-min, 56px) !important;
 }
-.as-pop { min-width: 220px; padding-right: 40px; }   /* clear of the 44 px close button */
+.as-pop { min-width: 220px; padding-right: 52px; }   /* clear of the 56 px close button */
 .as-pop-row { padding: 6px 0; border-bottom: 1px solid var(--border-light); }
 .as-pop-row:last-child { border-bottom: none; }
 .as-pop-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
