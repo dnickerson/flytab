@@ -154,6 +154,7 @@ describe('NOTAM activation on the map (2026-10-19)', () => {
         expect(v._suaPolygons.get('BULL')._suaActive).toBe(true);
         expect(v._suaPolygons.get('BULL').options.fillOpacity).toBe(VectorMapLayers.SUA_ACTIVE_OVERRIDES.fillOpacity);
         expect(v._suaPolygons.get('BULL_lbl').options.icon.options.html).toMatch(/sua-act-badge">ACT</);   // in the icon, not only the DOM
+        expect(v._suaPolygons.get('BULL_lbl').options.icon.options.iconAnchor).toEqual([24, 17]);        // same stack position
         active = false; await at(v, 10);
         expect(v._suaPolygons.get('BULL_lbl').options.icon.options.html).not.toMatch(/sua-act-badge/);
     });

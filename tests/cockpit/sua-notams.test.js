@@ -335,12 +335,21 @@ describe('review 3 fixes (2026-10-19)', () => {
         return { ok: true, json: async () => fn(locs) };
     }); };
 
-    it('an oceanic ARTCC may answer with nothing: counted as downloaded; a domestic one is not', async () => {
-        answer((locs) => ({ failed: [], features: locs.filter((z) => z !== 'ZWY' && z !== 'ZJX').map(filler) }));
+    it('no ARTCC answering with nothing counts as downloaded -- oceanic ZWY too (it had 21, ZAK 69, live 10-19)', async () => {
+        const asked = [];
+        answer((locs) => { asked.push(locs); return { failed: [], features: locs.filter((z) => z !== 'ZWY' && z !== 'ZJX').map(filler) }; });
         const s = new SuaNotams();
         await s.refresh(nasr, [NY]);
-        expect(s._fetchedAt.get('ZWY')).toBe(Date.parse('2026-10-19T19:00:00Z'));
+        expect(asked[0]).toContain('ZWY');
+        expect(s._fetchedAt.has('ZWY')).toBe(false);
         expect(s._fetchedAt.has('ZJX')).toBe(false);
+    });
+
+    it('ZAP (not an NMS location: never a NOTAM list back) is not asked for', async () => {
+        const s = new SuaNotams();
+        await s._loadArtccs(nasr);
+        expect(s._artccBoxes.map((a) => a.id)).not.toContain('ZAP');
+        expect(s._artccBoxes.map((a) => a.id)).toContain('ZAK');
     });
 
     it('an FAA error is asked again after a minute; an empty domestic answer after 15', async () => {
@@ -359,9 +368,10 @@ describe('review 3 fixes (2026-10-19)', () => {
         await s.refresh(nasr, [MOODY_VIEW]);
         const wiped = { getSuaInBounds: async () => [], getAirspaceInBounds: nasr.getAirspaceInBounds };
         at('2026-10-19T19:20:00Z');
+        const calls = globalThis.fetch.mock.calls.length;
         await s.refresh(wiped, [MOODY_VIEW]);
+        expect(globalThis.fetch.mock.calls.length).toBe(calls);               // the FAA is not asked
         expect(s.hasActiveNotam(sua('MMOODY2N'))).toBe(true);
-        expect(s._lastError).toMatch(/NASR/);
     });
 
     it('ranges and AND lists', async () => {
@@ -372,6 +382,8 @@ describe('review 3 fixes (2026-10-19)', () => {
         const m = (d) => s._match(d).sort();
         expect(m('R4401A-E')).toEqual(['R4401A', 'R4401B', 'R4401C', 'R4401D', 'R4401E']);
         expect(m('R4401A THRU C')).toEqual(['R4401A', 'R4401B', 'R4401C']);
+        expect(m('R4401A THRU R4401E')).toEqual(['R4401A', 'R4401B', 'R4401C', 'R4401D', 'R4401E']);
+        expect(m('R4401A-R4401C')).toEqual(['R4401A', 'R4401B', 'R4401C']);
         expect(m('W161A NORTH AND SOUTH')).toEqual(['W161AN', 'W161AS']);
         expect(m('R3202 HIGH AND LOW')).toEqual(['R3202HIGH', 'R3202LOW']);
         expect(m('RESERVE AND DOME MOA')).toEqual(['MDOME', 'MRESERVE']);

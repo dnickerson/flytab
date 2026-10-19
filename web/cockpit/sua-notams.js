@@ -23,10 +23,10 @@ class SuaNotams {
     static STORE_KEY = 'flytab_sua_notams';
     static STALE_MS = 15 * 60 * 1000;      // refetch an ARTCC after this (when online)
     static ARTCC_MARGIN_DEG = 2;
-    // Oceanic ARTCCs: their NASR boxes reach the coast (ZWY from 77 W), but on
-    // 10-19 every offshore W-area NOTAM came under a domestic ARTCC. They may
-    // answer with nothing; a domestic one never does (fewest: ZAU, 21).
-    static OCEANIC = new Set(['ZWY', 'ZAK', 'ZAP']);     // 1 held the issuing ARTCC for 364/364 on 10-19; 2 for margin (review)
+    // NASR ARTCCs the NMS API does not take as a location (ZAP: no NOTAM list
+    // back, 10-19). Every other one answered with NOTAMs that day (fewest:
+    // ZSU 18, ZAU 21; the oceanic ZWY 21, ZAK 69 -- ZAK alone issues W-237H/J).
+    static NOT_NMS = new Set(['ZAP']);     // 1 held the issuing ARTCC for 364/364 on 10-19; 2 for margin (review)
     static RETRY_MS = 60 * 1000;           // after a failed fetch
     static KEEP_TEXT = 300;                // chars of NOTAM text kept
 
@@ -115,6 +115,8 @@ class SuaNotams {
         const due = [...artccs].filter((z) => (age(z) > SuaNotams.STALE_MS || age(z) < 0) && !waiting(z)).sort();
         const sinceFail = now - this._failedAt;
         if (!due.length || (sinceFail >= 0 && sinceFail < SuaNotams.RETRY_MS)) return;
+        // NASR wiped (Reset NASR Data): nothing to match -- don't ask the FAA every minute.
+        if (!(await nasr.getSuaInBounds(-90, -180, 90, 180, 1)).length) return;
 
         const base = (typeof CockpitConfig !== 'undefined' && CockpitConfig.notamBase)
             || (typeof Settings !== 'undefined' && Settings.workerBase) || 'https://www.flywhere.app/api';
@@ -125,12 +127,11 @@ class SuaNotams {
             const features = data.features || [];
             // Not fetched (kept as it was, not "no activation NOTAM"; reviews
             // 2026-10-19): one the proxy lists as `failed` (tools/notam-proxy.py
-            // since 10-19), and a domestic ARTCC with nothing back -- the proxy
-            // used to skip FAA errors silently, and the FAA may answer without
-            // a list. An oceanic one may truly have none.
+            // since 10-19), and one with nothing back -- the older proxy skips
+            // FAA errors silently, and every ARTCC has NOTAMs.
             const got = new Set(features.map((f) => SuaNotams._artccId(f?.properties?.coreNOTAMData?.notam?.location)));
             const failed = new Set((Array.isArray(data.failed) ? data.failed : []).map(SuaNotams._artccId));
-            const ok = due.filter((z) => !failed.has(z) && (got.has(z) || SuaNotams.OCEANIC.has(z)));
+            const ok = due.filter((z) => !failed.has(z) && got.has(z));
             const t = Date.now();
             for (const z of due) {
                 if (ok.includes(z)) this._retryAt.delete(z);
@@ -222,7 +223,7 @@ class SuaNotams {
         const all = await nasr.getAirspaceInBounds(-90, -180, 90, 180, 100000);
         this._artccBoxes = all.filter((a) => a.class === 'ARTCC')
             .map((a) => ({ id: SuaNotams._artccId(a.id), ...SuaNotams._bbox((a.boundary || []).filter((p) => p[1] < 0)) }))
-            .filter((a) => a.id && Number.isFinite(a.south));
+            .filter((a) => a.id && Number.isFinite(a.south) && !SuaNotams.NOT_NMS.has(a.id));
     }
 
     /**
@@ -287,8 +288,8 @@ class SuaNotams {
         const out = new Set();
         // "R4401A-E", "R4401A THRU E" -> "R4401A B C D E" (before the hyphen is lost)
         const ranged = String(designator || '').toUpperCase().replace(
-            /\b([RWAP]-?\d{1,4})([A-Z])\s*(?:-|THRU|THROUGH)\s*([A-Z])\b/g,
-            (all, base, a, b) => (b > a && b.charCodeAt(0) - a.charCodeAt(0) < 12
+            /\b([RWAP]-?\d{1,4})([A-Z])\s*(?:-|THRU|THROUGH)\s*([RWAP]-?\d{1,4})?([A-Z])\b/g,
+            (all, base, a, base2, b) => ((!base2 || base2.replace('-', '') === base.replace('-', '')) && b > a && b.charCodeAt(0) - a.charCodeAt(0) < 12
                 ? base + [...Array(b.charCodeAt(0) - a.charCodeAt(0) + 1)].map((_, i) => String.fromCharCode(a.charCodeAt(0) + i)).join(' ')
                 : all));
         let seg = ` ${SuaNotams._norm(ranged)} `;

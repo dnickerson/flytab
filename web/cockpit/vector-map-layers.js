@@ -1158,12 +1158,12 @@ class VectorMapLayers {
                             ? { ...base, ...VectorMapLayers.SUA_ACTIVE_OVERRIDES }
                             : base);
                         existingPoly._suaActive = isActive;
-                        // The label is rebuilt with the ACT badge (or without):
-                        // Leaflet re-creates a marker's element from its icon
-                        // HTML when the layer is shown again, so editing the
-                        // element lost the badge after a hide/show (review).
+                        // A new icon with the ACT badge (or without), in the same
+                        // stack position: Leaflet re-creates a marker's element
+                        // from its icon when the layer is shown again, so editing
+                        // the element lost the badge after a hide/show (review).
                         const lbl = this._suaPolygons.get(sua.id + '_lbl');
-                        if (lbl) { this._suaLayer.removeLayer(lbl); this._suaPolygons.delete(sua.id + '_lbl'); }
+                        if (lbl) lbl.setIcon(VectorMapLayers._suaLabelIcon(sua, isActive, lbl._suaStack || 0));
                     }
                     label(sua, isActive);
                     continue;
@@ -1204,14 +1204,24 @@ class VectorMapLayers {
     }
 
     /** The ceiling/floor (and ACT) label at the area's centroid, stacked off labels nearby. */
-    _addSuaLabel(sua, isActive, usedLabelPos) {
-        // Altitude label at centroid with collision offset
-        let labelPos = VectorMapLayers._polygonCentroid((sua.boundary || []).map(pt => [pt[0], pt[1]]));
+    /** The label's icon: ceiling over floor, the ACT badge when active, raised by its stack position. */
+    static _suaLabelIcon(sua, isActive, stackCount) {
         const altLower = sua.lower_ft === 0 ? 'SFC' : (sua.lower_ft >= 1000 ? `${Math.round(sua.lower_ft / 100)}` : sua.lower_ft);
         const altUpper = sua.upper_ft != null ? (sua.upper_ft < 0 ? 'UNL' : sua.upper_ft >= 1000 ? `${Math.round(sua.upper_ft / 100)}` : sua.upper_ft) : '?';
         const actBadge = isActive ? '<span class="sua-act-badge">ACT</span>' : '';
         const altHtml  = `${altUpper}<br><span class="as-alt-floor">${altLower}</span>${actBadge}`;
         const typeClass = `sua-lbl-${(sua.type || 'moa').toLowerCase()}`;
+        return L.divIcon({
+            className: `as-alt-label ${typeClass}${isActive ? ' sua-lbl-active' : ''}`,
+            html: altHtml,
+            iconSize: [48, 34],
+            iconAnchor: [24, 17 - stackCount * 38],
+        });
+    }
+
+    _addSuaLabel(sua, isActive, usedLabelPos) {
+        // Altitude label at centroid with collision offset
+        let labelPos = VectorMapLayers._polygonCentroid((sua.boundary || []).map(pt => [pt[0], pt[1]]));
 
         // Offset label vertically if another label is within ~0.05° of this pos
         const SUA_CLOSE = 0.05;
@@ -1221,15 +1231,11 @@ class VectorMapLayers {
         usedLabelPos.push(labelPos);
 
         const marker = L.marker(labelPos, {
-            icon: L.divIcon({
-                className: `as-alt-label ${typeClass}${isActive ? ' sua-lbl-active' : ''}`,
-                html: altHtml,
-                iconSize: [48, 34],
-                iconAnchor: [24, 17 - stackCount * 38],
-            }),
+            icon: VectorMapLayers._suaLabelIcon(sua, isActive, stackCount),
             interactive: false,
             zIndexOffset: -150,
         });
+        marker._suaStack = stackCount;
         marker.addTo(this._suaLayer);
         this._suaPolygons.set(sua.id + '_lbl', marker);
     }
