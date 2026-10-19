@@ -86,10 +86,15 @@ class WxBriefing {
     setFlightPlan(plan) {
         const before = this._getStationList().join(',');
         this._flightPlan = plan;
-        // A new route's NOTAMs, not the old route's for up to 15 min (2026-10-19).
+        // A new route's NOTAMs, not the old route's for up to 15 min; its saved
+        // ones (and their TFRs on the map) at once, also at startup (2026-10-19).
         if (this._getStationList().join(',') !== before) {
             this._notamFetchedAt = this._enrouteNotamFetchedAt = 0;
-            if (this.visible) Promise.resolve().then(() => this._fetchColdSections());
+            this._notams = []; this._enrouteNotams = [];
+            this._notamStale = this._notamMissing = this._enrouteNotamStale = this._enrouteNotamMissing = null;
+            this._notamFetchError = this._enrouteNotamFetchError = null;
+            Promise.resolve().then(() => this._restoreSavedNotams())
+                .then(() => { if (this.visible) this._fetchColdSections(); }).catch(() => {});
         }
         if (plan?.weather_cache?.mos) this._mosData = this._normalizeMos(plan.weather_cache.mos);
         this._routeCoords = null;
@@ -474,7 +479,10 @@ class WxBriefing {
         const loading = this._notams === null || this._enrouteNotams === null;
         const all = loading ? [] : this._sortedNotams();
         const critical = all.filter(n => this._notamTier(n) === 0);
-        const fetchErr = !loading && this._notamFetchError && !this._notams?.length;
+        // The error alone only when there is nothing else to show (saved
+        // en-route NOTAMs and the warning lines were hidden -- review 2026-10-19).
+        const fetchErr = !loading && this._notamFetchError && !this._notams?.length && !this._enrouteNotams?.length
+            && !this._notamStale && !this._enrouteNotamStale;
         const anyErr = fetchErr || (!loading && (this._notamFetchError || this._enrouteNotamFetchError));
         const notCurrent = !loading && (anyErr || this._notamStale || this._notamMissing || this._enrouteNotamStale || this._enrouteNotamMissing);
 
@@ -505,10 +513,13 @@ class WxBriefing {
             const warn = (t) => body.insertAdjacentHTML('beforeend', `<div class="wx-section-error">⚠ ${this._escHtml(t)} · tap ↻ to retry</div>`);
             const z = (ms) => { const d = new Date(ms), p = (n) => String(n).padStart(2, '0'); return `${p(d.getUTCDate())} ${p(d.getUTCHours())}${p(d.getUTCMinutes())}Z`; };
             const list = (st) => st.map(x => `${x.station} ${z(x.at)}`).join(', ');
-            if (this._notamStale) warn(`${this._notamFetchError ? 'Refresh failed — showing' : 'Not refreshed — showing'} NOTAMs downloaded earlier: ${list(this._notamStale)}`);
-            if (this._notamMissing) warn(`No NOTAMs for ${this._notamMissing.join(', ')} — not fetched, none saved`);
-            if (this._enrouteNotamStale) warn(`En-route ${this._enrouteNotamFetchError ? 'refresh failed' : 'not refreshed'} — showing NOTAMs downloaded earlier: ${list(this._enrouteNotamStale)}`);
-            if (this._enrouteNotamMissing) warn(`En-route NOTAMs not fetched for ${this._enrouteNotamMissing.join(', ')} — TFRs and en-route restrictions may be missing`);
+            const how = (busy, err) => busy ? 'Refreshing' : err ? 'Refresh failed' : 'Not refreshed';
+            if (this._notamFetchError && !this._notamStale && !this._notams?.length) warn(`Airport NOTAMs: ${this._notamFetchError}`);
+            if (this._notamStale) warn(`${how(this._notamBusy, this._notamFetchError)} — showing NOTAMs downloaded earlier: ${list(this._notamStale)}`);
+            // Not "No NOTAMs for …": read as "none in force" (review 2026-10-19).
+            if (this._notamMissing) warn(`${this._notamMissing.join(', ')}: NOTAMs NOT AVAILABLE — never downloaded`);
+            if (this._enrouteNotamStale) warn(`En-route: ${how(this._enrouteBusy, this._enrouteNotamFetchError).toLowerCase()} — showing NOTAMs downloaded earlier: ${list(this._enrouteNotamStale)}`);
+            if (this._enrouteNotamMissing) warn(`En-route NOTAMs NOT AVAILABLE for ${this._enrouteNotamMissing.join(', ')} — never downloaded; TFRs and restrictions may be missing`);
         }
 
         // Search bar
@@ -2143,6 +2154,9 @@ class WxBriefing {
     static NOTAM_CACHE_KEY = 'flytab_notam_cache';
     static ENROUTE_NOTAM_CACHE_KEY = 'flytab_enroute_notam_cache';
     static NOTAM_CACHE_MAX_AGE_MS = 7 * 24 * 3600e3;
+    // Both caches together stay well inside localStorage's ~5 MB, which also
+    // holds flight plans, fuel history and settings (review 2026-10-19).
+    static NOTAM_CACHE_MAX_CHARS = 700000;
 
     _readNotamCache(key) {
         try {
@@ -2154,10 +2168,17 @@ class WxBriefing {
 
     _writeNotamCache(key, cache) {
         const now = Date.now();
-        const bins = Object.entries(cache.bins)
+        let bins = Object.entries(cache.bins)
             .filter(([, b]) => b && now - b.at < WxBriefing.NOTAM_CACHE_MAX_AGE_MS && now - b.at >= -3600e3)
             .sort((x, y) => y[1].at - x[1].at).slice(0, 150);
-        try { localStorage.setItem(key, JSON.stringify({ v: 2, bins: Object.fromEntries(bins) })); } catch (_) {}
+        // Newest first; the oldest bins go until it fits the budget and the store.
+        for (;;) {
+            const json = JSON.stringify({ v: 2, bins: Object.fromEntries(bins) });
+            if (json.length <= WxBriefing.NOTAM_CACHE_MAX_CHARS || bins.length <= 1) {
+                try { localStorage.setItem(key, json); return; } catch (_) { if (bins.length <= 1) return; }
+            }
+            bins = bins.slice(0, Math.max(1, Math.floor(bins.length * 0.75)));
+        }
     }
 
     static _notamNotExpired(n, now) {
@@ -2178,26 +2199,94 @@ class WxBriefing {
 
     /**
      * What to show per bin: this refresh's NOTAMs where it got them, else the
-     * last downloaded (unexpired) with their time, else nothing (missing).
+     * last downloaded (unexpired, under 7 days) with their time, else nothing
+     * (missing). A NOTAM in two bins (ZZZ holds others' too) is shown once.
      */
     static _mergeNotamBins(keys, cache, fetched, now) {
-        const shown = [], stale = [], missing = [];
+        const shown = [], stale = [], missing = [], seen = new Set();
+        const add = (list) => { for (const n of list) { const k = `${n.airport}|${n.raw}`; if (!seen.has(k)) { seen.add(k); shown.push(n); } } };
         for (const k of keys) {
             const b = cache.bins[k];
-            if (fetched.has(k) && b) { shown.push(...b.notams); continue; }
-            if (b) {
-                shown.push(...b.notams.filter(n => WxBriefing._notamNotExpired(n, now)));
+            if (fetched.has(k) && b) { add(b.notams); continue; }
+            if (b && now - b.at < WxBriefing.NOTAM_CACHE_MAX_AGE_MS) {
+                add(b.notams.filter(n => WxBriefing._notamNotExpired(n, now)));
                 stale.push({ station: k, at: b.at });
             } else missing.push(k);
         }
         return { shown, stale: stale.length ? stale : null, missing: missing.length ? missing : null };
     }
 
-    async _fetchNotams() {
-        this._notams = null;
-        this._renderNotamSection();
+    _sortAirportNotams(list, stations) {
+        const order = ['RWY', 'NAVAID', 'OBST', 'TWY', 'AD', 'SVC', 'OBST_LGT'];
+        return list.sort((a, b) => {
+            const ai = order.indexOf(a.type);
+            const bi = order.indexOf(b.type);
+            if (ai !== bi) return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
+            const aRoute = stations.indexOf(a.airport);
+            const bRoute = stations.indexOf(b.airport);
+            if (aRoute !== bRoute) return aRoute - bRoute;
+            return 0;
+        });
+    }
 
-        const stations = this._getStationList();
+    static _sortEnrouteNotams(list) {
+        const PRIORITY = { TFR: 0, RESTR: 1, MOA: 2, WARN: 3, ATCAA: 4, UAS: 5, LASER: 6 };
+        return list.sort((a, b) => {
+            const ap = PRIORITY[a.type] ?? 9;
+            const bp = PRIORITY[b.type] ?? 9;
+            return ap !== bp ? ap - bp : String(a.airport).localeCompare(String(b.airport));
+        });
+    }
+
+    /** The route's stations, once each (a round trip lists the departure twice). */
+    _notamStations() { return [...new Set(this._getStationList())]; }
+
+    /** "KZJX" -> "ZJX": the request uses K-prefixed ARTCC ids, the NOTAMs' location does not. */
+    static _enrouteBin(loc) {
+        const s = String(loc || '').toUpperCase();
+        return /^KZ[A-Z]{2}$/.test(s) ? s.slice(1) : s;
+    }
+
+    async _enrouteRequest() {
+        const bbox = await this._getRouteBbox(0);
+        if (!bbox) return null;
+        // Pick the 2 nearest ARTCCs to the route center + national ZZZ
+        const artccs = this._nearestArtccs((bbox.n + bbox.s) / 2, (bbox.e + bbox.w) / 2, 2);
+        const requested = [...artccs, 'ZZZ'];
+        return { requested, bins: requested.map(WxBriefing._enrouteBin) };
+    }
+
+    /**
+     * The saved NOTAMs for this route, shown and sent to the map without a
+     * download: at startup (an in-flight restart had no NOTAM TFRs until WX
+     * Briefing was opened) and for a newly loaded route (review 2026-10-19).
+     */
+    async _restoreSavedNotams() {
+        const now = Date.now();
+        const stations = this._notamStations();
+        if (stations.length && !this._notamBusy) {
+            const { shown, stale, missing } = WxBriefing._mergeNotamBins(stations, this._readNotamCache(WxBriefing.NOTAM_CACHE_KEY), new Set(), now);
+            if (stale) {
+                this._notams = this._sortAirportNotams(shown, stations);
+                this._notamStale = stale; this._notamMissing = missing; this._notamFetchError = null;
+                document.dispatchEvent(new CustomEvent('notam:tfrs-apt', { detail: { shapes: this._tfrShapesOf(shown), replace: true } }));
+            }
+        }
+        const req = await this._enrouteRequest().catch(() => null);
+        if (req && !this._enrouteBusy) {
+            const { shown, stale, missing } = WxBriefing._mergeNotamBins(req.bins, this._readNotamCache(WxBriefing.ENROUTE_NOTAM_CACHE_KEY), new Set(), now);
+            if (stale) {
+                this._enrouteNotams = WxBriefing._sortEnrouteNotams(shown);
+                this._enrouteNotamStale = stale; this._enrouteNotamMissing = missing; this._enrouteNotamFetchError = null;
+                document.dispatchEvent(new CustomEvent('notam:tfrs', { detail: { shapes: this._tfrShapesOf(shown), replace: true } }));
+            }
+        }
+        if (this.visible) this._renderNotamSection();
+    }
+
+    async _fetchNotams() {
+        const gen = this._notamGen = (this._notamGen || 0) + 1;      // a newer fetch wins (route changed, ↻ twice)
+        const stations = this._notamStations();
         if (!stations.length) {
             this._notams = [];
             this._notamFetchError = null; this._notamStale = this._notamMissing = null;
@@ -2205,11 +2294,13 @@ class WxBriefing {
             this._renderNotamSection();
             return;
         }
+        // The saved NOTAMs stay on screen while it refreshes (in flight the
+        // refresh can take the 30 s timeout to fail).
+        this._notamBusy = true;
+        if (!this._notamStale && !this._notams?.length) this._notams = null;
+        this._renderNotamSection();
 
-        const KEY = WxBriefing.NOTAM_CACHE_KEY;
-        const cache = this._readNotamCache(KEY);
-        const now = Date.now();
-        let fetched = new Set();
+        let fetched = new Set(), notams = [], err = null;
         try {
             const base = CockpitConfig.notamBase || Settings.workerBase || 'https://www.flywhere.app/api';
             const url  = `${base}/notams?location=${stations.join(',')}`;
@@ -2220,7 +2311,9 @@ class WxBriefing {
                 throw new Error(errMsg);
             }
             const data = await resp.json();
-            // The NOTAM proxy lists stations the FAA did not answer for.
+            // The NOTAM proxy (tools/notam-proxy.py) lists stations the FAA did
+            // not answer for. (flywhere's route does not: there a station that
+            // failed reads as having none -- the tablet uses the proxy.)
             const failed = new Set((Array.isArray(data.failed) ? data.failed : []).map(x => String(x).toUpperCase()));
             fetched = new Set(stations.filter(st => !failed.has(st)));
             if (!fetched.size) throw new Error(`NOTAMs not fetched for ${stations.join(', ')}`);
@@ -2232,8 +2325,9 @@ class WxBriefing {
                 if (key && wp.lat != null && wp.lon != null)
                     wpGeoMap.set(key, { lat: wp.lat, lon: wp.lon });
             }
-
-            const notams = [];
+            // A NOTAM whose location is none of the stations goes with the
+            // first station that was fetched (not one that failed: lost).
+            const fallback = stations.find(st => fetched.has(st));
             const seen = new Set();
             for (const feature of features) {
                 const n = feature.properties?.coreNOTAMData?.notam || {};
@@ -2242,32 +2336,28 @@ class WxBriefing {
                 seen.add(num);
                 // n.location is the 3-letter FAA id (e.g. LKR); map back to ICAO
                 const nLoc = (n.location || '').toUpperCase();
-                const loc = stations.find(s => s === nLoc || s === 'K' + nLoc) || stations[0];
+                const loc = stations.find(s => s === nLoc || s === 'K' + nLoc) || fallback;
                 notams.push(this._parseNotam(feature, loc, wpGeoMap));
             }
+        } catch (e) {
+            console.error('NOTAM fetch failed:', e);
+            err = e; fetched = new Set();
+        }
+        if (gen !== this._notamGen) return;                          // a newer fetch is running or done
+        this._notamBusy = false;
+
+        const now = Date.now();
+        const cache = this._readNotamCache(WxBriefing.NOTAM_CACHE_KEY);   // read now: no lost update
+        if (fetched.size) {
             for (const st of fetched) cache.bins[st] = { at: now, notams: notams.filter(n => n.airport === st) };
-            this._writeNotamCache(KEY, cache);
-            this._notamFetchError = null;
+            this._writeNotamCache(WxBriefing.NOTAM_CACHE_KEY, cache);
             // Complete: fresh for 15 min. Partial: asked again at the next open.
             if (fetched.size === stations.length) this._notamFetchedAt = now;
-        } catch (err) {
-            console.error('NOTAM fetch failed:', err);
-            this._notamFetchError = err.message;
-            fetched = new Set();
         }
+        this._notamFetchError = err ? err.message : null;
 
         const { shown, stale, missing } = WxBriefing._mergeNotamBins(stations, cache, fetched, now);
-        const order = ['RWY', 'NAVAID', 'OBST', 'TWY', 'AD', 'SVC', 'OBST_LGT'];
-        shown.sort((a, b) => {
-            const ai = order.indexOf(a.type);
-            const bi = order.indexOf(b.type);
-            if (ai !== bi) return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
-            const aRoute = stations.indexOf(a.airport);
-            const bRoute = stations.indexOf(b.airport);
-            if (aRoute !== bRoute) return aRoute - bRoute;
-            return 0;
-        });
-        this._notams = shown;
+        this._notams = this._sortAirportNotams(shown, stations);
         this._notamStale = stale;
         this._notamMissing = missing;
 
@@ -2281,40 +2371,26 @@ class WxBriefing {
         this._renderNotamSection();
     }
 
-    /** "KZJX" -> "ZJX": the request uses K-prefixed ARTCC ids, the NOTAMs' location does not. */
-    static _enrouteBin(loc) {
-        const s = String(loc || '').toUpperCase();
-        return /^KZ[A-Z]{2}$/.test(s) ? s.slice(1) : s;
-    }
-
     async _fetchEnrouteNotams() {
-        this._enrouteNotams = null;
-        this._renderNotamSection();
-
-        const bbox = await this._getRouteBbox(0);
-        if (!bbox) {
+        const gen = this._enrouteGen = (this._enrouteGen || 0) + 1;
+        const req = await this._enrouteRequest();
+        if (gen !== this._enrouteGen) return;
+        if (!req) {
             this._enrouteNotams = [];
             this._enrouteNotamFetchError = null; this._enrouteNotamStale = this._enrouteNotamMissing = null;
             document.dispatchEvent(new CustomEvent('notam:tfrs', { detail: { shapes: [], replace: true } }));
             this._renderNotamSection();
             return;
         }
+        const { requested, bins } = req;
+        this._enrouteBusy = true;
+        if (!this._enrouteNotamStale && !this._enrouteNotams?.length) this._enrouteNotams = null;
+        this._renderNotamSection();
 
-        // Pick the 2 nearest ARTCCs to the route center + national ZZZ
-        const centerLat = (bbox.n + bbox.s) / 2;
-        const centerLon = (bbox.e + bbox.w) / 2;
-        const artccs = this._nearestArtccs(centerLat, centerLon, 2);
-        const requested = [...artccs, 'ZZZ'];
-        const locations = requested.join(',');
-        const bins = requested.map(WxBriefing._enrouteBin);
-
-        const KEY = WxBriefing.ENROUTE_NOTAM_CACHE_KEY;
-        const cache = this._readNotamCache(KEY);
-        const now = Date.now();
-        let fetched = new Set();
+        let fetched = new Set(), notams = [], err = null;
         try {
             const base = CockpitConfig.notamBase || Settings.workerBase || 'https://www.flywhere.app/api';
-            const resp = await fetch(`${base}/notams?location=${locations}`, { signal: AbortSignal.timeout(30000) });
+            const resp = await fetch(`${base}/notams?location=${requested.join(',')}`, { signal: AbortSignal.timeout(30000) });
             if (!resp.ok) {
                 let errMsg = `En-route NOTAM fetch failed (${resp.status})`;
                 try { const d = await resp.json(); if (d.error) errMsg = d.error; } catch (_) {}
@@ -2323,11 +2399,10 @@ class WxBriefing {
             const data = await resp.json();
             const failed = new Set((Array.isArray(data.failed) ? data.failed : []).map(WxBriefing._enrouteBin));
             fetched = new Set(bins.filter(b => !failed.has(b)));
-            if (!fetched.size) throw new Error(`En-route NOTAMs not fetched for ${locations}`);
+            if (!fetched.size) throw new Error(`En-route NOTAMs not fetched for ${requested.join(', ')}`);
             const features = data.features || [];
 
             const seen = new Set();
-            const notams = [];
             for (const feature of features) {
                 const n = feature.properties?.coreNOTAMData?.notam || {};
                 const num = n.number || n.id || '';
@@ -2360,27 +2435,29 @@ class WxBriefing {
                     geo,
                 });
             }
-            // Each NOTAM in its location's bin; one from a location not asked
-            // for (the national ZZZ query returns others') in ZZZ's.
-            const binOf = (n) => { const b = WxBriefing._enrouteBin(n.airport); return bins.includes(b) ? b : 'ZZZ'; };
-            for (const b of fetched) cache.bins[b] = { at: now, notams: notams.filter(n => binOf(n) === b) };
-            this._writeNotamCache(KEY, cache);
-            this._enrouteNotamFetchError = null;
-            if (fetched.size === bins.length) this._enrouteNotamFetchedAt = now;
-        } catch (err) {
-            console.error('En-route NOTAM fetch failed:', err);
-            this._enrouteNotamFetchError = err.message;
-            fetched = new Set();
+        } catch (e) {
+            console.error('En-route NOTAM fetch failed:', e);
+            err = e; fetched = new Set();
         }
+        if (gen !== this._enrouteGen) return;
+        this._enrouteBusy = false;
+
+        const now = Date.now();
+        const cache = this._readNotamCache(WxBriefing.ENROUTE_NOTAM_CACHE_KEY);
+        if (fetched.size) {
+            // Each NOTAM in its location's bin; one from a location not asked
+            // for (the national ZZZ query returns others') in ZZZ's -- or the
+            // first fetched bin if ZZZ was not.
+            const spare = fetched.has('ZZZ') ? 'ZZZ' : [...fetched][0];
+            const binOf = (n) => { const b = WxBriefing._enrouteBin(n.airport); return fetched.has(b) ? b : spare; };
+            for (const b of fetched) cache.bins[b] = { at: now, notams: notams.filter(n => binOf(n) === b) };
+            this._writeNotamCache(WxBriefing.ENROUTE_NOTAM_CACHE_KEY, cache);
+            if (fetched.size === bins.length) this._enrouteNotamFetchedAt = now;
+        }
+        this._enrouteNotamFetchError = err ? err.message : null;
 
         const { shown, stale, missing } = WxBriefing._mergeNotamBins(bins, cache, fetched, now);
-        const PRIORITY = { TFR: 0, RESTR: 1, MOA: 2, WARN: 3, ATCAA: 4, UAS: 5, LASER: 6 };
-        shown.sort((a, b) => {
-            const ap = PRIORITY[a.type] ?? 9;
-            const bp = PRIORITY[b.type] ?? 9;
-            return ap !== bp ? ap - bp : a.airport.localeCompare(b.airport);
-        });
-        this._enrouteNotams = shown;
+        this._enrouteNotams = WxBriefing._sortEnrouteNotams(shown);
         this._enrouteNotamStale = stale;
         this._enrouteNotamMissing = missing;
 

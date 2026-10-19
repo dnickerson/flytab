@@ -86,7 +86,7 @@ describe('airport NOTAMs, kept per station', () => {
         answer({ features: [feat('LKR', 'RWY 06/24 CLSD')], failed: ['KTMB'] });
         const wx = makeWx();
         await wx._fetchNotams();
-        expect(warnings(wx)).toContain('⚠ No NOTAMs for KTMB — not fetched, none saved · tap ↻ to retry');
+        expect(warnings(wx)).toContain('⚠ KTMB: NOTAMs NOT AVAILABLE — never downloaded · tap ↻ to retry');
     });
 
     it('offline (in flight): every station\'s last NOTAMs and the airport TFRs are shown again', async () => {
@@ -123,7 +123,7 @@ describe('airport NOTAMs, kept per station', () => {
         await wx._fetchNotams();
         expect(texts(wx._notams)).toMatch(/RWY 06\/24 CLSD/);
         expect(texts(wx._notams)).not.toMatch(/RWY 1\/19/);
-        expect(warnings(wx).join(' ')).toMatch(/No NOTAMs for KCAE, KTMB/);
+        expect(warnings(wx).join(' ')).toMatch(/KCAE, KTMB: NOTAMs NOT AVAILABLE — never downloaded/);
     });
 
     it('a saved NOTAM that has since expired is not shown', async () => {
@@ -174,7 +174,7 @@ describe('en-route NOTAMs, kept per ARTCC', () => {
         const wx = makeWx();
         await wx._fetchEnrouteNotams();
         expect(enr).not.toHaveBeenCalled();
-        expect(warnings(wx)).toContain('⚠ En-route NOTAMs not fetched for ZJX, ZTL, ZZZ — TFRs and en-route restrictions may be missing · tap ↻ to retry');
+        expect(warnings(wx)).toContain('⚠ En-route NOTAMs NOT AVAILABLE for ZJX, ZTL, ZZZ — never downloaded; TFRs and restrictions may be missing · tap ↻ to retry');
         document.removeEventListener('notam:tfrs', enr);
     });
 
@@ -189,7 +189,7 @@ describe('en-route NOTAMs, kept per ARTCC', () => {
         expect(texts(wx._enrouteNotams)).toMatch(/ASHEVILLE/);
         expect(enr).toHaveBeenCalledTimes(2);
         expect(enr.mock.calls[1][0].detail.shapes.length).toBe(first);
-        expect(warnings(wx)[0]).toMatch(/^⚠ En-route refresh failed — showing NOTAMs downloaded earlier: ZJX 19 1852Z, ZTL 19 1852Z, ZZZ 19 1852Z/);
+        expect(warnings(wx).join(' ')).toMatch(/⚠ En-route: refresh failed — showing NOTAMs downloaded earlier: ZJX 19 1852Z, ZTL 19 1852Z, ZZZ 19 1852Z/);
         document.removeEventListener('notam:tfrs', enr);
     });
 
@@ -200,7 +200,7 @@ describe('en-route NOTAMs, kept per ARTCC', () => {
         const wx = makeWx();
         await wx._fetchEnrouteNotams();
         expect(wx._enrouteNotamFetchedAt).toBe(0);
-        expect(warnings(wx)).toContain('⚠ En-route not refreshed — showing NOTAMs downloaded earlier: ZZZ 19 1852Z · tap ↻ to retry');
+        expect(warnings(wx)).toContain('⚠ En-route: not refreshed — showing NOTAMs downloaded earlier: ZZZ 19 1852Z · tap ↻ to retry');
     });
 
     it('no route: the en-route TFRs are cleared', async () => {
@@ -262,5 +262,84 @@ describe('the map\'s NOTAM TFRs (map.js)', () => {
         const html = m._notamTfrShapes.get('X').layer.getPopup().getContent();
         expect(html).toMatch(/&lt;img src=x onerror=alert\(1\)&gt;/);
         expect(html).not.toMatch(/<img/);
+    });
+});
+
+describe('review fixes (2026-10-19)', () => {
+    it('a round trip (KLKR → KCAE → KLKR): each NOTAM once, and fresh when complete', async () => {
+        stations = ['KLKR', 'KCAE', 'KLKR'];
+        answer({ features: [feat('LKR', 'RWY 06/24 CLSD')], failed: [] });
+        const wx = makeWx();
+        await wx._fetchNotams();
+        expect(wx._notams.filter((n) => /RWY 06\/24/.test(n.raw || n.summary))).toHaveLength(1);
+        expect(wx._notamFetchedAt).toBe(Date.parse(T0));
+        expect(String(globalThis.fetch.mock.calls[0][0])).toMatch(/location=KLKR,KCAE$/);
+    });
+
+    it('airport refresh failed with nothing saved, en-route saved: both lines and the en-route NOTAMs show', async () => {
+        const TFR = '!FDC 6/0050 ZTL NC..AIRSPACE ASHEVILLE, NORTH CAROLINA..TEMPORARY FLIGHT RESTRICTIONS. WI AN AREA DEFINED AS 3NM RADIUS OF 352600N0823300W SFC-3000FT';
+        answer({ features: [feat('ZTL', TFR)], failed: [] });
+        await makeWx()._fetchEnrouteNotams();
+        offline();
+        const wx = makeWx(); stations = ['KAVL', 'KGSP'];                    // a divert, never downloaded
+        await wx._fetchEnrouteNotams();
+        await wx._fetchNotams();
+        const w = warnings(wx).join(' | ');
+        expect(w).toMatch(/KAVL, KGSP: NOTAMs NOT AVAILABLE/);
+        expect(w).toMatch(/En-route: refresh failed — showing NOTAMs downloaded earlier/);
+        expect(texts(wx._enrouteNotams)).toMatch(/ASHEVILLE/);
+    });
+
+    it('two refreshes overlapping: the older answer does not overwrite the newer', async () => {
+        let release; const slow = new Promise((res) => { release = res; });
+        globalThis.fetch = vi.fn()
+            .mockImplementationOnce(async () => { await slow; return { ok: true, json: async () => ({ features: [feat('LKR', 'OLD ROUTE')], failed: [] }) }; })
+            .mockImplementationOnce(async () => ({ ok: true, json: async () => ({ features: [feat('AVL', 'NEW ROUTE')], failed: [] }) }));
+        const wx = makeWx();
+        const first = wx._fetchNotams();
+        stations = ['KAVL'];
+        await wx._fetchNotams();
+        release(); await first;
+        expect(texts(wx._notams)).toMatch(/NEW ROUTE/);
+        expect(texts(wx._notams)).not.toMatch(/OLD ROUTE/);
+    });
+
+    it('startup / a route loaded: the saved NOTAMs and their TFRs come back without a download', async () => {
+        const tfr = '!FDC 6/0128 ZJX FL..AIRSPACE MAYPORT, FL..TEMPORARY FLIGHT RESTRICTIONS. WI AN AREA DEFINED AS 3NM RADIUS OF 302300N0812500W SFC-3000FT';
+        answer({ features: [feat('TMB', tfr)], failed: [] });
+        await makeWx()._fetchNotams();
+        globalThis.fetch = vi.fn(async () => { throw new Error('no network expected'); });
+        const apt = vi.fn(); document.addEventListener('notam:tfrs-apt', apt);
+        const wx = makeWx();
+        await wx._restoreSavedNotams();
+        expect(globalThis.fetch).not.toHaveBeenCalled();
+        expect(apt).toHaveBeenCalledTimes(1);
+        expect(texts(wx._notams)).toMatch(/MAYPORT/);
+        document.removeEventListener('notam:tfrs-apt', apt);
+    });
+
+    it('while refreshing, the saved NOTAMs stay on screen ("Refreshing — showing …")', async () => {
+        answer({ features: [feat('LKR', 'RWY 06/24 CLSD')], failed: [] });
+        stations = ['KLKR']; await makeWx()._fetchNotams();
+        let release; globalThis.fetch = vi.fn(() => new Promise((res) => { release = res; }));
+        const wx = makeWx();
+        await wx._restoreSavedNotams();
+        const p = wx._fetchNotams();
+        expect(texts(wx._notams)).toMatch(/RWY 06\/24/);
+        expect(warnings(wx).join(' ')).toMatch(/Refreshing — showing NOTAMs downloaded earlier: KLKR/);
+        release({ ok: true, json: async () => ({ features: [], failed: [] }) }); await p;
+    });
+
+    it('saved bins older than 7 days are not shown; the cache keeps within its size budget', () => {
+        const wx = makeWx();
+        const big = 'X'.repeat(1000);
+        const bins = {};
+        for (let i = 0; i < 150; i++) bins[`K${String(i).padStart(3, '0')}`] = { at: Date.now() - i * 1000, notams: Array.from({ length: 10 }, () => ({ airport: 'K', raw: big })) };
+        wx._writeNotamCache('t', { v: 2, bins });
+        const saved = localStorage.getItem('t');
+        expect(saved.length).toBeLessThanOrEqual(WxBriefing.NOTAM_CACHE_MAX_CHARS);
+        expect(JSON.parse(saved).bins.K000).toBeTruthy();                    // newest kept
+        const old = { v: 2, bins: { KLKR: { at: Date.now() - 8 * 24 * 3600e3, notams: [{ airport: 'KLKR', raw: 'OLD' }] } } };
+        expect(WxBriefing._mergeNotamBins(['KLKR'], old, new Set(), Date.now()).missing).toEqual(['KLKR']);
     });
 });
