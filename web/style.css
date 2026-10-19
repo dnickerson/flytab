@@ -4658,82 +4658,32 @@ body {
     text-align: center;
 }
 
-/* SUA popup styles */
-.sua-popup-container .leaflet-popup-content-wrapper {
-    background: var(--bg-surface);
-    color: var(--text-primary);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.5);
-}
-.sua-popup-container .leaflet-popup-tip {
-    background: var(--bg-surface);
-}
-.sua-popup { font-size: 13px; line-height: 1.4; min-width: 180px; }
-.sua-popup b { font-size: 14px; }
-.sua-popup-type {
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.05em;
-    opacity: 0.7;
-    text-transform: uppercase;
-}
-.sua-popup-alt {
-    display: block;
-    font-size: 12px;
-    color: var(--text-secondary);
-    margin: 2px 0 6px;
-}
-.sua-popup-notam {
-    font-size: 12px;
-    padding: 4px 6px;
-    border-radius: 4px;
-    margin-top: 4px;
-}
-.sua-popup-active {
-    background: rgba(255, 160, 0, 0.15);
-    border-left: 3px solid var(--status-warning);
-    color: var(--text-primary);
-}
-.sua-popup-inactive {
-    color: var(--text-muted);
-    font-style: italic;
-}
-
 /* TRSA label — grey, matching VFR sectional chart convention for TRSA */
 .trsa-lbl { color: var(--text-muted); }
 
-/* TRSA popup styles */
-.trsa-popup-container .leaflet-popup-content-wrapper {
-    background: var(--bg-surface);
-    color: var(--text-primary);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+/* Airspace popup (tap on the map): Class B/C/D, Restricted/MOA with NOTAM
+   status, TRSA -- every area at the tap, lowest floor first (2026-10-18).
+   Light, high-contrast; tokens only. */
+.as-popup-container .leaflet-popup-content-wrapper {
+    background: var(--bg-primary); color: var(--text-primary);
+    border: 1px solid var(--border-strong); border-radius: 8px;
 }
-.trsa-popup-container .leaflet-popup-tip {
-    background: var(--bg-surface);
+.as-popup-container .leaflet-popup-content { margin: 10px 12px; }
+.as-popup-container .leaflet-popup-tip { background: var(--bg-primary); }
+.as-popup-container .leaflet-popup-close-button {
+    width: var(--touch-min, 56px) !important; height: var(--touch-min, 56px) !important;
+    font-size: 28px !important; line-height: var(--touch-min, 56px) !important;
 }
-.trsa-popup { font-size: 13px; line-height: 1.4; min-width: 180px; }
-.trsa-popup b { font-size: 14px; }
-.trsa-popup-freq {
-    display: block;
-    font-size: 13px;
-    font-weight: 700;
-    color: var(--text-secondary);
-    margin: 2px 0;
-}
-.trsa-popup-alt {
-    display: block;
-    font-size: 12px;
-    color: var(--text-secondary);
-    margin: 2px 0 4px;
-}
-.trsa-popup-approx {
-    font-size: 11px;
-    color: var(--text-muted);
-    font-style: italic;
-}
+.as-pop { min-width: 220px; padding-right: 52px; }   /* clear of the 56 px close button */
+.as-pop-row { padding: 6px 0; border-bottom: 1px solid var(--border-light); }
+.as-pop-row:last-child { border-bottom: none; }
+.as-pop-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.as-pop-name { font-family: var(--font-ui); font-size: var(--text-md); font-weight: 800; color: var(--text-primary); }
+.as-pop-kind { font-family: var(--font-ui); font-size: var(--text-xs); font-weight: 800; color: var(--text-secondary); white-space: nowrap; }
+.as-pop-alt, .as-pop-freq { font-family: var(--font-instrument); font-size: var(--text-base); font-weight: 900; color: var(--text-primary); }
+.as-pop-notam, .as-pop-note { font-family: var(--font-ui); font-size: var(--text-xs); font-weight: 700; color: var(--text-secondary); margin-top: 2px; }
+.as-pop-notam.is-active { color: var(--color-caution-on-light); }
+.as-pop-notam-text { font-weight: 700; }
 
 .airway-label {
     font: 700 9px var(--font-instrument);

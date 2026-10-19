@@ -114,3 +114,30 @@ describe('Class B/C/D altitude and TRSA frequency labels: same rule (Dana, 2026-
         expect(v._airspaceLayer.getLayers()).toHaveLength(5);
     });
 });
+
+describe('Class B shelf label when the surface ring is off screen (review 2026-10-18)', () => {
+    const SFC = { id: 'CLT-SFC', name: 'Charlotte Class B', class: 'B', lower_ft: 0, upper_ft: 10000, boundary: box(35.21, -80.94, 0.08) };
+    // a shelf ring east of the airport
+    const SHELF = { id: 'CLT-60', name: 'Charlotte Class B', class: 'B', lower_ft: 6000, upper_ft: 10000,
+                    boundary: [[35.0, -80.70], [35.0, -80.40], [35.45, -80.40], [35.45, -80.70]] };
+    function v1(sets) {
+        const v = Object.create(VectorMapLayers.prototype);
+        v._map = { hasLayer: () => true };
+        v._airspaceLayer = L.layerGroup(); v._airspacePolygons = new Map();
+        let i = 0;
+        v._nasr = { getAirspaceInBounds: async () => sets[Math.min(i++, sets.length - 1)].map((a) => ({ ...a })) };
+        return v;
+    }
+    const ll = (r) => r.boundary.map(([a, b]) => [a, b]);
+    it('placed relative to the airport (surface ring), not to the shelf itself', async () => {
+        const v = v1([[SFC, SHELF], [SHELF], [SHELF]]);
+        await v._updateAirspace(32, -82, 37, -77, 9, {});              // airport in view: centre remembered
+        await v._updateAirspace(32, -82, 37, -77, 8, {});              // zoom out: labels go
+        await v._updateAirspace(35.0, -80.7, 35.45, -80.4, 12, {});    // in on the shelf only
+        const pos = v._airspacePolygons.get('CLT-60_alt').getLatLng();
+        const want = VectorMapLayers._shelfLabelPosition(ll(SHELF), VectorMapLayers._polygonCentroid(ll(SFC)));
+        expect([pos.lat, pos.lng]).toEqual([want[0], want[1]]);
+        const wrong = VectorMapLayers._shelfLabelPosition(ll(SHELF), VectorMapLayers._polygonCentroid(ll(SHELF)));
+        expect([pos.lat, pos.lng]).not.toEqual([wrong[0], wrong[1]]);
+    });
+});
