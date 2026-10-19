@@ -46,16 +46,25 @@ _token_expiry = 0
 
 _token_lock   = threading.Lock()
 
-# One request's FAA calls stop after this (the FlyTab client gives up at 30 s);
-# the locations not reached are listed as failed.
+# One request's FAA calls (token included) stop after this -- the FlyTab
+# client gives up at 30 s; the locations not reached are listed as failed.
 REQUEST_DEADLINE_S = 25
+# The proxy is public (Tailscale Funnel) and spends the CGI account: at most
+# this many requests call the FAA at once (others get 503), and this many
+# locations per request (WX Briefing sends the route's airports, FlyTab's
+# Restricted/MOA check 6 ARTCCs).
+MAX_CONCURRENT     = 3
+MAX_LOCATIONS      = 60
+_busy              = threading.BoundedSemaphore(MAX_CONCURRENT)
 
 
-def drop_token():
-    """After a 401: the next request gets a new token, not the rejected one."""
+def drop_token(rejected):
+    """After a 401: the next request gets a new token -- unless another
+    request already got one since (only the rejected token is dropped)."""
     global _token, _token_expiry
     with _token_lock:
-        _token, _token_expiry = None, 0
+        if _token == rejected:
+            _token, _token_expiry = None, 0
 
 
 def get_token() -> str:
@@ -89,10 +98,10 @@ def _get_token() -> str:
 def fetch_notams(locations):
     """(features, failed): failed lists the locations the FAA did not answer,
     so a client can tell "no NOTAMs" from "not fetched" (FlyTab SuaNotams)."""
+    deadline = time.monotonic() + REQUEST_DEADLINE_S
     token    = get_token()
     features = []
     failed   = []
-    deadline = time.monotonic() + REQUEST_DEADLINE_S
     for n, icao in enumerate(locations):
         left = deadline - time.monotonic()
         if left < 2:
@@ -119,7 +128,7 @@ def fetch_notams(locations):
             failed.append(icao)
             if e.code == 401:
                 # The token was refused: every other location would be too.
-                drop_token()
+                drop_token(token)
                 failed.extend(locations[n + 1:])
                 break
         except Exception as e:
@@ -132,6 +141,8 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         print(f'[notam-proxy] {self.address_string()} {fmt % args}')
 
+    timeout = 30        # an idle connection does not hold a thread
+
     def _send_json(self, status: int, body: dict):
         data = json.dumps(body).encode()
         self.send_response(status)
@@ -139,7 +150,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header(k, v)
         self.send_header('Content-Type',   'application/json')
         self.send_header('Content-Length', str(len(data)))
-        self.send_header('Cache-Control',  'public, max-age=300, stale-while-revalidate=60')
+        # A complete answer may be cached; an error or a partial one must not
+        # come back from a cache when the client retries.
+        complete = status == 200 and not body.get('failed')
+        self.send_header('Cache-Control',  'public, max-age=300, stale-while-revalidate=60' if complete else 'no-store')
         self.end_headers()
         self.wfile.write(data)
 
@@ -162,13 +176,20 @@ class Handler(BaseHTTPRequestHandler):
         if not locations:
             self._send_json(400, {'error': 'location parameter required'})
             return
-
+        if len(locations) > MAX_LOCATIONS:
+            self._send_json(400, {'error': f'at most {MAX_LOCATIONS} locations per request'})
+            return
+        if not _busy.acquire(timeout=5):
+            self._send_json(503, {'error': 'busy, try again', 'features': []})
+            return
         try:
             features, failed = fetch_notams(locations)
             self._send_json(200, {'features': features, 'total': len(features), 'failed': failed})
         except Exception as e:
             print(f'[notam-proxy] fetch error: {e}')
             self._send_json(502, {'error': str(e), 'features': []})
+        finally:
+            _busy.release()
 
 
 def main():
