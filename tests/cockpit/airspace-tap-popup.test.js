@@ -87,10 +87,10 @@ describe('the airspace at a tap', () => {
         const el = document.createElement('div');
         el.innerHTML = v._airspacePopupHtml(v._areasAt(35.4, -81.2));
         const rows = [...el.querySelectorAll('.as-pop-row')].map(words);
-        expect(rows[0]).toMatch(/^BULLDOG A MOA MOA 10,000 ft – 500 ft ⚠ ACTIVE per NOTAM BULLDOG A MOA ACT/);
-        expect(rows[1]).toBe('Charlotte CLASS B 10,000 ft – 6,000 ft');
+        expect(rows[0]).toMatch(/^BULLDOG A MOA MOA 500 ft – 10,000 ft ⚠ ACTIVE per NOTAM BULLDOG A MOA ACT/);
+        expect(rows[1]).toBe('Charlotte CLASS B 6,000 ft – 10,000 ft');
         el.innerHTML = v._airspacePopupHtml(v._areasAt(33.68, -78.93));
-        expect(words(el)).toMatch(/Myrtle Beach TRSA TRSA 119\.85 \(180-359\) \/ 127\.1 \(360-179\) 4,000 ft – SFC Approximate boundary — 20 nm radius/);
+        expect(words(el)).toMatch(/Myrtle Beach TRSA TRSA 119\.85 \(180-359\) \/ 127\.1 \(360-179\) SFC – 4,000 ft Approximate boundary — 20 nm radius/);
         expect(VectorMapLayers._fmtAltFt(-9998)).toBe('UNL');
         expect(VectorMapLayers._fmtAltFt(0, true)).toBe('SFC');
     });
@@ -140,7 +140,7 @@ describe('full review fixes (2026-10-18)', () => {
         const v = await layers();
         const el = document.createElement('div');
         el.innerHTML = v._airspacePopupHtml([{ kind: 'sua', rec: { id: 'R-2505', name: 'R-2505', type: 'R', lower_ft: 0, upper_ft: -1 } }]);
-        expect(el.querySelector('.as-pop-alt').textContent).toBe('UNL – SFC');
+        expect(el.querySelector('.as-pop-alt').textContent).toBe('SFC – UNL');
         const sua = { id: 'R-2505', name: 'R-2505', type: 'R', lower_ft: 0, upper_ft: -1, boundary: box(34, -117, 0.2) };
         v._addSuaLabel(sua, false, []);
         expect(v._suaPolygons.get('R-2505_lbl').options.icon.options.html).toMatch(/^UNL<br>/);
@@ -259,7 +259,7 @@ describe('round 5 fixes (2026-10-18)', () => {
     it('a TRSA with no published ceiling reads clearly', async () => {
         const v = await layers(); const el = document.createElement('div');
         el.innerHTML = v._airspacePopupHtml([{ kind: 'trsa', rec: { id: 't', name: 'T TRSA', freqs: [], lower_ft: 0, upper_ft: null } }]);
-        expect(el.querySelector('.as-pop-alt').textContent).toBe('ceiling not published – SFC');
+        expect(el.querySelector('.as-pop-alt').textContent).toBe('SFC – ceiling not published');
         expect(el.textContent).toMatch(/Check the sectional for the ceiling/);
     });
 });

@@ -1891,7 +1891,8 @@ class VectorMapLayers {
     /** The popup's HTML for these areas (all text escaped: names come from NASR, NOTAM text from the FAA). */
     _airspacePopupHtml(areas) {
         const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-        const alt = (r) => `${VectorMapLayers._fmtAltFt(r.upper_ft ?? r.upper, false)} – ${VectorMapLayers._fmtAltFt(r.lower_ft ?? r.lower, true)}`;
+        // Floor – ceiling, the way it is read (Dana, 2026-10-19: "SFC – 4,100 ft", not "4,100 ft – SFC").
+        const alt = (r) => `${VectorMapLayers._fmtAltFt(r.lower_ft ?? r.lower, true)} – ${VectorMapLayers._fmtAltFt(r.upper_ft ?? r.upper, false)}`;
         const notams = window.SuaNotams;
         const rows = areas.map(({ kind, rec }) => {
             if (kind === 'class') {
@@ -1919,7 +1920,7 @@ class VectorMapLayers {
             return `<div class="as-pop-row as-pop-trsa">
                 <div class="as-pop-head"><span class="as-pop-name">${esc(rec.name ?? rec.id)}</span><span class="as-pop-kind">TRSA</span></div>
                 <div class="as-pop-freq">${esc(freqs)}</div>
-                <div class="as-pop-alt">${esc(`${upper} – ${VectorMapLayers._fmtAltFt(rec.lower_ft, true)}`)}</div>${rec.upper_ft == null ? '<div class="as-pop-note">Check the sectional for the ceiling</div>' : ''}${approx}</div>`;
+                <div class="as-pop-alt">${esc(`${VectorMapLayers._fmtAltFt(rec.lower_ft, true)} – ${upper}`)}</div>${rec.upper_ft == null ? '<div class="as-pop-note">Check the sectional for the ceiling</div>' : ''}${approx}</div>`;
         });
         return `<div class="as-pop">${rows.join('')}</div>`;
     }
