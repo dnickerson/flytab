@@ -241,3 +241,59 @@ describe('full review fixes (2026-10-18)', () => {
         expect(v._trsaPolygons.get('T_lbl').options.icon.options.html).not.toMatch(/<img/);
     });
 });
+
+describe('re-review 3 fixes (2026-10-18)', () => {
+    beforeEach(() => { document.body.innerHTML = ''; delete window.app; });
+    const withPopup = () => {
+        const div = document.createElement('div'); document.body.appendChild(div);
+        const map = L.map(div, { center: [35.2, -80.9], zoom: 9 });
+        const v = Object.create(VectorMapLayers.prototype); v._map = map;
+        v._areasAt = () => [{ kind: 'class', rec: { id: 'CLT', name: 'Charlotte Class B', class: 'B', lower_ft: 0, upper_ft: 10000 } }];
+        map.getBounds = () => L.latLngBounds([34, -82], [36, -79]);
+        v._showAirspacePopup(L.latLng(35.2, -80.9));
+        return { map, v };
+    };
+
+    it('an off-screen popup is not closed before an airport tap is handled (that dropped the tap)', () => {
+        const { map, v } = withPopup();
+        map.getBounds = () => L.latLngBounds([40, -75], [41, -74]);       // anchor now out of view
+        const order = []; map.on('popupclose', () => order.push('popupclose'));
+        v._onAirportClick = () => order.push('airport');
+        v._findNearestMarker = () => ({ type: 'airport', data: { icao: 'KCLT' } });
+        v._onMapClick({ latlng: L.latLng(40.5, -74.5) });
+        expect(order).toEqual(['airport', 'popupclose']);
+        map.remove();
+    });
+
+    it('a tap on a route waypoint marker is left to its own click: no airspace popup, ours not closed', () => {
+        const { map, v } = withPopup();
+        v._findNearestMarker = () => null; v._onTrafficTap = () => false;
+        const spy = vi.spyOn(v, '_showAirspacePopup');
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path'); path.setAttribute('class', 'route-wp-marker leaflet-interactive');
+        document.body.appendChild(path);
+        v._onMapClick({ latlng: L.latLng(35.2, -80.9), target: path });
+        expect(spy).not.toHaveBeenCalled();
+        expect(map.hasLayer(v._tapPopup)).toBe(true);
+        expect(read('web/cockpit/map.js')).toMatch(/className: 'route-wp-marker'/);
+        map.remove();
+    });
+
+    it('other interactive layers (an AIRMET area, a lake) do not hide the airspace popup', () => {
+        const { map, v } = withPopup(); v._closeTapPopup();
+        v._findNearestMarker = () => null; v._onTrafficTap = () => false;
+        const spy = vi.spyOn(v, '_showAirspacePopup');
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path'); path.setAttribute('class', 'leaflet-interactive');
+        v._onMapClick({ latlng: L.latLng(35.2, -80.9), target: path });
+        expect(spy).toHaveBeenCalled();
+        map.remove();
+    });
+
+    it('the radar loop bar and the convective-alert panel are overlays; their clicks never reach the map tap', () => {
+        const T = new Function(read('web/shared/tap-utils.js') + '\nreturn { isTapOnMapOverlay };')();
+        for (const cls of ['radar-loop-controls', 'conv-alerts-panel']) {
+            const el = document.createElement('div'); el.className = cls; const c = document.createElement('span'); el.appendChild(c);
+            expect(T.isTapOnMapOverlay(c), cls).toBe(true);
+        }
+        expect(read('web/cockpit/vector-map-layers.js')).toMatch(/isTapOnMapOverlay\(e\.originalEvent\?\.target\)\) return;/);
+    });
+});

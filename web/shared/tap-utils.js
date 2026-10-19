@@ -23,7 +23,10 @@ let _wireTapLastTouchAt = 0;
 // .plate-toggle-btn / .plate-overlay-bar: the approach-plate PLATE button and
 // overlay bar (approach-charts.js) are mounted inside the map container; a tap
 // on them opened the airspace popup underneath (review 2026-10-18).
-const MAP_OVERLAY_SELECTORS = ['.leaflet-popup', '.airspace-alert-popup', '.plate-toggle-btn', '.plate-overlay-bar'];
+// .radar-loop-controls (radar-loop.js) and .conv-alerts-panel (convective-
+// alerts.js) are also mounted inside it (re-review 3).
+const MAP_OVERLAY_SELECTORS = ['.leaflet-popup', '.airspace-alert-popup', '.plate-toggle-btn', '.plate-overlay-bar',
+                               '.radar-loop-controls', '.conv-alerts-panel'];
 
 function isTapOnMapOverlay(target) {
     return MAP_OVERLAY_SELECTORS.some(sel => target?.closest?.(sel));

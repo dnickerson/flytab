@@ -98,6 +98,10 @@ class VectorMapLayers {
             // _wireTapLastTouchAt is set by wireTap (tap-utils.js) and route-table.js
             // delegated handlers on every UI button tap.
             if (typeof _wireTapLastTouchAt !== 'undefined' && Date.now() - _wireTapLastTouchAt < 500) return;
+            // A click on an overlay inside the map (convective-alert panel, radar
+            // controls, plate bar): the touch path already ignores it, but its
+            // synthetic click reached here and opened the airspace popup (re-review 3).
+            if (typeof isTapOnMapOverlay === 'function' && isTapOnMapOverlay(e.originalEvent?.target)) return;
             this._onMapClick(e);
         });
 
@@ -145,7 +149,7 @@ class VectorMapLayers {
                 const pt = L.point(endX - rect.left, endY - rect.top);
                 const latlng = this._map.containerPointToLatLng(pt);
                 this._lastTouchTap = Date.now();
-                this._onMapClick({ latlng });
+                this._onMapClick({ latlng, target: e.target });
             }
         }, { passive: true });
     }
@@ -1772,6 +1776,8 @@ class VectorMapLayers {
         // _wireTapLastTouchAt, and app.js's 500 ms guard then dropped the
         // airport tap (re-review 2026-10-18).
         const popupOpen = this._tapPopupShown();
+        // The touched element (touch path) or the click's (desktop).
+        const tgt = (typeof Element !== 'undefined' && e.target instanceof Element) ? e.target : e.originalEvent?.target;
         const HIT_PX = 30; // generous tap target for fingers
         const pt = this._map.latLngToContainerPoint(e.latlng);
         const hit = this._findNearestMarker(pt, HIT_PX);
@@ -1816,9 +1822,18 @@ class VectorMapLayers {
         // that only closed an open popup does not open another; none while
         // the route table is being edited (map taps add waypoints then).
         if (this._onTrafficTap && this._onTrafficTap(pt)) { this._closeTapPopup(); return; }
+        // On a route waypoint marker (map.js, its own click opens the airport
+        // panel): leave it to that click. Closing our popup now would stamp
+        // _wireTapLastTouchAt (map.js popupclose) and drop that click; with no
+        // popup, the airspace popup opened beside the panel (re-review 3). Not
+        // every .leaflet-interactive: AIRMET/SIGMET areas, lakes and airway lines
+        // are interactive by default and would hide the airspace popup.
+        if (tgt?.closest?.('.route-wp-marker')) return;
         if (popupOpen) { this._closeTapPopup(); return; }
-        if (window.app?.routeTable?.isEditing?.()) return;
-        this._showAirspacePopup(e.latlng);
+        // Closed only now, after anything else was handled: one panned off screen
+        // is replaced or closed here (never before a marker tap: that dropped it).
+        const editing = window.app?.routeTable?.isEditing?.();
+        if (editing || !this._showAirspacePopup(e.latlng)) this._closeTapPopup();
     }
 
     /**
@@ -1836,15 +1851,23 @@ class VectorMapLayers {
     }
 
     /**
-     * The tap popup is open and its anchor in view. One panned off screen (auto-
-     * pan follow) is closed quietly: it must not eat the pilot's next tap.
+     * The tap popup is open and on screen (some of its box inside the map). One
+     * panned off screen by auto-pan follow must not eat the pilot's next tap,
+     * so it counts as not shown -- but is NOT closed here: closing before a
+     * marker tap is handled dropped that tap (re-review 3). _onMapClick closes
+     * it after.
      */
     _tapPopupShown() {
         const p = this._tapPopup;
         if (!p || !this._map.hasLayer?.(p)) { this._tapPopup = null; return false; }
-        const ll = p.getLatLng?.();
-        if (ll && this._map.getBounds && !this._map.getBounds().contains(ll)) { this._closeTapPopup(); return false; }
-        return true;
+        const el = p.getElement?.();
+        const box = el?.getBoundingClientRect?.();
+        const map = this._map.getContainer?.()?.getBoundingClientRect?.();
+        if (box && map && box.width > 0 && map.width > 0) {
+            return box.right > map.left && box.left < map.right && box.bottom > map.top && box.top < map.bottom;
+        }
+        const ll = p.getLatLng?.();                       // no layout (tests): the anchor
+        return !(ll && this._map.getBounds && !this._map.getBounds().contains(ll));
     }
 
     /** Close the tap popup if open. True if one was open. */
