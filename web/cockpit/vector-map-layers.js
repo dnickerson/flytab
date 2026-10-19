@@ -68,6 +68,9 @@ class VectorMapLayers {
         // Refresh internet METARs every 10 minutes even when map is stationary
         setInterval(() => { this._internetFetchedAt = 0; this._scheduleUpdate(); }, 10 * 60 * 1000);
 
+        // Restricted/MOA activations: redraw when downloaded, and when one starts or ends.
+        document.addEventListener('sua-notams:changed', () => this._scheduleUpdate());
+
         // Route waypoint ICAOs — suppress duplicate airport labels for these
         this._routeIcaos = new Set();
 
@@ -1106,10 +1109,18 @@ class VectorMapLayers {
             return;
         }
 
-        // Fetch NOTAM status (cached, silent on error)
+        // NOTAM activations for the ARTCCs near the view and the route (fetched
+        // on the ground, kept for the flight; quiet offline).
         const suaNotams = window.SuaNotams;
-        if (suaNotams) {
-            suaNotams.fetchForBounds(south, west, north, east).catch(() => {});
+        if (suaNotams?.refresh) {
+            const boxes = [{ south, west, north, east }];
+            const wps = (typeof ActiveRoute !== 'undefined' ? ActiveRoute.getWaypoints() : [])
+                .filter((w) => Number.isFinite(w?.lat) && Number.isFinite(w?.lon));
+            if (wps.length) {
+                const lats = wps.map((w) => w.lat), lons = wps.map((w) => w.lon);
+                boxes.push({ south: Math.min(...lats), west: Math.min(...lons), north: Math.max(...lats), east: Math.max(...lons) });
+            }
+            suaNotams.refresh(this._nasr, boxes).catch(() => {});
         }
 
         try {
@@ -1888,6 +1899,29 @@ class VectorMapLayers {
         return `${Math.round(ft).toLocaleString('en-US')} ft`;
     }
 
+    /**
+     * The NOTAM line for a Restricted/MOA row: { line, text?, active }.
+     * Active now / later today / none as of the last download / never
+     * downloaded (SuaNotams keeps them for the flight -- no internet aloft).
+     */
+    static _suaNotamStatus(rec, notams, now) {
+        const z = (ms) => {
+            if (ms === Infinity) return 'further notice';
+            if (!Number.isFinite(ms)) return '?';
+            const d = new Date(ms), p = (n) => String(n).padStart(2, '0');
+            const hm = `${p(d.getUTCHours())}${p(d.getUTCMinutes())}Z`;
+            return d.toISOString().slice(0, 10) === new Date(now).toISOString().slice(0, 10)
+                ? hm : `${d.getUTCDate()} ${'Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec'.split(' ')[d.getUTCMonth()]} ${hm}`;
+        };
+        const act = notams?.getNotam?.(rec, now);
+        if (act) return { active: true, line: `⚠ ACTIVE per NOTAM until ${z(act.end)}`, text: act.text ? String(act.text) : '' };
+        const next = notams?.getUpcoming?.(rec, now);
+        if (next) return { active: false, line: `NOTAM: active ${z(next.start)} – ${z(next.end)}`, text: next.text ? String(next.text) : '' };
+        const at = notams?.checkedAt?.(rec) || 0;
+        if (at) return { active: false, line: `No activation NOTAM (downloaded ${z(at)})` };
+        return { active: false, line: 'NOTAM status unknown — not downloaded (needs internet on the ground)' };
+    }
+
     /** The popup's HTML for these areas (all text escaped: names come from NASR, NOTAM text from the FAA). */
     _airspacePopupHtml(areas) {
         const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1902,14 +1936,14 @@ class VectorMapLayers {
                     <div class="as-pop-alt">${esc(alt(rec))}</div></div>`;
             }
             if (kind === 'sua') {
-                const n = notams ? notams.getNotam(rec) : null;
-                const status = n
-                    ? `<div class="as-pop-notam is-active">⚠ ACTIVE per NOTAM${n.text ? `<br><span class="as-pop-notam-text">${esc(String(n.text).length > 120 ? String(n.text).slice(0, 120) + '…' : String(n.text))}</span>` : ''}</div>`
-                    // Not "not active": NOTAM matching misses most SUA names (review 7) -- see the NOTAMs.
-                    : `<div class="as-pop-notam">Activation not confirmed — check NOTAMs (fetched on the ground)</div>`;
+                const status = VectorMapLayers._suaNotamStatus(rec, notams, Date.now());
+                const times = rec.active_times ? String(rec.active_times) : '';
                 return `<div class="as-pop-row as-pop-sua">
                     <div class="as-pop-head"><span class="as-pop-name">${esc(rec.name ?? rec.id)}</span><span class="as-pop-kind">${esc(rec.type || 'SUA')}</span></div>
-                    <div class="as-pop-alt">${esc(alt(rec))}</div>${status}</div>`;
+                    <div class="as-pop-alt">${esc(alt(rec))}</div>
+                    <div class="as-pop-notam${status.active ? ' is-active' : ''}">${esc(status.line)}${status.text
+                        ? `<br><span class="as-pop-notam-text">${esc(status.text.length > 120 ? status.text.slice(0, 120) + '…' : status.text)}</span>` : ''}</div>${times
+                        ? `<div class="as-pop-note">Published times: ${esc(times.length > 140 ? times.slice(0, 140) + '…' : times)}</div>` : ''}</div>`;
             }
             // Each freq is {freq, sector?} -- the sector (raw NASR text, e.g. "164-343") says
             // which arrival sector calls which frequency (KILM); _formatTrsaFreq also takes

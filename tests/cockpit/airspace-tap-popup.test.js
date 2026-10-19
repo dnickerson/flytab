@@ -87,7 +87,7 @@ describe('the airspace at a tap', () => {
         const el = document.createElement('div');
         el.innerHTML = v._airspacePopupHtml(v._areasAt(35.4, -81.2));
         const rows = [...el.querySelectorAll('.as-pop-row')].map(words);
-        expect(rows[0]).toMatch(/^BULLDOG A MOA MOA 500 ft – 10,000 ft ⚠ ACTIVE per NOTAM BULLDOG A MOA ACT/);
+        expect(rows[0]).toMatch(/^BULLDOG A MOA MOA 500 ft – 10,000 ft ⚠ ACTIVE per NOTAM until \? BULLDOG A MOA ACT/);   // stub: no end time
         expect(rows[1]).toBe('Charlotte CLASS B 6,000 ft – 10,000 ft');
         el.innerHTML = v._airspacePopupHtml(v._areasAt(33.68, -78.93));
         expect(words(el)).toMatch(/Myrtle Beach TRSA TRSA 119\.85 \(180-359\) \/ 127\.1 \(360-179\) SFC – 4,000 ft Approximate boundary — 20 nm radius/);
@@ -159,7 +159,7 @@ describe('full review fixes (2026-10-18)', () => {
         expect(el.querySelector('.as-pop-notam-text').textContent).toBe('X'.repeat(120) + '…');
         window.SuaNotams = { getNotam: () => null };
         el.innerHTML = v._airspacePopupHtml([{ kind: 'sua', rec: { id: 'm', name: 'M', type: 'MOA', lower_ft: 500, upper_ft: 10000 } }]);
-        expect(el.querySelector('.as-pop-notam').textContent).toBe('Activation not confirmed — check NOTAMs (fetched on the ground)');
+        expect(el.querySelector('.as-pop-notam').textContent).toBe('NOTAM status unknown — not downloaded (needs internet on the ground)');
     });
 
     it('9. a TRSA map label is text, not HTML', async () => {
@@ -386,5 +386,46 @@ describe('review 7 (2026-10-18): the constructor\'s real touch listeners', () =>
         touch('touchstart', pop);
         polygonClick(v);
         expect(v._showAirspacePopup).not.toHaveBeenCalled();
+    });
+});
+
+describe('Restricted/MOA NOTAM line (2026-10-19: activation by NOTAM now works)', () => {
+    beforeEach(() => { delete window.SuaNotams; });
+    const NOW = Date.parse('2026-10-19T19:00:00Z');
+    const MOODY = { id: 'MMOODY2N', name: 'MOODY 2 NORTH MOA, GA', type: 'MOA', lower_ft: 100, upper_ft: 1500,
+                    active_times: 'MON 0800-0100 UTC; TUE 0800-0100 UTC; By NOTAM' };
+    const line = (n, rec = MOODY) => VectorMapLayers._suaNotamStatus(rec, n, NOW);
+
+    it('active now: until when, and the NOTAM text', () => {
+        const act = { number: '10/004', start: Date.parse('2026-10-19T18:10:00Z'), end: Date.parse('2026-10-20T01:20:00Z'),
+                      text: '!SUAE 10/004 ZJX AIRSPACE MOODY 2 NORTH MOA ACT 500FT-7999FT' };
+        const s = line({ getNotam: () => act });
+        expect(s).toMatchObject({ active: true, line: '⚠ ACTIVE per NOTAM until 20 Oct 0120Z' });
+        expect(s.text).toMatch(/MOODY 2 NORTH MOA ACT/);
+        expect(line({ getNotam: () => ({ ...act, end: Infinity }) }).line).toBe('⚠ ACTIVE per NOTAM until further notice');
+    });
+
+    it('later: when it starts and ends (today in HHMMZ)', () => {
+        const next = { start: Date.parse('2026-10-19T21:00:00Z'), end: Date.parse('2026-10-19T23:59:00Z'), text: 'X' };
+        expect(line({ getNotam: () => null, getUpcoming: () => next })).toMatchObject({ active: false, line: 'NOTAM: active 2100Z – 2359Z' });
+    });
+
+    it('none: as of the download; never downloaded: unknown', () => {
+        expect(line({ getNotam: () => null, getUpcoming: () => null, checkedAt: () => Date.parse('2026-10-19T18:52:00Z') }).line)
+            .toBe('No activation NOTAM (downloaded 1852Z)');
+        expect(line({ getNotam: () => null, getUpcoming: () => null, checkedAt: () => Date.parse('2026-10-18T22:05:00Z') }).line)
+            .toBe('No activation NOTAM (downloaded 18 Oct 2205Z)');
+        expect(line({ getNotam: () => null, getUpcoming: () => null, checkedAt: () => 0 }).line)
+            .toBe('NOTAM status unknown — not downloaded (needs internet on the ground)');
+        expect(line(undefined).line).toBe('NOTAM status unknown — not downloaded (needs internet on the ground)');
+    });
+
+    it('the popup row: the active class, the published times, all escaped', async () => {
+        const v = await layers(); const el = document.createElement('div');
+        window.SuaNotams = { getNotam: () => ({ end: Infinity, text: '<b>x</b>' }) };
+        el.innerHTML = v._airspacePopupHtml([{ kind: 'sua', rec: { ...MOODY, active_times: '<img src=x onerror=alert(1)>' } }]);
+        expect(el.querySelector('.as-pop-notam.is-active')).not.toBeNull();
+        expect(el.querySelector('img, b')).toBeNull();
+        expect(el.querySelector('.as-pop-note').textContent).toBe('Published times: <img src=x onerror=alert(1)>');
     });
 });
