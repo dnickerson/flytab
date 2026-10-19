@@ -9,9 +9,9 @@
  * FitPC, CockpitConfig.notamBase -- the one WX Briefing uses), one request for
  * the ARTCCs near the map view and the active route. R/W/A/P areas match the
  * NASR id ("R2904A"); MOAs match the NASR name without its state ("MOODY 2
- * NORTH MOA, GA"). On 2026-10-19's NOTAMs (all CONUS ARTCCs) that matched 317
- * of 328; the rest were refueling tracks, a TFR and a high-speed area, which
- * are not SUA. Was: flywhere.app/api/notams (503, no credentials), an R-2501
+ * NORTH MOA, GA"). On 2026-10-19's NOTAMs (all CONUS ARTCCs) that matched 364
+ * of 374 activations; the rest were refueling tracks and a high-speed area,
+ * which are not SUA. Was: flywhere.app/api/notams (503, no credentials), an R-2501
  * pattern the FAA text never uses, and names compared with the state left on --
  * nothing ever matched (Dana, 2026-10-19).
  *
@@ -22,7 +22,11 @@
 class SuaNotams {
     static STORE_KEY = 'flytab_sua_notams';
     static STALE_MS = 15 * 60 * 1000;      // refetch an ARTCC after this (when online)
-    static ARTCC_MARGIN_DEG = 2;     // 1 held the issuing ARTCC for 364/364 on 10-19; 2 for margin (review)
+    static ARTCC_MARGIN_DEG = 2;
+    // Oceanic ARTCCs: their NASR boxes reach the coast (ZWY from 77 W), but on
+    // 10-19 every offshore W-area NOTAM came under a domestic ARTCC. They may
+    // answer with nothing; a domestic one never does (fewest: ZAU, 21).
+    static OCEANIC = new Set(['ZWY', 'ZAK', 'ZAP']);     // 1 held the issuing ARTCC for 364/364 on 10-19; 2 for margin (review)
     static RETRY_MS = 60 * 1000;           // after a failed fetch
     static KEEP_TEXT = 300;                // chars of NOTAM text kept
 
@@ -34,7 +38,7 @@ class SuaNotams {
         this._checkedBoxesAt = 0;
         this._fetching = null;
         this._failedAt = 0;
-        this._emptyAt = new Map();       // ARTCC -> ms it last came back with nothing (retried after STALE_MS)
+        this._retryAt = new Map();       // ARTCC -> ms before which it is not asked again (empty: 15 min, FAA error: 1 min)
         this._lastError = null;
         this._timer = null;
         this._load();
@@ -107,9 +111,8 @@ class SuaNotams {
         for (const b of boxes) for (const z of this._artccsFor(b)) artccs.add(z);
         const now = Date.now();
         const age = (z) => now - (this._fetchedAt.get(z) || 0);   // < 0: the clock was set back
-        const sinceEmpty = (z) => now - (this._emptyAt.get(z) || 0);
-        const due = [...artccs].filter((z) => (age(z) > SuaNotams.STALE_MS || age(z) < 0)
-            && !(sinceEmpty(z) >= 0 && sinceEmpty(z) < SuaNotams.STALE_MS)).sort();
+        const waiting = (z) => { const t = this._retryAt.get(z); return t != null && now < t && t - now <= SuaNotams.STALE_MS; };
+        const due = [...artccs].filter((z) => (age(z) > SuaNotams.STALE_MS || age(z) < 0) && !waiting(z)).sort();
         const sinceFail = now - this._failedAt;
         if (!due.length || (sinceFail >= 0 && sinceFail < SuaNotams.RETRY_MS)) return;
 
@@ -120,20 +123,26 @@ class SuaNotams {
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
             const data = await resp.json();
             const features = data.features || [];
-            // The proxy skips an ARTCC the FAA refused (and still answers 200):
-            // every ARTCC has dozens of NOTAMs (fewest on 10-19: ZAU, 21), so
-            // none back means it was not fetched -- keep what it had, not
-            // "no activation NOTAM" (review 2026-10-19).
-            // A proxy that lists `failed` (tools/notam-proxy.py since 2026-10-19)
-            // says which; an older one: an ARTCC with nothing back.
+            // Not fetched (kept as it was, not "no activation NOTAM"; reviews
+            // 2026-10-19): one the proxy lists as `failed` (tools/notam-proxy.py
+            // since 10-19), and a domestic ARTCC with nothing back -- the proxy
+            // used to skip FAA errors silently, and the FAA may answer without
+            // a list. An oceanic one may truly have none.
             const got = new Set(features.map((f) => SuaNotams._artccId(f?.properties?.coreNOTAMData?.notam?.location)));
-            const failed = Array.isArray(data.failed) ? new Set(data.failed.map(SuaNotams._artccId)) : null;
-            const ok = due.filter((z) => (failed ? !failed.has(z) : got.has(z)));
-            for (const z of due) if (!ok.includes(z)) this._emptyAt.set(z, Date.now()); else this._emptyAt.delete(z);
+            const failed = new Set((Array.isArray(data.failed) ? data.failed : []).map(SuaNotams._artccId));
+            const ok = due.filter((z) => !failed.has(z) && (got.has(z) || SuaNotams.OCEANIC.has(z)));
+            const t = Date.now();
+            for (const z of due) {
+                if (ok.includes(z)) this._retryAt.delete(z);
+                else this._retryAt.set(z, t + (failed.has(z) ? SuaNotams.RETRY_MS : SuaNotams.STALE_MS));
+            }
             if (!ok.length) throw new Error(`no NOTAMs returned for ${due.join(',')}`);
             await this._buildIndex(nasr);        // the NASR cycle may have changed since the last fetch
+            // NASR wiped (Reset NASR Data) mid-session: nothing to match, so
+            // applying would drop every activation (review).
+            if (!this._index?.byKey.size && !this._index?.moaNames.length) throw new Error('NASR SUA not loaded');
             this._apply(ok, features.filter((f) => ok.includes(SuaNotams._artccId(f?.properties?.coreNOTAMData?.notam?.location))), Date.now());
-            this._lastError = ok.length < due.length ? `no NOTAMs returned for ${due.filter((z) => !got.has(z)).join(',')}` : null;
+            this._lastError = ok.length < due.length ? `not fetched: ${due.filter((z) => !ok.includes(z)).join(',')}` : null;
             this._failedAt = 0;
             this._save();
             this._changed();
@@ -217,8 +226,8 @@ class SuaNotams {
     }
 
     /**
-     * The ARTCCs that may issue NOTAMs for this box: those whose box, 1 deg
-     * wider, overlaps it. On 2026-10-19's 364 matched NOTAMs this always held
+     * The ARTCCs that may issue NOTAMs for this box: those whose box,
+     * ARTCC_MARGIN_DEG wider, overlaps it. On 2026-10-19's 364 matched NOTAMs this always held
      * the issuing ARTCC (0.5 deg missed one: JUNIPER MOA, ZLC), ~3.3 per area;
      * ARTCC_MARGIN_DEG is 2 to leave room (~3.8 per area).
      */
@@ -276,18 +285,32 @@ class SuaNotams {
         if (!this._index) return [];
         const { byKey, moaNames } = this._index;
         const out = new Set();
-        let seg = ` ${SuaNotams._norm(designator)} `;
+        // "R4401A-E", "R4401A THRU E" -> "R4401A B C D E" (before the hyphen is lost)
+        const ranged = String(designator || '').toUpperCase().replace(
+            /\b([RWAP]-?\d{1,4})([A-Z])\s*(?:-|THRU|THROUGH)\s*([A-Z])\b/g,
+            (all, base, a, b) => (b > a && b.charCodeAt(0) - a.charCodeAt(0) < 12
+                ? base + [...Array(b.charCodeAt(0) - a.charCodeAt(0) + 1)].map((_, i) => String.fromCharCode(a.charCodeAt(0) + i)).join(' ')
+                : all));
+        let seg = ` ${SuaNotams._norm(ranged)} `;
         const lookup = (k, word) => {
+            if (Array.isArray(word) && word.length) { word.forEach((w) => lookup(k, w)); return; }
+            if (Array.isArray(word)) word = null;
             const hit = (word && (byKey.get(`${k} ${word}`) || byKey.get(k + word[0]))) || byKey.get(k)
                 || [...byKey].filter(([key]) => key.length > k.length && key.startsWith(k) && /^[A-Z]+$/.test(key.slice(k.length))).flatMap(([, ids]) => ids);
             for (const id of hit) out.add(id);
         };
-        for (const m of seg.matchAll(/ ([RWAP]) ?(\d{1,4})([A-Z]{0,2})((?: (?:AND )?[A-Z](?= ))*)(?: (HIGH|LOW|NORTH|SOUTH|EAST|WEST)(?= ))?/g)) {
-            const [, kind, num, letters, more, word] = m;
+        for (const m of seg.matchAll(/ ([RWAP]) ?(\d{1,4})([A-Z]{0,2})((?: (?:AND )?[A-Z](?= ))*)((?: (?:AND )?(?:HIGH|LOW|NORTH|SOUTH|EAST|WEST)(?= ))*)/g)) {
+            const [, kind, num, letters, more, words] = m;
+            const word = (words || '').trim().split(' ').filter((w) => w && w !== 'AND');   // "NORTH AND SOUTH"
+
             lookup(kind + num + letters, word);
             for (const extra of (more || '').trim().split(' ').filter((w) => w && w !== 'AND')) lookup(kind + num + extra, word);   // R4401A B C, R4401A/B, W497A AND B
         }
         const names = new Map(moaNames);
+        // "RESERVE AND DOME MOA": a whole name (less MOA) before AND
+        for (const [name, ids] of moaNames) {
+            if (seg.includes(` ${name.slice(0, -4)} AND `)) ids.forEach((id) => out.add(id));
+        }
         for (const [name, ids] of moaNames) {                      // longest first; a matched name is blanked out
             const at = seg.indexOf(` ${name} `);
             if (at < 0) continue;

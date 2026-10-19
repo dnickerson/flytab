@@ -1109,22 +1109,25 @@ class VectorMapLayers {
             return;
         }
 
-        // NOTAM activations for the ARTCCs near the view and the route (fetched
-        // on the ground, kept for the flight; quiet offline).
         const suaNotams = window.SuaNotams;
-        if (suaNotams?.refresh) {
-            const boxes = [{ south, west, north, east }];
-            const wps = (typeof ActiveRoute !== 'undefined' ? ActiveRoute.getWaypoints() : [])
-                .filter((w) => Number.isFinite(w?.lat) && Number.isFinite(w?.lon));
-            if (wps.length) {
-                const lats = wps.map((w) => w.lat), lons = wps.map((w) => w.lon);
-                boxes.push({ south: Math.min(...lats), west: Math.min(...lons), north: Math.max(...lats), east: Math.max(...lons) });
-            }
-            suaNotams.refresh(this._nasr, boxes).catch(() => {});
-        }
-
         try {
             const areas = await this._nasr.getSuaInBounds(south, west, north, east);
+
+            // NOTAM activations for the ARTCCs near the view, the areas in it
+            // (R-2508 reaches far past a z8 view) and the route; fetched on the
+            // ground, kept for the flight; quiet offline.
+            if (suaNotams?.refresh) {
+                const box = (pts) => {
+                    const lats = pts.map((p) => p[0]), lons = pts.map((p) => p[1]);
+                    return lats.length ? { south: Math.min(...lats), west: Math.min(...lons), north: Math.max(...lats), east: Math.max(...lons) } : null;
+                };
+                const wps = (typeof ActiveRoute !== 'undefined' ? ActiveRoute.getWaypoints() : [])
+                    .filter((w) => Number.isFinite(w?.lat) && Number.isFinite(w?.lon)).map((w) => [w.lat, w.lon]);
+                const corners = areas.flatMap((a) => { const b = box(a.boundary || []); return b ? [[b.south, b.west], [b.north, b.east]] : []; });
+                const boxes = [{ south, west, north, east }, box(corners), box(wps)].filter(Boolean);
+                suaNotams.refresh(this._nasr, boxes).catch(() => {});
+            }
+
             const currentIds = new Set();
             const usedLabelPos = [];
             // Ceiling/floor labels only from Z9 (the zoom badge's rounding): at
@@ -1155,8 +1158,12 @@ class VectorMapLayers {
                             ? { ...base, ...VectorMapLayers.SUA_ACTIVE_OVERRIDES }
                             : base);
                         existingPoly._suaActive = isActive;
-                        // Redraw "ACT" badge label
-                        this._updateSuaActLabel(sua, isActive, center => center);
+                        // The label is rebuilt with the ACT badge (or without):
+                        // Leaflet re-creates a marker's element from its icon
+                        // HTML when the layer is shown again, so editing the
+                        // element lost the badge after a hide/show (review).
+                        const lbl = this._suaPolygons.get(sua.id + '_lbl');
+                        if (lbl) { this._suaLayer.removeLayer(lbl); this._suaPolygons.delete(sua.id + '_lbl'); }
                     }
                     label(sua, isActive);
                     continue;
@@ -1225,28 +1232,6 @@ class VectorMapLayers {
         });
         marker.addTo(this._suaLayer);
         this._suaPolygons.set(sua.id + '_lbl', marker);
-    }
-
-    _updateSuaActLabel(sua, isActive, _getCenterFn) {
-        // Re-render the label marker when activation state flips mid-session
-        const lblKey = sua.id + '_lbl';
-        const existing = this._suaPolygons.get(lblKey);
-        if (!existing) return;
-        const el = existing.getElement?.();
-        if (!el) return;
-        if (isActive) {
-            el.classList.add('sua-lbl-active');
-            // Add ACT badge if not present
-            if (!el.querySelector('.sua-act-badge')) {
-                const badge = document.createElement('span');
-                badge.className = 'sua-act-badge';
-                badge.textContent = 'ACT';
-                el.appendChild(badge);
-            }
-        } else {
-            el.classList.remove('sua-lbl-active');
-            el.querySelector('.sua-act-badge')?.remove();
-        }
     }
 
     // Grey dashed outline, no fill -- matches VFR sectional chart convention
@@ -1917,6 +1902,9 @@ class VectorMapLayers {
         if (act) return { active: true, line: `⚠ ACTIVE per NOTAM until ${z(act.end)}`, text: act.text ? String(act.text) : '' };
         const next = notams?.getUpcoming?.(rec, now);
         if (next) return { active: false, line: `NOTAM: active ${z(next.start)} – ${z(next.end)}`, text: next.text ? String(next.text) : '' };
+        // P-56, P-40, R-2508...: "No activation NOTAM found" read as "not
+        // active" for an area that always is (145 in NASR; review).
+        if (/^\s*continuous\b/i.test(String(rec.active_times || ''))) return { active: true, line: '⚠ Active continuously (published times)' };
         if (notams?.constructor?.matchable && !notams.constructor.matchable(rec)) {
             return { active: false, line: 'NOTAM status not tracked for this area — check the NOTAMs' };   // NSAs
         }

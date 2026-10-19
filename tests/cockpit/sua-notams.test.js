@@ -275,14 +275,15 @@ describe('re-review fixes (2026-10-19)', () => {
         const t1 = s.checkedAt(sua('MMOODY2N'));
         globalThis.fetch = vi.fn(async (url) => {
             const locs = new URL(String(url)).searchParams.get('location').split(',');
-            // ZJX failed upstream; ZTL legitimately has no NOTAMs at all
+            // ZJX failed upstream; ZTL came back with nothing (a domestic ARTCC never has none)
             return { ok: true, json: async () => ({ failed: ['ZJX'], features: locs.filter((z) => z !== 'ZJX' && z !== 'ZTL').map(filler) }) };
         });
         at('2026-10-19T19:20:00Z');
         await s.refresh(nasr, [MOODY_VIEW]);
         expect(s.hasActiveNotam(sua('MMOODY2N'))).toBe(true);                // ZJX kept
         expect(s._fetchedAt.get('ZJX')).toBe(t1);
-        expect(s._fetchedAt.get('ZTL')).toBe(Date.parse('2026-10-19T19:20:00Z'));   // empty but answered: fetched
+        expect(s._fetchedAt.get('ZTL')).toBe(t1);                            // not counted as downloaded
+        expect(s._fetchedAt.get('ZMA')).toBe(Date.parse('2026-10-19T19:20:00Z'));
     });
 
     it('an ARTCC that came back empty (older proxy) is asked again after 15 min, not every minute', async () => {
@@ -324,5 +325,56 @@ describe('re-review fixes (2026-10-19)', () => {
         expect(m('GAMECOCK C/D MOA')).toEqual(['MGAMECOCKC', 'MGAMECOCKD']);
         expect(m('MOODY 2 NORTH AND SOUTH MOA')).toEqual(['MMOODY2N', 'MMOODY2S']);
         expect(m('BULLDOG C AND D MOA')).toEqual([]);                        // names NASR does not have: nothing invented
+    });
+});
+
+describe('review 3 fixes (2026-10-19)', () => {
+    const NY = { south: 33.5, west: -79.5, north: 34.5, east: -78 };        // Myrtle Beach: ZWY (oceanic) is asked too
+    const answer = (fn) => { globalThis.fetch = vi.fn(async (url) => {
+        const locs = new URL(String(url)).searchParams.get('location').split(',');
+        return { ok: true, json: async () => fn(locs) };
+    }); };
+
+    it('an oceanic ARTCC may answer with nothing: counted as downloaded; a domestic one is not', async () => {
+        answer((locs) => ({ failed: [], features: locs.filter((z) => z !== 'ZWY' && z !== 'ZJX').map(filler) }));
+        const s = new SuaNotams();
+        await s.refresh(nasr, [NY]);
+        expect(s._fetchedAt.get('ZWY')).toBe(Date.parse('2026-10-19T19:00:00Z'));
+        expect(s._fetchedAt.has('ZJX')).toBe(false);
+    });
+
+    it('an FAA error is asked again after a minute; an empty domestic answer after 15', async () => {
+        const asked = [];
+        answer((locs) => { asked.push(locs); return { failed: ['ZJX'], features: locs.filter((z) => z !== 'ZJX' && z !== 'ZTL').map(filler) }; });
+        const s = new SuaNotams();
+        await s.refresh(nasr, [MOODY_VIEW]);
+        at('2026-10-19T19:01:30Z'); await s.refresh(nasr, [MOODY_VIEW]);
+        expect(asked.at(-1)).toEqual(['ZJX']);                               // ZTL waits
+        at('2026-10-19T19:16:00Z'); await s.refresh(nasr, [MOODY_VIEW]);
+        expect(asked.at(-1)).toContain('ZTL');
+    });
+
+    it('NASR wiped mid-session: a fetch does not clear what is kept', async () => {
+        proxy(); const s = new SuaNotams();
+        await s.refresh(nasr, [MOODY_VIEW]);
+        const wiped = { getSuaInBounds: async () => [], getAirspaceInBounds: nasr.getAirspaceInBounds };
+        at('2026-10-19T19:20:00Z');
+        await s.refresh(wiped, [MOODY_VIEW]);
+        expect(s.hasActiveNotam(sua('MMOODY2N'))).toBe(true);
+        expect(s._lastError).toMatch(/NASR/);
+    });
+
+    it('ranges and AND lists', async () => {
+        const s = new SuaNotams();
+        const rows = ['R4401A', 'R4401B', 'R4401C', 'R4401D', 'R4401E', 'W161AN', 'W161AS', 'R3202HIGH', 'R3202LOW']
+            .map((id) => ({ id, type: id[0], name: id })).concat([{ id: 'MRESERVE', type: 'MOA', name: 'RESERVE MOA, NM' }, { id: 'MDOME', type: 'MOA', name: 'DOME MOA, AZ' }]);
+        await s._buildIndex({ getSuaInBounds: async () => rows });
+        const m = (d) => s._match(d).sort();
+        expect(m('R4401A-E')).toEqual(['R4401A', 'R4401B', 'R4401C', 'R4401D', 'R4401E']);
+        expect(m('R4401A THRU C')).toEqual(['R4401A', 'R4401B', 'R4401C']);
+        expect(m('W161A NORTH AND SOUTH')).toEqual(['W161AN', 'W161AS']);
+        expect(m('R3202 HIGH AND LOW')).toEqual(['R3202HIGH', 'R3202LOW']);
+        expect(m('RESERVE AND DOME MOA')).toEqual(['MDOME', 'MRESERVE']);
+        expect(m('R4401A')).toEqual(['R4401A']);
     });
 });

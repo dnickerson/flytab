@@ -428,6 +428,12 @@ describe('Restricted/MOA NOTAM line (2026-10-19: activation by NOTAM now works)'
         expect(VectorMapLayers._suaNotamStatus(MOODY, n, NOW).line).toBe('No activation NOTAM found (downloaded 1852Z)');
     });
 
+    it('an area active "Continuous" by its published times says so, not "no activation NOTAM"', () => {
+        const n = { getNotam: () => null, getUpcoming: () => null, checkedAt: () => NOW };
+        expect(VectorMapLayers._suaNotamStatus({ id: 'P56A', type: 'P', name: 'P-56A WASHINGTON, DC', active_times: 'Continuous' }, n, NOW))
+            .toEqual({ active: true, line: '⚠ Active continuously (published times)' });
+    });
+
     it('the popup row: the active class, the published times, all escaped', async () => {
         const v = await layers(); const el = document.createElement('div');
         window.SuaNotams = { getNotam: () => ({ end: Infinity, text: '<b>x</b>' }) };

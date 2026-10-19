@@ -81,7 +81,13 @@ def fetch_notams(locations):
         try:
             with urllib.request.urlopen(req, timeout=20) as resp:
                 data = json.load(resp)
-            features.extend(data.get('data', {}).get('geojson') or [])
+            geo = (data.get('data') or {}).get('geojson') if isinstance(data, dict) else None
+            if not isinstance(geo, list):
+                # No list is not "no NOTAMs": the client would clear what it has.
+                print(f'[notam-proxy] {icao} → no geojson list in the answer')
+                failed.append(icao)
+                continue
+            features.extend(geo)
         except urllib.error.HTTPError as e:
             print(f'[notam-proxy] {icao} → HTTP {e.code}')
             failed.append(icao)
