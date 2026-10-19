@@ -4647,7 +4647,14 @@ body {
 
 /* "ACT" badge on active SUA labels */
 .sua-act-badge {
-    display: block;
+    /* Beside the label, not under it: under it, an active label grew to
+       ~52 px and covered the label stacked 38 px below (review 13). The
+       label's icon element is position: absolute (Leaflet), so it anchors this. */
+    position: absolute;
+    left: 100%;
+    top: 50%;
+    transform: translateY(-50%);
+    margin-left: 2px;
     font: 900 var(--text-xs) var(--font-ui);
     letter-spacing: 0.05em;
     /* Solid caution fill, black text (CLAUDE.md badge pattern): white on
@@ -4657,7 +4664,6 @@ body {
     color: #000;
     border-radius: 2px;
     padding: 0 3px;
-    margin-top: 2px;
     text-align: center;
 }
 

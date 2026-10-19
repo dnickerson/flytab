@@ -58,6 +58,10 @@ REQUEST_DEADLINE_S = 25
 MAX_CONCURRENT     = 3
 MAX_LOCATIONS      = 60
 _busy              = threading.BoundedSemaphore(MAX_CONCURRENT)
+# Requests allowed to wait for a slot; more get 503 at once, so a flood
+# cannot pile up threads and sockets (review 13).
+MAX_WAITING        = 10
+_waiting           = threading.BoundedSemaphore(MAX_WAITING)
 
 
 def drop_token(rejected):
@@ -105,7 +109,10 @@ def fetch_notams(locations, deadline=None):
     token    = get_token(deadline)
     features = []
     failed   = []
-    for n, icao in enumerate(locations):
+    renewed  = False                 # the token was renewed once after a 401
+    n        = 0
+    while n < len(locations):
+        icao = locations[n]
         left = 20 if deadline is None else deadline - time.monotonic()
         if left < 2:
             print(f'[notam-proxy] deadline: not asked {",".join(locations[n:])}')
@@ -120,22 +127,32 @@ def fetch_notams(locations, deadline=None):
             with urllib.request.urlopen(req, timeout=min(20, left)) as resp:
                 data = json.load(resp)
             body = data.get('data') if isinstance(data, dict) else None
-            if not isinstance(body, dict):
+            if isinstance(body, dict):
+                # data without a geojson list: taken as no NOTAMs (the API does
+                # not require the list; a quiet VOR id or field must not fail WX
+                # Briefing -- review 10). FlyTab's Restricted/MOA check never
+                # counts an ARTCC with no NOTAMs as downloaded, so it stays safe.
+                geo = body.get('geojson')
+                features.extend(geo if isinstance(geo, list) else [])
+            else:
                 # No data object (the API requires one): not an answer.
                 print(f'[notam-proxy] {icao} → no data in the answer')
                 failed.append(icao)
-                continue
-            # data without a geojson list: taken as no NOTAMs (the API does not
-            # require the list; a quiet VOR id or field must not fail WX
-            # Briefing -- review 10). FlyTab's Restricted/MOA check never
-            # counts an ARTCC with no NOTAMs as downloaded, so it stays safe.
-            geo = body.get('geojson')
-            features.extend(geo if isinstance(geo, list) else [])
         except urllib.error.HTTPError as e:
             print(f'[notam-proxy] {icao} → HTTP {e.code}')
+            if e.code == 401 and not renewed:
+                # The token was refused (expired early, revoked): a new one,
+                # and this location again -- once (review 13).
+                drop_token(token)
+                renewed = True
+                try:
+                    token = get_token(deadline)
+                    continue
+                except Exception as te:
+                    print(f'[notam-proxy] new token failed: {te}')
             failed.append(icao)
             if e.code == 401 or (deadline is not None and e.code in (403, 429)):
-                # Refused token (401): every other location would be too. A
+                # Refused again (401): every other location would be too. A
                 # 403 (IP not allowed -- e.g. a VPN on the FitPC) or 429 (rate
                 # limit) stops only a request with a deadline, whose client
                 # reads `failed` and backs off; WX Briefing does not, so all
@@ -147,6 +164,7 @@ def fetch_notams(locations, deadline=None):
         except Exception as e:
             print(f'[notam-proxy] {icao} → {e}')
             failed.append(icao)
+        n += 1
     return features, failed
 
 
@@ -204,7 +222,14 @@ class Handler(BaseHTTPRequestHandler):
         # A request without a deadline (WX Briefing) waits for a slot as the
         # single-threaded proxy used to queue it; one with a deadline gives up
         # sooner -- its client retries (review 12).
-        if not _busy.acquire(timeout=5 if deadline is not None else 25):
+        if not _waiting.acquire(blocking=False):
+            self._send_json(503, {'error': 'busy, try again', 'features': []})
+            return
+        try:
+            got_slot = _busy.acquire(timeout=5 if deadline is not None else 25)
+        finally:
+            _waiting.release()
+        if not got_slot:
             self._send_json(503, {'error': 'busy, try again', 'features': []})
             return
         try:
