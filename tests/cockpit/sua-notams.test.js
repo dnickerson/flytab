@@ -267,3 +267,62 @@ describe('review fixes (2026-10-19)', () => {
         expect(s.getNotam({ id: 'X' }).end).toBe(Date.parse('2026-10-20T01:20:00Z'));
     });
 });
+
+describe('re-review fixes (2026-10-19)', () => {
+    it('the proxy lists the ARTCCs the FAA did not answer: only those keep their old state', async () => {
+        proxy(); const s = new SuaNotams();
+        await s.refresh(nasr, [MOODY_VIEW]);
+        const t1 = s.checkedAt(sua('MMOODY2N'));
+        globalThis.fetch = vi.fn(async (url) => {
+            const locs = new URL(String(url)).searchParams.get('location').split(',');
+            // ZJX failed upstream; ZTL legitimately has no NOTAMs at all
+            return { ok: true, json: async () => ({ failed: ['ZJX'], features: locs.filter((z) => z !== 'ZJX' && z !== 'ZTL').map(filler) }) };
+        });
+        at('2026-10-19T19:20:00Z');
+        await s.refresh(nasr, [MOODY_VIEW]);
+        expect(s.hasActiveNotam(sua('MMOODY2N'))).toBe(true);                // ZJX kept
+        expect(s._fetchedAt.get('ZJX')).toBe(t1);
+        expect(s._fetchedAt.get('ZTL')).toBe(Date.parse('2026-10-19T19:20:00Z'));   // empty but answered: fetched
+    });
+
+    it('an ARTCC that came back empty (older proxy) is asked again after 15 min, not every minute', async () => {
+        const calls = proxy(); const s = new SuaNotams();
+        globalThis.fetch = vi.fn(async (url) => {
+            calls.push(String(url));
+            const locs = new URL(String(url)).searchParams.get('location').split(',').filter((z) => z !== 'ZWY');
+            return { ok: true, json: async () => ({ features: locs.map(filler) }) };
+        });
+        const EAST = { south: 33.5, west: -79.5, north: 34.5, east: -78 };   // Myrtle Beach: ZWY's box is in range
+        await s.refresh(nasr, [EAST]);
+        const asked = (u) => new URL(u).searchParams.get('location').split(',');
+        expect(asked(calls[0])).toContain('ZWY');                             // New York Oceanic's box reaches the coast
+        for (const t of ['19:01:10', '19:02:20', '19:05:00', '19:10:00']) { at(`2026-10-19T${t}Z`); await s.refresh(nasr, [EAST]); }
+        expect(calls.filter((u) => asked(u).includes('ZWY'))).toHaveLength(1);
+        at('2026-10-19T19:16:00Z'); await s.refresh(nasr, [EAST]);
+        expect(calls.filter((u) => asked(u).includes('ZWY'))).toHaveLength(2);
+    });
+
+    it('the clock set back: the 20 s check does not stall', async () => {
+        const calls = proxy(); const s = new SuaNotams();
+        at('2026-10-20T19:00:00Z'); await s.refresh(nasr, [MOODY_VIEW]);     // a day fast
+        at('2026-10-19T19:00:00Z'); await s.refresh(nasr, [MOODY_VIEW]);     // corrected
+        expect(calls).toHaveLength(2);
+    });
+
+    it('direction words and combined names', async () => {
+        const s = new SuaNotams();
+        const rows = [['W161AN', 'W', 'W-161A NORTH, SC'], ['W161AS', 'W', 'W-161A SOUTH, SC'], ['R2301E', 'R', 'R-2301E, AZ'], ['R2301W', 'R', 'R-2301W, AZ'],
+            ['W497A', 'W', 'W-497A, FL'], ['W497B', 'W', 'W-497B, FL'], ['MBULLDOGA', 'MOA', 'BULLDOG A MOA, GA'], ['MBULLDOGB', 'MOA', 'BULLDOG B MOA, GA'],
+            ['MGAMECOCKC', 'MOA', 'GAMECOCK C MOA, SC'], ['MGAMECOCKD', 'MOA', 'GAMECOCK D MOA, SC'], ['MMOODY2N', 'MOA', 'MOODY 2 NORTH MOA, GA'],
+            ['MMOODY2S', 'MOA', 'MOODY 2 SOUTH MOA, GA']].map(([id, type, name]) => ({ id, type, name }));
+        await s._buildIndex({ getSuaInBounds: async () => rows });
+        const m = (d) => s._match(d).sort();
+        expect(m('W161A NORTH')).toEqual(['W161AN']);
+        expect(m('R2301 WEST')).toEqual(['R2301W']);
+        expect(m('W497A AND B')).toEqual(['W497A', 'W497B']);
+        expect(m('LGT OUT/NIGHT VISION GOGGLE TRAINING BULLDOG A AND B MOA')).toEqual(['MBULLDOGA', 'MBULLDOGB']);
+        expect(m('GAMECOCK C/D MOA')).toEqual(['MGAMECOCKC', 'MGAMECOCKD']);
+        expect(m('MOODY 2 NORTH AND SOUTH MOA')).toEqual(['MMOODY2N', 'MMOODY2S']);
+        expect(m('BULLDOG C AND D MOA')).toEqual([]);                        // names NASR does not have: nothing invented
+    });
+});

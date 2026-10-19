@@ -34,6 +34,7 @@ class SuaNotams {
         this._checkedBoxesAt = 0;
         this._fetching = null;
         this._failedAt = 0;
+        this._emptyAt = new Map();       // ARTCC -> ms it last came back with nothing (retried after STALE_MS)
         this._lastError = null;
         this._timer = null;
         this._load();
@@ -93,7 +94,8 @@ class SuaNotams {
         if (!nasr || !boxes?.length) return;
         if (this._fetching) return this._fetching;
         // Called on every map refresh: look at most every 20 s.
-        if (Date.now() - this._checkedBoxesAt < 20000) return;
+        const sinceCheck = Date.now() - this._checkedBoxesAt;   // < 0: the clock was set back
+        if (sinceCheck >= 0 && sinceCheck < 20000) return;
         this._checkedBoxesAt = Date.now();
         this._fetching = this._refresh(nasr, boxes).finally(() => { this._fetching = null; });
         return this._fetching;
@@ -105,7 +107,9 @@ class SuaNotams {
         for (const b of boxes) for (const z of this._artccsFor(b)) artccs.add(z);
         const now = Date.now();
         const age = (z) => now - (this._fetchedAt.get(z) || 0);   // < 0: the clock was set back
-        const due = [...artccs].filter((z) => age(z) > SuaNotams.STALE_MS || age(z) < 0).sort();
+        const sinceEmpty = (z) => now - (this._emptyAt.get(z) || 0);
+        const due = [...artccs].filter((z) => (age(z) > SuaNotams.STALE_MS || age(z) < 0)
+            && !(sinceEmpty(z) >= 0 && sinceEmpty(z) < SuaNotams.STALE_MS)).sort();
         const sinceFail = now - this._failedAt;
         if (!due.length || (sinceFail >= 0 && sinceFail < SuaNotams.RETRY_MS)) return;
 
@@ -120,13 +124,17 @@ class SuaNotams {
             // every ARTCC has dozens of NOTAMs (fewest on 10-19: ZAU, 21), so
             // none back means it was not fetched -- keep what it had, not
             // "no activation NOTAM" (review 2026-10-19).
+            // A proxy that lists `failed` (tools/notam-proxy.py since 2026-10-19)
+            // says which; an older one: an ARTCC with nothing back.
             const got = new Set(features.map((f) => SuaNotams._artccId(f?.properties?.coreNOTAMData?.notam?.location)));
-            const ok = due.filter((z) => got.has(z));
+            const failed = Array.isArray(data.failed) ? new Set(data.failed.map(SuaNotams._artccId)) : null;
+            const ok = due.filter((z) => (failed ? !failed.has(z) : got.has(z)));
+            for (const z of due) if (!ok.includes(z)) this._emptyAt.set(z, Date.now()); else this._emptyAt.delete(z);
             if (!ok.length) throw new Error(`no NOTAMs returned for ${due.join(',')}`);
             await this._buildIndex(nasr);        // the NASR cycle may have changed since the last fetch
             this._apply(ok, features.filter((f) => ok.includes(SuaNotams._artccId(f?.properties?.coreNOTAMData?.notam?.location))), Date.now());
             this._lastError = ok.length < due.length ? `no NOTAMs returned for ${due.filter((z) => !got.has(z)).join(',')}` : null;
-            this._failedAt = ok.length < due.length ? Date.now() : 0;
+            this._failedAt = 0;
             this._save();
             this._changed();
         } catch (err) {
@@ -270,20 +278,42 @@ class SuaNotams {
         const out = new Set();
         let seg = ` ${SuaNotams._norm(designator)} `;
         const lookup = (k, word) => {
-            const hit = (word && byKey.get(`${k} ${word}`)) || byKey.get(k)
+            const hit = (word && (byKey.get(`${k} ${word}`) || byKey.get(k + word[0]))) || byKey.get(k)
                 || [...byKey].filter(([key]) => key.length > k.length && key.startsWith(k) && /^[A-Z]+$/.test(key.slice(k.length))).flatMap(([, ids]) => ids);
             for (const id of hit) out.add(id);
         };
-        for (const m of seg.matchAll(/ ([RWAP]) ?(\d{1,4})([A-Z]{0,2})((?: [A-Z](?= ))*)(?: (HIGH|LOW|NORTH|SOUTH|EAST|WEST)(?= ))?/g)) {
+        for (const m of seg.matchAll(/ ([RWAP]) ?(\d{1,4})([A-Z]{0,2})((?: (?:AND )?[A-Z](?= ))*)(?: (HIGH|LOW|NORTH|SOUTH|EAST|WEST)(?= ))?/g)) {
             const [, kind, num, letters, more, word] = m;
             lookup(kind + num + letters, word);
-            for (const extra of (more || '').trim().split(' ').filter(Boolean)) lookup(kind + num + extra, word);   // R4401A B C, R4401A/B
+            for (const extra of (more || '').trim().split(' ').filter((w) => w && w !== 'AND')) lookup(kind + num + extra, word);   // R4401A B C, R4401A/B, W497A AND B
         }
+        const names = new Map(moaNames);
         for (const [name, ids] of moaNames) {                      // longest first; a matched name is blanked out
             const at = seg.indexOf(` ${name} `);
             if (at < 0) continue;
             ids.forEach((id) => out.add(id));
             seg = seg.slice(0, at) + ' ' + '#'.repeat(name.length) + ' ' + seg.slice(at + name.length + 2);
+        }
+        // Several MOAs in one name: "BULLDOG A AND B MOA", "GAMECOCK C/D MOA",
+        // "MOODY 2 NORTH AND SOUTH MOA". Only names NASR has are taken.
+        const toks = seg.trim().split(' ');
+        for (let i = 0; i < toks.length; i++) {
+            if (toks[i] !== 'MOA') continue;                        // a MOA not matched whole above
+            let lo = i;
+            while (lo > 0 && !toks[lo - 1].startsWith('#') && i - lo < 10) lo--;
+            const pre = toks.slice(lo, i);
+            found: for (let k = 2; k <= Math.min(7, pre.length - 1); k++) {
+                const tail = pre.slice(pre.length - k);             // "A AND B", "C D", "NORTH AND SOUTH"
+                if (tail[0] === 'AND' || tail[tail.length - 1] === 'AND') continue;
+                const parts = tail.filter((w) => w !== 'AND');
+                if (parts.length < 2) continue;
+                const rest = pre.slice(0, pre.length - k);
+                for (let b = 1; b <= Math.min(4, rest.length); b++) {
+                    const base = rest.slice(rest.length - b).join(' ');
+                    const ids = parts.map((p) => names.get(`${base} ${p} MOA`));
+                    if (ids.every(Boolean)) { ids.flat().forEach((id) => out.add(id)); break found; }
+                }
+            }
         }
         return [...out];
     }
@@ -354,5 +384,5 @@ class SuaNotams {
 if (typeof window !== 'undefined') {
     window.SuaNotams = window.SuaNotams || new SuaNotams();
     // Activations loaded from storage: wake the map at their start/end times.
-    setTimeout(() => window.SuaNotams._changed(), 0);
+    setTimeout(() => window.SuaNotams?._changed?.(), 0);
 }

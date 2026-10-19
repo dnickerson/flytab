@@ -67,8 +67,11 @@ def get_token() -> str:
 
 
 def fetch_notams(locations):
+    """(features, failed): failed lists the locations the FAA did not answer,
+    so a client can tell "no NOTAMs" from "not fetched" (FlyTab SuaNotams)."""
     token    = get_token()
     features = []
+    failed   = []
     for icao in locations:
         url = f'{CGI_BASE}/nmsapi/v1/notams?location={urllib.parse.quote(icao)}'
         req = urllib.request.Request(url, headers={
@@ -81,9 +84,11 @@ def fetch_notams(locations):
             features.extend(data.get('data', {}).get('geojson') or [])
         except urllib.error.HTTPError as e:
             print(f'[notam-proxy] {icao} → HTTP {e.code}')
+            failed.append(icao)
         except Exception as e:
             print(f'[notam-proxy] {icao} → {e}')
-    return features
+            failed.append(icao)
+    return features, failed
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -122,8 +127,8 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         try:
-            features = fetch_notams(locations)
-            self._send_json(200, {'features': features, 'total': len(features)})
+            features, failed = fetch_notams(locations)
+            self._send_json(200, {'features': features, 'total': len(features), 'failed': failed})
         except Exception as e:
             print(f'[notam-proxy] fetch error: {e}')
             self._send_json(502, {'error': str(e), 'features': []})
