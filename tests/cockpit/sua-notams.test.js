@@ -54,6 +54,7 @@ describe('reading the FAA\'s !SUA NOTAMs', () => {
         expect(calls).toHaveLength(1);
         expect(calls[0]).toMatch(/^https:\/\/fitpc\.example\.ts\.net\/notams\?location=/);   // the NOTAM proxy, not flywhere
         expect(new URL(calls[0]).searchParams.get('location').split(',')).toContain('ZJX');
+        expect(new URL(calls[0]).searchParams.get('deadline')).toBe('25');      // the proxy stops at 25 s, lists the rest
         const n = s.getNotam(sua('MMOODY2N'));
         expect(n?.number).toBe('10/004');
         expect(n.text).toMatch(/MOODY 2 NORTH MOA ACT 500FT-7999FT/);

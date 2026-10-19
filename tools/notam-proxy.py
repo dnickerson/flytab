@@ -46,8 +46,10 @@ _token_expiry = 0
 
 _token_lock   = threading.Lock()
 
-# One request's FAA calls (token included) stop after this -- the FlyTab
-# client gives up at 30 s; the locations not reached are listed as failed.
+# A request that asks for a deadline (?deadline=25 -- FlyTab's Restricted/MOA
+# check, which reads `failed`) stops its FAA calls (token included) after it,
+# at most this long; the locations not reached are listed as failed. Without
+# one (WX Briefing) every location is asked, as before.
 REQUEST_DEADLINE_S = 25
 # The proxy is public (Tailscale Funnel) and spends the CGI account: at most
 # this many requests call the FAA at once (others get 503), and this many
@@ -99,14 +101,12 @@ def _get_token(timeout=15) -> str:
 def fetch_notams(locations, deadline=None):
     """(features, failed): failed lists the locations the FAA did not answer,
     so a client can tell "no NOTAMs" from "not fetched" (FlyTab SuaNotams).
-    deadline: time.monotonic() by which to stop (default: 25 s from now)."""
-    if deadline is None:
-        deadline = time.monotonic() + REQUEST_DEADLINE_S
+    deadline: time.monotonic() by which to stop; None: no overall limit."""
     token    = get_token(deadline)
     features = []
     failed   = []
     for n, icao in enumerate(locations):
-        left = deadline - time.monotonic()
+        left = 20 if deadline is None else deadline - time.monotonic()
         if left < 2:
             print(f'[notam-proxy] deadline: not asked {",".join(locations[n:])}')
             failed.extend(locations[n:])
@@ -174,9 +174,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        # The deadline runs from arrival, so a wait for a free slot counts
-        # (the client gives up at 30 s).
-        deadline = time.monotonic() + REQUEST_DEADLINE_S
+        arrived = time.monotonic()
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path != '/notams':
             self._send_json(404, {'error': 'Not found'})
@@ -192,6 +190,14 @@ class Handler(BaseHTTPRequestHandler):
         if len(locations) > MAX_LOCATIONS:
             self._send_json(400, {'error': f'at most {MAX_LOCATIONS} locations per request'})
             return
+        # The deadline runs from arrival, so a wait for a free slot counts.
+        deadline = None
+        try:
+            want = float(params.get('deadline', [''])[0] or 0)
+        except ValueError:
+            want = 0
+        if want > 0:
+            deadline = arrived + min(want, REQUEST_DEADLINE_S)
         if not _busy.acquire(timeout=5):
             self._send_json(503, {'error': 'busy, try again', 'features': []})
             return

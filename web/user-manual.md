@@ -513,7 +513,7 @@ The briefing has several sections:
 
 **Forecast Discussions** — NWS Area Forecast Discussions for regions along the route. Useful for understanding the meteorologist's reasoning behind the forecasts.
 
-**NOTAMs** — Active NOTAMs for route airports and TFRs along the route. Shows type (RWY, APCH, SUA, TFR, etc.) with severity-sorted display. Tap any NOTAM for the full text. If the NOTAM server could not fetch some of them, a yellow line says so — "Not fetched: KTMB — their NOTAMs are missing", or "En-route NOTAMs not fetched — TFRs and en-route restrictions may be missing" — and the next refresh asks again (tap ↻ to retry now). If a refresh fails completely, the last briefing for the same route is shown with the time it was downloaded ("Refresh failed — showing NOTAMs downloaded 19 1852Z"); a briefing for a different route is not shown. A failed en-route refresh leaves the NOTAM TFRs already on the map in place.
+**NOTAMs** — Active NOTAMs for route airports and TFRs along the route. Shows type (RWY, APCH, SUA, TFR, etc.) with severity-sorted display. Tap any NOTAM for the full text.
 
 ---
 

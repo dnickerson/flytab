@@ -139,7 +139,9 @@ class SuaNotams {
         try {
             // no-store: the proxy marks answers cacheable for 5 min, and a retry
             // of the same ARTCCs must not get the failed answer back (review 6).
-            const resp = await fetch(`${base}/notams?location=${due.join(',')}`, { signal: AbortSignal.timeout(30000), cache: 'no-store' });
+            // deadline=25: the proxy stops at 25 s and lists the rest as failed
+            // (only clients that read `failed` ask for it -- not WX Briefing).
+            const resp = await fetch(`${base}/notams?location=${due.join(',')}&deadline=25`, { signal: AbortSignal.timeout(30000), cache: 'no-store' });
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
             const data = await resp.json();
             const features = data.features || [];
