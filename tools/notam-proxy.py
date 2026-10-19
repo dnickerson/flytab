@@ -134,9 +134,12 @@ def fetch_notams(locations, deadline=None):
         except urllib.error.HTTPError as e:
             print(f'[notam-proxy] {icao} → HTTP {e.code}')
             failed.append(icao)
-            if e.code in (401, 403, 429):
-                # Refused token (401), IP not allowed (403 -- e.g. a VPN on
-                # the FitPC) or rate-limited (429): the rest would be too.
+            if e.code == 401 or (deadline is not None and e.code in (403, 429)):
+                # Refused token (401): every other location would be too. A
+                # 403 (IP not allowed -- e.g. a VPN on the FitPC) or 429 (rate
+                # limit) stops only a request with a deadline, whose client
+                # reads `failed` and backs off; WX Briefing does not, so all
+                # its stations are still asked, as before (review 12).
                 if e.code == 401:
                     drop_token(token)
                 failed.extend(locations[n + 1:])
@@ -198,7 +201,10 @@ class Handler(BaseHTTPRequestHandler):
             want = 0
         if want > 0:
             deadline = arrived + min(want, REQUEST_DEADLINE_S)
-        if not _busy.acquire(timeout=5):
+        # A request without a deadline (WX Briefing) waits for a slot as the
+        # single-threaded proxy used to queue it; one with a deadline gives up
+        # sooner -- its client retries (review 12).
+        if not _busy.acquire(timeout=5 if deadline is not None else 25):
             self._send_json(503, {'error': 'busy, try again', 'features': []})
             return
         try:
