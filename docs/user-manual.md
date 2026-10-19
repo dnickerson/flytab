@@ -513,7 +513,7 @@ The briefing has several sections:
 
 **Forecast Discussions** — NWS Area Forecast Discussions for regions along the route. Useful for understanding the meteorologist's reasoning behind the forecasts.
 
-**NOTAMs** — Active NOTAMs for route airports and TFRs along the route. Shows type (RWY, APCH, SUA, TFR, etc.) with severity-sorted display. Tap any NOTAM for the full text.
+**NOTAMs** — Active NOTAMs for route airports and TFRs along the route. Shows type (RWY, APCH, SUA, TFR, etc.) with severity-sorted display. Tap any NOTAM for the full text. FlyTab keeps the last NOTAMs it downloaded for each airport and ARTCC (for up to a week), so with no internet — in flight — the briefing and the map's NOTAM TFRs are still there; expired NOTAMs drop off. A yellow line says when what you see is not from this refresh: "Not refreshed — showing NOTAMs downloaded earlier: KTMB 19 1852Z" (the NOTAM server could not get that airport this time), "Refresh failed — showing NOTAMs downloaded earlier: …" (no connection), "No NOTAMs for KTMB — not fetched, none saved", or the same for en-route NOTAMs. Tap ↻ to try again. Download the briefing on the ground, on WiFi, before departure. Loading a different route fetches its NOTAMs at once.
 
 ---
 
