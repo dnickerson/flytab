@@ -6,8 +6,8 @@
  *   !SUAE 10/004 ZJX AIRSPACE LGT OUT/NIGHT VISION GOGGLE TRAINING MOODY 2 NORTH MOA ACT 500FT-7999FT
  *   !SUAE 10/050 ZJX AIRSPACE R2904A ACT SFC-1700FT
  * with effectiveStart/effectiveEnd. They come through the NOTAM proxy (the
- * FitPC, CockpitConfig.notamBase -- the one WX Briefing uses), one request for
- * the ARTCCs near the map view and the active route. R/W/A/P areas match the
+ * FitPC, CockpitConfig.notamBase -- the one WX Briefing uses), up to six
+ * ARTCCs per request, for those near the map view, its areas and the route. R/W/A/P areas match the
  * NASR id ("R2904A"); MOAs match the NASR name without its state ("MOODY 2
  * NORTH MOA, GA"). On 2026-10-19's NOTAMs (all CONUS ARTCCs) that matched 364
  * of 374 activations; the rest were refueling tracks and a high-speed area,
@@ -36,6 +36,7 @@ class SuaNotams {
         this._fetchedAt = new Map();     // ARTCC ('ZJX') -> ms of its last good fetch
         this._index = null;              // { byKey: Map<key, ids[]>, moaNames: [[name, ids[]]] } from NASR
         this._artccBoxes = null;         // [{ id: 'ZJX', south, west, north, east }] -- loaded once
+        this._artccLoadedAt = 0;
         this._fetching = null;
         this._failedAt = 0;
         this._retryAt = new Map();       // ARTCC -> ms before which it is not asked again (empty: 15 min, FAA error: 1 min)
@@ -97,7 +98,7 @@ class SuaNotams {
     async refresh(nasr, boxes) {
         if (!nasr || !boxes?.length) return;
         if (this._fetching) return this._fetching;
-        // Called on every map refresh; cheap unless an ARTCC is due (26 boxes).
+        // Called on every map refresh; cheap unless an ARTCC is due (25 boxes).
         this._fetching = this._refresh(nasr, boxes).finally(() => { this._fetching = null; });
         return this._fetching;
     }
@@ -129,10 +130,16 @@ class SuaNotams {
         }
     }
 
-    /** One request for these ARTCCs; false if it failed outright. */
+    /**
+     * One request for these ARTCCs; false only if it could not be made or
+     * answered (offline, HTTP error, NASR gone) -- an answer whose ARTCCs all
+     * failed at the FAA does not hold up the next request (review 6).
+     */
     async _fetchSome(nasr, base, due) {
         try {
-            const resp = await fetch(`${base}/notams?location=${due.join(',')}`, { signal: AbortSignal.timeout(30000) });
+            // no-store: the proxy marks answers cacheable for 5 min, and a retry
+            // of the same ARTCCs must not get the failed answer back (review 6).
+            const resp = await fetch(`${base}/notams?location=${due.join(',')}`, { signal: AbortSignal.timeout(30000), cache: 'no-store' });
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
             const data = await resp.json();
             const features = data.features || [];
@@ -148,7 +155,7 @@ class SuaNotams {
                 if (ok.includes(z)) this._retryAt.delete(z);
                 else this._retryAt.set(z, t + (failed.has(z) ? SuaNotams.RETRY_MS : SuaNotams.STALE_MS));
             }
-            if (!ok.length) throw new Error(`no NOTAMs returned for ${due.join(',')}`);
+            if (!ok.length) { this._lastError = `no NOTAMs returned for ${due.join(',')}`; return true; }
             await this._buildIndex(nasr);        // the NASR cycle may have changed since the last fetch
             // NASR wiped (Reset NASR Data) mid-session: nothing to match, so
             // applying would drop every activation (review).
@@ -231,6 +238,10 @@ class SuaNotams {
      */
     async _loadArtccs(nasr) {
         if (this._artccBoxes?.length) return;
+        // Empty (NASR not imported, or a bundle without ARTCCs): look again at
+        // most once a minute -- it reads the whole airspace store (review 6).
+        if (this._artccBoxes && Date.now() - this._artccLoadedAt >= 0 && Date.now() - this._artccLoadedAt < SuaNotams.RETRY_MS) return;
+        this._artccLoadedAt = Date.now();
         // Not kept while empty: the map starts before NASR is imported (a new
         // install, Reset NASR Data) -- it latched [] and never fetched (review).
         const all = await nasr.getAirspaceInBounds(-90, -180, 90, 180, 100000);

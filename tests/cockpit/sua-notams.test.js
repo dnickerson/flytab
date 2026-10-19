@@ -140,7 +140,7 @@ describe('downloaded on the ground, used in flight', () => {
         } finally { FIX.features.push(...keep); }
     });
 
-    it('not refetched within 15 min, nor checked more than every 20 s; a failure waits a minute', async () => {
+    it('not refetched within 15 min; a failure waits a minute', async () => {
         const calls = proxy(); const s = new SuaNotams();
         await s.refresh(nasr, [MOODY_VIEW]);
         at('2026-10-19T19:00:10Z'); await s.refresh(nasr, [MOODY_VIEW]);
@@ -205,6 +205,9 @@ describe('review fixes (2026-10-19)', () => {
         await s.refresh(empty, [MOODY_VIEW]);
         expect(calls).toHaveLength(0);
         at('2026-10-19T19:00:30Z');
+        await s.refresh(nasr, [MOODY_VIEW]);
+        expect(calls).toHaveLength(0);                                        // looks again once a minute
+        at('2026-10-19T19:01:01Z');
         await s.refresh(nasr, [MOODY_VIEW]);
         expect(calls).toHaveLength(1);
         expect(s.hasActiveNotam(sua('MMOODY2N'))).toBe(true);
@@ -303,7 +306,7 @@ describe('re-review fixes (2026-10-19)', () => {
         expect(calls.filter((u) => asked(u).includes('ZWY'))).toHaveLength(2);
     });
 
-    it('the clock set back: the 20 s check does not stall', async () => {
+    it('the clock set back: fetching does not stall', async () => {
         const calls = proxy(); const s = new SuaNotams();
         at('2026-10-20T19:00:00Z'); await s.refresh(nasr, [MOODY_VIEW]);     // a day fast
         at('2026-10-19T19:00:00Z'); await s.refresh(nasr, [MOODY_VIEW]);     // corrected
@@ -412,6 +415,24 @@ describe('review 5 fixes (2026-10-19)', () => {
         const s = new SuaNotams();
         await s.refresh(nasr, [MOODY_VIEW, CONUS]);
         expect(calls).toHaveLength(1);
+        proxy(); at('2026-10-19T19:01:01Z');
+        await s.refresh(nasr, [MOODY_VIEW, CONUS]);
+        expect(globalThis.fetch.mock.calls.length).toBeGreaterThan(2);       // all of them now
+    });
+
+    it('an answer whose ARTCCs all failed at the FAA does not hold up the next request', async () => {
+        const asked = [];
+        globalThis.fetch = vi.fn(async (u, opts) => {
+            const locs = new URL(String(u)).searchParams.get('location').split(',');
+            asked.push({ locs, cache: opts?.cache });
+            return { ok: true, json: async () => (asked.length === 1 ? { failed: locs, features: [] } : { failed: [], features: locs.map(filler) }) };
+        });
+        const s = new SuaNotams();
+        await s.refresh(nasr, [MOODY_VIEW, CONUS]);
+        expect(asked.length).toBeGreaterThan(2);
+        expect(asked.every((a) => a.cache === 'no-store')).toBe(true);       // a retry never gets a cached failure
+        expect(s._fetchedAt.has(asked[0].locs[0])).toBe(false);
+        expect(s._fetchedAt.has(asked[1].locs[0])).toBe(true);
     });
 
     it('a second pan within 20 s fetches the new region at once', async () => {
