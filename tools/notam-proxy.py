@@ -95,10 +95,12 @@ def _get_token() -> str:
     return _token
 
 
-def fetch_notams(locations):
+def fetch_notams(locations, deadline=None):
     """(features, failed): failed lists the locations the FAA did not answer,
-    so a client can tell "no NOTAMs" from "not fetched" (FlyTab SuaNotams)."""
-    deadline = time.monotonic() + REQUEST_DEADLINE_S
+    so a client can tell "no NOTAMs" from "not fetched" (FlyTab SuaNotams).
+    deadline: time.monotonic() by which to stop (default: 25 s from now)."""
+    if deadline is None:
+        deadline = time.monotonic() + REQUEST_DEADLINE_S
     token    = get_token()
     features = []
     failed   = []
@@ -126,9 +128,11 @@ def fetch_notams(locations):
         except urllib.error.HTTPError as e:
             print(f'[notam-proxy] {icao} → HTTP {e.code}')
             failed.append(icao)
-            if e.code == 401:
-                # The token was refused: every other location would be too.
-                drop_token(token)
+            if e.code in (401, 403, 429):
+                # Refused token (401), IP not allowed (403 -- e.g. a VPN on
+                # the FitPC) or rate-limited (429): the rest would be too.
+                if e.code == 401:
+                    drop_token(token)
                 failed.extend(locations[n + 1:])
                 break
         except Exception as e:
@@ -164,6 +168,9 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
+        # The deadline runs from arrival, so a wait for a free slot counts
+        # (the client gives up at 30 s).
+        deadline = time.monotonic() + REQUEST_DEADLINE_S
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path != '/notams':
             self._send_json(404, {'error': 'Not found'})
@@ -183,7 +190,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(503, {'error': 'busy, try again', 'features': []})
             return
         try:
-            features, failed = fetch_notams(locations)
+            features, failed = fetch_notams(locations, deadline)
             self._send_json(200, {'features': features, 'total': len(features), 'failed': failed})
         except Exception as e:
             print(f'[notam-proxy] fetch error: {e}')

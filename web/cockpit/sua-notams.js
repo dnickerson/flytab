@@ -123,9 +123,8 @@ class SuaNotams {
         const base = (typeof CockpitConfig !== 'undefined' && CockpitConfig.notamBase)
             || (typeof Settings !== 'undefined' && Settings.workerBase) || 'https://www.flywhere.app/api';
         // A few ARTCCs per request: the proxy asks the FAA for each in turn
-        // (~0.5 s each, up to 20 s on an error) and serves one request at a
-        // time -- 19 in one request could pass the 30 s timeout, and WX
-        // Briefing waited behind it (review 5).
+        // (~0.5 s each) and stops a request at 25 s -- 19 in one request
+        // could pass the client's 30 s timeout (review 5).
         for (let i = 0; i < due.length; i += SuaNotams.PER_REQUEST) {
             if (!(await this._fetchSome(nasr, base, due.slice(i, i + SuaNotams.PER_REQUEST)))) break;   // offline: stop
         }

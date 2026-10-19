@@ -2133,6 +2133,10 @@ class WxBriefing {
                 throw new Error(errMsg);
             }
             const data = await resp.json();
+            // The NOTAM proxy lists locations it could not fetch (an FAA error,
+            // or its 25 s deadline -- the destination is last, so first lost).
+            // A partial answer is not a briefing: keep the cached one and say so.
+            if (Array.isArray(data.failed) && data.failed.length) throw new Error(`NOTAMs not fetched for ${data.failed.join(', ')}`);
             const features = data.features || [];
 
             const wpGeoMap = new Map();
@@ -2224,6 +2228,7 @@ class WxBriefing {
                 throw new Error(errMsg);
             }
             const data = await resp.json();
+            if (Array.isArray(data.failed) && data.failed.length) throw new Error(`En-route NOTAMs not fetched for ${data.failed.join(', ')}`);
             const features = data.features || [];
 
             const seen = new Set();
@@ -2285,7 +2290,9 @@ class WxBriefing {
             console.error('En-route NOTAM fetch failed:', err);
             this._enrouteNotamFetchError = err.message;
             this._enrouteNotams = [];
-            document.dispatchEvent(new CustomEvent('notam:tfrs', { detail: { shapes: [] } }));
+            // The TFRs already on the map stay: this cleared every NOTAM TFR
+            // (airport ones too) whenever the fetch failed -- in flight, with no
+            // internet, opening WX Briefing wiped them (review 2026-10-19).
         }
 
         this._renderNotamSection();
