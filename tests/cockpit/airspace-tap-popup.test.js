@@ -51,7 +51,7 @@ describe('the airspace at a tap', () => {
 
     it('inside the Class B surface area: listed, lowest floor first', async () => {
         const v = await layers();
-        expect(names(v._areasAt(35.21, -80.94))).toEqual(['CLT-B-SFC', 'CLT-B-60']);   // test rings overlap; lowest floor first
+        expect(names(v._areasAt(35.21, -80.94))).toEqual(['CLT-B-SFC']);   // same-name rings: the lowest floor only
     });
 
     it('a MOA under the Class B shelf: both, lowest floor first', async () => {
@@ -109,6 +109,7 @@ describe('the airspace at a tap', () => {
     it('every airspace polygon takes Leaflet\'s own tap (the MOA\'s proven method) and opens the combined popup', async () => {
         const v = await layers();
         v._showAirspacePopup = vi.fn(() => true);
+        v._findNearestMarker = () => null;                                    // no airport etc. near the tap
         for (const m of [v._airspacePolygons, v._suaPolygons, v._trsaPolygons]) {
             for (const [k, p] of m) if (p._flyArea) {
                 expect(p.options.interactive, k).not.toBe(false);
@@ -204,5 +205,52 @@ describe('the MOA method (2026-10-18): Leaflet polygon click, the app tap path u
         const src = read('web/cockpit/vector-map-layers.js');
         expect(src).not.toMatch(/_openTapPopup|_closeTapPopup|_tapPopupShown|closeOnClick: false/);
         expect(read('web/shared/tap-utils.js')).toMatch(/const MAP_OVERLAY_SELECTORS = \['\.leaflet-popup', '\.airspace-alert-popup'\];/);
+    });
+});
+
+describe('round 5 fixes (2026-10-18)', () => {
+    beforeEach(() => { delete window.app; });
+
+    it('a click from a touch that started off the map (a button that hid itself) opens nothing', async () => {
+        const v = await layers(); v._showAirspacePopup = vi.fn(() => true); v._findNearestMarker = () => null;
+        v._anyTouchAt = Date.now(); v._mapTouchAt = Date.now() - 50;            // the touch began on the alert's ✕
+        v._onAirspaceClick({ latlng: L.latLng(35.4, -81.2) });
+        expect(v._showAirspacePopup).not.toHaveBeenCalled();
+        v._mapTouchAt = Date.now();                                             // a touch on the map
+        v._onAirspaceClick({ latlng: L.latLng(35.4, -81.2) });
+        expect(v._showAirspacePopup).toHaveBeenCalledTimes(1);
+        const w = await layers(); w._showAirspacePopup = vi.fn(() => true); w._findNearestMarker = () => null;
+        w._onAirspaceClick({ latlng: L.latLng(35.4, -81.2) });                  // desktop: no touch at all
+        expect(w._showAirspacePopup).toHaveBeenCalledTimes(1);
+    });
+
+    it('an airport, navaid or CB near the tap wins; a fix near it does not (a fix tap does nothing then)', async () => {
+        for (const [type, opens] of [['airport', false], ['navaid', false], ['cb', false], ['fix', true]]) {
+            const v = await layers(); v._showAirspacePopup = vi.fn(() => true);
+            v._findNearestMarker = () => ({ type, data: {} });
+            v._onAirspaceClick({ latlng: L.latLng(35.4, -81.2) });
+            expect(v._showAirspacePopup.mock.calls.length > 0, type).toBe(opens);
+        }
+    });
+
+    it('an airspace tap right after a marker tap is not dropped', async () => {
+        const v = await layers(); v._showAirspacePopup = vi.fn(() => true);
+        v._onAirportClick = vi.fn(); v._findNearestMarker = () => ({ type: 'airport', data: { icao: 'KCLT' } });
+        v._onMapClick({ latlng: L.latLng(35.21, -80.94) });
+        v._findNearestMarker = () => null;                                      // the next tap is away from it
+        v._onAirspaceClick({ latlng: L.latLng(35.4, -81.2) });
+        expect(v._showAirspacePopup).toHaveBeenCalledTimes(1);
+    });
+
+    it('inside the Class B surface area: only the surface row, not the shelves stored without holes', async () => {
+        const v = await layers();
+        expect(names(v._areasAt(35.21, -80.94))).toEqual(['CLT-B-SFC']);       // the 6,000 ft shelf ring also covers it
+    });
+
+    it('a TRSA with no published ceiling reads clearly', async () => {
+        const v = await layers(); const el = document.createElement('div');
+        el.innerHTML = v._airspacePopupHtml([{ kind: 'trsa', rec: { id: 't', name: 'T TRSA', freqs: [], lower_ft: 0, upper_ft: null } }]);
+        expect(el.querySelector('.as-pop-alt').textContent).toBe('ceiling not published – SFC');
+        expect(el.textContent).toMatch(/Check the sectional for the ceiling/);
     });
 });

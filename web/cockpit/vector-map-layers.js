@@ -112,6 +112,14 @@ class VectorMapLayers {
         // on the bubble phase and prevents _tapStart from ever being set.
         this._tapStart = null;
         const container = this._map.getContainer();
+        // Where the latest touch started, for _onAirspaceClick: a touch on a
+        // button that hides itself (an alert's ✕) sends its click to the map
+        // underneath (review 2026-10-18).
+        this._anyTouchAt = 0; this._mapTouchAt = 0;
+        document.addEventListener('touchstart', () => { this._anyTouchAt = Date.now(); }, { capture: true, passive: true });
+        container.addEventListener('touchstart', (e) => {
+            if (!isTapOnMapOverlay(e.target)) this._mapTouchAt = Date.now();
+        }, { capture: true, passive: true });
         container.addEventListener('touchstart', (e) => {
             // Don't enter tap-detection if the touch starts on a Leaflet popup
             // (close button, content) or the airspace alert popup (also
@@ -1773,7 +1781,6 @@ class VectorMapLayers {
         const hit = this._findNearestMarker(pt, HIT_PX);
 
         if (hit) {
-            this._touchHandledAt = Date.now();       // the airspace polygon click after it is skipped
             if (hit.type === 'airport' && this._onAirportClick) {
                 this._onAirportClick(hit.data);
             } else if (hit.type === 'navaid' && this._onNavaidClick) {
@@ -1794,7 +1801,6 @@ class VectorMapLayers {
         // ensuring any aviation feature beats a traffic marker in the 31–60px range.
         const fallback = this._findNearestMarker(pt, 60);
         if (fallback) {
-            this._touchHandledAt = Date.now();
             if (fallback.type === 'airport' && this._onAirportClick) {
                 this._onAirportClick(fallback.data);
             } else if (fallback.type === 'navaid' && this._onNavaidClick) {
@@ -1811,6 +1817,7 @@ class VectorMapLayers {
         }
 
         // No aviation marker hit — check traffic markers
+        // A traffic hit: the airspace polygon click that follows is skipped.
         if (this._onTrafficTap && this._onTrafficTap(pt)) this._touchHandledAt = Date.now();
     }
 
@@ -1838,7 +1845,16 @@ class VectorMapLayers {
         scan(this._suaLayer, this._suaPolygons);
         scan(this._trsaLayer, this._trsaPolygons);
         const floor = (a) => { const f = a.rec.lower_ft ?? a.rec.lower; return Number.isFinite(f) ? f : 0; };
-        return out.sort((x, y) => floor(x) - floor(y));
+        // Class B/C shelves are stored as outer rings without their holes, so a
+        // point in the surface area is also "inside" the shelves around it (KCLT
+        // listed 10,000-1,800 too). The lowest floor of a name is the right one.
+        const seen = new Set();
+        return out.sort((x, y) => floor(x) - floor(y)).filter((a) => {
+            if (a.kind !== 'class') return true;
+            const k = `${a.rec.class}|${a.rec.name}`;
+            if (seen.has(k)) return false;
+            seen.add(k); return true;
+        });
     }
 
     /** "SFC", "UNL", or "10,000 ft" (MSL as published). */
@@ -1876,12 +1892,12 @@ class VectorMapLayers {
             // which arrival sector calls which frequency (KILM); _formatTrsaFreq also takes
             // the pre-sector plain-string shape a device not re-synced past bundle 9 may hold.
             const freqs = (rec.freqs || []).map((f) => VectorMapLayers._formatTrsaFreq(f)).filter(Boolean).join(' / ') || '?';
-            const upper = rec.upper_ft != null ? VectorMapLayers._fmtAltFt(rec.upper_ft, false) : 'ceiling not published — check sectional';
+            const upper = rec.upper_ft != null ? VectorMapLayers._fmtAltFt(rec.upper_ft, false) : 'ceiling not published';
             const approx = rec.approximate ? `<div class="as-pop-note">Approximate boundary${rec.radius_nm ? ` — ${esc(rec.radius_nm)} nm radius` : ''}</div>` : '';
             return `<div class="as-pop-row as-pop-trsa">
                 <div class="as-pop-head"><span class="as-pop-name">${esc(rec.name ?? rec.id)}</span><span class="as-pop-kind">TRSA</span></div>
                 <div class="as-pop-freq">${esc(freqs)}</div>
-                <div class="as-pop-alt">${esc(`${upper} – ${VectorMapLayers._fmtAltFt(rec.lower_ft, true)}`)}</div>${approx}</div>`;
+                <div class="as-pop-alt">${esc(`${upper} – ${VectorMapLayers._fmtAltFt(rec.lower_ft, true)}`)}</div>${rec.upper_ft == null ? '<div class="as-pop-note">Check the sectional for the ceiling</div>' : ''}${approx}</div>`;
         });
         return `<div class="as-pop">${rows.join('')}</div>`;
     }
@@ -1896,8 +1912,20 @@ class VectorMapLayers {
      * is edited (taps add waypoints then).
      */
     _onAirspaceClick(e) {
-        if (Date.now() - (this._touchHandledAt || 0) < 600) return;
+        if (!e?.latlng) return;
+        // A click from a touch that did not start on the map (a button that hid
+        // itself under the finger): not a map tap.
+        if (Date.now() - this._anyTouchAt < 1000 && this._mapTouchAt < this._anyTouchAt) return;
         if (window.app?.routeTable?.isEditing?.()) return;
+        // The tap is (or was, on the touch path) an airport, navaid or CB tap, or
+        // traffic: that wins, no airspace popup beside it. Checked from the point,
+        // not a timestamp: on desktop this click comes first, and a real airspace
+        // tap soon after a marker tap was dropped (review 2026-10-18). A fix tap
+        // does nothing outside route editing, so a fix nearby does not count.
+        const pt = this._map.latLngToContainerPoint(e.latlng);
+        const near = this._findNearestMarker(pt, 60);
+        if (near && near.type !== 'fix') return;
+        if (Date.now() - (this._touchHandledAt || 0) < 600) return;   // traffic (touch path)
         this._showAirspacePopup(e.latlng);
     }
 
