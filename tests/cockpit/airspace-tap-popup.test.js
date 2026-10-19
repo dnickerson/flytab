@@ -137,3 +137,78 @@ describe('what a tap opens, in order: aviation marker, then traffic, then airspa
         expect(read('web/app.js')).toMatch(/this\.vectorLayers\._onTrafficTap = \(containerPt\) => this\.cockpitMap\._onTrafficTap\(containerPt\);/);
     });
 });
+
+describe('full review fixes (2026-10-18)', () => {
+    beforeEach(() => { document.body.innerHTML = ''; delete window.SuaNotams; delete window.app; globalThis._wireTapLastTouchAt = 0; });
+
+    it('1. the tap popup survives the synthetic click that follows the tap (real Leaflet map, preclick)', () => {
+        const div = document.createElement('div'); div.style.width = '800px'; div.style.height = '600px'; document.body.appendChild(div);
+        const map = L.map(div, { center: [35.2, -80.9], zoom: 9 });
+        const v = Object.create(VectorMapLayers.prototype); v._map = map;
+        v._areasAt = () => [{ kind: 'class', rec: { id: 'CLT', name: 'Charlotte Class B', class: 'B', lower_ft: 0, upper_ft: 10000 } }];
+        expect(v._showAirspacePopup(L.latLng(35.2, -80.9))).toBe(true);
+        map.fire('preclick', { latlng: L.latLng(35.2, -80.9) });              // what Leaflet fires for the synthetic click
+        expect(map.hasLayer(v._tapPopup)).toBe(true);
+        expect(document.querySelector('.as-popup-container')).not.toBeNull();
+        // the next real tap closes it, without opening another
+        v._findNearestMarker = () => null; v._onTrafficTap = () => false;
+        const spy = vi.spyOn(v, '_showAirspacePopup');
+        v._onMapClick({ latlng: L.latLng(35.0, -80.0) });
+        expect(document.querySelector('.as-popup-container')).toBeNull();
+        expect(spy).not.toHaveBeenCalled();
+        map.remove();
+    });
+
+    it('2. a tap on a UI button inside the map (auto-pan, D→) does not open the airspace popup', async () => {
+        const v = await layers(); v._findNearestMarker = () => null; v._onTrafficTap = () => false;
+        v._showAirspacePopup = vi.fn(() => true);
+        globalThis._wireTapLastTouchAt = Date.now();
+        v._onMapClick({ latlng: L.latLng(35.4, -81.2) });
+        expect(v._showAirspacePopup).not.toHaveBeenCalled();
+        globalThis._wireTapLastTouchAt = Date.now() - 1000;
+        v._onMapClick({ latlng: L.latLng(35.4, -81.2) });
+        expect(v._showAirspacePopup).toHaveBeenCalled();
+    });
+
+    it('3. NASR "unlimited" -1 (121 SUA, e.g. R-2505) is UNL, in the popup and the map label', async () => {
+        expect(VectorMapLayers._fmtAltFt(-1)).toBe('UNL');
+        const v = await layers();
+        const el = document.createElement('div');
+        el.innerHTML = v._airspacePopupHtml([{ kind: 'sua', rec: { id: 'R-2505', name: 'R-2505', type: 'R', lower_ft: 0, upper_ft: -1 } }]);
+        expect(el.querySelector('.as-pop-alt').textContent).toBe('UNL – SFC');
+        const sua = { id: 'R-2505', name: 'R-2505', type: 'R', lower_ft: 0, upper_ft: -1, boundary: box(34, -117, 0.2) };
+        v._addSuaLabel(sua, false, []);
+        expect(v._suaPolygons.get('R-2505_lbl').options.icon.options.html).toMatch(/^UNL<br>/);
+    });
+
+    it('4. while the route table is being edited, no airspace popup', async () => {
+        const v = await layers(); v._findNearestMarker = () => null; v._onTrafficTap = () => false; v._showAirspacePopup = vi.fn(() => true);
+        window.app = { routeTable: { isEditing: () => true } };
+        v._onMapClick({ latlng: L.latLng(35.4, -81.2) });
+        expect(v._showAirspacePopup).not.toHaveBeenCalled();
+    });
+
+    it('6. "Seattle-Tacoma ... Class D1" reads without the suffix', async () => {
+        const v = await layers(); const el = document.createElement('div');
+        el.innerHTML = v._airspacePopupHtml([{ kind: 'class', rec: { id: 'd1', name: 'Seattle-Tacoma International Airport Class D1', class: 'D', lower_ft: 0, upper_ft: 2500 } }]);
+        expect(el.querySelector('.as-pop-name').textContent).toBe('Seattle-Tacoma International Airport');
+    });
+
+    it('7. a long NOTAM ends with …; no NOTAM says they are fetched on the ground', async () => {
+        const v = await layers(); const el = document.createElement('div');
+        window.SuaNotams = { getNotam: () => ({ text: 'X'.repeat(200) }) };
+        el.innerHTML = v._airspacePopupHtml([{ kind: 'sua', rec: { id: 'm', name: 'M', type: 'MOA', lower_ft: 500, upper_ft: 10000 } }]);
+        expect(el.querySelector('.as-pop-notam-text').textContent).toBe('X'.repeat(120) + '…');
+        window.SuaNotams = { getNotam: () => null };
+        el.innerHTML = v._airspacePopupHtml([{ kind: 'sua', rec: { id: 'm', name: 'M', type: 'MOA', lower_ft: 500, upper_ft: 10000 } }]);
+        expect(el.querySelector('.as-pop-notam').textContent).toBe('No activating NOTAM found (NOTAMs are fetched on the ground)');
+    });
+
+    it('9. a TRSA map label is text, not HTML', async () => {
+        const v = Object.create(VectorMapLayers.prototype);
+        v._map = { hasLayer: () => true }; v._trsaLayer = L.layerGroup(); v._trsaPolygons = new Map();
+        v._nasr = { getTrsaInBounds: async () => [{ id: 'T', name: 'T', freqs: [{ freq: '119.1', sector: '<img src=x>' }], boundary: box(33.7, -78.9, 0.3) }] };
+        await v._updateTrsa(32, -82, 37, -77, 10);
+        expect(v._trsaPolygons.get('T_lbl').options.icon.options.html).not.toMatch(/<img/);
+    });
+});

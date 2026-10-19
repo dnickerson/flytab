@@ -1023,7 +1023,7 @@ class VectorMapLayers {
             const ceil = lower === 0 || lower == null
                 ? 'SFC'
                 : (lower >= 1000 ? Math.round(lower / 100) : lower);
-            const top = (upper != null && upper <= -1000) ? 'UNL'
+            const top = (upper != null && upper < 0) ? 'UNL'
                 : (upper >= 1000 ? Math.round(upper / 100) : upper);
             const altHtml = `${top}<br><span class="as-alt-floor">${ceil}</span>`;
 
@@ -1171,7 +1171,7 @@ class VectorMapLayers {
         // Altitude label at centroid with collision offset
         let labelPos = VectorMapLayers._polygonCentroid((sua.boundary || []).map(pt => [pt[0], pt[1]]));
         const altLower = sua.lower_ft === 0 ? 'SFC' : (sua.lower_ft >= 1000 ? `${Math.round(sua.lower_ft / 100)}` : sua.lower_ft);
-        const altUpper = sua.upper_ft != null ? (sua.upper_ft >= 1000 ? `${Math.round(sua.upper_ft / 100)}` : sua.upper_ft) : '?';
+        const altUpper = sua.upper_ft != null ? (sua.upper_ft < 0 ? 'UNL' : sua.upper_ft >= 1000 ? `${Math.round(sua.upper_ft / 100)}` : sua.upper_ft) : '?';
         const actBadge = isActive ? '<span class="sua-act-badge">ACT</span>' : '';
         const altHtml  = `${altUpper}<br><span class="as-alt-floor">${altLower}</span>${actBadge}`;
         const typeClass = `sua-lbl-${(sua.type || 'moa').toLowerCase()}`;
@@ -1258,7 +1258,8 @@ class VectorMapLayers {
                     const label = L.marker(VectorMapLayers._polygonCentroid(trsa.boundary.map(pt => [pt[0], pt[1]])), {
                         icon: L.divIcon({
                             className: 'as-alt-label trsa-lbl',
-                            html: VectorMapLayers._formatTrsaFreq((trsa.freqs || [])[0]) || '',
+                            // NASR sector text: as text, not HTML (review 2026-10-18)
+                            html: String(VectorMapLayers._formatTrsaFreq((trsa.freqs || [])[0]) || '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])),
                             iconSize: [48, 20],
                             iconAnchor: [24, 10],
                         }),
@@ -1765,6 +1766,12 @@ class VectorMapLayers {
     }
 
     _onMapClick(e) {
+        // A tap on a UI button inside the map (auto-pan, D→: wireTap) is not a map
+        // tap: the capture-phase touchstart still saw it, and the airspace popup
+        // opened under the button (review 2026-10-18).
+        if (typeof _wireTapLastTouchAt !== 'undefined' && Date.now() - _wireTapLastTouchAt < 500) return;
+        // A tap popup (airspace, CB) open: this tap closes it.
+        const closedPopup = this._closeTapPopup();
         const HIT_PX = 30; // generous tap target for fingers
         const pt = this._map.latLngToContainerPoint(e.latlng);
         const hit = this._findNearestMarker(pt, HIT_PX);
@@ -1777,10 +1784,9 @@ class VectorMapLayers {
             } else if (hit.type === 'fix' && this._onFixClick) {
                 this._onFixClick(hit.data);
             } else if (hit.type === 'cb') {
-                L.popup({ minWidth: 260, maxWidth: 380, className: 'cb-popup-container' })
+                this._openTapPopup(L.popup({ minWidth: 260, maxWidth: 380, className: 'cb-popup-container', closeOnClick: false })
                     .setLatLng(hit.marker.getLatLng())
-                    .setContent(this._buildCbPopupHtml(hit.data))
-                    .openOn(this._map);
+                    .setContent(this._buildCbPopupHtml(hit.data)));
             }
             return;
         }
@@ -1797,17 +1803,43 @@ class VectorMapLayers {
             } else if (fallback.type === 'fix' && this._onFixClick) {
                 this._onFixClick(fallback.data);
             } else if (fallback.type === 'cb') {
-                L.popup({ minWidth: 260, maxWidth: 380, className: 'cb-popup-container' })
+                this._openTapPopup(L.popup({ minWidth: 260, maxWidth: 380, className: 'cb-popup-container', closeOnClick: false })
                     .setLatLng(fallback.marker.getLatLng())
-                    .setContent(this._buildCbPopupHtml(fallback.data))
-                    .openOn(this._map);
+                    .setContent(this._buildCbPopupHtml(fallback.data)));
             }
             return;
         }
 
-        // No aviation marker hit — traffic, then the airspace at the tap
+        // No aviation marker hit — traffic, then the airspace at the tap. A tap
+        // that only closed an open popup does not open another; none while
+        // the route table is being edited (map taps add waypoints then).
         if (this._onTrafficTap && this._onTrafficTap(pt)) return;
+        if (closedPopup) return;
+        if (window.app?.routeTable?.isEditing?.()) return;
         this._showAirspacePopup(e.latlng);
+    }
+
+    /**
+     * Open a popup from the tap path. closeOnClick:false: Leaflet closes a
+     * default popup on the 'preclick' of the browser's synthetic click that
+     * follows the very tap that opened it, so on touch it closed at once
+     * (review 2026-10-18, reproduced with touch emulation). The next map tap
+     * closes it instead (_closeTapPopup), and its ✕ button.
+     */
+    _openTapPopup(popup) {
+        this._closeTapPopup();
+        this._tapPopup = popup;
+        popup.openOn(this._map);
+        return popup;
+    }
+
+    /** Close the tap popup if open. True if one was open. */
+    _closeTapPopup() {
+        const p = this._tapPopup;
+        this._tapPopup = null;
+        if (!p || !this._map.hasLayer?.(p)) return false;
+        this._map.closePopup(p);
+        return true;
     }
 
     /**
@@ -1839,7 +1871,9 @@ class VectorMapLayers {
     /** "SFC", "UNL", or "10,000 ft" (MSL as published). */
     static _fmtAltFt(ft, isFloor) {
         if (ft == null || !Number.isFinite(ft)) return isFloor ? 'SFC' : '?';
-        if (ft <= -1000) return 'UNL';
+        // NASR "unlimited": -1 for SUA (build_nasr _parse_altitude; 121 areas,
+        // e.g. R-2505), -9998 for Class E. Was shown as "-1 ft" (review).
+        if (ft < 0) return 'UNL';
         if (ft === 0) return 'SFC';
         return `${Math.round(ft).toLocaleString('en-US')} ft`;
     }
@@ -1851,7 +1885,7 @@ class VectorMapLayers {
         const notams = window.SuaNotams;
         const rows = areas.map(({ kind, rec }) => {
             if (kind === 'class') {
-                const name = String(rec.name || '').replace(/\s*Class\s*[BCD]\s*$/i, '').trim() || rec.id;
+                const name = String(rec.name || '').replace(/\s*Class\s*[BCD]\d*\s*$/i, '').trim() || rec.id;
                 return `<div class="as-pop-row as-pop-${esc(rec.class).toLowerCase()}">
                     <div class="as-pop-head"><span class="as-pop-name">${esc(name)}</span><span class="as-pop-kind">CLASS ${esc(rec.class)}</span></div>
                     <div class="as-pop-alt">${esc(alt(rec))}</div></div>`;
@@ -1859,8 +1893,8 @@ class VectorMapLayers {
             if (kind === 'sua') {
                 const n = notams ? notams.getNotam(rec) : null;
                 const status = n
-                    ? `<div class="as-pop-notam is-active">⚠ ACTIVE per NOTAM${n.text ? `<br><span class="as-pop-notam-text">${esc(String(n.text).slice(0, 120))}</span>` : ''}</div>`
-                    : `<div class="as-pop-notam">No active NOTAM found</div>`;
+                    ? `<div class="as-pop-notam is-active">⚠ ACTIVE per NOTAM${n.text ? `<br><span class="as-pop-notam-text">${esc(String(n.text).length > 120 ? String(n.text).slice(0, 120) + '…' : String(n.text))}</span>` : ''}</div>`
+                    : `<div class="as-pop-notam">No activating NOTAM found (NOTAMs are fetched on the ground)</div>`;
                 return `<div class="as-pop-row as-pop-sua">
                     <div class="as-pop-head"><span class="as-pop-name">${esc(rec.name ?? rec.id)}</span><span class="as-pop-kind">${esc(rec.type || 'SUA')}</span></div>
                     <div class="as-pop-alt">${esc(alt(rec))}</div>${status}</div>`;
@@ -1884,10 +1918,9 @@ class VectorMapLayers {
         if (!latlng) return false;
         const areas = this._areasAt(latlng.lat, latlng.lng);
         if (!areas.length) return false;
-        L.popup({ minWidth: 260, maxWidth: 360, className: 'as-popup-container', autoPanPadding: [16, 16] })
+        this._openTapPopup(L.popup({ minWidth: 260, maxWidth: 360, className: 'as-popup-container', autoPanPadding: [16, 16], closeOnClick: false })
             .setLatLng(latlng)
-            .setContent(this._airspacePopupHtml(areas))
-            .openOn(this._map);
+            .setContent(this._airspacePopupHtml(areas)));
         return true;
     }
 
