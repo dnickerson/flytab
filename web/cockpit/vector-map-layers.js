@@ -1766,12 +1766,12 @@ class VectorMapLayers {
     }
 
     _onMapClick(e) {
-        // A tap on a UI button inside the map (auto-pan, D→: wireTap) is not a map
-        // tap: the capture-phase touchstart still saw it, and the airspace popup
-        // opened under the button (review 2026-10-18).
-        if (typeof _wireTapLastTouchAt !== 'undefined' && Date.now() - _wireTapLastTouchAt < 500) return;
-        // A tap popup (airspace, CB) open: this tap closes it.
-        const closedPopup = this._closeTapPopup();
+        // A tap popup (airspace, CB) open and on screen: a tap that hits nothing
+        // else only closes it. It is closed AFTER a marker or traffic tap is
+        // handled: closing first fired popupclose, which (map.js) stamps
+        // _wireTapLastTouchAt, and app.js's 500 ms guard then dropped the
+        // airport tap (re-review 2026-10-18).
+        const popupOpen = this._tapPopupShown();
         const HIT_PX = 30; // generous tap target for fingers
         const pt = this._map.latLngToContainerPoint(e.latlng);
         const hit = this._findNearestMarker(pt, HIT_PX);
@@ -1788,6 +1788,7 @@ class VectorMapLayers {
                     .setLatLng(hit.marker.getLatLng())
                     .setContent(this._buildCbPopupHtml(hit.data)));
             }
+            if (hit.type !== 'cb') this._closeTapPopup();
             return;
         }
 
@@ -1807,14 +1808,15 @@ class VectorMapLayers {
                     .setLatLng(fallback.marker.getLatLng())
                     .setContent(this._buildCbPopupHtml(fallback.data)));
             }
+            if (fallback.type !== 'cb') this._closeTapPopup();
             return;
         }
 
         // No aviation marker hit — traffic, then the airspace at the tap. A tap
         // that only closed an open popup does not open another; none while
         // the route table is being edited (map taps add waypoints then).
-        if (this._onTrafficTap && this._onTrafficTap(pt)) return;
-        if (closedPopup) return;
+        if (this._onTrafficTap && this._onTrafficTap(pt)) { this._closeTapPopup(); return; }
+        if (popupOpen) { this._closeTapPopup(); return; }
         if (window.app?.routeTable?.isEditing?.()) return;
         this._showAirspacePopup(e.latlng);
     }
@@ -1831,6 +1833,18 @@ class VectorMapLayers {
         this._tapPopup = popup;
         popup.openOn(this._map);
         return popup;
+    }
+
+    /**
+     * The tap popup is open and its anchor in view. One panned off screen (auto-
+     * pan follow) is closed quietly: it must not eat the pilot's next tap.
+     */
+    _tapPopupShown() {
+        const p = this._tapPopup;
+        if (!p || !this._map.hasLayer?.(p)) { this._tapPopup = null; return false; }
+        const ll = p.getLatLng?.();
+        if (ll && this._map.getBounds && !this._map.getBounds().contains(ll)) { this._closeTapPopup(); return false; }
+        return true;
     }
 
     /** Close the tap popup if open. True if one was open. */

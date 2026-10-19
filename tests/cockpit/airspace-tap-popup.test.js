@@ -144,6 +144,7 @@ describe('full review fixes (2026-10-18)', () => {
     it('1. the tap popup survives the synthetic click that follows the tap (real Leaflet map, preclick)', () => {
         const div = document.createElement('div'); div.style.width = '800px'; div.style.height = '600px'; document.body.appendChild(div);
         const map = L.map(div, { center: [35.2, -80.9], zoom: 9 });
+        map.getBounds = () => L.latLngBounds([34, -82], [36, -79]);       // jsdom has no layout: a 0x0 map
         const v = Object.create(VectorMapLayers.prototype); v._map = map;
         v._areasAt = () => [{ kind: 'class', rec: { id: 'CLT', name: 'Charlotte Class B', class: 'B', lower_ft: 0, upper_ft: 10000 } }];
         expect(v._showAirspacePopup(L.latLng(35.2, -80.9))).toBe(true);
@@ -159,15 +160,43 @@ describe('full review fixes (2026-10-18)', () => {
         map.remove();
     });
 
-    it('2. a tap on a UI button inside the map (auto-pan, D→) does not open the airspace popup', async () => {
-        const v = await layers(); v._findNearestMarker = () => null; v._onTrafficTap = () => false;
-        v._showAirspacePopup = vi.fn(() => true);
-        globalThis._wireTapLastTouchAt = Date.now();
-        v._onMapClick({ latlng: L.latLng(35.4, -81.2) });
-        expect(v._showAirspacePopup).not.toHaveBeenCalled();
-        globalThis._wireTapLastTouchAt = Date.now() - 1000;
-        v._onMapClick({ latlng: L.latLng(35.4, -81.2) });
-        expect(v._showAirspacePopup).toHaveBeenCalled();
+    it('2. the PLATE button and plate bar inside the map are overlays the map tap ignores', () => {
+        const T = new Function(read('web/shared/tap-utils.js') + '\nreturn { isTapOnMapOverlay, MAP_OVERLAY_SELECTORS };')();
+        for (const cls of ['plate-toggle-btn', 'plate-overlay-bar', 'leaflet-popup']) {
+            const el = document.createElement('div'); el.className = cls; const child = document.createElement('span'); el.appendChild(child);
+            expect(T.isTapOnMapOverlay(child), cls).toBe(true);
+        }
+        expect(T.isTapOnMapOverlay(document.createElement('div'))).toBe(false);
+    });
+
+    it('2b. with the popup open, an airport tap is handled first, then the popup closes (re-review: the tap was dropped)', () => {
+        const div = document.createElement('div'); div.style.width = '800px'; div.style.height = '600px'; document.body.appendChild(div);
+        const map = L.map(div, { center: [35.2, -80.9], zoom: 9 });
+        const v = Object.create(VectorMapLayers.prototype); v._map = map;
+        map.getBounds = () => L.latLngBounds([34, -82], [36, -79]);       // jsdom has no layout: a 0x0 map
+        v._areasAt = () => [{ kind: 'class', rec: { id: 'CLT', name: 'Charlotte Class B', class: 'B', lower_ft: 0, upper_ft: 10000 } }];
+        v._showAirspacePopup(L.latLng(35.2, -80.9));
+        const order = [];
+        map.on('popupclose', () => order.push('popupclose'));
+        v._onAirportClick = () => order.push('airport');
+        v._findNearestMarker = () => ({ type: 'airport', data: { icao: 'KCLT' } });
+        v._onMapClick({ latlng: L.latLng(35.21, -80.94) });
+        expect(order).toEqual(['airport', 'popupclose']);
+        map.remove();
+    });
+
+    it('2c. a popup panned off screen does not eat the next tap', () => {
+        const div = document.createElement('div'); div.style.width = '800px'; div.style.height = '600px'; document.body.appendChild(div);
+        const map = L.map(div, { center: [35.2, -80.9], zoom: 9 });
+        const v = Object.create(VectorMapLayers.prototype); v._map = map;
+        v._areasAt = () => [{ kind: 'class', rec: { id: 'CLT', name: 'Charlotte Class B', class: 'B', lower_ft: 0, upper_ft: 10000 } }];
+        v._showAirspacePopup(L.latLng(35.2, -80.9));
+        map.getBounds = () => L.latLngBounds([40, -75], [41, -74]);      // the anchor is now out of view
+        v._findNearestMarker = () => null; v._onTrafficTap = () => false;
+        const spy = vi.spyOn(v, '_showAirspacePopup');
+        v._onMapClick({ latlng: L.latLng(40.5, -74.5) });
+        expect(spy).toHaveBeenCalled();                                  // a new popup, not a spent tap
+        map.remove();
     });
 
     it('3. NASR "unlimited" -1 (121 SUA, e.g. R-2505) is UNL, in the popup and the map label', async () => {

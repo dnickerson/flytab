@@ -20,7 +20,10 @@ let _wireTapLastTouchAt = 0;
 // map container rather than going through Leaflet's popup system). Add a new
 // selector HERE, not to each map touch-handler file individually, when a
 // future popup/button mounts directly into the map container the same way.
-const MAP_OVERLAY_SELECTORS = ['.leaflet-popup', '.airspace-alert-popup'];
+// .plate-toggle-btn / .plate-overlay-bar: the approach-plate PLATE button and
+// overlay bar (approach-charts.js) are mounted inside the map container; a tap
+// on them opened the airspace popup underneath (review 2026-10-18).
+const MAP_OVERLAY_SELECTORS = ['.leaflet-popup', '.airspace-alert-popup', '.plate-toggle-btn', '.plate-overlay-bar'];
 
 function isTapOnMapOverlay(target) {
     return MAP_OVERLAY_SELECTORS.some(sel => target?.closest?.(sel));
