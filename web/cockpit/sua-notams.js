@@ -22,11 +22,12 @@
 class SuaNotams {
     static STORE_KEY = 'flytab_sua_notams';
     static STALE_MS = 15 * 60 * 1000;      // refetch an ARTCC after this (when online)
-    static ARTCC_MARGIN_DEG = 2;
+    static ARTCC_MARGIN_DEG = 2;     // 1 held the issuing ARTCC for 364/364 on 10-19; 2 for margin (review)
     // NASR ARTCCs the NMS API does not take as a location (ZAP: no NOTAM list
     // back, 10-19). Every other one answered with NOTAMs that day (fewest:
     // ZSU 18, ZAU 21; the oceanic ZWY 21, ZAK 69 -- ZAK alone issues W-237H/J).
-    static NOT_NMS = new Set(['ZAP']);     // 1 held the issuing ARTCC for 364/364 on 10-19; 2 for margin (review)
+    static NOT_NMS = new Set(['ZAP']);
+    static PER_REQUEST = 6;          // ARTCCs per proxy request
     static RETRY_MS = 60 * 1000;           // after a failed fetch
     static KEEP_TEXT = 300;                // chars of NOTAM text kept
 
@@ -35,7 +36,6 @@ class SuaNotams {
         this._fetchedAt = new Map();     // ARTCC ('ZJX') -> ms of its last good fetch
         this._index = null;              // { byKey: Map<key, ids[]>, moaNames: [[name, ids[]]] } from NASR
         this._artccBoxes = null;         // [{ id: 'ZJX', south, west, north, east }] -- loaded once
-        this._checkedBoxesAt = 0;
         this._fetching = null;
         this._failedAt = 0;
         this._retryAt = new Map();       // ARTCC -> ms before which it is not asked again (empty: 15 min, FAA error: 1 min)
@@ -97,10 +97,7 @@ class SuaNotams {
     async refresh(nasr, boxes) {
         if (!nasr || !boxes?.length) return;
         if (this._fetching) return this._fetching;
-        // Called on every map refresh: look at most every 20 s.
-        const sinceCheck = Date.now() - this._checkedBoxesAt;   // < 0: the clock was set back
-        if (sinceCheck >= 0 && sinceCheck < 20000) return;
-        this._checkedBoxesAt = Date.now();
+        // Called on every map refresh; cheap unless an ARTCC is due (26 boxes).
         this._fetching = this._refresh(nasr, boxes).finally(() => { this._fetching = null; });
         return this._fetching;
     }
@@ -112,7 +109,10 @@ class SuaNotams {
         const now = Date.now();
         const age = (z) => now - (this._fetchedAt.get(z) || 0);   // < 0: the clock was set back
         const waiting = (z) => { const t = this._retryAt.get(z); return t != null && now < t && t - now <= SuaNotams.STALE_MS; };
-        const due = [...artccs].filter((z) => (age(z) > SuaNotams.STALE_MS || age(z) < 0) && !waiting(z)).sort();
+        // The view's ARTCCs first, then the areas' and the route's.
+        const inView = new Set(this._artccsFor(boxes[0]));
+        const due = [...artccs].filter((z) => (age(z) > SuaNotams.STALE_MS || age(z) < 0) && !waiting(z))
+            .sort((a, b) => (inView.has(b) - inView.has(a)) || a.localeCompare(b));
         const sinceFail = now - this._failedAt;
         if (!due.length || (sinceFail >= 0 && sinceFail < SuaNotams.RETRY_MS)) return;
         // NASR wiped (Reset NASR Data): nothing to match -- don't ask the FAA every minute.
@@ -120,6 +120,17 @@ class SuaNotams {
 
         const base = (typeof CockpitConfig !== 'undefined' && CockpitConfig.notamBase)
             || (typeof Settings !== 'undefined' && Settings.workerBase) || 'https://www.flywhere.app/api';
+        // A few ARTCCs per request: the proxy asks the FAA for each in turn
+        // (~0.5 s each, up to 20 s on an error) and serves one request at a
+        // time -- 19 in one request could pass the 30 s timeout, and WX
+        // Briefing waited behind it (review 5).
+        for (let i = 0; i < due.length; i += SuaNotams.PER_REQUEST) {
+            if (!(await this._fetchSome(nasr, base, due.slice(i, i + SuaNotams.PER_REQUEST)))) break;   // offline: stop
+        }
+    }
+
+    /** One request for these ARTCCs; false if it failed outright. */
+    async _fetchSome(nasr, base, due) {
         try {
             const resp = await fetch(`${base}/notams?location=${due.join(',')}`, { signal: AbortSignal.timeout(30000) });
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -147,11 +158,13 @@ class SuaNotams {
             this._failedAt = 0;
             this._save();
             this._changed();
+            return true;
         } catch (err) {
             // Offline (in flight) or the proxy is down: keep what we have.
             this._failedAt = Date.now();
             this._lastError = err?.message || String(err);
             console.debug('[SuaNotams] fetch failed:', this._lastError);
+            return false;
         }
     }
 

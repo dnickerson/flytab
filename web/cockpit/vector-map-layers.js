@@ -1203,7 +1203,6 @@ class VectorMapLayers {
         }
     }
 
-    /** The ceiling/floor (and ACT) label at the area's centroid, stacked off labels nearby. */
     /** The label's icon: ceiling over floor, the ACT badge when active, raised by its stack position. */
     static _suaLabelIcon(sua, isActive, stackCount) {
         const altLower = sua.lower_ft === 0 ? 'SFC' : (sua.lower_ft >= 1000 ? `${Math.round(sua.lower_ft / 100)}` : sua.lower_ft);
@@ -1219,6 +1218,7 @@ class VectorMapLayers {
         });
     }
 
+    /** The ceiling/floor (and ACT) label at the area's centroid, stacked off labels nearby. */
     _addSuaLabel(sua, isActive, usedLabelPos) {
         // Altitude label at centroid with collision offset
         let labelPos = VectorMapLayers._polygonCentroid((sua.boundary || []).map(pt => [pt[0], pt[1]]));

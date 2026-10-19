@@ -390,3 +390,35 @@ describe('review 3 fixes (2026-10-19)', () => {
         expect(m('R4401A')).toEqual(['R4401A']);
     });
 });
+
+describe('review 5 fixes (2026-10-19)', () => {
+    const CONUS = { south: 25, west: -124, north: 49, east: -67 };
+    const asked = (calls) => calls.map((u) => new URL(u).searchParams.get('location').split(','));
+
+    it('many ARTCCs: at most 6 per request, the view\'s first', async () => {
+        const calls = proxy(); const s = new SuaNotams();
+        await s.refresh(nasr, [MOODY_VIEW, CONUS]);
+        const reqs = asked(calls);
+        expect(reqs.length).toBeGreaterThan(2);
+        expect(reqs.every((r) => r.length <= SuaNotams.PER_REQUEST)).toBe(true);
+        const all = reqs.flat();
+        expect(new Set(all).size).toBe(all.length);                          // each once
+        expect(reqs[0]).toEqual(expect.arrayContaining(['ZJX', 'ZMA', 'ZTL']));   // the view's
+        expect(all).not.toContain('ZAP');
+    });
+
+    it('a request that fails (offline) stops the rest; they are asked on the next try', async () => {
+        const calls = []; globalThis.fetch = vi.fn(async (u) => { calls.push(String(u)); throw new TypeError('Failed to fetch'); });
+        const s = new SuaNotams();
+        await s.refresh(nasr, [MOODY_VIEW, CONUS]);
+        expect(calls).toHaveLength(1);
+    });
+
+    it('a second pan within 20 s fetches the new region at once', async () => {
+        const calls = proxy(); const s = new SuaNotams();
+        await s.refresh(nasr, [MOODY_VIEW]);
+        at('2026-10-19T19:00:05Z');
+        await s.refresh(nasr, [{ south: 42.5, west: -121.5, north: 43.5, east: -119.5 }]);   // Oregon
+        expect(asked(calls).at(-1)).toContain('ZSE');
+    });
+});
