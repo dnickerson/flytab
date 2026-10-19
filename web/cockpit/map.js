@@ -1694,7 +1694,6 @@ class CockpitMap {
         waypoints.forEach(wp => {
             const marker = L.circleMarker([wp.lat, wp.lon], {
                 radius: 8, color: '#ff44ff', fillColor: '#ff44ff', fillOpacity: 0.8, weight: 2,
-                className: 'route-wp-marker',   // vector-map-layers' tap path leaves these to this click
             }).addTo(this.routeLayer);
 
             const label = wp.icao || wp.name || '';

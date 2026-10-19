@@ -106,98 +106,23 @@ describe('the airspace at a tap', () => {
         expect(el.querySelectorAll('.as-pop-row')).toHaveLength(2);
     });
 
-    it('the polygons no longer carry their own Leaflet popups or take clicks (they raced the tap)', async () => {
+    it('every airspace polygon takes Leaflet\'s own tap (the MOA\'s proven method) and opens the combined popup', async () => {
         const v = await layers();
+        v._showAirspacePopup = vi.fn(() => true);
         for (const m of [v._airspacePolygons, v._suaPolygons, v._trsaPolygons]) {
-            for (const [k, p] of m) if (p._flyArea) { expect(p.options.interactive, k).toBe(false); expect(p.getPopup(), k).toBeFalsy(); }
+            for (const [k, p] of m) if (p._flyArea) {
+                expect(p.options.interactive, k).not.toBe(false);
+                expect(p.getPopup(), k).toBeFalsy();                       // no per-area popup: one combined
+                p.fire('click', { latlng: L.latLng(35.4, -81.2) });
+            }
         }
-    });
-});
-
-describe('what a tap opens, in order: aviation marker, then traffic, then airspace', () => {
-    const ctx = async () => { const v = await layers(); v._findNearestMarker = () => null; v._showAirspacePopup = vi.fn(() => true); return v; };
-    it('nothing else hit: the airspace popup', async () => {
-        const v = await ctx(); v._onTrafficTap = () => false;
-        v._onMapClick({ latlng: L.latLng(35.4, -81.2) });
-        expect(v._showAirspacePopup).toHaveBeenCalled();
-    });
-    it('a traffic target hit: traffic only', async () => {
-        const v = await ctx(); v._onTrafficTap = () => true;
-        v._onMapClick({ latlng: L.latLng(35.4, -81.2) });
-        expect(v._showAirspacePopup).not.toHaveBeenCalled();
-    });
-    it('an airport hit: the airport only', async () => {
-        const v = await ctx(); v._onAirportClick = vi.fn();
-        v._findNearestMarker = () => ({ type: 'airport', data: { icao: 'KCLT' } });
-        v._onMapClick({ latlng: L.latLng(35.21, -80.94) });
-        expect(v._onAirportClick).toHaveBeenCalled();
-        expect(v._showAirspacePopup).not.toHaveBeenCalled();
-    });
-    it('the app passes the traffic hit through (it was dropped)', () => {
-        expect(read('web/app.js')).toMatch(/this\.vectorLayers\._onTrafficTap = \(containerPt\) => this\.cockpitMap\._onTrafficTap\(containerPt\);/);
+        expect(v._showAirspacePopup).toHaveBeenCalledTimes(5);
+        expect(v._showAirspacePopup).toHaveBeenCalledWith(L.latLng(35.4, -81.2));
     });
 });
 
 describe('full review fixes (2026-10-18)', () => {
     beforeEach(() => { document.body.innerHTML = ''; delete window.SuaNotams; delete window.app; globalThis._wireTapLastTouchAt = 0; });
-
-    it('1. the tap popup survives the synthetic click that follows the tap (real Leaflet map, preclick)', () => {
-        const div = document.createElement('div'); div.style.width = '800px'; div.style.height = '600px'; document.body.appendChild(div);
-        const map = L.map(div, { center: [35.2, -80.9], zoom: 9 });
-        map.getBounds = () => L.latLngBounds([34, -82], [36, -79]);       // jsdom has no layout: a 0x0 map
-        const v = Object.create(VectorMapLayers.prototype); v._map = map;
-        v._areasAt = () => [{ kind: 'class', rec: { id: 'CLT', name: 'Charlotte Class B', class: 'B', lower_ft: 0, upper_ft: 10000 } }];
-        expect(v._showAirspacePopup(L.latLng(35.2, -80.9))).toBe(true);
-        map.fire('preclick', { latlng: L.latLng(35.2, -80.9) });              // what Leaflet fires for the synthetic click
-        expect(map.hasLayer(v._tapPopup)).toBe(true);
-        expect(document.querySelector('.as-popup-container')).not.toBeNull();
-        // the next real tap closes it, without opening another
-        v._findNearestMarker = () => null; v._onTrafficTap = () => false;
-        const spy = vi.spyOn(v, '_showAirspacePopup');
-        v._onMapClick({ latlng: L.latLng(35.0, -80.0) });
-        expect(document.querySelector('.as-popup-container')).toBeNull();
-        expect(spy).not.toHaveBeenCalled();
-        map.remove();
-    });
-
-    it('2. the PLATE button and plate bar inside the map are overlays the map tap ignores', () => {
-        const T = new Function(read('web/shared/tap-utils.js') + '\nreturn { isTapOnMapOverlay, MAP_OVERLAY_SELECTORS };')();
-        for (const cls of ['plate-toggle-btn', 'plate-overlay-bar', 'leaflet-popup']) {
-            const el = document.createElement('div'); el.className = cls; const child = document.createElement('span'); el.appendChild(child);
-            expect(T.isTapOnMapOverlay(child), cls).toBe(true);
-        }
-        expect(T.isTapOnMapOverlay(document.createElement('div'))).toBe(false);
-    });
-
-    it('2b. with the popup open, an airport tap is handled first, then the popup closes (re-review: the tap was dropped)', () => {
-        const div = document.createElement('div'); div.style.width = '800px'; div.style.height = '600px'; document.body.appendChild(div);
-        const map = L.map(div, { center: [35.2, -80.9], zoom: 9 });
-        const v = Object.create(VectorMapLayers.prototype); v._map = map;
-        map.getBounds = () => L.latLngBounds([34, -82], [36, -79]);       // jsdom has no layout: a 0x0 map
-        v._areasAt = () => [{ kind: 'class', rec: { id: 'CLT', name: 'Charlotte Class B', class: 'B', lower_ft: 0, upper_ft: 10000 } }];
-        v._showAirspacePopup(L.latLng(35.2, -80.9));
-        const order = [];
-        map.on('popupclose', () => order.push('popupclose'));
-        v._onAirportClick = () => order.push('airport');
-        v._findNearestMarker = () => ({ type: 'airport', data: { icao: 'KCLT' } });
-        v._onMapClick({ latlng: L.latLng(35.21, -80.94) });
-        expect(order).toEqual(['airport', 'popupclose']);
-        map.remove();
-    });
-
-    it('2c. a popup panned off screen does not eat the next tap', () => {
-        const div = document.createElement('div'); div.style.width = '800px'; div.style.height = '600px'; document.body.appendChild(div);
-        const map = L.map(div, { center: [35.2, -80.9], zoom: 9 });
-        const v = Object.create(VectorMapLayers.prototype); v._map = map;
-        v._areasAt = () => [{ kind: 'class', rec: { id: 'CLT', name: 'Charlotte Class B', class: 'B', lower_ft: 0, upper_ft: 10000 } }];
-        v._showAirspacePopup(L.latLng(35.2, -80.9));
-        map.getBounds = () => L.latLngBounds([40, -75], [41, -74]);      // the anchor is now out of view
-        v._findNearestMarker = () => null; v._onTrafficTap = () => false;
-        const spy = vi.spyOn(v, '_showAirspacePopup');
-        v._onMapClick({ latlng: L.latLng(40.5, -74.5) });
-        expect(spy).toHaveBeenCalled();                                  // a new popup, not a spent tap
-        map.remove();
-    });
 
     it('3. NASR "unlimited" -1 (121 SUA, e.g. R-2505) is UNL, in the popup and the map label', async () => {
         expect(VectorMapLayers._fmtAltFt(-1)).toBe('UNL');
@@ -208,13 +133,6 @@ describe('full review fixes (2026-10-18)', () => {
         const sua = { id: 'R-2505', name: 'R-2505', type: 'R', lower_ft: 0, upper_ft: -1, boundary: box(34, -117, 0.2) };
         v._addSuaLabel(sua, false, []);
         expect(v._suaPolygons.get('R-2505_lbl').options.icon.options.html).toMatch(/^UNL<br>/);
-    });
-
-    it('4. while the route table is being edited, no airspace popup', async () => {
-        const v = await layers(); v._findNearestMarker = () => null; v._onTrafficTap = () => false; v._showAirspacePopup = vi.fn(() => true);
-        window.app = { routeTable: { isEditing: () => true } };
-        v._onMapClick({ latlng: L.latLng(35.4, -81.2) });
-        expect(v._showAirspacePopup).not.toHaveBeenCalled();
     });
 
     it('6. "Seattle-Tacoma ... Class D1" reads without the suffix', async () => {
@@ -242,58 +160,49 @@ describe('full review fixes (2026-10-18)', () => {
     });
 });
 
-describe('re-review 3 fixes (2026-10-18)', () => {
-    beforeEach(() => { document.body.innerHTML = ''; delete window.app; });
-    const withPopup = () => {
-        const div = document.createElement('div'); document.body.appendChild(div);
-        const map = L.map(div, { center: [35.2, -80.9], zoom: 9 });
-        const v = Object.create(VectorMapLayers.prototype); v._map = map;
-        v._areasAt = () => [{ kind: 'class', rec: { id: 'CLT', name: 'Charlotte Class B', class: 'B', lower_ft: 0, upper_ft: 10000 } }];
-        map.getBounds = () => L.latLngBounds([34, -82], [36, -79]);
-        v._showAirspacePopup(L.latLng(35.2, -80.9));
-        return { map, v };
-    };
 
-    it('an off-screen popup is not closed before an airport tap is handled (that dropped the tap)', () => {
-        const { map, v } = withPopup();
-        map.getBounds = () => L.latLngBounds([40, -75], [41, -74]);       // anchor now out of view
-        const order = []; map.on('popupclose', () => order.push('popupclose'));
-        v._onAirportClick = () => order.push('airport');
-        v._findNearestMarker = () => ({ type: 'airport', data: { icao: 'KCLT' } });
-        v._onMapClick({ latlng: L.latLng(40.5, -74.5) });
-        expect(order).toEqual(['airport', 'popupclose']);
-        map.remove();
+
+describe('the MOA method (2026-10-18): Leaflet polygon click, the app tap path unchanged', () => {
+    beforeEach(() => { delete window.app; });
+
+    it('a marker or traffic tap on the touch path: the polygon click that follows is skipped (no second popup)', async () => {
+        const v = await layers(); v._showAirspacePopup = vi.fn(() => true);
+        v._onAirportClick = vi.fn(); v._findNearestMarker = () => ({ type: 'airport', data: { icao: 'KCLT' } });
+        v._onMapClick({ latlng: L.latLng(35.21, -80.94) });
+        expect(v._onAirportClick).toHaveBeenCalledTimes(1);
+        v._onAirspaceClick({ latlng: L.latLng(35.21, -80.94) });
+        expect(v._showAirspacePopup).not.toHaveBeenCalled();
+        const w = await layers(); w._showAirspacePopup = vi.fn(() => true);
+        w._findNearestMarker = () => null; w._onTrafficTap = () => true;
+        w._onMapClick({ latlng: L.latLng(35.4, -81.2) });
+        w._onAirspaceClick({ latlng: L.latLng(35.4, -81.2) });
+        expect(w._showAirspacePopup).not.toHaveBeenCalled();
     });
 
-    it('a tap on a route waypoint marker is left to its own click: no airspace popup, ours not closed', () => {
-        const { map, v } = withPopup();
+    it('nothing else hit: the polygon click opens it; a minute later too', async () => {
+        vi.useFakeTimers({ now: new Date('2026-10-18T22:00:00Z') });
+        const v = await layers(); v._showAirspacePopup = vi.fn(() => true);
         v._findNearestMarker = () => null; v._onTrafficTap = () => false;
-        const spy = vi.spyOn(v, '_showAirspacePopup');
-        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path'); path.setAttribute('class', 'route-wp-marker leaflet-interactive');
-        document.body.appendChild(path);
-        v._onMapClick({ latlng: L.latLng(35.2, -80.9), target: path });
-        expect(spy).not.toHaveBeenCalled();
-        expect(map.hasLayer(v._tapPopup)).toBe(true);
-        expect(read('web/cockpit/map.js')).toMatch(/className: 'route-wp-marker'/);
-        map.remove();
+        v._onMapClick({ latlng: L.latLng(35.4, -81.2) });
+        v._onAirspaceClick({ latlng: L.latLng(35.4, -81.2) });
+        expect(v._showAirspacePopup).toHaveBeenCalledTimes(1);
+        v._onMapClick({ latlng: L.latLng(35.21, -80.94) });                 // a marker tap...
+        vi.advanceTimersByTime(60000);                                        // ...long ago
+        v._onAirspaceClick({ latlng: L.latLng(35.4, -81.2) });
+        expect(v._showAirspacePopup).toHaveBeenCalledTimes(2);
+        vi.useRealTimers();
     });
 
-    it('other interactive layers (an AIRMET area, a lake) do not hide the airspace popup', () => {
-        const { map, v } = withPopup(); v._closeTapPopup();
-        v._findNearestMarker = () => null; v._onTrafficTap = () => false;
-        const spy = vi.spyOn(v, '_showAirspacePopup');
-        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path'); path.setAttribute('class', 'leaflet-interactive');
-        v._onMapClick({ latlng: L.latLng(35.2, -80.9), target: path });
-        expect(spy).toHaveBeenCalled();
-        map.remove();
+    it('while the route table is edited: no airspace popup', async () => {
+        const v = await layers(); v._showAirspacePopup = vi.fn(() => true);
+        window.app = { routeTable: { isEditing: () => true } };
+        v._onAirspaceClick({ latlng: L.latLng(35.4, -81.2) });
+        expect(v._showAirspacePopup).not.toHaveBeenCalled();
     });
 
-    it('the radar loop bar and the convective-alert panel are overlays; their clicks never reach the map tap', () => {
-        const T = new Function(read('web/shared/tap-utils.js') + '\nreturn { isTapOnMapOverlay };')();
-        for (const cls of ['radar-loop-controls', 'conv-alerts-panel']) {
-            const el = document.createElement('div'); el.className = cls; const c = document.createElement('span'); el.appendChild(c);
-            expect(T.isTapOnMapOverlay(c), cls).toBe(true);
-        }
-        expect(read('web/cockpit/vector-map-layers.js')).toMatch(/isTapOnMapOverlay\(e\.originalEvent\?\.target\)\) return;/);
+    it('the app tap path and its guards are main\'s: no popup closing or overlay changes in this branch', () => {
+        const src = read('web/cockpit/vector-map-layers.js');
+        expect(src).not.toMatch(/_openTapPopup|_closeTapPopup|_tapPopupShown|closeOnClick: false/);
+        expect(read('web/shared/tap-utils.js')).toMatch(/const MAP_OVERLAY_SELECTORS = \['\.leaflet-popup', '\.airspace-alert-popup'\];/);
     });
 });

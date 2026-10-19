@@ -98,10 +98,6 @@ class VectorMapLayers {
             // _wireTapLastTouchAt is set by wireTap (tap-utils.js) and route-table.js
             // delegated handlers on every UI button tap.
             if (typeof _wireTapLastTouchAt !== 'undefined' && Date.now() - _wireTapLastTouchAt < 500) return;
-            // A click on an overlay inside the map (convective-alert panel, radar
-            // controls, plate bar): the touch path already ignores it, but its
-            // synthetic click reached here and opened the airspace popup (re-review 3).
-            if (typeof isTapOnMapOverlay === 'function' && isTapOnMapOverlay(e.originalEvent?.target)) return;
             this._onMapClick(e);
         });
 
@@ -149,7 +145,7 @@ class VectorMapLayers {
                 const pt = L.point(endX - rect.left, endY - rect.top);
                 const latlng = this._map.containerPointToLatLng(pt);
                 this._lastTouchTap = Date.now();
-                this._onMapClick({ latlng, target: e.target });
+                this._onMapClick({ latlng });
             }
         }, { passive: true });
     }
@@ -993,9 +989,9 @@ class VectorMapLayers {
                     weight: style.weight || 1,
                     fillOpacity: style.fillOpacity || 0.04,
                     dashArray: style.dashArray || null,
-                    interactive: false,          // taps: _showAirspacePopup (one tap path)
                 });
                 polygon._flyArea = { kind: 'class', rec: as };
+                polygon.on('click', (ev) => this._onAirspaceClick(ev));   // the MOA's tap method
 
                 // No tooltip — sticky tooltips interfere with touch interactions on Android
 
@@ -1144,12 +1140,13 @@ class VectorMapLayers {
                 const style = isActive ? { ...base, ...VectorMapLayers.SUA_ACTIVE_OVERRIDES } : base;
                 const latlngs = boundary.map(pt => [pt[0], pt[1]]);
 
-                // Not a Leaflet popup: its click raced the tap path's popup where
-                // areas overlap (a MOA under a Class B shelf); _showAirspacePopup
-                // lists every area at the tap (Dana, 2026-10-18).
-                const polygon = L.polygon(latlngs, { ...style, interactive: false });
+                // Its tap opens the combined airspace popup (every area at the spot,
+                // Dana 2026-10-18) through the same Leaflet polygon click its own
+                // popup used.
+                const polygon = L.polygon(latlngs, { ...style, interactive: true });
                 polygon._suaActive = isActive;
                 polygon._flyArea = { kind: 'sua', rec: sua };
+                polygon.on('click', (ev) => this._onAirspaceClick(ev));
 
                 polygon.addTo(this._suaLayer);
                 this._suaPolygons.set(sua.id, polygon);
@@ -1283,8 +1280,9 @@ class VectorMapLayers {
                 if (boundary.length < 3) continue;
 
                 const latlngs = boundary.map(pt => [pt[0], pt[1]]);
-                const polygon = L.polygon(latlngs, { ...VectorMapLayers.TRSA_STYLE, interactive: false });
-                polygon._flyArea = { kind: 'trsa', rec: trsa };   // tap: _showAirspacePopup
+                const polygon = L.polygon(latlngs, { ...VectorMapLayers.TRSA_STYLE, interactive: true });
+                polygon._flyArea = { kind: 'trsa', rec: trsa };
+                polygon.on('click', (ev) => this._onAirspaceClick(ev));
 
                 polygon.addTo(this._trsaLayer);
                 this._trsaPolygons.set(trsa.id, polygon);
@@ -1770,19 +1768,12 @@ class VectorMapLayers {
     }
 
     _onMapClick(e) {
-        // A tap popup (airspace, CB) open and on screen: a tap that hits nothing
-        // else only closes it. It is closed AFTER a marker or traffic tap is
-        // handled: closing first fired popupclose, which (map.js) stamps
-        // _wireTapLastTouchAt, and app.js's 500 ms guard then dropped the
-        // airport tap (re-review 2026-10-18).
-        const popupOpen = this._tapPopupShown();
-        // The touched element (touch path) or the click's (desktop).
-        const tgt = (typeof Element !== 'undefined' && e.target instanceof Element) ? e.target : e.originalEvent?.target;
         const HIT_PX = 30; // generous tap target for fingers
         const pt = this._map.latLngToContainerPoint(e.latlng);
         const hit = this._findNearestMarker(pt, HIT_PX);
 
         if (hit) {
+            this._touchHandledAt = Date.now();       // the airspace polygon click after it is skipped
             if (hit.type === 'airport' && this._onAirportClick) {
                 this._onAirportClick(hit.data);
             } else if (hit.type === 'navaid' && this._onNavaidClick) {
@@ -1790,11 +1781,11 @@ class VectorMapLayers {
             } else if (hit.type === 'fix' && this._onFixClick) {
                 this._onFixClick(hit.data);
             } else if (hit.type === 'cb') {
-                this._openTapPopup(L.popup({ minWidth: 260, maxWidth: 380, className: 'cb-popup-container', closeOnClick: false })
+                L.popup({ minWidth: 260, maxWidth: 380, className: 'cb-popup-container' })
                     .setLatLng(hit.marker.getLatLng())
-                    .setContent(this._buildCbPopupHtml(hit.data)));
+                    .setContent(this._buildCbPopupHtml(hit.data))
+                    .openOn(this._map);
             }
-            if (hit.type !== 'cb') this._closeTapPopup();
             return;
         }
 
@@ -1803,6 +1794,7 @@ class VectorMapLayers {
         // ensuring any aviation feature beats a traffic marker in the 31–60px range.
         const fallback = this._findNearestMarker(pt, 60);
         if (fallback) {
+            this._touchHandledAt = Date.now();
             if (fallback.type === 'airport' && this._onAirportClick) {
                 this._onAirportClick(fallback.data);
             } else if (fallback.type === 'navaid' && this._onNavaidClick) {
@@ -1810,74 +1802,18 @@ class VectorMapLayers {
             } else if (fallback.type === 'fix' && this._onFixClick) {
                 this._onFixClick(fallback.data);
             } else if (fallback.type === 'cb') {
-                this._openTapPopup(L.popup({ minWidth: 260, maxWidth: 380, className: 'cb-popup-container', closeOnClick: false })
+                L.popup({ minWidth: 260, maxWidth: 380, className: 'cb-popup-container' })
                     .setLatLng(fallback.marker.getLatLng())
-                    .setContent(this._buildCbPopupHtml(fallback.data)));
+                    .setContent(this._buildCbPopupHtml(fallback.data))
+                    .openOn(this._map);
             }
-            if (fallback.type !== 'cb') this._closeTapPopup();
             return;
         }
 
-        // No aviation marker hit — traffic, then the airspace at the tap. A tap
-        // that only closed an open popup does not open another; none while
-        // the route table is being edited (map taps add waypoints then).
-        if (this._onTrafficTap && this._onTrafficTap(pt)) { this._closeTapPopup(); return; }
-        // On a route waypoint marker (map.js, its own click opens the airport
-        // panel): leave it to that click. Closing our popup now would stamp
-        // _wireTapLastTouchAt (map.js popupclose) and drop that click; with no
-        // popup, the airspace popup opened beside the panel (re-review 3). Not
-        // every .leaflet-interactive: AIRMET/SIGMET areas, lakes and airway lines
-        // are interactive by default and would hide the airspace popup.
-        if (tgt?.closest?.('.route-wp-marker')) return;
-        if (popupOpen) { this._closeTapPopup(); return; }
-        // Closed only now, after anything else was handled: one panned off screen
-        // is replaced or closed here (never before a marker tap: that dropped it).
-        const editing = window.app?.routeTable?.isEditing?.();
-        if (editing || !this._showAirspacePopup(e.latlng)) this._closeTapPopup();
+        // No aviation marker hit — check traffic markers
+        if (this._onTrafficTap && this._onTrafficTap(pt)) this._touchHandledAt = Date.now();
     }
 
-    /**
-     * Open a popup from the tap path. closeOnClick:false: Leaflet closes a
-     * default popup on the 'preclick' of the browser's synthetic click that
-     * follows the very tap that opened it, so on touch it closed at once
-     * (review 2026-10-18, reproduced with touch emulation). The next map tap
-     * closes it instead (_closeTapPopup), and its ✕ button.
-     */
-    _openTapPopup(popup) {
-        this._closeTapPopup();
-        this._tapPopup = popup;
-        popup.openOn(this._map);
-        return popup;
-    }
-
-    /**
-     * The tap popup is open and on screen (some of its box inside the map). One
-     * panned off screen by auto-pan follow must not eat the pilot's next tap,
-     * so it counts as not shown -- but is NOT closed here: closing before a
-     * marker tap is handled dropped that tap (re-review 3). _onMapClick closes
-     * it after.
-     */
-    _tapPopupShown() {
-        const p = this._tapPopup;
-        if (!p || !this._map.hasLayer?.(p)) { this._tapPopup = null; return false; }
-        const el = p.getElement?.();
-        const box = el?.getBoundingClientRect?.();
-        const map = this._map.getContainer?.()?.getBoundingClientRect?.();
-        if (box && map && box.width > 0 && map.width > 0) {
-            return box.right > map.left && box.left < map.right && box.bottom > map.top && box.top < map.bottom;
-        }
-        const ll = p.getLatLng?.();                       // no layout (tests): the anchor
-        return !(ll && this._map.getBounds && !this._map.getBounds().contains(ll));
-    }
-
-    /** Close the tap popup if open. True if one was open. */
-    _closeTapPopup() {
-        const p = this._tapPopup;
-        this._tapPopup = null;
-        if (!p || !this._map.hasLayer?.(p)) return false;
-        this._map.closePopup(p);
-        return true;
-    }
 
     /**
      * Every airspace drawn at this point -- Class B/C/D (Dana, 2026-10-18:
@@ -1950,14 +1886,30 @@ class VectorMapLayers {
         return `<div class="as-pop">${rows.join('')}</div>`;
     }
 
-    /** Open the airspace popup at the tap, if any airspace is drawn there. True if it opened. */
+    /**
+     * A tap on an airspace polygon (Leaflet's own polygon click -- the path the
+     * MOA popup always used and Dana confirmed works on the tablet; a custom
+     * tap path collided with the app's 500 ms tap guards four times, review
+     * 2026-10-18). One popup lists every area at the spot. Opened in the click
+     * handler, i.e. after Leaflet's preclick, so it is not closed by it. Not
+     * when the same tap already opened a marker or traffic, nor while the route
+     * is edited (taps add waypoints then).
+     */
+    _onAirspaceClick(e) {
+        if (Date.now() - (this._touchHandledAt || 0) < 600) return;
+        if (window.app?.routeTable?.isEditing?.()) return;
+        this._showAirspacePopup(e.latlng);
+    }
+
+    /** Open the airspace popup at this point, if any airspace is drawn there. True if it opened. */
     _showAirspacePopup(latlng) {
         if (!latlng) return false;
         const areas = this._areasAt(latlng.lat, latlng.lng);
         if (!areas.length) return false;
-        this._openTapPopup(L.popup({ minWidth: 260, maxWidth: 360, className: 'as-popup-container', autoPanPadding: [16, 16], closeOnClick: false })
+        L.popup({ minWidth: 260, maxWidth: 360, className: 'as-popup-container', autoPanPadding: [16, 16] })
             .setLatLng(latlng)
-            .setContent(this._airspacePopupHtml(areas)));
+            .setContent(this._airspacePopupHtml(areas))
+            .openOn(this._map);
         return true;
     }
 

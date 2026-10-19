@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v11.85';
+const FLYTAB_VERSION = 'v11.86';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 // Kept in memory and saved at most every FLUSH_MS (errors at once). Every log()
@@ -831,7 +831,7 @@ class FlyTabApp {
                 });
 
                 // Traffic tap fallback — when no aviation marker is hit
-                this.vectorLayers._onTrafficTap = (containerPt) => this.cockpitMap._onTrafficTap(containerPt);   // true: a target was hit
+                this.vectorLayers._onTrafficTap = (containerPt) => this.cockpitMap._onTrafficTap(containerPt);   // true: a target was hit (airspace popup then skipped)
             }
         }
 
