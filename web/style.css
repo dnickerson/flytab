@@ -8844,6 +8844,15 @@ body.fs-overlay-open .radar-loop-controls {
     text-transform: uppercase; letter-spacing: 0.3px;
     padding-bottom: 4px; margin-bottom: 2px;
     border-bottom: 1px solid var(--border);
+    /* Stays at the top of the panel while its periods scroll (Dana,
+       2026-10-19); the panel's background so rows do not show through.
+       The panel's 6 px top padding: stuck 6 px higher, covered by the
+       header's own 6 px (margin -6 keeps it in place at rest). */
+    position: sticky;
+    top: -6px;
+    padding-top: 6px; margin-top: -6px;
+    z-index: 1;
+    background: var(--bg-surface, #fff);
 }
 .wx-mos-pg-row {
     padding: 3px 0;

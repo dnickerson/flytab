@@ -491,7 +491,9 @@ class WxBriefing {
         const critical = all.filter(n => this._notamTier(n) === 0);
         // The error alone only when there is nothing else to show (saved
         // en-route NOTAMs and the warning lines were hidden -- review 2026-10-19).
-        const fetchErr = !loading && this._notamFetchError && !this._notams?.length && !this._enrouteNotams?.length
+        // Not while a retry is downloading: that is "Fetching…", not the last
+        // attempt's error (2026-10-19).
+        const fetchErr = !loading && this._notamFetchError && !this._notamBusy && !this._notams?.length && !this._enrouteNotams?.length
             && !this._notamStale && !this._enrouteNotamStale;
         const anyErr = fetchErr || (!loading && (this._notamFetchError || this._enrouteNotamFetchError));
         // One list still downloading with nothing of its own on screen: not
@@ -532,7 +534,7 @@ class WxBriefing {
             const how = (busy, err) => busy ? 'Refreshing' : err ? 'Refresh failed' : 'Not refreshed';
             if (this._notamBusy && !this._notamStale && !this._notams?.length) body.insertAdjacentHTML('beforeend', '<div class="wx-section-error">Downloading airport NOTAMs…</div>');
             if (this._enrouteBusy && !this._enrouteNotamStale && !this._enrouteNotams?.length) body.insertAdjacentHTML('beforeend', '<div class="wx-section-error">Downloading en-route NOTAMs…</div>');
-            if (this._notamFetchError && !this._notamStale && !this._notams?.length) warn(`Airport NOTAMs: ${this._notamFetchError}`);
+            if (this._notamFetchError && !this._notamBusy && !this._notamStale && !this._notams?.length) warn(`Airport NOTAMs: ${this._notamFetchError}`);
             if (this._notamStale) warn(`${how(this._notamBusy, this._notamFetchError)} — showing NOTAMs downloaded earlier: ${list(this._notamStale)}`);
             // Not "No NOTAMs for …": read as "none in force" (review 2026-10-19).
             if (this._notamMissing) warn(`${this._notamMissing.join(', ')}: NOTAMs NOT AVAILABLE — never downloaded`);
@@ -2268,10 +2270,11 @@ class WxBriefing {
         const enr = kind === 'enr';
         if (enr ? (this._enrouteNotamStale || this._enrouteNotams?.length) : (this._notamStale || this._notams?.length)) return false;
         const cache = this._readNotamCache(enr ? WxBriefing.ENROUTE_NOTAM_CACHE_KEY : WxBriefing.NOTAM_CACHE_KEY);
-        const { shown, stale } = WxBriefing._mergeNotamBins(keys, cache, new Set(), Date.now());
+        const { shown, stale, missing } = WxBriefing._mergeNotamBins(keys, cache, new Set(), Date.now());
         if (!stale) return false;
-        if (enr) { this._enrouteNotams = WxBriefing._sortEnrouteNotams(shown); this._enrouteNotamStale = stale; }
-        else { this._notams = this._sortAirportNotams(shown, keys); this._notamStale = stale; }
+        // With the stations never downloaded, at once (2026-10-19).
+        if (enr) { this._enrouteNotams = WxBriefing._sortEnrouteNotams(shown); this._enrouteNotamStale = stale; this._enrouteNotamMissing = missing; }
+        else { this._notams = this._sortAirportNotams(shown, keys); this._notamStale = stale; this._notamMissing = missing; }
         document.dispatchEvent(new CustomEvent(enr ? 'notam:tfrs' : 'notam:tfrs-apt', { detail: { shapes: this._tfrShapesOf(shown), replace: true } }));
         return true;
     }
@@ -2418,7 +2421,18 @@ class WxBriefing {
         const gen = this._enrouteGen = (this._enrouteGen || 0) + 1;
         this._enrouteBusy = true;           // before the route lookup: not "NONE" while it runs
         if (!this._enrouteNotams) this._enrouteNotams = [];
-        const req = await this._enrouteRequest();
+        let req;
+        try {
+            req = await this._enrouteRequest();
+        } catch (e) {
+            // A failed route lookup: an error, the busy line cleared, the map's
+            // TFRs left (2026-10-19; "no route" below clears them).
+            if (gen !== this._enrouteGen) return;
+            this._enrouteBusy = false;
+            this._enrouteNotamFetchError = e?.message || String(e);
+            this._renderNotamSection();
+            return;
+        }
         if (gen !== this._enrouteGen) return;
         if (!req) {
             this._enrouteBusy = false;

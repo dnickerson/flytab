@@ -505,7 +505,7 @@ The briefing has several sections:
 
 **Summary bar** — Route label and worst flight category badge along the route (color-coded).
 
-**MOS forecast** — Machine-learning model output aviation forecast for each route airport. Shows ceiling, visibility, wind, and category prediction by hour. More granular than TAFs.
+**MOS forecast** — Machine-learning model output aviation forecast for each route airport. Shows ceiling, visibility, wind, and category prediction by hour. More granular than TAFs. In an airport's MOS panel (the **MOS** pill on its card) the column header (Time · Cat · Wind · …) stays at the top while you scroll through the periods.
 
 **METARs & TAFs** — Current observation and terminal forecast for each route airport. Formatted for quick reading with age indicator.
 
