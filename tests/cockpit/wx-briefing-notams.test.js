@@ -343,3 +343,58 @@ describe('review fixes (2026-10-19)', () => {
         expect(WxBriefing._mergeNotamBins(['KLKR'], old, new Set(), Date.now()).missing).toEqual(['KLKR']);
     });
 });
+
+describe('review 2 fixes (2026-10-19)', () => {
+    it('the route changes while a refresh runs (panel closed): the old answer is dropped; the new route\'s saved NOTAMs show', async () => {
+        stations = ['KAVL']; answer({ features: [feat('AVL', 'NEW ROUTE RWY CLSD')], failed: [] });
+        await makeWx()._fetchNotams();                                        // KAVL saved earlier
+        stations = ['KLKR'];
+        let release; globalThis.fetch = vi.fn(() => new Promise((res) => { release = res; }));
+        const wx = makeWx(); wx._renderAll = () => {};
+        const old = wx._fetchNotams();                                        // the old route's refresh
+        wx._getStationList = vi.fn().mockReturnValueOnce(['KLKR']).mockReturnValue(['KAVL']);
+        stations = ['KAVL'];
+        wx.setFlightPlan({});                                                 // a divert to KAVL
+        await Promise.resolve(); await wx._restoreSavedNotams();
+        release({ ok: true, json: async () => ({ features: [feat('LKR', 'OLD ROUTE')], failed: [] }) });
+        await old;
+        expect(texts(wx._notams)).toMatch(/NEW ROUTE/);
+        expect(texts(wx._notams)).not.toMatch(/OLD ROUTE/);
+        expect(wx._notamFetchedAt).toBe(0);                                   // the new route is still fetched on open
+    });
+
+    it('a route without stations overtaking a refresh does not leave it "busy"', async () => {
+        let release; globalThis.fetch = vi.fn(() => new Promise((res) => { release = res; }));
+        const wx = makeWx();
+        const p = wx._fetchNotams();
+        stations = [];
+        await wx._fetchNotams();
+        release({ ok: true, json: async () => ({ features: [], failed: [] }) }); await p;
+        expect(wx._notamBusy).toBe(false);
+    });
+
+    it('a never-downloaded divert airport downloading: the saved en-route NOTAMs stay on screen', async () => {
+        const TFR = '!FDC 6/0050 ZTL NC..AIRSPACE ASHEVILLE, NORTH CAROLINA..TEMPORARY FLIGHT RESTRICTIONS. WI AN AREA DEFINED AS 3NM RADIUS OF 352600N0823300W SFC-3000FT';
+        answer({ features: [feat('ZTL', TFR)], failed: [] });
+        const wx = makeWx();
+        await wx._fetchEnrouteNotams();
+        stations = ['KAVL'];
+        let release; globalThis.fetch = vi.fn(() => new Promise((res) => { release = res; }));
+        const p = wx._fetchNotams();
+        expect(wx._notams).toEqual([]);                                       // not null: the section is not "Fetching…"
+        expect(warnings(wx).join(' ')).toMatch(/Downloading airport NOTAMs…/);
+        expect(texts(wx._enrouteNotams)).toMatch(/ASHEVILLE/);
+        release({ ok: true, json: async () => ({ features: [], failed: [] }) }); await p;
+    });
+
+    it('a broken saved entry does not stop the refresh of a newly loaded route', async () => {
+        localStorage.setItem('flytab_notam_cache', JSON.stringify({ v: 2, bins: { KAVL: { at: Date.now(), notams: null } } }));
+        const wx = makeWx(); wx.visible = true; wx._renderAll = () => {};
+        wx._fetchColdSections = vi.fn();
+        stations = ['KLKR']; const before = stations; stations = ['KAVL'];
+        wx._getStationList = vi.fn().mockReturnValueOnce(before).mockReturnValue(['KAVL']);
+        wx.setFlightPlan({});
+        await new Promise((r) => setTimeout(r, 0)); await Promise.resolve(); await Promise.resolve();
+        expect(wx._fetchColdSections).toHaveBeenCalledTimes(1);
+    });
+});

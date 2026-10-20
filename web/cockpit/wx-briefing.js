@@ -93,8 +93,13 @@ class WxBriefing {
             this._notams = []; this._enrouteNotams = [];
             this._notamStale = this._notamMissing = this._enrouteNotamStale = this._enrouteNotamMissing = null;
             this._notamFetchError = this._enrouteNotamFetchError = null;
+            // A fetch still running is for the old route: its answer is dropped
+            // (it was applied to the new route -- review 2026-10-19).
+            this._notamGen = (this._notamGen || 0) + 1; this._enrouteGen = (this._enrouteGen || 0) + 1;
+            this._notamBusy = this._enrouteBusy = false;
             Promise.resolve().then(() => this._restoreSavedNotams())
-                .then(() => { if (this.visible) this._fetchColdSections(); }).catch(() => {});
+                .catch((e) => console.warn('WX: saved NOTAMs not restored:', e))
+                .then(() => { if (this.visible) this._fetchColdSections(); });
         }
         if (plan?.weather_cache?.mos) this._mosData = this._normalizeMos(plan.weather_cache.mos);
         this._routeCoords = null;
@@ -514,6 +519,8 @@ class WxBriefing {
             const z = (ms) => { const d = new Date(ms), p = (n) => String(n).padStart(2, '0'); return `${p(d.getUTCDate())} ${p(d.getUTCHours())}${p(d.getUTCMinutes())}Z`; };
             const list = (st) => st.map(x => `${x.station} ${z(x.at)}`).join(', ');
             const how = (busy, err) => busy ? 'Refreshing' : err ? 'Refresh failed' : 'Not refreshed';
+            if (this._notamBusy && !this._notamStale && !this._notams?.length) body.insertAdjacentHTML('beforeend', '<div class="wx-section-error">Downloading airport NOTAMs…</div>');
+            if (this._enrouteBusy && !this._enrouteNotamStale && !this._enrouteNotams?.length) body.insertAdjacentHTML('beforeend', '<div class="wx-section-error">Downloading en-route NOTAMs…</div>');
             if (this._notamFetchError && !this._notamStale && !this._notams?.length) warn(`Airport NOTAMs: ${this._notamFetchError}`);
             if (this._notamStale) warn(`${how(this._notamBusy, this._notamFetchError)} — showing NOTAMs downloaded earlier: ${list(this._notamStale)}`);
             // Not "No NOTAMs for …": read as "none in force" (review 2026-10-19).
@@ -2272,8 +2279,9 @@ class WxBriefing {
                 document.dispatchEvent(new CustomEvent('notam:tfrs-apt', { detail: { shapes: this._tfrShapesOf(shown), replace: true } }));
             }
         }
+        const eGen = this._enrouteGen;
         const req = await this._enrouteRequest().catch(() => null);
-        if (req && !this._enrouteBusy) {
+        if (req && !this._enrouteBusy && eGen === this._enrouteGen) {
             const { shown, stale, missing } = WxBriefing._mergeNotamBins(req.bins, this._readNotamCache(WxBriefing.ENROUTE_NOTAM_CACHE_KEY), new Set(), now);
             if (stale) {
                 this._enrouteNotams = WxBriefing._sortEnrouteNotams(shown);
@@ -2288,6 +2296,7 @@ class WxBriefing {
         const gen = this._notamGen = (this._notamGen || 0) + 1;      // a newer fetch wins (route changed, ↻ twice)
         const stations = this._notamStations();
         if (!stations.length) {
+            this._notamBusy = false;
             this._notams = [];
             this._notamFetchError = null; this._notamStale = this._notamMissing = null;
             document.dispatchEvent(new CustomEvent('notam:tfrs-apt', { detail: { shapes: [], replace: true } }));
@@ -2297,7 +2306,10 @@ class WxBriefing {
         // The saved NOTAMs stay on screen while it refreshes (in flight the
         // refresh can take the 30 s timeout to fail).
         this._notamBusy = true;
-        if (!this._notamStale && !this._notams?.length) this._notams = null;
+        // "Fetching…" over the whole section only when nothing else is on
+        // screen: saved en-route NOTAMs stay while a never-downloaded divert
+        // airport downloads (review 2026-10-19).
+        if (!this._notamStale && !this._notams?.length) this._notams = this._enrouteNotams?.length ? [] : null;
         this._renderNotamSection();
 
         let fetched = new Set(), notams = [], err = null;
@@ -2376,6 +2388,7 @@ class WxBriefing {
         const req = await this._enrouteRequest();
         if (gen !== this._enrouteGen) return;
         if (!req) {
+            this._enrouteBusy = false;
             this._enrouteNotams = [];
             this._enrouteNotamFetchError = null; this._enrouteNotamStale = this._enrouteNotamMissing = null;
             document.dispatchEvent(new CustomEvent('notam:tfrs', { detail: { shapes: [], replace: true } }));
@@ -2384,7 +2397,7 @@ class WxBriefing {
         }
         const { requested, bins } = req;
         this._enrouteBusy = true;
-        if (!this._enrouteNotamStale && !this._enrouteNotams?.length) this._enrouteNotams = null;
+        if (!this._enrouteNotamStale && !this._enrouteNotams?.length) this._enrouteNotams = this._notams?.length ? [] : null;
         this._renderNotamSection();
 
         let fetched = new Set(), notams = [], err = null;
