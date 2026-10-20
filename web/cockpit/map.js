@@ -169,7 +169,7 @@ class CockpitMap {
         this._tfrLayer = null;           // L.LayerGroup (FIS-B TFRs, created in setFisbClient)
         this._tfrShapes = new Map();     // raw → L.layer (FIS-B)
         this._notamTfrGroup = null;      // L.LayerGroup (NOTAM TFRs, created in init)
-        this._notamTfrShapes = new Map(); // raw → L.layer (NOTAM)
+        this._notamTfrShapes = new Map(); // raw → { layer, srcs: Set<'apt'|'enr'> } (NOTAM)
         this._showTfrs = true;           // default ON
 
         // Runway extension centerlines
@@ -289,19 +289,32 @@ class CockpitMap {
         // NOTAM TFR layer — independent of FIS-B
         this._notamTfrGroup = L.layerGroup();
         if (this._showTfrs) this._notamTfrGroup.addTo(this.map);
-        this._onNotamTfrs = (e) => {
-            if (!this._notamTfrGroup) return;
-            if (e.type !== 'notam:tfrs-apt') {
-                // En-route refresh: clear all and rebuild
-                this._notamTfrShapes.clear();
-                this._notamTfrGroup.clearLayers();
-            }
-            for (const shape of (e.detail?.shapes || [])) {
-                this._addNotamTfrShape(shape);
-            }
-        };
+        // Airport ('notam:tfrs-apt') and en-route ('notam:tfrs') NOTAM TFRs are
+        // kept apart: a refresh with `replace` swaps only its own source's
+        // shapes. An en-route refresh used to clear them all, airport ones
+        // included (2026-10-19). en-route: replace unless detail.replace is
+        // false; airport: add unless detail.replace is true (as before).
+        this._onNotamTfrs = (e) => this._handleNotamTfrs(e);
         document.addEventListener('notam:tfrs', this._onNotamTfrs);
         document.addEventListener('notam:tfrs-apt', this._onNotamTfrs);
+    }
+
+    _handleNotamTfrs(e) {
+        if (!this._notamTfrGroup) return;
+        const src = e.type === 'notam:tfrs-apt' ? 'apt' : 'enr';
+        const d = e.detail || {};
+        const replace = src === 'enr' ? d.replace !== false : d.replace === true;
+        if (replace) {
+            for (const [raw, ent] of this._notamTfrShapes) {
+                if (ent.srcs.delete(src) && !ent.srcs.size) {
+                    this._notamTfrGroup.removeLayer(ent.layer);
+                    this._notamTfrShapes.delete(raw);
+                }
+            }
+        }
+        for (const shape of (d.shapes || [])) {
+            this._addNotamTfrShape(shape, src);
+        }
     }
 
     /** Provide a NasrDB instance for fix/navaid queries */
@@ -619,8 +632,9 @@ class CockpitMap {
         }
     }
 
-    _addNotamTfrShape(shape) {
-        if (this._notamTfrShapes.has(shape.raw)) return;
+    _addNotamTfrShape(shape, src = 'enr') {
+        const have = this._notamTfrShapes.get(shape.raw);
+        if (have) { have.srcs.add(src); return; }
 
         const fill   = 'rgba(220,38,38,0.15)';
         const stroke = '#dc2626';
@@ -645,6 +659,8 @@ class CockpitMap {
 
         if (!layer) return;
 
+        // NOTAM text from the FAA: escaped, not HTML (2026-10-19).
+        const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
         const validStr = shape.validTo
             ? `Exp: ${new Date(shape.validTo).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})} L`
             : '';
@@ -653,11 +669,11 @@ class CockpitMap {
                 <div style="font-weight:700;font-size:13px;color:#dc2626;margin-bottom:4px">
                     ⛔ TFR <span style="font-size:10px;color:#888">${validStr}</span>
                 </div>
-                <div style="font-size:11px;color:#444;word-break:break-all;white-space:pre-wrap">${shape.summary}</div>
+                <div style="font-size:11px;color:#444;word-break:break-all;white-space:pre-wrap">${esc(shape.summary)}</div>
             </div>`;
         layer.bindPopup(popupHtml, { maxWidth: 300 });
         layer.addTo(this._notamTfrGroup);
-        this._notamTfrShapes.set(shape.raw, layer);
+        this._notamTfrShapes.set(shape.raw, { layer, srcs: new Set([src]) });
     }
 
     _addTfrShape(notam) {

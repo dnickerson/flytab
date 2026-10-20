@@ -8870,7 +8870,9 @@ body.fs-overlay-open .radar-loop-controls {
     color: var(--text-muted);
     font-style: italic;
 }
-.wx-section-error { color: var(--status-warn, #f59e0b); font-style: normal; font-weight: 600; }
+/* --status-warn is not defined: this was #f59e0b on white (~2.1:1) at 600 --
+   the "not current" NOTAM lines must read in sun (review 2026-10-19). */
+.wx-section-error { color: var(--color-caution-on-light); font-style: normal; font-weight: 800; }
 
 /* ── Existing rules preserved ── */
 .wx-briefing-content { display: none; }

@@ -513,7 +513,7 @@ The briefing has several sections:
 
 **Forecast Discussions** — NWS Area Forecast Discussions for regions along the route. Useful for understanding the meteorologist's reasoning behind the forecasts.
 
-**NOTAMs** — Active NOTAMs for route airports and TFRs along the route. Shows type (RWY, APCH, SUA, TFR, etc.) with severity-sorted display. Tap any NOTAM for the full text.
+**NOTAMs** — Active NOTAMs for route airports and TFRs along the route. Shows type (RWY, APCH, SUA, TFR, etc.) with severity-sorted display. Tap any NOTAM for the full text. FlyTab keeps the last NOTAMs it downloaded for each airport and ARTCC (up to a week). With no internet — in flight, or after FlyTab restarts — the briefing and the map's NOTAM TFRs come back from them as soon as the route is loaded; expired NOTAMs drop off. A dark-amber line says when what you see is not from this refresh: "Refreshing — showing NOTAMs downloaded earlier: KTMB 19 1852Z" (while it downloads), "Not refreshed — …" (the NOTAM server could not get that airport this time), "Refresh failed — …" (no connection), or "KTMB: NOTAMs NOT AVAILABLE — never downloaded"; the same for en-route NOTAMs. Tap ↻ to try again. Download the briefing on the ground, on WiFi, before departure: an airport you have never downloaded has no NOTAMs in flight. Loading a different route shows its saved NOTAMs at once and downloads new ones when WX Briefing is open (or the next time you open it). (This needs the NOTAM server in Configuration to be the FitPC proxy; the default server does not say which airports it could not get.)
 
 ---
 
