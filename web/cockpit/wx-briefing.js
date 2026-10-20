@@ -540,6 +540,11 @@ class WxBriefing {
             if (this._notamMissing) warn(`${this._notamMissing.join(', ')}: NOTAMs NOT AVAILABLE — never downloaded`);
             if (this._enrouteNotamStale) warn(`En-route: ${how(this._enrouteBusy, this._enrouteNotamFetchError).toLowerCase()} — showing NOTAMs downloaded earlier: ${list(this._enrouteNotamStale)}`);
             if (this._enrouteNotamMissing) warn(`En-route NOTAMs NOT AVAILABLE for ${this._enrouteNotamMissing.join(', ')} — never downloaded; TFRs and restrictions may be missing`);
+            // An en-route error with nothing saved to show (e.g. the route lookup
+            // failed): say so -- the section read "No active NOTAMs." (review).
+            if (this._enrouteNotamFetchError && !this._enrouteBusy && !this._enrouteNotamStale && !this._enrouteNotamMissing) {
+                warn(`En-route NOTAMs not checked: ${this._enrouteNotamFetchError} — TFRs and restrictions may be missing`);
+            }
         }
 
         // Search bar

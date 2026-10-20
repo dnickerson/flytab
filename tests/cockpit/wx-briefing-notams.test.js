@@ -513,6 +513,7 @@ describe('the last three (2026-10-19)', () => {
         expect(wx._enrouteNotamFetchError).toBe('NASR busy');
         expect(enr).not.toHaveBeenCalled();
         expect(warnings(wx).join(' ')).not.toMatch(/Downloading en-route/);
+        expect(warnings(wx)).toContain('⚠ En-route NOTAMs not checked: NASR busy — TFRs and restrictions may be missing · tap ↻ to retry');
         document.removeEventListener('notam:tfrs', enr);
     });
 });
