@@ -6,7 +6,7 @@
  * every zoom from 6. Labels used to be created once with the polygon and
  * never removed on zooming out.
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { readFileSync } from 'fs';
 
 const read = (p) => readFileSync(p, 'utf8');
@@ -139,5 +139,36 @@ describe('Class B shelf label when the surface ring is off screen (review 2026-1
         expect([pos.lat, pos.lng]).toEqual([want[0], want[1]]);
         const wrong = VectorMapLayers._shelfLabelPosition(ll(SHELF), VectorMapLayers._polygonCentroid(ll(SHELF)));
         expect([pos.lat, pos.lng]).not.toEqual([wrong[0], wrong[1]]);
+    });
+});
+
+describe('NOTAM activation on the map (2026-10-19)', () => {
+    beforeEach(() => { delete window.SuaNotams; });
+
+    it('an area turning active: filled, and its label rebuilt with the ACT badge (kept after a hide/show)', async () => {
+        let active = false;
+        window.SuaNotams = { refresh: vi.fn(async () => {}), hasActiveNotam: (s) => active && s.id === 'BULL' };
+        const v = layers(); await at(v, 10);
+        expect(v._suaPolygons.get('BULL_lbl').options.icon.options.html).not.toMatch(/sua-act-badge/);
+        active = true; await at(v, 10);
+        expect(v._suaPolygons.get('BULL')._suaActive).toBe(true);
+        expect(v._suaPolygons.get('BULL').options.fillOpacity).toBe(VectorMapLayers.SUA_ACTIVE_OVERRIDES.fillOpacity);
+        expect(v._suaPolygons.get('BULL_lbl').options.icon.options.html).toMatch(/sua-act-badge">ACT</);   // in the icon, not only the DOM
+        expect(v._suaPolygons.get('BULL_lbl').options.icon.options.iconAnchor).toEqual([24, 17]);        // same stack position
+        active = false; await at(v, 10);
+        expect(v._suaPolygons.get('BULL_lbl').options.icon.options.html).not.toMatch(/sua-act-badge/);
+    });
+
+    it('asks for the ARTCCs of the view, of the areas in it (they reach past it) and of the route', async () => {
+        const refresh = vi.fn(async () => {});
+        window.SuaNotams = { refresh, hasActiveNotam: () => false };
+        globalThis.ActiveRoute = { getWaypoints: () => [{ lat: 34.72, lon: -80.85 }, { lat: 28.5, lon: -81.3 }] };
+        try {
+            const v = layers(); await v._updateSua(33.3, -80.5, 33.5, -80.3, 10);   // a view inside BULLDOG A
+            const [, boxes] = refresh.mock.calls[0];
+            expect(boxes[0]).toEqual({ south: 33.3, west: -80.5, north: 33.5, east: -80.3 });
+            expect(boxes).toContainEqual({ south: 33.1, west: -80.7, north: 35.5, east: -78.9 });   // both areas' corners
+            expect(boxes).toContainEqual({ south: 28.5, west: -81.3, north: 34.72, east: -80.85 });
+        } finally { delete globalThis.ActiveRoute; }
     });
 });

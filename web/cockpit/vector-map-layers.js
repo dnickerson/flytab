@@ -68,6 +68,9 @@ class VectorMapLayers {
         // Refresh internet METARs every 10 minutes even when map is stationary
         setInterval(() => { this._internetFetchedAt = 0; this._scheduleUpdate(); }, 10 * 60 * 1000);
 
+        // Restricted/MOA activations: redraw when downloaded, and when one starts or ends.
+        document.addEventListener('sua-notams:changed', () => this._scheduleUpdate());
+
         // Route waypoint ICAOs — suppress duplicate airport labels for these
         this._routeIcaos = new Set();
 
@@ -1106,14 +1109,25 @@ class VectorMapLayers {
             return;
         }
 
-        // Fetch NOTAM status (cached, silent on error)
         const suaNotams = window.SuaNotams;
-        if (suaNotams) {
-            suaNotams.fetchForBounds(south, west, north, east).catch(() => {});
-        }
-
         try {
             const areas = await this._nasr.getSuaInBounds(south, west, north, east);
+
+            // NOTAM activations for the ARTCCs near the view, the areas in it
+            // (R-2508 reaches far past a z8 view) and the route; fetched on the
+            // ground, kept for the flight; quiet offline.
+            if (suaNotams?.refresh) {
+                const box = (pts) => {
+                    const lats = pts.map((p) => p[0]), lons = pts.map((p) => p[1]);
+                    return lats.length ? { south: Math.min(...lats), west: Math.min(...lons), north: Math.max(...lats), east: Math.max(...lons) } : null;
+                };
+                const wps = (typeof ActiveRoute !== 'undefined' ? ActiveRoute.getWaypoints() : [])
+                    .filter((w) => Number.isFinite(w?.lat) && Number.isFinite(w?.lon)).map((w) => [w.lat, w.lon]);
+                const corners = areas.flatMap((a) => { const b = box(a.boundary || []); return b ? [[b.south, b.west], [b.north, b.east]] : []; });
+                const boxes = [{ south, west, north, east }, box(corners), box(wps)].filter(Boolean);
+                suaNotams.refresh(this._nasr, boxes).catch(() => {});
+            }
+
             const currentIds = new Set();
             const usedLabelPos = [];
             // Ceiling/floor labels only from Z9 (the zoom badge's rounding): at
@@ -1144,8 +1158,12 @@ class VectorMapLayers {
                             ? { ...base, ...VectorMapLayers.SUA_ACTIVE_OVERRIDES }
                             : base);
                         existingPoly._suaActive = isActive;
-                        // Redraw "ACT" badge label
-                        this._updateSuaActLabel(sua, isActive, center => center);
+                        // A new icon with the ACT badge (or without), in the same
+                        // stack position: Leaflet re-creates a marker's element
+                        // from its icon when the layer is shown again, so editing
+                        // the element lost the badge after a hide/show (review).
+                        const lbl = this._suaPolygons.get(sua.id + '_lbl');
+                        if (lbl) lbl.setIcon(VectorMapLayers._suaLabelIcon(sua, isActive, lbl._suaStack || 0));
                     }
                     label(sua, isActive);
                     continue;
@@ -1185,15 +1203,25 @@ class VectorMapLayers {
         }
     }
 
-    /** The ceiling/floor (and ACT) label at the area's centroid, stacked off labels nearby. */
-    _addSuaLabel(sua, isActive, usedLabelPos) {
-        // Altitude label at centroid with collision offset
-        let labelPos = VectorMapLayers._polygonCentroid((sua.boundary || []).map(pt => [pt[0], pt[1]]));
+    /** The label's icon: ceiling over floor, the ACT badge when active, raised by its stack position. */
+    static _suaLabelIcon(sua, isActive, stackCount) {
         const altLower = sua.lower_ft === 0 ? 'SFC' : (sua.lower_ft >= 1000 ? `${Math.round(sua.lower_ft / 100)}` : sua.lower_ft);
         const altUpper = sua.upper_ft != null ? (sua.upper_ft < 0 ? 'UNL' : sua.upper_ft >= 1000 ? `${Math.round(sua.upper_ft / 100)}` : sua.upper_ft) : '?';
         const actBadge = isActive ? '<span class="sua-act-badge">ACT</span>' : '';
         const altHtml  = `${altUpper}<br><span class="as-alt-floor">${altLower}</span>${actBadge}`;
         const typeClass = `sua-lbl-${(sua.type || 'moa').toLowerCase()}`;
+        return L.divIcon({
+            className: `as-alt-label ${typeClass}${isActive ? ' sua-lbl-active' : ''}`,
+            html: altHtml,
+            iconSize: [48, 34],
+            iconAnchor: [24, 17 - stackCount * 38],
+        });
+    }
+
+    /** The ceiling/floor (and ACT) label at the area's centroid, stacked off labels nearby. */
+    _addSuaLabel(sua, isActive, usedLabelPos) {
+        // Altitude label at centroid with collision offset
+        let labelPos = VectorMapLayers._polygonCentroid((sua.boundary || []).map(pt => [pt[0], pt[1]]));
 
         // Offset label vertically if another label is within ~0.05° of this pos
         const SUA_CLOSE = 0.05;
@@ -1203,39 +1231,13 @@ class VectorMapLayers {
         usedLabelPos.push(labelPos);
 
         const marker = L.marker(labelPos, {
-            icon: L.divIcon({
-                className: `as-alt-label ${typeClass}${isActive ? ' sua-lbl-active' : ''}`,
-                html: altHtml,
-                iconSize: [48, 34],
-                iconAnchor: [24, 17 - stackCount * 38],
-            }),
+            icon: VectorMapLayers._suaLabelIcon(sua, isActive, stackCount),
             interactive: false,
             zIndexOffset: -150,
         });
+        marker._suaStack = stackCount;
         marker.addTo(this._suaLayer);
         this._suaPolygons.set(sua.id + '_lbl', marker);
-    }
-
-    _updateSuaActLabel(sua, isActive, _getCenterFn) {
-        // Re-render the label marker when activation state flips mid-session
-        const lblKey = sua.id + '_lbl';
-        const existing = this._suaPolygons.get(lblKey);
-        if (!existing) return;
-        const el = existing.getElement?.();
-        if (!el) return;
-        if (isActive) {
-            el.classList.add('sua-lbl-active');
-            // Add ACT badge if not present
-            if (!el.querySelector('.sua-act-badge')) {
-                const badge = document.createElement('span');
-                badge.className = 'sua-act-badge';
-                badge.textContent = 'ACT';
-                el.appendChild(badge);
-            }
-        } else {
-            el.classList.remove('sua-lbl-active');
-            el.querySelector('.sua-act-badge')?.remove();
-        }
     }
 
     // Grey dashed outline, no fill -- matches VFR sectional chart convention
@@ -1888,6 +1890,35 @@ class VectorMapLayers {
         return `${Math.round(ft).toLocaleString('en-US')} ft`;
     }
 
+    /**
+     * The NOTAM line for a Restricted/MOA row: { line, text?, active }.
+     * Active now / later today / none as of the last download / never
+     * downloaded (SuaNotams keeps them for the flight -- no internet aloft).
+     */
+    static _suaNotamStatus(rec, notams, now) {
+        const z = (ms) => {
+            if (ms === Infinity) return 'further notice';
+            if (!Number.isFinite(ms)) return '?';
+            const d = new Date(ms), p = (n) => String(n).padStart(2, '0');
+            const hm = `${p(d.getUTCHours())}${p(d.getUTCMinutes())}Z`;
+            return d.toISOString().slice(0, 10) === new Date(now).toISOString().slice(0, 10)
+                ? hm : `${d.getUTCDate()} ${'Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec'.split(' ')[d.getUTCMonth()]} ${hm}`;
+        };
+        const act = notams?.getNotam?.(rec, now);
+        if (act) return { active: true, line: `⚠ ACTIVE per NOTAM until ${z(act.end)}`, text: act.text ? String(act.text) : '' };
+        const next = notams?.getUpcoming?.(rec, now);
+        if (next) return { active: false, line: `NOTAM: active ${z(next.start)} – ${z(next.end)}`, text: next.text ? String(next.text) : '' };
+        // P-56, P-40, R-2508...: "No activation NOTAM found" read as "not
+        // active" for an area that always is (145 in NASR; review).
+        if (/^\s*continuous\b/i.test(String(rec.active_times || ''))) return { active: true, line: '⚠ Active continuously (published times)' };
+        if (notams?.constructor?.matchable && !notams.constructor.matchable(rec)) {
+            return { active: false, line: 'NOTAM status not tracked for this area — check the NOTAMs' };   // NSAs
+        }
+        const at = notams?.checkedAt?.(rec) || 0;
+        if (at) return { active: false, line: `No activation NOTAM found (downloaded ${z(at)})` };
+        return { active: false, line: 'NOTAM status unknown — not downloaded (needs internet on the ground)' };
+    }
+
     /** The popup's HTML for these areas (all text escaped: names come from NASR, NOTAM text from the FAA). */
     _airspacePopupHtml(areas) {
         const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1902,14 +1933,14 @@ class VectorMapLayers {
                     <div class="as-pop-alt">${esc(alt(rec))}</div></div>`;
             }
             if (kind === 'sua') {
-                const n = notams ? notams.getNotam(rec) : null;
-                const status = n
-                    ? `<div class="as-pop-notam is-active">⚠ ACTIVE per NOTAM${n.text ? `<br><span class="as-pop-notam-text">${esc(String(n.text).length > 120 ? String(n.text).slice(0, 120) + '…' : String(n.text))}</span>` : ''}</div>`
-                    // Not "not active": NOTAM matching misses most SUA names (review 7) -- see the NOTAMs.
-                    : `<div class="as-pop-notam">Activation not confirmed — check NOTAMs (fetched on the ground)</div>`;
+                const status = VectorMapLayers._suaNotamStatus(rec, notams, Date.now());
+                const times = rec.active_times ? String(rec.active_times) : '';
                 return `<div class="as-pop-row as-pop-sua">
                     <div class="as-pop-head"><span class="as-pop-name">${esc(rec.name ?? rec.id)}</span><span class="as-pop-kind">${esc(rec.type || 'SUA')}</span></div>
-                    <div class="as-pop-alt">${esc(alt(rec))}</div>${status}</div>`;
+                    <div class="as-pop-alt">${esc(alt(rec))}</div>
+                    <div class="as-pop-notam${status.active ? ' is-active' : ''}">${esc(status.line)}${status.text
+                        ? `<br><span class="as-pop-notam-text">${esc(status.text.length > 120 ? status.text.slice(0, 120) + '…' : status.text)}</span>` : ''}</div>${times
+                        ? `<div class="as-pop-note">Published times: ${esc(times.length > 140 ? times.slice(0, 140) + '…' : times)}</div>` : ''}</div>`;
             }
             // Each freq is {freq, sector?} -- the sector (raw NASR text, e.g. "164-343") says
             // which arrival sector calls which frequency (KILM); _formatTrsaFreq also takes
