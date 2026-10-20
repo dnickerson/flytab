@@ -99,8 +99,9 @@ describe('airport NOTAMs, kept per station', () => {
         await wx._fetchNotams();
         expect(texts(wx._notams)).toMatch(/RWY 06\/24 CLSD/);
         expect(warnings(wx)[0]).toMatch(/^⚠ Refresh failed — showing NOTAMs downloaded earlier: KLKR 19 1852Z, KCAE 19 1852Z, KTMB 19 1852Z/);
-        expect(apt).toHaveBeenCalledTimes(1);
-        expect(apt.mock.calls[0][0].detail.replace).toBe(true);
+        expect(apt).toHaveBeenCalledTimes(2);                                 // the saved ones at once, again when it failed
+        expect(apt.mock.calls.every((c) => c[0].detail.replace === true)).toBe(true);
+        expect(apt.mock.calls[0][0].detail.shapes).toEqual(apt.mock.calls[1][0].detail.shapes);
         document.removeEventListener('notam:tfrs-apt', apt);
     });
 
@@ -187,8 +188,9 @@ describe('en-route NOTAMs, kept per ARTCC', () => {
         const wx = makeWx();
         await wx._fetchEnrouteNotams();
         expect(texts(wx._enrouteNotams)).toMatch(/ASHEVILLE/);
-        expect(enr).toHaveBeenCalledTimes(2);
+        expect(enr).toHaveBeenCalledTimes(3);                                 // fetched; saved at once; again when it failed
         expect(enr.mock.calls[1][0].detail.shapes.length).toBe(first);
+        expect(enr.mock.calls[2][0].detail.shapes.length).toBe(first);
         expect(warnings(wx).join(' ')).toMatch(/⚠ En-route: refresh failed — showing NOTAMs downloaded earlier: ZJX 19 1852Z, ZTL 19 1852Z, ZZZ 19 1852Z/);
         document.removeEventListener('notam:tfrs', enr);
     });
@@ -432,5 +434,48 @@ describe('review 3 fixes (2026-10-19)', () => {
         release({ lat: 34.7, lon: -80.9 }); await old;
         expect(wx._routeCoords).toBe(now);
         expect(wx._routeCoords[0].icao).toBe('KAVL');
+    });
+});
+
+describe('review 4 fixes (2026-10-19)', () => {
+    const TFR = '!FDC 6/0050 ZTL NC..AIRSPACE ASHEVILLE, NORTH CAROLINA..TEMPORARY FLIGHT RESTRICTIONS. WI AN AREA DEFINED AS 3NM RADIUS OF 352600N0823300W SFC-3000FT';
+    it('the saved en-route NOTAMs and TFRs show as soon as the download starts, not when it ends', async () => {
+        answer({ features: [feat('ZTL', TFR)], failed: [] });
+        await makeWx()._fetchEnrouteNotams();
+        let release; globalThis.fetch = vi.fn(() => new Promise((res) => { release = res; }));
+        const enr = vi.fn(); document.addEventListener('notam:tfrs', enr);
+        const wx = makeWx();
+        const p = wx._fetchEnrouteNotams();
+        await Promise.resolve(); await Promise.resolve();
+        expect(texts(wx._enrouteNotams)).toMatch(/ASHEVILLE/);
+        expect(enr).toHaveBeenCalledTimes(1);
+        expect(warnings(wx).join(' ')).toMatch(/En-route: refreshing — showing NOTAMs downloaded earlier/);
+        release({ ok: true, json: async () => ({ features: [], failed: [] }) }); await p;
+        document.removeEventListener('notam:tfrs', enr);
+    });
+
+    it('while the en-route route lookup runs: "Fetching…", not NONE', async () => {
+        answer({ features: [], failed: [] });
+        const wx = makeWx();
+        let releaseBox; wx._getRouteBbox = () => new Promise((res) => { releaseBox = res; });
+        const p = wx._fetchEnrouteNotams();
+        await wx._fetchNotams();                                              // airport: none in force
+        const sec = document.createElement('div'); wx._section = () => sec; delete wx._renderNotamSection; wx._renderNotamSection();
+        expect(sec.textContent).toMatch(/Fetching…/);
+        expect(sec.textContent).not.toMatch(/NONE/);
+        releaseBox({ n: 34.8, s: 25.6, e: -80.3, w: -81.2 }); await p;
+    });
+
+    it('a failed airport refresh with en-route downloading: amber, not neutral', async () => {
+        offline();
+        const wx = makeWx(); wx._enrouteBusy = true; wx._enrouteNotams = [];
+        await wx._fetchNotams();
+        const sec = document.createElement('div'); wx._section = () => sec; delete wx._renderNotamSection; wx._renderNotamSection();
+        expect(sec.querySelector('.wx-rhs-badge')?.className || '').toMatch(/warn/);
+    });
+
+    it('a corrupt entry inside a saved list is skipped', () => {
+        const c = { v: 2, bins: { KLKR: { at: Date.now(), notams: [null, { airport: 'KLKR', raw: 'RWY CLSD' }] } } };
+        expect(WxBriefing._mergeNotamBins(['KLKR'], c, new Set(), Date.now()).shown).toHaveLength(1);
     });
 });

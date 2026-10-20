@@ -501,9 +501,10 @@ class WxBriefing {
         this._notamsDownloading = downloading;
         const notCurrent = !loading && (anyErr || downloading || this._notamStale || this._notamMissing || this._enrouteNotamStale || this._enrouteNotamMissing);
 
-        const badgeClass = (loading || (downloading && !all.length)) ? null
+        const neutral = loading || (downloading && !all.length && !fetchErr);
+        const badgeClass = neutral ? null
             : (fetchErr || notCurrent ? 'warn' : critical.length ? 'warn' : all.length ? 'info' : 'ok');
-        const badgeText = (loading || (downloading && !all.length)) ? 'Fetching…'
+        const badgeText = neutral ? 'Fetching…'
             : (anyErr && !all.length) ? 'UNAVAIL'
             : critical.length ? `${critical.length} CRITICAL`
             : all.length ? `${all.length} ACTIVE`
@@ -2223,7 +2224,7 @@ class WxBriefing {
      */
     static _mergeNotamBins(keys, cache, fetched, now) {
         const shown = [], stale = [], missing = [], seen = new Set();
-        const add = (list) => { for (const n of list) { const k = `${n.airport}|${n.raw}`; if (!seen.has(k)) { seen.add(k); shown.push(n); } } };
+        const add = (list) => { for (const n of list) { if (!n || typeof n !== 'object') continue; const k = `${n.airport}|${n.raw}`; if (!seen.has(k)) { seen.add(k); shown.push(n); } } };
         for (const k of keys) {
             const b = cache.bins[k];
             const list = Array.isArray(b?.notams) ? b.notams : [];
@@ -2256,6 +2257,23 @@ class WxBriefing {
             const bp = PRIORITY[b.type] ?? 9;
             return ap !== bp ? ap - bp : String(a.airport).localeCompare(String(b.airport));
         });
+    }
+
+    /**
+     * Nothing of this list on screen: its saved NOTAMs (and their map TFRs)
+     * while the download runs (review 2026-10-19: a divert's saved en-route
+     * TFRs waited for the download, up to 30 s offline). True if any.
+     */
+    _showSavedWhileDownloading(kind, keys) {
+        const enr = kind === 'enr';
+        if (enr ? (this._enrouteNotamStale || this._enrouteNotams?.length) : (this._notamStale || this._notams?.length)) return false;
+        const cache = this._readNotamCache(enr ? WxBriefing.ENROUTE_NOTAM_CACHE_KEY : WxBriefing.NOTAM_CACHE_KEY);
+        const { shown, stale } = WxBriefing._mergeNotamBins(keys, cache, new Set(), Date.now());
+        if (!stale) return false;
+        if (enr) { this._enrouteNotams = WxBriefing._sortEnrouteNotams(shown); this._enrouteNotamStale = stale; }
+        else { this._notams = this._sortAirportNotams(shown, keys); this._notamStale = stale; }
+        document.dispatchEvent(new CustomEvent(enr ? 'notam:tfrs' : 'notam:tfrs-apt', { detail: { shapes: this._tfrShapesOf(shown), replace: true } }));
+        return true;
     }
 
     /** The route's stations, once each (a round trip lists the departure twice). */
@@ -2319,10 +2337,10 @@ class WxBriefing {
         // The saved NOTAMs stay on screen while it refreshes (in flight the
         // refresh can take the 30 s timeout to fail).
         this._notamBusy = true;
-        // "Fetching…" over the whole section only when nothing else is on
-        // screen: saved en-route NOTAMs stay while a never-downloaded divert
-        // airport downloads (review 2026-10-19).
-        if (!this._notamStale && !this._notams?.length) this._notams = this._enrouteNotams?.length ? [] : null;
+        // Its saved NOTAMs on screen while it downloads; else an empty list
+        // marked busy ("Fetching…" / "Downloading airport NOTAMs…", never a
+        // green NONE). A null placeholder hid the other list's answer.
+        if (!this._showSavedWhileDownloading('apt', stations) && !this._notams) this._notams = [];
         this._renderNotamSection();
 
         let fetched = new Set(), notams = [], err = null;
@@ -2398,6 +2416,8 @@ class WxBriefing {
 
     async _fetchEnrouteNotams() {
         const gen = this._enrouteGen = (this._enrouteGen || 0) + 1;
+        this._enrouteBusy = true;           // before the route lookup: not "NONE" while it runs
+        if (!this._enrouteNotams) this._enrouteNotams = [];
         const req = await this._enrouteRequest();
         if (gen !== this._enrouteGen) return;
         if (!req) {
@@ -2409,8 +2429,7 @@ class WxBriefing {
             return;
         }
         const { requested, bins } = req;
-        this._enrouteBusy = true;
-        if (!this._enrouteNotamStale && !this._enrouteNotams?.length) this._enrouteNotams = this._notams?.length ? [] : null;
+        this._showSavedWhileDownloading('enr', bins);
         this._renderNotamSection();
 
         let fetched = new Set(), notams = [], err = null;
