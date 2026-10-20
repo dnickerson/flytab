@@ -97,9 +97,14 @@ class WxBriefing {
             // (it was applied to the new route -- review 2026-10-19).
             this._notamGen = (this._notamGen || 0) + 1; this._enrouteGen = (this._enrouteGen || 0) + 1;
             this._notamBusy = this._enrouteBusy = false;
-            Promise.resolve().then(() => this._restoreSavedNotams())
-                .catch((e) => console.warn('WX: saved NOTAMs not restored:', e))
-                .then(() => { if (this.visible) this._fetchColdSections(); });
+            this._routeCoords = null;
+            // The saved airport NOTAMs are restored at once (before the first
+            // await); the download does not wait for the en-route part's route
+            // lookup (it could hang on the NASR database -- review).
+            Promise.resolve().then(() => {
+                this._restoreSavedNotams().catch((e) => console.warn('WX: saved NOTAMs not restored:', e));
+                if (this.visible) this._fetchColdSections();
+            });
         }
         if (plan?.weather_cache?.mos) this._mosData = this._normalizeMos(plan.weather_cache.mos);
         this._routeCoords = null;
@@ -489,11 +494,16 @@ class WxBriefing {
         const fetchErr = !loading && this._notamFetchError && !this._notams?.length && !this._enrouteNotams?.length
             && !this._notamStale && !this._enrouteNotamStale;
         const anyErr = fetchErr || (!loading && (this._notamFetchError || this._enrouteNotamFetchError));
-        const notCurrent = !loading && (anyErr || this._notamStale || this._notamMissing || this._enrouteNotamStale || this._enrouteNotamMissing);
+        // One list still downloading with nothing of its own on screen: not
+        // "NONE" (a green badge while en-route NOTAMs download -- review).
+        const downloading = !loading && ((this._notamBusy && !this._notamStale && !this._notams?.length)
+            || (this._enrouteBusy && !this._enrouteNotamStale && !this._enrouteNotams?.length));
+        this._notamsDownloading = downloading;
+        const notCurrent = !loading && (anyErr || downloading || this._notamStale || this._notamMissing || this._enrouteNotamStale || this._enrouteNotamMissing);
 
-        const badgeClass = loading ? null
+        const badgeClass = (loading || (downloading && !all.length)) ? null
             : (fetchErr || notCurrent ? 'warn' : critical.length ? 'warn' : all.length ? 'info' : 'ok');
-        const badgeText = loading ? 'Fetching…'
+        const badgeText = (loading || (downloading && !all.length)) ? 'Fetching…'
             : (anyErr && !all.length) ? 'UNAVAIL'
             : critical.length ? `${critical.length} CRITICAL`
             : all.length ? `${all.length} ACTIVE`
@@ -1301,6 +1311,7 @@ class WxBriefing {
 
     async _getRouteCoords() {
         if (this._routeCoords) return this._routeCoords;
+        const plan = this._flightPlan;
         const coords = [];
 
         // Use coords already on the flight plan waypoints first — plan normalization
@@ -1334,7 +1345,8 @@ class WxBriefing {
             } catch (_) {}
         }
 
-        this._routeCoords = coords;
+        // An older route's lookup finishing late does not replace the new route's.
+        if (this._flightPlan === plan) this._routeCoords = coords;
         return coords;
     }
 
@@ -2112,7 +2124,7 @@ class WxBriefing {
 
         if (!mainItems.length && !lights.length) {
             container.insertAdjacentHTML('beforeend',
-                `<div class="wx-section-empty">${query ? 'No NOTAMs match your search.' : 'No active NOTAMs.'}</div>`);
+                `<div class="wx-section-empty">${query ? 'No NOTAMs match your search.' : this._notamsDownloading ? 'Downloading NOTAMs…' : 'No active NOTAMs.'}</div>`);
             return;
         }
 
@@ -2214,9 +2226,10 @@ class WxBriefing {
         const add = (list) => { for (const n of list) { const k = `${n.airport}|${n.raw}`; if (!seen.has(k)) { seen.add(k); shown.push(n); } } };
         for (const k of keys) {
             const b = cache.bins[k];
-            if (fetched.has(k) && b) { add(b.notams); continue; }
+            const list = Array.isArray(b?.notams) ? b.notams : [];
+            if (fetched.has(k) && b) { add(list); continue; }
             if (b && now - b.at < WxBriefing.NOTAM_CACHE_MAX_AGE_MS) {
-                add(b.notams.filter(n => WxBriefing._notamNotExpired(n, now)));
+                add(list.filter(n => WxBriefing._notamNotExpired(n, now)));
                 stale.push({ station: k, at: b.at });
             } else missing.push(k);
         }

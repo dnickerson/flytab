@@ -398,3 +398,39 @@ describe('review 2 fixes (2026-10-19)', () => {
         expect(wx._fetchColdSections).toHaveBeenCalledTimes(1);
     });
 });
+
+describe('review 3 fixes (2026-10-19)', () => {
+    it('en-route still downloading, airport fresh and empty: "Fetching…", not a green NONE', async () => {
+        answer({ features: [feat('LKR', 'RWY 06/24 CLSD')], failed: [] });
+        stations = ['KLKR']; await makeWx()._fetchNotams();                   // KLKR saved
+        const wx = makeWx();
+        await wx._restoreSavedNotams();
+        let releaseEnr;
+        globalThis.fetch = vi.fn((url) => String(url).includes('ZZZ')
+            ? new Promise((res) => { releaseEnr = res; })
+            : Promise.resolve({ ok: true, json: async () => ({ features: [], failed: [] }) }));
+        const enr = wx._fetchEnrouteNotams();
+        await wx._fetchNotams();                                              // KLKR now has none
+        const sec = document.createElement('div'); wx._section = () => sec; delete wx._renderNotamSection; wx._renderNotamSection();
+        expect(sec.textContent).toMatch(/Fetching…/);
+        expect(sec.textContent).not.toMatch(/NONE|No active NOTAMs/);
+        expect(sec.textContent).toMatch(/Downloading en-route NOTAMs…/);
+        releaseEnr({ ok: true, json: async () => ({ features: [], failed: [] }) }); await enr;
+        wx._renderNotamSection();
+        expect(sec.textContent).toMatch(/NONE/);                               // both done, none in force
+    });
+
+    it('an older route\'s coordinate lookup finishing late does not replace the new route\'s', async () => {
+        const wx = makeWx();
+        delete wx._getStationList;
+        let release; wx._db = { getAirport: (id) => (id === 'KLKR' ? new Promise((res) => { release = res; }) : Promise.resolve({ lat: 35, lon: -82 })) };
+        wx._flightPlan = { waypoints: [{ icao: 'KLKR' }] };
+        const old = wx._getRouteCoords();
+        wx._flightPlan = { waypoints: [{ icao: 'KAVL', lat: 35.4, lon: -82.5 }] };
+        wx._routeCoords = null;
+        const now = await wx._getRouteCoords();
+        release({ lat: 34.7, lon: -80.9 }); await old;
+        expect(wx._routeCoords).toBe(now);
+        expect(wx._routeCoords[0].icao).toBe('KAVL');
+    });
+});
