@@ -193,6 +193,21 @@ class ConfigEditor {
                 <div class="ce-field-row" style="font-size:14px;color:var(--text-secondary)">
                     Pi IP for live GPS/traffic/engine data (default: 192.168.10.1)
                 </div>
+                <div class="ce-field-row">
+                    <label class="ce-label" for="ce-home-stratux-ip">Home Stratux IP</label>
+                    <input type="text" id="ce-home-stratux-ip" class="ce-input" style="width:150px"
+                        value="${typeof Settings !== 'undefined' ? this._attr(Settings.homeStratuxIp) : ''}">
+                </div>
+                <div class="ce-field-row">
+                    <label class="ce-toggle-label" for="ce-home-stratux-no-record">
+                        <input type="checkbox" id="ce-home-stratux-no-record"
+                            ${typeof Settings === 'undefined' || Settings.homeStratuxNoRecord ? 'checked' : ''}>
+                        Don't record on the home Stratux
+                    </label>
+                </div>
+                <div class="ce-field-row" style="font-size:14px;color:var(--text-secondary)">
+                    While FlyTab is connected to the Stratux at this address (brought home to diagnose a problem), no flight recording or logbook entry is made. An engine running (fresh RPM 500 or more) is always recorded.
+                </div>
             </div>
         </div>`);
         // Which route planner EDIT, Direct-To, procedures, Replan and REV open
@@ -383,6 +398,11 @@ class ConfigEditor {
         return `<div class="ce-section-header">${title}</div>`;
     }
 
+    /** A stored value made safe for an HTML attribute. */
+    _attr(v) {
+        return String(v ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+    }
+
     _renderSection(sectionKey, title, data, fields) {
         let rows = '';
         for (const [key, cfg] of Object.entries(fields)) {
@@ -463,6 +483,14 @@ class ConfigEditor {
                         app.stratuxClient.connect();
                     }
                 }
+            }
+
+            // Home Stratux: no recordings while connected to it (FlightRecorder)
+            const homeIpEl = body.querySelector('#ce-home-stratux-ip');
+            const homeNoRecEl = body.querySelector('#ce-home-stratux-no-record');
+            if (typeof Settings !== 'undefined') {
+                if (homeIpEl) Settings.homeStratuxIp = homeIpEl.value.trim();
+                if (homeNoRecEl) Settings.homeStratuxNoRecord = homeNoRecEl.checked;
             }
 
             // Route planner (current / new)

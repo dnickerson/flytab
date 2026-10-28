@@ -73,6 +73,8 @@ class FlightRecorder {
         this._gsAboveCount = 0;
         this._gsBelowCount = 0;
         this._autoMonitorInterval = null;
+        // "Not recording: home Stratux" logged for this connection (_onHomeStratux)
+        this._homeLogged = false;
 
         // First/last GPS for dep/dest naming
         this._firstGps = null;
@@ -832,8 +834,16 @@ class FlightRecorder {
                 }
             } else {
                 this._rpmAboveCount = 0;
-                // GPS-based auto-start: GS > 30kt for 10s
-                if (sitFresh && gs > 30) {
+                // GPS-based auto-start: GS > 30kt for 10s. Not on the home Stratux:
+                // brought home to diagnose a problem, its GPS can report 80-300 kt
+                // standing still (10-18: five bench "flights" in the logbook).
+                if (this._onHomeStratux()) {
+                    this._gsAboveCount = 0;
+                    if (!this._homeLogged && typeof DiagLog !== 'undefined') {
+                        DiagLog.log('recorder', `Not recording: connected to the home Stratux (${this._stratux?.ip}) — MORE → Configuration`);
+                    }
+                    this._homeLogged = true;
+                } else if (sitFresh && gs > 30) {
                     this._gsAboveCount++;
                     if (this._gsAboveCount >= 10) {
                         this.start();
@@ -874,6 +884,23 @@ class FlightRecorder {
                 }
             }
         }
+    }
+
+    /**
+     * Connected to the home Stratux (Settings.homeStratuxIp) with "Don't record
+     * on the home Stratux" on: the configured Stratux is that address and its
+     * data is arriving. Only the GPS start asks: fresh RPM >= 500 always starts a
+     * recording, and on a forgotten home address in flight nothing arrives from
+     * it, so the engine (or nothing) decides as usual.
+     */
+    _onHomeStratux() {
+        if (typeof Settings === 'undefined' || !Settings.homeStratuxNoRecord) { this._homeLogged = false; return false; }
+        const home = String(Settings.homeStratuxIp ?? '').trim();
+        const sit = this._stratux?.situation;
+        const fresh = typeof sit?.timestamp === 'number' && (Date.now() - sit.timestamp) < FlightRecorder.FRESH_DATA_MS;
+        const on = !!home && String(this._stratux?.ip ?? '').trim() === home && fresh;
+        if (!on) this._homeLogged = false;
+        return on;
     }
 
     _emitStatus() {

@@ -325,3 +325,89 @@ describe('Logbook entry from the stopped event', () => {
         vi.useRealTimers();
     });
 });
+
+describe("home Stratux: no recording while connected to it (10-18 bench test)", () => {
+    const HOME = '192.168.1.212';
+    let started;
+    const onStart = () => started++;
+    /** Stratux at `ip`, its last situation `ageMs` old at `gs` kt (a moving fix like 10-18's). */
+    function stratux(ip, gs, ageMs = 200) {
+        return {
+            ip,
+            get situation() { return { ground_speed: gs, lat: 34.8927, lon: -80.8419, gps_fix_quality: 1, timestamp: Date.now() - ageMs }; },
+            traffic: new Map(),
+        };
+    }
+    function make(eng, strat) {
+        const rec = new FlightRecorder(eng, strat, null);
+        rec._renameWithRoute = vi.fn(async () => null);
+        rec.init();
+        return rec;
+    }
+    const noEngine = { lastData: null, get dataAge() { return Infinity; } };
+    beforeEach(() => {
+        vi.useFakeTimers(); vi.setSystemTime(T0);
+        localStorage.clear(); started = 0; DiagLog.log.mockClear();
+        global.fetch = server().fetch;
+        global.Settings = { homeStratuxIp: HOME, homeStratuxNoRecord: true };
+        window.addEventListener('flightsync:started', onStart);
+    });
+    afterEach(() => {
+        window.removeEventListener('flightsync:started', onStart);
+        delete global.Settings;
+        vi.useRealTimers();
+    });
+
+    it('replay of 10-18: home Stratux reporting 90 kt standing still -> nothing recorded, logged once', async () => {
+        const rec = make(noEngine, stratux(HOME, 92));
+        await vi.advanceTimersByTimeAsync(10 * 60_000);
+        expect(started).toBe(0);
+        expect(rec.recording).toBe(false);
+        const lines = DiagLog.log.mock.calls.filter(([, m]) => /home Stratux/.test(m));
+        expect(lines).toHaveLength(1);
+        expect(lines[0][1]).toContain(HOME);
+        rec.destroy();
+    });
+
+    it('setting off -> the GPS rule records as before', async () => {
+        Settings.homeStratuxNoRecord = false;
+        const rec = make(noEngine, stratux(HOME, 92));
+        await vi.advanceTimersByTimeAsync(11_000);
+        expect(rec.recording).toBe(true);
+        rec.destroy();
+        await vi.advanceTimersByTimeAsync(0);
+    });
+
+    it('in-flight Stratux address -> the GPS rule records as before', async () => {
+        const rec = make(noEngine, stratux('192.168.10.1', 140));
+        await vi.advanceTimersByTimeAsync(11_000);
+        expect(rec.recording).toBe(true);
+        rec.destroy();
+        await vi.advanceTimersByTimeAsync(0);
+    });
+
+    it('an engine running (fresh RPM >= 500) is recorded even on the home Stratux', async () => {
+        const rec = make(engine(1020, 500).client, stratux(HOME, 0));
+        await vi.advanceTimersByTimeAsync(11_000);
+        expect(rec.recording).toBe(true);
+        rec.destroy();
+        await vi.advanceTimersByTimeAsync(0);
+    });
+
+    it('home address left set in flight: nothing arrives from it, the engine starts the recording', async () => {
+        const rec = make(engine(2400, 500).client, { ip: HOME, situation: null, traffic: new Map() });
+        await vi.advanceTimersByTimeAsync(11_000);
+        expect(rec.recording).toBe(true);
+        rec.destroy();
+        await vi.advanceTimersByTimeAsync(0);
+    });
+
+    it('blank home address -> the setting does nothing', async () => {
+        Settings.homeStratuxIp = '';
+        const rec = make(noEngine, stratux('', 92));
+        await vi.advanceTimersByTimeAsync(11_000);
+        expect(rec.recording).toBe(true);
+        rec.destroy();
+        await vi.advanceTimersByTimeAsync(0);
+    });
+});
