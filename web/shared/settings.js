@@ -61,6 +61,13 @@ class Settings {
     static get homeStratuxNoRecord() { return Settings.get('home_stratux_no_record') !== false; }
     static set homeStratuxNoRecord(v) { Settings.set('home_stratux_no_record', !!v); }
 
+    // "Use the home Stratux": connect to homeStratuxIp instead of stratuxIp
+    // (StratuxClient.ip). This session only, never saved: every start of FlyTab
+    // (a restart after a crash in flight too) uses the in-flight Stratux IP.
+    static _useHomeStratux = false;
+    static get useHomeStratux() { return Settings._useHomeStratux; }
+    static set useHomeStratux(v) { Settings._useHomeStratux = !!v; }
+
     static get piIp() { return Settings.get('pi_ip'); }
     static set piIp(v) { Settings.set('pi_ip', v); }
 

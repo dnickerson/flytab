@@ -1980,7 +1980,8 @@ class CockpitMap {
             this._stxOverlay = null;
             return;
         }
-        const ip = Settings.stratuxIp;
+        // The Stratux in use: the home one with "Use the home Stratux" on
+        const ip = window.app?.stratuxClient?.ip ?? Settings.stratuxIp;
         const overlay = document.createElement('div');
         overlay.className = 'stx-overlay';
         overlay.innerHTML = `

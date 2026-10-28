@@ -162,6 +162,12 @@ class StratuxClient extends EventTarget {
         this.deviceStatus = null;
         this.deviceStatusAt = 0;
         this._statusFailing = false;
+
+        // "Use the home Stratux" fallback (_checkHomeFallback)
+        this._homeFellBack = false;
+        this._homeSilentSince = 0;
+        this._homeProbe = null;
+        this._homeTimer = null;
         // Tower data from /getTowers
         this.towerData = {};
 
@@ -237,6 +243,8 @@ class StratuxClient extends EventTarget {
         }
         this._startPurge();
         this._startLinkWatchdog();
+        if (!this._homeTimer) this._homeTimer = setInterval(() => this._checkHomeFallback(), StratuxClient.HOME_CHECK_MS);
+        this._homeSilentSince = 0;
 
         // Start the stale window immediately so that if Stratux never connects
         // (e.g. not on the Stratux Wi-Fi network), stratux:stale fires after ~5s
@@ -260,14 +268,57 @@ class StratuxClient extends EventTarget {
         if (this._statusTimer) { clearInterval(this._statusTimer); this._statusTimer = null; }
         if (this._towerTimer) { clearInterval(this._towerTimer); this._towerTimer = null; }
         if (this._linkWatchdog) { clearInterval(this._linkWatchdog); this._linkWatchdog = null; }
+        if (this._homeTimer) { clearInterval(this._homeTimer); this._homeTimer = null; }
         this._stale = false;
         this._setConnected(false);
     }
 
     /** Stratux IP — always direct, never location.hostname.
-     *  No fallback: Settings.get() already defaults stratux_ip when unset (#130). */
+     *  No fallback: Settings.get() already defaults stratux_ip when unset (#130).
+     *  "Use the home Stratux" (MORE → Configuration): the Home Stratux IP instead,
+     *  until that falls back to Stratux IP (_checkHomeFallback). */
     get ip() {
+        if (this.homeMode === 'home') return String(Settings.homeStratuxIp).trim();
         return Settings.stratuxIp;
+    }
+
+    /** 'off' (normal Stratux IP) | 'home' (home Stratux) | 'fallback' (home was
+     *  silent, the normal Stratux IP answered: in use until the setting changes). */
+    get homeMode() {
+        const home = (typeof Settings !== 'undefined' && Settings.useHomeStratux)
+            ? String(Settings.homeStratuxIp ?? '').trim() : '';
+        if (!home) return 'off';
+        return this._homeFellBack ? 'fallback' : 'home';
+    }
+
+    /** The setting or the home address changed: try the home Stratux again. */
+    resetHomeFallback() {
+        this._homeFellBack = false;
+        this._homeSilentSince = 0;
+    }
+
+    /**
+     * "Use the home Stratux" left on in the aircraft must not cost GPS, traffic or
+     * FIS-B: when the home Stratux has sent nothing for HOME_FALLBACK_AFTER_MS and
+     * the normal Stratux IP answers /getStatus, switch to it (and stay there).
+     */
+    _checkHomeFallback() {
+        if (this.homeMode !== 'home' || this._disconnected || this._homeProbe) return;
+        const now = Date.now();
+        if (this._connected || this._dataFresh()) { this._homeSilentSince = 0; return; }
+        if (!this._homeSilentSince) { this._homeSilentSince = now; return; }
+        if (now - this._homeSilentSince < StratuxClient.HOME_FALLBACK_AFTER_MS) return;
+        const flightIp = Settings.stratuxIp;
+        this._homeProbe = fetch(`http://${flightIp}/getStatus`, { cache: 'no-store', signal: AbortSignal.timeout(StratuxClient.HTTP_TIMEOUT_MS) })
+            .then((r) => {
+                if (!r.ok || this.homeMode !== 'home' || this._disconnected || this._connected) return;
+                this._homeFellBack = true;
+                if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', `Home Stratux ${Settings.homeStratuxIp} silent ${Math.round((Date.now() - this._homeSilentSince) / 1000)} s; ${flightIp} answers — using it`);
+                this.disconnect();
+                this.connect();
+            })
+            .catch(() => { /* not there either: keep trying the home Stratux */ })
+            .finally(() => { this._homeProbe = null; });
     }
 
     /** True when cockpit-config.json has simMode: true */
@@ -846,3 +897,6 @@ StratuxClient.CHANNEL_BASE_DELAY_MS = { situation: 2000, weather: 5000, jsonio: 
 StratuxClient.TICK_GAP_MS = 2000;
 // Stratux REST polls (/getStatus, /getTowers).
 StratuxClient.HTTP_TIMEOUT_MS = 3000;
+// "Use the home Stratux": check this often; fall back after this long with no data.
+StratuxClient.HOME_CHECK_MS = 5000;
+StratuxClient.HOME_FALLBACK_AFTER_MS = 10000;

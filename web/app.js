@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v12.16';
+const FLYTAB_VERSION = 'v12.17';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 // Kept in memory and saved at most every FLUSH_MS (errors at once). Every log()
@@ -154,6 +154,7 @@ class FlyTabApp {
             statusTimeLocal: document.getElementById('statusTimeLocal'),
             statusGps: document.getElementById('statusGps'),
             statusFisb: document.getElementById('statusFisb'),
+            statusHomeStx: document.getElementById('statusHomeStx'),
             statusPiContract: document.getElementById('statusPiContract'),
             statusNasr: document.getElementById('statusNasr'),
             mainContent: document.getElementById('mainContent'),
@@ -2032,6 +2033,16 @@ class FlyTabApp {
                 } else {
                     this.dom.statusGps.textContent = `${src} GPS`;
                 }
+            }
+
+            // "Use the home Stratux" (this session only): always shown while on, so
+            // it can't go unnoticed before departure; after a fallback it says so.
+            if (this.dom.statusHomeStx) {
+                const hm = this.stratuxClient?.homeMode ?? 'off';
+                this.dom.statusHomeStx.hidden = hm === 'off';
+                this.dom.statusHomeStx.textContent = hm === 'fallback'
+                    ? `HOME STX OFF → ${String(Settings.stratuxIp).split('.').slice(-2).join('.')}`
+                    : 'HOME STX';
             }
 
             // FIS-B: green while FIS-B is being received (FisbClient.isReceiving):
