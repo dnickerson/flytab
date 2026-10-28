@@ -68,7 +68,7 @@ FlyTab connects automatically on app launch. The status bar at the top shows con
 | Badge | Green | Amber | Red / Absent |
 |---|---|---|---|
 | **GPS** | 3D fix (Stratux "3D GPS" / "3D GPS + SBAS") | ENG GPS (position from the engine monitor's link to Stratux) | No fix, DEAD RECKONING, or GPS STALE |
-| **FIS-B** | UAT radio connected and receiving | — | No UAT data |
+| **FIS-B** | FIS-B being received: FlyTab got FIS-B weather (METAR, NEXRAD, NOTAM …) in the last 2 minutes, or the Stratux reports UAT messages in the last minute | — | No FIS-B received (on the ground, FIS-B is often out of range) |
 | **FLT / HOME / NET / OFFL** | FLT = Stratux reachable; HOME = home server reachable | NET = internet only | OFFL = no network |
 | **FAA data** (NASR / CIFP / PLATES / A/FD) | **FAA 12d** — every FAA product on the tablet current; days until the first one expires | Under 7 days left on one (**PLATES 4d**), A/FD pages not current (**A/FD OLD**) or a plate state not updated (**PLATES OLD**) | **PLATES EXP** (or NASR/CIFP/A/FD) — expired; **CIFP ??** — never synced. FAA data changes at 0901Z on the cycle date: that is when it turns red. Works offline, from what the tablet recorded at its last sync; refreshed every 10 minutes |
 | **ML** | Engine anomaly score normal | **ML:OFF**: anomaly scoring isn't running (ML not available, or a model run never returned and FlyTab turned it off). **ML:ERR**: scoring has failed 5 samples in a row. Either way the rule-based engine warnings and advisories continue; restart FlyTab on the ground | Anomaly detected |

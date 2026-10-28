@@ -158,8 +158,10 @@ class StratuxClient extends EventTarget {
         this.traffic = new Map();
         // Latest situation data
         this.situation = null;
-        // Device status from /getStatus
+        // Device status from /getStatus, and when it last arrived (ms; 0 = never)
         this.deviceStatus = null;
+        this.deviceStatusAt = 0;
+        this._statusFailing = false;
         // Tower data from /getTowers
         this.towerData = {};
 
@@ -506,11 +508,21 @@ class StratuxClient extends EventTarget {
     _pollStatus() {
         if (this._statusTimer) return;
         const poll = async () => {
+            // A failure is logged once, and its recovery: 10-27 the FIS-B badge was red
+            // all flight and nothing said whether /getStatus was answering.
+            const fail = (why) => {
+                if (!this._statusFailing && typeof DiagLog !== 'undefined') DiagLog.log('stratux', `getStatus failing: ${why}`);
+                this._statusFailing = true;
+            };
             try {
                 // Direct HTTP to Stratux — no proxy needed on Android
                 const r = await fetch(`http://${this.ip}/getStatus`, { cache: 'no-store', signal: AbortSignal.timeout(StratuxClient.HTTP_TIMEOUT_MS) });
-                if (r.ok) this.deviceStatus = await r.json();
-            } catch { /* offline */ }
+                if (!r.ok) { fail(`HTTP ${r.status}`); return; }
+                this.deviceStatus = await r.json();
+                this.deviceStatusAt = Date.now();
+                if (this._statusFailing && typeof DiagLog !== 'undefined') DiagLog.log('stratux', 'getStatus answering again');
+                this._statusFailing = false;
+            } catch (e) { fail(`${e?.name || 'Error'}: ${e?.message || e}`); }
         };
         poll();
         this._statusTimer = setInterval(poll, 10000);

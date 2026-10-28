@@ -28,6 +28,10 @@ class FisbClient extends EventTarget {
         this.sigmetCount = 0;
         this.notamCount = 0;
 
+        // When FIS-B last arrived from the Stratux (weather report, NEXRAD or other
+        // FIS-B frame), ms; 0 = never. The FIS-B badge goes by it (isReceiving).
+        this.lastRxAt = 0;
+
         // NEXRAD blocks forwarded to FisbNexrad
         this._nexradBlocks = new Map(); // "lat,lon" → { received_at }
         this._nexradNewestAt = 0;
@@ -42,6 +46,21 @@ class FisbClient extends EventTarget {
         this._onWeather = (e) => this._handleWeather(e.detail);
         this._onNexrad = (e) => this._handleNexrad(e.detail);
         this._onFisbFrame = (e) => this._handleFisbFrame(e.detail);
+    }
+
+    /**
+     * The FIS-B badge: is FIS-B being received? FlyTab's own reception (anything
+     * in the last FRESH_MS), else a fresh Stratux /getStatus counting UAT
+     * messages, whatever the radio. 10-27 KTBR-KLKR: FIS-B arrived every minute
+     * for an hour while the badge, going by /getStatus alone, stayed red.
+     */
+    static isReceiving({ now, lastRxAt, connected, status, statusAt }) {
+        const age = (t) => (t > 0 ? now - t : Infinity);
+        const own = age(lastRxAt);
+        if (own >= 0 && own < FisbClient.FRESH_MS) return true;
+        const st = age(statusAt);
+        return !!connected && !!status && st >= 0 && st < FisbClient.STATUS_FRESH_MS
+            && status.UAT_messages_last_minute > 0;
     }
 
     get nexradBlockCount() { return this._nexradBlocks?.size || 0; }
@@ -106,6 +125,7 @@ class FisbClient extends EventTarget {
         const data = msg.Data;
         const location = msg.Location || '';
         const now = Date.now();
+        this.lastRxAt = now;
 
         if (type === 'METAR' || type === 'SPECI') {
             this._handleMetar(data, location, now, type === 'SPECI');
@@ -334,6 +354,7 @@ class FisbClient extends EventTarget {
     // ========== NEXRAD Handling ==========
 
     _handleNexrad(msg) {
+        if (msg) this.lastRxAt = Date.now();
         // Track blocks for status page (lightweight — no intensity data, just presence)
         if (msg?.NEXRAD?.length > 0) {
             const now = Date.now();
@@ -355,6 +376,7 @@ class FisbClient extends EventTarget {
     _handleFisbFrame(msg) {
         const pid = msg.Product_id;
         const now = Date.now();
+        this.lastRxAt = now;
 
         // NOTAM product IDs: 8 = NOTAM-TFR, 11 = NOTAM-D, 12 = NOTAM-FDC
         if (pid === 8 || pid === 11 || pid === 12) {
@@ -916,3 +938,8 @@ class FisbClient extends EventTarget {
         return null;
     }
 }
+
+// FIS-B badge (isReceiving): FlyTab's own reception counts for this long (FIS-B
+// arrived every minute in flight, 10-27); a Stratux /getStatus reply for this long.
+FisbClient.FRESH_MS = 120000;
+FisbClient.STATUS_FRESH_MS = 30000;

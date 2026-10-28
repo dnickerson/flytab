@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v12.15';
+const FLYTAB_VERSION = 'v12.16';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 // Kept in memory and saved at most every FLUSH_MS (errors at once). Every log()
@@ -2034,12 +2034,17 @@ class FlyTabApp {
                 }
             }
 
-            // FIS-B: green when the 978 MHz UAT radio is present and receiving UAT messages.
-            // UATRadio_connected = hardware detected; UAT_messages_last_minute = data flowing.
-            // Guard: only evaluate when Stratux is connected.
+            // FIS-B: green while FIS-B is being received (FisbClient.isReceiving):
+            // FlyTab got FIS-B in the last 2 min, or a fresh Stratux /getStatus counts
+            // UAT messages (an SDR dongle or the UATRadio board alike).
             if (this.dom.statusFisb) {
-                const uatRadio = !!status?.UATRadio_connected;
-                const receiving = uatRadio && (status?.UAT_messages_last_minute > 0);
+                const receiving = (typeof FisbClient !== 'undefined') && FisbClient.isReceiving({
+                    now: Date.now(),
+                    lastRxAt: this.fisbClient?.lastRxAt ?? 0,
+                    connected: !!connected,
+                    status,
+                    statusAt: this.stratuxClient?.deviceStatusAt ?? 0,
+                });
                 this.dom.statusFisb.classList.toggle('active', receiving);
                 if (receiving && this.fisbClient) {
                     const mc = this.fisbClient.metarCount;
