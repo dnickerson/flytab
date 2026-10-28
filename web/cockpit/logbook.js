@@ -23,6 +23,10 @@ class Logbook {
         this._syncQueue = [];
         this._syncInProgress = false;
         this._visible = false;
+        // MainActivity's 'flytab:screen' { onScreen }: document.visibilityState is
+        // always 'visible' since KeepAliveWebView.
+        this._onScreen = true;
+        window.addEventListener('flytab:screen', (e) => { this._onScreen = e?.onScreen !== false; });
 
         // Config
         const cfg = CockpitConfig.get('logbook');
@@ -537,7 +541,12 @@ class Logbook {
         // Duration from recorder event (authoritative). No fallback to enginePanel.
         const flightTimeHours = flightDetail.durationHours || 0;
 
-        const mlSummary = window.engineML?.getFlightSummary() || null;
+        // From the recorder when it has them: they include the part of a flight
+        // from before a restart, and a recording closed out at the next launch has
+        // no ML log in this session at all (#188).
+        const mlSummary = (flightDetail.mlCounts && typeof EngineMLBridge !== 'undefined')
+            ? EngineMLBridge.summaryFromCounts(flightDetail.mlCounts)
+            : (window.engineML?.getFlightSummary() || null);
 
         const entryId = crypto.randomUUID ? crypto.randomUUID() : `lb-${Date.now()}`;
         const entry = {
@@ -1549,10 +1558,10 @@ class Logbook {
                 });
         };
 
-        // When the page is hidden (screen off / app backgrounded), Android throttles
+        // When the screen is off (or the app backgrounded), Android throttles
         // timers — a 2-second setTimeout may be delayed indefinitely before the WebView
         // is suspended. Skip the delay and write to IDB immediately in that case.
-        if (document.visibilityState === 'hidden') {
+        if (!this._onScreen || document.visibilityState === 'hidden') {
             doCreate();
         } else {
             setTimeout(doCreate, 2000);

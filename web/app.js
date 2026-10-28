@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v12.12';
+const FLYTAB_VERSION = 'v12.13';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 // Kept in memory and saved at most every FLUSH_MS (errors at once). Every log()
@@ -739,6 +739,8 @@ class FlyTabApp {
             if (typeof FlightRecorder !== 'undefined') {
                 this.flightRecorder = new FlightRecorder(this.engineClient, this.stratuxClient, nasrDb);
                 this.flightRecorder.init();
+                // Engine ML counts travel with the recording, so a close-out after a restart keeps them (#188)
+                this.flightRecorder.mlCounts = () => window.engineML?.getFlightCounts?.() ?? null;
                 window.flightRecorder = this.flightRecorder;
                 // Update REC badge from flight recorder
                 this.flightRecorder.onStatusChange = (status) => {

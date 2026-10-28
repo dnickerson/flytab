@@ -934,6 +934,15 @@ class EngineMLBridge {
 
     /** Returns compact summary for logbook custom_fields. Returns null if no data. */
     getFlightSummary() {
+        return EngineMLBridge.summaryFromCounts(this.getFlightCounts());
+    }
+
+    /**
+     * The summary's raw counts, or null if no data. FlightRecorder keeps them in
+     * its marker, so a recording closed out after a restart (when this log is
+     * empty) still gets its summary, and a resumed one adds the two parts (#188).
+     */
+    getFlightCounts() {
         if (!this._log.length) return null;
         const phases = {};
         let anomalyCount = 0;
@@ -944,17 +953,31 @@ class EngineMLBridge {
             if (s.an) anomalyCount++;
             if (s.lt != null) { latSum += s.lt; latCount++; }
         }
-        const total = this._log.length;
         return {
-            samples: total,
+            samples: this._log.length,
             duration_s: this._log[this._log.length - 1].t,
             anomaly_count: anomalyCount,
-            anomaly_pct: Math.round(anomalyCount / total * 100),
-            avg_latency_ms: latCount ? Math.round(latSum / latCount) : null,
-            phase_dist: Object.fromEntries(
-                Object.entries(phases).map(([k, v]) => [k, Math.round(v / total * 100)])
-            ),
+            latency_sum_ms: latSum,
+            latency_n: latCount,
+            phases,
             advisory_count: this._advisoryLog.length,
+        };
+    }
+
+    /** getFlightCounts() -> the logbook's engineml_summary, or null. */
+    static summaryFromCounts(c) {
+        if (!c || !(c.samples > 0)) return null;
+        const total = c.samples;
+        return {
+            samples: total,
+            duration_s: c.duration_s,
+            anomaly_count: c.anomaly_count,
+            anomaly_pct: Math.round(c.anomaly_count / total * 100),
+            avg_latency_ms: c.latency_n ? Math.round(c.latency_sum_ms / c.latency_n) : null,
+            phase_dist: Object.fromEntries(
+                Object.entries(c.phases || {}).map(([k, v]) => [k, Math.round(v / total * 100)])
+            ),
+            advisory_count: c.advisory_count,
         };
     }
 

@@ -36,6 +36,8 @@ class FlightRecorder {
     // last alive, so a restart (the WebView renderer dying, Android ending FlyTab)
     // doesn't split or orphan the flight; see recoverUnfinished().
     static ACTIVE_KEY = 'flytab_recording_active';
+    // EngineMLBridge.getFlightCounts() fields kept in the marker (besides phases)
+    static ML_COUNT_FIELDS = ['samples', 'duration_s', 'anomaly_count', 'latency_sum_ms', 'latency_n', 'advisory_count'];
     // A relaunch within this of the last save carries on in the same files.
     static RESUME_WINDOW_MS = 10 * 60 * 1000;
     // recoverUnfinished: TileServer not answering yet -> retry this often.
@@ -86,8 +88,15 @@ class FlightRecorder {
         // Status callback
         this.onStatusChange = null;
 
-        // Visibility-change handler — registered in init(), removed in destroy()
+        // () => Engine ML counts for the flight so far (EngineMLBridge.getFlightCounts),
+        // set by app.js. Saved in the marker and sent with flightsync:stopped (#188).
+        this.mlCounts = null;
+        // ML counts of this recording from before a restart (marker), or null
+        this._mlCarry = null;
+
+        // Hide handlers — registered in init(), removed in destroy()
         this._onVisibilityHidden = null;
+        this._onScreenOff = null;
     }
 
     get recording() { return this._recording; }
@@ -112,12 +121,26 @@ class FlightRecorder {
         // (_shutdownEvidenceNow). Never on a data gap or stale readings: on 10-13 a
         // pilot switching apps 27 s into a Wi-Fi dropout ended the recording 10 min
         // before landing. Anything else is decided by _autoMonitor after resume.
+        //
+        // Since KeepAliveWebView (v11.19) the page always reports itself visible,
+        // so visibilitychange no longer fires; MainActivity sends the real state as
+        // 'flytab:screen' { onScreen }. Without it, a pilot who turned the screen
+        // off (or rebooted) inside the 60 s left the recording to be closed out at
+        // the next launch, with no Engine ML summary (#188).
         this._onVisibilityHidden = () => {
-            if (document.visibilityState !== 'hidden' || !this._recording) return;
-            this._flush().catch(() => {});
-            if (this._shutdownEvidenceNow()) this.stop();
+            if (document.visibilityState === 'hidden') this._onHidden();
+        };
+        this._onScreenOff = (e) => {
+            if (e && e.onScreen === false) this._onHidden();
         };
         document.addEventListener('visibilitychange', this._onVisibilityHidden);
+        window.addEventListener('flytab:screen', this._onScreenOff);
+    }
+
+    _onHidden() {
+        if (!this._recording) return;
+        this._flush().catch(() => {});
+        if (this._shutdownEvidenceNow()) this.stop();
     }
 
     destroy() {
@@ -126,6 +149,10 @@ class FlightRecorder {
         if (this._onVisibilityHidden) {
             document.removeEventListener('visibilitychange', this._onVisibilityHidden);
             this._onVisibilityHidden = null;
+        }
+        if (this._onScreenOff) {
+            window.removeEventListener('flytab:screen', this._onScreenOff);
+            this._onScreenOff = null;
         }
         if (this._recording) this.stop();
     }
@@ -138,6 +165,7 @@ class FlightRecorder {
         this._startTime = Date.now();
         this._firstGps = null;
         this._lastGps = null;
+        this._mlCarry = null;
         this._csvBuffer = [FlightRecorder.CSV_HEADER];
 
         // Generate filename: YYYYMMDD_HHMMZ.csv
@@ -211,6 +239,7 @@ class FlightRecorder {
             this._firstGps = m.firstGps;
             this._lastGps = m.lastGps;
             this._rowCount = m.rowCount;
+            this._mlCarry = m.ml;
             this._csvBuffer = [];           // the file already has its header
             this._trafficBuffer = [];
             this._recording = true;
@@ -255,7 +284,50 @@ class FlightRecorder {
             rowCount: Number.isFinite(m.rowCount) ? m.rowCount : 0,
             savedAt: m.savedAt,
             shutdown: m.shutdown === true,
+            ml: FlightRecorder.parseMlCounts(m.ml),
         };
+    }
+
+    /**
+     * Engine ML counts from the marker, or null. They end up in the logbook
+     * entry (and the server), so only known fields, finite counts and plain
+     * phase names are kept.
+     */
+    static parseMlCounts(c) {
+        if (!c || typeof c !== 'object') return null;
+        const num = (v) => (Number.isFinite(v) && v >= 0) ? v : null;
+        const out = {};
+        for (const k of FlightRecorder.ML_COUNT_FIELDS) {
+            const v = num(c[k]);
+            if (v == null) return null;
+            out[k] = v;
+        }
+        if (!(out.samples > 0)) return null;
+        out.phases = {};
+        if (c.phases && typeof c.phases === 'object') {
+            for (const [k, v] of Object.entries(c.phases)) {
+                if (/^[A-Za-z_]{1,32}$/.test(k) && num(v) != null) out.phases[k] = v;
+            }
+        }
+        return out;
+    }
+
+    /** a + b, either may be null (counts of two parts of one recording). */
+    static mergeMlCounts(a, b) {
+        if (!a) return b || null;
+        if (!b) return a;
+        const out = {};
+        for (const k of FlightRecorder.ML_COUNT_FIELDS) out[k] = (a[k] || 0) + (b[k] || 0);
+        out.phases = { ...a.phases };
+        for (const [k, v] of Object.entries(b.phases || {})) out.phases[k] = (out.phases[k] || 0) + v;
+        return out;
+    }
+
+    /** This recording's ML counts so far: from before a restart + this session's. */
+    _mlCountsNow() {
+        let now = null;
+        try { now = FlightRecorder.parseMlCounts(this.mlCounts?.()); } catch { /* ML not available */ }
+        return FlightRecorder.mergeMlCounts(this._mlCarry, now);
     }
 
     static _readStorage() {
@@ -276,6 +348,7 @@ class FlightRecorder {
                 // Fresh evidence the flight is over (engine stopped / aircraft
                 // stopped): after a restart this recording is closed out, not resumed.
                 shutdown: this._shutdownEvidenceNow(),
+                ml: this._mlCountsNow(),
             }));
         } catch { /* storage full: the recording itself is unaffected */ }
     }
@@ -333,6 +406,11 @@ class FlightRecorder {
             DiagLog.log('recorder', `Final save failed: ${this._csvBuffer.length} rows could not be saved to ${this._fileName}; not renamed`);
         }
 
+        // Closing out a previous run's recording: only what that run saved. This
+        // session's ML log belongs to no recording yet.
+        const mlCounts = Number.isFinite(endOverride) ? this._mlCarry : this._mlCountsNow();
+        this._mlCarry = null;
+
         const finalName = this._fileName;
         this._clearMarker();
         this._emitStatus();
@@ -346,6 +424,7 @@ class FlightRecorder {
                 startTime,
                 endTime,
                 durationHours,
+                mlCounts,
             }
         }));
         if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Stopped: ${finalName} (${this._rowCount} rows, flushOk=${flushOk})`);
@@ -732,7 +811,14 @@ class FlightRecorder {
         const hasEngine = !!eng;
 
         if (!this._recording) {
-            if (hasEngine) {
+            // Auto-start goes by FRESH engine readings only. lastData keeps the last
+            // reading when the engine monitor goes quiet: 10-27 the Pi lost power with
+            // its last sample at 890 RPM, and every 130 s (10 s start + the 2-min
+            // data-gap stop) a new, empty recording and logbook entry began. With no
+            // fresh engine data, ground speed decides, as in a session without one.
+            const engFresh = hasEngine && (this._engine?.dataAge ?? Infinity) < FlightRecorder.FRESH_DATA_MS;
+            if (engFresh) {
+                this._gsAboveCount = 0;
                 // RPM-based auto-start
                 if (rpm >= FlightRecorder.RPM_START_THRESHOLD) {
                     this._rpmAboveCount++;
@@ -745,6 +831,7 @@ class FlightRecorder {
                     this._rpmAboveCount = 0;
                 }
             } else {
+                this._rpmAboveCount = 0;
                 // GPS-based auto-start: GS > 30kt for 10s
                 if (sitFresh && gs > 30) {
                     this._gsAboveCount++;
