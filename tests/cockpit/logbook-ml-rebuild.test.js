@@ -180,6 +180,32 @@ describe('Logbook: rebuild from the CSV', () => {
         expect(global.fetch).not.toHaveBeenCalled();
     });
 
+    it('a flight with its own summary and full log is read once, then left alone', async () => {
+        const lb = makeLogbook();
+        await put(lb, entry('full', { custom_fields: { engineml_summary: { samples: 1 } } }));
+        await putLog(lb, { id: 'full', samples: [{ t: 0 }] });
+        global.fetch = files({ 'full.csv': CSV });
+        const read = vi.spyOn(lb, '_getMLRecords');
+        await lb._rebuildMissingMLSummaries(await lb.getEntries());
+        await lb._rebuildMissingMLSummaries(await lb.getEntries());
+        expect(read).toHaveBeenCalledTimes(1);
+        expect(global.fetch).not.toHaveBeenCalled();
+    });
+
+    it('no EngineMLBridge -> nothing fetched, nothing written off', async () => {
+        const lb = makeLogbook();
+        await put(lb, entry('a'));
+        global.fetch = files({ 'a.csv': CSV });
+        delete globalThis.EngineMLBridge;
+        try {
+            expect(await lb._rebuildMissingMLSummaries(await lb.getEntries())).toBe(0);
+        } finally {
+            globalThis.EngineMLBridge = EngineMLBridge;
+        }
+        expect(global.fetch).not.toHaveBeenCalled();
+        expect(await lb._rebuildMissingMLSummaries(await lb.getEntries())).toBe(1);
+    });
+
     it('two calls at once share one run', async () => {
         const lb = makeLogbook();
         await put(lb, entry('a'));
@@ -193,16 +219,31 @@ describe('Logbook: rebuild from the CSV', () => {
 describe('Logbook ML tab', () => {
     it('renders at once, rebuilds in the background, then shows the rebuilt flight', async () => {
         const lb = makeLogbook();
-        await put(lb, entry('a', { departure_icao: 'KLKR', destination_icao: 'KORL' }));
+        await put(lb, entry('a', { departure_icao: 'KLKR', destination_icao: 'KORL' }), entry('gone', { date: '2026-10-21' }));
         let release;
-        global.fetch = vi.fn(() => new Promise((r) => { release = r; }));    // the file server is slow
+        global.fetch = vi.fn((url) => url.endsWith('gone.csv')                // not there: looked at again next time
+            ? Promise.resolve({ ok: false, status: 404, text: async () => '' })
+            : new Promise((r) => { release = r; }));                          // the file server is slow
         await lb._renderML();
         expect(lb._body.textContent).toContain('No Engine ML data recorded yet');
-        await vi.waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(1));
+        await vi.waitFor(() => expect(release).toBeTypeOf('function'));
         release({ ok: true, status: 200, text: async () => CSV });
         await vi.waitFor(() => expect(lb._body.textContent).toContain('2026-10-22 KLKR→KORL'));
         expect(lb._body.textContent).toContain('2 samples');
         expect(lb._body.querySelector('.lb-ml-export-btn')?.dataset.entryId).toBe('a');
+        await new Promise((r) => setTimeout(r, 20));
+        expect(global.fetch).toHaveBeenCalledTimes(2);                   // a + gone: the re-render starts no second run
+    });
+
+    it('pilot switches tab while the ML tab loads -> the other tab is not overwritten', async () => {
+        const lb = makeLogbook();
+        await put(lb, entry('a', { custom_fields: { engineml_summary: { samples: 3, duration_s: 60, anomaly_count: 0, anomaly_pct: 0 } } }));
+        global.fetch = files({});
+        const p = lb._renderML();
+        lb._activeTab = 'flights';
+        lb._body.innerHTML = '<div>FLIGHTS</div>';
+        await p;
+        expect(lb._body.textContent).toBe('FLIGHTS');
     });
 
     it('no re-render when the pilot left the ML tab meanwhile', async () => {

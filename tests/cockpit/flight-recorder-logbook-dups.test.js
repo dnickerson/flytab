@@ -126,6 +126,54 @@ describe('auto-start needs fresh engine data', () => {
     });
 });
 
+describe('screen-off stop counts 0 RPM through _autoMonitor (rpmStopThreshold 100, as configured)', () => {
+    const screen = (onScreen) => { const ev = new Event('flytab:screen'); ev.onScreen = onScreen; window.dispatchEvent(ev); };
+    let saved;
+    beforeEach(() => { vi.useFakeTimers(); saved = global.CockpitConfig; global.CockpitConfig = { get: () => ({ rpmStopThreshold: 100, stopDelaySeconds: 60 }) }; });
+    afterEach(() => { global.CockpitConfig = saved; vi.useRealTimers(); });
+    function running(rpm) {
+        const e = { lastData: { data: { RPM: rpm } }, get dataAge() { return 500; } };
+        const rec = new FlightRecorder(e, { situation: null }, null);
+        rec.init();
+        rec._recording = true;
+        rec._flush = vi.fn(async () => true);
+        rec.stop = vi.fn(async () => { rec._recording = false; });
+        return { rec, e };
+    }
+
+    it('13 s at 0 RPM (mag check) then screen off -> goes on; 30 s -> ends', () => {
+        const { rec, e } = running(2400);
+        vi.advanceTimersByTime(5000);
+        e.lastData.data.RPM = 0;
+        vi.advanceTimersByTime(13000);
+        screen(false);
+        expect(rec.stop).not.toHaveBeenCalled();
+        e.lastData.data.RPM = 1700;                             // engine was running
+        vi.advanceTimersByTime(2000);
+        e.lastData.data.RPM = 40;                               // shut down (below the 100 threshold)
+        vi.advanceTimersByTime(29000);
+        screen(false);
+        expect(rec.stop).not.toHaveBeenCalled();                // 29 s: the count restarted at 1700 RPM
+        vi.advanceTimersByTime(1000);
+        screen(false);
+        expect(rec.stop).toHaveBeenCalledTimes(1);
+        rec.destroy();
+    });
+
+    it('start() resets the count: a manual start with the engine off is not ended by the next screen-off', async () => {
+        const { rec } = running(0);
+        rec._recording = false;
+        rec._rpmZeroCount = 45;
+        rec._startIntervals = () => {};
+        rec._saveMarker = () => {};
+        await rec.start();
+        expect(rec._rpmZeroCount).toBe(0);
+        screen(false);
+        expect(rec.stop).not.toHaveBeenCalled();
+        rec.destroy();
+    });
+});
+
 describe("'flytab:screen' off ends a recording on fresh shutdown evidence (#188)", () => {
     const screen = (onScreen) => {
         const ev = new Event('flytab:screen');

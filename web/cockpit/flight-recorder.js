@@ -176,6 +176,7 @@ class FlightRecorder {
         this._firstGps = null;
         this._lastGps = null;
         this._mlCarry = null;
+        this._rpmZeroCount = 0;             // a manual start with the engine off counts from now
         this._csvBuffer = [FlightRecorder.CSV_HEADER];
 
         // Generate filename: YYYYMMDD_HHMMZ.csv

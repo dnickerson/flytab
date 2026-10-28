@@ -629,7 +629,7 @@ class Logbook {
     // log store (IDB_ML_STORE record: samples, summary), never in the logbook
     // entry: editing entries would mean syncing them.
     static ML_REBUILD_FROM = '2026-10-14';
-    // Entries already looked at (no ML data in the CSV, or done): not fetched again
+    // Entries already looked at (complete, no ML data in the CSV, or done): not read again
     static ML_REBUILD_TRIED_KEY = 'flytab_ml_rebuild_tried';
 
     /**
@@ -755,6 +755,7 @@ class Logbook {
      * from the flight CSV. Resolves the number of summaries added. One run at a time.
      */
     _rebuildMissingMLSummaries(entries) {
+        if (typeof EngineMLBridge === 'undefined') return Promise.resolve(0);
         if (this._mlRebuildRun) return this._mlRebuildRun;
         this._mlRebuildRun = (async () => {
             let tried;
@@ -770,7 +771,7 @@ class Logbook {
                 const needSummary = !own && !rec?.summary;
                 const want = own?.samples ?? rec?.summary?.samples ?? 0;
                 const needLog = !rec?.samples?.length || rec.samples.length < want;
-                if (!needSummary && !needLog) continue;
+                if (!needSummary && !needLog) { tried.add(e.id); triedChanged = true; continue; }
                 let text;
                 try {
                     const resp = await fetch(`http://localhost:9090/flights/${e.csvFilename}`, {
@@ -1470,8 +1471,9 @@ class Logbook {
         });
     }
 
-    async _renderML() {
-        this._body.innerHTML = '<div class="logbook-empty">Loading ML logs...</div>';
+    /** `background`: the re-render after a rebuild (no spinner, no new rebuild). */
+    async _renderML({ background = false } = {}) {
+        if (!background) this._body.innerHTML = '<div class="logbook-empty">Loading ML logs...</div>';
 
         // Get all logbook entries that have an ML summary: their own, or one
         // rebuilt from the flight CSV (#188), kept with the ML log
@@ -1482,9 +1484,13 @@ class Logbook {
 
         // In the background (the file server can be slow): rebuild what's missing,
         // then show it if the ML tab is still open
-        this._rebuildMissingMLSummaries(entries).then((n) => {
-            if (n > 0 && this._activeTab === 'ml') this._renderML();
-        }).catch(() => {});
+        if (!background) {
+            this._rebuildMissingMLSummaries(entries).then((n) => {
+                if (n > 0 && this._activeTab === 'ml') this._renderML({ background: true });
+            }).catch(() => {});
+        }
+        // The pilot may have switched tabs during the awaits above
+        if (this._activeTab !== 'ml') return;
 
         // Also check if there is a live (in-memory) log not yet attached to an entry
         const liveLog = window.engineML?.getFullLog() || [];
