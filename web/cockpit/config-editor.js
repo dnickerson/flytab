@@ -199,8 +199,9 @@ class ConfigEditor {
                         value="${typeof Settings !== 'undefined' ? this._attr(Settings.homeStratuxIp) : ''}">
                 </div>
                 <div class="ce-field-row">
-                    <label class="ce-toggle-label" for="ce-home-stratux-no-record">
-                        <input type="checkbox" id="ce-home-stratux-no-record"
+                    <label class="ce-toggle-label" for="ce-home-stratux-no-record"
+                        style="min-height:var(--touch-min, 56px);display:flex;align-items:center;gap:12px">
+                        <input type="checkbox" id="ce-home-stratux-no-record" style="width:28px;height:28px"
                             ${typeof Settings === 'undefined' || Settings.homeStratuxNoRecord ? 'checked' : ''}>
                         Don't record on the home Stratux
                     </label>
