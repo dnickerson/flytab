@@ -23,6 +23,12 @@ class FlightRecorder {
     static RPM_START_THRESHOLD = 500;
     static RPM_START_SECONDS = 10;
     static RPM_STOP_SECONDS = 60;
+    // Screen off / app hidden ends a recording at once only after RPM has read 0
+    // this long. The engine data on this airframe shows 0 RPM for 1-13 s with the
+    // engine running, mostly at the mag check (see the sticky-valve stopSec in
+    // CLAUDE.md): ending the recording there splits the flight in two. Before
+    // this, the 60 s countdown (or a close-out with the marker's ML counts) decides.
+    static HIDE_STOP_RPM_ZERO_SECONDS = 30;
     // "Now" for _shutdownEvidenceNow: engine data is ~1 Hz, Stratux situation 10 Hz.
     static FRESH_DATA_MS = 5000;
     // Every request to TileServer. A save is a ~1 KB append and a rename reads a
@@ -142,7 +148,9 @@ class FlightRecorder {
     _onHidden() {
         if (!this._recording) return;
         this._flush().catch(() => {});
-        if (this._shutdownEvidenceNow()) this.stop();
+        // With an engine monitor, also: RPM 0 for a while, not one run-up reading
+        const settled = !this._engine?.lastData || this._rpmZeroCount >= FlightRecorder.HIDE_STOP_RPM_ZERO_SECONDS;
+        if (settled && this._shutdownEvidenceNow()) this.stop();
     }
 
     destroy() {

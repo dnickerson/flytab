@@ -143,11 +143,21 @@ describe("'flytab:screen' off ends a recording on fresh shutdown evidence (#188)
     beforeEach(() => vi.useFakeTimers());
     afterEach(() => vi.useRealTimers());
 
-    it('engine just stopped (fresh 0 RPM), screen off -> stop()', () => {
+    it('engine stopped (fresh 0 RPM for 30 s), screen off -> stop()', () => {
         const rec = make(0, 800);
+        rec._rpmZeroCount = 30;
         screen(false);
         expect(rec._flush).toHaveBeenCalled();
         expect(rec.stop).toHaveBeenCalledTimes(1);
+        rec.destroy();
+    });
+
+    it('fresh 0 RPM for only 13 s (mag check), screen off -> recording goes on', () => {
+        const rec = make(0, 800);
+        rec._rpmZeroCount = 13;
+        screen(false);
+        expect(rec._flush).toHaveBeenCalled();
+        expect(rec.stop).not.toHaveBeenCalled();
         rec.destroy();
     });
 

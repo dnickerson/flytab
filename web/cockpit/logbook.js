@@ -620,6 +620,221 @@ class Logbook {
         }
     }
 
+    // ========== ML summaries rebuilt from flight CSVs (#188) ==========
+
+    // From v11.15 (2026-10-14) a recording still open when FlyTab closed was
+    // closed out at the next launch without its Engine ML summary or per-second
+    // log, and a resumed one kept only the part after the restart. The flight CSV
+    // has the same data in its ml_* columns. What is rebuilt is kept in the ML
+    // log store (IDB_ML_STORE record: samples, summary), never in the logbook
+    // entry: editing entries would mean syncing them.
+    static ML_REBUILD_FROM = '2026-10-14';
+    // Entries already looked at (no ML data in the CSV, or done): not fetched again
+    static ML_REBUILD_TRIED_KEY = 'flytab_ml_rebuild_tried';
+
+    /**
+     * { counts, summary, samples } from a flight CSV's ml_* columns, or null if
+     * it has none. Each EDM second once (the recorder can write a second twice),
+     * as engineML logs it. counts: EngineMLBridge.getFlightCounts() fields;
+     * samples: engineML's log format { t, ph, sc, an, lt }, t from the first row.
+     */
+    static mlFromCsv(text) {
+        if (typeof text !== 'string' || typeof EngineMLBridge === 'undefined') return null;
+        const lines = text.split(/\r?\n/);
+        const header = lines[0].split(',');
+        const col = (name) => header.indexOf(name);
+        const iTime = col('Zulu_Time'), iDate = col('date');
+        const iPh = col('ml_phase'), iSc = col('ml_score'), iAn = col('ml_anomaly'), iLt = col('ml_latency_ms');
+        if (iPh < 0 || iSc < 0 || iAn < 0) return null;
+
+        const seen = new Set();
+        const samples = [];
+        const phases = {};
+        let anomalies = 0, latSum = 0, latN = 0, t0 = null, prevMs = null;
+        for (let i = 1; i < lines.length; i++) {
+            const line = lines[i];
+            if (!line || line === lines[0]) continue;          // blank, or the header written again
+            const f = line.split(',');
+            if (f.length !== header.length) continue;
+            let ms = iTime >= 0 && iDate >= 0 ? Logbook._csvRowMs(f[iDate], f[iTime]) : null;
+            if (ms != null) {
+                const key = f[iDate] + ' ' + f[iTime];
+                if (seen.has(key)) continue;
+                seen.add(key);
+                // Tablet date + EDM Zulu time: a wrong date across 00:00Z is a ±24 h jump
+                if (prevMs != null && ms < prevMs - 43200000) ms += 86400000;
+                else if (prevMs != null && ms > prevMs + 43200000) ms -= 86400000;
+                prevMs = ms;
+                if (t0 == null) t0 = ms;
+            }
+            const ph = f[iPh];
+            if (!/^[a-z_]{1,32}$/.test(ph)) continue;           // ML not running yet
+            const sc = parseFloat(f[iSc]);
+            const lt = parseFloat(f[iLt]);
+            const s = {
+                t: ms != null ? Math.round((ms - t0) / 1000) : (samples.length ? samples[samples.length - 1].t + 1 : 0),
+                ph,
+                sc: Number.isFinite(sc) ? Math.round(sc * 1000) / 1000 : null,
+                an: f[iAn] === '1' ? 1 : 0,
+            };
+            if (iLt >= 0 && Number.isFinite(lt)) s.lt = lt;
+            samples.push(s);
+            phases[ph] = (phases[ph] || 0) + 1;
+            if (s.an) anomalies++;
+            if (s.lt != null) { latSum += s.lt; latN++; }
+        }
+        if (!samples.length) return null;
+        const counts = {
+            samples: samples.length,
+            duration_s: Math.max(0, samples[samples.length - 1].t),
+            anomaly_count: anomalies,
+            latency_sum_ms: latSum,
+            latency_n: latN,
+            phases,
+            advisory_count: null,                               // not in the CSV
+        };
+        const summary = EngineMLBridge.summaryFromCounts(counts);
+        if (!summary) return null;
+        summary.source = 'csv';
+        return { counts, summary, samples };
+    }
+
+    /** ms for a CSV row's date ('2026-10-22') + Zulu_Time ('1:16:27 PM'), or null. */
+    static _csvRowMs(date, time) {
+        const d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date || '');
+        const t = /^(\d{1,2}):(\d{2}):(\d{2}) (AM|PM)$/.exec(time || '');
+        if (!d || !t) return null;
+        const h = (+t[1] % 12) + (t[4] === 'PM' ? 12 : 0);
+        return Date.UTC(+d[1], +d[2] - 1, +d[3], h, +t[2], +t[3]);
+    }
+
+    /** Entries since ML_REBUILD_FROM with a valid CSV name. */
+    static _mlRebuildCandidates(entries) {
+        return (entries || []).filter((e) => e && !e.deleted_at
+            && typeof e.date === 'string' && e.date >= Logbook.ML_REBUILD_FROM
+            && typeof e.csvFilename === 'string' && /^[A-Za-z0-9_-]+\.csv$/.test(e.csvFilename));
+    }
+
+    /** id -> summary rebuilt from the CSV, for entries without one of their own. */
+    async _rebuiltMLSummaries(entries) {
+        const out = new Map();
+        const ids = Logbook._mlRebuildCandidates(entries)
+            .filter((e) => !e.custom_fields?.engineml_summary).map((e) => e.id);
+        if (!ids.length) return out;
+        try {
+            for (const [id, rec] of await this._getMLRecords(ids)) {
+                const s = rec?.summary;
+                if (s && Number.isFinite(s.samples) && s.samples > 0) out.set(id, s);
+            }
+        } catch (err) {
+            console.warn('[Logbook] Rebuilt ML summaries not read:', err);
+        }
+        return out;
+    }
+
+    /** id -> IDB_ML_STORE record (missing ids left out). One read transaction. */
+    async _getMLRecords(ids) {
+        const db = await this._openIdb();
+        return new Promise((resolve, reject) => {
+            const out = new Map();
+            const tx = db.transaction(Logbook.IDB_ML_STORE, 'readonly');
+            const store = tx.objectStore(Logbook.IDB_ML_STORE);
+            for (const id of ids) {
+                const req = store.get(id);
+                req.onsuccess = () => { if (req.result) out.set(id, req.result); };
+            }
+            tx.oncomplete = () => { db.close(); resolve(out); };
+            tx.onerror = () => { db.close(); reject(tx.error); };
+            tx.onabort = () => { db.close(); reject(tx.error || new Error('IDB transaction aborted')); };
+        });
+    }
+
+    /**
+     * For entries since ML_REBUILD_FROM: a missing summary, or a missing or
+     * partial per-second log (fewer samples than the summary counts), is rebuilt
+     * from the flight CSV. Resolves the number of summaries added. One run at a time.
+     */
+    _rebuildMissingMLSummaries(entries) {
+        if (this._mlRebuildRun) return this._mlRebuildRun;
+        this._mlRebuildRun = (async () => {
+            let tried;
+            try { tried = new Set(JSON.parse(localStorage.getItem(Logbook.ML_REBUILD_TRIED_KEY) || '[]')); }
+            catch { tried = new Set(); }
+            const todo = Logbook._mlRebuildCandidates(entries).filter((e) => !tried.has(e.id));
+            if (!todo.length) return 0;
+            const records = await this._getMLRecords(todo.map((e) => e.id));
+            let added = 0, triedChanged = false;
+            for (const e of todo) {
+                const rec = records.get(e.id);
+                const own = e.custom_fields?.engineml_summary;
+                const needSummary = !own && !rec?.summary;
+                const want = own?.samples ?? rec?.summary?.samples ?? 0;
+                const needLog = !rec?.samples?.length || rec.samples.length < want;
+                if (!needSummary && !needLog) continue;
+                let text;
+                try {
+                    const resp = await fetch(`http://localhost:9090/flights/${e.csvFilename}`, {
+                        cache: 'no-store',
+                        signal: AbortSignal.timeout(15000),
+                    });
+                    // Not there (renamed, or not copied back yet) or file server trouble:
+                    // look again next time; a missing file is answered at once
+                    if (!resp.ok) continue;
+                    text = await resp.text();
+                } catch { continue; }
+                const ml = Logbook.mlFromCsv(text);
+                if (ml) {
+                    try {
+                        if (await this._mergeMLRecord(e.id, ml, needSummary)) {
+                            added++;
+                            if (typeof DiagLog !== 'undefined') DiagLog.log('logbook', `ML summary rebuilt from ${e.csvFilename} (${ml.summary.samples} samples) for entry ${e.id}`);
+                        }
+                    } catch (err) {
+                        console.warn('[Logbook] ML rebuild not saved:', err);
+                        continue;                               // next time
+                    }
+                }
+                tried.add(e.id); triedChanged = true;
+            }
+            if (triedChanged) {
+                try { localStorage.setItem(Logbook.ML_REBUILD_TRIED_KEY, JSON.stringify([...tried].slice(-500))); }
+                catch { /* storage full: looked at again next time */ }
+            }
+            return added;
+        })().finally(() => { this._mlRebuildRun = null; });
+        return this._mlRebuildRun;
+    }
+
+    /**
+     * Adds the CSV's summary (if `withSummary` and the record has none) and its
+     * per-second log (if longer than the record's) to an entry's ML record.
+     * Resolves true if a summary was added.
+     */
+    async _mergeMLRecord(id, ml, withSummary) {
+        const db = await this._openIdb();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(Logbook.IDB_ML_STORE, 'readwrite');
+            const store = tx.objectStore(Logbook.IDB_ML_STORE);
+            let addedSummary = false;
+            const req = store.get(id);
+            req.onsuccess = () => {
+                const cur = req.result || null;
+                const next = { ...(cur || {}), id, captured_at: cur?.captured_at || new Date().toISOString() };
+                let changed = false;
+                if (withSummary && !cur?.summary) { next.summary = ml.summary; addedSummary = changed = true; }
+                if (!(cur?.samples?.length >= ml.samples.length)) {
+                    next.samples = ml.samples;
+                    next.samples_source = 'csv';
+                    changed = true;
+                }
+                if (changed) store.put(next);
+            };
+            tx.oncomplete = () => { db.close(); resolve(addedSummary); };
+            tx.onerror = () => { db.close(); reject(tx.error); };
+            tx.onabort = () => { db.close(); reject(tx.error || new Error('IDB transaction aborted')); };
+        });
+    }
+
     // ========== Data Access ==========
 
     async getEntries({ limit = 0, includeTombstones = false } = {}) {
@@ -1258,9 +1473,18 @@ class Logbook {
     async _renderML() {
         this._body.innerHTML = '<div class="logbook-empty">Loading ML logs...</div>';
 
-        // Get all logbook entries that have an ML summary
+        // Get all logbook entries that have an ML summary: their own, or one
+        // rebuilt from the flight CSV (#188), kept with the ML log
         const entries = await this.getEntries();
-        const withML = entries.filter(e => e.custom_fields?.engineml_summary);
+        const rebuilt = await this._rebuiltMLSummaries(entries);
+        const summaryOf = (e) => e.custom_fields?.engineml_summary || rebuilt.get(e.id) || null;
+        const withML = entries.filter(summaryOf);
+
+        // In the background (the file server can be slow): rebuild what's missing,
+        // then show it if the ML tab is still open
+        this._rebuildMissingMLSummaries(entries).then((n) => {
+            if (n > 0 && this._activeTab === 'ml') this._renderML();
+        }).catch(() => {});
 
         // Also check if there is a live (in-memory) log not yet attached to an entry
         const liveLog = window.engineML?.getFullLog() || [];
@@ -1342,7 +1566,7 @@ class Logbook {
             html += withML.map(e => {
                 const dep = e.departure_icao || e.from_airport || '?';
                 const dest = e.destination_icao || e.to_airport || '?';
-                return renderCard(e.custom_fields.engineml_summary, `${e.date} ${dep}→${dest}`, e.id);
+                return renderCard(summaryOf(e), `${e.date} ${dep}→${dest}`, e.id);
             }).join('');
         }
 

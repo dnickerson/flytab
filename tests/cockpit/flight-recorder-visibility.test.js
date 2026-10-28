@@ -76,10 +76,19 @@ describe('FlightRecorder — app goes to the background', () => {
         expect(rec.stop).not.toHaveBeenCalled();
     });
 
-    it('4ef751b kept: engine just shut down (fresh 0 RPM) then screen off -> recording ends', () => {
+    it('4ef751b kept: engine shut down (fresh 0 RPM for 30 s) then screen off -> recording ends', () => {
         rec = makeRecorder({ engine: { rpm: 0, ageMs: 800 }, gps: { gs: 0, ageMs: 300 } });
+        rec._rpmZeroCount = 30;
         setVisibility('hidden');
         expect(rec.stop).toHaveBeenCalledTimes(1);
+    });
+
+    it('0 RPM for 13 s at the mag check, then app switch -> keeps recording (no split flight)', () => {
+        rec = makeRecorder({ engine: { rpm: 0, ageMs: 800 }, gps: { gs: 0, ageMs: 300 } });
+        rec._rpmZeroCount = 13;
+        setVisibility('hidden');
+        expect(rec._flush).toHaveBeenCalled();
+        expect(rec.stop).not.toHaveBeenCalled();
     });
 
     it('4ef751b kept for GPS-only recordings: no engine monitor, fresh GS < 10 kt -> ends', () => {
