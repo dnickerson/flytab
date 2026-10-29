@@ -164,3 +164,104 @@ describe('Airspace popup TFR row', () => {
         expect(vl._areasAt(34.72, -80.85).map((a) => a.kind)).toEqual(['tfr']);
     });
 });
+
+describe('TFR NOTAM text in the airspace popup', () => {
+    const { wireTap } = new Function(read('web/shared/tap-utils.js') + '\nreturn { wireTap };')();
+    const area = (name, text = 'FDC 6/3879 ZTL NC..SC..AIRSPACE CHARLOTTE, NC..ROCK HILL, SC..TEMPORARY FLIGHT RESTRICTIONS <SFC>.') => ({ kind: 'tfr', rec: {
+        name, lowerFt: 0, lowerRef: 'AGL', upperFt: 17999, upperRef: 'MSL', start: null, end: '2026-10-30T01:15:00Z',
+        status: 'active', fetchedAt: '2026-10-29T19:43:06Z', tfr: { id: '6/3879', legal: 'VIP', detail: true, text },
+    } });
+
+    it('one NOTAM TEXT button per TFR, its text hidden until tapped; escaped', () => {
+        const html = VectorMapLayers.prototype._airspacePopupHtml.call({}, [area('Area A'), area('Area C')]);
+        expect(html.match(/as-pop-tfr-textbtn/g)).toHaveLength(1);
+        const d = document.createElement('div'); d.innerHTML = html;
+        expect(d.querySelector('.as-pop-tfr-text').hidden).toBe(true);
+        expect(d.querySelector('.as-pop-tfr-text').innerHTML).toContain('&lt;SFC&gt;');
+    });
+
+    it('a tap opens the full text and a second tap closes it; the popup re-lays out', () => {
+        global.wireTap = wireTap;
+        const el = document.createElement('div');
+        el.innerHTML = VectorMapLayers.prototype._airspacePopupHtml.call({}, [area('Area A')]);
+        const popup = { getElement: () => el, update: vi.fn() };
+        VectorMapLayers._wireTfrText(popup);
+        const btn = el.querySelector('.as-pop-tfr-textbtn'), box = el.querySelector('.as-pop-tfr-text');
+        btn.click();
+        expect(box.hidden).toBe(false);
+        expect(btn.textContent).toBe('NOTAM TEXT ▾');
+        expect(popup.update).toHaveBeenCalled();
+        btn.click();
+        expect(box.hidden).toBe(true);
+        delete global.wireTap;
+    });
+
+    it('no text from the FAA: no button', () => {
+        const html = VectorMapLayers.prototype._airspacePopupHtml.call({}, [area('Area A', '')]);
+        expect(html).not.toContain('as-pop-tfr-textbtn');
+    });
+});
+
+describe('TFRs in the airport panel (a tap inside a TFR opens the nearest airport)', () => {
+    const AirportPopup = new Function(`${read('web/cockpit/airport-popup.js')}\nreturn AirportPopup;`)();
+    // The FAA's real areas for 6/3091 (fixture): A = Charlotte 30 nm (KLKR just inside), B = its 10 nm.
+    const xml = read('tests/fixtures/tfr/detail_6_3091.xml');
+    const ring = (name) => {
+        const g = xml.split('<TFRAreaGroup>').find((p) => p.includes(`<txtName>${name}</txtName>`));
+        const merged = g.split('<abdMergedArea>')[1].split('</abdMergedArea>')[0];
+        const ll = (v) => { const x = parseFloat(v); return /[SW]$/.test(v) ? -x : x; };
+        return [...merged.matchAll(/<geoLat>([^<]+)<\/geoLat>\s*<geoLong>([^<]+)<\/geoLong>/g)].map((m) => [ll(m[1]), ll(m[2])]);
+    };
+    const A = ring('Area A'), B = ring('Area B');
+    const NOW = Date.parse('2026-10-29T19:00:00Z');
+    function client() {
+        localStorage.setItem(FaaTfrClient.CACHE_KEY, JSON.stringify({ fetchedAt: '2026-10-29T18:27:35Z', tfrs: [{
+            id: '6/3091', legal: 'VIP', detail: true, text: 'FDC 6/3091 ... PROHIBITED: WI AN AREA DEFINED AS 30NM RADIUS ...',
+            areas: [
+                { name: 'Area A', polygon: A, lowerFt: 0, lowerRef: 'AGL', upperFt: 17999, upperRef: 'MSL', start: '2026-10-29T18:15:00Z', end: '2026-10-29T20:30:00Z' },
+                { name: 'Area B', polygon: B, lowerFt: 0, lowerRef: 'AGL', upperFt: 17999, upperRef: 'MSL', start: '2026-10-29T18:15:00Z', end: '2026-10-29T20:30:00Z' },
+            ] }] }));
+        return new FaaTfrClient();
+    }
+
+    it('distanceNm: 0 inside, else to the nearest edge', () => {
+        expect(FaaTfrClient.distanceNm(35.2131, -80.9514, B)).toBe(0);            // Charlotte centre
+        const d = FaaTfrClient.distanceNm(34.40, -80.95, A);                       // ~19 nm south of the 30 nm ring
+        expect(d).toBeGreaterThan(17); expect(d).toBeLessThan(21);
+    });
+
+    it('KLKR: in 6/3091 (Area A, the 30 nm ring), one entry per TFR', () => {
+        const n = client().near(34.722904, -80.854590, 5, NOW);
+        expect(n.map((e) => [e.tfr.id, e.area.name, e.status, e.distanceNm])).toEqual([['6/3091', 'Area A', 'active', 0]]);
+    });
+
+    it('an airport outside but within 5 nm gets "TFR n nm"; farther, nothing', () => {
+        const c = client();
+        const out = c.near(34.66, -80.86, 5, NOW);                                  // ~3.5 nm outside the ring
+        expect(out).toHaveLength(1); expect(out[0].distanceNm).toBeGreaterThan(2); expect(out[0].distanceNm).toBeLessThan(5);
+        expect(c.near(34.40, -80.95, 5, NOW)).toEqual([]);
+    });
+
+    it('the airport panel shows the TFR first, with altitudes, times and the NOTAM text behind a button', () => {
+        const ap = Object.create(AirportPopup.prototype);
+        global.window.app = { faaTfr: client() };
+        global.VectorMapLayers = VectorMapLayers;
+        const html = ap._tfrBlockHtml({ icao: 'KLKR', lat: 34.722904, lon: -80.854590 });
+        expect(html).toContain('IN TFR 6/3091 · VIP');
+        expect(html).toContain('SFC – 17,999 ft MSL');
+        expect(html).toContain('(2030Z)');
+        expect(html).toContain('apt-tfr-textbtn');
+        const d = document.createElement('div'); d.innerHTML = html;
+        expect(d.querySelector('.apt-tfr-text').hidden).toBe(true);
+        delete global.window.app; delete global.VectorMapLayers;
+    });
+
+    it('no TFR data, or none near: no block', () => {
+        const ap = Object.create(AirportPopup.prototype);
+        expect(ap._tfrBlockHtml({ lat: 34.7, lon: -80.8 })).toBe('');
+        localStorage.clear();
+        global.window.app = { faaTfr: new FaaTfrClient() };
+        expect(ap._tfrBlockHtml({ lat: 34.7, lon: -80.8 })).toBe('');
+        delete global.window.app;
+    });
+});

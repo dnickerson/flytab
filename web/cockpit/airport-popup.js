@@ -168,6 +168,17 @@ class AirportPopup {
         });
 
         // Wire frequency rows
+        // TFR NOTAM text: a tap shows / hides it
+        this._panel.querySelectorAll('.apt-tfr-textbtn').forEach(btn => {
+            wireTap(btn, () => {
+                const box = [...this._panel.querySelectorAll('.apt-tfr-text')].find(d => d.dataset.tfr === btn.dataset.tfr);
+                if (!box) return;
+                box.hidden = !box.hidden;
+                btn.textContent = box.hidden ? 'NOTAM TEXT ▸' : 'NOTAM TEXT ▾';
+                btn.setAttribute('aria-expanded', String(!box.hidden));
+            });
+        });
+
         this._panel.querySelectorAll('.freq-row[data-freq]').forEach(row => {
             wireTap(row, () => this._flashFrequency(row.dataset.freq));
         });
@@ -324,6 +335,37 @@ class AirportPopup {
         setTimeout(() => input.focus(), 120);
     }
 
+    /**
+     * TFRs this airport is in or within 5 nm of (tfr.faa.gov, FaaTfrClient).
+     * 2026-10-29: inside the Charlotte / Rock Hill VIP TFR every tap opened an
+     * airport (the nearest marker wins), so the TFR popup never did; here the
+     * airport panel says it.
+     */
+    _tfrBlockHtml(apt) {
+        const client = window.app?.faaTfr;
+        if (!client || !Number.isFinite(apt?.lat) || !Number.isFinite(apt?.lon)) return '';
+        let near = [];
+        try { near = client.near(apt.lat, apt.lon, 5); } catch (_) { return ''; }
+        if (!near.length) return '';
+        const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        const V = (typeof VectorMapLayers !== 'undefined') ? VectorMapLayers : null;
+        const alt = (ft, ref) => (V ? V._fmtTfrAlt(ft, ref) : (Number.isFinite(ft) ? `${ft} ft` : '?'));
+        const time = (iso) => (V ? V._fmtTfrTime(iso) : iso);
+        const rows = near.map(({ tfr, area, status, distanceNm }) => {
+            const where = distanceNm === 0 ? 'IN TFR' : `TFR ${distanceNm < 1 ? '<1' : Math.round(distanceNm)} nm`;
+            const when = status === 'active' ? `ACTIVE NOW${area.end ? ` · until ${time(area.end)}` : ''}`
+                : status === 'upcoming' ? `STARTS ${time(area.start)}` : 'times not known: read the NOTAM';
+            return `<div class="apt-tfr${status === 'active' ? ' is-active' : ''}">
+                <div class="apt-tfr-head">⛔ ${esc(where)} ${esc(tfr.id)}${tfr.legal ? ` · ${esc(tfr.legal)}` : ''}</div>
+                <div class="apt-tfr-when">${esc(when)}</div>
+                <div class="apt-tfr-alt">${esc(`${alt(area.lowerFt, area.lowerRef)} – ${alt(area.upperFt, area.upperRef)}`)}${area.name ? ` · ${esc(area.name)}` : ''}</div>${tfr.text
+                    ? `<button class="apt-tfr-textbtn" data-tfr="${esc(tfr.id)}" aria-expanded="false">NOTAM TEXT ▸</button>
+                <div class="apt-tfr-text" data-tfr="${esc(tfr.id)}" hidden>${esc(tfr.text)}</div>` : ''}
+            </div>`;
+        });
+        return `<div class="apt-tfrs">${rows.join('')}</div>`;
+    }
+
     _buildPanelHtml(apt, wx) {
         const towerStr = apt.tower ? 'TOWERED' : 'UNCONTROLLED';
         const elevStr = apt.elev_ft ? `${apt.elev_ft} ft` : '';
@@ -371,6 +413,8 @@ class AirportPopup {
             </div>
             <button class="apt-panel-close btn-close" aria-label="Close">✕</button>
         </div>
+
+        ${this._tfrBlockHtml(apt)}
 
         <div class="apt-action-chips">
             <button class="apt-chip" data-action="direct-to">D→ Direct</button>

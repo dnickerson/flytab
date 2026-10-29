@@ -107,6 +107,49 @@ class FaaTfrClient extends EventTarget {
         return out;
     }
 
+    /**
+     * TFRs at or near a point (an airport): one entry per TFR -- its most
+     * relevant area (inside before near, active before upcoming) -- with
+     * distanceNm (0 = inside). Nearest first.
+     */
+    near(lat, lon, withinNm = 5, now = Date.now()) {
+        const rank = { active: 0, upcoming: 1, unknown: 2 };
+        const best = new Map();
+        for (const e of this.areas(now)) {
+            const d = FaaTfrClient.distanceNm(lat, lon, e.area.polygon);
+            if (d > withinNm) continue;
+            const cur = best.get(e.tfr.id);
+            let better;
+            if (!cur) better = true;
+            else if ((d === 0) !== (cur.distanceNm === 0)) better = d === 0;              // inside wins
+            else if (rank[e.status] !== rank[cur.status]) better = rank[e.status] < rank[cur.status];  // then active
+            else better = d < cur.distanceNm;                                              // then closer
+            if (better) best.set(e.tfr.id, { ...e, distanceNm: d });
+        }
+        return [...best.values()].sort((a, b) => a.distanceNm - b.distanceNm || rank[a.status] - rank[b.status]);
+    }
+
+    /** 0 inside the polygon ([lat, lon] points), else the distance to its nearest edge, nm. */
+    static distanceNm(lat, lon, poly) {
+        if (!Array.isArray(poly) || poly.length < 3) return Infinity;
+        let inside = false;
+        for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+            const [yi, xi] = poly[i], [yj, xj] = poly[j];
+            if ((yi > lat) !== (yj > lat) && lon < (xj - xi) * (lat - yi) / (yj - yi) + xi) inside = !inside;
+        }
+        if (inside) return 0;
+        const kx = 60 * Math.cos(lat * Math.PI / 180), ky = 60;          // nm per degree, locally
+        let min = Infinity;
+        for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+            const ax = (poly[j][1] - lon) * kx, ay = (poly[j][0] - lat) * ky;
+            const bx = (poly[i][1] - lon) * kx, by = (poly[i][0] - lat) * ky;
+            const dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy;
+            const t = len2 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / len2)) : 0;
+            min = Math.min(min, Math.hypot(ax + t * dx, ay + t * dy));
+        }
+        return min;
+    }
+
     /** [lat, lon] points + margin -> [W, S, E, N] (at most MAX_SPAN_DEG each way), or null. */
     static bboxFor(points, marginNm) {
         const pts = (points || []).filter((p) => Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1]));

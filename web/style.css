@@ -12408,3 +12408,33 @@ body.route-editing-mode .route-table-sheet {
 .as-pop-tfr .as-pop-name { color: var(--color-danger-on-light); }
 .as-pop-tfr-when { font-size: var(--text-sm); color: var(--text-secondary); }
 .as-pop-tfr.is-active .as-pop-tfr-when { background: var(--color-danger); color: #fff; padding: 1px 6px; border-radius: 4px; }
+.as-pop-tfr-textbtn {
+    margin-top: 6px; min-height: var(--touch-min, 56px); width: 100%;
+    border: 2px solid var(--color-danger-on-light); border-radius: 8px; background: var(--bg-primary);
+    color: var(--color-danger-on-light); font-family: var(--font-ui); font-size: var(--text-sm); font-weight: 800;
+    cursor: pointer; touch-action: manipulation;
+}
+.as-pop-tfr-text {
+    margin-top: 6px; max-height: 40vh; overflow-y: auto; -webkit-overflow-scrolling: touch;
+    background: var(--bg-surface); border: 1px solid var(--border); border-radius: 6px; padding: 8px;
+    font-family: var(--font-instrument); font-size: var(--text-sm); font-weight: 700; line-height: 1.4;
+    color: var(--text-primary); white-space: pre-wrap; word-break: break-word;
+}
+
+/* TFRs in the airport panel (airport-popup.js _tfrBlockHtml) */
+.apt-tfrs { display: grid; gap: 6px; padding: 8px 12px 4px; }
+.apt-tfr { border: 2px solid var(--color-danger); border-left-width: 8px; border-radius: 6px; padding: 6px 8px; background: var(--bg-primary); }
+.apt-tfr-head { font-family: var(--font-ui); font-size: var(--text-md); font-weight: 900; color: var(--color-danger-on-light); }
+.apt-tfr-when { font-family: var(--font-ui); font-size: var(--text-sm); font-weight: 800; color: var(--text-primary); }
+.apt-tfr.is-active .apt-tfr-when { color: var(--color-danger-on-light); }
+.apt-tfr-alt { font-family: var(--font-instrument); font-size: var(--text-sm); font-weight: 900; color: var(--text-primary); }
+.apt-tfr-textbtn {
+    margin-top: 6px; min-height: var(--touch-min, 56px); width: 100%;
+    border: 2px solid var(--color-danger-on-light); border-radius: 8px; background: var(--bg-primary);
+    color: var(--color-danger-on-light); font-family: var(--font-ui); font-size: var(--text-sm); font-weight: 800; cursor: pointer;
+}
+.apt-tfr-text {
+    margin-top: 6px; max-height: 40vh; overflow-y: auto; background: var(--bg-surface); border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px; font-family: var(--font-instrument); font-size: var(--text-sm); font-weight: 700;
+    line-height: 1.4; color: var(--text-primary); white-space: pre-wrap; word-break: break-word;
+}
