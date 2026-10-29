@@ -250,9 +250,23 @@ describe('TFRs in the airport panel (a tap inside a TFR opens the nearest airpor
         expect(html).toContain('IN TFR 6/3091 · VIP');
         expect(html).toContain('SFC – 17,999 ft MSL');
         expect(html).toContain('(2030Z)');
-        expect(html).toContain('apt-tfr-textbtn');
         const d = document.createElement('div'); d.innerHTML = html;
+        expect(d.querySelector('button.apt-tfr[data-tfr="6/3091"]')).not.toBeNull();   // the row is the text button
         expect(d.querySelector('.apt-tfr-text').hidden).toBe(true);
+        expect(d.querySelectorAll('.apt-tfr')).toHaveLength(1);
+        delete global.window.app; delete global.VectorMapLayers;
+    });
+
+    it('the same TFR issued for two Centers (same area, times, altitudes) is one row naming both', () => {
+        const c = client();
+        const t = c.data.tfrs[0];
+        c.data.tfrs.push({ ...t, id: '6/3092', facility: 'ZJX' });
+        const ap = Object.create(AirportPopup.prototype);
+        global.window.app = { faaTfr: c };
+        global.VectorMapLayers = VectorMapLayers;
+        const d = document.createElement('div'); d.innerHTML = ap._tfrBlockHtml({ lat: 34.722904, lon: -80.854590 });
+        expect(d.querySelectorAll('.apt-tfr')).toHaveLength(1);
+        expect(d.querySelector('.apt-tfr-head').textContent).toContain('6/3091 / 6/3092');
         delete global.window.app; delete global.VectorMapLayers;
     });
 

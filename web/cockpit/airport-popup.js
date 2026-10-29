@@ -168,13 +168,14 @@ class AirportPopup {
         });
 
         // Wire frequency rows
-        // TFR NOTAM text: a tap shows / hides it
-        this._panel.querySelectorAll('.apt-tfr-textbtn').forEach(btn => {
+        // TFR row: a tap shows / hides its NOTAM text
+        this._panel.querySelectorAll('button.apt-tfr[data-tfr]').forEach(btn => {
             wireTap(btn, () => {
                 const box = [...this._panel.querySelectorAll('.apt-tfr-text')].find(d => d.dataset.tfr === btn.dataset.tfr);
                 if (!box) return;
                 box.hidden = !box.hidden;
-                btn.textContent = box.hidden ? 'NOTAM TEXT ▸' : 'NOTAM TEXT ▾';
+                const arrow = btn.querySelector('.apt-tfr-arrow');
+                if (arrow) arrow.textContent = box.hidden ? '▸' : '▾';
                 btn.setAttribute('aria-expanded', String(!box.hidden));
             });
         });
@@ -351,19 +352,31 @@ class AirportPopup {
         const V = (typeof VectorMapLayers !== 'undefined') ? VectorMapLayers : null;
         const alt = (ft, ref) => (V ? V._fmtTfrAlt(ft, ref) : (Number.isFinite(ft) ? `${ft} ft` : '?'));
         const time = (iso) => (V ? V._fmtTfrTime(iso) : iso);
-        const rows = near.map(({ tfr, area, status, distanceNm }) => {
+        // The same TFR issued for two Centers (6/3879 ZTL, 6/3884 ZJX on 2026-10-29):
+        // same area, times and altitudes -> one row naming both.
+        const rows = [];
+        for (const e of near) {
+            const a = e.area, p0 = a.polygon[0] || [];
+            const key = [e.distanceNm === 0, e.status, a.start, a.end, a.lowerFt, a.lowerRef, a.upperFt, a.upperRef,
+                a.polygon.length, (+p0[0]).toFixed(3), (+p0[1]).toFixed(3)].join('|');
+            const same = rows.find((r) => r.key === key);
+            if (same) same.ids.push(e.tfr.id); else rows.push({ key, ids: [e.tfr.id], ...e });
+        }
+        const html = rows.map(({ ids, tfr, area, status, distanceNm }) => {
             const where = distanceNm === 0 ? 'IN TFR' : `TFR ${distanceNm < 1 ? '<1' : Math.round(distanceNm)} nm`;
-            const when = status === 'active' ? `ACTIVE NOW${area.end ? ` · until ${time(area.end)}` : ''}`
-                : status === 'upcoming' ? `STARTS ${time(area.start)}` : 'times not known: read the NOTAM';
-            return `<div class="apt-tfr${status === 'active' ? ' is-active' : ''}">
-                <div class="apt-tfr-head">⛔ ${esc(where)} ${esc(tfr.id)}${tfr.legal ? ` · ${esc(tfr.legal)}` : ''}</div>
-                <div class="apt-tfr-when">${esc(when)}</div>
-                <div class="apt-tfr-alt">${esc(`${alt(area.lowerFt, area.lowerRef)} – ${alt(area.upperFt, area.upperRef)}`)}${area.name ? ` · ${esc(area.name)}` : ''}</div>${tfr.text
-                    ? `<button class="apt-tfr-textbtn" data-tfr="${esc(tfr.id)}" aria-expanded="false">NOTAM TEXT ▸</button>
-                <div class="apt-tfr-text" data-tfr="${esc(tfr.id)}" hidden>${esc(tfr.text)}</div>` : ''}
-            </div>`;
+            const when = status === 'active' ? (area.end ? `until ${time(area.end)}` : 'active')
+                : status === 'upcoming' ? `starts ${time(area.start)}` : 'times not known';
+            const tag = status === 'active' ? '<span class="apt-tfr-tag">ACTIVE</span>' : '';
+            const head = `<span class="apt-tfr-head">⛔ ${esc(where)} ${esc(ids.join(' / '))}${tfr.legal ? ` · ${esc(tfr.legal)}` : ''}</span>${tag}`;
+            const sub = `<span class="apt-tfr-sub">${esc(`${when} · ${alt(area.lowerFt, area.lowerRef)} – ${alt(area.upperFt, area.upperRef)}`)}</span>`;
+            // The row is the button for the NOTAM text (no extra button to take room)
+            return tfr.text
+                ? `<button class="apt-tfr${status === 'active' ? ' is-active' : ''}" data-tfr="${esc(tfr.id)}" aria-expanded="false">
+                    <span class="apt-tfr-line">${head}<span class="apt-tfr-arrow">▸</span></span>${sub}</button>
+                <div class="apt-tfr-text" data-tfr="${esc(tfr.id)}" hidden>${esc(tfr.text)}</div>`
+                : `<div class="apt-tfr${status === 'active' ? ' is-active' : ''}"><span class="apt-tfr-line">${head}</span>${sub}</div>`;
         });
-        return `<div class="apt-tfrs">${rows.join('')}</div>`;
+        return `<div class="apt-tfrs">${html.join('')}</div>`;
     }
 
     _buildPanelHtml(apt, wx) {
