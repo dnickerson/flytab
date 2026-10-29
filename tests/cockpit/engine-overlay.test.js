@@ -174,11 +174,17 @@ describe('EngineOverlay picker support', () => {
     }
 
     it('every catalog key resolves against the real Pi payload', () => {
-        const d = EngineOverlay.flatten({ percent_power: 65, data: { Carb_Temp: 72, RPM: 2420, MP: 23.4, Fuel_Flow: 8.2,
-            Oil_Temp: 185, Oil_Press: 78, Volts: 14.1, CHT1: 340, CHT2: 362, CHT3: 0, CHT4: 355, EGT1: 1290, EGT2: 1312, EGT3: 1301, EGT4: 1288 } });
+        // engine_monitor.py get_status(): top-level oat / pressure_altitude / manual_oat,
+        // parse_line() fields under data (Fuel_Press, Amps, Fuel_Left, Fuel_Right, CHTn, EGTn)
+        const d = EngineOverlay.flatten({ percent_power: 65, oat: 3.1, pressure_altitude: 5500, manual_oat: null,
+            data: { Carb_Temp: 72, RPM: 2420, MP: 23.4, Fuel_Flow: 8.2,
+            Oil_Temp: 185, Oil_Press: 78, Volts: 14.1, Amps: 4, Fuel_Press: 2.9, Fuel_Left: 11.9, Fuel_Right: 8.8,
+            CHT1: 340, CHT2: 362, CHT3: 0, CHT4: 355, EGT1: 1290, EGT2: 1312, EGT3: 1301, EGT4: 1288 } });
         const got = Object.fromEntries(EngineOverlay.CATALOG.map(c => [c.key, EngineOverlay.valueFor(d, c.key)]));
         expect(got).toEqual({ carb_temp: 72, rpm: 2420, mp: 23.4, fuel_flow: 8.2, percent_power: 65, oil_temp: 185,
-            oil_press: 78, cht_max: 362, egt_max: 1312, volts: 14.1 });
+            oil_press: 78, cht_max: 362, egt_max: 1312, volts: 14.1, amps: 4, fuel_press: 2.9, fuel_left: 11.9,
+            fuel_right: 8.8, oat_c: 3.1, egt1: 1290, egt2: 1312, egt3: 1301, egt4: 1288, cht1: 340, cht2: 362, cht3: 0,
+            cht4: 355, egt_spread: 24, cht_spread: 22 });
     });
 
     it('CHT/EGT max ignore an unfitted probe reading 0, and are null with no readings', () => {
@@ -276,9 +282,28 @@ describe('EngineOverlay — code review fixes', () => {
         expect(card(container).map(c => c[1])).toEqual(['0°F', '--"', '-- gph', '--%', '--V', '0 psi']);
     });
 
-    it('sits below the D-> button (map corner buttons end at 100px)', () => {
+    it('sits below the FREQ button (three map corner buttons end at 148px)', () => {
         new EngineOverlay(container);
-        expect(container.querySelector('.engine-overlay').style.top).toBe('108px');
+        expect(container.querySelector('.engine-overlay').style.top).toBe('156px');
+    });
+
+    it('OAT is labelled by where it comes from: ISA (calculated) or ATIS (entered); blank before an altitude', () => {
+        setConfig([{ key: 'oat_c' }]);
+        const client = makeClient();
+        new EngineOverlay(container, client);
+        client.emit('engine:data', { oat: 0, pressure_altitude: null, manual_oat: null, data: { RPM: 2400 } });
+        expect(card(container).map(c => c.slice(0, 2))).toEqual([['OAT ISA', '--°C']]);
+        client.emit('engine:data', { oat: 3.1, pressure_altitude: 5500, manual_oat: null, data: { RPM: 2400 } });
+        expect(card(container).map(c => c.slice(0, 2))).toEqual([['OAT ISA', '3°C']]);
+        client.emit('engine:data', { oat: 9, pressure_altitude: 5500, manual_oat: 9, data: { RPM: 2400 } });
+        expect(card(container).map(c => c.slice(0, 2))).toEqual([['OAT ATIS', '9°C']]);
+        client.emit('engine:data', { oat: -12, pressure_altitude: 11000, manual_oat: null, data: { RPM: 2400 } });
+        expect(card(container).map(c => c.slice(0, 2))).toEqual([['OAT ISA', '-12°C']]);
+    });
+
+    it('EGT/CHT spread ignore an unfitted probe and need two readings', () => {
+        expect(EngineOverlay.valueFor({ EGT1: 1300, EGT2: 0, EGT3: 1250, EGT4: 1280 }, 'egt_spread')).toBe(50);
+        expect(EngineOverlay.valueFor({ CHT1: 0, CHT2: 300, CHT3: 0, CHT4: 0 }, 'cht_spread')).toBeNull();
     });
 
     it('the cap counts hand-added fields: they keep their slots and are never dropped', () => {

@@ -34,6 +34,25 @@ class EngineOverlay {
         { key: 'cht_max',       label: 'CHT MAX',   unit: '°F',   level: 'chtLevel' },
         { key: 'egt_max',       label: 'EGT MAX',   unit: '°F',   level: 'egtLevel' },
         { key: 'volts',         label: 'VOLTS',     unit: 'V',    decimals: 1, zeroIsBlank: true },
+        { key: 'amps',          label: 'AMPS',      unit: 'A' },
+        { key: 'fuel_press',    label: 'FUEL PRESS', unit: ' psi', decimals: 1, zeroIsBlank: true },
+        { key: 'fuel_left',     label: 'FUEL L',    unit: ' gal', decimals: 1, zeroIsBlank: true },
+        { key: 'fuel_right',    label: 'FUEL R',    unit: ' gal', decimals: 1, zeroIsBlank: true },
+        // The Pi's OAT is not measured: the standard atmosphere at the pressure
+        // altitude, or the ATIS value entered on the ENG page (manual_oat). The
+        // D-180's own OAT is on neither of its serial ports (Pilot's User Guide
+        // Rev H, Appendix A), so the label says which one this is.
+        { key: 'oat_c',         label: 'OAT',       unit: '°C',   labelFor: (d) => (d && d.manual_oat != null ? 'OAT ATIS' : 'OAT ISA') },
+        { key: 'egt1',          label: 'EGT 1',     unit: '°F',   level: 'egtLevel', zeroIsBlank: true },
+        { key: 'egt2',          label: 'EGT 2',     unit: '°F',   level: 'egtLevel', zeroIsBlank: true },
+        { key: 'egt3',          label: 'EGT 3',     unit: '°F',   level: 'egtLevel', zeroIsBlank: true },
+        { key: 'egt4',          label: 'EGT 4',     unit: '°F',   level: 'egtLevel', zeroIsBlank: true },
+        { key: 'cht1',          label: 'CHT 1',     unit: '°F',   level: 'chtLevel', zeroIsBlank: true },
+        { key: 'cht2',          label: 'CHT 2',     unit: '°F',   level: 'chtLevel', zeroIsBlank: true },
+        { key: 'cht3',          label: 'CHT 3',     unit: '°F',   level: 'chtLevel', zeroIsBlank: true },
+        { key: 'cht4',          label: 'CHT 4',     unit: '°F',   level: 'chtLevel', zeroIsBlank: true },
+        { key: 'egt_spread',    label: 'EGT SPREAD', unit: '°F' },
+        { key: 'cht_spread',    label: 'CHT SPREAD', unit: '°F' },
     ];
 
     /** More than this many cards would cover too much of the map. */
@@ -43,11 +62,28 @@ class EngineOverlay {
     static DERIVED = {
         chtmax: (d) => EngineOverlay._maxOf(d, ['CHT1', 'CHT2', 'CHT3', 'CHT4']),
         egtmax: (d) => EngineOverlay._maxOf(d, ['EGT1', 'EGT2', 'EGT3', 'EGT4']),
+        chtspread: (d) => EngineOverlay._spreadOf(d, ['CHT1', 'CHT2', 'CHT3', 'CHT4']),
+        egtspread: (d) => EngineOverlay._spreadOf(d, ['EGT1', 'EGT2', 'EGT3', 'EGT4']),
+        // The Pi sends oat 0 until it has a pressure altitude (or an ATIS value): not a reading.
+        oatc: (d) => {
+            if (d.manual_oat != null && Number.isFinite(Number(d.manual_oat))) return Number(d.manual_oat);
+            return d.pressure_altitude ? (Number.isFinite(Number(d.oat)) ? Number(d.oat) : null) : null;
+        },
     };
 
+    static _probes(d, keys) {
+        return keys.map(k => Number(d[k])).filter(v => Number.isFinite(v) && v > 0);
+    }
+
     static _maxOf(d, keys) {
-        const vals = keys.map(k => Number(d[k])).filter(v => Number.isFinite(v) && v > 0);
+        const vals = EngineOverlay._probes(d, keys);
         return vals.length ? Math.max(...vals) : null;
+    }
+
+    /** Highest minus lowest fitted probe; needs two. */
+    static _spreadOf(d, keys) {
+        const vals = EngineOverlay._probes(d, keys);
+        return vals.length >= 2 ? Math.max(...vals) - Math.min(...vals) : null;
     }
 
     static _norm(s) {
@@ -167,9 +203,10 @@ class EngineOverlay {
         // Position
         const pos = config.position || 'top-right';
         if (pos === 'top-right') {
-            // Below the two 44px map corner buttons (#mapCornerBtns: top 8, gap 4 ->
-            // they end at 100px); at 64px the D-> button covered the first value.
-            this._el.style.top = '108px';
+            // Below the three 44px map corner buttons (#mapCornerBtns: top 8, gap 4 ->
+            // auto-pan, D-> and FREQ end at 148px); at 64px the D-> button covered
+            // the first value.
+            this._el.style.top = '156px';
             this._el.style.right = '8px';
         } else if (pos === 'top-left') {
             this._el.style.top = '64px';
@@ -195,7 +232,7 @@ class EngineOverlay {
             row.appendChild(label);
             row.appendChild(val);
             this._el.appendChild(row);
-            this._fieldEls.push({ rowEl: row, valEl: val, field });
+            this._fieldEls.push({ rowEl: row, valEl: val, labelEl: label, field });
         }
 
         this._container.appendChild(this._el);
@@ -228,10 +265,10 @@ class EngineOverlay {
      */
     static valueFor(data, key) {
         if (!data || !key) return null;
-        if (data[key] != null) return data[key];
         const norm = EngineOverlay._norm;
         const want = norm(key);
         if (EngineOverlay.DERIVED[want]) return EngineOverlay.DERIVED[want](data);
+        if (data[key] != null) return data[key];
         for (const k of Object.keys(data)) {
             if (norm(k) === want && data[k] != null) return data[k];
         }
@@ -246,7 +283,8 @@ class EngineOverlay {
         this._lastData = data;
         if (!this._el) return;
 
-        for (const { rowEl, valEl, field } of this._fieldEls) {
+        for (const { rowEl, valEl, labelEl, field } of this._fieldEls) {
+            if (typeof field.labelFor === 'function') labelEl.textContent = field.labelFor(data);
             const raw = EngineOverlay.valueFor(data, field.key);
             const value = raw == null || raw === '' ? null : Number(raw);
             const ok = value != null && Number.isFinite(value) && !(field.zeroIsBlank && value <= 0);

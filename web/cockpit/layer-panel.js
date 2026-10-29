@@ -68,7 +68,7 @@ class LayerPanel {
                     <span>Map Engine Box</span><span class="lp-acc-arrow">&#9654;</span>
                 </button>
                 <div class="lp-accordion-body">
-                    <div class="lp-engine-note">Engine values shown top right of the map, under D&rarr;. Up to ${EngineOverlay.MAX_FIELDS}.</div>${rows}
+                    <div class="lp-engine-note">Engine values shown top right of the map, under FREQ. Up to ${EngineOverlay.MAX_FIELDS}.</div>${rows}
                 </div>
             </div>`;
     }

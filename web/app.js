@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v12.19';
+const FLYTAB_VERSION = 'v12.20';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 // Kept in memory and saved at most every FLUSH_MS (errors at once). Every log()
@@ -900,6 +900,16 @@ class FlyTabApp {
             this.directToPanel = new DirectToPanel(this, nasrDb);
             this.cockpitMap.onDirectToTap = () => this.directToPanel.open();
         }
+
+        // Radio frequency tool (map FREQ button)
+        this._guard('Radio frequencies', () => {
+            const mapAreaEl = document.querySelector('.map-area');
+            if (typeof FreqPanel === 'undefined' || !mapAreaEl) return;
+            this.freqPanel = new FreqPanel(mapAreaEl, { getSituation: () => this.stratuxClient?.situation ?? null });
+            this.freqPanel.onCurrentChange = (mhz) => this.cockpitMap.setFreqButton(mhz);
+            this.cockpitMap.onFreqTap = () => this.freqPanel.toggle();
+            this.cockpitMap.setFreqButton(this.freqPanel.current);
+        });
 
         // FIS-B weather client (METARs, TAFs, PIREPs, SIGMETs, winds aloft)
         if (typeof FisbClient !== 'undefined') {

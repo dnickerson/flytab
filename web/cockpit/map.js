@@ -1958,6 +1958,24 @@ class CockpitMap {
         L.DomEvent.disableScrollPropagation(directToBtn);
         container.appendChild(directToBtn);
         this._directToBtn = directToBtn;
+
+        // Radio frequency tool: shows the current frequency, opens the panel (app wires onFreqTap)
+        const freqBtn = document.createElement('button');
+        freqBtn.className = 'map-corner-btn freq-btn';
+        freqBtn.title = 'Radio frequencies';
+        freqBtn.textContent = 'FREQ';
+        wireTap(freqBtn, () => { if (this.onFreqTap) this.onFreqTap(); });
+        L.DomEvent.disableClickPropagation(freqBtn);
+        L.DomEvent.disableScrollPropagation(freqBtn);
+        container.appendChild(freqBtn);
+        this._freqBtn = freqBtn;
+    }
+
+    /** The map's FREQ button shows the current frequency (or FREQ when there is none). */
+    setFreqButton(mhz) {
+        if (!this._freqBtn) return;
+        this._freqBtn.textContent = mhz || 'FREQ';
+        this._freqBtn.classList.toggle('has-freq', !!mhz);
     }
 
     /** Toggle traffic altitude labels — called by layer panel */

@@ -12330,3 +12330,75 @@ body.route-editing-mode .route-table-sheet {
                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dto-row-dist { font-family: var(--font-instrument); font-size: var(--text-sm); font-weight: 900; color: var(--text-secondary); }
 .dto-row.is-passed { background: var(--bg-surface); }   /* text stays at full contrast; "passed" says it */
+
+/* Radio frequency tool (cockpit/freq-panel.js): map corner button + side panel.
+   Right side like the airport panel; z 610 so it sits over it when both are open. */
+.map-corner-btn.freq-btn {
+    width: auto;
+    min-width: 44px;
+    padding: 0 10px;
+    font-family: var(--font-instrument);
+    font-weight: 900;
+    align-self: flex-end;
+}
+.map-corner-btn.freq-btn.has-freq { background: var(--bg-primary); color: var(--text-primary); border: 2px solid var(--accent); }
+.freq-panel {
+    position: absolute; top: 0; right: 0; bottom: 0;
+    width: 400px; max-width: 100%;
+    z-index: 610;
+    background: var(--bg-surface);
+    border-left: 1px solid var(--border-strong);
+    transform: translateX(100%);
+    transition: transform 0.2s ease;
+    display: flex; flex-direction: column;
+    overflow-y: auto;
+    padding: 0 14px 14px;
+    box-sizing: border-box;
+}
+.freq-panel.open { transform: translateX(0); }
+.freq-head { display: flex; align-items: center; justify-content: space-between; min-height: var(--touch-min, 56px); }
+.freq-title, .freq-hist-title, .freq-center-lbl {
+    font-family: var(--font-ui); font-size: 15px; font-weight: 800; letter-spacing: 0.08em; color: var(--text-secondary);
+}
+.freq-center { display: grid; gap: 6px; margin-bottom: 12px; }
+.freq-center-btn {
+    min-height: var(--touch-preferred, 64px); border: 2px solid var(--accent); border-radius: 8px;
+    background: var(--bg-primary); display: flex; align-items: baseline; gap: 12px; padding: 0 14px; cursor: pointer;
+}
+.freq-center-mhz { font-family: var(--font-instrument); font-size: 30px; font-weight: 900; color: var(--text-primary); }
+.freq-center-name { font-family: var(--font-ui); font-size: 16px; font-weight: 700; color: var(--text-secondary); }
+.freq-entry { display: grid; gap: 8px; }
+.freq-display {
+    font-family: var(--font-instrument); font-size: 44px; font-weight: 900; letter-spacing: 0.02em;
+    background: var(--bg-primary); border: 2px solid var(--border-strong); border-radius: 8px;
+    padding: 6px 14px; min-height: 64px; color: var(--text-primary);
+}
+.freq-one { color: var(--text-muted); }
+.freq-error { min-height: 22px; font-family: var(--font-ui); font-size: 16px; font-weight: 800; color: var(--color-danger-on-light); }
+.freq-keys { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.freq-key, .freq-enter {
+    min-height: var(--touch-preferred, 64px); border-radius: 8px; border: 2px solid var(--border-strong);
+    background: var(--bg-primary); color: var(--text-primary);
+    font-family: var(--font-instrument); font-size: 28px; font-weight: 900; cursor: pointer;
+    touch-action: manipulation;
+}
+.freq-key[data-key="CLR"], .freq-key[data-key="⌫"] { font-family: var(--font-ui); font-size: 20px; font-weight: 800; }
+.freq-enter { background: var(--accent); border-color: var(--accent); color: #fff; font-family: var(--font-ui); font-size: 22px; font-weight: 800; }
+.freq-enter:disabled { opacity: 0.4; }
+.freq-hist-title { margin-top: 16px; margin-bottom: 6px; }
+.freq-hist { display: grid; gap: 6px; }
+.freq-hist-empty { font-family: var(--font-ui); font-size: 16px; font-weight: 700; color: var(--text-muted); }
+.freq-row { display: flex; gap: 6px; }
+.freq-row-main {
+    flex: 1; min-height: var(--touch-min, 56px); text-align: left; cursor: pointer;
+    border: 1px solid var(--border); border-radius: 8px; background: var(--bg-primary);
+    display: flex; flex-direction: column; justify-content: center; padding: 4px 12px;
+}
+.freq-row.current .freq-row-main { border: 2px solid var(--accent); }
+.freq-row-mhz { font-family: var(--font-instrument); font-size: 26px; font-weight: 900; color: var(--text-primary); }
+.freq-row-meta { font-family: var(--font-ui); font-size: 14px; font-weight: 700; color: var(--text-secondary); }
+.freq-row-del {
+    min-width: var(--touch-min, 56px); min-height: var(--touch-min, 56px); border-radius: 8px;
+    border: 1px solid var(--border); background: var(--bg-primary); color: var(--text-secondary);
+    font-size: 20px; font-weight: 800; cursor: pointer;
+}
