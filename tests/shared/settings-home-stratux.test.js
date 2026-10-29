@@ -25,3 +25,13 @@ describe('Settings: home Stratux', () => {
         expect(Settings.homeStratuxNoRecord).toBe(true);
     });
 });
+
+describe('Stratux addresses are checked before they are saved (review 2026-10-29)', () => {
+    // They go into http:// and ws:// URLs: "host/#..." or "user@host" would send
+    // the Stratux traffic somewhere else.
+    const ConfigEditor = new Function(readFileSync('web/cockpit/config-editor.js', 'utf8') + '\nreturn ConfigEditor;')();
+    it('an address or host name (optional :port) passes; anything else does not', () => {
+        for (const ok of ['192.168.10.1', '192.168.1.212', '192.168.1.212:80', 'stratux.local']) expect(ConfigEditor.validHost(ok)).toBe(true);
+        for (const bad of ['evil.com/#', 'host@evil.com', 'a b', 'http://x', '1.2.3.4:999999', '"><img src=x>', '']) expect(ConfigEditor.validHost(bad)).toBe(false);
+    });
+});

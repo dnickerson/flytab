@@ -89,6 +89,33 @@ describe('EngineClient._onData', () => {
 // ---------------------------------------------------------------------------
 // Pi contract handshake (#113)
 // ---------------------------------------------------------------------------
+describe('EngineClient.readingAge: the readings moving, not just the Pi answering', () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it('data_count rising: fresh; the Pi repeating the same count (EMS serial dead): ages', () => {
+        const c = new EngineClient('127.0.0.1', 8082);
+        expect(c.readingAge).toBe(Infinity);
+        c._onData({ ...ENGINE_FRAME, data_count: 10 });
+        vi.advanceTimersByTime(1000); c._onData({ ...ENGINE_FRAME, data_count: 11 });
+        expect(c.readingAge).toBe(0);
+        for (let i = 0; i < 6; i++) { vi.advanceTimersByTime(1000); c._onData({ ...ENGINE_FRAME, data_count: 11 }); }
+        expect(c.dataAge).toBe(0);
+        expect(c.readingAge).toBe(6000);
+        c._onData({ ...ENGINE_FRAME, data_count: 0 });         // Pi restarted: counting again
+        expect(c.readingAge).toBe(0);
+    });
+
+    it('a Pi without data_count: same as dataAge', () => {
+        const c = new EngineClient('127.0.0.1', 8082);
+        const { data_count, ...frame } = ENGINE_FRAME;
+        c._onData(frame);
+        vi.advanceTimersByTime(2500);
+        expect(c.readingAge).toBe(c.dataAge);
+        expect(c.readingAge).toBe(2500);
+    });
+});
+
 describe('EngineClient — Pi contract handshake (#113)', () => {
     let client;
 

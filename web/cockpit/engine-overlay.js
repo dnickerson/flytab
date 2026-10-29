@@ -35,14 +35,18 @@ class EngineOverlay {
         { key: 'egt_max',       label: 'EGT MAX',   unit: '°F',   level: 'egtLevel' },
         { key: 'volts',         label: 'VOLTS',     unit: 'V',    decimals: 1, zeroIsBlank: true },
         { key: 'amps',          label: 'AMPS',      unit: 'A' },
-        { key: 'fuel_press',    label: 'FUEL PRESS', unit: ' psi', decimals: 1, zeroIsBlank: true },
-        { key: 'fuel_left',     label: 'FUEL L',    unit: ' gal', decimals: 1, zeroIsBlank: true },
-        { key: 'fuel_right',    label: 'FUEL R',    unit: ' gal', decimals: 1, zeroIsBlank: true },
+        // 0 shows as 0, like OIL PRESS: a failed pump or vapor lock (KTBR 10-27)
+        // and an empty tank must not read as "no sensor" (review 2026-10-29).
+        { key: 'fuel_press',    label: 'FUEL PRESS', unit: ' psi', decimals: 1 },
+        { key: 'fuel_left',     label: 'FUEL L',    unit: ' gal', decimals: 1 },
+        { key: 'fuel_right',    label: 'FUEL R',    unit: ' gal', decimals: 1 },
         // The Pi's OAT is not measured: the standard atmosphere at the pressure
         // altitude, or the ATIS value entered on the ENG page (manual_oat). The
         // D-180's own OAT is on neither of its serial ports (Pilot's User Guide
-        // Rev H, Appendix A), so the label says which one this is.
-        { key: 'oat_c',         label: 'OAT',       unit: '°C',   labelFor: (d) => (d && d.manual_oat != null ? 'OAT ATIS' : 'OAT ISA') },
+        // Rev H, Appendix A), so the label says which one this is. The ATIS value
+        // is the field's: only on the ground (review 2026-10-29: it stayed until
+        // cleared, "OAT ATIS 20°C" at 10,000 ft); airborne, ISA.
+        { key: 'oat_c',         label: 'OAT',       unit: '°C',   labelFor: (d) => (EngineOverlay._atisOat(d) != null ? 'OAT ATIS' : 'OAT ISA') },
         { key: 'egt1',          label: 'EGT 1',     unit: '°F',   level: 'egtLevel', zeroIsBlank: true },
         { key: 'egt2',          label: 'EGT 2',     unit: '°F',   level: 'egtLevel', zeroIsBlank: true },
         { key: 'egt3',          label: 'EGT 3',     unit: '°F',   level: 'egtLevel', zeroIsBlank: true },
@@ -65,11 +69,27 @@ class EngineOverlay {
         chtspread: (d) => EngineOverlay._spreadOf(d, ['CHT1', 'CHT2', 'CHT3', 'CHT4']),
         egtspread: (d) => EngineOverlay._spreadOf(d, ['EGT1', 'EGT2', 'EGT3', 'EGT4']),
         // The Pi sends oat 0 until it has a pressure altitude (or an ATIS value): not a reading.
+        // With an ATIS value the Pi's oat IS that value, so ISA is worked out here
+        // (engine_monitor.py calculate_oat_from_altitude: 15 - 0.00198 x ft).
         oatc: (d) => {
-            if (d.manual_oat != null && Number.isFinite(Number(d.manual_oat))) return Number(d.manual_oat);
-            return d.pressure_altitude ? (Number.isFinite(Number(d.oat)) ? Number(d.oat) : null) : null;
+            const atis = EngineOverlay._atisOat(d);
+            if (atis != null) return atis;
+            const pa = Number(d.pressure_altitude);
+            if (!d.pressure_altitude || !Number.isFinite(pa)) return null;
+            if (d.manual_oat != null) return Math.round((15 - pa * 0.00198) * 10) / 10;
+            return Number.isFinite(Number(d.oat)) ? Number(d.oat) : null;
         },
     };
+
+    /** Below this ground speed (kt) the ATIS temperature entered is shown. */
+    static ATIS_MAX_GS_KT = 40;
+
+    /** The ATIS temperature entered on the ENG page, while on the ground; else null. */
+    static _atisOat(d) {
+        if (!d || d.manual_oat == null || !Number.isFinite(Number(d.manual_oat))) return null;
+        const gs = Number(d.ground_speed);
+        return Number.isFinite(gs) && gs < EngineOverlay.ATIS_MAX_GS_KT ? Number(d.manual_oat) : null;
+    }
 
     static _probes(d, keys) {
         return keys.map(k => Number(d[k])).filter(v => Number.isFinite(v) && v > 0);

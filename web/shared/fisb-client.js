@@ -50,17 +50,20 @@ class FisbClient extends EventTarget {
 
     /**
      * The FIS-B badge: is FIS-B being received? FlyTab's own reception (anything
-     * in the last FRESH_MS), else a fresh Stratux /getStatus counting UAT
-     * messages, whatever the radio. 10-27 KTBR-KLKR: FIS-B arrived every minute
-     * for an hour while the badge, going by /getStatus alone, stayed red.
+     * in the last FRESH_MS), else a fresh Stratux /getTowers with a ground
+     * station heard in the last minute. 10-27 KTBR-KLKR: FIS-B arrived every
+     * minute for an hour while the badge, going by /getStatus alone, stayed red.
+     * Not /getStatus UAT_messages_last_minute: it counts every 978 message, an
+     * aircraft's too (review 2026-10-29); a tower's Messages_last_minute counts
+     * only its uplinks (Stratux main/gen_gdl90.go @150f2828).
      */
-    static isReceiving({ now, lastRxAt, connected, status, statusAt }) {
+    static isReceiving({ now, lastRxAt, connected, towers, towersAt }) {
         const age = (t) => (t > 0 ? now - t : Infinity);
         const own = age(lastRxAt);
         if (own >= 0 && own < FisbClient.FRESH_MS) return true;
-        const st = age(statusAt);
-        return !!connected && !!status && st >= 0 && st < FisbClient.STATUS_FRESH_MS
-            && status.UAT_messages_last_minute > 0;
+        const tw = age(towersAt);
+        return !!connected && !!towers && typeof towers === 'object' && tw >= 0 && tw < FisbClient.STATUS_FRESH_MS
+            && Object.values(towers).some((t) => Number(t?.Messages_last_minute) > 0);
     }
 
     get nexradBlockCount() { return this._nexradBlocks?.size || 0; }

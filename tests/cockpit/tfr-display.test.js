@@ -6,7 +6,7 @@
  * data (tfr.faa.gov, through the NOTAM proxy) draws the exact areas; the text
  * parser, the fallback, reads every area.
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { readFileSync } from 'fs';
 
 const read = (p) => readFileSync(p, 'utf8');
@@ -52,6 +52,12 @@ describe('NOTAM text parser (fallback): every area of a TFR', () => {
     });
 
     it('older wording without "WI AN AREA DEFINED AS" still parses as before', () => {
+        // Review 2026-10-29: the phrase present but an area wording the per-area
+        // reading doesn't know: the whole-text reading, not nothing.
+        const odd = wx._parseTfrGeometries('3NM RADIUS OF 3512N08057W SFC-3000FT. WI AN AREA DEFINED AS ABOVE.');
+        expect(odd).toHaveLength(1);
+        expect(odd[0]).toEqual(wx._parseTfrGeometryText('3NM RADIUS OF 3512N08057W SFC-3000FT. WI AN AREA DEFINED AS ABOVE.'));
+        expect(odd[0]).not.toBeNull();
         const g = wx._parseTfrGeometries('WITHIN A 3NM RADIUS OF 3512N08057W SFC-3000FT');
         expect(g).toHaveLength(1);
         expect(g[0].radiusNm).toBe(3);
@@ -117,11 +123,29 @@ describe('FaaTfrClient (tfr.faa.gov through the NOTAM proxy)', () => {
         expect(FaaTfrClient._clean({ id: 5, areas: [] })).toBeNull();
     });
 
-    it('isCurrent: within 24 h of the download', () => {
-        localStorage.setItem(FaaTfrClient.CACHE_KEY, JSON.stringify(body([{ id: '6/3091', areas: [area()] }])));
-        const c = new FaaTfrClient();
+    it('isCurrent: within 24 h of the download, and its box holds us and the route', () => {
+        const BOX = [-83.5, 32.2, -78.2, 37.2];                     // around KLKR
+        localStorage.setItem(FaaTfrClient.CACHE_KEY, JSON.stringify({ ...body([{ id: '6/3091', areas: [area()] }]), bbox: BOX }));
+        let pts = [[34.72, -80.85]];
+        const c = new FaaTfrClient({ points: () => pts });
         expect(c.isCurrent(Date.parse('2026-10-29T20:00:00Z'))).toBe(true);
         expect(c.isCurrent(Date.parse('2026-10-31T20:00:00Z'))).toBe(false);
+        // Review 2026-10-29: a route loaded after the download, outside its box ->
+        // not the picture (the NOTAM-text TFRs show) until it is downloaded for.
+        pts = [[34.72, -80.85], [28.55, -81.33]];                     // KLKR -> KORL
+        expect(c.isCurrent(Date.parse('2026-10-29T20:00:00Z'))).toBe(false);
+        pts = [];
+        expect(c.isCurrent(Date.parse('2026-10-29T20:00:00Z'))).toBe(false);
+        // An old cache without a box is never current
+        localStorage.setItem(FaaTfrClient.CACHE_KEY, JSON.stringify(body([{ id: '6/3091', areas: [area()] }])));
+        expect(new FaaTfrClient({ points: () => [[34.72, -80.85]] }).isCurrent(Date.parse('2026-10-29T20:00:00Z'))).toBe(false);
+    });
+
+    it('an area is dropped an hour after its end (local times across a DST change)', () => {
+        localStorage.setItem(FaaTfrClient.CACHE_KEY, JSON.stringify(body([{ id: '6/3091', areas: [area()] }])));   // ends 20:30Z
+        const c = new FaaTfrClient();
+        expect(c.areas(Date.parse('2026-10-29T21:20:00Z'))).toHaveLength(1);
+        expect(c.areas(Date.parse('2026-10-29T21:31:00Z'))).toHaveLength(0);
     });
 
     it('bboxFor: at most 30 degrees each way', () => {
@@ -214,6 +238,10 @@ describe('TFRs in the airport panel (a tap inside a TFR opens the nearest airpor
     };
     const A = ring('Area A'), B = ring('Area B');
     const NOW = Date.parse('2026-10-29T19:00:00Z');
+    // The panel asks for "now": pinned inside the fixture's 18:15-20:30Z (the
+    // tests failed once the real clock passed 20:30Z on 10-29).
+    beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW); });
+    afterEach(() => { vi.useRealTimers(); });
     function client() {
         localStorage.setItem(FaaTfrClient.CACHE_KEY, JSON.stringify({ fetchedAt: '2026-10-29T18:27:35Z', tfrs: [{
             id: '6/3091', legal: 'VIP', detail: true, text: 'FDC 6/3091 ... PROHIBITED: WI AN AREA DEFINED AS 30NM RADIUS ...',

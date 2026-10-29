@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v12.24';
+const FLYTAB_VERSION = 'v12.25';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 // Kept in memory and saved at most every FLUSH_MS (errors at once). Every log()
@@ -910,7 +910,9 @@ class FlyTabApp {
                 points: () => {
                     const pts = [];
                     const sit = this.stratuxClient?.situation;
-                    if (Number.isFinite(sit?.lat) && Number.isFinite(sit?.lon)) pts.push([sit.lat, sit.lon]);
+                    // A position only with a fix: a Stratux without one reports 0,0,
+                    // which pulled the box off the US (review 2026-10-29).
+                    if (Number.isFinite(sit?.lat) && Number.isFinite(sit?.lon) && sit.lat && sit.lon && sit.gps_fix_quality > 0) pts.push([sit.lat, sit.lon]);
                     else if (this.cockpitMap?.map) { const c = this.cockpitMap.map.getCenter(); pts.push([c.lat, c.lng]); }
                     for (const wp of this.routeTable?._waypoints || []) {
                         if (Number.isFinite(wp?.lat) && Number.isFinite(wp?.lon)) pts.push([wp.lat, wp.lon]);
@@ -926,6 +928,12 @@ class FlyTabApp {
             // Back on the ground with internet: download at once.
             this.networkMode?.addEventListener?.('mode:changed', (e) => {
                 if (!['flight', 'offline'].includes(e.detail?.mode)) this.faaTfr.refresh();
+            });
+            // A route outside the downloaded box: download for it now, not in up to
+            // 15 min (until then the NOTAM-text TFRs show, isCurrent() is false).
+            window.addEventListener('activeroute:plan', () => {
+                if (!this.faaTfr.covers()) this.faaTfr.refresh();
+                this.cockpitMap.redrawFaaTfrs?.();
             });
         });
 
@@ -2084,15 +2092,15 @@ class FlyTabApp {
             }
 
             // FIS-B: green while FIS-B is being received (FisbClient.isReceiving):
-            // FlyTab got FIS-B in the last 2 min, or a fresh Stratux /getStatus counts
-            // UAT messages (an SDR dongle or the UATRadio board alike).
+            // FlyTab got FIS-B in the last 2 min, or a fresh Stratux /getTowers has a
+            // ground station heard in the last minute.
             if (this.dom.statusFisb) {
                 const receiving = (typeof FisbClient !== 'undefined') && FisbClient.isReceiving({
                     now: Date.now(),
                     lastRxAt: this.fisbClient?.lastRxAt ?? 0,
                     connected: !!connected,
-                    status,
-                    statusAt: this.stratuxClient?.deviceStatusAt ?? 0,
+                    towers: this.stratuxClient?.towerData,
+                    towersAt: this.stratuxClient?.towerDataAt ?? 0,
                 });
                 this.dom.statusFisb.classList.toggle('active', receiving);
                 if (receiving && this.fisbClient) {

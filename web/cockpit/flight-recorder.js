@@ -188,10 +188,12 @@ class FlightRecorder {
         this._trafficBuffer = [];
 
         this._startIntervals();
-        this._saveMarker();
 
         this._emitStatus();
         window.dispatchEvent(new CustomEvent('flightsync:started'));
+        // After flightsync:started: engineML has started this flight's log, so the
+        // marker's ML counts are this flight's, not the previous one's.
+        this._saveMarker();
         if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Started: ${this._fileName}`);
     }
 
@@ -436,6 +438,10 @@ class FlightRecorder {
                 endTime,
                 durationHours,
                 mlCounts,
+                // A previous run's recording closed out at this launch: engineML's
+                // log is this session's (it may already be the next flight's), so
+                // the logbook must neither save nor clear it for this entry.
+                closedOut: Number.isFinite(endOverride),
             }
         }));
         if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Stopped: ${finalName} (${this._rowCount} rows, flushOk=${flushOk})`);
@@ -797,13 +803,19 @@ class FlightRecorder {
         const stopThreshold = cfg?.rpmStopThreshold ?? 0;
         const eng = this._engine?.lastData;
         if (eng) {
-            const fresh = (this._engine?.dataAge ?? Infinity) < FlightRecorder.FRESH_DATA_MS;
+            const fresh = this._engineReadingAge() < FlightRecorder.FRESH_DATA_MS;
             const rpm = eng.data?.RPM;
             return fresh && typeof rpm === 'number' && rpm <= stopThreshold;
         }
         const sit = this._stratux?.situation;
         const sitAge = typeof sit?.timestamp === 'number' ? Date.now() - sit.timestamp : Infinity;
         return sitAge < FlightRecorder.FRESH_DATA_MS && typeof sit?.ground_speed === 'number' && sit.ground_speed < 10;
+    }
+
+    /** Age of the newest engine reading, ms (EngineClient.readingAge; dataAge from older clients). */
+    _engineReadingAge() {
+        const e = this._engine;
+        return e?.readingAge ?? e?.dataAge ?? Infinity;
     }
 
     _autoMonitor() {
@@ -827,7 +839,10 @@ class FlightRecorder {
             // its last sample at 890 RPM, and every 130 s (10 s start + the 2-min
             // data-gap stop) a new, empty recording and logbook entry began. With no
             // fresh engine data, ground speed decides, as in a session without one.
-            const engFresh = hasEngine && (this._engine?.dataAge ?? Infinity) < FlightRecorder.FRESH_DATA_MS;
+            // "Fresh" = the readings are moving, not just the Pi answering: with the
+            // EMS serial line dead the Pi still sends its last reading every second,
+            // so a flight read RPM 0 and was never recorded (review 2026-10-29).
+            const engFresh = hasEngine && this._engineReadingAge() < FlightRecorder.FRESH_DATA_MS;
             if (engFresh) {
                 this._gsAboveCount = 0;
                 // RPM-based auto-start
@@ -863,7 +878,11 @@ class FlightRecorder {
                 }
             }
         } else {
-            if (hasEngine) {
+            // RPM decides only while the readings are moving: frozen at cruise RPM
+            // (EMS serial line lost, Pi up) the recording never stopped after
+            // landing. Otherwise ground speed decides, as without an engine monitor.
+            if (hasEngine && this._engineReadingAge() < FlightRecorder.FRESH_DATA_MS) {
+                this._gsBelowCount = 0;
                 // RPM-based auto-stop — use configurable threshold (default 0 = exact zero)
                 const cfg = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.get('flightRecording') : {};
                 const stopThreshold = cfg.rpmStopThreshold ?? 0;
@@ -877,6 +896,7 @@ class FlightRecorder {
                     this._rpmZeroCount = 0;
                 }
             } else {
+                this._rpmZeroCount = 0;
                 // GPS-based auto-stop: GS < 10kt for stopDelaySeconds
                 const cfg = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.get('flightRecording') : {};
                 const stopDelay = cfg.stopDelaySeconds ?? 60;
@@ -907,7 +927,9 @@ class FlightRecorder {
         const home = String(Settings.homeStratuxIp ?? '').trim();
         const sit = this._stratux?.situation;
         const fresh = typeof sit?.timestamp === 'number' && (Date.now() - sit.timestamp) < FlightRecorder.FRESH_DATA_MS;
-        const on = !!home && String(this._stratux?.ip ?? '').trim() === home && fresh;
+        // Only with "Use the home Stratux" on: a Home Stratux IP equal to the
+        // Stratux IP (192.168.10.1) blocked every GPS-started flight (review 10-29).
+        const on = !!home && this._stratux?.homeMode === 'home' && String(this._stratux?.ip ?? '').trim() === home && fresh;
         if (!on) this._homeLogged = false;
         return on;
     }

@@ -7,7 +7,8 @@
  *  - the history (FreqHistory), newest first: the top one is "current" and
  *    shows on the map button; tap an older one to make it current again;
  *  - the Center frequency for this position and altitude, when a provider is
- *    set (setCenterProvider) and has one.
+ *    set (setCenterProvider) and has one. NOT WIRED YET: no Center data source
+ *    (ARTCC sector frequencies by altitude) exists; the section stays hidden.
  */
 class FreqPanel {
     constructor(container, opts = {}) {

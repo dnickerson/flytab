@@ -184,13 +184,15 @@ TFR_WFS_URL     = (TFR_BASE + '/geoserver/TFR/ows?service=WFS&version=1.1.0&requ
 TFR_DETAIL_URL  = TFR_BASE + '/download/detail_{key}.xml'      # key "6_3091"
 TFR_WFS_TTL_S    = 300      # the FAA is asked at most this often for the shape list
 TFR_DETAIL_TTL_S = 900      # and for one TFR's details
-TFR_MAX_DETAILS  = 40       # TFRs per request (closest to the box centre first)
+TFR_MAX_DETAILS  = 40       # TFRs per request with details (closest to the box centre first); the rest: shapes only
+TFR_DEADLINE_S   = 45       # a /tfrs answer within this (FlyTab waits 60 s): details not fetched by then -> shapes only
 TFR_MAX_BYTES    = 4_000_000
 TFR_MAX_SPAN_DEG = 30
 TFR_TEXT_MAX     = 6000
 _tfr_cache = {}             # url -> (monotonic time, bytes)
 _tfr_cache_lock = threading.Lock()
 _tfr_busy = threading.BoundedSemaphore(2)
+_tfr_waiting = threading.BoundedSemaphore(4)    # more than this waiting for a slot: 503 at once
 
 # NOTAM time zones (codeTimeZone) -> UTC offset hours
 TZ_OFFSETS = {'UTC': 0, 'GMT': 0, 'Z': 0, 'AST': -4, 'ADT': -3, 'EST': -5, 'EDT': -4, 'CST': -6,
@@ -288,8 +290,9 @@ def _alt(code, val, uom):
 
 def parse_tfr_detail(data):
     """tfr.faa.gov detail XML (bytes) -> TFR dict with its areas, or None."""
-    head = data[:4096].lower()
-    if b'<!doctype' in head or b'<!entity' in head:
+    # The whole document: a DTD after a long comment got past a 4 KB check (review 10-29).
+    low = data.lower()
+    if b'<!doctype' in low or b'<!entity' in low:
         raise ValueError('XML with a DTD refused')
     root = ET.fromstring(data)
     notam = _desc(root, 'Not')
@@ -318,14 +321,21 @@ def parse_tfr_detail(data):
         if len(pts) < 3:
             continue
         is_local = (_text(g, 'codeLclTime') or '').upper() == 'TRUE'
-        sched = _child(ase, 'ScheduleGroup')
+        # Every schedule of the area: earliest start, latest end (an end not known
+        # in any of them: not known -- never dropped early).
+        starts, ends = [], []
+        for sg in ase:
+            if _tag(sg) != 'ScheduleGroup':
+                continue
+            starts.append(_to_utc(_text(sg, 'dateEffective'), tz, is_local))
+            ends.append(_to_utc(_text(sg, 'dateExpire'), tz, is_local))
         lo_ft, lo_ref = _alt(_text(ase, 'codeDistVerLower'), _text(ase, 'valDistVerLower'), _text(ase, 'uomDistVerLower'))
         up_ft, up_ref = _alt(_text(ase, 'codeDistVerUpper'), _text(ase, 'valDistVerUpper'), _text(ase, 'uomDistVerUpper'))
         areas.append({
             'name': _text(ase, 'txtName') or '',
             'lowerFt': lo_ft, 'lowerRef': lo_ref, 'upperFt': up_ft, 'upperRef': up_ref,
-            'start': _to_utc(_text(sched, 'dateEffective'), tz, is_local) if sched is not None else None,
-            'end': _to_utc(_text(sched, 'dateExpire'), tz, is_local) if sched is not None else None,
+            'start': min(starts) if starts and all(starts) else None,
+            'end': max(ends) if ends and all(ends) else None,
             'polygon': pts,
         })
     text = _text(notam, 'txtDescrTraditional') or ''
@@ -342,6 +352,28 @@ def parse_tfr_detail(data):
     }
 
 
+def _inside(pt, poly):
+    """[lat, lon] in a [[lat, lon], ...] ring."""
+    y, x = pt
+    c = False
+    for i in range(len(poly)):
+        y1, x1 = poly[i]
+        y2, x2 = poly[i - 1]
+        if (y1 > y) != (y2 > y) and x < (x2 - x1) * (y - y1) / (y2 - y1) + x1:
+            c = not c
+    return c
+
+
+def _outer_rings(geom):
+    """The outer ring(s) of a GeoJSON Polygon or MultiPolygon, else []."""
+    t, c = geom.get('type'), geom.get('coordinates') or []
+    if t == 'Polygon':
+        return c[:1]
+    if t == 'MultiPolygon':
+        return [p[0] for p in c if p]
+    return []
+
+
 def _bbox_of(coords):
     lons = [c[0] for c in coords]
     lats = [c[1] for c in coords]
@@ -352,51 +384,72 @@ def fetch_tfrs(bbox):
     """bbox (W, S, E, N) -> {'tfrs': [...], 'failed': [ids]}: every TFR whose
     shape reaches into the box, closest first, with its details."""
     w, s, e, n = bbox
+    started = time.monotonic()
     fc = json.loads(_tfr_get(TFR_WFS_URL, TFR_WFS_TTL_S))
-    by_id = {}
-    for f in fc.get('features') or []:
+    features = fc.get('features') or []
+    # There are always TFRs somewhere (the permanent ones): none at all is the
+    # FAA's service or its format failing, not "no TFRs" -- FlyTab would hide
+    # the NOTAM-text TFRs on that answer (review 10-29).
+    if not features:
+        raise ValueError('tfr.faa.gov listed no TFRs at all')
+    by_id, unread = {}, set()
+    for f in features:
         props = f.get('properties') or {}
         geom = f.get('geometry') or {}
         key = str(props.get('NOTAM_KEY') or '').split('-')[0]
-        if not key or geom.get('type') != 'Polygon' or not geom.get('coordinates'):
+        rings = [r for r in _outer_rings(geom) if len(r) >= 3]
+        if not rings:
+            unread.add(key or '?')
             continue
-        ring = geom['coordinates'][0]
-        fw, fs, fe, fn = _bbox_of(ring)
-        if fe < w or fw > e or fn < s or fs > n:
-            continue
-        t = by_id.setdefault(key, {'id': key, 'title': props.get('TITLE') or '', 'state': props.get('STATE'),
-                                   'facility': props.get('CNS_LOCATION_ID'), 'legal': props.get('LEGAL'),
-                                   'modified': props.get('LAST_MODIFICATION_DATETIME'), 'shapes': []})
-        t['shapes'].append([[round(lat, 6), round(lon, 6)] for lon, lat in ring])
+        for ring in rings:
+            fw, fs, fe, fn = _bbox_of(ring)
+            if fe < w or fw > e or fn < s or fs > n:
+                continue
+            t = by_id.setdefault(key, {'id': key, 'title': props.get('TITLE') or '', 'state': props.get('STATE'),
+                                       'facility': props.get('CNS_LOCATION_ID'), 'legal': props.get('LEGAL'),
+                                       'modified': props.get('LAST_MODIFICATION_DATETIME'), 'shapes': []})
+            t['shapes'].append([[round(lat, 6), round(lon, 6)] for lon, lat in ring])
+    if unread:
+        print(f'[notam-proxy] TFR shapes not read (geometry): {" ".join(sorted(unread))}')
     cx, cy = (w + e) / 2, (s + n) / 2
     def dist(t):
         pts = [p for sh in t['shapes'] for p in sh]
         return min((p[0] - cy) ** 2 + (p[1] - cx) ** 2 for p in pts)
     ids = sorted(by_id, key=lambda k: dist(by_id[k]))
-    skipped = ids[TFR_MAX_DETAILS:]
-    ids = ids[:TFR_MAX_DETAILS]
+    detailed = set(ids[:TFR_MAX_DETAILS])      # the rest: drawn from their shapes (review 10-29)
+
+    def shapes_only(shapes):
+        return [{'name': '', 'lowerFt': None, 'lowerRef': None, 'upperFt': None, 'upperRef': None,
+                 'start': None, 'end': None, 'polygon': sh} for sh in shapes]
 
     def one(key):
         base = by_id[key]
-        try:
-            d = parse_tfr_detail(_tfr_get(TFR_DETAIL_URL.format(key=key.replace('/', '_')), TFR_DETAIL_TTL_S))
-        except Exception as ex:
-            print(f'[notam-proxy] TFR {key} detail failed: {ex}')
-            d = None
         out = {k: base[k] for k in ('id', 'title', 'state', 'facility', 'legal', 'modified')}
+        d = None
+        left = TFR_DEADLINE_S - (time.monotonic() - started)
+        if key in detailed and left > 2:
+            try:
+                d = parse_tfr_detail(_tfr_get(TFR_DETAIL_URL.format(key=key.replace('/', '_')), TFR_DETAIL_TTL_S,
+                                              timeout=min(20, left)))
+            except Exception as ex:
+                print(f'[notam-proxy] TFR {key} detail failed: {ex}')
         if d and d.get('areas'):
+            # A shape the details left out (no merged area, or too few points) is
+            # still drawn, from the FAA's shape list.
+            extra = [sh for sh in base['shapes']
+                     if not any(_inside([sum(p[0] for p in sh) / len(sh), sum(p[1] for p in sh) / len(sh)], a['polygon'])
+                                for a in d['areas'])]
             out.update({'type': d['type'], 'name': d['name'], 'start': d['start'], 'end': d['end'],
-                        'timeZone': d['timeZone'], 'areas': d['areas'], 'text': d['text'], 'detail': True})
+                        'timeZone': d['timeZone'], 'areas': d['areas'] + shapes_only(extra), 'text': d['text'],
+                        'detail': True})
             return out, False
         # No details: the shapes alone, with no altitudes or times (still drawn)
-        out.update({'areas': [{'name': '', 'lowerFt': None, 'lowerRef': None, 'upperFt': None, 'upperRef': None,
-                               'start': None, 'end': None, 'polygon': sh} for sh in base['shapes']],
-                    'detail': False})
+        out.update({'areas': shapes_only(base['shapes']), 'detail': False})
         return out, True
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         results = list(pool.map(one, ids))
-    return {'tfrs': [r for r, _ in results], 'failed': [r['id'] for r, bad in results if bad] + skipped}
+    return {'tfrs': [r for r, _ in results], 'failed': [r['id'] for r, bad in results if bad] + sorted(unread)}
 
 
 def parse_bbox(v):
@@ -494,7 +547,15 @@ def _handler_get_tfrs(self, parsed):
     if bbox is None:
         self._send_json(400, {'error': f'bbox=W,S,E,N required (at most {TFR_MAX_SPAN_DEG} degrees each way)', 'tfrs': []})
         return
-    if not _tfr_busy.acquire(timeout=20):
+    # Public (Funnel): a few may wait for a slot, the rest are turned away at once.
+    if not _tfr_waiting.acquire(blocking=False):
+        self._send_json(503, {'error': 'busy, try again', 'tfrs': []})
+        return
+    try:
+        got_slot = _tfr_busy.acquire(timeout=10)
+    finally:
+        _tfr_waiting.release()
+    if not got_slot:
         self._send_json(503, {'error': 'busy, try again', 'tfrs': []})
         return
     try:
@@ -503,8 +564,8 @@ def _handler_get_tfrs(self, parsed):
         body['fetchedAt'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
         self._send_json(200, body)
     except Exception as e:
-        print(f'[notam-proxy] TFR fetch error: {e}')
-        self._send_json(502, {'error': str(e), 'tfrs': []})
+        print(f'[notam-proxy] TFR fetch error: {e}')        # the detail stays here, not in the public answer
+        self._send_json(502, {'error': 'tfr.faa.gov could not be read', 'tfrs': []})
     finally:
         _tfr_busy.release()
 

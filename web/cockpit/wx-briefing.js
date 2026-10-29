@@ -2568,7 +2568,7 @@ class WxBriefing {
         const text = String(raw || '');
         const parts = text.split(/\bWI(?:THIN)?\s+AN\s+AREA\s+DEFINED\s+AS\b/i).slice(1);
         if (!parts.length) {
-            const one = this._parseTfrGeometry(text);
+            const one = this._parseTfrGeometryText(text);
             return one ? [one] : [];
         }
         const coordRe = /(?<!\d)(\d{4}(?:\d{2})?)([NS])\s*\/?\s*(\d{5}(?:\d{2})?)([EW])/gi;
@@ -2602,7 +2602,11 @@ class WxBriefing {
                 out.push({ points: coords, center: { lat: clat, lon: clon } });
             }
         }
-        return out;
+        if (out.length) return out;
+        // Wording the per-area reading doesn't know: the whole-text reading, as
+        // before (review 2026-10-29: it returned nothing, a regression).
+        const one = this._parseTfrGeometryText(text);
+        return one ? [one] : [];
     }
 
     _parseTfrGeometry(raw) {
@@ -2610,6 +2614,11 @@ class WxBriefing {
             const all = this._parseTfrGeometries(raw);
             if (all.length) return all[0];
         }
+        return this._parseTfrGeometryText(raw);
+    }
+
+    /** The whole text as one shape (the reading before per-area parsing). */
+    _parseTfrGeometryText(raw) {
         const pts = [];
 
         const pat1 = /(\d{2})(\d{2})(N|S)\s*\/?(\d{2,3})(\d{2})(W|E)/gi;

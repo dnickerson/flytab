@@ -277,7 +277,7 @@ body {
 /* "Use the home Stratux" is on (this session): caution badge, solid fill */
 .status-home-stx {
     background: var(--color-caution); color: #000;
-    font-size: 14px; font-weight: 800; padding: 1px 6px;
+    font-size: var(--text-xs); font-weight: 800; padding: 1px 6px;
     border-radius: 4px; letter-spacing: 0.3px;
 }
 .status-home-stx[hidden] { display: none; }
@@ -12357,8 +12357,8 @@ body.route-editing-mode .route-table-sheet {
     box-sizing: border-box;
 }
 .freq-panel.open { transform: translateX(0); }
-.freq-head { display: flex; align-items: center; justify-content: space-between; min-height: 44px; }
-.freq-head .freq-close { min-width: var(--touch-min, 56px); min-height: 44px; }
+.freq-head { display: flex; align-items: center; justify-content: space-between; min-height: var(--touch-min, 56px); }
+.freq-head .freq-close { min-width: var(--touch-min, 56px); min-height: var(--touch-min, 56px); }
 .freq-title, .freq-hist-title, .freq-center-lbl {
     font-family: var(--font-ui); font-size: var(--text-xs); font-weight: 800; letter-spacing: 0.08em; color: var(--text-secondary);
 }
@@ -12400,7 +12400,7 @@ body.route-editing-mode .route-table-sheet {
 .freq-row-mhz { font-family: var(--font-instrument); font-size: var(--text-md); font-weight: 900; color: var(--text-primary); }
 .freq-row-meta { font-family: var(--font-ui); font-size: var(--text-xs); font-weight: 700; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .freq-row-del {
-    min-width: 44px; min-height: var(--touch-min, 56px); border-radius: 6px;
+    min-width: var(--touch-min, 56px); min-height: var(--touch-min, 56px); border-radius: 6px;
     border: 1px solid var(--border); background: var(--bg-primary); color: var(--text-secondary);
     font-size: var(--text-sm); font-weight: 800; cursor: pointer;
 }

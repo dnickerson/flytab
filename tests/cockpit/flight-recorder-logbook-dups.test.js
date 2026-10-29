@@ -108,6 +108,52 @@ describe('auto-start needs fresh engine data', () => {
         await vi.advanceTimersByTimeAsync(0);
     });
 
+    // Review 2026-10-29: the Pi sends its status every second whether or not the
+    // EMS serial line delivers, so "fresh" has to mean the readings are moving.
+    const frozen = (rpm) => ({ lastData: { data: { RPM: rpm } }, dataAge: 300, readingAge: 60_000 });
+    const gpsAt = (gs) => {
+        const sit = { ground_speed: gs, lat: 34.7, lon: -80.8, gps_fix_quality: 2 };
+        return { get situation() { return { ...sit, timestamp: Date.now() - 200 }; }, traffic: new Map() };
+    };
+
+    it('EMS serial line dead, Pi up (RPM 0, not moving): ground speed 140 kt starts the recording', async () => {
+        const rec = new FlightRecorder(frozen(0), gpsAt(140), null);
+        rec._renameWithRoute = vi.fn(async () => null);
+        rec.init();
+        await vi.advanceTimersByTimeAsync(11_000);
+        expect(rec.recording).toBe(true);
+        rec.destroy();
+        await vi.advanceTimersByTimeAsync(0);
+    });
+
+    it('readings frozen at 2400 RPM after landing: ground speed stops the recording', async () => {
+        const eng = { lastData: { data: { RPM: 2400 } }, dataAge: 300, readingAge: 300 };
+        const stratux = gpsAt(140);
+        const rec = new FlightRecorder(eng, stratux, null);
+        rec._renameWithRoute = vi.fn(async () => null);
+        rec.init();
+        await vi.advanceTimersByTimeAsync(11_000);
+        expect(rec.recording).toBe(true);
+        eng.readingAge = 60_000;                              // serial line lost; Pi still sends 2400
+        Object.defineProperty(stratux, 'situation', { get: () => ({ ground_speed: 0, lat: 34.7, lon: -80.8, gps_fix_quality: 2, timestamp: Date.now() - 200 }) });
+        await vi.advanceTimersByTimeAsync(59_000);
+        expect(rec.recording).toBe(true);
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(rec.recording).toBe(false);
+        rec.destroy();
+    });
+
+    it('readings moving at 2400 RPM, standing still (run-up): the recording goes on', async () => {
+        const eng = { lastData: { data: { RPM: 2400 } }, dataAge: 300, readingAge: 300 };
+        const rec = new FlightRecorder(eng, gpsAt(0), null);
+        rec._renameWithRoute = vi.fn(async () => null);
+        rec.init();
+        await vi.advanceTimersByTimeAsync(5 * 60_000);
+        expect(rec.recording).toBe(true);
+        rec.destroy();
+        await vi.advanceTimersByTimeAsync(0);
+    });
+
     it('replay of 10-27 14:46:50Z: link lost at 890 RPM -> one gap stop, no empty recordings after it', async () => {
         const { e, client } = engine(890, 500);
         const rec = new FlightRecorder(client, { situation: null }, null);
@@ -280,6 +326,7 @@ describe('Engine ML counts travel with the recording (#188)', () => {
         rec.mlCounts = () => counts({ samples: 3, phases: { startup: 3 } });   // this session's: not that flight's
         expect(await rec.recoverUnfinished()).toBe('closed');
         expect(stopped[0].mlCounts).toEqual(counts());
+        expect(stopped[0].closedOut).toBe(true);
     });
 
     it('resumed after a restart: the two parts are added', async () => {
@@ -363,6 +410,32 @@ describe('Logbook entry from the stopped event', () => {
         });
     });
 
+    it('closed out while the next flight is recording: its ML log is neither taken nor cleared', async () => {
+        // Review 2026-10-29: relaunched in flight >10 min after a crash, the new
+        // recording starts as the close-out ends; the old entry took its samples
+        // and then cleared them.
+        const live = { samples: 5 };
+        const clearLog = vi.fn();
+        window.engineML = { getFlightSummary: () => live, clearLog };
+        const lb = fakeLogbook();
+        const entry = await Logbook.prototype.createEntry.call(lb, '20261022_1316Z.csv', { closedOut: true, mlCounts: null });
+        expect(entry.custom_fields.engineml_summary).toBeUndefined();     // rebuilt from the CSV later
+        expect(lb._saveMLLog).not.toHaveBeenCalled();
+        expect(clearLog).not.toHaveBeenCalled();
+        const withCounts = await Logbook.prototype.createEntry.call(lb, '20261022_1316Z.csv', { closedOut: true, mlCounts: counts() });
+        expect(withCounts.custom_fields.engineml_summary.samples).toBe(600);
+        expect(clearLog).not.toHaveBeenCalled();
+    });
+
+    it('a normal stop saves and clears the live ML log', async () => {
+        const clearLog = vi.fn();
+        window.engineML = { getFlightSummary: () => null, clearLog };
+        const lb = fakeLogbook();
+        await Logbook.prototype.createEntry.call(lb, '20261027_1221Z.csv', { closedOut: false, mlCounts: counts() });
+        expect(lb._saveMLLog).toHaveBeenCalledTimes(1);
+        expect(clearLog).toHaveBeenCalledTimes(1);
+    });
+
     it('no counts in the event: as before, from the live ML log', async () => {
         const live = { samples: 1 };
         window.engineML = { getFlightSummary: () => live, clearLog: () => {} };
@@ -392,6 +465,7 @@ describe("home Stratux: no recording while connected to it (10-18 bench test)", 
     function stratux(ip, gs, ageMs = 200) {
         return {
             ip,
+            homeMode: ip === HOME ? 'home' : 'off',
             get situation() { return { ground_speed: gs, lat: 34.8927, lon: -80.8419, gps_fix_quality: 1, timestamp: Date.now() - ageMs }; },
             traffic: new Map(),
         };
@@ -453,7 +527,16 @@ describe("home Stratux: no recording while connected to it (10-18 bench test)", 
     });
 
     it('home address left set in flight: nothing arrives from it, the engine starts the recording', async () => {
-        const rec = make(engine(2400, 500).client, { ip: HOME, situation: null, traffic: new Map() });
+        const rec = make(engine(2400, 500).client, { ip: HOME, homeMode: 'home', situation: null, traffic: new Map() });
+        await vi.advanceTimersByTimeAsync(11_000);
+        expect(rec.recording).toBe(true);
+        rec.destroy();
+        await vi.advanceTimersByTimeAsync(0);
+    });
+
+    it('Home Stratux IP set to the in-flight address, switch off -> the GPS rule records', async () => {
+        Settings.homeStratuxIp = '192.168.10.1';
+        const rec = make(noEngine, stratux('192.168.10.1', 140));        // homeMode 'off'
         await vi.advanceTimersByTimeAsync(11_000);
         expect(rec.recording).toBe(true);
         rec.destroy();

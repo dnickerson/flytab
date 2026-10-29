@@ -168,8 +168,9 @@ class StratuxClient extends EventTarget {
         this._homeSilentSince = 0;
         this._homeProbe = null;
         this._homeTimer = null;
-        // Tower data from /getTowers
+        // Tower data from /getTowers, and when it last arrived (ms; 0 = never)
         this.towerData = {};
+        this.towerDataAt = 0;
 
         this._purgeInterval = null;
 
@@ -244,7 +245,7 @@ class StratuxClient extends EventTarget {
         this._startPurge();
         this._startLinkWatchdog();
         if (!this._homeTimer) this._homeTimer = setInterval(() => this._checkHomeFallback(), StratuxClient.HOME_CHECK_MS);
-        this._homeSilentSince = 0;
+        this._homeSilentSince = Date.now();
 
         // Start the stale window immediately so that if Stratux never connects
         // (e.g. not on the Stratux Wi-Fi network), stratux:stale fires after ~5s
@@ -294,7 +295,15 @@ class StratuxClient extends EventTarget {
     /** The setting or the home address changed: try the home Stratux again. */
     resetHomeFallback() {
         this._homeFellBack = false;
-        this._homeSilentSince = 0;
+        this._homeSilentSince = Date.now();
+    }
+
+    /** Last time the address in use answered: its situation WS (open or a
+     *  message), its /getStatus, or an open traffic WS. _homeSilentSince (connect,
+     *  reset) gives it HOME_FALLBACK_AFTER_MS to start answering. */
+    _homeAnsweredAt(now = Date.now()) {
+        const traffic = this._trafficWs && this._trafficWs.readyState === WebSocket.OPEN ? now : 0;
+        return Math.max(this._homeSilentSince || 0, this._lastSituationMsgAt || 0, this.deviceStatusAt || 0, traffic);
     }
 
     /**
@@ -305,15 +314,20 @@ class StratuxClient extends EventTarget {
     _checkHomeFallback() {
         if (this.homeMode !== 'home' || this._disconnected || this._homeProbe) return;
         const now = Date.now();
-        if (this._connected || this._dataFresh()) { this._homeSilentSince = 0; return; }
-        if (!this._homeSilentSince) { this._homeSilentSince = now; return; }
-        if (now - this._homeSilentSince < StratuxClient.HOME_FALLBACK_AFTER_MS) return;
+        // Only what came from the home address counts. GDL 90 (UDP) is taken from
+        // any sender, so in the aircraft its GDL 90 kept "connected" true and this
+        // never fell back: FIS-B, status and towers stayed on the home address
+        // all flight (review 2026-10-29).
+        const answered = this._homeAnsweredAt(now);
+        if (now - answered < StratuxClient.HOME_FALLBACK_AFTER_MS) return;
         const flightIp = Settings.stratuxIp;
         this._homeProbe = fetch(`http://${flightIp}/getStatus`, { cache: 'no-store', signal: AbortSignal.timeout(StratuxClient.HTTP_TIMEOUT_MS) })
             .then((r) => {
-                if (!r.ok || this.homeMode !== 'home' || this._disconnected || this._connected) return;
+                if (!r.ok || this.homeMode !== 'home' || this._disconnected) return;
+                const at = this._homeAnsweredAt(Date.now());
+                if (Date.now() - at < StratuxClient.HOME_FALLBACK_AFTER_MS) return;     // the home Stratux answered meanwhile
                 this._homeFellBack = true;
-                if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', `Home Stratux ${Settings.homeStratuxIp} silent ${Math.round((Date.now() - this._homeSilentSince) / 1000)} s; ${flightIp} answers — using it`);
+                if (typeof DiagLog !== 'undefined') DiagLog.log('stratux', `Home Stratux ${Settings.homeStratuxIp} silent ${Math.round((Date.now() - at) / 1000)} s; ${flightIp} answers — using it`);
                 this.disconnect();
                 this.connect();
             })
@@ -586,6 +600,7 @@ class StratuxClient extends EventTarget {
                 const r = await fetch(`http://${this.ip}/getTowers`, { cache: 'no-store', signal: AbortSignal.timeout(StratuxClient.HTTP_TIMEOUT_MS) });
                 if (r.ok) {
                     this.towerData = await r.json();
+                    this.towerDataAt = Date.now();
                     this.dispatchEvent(new CustomEvent('stratux:towers', { detail: this.towerData }));
                 }
             } catch { /* offline */ }
@@ -899,4 +914,4 @@ StratuxClient.TICK_GAP_MS = 2000;
 StratuxClient.HTTP_TIMEOUT_MS = 3000;
 // "Use the home Stratux": check this often; fall back after this long with no data.
 StratuxClient.HOME_CHECK_MS = 5000;
-StratuxClient.HOME_FALLBACK_AFTER_MS = 10000;
+StratuxClient.HOME_FALLBACK_AFTER_MS = 15000;     // > one /getStatus poll (10 s)

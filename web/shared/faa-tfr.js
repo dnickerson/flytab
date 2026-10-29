@@ -17,6 +17,10 @@ class FaaTfrClient extends EventTarget {
     static MAX_SPAN_DEG = 30;
     /** The FAA data is the TFR picture (NOTAM-text TFRs hidden) while younger than this. */
     static CURRENT_MS = 24 * 60 * 60 * 1000;
+    /** An area is dropped this long after its end. The FAA gives local times
+     *  (EDT...); one that ends after a daylight-saving change could read an hour
+     *  early. Unverified: never drop a TFR early (review 2026-10-29). */
+    static END_GRACE_MS = 60 * 60 * 1000;
 
     /**
      * @param {Object} opts
@@ -45,10 +49,22 @@ class FaaTfrClient extends EventTarget {
         this._timer = null;
     }
 
-    /** Is the downloaded FAA data recent enough to be the TFR picture? */
+    /**
+     * Is the downloaded FAA data the TFR picture: recent enough, AND its box
+     * holds where we are and every point of the route now? Age alone hid the
+     * NOTAM-text TFRs of a route loaded after the download (review 2026-10-29).
+     */
     isCurrent(now = Date.now()) {
         const t = Date.parse(this.data?.fetchedAt || '');
-        return Number.isFinite(t) && now - t >= 0 && now - t < FaaTfrClient.CURRENT_MS;
+        return Number.isFinite(t) && now - t >= 0 && now - t < FaaTfrClient.CURRENT_MS && this.covers();
+    }
+
+    /** The download's box holds every point (default: where we are + the route). */
+    covers(points = this._points()) {
+        const b = this.data?.bbox;
+        if (!Array.isArray(b) || b.length !== 4 || !b.every(Number.isFinite)) return false;
+        const pts = (points || []).filter((p) => Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1]));
+        return pts.length > 0 && pts.every(([lat, lon]) => lon >= b[0] && lat >= b[1] && lon <= b[2] && lat <= b[3]);
     }
 
     /** Download now (shared by concurrent callers). Resolves true when new data arrived. */
@@ -98,7 +114,7 @@ class FaaTfrClient extends EventTarget {
         for (const t of this.data?.tfrs || []) {
             for (const a of t.areas) {
                 const s = Date.parse(a.start || ''), e = Date.parse(a.end || '');
-                if (Number.isFinite(e) && e <= now) continue;
+                if (Number.isFinite(e) && e + FaaTfrClient.END_GRACE_MS <= now) continue;
                 const status = !Number.isFinite(s) && !Number.isFinite(e) ? 'unknown'
                     : (Number.isFinite(s) && s > now) ? 'upcoming' : 'active';
                 out.push({ tfr: t, area: a, status, fetchedAt: this.data.fetchedAt });

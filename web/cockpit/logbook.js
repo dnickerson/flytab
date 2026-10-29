@@ -544,9 +544,12 @@ class Logbook {
         // From the recorder when it has them: they include the part of a flight
         // from before a restart, and a recording closed out at the next launch has
         // no ML log in this session at all (#188).
+        // A closed-out recording: only the counts its run saved -- the live log is
+        // this session's, possibly the next flight's (review 2026-10-29).
+        const closedOut = flightDetail.closedOut === true;
         const mlSummary = (flightDetail.mlCounts && typeof EngineMLBridge !== 'undefined')
             ? EngineMLBridge.summaryFromCounts(flightDetail.mlCounts)
-            : (window.engineML?.getFlightSummary() || null);
+            : (closedOut ? null : (window.engineML?.getFlightSummary() || null));
 
         const entryId = crypto.randomUUID ? crypto.randomUUID() : `lb-${Date.now()}`;
         const entry = {
@@ -587,13 +590,16 @@ class Logbook {
         await this._saveEntry(entry);
         console.log(`[Logbook] Auto entry (draft): ${depIcao} -> ${destIcao}, ${flightTimeHours}h`);
 
-        // Save full ML ring buffer linked to this entry
-        this._saveMLLog(entry.id).catch(() => {});
+        if (!closedOut) {
+            // Save full ML ring buffer linked to this entry
+            this._saveMLLog(entry.id).catch(() => {});
 
-        // getFullLog() above already copied the ring buffer synchronously, so it's
-        // safe to clear now — otherwise the ML tab's "Current Session (Live)" card
-        // keeps showing this finished flight as in-progress until the next one starts.
-        window.engineML?.clearLog();
+            // getFullLog() above already copied the ring buffer synchronously, so it's
+            // safe to clear now — otherwise the ML tab's "Current Session (Live)" card
+            // keeps showing this finished flight as in-progress until the next one starts.
+            window.engineML?.clearLog();
+        }
+        // closedOut: its per-second ML log is rebuilt from the CSV (_rebuildMissingMLSummaries).
 
         // Don't auto-sync drafts — pilot must review first
         return entry;
@@ -1791,7 +1797,9 @@ class Logbook {
         // When the screen is off (or the app backgrounded), Android throttles
         // timers — a 2-second setTimeout may be delayed indefinitely before the WebView
         // is suspended. Skip the delay and write to IDB immediately in that case.
-        if (!this._onScreen || document.visibilityState === 'hidden') {
+        // app._onScreen also knows the state at startup (AppHealth.isOnScreen),
+        // before any 'flytab:screen' event.
+        if (!this._onScreen || window.app?._onScreen === false || document.visibilityState === 'hidden') {
             doCreate();
         } else {
             setTimeout(doCreate, 2000);

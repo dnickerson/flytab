@@ -295,10 +295,30 @@ describe('EngineOverlay — code review fixes', () => {
         expect(card(container).map(c => c.slice(0, 2))).toEqual([['OAT ISA', '--°C']]);
         client.emit('engine:data', { oat: 3.1, pressure_altitude: 5500, manual_oat: null, data: { RPM: 2400 } });
         expect(card(container).map(c => c.slice(0, 2))).toEqual([['OAT ISA', '3°C']]);
-        client.emit('engine:data', { oat: 9, pressure_altitude: 5500, manual_oat: 9, data: { RPM: 2400 } });
+        client.emit('engine:data', { oat: 9, pressure_altitude: 700, manual_oat: 9, ground_speed: 0, data: { RPM: 1000 } });
         expect(card(container).map(c => c.slice(0, 2))).toEqual([['OAT ATIS', '9°C']]);
         client.emit('engine:data', { oat: -12, pressure_altitude: 11000, manual_oat: null, data: { RPM: 2400 } });
         expect(card(container).map(c => c.slice(0, 2))).toEqual([['OAT ISA', '-12°C']]);
+    });
+
+    it('the ATIS temperature is the field\'s: airborne (or no ground speed) it is ISA again', () => {
+        // Review 2026-10-29: the Pi keeps manual_oat until cleared, and its oat IS
+        // that value -- "OAT ATIS 20°C" at 10,000 ft.
+        setConfig([{ key: 'oat_c' }]);
+        const client = makeClient();
+        new EngineOverlay(container, client);
+        client.emit('engine:data', { oat: 20, pressure_altitude: 10000, manual_oat: 20, ground_speed: 140, data: { RPM: 2400 } });
+        expect(card(container).map(c => c.slice(0, 2))).toEqual([['OAT ISA', '-5°C']]);      // 15 - 19.8
+        client.emit('engine:data', { oat: 20, pressure_altitude: 10000, manual_oat: 20, data: { RPM: 2400 } });
+        expect(card(container).map(c => c.slice(0, 2))).toEqual([['OAT ISA', '-5°C']]);
+    });
+
+    it('FUEL PRESS 0 psi and an empty tank show 0, not "--" (failed pump, vapor lock)', () => {
+        setConfig([{ key: 'fuel_press' }, { key: 'fuel_left' }]);
+        const client = makeClient();
+        new EngineOverlay(container, client);
+        client.emit('engine:data', { data: { RPM: 2400, Fuel_Press: 0, Fuel_Left: 0 } });
+        expect(card(container).map(c => c.slice(0, 2))).toEqual([['FUEL PRESS', '0.0 psi'], ['FUEL L', '0.0 gal']]);
     });
 
     it('EGT/CHT spread ignore an unfitted probe and need two readings', () => {

@@ -649,6 +649,9 @@ class CockpitMap {
         }
     }
 
+    /** Redraw the FAA TFRs now (and which TFR picture shows): route changed. */
+    redrawFaaTfrs() { this._drawFaaTfrs(); }
+
     /** TFR areas drawn at this point, for the airspace popup: [{ kind: 'tfr', rec }]. */
     tfrAreasAt(lat, lon) {
         if (!this._showTfrs || typeof GeoUtils === 'undefined') return [];
@@ -776,7 +779,7 @@ class CockpitMap {
         // Build popup
         const ageMin = Math.round((Date.now() - notam.received_at) / 60000);
         const ageStr = ageMin < 1 ? 'just now' : `${ageMin}m ago`;
-        const icao   = notam.icao ? `<strong>${notam.icao}</strong> · ` : '';
+        const icao   = notam.icao ? `<strong>${CockpitMap._esc(notam.icao)}</strong> · ` : '';
         const expiry = notam.expires_at
             ? `Exp: ${new Date(notam.expires_at).toUTCString().slice(17, 22)}Z`
             : '';
@@ -786,7 +789,7 @@ class CockpitMap {
                 <div style="font-weight:700;font-size:13px;color:#dc2626;margin-bottom:4px">
                     ⛔ TFR ${icao}<span style="font-size:10px;color:#888">${ageStr} ${expiry}</span>
                 </div>
-                <div style="font-size:11px;color:#444;word-break:break-all;white-space:pre-wrap">${notam.raw}</div>
+                <div style="font-size:11px;color:#444;word-break:break-all;white-space:pre-wrap">${CockpitMap._esc(notam.raw)}</div>
             </div>`;
 
         shape.bindPopup(popupHtml, { maxWidth: 300 });
@@ -836,7 +839,7 @@ class CockpitMap {
                     ${typeLabel} ${sevLabel}${urgent} ${altLabel}
                     <span style="font-size:10px;color:#888;margin-left:6px">${ageStr}</span>
                 </div>
-                <div style="font-size:11px;color:#555;word-break:break-all;white-space:pre-wrap">${pirep.raw}</div>
+                <div style="font-size:11px;color:#555;word-break:break-all;white-space:pre-wrap">${CockpitMap._esc(pirep.raw)}</div>
             </div>`;
 
         marker.bindPopup(popupHtml, { maxWidth: 280 });
@@ -1463,6 +1466,11 @@ class CockpitMap {
     }
 
     /** FlyTab is not on screen (MainActivity via app._onScreen). Unknown counts as on screen. */
+    /** Text for HTML (FIS-B NOTAM / PIREP text arrives over the radio). */
+    static _esc(v) {
+        return String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
     static offScreen() {
         return typeof window !== 'undefined' && window.app?._onScreen === false;
     }

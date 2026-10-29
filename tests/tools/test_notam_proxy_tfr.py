@@ -129,5 +129,91 @@ class FetchTfrs(unittest.TestCase):
         self.assertEqual(r['failed'], ['4/3634'])
 
 
+class ReviewFixes(unittest.TestCase):
+    """Pre-merge review 2026-10-29."""
+
+    def setUp(self):
+        self.files = {proxy.TFR_WFS_URL: read('wfs-subset.json'),
+                      proxy.TFR_DETAIL_URL.format(key='6_3091'): read('detail_6_3091.xml'),
+                      proxy.TFR_DETAIL_URL.format(key='6_3503'): read('detail_6_3503.xml')}
+        self.calls = []
+
+        def fake_get(url, ttl_s, timeout=20):
+            self.calls.append(url)
+            if url not in self.files:
+                raise OSError('HTTP 404')
+            return self.files[url]
+        self._orig = proxy._tfr_get
+        proxy._tfr_get = fake_get
+
+    def tearDown(self):
+        proxy._tfr_get = self._orig
+        proxy.TFR_MAX_DETAILS = 40
+
+    def wfs(self, mutate):
+        fc = json.loads(read('wfs-subset.json'))
+        mutate(fc)
+        self.files[proxy.TFR_WFS_URL] = json.dumps(fc).encode()
+
+    def test_tfrs_past_the_detail_limit_are_still_drawn_from_their_shapes(self):
+        proxy.TFR_MAX_DETAILS = 1
+        r = proxy.fetch_tfrs((-82.0, 34.0, -80.0, 36.0))
+        self.assertEqual(sorted(t['id'] for t in r['tfrs']), ['6/3091', '6/3503'])
+        shape_only = [t for t in r['tfrs'] if not t['detail']]
+        self.assertEqual(len(shape_only), 1)
+        self.assertTrue(all(len(a['polygon']) >= 3 for a in shape_only[0]['areas']))
+        self.assertEqual(sum(1 for u in self.calls if '/download/' in u), 1)
+
+    def test_a_multipolygon_is_drawn(self):
+        def to_multi(fc):
+            for f in fc['features']:
+                if f['properties']['NOTAM_KEY'].startswith('6/3503'):
+                    f['geometry'] = {'type': 'MultiPolygon', 'coordinates': [f['geometry']['coordinates']]}
+        self.wfs(to_multi)
+        del self.files[proxy.TFR_DETAIL_URL.format(key='6_3503')]
+        r = proxy.fetch_tfrs((-82.0, 34.0, -80.0, 36.0))
+        self.assertIn('6/3503', [t['id'] for t in r['tfrs']])
+
+    def test_a_shape_that_cannot_be_read_is_reported(self):
+        def to_point(fc):
+            for f in fc['features']:
+                if f['properties']['NOTAM_KEY'].startswith('6/3503'):
+                    f['geometry'] = {'type': 'GeometryCollection', 'geometries': []}
+        self.wfs(to_point)
+        r = proxy.fetch_tfrs((-82.0, 34.0, -80.0, 36.0))
+        self.assertIn('6/3503', r['failed'])
+
+    def test_no_features_at_all_is_an_error_not_no_tfrs(self):
+        self.wfs(lambda fc: fc.update(features=[]))
+        with self.assertRaises(ValueError):
+            proxy.fetch_tfrs((-82.0, 34.0, -80.0, 36.0))
+
+    def test_a_dtd_after_a_long_comment_is_refused(self):
+        doc = b'<?xml version="1.0"?><!--' + b'x' * 5000 + b'--><!DOCTYPE x [<!ENTITY a "b">]><x>&a;</x>'
+        with self.assertRaises(ValueError):
+            proxy.parse_tfr_detail(doc)
+
+    def test_every_schedule_of_an_area_counts(self):
+        xml = read('detail_6_3503.xml').decode()
+        second = ('<ScheduleGroup><isTimeSeparate>FALSE</isTimeSeparate>'
+                  '<dateEffective>2026-10-30T09:00:00</dateEffective><dateExpire>2026-10-30T18:00:00</dateExpire>'
+                  '</ScheduleGroup></aseTFRArea>')
+        t = proxy.parse_tfr_detail(xml.replace('</aseTFRArea>', second, 1).encode())
+        a = t['areas'][0]
+        self.assertEqual(a['start'], '2026-10-29T17:20:00Z')
+        self.assertEqual(a['end'], '2026-10-30T22:00:00Z')      # 18:00 EDT on the 30th, not the first window's end
+
+    def test_out_of_time_details_are_skipped_shapes_still_drawn(self):
+        orig = proxy.TFR_DEADLINE_S
+        proxy.TFR_DEADLINE_S = 0
+        try:
+            r = proxy.fetch_tfrs((-82.0, 34.0, -80.0, 36.0))
+        finally:
+            proxy.TFR_DEADLINE_S = orig
+        self.assertEqual(len(r['tfrs']), 2)
+        self.assertTrue(all(not t['detail'] for t in r['tfrs']))
+        self.assertFalse(any('/download/' in u for u in self.calls))
+
+
 if __name__ == '__main__':
     unittest.main()

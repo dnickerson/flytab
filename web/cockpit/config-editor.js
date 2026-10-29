@@ -188,7 +188,7 @@ class ConfigEditor {
                 <div class="ce-field-row">
                     <label class="ce-label" for="ce-stratux-ip">Stratux IP</label>
                     <input type="text" id="ce-stratux-ip" class="ce-input" style="width:150px"
-                        value="${typeof Settings !== 'undefined' ? Settings.stratuxIp : '192.168.10.1'}">
+                        value="${typeof Settings !== 'undefined' ? this._attr(Settings.stratuxIp) : '192.168.10.1'}">
                 </div>
                 <div class="ce-field-row" style="font-size:14px;color:var(--text-secondary)">
                     Pi IP for live GPS/traffic/engine data (default: 192.168.10.1)
@@ -476,6 +476,11 @@ class ConfigEditor {
         </div>`;
     }
 
+    /** An IPv4 address or host name, with an optional :port -- nothing else. */
+    static validHost(v) {
+        return /^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?(?::\d{1,5})?$/.test(String(v ?? ''));
+    }
+
     async _save() {
         const body = this._el.querySelector('.config-editor-body');
         const saveBtn = body.querySelector('.ce-save-btn');
@@ -483,6 +488,16 @@ class ConfigEditor {
         saveBtn.disabled = true;
 
         try {
+            // Both addresses go into http:// and ws:// URLs: an address, nothing else
+            // ("host/#..." or "user@host" would send Stratux traffic elsewhere).
+            // Checked before anything is saved (review 2026-10-29).
+            for (const [sel, name] of [['#ce-stratux-ip', 'Stratux IP'], ['#ce-home-stratux-ip', 'Home Stratux IP']]) {
+                const v = body.querySelector(sel)?.value.trim();
+                if (v && !ConfigEditor.validHost(v)) {
+                    if (typeof app !== 'undefined' && app.showToast) app.showToast(`${name} "${v}" is not an address (e.g. 192.168.10.1) — not saved`);
+                    throw new Error(`${name} invalid`);
+                }
+            }
             // Save connection settings to localStorage. The Stratux client reconnects
             // once, at the end, if the address it uses (StratuxClient.ip) changed.
             const stx = (typeof app !== 'undefined') ? app.stratuxClient : null;

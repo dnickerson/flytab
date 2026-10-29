@@ -3,7 +3,7 @@
  * home WiFi at 192.168.1.212; FlyTab's Stratux IP is the in-flight 192.168.10.1.
  * The switch is for this session only (every start is in-flight), and left on in
  * the aircraft it must not cost GPS/traffic/FIS-B: with the home Stratux silent
- * for 10 s and 192.168.10.1 answering, FlyTab uses 192.168.10.1.
+ * for 15 s and 192.168.10.1 answering, FlyTab uses 192.168.10.1.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { readFileSync } from 'fs';
@@ -56,16 +56,42 @@ describe('Use the home Stratux', () => {
         c.disconnect();
     });
 
-    it('left on in the aircraft: home silent 10 s, 192.168.10.1 answers -> uses it, logged', async () => {
+    it('left on in the aircraft: home silent 15 s, 192.168.10.1 answers -> uses it, logged', async () => {
         Settings.useHomeStratux = true;
         global.fetch = answers(AIR);
         const c = new StratuxClient();
         c.connect();
-        await vi.advanceTimersByTimeAsync(16_000);
+        await vi.advanceTimersByTimeAsync(21_000);
         expect(c.homeMode).toBe('fallback');
         expect(c.ip).toBe(AIR);
         expect(sockets.filter(s => s.readyState !== 3).map(s => new URL(s.url).hostname)).toEqual([AIR, AIR, AIR, AIR]);
         expect(DiagLog.log).toHaveBeenCalledWith('stratux', expect.stringMatching(/Home Stratux 192\.168\.1\.212 silent \d+ s; 192\.168\.10\.1 answers/));
+        c.disconnect();
+    });
+
+    it('left on in the aircraft with GDL 90 flowing (UDP takes any sender): still falls back', async () => {
+        // Review 2026-10-29: GDL 90 from the aircraft Stratux kept "connected"
+        // true, so FIS-B / status / towers stayed on the home address all flight.
+        Settings.useHomeStratux = true;
+        global.fetch = answers(AIR);
+        const c = new StratuxClient();
+        c.connect();
+        for (let i = 0; i < 21; i++) { c._noteData('GDL 90'); await vi.advanceTimersByTimeAsync(1000); }
+        expect(c.homeMode).toBe('fallback');
+        expect(c.ip).toBe(AIR);
+        c.disconnect();
+    });
+
+    it('home Stratux answering /getStatus only: no fallback', async () => {
+        Settings.useHomeStratux = true;
+        global.fetch = vi.fn(async (url) => {
+            if (url.startsWith(`http://${HOME}/`) || url.startsWith(`http://${AIR}/`)) return { ok: true, status: 200, json: async () => ({}) };
+            throw new TypeError('Failed to fetch');
+        });
+        const c = new StratuxClient();
+        c.connect();
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(c.homeMode).toBe('home');
         c.disconnect();
     });
 
@@ -96,7 +122,7 @@ describe('Use the home Stratux', () => {
         global.fetch = answers(AIR);
         const c = new StratuxClient();
         c.connect();
-        await vi.advanceTimersByTimeAsync(16_000);
+        await vi.advanceTimersByTimeAsync(21_000);
         expect(c.homeMode).toBe('fallback');
         c.resetHomeFallback();
         expect(c.ip).toBe(HOME);
