@@ -246,6 +246,34 @@ describe("'flytab:screen' off ends a recording on fresh shutdown evidence (#188)
         rec.destroy();
     });
 
+    it('EMS readings frozen (Pi up), landed (GPS 0 kt), screen off -> stop() by ground speed', () => {
+        // Re-review 2026-10-29: _onHidden waited for 30 s of fresh 0 RPM that can't come.
+        const eng = { lastData: { data: { RPM: 2400 } }, dataAge: 300, readingAge: 60_000 };
+        const stx = { get situation() { return { ground_speed: 0, timestamp: Date.now() - 200 }; } };
+        const rec = new FlightRecorder(eng, stx, null);
+        rec.init();
+        rec._recording = true;
+        rec._flush = vi.fn(async () => true);
+        rec.stop = vi.fn(async () => { rec._recording = false; });
+        expect(rec._shutdownEvidenceNow()).toBe(true);           // the marker's shutdown flag too
+        screen(false);
+        expect(rec.stop).toHaveBeenCalledTimes(1);
+        rec.destroy();
+    });
+
+    it('EMS readings frozen, still flying (GPS 140 kt), screen off -> recording goes on', () => {
+        const eng = { lastData: { data: { RPM: 0 } }, dataAge: 300, readingAge: 60_000 };
+        const stx = { get situation() { return { ground_speed: 140, timestamp: Date.now() - 200 }; } };
+        const rec = new FlightRecorder(eng, stx, null);
+        rec.init();
+        rec._recording = true;
+        rec._flush = vi.fn(async () => true);
+        rec.stop = vi.fn(async () => { rec._recording = false; });
+        screen(false);
+        expect(rec.stop).not.toHaveBeenCalled();
+        rec.destroy();
+    });
+
     it('fresh 0 RPM for only 13 s (mag check), screen off -> recording goes on', () => {
         const rec = make(0, 800);
         rec._rpmZeroCount = 13;

@@ -141,11 +141,44 @@ describe('FaaTfrClient (tfr.faa.gov through the NOTAM proxy)', () => {
         expect(new FaaTfrClient({ points: () => [[34.72, -80.85]] }).isCurrent(Date.parse('2026-10-29T20:00:00Z'))).toBe(false);
     });
 
-    it('an area is dropped an hour after its end (local times across a DST change)', () => {
+    it('an area is dropped an hour after its end (local times across a DST change), "ended" meanwhile', () => {
         localStorage.setItem(FaaTfrClient.CACHE_KEY, JSON.stringify(body([{ id: '6/3091', areas: [area()] }])));   // ends 20:30Z
         const c = new FaaTfrClient();
-        expect(c.areas(Date.parse('2026-10-29T21:20:00Z'))).toHaveLength(1);
+        expect(c.areas(Date.parse('2026-10-29T20:29:00Z'))[0].status).toBe('active');
+        expect(c.areas(Date.parse('2026-10-29T21:20:00Z')).map((e) => e.status)).toEqual(['ended']);
         expect(c.areas(Date.parse('2026-10-29T21:31:00Z'))).toHaveLength(0);
+        const html = VectorMapLayers.prototype._airspacePopupHtml.call(Object.create(VectorMapLayers.prototype),
+            [{ kind: 'tfr', rec: { ...area(), tfr: { id: '6/3091' }, status: 'ended' } }]);
+        expect(html).toContain('ENDED');
+        expect(html).not.toContain('ACTIVE NOW');
+    });
+
+    it('daily windows: active only inside one; between them "upcoming" with the next window\'s times', () => {
+        const windows = [['2026-10-29T13:00:00Z', '2026-10-29T22:00:00Z'], ['2026-10-30T13:00:00Z', '2026-10-30T22:00:00Z']];
+        localStorage.setItem(FaaTfrClient.CACHE_KEY, JSON.stringify(body([{ id: '6/3503', areas: [
+            area({ start: '2026-10-29T13:00:00Z', end: '2026-10-30T22:00:00Z', windows }) ] }])));
+        const c = new FaaTfrClient();
+        expect(c.areas(Date.parse('2026-10-29T15:00:00Z'))[0]).toMatchObject({ status: 'active', area: { end: '2026-10-29T22:00:00Z' } });
+        const night = c.areas(Date.parse('2026-10-30T04:00:00Z'))[0];
+        expect(night).toMatchObject({ status: 'upcoming', area: { start: '2026-10-30T13:00:00Z' } });
+        expect(c.areas(Date.parse('2026-10-30T22:30:00Z'))[0].status).toBe('ended');
+        expect(c.areas(Date.parse('2026-10-30T23:01:00Z'))).toEqual([]);
+    });
+
+    it('ensureCovered: downloads for a route outside the box; not for one no box can hold', async () => {
+        global.fetch = vi.fn(async () => ({ ok: true, status: 200, json: async () => body([]) }));
+        localStorage.setItem(FaaTfrClient.CACHE_KEY, JSON.stringify({ ...body([]), bbox: [-83.5, 32.2, -78.2, 37.2] }));
+        let pts = [[34.72, -80.85]];
+        const c = new FaaTfrClient({ baseUrl: () => 'https://fitpc.example', points: () => pts });
+        expect(await c.ensureCovered()).toBe(false);                     // covered: nothing asked
+        expect(fetch).not.toHaveBeenCalled();
+        pts = [[34.72, -80.85], [28.55, -81.33]];                        // + KORL
+        expect(await c.ensureCovered()).toBe(true);
+        expect(c.covers()).toBe(true);
+        pts = [[34.72, -80.85], [33.94, -118.41]];                       // + KLAX: wider than a box can be
+        fetch.mockClear();
+        expect(await c.ensureCovered()).toBe(false);
+        expect(fetch).not.toHaveBeenCalled();
     });
 
     it('bboxFor: at most 30 degrees each way', () => {

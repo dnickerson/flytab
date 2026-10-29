@@ -627,10 +627,10 @@ class CockpitMap {
         this._faaTfrEntries = [];
         const stroke = '#dc2626';
         for (const entry of this._faaTfr.areas(now)) {
-            // Active: solid outline and fill. Upcoming: dashed, light. No times known: solid, light.
+            // Active: solid outline and fill. Upcoming / just ended: dashed, light. No times known: solid, light.
             const style = entry.status === 'active'
                 ? { color: stroke, weight: 3, opacity: 1, fillColor: stroke, fillOpacity: 0.22 }
-                : entry.status === 'upcoming'
+                : (entry.status === 'upcoming' || entry.status === 'ended')
                     ? { color: stroke, weight: 2.5, opacity: 0.9, fillColor: stroke, fillOpacity: 0.06, dashArray: '8,6' }
                     : { color: stroke, weight: 2.5, opacity: 1, fillColor: stroke, fillOpacity: 0.12 };
             const poly = L.polygon(entry.area.polygon, { ...style, interactive: true, bubblingMouseEvents: false });

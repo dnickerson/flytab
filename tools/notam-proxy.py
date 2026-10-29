@@ -336,6 +336,8 @@ def parse_tfr_detail(data):
             'lowerFt': lo_ft, 'lowerRef': lo_ref, 'upperFt': up_ft, 'upperRef': up_ref,
             'start': min(starts) if starts and all(starts) else None,
             'end': max(ends) if ends and all(ends) else None,
+            # Several windows (e.g. daily): each one, so FlyTab says ACTIVE only inside one
+            'windows': sorted(zip(starts, ends)) if len(starts) > 1 and all(starts) and all(ends) else None,
             'polygon': pts,
         })
     text = _text(notam, 'txtDescrTraditional') or ''
@@ -362,6 +364,17 @@ def _inside(pt, poly):
         if (y1 > y) != (y2 > y) and x < (x2 - x1) * (y - y1) / (y2 - y1) + x1:
             c = not c
     return c
+
+
+def _same_area(shape, poly, tol=0.02):
+    """A shape-list ring and a detail area ([lat, lon] rings) are the same area:
+    their boxes agree within tol degrees (about a mile), or the shape's centre
+    is inside the area. (The centre alone missed concave shapes.)"""
+    def box(r):
+        return min(p[0] for p in r), min(p[1] for p in r), max(p[0] for p in r), max(p[1] for p in r)
+    if all(abs(x - y) <= tol for x, y in zip(box(shape), box(poly))):
+        return True
+    return _inside([sum(p[0] for p in shape) / len(shape), sum(p[1] for p in shape) / len(shape)], poly)
 
 
 def _outer_rings(geom):
@@ -397,9 +410,12 @@ def fetch_tfrs(bbox):
         props = f.get('properties') or {}
         geom = f.get('geometry') or {}
         key = str(props.get('NOTAM_KEY') or '').split('-')[0]
+        if not key:
+            continue
         rings = [r for r in _outer_rings(geom) if len(r) >= 3]
         if not rings:
-            unread.add(key or '?')
+            # Where it is can't be told: reported (in 'failed', and logged)
+            unread.add(key)
             continue
         for ring in rings:
             fw, fs, fe, fn = _bbox_of(ring)
@@ -436,9 +452,7 @@ def fetch_tfrs(bbox):
         if d and d.get('areas'):
             # A shape the details left out (no merged area, or too few points) is
             # still drawn, from the FAA's shape list.
-            extra = [sh for sh in base['shapes']
-                     if not any(_inside([sum(p[0] for p in sh) / len(sh), sum(p[1] for p in sh) / len(sh)], a['polygon'])
-                                for a in d['areas'])]
+            extra = [sh for sh in base['shapes'] if not any(_same_area(sh, a['polygon']) for a in d['areas'])]
             out.update({'type': d['type'], 'name': d['name'], 'start': d['start'], 'end': d['end'],
                         'timeZone': d['timeZone'], 'areas': d['areas'] + shapes_only(extra), 'text': d['text'],
                         'detail': True})

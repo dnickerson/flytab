@@ -365,7 +365,8 @@ class AirportPopup {
         const html = rows.map(({ ids, tfr, area, status, distanceNm }) => {
             const where = distanceNm === 0 ? 'IN TFR' : `TFR ${distanceNm < 1 ? '<1' : Math.round(distanceNm)} nm`;
             const when = status === 'active' ? (area.end ? `until ${time(area.end)}` : 'active')
-                : status === 'upcoming' ? `starts ${time(area.start)}` : 'times not known';
+                : status === 'upcoming' ? `starts ${time(area.start)}`
+                : status === 'ended' ? `ended ${time(area.end)} — check the NOTAM` : 'times not known';
             const tag = status === 'active' ? '<span class="apt-tfr-tag">ACTIVE</span>' : '';
             const head = `<span class="apt-tfr-head">⛔ ${esc(where)} ${esc(ids.join(' / '))}${tfr.legal ? ` · ${esc(tfr.legal)}` : ''}</span>${tag}`;
             const sub = `<span class="apt-tfr-sub">${esc(`${when} · ${alt(area.lowerFt, area.lowerRef)} – ${alt(area.upperFt, area.upperRef)}`)}</span>`;

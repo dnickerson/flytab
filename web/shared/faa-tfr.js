@@ -59,9 +59,23 @@ class FaaTfrClient extends EventTarget {
         return Number.isFinite(t) && now - t >= 0 && now - t < FaaTfrClient.CURRENT_MS && this.covers();
     }
 
-    /** The download's box holds every point (default: where we are + the route). */
-    covers(points = this._points()) {
-        const b = this.data?.bbox;
+    /**
+     * Download for where we are and the route unless the data already holds
+     * them: after a download already running (it may be for the old box), and
+     * not for a route wider than one box can be (MAX_SPAN_DEG) -- that one is
+     * never covered, and the NOTAM-text TFRs show. Resolves true on new data.
+     */
+    async ensureCovered() {
+        if (this.covers()) return false;
+        const pts = this._points();
+        const box = FaaTfrClient.bboxFor(pts, FaaTfrClient.BOX_MARGIN_NM);
+        if (!box || !this.covers(pts, box)) return false;
+        if (this._inFlight) { await this._inFlight.catch(() => {}); if (this.covers()) return false; }
+        return this.refresh();
+    }
+
+    /** The box (default: the download's) holds every point (default: where we are + the route). */
+    covers(points = this._points(), b = this.data?.bbox) {
         if (!Array.isArray(b) || b.length !== 4 || !b.every(Number.isFinite)) return false;
         const pts = (points || []).filter((p) => Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1]));
         return pts.length > 0 && pts.every(([lat, lon]) => lon >= b[0] && lat >= b[1] && lon <= b[2] && lat <= b[3]);
@@ -107,15 +121,26 @@ class FaaTfrClient extends EventTarget {
 
     /**
      * Every area not yet over, one entry per area: status 'active' (now within
-     * its times), 'upcoming', or 'unknown' (no times from the FAA).
+     * its times), 'upcoming', 'ended' (in the END_GRACE_MS after its end) or
+     * 'unknown' (no times from the FAA). An area with several windows (daily)
+     * is judged by the window now or next; the entry's area then carries that
+     * window's start and end, so every display says the right times.
      */
     areas(now = Date.now()) {
         const out = [];
+        const ms = (v) => Date.parse(v || '');
         for (const t of this.data?.tfrs || []) {
-            for (const a of t.areas) {
-                const s = Date.parse(a.start || ''), e = Date.parse(a.end || '');
+            for (const a0 of t.areas) {
+                let a = a0;
+                if (Array.isArray(a0.windows) && a0.windows.length) {
+                    const w = a0.windows.find(([ws, we]) => ms(we) > now)
+                        || a0.windows[a0.windows.length - 1];
+                    a = { ...a0, start: w[0], end: w[1] };
+                }
+                const s = ms(a.start), e = ms(a.end);
                 if (Number.isFinite(e) && e + FaaTfrClient.END_GRACE_MS <= now) continue;
                 const status = !Number.isFinite(s) && !Number.isFinite(e) ? 'unknown'
+                    : (Number.isFinite(e) && e <= now) ? 'ended'
                     : (Number.isFinite(s) && s > now) ? 'upcoming' : 'active';
                 out.push({ tfr: t, area: a, status, fetchedAt: this.data.fetchedAt });
             }
@@ -129,7 +154,7 @@ class FaaTfrClient extends EventTarget {
      * distanceNm (0 = inside). Nearest first.
      */
     near(lat, lon, withinNm = 5, now = Date.now()) {
-        const rank = { active: 0, upcoming: 1, unknown: 2 };
+        const rank = { active: 0, upcoming: 1, unknown: 2, ended: 3 };
         const best = new Map();
         for (const e of this.areas(now)) {
             const d = FaaTfrClient.distanceNm(lat, lon, e.area.polygon);
@@ -196,6 +221,10 @@ class FaaTfrClient extends EventTarget {
                 name: str(a.name, 60) || '', polygon: poly,
                 lowerFt: num(a.lowerFt), lowerRef: str(a.lowerRef, 4), upperFt: num(a.upperFt), upperRef: str(a.upperRef, 4),
                 start: str(a.start, 30), end: str(a.end, 30),
+                windows: Array.isArray(a.windows)
+                    ? a.windows.filter((w) => Array.isArray(w) && typeof w[0] === 'string' && typeof w[1] === 'string')
+                        .slice(0, 60).map((w) => [w[0].slice(0, 30), w[1].slice(0, 30)])
+                    : null,
             };
         }).filter(Boolean);
         if (!areas.length) return null;

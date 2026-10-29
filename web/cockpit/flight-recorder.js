@@ -148,8 +148,10 @@ class FlightRecorder {
     _onHidden() {
         if (!this._recording) return;
         this._flush().catch(() => {});
-        // With an engine monitor, also: RPM 0 for a while, not one run-up reading
-        const settled = !this._engine?.lastData || this._rpmZeroCount >= FlightRecorder.HIDE_STOP_RPM_ZERO_SECONDS;
+        // With an engine monitor, also: RPM 0 for a while, not one run-up reading.
+        // Readings not moving (EMS serial dead, Pi up): ground speed decides, as
+        // without an engine monitor (re-review 2026-10-29).
+        const settled = !this._engineReadingsLive() || this._rpmZeroCount >= FlightRecorder.HIDE_STOP_RPM_ZERO_SECONDS;
         if (settled && this._shutdownEvidenceNow()) this.stop();
     }
 
@@ -802,14 +804,18 @@ class FlightRecorder {
         const cfg = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.get('flightRecording') : {};
         const stopThreshold = cfg?.rpmStopThreshold ?? 0;
         const eng = this._engine?.lastData;
-        if (eng) {
-            const fresh = this._engineReadingAge() < FlightRecorder.FRESH_DATA_MS;
+        if (eng && this._engineReadingsLive()) {
             const rpm = eng.data?.RPM;
-            return fresh && typeof rpm === 'number' && rpm <= stopThreshold;
+            return typeof rpm === 'number' && rpm <= stopThreshold;
         }
         const sit = this._stratux?.situation;
         const sitAge = typeof sit?.timestamp === 'number' ? Date.now() - sit.timestamp : Infinity;
         return sitAge < FlightRecorder.FRESH_DATA_MS && typeof sit?.ground_speed === 'number' && sit.ground_speed < 10;
+    }
+
+    /** An engine monitor whose readings are moving (fresh within FRESH_DATA_MS). */
+    _engineReadingsLive() {
+        return !!this._engine?.lastData && this._engineReadingAge() < FlightRecorder.FRESH_DATA_MS;
     }
 
     /** Age of the newest engine reading, ms (EngineClient.readingAge; dataAge from older clients). */

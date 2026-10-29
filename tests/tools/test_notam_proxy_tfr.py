@@ -203,6 +203,29 @@ class ReviewFixes(unittest.TestCase):
         self.assertEqual(a['start'], '2026-10-29T17:20:00Z')
         self.assertEqual(a['end'], '2026-10-30T22:00:00Z')      # 18:00 EDT on the 30th, not the first window's end
 
+    def test_a_feature_without_a_notam_key_is_skipped(self):
+        def keyless(fc):
+            fc['features'][0]['properties']['NOTAM_KEY'] = ''
+        self.wfs(keyless)
+        r = proxy.fetch_tfrs((-82.0, 34.0, -80.0, 36.0))
+        self.assertNotIn('', [t['id'] for t in r['tfrs']])
+        self.assertFalse(any('detail_.xml' in u for u in self.calls))
+
+    def test_daily_windows_are_kept(self):
+        xml = read('detail_6_3503.xml').decode()
+        second = ('<ScheduleGroup><isTimeSeparate>FALSE</isTimeSeparate>'
+                  '<dateEffective>2026-10-30T09:00:00</dateEffective><dateExpire>2026-10-30T18:00:00</dateExpire>'
+                  '</ScheduleGroup></aseTFRArea>')
+        a = proxy.parse_tfr_detail(xml.replace('</aseTFRArea>', second, 1).encode())['areas'][0]
+        self.assertEqual(a['windows'], [('2026-10-29T17:20:00Z', '2026-10-30T00:35:00Z'),
+                                        ('2026-10-30T13:00:00Z', '2026-10-30T22:00:00Z')])
+        self.assertIsNone(proxy.parse_tfr_detail(read('detail_6_3503.xml'))['areas'][0]['windows'])
+
+    def test_same_area_by_box_or_centre(self):
+        c = [[35.0, -81.0], [35.0, -80.0], [35.2, -80.0], [35.2, -80.9], [36.0, -80.9], [36.0, -81.0]]   # an L
+        self.assertTrue(proxy._same_area(c, [list(p) for p in c]))
+        self.assertFalse(proxy._same_area(c, [[30.0, -70.0], [30.0, -69.0], [31.0, -69.0]]))
+
     def test_out_of_time_details_are_skipped_shapes_still_drawn(self):
         orig = proxy.TFR_DEADLINE_S
         proxy.TFR_DEADLINE_S = 0

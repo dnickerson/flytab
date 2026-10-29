@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v12.25';
+const FLYTAB_VERSION = 'v12.26';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 // Kept in memory and saved at most every FLUSH_MS (errors at once). Every log()
@@ -932,8 +932,8 @@ class FlyTabApp {
             // A route outside the downloaded box: download for it now, not in up to
             // 15 min (until then the NOTAM-text TFRs show, isCurrent() is false).
             window.addEventListener('activeroute:plan', () => {
-                if (!this.faaTfr.covers()) this.faaTfr.refresh();
                 this.cockpitMap.redrawFaaTfrs?.();
+                this.faaTfr.ensureCovered().catch(() => {});      // refresh() asks only with internet
             });
         });
 

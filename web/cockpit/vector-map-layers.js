@@ -1967,7 +1967,8 @@ class VectorMapLayers {
             if (kind === 'tfr') {
                 const t = rec.tfr || {};
                 const from = VectorMapLayers._fmtTfrTime(rec.start), to = VectorMapLayers._fmtTfrTime(rec.end);
-                const when = rec.status === 'active' ? 'ACTIVE NOW' : rec.status === 'upcoming' ? `STARTS ${from}` : 'TIMES NOT KNOWN';
+                const when = rec.status === 'active' ? 'ACTIVE NOW' : rec.status === 'upcoming' ? `STARTS ${from}`
+                    : rec.status === 'ended' ? `ENDED ${to} — CHECK THE NOTAM` : 'TIMES NOT KNOWN';
                 const span = from && to ? `${from} – ${to}` : (to ? `until ${to}` : 'check the NOTAM for times');
                 const got = VectorMapLayers._fmtTfrTime(rec.fetchedAt);
                 return `<div class="as-pop-row as-pop-tfr${rec.status === 'active' ? ' is-active' : ''}">
