@@ -15,6 +15,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { readFileSync } from 'fs';
 
 const read = (p) => readFileSync(p, 'utf8');
+// The app's global tap helper (shared/tap-utils.js): a TFR card whose area is now
+// read (seconds in its coordinates) gets the map-location pill, which wires it.
+global.wireTap = global.wireTap || ((el, fn) => el?.addEventListener?.('click', fn));
 const WxBriefing = new Function(`${read('web/cockpit/wx-briefing.js')}\nreturn WxBriefing;`)();
 
 let stations = ['KLKR', 'KCAE', 'KTMB'];

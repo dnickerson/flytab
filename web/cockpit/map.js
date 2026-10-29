@@ -171,6 +171,12 @@ class CockpitMap {
         this._notamTfrGroup = null;      // L.LayerGroup (NOTAM TFRs, created in init)
         this._notamTfrShapes = new Map(); // raw → { layer, srcs: Set<'apt'|'enr'> } (NOTAM)
         this._showTfrs = true;           // default ON
+        // TFRs from tfr.faa.gov (FaaTfrClient): exact areas, altitudes and times.
+        // While that data is current, the NOTAM-text TFRs are not drawn.
+        this._faaTfr = null;
+        this._faaTfrGroup = null;
+        this._faaTfrEntries = [];        // [{ poly, entry }] drawn now
+        this._faaTfrTimer = null;
 
         // Runway extension centerlines
         this._rwyExtLayer = null;
@@ -602,9 +608,61 @@ class CockpitMap {
         }
     }
 
+    /** Draw TFRs from tfr.faa.gov (FaaTfrClient); redraw on new data and every minute (times). */
+    setFaaTfrClient(client) {
+        this._faaTfr = client;
+        if (!this.map) return;
+        this._faaTfrGroup = L.layerGroup();
+        if (this._showTfrs) this._faaTfrGroup.addTo(this.map);
+        client.addEventListener('faatfr:updated', () => this._drawFaaTfrs());
+        if (this._faaTfrTimer) clearInterval(this._faaTfrTimer);
+        this._faaTfrTimer = setInterval(() => this._drawFaaTfrs(), 60 * 1000);
+        this._drawFaaTfrs();
+    }
+
+    _drawFaaTfrs() {
+        if (!this._faaTfr || !this._faaTfrGroup) return;
+        const now = Date.now();
+        this._faaTfrGroup.clearLayers();
+        this._faaTfrEntries = [];
+        const stroke = '#dc2626';
+        for (const entry of this._faaTfr.areas(now)) {
+            // Active: solid outline and fill. Upcoming: dashed, light. No times known: solid, light.
+            const style = entry.status === 'active'
+                ? { color: stroke, weight: 3, opacity: 1, fillColor: stroke, fillOpacity: 0.22 }
+                : entry.status === 'upcoming'
+                    ? { color: stroke, weight: 2.5, opacity: 0.9, fillColor: stroke, fillOpacity: 0.06, dashArray: '8,6' }
+                    : { color: stroke, weight: 2.5, opacity: 1, fillColor: stroke, fillOpacity: 0.12 };
+            const poly = L.polygon(entry.area.polygon, { ...style, interactive: true, bubblingMouseEvents: false });
+            // The airspace popup's tap path (VectorMapLayers): it lists this TFR with
+            // whatever other airspace is at the spot.
+            poly.on('click', (ev) => this._vectorLayers?._onAirspaceClick?.(ev));
+            poly.addTo(this._faaTfrGroup);
+            this._faaTfrEntries.push({ poly, entry });
+        }
+        // The FAA's own TFR data is the picture while current: the NOTAM-text
+        // shapes (staging API, text-parsed) are not drawn beside it.
+        if (this._notamTfrGroup) {
+            const showNotam = this._showTfrs && !this._faaTfr.isCurrent(now);
+            if (showNotam && !this.map.hasLayer(this._notamTfrGroup)) this._notamTfrGroup.addTo(this.map);
+            if (!showNotam && this.map.hasLayer(this._notamTfrGroup)) this.map.removeLayer(this._notamTfrGroup);
+        }
+    }
+
+    /** TFR areas drawn at this point, for the airspace popup: [{ kind: 'tfr', rec }]. */
+    tfrAreasAt(lat, lon) {
+        if (!this._showTfrs || typeof GeoUtils === 'undefined') return [];
+        return this._faaTfrEntries
+            .filter(({ entry }) => GeoUtils.pointInPolygon(lat, lon, entry.area.polygon))
+            .map(({ entry }) => ({ kind: 'tfr', rec: { ...entry.area, tfr: entry.tfr, status: entry.status, fetchedAt: entry.fetchedAt } }));
+    }
+
     toggleTfrs(on) {
         this._showTfrs = on;
         if (!this.map) return;
+        if (this._faaTfrGroup) {
+            if (on) this._faaTfrGroup.addTo(this.map); else this.map.removeLayer(this._faaTfrGroup);
+        }
         if (on) {
             if (this._tfrLayer) {
                 this._tfrLayer.addTo(this.map);
@@ -616,7 +674,7 @@ class CockpitMap {
                     }
                 }
             }
-            if (this._notamTfrGroup) this._notamTfrGroup.addTo(this.map);
+            if (this._notamTfrGroup && !this._faaTfr?.isCurrent()) this._notamTfrGroup.addTo(this.map);
         } else {
             if (this._tfrLayer) this.map.removeLayer(this._tfrLayer);
             if (this._notamTfrGroup) this.map.removeLayer(this._notamTfrGroup);
@@ -633,7 +691,8 @@ class CockpitMap {
     }
 
     _addNotamTfrShape(shape, src = 'enr') {
-        const have = this._notamTfrShapes.get(shape.raw);
+        const key = shape.key || shape.raw;     // one NOTAM can be several areas (wx-briefing _tfrShapesOf)
+        const have = this._notamTfrShapes.get(key);
         if (have) { have.srcs.add(src); return; }
 
         const fill   = 'rgba(220,38,38,0.15)';
@@ -673,7 +732,7 @@ class CockpitMap {
             </div>`;
         layer.bindPopup(popupHtml, { maxWidth: 300 });
         layer.addTo(this._notamTfrGroup);
-        this._notamTfrShapes.set(shape.raw, { layer, srcs: new Set([src]) });
+        this._notamTfrShapes.set(key, { layer, srcs: new Set([src]) });
     }
 
     _addTfrShape(notam) {

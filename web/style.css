@@ -12402,3 +12402,9 @@ body.route-editing-mode .route-table-sheet {
     border: 1px solid var(--border); background: var(--bg-primary); color: var(--text-secondary);
     font-size: 20px; font-weight: 800; cursor: pointer;
 }
+
+/* TFR rows in the airspace popup (tfr.faa.gov) */
+.as-pop-row.as-pop-tfr { border-left: 6px solid var(--color-danger); padding-left: 8px; }
+.as-pop-tfr .as-pop-name { color: var(--color-danger-on-light); }
+.as-pop-tfr-when { font-size: var(--text-sm); color: var(--text-secondary); }
+.as-pop-tfr.is-active .as-pop-tfr-when { background: var(--color-danger); color: #fff; padding: 1px 6px; border-radius: 4px; }

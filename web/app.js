@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v12.20';
+const FLYTAB_VERSION = 'v12.21';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 // Kept in memory and saved at most every FLUSH_MS (errors at once). Every log()
@@ -900,6 +900,34 @@ class FlyTabApp {
             this.directToPanel = new DirectToPanel(this, nasrDb);
             this.cockpitMap.onDirectToTap = () => this.directToPanel.open();
         }
+
+        // TFRs from tfr.faa.gov through the NOTAM proxy: exact areas, altitudes, times.
+        // Downloaded on the ground around us and the route, kept for the flight.
+        this._guard('TFRs (tfr.faa.gov)', () => {
+            if (typeof FaaTfrClient === 'undefined') return;
+            this.faaTfr = new FaaTfrClient({
+                baseUrl: () => (typeof CockpitConfig !== 'undefined' && CockpitConfig.notamBase) || null,
+                points: () => {
+                    const pts = [];
+                    const sit = this.stratuxClient?.situation;
+                    if (Number.isFinite(sit?.lat) && Number.isFinite(sit?.lon)) pts.push([sit.lat, sit.lon]);
+                    else if (this.cockpitMap?.map) { const c = this.cockpitMap.map.getCenter(); pts.push([c.lat, c.lng]); }
+                    for (const wp of this.routeTable?._waypoints || []) {
+                        if (Number.isFinite(wp?.lat) && Number.isFinite(wp?.lon)) pts.push([wp.lat, wp.lon]);
+                    }
+                    return pts;
+                },
+                // In flight (Stratux WiFi) there is no internet: keep what was downloaded.
+                canFetch: () => !['flight', 'offline'].includes(this.networkMode?.mode),
+            });
+            this.cockpitMap.setFaaTfrClient(this.faaTfr);
+            if (this.vectorLayers) this.vectorLayers.extraAreasAt = (lat, lon) => this.cockpitMap.tfrAreasAt(lat, lon);
+            this.faaTfr.start();
+            // Back on the ground with internet: download at once.
+            this.networkMode?.addEventListener?.('mode:changed', (e) => {
+                if (!['flight', 'offline'].includes(e.detail?.mode)) this.faaTfr.refresh();
+            });
+        });
 
         // Radio frequency tool (map FREQ button)
         this._guard('Radio frequencies', () => {

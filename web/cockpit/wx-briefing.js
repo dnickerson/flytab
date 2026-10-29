@@ -2214,14 +2214,14 @@ class WxBriefing {
     }
 
     _tfrShapesOf(notams) {
+        // One shape per area: a TFR is often several (Charlotte / Rock Hill VIP,
+        // 2026-10-29: a 30 and a 10 nm ring around each of two points).
         return notams
             .filter(n => n.type === 'TFR')
-            .map(n => {
-                const geo = this._parseTfrGeometry(n.raw);
-                if (!geo) return null;
-                return { raw: n.raw, summary: n.summary, validFrom: n.validFrom, validTo: n.validTo, ...geo };
-            })
-            .filter(Boolean);
+            .flatMap(n => this._parseTfrGeometries(n.raw).map((geo, i) => ({
+                key: i ? `${n.raw}#${i}` : n.raw,
+                raw: n.raw, summary: n.summary, validFrom: n.validFrom, validTo: n.validTo, ...geo,
+            })));
     }
 
     /**
@@ -2556,7 +2556,60 @@ class WxBriefing {
             .map(a => a.id);
     }
 
+    /**
+     * Every area of a TFR NOTAM: "WI AN AREA DEFINED AS 30NM RADIUS OF
+     * 351247N0805705W ..." (a circle) or "... AS 334903N0791434W TO ... TO
+     * POINT OF ORIGIN" (a polygon), coordinates with or without seconds. Each
+     * area is its own shape -- the text holds several; joining their
+     * coordinates drew Charlotte / Rock Hill's four rings as one line.
+     * Text without that phrase: the old single-shape parse.
+     */
+    _parseTfrGeometries(raw) {
+        const text = String(raw || '');
+        const parts = text.split(/\bWI(?:THIN)?\s+AN\s+AREA\s+DEFINED\s+AS\b/i).slice(1);
+        if (!parts.length) {
+            const one = this._parseTfrGeometry(text);
+            return one ? [one] : [];
+        }
+        const coordRe = /(?<!\d)(\d{4}(?:\d{2})?)([NS])\s*\/?\s*(\d{5}(?:\d{2})?)([EW])/gi;
+        const toDeg = (d, isLon) => {
+            const dd = isLon ? 3 : 2;
+            const deg = parseInt(d.slice(0, dd), 10), min = parseInt(d.slice(dd, dd + 2), 10);
+            const sec = d.length > dd + 2 ? parseInt(d.slice(dd + 2, dd + 4), 10) : 0;
+            return deg + min / 60 + sec / 3600;
+        };
+        const coordOf = (m) => {
+            let lat = toDeg(m[1], false), lon = toDeg(m[3], true);
+            if (m[2].toUpperCase() === 'S') lat = -lat;
+            if (m[4].toUpperCase() === 'W') lon = -lon;
+            return (Math.abs(lat) <= 90 && Math.abs(lon) <= 180) ? [lat, lon] : null;
+        };
+        const out = [];
+        for (const part of parts) {
+            // The area's own definition: up to the altitudes/times that follow it
+            const def = part.split(/\b(?:SFC|SURFACE|FL\d{3}|\d{3,5}\s*FT|EFFECTIVE|STNR|EXCEPT)\b/i)[0];
+            const circle = def.match(/^\s*(\d+(?:\.\d+)?)\s*NM\s+RADIUS\s+OF\s+/i);
+            coordRe.lastIndex = 0;
+            const coords = [];
+            let m;
+            while ((m = coordRe.exec(def)) !== null) { const c = coordOf(m); if (c) coords.push(c); }
+            if (circle && coords.length) {
+                const [lat, lon] = coords[0];
+                out.push({ lat, lon, radiusNm: parseFloat(circle[1]), center: { lat, lon } });
+            } else if (coords.length >= 3) {
+                const clat = coords.reduce((a, p) => a + p[0], 0) / coords.length;
+                const clon = coords.reduce((a, p) => a + p[1], 0) / coords.length;
+                out.push({ points: coords, center: { lat: clat, lon: clon } });
+            }
+        }
+        return out;
+    }
+
     _parseTfrGeometry(raw) {
+        if (/\bWI(?:THIN)?\s+AN\s+AREA\s+DEFINED\s+AS\b/i.test(String(raw || ''))) {
+            const all = this._parseTfrGeometries(raw);
+            if (all.length) return all[0];
+        }
         const pts = [];
 
         const pat1 = /(\d{2})(\d{2})(N|S)\s*\/?(\d{2,3})(\d{2})(W|E)/gi;
