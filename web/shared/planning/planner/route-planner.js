@@ -664,6 +664,27 @@ export class RoutePlanner {
                         rpm: fp?.descent?.rpm, mp: fp?.descent?.mp,
                         percent_power: fp?.descent?.percent_power });
                 }
+                // Never less fuel than before (final review of #193): a descent to a
+                // field elevation is shorter than the pre-#190 descent to 0, so on a
+                // short leg it planned less fuel. Floor the leg's fuel at the same leg
+                // descending to 0; the difference goes on the DES segment (the last
+                // segment if the leg has no descent), unrounded so the segments still
+                // sum. Time stays as modelled.
+                if (endingAtGround && fieldElevFt > 0 && legSegs.length) {
+                    const toZero = decomposeLeg(legProfile, {
+                        distNm, altFt: legAltFt, departingFromGround, endingAtGround,
+                        gsKt: gs, tasKt: tas, powerFrac: pctPower, destElevFt: 0,
+                    });
+                    const short = toZero.totalFuelGal - dl.totalFuelGal;
+                    if (short > 0) {
+                        const hasDes = dl.phases.descent.timeHrs > 0;
+                        const seg = hasDes ? legSegs.find((x) => x.phase === 'DES') : legSegs[legSegs.length - 1];
+                        const ph  = hasDes ? dl.phases.descent
+                                  : seg.phase === 'CRZ' ? dl.phases.cruise : dl.phases.climb;
+                        seg.gph = (ph.fuelGal + short) / ph.timeHrs;
+                        decomp = { totalTimeHrs: dl.totalTimeHrs, totalFuelGal: dl.totalFuelGal + short };
+                    }
+                }
             }
 
             fuelRem -= decomp.totalFuelGal;

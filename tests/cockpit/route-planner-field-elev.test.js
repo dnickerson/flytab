@@ -120,6 +120,18 @@ describe('the elevation lookup cannot hang Plan / Apply', () => {
         expect(RoutePlannerPanel.ELEV_LOOKUP_MS).toBe(1000);
     });
 
+    it('two hung airport pills cost ~1 s in all, not 1 s each (lookups in parallel)', async () => {
+        vi.useFakeTimers();
+        const panel = makePanel(APPROACH_ROUTE(), APPROACH_COORDS());
+        panel._nasrDb.getAirport = vi.fn(() => new Promise(() => {}));
+        let wps = null;
+        panel._pillsToWaypoints().then((w) => { wps = w; });
+        await vi.advanceTimersByTimeAsync(1100);
+        expect(wps).not.toBeNull();
+        expect(wps.map(w => w.id)).toEqual(['KCLT', 'SAPSE', 'WITUR', 'RW24', 'KLKR']);
+        for (const w of wps) expect(w).not.toHaveProperty('elev_ft');
+    });
+
     it('a lookup that answers in time still gives the elevation', async () => {
         vi.useFakeTimers();
         const panel = makePanel(APPROACH_ROUTE(), APPROACH_COORDS());

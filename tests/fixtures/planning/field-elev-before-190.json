@@ -1,0 +1,369 @@
+{
+  "plainDirect": {
+    "plan": {
+      "departure": "KLKR",
+      "destination": "KCLW",
+      "waypoints": [
+        {
+          "id": "KLKR",
+          "lat": 34.722904,
+          "lon": -80.85459,
+          "type": "APT",
+          "elev_ft": 486
+        },
+        {
+          "id": "KCLW",
+          "lat": 27.977214,
+          "lon": -82.759057,
+          "type": "APT",
+          "elev_ft": 71
+        }
+      ]
+    },
+    "opts": {
+      "departureTime": "2026-10-30T15:00:00Z"
+    },
+    "before": {
+      "legFuel": [
+        21.93309765252686
+      ],
+      "totalFuelGal": 21.93309765252686,
+      "totalEteHrs": 2.5247735300627214
+    }
+  },
+  "plainFuelStopWinds": {
+    "plan": {
+      "departure": "KLKR",
+      "destination": "KCLW",
+      "cruiseAltFt": 8500,
+      "waypoints": [
+        {
+          "id": "KLKR",
+          "lat": 34.722904,
+          "lon": -80.85459,
+          "type": "APT",
+          "elev_ft": 486
+        },
+        {
+          "id": "MID",
+          "lat": 32.5,
+          "lon": -81.6
+        },
+        {
+          "id": "KFUEL",
+          "lat": 30.4,
+          "lon": -81.9,
+          "type": "APT",
+          "elev_ft": 97,
+          "fuelStop": true
+        },
+        {
+          "id": "MID2",
+          "lat": 29,
+          "lon": -82.3
+        },
+        {
+          "id": "KCLW",
+          "lat": 27.977214,
+          "lon": -82.759057,
+          "type": "APT",
+          "elev_ft": 71
+        }
+      ]
+    },
+    "opts": {
+      "pctPower": 75,
+      "winds": {
+        "CAE": {
+          "3000": {
+            "dir": 240,
+            "spd": 15,
+            "temp": 12
+          },
+          "6000": {
+            "dir": 250,
+            "spd": 22,
+            "temp": 6
+          },
+          "9000": {
+            "dir": 260,
+            "spd": 30,
+            "temp": 0
+          }
+        },
+        "JAX": {
+          "3000": {
+            "dir": 200,
+            "spd": 10,
+            "temp": 16
+          },
+          "6000": {
+            "dir": 210,
+            "spd": 18,
+            "temp": 10
+          },
+          "9000": {
+            "dir": 220,
+            "spd": 25,
+            "temp": 4
+          }
+        }
+      },
+      "fdLocs": {
+        "CAE": [
+          33.94,
+          -81.12
+        ],
+        "JAX": [
+          30.44,
+          -81.56
+        ]
+      },
+      "departureTime": "2026-10-30T15:00:00Z"
+    },
+    "before": {
+      "legFuel": [
+        9.099106450601147,
+        6.8132578830596655,
+        6.272833907991076,
+        3.1645256200359575
+      ],
+      "totalFuelGal": 25.349723861687846,
+      "totalEteHrs": 2.8631190538290516
+    }
+  },
+  "destAlt": {
+    "plan": {
+      "departure": "KLKR",
+      "destination": "KDST",
+      "waypoints": [
+        {
+          "id": "KLKR",
+          "lat": 34.722904,
+          "lon": -80.85459,
+          "type": "APT",
+          "elev_ft": 486
+        },
+        {
+          "id": "AAA",
+          "lat": 34,
+          "lon": -81.4
+        },
+        {
+          "id": "KDST",
+          "lat": 32,
+          "lon": -82.2,
+          "type": "APT",
+          "elev_ft": 196,
+          "altFt": 4500,
+          "isDest": true
+        }
+      ]
+    },
+    "opts": {
+      "cruiseAltFt": 8500,
+      "departureTime": "2026-10-30T15:00:00Z"
+    },
+    "before": {
+      "legFuel": [
+        3.798961237126491,
+        6.782158238608062
+      ],
+      "totalFuelGal": 10.581119475734553,
+      "totalEteHrs": 1.1652976700137507
+    }
+  },
+  "fuelAlt": {
+    "plan": {
+      "departure": "KLKR",
+      "destination": "KDST",
+      "waypoints": [
+        {
+          "id": "KLKR",
+          "lat": 34.722904,
+          "lon": -80.85459,
+          "type": "APT",
+          "elev_ft": 486
+        },
+        {
+          "id": "AAA",
+          "lat": 34,
+          "lon": -81.4
+        },
+        {
+          "id": "KMID",
+          "lat": 33,
+          "lon": -81.8,
+          "type": "APT",
+          "elev_ft": 240,
+          "altFt": 4500,
+          "fuelStop": true
+        },
+        {
+          "id": "KDST",
+          "lat": 32,
+          "lon": -82.2,
+          "type": "APT",
+          "elev_ft": 196
+        }
+      ]
+    },
+    "opts": {
+      "cruiseAltFt": 8500,
+      "departureTime": "2026-10-30T15:00:00Z"
+    },
+    "before": {
+      "legFuel": [
+        3.798961237126491,
+        3.2262530459251066,
+        3.9595340215718164
+      ],
+      "totalFuelGal": 10.984748304623414,
+      "totalEteHrs": 1.1539099455617443
+    }
+  },
+  "cltUza3500": {
+    "plan": {
+      "departure": "KCLT",
+      "destination": "KUZA",
+      "waypoints": [
+        {
+          "id": "KCLT",
+          "lat": 35.213187,
+          "lon": -80.951379,
+          "type": "APT",
+          "elev_ft": 748
+        },
+        {
+          "id": "KUZA",
+          "lat": 34.987833,
+          "lon": -81.057167,
+          "type": "APT",
+          "elev_ft": 666
+        }
+      ]
+    },
+    "opts": {
+      "cruiseAltFt": 3500,
+      "departureTime": "2026-10-30T15:00:00Z"
+    },
+    "before": {
+      "legFuel": [
+        1.4883333333333333
+      ],
+      "totalFuelGal": 1.4883333333333333,
+      "totalEteHrs": 0.12222222222222222
+    }
+  },
+  "cltFixLkr4500": {
+    "plan": {
+      "departure": "KCLT",
+      "destination": "KLKR",
+      "waypoints": [
+        {
+          "id": "KCLT",
+          "lat": 35.213187,
+          "lon": -80.951379,
+          "type": "APT",
+          "elev_ft": 748
+        },
+        {
+          "id": "FIX",
+          "lat": 34.805167807815366,
+          "lon": -80.87083007296734
+        },
+        {
+          "id": "KLKR",
+          "lat": 34.722904,
+          "lon": -80.85459,
+          "type": "APT",
+          "elev_ft": 486
+        }
+      ]
+    },
+    "opts": {
+      "cruiseAltFt": 4500,
+      "departureTime": "2026-10-30T15:00:00Z"
+    },
+    "before": {
+      "legFuel": [
+        2.121838929414202,
+        0.7392857142857143
+      ],
+      "totalFuelGal": 2.8611246436999163,
+      "totalEteHrs": 0.2811713011207383
+    }
+  },
+  "lkrFixAvl6500": {
+    "plan": {
+      "departure": "KLKR",
+      "destination": "KAVL",
+      "waypoints": [
+        {
+          "id": "KLKR",
+          "lat": 34.722904,
+          "lon": -80.85459,
+          "type": "APT",
+          "elev_ft": 486
+        },
+        {
+          "id": "FIX",
+          "lat": 35.37492903974878,
+          "lon": -82.39728536349001
+        },
+        {
+          "id": "KAVL",
+          "lat": 35.436113,
+          "lon": -82.542047,
+          "type": "APT",
+          "elev_ft": 2164
+        }
+      ]
+    },
+    "opts": {
+      "cruiseAltFt": 6500,
+      "departureTime": "2026-10-30T15:00:00Z"
+    },
+    "before": {
+      "legFuel": [
+        5.558150890265381,
+        1.0678571428571428
+      ],
+      "totalFuelGal": 6.626008033122524,
+      "totalEteHrs": 0.7204147885236565
+    }
+  },
+  "lxvSaf12500": {
+    "plan": {
+      "departure": "KLXV",
+      "destination": "KSAF",
+      "waypoints": [
+        {
+          "id": "KLXV",
+          "lat": 39.219472,
+          "lon": -106.316417,
+          "type": "APT",
+          "elev_ft": 9934
+        },
+        {
+          "id": "KSAF",
+          "lat": 35.617111,
+          "lon": -106.089417,
+          "type": "APT",
+          "elev_ft": 6349
+        }
+      ]
+    },
+    "opts": {
+      "cruiseAltFt": 12500,
+      "departureTime": "2026-10-30T15:00:00Z"
+    },
+    "before": {
+      "legFuel": [
+        11.457791101134735
+      ],
+      "totalFuelGal": 11.457791101134735,
+      "totalEteHrs": 1.2687563102257904
+    }
+  }
+}

@@ -3406,6 +3406,7 @@ class RoutePlannerPanel {
     async _pillsToWaypoints() {
         const wps = [];
         const skipped = [];
+        const elevPending = [];   // field-elevation lookups in flight: [{ wp, lookup }]
 
         // Build case-insensitive index of cached coords. AirwayGraph stores
         // fix names as they appear in the NASR bundle (e.g. 'Pawling') but
@@ -3454,8 +3455,10 @@ class RoutePlannerPanel {
             // the field, not at 0 (#190: RW24 -> KLKR 528 -> 486). The _coords cache
             // holds lat/lon only, so look the airport up here too -- bounded: a hung IDB
             // must not hang Plan / Apply, which worked from cached coordinates before.
-            // On timeout: no elev_ft, the descent ends at 0 as before.
-            if (isAptPill && !aptRec && this._nasrDb) aptRec = await this._airportRecordBounded(id);
+            // On timeout: no elev_ft, the descent ends at 0 as before. Started here,
+            // awaited for all airport pills together after the loop, so a hung IDB
+            // costs one timeout in all, not one per airport.
+            const elevLookup = (isAptPill && !aptRec && this._nasrDb) ? this._airportRecordBounded(id) : null;
             const elevFt = isAptPill && Number.isFinite(aptRec?.elev_ft) ? aptRec.elev_ft : null;
 
             // airway: prefer the explicit pendingAirway set by an AWY pill, fall
@@ -3491,8 +3494,14 @@ class RoutePlannerPanel {
                 ...(pill.proc ? { proc: pill.proc } : {}),
                 ...(aw ? { airway: aw } : {}),
             });
+            if (elevLookup) elevPending.push({ wp: wps[wps.length - 1], lookup: elevLookup });
             pendingAirway = null;
         }
+
+        await Promise.all(elevPending.map(async ({ wp, lookup }) => {
+            const rec = await lookup;
+            if (Number.isFinite(rec?.elev_ft)) wp.elev_ft = rec.elev_ft;
+        }));
 
         if (skipped.length > 0)
             this._toast(`Skipped (not found): ${skipped.join(', ')}`);

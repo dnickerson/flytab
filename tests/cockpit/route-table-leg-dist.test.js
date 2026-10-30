@@ -150,6 +150,20 @@ describe('#191 DIST / TIME show the leg, running total underneath', () => {
         expect(wps.slice(1).map(w => w._cumDist)).toEqual([5, 10, 40]);   // nav strip's figure unchanged
     });
 
+    it('the strips\' running total (_cumDist) is the rounded row total, not a sum of rounded legs', () => {
+        installGlobals();
+        const wps = threeLegs();
+        wps[1]._legDist = 82.4; wps[1]._segments = crz(82.4);
+        wps[2]._legDist = 4.4;  wps[2]._segments = crz(4.4);
+        const rt = makeTable(wps, 1);
+        rt._computeEnroute(0);
+        // 82.4 + 4.4 = 86.8: the row shows 87, and so must the nav / instrument strips
+        // (a sum of rounded legs, 82 + 4, read 86)
+        expect(cell(rt, wps[2], 'dist')).toEqual({ leg: '4.4', cum: '87' });
+        expect(wps[2]._cumDist).toBe(87);
+        expect(wps[3]._cumDist).toBe(Math.round(82.4 + 4.4 + 30));
+    });
+
     it('departure row (no inbound leg): dash, no total', () => {
         installGlobals();
         const wps = threeLegs();

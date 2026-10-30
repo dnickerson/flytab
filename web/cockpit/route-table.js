@@ -1868,20 +1868,23 @@ class RouteTable {
         // Compute cumulative dist/ete from the aircraft's current position forward.
         // Each row shows total remaining distance/time to reach that waypoint, so all
         // rows shrink as the aircraft moves — not just the active leg.
-        // Totals footer continues to sum per-leg _dist/_ete (unchanged).
-        let cumDist = 0, cumEte = 0, cumDistNm = 0;
+        // Totals footer continues to sum per-leg _dist/_ete (the route total).
+        // _cumDist is the unrounded running total, rounded: the nav / instrument
+        // strips read it, and it must match the DIST cell's second line (a sum of
+        // rounded legs could read 86 beside a row showing 87).
+        let cumEte = 0, cumDistNm = 0;
         for (let i = this._activeIndex; i < this._waypoints.length; i++) {
             const wp = this._waypoints[i];
-            cumDist += wp._dist || 0;
             cumEte  += wp._ete  || 0;
             cumDistNm += wp._legDistNm || 0;
+            const cumRounded = Math.round(cumDistNm);
             // Use i > _activeIndex check rather than cumDist > 0 so the first
             // non-departure leg shows its distance even when the active waypoint
             // is at index 0 (pre-departure, cumDist accumulates from the first leg).
-            wp._cumDist = (i > this._activeIndex || cumDist > 0) ? Math.round(cumDist) : null;
+            wp._cumDist = (i > this._activeIndex || cumRounded > 0) ? cumRounded : null;
             wp._cumEte  = (i > this._activeIndex || cumEte  > 0) ? cumEte : null;
             // Unrounded, for the DIST cell's second line (#191): below 10 nm it shows
-            // a decimal like the leg above it. _cumDist (nav strip) is unchanged.
+            // a decimal like the leg above it.
             wp._cumDistNm = wp._cumDist != null ? cumDistNm : null;
         }
 

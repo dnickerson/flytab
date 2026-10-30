@@ -350,3 +350,34 @@ function RV9A_COPY(apprIas) {
         },
     };
 }
+
+// ── The descent into an airport with a field elevation never plans less fuel ──
+// (final review of PR #193). Since _pillsToWaypoints stamps elev_ft on airport
+// pills, the descent to the field is shorter than ee166a2's descent to 0 -- less
+// descent time, and on a short leg less fuel. The fuel is floored at the same
+// leg descending to 0; times stay as modelled. Routes with real NASR field
+// elevations; "before" figures from ee166a2 (scratch `git archive ee166a2`),
+// which ignored elev_ft.
+const elevCases = JSON.parse(readFileSync(join(__dirname, '../fixtures/planning/field-elev-before-190.json'), 'utf8'));
+
+describe('#190 airports with field elevations: fuel never below ee166a2', () => {
+    for (const [name, c] of Object.entries(elevCases)) {
+        it(`${name}: every leg and the total at least the ee166a2 fuel; segments sum`, () => {
+            const r = planner.recomputeLegs(c.plan, null, { ...c.opts, departureTime: new Date(c.opts.departureTime) });
+            r.legs.forEach((leg, i) => {
+                expect(leg.fuelGal).toBeGreaterThanOrEqual(c.before.legFuel[i] - 1e-9);
+            });
+            expect(r.summary.totalFuelGal).toBeGreaterThanOrEqual(c.before.totalFuelGal - 1e-9);
+            // segments sum to the leg (the departure leg's taxi fuel is not a segment)
+            const departs = (i) => i === 0 || !!c.plan.waypoints[i].fuelStop;
+            r.legs.forEach((leg, i) => {
+                expect(segMin(leg)).toBeCloseTo(leg.timeHrs * 60, 9);
+                if (!departs(i)) expect(segFuel(leg)).toBeCloseTo(leg.fuelGal, 9);
+            });
+            // the descent still ends at the field
+            const last = r.legs[r.legs.length - 1];
+            const dest = c.plan.waypoints[c.plan.waypoints.length - 1];
+            expect(last.segments.at(-1).altTo).toBe(dest.elev_ft);
+        });
+    }
+});
