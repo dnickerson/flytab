@@ -12120,7 +12120,8 @@ body.route-editing-mode .route-table-sheet {
 }
 .checklist-vpn-open[hidden] { display: none; }
 
-/* The mark toasts (z-index 700) would sit behind the open checklist (800). */
+/* Toasts (z-index 700) sit behind the open checklist (800), so the mark confirmations
+   ("Not recording" included) were invisible. This lifts EVERY toast while the checklist is open. */
 body:has(.checklist-page.visible) > .toast { z-index: 900; }
 
 /* Run-up / magneto mark buttons (cockpit/checklist.js, FlightRecorder.markEvent).

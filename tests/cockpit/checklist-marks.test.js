@@ -200,6 +200,14 @@ describe('Checklist capture buttons', () => {
         expect(btn('mag_L').classList.contains('active')).toBe(false);
     });
 
+    it('no fresh data: its own toast', async () => {
+        await build();
+        open('normal', 'VFR', 'Runup');
+        recorder.saveResult = { saved: false, at: '2026-10-30T20:57:14.000Z', reason: 'no_data' };
+        tap(btn('mag_L'));
+        expect(toast).toHaveBeenCalledWith('No engine or GPS data — mark not saved');
+    });
+
     it('recording started before marks existed: its own toast', async () => {
         await build();
         open('normal', 'VFR', 'Runup');
@@ -241,5 +249,29 @@ describe('Checklist capture buttons', () => {
         expect(rule).toMatch(/font-weight:\s*(7|8|9)00/);
         expect(rule).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
         expect(rule).not.toMatch(/font-size:\s*\d+px/);
+    });
+});
+
+describe('Checklist highlight follows the recording start/stop', () => {
+    it('refreshes on flightsync:started and flightsync:stopped', async () => {
+        document.body.innerHTML = '';
+        global.fetch = vi.fn(async () => ({ ok: true, json: async () => DATA }));
+        let mag = 'mag_R';
+        window.flightRecorder = { currentMag: () => mag, markEvent: vi.fn() };
+        const cl = new Checklist(document.body);
+        await vi.waitFor(() => expect(cl._data).not.toBeNull());
+        cl._selectGroup('normal');
+        cl._activeSection = 0;
+        cl._activeChecklist = find('normal', 'VFR', 'Runup') ? DATA.groups[0].sections[0].checklists.findIndex((c) => c.name === 'Runup') : 0;
+        cl._renderItems();
+        const active = () => [...cl._bodyEl.querySelectorAll('.checklist-capture-btn.active')].map((b) => b.dataset.capture);
+        expect(active()).toEqual(['mag_R']);
+        mag = null;                                     // recording ended
+        window.dispatchEvent(new CustomEvent('flightsync:stopped'));
+        expect(active()).toEqual([]);
+        mag = 'mag_L';                                  // resumed recording
+        window.dispatchEvent(new CustomEvent('flightsync:started'));
+        expect(active()).toEqual(['mag_L']);
+        delete window.flightRecorder; delete global.fetch;
     });
 });

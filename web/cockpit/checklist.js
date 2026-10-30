@@ -28,6 +28,10 @@ class Checklist {
 
         this._buildDOM();
         this._load();
+        // The mag highlight is the recording's: it clears when the recording ends and
+        // is the resumed one's after a restart.
+        window.addEventListener('flightsync:started', () => this._refreshCapture());
+        window.addEventListener('flightsync:stopped', () => this._refreshCapture());
     }
 
     // ========== Overlay lifecycle ==========
@@ -365,6 +369,8 @@ class Checklist {
         if (r?.saved) {
             const t = String(r.at || '').slice(11, 19);
             this._toast(`${Checklist.CAPTURE_LABELS[code]} marked ${t}Z`);
+        } else if (r?.reason === 'no_data') {
+            this._toast('No engine or GPS data — mark not saved');
         } else if (r?.reason === 'old_recording') {
             this._toast('This recording started before marks existed — mark not saved');
         } else {
