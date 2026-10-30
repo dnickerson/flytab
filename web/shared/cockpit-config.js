@@ -170,6 +170,7 @@ class CockpitConfig {
             descent_fpm: 500,
             pattern_speed_kt: 90,
             approach_speed_kt: 75,
+            instrument_approach_ias_kt: 90,   // approach legs in the route planner (not approach_speed_kt: that is the landing speed, synced from flywhere)
             vso_kt: 55,
             vs1_kt: 55,
             dmms_factor: 1.404,

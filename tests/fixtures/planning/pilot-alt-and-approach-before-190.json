@@ -1,0 +1,527 @@
+{
+  "destAlt": {
+    "legs": [
+      {
+        "from": "KLKR",
+        "to": "AAA",
+        "distNm": 51.1329192003477,
+        "bearingTrue": 212.0693795352578,
+        "altFt": 8500,
+        "tasKt": 159,
+        "gsKt": 159,
+        "percentPwr": 65,
+        "timeHrs": 0.3387652266420426,
+        "fuelGal": 3.798961237126491,
+        "fuelRemGal": 32.20103876287351,
+        "eta": 1793373619554.816,
+        "airway": "DIRECT",
+        "segments": [
+          {
+            "phase": "CLB",
+            "altFrom": 0,
+            "altTo": 8500,
+            "dist": 12.3,
+            "tas": 128,
+            "gs": 128,
+            "ete_min": 5.666666666666667,
+            "gph": 15,
+            "rpm": 2700,
+            "mp": 28,
+            "percent_power": 100
+          },
+          {
+            "phase": "CRZ",
+            "altFrom": 8500,
+            "altTo": 8500,
+            "dist": 38.9,
+            "tas": 159,
+            "gs": 159,
+            "ete_min": 14.659246931855888,
+            "gph": 8.4,
+            "rpm": 2400,
+            "mp": 22,
+            "percent_power": 65
+          }
+        ]
+      },
+      {
+        "from": "AAA",
+        "to": "KDST",
+        "distNm": 126.6562023698992,
+        "bearingTrue": 198.7640157303206,
+        "altFt": 4500,
+        "tasKt": 150,
+        "gsKt": 150,
+        "percentPwr": 65,
+        "timeHrs": 0.8265324433717081,
+        "fuelGal": 6.782158238608062,
+        "fuelRemGal": 25.418880524265447,
+        "eta": 1793376595071.612,
+        "airway": "DIRECT",
+        "segments": [
+          {
+            "phase": "CRZ",
+            "altFrom": 4500,
+            "altTo": 4500,
+            "dist": 107.7,
+            "tas": 150,
+            "gs": 150,
+            "ete_min": 43.163375173731055,
+            "gph": 8.4,
+            "rpm": 2400,
+            "mp": 22,
+            "percent_power": 65
+          },
+          {
+            "phase": "DES",
+            "altFrom": 4500,
+            "altTo": 0,
+            "dist": 19,
+            "tas": 176,
+            "gs": 176,
+            "ete_min": 6.428571428571429,
+            "gph": 6.9,
+            "rpm": 2400,
+            "mp": 14,
+            "percent_power": 50
+          }
+        ]
+      }
+    ],
+    "summary": {
+      "totalDistNm": 177.7891215702469,
+      "totalEteHrs": 1.1652976700137507,
+      "totalFuelGal": 10.581119475734553,
+      "fuelRemGal": 25.418880524265447,
+      "groundHrs": 0,
+      "fixCount": 3
+    }
+  },
+  "fuelAlt": {
+    "legs": [
+      {
+        "from": "KLKR",
+        "to": "AAA",
+        "distNm": 51.1329192003477,
+        "bearingTrue": 212.0693795352578,
+        "altFt": 8500,
+        "tasKt": 159,
+        "gsKt": 159,
+        "percentPwr": 65,
+        "timeHrs": 0.3387652266420426,
+        "fuelGal": 3.798961237126491,
+        "fuelRemGal": 32.20103876287351,
+        "eta": 1793373619554.816,
+        "airway": "DIRECT",
+        "segments": [
+          {
+            "phase": "CLB",
+            "altFrom": 0,
+            "altTo": 8500,
+            "dist": 12.3,
+            "tas": 128,
+            "gs": 128,
+            "ete_min": 5.666666666666667,
+            "gph": 15,
+            "rpm": 2700,
+            "mp": 28,
+            "percent_power": 100
+          },
+          {
+            "phase": "CRZ",
+            "altFrom": 8500,
+            "altTo": 8500,
+            "dist": 38.9,
+            "tas": 159,
+            "gs": 159,
+            "ete_min": 14.659246931855888,
+            "gph": 8.4,
+            "rpm": 2400,
+            "mp": 22,
+            "percent_power": 65
+          }
+        ]
+      },
+      {
+        "from": "AAA",
+        "to": "KMID",
+        "distNm": 63.29220967538117,
+        "bearingTrue": 198.55702401237315,
+        "altFt": 4500,
+        "tasKt": 150,
+        "gsKt": 150,
+        "percentPwr": 65,
+        "timeHrs": 0.4032103966237372,
+        "fuelGal": 3.2262530459251066,
+        "fuelRemGal": 28.974785716948404,
+        "eta": 1793375071112.2437,
+        "airway": "DIRECT",
+        "segments": [
+          {
+            "phase": "CRZ",
+            "altFrom": 4500,
+            "altTo": 4500,
+            "dist": 44.3,
+            "tas": 150,
+            "gs": 150,
+            "ete_min": 17.764052368852802,
+            "gph": 8.4,
+            "rpm": 2400,
+            "mp": 22,
+            "percent_power": 65
+          },
+          {
+            "phase": "DES",
+            "altFrom": 4500,
+            "altTo": 0,
+            "dist": 19,
+            "tas": 176,
+            "gs": 176,
+            "ete_min": 6.428571428571429,
+            "gph": 6.9,
+            "rpm": 2400,
+            "mp": 14,
+            "percent_power": 50
+          }
+        ]
+      },
+      {
+        "from": "KMID",
+        "to": "KDST",
+        "distNm": 63.36481809267389,
+        "bearingTrue": 198.7499163564582,
+        "altFt": 4500,
+        "tasKt": 150,
+        "gsKt": 150,
+        "percentPwr": 65,
+        "timeHrs": 0.4119343222959645,
+        "fuelGal": 3.9595340215718164,
+        "fuelRemGal": 32.04046597842818,
+        "eta": 1793378354075.804,
+        "airway": "DIRECT",
+        "segments": [
+          {
+            "phase": "CLB",
+            "altFrom": 0,
+            "altTo": 4500,
+            "dist": 6.3,
+            "tas": 124,
+            "gs": 124,
+            "ete_min": 3,
+            "gph": 15,
+            "rpm": 2700,
+            "mp": 28,
+            "percent_power": 100
+          },
+          {
+            "phase": "CRZ",
+            "altFrom": 4500,
+            "altTo": 4500,
+            "dist": 38.1,
+            "tas": 150,
+            "gs": 150,
+            "ete_min": 15.287487909186442,
+            "gph": 8.4,
+            "rpm": 2400,
+            "mp": 22,
+            "percent_power": 65
+          },
+          {
+            "phase": "DES",
+            "altFrom": 4500,
+            "altTo": 0,
+            "dist": 19,
+            "tas": 176,
+            "gs": 176,
+            "ete_min": 6.428571428571429,
+            "gph": 6.9,
+            "rpm": 2400,
+            "mp": 14,
+            "percent_power": 50
+          }
+        ]
+      }
+    ],
+    "summary": {
+      "totalDistNm": 177.78994696840277,
+      "totalEteHrs": 1.1539099455617443,
+      "totalFuelGal": 10.984748304623414,
+      "fuelRemGal": 32.04046597842818,
+      "groundHrs": 0.5,
+      "fixCount": 4
+    }
+  },
+  "airportAlt": {
+    "legs": [
+      {
+        "from": "KLKR",
+        "to": "AAA",
+        "distNm": 51.1329192003477,
+        "bearingTrue": 212.0693795352578,
+        "altFt": 8500,
+        "tasKt": 159,
+        "gsKt": 159,
+        "percentPwr": 65,
+        "timeHrs": 0.3387652266420426,
+        "fuelGal": 3.798961237126491,
+        "fuelRemGal": 32.20103876287351,
+        "eta": 1793373619554.816,
+        "airway": "DIRECT",
+        "segments": [
+          {
+            "phase": "CLB",
+            "altFrom": 0,
+            "altTo": 8500,
+            "dist": 12.3,
+            "tas": 128,
+            "gs": 128,
+            "ete_min": 5.666666666666667,
+            "gph": 15,
+            "rpm": 2700,
+            "mp": 28,
+            "percent_power": 100
+          },
+          {
+            "phase": "CRZ",
+            "altFrom": 8500,
+            "altTo": 8500,
+            "dist": 38.9,
+            "tas": 159,
+            "gs": 159,
+            "ete_min": 14.659246931855888,
+            "gph": 8.4,
+            "rpm": 2400,
+            "mp": 22,
+            "percent_power": 65
+          }
+        ]
+      },
+      {
+        "from": "AAA",
+        "to": "KMID",
+        "distNm": 63.29220967538117,
+        "bearingTrue": 198.55702401237315,
+        "altFt": 4500,
+        "tasKt": 150,
+        "gsKt": 150,
+        "percentPwr": 65,
+        "timeHrs": 0.42284247888473253,
+        "fuelGal": 3.5518768226317534,
+        "fuelRemGal": 28.649161940241754,
+        "eta": 1793375141787.74,
+        "airway": "DIRECT",
+        "segments": [
+          {
+            "phase": "CRZ",
+            "altFrom": 4500,
+            "altTo": 4500,
+            "dist": 63.3,
+            "tas": 150,
+            "gs": 150,
+            "ete_min": 25.37054873308395,
+            "gph": 8.4,
+            "rpm": 2400,
+            "mp": 22,
+            "percent_power": 65
+          }
+        ]
+      },
+      {
+        "from": "KMID",
+        "to": "KDST",
+        "distNm": 63.36481809267389,
+        "bearingTrue": 198.7499163564582,
+        "altFt": 4500,
+        "tasKt": 150,
+        "gsKt": 150,
+        "percentPwr": 65,
+        "timeHrs": 0.40369547880546885,
+        "fuelGal": 3.230327736251653,
+        "fuelRemGal": 25.4188342039901,
+        "eta": 1793376595091.4636,
+        "airway": "DIRECT",
+        "segments": [
+          {
+            "phase": "CRZ",
+            "altFrom": 4500,
+            "altTo": 4500,
+            "dist": 44.4,
+            "tas": 150,
+            "gs": 150,
+            "ete_min": 17.793157299756704,
+            "gph": 8.4,
+            "rpm": 2400,
+            "mp": 22,
+            "percent_power": 65
+          },
+          {
+            "phase": "DES",
+            "altFrom": 4500,
+            "altTo": 0,
+            "dist": 19,
+            "tas": 176,
+            "gs": 176,
+            "ete_min": 6.428571428571429,
+            "gph": 6.9,
+            "rpm": 2400,
+            "mp": 14,
+            "percent_power": 50
+          }
+        ]
+      }
+    ],
+    "summary": {
+      "totalDistNm": 177.78994696840277,
+      "totalEteHrs": 1.165303184332244,
+      "totalFuelGal": 10.581165796009897,
+      "fuelRemGal": 25.4188342039901,
+      "groundHrs": 0,
+      "fixCount": 4
+    }
+  },
+  "approach": {
+    "legs": [
+      {
+        "from": "KCLT",
+        "to": "SAPSE",
+        "distNm": 27.391854444083116,
+        "bearingTrue": 148.97697673605262,
+        "altFt": 2500,
+        "tasKt": 145,
+        "gsKt": 145,
+        "percentPwr": 65,
+        "timeHrs": 0.19287346989287543,
+        "fuelGal": 2.1334704804334867,
+        "fuelRemGal": 33.86652951956651,
+        "eta": 1793373094344.4917,
+        "airway": "DIRECT",
+        "segments": [
+          {
+            "phase": "CLB",
+            "altFrom": 0,
+            "altTo": 2500,
+            "dist": 3.4,
+            "tas": 122,
+            "gs": 122,
+            "ete_min": 1.6666666666666667,
+            "gph": 15,
+            "rpm": 2700,
+            "mp": 28,
+            "percent_power": 100
+          },
+          {
+            "phase": "CRZ",
+            "altFrom": 2500,
+            "altTo": 2500,
+            "dist": 24,
+            "tas": 145,
+            "gs": 145,
+            "ete_min": 9.905741526905858,
+            "gph": 8.4,
+            "rpm": 2400,
+            "mp": 22,
+            "percent_power": 65
+          }
+        ]
+      },
+      {
+        "from": "SAPSE",
+        "to": "WITUR",
+        "distNm": 6.0945299742742645,
+        "bearingTrue": 238.51239249721007,
+        "altFt": 2100,
+        "tasKt": 144,
+        "gsKt": 144,
+        "percentPwr": 65,
+        "timeHrs": 0.04220578616902848,
+        "fuelGal": 0.35452860381983925,
+        "fuelRemGal": 33.512000915746675,
+        "eta": 1793373246285.322,
+        "airway": "DIRECT",
+        "segments": [
+          {
+            "phase": "CRZ",
+            "altFrom": 2100,
+            "altTo": 2100,
+            "dist": 6.1,
+            "tas": 144,
+            "gs": 144,
+            "ete_min": 2.532347170141709,
+            "gph": 8.4,
+            "rpm": 2400,
+            "mp": 22,
+            "percent_power": 65
+          }
+        ]
+      },
+      {
+        "from": "WITUR",
+        "to": "RW24",
+        "distNm": 4.8647802670893725,
+        "bearingTrue": 238.45270153251602,
+        "altFt": 528,
+        "tasKt": 141,
+        "gsKt": 141,
+        "percentPwr": 65,
+        "timeHrs": 0.03448055876520228,
+        "fuelGal": 0.28963669362769917,
+        "fuelRemGal": 33.222364222118976,
+        "eta": 1793373370415.3335,
+        "airway": "DIRECT",
+        "segments": [
+          {
+            "phase": "CRZ",
+            "altFrom": 528,
+            "altTo": 528,
+            "dist": 4.9,
+            "tas": 141,
+            "gs": 141,
+            "ete_min": 2.0688335259121367,
+            "gph": 8.4,
+            "rpm": 2400,
+            "mp": 22,
+            "percent_power": 65
+          }
+        ]
+      },
+      {
+        "from": "RW24",
+        "to": "KLKR",
+        "distNm": 0.49409486307366984,
+        "bearingTrue": 238.40579076984966,
+        "altFt": 528,
+        "tasKt": 141,
+        "gsKt": 141,
+        "percentPwr": 65,
+        "timeHrs": 0.012571428571428572,
+        "fuelGal": 0.08674285714285715,
+        "fuelRemGal": 33.13562136497612,
+        "eta": 1793373415672.4763,
+        "airway": "DIRECT",
+        "segments": [
+          {
+            "phase": "DES",
+            "altFrom": 528,
+            "altTo": 0,
+            "dist": 0.5,
+            "tas": 171,
+            "gs": 171,
+            "ete_min": 0.7542857142857143,
+            "gph": 6.9,
+            "rpm": 2400,
+            "mp": 14,
+            "percent_power": 50
+          }
+        ]
+      }
+    ],
+    "summary": {
+      "totalDistNm": 38.845259548520424,
+      "totalEteHrs": 0.28213124339853474,
+      "totalFuelGal": 2.8643786350238822,
+      "fuelRemGal": 33.13562136497612,
+      "groundHrs": 0,
+      "fixCount": 5
+    }
+  }
+}

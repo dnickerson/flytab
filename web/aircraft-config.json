@@ -22,6 +22,7 @@
     "descent_fpm": 700,
     "pattern_speed_kt": 120,
     "approach_speed_kt": 65,
+    "instrument_approach_ias_kt": 90,
     "vso_kt": 48,
     "vs1_kt": 48,
     "dmms_factor": 1.401,

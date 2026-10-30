@@ -1694,6 +1694,7 @@ class RouteTable {
                 }
 
                 wp._dist = Math.round(legDist);
+                wp._legDistNm = legDist;      // DIST cell (#191): unrounded, one decimal below 10 nm
                 // For the active leg, override segment-plan ETE with live time (liveDist / actual GS).
                 // Segment ETE is the original planned duration for the full leg — it doesn't shrink
                 // as the aircraft approaches the waypoint, making the total ETE appear frozen.
@@ -1752,6 +1753,7 @@ class RouteTable {
                 // Departure waypoint: no leg data to compute — show starting fuel only
                 wp._phase = null;
                 wp._dist = null;
+                wp._legDistNm = null;
                 wp._ete = null;
                 wp._fuel = null;
                 wp._fuelMeasured = false;
@@ -1798,6 +1800,7 @@ class RouteTable {
                 fuelBurned += legFuel;
 
                 wp._dist = Math.round(legDist);
+                wp._legDistNm = legDist;      // DIST cell (#191): unrounded, one decimal below 10 nm
                 wp._ete = legTimeHrs * 60;
                 wp._fuel = legFuel;
                 wp._fuelMeasured = useLiveGph;
@@ -1843,6 +1846,7 @@ class RouteTable {
         // recomputed, and a passed leg's remaining fuel is not a number the pilot needs.
         for (let i = 0; i < this._activeIndex; i++) {
             this._waypoints[i]._dist = null;
+            this._waypoints[i]._legDistNm = null;
             this._waypoints[i]._ete = null;
             this._waypoints[i]._fuel = null;
             this._waypoints[i]._fuelMeasured = false;
@@ -1864,17 +1868,24 @@ class RouteTable {
         // Compute cumulative dist/ete from the aircraft's current position forward.
         // Each row shows total remaining distance/time to reach that waypoint, so all
         // rows shrink as the aircraft moves — not just the active leg.
-        // Totals footer continues to sum per-leg _dist/_ete (unchanged).
-        let cumDist = 0, cumEte = 0;
+        // Totals footer continues to sum per-leg _dist/_ete (the route total).
+        // _cumDist is the unrounded running total, rounded: the nav / instrument
+        // strips read it, and it must match the DIST cell's second line (a sum of
+        // rounded legs could read 86 beside a row showing 87).
+        let cumEte = 0, cumDistNm = 0;
         for (let i = this._activeIndex; i < this._waypoints.length; i++) {
             const wp = this._waypoints[i];
-            cumDist += wp._dist || 0;
             cumEte  += wp._ete  || 0;
+            cumDistNm += wp._legDistNm || 0;
+            const cumRounded = Math.round(cumDistNm);
             // Use i > _activeIndex check rather than cumDist > 0 so the first
             // non-departure leg shows its distance even when the active waypoint
             // is at index 0 (pre-departure, cumDist accumulates from the first leg).
-            wp._cumDist = (i > this._activeIndex || cumDist > 0) ? Math.round(cumDist) : null;
+            wp._cumDist = (i > this._activeIndex || cumRounded > 0) ? cumRounded : null;
             wp._cumEte  = (i > this._activeIndex || cumEte  > 0) ? cumEte : null;
+            // Unrounded, for the DIST cell's second line (#191): below 10 nm it shows
+            // a decimal like the leg above it.
+            wp._cumDistNm = wp._cumDist != null ? cumDistNm : null;
         }
 
         // Compute per-Flight totals for the multi-flight footer rows.
@@ -3585,17 +3596,14 @@ class RouteTable {
                 case 'brg':
                     return segIndex === 0 ? (wp._brg != null ? Math.round(wp._brg) + '\u00b0' : '\u2014') : '';
                 case 'dist':
-                    // Show cumulative remaining distance on the first segment row only;
-                    // subsequent sub-rows of the same waypoint leave it blank to avoid
-                    // repeating the same number across CLB/CRZ/DES rows.
-                    return segIndex === 0
-                        ? (wp._cumDist != null ? wp._cumDist : '\u2014')
-                        : '';
+                    // First segment row only: the leg, running total underneath (#191);
+                    // sub-rows leave it blank rather than repeat it across CLB/CRZ/DES.
+                    return segIndex === 0 ? this._distCell(wp) : '';
                 case 'ete':
-                    // First segment row: show cumulative ETE to this waypoint
+                    // First segment row: the leg's ETE, running total underneath (#191).
                     // Sub-rows: show per-segment ETE so pilot can see e.g. CLB=5m, CRZ=15m
                     return segIndex === 0
-                        ? (wp._cumEte != null ? this._formatTime(wp._cumEte) : '\u2014')
+                        ? this._eteCell(wp)
                         : (seg._ete != null ? this._formatTime(seg._ete) : '');
                 case 'eta':
                     if (segIndex === 0 && wp._eta) {
@@ -3653,9 +3661,9 @@ class RouteTable {
             case 'brg':
                 return wp._brg != null ? Math.round(wp._brg) + '\u00b0' : '\u2014';
             case 'dist':
-                return wp._cumDist != null ? wp._cumDist : '\u2014';
+                return this._distCell(wp);
             case 'ete':
-                return wp._cumEte != null ? this._formatTime(wp._cumEte) : '\u2014';
+                return this._eteCell(wp);
             case 'eta':
                 return wp._eta
                     ? new Date(wp._eta).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -3716,6 +3724,30 @@ class RouteTable {
         }
         // Notify ActiveRoute so InstrumentStrip (and any other subscriber) stays in sync
         if (typeof ActiveRoute !== 'undefined') ActiveRoute.setIndex(this._activeIndex);
+    }
+
+    /**
+     * DIST cell (#191): the leg -- previous waypoint to this one; on the active row,
+     * the aircraft to it (live) -- with the running total from the aircraft
+     * (_cumDistNm) as a smaller second line. One decimal below 10 nm, whole numbers
+     * above (as airport-popup.js). A row with no leg (departure, passed) is a dash.
+     */
+    _distCell(wp) {
+        const nm = wp._legDistNm;
+        if (nm == null) return '\u2014';
+        const fmt = (d) => (d < 10 ? d.toFixed(1) : String(Math.round(d)));
+        return this._withRunningTotal(fmt(nm), wp._cumDistNm != null ? fmt(wp._cumDistNm) : null);
+    }
+
+    /** TIME cell (#191): the leg's ETE (live on the active row), running total (_cumEte) underneath. */
+    _eteCell(wp) {
+        if (wp._ete == null) return '\u2014';
+        return this._withRunningTotal(this._formatTime(wp._ete),
+            wp._cumEte != null ? this._formatTime(wp._cumEte) : null);
+    }
+
+    _withRunningTotal(leg, total) {
+        return total != null ? `${leg}<span class="rt-cum-val">${total}</span>` : String(leg);
     }
 
     _formatTime(minutes) {

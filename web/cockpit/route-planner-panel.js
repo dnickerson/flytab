@@ -869,6 +869,9 @@ class RoutePlannerPanel {
                            ias_kt:   perf?.descent_speed_kt ?? 170,
                            rpm: perf?.descent_rpm, mp: perf?.descent_mp,
                            percent_power: perf?.descent_pwr_pct },
+                // Instrument approach speed: approach legs are timed at it
+                // (Configuration -> Aircraft; 90 or 120 KIAS for this pilot).
+                approach: { ias_kt: RoutePlannerPanel.approachIas(perf?.instrument_approach_ias_kt) },
             },
         };
     }
@@ -3055,6 +3058,19 @@ class RoutePlannerPanel {
     /** How long a REV's UNDO stays offered. */
     static UNDO_MS = 15000;
 
+    /**
+     * Instrument approach speed (KIAS) from the aircraft setting: missing, non-numeric,
+     * zero or negative -> 90 (never the faster en-route speed); otherwise clamped to
+     * 60-160, the Configuration field's range (a typo of 12 for 120 is not a 12 kt approach).
+     */
+    static approachIas(v) {
+        const n = (v == null || v === '') ? NaN : Number(v);
+        if (!Number.isFinite(n) || n <= 0) return 90;
+        return Math.min(160, Math.max(60, n));
+    }
+    /** Longest wait for a field-elevation lookup in _pillsToWaypoints (IDB can hang, see CLAUDE.md). */
+    static ELEV_LOOKUP_MS = 1000;
+
     /** "Route reversed" with UNDO (the global toast: visible with or without the panel). */
     static _announceReverse(dep, dest, undo) {
         if (typeof app === 'undefined' || !app.showToast) return;
@@ -3390,6 +3406,7 @@ class RoutePlannerPanel {
     async _pillsToWaypoints() {
         const wps = [];
         const skipped = [];
+        const elevPending = [];   // field-elevation lookups in flight: [{ wp, lookup }]
 
         // Build case-insensitive index of cached coords. AirwayGraph stores
         // fix names as they appear in the NASR bundle (e.g. 'Pawling') but
@@ -3411,13 +3428,16 @@ class RoutePlannerPanel {
             }
 
             const id = pill.id;
+            const isAptPill = pill.type === 'dep' || pill.type === 'dest' || pill.type === 'airport' || pill.type === 'fuel';
             let coord = this._coords[id] || coordsCi[id.toUpperCase()];
             // Discard any cached coord that has non-finite values so the NASR fallback runs
             if (coord && (!Number.isFinite(coord.lat) || !Number.isFinite(coord.lon))) coord = null;
+            let aptRec = null;   // NASR airport record, for the field elevation (#190)
 
             if (!coord && this._nasrDb) {
                 // Try IDB: airport → navaid → fix
                 let rec = await this._nasrDb.getAirport(id).catch(() => null);
+                if (rec) aptRec = rec;
                 if (!rec) rec = await this._nasrDb.getNavaid(id).catch(() => null);
                 if (!rec) rec = await this._nasrDb.getFix(id).catch(() => null);
                 if (Number.isFinite(rec?.lat) && Number.isFinite(rec?.lon)) {
@@ -3430,6 +3450,16 @@ class RoutePlannerPanel {
                 skipped.push(id);
                 continue;
             }
+
+            // Field elevation for an airport pill, so the planner's descent ends at
+            // the field, not at 0 (#190: RW24 -> KLKR 528 -> 486). The _coords cache
+            // holds lat/lon only, so look the airport up here too -- bounded: a hung IDB
+            // must not hang Plan / Apply, which worked from cached coordinates before.
+            // On timeout: no elev_ft, the descent ends at 0 as before. Started here,
+            // awaited for all airport pills together after the loop, so a hung IDB
+            // costs one timeout in all, not one per airport.
+            const elevLookup = (isAptPill && !aptRec && this._nasrDb) ? this._airportRecordBounded(id) : null;
+            const elevFt = isAptPill && Number.isFinite(aptRec?.elev_ft) ? aptRec.elev_ft : null;
 
             // airway: prefer the explicit pendingAirway set by an AWY pill, fall
             // back to the pill's own .airway tag (populated by _loadPlan /
@@ -3453,6 +3483,7 @@ class RoutePlannerPanel {
                 // (the A* default) which overrides cruiseAltFt in recomputeOpts
                 // and causes TAS/GS/fuel to be computed at the wrong altitude.
                 ...(pill.altFt != null ? { altFt: pill.altFt } : {}),
+                ...(elevFt != null ? { elev_ft: elevFt } : {}),
                 // fuelStop:true tells recomputeLegs to model descent/climb at
                 // this stop rather than treating it as a level pass-over.
                 ...(pill.type === 'fuel' ? { fuelStop: true } : {}),
@@ -3463,13 +3494,42 @@ class RoutePlannerPanel {
                 ...(pill.proc ? { proc: pill.proc } : {}),
                 ...(aw ? { airway: aw } : {}),
             });
+            if (elevLookup) elevPending.push({ wp: wps[wps.length - 1], lookup: elevLookup });
             pendingAirway = null;
         }
+
+        await Promise.all(elevPending.map(async ({ wp, lookup }) => {
+            const rec = await lookup;
+            if (Number.isFinite(rec?.elev_ft)) wp.elev_ft = rec.elev_ft;
+        }));
 
         if (skipped.length > 0)
             this._toast(`Skipped (not found): ${skipped.join(', ')}`);
 
         return wps;
+    }
+
+    /**
+     * NASR airport record for a pill id, or null: as typed, then the other
+     * K-prefix form (a bare 3-letter id is stored K-prefixed, as insertApproach
+     * caches both). Never throws.
+     */
+    async _airportRecord(id) {
+        const db = this._nasrDb;
+        if (!db?.getAirport || !id) return null;
+        const up = String(id).toUpperCase();
+        let rec = await db.getAirport(up).catch(() => null);
+        if (!rec && up.length <= 3) rec = await db.getAirport('K' + up).catch(() => null);
+        return rec || null;
+    }
+
+    /** _airportRecord, or null after ELEV_LOOKUP_MS. */
+    _airportRecordBounded(id) {
+        let timer;
+        const timeout = new Promise((resolve) => {
+            timer = setTimeout(() => resolve(null), RoutePlannerPanel.ELEV_LOOKUP_MS);
+        });
+        return Promise.race([this._airportRecord(id), timeout]).finally(() => clearTimeout(timer));
     }
 
     // ── Utilities ─────────────────────────────────────────────────────────────
