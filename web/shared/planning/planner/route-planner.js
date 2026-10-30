@@ -31,17 +31,27 @@ const AIRWAY_RE = /^[VTJQ]\d+[A-Z]?$/;
 // A runway-threshold fix from a loaded approach (RW24, RW06L): the end of the final approach.
 const RWY_FIX_RE = /^RW\d/i;
 
-/** An approach fix: proc 'APPROACH' (insertApproach), or true from plans saved before the kind was recorded. STAR / SID fixes are not. */
+/**
+ * An approach fix: proc 'APPROACH' (insertApproach), or true from plans saved
+ * before the kind was recorded. STAR / SID fixes ('STAR', 'SID') are not.
+ * Known: a STAR loaded before then also carries proc true and is timed at the
+ * approach speed -- slower than en route, so it plans more time and fuel (the
+ * conservative side); loading it again records 'STAR'.
+ */
 const isApproachFix = (w) => w?.proc === 'APPROACH' || w?.proc === true;
 
 /**
  * The profile flown on approach legs: every phase at the instrument approach
- * speed (fuelPhases.approach.ias_kt), burns unchanged. Null when the profile has none.
+ * speed (fuelPhases.approach.ias_kt), never above the cruise IAS (faster than
+ * cruise would plan less fuel than en route); burns unchanged. Null when the
+ * profile has no approach speed.
  * @param {any} profile
  */
 function approachProfileOf(profile) {
     const fp = profile?.fuelPhases;
-    const ias = fp?.approach?.ias_kt;
+    const cruiseIas = profile?.cruise_ias ?? fp?.cruise?.ias_kt;
+    const set = fp?.approach?.ias_kt;
+    const ias = Number.isFinite(cruiseIas) && cruiseIas > 0 ? Math.min(set, cruiseIas) : set;
     if (!fp || !Number.isFinite(ias) || ias <= 0) return null;
     const at = (ph) => (ph ? { ...ph, ias_kt: ias } : ph);
     return { ...profile, cruise_ias: ias,

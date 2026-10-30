@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v12.32';
+const FLYTAB_VERSION = 'v12.33';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 // Kept in memory and saved at most every FLUSH_MS (errors at once). Every log()
@@ -2030,9 +2030,19 @@ class FlyTabApp {
                 localStorage.setItem('flypi_cfg_aircraft_config_json', JSON.stringify(merged));
             } catch { /* storage full */ }
 
-            // Refresh in-memory config
+            // Refresh in-memory config, with the pilot's Configuration overrides
+            // (flypi_user_aircraft) on top, as CockpitConfig.load() applies them --
+            // without them a plan sync silently reverted every saved aircraft setting
+            // (Instrument Approach Speed, cruise/climb/descent burn ...) until restart.
+            // _deepMerge, not _mergeUserOverrides: that also rewrites the stored
+            // override diffed against its base, and this base is the synced config,
+            // not the bundle -- a saved value equal to flywhere's would be deleted.
             if (typeof CockpitConfig !== 'undefined') {
-                CockpitConfig._aircraft = merged;
+                let user = null;
+                try { user = JSON.parse(localStorage.getItem('flypi_user_aircraft') || 'null'); } catch { /* corrupt: ignore */ }
+                CockpitConfig._aircraft = (user && typeof user === 'object' && !Array.isArray(user))
+                    ? CockpitConfig._deepMerge(merged, user)
+                    : merged;
             }
         } catch (err) {
             console.warn('Aircraft config merge failed:', err);

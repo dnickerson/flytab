@@ -82,6 +82,18 @@ describe('instrument_approach_ias_kt setting', () => {
         expect(new RoutePlannerPanel(document.createElement('div'), null, null)._profileForPower(65).fuelPhases.approach.ias_kt).toBe(90);
     });
 
+    it('validated: non-finite / zero / negative -> 90 (not en route); clamped to 60-160', () => {
+        const ias = (v) => {
+            useAircraft({ instrument_approach_ias_kt: v });
+            return new RoutePlannerPanel(document.createElement('div'), null, null)._profileForPower(65).fuelPhases.approach.ias_kt;
+        };
+        for (const bad of [0, -5, NaN, Infinity, null, 'abc', '']) expect(ias(bad)).toBe(90);
+        expect(ias(12)).toBe(60);       // a typo for 120 would otherwise plan a 12 kt approach
+        expect(ias(200)).toBe(160);
+        expect(ias(120)).toBe(120);
+        expect(ias('120')).toBe(120);
+    });
+
     it('setting 120 shortens the planned approach legs; the leg into the IAF is unchanged', async () => {
         useAircraft();
         const p90 = await planViaPanel();

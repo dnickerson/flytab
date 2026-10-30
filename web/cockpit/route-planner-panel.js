@@ -871,7 +871,7 @@ class RoutePlannerPanel {
                            percent_power: perf?.descent_pwr_pct },
                 // Instrument approach speed: approach legs are timed at it
                 // (Configuration -> Aircraft; 90 or 120 KIAS for this pilot).
-                approach: { ias_kt: perf?.instrument_approach_ias_kt ?? 90 },
+                approach: { ias_kt: RoutePlannerPanel.approachIas(perf?.instrument_approach_ias_kt) },
             },
         };
     }
@@ -3057,6 +3057,17 @@ class RoutePlannerPanel {
 
     /** How long a REV's UNDO stays offered. */
     static UNDO_MS = 15000;
+
+    /**
+     * Instrument approach speed (KIAS) from the aircraft setting: missing, non-numeric,
+     * zero or negative -> 90 (never the faster en-route speed); otherwise clamped to
+     * 60-160, the Configuration field's range (a typo of 12 for 120 is not a 12 kt approach).
+     */
+    static approachIas(v) {
+        const n = (v == null || v === '') ? NaN : Number(v);
+        if (!Number.isFinite(n) || n <= 0) return 90;
+        return Math.min(160, Math.max(60, n));
+    }
     /** Longest wait for a field-elevation lookup in _pillsToWaypoints (IDB can hang, see CLAUDE.md). */
     static ELEV_LOOKUP_MS = 1000;
 

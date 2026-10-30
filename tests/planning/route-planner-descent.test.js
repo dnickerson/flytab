@@ -314,6 +314,22 @@ describe('#190 approach legs at the instrument approach speed', () => {
         expect(old.legs).toEqual(at90.legs);
     });
 
+    it('an approach speed above cruise is flown at cruise IAS (never less fuel than en route)', () => {
+        const at160 = planner.recomputeLegs(procPlan(), RV9A_COPY(160), { departureTime });
+        const at140 = planner.recomputeLegs(procPlan(), RV9A_COPY(140), { departureTime });
+        expect(at160.legs).toEqual(at140.legs);
+        expect(legOf(at160, 'SAPSE', 'WITUR').segments[1].tas).toBe(Math.round(iasToTas(140, 2100)));
+        expect(at160.summary.totalFuelGal).toBeGreaterThanOrEqual(plain.summary.totalFuelGal - 1e-12);
+    });
+
+    it('a STAR loaded before the kind was recorded (proc: true) is timed at the approach speed (known; slower = more fuel)', () => {
+        const KSTAR = planner.recomputeLegs({ departure: 'KCLT', destination: 'KLKR', waypoints: [
+            KCLT, { id: 'STAR1', lat: 35.0, lon: -80.7, altFt: 4000, proc: true },
+            { ...SAPSE, proc: true }, { ...WITUR, proc: 'APPROACH' }, { ...RW24, proc: 'APPROACH' }, KLKR] }, null, { departureTime });
+        const leg = legOf(KSTAR, 'STAR1', 'SAPSE');
+        expect(leg.tasKt).toBe(Math.round(iasToTas(90, 2500)));
+    });
+
     it('fuel stays at least the pre-#190 figure (2.864 gal); more time at 90 KIAS', () => {
         expect(at90.summary.totalFuelGal).toBeGreaterThanOrEqual(before.approach.summary.totalFuelGal - 1e-12);
         expect(at90.summary.totalEteHrs).toBeGreaterThan(plain.summary.totalEteHrs);
