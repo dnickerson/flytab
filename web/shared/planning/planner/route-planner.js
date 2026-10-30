@@ -456,16 +456,21 @@ export class RoutePlanner {
             // of the leg, then level. Final approach (to an RW## threshold fix) and
             // the leg from the threshold into the airport are one descent over the
             // whole leg (the glidepath).
-            const betweenFixes  = !departingFromGround && !endingAtGround;
+            // An altitude the pilot set on an airport the leg ends at (destination, fuel
+            // stop or any airport pill) governs the leg into it exactly as before #190:
+            // level at that altitude, the descent to the field from it.
+            const pilotAptAlt   = b.altFt != null && (endingAtGround || b.type === 'APT');
+            const betweenFixes  = !departingFromGround && !endingAtGround && !pilotAptAlt;
             const finalApproach = betweenFixes && RWY_FIX_RE.test(b.id ?? '') && startAltFt > targetAltFt;
-            const landing       = endingAtGround && !departingFromGround
+            const landing       = endingAtGround && !departingFromGround && !pilotAptAlt
                                && RWY_FIX_RE.test(a.id ?? '') && startAltFt > fieldElevFt;
             const transition    = landing || (betweenFixes && startAltFt !== targetAltFt);
             const transToAltFt  = landing ? fieldElevFt : targetAltFt;
             // Altitude for the leg's TAS, winds and level part: the target; into an
-            // airport (not off the ground) it is the altitude the leg starts at --
-            // the descent is from there. The same value for a plain route.
-            const legAltFt = (endingAtGround && !departingFromGround) ? startAltFt : targetAltFt;
+            // airport (not off the ground, no pilot altitude on it) it is the altitude
+            // the leg starts at -- the descent is from there (RW24 -> KLKR from 528).
+            // The same value for a plain route.
+            const legAltFt = (endingAtGround && !departingFromGround && !pilotAptAlt) ? startAltFt : targetAltFt;
             prevEndAltFt = endingAtGround ? fieldElevFt : targetAltFt;
 
             const distNm = haversine(a.lat, a.lon, b.lat, b.lon);
@@ -520,15 +525,37 @@ export class RoutePlanner {
                     descentGsKt: desGs,
                     powerFrac:   pctPower,
                 });
-                decomp = tr;
                 const change = tr.phases.climb || tr.phases.descent;
                 const isClb  = !!tr.phases.climb;
+                // Fuel never below level (#190 review; fuel is planned conservatively):
+                // the leg's fuel is at least the same leg flown level at its start
+                // altitude, and at least what the pre-#190 model planned for it
+                // (level at legAltFt; into the airport, its descent to 0). The
+                // difference goes on the climb/descent segment; times stay as modelled.
+                const startTas = profile.cruise_ias
+                    ? iasToTas(profile.cruise_ias, startAltFt, oatC)
+                    : tasAtAltitude(profile, startAltFt);
+                const startGs = (windDir !== null && windSpd !== null)
+                    ? groundSpeed(startTas, brgTrue, windDir, windSpd) : startTas;
+                const levelAtStart = decomposeLeg(profile, { distNm, altFt: startAltFt,
+                    gsKt: startGs, tasKt: startTas, powerFrac: pctPower }).totalFuelGal;
+                const preModel = decomposeLeg(profile, { distNm, altFt: legAltFt,
+                    endingAtGround: landing, gsKt: gs, tasKt: tas, powerFrac: pctPower }).totalFuelGal;
+                const floorGal = Math.max(levelAtStart, preModel);
+                const floored = tr.totalFuelGal < floorGal;
+                if (floored) {
+                    change.fuelGal += floorGal - tr.totalFuelGal;
+                    tr.totalFuelGal = floorGal;
+                }
+                decomp = tr;
+                // Unrounded gph when floored, so the segments still sum to the leg's fuel.
+                const changeGph = change.fuelGal / change.timeHrs;
                 const fpPh   = isClb ? fp?.climb : fp?.descent;
                 legSegs.push({ phase: isClb ? 'CLB' : 'DES', altFrom: change.altFrom, altTo: change.altTo,
                     dist: parseFloat(change.distNm.toFixed(1)),
                     tas: Math.round(isClb ? clbTas : desTas), gs: Math.round(isClb ? clbGs : desGs),
                     ete_min: change.timeHrs * 60,
-                    gph: parseFloat((change.fuelGal / change.timeHrs).toFixed(1)),
+                    gph: floored ? changeGph : parseFloat(changeGph.toFixed(1)),
                     rpm: fpPh?.rpm, mp: fpPh?.mp, percent_power: fpPh?.percent_power });
                 const crz = tr.phases.cruise;
                 if (crz && crz.timeHrs > 0) {

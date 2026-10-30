@@ -3411,13 +3411,16 @@ class RoutePlannerPanel {
             }
 
             const id = pill.id;
+            const isAptPill = pill.type === 'dep' || pill.type === 'dest' || pill.type === 'airport' || pill.type === 'fuel';
             let coord = this._coords[id] || coordsCi[id.toUpperCase()];
             // Discard any cached coord that has non-finite values so the NASR fallback runs
             if (coord && (!Number.isFinite(coord.lat) || !Number.isFinite(coord.lon))) coord = null;
+            let aptRec = null;   // NASR airport record, for the field elevation (#190)
 
             if (!coord && this._nasrDb) {
                 // Try IDB: airport → navaid → fix
                 let rec = await this._nasrDb.getAirport(id).catch(() => null);
+                if (rec) aptRec = rec;
                 if (!rec) rec = await this._nasrDb.getNavaid(id).catch(() => null);
                 if (!rec) rec = await this._nasrDb.getFix(id).catch(() => null);
                 if (Number.isFinite(rec?.lat) && Number.isFinite(rec?.lon)) {
@@ -3430,6 +3433,12 @@ class RoutePlannerPanel {
                 skipped.push(id);
                 continue;
             }
+
+            // Field elevation for an airport pill, so the planner's descent ends at
+            // the field, not at 0 (#190: RW24 -> KLKR 528 -> 486). The _coords cache
+            // holds lat/lon only, so look the airport up here too.
+            if (isAptPill && !aptRec && this._nasrDb) aptRec = await this._airportRecord(id);
+            const elevFt = isAptPill && Number.isFinite(aptRec?.elev_ft) ? aptRec.elev_ft : null;
 
             // airway: prefer the explicit pendingAirway set by an AWY pill, fall
             // back to the pill's own .airway tag (populated by _loadPlan /
@@ -3453,6 +3462,7 @@ class RoutePlannerPanel {
                 // (the A* default) which overrides cruiseAltFt in recomputeOpts
                 // and causes TAS/GS/fuel to be computed at the wrong altitude.
                 ...(pill.altFt != null ? { altFt: pill.altFt } : {}),
+                ...(elevFt != null ? { elev_ft: elevFt } : {}),
                 // fuelStop:true tells recomputeLegs to model descent/climb at
                 // this stop rather than treating it as a level pass-over.
                 ...(pill.type === 'fuel' ? { fuelStop: true } : {}),
@@ -3470,6 +3480,20 @@ class RoutePlannerPanel {
             this._toast(`Skipped (not found): ${skipped.join(', ')}`);
 
         return wps;
+    }
+
+    /**
+     * NASR airport record for a pill id, or null: as typed, then the other
+     * K-prefix form (a bare 3-letter id is stored K-prefixed, as insertApproach
+     * caches both). Never throws.
+     */
+    async _airportRecord(id) {
+        const db = this._nasrDb;
+        if (!db?.getAirport || !id) return null;
+        const up = String(id).toUpperCase();
+        let rec = await db.getAirport(up).catch(() => null);
+        if (!rec && up.length <= 3) rec = await db.getAirport('K' + up).catch(() => null);
+        return rec || null;
     }
 
     // ── Utilities ─────────────────────────────────────────────────────────────

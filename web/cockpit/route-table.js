@@ -1869,16 +1869,20 @@ class RouteTable {
         // Each row shows total remaining distance/time to reach that waypoint, so all
         // rows shrink as the aircraft moves — not just the active leg.
         // Totals footer continues to sum per-leg _dist/_ete (unchanged).
-        let cumDist = 0, cumEte = 0;
+        let cumDist = 0, cumEte = 0, cumDistNm = 0;
         for (let i = this._activeIndex; i < this._waypoints.length; i++) {
             const wp = this._waypoints[i];
             cumDist += wp._dist || 0;
             cumEte  += wp._ete  || 0;
+            cumDistNm += wp._legDistNm || 0;
             // Use i > _activeIndex check rather than cumDist > 0 so the first
             // non-departure leg shows its distance even when the active waypoint
             // is at index 0 (pre-departure, cumDist accumulates from the first leg).
             wp._cumDist = (i > this._activeIndex || cumDist > 0) ? Math.round(cumDist) : null;
             wp._cumEte  = (i > this._activeIndex || cumEte  > 0) ? cumEte : null;
+            // Unrounded, for the DIST cell's second line (#191): below 10 nm it shows
+            // a decimal like the leg above it. _cumDist (nav strip) is unchanged.
+            wp._cumDistNm = wp._cumDist != null ? cumDistNm : null;
         }
 
         // Compute per-Flight totals for the multi-flight footer rows.
@@ -3722,14 +3726,14 @@ class RouteTable {
     /**
      * DIST cell (#191): the leg -- previous waypoint to this one; on the active row,
      * the aircraft to it (live) -- with the running total from the aircraft
-     * (_cumDist) as a smaller second line. One decimal below 10 nm, whole numbers
+     * (_cumDistNm) as a smaller second line. One decimal below 10 nm, whole numbers
      * above (as airport-popup.js). A row with no leg (departure, passed) is a dash.
      */
     _distCell(wp) {
         const nm = wp._legDistNm;
         if (nm == null) return '\u2014';
-        const leg = nm < 10 ? nm.toFixed(1) : String(Math.round(nm));
-        return this._withRunningTotal(leg, wp._cumDist);
+        const fmt = (d) => (d < 10 ? d.toFixed(1) : String(Math.round(d)));
+        return this._withRunningTotal(fmt(nm), wp._cumDistNm != null ? fmt(wp._cumDistNm) : null);
     }
 
     /** TIME cell (#191): the leg's ETE (live on the active row), running total (_cumEte) underneath. */

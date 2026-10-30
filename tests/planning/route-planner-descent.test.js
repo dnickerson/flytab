@@ -99,7 +99,8 @@ describe('#190 KLKR RNAV 24: plate profile', () => {
         const [des, crz] = leg.segments;
         // the drop at the profile's descent rate
         expect(des.ete_min).toBeCloseTo(400 / DES_FPM, 6);
-        expect(des.gph).toBe(DES_GPH);
+        // descent burn, raised by the never-below-level floor (see below)
+        expect(des.gph).toBeGreaterThanOrEqual(DES_GPH);
         expect(crz.gph).toBe(CRZ_GPH);
         expect(des.dist).toBeLessThan(leg.distNm);
         expect(segDist(leg)).toBeCloseTo(leg.distNm, 1);
@@ -109,7 +110,9 @@ describe('#190 KLKR RNAV 24: plate profile', () => {
         const leg = legOf(plan, 'WITUR', 'RW24');
         expect(shape(leg)).toEqual(['DES 2100->528']);
         expect(leg.segments[0].dist).toBeCloseTo(leg.distNm, 1);
-        expect(leg.segments[0].gph).toBe(DES_GPH);
+        expect(leg.segments[0].gph).toBeGreaterThanOrEqual(DES_GPH);
+        // time as modelled: the 1572 ft at the descent rate (longer than the leg at 173 kt)
+        expect(leg.timeHrs * 60).toBeCloseTo(1572 / DES_FPM, 6);
     });
 
     it('RW24 -> KLKR: DES 528 -> field elevation', () => {
@@ -187,5 +190,65 @@ describe('#190 step-downs and step-ups between fixes', () => {
         // totals still stop at the destination
         const toDest = p.legs.slice(0, 4);
         expect(p.summary.totalFuelGal).toBeCloseTo(toDest.reduce((s, l) => s + l.fuelGal, 0), 9);
+    });
+});
+
+// ── Fix round 1 (review of 7a683d8) ─────────────────────────────────────────
+// Expected values: recomputeLegs at ee166a2 (before #190), run on a scratch copy
+// of web/shared/planning from `git archive ee166a2` with the same inputs.
+const before = JSON.parse(readFileSync(join(__dirname, '../fixtures/planning/pilot-alt-and-approach-before-190.json'), 'utf8'));
+
+describe('#190 an altitude the pilot set on an airport governs the leg into it, as before', () => {
+    const DEP  = { id: 'KLKR', lat: 34.722904, lon: -80.85459, type: 'APT' };
+    const A    = { id: 'AAA', lat: 34.0, lon: -81.4 };
+    const MIDA = { id: 'KMID', lat: 33.0, lon: -81.8, type: 'APT' };
+    const DEST = { id: 'KDST', lat: 32.0, lon: -82.2, type: 'APT' };
+    const opts = { departureTime, cruiseAltFt: 8500 };
+    const run = (wps) => planner.recomputeLegs({ departure: 'KLKR', destination: 'KDST', waypoints: wps }, null, opts);
+
+    it('DEP -> A -> DEST(alt 4500): the last leg at 4500, not 8500', () => {
+        const r = run([DEP, A, { ...DEST, altFt: 4500, isDest: true }]);
+        expect(r.legs[1].altFt).toBe(4500);
+        expect(r.legs).toEqual(before.destAlt.legs);
+        expect(r.summary).toEqual(before.destAlt.summary);
+    });
+
+    it('DEP -> A -> FUEL(alt 4500) -> DEST: the leg into the fuel stop at 4500', () => {
+        const r = run([DEP, A, { ...MIDA, altFt: 4500, fuelStop: true }, DEST]);
+        expect(r.legs[1].altFt).toBe(4500);
+        expect(r.legs).toEqual(before.fuelAlt.legs);
+        expect(r.summary).toEqual(before.fuelAlt.summary);
+    });
+
+    it('DEP -> A -> airport pass-over (alt 4500) -> DEST: level at 4500, as before', () => {
+        const r = run([DEP, A, { ...MIDA, altFt: 4500 }, DEST]);
+        expect(r.legs).toEqual(before.airportAlt.legs);
+        expect(r.summary).toEqual(before.airportAlt.summary);
+    });
+});
+
+describe('#190 approach fuel is never below the level (pre-#190) plan', () => {
+    const plan = planner.recomputeLegs(approachPlan(), null, { departureTime });
+    const old = (from, to) => before.approach.legs.find(l => l.from === from && l.to === to);
+
+    it('WITUR -> RW24 burns at least what ee166a2 planned (0.290 gal)', () => {
+        const leg = legOf(plan, 'WITUR', 'RW24');
+        expect(old('WITUR', 'RW24').fuelGal).toBeCloseTo(0.290, 3);
+        expect(leg.fuelGal).toBeGreaterThanOrEqual(old('WITUR', 'RW24').fuelGal);
+    });
+
+    it('every approach leg, and the total, at least the ee166a2 figure (2.864 gal)', () => {
+        for (const leg of plan.legs) {
+            expect(leg.fuelGal).toBeGreaterThanOrEqual(old(leg.from, leg.to).fuelGal - 1e-12);
+        }
+        expect(before.approach.summary.totalFuelGal).toBeCloseTo(2.864, 3);
+        expect(plan.summary.totalFuelGal).toBeGreaterThanOrEqual(before.approach.summary.totalFuelGal - 1e-12);
+    });
+
+    it('the floor goes on the DES segment: segments still sum to the leg', () => {
+        for (const leg of plan.legs.slice(1)) {
+            expect(segFuel(leg)).toBeCloseTo(leg.fuelGal, 9);
+            expect(segMin(leg)).toBeCloseTo(leg.timeHrs * 60, 9);
+        }
     });
 });

@@ -127,11 +127,27 @@ describe('#191 DIST / TIME show the leg, running total underneath', () => {
         wps[1]._cumDist = 82;                        // left over from when AAA was ahead
         const rt = makeTable(wps, 2, { ground_speed: 120 });
         rt._computeEnroute(120);
-        expect(cell(rt, wps[2], 'dist')).toEqual({ leg: '3.3', cum: '3' });
+        // the total below 10 nm has a decimal too (was 3.3 over 3)
+        expect(cell(rt, wps[2], 'dist')).toEqual({ leg: '3.3', cum: '3.3' });
         expect(wps[2]._ete).toBeCloseTo(3.27 / 120 * 60, 6);
+        // TIME counts down too: 1.6 min to BBB, the total underneath
+        expect(cell(rt, wps[2], 'ete')).toEqual({ leg: '2m', cum: '2m' });
         expect(cell(rt, wps[3], 'dist')).toEqual({ leg: '30', cum: '33' });
+        expect(cell(rt, wps[3], 'ete')).toEqual({ leg: '15m', cum: '17m' });
         // passed row: no leg, no stale running total
         expect(cell(rt, wps[1], 'dist')).toEqual({ leg: '—', cum: null });
+    });
+
+    it('a first leg under 10 nm: the total reads like the leg (4.9 over 4.9, not over 5)', () => {
+        installGlobals();
+        const wps = threeLegs();
+        wps[1]._legDist = 4.9; wps[1]._segments = crz(4.9);
+        const rt = makeTable(wps, 1);
+        rt._computeEnroute(0);
+        expect(cell(rt, wps[1], 'dist')).toEqual({ leg: '4.9', cum: '4.9' });
+        expect(cell(rt, wps[2], 'dist')).toEqual({ leg: '4.9', cum: '9.8' });
+        expect(cell(rt, wps[3], 'dist')).toEqual({ leg: '30', cum: '40' });
+        expect(wps.slice(1).map(w => w._cumDist)).toEqual([5, 10, 40]);   // nav strip's figure unchanged
     });
 
     it('departure row (no inbound leg): dash, no total', () => {
