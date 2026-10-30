@@ -2399,6 +2399,15 @@ body {
     padding-bottom: 2px;
 }
 
+/* DIST / TIME cells: the running total from the aircraft, as a smaller second
+   line under the leg value (#191) -- no extra column; portrait has no room. */
+.route-table-content .rt-cum-val {
+    display: block;
+    font-size: var(--text-xs);
+    font-weight: 700;
+    color: var(--text-secondary);
+}
+
 .route-table-content .rt-totals-row td {
     border-top: 1px solid var(--border-strong, rgba(255,255,255,0.3));
     color: var(--text-primary);

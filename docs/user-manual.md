@@ -708,6 +708,12 @@ The Fuel Entry screen's K-FACTOR CALCULATOR section computes a ratio of actual f
 
 Below the calculator, a PI K-FACTOR (LIVE) panel shows the K-factor currently programmed into the Pi's own tracker, and — once the Pi has logged at least 30 gal of fuel additions — a suggested new value with a recommendation. Tapping APPLY TO PI only records that you applied the suggested value to the physical Dynon EMS; it does not reprogram the sensor itself, which must still be set manually on the EMS per its own calibration procedure.
 
+### Route table DIST and TIME columns
+
+**DIST and TIME are per leg**, as on a nav log: each row shows the distance and time from the waypoint before it to that one. On the row you are flying to (the active waypoint) they count down live — distance from your aircraft to the waypoint, and time at your current ground speed. Distances under 10 nm show one decimal (`4.9`), longer ones whole miles (`82`).
+
+**The running total is the smaller line underneath** in the same cell: distance and time from your aircraft to that waypoint. A 4.9 nm leg after an 82 nm leg reads `4.9` with `87` under it. On a waypoint split into climb/cruise/descent rows, the leg and the total are on its first row; the TIME on the other rows is the time in that phase. The departure row and rows already behind you show `—`. The TOTAL and per-flight footer rows, the nav strip and the instrument strip are unchanged. (Until v12.29 DIST and TIME showed only the running total, so a short leg after a long one looked long.)
+
 ### Route table FUEL and REM columns
 
 The route table's **FUEL** column shows the fuel burned on each leg; **REM** shows the fuel expected to remain on arrival at that waypoint.
