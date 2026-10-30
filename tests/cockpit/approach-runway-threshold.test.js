@@ -11,15 +11,16 @@ import { readFileSync } from 'fs';
 const ApproachCharts = new Function(
     readFileSync('web/cockpit/approach-charts.js', 'utf8') + '\nreturn ApproachCharts;')();
 
-// KLKR runway 06/24 (April 2026 NASR APT_RWY_END.csv): RW06 has a 105 ft displaced threshold.
+// KLKR runway 06/24 exactly as the pipeline's 2611 NASR bundle (bundle v11) emits it:
+// RW06 has a 105 ft displaced threshold.
 const KLKR_RWY = {
-    id: '06/24', length_ft: 6004, width_ft: 100, surface: 'ASPH-G',
+    id: '06/24', length_ft: 6004, width_ft: 101, surface: 'CONC-E',
     base_id: '06', base_lat: 34.71859708, base_lon: -80.8631085,
     base_thr_lat: 34.71874788, base_thr_lon: -80.86280972,
-    base_true_hdg: 58.4, base_elev_ft: 459.3, base_displ_ft: 105, base_tch_ft: 41,
+    base_true_hdg: 59, base_elev_ft: 459.7, base_displ_ft: 105, base_tch_ft: 41,
     recip_id: '24', recip_lat: 34.72721166, recip_lon: -80.84607163,
     recip_thr_lat: 34.72721166, recip_thr_lon: -80.84607163,
-    recip_true_hdg: 238.4, recip_elev_ft: 485.7, recip_tch_ft: 39,
+    recip_true_hdg: 239, recip_elev_ft: 485.7, recip_tch_ft: 39,
 };
 const KLKR = { icao: 'KLKR', runways: [KLKR_RWY] };
 
@@ -34,7 +35,7 @@ describe('ApproachCharts.runwayThreshold', () => {
         const t = ApproachCharts.runwayThreshold(KLKR, 'RW06');
         expect(t.lat).toBe(34.71874788);
         expect(t.lon).toBe(-80.86280972);
-        expect(t).toMatchObject({ elevFt: 459.3, tchFt: 41 });
+        expect(t).toMatchObject({ elevFt: 459.7, tchFt: 41 });
     });
 
     it('RW6 and RW06 are the same end', () => {

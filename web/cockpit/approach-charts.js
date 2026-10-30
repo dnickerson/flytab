@@ -1376,6 +1376,9 @@ class ApproachCharts {
                     aptElev = aptData?.elev_ft ?? null;
                 } catch {}
             }
+            // Deliberate: the destination airport waypoint takes the RW step's
+            // coordinates, so it now sits at the landing threshold (not the airport
+            // reference point) -- and insertApproach caches it for the planner session.
             const airportWp = rwStep
                 ? { icao, name: icao, lat: rwStep.lat, lon: rwStep.lon, type: 'APT',
                     elev_ft: aptElev, alt: aptElev ?? 0, altLocked: true }
