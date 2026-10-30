@@ -24,6 +24,54 @@ function _fetchWithTimeout(url, opts = {}, timeoutMs = PLATES_FETCH_TIMEOUT) {
 }
 
 class ApproachCharts {
+    /**
+     * Runway end id as the pipeline's normalise_end_id writes it: strip a leading
+     * "RW", left-pad a lone leading digit ("6" / "6L" -> "06" / "06L"), upper-case.
+     * Letter-only ids ("N", "NE") are left alone.
+     */
+    static _normEndId(id) {
+        let s = String(id == null ? '' : id).trim().toUpperCase();
+        if (s.startsWith('RW')) s = s.slice(2);
+        if (/^\d(?!\d)/.test(s)) s = '0' + s;
+        return s;
+    }
+
+    /**
+     * Landing threshold of a runway end, from the NASR bundle (v11) runway fields.
+     * fixId is an approach fix such as "RW24", "RW06", "RW6", "RW18L".
+     * Uses {base,recip}_thr_lat/lon (the displaced threshold if there is one, else
+     * the physical end), falling back to {base,recip}_lat/lon. Decided by coordinate
+     * finiteness, never by *_id: an end can have an id and no position, and bundle
+     * v10 has an id with a lone latitude. Returns null when no usable pair exists,
+     * so the caller can fall back to the airport reference point.
+     * @param {object} airport  NasrDB airport record ({runways: [...]})
+     * @param {string} fixId
+     * @returns {{lat:number, lon:number, elevFt?:number, tchFt?:number}|null}
+     */
+    static runwayThreshold(airport, fixId) {
+        const want = ApproachCharts._normEndId(fixId);
+        if (!want || !Array.isArray(airport?.runways)) return null;
+        const num = (v) => (typeof v === 'number' && Number.isFinite(v)) ? v : null;
+        for (const rwy of airport.runways) {
+            if (!rwy) continue;
+            for (const end of ['base', 'recip']) {
+                if (ApproachCharts._normEndId(rwy[end + '_id']) !== want) continue;
+                for (const pre of [end + '_thr_', end + '_']) {
+                    const lat = num(rwy[pre + 'lat']);
+                    const lon = num(rwy[pre + 'lon']);
+                    if (lat === null || lon === null) continue;
+                    const out = { lat, lon };
+                    const elev = num(rwy[end + '_elev_ft']);
+                    const tch = num(rwy[end + '_tch_ft']);
+                    if (elev !== null) out.elevFt = elev;
+                    if (tch !== null) out.tchFt = tch;
+                    return out;
+                }
+            }
+        }
+        return null;
+    }
+
     constructor(container) {
         this._container = container;
         this._plateIndex = null;
@@ -1252,6 +1300,14 @@ class ApproachCharts {
                     // RW## pattern: runway threshold — use nasrIcao (K-prefixed) for getAirport
                     if (/^RW\d/.test(id) || section === 'PG') {
                         const r = await this._nasrDb.getAirport(nasrIcao);
+                        // The runway threshold (displaced threshold where there is one);
+                        // bundle v10 / airports without runway positions fall back to the
+                        // airport reference point, as before.
+                        const thr = ApproachCharts.runwayThreshold(r, id);
+                        if (thr) return { lat: thr.lat, lon: thr.lon };
+                        if (typeof DiagLog !== 'undefined') {
+                            DiagLog.log('approach', `${id}: no threshold in NASR \u2014 airport reference point used`);
+                        }
                         if (r?.lat) return { lat: r.lat, lon: r.lon };
                         return null;
                     }

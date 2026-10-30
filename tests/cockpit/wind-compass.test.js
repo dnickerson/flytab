@@ -58,6 +58,17 @@ describe('WindCompass.parseRunwayEnds', () => {
         ]);
     });
 
+    it('real KLKR surveyed coordinates give 06 at 58.4 and 24 at 238.4 true', () => {
+        const ends = WindCompass.parseRunwayEnds([{
+            id: '06/24', length_ft: 6004, width_ft: 100, surface: 'ASPH-G',
+            base_id: '06', base_lat: 34.71859708, base_lon: -80.8631085,
+            base_thr_lat: 34.71874788, base_thr_lon: -80.86280972,
+            recip_id: '24', recip_lat: 34.72721166, recip_lon: -80.84607163,
+            recip_thr_lat: 34.72721166, recip_thr_lon: -80.84607163,
+        }]);
+        expect(ends.map(e => [e.label, e.hdg])).toEqual([['06', 58.4], ['24', 238.4]]);
+    });
+
     it('handles a runway with no L/R/C suffix', () => {
         const ends = WindCompass.parseRunwayEnds([{ id: '09/27', length_ft: 4000 }]);
         expect(ends).toEqual([
