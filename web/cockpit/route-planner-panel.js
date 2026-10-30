@@ -3054,6 +3054,8 @@ class RoutePlannerPanel {
 
     /** How long a REV's UNDO stays offered. */
     static UNDO_MS = 15000;
+    /** Longest wait for a field-elevation lookup in _pillsToWaypoints (IDB can hang, see CLAUDE.md). */
+    static ELEV_LOOKUP_MS = 1000;
 
     /** "Route reversed" with UNDO (the global toast: visible with or without the panel). */
     static _announceReverse(dep, dest, undo) {
@@ -3436,8 +3438,10 @@ class RoutePlannerPanel {
 
             // Field elevation for an airport pill, so the planner's descent ends at
             // the field, not at 0 (#190: RW24 -> KLKR 528 -> 486). The _coords cache
-            // holds lat/lon only, so look the airport up here too.
-            if (isAptPill && !aptRec && this._nasrDb) aptRec = await this._airportRecord(id);
+            // holds lat/lon only, so look the airport up here too -- bounded: a hung IDB
+            // must not hang Plan / Apply, which worked from cached coordinates before.
+            // On timeout: no elev_ft, the descent ends at 0 as before.
+            if (isAptPill && !aptRec && this._nasrDb) aptRec = await this._airportRecordBounded(id);
             const elevFt = isAptPill && Number.isFinite(aptRec?.elev_ft) ? aptRec.elev_ft : null;
 
             // airway: prefer the explicit pendingAirway set by an AWY pill, fall
@@ -3494,6 +3498,15 @@ class RoutePlannerPanel {
         let rec = await db.getAirport(up).catch(() => null);
         if (!rec && up.length <= 3) rec = await db.getAirport('K' + up).catch(() => null);
         return rec || null;
+    }
+
+    /** _airportRecord, or null after ELEV_LOOKUP_MS. */
+    _airportRecordBounded(id) {
+        let timer;
+        const timeout = new Promise((resolve) => {
+            timer = setTimeout(() => resolve(null), RoutePlannerPanel.ELEV_LOOKUP_MS);
+        });
+        return Promise.race([this._airportRecord(id), timeout]).finally(() => clearTimeout(timer));
     }
 
     // ── Utilities ─────────────────────────────────────────────────────────────

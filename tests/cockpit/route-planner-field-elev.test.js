@@ -5,7 +5,7 @@
  * super) now stamps elev_ft from NASR on airport pills -- dep, dest, airport,
  * fuel -- also when the coordinates come from the _coords cache (lat/lon only).
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -95,5 +95,38 @@ describe('KLKR RNAV 24 through the panel path ends at the field', () => {
             { departureTime: new Date('2026-10-30T15:00:00Z') });
         const last = plan.legs.find(l => l.from === 'RW24' && l.to === 'KLKR');
         expect(last.segments.map(s => `${s.phase} ${s.altFrom}->${s.altTo}`)).toEqual(['DES 528->486']);
+    });
+});
+
+describe('the elevation lookup cannot hang Plan / Apply', () => {
+    afterEach(() => vi.useRealTimers());
+
+    // CLAUDE.md: IDB can get into a state where requests never resolve. With the
+    // coordinates cached, _pillsToWaypoints worked before the elevation lookup was
+    // added; it must still return, with no elev_ft (descent to 0, as before).
+    it('getAirport never resolves: returns after ELEV_LOOKUP_MS with cached coordinates, no elev_ft', async () => {
+        vi.useFakeTimers();
+        const panel = makePanel(APPROACH_ROUTE(), APPROACH_COORDS());
+        panel._nasrDb.getAirport = vi.fn(() => new Promise(() => {}));   // hung IDB
+        let wps = null;
+        panel._pillsToWaypoints().then((w) => { wps = w; });
+        await vi.advanceTimersByTimeAsync(900);
+        expect(wps).toBeNull();                      // still waiting on the first airport
+        await vi.advanceTimersByTimeAsync(1300);     // 2 airport pills x 1000 ms, < 2.2 s in all
+        expect(wps).not.toBeNull();
+        expect(wps.map(w => w.id)).toEqual(['KCLT', 'SAPSE', 'WITUR', 'RW24', 'KLKR']);
+        expect(wps[4].lat).toBe(34.7229);
+        for (const w of wps) expect(w).not.toHaveProperty('elev_ft');
+        expect(RoutePlannerPanel.ELEV_LOOKUP_MS).toBe(1000);
+    });
+
+    it('a lookup that answers in time still gives the elevation', async () => {
+        vi.useFakeTimers();
+        const panel = makePanel(APPROACH_ROUTE(), APPROACH_COORDS());
+        panel._nasrDb.getAirport = vi.fn((id) => new Promise((r) => setTimeout(() => r(AIRPORTS[id] ?? null), 500)));
+        let wps = null;
+        panel._pillsToWaypoints().then((w) => { wps = w; });
+        await vi.advanceTimersByTimeAsync(1200);
+        expect(wps[4].elev_ft).toBe(486);
     });
 });
