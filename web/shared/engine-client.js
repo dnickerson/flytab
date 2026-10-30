@@ -108,6 +108,18 @@ class EngineClient extends EventTarget {
     /** Milliseconds since last data, or Infinity if never received */
     get dataAge() { return this._lastDataTime ? Date.now() - this._lastDataTime : Infinity; }
 
+    /**
+     * Age of the newest engine READING, ms. The Pi sends its status every second
+     * whether or not the EMS serial line delivers (engine_monitor.py
+     * broadcast_loop), keeping its last reading: dataAge alone says only that the
+     * Pi is up. Its data_count rises with each reading. A Pi without data_count:
+     * dataAge.
+     */
+    get readingAge() {
+        if (!Number.isFinite(this._readingCount)) return this.dataAge;
+        return Math.max(this.dataAge, Date.now() - this._readingAt);
+    }
+
     /** Pi's api_contract, or 0 if the field is missing entirely (#113) —
      *  a Pi that predates this handshake reports as contract 0, not "unknown". */
     get piContract() { return this.lastData?.api_contract ?? 0; }
@@ -237,6 +249,8 @@ class EngineClient extends EventTarget {
     _onData(data) {
         this.lastData = data;
         this._lastDataTime = Date.now();
+        const n = data?.data_count;
+        if (Number.isFinite(n) && n !== this._readingCount) { this._readingCount = n; this._readingAt = this._lastDataTime; }
         if (this._stale) {
             this._stale = false;
             this.dispatchEvent(new CustomEvent('engine:stale', { detail: { stale: false } }));

@@ -188,10 +188,37 @@ class ConfigEditor {
                 <div class="ce-field-row">
                     <label class="ce-label" for="ce-stratux-ip">Stratux IP</label>
                     <input type="text" id="ce-stratux-ip" class="ce-input" style="width:150px"
-                        value="${typeof Settings !== 'undefined' ? Settings.stratuxIp : '192.168.10.1'}">
+                        value="${typeof Settings !== 'undefined' ? this._attr(Settings.stratuxIp) : '192.168.10.1'}">
                 </div>
                 <div class="ce-field-row" style="font-size:14px;color:var(--text-secondary)">
                     Pi IP for live GPS/traffic/engine data (default: 192.168.10.1)
+                </div>
+                <div class="ce-field-row">
+                    <label class="ce-label" for="ce-home-stratux-ip">Home Stratux IP</label>
+                    <input type="text" id="ce-home-stratux-ip" class="ce-input" style="width:150px"
+                        value="${typeof Settings !== 'undefined' ? this._attr(Settings.homeStratuxIp) : ''}">
+                </div>
+                <div class="ce-field-row">
+                    <label class="ce-toggle-label" for="ce-use-home-stratux"
+                        style="min-height:var(--touch-min, 56px);display:flex;align-items:center;gap:12px">
+                        <input type="checkbox" id="ce-use-home-stratux" style="width:28px;height:28px"
+                            ${typeof Settings !== 'undefined' && Settings.useHomeStratux ? 'checked' : ''}>
+                        Use the home Stratux (until FlyTab restarts)
+                    </label>
+                </div>
+                <div class="ce-field-row" style="font-size:14px;color:var(--text-secondary)">
+                    FlyTab connects to the Home Stratux IP instead of the Stratux IP. Off again at every start. If the home Stratux sends nothing for 10 s and the Stratux IP answers, FlyTab uses the Stratux IP. A HOME STX badge shows while this is on.
+                </div>
+                <div class="ce-field-row">
+                    <label class="ce-toggle-label" for="ce-home-stratux-no-record"
+                        style="min-height:var(--touch-min, 56px);display:flex;align-items:center;gap:12px">
+                        <input type="checkbox" id="ce-home-stratux-no-record" style="width:28px;height:28px"
+                            ${typeof Settings === 'undefined' || Settings.homeStratuxNoRecord ? 'checked' : ''}>
+                        Don't record on the home Stratux
+                    </label>
+                </div>
+                <div class="ce-field-row" style="font-size:14px;color:var(--text-secondary)">
+                    While FlyTab is connected to the Stratux at this address (brought home to diagnose a problem), no flight recording or logbook entry is made. An engine running (fresh RPM 500 or more) is always recorded.
                 </div>
             </div>
         </div>`);
@@ -383,6 +410,11 @@ class ConfigEditor {
         return `<div class="ce-section-header">${title}</div>`;
     }
 
+    /** A stored value made safe for an HTML attribute. */
+    _attr(v) {
+        return String(v ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+    }
+
     _renderSection(sectionKey, title, data, fields) {
         let rows = '';
         for (const [key, cfg] of Object.entries(fields)) {
@@ -444,6 +476,11 @@ class ConfigEditor {
         </div>`;
     }
 
+    /** An IPv4 address or host name, with an optional :port -- nothing else. */
+    static validHost(v) {
+        return /^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?(?::\d{1,5})?$/.test(String(v ?? ''));
+    }
+
     async _save() {
         const body = this._el.querySelector('.config-editor-body');
         const saveBtn = body.querySelector('.ce-save-btn');
@@ -451,18 +488,44 @@ class ConfigEditor {
         saveBtn.disabled = true;
 
         try {
-            // Save connection settings to localStorage
+            // Both addresses go into http:// and ws:// URLs: an address, nothing else
+            // ("host/#..." or "user@host" would send Stratux traffic elsewhere).
+            // Checked before anything is saved (review 2026-10-29).
+            for (const [sel, name] of [['#ce-stratux-ip', 'Stratux IP'], ['#ce-home-stratux-ip', 'Home Stratux IP']]) {
+                const v = body.querySelector(sel)?.value.trim();
+                if (v && !ConfigEditor.validHost(v)) {
+                    if (typeof app !== 'undefined' && app.showToast) app.showToast(`${name} "${v}" is not an address (e.g. 192.168.10.1) — not saved`);
+                    throw new Error(`${name} invalid`);
+                }
+            }
+            // Save connection settings to localStorage. The Stratux client reconnects
+            // once, at the end, if the address it uses (StratuxClient.ip) changed.
+            const stx = (typeof app !== 'undefined') ? app.stratuxClient : null;
+            const ipBefore = stx?.ip;
+            const homeBefore = typeof Settings !== 'undefined'
+                ? `${Settings.useHomeStratux}|${String(Settings.homeStratuxIp ?? '').trim()}` : '';
             const stratuxIpEl = body.querySelector('#ce-stratux-ip');
             if (stratuxIpEl && typeof Settings !== 'undefined') {
                 const newIp = stratuxIpEl.value.trim();
-                if (newIp && newIp !== Settings.stratuxIp) {
-                    Settings.stratuxIp = newIp;
-                    // Reconnect Stratux with new IP
-                    if (typeof app !== 'undefined' && app.stratuxClient) {
-                        app.stratuxClient.disconnect();
-                        app.stratuxClient.connect();
-                    }
+                if (newIp && newIp !== Settings.stratuxIp) Settings.stratuxIp = newIp;
+            }
+
+            // Home Stratux: use it this session; no recordings while connected to it
+            const homeIpEl = body.querySelector('#ce-home-stratux-ip');
+            const useHomeEl = body.querySelector('#ce-use-home-stratux');
+            const homeNoRecEl = body.querySelector('#ce-home-stratux-no-record');
+            if (typeof Settings !== 'undefined') {
+                if (homeIpEl) Settings.homeStratuxIp = homeIpEl.value.trim();
+                if (useHomeEl) Settings.useHomeStratux = useHomeEl.checked;
+                if (homeNoRecEl) Settings.homeStratuxNoRecord = homeNoRecEl.checked;
+                // Switched on again, or a new home address: try the home Stratux again
+                if (stx && `${Settings.useHomeStratux}|${String(Settings.homeStratuxIp ?? '').trim()}` !== homeBefore) {
+                    stx.resetHomeFallback?.();
                 }
+            }
+            if (stx && stx.ip !== ipBefore) {
+                stx.disconnect();
+                stx.connect();
             }
 
             // Route planner (current / new)

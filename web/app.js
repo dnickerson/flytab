@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v12.10';
+const FLYTAB_VERSION = 'v12.26';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 // Kept in memory and saved at most every FLUSH_MS (errors at once). Every log()
@@ -154,6 +154,7 @@ class FlyTabApp {
             statusTimeLocal: document.getElementById('statusTimeLocal'),
             statusGps: document.getElementById('statusGps'),
             statusFisb: document.getElementById('statusFisb'),
+            statusHomeStx: document.getElementById('statusHomeStx'),
             statusPiContract: document.getElementById('statusPiContract'),
             statusNasr: document.getElementById('statusNasr'),
             mainContent: document.getElementById('mainContent'),
@@ -739,6 +740,8 @@ class FlyTabApp {
             if (typeof FlightRecorder !== 'undefined') {
                 this.flightRecorder = new FlightRecorder(this.engineClient, this.stratuxClient, nasrDb);
                 this.flightRecorder.init();
+                // Engine ML counts travel with the recording, so a close-out after a restart keeps them (#188)
+                this.flightRecorder.mlCounts = () => window.engineML?.getFlightCounts?.() ?? null;
                 window.flightRecorder = this.flightRecorder;
                 // Update REC badge from flight recorder
                 this.flightRecorder.onStatusChange = (status) => {
@@ -897,6 +900,52 @@ class FlyTabApp {
             this.directToPanel = new DirectToPanel(this, nasrDb);
             this.cockpitMap.onDirectToTap = () => this.directToPanel.open();
         }
+
+        // TFRs from tfr.faa.gov through the NOTAM proxy: exact areas, altitudes, times.
+        // Downloaded on the ground around us and the route, kept for the flight.
+        this._guard('TFRs (tfr.faa.gov)', () => {
+            if (typeof FaaTfrClient === 'undefined') return;
+            this.faaTfr = new FaaTfrClient({
+                baseUrl: () => (typeof CockpitConfig !== 'undefined' && CockpitConfig.notamBase) || null,
+                points: () => {
+                    const pts = [];
+                    const sit = this.stratuxClient?.situation;
+                    // A position only with a fix: a Stratux without one reports 0,0,
+                    // which pulled the box off the US (review 2026-10-29).
+                    if (Number.isFinite(sit?.lat) && Number.isFinite(sit?.lon) && sit.lat && sit.lon && sit.gps_fix_quality > 0) pts.push([sit.lat, sit.lon]);
+                    else if (this.cockpitMap?.map) { const c = this.cockpitMap.map.getCenter(); pts.push([c.lat, c.lng]); }
+                    for (const wp of this.routeTable?._waypoints || []) {
+                        if (Number.isFinite(wp?.lat) && Number.isFinite(wp?.lon)) pts.push([wp.lat, wp.lon]);
+                    }
+                    return pts;
+                },
+                // In flight (Stratux WiFi) there is no internet: keep what was downloaded.
+                canFetch: () => !['flight', 'offline'].includes(this.networkMode?.mode),
+            });
+            this.cockpitMap.setFaaTfrClient(this.faaTfr);
+            if (this.vectorLayers) this.vectorLayers.extraAreasAt = (lat, lon) => this.cockpitMap.tfrAreasAt(lat, lon);
+            this.faaTfr.start();
+            // Back on the ground with internet: download at once.
+            this.networkMode?.addEventListener?.('mode:changed', (e) => {
+                if (!['flight', 'offline'].includes(e.detail?.mode)) this.faaTfr.refresh();
+            });
+            // A route outside the downloaded box: download for it now, not in up to
+            // 15 min (until then the NOTAM-text TFRs show, isCurrent() is false).
+            window.addEventListener('activeroute:plan', () => {
+                this.cockpitMap.redrawFaaTfrs?.();
+                this.faaTfr.ensureCovered().catch(() => {});      // refresh() asks only with internet
+            });
+        });
+
+        // Radio frequency tool (map FREQ button)
+        this._guard('Radio frequencies', () => {
+            const mapAreaEl = document.querySelector('.map-area');
+            if (typeof FreqPanel === 'undefined' || !mapAreaEl) return;
+            this.freqPanel = new FreqPanel(mapAreaEl, { getSituation: () => this.stratuxClient?.situation ?? null });
+            this.freqPanel.onCurrentChange = (mhz) => this.cockpitMap.setFreqButton(mhz);
+            this.cockpitMap.onFreqTap = () => this.freqPanel.toggle();
+            this.cockpitMap.setFreqButton(this.freqPanel.current);
+        });
 
         // FIS-B weather client (METARs, TAFs, PIREPs, SIGMETs, winds aloft)
         if (typeof FisbClient !== 'undefined') {
@@ -2032,12 +2081,27 @@ class FlyTabApp {
                 }
             }
 
-            // FIS-B: green when the 978 MHz UAT radio is present and receiving UAT messages.
-            // UATRadio_connected = hardware detected; UAT_messages_last_minute = data flowing.
-            // Guard: only evaluate when Stratux is connected.
+            // "Use the home Stratux" (this session only): always shown while on, so
+            // it can't go unnoticed before departure; after a fallback it says so.
+            if (this.dom.statusHomeStx) {
+                const hm = this.stratuxClient?.homeMode ?? 'off';
+                this.dom.statusHomeStx.hidden = hm === 'off';
+                this.dom.statusHomeStx.textContent = hm === 'fallback'
+                    ? `HOME STX OFF → ${String(Settings.stratuxIp).split('.').slice(-2).join('.')}`
+                    : 'HOME STX';
+            }
+
+            // FIS-B: green while FIS-B is being received (FisbClient.isReceiving):
+            // FlyTab got FIS-B in the last 2 min, or a fresh Stratux /getTowers has a
+            // ground station heard in the last minute.
             if (this.dom.statusFisb) {
-                const uatRadio = !!status?.UATRadio_connected;
-                const receiving = uatRadio && (status?.UAT_messages_last_minute > 0);
+                const receiving = (typeof FisbClient !== 'undefined') && FisbClient.isReceiving({
+                    now: Date.now(),
+                    lastRxAt: this.fisbClient?.lastRxAt ?? 0,
+                    connected: !!connected,
+                    towers: this.stratuxClient?.towerData,
+                    towersAt: this.stratuxClient?.towerDataAt ?? 0,
+                });
                 this.dom.statusFisb.classList.toggle('active', receiving);
                 if (receiving && this.fisbClient) {
                     const mc = this.fisbClient.metarCount;

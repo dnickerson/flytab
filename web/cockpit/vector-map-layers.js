@@ -1870,13 +1870,50 @@ class VectorMapLayers {
             low.set(k, Math.min(low.get(k) ?? Infinity, floor(a)));
         }
         const shown = new Set();   // two areas that would print the same row: one row
-        return out.filter((a) => {
+        // TFRs (tfr.faa.gov, drawn by CockpitMap) first: the one thing a pilot must not miss.
+        let tfrs = [];
+        try { tfrs = this.extraAreasAt ? (this.extraAreasAt(lat, lon) || []) : []; } catch (_) { tfrs = []; }
+        return [...tfrs, ...out.filter((a) => {
             if (a.kind !== 'class') return true;
             if (floor(a) !== low.get(`${a.rec.class}|${a.rec.name}`)) return false;
             const row = `${a.rec.class}|${a.rec.name}|${floor(a)}|${a.rec.upper_ft ?? a.rec.upper}`;
             if (shown.has(row)) return false;
             shown.add(row); return true;
-        }).sort((x, y) => floor(x) - floor(y));
+        }).sort((x, y) => floor(x) - floor(y))];
+    }
+
+    /** NOTAM TEXT buttons in an open airspace popup: a tap shows / hides that TFR's full text. */
+    static _wireTfrText(popup) {
+        const el = popup?.getElement?.();
+        if (!el) return;
+        const tap = (typeof wireTap === 'function') ? wireTap : (b, fn) => b.addEventListener('click', fn);
+        el.querySelectorAll('.as-pop-tfr-textbtn').forEach((btn) => tap(btn, () => {
+            const box = [...el.querySelectorAll('.as-pop-tfr-text')].find((d) => d.dataset.tfr === btn.dataset.tfr);
+            if (!box) return;
+            box.hidden = !box.hidden;
+            btn.textContent = box.hidden ? 'NOTAM TEXT ▸' : 'NOTAM TEXT ▾';
+            btn.setAttribute('aria-expanded', String(!box.hidden));
+            popup.update?.();
+        }));
+    }
+
+    /** "SFC" / "2,000 ft AGL" / "17,999 ft MSL" / "FL180" for a TFR area altitude. */
+    static _fmtTfrAlt(ft, ref) {
+        if (!Number.isFinite(ft)) return '?';
+        if (ft === 0 && ref !== 'MSL') return 'SFC';
+        if (ref === 'FL') return `FL${String(Math.round(ft / 100)).padStart(3, '0')}`;
+        return `${Math.round(ft).toLocaleString('en-US')} ft ${ref === 'AGL' ? 'AGL' : 'MSL'}`;
+    }
+
+    /** "14:15 EDT (1815Z)" in the tablet's time, with UTC. */
+    static _fmtTfrTime(iso) {
+        const t = Date.parse(iso || '');
+        if (!Number.isFinite(t)) return null;
+        const d = new Date(t);
+        const local = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false, timeZoneName: 'short' });
+        const z = `${String(d.getUTCHours()).padStart(2, '0')}${String(d.getUTCMinutes()).padStart(2, '0')}Z`;
+        const day = d.toDateString() === new Date().toDateString() ? '' : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} `;
+        return `${day}${local} (${z})`;
     }
 
     /** "SFC", "UNL", or "10,000 ft" -- the NASR number as is. The bundle does not
@@ -1925,7 +1962,25 @@ class VectorMapLayers {
         // Floor – ceiling, the way it is read (Dana, 2026-10-19: "SFC – 4,100 ft", not "4,100 ft – SFC").
         const alt = (r) => `${VectorMapLayers._fmtAltFt(r.lower_ft ?? r.lower, true)} – ${VectorMapLayers._fmtAltFt(r.upper_ft ?? r.upper, false)}`;
         const notams = window.SuaNotams;
+        const tfrTextShown = new Set();   // a TFR with several areas here: its text once
         const rows = areas.map(({ kind, rec }) => {
+            if (kind === 'tfr') {
+                const t = rec.tfr || {};
+                const from = VectorMapLayers._fmtTfrTime(rec.start), to = VectorMapLayers._fmtTfrTime(rec.end);
+                const when = rec.status === 'active' ? 'ACTIVE NOW' : rec.status === 'upcoming' ? `STARTS ${from}`
+                    : rec.status === 'ended' ? `ENDED ${to} — CHECK THE NOTAM` : 'TIMES NOT KNOWN';
+                const span = from && to ? `${from} – ${to}` : (to ? `until ${to}` : 'check the NOTAM for times');
+                const got = VectorMapLayers._fmtTfrTime(rec.fetchedAt);
+                return `<div class="as-pop-row as-pop-tfr${rec.status === 'active' ? ' is-active' : ''}">
+                    <div class="as-pop-head"><span class="as-pop-name">TFR ${esc(t.id)}${t.legal ? ` · ${esc(t.legal)}` : ''}</span><span class="as-pop-kind as-pop-tfr-when">${esc(when)}</span></div>
+                    <div class="as-pop-alt">${esc(`${VectorMapLayers._fmtTfrAlt(rec.lowerFt, rec.lowerRef)} – ${VectorMapLayers._fmtTfrAlt(rec.upperFt, rec.upperRef)}`)}</div>
+                    <div class="as-pop-notam">${esc([rec.name, t.name || t.title].filter(Boolean).join(' · '))}</div>
+                    <div class="as-pop-notam">${esc(span)}</div>
+                    <div class="as-pop-note">tfr.faa.gov${got ? ` · downloaded ${esc(got)}` : ''}${t.detail === false ? ' · no altitudes or times from the FAA: read the NOTAM' : ''}</div>${
+                    t.text && !tfrTextShown.has(t.id) && tfrTextShown.add(t.id)
+                        ? `<button class="as-pop-tfr-textbtn" data-tfr="${esc(t.id)}" aria-expanded="false">NOTAM TEXT ▸</button>
+                    <div class="as-pop-tfr-text" data-tfr="${esc(t.id)}" hidden>${esc(t.text)}</div>` : ''}</div>`;
+            }
             if (kind === 'class') {
                 const name = String(rec.name || '').replace(/\s*Class\s*[BCD]\d*\s*$/i, '').trim() || rec.id;
                 return `<div class="as-pop-row as-pop-${esc(rec.class).toLowerCase()}">
@@ -1993,10 +2048,11 @@ class VectorMapLayers {
         if (!latlng) return false;
         const areas = this._areasAt(latlng.lat, latlng.lng);
         if (!areas.length) return false;
-        L.popup({ minWidth: 260, maxWidth: 360, className: 'as-popup-container', autoPanPadding: [16, 16] })
+        const popup = L.popup({ minWidth: 260, maxWidth: 360, className: 'as-popup-container', autoPanPadding: [16, 16] })
             .setLatLng(latlng)
             .setContent(this._airspacePopupHtml(areas))
             .openOn(this._map);
+        VectorMapLayers._wireTfrText(popup);
         return true;
     }
 

@@ -232,6 +232,22 @@ public class TileServer extends NanoHTTPD {
         }
     }
 
+    /**
+     * NanoHTTPD 2.3.1 gzips every text/* or JSON response to a client that accepts
+     * gzip, a 204 too, which then goes out with a chunked body. A 204 or 304 has no
+     * body (RFC 9110), so the browser stops at its headers and reads the stray bytes
+     * as the start of the next response on the connection: after a CORS preflight
+     * the PUT or DELETE "failed" (net::ERR_INVALID_HTTP_RESPONSE) although it had
+     * been carried out (2026-10-28). NanoHTTPD sets this after serve() returns, so
+     * it can't be switched off on the response itself.
+     */
+    @Override
+    protected boolean useGzipWhenAccepted(Response r) {
+        Response.IStatus s = r.getStatus();
+        if (s == Response.Status.NO_CONTENT || s == Response.Status.NOT_MODIFIED) return false;
+        return super.useGzipWhenAccepted(r);
+    }
+
     private void addCors(Response r) {
         r.addHeader("Access-Control-Allow-Origin", APP_ORIGIN);
         r.addHeader("Access-Control-Allow-Methods", "GET, PUT, POST, DELETE, OPTIONS");

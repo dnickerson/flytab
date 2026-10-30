@@ -168,6 +168,18 @@ class AirportPopup {
         });
 
         // Wire frequency rows
+        // TFR row: a tap shows / hides its NOTAM text
+        this._panel.querySelectorAll('button.apt-tfr[data-tfr]').forEach(btn => {
+            wireTap(btn, () => {
+                const box = [...this._panel.querySelectorAll('.apt-tfr-text')].find(d => d.dataset.tfr === btn.dataset.tfr);
+                if (!box) return;
+                box.hidden = !box.hidden;
+                const arrow = btn.querySelector('.apt-tfr-arrow');
+                if (arrow) arrow.textContent = box.hidden ? '▸' : '▾';
+                btn.setAttribute('aria-expanded', String(!box.hidden));
+            });
+        });
+
         this._panel.querySelectorAll('.freq-row[data-freq]').forEach(row => {
             wireTap(row, () => this._flashFrequency(row.dataset.freq));
         });
@@ -324,6 +336,50 @@ class AirportPopup {
         setTimeout(() => input.focus(), 120);
     }
 
+    /**
+     * TFRs this airport is in or within 5 nm of (tfr.faa.gov, FaaTfrClient).
+     * 2026-10-29: inside the Charlotte / Rock Hill VIP TFR every tap opened an
+     * airport (the nearest marker wins), so the TFR popup never did; here the
+     * airport panel says it.
+     */
+    _tfrBlockHtml(apt) {
+        const client = window.app?.faaTfr;
+        if (!client || !Number.isFinite(apt?.lat) || !Number.isFinite(apt?.lon)) return '';
+        let near = [];
+        try { near = client.near(apt.lat, apt.lon, 5); } catch (_) { return ''; }
+        if (!near.length) return '';
+        const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        const V = (typeof VectorMapLayers !== 'undefined') ? VectorMapLayers : null;
+        const alt = (ft, ref) => (V ? V._fmtTfrAlt(ft, ref) : (Number.isFinite(ft) ? `${ft} ft` : '?'));
+        const time = (iso) => (V ? V._fmtTfrTime(iso) : iso);
+        // The same TFR issued for two Centers (6/3879 ZTL, 6/3884 ZJX on 2026-10-29):
+        // same area, times and altitudes -> one row naming both.
+        const rows = [];
+        for (const e of near) {
+            const a = e.area, p0 = a.polygon[0] || [];
+            const key = [e.distanceNm === 0, e.status, a.start, a.end, a.lowerFt, a.lowerRef, a.upperFt, a.upperRef,
+                a.polygon.length, (+p0[0]).toFixed(3), (+p0[1]).toFixed(3)].join('|');
+            const same = rows.find((r) => r.key === key);
+            if (same) same.ids.push(e.tfr.id); else rows.push({ key, ids: [e.tfr.id], ...e });
+        }
+        const html = rows.map(({ ids, tfr, area, status, distanceNm }) => {
+            const where = distanceNm === 0 ? 'IN TFR' : `TFR ${distanceNm < 1 ? '<1' : Math.round(distanceNm)} nm`;
+            const when = status === 'active' ? (area.end ? `until ${time(area.end)}` : 'active')
+                : status === 'upcoming' ? `starts ${time(area.start)}`
+                : status === 'ended' ? `ended ${time(area.end)} — check the NOTAM` : 'times not known';
+            const tag = status === 'active' ? '<span class="apt-tfr-tag">ACTIVE</span>' : '';
+            const head = `<span class="apt-tfr-head">⛔ ${esc(where)} ${esc(ids.join(' / '))}${tfr.legal ? ` · ${esc(tfr.legal)}` : ''}</span>${tag}`;
+            const sub = `<span class="apt-tfr-sub">${esc(`${when} · ${alt(area.lowerFt, area.lowerRef)} – ${alt(area.upperFt, area.upperRef)}`)}</span>`;
+            // The row is the button for the NOTAM text (no extra button to take room)
+            return tfr.text
+                ? `<button class="apt-tfr${status === 'active' ? ' is-active' : ''}" data-tfr="${esc(tfr.id)}" aria-expanded="false">
+                    <span class="apt-tfr-line">${head}<span class="apt-tfr-arrow">▸</span></span>${sub}</button>
+                <div class="apt-tfr-text" data-tfr="${esc(tfr.id)}" hidden>${esc(tfr.text)}</div>`
+                : `<div class="apt-tfr${status === 'active' ? ' is-active' : ''}"><span class="apt-tfr-line">${head}</span>${sub}</div>`;
+        });
+        return `<div class="apt-tfrs">${html.join('')}</div>`;
+    }
+
     _buildPanelHtml(apt, wx) {
         const towerStr = apt.tower ? 'TOWERED' : 'UNCONTROLLED';
         const elevStr = apt.elev_ft ? `${apt.elev_ft} ft` : '';
@@ -371,6 +427,8 @@ class AirportPopup {
             </div>
             <button class="apt-panel-close btn-close" aria-label="Close">✕</button>
         </div>
+
+        ${this._tfrBlockHtml(apt)}
 
         <div class="apt-action-chips">
             <button class="apt-chip" data-action="direct-to">D→ Direct</button>

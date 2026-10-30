@@ -171,6 +171,12 @@ class CockpitMap {
         this._notamTfrGroup = null;      // L.LayerGroup (NOTAM TFRs, created in init)
         this._notamTfrShapes = new Map(); // raw → { layer, srcs: Set<'apt'|'enr'> } (NOTAM)
         this._showTfrs = true;           // default ON
+        // TFRs from tfr.faa.gov (FaaTfrClient): exact areas, altitudes and times.
+        // While that data is current, the NOTAM-text TFRs are not drawn.
+        this._faaTfr = null;
+        this._faaTfrGroup = null;
+        this._faaTfrEntries = [];        // [{ poly, entry }] drawn now
+        this._faaTfrTimer = null;
 
         // Runway extension centerlines
         this._rwyExtLayer = null;
@@ -602,9 +608,64 @@ class CockpitMap {
         }
     }
 
+    /** Draw TFRs from tfr.faa.gov (FaaTfrClient); redraw on new data and every minute (times). */
+    setFaaTfrClient(client) {
+        this._faaTfr = client;
+        if (!this.map) return;
+        this._faaTfrGroup = L.layerGroup();
+        if (this._showTfrs) this._faaTfrGroup.addTo(this.map);
+        client.addEventListener('faatfr:updated', () => this._drawFaaTfrs());
+        if (this._faaTfrTimer) clearInterval(this._faaTfrTimer);
+        this._faaTfrTimer = setInterval(() => this._drawFaaTfrs(), 60 * 1000);
+        this._drawFaaTfrs();
+    }
+
+    _drawFaaTfrs() {
+        if (!this._faaTfr || !this._faaTfrGroup) return;
+        const now = Date.now();
+        this._faaTfrGroup.clearLayers();
+        this._faaTfrEntries = [];
+        const stroke = '#dc2626';
+        for (const entry of this._faaTfr.areas(now)) {
+            // Active: solid outline and fill. Upcoming / just ended: dashed, light. No times known: solid, light.
+            const style = entry.status === 'active'
+                ? { color: stroke, weight: 3, opacity: 1, fillColor: stroke, fillOpacity: 0.22 }
+                : (entry.status === 'upcoming' || entry.status === 'ended')
+                    ? { color: stroke, weight: 2.5, opacity: 0.9, fillColor: stroke, fillOpacity: 0.06, dashArray: '8,6' }
+                    : { color: stroke, weight: 2.5, opacity: 1, fillColor: stroke, fillOpacity: 0.12 };
+            const poly = L.polygon(entry.area.polygon, { ...style, interactive: true, bubblingMouseEvents: false });
+            // The airspace popup's tap path (VectorMapLayers): it lists this TFR with
+            // whatever other airspace is at the spot.
+            poly.on('click', (ev) => this._vectorLayers?._onAirspaceClick?.(ev));
+            poly.addTo(this._faaTfrGroup);
+            this._faaTfrEntries.push({ poly, entry });
+        }
+        // The FAA's own TFR data is the picture while current: the NOTAM-text
+        // shapes (staging API, text-parsed) are not drawn beside it.
+        if (this._notamTfrGroup) {
+            const showNotam = this._showTfrs && !this._faaTfr.isCurrent(now);
+            if (showNotam && !this.map.hasLayer(this._notamTfrGroup)) this._notamTfrGroup.addTo(this.map);
+            if (!showNotam && this.map.hasLayer(this._notamTfrGroup)) this.map.removeLayer(this._notamTfrGroup);
+        }
+    }
+
+    /** Redraw the FAA TFRs now (and which TFR picture shows): route changed. */
+    redrawFaaTfrs() { this._drawFaaTfrs(); }
+
+    /** TFR areas drawn at this point, for the airspace popup: [{ kind: 'tfr', rec }]. */
+    tfrAreasAt(lat, lon) {
+        if (!this._showTfrs || typeof GeoUtils === 'undefined') return [];
+        return this._faaTfrEntries
+            .filter(({ entry }) => GeoUtils.pointInPolygon(lat, lon, entry.area.polygon))
+            .map(({ entry }) => ({ kind: 'tfr', rec: { ...entry.area, tfr: entry.tfr, status: entry.status, fetchedAt: entry.fetchedAt } }));
+    }
+
     toggleTfrs(on) {
         this._showTfrs = on;
         if (!this.map) return;
+        if (this._faaTfrGroup) {
+            if (on) this._faaTfrGroup.addTo(this.map); else this.map.removeLayer(this._faaTfrGroup);
+        }
         if (on) {
             if (this._tfrLayer) {
                 this._tfrLayer.addTo(this.map);
@@ -616,7 +677,7 @@ class CockpitMap {
                     }
                 }
             }
-            if (this._notamTfrGroup) this._notamTfrGroup.addTo(this.map);
+            if (this._notamTfrGroup && !this._faaTfr?.isCurrent()) this._notamTfrGroup.addTo(this.map);
         } else {
             if (this._tfrLayer) this.map.removeLayer(this._tfrLayer);
             if (this._notamTfrGroup) this.map.removeLayer(this._notamTfrGroup);
@@ -633,7 +694,8 @@ class CockpitMap {
     }
 
     _addNotamTfrShape(shape, src = 'enr') {
-        const have = this._notamTfrShapes.get(shape.raw);
+        const key = shape.key || shape.raw;     // one NOTAM can be several areas (wx-briefing _tfrShapesOf)
+        const have = this._notamTfrShapes.get(key);
         if (have) { have.srcs.add(src); return; }
 
         const fill   = 'rgba(220,38,38,0.15)';
@@ -673,7 +735,7 @@ class CockpitMap {
             </div>`;
         layer.bindPopup(popupHtml, { maxWidth: 300 });
         layer.addTo(this._notamTfrGroup);
-        this._notamTfrShapes.set(shape.raw, { layer, srcs: new Set([src]) });
+        this._notamTfrShapes.set(key, { layer, srcs: new Set([src]) });
     }
 
     _addTfrShape(notam) {
@@ -717,7 +779,7 @@ class CockpitMap {
         // Build popup
         const ageMin = Math.round((Date.now() - notam.received_at) / 60000);
         const ageStr = ageMin < 1 ? 'just now' : `${ageMin}m ago`;
-        const icao   = notam.icao ? `<strong>${notam.icao}</strong> · ` : '';
+        const icao   = notam.icao ? `<strong>${CockpitMap._esc(notam.icao)}</strong> · ` : '';
         const expiry = notam.expires_at
             ? `Exp: ${new Date(notam.expires_at).toUTCString().slice(17, 22)}Z`
             : '';
@@ -727,7 +789,7 @@ class CockpitMap {
                 <div style="font-weight:700;font-size:13px;color:#dc2626;margin-bottom:4px">
                     ⛔ TFR ${icao}<span style="font-size:10px;color:#888">${ageStr} ${expiry}</span>
                 </div>
-                <div style="font-size:11px;color:#444;word-break:break-all;white-space:pre-wrap">${notam.raw}</div>
+                <div style="font-size:11px;color:#444;word-break:break-all;white-space:pre-wrap">${CockpitMap._esc(notam.raw)}</div>
             </div>`;
 
         shape.bindPopup(popupHtml, { maxWidth: 300 });
@@ -777,7 +839,7 @@ class CockpitMap {
                     ${typeLabel} ${sevLabel}${urgent} ${altLabel}
                     <span style="font-size:10px;color:#888;margin-left:6px">${ageStr}</span>
                 </div>
-                <div style="font-size:11px;color:#555;word-break:break-all;white-space:pre-wrap">${pirep.raw}</div>
+                <div style="font-size:11px;color:#555;word-break:break-all;white-space:pre-wrap">${CockpitMap._esc(pirep.raw)}</div>
             </div>`;
 
         marker.bindPopup(popupHtml, { maxWidth: 280 });
@@ -1404,6 +1466,11 @@ class CockpitMap {
     }
 
     /** FlyTab is not on screen (MainActivity via app._onScreen). Unknown counts as on screen. */
+    /** Text for HTML (FIS-B NOTAM / PIREP text arrives over the radio). */
+    static _esc(v) {
+        return String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
     static offScreen() {
         return typeof window !== 'undefined' && window.app?._onScreen === false;
     }
@@ -1958,6 +2025,24 @@ class CockpitMap {
         L.DomEvent.disableScrollPropagation(directToBtn);
         container.appendChild(directToBtn);
         this._directToBtn = directToBtn;
+
+        // Radio frequency tool: shows the current frequency, opens the panel (app wires onFreqTap)
+        const freqBtn = document.createElement('button');
+        freqBtn.className = 'map-corner-btn freq-btn';
+        freqBtn.title = 'Radio frequencies';
+        freqBtn.textContent = 'FREQ';
+        wireTap(freqBtn, () => { if (this.onFreqTap) this.onFreqTap(); });
+        L.DomEvent.disableClickPropagation(freqBtn);
+        L.DomEvent.disableScrollPropagation(freqBtn);
+        container.appendChild(freqBtn);
+        this._freqBtn = freqBtn;
+    }
+
+    /** The map's FREQ button shows the current frequency (or FREQ when there is none). */
+    setFreqButton(mhz) {
+        if (!this._freqBtn) return;
+        this._freqBtn.textContent = mhz || 'FREQ';
+        this._freqBtn.classList.toggle('has-freq', !!mhz);
     }
 
     /** Toggle traffic altitude labels — called by layer panel */
@@ -1980,7 +2065,8 @@ class CockpitMap {
             this._stxOverlay = null;
             return;
         }
-        const ip = Settings.stratuxIp;
+        // The Stratux in use: the home one with "Use the home Stratux" on
+        const ip = window.app?.stratuxClient?.ip ?? Settings.stratuxIp;
         const overlay = document.createElement('div');
         overlay.className = 'stx-overlay';
         overlay.innerHTML = `

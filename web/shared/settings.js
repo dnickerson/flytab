@@ -6,6 +6,10 @@
 class Settings {
     static DEFAULTS = {
         stratux_ip: '192.168.10.1',
+        // The Stratux on the home network, brought home to diagnose problems.
+        // While FlyTab is connected to it, no flight recording starts (FlightRecorder).
+        home_stratux_ip: '192.168.1.212',
+        home_stratux_no_record: true,
         pi_ip: '192.168.10.1',
         worker_base: 'https://www.flywhere.app/api',
         night_mode: false,
@@ -50,6 +54,19 @@ class Settings {
 
     static get stratuxIp() { return Settings.get('stratux_ip'); }
     static set stratuxIp(v) { Settings.set('stratux_ip', v); }
+
+    static get homeStratuxIp() { return Settings.get('home_stratux_ip'); }
+    static set homeStratuxIp(v) { Settings.set('home_stratux_ip', v); }
+
+    static get homeStratuxNoRecord() { return Settings.get('home_stratux_no_record') !== false; }
+    static set homeStratuxNoRecord(v) { Settings.set('home_stratux_no_record', !!v); }
+
+    // "Use the home Stratux": connect to homeStratuxIp instead of stratuxIp
+    // (StratuxClient.ip). This session only, never saved: every start of FlyTab
+    // (a restart after a crash in flight too) uses the in-flight Stratux IP.
+    static _useHomeStratux = false;
+    static get useHomeStratux() { return Settings._useHomeStratux; }
+    static set useHomeStratux(v) { Settings._useHomeStratux = !!v; }
 
     static get piIp() { return Settings.get('pi_ip'); }
     static set piIp(v) { Settings.set('pi_ip', v); }

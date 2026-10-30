@@ -19,9 +19,11 @@ describe('Stratux getStatus probes read Settings.stratuxIp (Finding 7a)', () => 
         expect(src).not.toMatch(/Settings\.stratuxIp \|\| '192\.168\.10\.1'/);
     });
 
-    it('device-status.js builds the probe URL from Settings.stratuxIp, with no redundant hardcoded-IP fallback', () => {
+    it('device-status.js probes the Stratux in use (StratuxClient.ip, else Settings.stratuxIp), with no hardcoded-IP fallback', () => {
+        // Review 2026-10-29: with "Use the home Stratux" on it showed the in-flight unit as down.
         const src = read('web/cockpit/device-status.js');
-        expect(src).toMatch(/fetch\(`http:\/\/\$\{Settings\.stratuxIp\}\/getStatus`/);
+        expect(src).toMatch(/const ip = \(typeof app !== 'undefined' && app\.stratuxClient\?\.ip\) \|\| Settings\.stratuxIp;/);
+        expect(src).toMatch(/fetch\(`http:\/\/\$\{ip\}\/getStatus`/);
         expect(src).not.toMatch(/Settings\.stratuxIp \|\| '192\.168\.10\.1'/);
     });
 });

@@ -15,6 +15,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { readFileSync } from 'fs';
 
 const read = (p) => readFileSync(p, 'utf8');
+// The app's global tap helper (shared/tap-utils.js): a TFR card whose area is now
+// read (seconds in its coordinates) gets the map-location pill, which wires it.
+global.wireTap = global.wireTap || ((el, fn) => el?.addEventListener?.('click', fn));
 const WxBriefing = new Function(`${read('web/cockpit/wx-briefing.js')}\nreturn WxBriefing;`)();
 
 let stations = ['KLKR', 'KCAE', 'KTMB'];
@@ -477,5 +480,43 @@ describe('review 4 fixes (2026-10-19)', () => {
     it('a corrupt entry inside a saved list is skipped', () => {
         const c = { v: 2, bins: { KLKR: { at: Date.now(), notams: [null, { airport: 'KLKR', raw: 'RWY CLSD' }] } } };
         expect(WxBriefing._mergeNotamBins(['KLKR'], c, new Set(), Date.now()).shown).toHaveLength(1);
+    });
+});
+
+describe('the last three (2026-10-19)', () => {
+    it('a retry after a failure shows "Fetching…", not the last attempt\'s error', async () => {
+        offline();
+        const wx = makeWx();
+        await wx._fetchNotams();
+        expect(wx._notamFetchError).toBe('Failed to fetch');
+        let release; globalThis.fetch = vi.fn(() => new Promise((res) => { release = res; }));
+        const p = wx._fetchNotams();                                          // the retry
+        const sec = document.createElement('div'); wx._section = () => sec; delete wx._renderNotamSection; wx._renderNotamSection();
+        expect(sec.textContent).toMatch(/Fetching…/);
+        expect(sec.textContent).not.toMatch(/Failed to fetch/);
+        release({ ok: true, json: async () => ({ features: [], failed: [] }) }); await p;
+    });
+
+    it('a station never downloaded is named at once, with the saved ones, not after the download', async () => {
+        answer({ features: [feat('LKR', 'RWY 06/24 CLSD')], failed: [] });
+        stations = ['KLKR']; await makeWx()._fetchNotams();                   // KLKR saved, KAVL never
+        stations = ['KLKR', 'KAVL'];
+        let release; globalThis.fetch = vi.fn(() => new Promise((res) => { release = res; }));
+        const wx = makeWx();
+        const p = wx._fetchNotams();
+        expect(warnings(wx).join(' ')).toMatch(/KAVL: NOTAMs NOT AVAILABLE — never downloaded/);
+        release({ ok: true, json: async () => ({ features: [], failed: [] }) }); await p;
+    });
+
+    it('the en-route route lookup failing: an error, not stuck "Downloading", and the map\'s TFRs are kept', async () => {
+        const enr = vi.fn(); document.addEventListener('notam:tfrs', enr);
+        const wx = makeWx(); wx._enrouteRequest = async () => { throw new Error('NASR busy'); };
+        await wx._fetchEnrouteNotams();
+        expect(wx._enrouteBusy).toBe(false);
+        expect(wx._enrouteNotamFetchError).toBe('NASR busy');
+        expect(enr).not.toHaveBeenCalled();
+        expect(warnings(wx).join(' ')).not.toMatch(/Downloading en-route/);
+        expect(warnings(wx)).toContain('⚠ En-route NOTAMs not checked: NASR busy — TFRs and restrictions may be missing · tap ↻ to retry');
+        document.removeEventListener('notam:tfrs', enr);
     });
 });

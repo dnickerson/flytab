@@ -113,7 +113,9 @@ class DeviceStatus {
 
     async _checkPi() {
         try {
-            const r = await fetch(`http://${Settings.stratuxIp}/getStatus`, {
+            // The Stratux in use: the home one while "Use the home Stratux" is on
+            const ip = (typeof app !== 'undefined' && app.stratuxClient?.ip) || Settings.stratuxIp;
+            const r = await fetch(`http://${ip}/getStatus`, {
                 cache: 'no-store',
                 signal: AbortSignal.timeout(3000),
             });

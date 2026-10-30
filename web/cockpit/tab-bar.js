@@ -173,7 +173,8 @@ class TabBar {
                 this._showMLMonitor();
             }},
             { icon: '📡', label: 'Stratux Status', action: () => {
-                const ip = c.stratuxIp;
+                // The Stratux in use (the home one with "Use the home Stratux" on)
+                const ip = window.app?.stratuxClient?.ip ?? c.stratuxIp;
                 window.open(`http://${ip}`, '_blank');
                 this._closeMoreDrawer();
             }},

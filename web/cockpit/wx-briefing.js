@@ -491,7 +491,9 @@ class WxBriefing {
         const critical = all.filter(n => this._notamTier(n) === 0);
         // The error alone only when there is nothing else to show (saved
         // en-route NOTAMs and the warning lines were hidden -- review 2026-10-19).
-        const fetchErr = !loading && this._notamFetchError && !this._notams?.length && !this._enrouteNotams?.length
+        // Not while a retry is downloading: that is "Fetching…", not the last
+        // attempt's error (2026-10-19).
+        const fetchErr = !loading && this._notamFetchError && !this._notamBusy && !this._notams?.length && !this._enrouteNotams?.length
             && !this._notamStale && !this._enrouteNotamStale;
         const anyErr = fetchErr || (!loading && (this._notamFetchError || this._enrouteNotamFetchError));
         // One list still downloading with nothing of its own on screen: not
@@ -532,12 +534,17 @@ class WxBriefing {
             const how = (busy, err) => busy ? 'Refreshing' : err ? 'Refresh failed' : 'Not refreshed';
             if (this._notamBusy && !this._notamStale && !this._notams?.length) body.insertAdjacentHTML('beforeend', '<div class="wx-section-error">Downloading airport NOTAMs…</div>');
             if (this._enrouteBusy && !this._enrouteNotamStale && !this._enrouteNotams?.length) body.insertAdjacentHTML('beforeend', '<div class="wx-section-error">Downloading en-route NOTAMs…</div>');
-            if (this._notamFetchError && !this._notamStale && !this._notams?.length) warn(`Airport NOTAMs: ${this._notamFetchError}`);
+            if (this._notamFetchError && !this._notamBusy && !this._notamStale && !this._notams?.length) warn(`Airport NOTAMs: ${this._notamFetchError}`);
             if (this._notamStale) warn(`${how(this._notamBusy, this._notamFetchError)} — showing NOTAMs downloaded earlier: ${list(this._notamStale)}`);
             // Not "No NOTAMs for …": read as "none in force" (review 2026-10-19).
             if (this._notamMissing) warn(`${this._notamMissing.join(', ')}: NOTAMs NOT AVAILABLE — never downloaded`);
             if (this._enrouteNotamStale) warn(`En-route: ${how(this._enrouteBusy, this._enrouteNotamFetchError).toLowerCase()} — showing NOTAMs downloaded earlier: ${list(this._enrouteNotamStale)}`);
             if (this._enrouteNotamMissing) warn(`En-route NOTAMs NOT AVAILABLE for ${this._enrouteNotamMissing.join(', ')} — never downloaded; TFRs and restrictions may be missing`);
+            // An en-route error with nothing saved to show (e.g. the route lookup
+            // failed): say so -- the section read "No active NOTAMs." (review).
+            if (this._enrouteNotamFetchError && !this._enrouteBusy && !this._enrouteNotamStale && !this._enrouteNotamMissing) {
+                warn(`En-route NOTAMs not checked: ${this._enrouteNotamFetchError} — TFRs and restrictions may be missing`);
+            }
         }
 
         // Search bar
@@ -2207,14 +2214,14 @@ class WxBriefing {
     }
 
     _tfrShapesOf(notams) {
+        // One shape per area: a TFR is often several (Charlotte / Rock Hill VIP,
+        // 2026-10-29: a 30 and a 10 nm ring around each of two points).
         return notams
             .filter(n => n.type === 'TFR')
-            .map(n => {
-                const geo = this._parseTfrGeometry(n.raw);
-                if (!geo) return null;
-                return { raw: n.raw, summary: n.summary, validFrom: n.validFrom, validTo: n.validTo, ...geo };
-            })
-            .filter(Boolean);
+            .flatMap(n => this._parseTfrGeometries(n.raw).map((geo, i) => ({
+                key: i ? `${n.raw}#${i}` : n.raw,
+                raw: n.raw, summary: n.summary, validFrom: n.validFrom, validTo: n.validTo, ...geo,
+            })));
     }
 
     /**
@@ -2268,10 +2275,11 @@ class WxBriefing {
         const enr = kind === 'enr';
         if (enr ? (this._enrouteNotamStale || this._enrouteNotams?.length) : (this._notamStale || this._notams?.length)) return false;
         const cache = this._readNotamCache(enr ? WxBriefing.ENROUTE_NOTAM_CACHE_KEY : WxBriefing.NOTAM_CACHE_KEY);
-        const { shown, stale } = WxBriefing._mergeNotamBins(keys, cache, new Set(), Date.now());
+        const { shown, stale, missing } = WxBriefing._mergeNotamBins(keys, cache, new Set(), Date.now());
         if (!stale) return false;
-        if (enr) { this._enrouteNotams = WxBriefing._sortEnrouteNotams(shown); this._enrouteNotamStale = stale; }
-        else { this._notams = this._sortAirportNotams(shown, keys); this._notamStale = stale; }
+        // With the stations never downloaded, at once (2026-10-19).
+        if (enr) { this._enrouteNotams = WxBriefing._sortEnrouteNotams(shown); this._enrouteNotamStale = stale; this._enrouteNotamMissing = missing; }
+        else { this._notams = this._sortAirportNotams(shown, keys); this._notamStale = stale; this._notamMissing = missing; }
         document.dispatchEvent(new CustomEvent(enr ? 'notam:tfrs' : 'notam:tfrs-apt', { detail: { shapes: this._tfrShapesOf(shown), replace: true } }));
         return true;
     }
@@ -2418,7 +2426,18 @@ class WxBriefing {
         const gen = this._enrouteGen = (this._enrouteGen || 0) + 1;
         this._enrouteBusy = true;           // before the route lookup: not "NONE" while it runs
         if (!this._enrouteNotams) this._enrouteNotams = [];
-        const req = await this._enrouteRequest();
+        let req;
+        try {
+            req = await this._enrouteRequest();
+        } catch (e) {
+            // A failed route lookup: an error, the busy line cleared, the map's
+            // TFRs left (2026-10-19; "no route" below clears them).
+            if (gen !== this._enrouteGen) return;
+            this._enrouteBusy = false;
+            this._enrouteNotamFetchError = e?.message || String(e);
+            this._renderNotamSection();
+            return;
+        }
         if (gen !== this._enrouteGen) return;
         if (!req) {
             this._enrouteBusy = false;
@@ -2537,7 +2556,69 @@ class WxBriefing {
             .map(a => a.id);
     }
 
+    /**
+     * Every area of a TFR NOTAM: "WI AN AREA DEFINED AS 30NM RADIUS OF
+     * 351247N0805705W ..." (a circle) or "... AS 334903N0791434W TO ... TO
+     * POINT OF ORIGIN" (a polygon), coordinates with or without seconds. Each
+     * area is its own shape -- the text holds several; joining their
+     * coordinates drew Charlotte / Rock Hill's four rings as one line.
+     * Text without that phrase: the old single-shape parse.
+     */
+    _parseTfrGeometries(raw) {
+        const text = String(raw || '');
+        const parts = text.split(/\bWI(?:THIN)?\s+AN\s+AREA\s+DEFINED\s+AS\b/i).slice(1);
+        if (!parts.length) {
+            const one = this._parseTfrGeometryText(text);
+            return one ? [one] : [];
+        }
+        const coordRe = /(?<!\d)(\d{4}(?:\d{2})?)([NS])\s*\/?\s*(\d{5}(?:\d{2})?)([EW])/gi;
+        const toDeg = (d, isLon) => {
+            const dd = isLon ? 3 : 2;
+            const deg = parseInt(d.slice(0, dd), 10), min = parseInt(d.slice(dd, dd + 2), 10);
+            const sec = d.length > dd + 2 ? parseInt(d.slice(dd + 2, dd + 4), 10) : 0;
+            return deg + min / 60 + sec / 3600;
+        };
+        const coordOf = (m) => {
+            let lat = toDeg(m[1], false), lon = toDeg(m[3], true);
+            if (m[2].toUpperCase() === 'S') lat = -lat;
+            if (m[4].toUpperCase() === 'W') lon = -lon;
+            return (Math.abs(lat) <= 90 && Math.abs(lon) <= 180) ? [lat, lon] : null;
+        };
+        const out = [];
+        for (const part of parts) {
+            // The area's own definition: up to the altitudes/times that follow it
+            const def = part.split(/\b(?:SFC|SURFACE|FL\d{3}|\d{3,5}\s*FT|EFFECTIVE|STNR|EXCEPT)\b/i)[0];
+            const circle = def.match(/^\s*(\d+(?:\.\d+)?)\s*NM\s+RADIUS\s+OF\s+/i);
+            coordRe.lastIndex = 0;
+            const coords = [];
+            let m;
+            while ((m = coordRe.exec(def)) !== null) { const c = coordOf(m); if (c) coords.push(c); }
+            if (circle && coords.length) {
+                const [lat, lon] = coords[0];
+                out.push({ lat, lon, radiusNm: parseFloat(circle[1]), center: { lat, lon } });
+            } else if (coords.length >= 3) {
+                const clat = coords.reduce((a, p) => a + p[0], 0) / coords.length;
+                const clon = coords.reduce((a, p) => a + p[1], 0) / coords.length;
+                out.push({ points: coords, center: { lat: clat, lon: clon } });
+            }
+        }
+        if (out.length) return out;
+        // Wording the per-area reading doesn't know: the whole-text reading, as
+        // before (review 2026-10-29: it returned nothing, a regression).
+        const one = this._parseTfrGeometryText(text);
+        return one ? [one] : [];
+    }
+
     _parseTfrGeometry(raw) {
+        if (/\bWI(?:THIN)?\s+AN\s+AREA\s+DEFINED\s+AS\b/i.test(String(raw || ''))) {
+            const all = this._parseTfrGeometries(raw);
+            if (all.length) return all[0];
+        }
+        return this._parseTfrGeometryText(raw);
+    }
+
+    /** The whole text as one shape (the reading before per-area parsing). */
+    _parseTfrGeometryText(raw) {
         const pts = [];
 
         const pat1 = /(\d{2})(\d{2})(N|S)\s*\/?(\d{2,3})(\d{2})(W|E)/gi;
