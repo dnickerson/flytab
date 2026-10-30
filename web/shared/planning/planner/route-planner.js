@@ -5,7 +5,7 @@ import { AirwayGraph } from './airway-graph.js';
 import { parseRouteString } from './parser.js';
 import { buildAvoidancePenalty } from './avoidance.js';
 import { haversine, bearing, crossTrackDistanceNm, iasToTas, groundSpeed, vfrAltitude } from '../math/route-math.js';
-import { decomposeLeg } from '../math/fuel-phases.js';
+import { decomposeLeg, decomposeTransition } from '../math/fuel-phases.js';
 import { tasAtAltitude } from '../math/engine-data.js';
 import { findNearestFdStation, getWindAtAlt } from './winds-interpolator.js';
 import { PlanError, DestinationUnreachableError } from './route-planner-errors.js';
@@ -28,6 +28,8 @@ import { PlanError, DestinationUnreachableError } from './route-planner-errors.j
  */
 
 const AIRWAY_RE = /^[VTJQ]\d+[A-Z]?$/;
+// A runway-threshold fix from a loaded approach (RW24, RW06L): the end of the final approach.
+const RWY_FIX_RE = /^RW\d/i;
 
 /**
  * Index of the destination in plan.waypoints — not necessarily the last, since
@@ -423,6 +425,8 @@ export class RoutePlanner {
         }
         globalCruiseAltFt = globalCruiseAltFt ?? 6000;
         let lastAltFt = globalCruiseAltFt;
+        // Altitude the previous leg ended at: each leg starts there (#190).
+        let prevEndAltFt = 0;
 
         for (let i = 0; i < wps.length - 1; i++) {
             const a = wps[i];
@@ -432,11 +436,37 @@ export class RoutePlanner {
                 etaMs += groundMin * 60000;
                 groundHrs += groundMin / 60;
             }
+            const departingFromGround = i === 0 || !!a.fuelStop;
+            const endingAtGround      = i === destIdx - 1 || !!b.fuelStop;
 
-            // Per-leg altitude: use destination altFt if set, else carry forward the last
+            // Target altitude: the to-fix's altFt if set, else carry forward the last
             // explicitly-set altitude (step-down/step-up persists until next override).
-            const legAltFt = b.altFt ?? lastAltFt;
-            lastAltFt = legAltFt;
+            const targetAltFt = b.altFt ?? lastAltFt;
+            lastAltFt = targetAltFt;
+
+            // #190, the plate profile. The leg starts where the previous one ended
+            // (the departure and a fuel stop: the ground, as decomposeLeg climbs from 0).
+            const startAltFt = departingFromGround ? 0 : prevEndAltFt;
+            // The descent into an airport ends at its field elevation when the
+            // waypoint carries one (route-table / app.js waypoints: elev_ft; the
+            // library's Airport type: elevFt), else 0 as before.
+            const elevRaw = b.elev_ft ?? b.elevFt;
+            const fieldElevFt = Number.isFinite(elevRaw) ? elevRaw : 0;
+            // Between fixes, a change of altitude is a climb or descent at the start
+            // of the leg, then level. Final approach (to an RW## threshold fix) and
+            // the leg from the threshold into the airport are one descent over the
+            // whole leg (the glidepath).
+            const betweenFixes  = !departingFromGround && !endingAtGround;
+            const finalApproach = betweenFixes && RWY_FIX_RE.test(b.id ?? '') && startAltFt > targetAltFt;
+            const landing       = endingAtGround && !departingFromGround
+                               && RWY_FIX_RE.test(a.id ?? '') && startAltFt > fieldElevFt;
+            const transition    = landing || (betweenFixes && startAltFt !== targetAltFt);
+            const transToAltFt  = landing ? fieldElevFt : targetAltFt;
+            // Altitude for the leg's TAS, winds and level part: the target; into an
+            // airport (not off the ground) it is the altitude the leg starts at --
+            // the descent is from there. The same value for a plain route.
+            const legAltFt = (endingAtGround && !departingFromGround) ? startAltFt : targetAltFt;
+            prevEndAltFt = endingAtGround ? fieldElevFt : targetAltFt;
 
             const distNm = haversine(a.lat, a.lon, b.lat, b.lon);
             const brgTrue = bearing(a.lat, a.lon, b.lat, b.lon);
@@ -465,63 +495,109 @@ export class RoutePlanner {
                 ? groundSpeed(tas, brgTrue, windDir, windSpd)
                 : tas;
 
-            const decomp = decomposeLeg(profile, {
-                distNm,
-                altFt: legAltFt,
-                departingFromGround: i === 0 || !!a.fuelStop,
-                endingAtGround: i === destIdx - 1 || !!b.fuelStop,
-                gsKt: gs,
-                tasKt: tas,
-                powerFrac: pctPower,
-            });
-
-            fuelRem -= decomp.totalFuelGal;
-            etaMs   += decomp.totalTimeHrs * 3_600_000;
-
             // Build CLB/CRZ/DES segments so route-table can display per-phase rows
             const fp = profile.fuelPhases;
             const legSegs = [];
             const wdDir = windDir ?? 0;
             const wdSpd = windSpd ?? 0;
-            if (decomp.phases.climb.timeHrs > 0) {
-                const clbTas = fp?.climb?.ias_kt
-                    ? iasToTas(fp.climb.ias_kt, legAltFt / 2, oatC)
-                    : tas * 0.87;
-                const clbGs = wdDir || wdSpd ? groundSpeed(clbTas, brgTrue, wdDir, wdSpd) : clbTas;
-                const clbGph = decomp.phases.climb.timeHrs > 0
-                    ? decomp.phases.climb.fuelGal / decomp.phases.climb.timeHrs : 0;
-                legSegs.push({ phase: 'CLB', altFrom: 0, altTo: legAltFt,
-                    dist: parseFloat(decomp.phases.climb.distNm.toFixed(1)),
-                    tas: Math.round(clbTas), gs: Math.round(clbGs),
-                    ete_min: decomp.phases.climb.timeHrs * 60,
-                    gph: parseFloat(clbGph.toFixed(1)),
-                    rpm: fp?.climb?.rpm, mp: fp?.climb?.mp,
-                    percent_power: fp?.climb?.percent_power });
+            /** @type {{totalTimeHrs:number, totalFuelGal:number}} */
+            let decomp;
+
+            if (transition) {
+                const midFt  = (startAltFt + transToAltFt) / 2;
+                const clbTas = fp?.climb?.ias_kt   ? iasToTas(fp.climb.ias_kt, midFt, oatC)   : tas * 0.87;
+                const desTas = fp?.descent?.ias_kt ? iasToTas(fp.descent.ias_kt, midFt, oatC) : tas * 0.95;
+                const gsOf   = (t) => (wdDir || wdSpd ? groundSpeed(t, brgTrue, wdDir, wdSpd) : t);
+                const clbGs  = gsOf(clbTas);
+                const desGs  = gsOf(desTas);
+                const tr = decomposeTransition(profile, {
+                    distNm,
+                    fromAltFt:   startAltFt,
+                    toAltFt:     transToAltFt,
+                    wholeLeg:    finalApproach || landing,
+                    cruiseGsKt:  gs,
+                    climbGsKt:   clbGs,
+                    descentGsKt: desGs,
+                    powerFrac:   pctPower,
+                });
+                decomp = tr;
+                const change = tr.phases.climb || tr.phases.descent;
+                const isClb  = !!tr.phases.climb;
+                const fpPh   = isClb ? fp?.climb : fp?.descent;
+                legSegs.push({ phase: isClb ? 'CLB' : 'DES', altFrom: change.altFrom, altTo: change.altTo,
+                    dist: parseFloat(change.distNm.toFixed(1)),
+                    tas: Math.round(isClb ? clbTas : desTas), gs: Math.round(isClb ? clbGs : desGs),
+                    ete_min: change.timeHrs * 60,
+                    gph: parseFloat((change.fuelGal / change.timeHrs).toFixed(1)),
+                    rpm: fpPh?.rpm, mp: fpPh?.mp, percent_power: fpPh?.percent_power });
+                const crz = tr.phases.cruise;
+                if (crz && crz.timeHrs > 0) {
+                    legSegs.push({ phase: 'CRZ', altFrom: crz.altFrom, altTo: crz.altTo,
+                        dist: parseFloat(crz.distNm.toFixed(1)),
+                        tas: Math.round(tas), gs: Math.round(gs),
+                        ete_min: crz.timeHrs * 60,
+                        gph: parseFloat((crz.fuelGal / crz.timeHrs).toFixed(1)),
+                        rpm: fp?.cruise?.rpm, mp: fp?.cruise?.mp,
+                        percent_power: fp?.cruise?.percent_power ?? Math.round(pctPower * 100) });
+                }
+            } else {
+                // Level, or the climb out of / descent into an airport.
+                const dl = decomposeLeg(profile, {
+                    distNm,
+                    altFt: legAltFt,
+                    departingFromGround,
+                    endingAtGround,
+                    gsKt: gs,
+                    tasKt: tas,
+                    powerFrac: pctPower,
+                    destElevFt: fieldElevFt,
+                });
+                decomp = dl;
+                // decomposeLeg's descent ends here (it never descends below the leg's altitude).
+                const destElevFt = Math.min(fieldElevFt, legAltFt);
+                if (dl.phases.climb.timeHrs > 0) {
+                    const clbTas = fp?.climb?.ias_kt
+                        ? iasToTas(fp.climb.ias_kt, legAltFt / 2, oatC)
+                        : tas * 0.87;
+                    const clbGs = wdDir || wdSpd ? groundSpeed(clbTas, brgTrue, wdDir, wdSpd) : clbTas;
+                    const clbGph = dl.phases.climb.timeHrs > 0
+                        ? dl.phases.climb.fuelGal / dl.phases.climb.timeHrs : 0;
+                    legSegs.push({ phase: 'CLB', altFrom: 0, altTo: legAltFt,
+                        dist: parseFloat(dl.phases.climb.distNm.toFixed(1)),
+                        tas: Math.round(clbTas), gs: Math.round(clbGs),
+                        ete_min: dl.phases.climb.timeHrs * 60,
+                        gph: parseFloat(clbGph.toFixed(1)),
+                        rpm: fp?.climb?.rpm, mp: fp?.climb?.mp,
+                        percent_power: fp?.climb?.percent_power });
+                }
+                if (dl.phases.cruise.timeHrs > 0) {
+                    const crzGph = dl.phases.cruise.fuelGal / dl.phases.cruise.timeHrs;
+                    legSegs.push({ phase: 'CRZ', altFrom: legAltFt, altTo: legAltFt,
+                        dist: parseFloat(dl.phases.cruise.distNm.toFixed(1)),
+                        tas: Math.round(tas), gs: Math.round(gs),
+                        ete_min: dl.phases.cruise.timeHrs * 60,
+                        gph: parseFloat(crzGph.toFixed(1)),
+                        rpm: fp?.cruise?.rpm, mp: fp?.cruise?.mp,
+                        percent_power: fp?.cruise?.percent_power ?? Math.round(pctPower * 100) });
+                }
+                if (dl.phases.descent.timeHrs > 0) {
+                    const desTas = fp?.descent?.ias_kt
+                        ? iasToTas(fp.descent.ias_kt, (legAltFt + destElevFt) / 2, oatC)
+                        : tas * 0.95;
+                    const desGs = wdDir || wdSpd ? groundSpeed(desTas, brgTrue, wdDir, wdSpd) : desTas;
+                    const desGph = dl.phases.descent.fuelGal / dl.phases.descent.timeHrs;
+                    legSegs.push({ phase: 'DES', altFrom: legAltFt, altTo: destElevFt,
+                        dist: parseFloat(dl.phases.descent.distNm.toFixed(1)),
+                        tas: Math.round(desTas), gs: Math.round(desGs),
+                        ete_min: dl.phases.descent.timeHrs * 60,
+                        gph: parseFloat(desGph.toFixed(1)),
+                        rpm: fp?.descent?.rpm, mp: fp?.descent?.mp,
+                        percent_power: fp?.descent?.percent_power });
+                }
             }
-            if (decomp.phases.cruise.timeHrs > 0) {
-                const crzGph = decomp.phases.cruise.fuelGal / decomp.phases.cruise.timeHrs;
-                legSegs.push({ phase: 'CRZ', altFrom: legAltFt, altTo: legAltFt,
-                    dist: parseFloat(decomp.phases.cruise.distNm.toFixed(1)),
-                    tas: Math.round(tas), gs: Math.round(gs),
-                    ete_min: decomp.phases.cruise.timeHrs * 60,
-                    gph: parseFloat(crzGph.toFixed(1)),
-                    rpm: fp?.cruise?.rpm, mp: fp?.cruise?.mp,
-                    percent_power: fp?.cruise?.percent_power ?? Math.round(pctPower * 100) });
-            }
-            if (decomp.phases.descent.timeHrs > 0) {
-                const desTas = fp?.descent?.ias_kt
-                    ? iasToTas(fp.descent.ias_kt, legAltFt / 2, oatC)
-                    : tas * 0.95;
-                const desGs = wdDir || wdSpd ? groundSpeed(desTas, brgTrue, wdDir, wdSpd) : desTas;
-                const desGph = decomp.phases.descent.fuelGal / decomp.phases.descent.timeHrs;
-                legSegs.push({ phase: 'DES', altFrom: legAltFt, altTo: 0,
-                    dist: parseFloat(decomp.phases.descent.distNm.toFixed(1)),
-                    tas: Math.round(desTas), gs: Math.round(desGs),
-                    ete_min: decomp.phases.descent.timeHrs * 60,
-                    gph: parseFloat(desGph.toFixed(1)),
-                    rpm: fp?.descent?.rpm, mp: fp?.descent?.mp,
-                    percent_power: fp?.descent?.percent_power });
-            }
+
+            fuelRem -= decomp.totalFuelGal;
+            etaMs   += decomp.totalTimeHrs * 3_600_000;
 
             legs.push({
                 from: a.id,
