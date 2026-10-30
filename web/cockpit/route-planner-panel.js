@@ -869,6 +869,9 @@ class RoutePlannerPanel {
                            ias_kt:   perf?.descent_speed_kt ?? 170,
                            rpm: perf?.descent_rpm, mp: perf?.descent_mp,
                            percent_power: perf?.descent_pwr_pct },
+                // Instrument approach speed: approach legs are timed at it
+                // (Configuration -> Aircraft; 90 or 120 KIAS for this pilot).
+                approach: { ias_kt: perf?.instrument_approach_ias_kt ?? 90 },
             },
         };
     }

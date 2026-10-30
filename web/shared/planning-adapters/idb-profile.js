@@ -79,6 +79,7 @@ const RV9A_DEFAULT = {
         // descent burn by ~2.9 gph and therefore over-stated fuel remaining.
         descent: { gph: 6.9, ias_kt: 170, rate_fpm: 700, percent_power: 50,
                    mixture: 'LOP', rpm: 2400, mp: 14 },
+        approach: { ias_kt: 90 },   // instrument approach speed (see route-planner.js)
     },
 };
 

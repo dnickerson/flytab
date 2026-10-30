@@ -326,6 +326,10 @@ class ConfigEditor {
             'tail': { type: 'text', label: 'Tail Number' },
             'type': { type: 'text', label: 'Aircraft Type' },
             'cruise_speed_kt': { type: 'number', label: 'Cruise TAS (kt)', min: 50, max: 300 },
+            // Route planner: approach legs (approach fix -> approach fix, and the
+            // runway fix -> airport) are timed at this speed. Not approach_speed_kt,
+            // the landing speed, which app.js syncs from the flywhere profile.
+            'instrument_approach_ias_kt': { type: 'number', label: 'Instrument Approach Speed (KIAS)', min: 60, max: 160 },
             'fuel_capacity_gal': { type: 'number', label: 'Fuel Capacity (gal)', min: 10, max: 200, step: 0.5 },
             // climb_gph and descent_gph drive route-table and planning-library fuel
             // projections but were previously absent from this editor. SAVE CONFIGURATION

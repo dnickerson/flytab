@@ -31,6 +31,23 @@ const AIRWAY_RE = /^[VTJQ]\d+[A-Z]?$/;
 // A runway-threshold fix from a loaded approach (RW24, RW06L): the end of the final approach.
 const RWY_FIX_RE = /^RW\d/i;
 
+/** An approach fix: proc 'APPROACH' (insertApproach), or true from plans saved before the kind was recorded. STAR / SID fixes are not. */
+const isApproachFix = (w) => w?.proc === 'APPROACH' || w?.proc === true;
+
+/**
+ * The profile flown on approach legs: every phase at the instrument approach
+ * speed (fuelPhases.approach.ias_kt), burns unchanged. Null when the profile has none.
+ * @param {any} profile
+ */
+function approachProfileOf(profile) {
+    const fp = profile?.fuelPhases;
+    const ias = fp?.approach?.ias_kt;
+    if (!fp || !Number.isFinite(ias) || ias <= 0) return null;
+    const at = (ph) => (ph ? { ...ph, ias_kt: ias } : ph);
+    return { ...profile, cruise_ias: ias,
+             fuelPhases: { ...fp, climb: at(fp.climb), cruise: at(fp.cruise), descent: at(fp.descent) } };
+}
+
 /**
  * Index of the destination in plan.waypoints — not necessarily the last, since
  * a loaded approach's missed-approach fixes follow it: the waypoint flagged
@@ -116,6 +133,9 @@ const RV9A_FALLBACK = {
         // descent burn by ~2.9 gph and therefore over-stated fuel remaining.
         descent: { gph: 6.9, ias_kt: 170, rate_fpm: 700, percent_power: 50,
                    mixture: 'LOP', rpm: 2400, mp: 14 },
+        // Instrument approach speed: approach legs are timed at it (aircraft
+        // performance instrument_approach_ias_kt, default 90).
+        approach: { ias_kt: 90 },
     },
 };
 
@@ -427,6 +447,7 @@ export class RoutePlanner {
         let lastAltFt = globalCruiseAltFt;
         // Altitude the previous leg ended at: each leg starts there (#190).
         let prevEndAltFt = 0;
+        const approachProfile = approachProfileOf(profile);
 
         for (let i = 0; i < wps.length - 1; i++) {
             const a = wps[i];
@@ -473,6 +494,14 @@ export class RoutePlanner {
             const legAltFt = (endingAtGround && !departingFromGround && !pilotAptAlt) ? startAltFt : targetAltFt;
             prevEndAltFt = endingAtGround ? fieldElevFt : targetAltFt;
 
+            // Approach leg (Dana, 2026-10-30: "approaches are timed and flown at 90 KIAS
+            // or 120 KIAS"): from an approach fix to an approach fix, or the landing leg
+            // (runway fix -> airport). The leg into the first approach fix is en route.
+            // Every phase on it at the instrument approach speed; burns unchanged.
+            const approachLeg = !!approachProfile && isApproachFix(a) && (isApproachFix(b)
+                || (RWY_FIX_RE.test(a.id ?? '') && (endingAtGround || b.type === 'APT')));
+            const legProfile = approachLeg ? approachProfile : profile;
+
             const distNm = haversine(a.lat, a.lon, b.lat, b.lon);
             const brgTrue = bearing(a.lat, a.lon, b.lat, b.lon);
 
@@ -491,17 +520,21 @@ export class RoutePlanner {
             }
 
             // TAS: use ISA model if cruise_ias available, else empirical tasAtAltitude
-            const tas = profile.cruise_ias
-                ? iasToTas(profile.cruise_ias, legAltFt, oatC)
-                : tasAtAltitude(profile, legAltFt);
-
+            const tasFor = (pr) => (pr.cruise_ias
+                ? iasToTas(pr.cruise_ias, legAltFt, oatC)
+                : tasAtAltitude(pr, legAltFt));
             // GS: wind-corrected or flat TAS
-            const gs = (windDir !== null && windSpd !== null)
-                ? groundSpeed(tas, brgTrue, windDir, windSpd)
-                : tas;
+            const gsFor = (t) => ((windDir !== null && windSpd !== null)
+                ? groundSpeed(t, brgTrue, windDir, windSpd)
+                : t);
+            // En route (the pre-#190 model the fuel floor compares with), and as flown.
+            const tasEnRoute = tasFor(profile);
+            const gsEnRoute  = gsFor(tasEnRoute);
+            const tas = approachLeg ? tasFor(legProfile) : tasEnRoute;
+            const gs  = approachLeg ? gsFor(tas) : gsEnRoute;
 
             // Build CLB/CRZ/DES segments so route-table can display per-phase rows
-            const fp = profile.fuelPhases;
+            const fp = legProfile.fuelPhases;
             const legSegs = [];
             const wdDir = windDir ?? 0;
             const wdSpd = windSpd ?? 0;
@@ -515,7 +548,7 @@ export class RoutePlanner {
                 const gsOf   = (t) => (wdDir || wdSpd ? groundSpeed(t, brgTrue, wdDir, wdSpd) : t);
                 const clbGs  = gsOf(clbTas);
                 const desGs  = gsOf(desTas);
-                const tr = decomposeTransition(profile, {
+                const tr = decomposeTransition(legProfile, {
                     distNm,
                     fromAltFt:   startAltFt,
                     toAltFt:     transToAltFt,
@@ -540,7 +573,7 @@ export class RoutePlanner {
                 const levelAtStart = decomposeLeg(profile, { distNm, altFt: startAltFt,
                     gsKt: startGs, tasKt: startTas, powerFrac: pctPower }).totalFuelGal;
                 const preModel = decomposeLeg(profile, { distNm, altFt: legAltFt,
-                    endingAtGround: landing, gsKt: gs, tasKt: tas, powerFrac: pctPower }).totalFuelGal;
+                    endingAtGround: landing, gsKt: gsEnRoute, tasKt: tasEnRoute, powerFrac: pctPower }).totalFuelGal;
                 const floorGal = Math.max(levelAtStart, preModel);
                 const floored = tr.totalFuelGal < floorGal;
                 if (floored) {
@@ -569,7 +602,7 @@ export class RoutePlanner {
                 }
             } else {
                 // Level, or the climb out of / descent into an airport.
-                const dl = decomposeLeg(profile, {
+                const dl = decomposeLeg(legProfile, {
                     distNm,
                     altFt: legAltFt,
                     departingFromGround,

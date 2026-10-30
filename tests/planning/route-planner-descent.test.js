@@ -23,6 +23,7 @@ import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { RoutePlanner } from '../../web/shared/planning/planner/route-planner.js';
+import { iasToTas } from '../../web/shared/planning/math/route-math.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -252,3 +253,84 @@ describe('#190 approach fuel is never below the level (pre-#190) plan', () => {
         }
     });
 });
+
+// ── Instrument approach speed (Dana, 2026-10-30) ───────────────────────────────
+// "Approaches are timed and flown at 90 KIAS or 120 KIAS. This should be a
+// configurable setting." A leg from an approach fix (proc 'APPROACH', or true
+// from older plans) to an approach fix, or the landing leg (RW## -> airport),
+// is flown at fuelPhases.approach.ias_kt (aircraft performance
+// instrument_approach_ias_kt, default 90). The leg into the IAF is en route.
+describe('#190 approach legs at the instrument approach speed', () => {
+    const P = (w) => ({ ...w, proc: 'APPROACH' });
+    const procPlan = (mark = P) => ({ departure: 'KCLT', destination: 'KLKR',
+        waypoints: [KCLT, mark(SAPSE), mark(WITUR), mark(RW24), KLKR] });
+    const plain = planner.recomputeLegs(approachPlan(), null, { departureTime });
+    const at90  = planner.recomputeLegs(procPlan(), null, { departureTime });
+
+    it('WITUR -> RW24 at 90 KIAS: DES TAS from 90 KIAS at the mid altitude, timed over the leg at that GS', () => {
+        const leg = legOf(at90, 'WITUR', 'RW24');
+        const tas = iasToTas(90, (2100 + 528) / 2);
+        expect(shape(leg)).toEqual(['DES 2100->528']);
+        expect(leg.segments[0].tas).toBe(Math.round(tas));
+        // 4.86 nm at ~92 kt (3.2 min) is longer than 1572 ft at 700 fpm (2.25 min)
+        expect(leg.timeHrs * 60).toBeCloseTo(leg.distNm / tas * 60, 6);
+        expect(leg.timeHrs).toBeGreaterThan(legOf(plain, 'WITUR', 'RW24').timeHrs);
+    });
+
+    it('level and step-down parts of an approach leg use the approach speed too', () => {
+        const leg = legOf(at90, 'SAPSE', 'WITUR');
+        expect(shape(leg)).toEqual(['DES 2500->2100', 'CRZ 2100->2100']);
+        expect(leg.segments[0].tas).toBe(Math.round(iasToTas(90, 2300)));
+        expect(leg.segments[1].tas).toBe(Math.round(iasToTas(90, 2100)));
+        expect(leg.tasKt).toBe(Math.round(iasToTas(90, 2100)));
+        expect(segMin(leg)).toBeCloseTo(leg.timeHrs * 60, 9);
+        expect(segFuel(leg)).toBeCloseTo(leg.fuelGal, 9);
+    });
+
+    it('the landing leg (RW24 -> KLKR) is at the approach speed', () => {
+        const leg = legOf(at90, 'RW24', 'KLKR');
+        expect(leg.segments[0].tas).toBe(Math.round(iasToTas(90, (528 + 486) / 2)));
+    });
+
+    it('the leg into the IAF stays at en-route speeds', () => {
+        expect(legOf(at90, 'KCLT', 'SAPSE')).toEqual(legOf(plain, 'KCLT', 'SAPSE'));
+    });
+
+    it('120 KIAS: shorter than 90', () => {
+        const fast = planner.recomputeLegs(procPlan(), RV9A_COPY(120), { departureTime });
+        const slow = planner.recomputeLegs(procPlan(), RV9A_COPY(90), { departureTime });
+        expect(slow.legs).toEqual(at90.legs);   // the fallback profile is 90 KIAS
+        expect(legOf(fast, 'WITUR', 'RW24').timeHrs).toBeLessThan(legOf(at90, 'WITUR', 'RW24').timeHrs);
+        expect(fast.summary.totalEteHrs).toBeLessThan(at90.summary.totalEteHrs);
+    });
+
+    it('STAR fixes (proc STAR) are not approach legs: unchanged', () => {
+        const star = planner.recomputeLegs(procPlan((w) => ({ ...w, proc: 'STAR' })), null, { departureTime });
+        expect(star.legs).toEqual(plain.legs);
+    });
+
+    it('proc: true (plans saved before the kind was recorded) counts as an approach', () => {
+        const old = planner.recomputeLegs(procPlan((w) => ({ ...w, proc: true })), null, { departureTime });
+        expect(old.legs).toEqual(at90.legs);
+    });
+
+    it('fuel stays at least the pre-#190 figure (2.864 gal); more time at 90 KIAS', () => {
+        expect(at90.summary.totalFuelGal).toBeGreaterThanOrEqual(before.approach.summary.totalFuelGal - 1e-12);
+        expect(at90.summary.totalEteHrs).toBeGreaterThan(plain.summary.totalEteHrs);
+    });
+});
+
+/** The RV9A fallback's figures (route-planner.js) with another approach speed. */
+function RV9A_COPY(apprIas) {
+    return {
+        id: 'rv9a-test', model: 'RV-9A', cruise_ktas: 153, cruise_ias: 140, fuel_burn_gph: 8.4,
+        fuel_capacity_gal: 36, reserve_gal: 10, climb_rate_fpm: 1500, service_ceiling_ft: 17500,
+        taxi_burn_gal: 0.33, max_hp: 180, alt_power_loss_pct_per_kft: 3.0,
+        fuelPhases: {
+            climb:   { gph: 15,  ias_kt: 120, rate_fpm: 1500, percent_power: 100, rpm: 2700, mp: 28 },
+            cruise:  { gph: 8.4, ias_kt: 140, percent_power: 65, rpm: 2400, mp: 22 },
+            descent: { gph: 6.9, ias_kt: 170, rate_fpm: 700, percent_power: 50, rpm: 2400, mp: 14 },
+            approach: { ias_kt: apprIas },
+        },
+    };
+}
