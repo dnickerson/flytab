@@ -12120,6 +12120,37 @@ body.route-editing-mode .route-table-sheet {
 }
 .checklist-vpn-open[hidden] { display: none; }
 
+/* The mark toasts (z-index 700) would sit behind the open checklist (800). */
+body:has(.checklist-page.visible) > .toast { z-index: 900; }
+
+/* Run-up / magneto mark buttons (cockpit/checklist.js, FlightRecorder.markEvent).
+   A row of their own under the item's main line, so a tap can't land on the
+   row's check-off. The last mag marked in the recording is filled. */
+.checklist-item-capture {
+    display: flex;
+    gap: 12px;
+    padding: 0 16px 12px;
+}
+.checklist-capture-btn {
+    flex: 1 1 0;
+    min-height: var(--touch-min, 56px);
+    padding: 0 16px;
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    border: 2px solid var(--border-strong);
+    border-radius: 8px;
+    font-family: var(--font-ui);
+    font-size: var(--text-md);
+    font-weight: 800;
+    cursor: pointer;
+    touch-action: manipulation;
+}
+.checklist-capture-btn.active {
+    background: var(--accent);
+    color: var(--bg-primary);
+    border-color: var(--accent);
+}
+
 /* ── Route Planner (preview) — route-planner-v2.js ───────────────────────────
    Spec: docs/superpowers/specs/2026-10-15-route-planner-redesign-design.md.
    Same grid slot as #routePlannerPanel; shown instead of it with .route-preview.

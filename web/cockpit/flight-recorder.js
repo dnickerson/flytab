@@ -17,7 +17,12 @@
 class FlightRecorder {
     static LOCAL_BASE = 'http://localhost:9090';
     static FLIGHTS_PATH = 'flights';
-    static CSV_HEADER = 'Zulu_Time,MP,Oil Temp,Oil Pressure,Fuel Pressure,Volts,Amps,RPM,Fuel Flow,Gallons Remaining,Fuel Level 1,Fuel Level 2,Carb Temp,GP 2,GP 3,Thermalcouple,EGT 1,EGT 2,EGT 3,EGT 4,CHT 1,CHT 2,CHT 3,CHT 4,date,time_z,longitude,latitude,altitude_ft,speed_kts,bank,pitch,acc_vert,course,EGT Spread,CHT Spread,Max EGT,Final_Percent_Power,Operating_Condition,Percent,SFC,ml_phase,ml_score,ml_anomaly,ml_latency_ms';
+    static CSV_HEADER = 'Zulu_Time,MP,Oil Temp,Oil Pressure,Fuel Pressure,Volts,Amps,RPM,Fuel Flow,Gallons Remaining,Fuel Level 1,Fuel Level 2,Carb Temp,GP 2,GP 3,Thermalcouple,EGT 1,EGT 2,EGT 3,EGT 4,CHT 1,CHT 2,CHT 3,CHT 4,date,time_z,longitude,latitude,altitude_ft,speed_kts,bank,pitch,acc_vert,course,EGT Spread,CHT Spread,Max EGT,Final_Percent_Power,Operating_Condition,Percent,SFC,ml_phase,ml_score,ml_anomaly,ml_latency_ms,event';
+
+    // Marks the checklist can put in the recording (markEvent), written to the
+    // `event` column of the next row. Fixed list: they go into a CSV unquoted.
+    static EVENT_CODES = ['runup_start', 'runup_end', 'mag_L', 'mag_R', 'mag_BOTH'];
+    static MAG_CODES = ['mag_L', 'mag_R', 'mag_BOTH'];
 
     // Auto-start/stop thresholds
     static RPM_START_THRESHOLD = 500;
@@ -92,6 +97,15 @@ class FlightRecorder {
         // may start or recover a recording meanwhile: stop() still works on this
         // recording's _fileName, buffers and GPS points.
         this._stopping = null;
+
+        // Marks (markEvent) waiting for the next row, and the last mag marked.
+        this._pendingEvents = [];
+        this._currentMag = null;
+        // Does THIS recording's file have the `event` column? Always for a new one;
+        // false for one resumed from before marks existed (its header is the old one,
+        // and a row must never have more fields than its file's header).
+        // undefined (never set up) counts as true: see _hasEventColumn().
+        this._eventColumn = true;
 
         // Status callback
         this.onStatusChange = null;
@@ -179,6 +193,9 @@ class FlightRecorder {
         this._lastGps = null;
         this._mlCarry = null;
         this._rpmZeroCount = 0;             // a manual start with the engine off counts from now
+        this._eventColumn = true;           // CSV_HEADER below has it
+        this._pendingEvents = [];
+        this._currentMag = null;
         this._csvBuffer = [FlightRecorder.CSV_HEADER];
 
         // Generate filename: YYYYMMDD_HHMMZ.csv
@@ -255,6 +272,11 @@ class FlightRecorder {
             this._lastGps = m.lastGps;
             this._rowCount = m.rowCount;
             this._mlCarry = m.ml;
+            // The file has the header it was started with: no event column unless the
+            // marker says it was written with one.
+            this._eventColumn = m.eventColumn;
+            this._pendingEvents = [];
+            this._currentMag = null;
             this._csvBuffer = [];           // the file already has its header
             this._trafficBuffer = [];
             this._recording = true;
@@ -299,6 +321,7 @@ class FlightRecorder {
             rowCount: Number.isFinite(m.rowCount) ? m.rowCount : 0,
             savedAt: m.savedAt,
             shutdown: m.shutdown === true,
+            eventColumn: m.eventColumn === true,
             ml: FlightRecorder.parseMlCounts(m.ml),
         };
     }
@@ -360,6 +383,9 @@ class FlightRecorder {
                 lastGps: this._lastGps,
                 rowCount: this._rowCount,
                 savedAt: Date.now(),
+                // This file's header has the `event` column (markEvent). A marker
+                // without it is a recording started by an older FlyTab.
+                eventColumn: this._hasEventColumn(),
                 // Fresh evidence the flight is over (engine stopped / aircraft
                 // stopped): after a restart this recording is closed out, not resumed.
                 shutdown: this._shutdownEvidenceNow(),
@@ -379,6 +405,8 @@ class FlightRecorder {
     async stop(opts = {}) {
         if (!this._recording) return;
         this._recording = false;
+        this._pendingEvents = [];           // marks are for this recording only
+        this._currentMag = null;
         let done;
         this._stopping = new Promise((r) => { done = r; });
         try {
@@ -448,6 +476,39 @@ class FlightRecorder {
         }));
         if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Stopped: ${finalName} (${this._rowCount} rows, flushOk=${flushOk})`);
         return finalName;
+    }
+
+    /**
+     * Mark a moment in the recording (checklist run-up / magneto buttons). The
+     * code goes into the `event` column of the NEXT row written -- exactly one
+     * row, though the engine data repeats every 2 s; taps before that row are
+     * joined with '|' in tap order.
+     * Returns { saved, at } (at = when it was tapped, ISO). When saved is false,
+     * `reason` says why: 'bad_code' | 'not_recording' | 'old_recording' (a
+     * recording resumed from before marks existed has no event column; adding
+     * fields to its rows would break the file).
+     */
+    markEvent(code) {
+        const at = new Date().toISOString();
+        if (typeof code !== 'string' || !FlightRecorder.EVENT_CODES.includes(code)) {
+            return { saved: false, at, reason: 'bad_code' };
+        }
+        if (!this._recording) return { saved: false, at, reason: 'not_recording' };
+        if (!this._hasEventColumn()) return { saved: false, at, reason: 'old_recording' };
+        this._pendingEvents.push(code);
+        if (FlightRecorder.MAG_CODES.includes(code)) this._currentMag = code;
+        if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Mark ${code} at ${at.slice(11, 19)}Z`);
+        return { saved: true, at };
+    }
+
+    /** The last magneto mark of this recording ('mag_L' | 'mag_R' | 'mag_BOTH'), or null. */
+    currentMag() {
+        return this._recording ? this._currentMag : null;
+    }
+
+    /** False only for a recording resumed from a file that has no `event` column. */
+    _hasEventColumn() {
+        return this._eventColumn !== false;
     }
 
     /** Build one CSV row from current engine + GPS state */
@@ -549,9 +610,15 @@ class FlightRecorder {
             egtSpread, chtSpread, maxEgt,
             pctPower, opCond, pct, sfc,
             mlPhase, mlScore, mlAnomaly, mlLatency
-        ].join(',');
+        ];
+        // Same field count as this file's header, always. The marks are known codes
+        // (no commas), so they go in unquoted like every other field.
+        if (this._hasEventColumn()) {
+            row.push(this._pendingEvents?.length ? this._pendingEvents.join('|') : '');
+            this._pendingEvents = [];
+        }
 
-        this._csvBuffer.push(row);
+        this._csvBuffer.push(row.join(','));
         this._rowCount++;
     }
 

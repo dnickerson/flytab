@@ -36,6 +36,7 @@ class Checklist {
         this._el.classList.add('visible');
         this._visible = true;
         this._setMapControlsVisible(false);
+        this._refreshCapture();
         this._refreshVpn();
         if (!this._vpnTimer) this._vpnTimer = setInterval(() => this._refreshVpn(), Checklist.VPN_POLL_MS);
     }
@@ -281,6 +282,7 @@ class Checklist {
                     <span class="checklist-item-check">${checked ? '\u2713' : '\u25CB'}</span>
                 </div>
                 ${hasNote ? `<div class="checklist-item-note"${noteOpen ? '' : ' style="display:none;"'}>${this._esc(item.note).replace(/\n/g, '<br>')}</div>` : ''}
+                ${this._captureRow(item.capture)}
                 <div class="checklist-item-action-status" style="display:none;"></div>
             </div>`;
         });
@@ -304,6 +306,10 @@ class Checklist {
         // Wire item taps
         this._bodyEl.querySelectorAll('.checklist-item').forEach(el => {
             const idx = parseInt(el.dataset.idx);
+            // Capture buttons sit beside the row's main line, not in it: a tap on one
+            // never reaches the handler that checks the item or the note icon.
+            el.querySelectorAll('.checklist-capture-btn').forEach(b =>
+                wireTap(b, () => this._capture(b.dataset.capture)));
             this._wire(el.querySelector('.checklist-item-main'), () => {
                 this._toggleItem(idx);
             });
@@ -331,6 +337,58 @@ class Checklist {
                 });
             }
         });
+    }
+
+    // ========== Run-up / magneto marks (FlightRecorder.markEvent) ==========
+
+    /** Buttons for an item's `capture` property ('runup_start' | 'runup_end' | 'mags'); '' for none. */
+    _captureRow(capture) {
+        const btns = Checklist.CAPTURE_BUTTONS[capture];
+        if (!btns) return '';
+        const cur = this._currentMag();
+        const html = btns.map(([code, label]) => {
+            const on = capture === 'mags' && code === cur;
+            return `<button type="button" class="checklist-capture-btn${on ? ' active' : ''}" data-capture="${code}"${capture === 'mags' ? ` aria-pressed="${on}"` : ''}>${label}</button>`;
+        }).join('');
+        return `<div class="checklist-item-capture checklist-capture--${capture}">${html}</div>`;
+    }
+
+    /** The last mag marked in the current recording (FlightRecorder, not localStorage), or null. */
+    _currentMag() {
+        try { return window.flightRecorder?.currentMag?.() ?? null; } catch { return null; }
+    }
+
+    /** Mark `code` in the recording, say so, and move the mag highlight. */
+    _capture(code) {
+        let r = null;
+        try { r = window.flightRecorder?.markEvent?.(code) ?? null; } catch { r = null; }
+        if (r?.saved) {
+            const t = String(r.at || '').slice(11, 19);
+            this._toast(`${Checklist.CAPTURE_LABELS[code]} marked ${t}Z`);
+        } else if (r?.reason === 'old_recording') {
+            this._toast('This recording started before marks existed — mark not saved');
+        } else {
+            this._toast('Not recording — mark not saved');
+        }
+        this._refreshCapture();
+    }
+
+    /** Highlight the button for the recorder's current mag, in place (no re-render). */
+    _refreshCapture() {
+        const cur = this._currentMag();
+        this._bodyEl.querySelectorAll('.checklist-capture--mags .checklist-capture-btn').forEach(b => {
+            const on = b.dataset.capture === cur;
+            b.classList.toggle('active', on);
+            b.setAttribute('aria-pressed', String(on));
+        });
+    }
+
+    _toast(msg) {
+        try {
+            const el = window.app?.showToast?.(msg);
+            // showToast leaves it until dismissed; a mark confirmation should not stay over the list.
+            if (el?.remove) setTimeout(() => el.remove(), Checklist.TOAST_MS);
+        } catch { /* no toast available */ }
     }
 
     // ========== Live VPN status ==========
@@ -493,6 +551,21 @@ class Checklist {
         });
     }
 }
+
+// Item `capture` property -> buttons [FlightRecorder.markEvent code, label].
+Checklist.CAPTURE_BUTTONS = {
+    runup_start: [['runup_start', 'RUN-UP START']],
+    runup_end: [['runup_end', 'RUN-UP END']],
+    mags: [['mag_L', 'LEFT'], ['mag_R', 'RIGHT'], ['mag_BOTH', 'BOTH']],
+};
+// What the toast calls each mark.
+Checklist.CAPTURE_LABELS = {
+    runup_start: 'RUN-UP START', runup_end: 'RUN-UP END',
+    mag_L: 'LEFT mag', mag_R: 'RIGHT mag', mag_BOTH: 'BOTH mag',
+};
+
+// How long a mark's confirmation stays on screen.
+Checklist.TOAST_MS = 3000;
 
 // Live VPN status refresh while the checklist is open.
 Checklist.VPN_POLL_MS = 2000;

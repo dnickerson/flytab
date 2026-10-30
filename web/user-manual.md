@@ -229,6 +229,19 @@ Three sections: **Normal**, **Abnormal**, and **Emergency**. Each section contai
 
 Android tells FlyTab *that* a VPN is connected but not *which* app owns it, so both items turn red together whenever any VPN is on — open each app and check which one is connected. Tapping **OPEN** never checks or unchecks the item; tap the item itself to check it off.
 
+**Run-up and magneto marks.** Five items carry buttons that put a mark into the flight recording, so the run-up and each magneto switch can be found in the data afterwards:
+
+- **Normal → Runup → 50% Power:** **RUN-UP START**. Tap it when you set 50% power.
+- **Normal → Runup → Magneto:** **LEFT**, **RIGHT**, **BOTH**. Tap the one you have just selected, each time you switch.
+- **Normal → Runup → Engine Idle:** **RUN-UP END**.
+- **Abnormal → Engine → In Flight Mag Check → Mags:** the same **LEFT / RIGHT / BOTH** buttons.
+
+The most recent mag you marked in this recording is filled blue, so you can see where you left it. A toast confirms each tap with the time in Zulu ("LEFT mag marked 20:57:14Z"). Tapping a mark button never checks the item off; tap the item's text for that.
+
+The marks are saved in the flight's CSV file in a last column called `event` (`runup_start`, `runup_end`, `mag_L`, `mag_R`, `mag_BOTH`) on the next row recorded after your tap; several taps within the same second share one row, joined with `|`.
+
+Marks only go into a recording that is running. If FlyTab is not recording you get "Not recording — mark not saved" and nothing is stored (recording starts by itself once the engine has run above 500 RPM for 10 seconds, or you can start it by hand). A recording that was already running when FlyTab was updated cannot take marks: the toast says "This recording started before marks existed — mark not saved"; the next recording can.
+
 Swipe left/right or tap the section tabs to move between Normal, Abnormal, and Emergency.
 
 ---
