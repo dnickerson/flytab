@@ -68,6 +68,7 @@ const GlideModel = (() => {
     const fromPolar = (brgTrue, nm) => ({ x: nm * Math.sin(rad(brgTrue)), y: nm * Math.cos(rad(brgTrue)) });
     const toPolar = (dx, dy) => ({ brg: norm(deg(Math.atan2(dx, dy))), nm: Math.hypot(dx, dy) });
     const isPt = (p) => !!p && Number.isFinite(p.x) && Number.isFinite(p.y);
+    const rwyIdOf = (e) => (e.runwayId != null && e.runwayId !== '' ? String(e.runwayId) : null);
 
     /** Settings with any missing / non-finite key taken from DEFAULTS, and the derived values. */
     function resolve(settings) {
@@ -155,10 +156,12 @@ const GlideModel = (() => {
      *           ac: { pos, altMsl, gs, trkTrue, vs }, glideWind: {from,kt}|null,
      *           runwayWind: {kind:'metar',from,kt,gustKt}|{kind:'calm'}|{kind:'vrb'}|{kind:'none'},
      *           preferDirect: bool }
-     * -> { kind: 'final'|'direct'|'ref', endId, pt, needMsl, spare, hdgTrue, legNm, tMin, target, projected,
+     * -> { kind: 'final'|'direct'|'ref', endId, runwayId, pt, needMsl, spare, hdgTrue, legNm, tMin, target, projected,
      *      measured, targetNow, turnNow, headRwy, tailwindKt }
      *
      * endId: the chosen end's id, 'both' for plan B to the runway, null for plan B to the reference point.
+     * runwayId: the runway of the chosen end (final) / of the nearest segment (plan B), e.g. '06/24';
+     * null for the reference point or an end without runwayId.
      * hdgTrue: wind-corrected true heading of the straight leg after the turn. target / targetNow: fpm to
      * lose, >= 0, from the wind-triangle / the current ground speed. projected: glide sink at the current
      * altitude. measured: current descent rate (positive = descending, null when vs is unknown).
@@ -193,13 +196,13 @@ const GlideModel = (() => {
             const tri = triangleR(R, leg.brg, tasNow, glideWind);
             const tMin = leg.nm * 60 / tri.gs;
             const toLose = alt - needMsl - it.lost;
-            return { kind: 'final', endId: e.id, pt, leg, headRwy, turn, needMsl, tri, tMin, toLose,
+            return { kind: 'final', endId: e.id, runwayId: rwyIdOf(e), pt, leg, headRwy, turn, needMsl, tri, tMin, toLose,
                      spare: toLose - sinkNow * tMin };
         };
         const cands = ends.map(evalEnd);
 
         // Plan B: the nearest point of the nearest candidate runway segment, else the airport reference point.
-        let kindB = 'ref', ptB = isPt(apt.ref) ? apt.ref : { x: 0, y: 0 }, endIdB = null;
+        let kindB = 'ref', ptB = isPt(apt.ref) ? apt.ref : { x: 0, y: 0 }, endIdB = null, rwyIdB = null;
         let bestD = Infinity;
         for (const e of ends) {
             if (!e.rwy || !isPt(e.rwy.a) || !isPt(e.rwy.b)) continue;
@@ -208,13 +211,13 @@ const GlideModel = (() => {
                 ? Math.max(0, Math.min(1, ((pos.x - e.rwy.a.x) * ux + (pos.y - e.rwy.a.y) * uy) / len2)) : 0;
             const near = { x: e.rwy.a.x + k * ux, y: e.rwy.a.y + k * uy };
             const d = Math.hypot(pos.x - near.x, pos.y - near.y);
-            if (d < bestD) { bestD = d; ptB = near; kindB = 'direct'; endIdB = 'both'; }
+            if (d < bestD) { bestD = d; ptB = near; kindB = 'direct'; endIdB = 'both'; rwyIdB = rwyIdOf(e); }
         }
         const itD = initialTurnR(R, pos, trk, ptB, alt, glideWind);
         const legD = toPolar(ptB.x - itD.pos.x, ptB.y - itD.pos.y);
         const triD = triangleR(R, legD.brg, tasNow, glideWind);
         const tMinD = legD.nm * 60 / triD.gs, needD = elev + R.marginFt, toLoseD = alt - needD - itD.lost;
-        const direct = { kind: kindB, endId: endIdB, pt: ptB, leg: legD, headRwy: null, needMsl: needD, tri: triD,
+        const direct = { kind: kindB, endId: endIdB, runwayId: rwyIdB, pt: ptB, leg: legD, headRwy: null, needMsl: needD, tri: triD,
                          tMin: tMinD, toLose: toLoseD, spare: toLoseD - sinkNow * tMinD };
 
         const need = input.preferDirect ? R.hysteresisFt : 0;
@@ -231,6 +234,7 @@ const GlideModel = (() => {
         return {
             kind: pick.kind,
             endId: pick.endId,
+            runwayId: pick.runwayId,
             pt: pick.pt,
             needMsl: pick.needMsl,
             spare: pick.spare,

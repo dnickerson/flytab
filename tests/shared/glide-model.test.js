@@ -268,6 +268,35 @@ describe('GlideModel', () => {
             expect(Math.hypot(p.pt.x - ne.x, p.pt.y - ne.y)).toBeLessThan(0.05);
             expect(p.legNm).toBeLessThan(2);
         });
+
+        it('runwayId names the runway: the chosen end\'s for final, the nearest segment\'s for plan B, null for ref', () => {
+            // two runways: 05/23 (the golden one) and a 1 nm long 18/36 4 nm north of the field
+            const base = klkr();
+            base.ends.forEach((e) => { e.runwayId = '05/23'; });
+            const n = fromPolar(0, 4), half = 0.5;
+            const a = { x: n.x, y: n.y - half }, b = { x: n.x, y: n.y + half };
+            const mk = (id, hdg, thr) => ({ id, runwayId: '18/36', thr, hdgTrue: hdg, rwyLenFt: FT_PER_NM, mid: n, rwy: { a, b } });
+            const airport = { ...base, ends: [...base.ends, mk('36', 0, a), mk('18', 180, b)] };
+
+            const fin = GlideModel.plan(input({ ...CASES.B, airport: klkr() }), S());
+            expect(fin.kind).toBe('final');
+            expect(fin.runwayId).toBeNull();                   // ends without runwayId -> null
+            const fin2 = GlideModel.plan(input({ ...CASES.B, airport }), S());
+            expect(fin2.kind).toBe('final');
+            expect(fin2.runwayId).toBe('05/23');
+
+            // too low for any final point: 1 nm north the nearest runway is 05/23; 4.6 nm north it is 18/36
+            const d1 = GlideModel.plan(input({ pos: fromPolar(0, 1), alt: 600, trk: 180, wind: null, airport }), S());
+            expect(d1.kind).toBe('direct');
+            expect(d1.runwayId).toBe('05/23');
+            const d2 = GlideModel.plan(input({ pos: fromPolar(0, 4.6), alt: 700, trk: 180, wind: null, airport }), S());
+            expect(d2.kind).toBe('direct');
+            expect(d2.runwayId).toBe('18/36');
+
+            const ref = GlideModel.plan(input({ ...CASES.B, airport: { elevFt: ELEV, ref: { x: 0, y: 0 }, ends: [] } }), S());
+            expect(ref.kind).toBe('ref');
+            expect(ref.runwayId).toBeNull();
+        });
     });
 
     describe('aircraft over the field', () => {

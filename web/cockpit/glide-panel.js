@@ -35,6 +35,7 @@ class GlidePanel {
         this._apt = null;
         this._layer = null;
         this._lines = null;
+        this._vsSamples = [];          // { t: situation.timestamp, alt: alt_msl } for the MEASURED rate
     }
 
     start() {
@@ -44,9 +45,10 @@ class GlidePanel {
         this._apt = GlideInputs.airport(this._rec, this._S);   // geometry once per start
         this._preferDirect = false;
         this._rwy = { wind: { kind: 'none' }, label: '' };
+        this._vsSamples = [];
         this.render(Date.now());
-        this._timer = setInterval(() => this._tick(), GlidePanel.UPDATE_MS);
-        if (this._usable()) {
+        if (this._usable()) {                                   // an airport that can never have a block does not tick
+            this._timer = setInterval(() => this._tick(), GlidePanel.UPDATE_MS);
             this._refreshWind(gen);
             this._windTimer = setInterval(() => this._refreshWind(gen), GlidePanel.WIND_REFRESH_MS);
         }
@@ -84,7 +86,11 @@ class GlidePanel {
             this._rwy = r && r.wind ? r : { wind: { kind: 'none' }, label: '' };
             this.render(Date.now());
         } catch (err) {
-            if (gen === this._gen) this._rwy = { wind: { kind: 'none' }, label: '' };
+            if (gen === this._gen) {
+                console.warn('GlidePanel: runway wind update failed', err);
+                this._rwy = { wind: { kind: 'none' }, label: '' };
+                this._hide();                                   // never leave frozen numbers on screen
+            }
         } finally {
             if (gen === this._gen) this._windBusy = false;
         }
@@ -98,7 +104,10 @@ class GlidePanel {
         const sit = (typeof window !== 'undefined' && window.app && window.app.stratuxClient)
             ? window.app.stratuxClient.situation : null;
         const ac = GlideInputs.aircraft(sit, S, ref, now);
-        if (!ac) return this._hide();
+        if (!ac) { this._vsSamples = []; return this._hide(); }
+        // MEASURED: the descent rate from GPS altitude. situation.vertical_speed is not used: Stratux never
+        // fills GPSVerticalSpeed (WebSocket 0), GDL 90 sends none, the engine-GPS bridge sends 0.
+        ac.vs = this._measuredVs(sit.timestamp, ac.altMsl);
 
         const gw = GlideInputs.glideWind(sit.lat, sit.lon, ac.altMsl, S, now);
         const plan = GlideModel.plan({
@@ -116,6 +125,28 @@ class GlidePanel {
         this._el.hidden = false;
         this._drawMap(plan, sit, view.tone);
         return plan;
+    }
+
+    /**
+     * Adds the situation (t ms, alt ft MSL) to the samples - a timestamp already sampled is not a new one,
+     * a clock going backwards starts over - keeps those within VS_WINDOW_MS of the newest, and returns the
+     * least-squares slope in ft/min (negative = descending), or null with fewer than VS_MIN_SAMPLES samples
+     * or less than VS_MIN_SPAN_MS between the first and the last.
+     */
+    _measuredVs(t, alt) {
+        const s = this._vsSamples;
+        if (!Number.isFinite(t) || !Number.isFinite(alt)) return null;
+        if (s.length && t < s[s.length - 1].t) s.length = 0;
+        if (!s.length || t !== s[s.length - 1].t) s.push({ t, alt });
+        const newest = s[s.length - 1].t;
+        while (newest - s[0].t > GlidePanel.VS_WINDOW_MS) s.shift();
+        if (s.length < GlidePanel.VS_MIN_SAMPLES || newest - s[0].t < GlidePanel.VS_MIN_SPAN_MS) return null;
+        let tm = 0, am = 0;
+        for (const p of s) { tm += p.t; am += p.alt; }
+        tm /= s.length; am /= s.length;
+        let num = 0, den = 0;
+        for (const p of s) { num += (p.t - tm) * (p.alt - am); den += (p.t - tm) * (p.t - tm); }
+        return den > 0 ? (num / den) * 60000 : null;            // ft/ms -> ft/min
     }
 
     // ---- Text -------------------------------------------------------------
@@ -170,7 +201,9 @@ class GlidePanel {
 
         let dest;
         if (plan.kind === 'final') dest = `RWY ${GlidePanel._esc(plan.endId)} final point`;
-        else if (plan.kind === 'direct') dest = `RWY ${GlidePanel._esc(this._runwayAt(plan.pt))} (nearest part)`;
+        else if (plan.kind === 'direct') {
+            dest = plan.runwayId ? `RWY ${GlidePanel._esc(plan.runwayId)} (nearest part)` : 'the runway (nearest part)';
+        }
         else dest = icao;
         const flyTxt = `Fly ${hdgTxt} · ${plan.legNm.toFixed(1)} nm to ${dest}`;
         const beAtTxt = `Be at ${fmt(Math.ceil(plan.needMsl))} ft or higher there`;
@@ -207,19 +240,6 @@ class GlidePanel {
             + `<div class="glide-wind">${wind}</div>`
             + '</div>';
         return { html, tone };
-    }
-
-    /** The runway (id "06/24") whose centreline segment is nearest to a local point (plan B's target). */
-    _runwayAt(pt) {
-        let best = null, bestD = Infinity;
-        for (const e of this._apt.ends) {
-            if (!e.rwy || !e.rwy.a || !e.rwy.b) continue;
-            const a = e.rwy.a, b = e.rwy.b, ux = b.x - a.x, uy = b.y - a.y, len2 = ux * ux + uy * uy;
-            const k = len2 > 0 ? Math.max(0, Math.min(1, ((pt.x - a.x) * ux + (pt.y - a.y) * uy) / len2)) : 0;
-            const d = Math.hypot(pt.x - (a.x + k * ux), pt.y - (a.y + k * uy));
-            if (d < bestD) { bestD = d; best = e; }
-        }
-        return best ? (best.runwayId || best.id) : '';
     }
 
     // ---- Map --------------------------------------------------------------
@@ -296,5 +316,11 @@ class GlidePanel {
 GlidePanel.UPDATE_MS = 1000;
 /** Runway (METAR) wind re-read period (ms); the reads never overlap. */
 GlidePanel.WIND_REFRESH_MS = 60000;
+/** MEASURED descent rate: least-squares slope of GPS altitude over this window (ms) ... */
+GlidePanel.VS_WINDOW_MS = 10000;
+/** ... valid only with at least this many samples ... */
+GlidePanel.VS_MIN_SAMPLES = 3;
+/** ... spanning at least this long (ms). */
+GlidePanel.VS_MIN_SPAN_MS = 5000;
 
 if (typeof window !== 'undefined') window.GlidePanel = GlidePanel;

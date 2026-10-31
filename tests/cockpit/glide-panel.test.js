@@ -100,6 +100,18 @@ const text = () => {
 const block = () => host.querySelector('.glide-block');
 const mapShapes = () => [...map.layers].flatMap((g) => g.layers);
 
+/**
+ * `n` more situations, one per GlidePanel.UPDATE_MS tick, descending at `fpm` (negative = climbing),
+ * continuing from `startDrop` ft below base.alt_msl; each is fresh when its tick runs.
+ */
+function fly(base, n, fpm, startDrop = 0) {
+    const step = fpm * GlidePanel.UPDATE_MS / 60000;
+    for (let i = 1; i <= n; i++) {
+        sit = { ...base, alt_msl: base.alt_msl - startDrop - step * i, timestamp: Date.now() + GlidePanel.UPDATE_MS };
+        vi.advanceTimersByTime(GlidePanel.UPDATE_MS);
+    }
+}
+
 beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
@@ -136,7 +148,8 @@ describe('GlidePanel verdicts', () => {
         expect(text()).toMatch(/Be at 1,\d{3} ft or higher there/);
         expect(text()).toMatch(/TARGET \d{3} fpm/);
         expect(text()).toMatch(/PROJECTED \d{3} fpm/);
-        expect(text()).toMatch(/MEASURED 700 fpm/);
+        // one situation: no rate from GPS altitude yet, and situation.vertical_speed is never used
+        expect(text()).toMatch(/MEASURED —/);
         expect(text()).toContain('Glide: 250/14 at 6,000 ft · FIS-B');
         expect(text()).not.toContain('Runway:');      // no METAR -> no runway part
         // map: line aircraft -> final point, ring at the point, dashed final to the RWY 24 threshold
@@ -208,6 +221,7 @@ describe('GlidePanel verdicts', () => {
         expect(host.innerHTML).toBe('');
         expect(host.hidden).toBe(true);
         expect(map.layers.size).toBe(0);
+        expect(vi.getTimerCount()).toBe(0);              // nothing ticks for an airport that never has a block
     });
 
     it('no field elevation shows no block', () => {
@@ -217,6 +231,7 @@ describe('GlidePanel verdicts', () => {
         panel.start();
         expect(host.innerHTML).toBe('');
         expect(map.layers.size).toBe(0);
+        expect(vi.getTimerCount()).toBe(0);
     });
 });
 
@@ -332,20 +347,98 @@ describe('GlidePanel live behaviour', () => {
     });
 
     it('rates above target show red with "+N too steep"', () => {
-        sit = situation(0, 15, 3000, 180, { vertical_speed: -1500 });
+        const base = situation(0, 15, 3000, 180);
         panel = new GlidePanel(host, KLKR);
+        sit = { ...base, timestamp: Date.now() };
         panel.start();
-        const plan = panel.render(NOW);
+        fly(base, 10, 1500);                                // 11 samples over 10 s, 1,500 fpm down
+        const plan = panel.render(Date.now());              // same situation again: no new sample
+        expect(plan.measured).toBeCloseTo(1500, 6);
         const cells = host.querySelectorAll('.glide-rate');
         expect(cells[0].classList.contains('glide-rate-steep')).toBe(false);       // TARGET itself
         expect(cells[1].classList.contains('glide-rate-steep')).toBe(true);        // PROJECTED > TARGET
         expect(cells[1].textContent).toContain(`+${Math.ceil(plan.projected - plan.target)} too steep`);
         expect(cells[2].classList.contains('glide-rate-steep')).toBe(true);        // MEASURED > target now
-        expect(cells[2].textContent).toContain(`+${Math.ceil(1500 - plan.targetNow).toLocaleString('en-US')} too steep`);
+        expect(cells[2].textContent).toContain(`+${Math.ceil(plan.measured - plan.targetNow).toLocaleString('en-US')} too steep`);
+    });
 
-        sit = situation(0, 15, 3000, 180, { vertical_speed: undefined });
-        panel.render(NOW);
-        expect(host.querySelectorAll('.glide-rate')[2].querySelector('.glide-rate-val').textContent).toBe('—');
+    describe('MEASURED: descent rate from GPS altitude (situation.vertical_speed is not used)', () => {
+        const measured = () => host.querySelectorAll('.glide-rate')[2];
+        const measuredVal = () => measured().querySelector('.glide-rate-val').textContent;
+
+        it('steady descent of 600 fpm over 10 s -> MEASURED 600, with vertical_speed 0 ignored', () => {
+            const base = situation(180, 6, 5500, 360, { vertical_speed: 0 });
+            panel = new GlidePanel(host, KLKR);
+            sit = { ...base, timestamp: Date.now() };
+            panel.start();
+            fly(base, 10, 600);
+            expect(measuredVal()).toBe('600 fpm');
+            expect(measured().classList.contains('glide-rate-steep')).toBe(false);
+            // a climb measures 0 (not descending), a level flight 0
+            fly(base, 10, -300, 100);                  // from where the descent ended
+            expect(measuredVal()).toBe('0 fpm');
+        });
+
+        it('fewer than 3 samples, or less than 5 s of them -> "—" (never 0, never red)', () => {
+            const base = situation(0, 15, 3000, 180, { vertical_speed: -3000 });   // would be red if used
+            panel = new GlidePanel(host, KLKR);
+            sit = { ...base, timestamp: Date.now() };
+            panel.start();
+            expect(measuredVal()).toBe('—');
+            // the same situation rendered again is not a new sample
+            panel.render(Date.now()); panel.render(Date.now() + 500);
+            expect(measuredVal()).toBe('—');
+            fly(base, 1, 3000);                              // 2 samples, 1 s
+            expect(measuredVal()).toBe('—');
+            fly(base, 3, 3000, 50);                          // 5 samples, 4 s
+            expect(measuredVal()).toBe('—');
+            expect(measured().classList.contains('glide-rate-steep')).toBe(false);
+            fly(base, 1, 3000, 200);                         // 6 samples, 5 s: valid
+            expect(measuredVal()).toBe('3,000 fpm');
+            expect(measured().classList.contains('glide-rate-steep')).toBe(true);
+        });
+
+        it('only the last 10 s count', () => {
+            const base = situation(180, 6, 5500, 360);
+            panel = new GlidePanel(host, KLKR);
+            sit = { ...base, timestamp: Date.now() };
+            panel.start();
+            fly(base, 10, 2000);                             // 2,000 fpm for 10 s
+            fly(base, 10, 500, 10 * 2000 / 60);              // then 500 fpm for 10 s
+            expect(measuredVal()).toBe('500 fpm');
+            expect(GlidePanel.VS_WINDOW_MS).toBe(10000);
+        });
+
+        it('GPS lost then regained -> "—" until refilled', () => {
+            const base = situation(180, 6, 5500, 360);
+            panel = new GlidePanel(host, KLKR);
+            sit = { ...base, timestamp: Date.now() };
+            panel.start();
+            fly(base, 10, 600);
+            expect(measuredVal()).toBe('600 fpm');
+            vi.advanceTimersByTime(6000);                    // situation now 6 s old: block hidden
+            expect(host.innerHTML).toBe('');
+            sit = { ...base, alt_msl: base.alt_msl - 100, timestamp: Date.now() + GlidePanel.UPDATE_MS };
+            vi.advanceTimersByTime(GlidePanel.UPDATE_MS);
+            expect(measuredVal()).toBe('—');                 // the old samples are gone
+            fly(base, 4, 600, 100);
+            expect(measuredVal()).toBe('—');                 // 5 samples, 4 s
+            fly(base, 1, 600, 100 + 4 * 10);
+            expect(measuredVal()).toBe('600 fpm');
+        });
+    });
+
+    it('a failed runway-wind refresh hides the block (no frozen numbers)', async () => {
+        sit = situation(180, 6, 5500, 360);
+        panel = new GlidePanel(host, KLKR);
+        panel.start();
+        expect(block()).not.toBeNull();
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        vi.spyOn(panel, 'render').mockImplementationOnce(() => { throw new Error('render'); });
+        await vi.advanceTimersByTimeAsync(0);              // runwayWind resolves -> render throws
+        expect(host.innerHTML).toBe('');
+        expect(map.layers.size).toBe(0);
+        warn.mockRestore();
     });
 
     it('wind line: runway METAR + glide wind; amber no-wind and tailwind texts', async () => {
@@ -460,6 +553,34 @@ describe('AirportPopup mounts the glide block without risking the popup', () => 
         const p2 = openPopup();
         expect(() => p2.close()).not.toThrow();
         expect(p2._panelOpen).toBe(false);
+        warn.mockRestore();
+    });
+
+    it('a second airport without close(): the first airport\'s block is stopped', () => {
+        const made = [];
+        globalThis.GlidePanel = class { constructor(el, rec) { this.rec = rec; this.start = vi.fn(); this.stop = vi.fn(); made.push(this); } };
+        const p = openPopup();                              // A = KLKR
+        const B = { ...KLKR, icao: 'KCLT', name: 'Charlotte' };
+        p._showPanel(B, null);
+        expect(made).toHaveLength(2);
+        expect(made[0].stop).toHaveBeenCalledTimes(1);
+        expect(made[1].rec).toBe(B);
+        expect(made[1].stop).not.toHaveBeenCalled();
+        expect(document.querySelectorAll('.glide-host')).toHaveLength(1);
+    });
+
+    it('GlidePanel.start throwing after construction: the panel opens and the block is stopped', () => {
+        const made = [];
+        globalThis.GlidePanel = class {
+            constructor() { this.stop = vi.fn(); made.push(this); }
+            start() { throw new Error('start'); }
+        };
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const p = openPopup();
+        expect(p._panelOpen).toBe(true);
+        expect(document.querySelector('.airport-panel.open .apt-tabs')).not.toBeNull();
+        expect(made[0].stop).toHaveBeenCalledTimes(1);
+        expect(p._glide).toBeNull();
         warn.mockRestore();
     });
 });
