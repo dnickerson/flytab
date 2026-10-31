@@ -333,7 +333,11 @@ class FisbClient extends EventTarget {
 
             for (let i = 0; i < windParts.length && i < altitudes.length; i++) {
                 const wind = FisbClient.parseWindAloft(windParts[i]);
-                if (!wind) continue;
+                if (!wind) {
+                    // Light and variable replaces the previous report: the old wind must not stand in for it.
+                    if (FisbClient.isLightAndVariable(windParts[i])) this.winds.delete(`${station}:${altitudes[i]}`);
+                    continue;
+                }
                 wind.station = station;
                 wind.alt = altitudes[i];
                 wind.received_at = now;
@@ -783,10 +787,14 @@ class FisbClient extends EventTarget {
 
     // ========== Wind Aloft Parsing ==========
 
+    /** Light and variable: '9900', and at 6,000 ft and up with a temperature group ('9900+05', '990045'). */
+    static isLightAndVariable(code) {
+        return typeof code === 'string' && /^9900/.test(code);
+    }
+
     static parseWindAloft(code) {
-        // Light and variable: '9900', and at 6,000 ft and up with a temperature group ('9900+05', '990045').
-        // Decoded as an ordinary group it reads 490/100 kt.
-        if (!code || /^9900/.test(code)) return null;
+        // Light and variable has no direction or speed; decoded as an ordinary group it reads 490/100 kt.
+        if (!code || FisbClient.isLightAndVariable(code)) return null;
         // Format: ddss or ddss+TT or ddss-TT (dd=direction/10, ss=speed)
         const match = code.match(/^(\d{2})(\d{2})([+-]?\d{1,2})?$/);
         if (!match) return null;

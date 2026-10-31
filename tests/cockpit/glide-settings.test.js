@@ -66,20 +66,26 @@ describe('defaults come from config files', () => {
     });
 });
 
-describe('invalid settings: out of range clamps, junk falls back', () => {
+describe('invalid settings fall back on the safe side', () => {
     const v = (over) => GlideInputs.validate({ aircraft: over.aircraft || {}, pilot: over.pilot || {} });
 
-    // Review R26 (2026-10-31): a finite value outside its range is clamped to the nearest edge, not
-    // replaced by the default (sink 3500 means "a lot", not 700).
-    it('out of range clamps to the nearest edge: sink 3500 / 0, margin 2500 / -50, bank 90', () => {
-        const s = v({ aircraft: { glide_sink_fpm: 3500 }, pilot: { marginFt: 2500, turnBankDeg: 90 } });
-        expect(s.aircraft.glide_sink_fpm).toBe(3000);
-        expect(s.pilot.marginFt).toBe(2000);
-        expect(s.pilot.turnBankDeg).toBe(60);
-        const t = v({ aircraft: { glide_sink_fpm: 0 }, pilot: { marginFt: -50, turnBankDeg: 5 } });
-        expect(t.aircraft.glide_sink_fpm).toBe(100);
-        expect(t.pilot.marginFt).toBe(0);
-        expect(t.pilot.turnBankDeg).toBe(10);
+    // Review R27 (2026-10-31, supersedes R26's plain clamp): a finite value outside its range becomes the MORE
+    // CONSERVATIVE of the nearest edge and the default. Where a higher value is safer (sink, margin, line-up,
+    // assumed headwind) too high -> the max, too low -> the default; where lower is safer (glide speed, wind and
+    // METAR distance/age limits) too low -> the min, too high -> the default; every other key -> the default.
+    it('out of range -> the more conservative of the edge and the default', () => {
+        const s = (grp, k, val) => v({ [grp]: { [k]: val } })[grp][k];
+        expect(s('aircraft', 'glide_sink_fpm', 0)).toBe(700);
+        expect(s('aircraft', 'glide_sink_fpm', 3500)).toBe(3000);
+        expect(s('pilot', 'marginFt', -50)).toBe(200);
+        expect(s('pilot', 'marginFt', 2500)).toBe(2000);
+        expect(s('pilot', 'noWindHeadwindKt', 60)).toBe(50);
+        expect(s('aircraft', 'glide_ias_kt', 10)).toBe(30);
+        expect(s('aircraft', 'glide_ias_kt', 300)).toBe(65);
+        expect(s('pilot', 'windMaxStationNm', 600)).toBe(100);
+        expect(s('pilot', 'metarMaxAgeMin', 5)).toBe(10);
+        expect(s('pilot', 'turnBankDeg', 90)).toBe(30);
+        expect(s('pilot', 'showAboveGsKt', 500)).toBe(25);
     });
 
     it('min 1200 > max 1000 -> BOTH defaults (500 / 1000)', () => {
@@ -91,39 +97,42 @@ describe('invalid settings: out of range clamps, junk falls back', () => {
         expect(t.pilot.finalPointMaxFt).toBe(1500);
     });
 
-    it('finalPointMaxFt is capped at 5000 (the Configuration input max): 5000 kept, 5001 -> 5000', () => {
+    it('finalPointMaxFt is capped at 5000 (the Configuration input max): 5000 kept, 5001 -> default', () => {
         expect(v({ pilot: { finalPointMaxFt: 5000 } }).pilot.finalPointMaxFt).toBe(5000);
-        expect(v({ pilot: { finalPointMaxFt: 5001 } }).pilot.finalPointMaxFt).toBe(5000);
+        expect(v({ pilot: { finalPointMaxFt: 5001 } }).pilot.finalPointMaxFt).toBe(1000);
         // min <= max pair rule still applies inside the cap
         const s = v({ pilot: { finalPointMinFt: 600, finalPointMaxFt: 550 } });
         expect([s.pilot.finalPointMinFt, s.pilot.finalPointMaxFt]).toEqual([500, 1000]);
-        // ... and after clamping: min 6000 -> 5000 > max 4000 -> both defaults; min 6000 / max 9000 -> 5000 / 5000
-        const t = v({ pilot: { finalPointMinFt: 6000, finalPointMaxFt: 4000 } });
+        // ... and after the out-of-range rule: min 6000 -> default 500, max 400 < 500 -> both defaults
+        const t = v({ pilot: { finalPointMinFt: 6000, finalPointMaxFt: 400 } });
         expect([t.pilot.finalPointMinFt, t.pilot.finalPointMaxFt]).toEqual([500, 1000]);
-        const u = v({ pilot: { finalPointMinFt: 6000, finalPointMaxFt: 9000 } });
-        expect([u.pilot.finalPointMinFt, u.pilot.finalPointMaxFt]).toEqual([5000, 5000]);
     });
 
-    it('every range edge: in-range kept, just outside -> that edge', () => {
+    it('every range edge: in-range kept; just outside -> the edge on the safe side, else the default', () => {
+        // [lo, hi, group, safer]: 'higher' -> above = hi, below = default; 'lower' -> below = lo, above = default;
+        // none -> default both ways
         const ranges = {
-            glide_ias_kt: [30, 200, 'aircraft'], glide_sink_fpm: [100, 3000, 'aircraft'],
+            glide_ias_kt: [30, 200, 'aircraft', 'lower'], glide_sink_fpm: [100, 3000, 'aircraft', 'higher'],
             glide_density_pct_per_kft: [0, 5, 'aircraft'],
-            turnBankDeg: [10, 60], marginFt: [0, 2000], lineUpFtPerDeg: [0, 10],
-            finalPointFraction: [0, 1], finalPointMinFt: [0, 5000], noWindHeadwindKt: [0, 50],
-            planBHysteresisFt: [0, 1000], onCourseDeg: [1, 30], windMaxStationNm: [1, 500],
-            windMaxAgeMin: [10, 1440], metarMaxAgeMin: [10, 240], metarMaxStationNm: [0, 100],
-            showAboveGsKt: [0, 200],
+            turnBankDeg: [10, 60], marginFt: [0, 2000, 'pilot', 'higher'], lineUpFtPerDeg: [0, 10, 'pilot', 'higher'],
+            finalPointFraction: [0, 1], finalPointMinFt: [0, 5000], noWindHeadwindKt: [0, 50, 'pilot', 'higher'],
+            planBHysteresisFt: [0, 1000], onCourseDeg: [1, 30], windMaxStationNm: [1, 500, 'pilot', 'lower'],
+            windMaxAgeMin: [10, 1440, 'pilot', 'lower'], metarMaxAgeMin: [10, 240, 'pilot', 'lower'],
+            metarMaxStationNm: [0, 100, 'pilot', 'lower'], showAboveGsKt: [0, 200],
         };
-        for (const [k, [lo, hi, grp = 'pilot']] of Object.entries(ranges)) {
+        for (const [k, [lo, hi, grp = 'pilot', safer]] of Object.entries(ranges)) {
+            const def = D[grp][k];
+            const below = safer === 'lower' ? lo : def;
+            const above = safer === 'higher' ? hi : def;
             // an edge that equals the default proves nothing, so also check a clearly-inside value
             expect(v({ [grp]: { [k]: lo } })[grp][k], k + ' lo').toBe(lo);
             // finalPointMinFt is paired with finalPointMaxFt (max >= min), so give the max room at the top edge
             const room = k === 'finalPointMinFt' ? { finalPointMaxFt: 5000 } : {};
             expect(v({ [grp]: { [k]: hi, ...room } })[grp][k], k + ' hi').toBe(hi);
-            expect(v({ [grp]: { [k]: lo - 0.5 } })[grp][k], k + ' below').toBe(lo);
-            expect(v({ [grp]: { [k]: hi + 0.5, ...room } })[grp][k], k + ' above').toBe(hi);
-            expect(v({ [grp]: { [k]: lo - 1e6 } })[grp][k], k + ' far below').toBe(lo);
-            expect(v({ [grp]: { [k]: hi + 1e6, ...room } })[grp][k], k + ' far above').toBe(hi);
+            expect(v({ [grp]: { [k]: lo - 0.5 } })[grp][k], k + ' below').toBe(below);
+            expect(v({ [grp]: { [k]: hi + 0.5, ...room } })[grp][k], k + ' above').toBe(above);
+            expect(v({ [grp]: { [k]: lo - 1e6 } })[grp][k], k + ' far below').toBe(below);
+            expect(v({ [grp]: { [k]: hi + 1e6, ...room } })[grp][k], k + ' far above').toBe(above);
         }
     });
 

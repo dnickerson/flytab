@@ -67,36 +67,42 @@ const GlideInputs = (() => {
 
     // ---- Settings -----------------------------------------------------------
 
-    /** Allowed [min, max] per setting; a finite value outside is clamped to the nearest edge, a non-finite one takes its default. */
+    /**
+     * Allowed [min, max, safer?] per setting. `safer` says which way errs high (a wrong "GLIDE OK" is the failure
+     * to avoid): 'higher' (more sink, margin, assumed headwind) -> a value above max becomes max; 'lower' (slower
+     * glide speed, nearer / fresher wind and METAR limits) -> a value below min becomes min. Any other out-of-range
+     * value, and every non-finite one, takes the default.
+     */
     const RANGES = {
         aircraft: {
-            glide_ias_kt: [30, 200],
-            glide_sink_fpm: [100, 3000],
+            glide_ias_kt: [30, 200, 'lower'],
+            glide_sink_fpm: [100, 3000, 'higher'],
             glide_density_pct_per_kft: [0, 5],
         },
         pilot: {
             turnBankDeg: [10, 60],          // 90 or more would make 1 / cos(bank)^1.5 blow up
-            marginFt: [0, 2000],
-            lineUpFtPerDeg: [0, 10],
+            marginFt: [0, 2000, 'higher'],
+            lineUpFtPerDeg: [0, 10, 'higher'],
             finalPointFraction: [0, 1],
             finalPointMinFt: [0, 5000],
             finalPointMaxFt: [0, 5000],     // the Configuration input max; also >= finalPointMinFt, checked as a pair below
-            noWindHeadwindKt: [0, 50],
+            noWindHeadwindKt: [0, 50, 'higher'],
             planBHysteresisFt: [0, 1000],
             onCourseDeg: [1, 30],
-            windMaxStationNm: [1, 500],
-            windMaxAgeMin: [10, 1440],
-            metarMaxAgeMin: [10, 240],
-            metarMaxStationNm: [0, 100],
+            windMaxStationNm: [1, 500, 'lower'],
+            windMaxAgeMin: [10, 1440, 'lower'],
+            metarMaxAgeMin: [10, 240, 'lower'],
+            metarMaxStationNm: [0, 100, 'lower'],
             showAboveGsKt: [0, 200],
         },
     };
 
     /**
-     * Resolved settings: every GlideModel.DEFAULTS key, from `raw` when finite (numeric strings accepted,
-     * always returned as numbers) - clamped to its range when outside it - else (non-finite, null, blank,
-     * junk) the default. After clamping, finalPointMaxFt must be >= finalPointMinFt, else BOTH take their
-     * defaults. min_runway_ft (no range): a finite number >= 0, or null for "no length filter".
+     * Resolved settings: every GlideModel.DEFAULTS key, from `raw` when finite and within its range (numeric
+     * strings accepted, always returned as numbers). Out of range: the edge on the key's safe side (RANGES
+     * `safer`), else the default - always the more conservative of the two. Non-finite, null, blank or junk:
+     * the default. Then finalPointMaxFt must be >= finalPointMinFt, else BOTH take their defaults.
+     * min_runway_ft (no range): a finite number >= 0, or null for "no length filter".
      */
     function validate(raw) {
         const D = GlideModel.DEFAULTS;
@@ -104,8 +110,11 @@ const GlideInputs = (() => {
         const a = (raw && raw.aircraft) || {}, p = (raw && raw.pilot) || {};
         const resolve = (v, r, def) => {
             if (v === undefined) return def;
-            if (r) return Math.min(r[1], Math.max(r[0], v));
-            return v >= 0 ? v : def;
+            if (!r) return v >= 0 ? v : def;
+            const [lo, hi, safer] = r;
+            if (v < lo) return safer === 'lower' ? lo : def;
+            if (v > hi) return safer === 'higher' ? hi : def;
+            return v;
         };
         for (const k of Object.keys(D.aircraft)) out.aircraft[k] = resolve(toFinite(a[k]), RANGES.aircraft[k], D.aircraft[k]);
         for (const k of Object.keys(D.pilot)) out.pilot[k] = resolve(toFinite(p[k]), RANGES.pilot[k], D.pilot[k]);

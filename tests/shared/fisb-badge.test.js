@@ -153,3 +153,36 @@ describe('FisbClient.parseWindAloft (FD wind groups)', () => {
         expect(FisbClient.parseWindAloft('ABCD')).toBeNull();
     });
 });
+
+describe('FisbClient winds: a light-and-variable report replaces the old wind (review R28)', () => {
+    const COORDS = { KCLT: { lat: 35.21, lon: -80.94 }, KCAE: { lat: 33.94, lon: -81.12 } };
+    const client = () => new FisbClient(new EventTarget(), { getAirport: async (id) => COORDS[id] || null, getNavaid: async () => null });
+    const flush = () => new Promise((r) => setTimeout(r, 0));
+    const frame = (rows) => ['FD1 WINDS 311800 DATA BASED ON 311200Z', 'STN  3000  6000', ...rows].join('\n');
+    const near = (c, alt) => { const w = c.getNearestWind(35.2, -80.9, alt); return w && [w.station, w.dir, w.spd]; };
+
+    it('CLT 2714 at 3000, then CLT 9900 at 3000: CLT\'s old 270/14 is gone; the next station answers', async () => {
+        const c = client();
+        c._handleWinds(frame(['CLT  2714  2819+13', 'CAE  0910  1015+10']), Date.now());
+        await flush();
+        expect(near(c, 3000)).toEqual(['CLT', 270, 14]);
+        expect(near(c, 6000)).toEqual(['CLT', 280, 19]);
+
+        c._handleWinds(frame(['CLT  9900  9900+05']), Date.now());
+        await flush();
+        expect(c.winds.has('CLT:3000')).toBe(false);
+        expect(c.winds.has('CLT:6000')).toBe(false);
+        expect(near(c, 3000)).toEqual(['CAE', 90, 10]);
+        expect(near(c, 6000)).toEqual(['CAE', 100, 15]);
+    });
+
+    it('only station light and variable -> no wind at all; a junk group leaves the old wind alone', async () => {
+        const c = client();
+        c._handleWinds(frame(['CLT  2714  2819+13']), Date.now());
+        await flush();
+        c._handleWinds(frame(['CLT  9900  XXXX']), Date.now());
+        await flush();
+        expect(c.getNearestWind(35.2, -80.9, 3000)).toBeNull();
+        expect(near(c, 6000)).toEqual(['CLT', 280, 19]);   // unparseable, not light and variable: unchanged
+    });
+});
