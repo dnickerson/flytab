@@ -19,7 +19,7 @@ Safety direction, his words: "if the glide-to-point is too far out or too low, t
 
 - Terrain and obstacles along the glide (Dana: the panel does not need to say "terrain not checked" — "the pilot will know that. It just takes up space").
 - Slips, flaps, S-turns (how a high arrival is converted on short final) — not modelled.
-- Wind change with altitude during the glide (one wind at the current altitude).
+- Wind change with altitude during the glide other than the switch to the METAR wind on the final leg.
 - Choosing which airport to go to (EmergencyGlide's ranking stays as is; it only gets the shared range/feasibility model).
 - On the ground / taxi: no glide block.
 
@@ -45,6 +45,8 @@ Safety direction, his words: "if the glide-to-point is too far out or too low, t
 | Headwind assumed when there is no wind data (kt) | pilot `noWindHeadwindKt` | 10 |
 | Plan-B hysteresis (ft a final point needs to take over again) | pilot `planBHysteresisFt` | 100 |
 | Farthest forecast-wind station to trust (nm) | pilot `windMaxStationNm` | 100 |
+| Oldest METAR to use for the runway wind (min) | pilot `metarMaxAgeMin` | 75 |
+| Farthest METAR station when the airport has none (nm) | pilot `metarMaxStationNm` | 10 |
 | On-course band for the turn cue (°) | pilot `onCourseDeg` | 5 |
 | Shortest runway to glide to (ft) | aircraft `min_runway_ft` (already exists, synced from the flywhere profile) | as configured |
 
@@ -53,7 +55,7 @@ Physical constants (ft per nm, kt→fpm, the standard-rate turn formula) are not
 ## The model (as agreed — port the reference file)
 
 - **Glide:** 65 KIAS best glide, prop windmilling, **700 fpm** at sea level, fully loaded (Dana: "Use 65 kias as the airspeed and assume the prop is windmilling. The decent rate would likely be about 700 feet / min"; an estimate). TAS and sink both rise 2% per 1,000 ft (`tas = 65 × (1 + 0.02 × alt/1000)`, `sink = 700 × tas/65`); glide angle constant (~9.4:1 still air). These become aircraft performance settings (`glide_ias_kt` 65, `glide_sink_fpm` 700) in `aircraft-config.json` + Configuration → Aircraft, replacing `glide_ratio`.
-- **Wind:** winds aloft at the current altitude — in flight from FIS-B (`FisbClient.getNearestWind(lat, lon, altFt)`), else the pre-flight winds the route planner downloaded, else none. **No wind data → 10 kt headwind assumed**, shown amber "NO WINDS ALOFT · 10 kt headwind assumed". Heading from the GPS track (Dana: "the heading can be inferred from the gps track and the winds aloft come from the weather data"). Wind triangle for heading and ground speed.
+- **Wind (glide leg):** winds aloft at the current altitude — in flight from FIS-B (`FisbClient.getNearestWind(lat, lon, altFt)`), else the pre-flight winds the route planner downloaded, else none. **No wind data → 10 kt headwind assumed**, shown amber "NO WINDS ALOFT · 10 kt headwind assumed". Heading from the GPS track (Dana: "the heading can be inferred from the gps track and the winds aloft come from the weather data"). Wind triangle for heading and ground speed.
 - **Runway end:** the end most into the wind that is reachable; if none is reachable, the end with the most height to spare (a tailwind shown amber "RWY nn: N kt TAILWIND"). No wind data: the reachable end needing the least turn.
 - **Final ("glide-to") point** — option B (Dana: "flytab selects a point off the end of the ideal runway based on the winds and runway length, as the glide to point with the intent to glide to the center of the field. The glide to point could be 500 - 1000 feet off the end of the runway depending on the length of the runway"): on that end's extended centreline, **25% of runway length before the landing threshold, clamped 500–1,000 ft**.
 - **Height needed at the final point** = straight best glide from the point to **mid-runway** with the runway headwind component + **1.5 ft per degree** to line up + **200 ft margin**.
@@ -67,6 +69,7 @@ Physical constants (ft per nm, kt→fpm, the standard-rate turn formula) are not
 
 - **Altitude: GPS MSL.** The glide check uses the Stratux GPS altitude (true MSL, comparable with the field elevation), never pressure altitude. No 3D GPS fix → no glide block. "Be at H ft or higher there" is in MSL, like the field elevation.
 - **Winds: trusted only if fresh and near.** A forecast wind (FIS-B, else the pre-flight download) is used only when its station is within `windMaxStationNm` (default 100 nm, setting) and its forecast period is still valid; otherwise the no-wind headwind applies and the wind line says why ("NO CURRENT WINDS ALOFT · 10 kt headwind assumed"). The wind line names the source and the level actually used (e.g. "Wind 250/14 · 3,000 ft forecast · FIS-B" when below the lowest reporting level).
+- **The airport's METAR wind for the runway and the final leg** (Dana: "you should use the METAR wind at the airport"). The wind you land in decides the runway end and the final leg's headwind (`headRwy`); the glide from the aircraft to the final point (initial turn and straight leg) keeps the winds aloft at the current altitude. Source: the airport's own METAR — FIS-B first (`FisbClient.getMetar(icao)`), else the one the airport panel already shows (internet/cache) — used only when its observation is at most `metarMaxAgeMin` old (default 75 min, setting). No usable METAR at the airport → the nearest METAR within `metarMaxStationNm` (default 10 nm, setting) under the same age rule → otherwise the winds-aloft rule above for the final leg too. Calm → no runway headwind (end choice by least turn). Variable (VRB) or a direction-less report → end choice by least turn and the no-wind headwind for the final leg. **Gusts (my call, err high):** the final-leg component uses whichever of the steady and gust speed needs MORE height at the final point (the gust for a headwind component, the steady speed for a tailwind component). The wind line shows both sources, e.g. "Runway: METAR KLKR 240/12G18 (18 min) · Glide: 250/14 at 4,500 ft · FIS-B".
 - **Runways: paved and at least the aircraft's minimum length, paved preferred.** Candidate runways are those with length ≥ `performance.min_runway_ft` (no setting → no length filter); paved runways first, a turf/gravel runway only when no paved one qualifies; among the candidates, the most into-wind reachable end as in the model. Heliports and seaplane bases get no glide block. An airport with no qualifying runway shows the "RUNWAY POSITION NOT KNOWN"-style plan-B check to the airport reference point, worded "NO SUITABLE RUNWAY · steer to the airport".
 
 ## Runway data (now available — bundle v11)
@@ -119,7 +122,7 @@ Its range/feasibility uses the shared model (65 KIAS / 700 fpm, wind triangle, 1
 
 ## Golden cases (reference file output; KLKR 06/24, elev 486, 6,004 ft, runway end A true 233°)
 
-The production model, given the same inputs and the default settings, must match these to ±1 ft (spare, need), ±1° (heading), ±0.01 nm, ±1 fpm. Generated by running `plan()` from the reference file; `[on plan B]` = `preferDirect` (hysteresis active).
+The production model, given the same inputs and the default settings, with the SAME wind for the glide leg and the runway (i.e. the METAR wind equal to the winds aloft, as in the simulator), must match these to ±1 ft (spare, need), ±1° (heading), ±0.01 nm, ±1 fpm. Generated by running `plan()` from the reference file; `[on plan B]` = `preferDirect` (hysteresis active).
 
 | Case | kind | end | spare ft | need MSL ft | hdg true | leg nm | target fpm | projected fpm | turn now ° |
 |---|---|---|---|---|---|---|---|---|---|
