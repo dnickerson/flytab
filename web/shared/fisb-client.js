@@ -127,11 +127,14 @@ class FisbClient extends EventTarget {
         const type = msg.Type.toUpperCase();
         const data = msg.Data;
         const location = msg.Location || '';
+        // Stratux splits each text report on spaces: Type, Location (station), Time (DDHHMMZ), and Data = the
+        // rest (b3nn0/stratux main/gen_gdl90.go registerADSBTextMessageReceived). Station and time are NOT in Data.
+        const time = typeof msg.Time === 'string' ? msg.Time.trim() : '';
         const now = Date.now();
         this.lastRxAt = now;
 
         if (type === 'METAR' || type === 'SPECI') {
-            this._handleMetar(data, location, now, type === 'SPECI');
+            this._handleMetar(FisbClient.metarText(data, location, time), location, now, type === 'SPECI');
         } else if (type === 'TAF') {
             this._handleTaf(data, location, now);
         } else if (type === 'PIREP' || type === 'UA' || type === 'UUA') {
@@ -141,7 +144,7 @@ class FisbClient extends EventTarget {
         } else if (type === 'AIRMET') {
             await this._handleAirmet(data, location, now);
         } else if (type === 'WINDS' || type === 'FD') {
-            this._handleWinds(data, now);
+            this._handleWinds(data, now, location, time);
         } else if (type === 'CWA') {
             this._handleCwa(data, now);
         }
@@ -305,48 +308,85 @@ class FisbClient extends EventTarget {
         this.dispatchEvent(new CustomEvent('fisb:airmet', { detail: entry }));
     }
 
-    _handleWinds(raw, now) {
-        // FD format: "FD1 WINDS 241800 DATA BASED ON 241200Z VALID 241800Z
-        //   STN  3000  6000  9000  12000 ...
-        //   CLT  2408  2615+03  2720-01 ..."
-        const lines = raw.split('\n');
+    /**
+     * The METAR text as a full report, "KXXX DDHHMMZ ...": Stratux sends the station and the observation time as
+     * separate fields (Location, Time), not in Data. Data that already starts with the station (an older capture
+     * replayed by tools/mock-stratux.py, a "METAR KXXX ..." report) is returned unchanged. Without a usable
+     * station the Data is returned as is; without a usable time only the station is added (the report then has
+     * no observation time and is not used where its age matters).
+     */
+    static metarText(data, location, time) {
+        const text = String(data || '').trim();
+        const stn = String(location || '').trim().toUpperCase();
+        if (!/^[A-Z0-9]{3,5}$/.test(stn)) return text;
+        if (new RegExp('^(?:(?:METAR|SPECI)\\s+)?' + stn + '\\b', 'i').test(text)) return text;
+        const t = String(time || '').trim().toUpperCase();
+        return /^\d{6}Z$/.test(t) ? `${stn} ${t} ${text}` : `${stn} ${text}`;
+    }
+
+    /**
+     * Winds aloft (FD). Stratux shape (one station per report; station = Location, report time = Time):
+     *   Data = " FT 3000 6000 9000 ...\n   2630 2845+15 2945+10 ...\n"  - an FT header, then a data row with NO
+     *   station. A high station leaves out the low levels (TRI has no 3000 column); when a row has fewer groups
+     *   than the header they are aligned from the RIGHT (the highest level is always present).
+     * Also accepted (no live producer; older tests and hand-made frames): "STN|FT 3000 6000 ..." then one row per
+     *   station, "CLT 2714 2819+13 ...". A row with more groups than the header cannot be placed and is skipped.
+     * Each entry: { dir, spd, temp, station, alt, received_at (ms, when FlyTab got it), issued (the report's
+     *   DDHHMMZ Time, or null) }. A light-and-variable group (9900...) deletes that station:alt entry.
+     */
+    _handleWinds(raw, now, location = '', time = '') {
+        const loc = String(location || '').trim().toUpperCase();
+        const ownStation = /^[A-Z0-9]{3,4}$/.test(loc) ? loc : null;
+        const issued = typeof time === 'string' && time.trim() ? time.trim().toUpperCase() : null;
+        const lines = String(raw || '').split('\n');
         let altitudes = null;
+        const stations = new Set();
 
         for (const line of lines) {
             const trimmed = line.trim();
             if (!trimmed) continue;
 
-            // Header line with altitude labels
-            if (/^\s*(STN|FT)\s+\d{4}/.test(trimmed) || /^\d{4}\s+\d{4}/.test(trimmed)) {
-                // Parse altitude headers
-                const parts = trimmed.split(/\s+/);
-                altitudes = parts.slice(1).map(a => parseInt(a, 10)).filter(a => !isNaN(a));
+            // Header line with altitude labels: "FT 3000 6000 ..." or "STN 3000 6000 ..."
+            const head = trimmed.match(/^(?:STN|FT)((?:\s+\d{4,5})+)$/);
+            if (head) {
+                altitudes = head[1].trim().split(/\s+/).map((a) => parseInt(a, 10));
                 continue;
             }
+            if (!altitudes) continue;
 
-            // Data line: "CLT  2408  2615+03  ..."
-            const match = trimmed.match(/^([A-Z]{3})\s+(.+)/);
-            if (!match || !altitudes) continue;
+            let station, windParts;
+            const named = trimmed.match(/^([A-Z]{3})\s+(.+)$/);
+            if (named) {
+                station = named[1];
+                windParts = named[2].trim().split(/\s+/);
+            } else if (ownStation && /^[0-9+\-\s]+$/.test(trimmed)) {
+                station = ownStation;                       // Stratux: the row has no station; it is Location
+                windParts = trimmed.split(/\s+/);
+            } else {
+                continue;
+            }
+            if (windParts.length > altitudes.length) continue;
+            const offset = altitudes.length - windParts.length;   // missing low levels: align from the right
 
-            const station = match[1];
-            const windParts = match[2].split(/\s+/);
-
-            for (let i = 0; i < windParts.length && i < altitudes.length; i++) {
+            for (let i = 0; i < windParts.length; i++) {
+                const alt = altitudes[offset + i];
                 const wind = FisbClient.parseWindAloft(windParts[i]);
                 if (!wind) {
                     // Light and variable replaces the previous report: the old wind must not stand in for it.
-                    if (FisbClient.isLightAndVariable(windParts[i])) this.winds.delete(`${station}:${altitudes[i]}`);
+                    if (FisbClient.isLightAndVariable(windParts[i])) this.winds.delete(`${station}:${alt}`);
                     continue;
                 }
                 wind.station = station;
-                wind.alt = altitudes[i];
+                wind.alt = alt;
                 wind.received_at = now;
-                this.winds.set(`${station}:${altitudes[i]}`, wind);
+                wind.issued = issued;
+                this.winds.set(`${station}:${alt}`, wind);
             }
-
-            // Resolve station lat/lon from NASR (airport or navaid lookup)
-            this._resolveStationCoords(station);
+            stations.add(station);
         }
+
+        // Resolve station lat/lon from NASR (airport or navaid lookup)
+        for (const station of stations) this._resolveStationCoords(station);
 
         this.dispatchEvent(new CustomEvent('fisb:winds', { detail: { count: this.winds.size } }));
     }

@@ -148,10 +148,14 @@ describe('invalid settings fall back on the safe side', () => {
             const def = D[grp][k];
             const below = safer === 'lower' ? lo : def;
             const above = safer === 'higher' ? hi : def;
-            // an edge that equals the default proves nothing, so also check a clearly-inside value
-            expect(v({ [grp]: { [k]: lo } })[grp][k], k + ' lo').toBe(lo);
-            // finalPointMinFt is paired with finalPointMaxFt (max >= min), so give the max room at the top edge
-            const room = k === 'finalPointMinFt' ? { finalPointMaxFt: 5000 } : {};
+            // an edge that equals the default proves nothing, so also check a clearly-inside value.
+            // glide_sink_fpm's low edge (100 fpm) is flatter than 20:1 with any allowed glide speed
+            // (30 kt x 101.269 / 100 = 30:1): the glide-ratio rule then resets speed AND sink to the defaults.
+            expect(v({ [grp]: { [k]: lo } })[grp][k], k + ' lo').toBe(k === 'glide_sink_fpm' ? def : lo);
+            // finalPointMinFt is paired with finalPointMaxFt (max >= min), so give the max room at the top edge;
+            // glide_ias_kt 200 needs a sink that keeps the glide at or under 20:1 (200 x 101.269 / 1100 = 18.4:1)
+            const room = k === 'finalPointMinFt' ? { finalPointMaxFt: 5000 }
+                : k === 'glide_ias_kt' ? { glide_sink_fpm: 1100 } : {};
             expect(v({ [grp]: { [k]: hi, ...room } })[grp][k], k + ' hi').toBe(hi);
             expect(v({ [grp]: { [k]: lo - 0.5 } })[grp][k], k + ' below').toBe(below);
             expect(v({ [grp]: { [k]: hi + 0.5, ...room } })[grp][k], k + ' above').toBe(above);

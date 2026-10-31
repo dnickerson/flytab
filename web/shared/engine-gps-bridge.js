@@ -86,6 +86,9 @@ class EngineGpsBridge {
                 gps_fix_quality: Number.isInteger(d.gps_fix_quality) ? d.gps_fix_quality : 1,
                 gps_sats:        null,
                 vertical_speed:  0,
+                // Receipt time, as StratuxClient and GpsSource stamp theirs: readers that age the
+                // situation (EmergencyGlide, TrackLog, FlightRecorder) treat a missing one as stale.
+                timestamp:       Date.now(),
                 _source:         'engine',
             };
             // Mirror gps-source.js:303-304 — set the property so direct readers

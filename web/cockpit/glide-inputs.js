@@ -40,6 +40,9 @@ const GlideInputs = (() => {
     /** An observation time this far ahead of now (clock skew, a bad report) is not trusted. */
     const FUTURE_TOLERANCE_MS = 5 * 60000;
     const MS_PER_MIN = 60000;
+    const KT_TO_FPM = 101.269;          // 1 kt in feet per minute
+    /** No light piston airplane glides flatter than ~20:1 windmilling. */
+    const MAX_GLIDE_RATIO = 20;
 
     const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
     const isLL = (lat, lon) => isNum(lat) && isNum(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
@@ -101,7 +104,9 @@ const GlideInputs = (() => {
      * Resolved settings: every GlideModel.DEFAULTS key, from `raw` when finite and within its range (numeric
      * strings accepted, always returned as numbers). Out of range: the edge on the key's safe side (RANGES
      * `safer`), else the default - always the more conservative of the two. Non-finite, null, blank or junk:
-     * the default. Then finalPointMaxFt must be >= finalPointMinFt, else BOTH take their defaults.
+     * the default. Then finalPointMaxFt must be >= finalPointMinFt, else BOTH take their defaults; and the
+     * still-air glide ratio glide_ias_kt x KT_TO_FPM / glide_sink_fpm must not exceed MAX_GLIDE_RATIO, else
+     * glide_ias_kt and glide_sink_fpm BOTH take their defaults.
      * min_runway_ft (no range): a finite number >= 0, or null for "no length filter".
      */
     function validate(raw) {
@@ -121,6 +126,11 @@ const GlideInputs = (() => {
         if (out.pilot.finalPointMaxFt < out.pilot.finalPointMinFt) {
             out.pilot.finalPointMinFt = D.pilot.finalPointMinFt;
             out.pilot.finalPointMaxFt = D.pilot.finalPointMaxFt;
+        }
+        // A still-air glide flatter than MAX_GLIDE_RATIO is a wrong speed or sink: BOTH take their defaults.
+        if (out.aircraft.glide_ias_kt * KT_TO_FPM / out.aircraft.glide_sink_fpm > MAX_GLIDE_RATIO) {
+            out.aircraft.glide_ias_kt = D.aircraft.glide_ias_kt;
+            out.aircraft.glide_sink_fpm = D.aircraft.glide_sink_fpm;
         }
         return out;
     }
@@ -177,6 +187,21 @@ const GlideInputs = (() => {
         return out;
     }
 
+    /**
+     * The end's landing threshold, or its physical end when the threshold cannot be right: past mid-runway along
+     * the landing heading, or farther than half the runway length from its own physical end. Bad data, not a
+     * displaced threshold (the 2611 bundle's K2S5 07 threshold is the 25 end); the physical end puts the final
+     * point earlier, the conservative way. An end with no physical coordinates keeps what it has.
+     */
+    function sensibleThreshold(me, hdg, mid, lenFt) {
+        const thr = me.thr, phys = me.phys;
+        if (!me.hasPhys || !thr || !phys || (thr.x === phys.x && thr.y === phys.y)) return thr;
+        const h = hdg * Math.PI / 180;
+        const pastMid = (thr.x - mid.x) * Math.sin(h) + (thr.y - mid.y) * Math.cos(h) > 0;
+        const fromEndFt = Math.hypot(thr.x - phys.x, thr.y - phys.y) * FT_PER_NM;
+        return pastMid || !(fromEndFt <= lenFt / 2) ? phys : thr;
+    }
+
     /** One runway -> its model ends (0, 1 or 2): an end needs a threshold (else physical end) and a heading. */
     function runwayEnds(r, refLat, refLon) {
         const sides = ['base', 'recip'];
@@ -186,7 +211,10 @@ const GlideInputs = (() => {
             const thr = isLL(tLat, tLon) ? { lat: tLat, lon: tLon } : phys;
             const loc = (p) => (p ? GlideModel.toLocal(refLat, refLon, p.lat, p.lon) : null);
             const hdg = r[s + '_true_hdg'];
-            return { side: s, id: r[s + '_id'], phys: loc(phys || thr), thr: loc(thr), hdg: isNum(hdg) ? norm360(hdg) : null };
+            return {
+                side: s, id: r[s + '_id'], phys: loc(phys || thr), thr: loc(thr), hasPhys: !!phys,
+                hdg: isNum(hdg) ? norm360(hdg) : null,
+            };
         });
         const bothKnown = !!(info[0].thr && info[1].thr);
         const ends = [];
@@ -220,7 +248,7 @@ const GlideInputs = (() => {
             ends.push({
                 id: me.id != null && me.id !== '' ? String(me.id) : (fallbackId || me.side),
                 runwayId: r.id != null ? String(r.id) : null,
-                thr: me.thr, hdgTrue: hdg, rwyLenFt: lenFt, mid, rwy: { a, b },
+                thr: sensibleThreshold(me, hdg, mid, lenFt), hdgTrue: hdg, rwyLenFt: lenFt, mid, rwy: { a, b },
             });
         }
         return ends;

@@ -751,3 +751,100 @@ describe('GlideInputs.validate / settings', () => {
         expect(GlideInputs.settings()).toEqual({ aircraft: { ...D.aircraft }, pilot: { ...D.pilot } });
     });
 });
+
+// ---------- threshold sanity (bad FAA threshold data) ----------
+describe('GlideInputs.airport: a landing threshold that cannot be right is replaced by the physical end', () => {
+    // K2S5 Waterville WA exactly as the 2611 bundle has it: runway 07's base_thr is the 25 end (2,978 ft away,
+    // past mid-runway), with no true headings. Before the fix the 07 final point lay ON the runway, 2,225 ft
+    // past the 07 end, and the panel could say GLIDE OK to a point the airplane would land beyond.
+    const K2S5 = {
+        icao: 'K2S5', name: 'Waterville', lat: 47.656004, lon: -120.056463, elev_ft: 2645, fac_type: 'AIRPORT',
+        runways: [{
+            id: '07/25', length_ft: 2978, width_ft: 50, surface: 'ASPH-G',
+            base_id: '07', base_lat: 47.65602444, base_lon: -120.06250527,
+            base_thr_lat: 47.65598388, base_thr_lon: -120.05042219, base_displ_ft: 270,
+            recip_id: '25', recip_lat: 47.65598388, recip_lon: -120.05042027,
+            recip_thr_lat: 47.65598388, recip_thr_lon: -120.05042027, recip_displ_ft: 0,
+        }],
+    };
+    /** Distance (ft) of point p past end e's physical end along e's landing heading (negative: before it). */
+    const alongFt = (e, p) => {
+        const h = e.hdgTrue * Math.PI / 180;
+        return ((p.x - e.rwy.a.x) * Math.sin(h) + (p.y - e.rwy.a.y) * Math.cos(h)) * 6076.12;
+    };
+    const plan = (a, alt) => GlideModel.plan({
+        airport: a, ac: { pos: { x: 1.5, y: 0 }, altMsl: alt, gs: 100, trkTrue: 270, vs: null },
+        glideWind: null, runwayWind: { kind: 'metar', from: 90, kt: 10, gustKt: null }, preferDirect: false,
+    }, settings());
+
+    it('K2S5 07: threshold = the 07 physical end; 25 unchanged', () => {
+        const a = GlideInputs.airport(K2S5, settings());
+        const e07 = a.ends.find((e) => e.id === '07'), e25 = a.ends.find((e) => e.id === '25');
+        const phys07 = GlideModel.toLocal(K2S5.lat, K2S5.lon, 47.65602444, -120.06250527);
+        expect(e07.thr.x).toBeCloseTo(phys07.x, 12);
+        expect(e07.thr.y).toBeCloseTo(phys07.y, 12);
+        const thr25 = GlideModel.toLocal(K2S5.lat, K2S5.lon, 47.65598388, -120.05042027);
+        expect(e25.thr.x).toBeCloseTo(thr25.x, 12);
+    });
+
+    it('K2S5, 1.5 nm east at 4,400 ft, wind 090/10: no longer GLIDE OK to a 07 final point on the runway', () => {
+        const a = GlideInputs.airport(K2S5, settings());
+        const p = plan(a, 4400);
+        // before the fix: { kind: 'final', endId: '07', spare: +157 } with the final point 2,225 ft past the 07 end
+        expect(p.kind === 'final' && p.endId === '07').toBe(false);
+        // when 07 is chosen (higher), its final point is before the runway
+        const hi = plan(a, 5000);
+        expect([hi.kind, hi.endId]).toEqual(['final', '07']);
+        expect(alongFt(a.ends.find((e) => e.id === '07'), hi.pt)).toBeLessThan(0);
+    });
+
+    it('a threshold more than half the runway length from its own end (off to the side) is not used', () => {
+        // 06's threshold moved 4,000 ft north-west of the runway (not past mid along 059, but far from its end)
+        const d = 4000 / 6076.12, b = 329 * Math.PI / 180;           // 329 = 059 - 90: square off the centreline
+        const off = GlideModel.fromLocal(34.71859708, -80.8631085, { x: d * Math.sin(b), y: d * Math.cos(b) });
+        const a = GlideInputs.airport(apt([rwy({ base_thr_lat: off.lat, base_thr_lon: off.lon })]), settings());
+        const phys06 = GlideModel.toLocal(KLKR.lat, KLKR.lon, 34.71859708, -80.8631085);
+        expect(a.ends[0].thr.x).toBeCloseTo(phys06.x, 12);
+        expect(a.ends[0].thr.y).toBeCloseTo(phys06.y, 12);
+        // the real KLKR 06 displaced threshold (105 ft) is kept
+        const k = GlideInputs.airport(KLKR, settings());
+        const thr06 = GlideModel.toLocal(KLKR.lat, KLKR.lon, 34.71874788, -80.86280972);
+        expect(k.ends[0].thr.x).toBeCloseTo(thr06.x, 12);
+    });
+});
+
+// ---------- glide-ratio sanity ----------
+describe('GlideInputs.validate: a still-air glide flatter than 20:1 is a mistake', () => {
+    it('ias 65, sink 170 (38.7:1) -> both defaults; ias 65, sink 400 (16.5:1) kept', () => {
+        const flat = GlideInputs.validate({ aircraft: { glide_ias_kt: 65, glide_sink_fpm: 170 } });
+        expect(flat.aircraft.glide_ias_kt).toBe(D.aircraft.glide_ias_kt);
+        expect(flat.aircraft.glide_sink_fpm).toBe(D.aircraft.glide_sink_fpm);
+        const ok = GlideInputs.validate({ aircraft: { glide_ias_kt: 65, glide_sink_fpm: 400 } });
+        expect([ok.aircraft.glide_ias_kt, ok.aircraft.glide_sink_fpm]).toEqual([65, 400]);
+        // a fast glide speed with an ordinary sink is caught too: 150 kt / 700 fpm = 21.7:1
+        const fast = GlideInputs.validate({ aircraft: { glide_ias_kt: 150, glide_sink_fpm: 700 } });
+        expect([fast.aircraft.glide_ias_kt, fast.aircraft.glide_sink_fpm]).toEqual([D.aircraft.glide_ias_kt, D.aircraft.glide_sink_fpm]);
+        // the defaults themselves pass (65 x 101.269 / 700 = 9.4:1)
+        expect(GlideInputs.validate({}).aircraft).toMatchObject({ glide_ias_kt: 65, glide_sink_fpm: 700 });
+    });
+});
+
+// ---------- a FIS-B METAR as Stratux sends it ----------
+describe('GlideInputs.runwayWind with a FIS-B METAR built from the real Stratux frame', () => {
+    const FisbClient = new Function(read('web/shared/fisb-client.js') + '\nreturn FisbClient;')();
+    // Real decoded report from Stratux's sample UAT logs, split as Stratux does: Type, Location, Time, Data.
+    const M = "METAR KARR 062152Z 21012KT 7SM CLR 33/19 A3001 RMK AO2 SLP155 \n    T03280189=\n";
+    const T = Date.parse('2026-10-06T22:00:00Z');
+    beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(T); GlideInputs._resetCaches(); });
+    afterEach(() => { vi.useRealTimers(); globalThis.window.app = undefined; });
+
+    it('the airport METAR is used: 210/12, 8 min old', async () => {
+        const fisb = new FisbClient(new EventTarget(), null);
+        const x = M.split(' ');
+        await fisb._handleWeather({ Type: x[0], Location: x[1], Time: x[2], Data: x.slice(3).join(' ') });
+        globalThis.window.app = { fisbClient: fisb, vectorLayers: null, _nasrDb: { getWeather: async () => null, getAirport: async () => null } };
+        const r = await GlideInputs.runwayWind('KARR', { lat: 41.77, lon: -88.48 }, settings(), T);
+        expect(r.wind).toEqual({ kind: 'metar', from: 210, kt: 12, gustKt: null });
+        expect(r.label).toBe('METAR KARR 210/12 (8 min)');
+    });
+});
