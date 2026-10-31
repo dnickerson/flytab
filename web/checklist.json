@@ -68,11 +68,11 @@
                 { "title": "Controls", "response": "FREE AND CORRECT" },
                 { "title": "Canopy", "response": "CLOSED" },
                 { "title": "Fuel", "response": "FULLEST TANK" },
-                { "title": "50% Power", "response": "SET", "note": "2000-2200 RPM, 24-26\" MP" },
+                { "title": "50% Power", "response": "SET", "note": "2000-2200 RPM, 24-26\" MP", "capture": "runup_start" },
                 { "title": "Lean", "response": "MAX RPM" },
-                { "title": "Magneto", "response": "CHECK", "note": "Maximum mag drop 175 RPM (<1875)\nAll EGTs increase 50-100 degrees\nOdd cylinders rise more than even\nCHT decrease" },
+                { "title": "Magneto", "response": "CHECK", "note": "Maximum mag drop 175 RPM (<1875)\nAll EGTs increase 50-100 degrees\nOdd cylinders rise more than even\nCHT decrease", "capture": "mags" },
                 { "title": "Prop", "response": "CYCLE", "note": "300 RPM decrease" },
-                { "title": "Engine Idle", "response": "CHECK" }
+                { "title": "Engine Idle", "response": "CHECK", "capture": "runup_end" }
               ]
             },
             {
@@ -176,7 +176,7 @@
                 { "title": "Power", "response": "CRUISE" },
                 { "title": "Mixture", "response": "LEAN", "note": "The leaner the better" },
                 { "title": "Engine Monitor", "response": "NORMALIZE MODE" },
-                { "title": "Mags", "response": "LEFT AND RIGHT FOR 20 SECS" },
+                { "title": "Mags", "response": "LEFT AND RIGHT FOR 20 SECS", "capture": "mags" },
                 { "title": "EGTs", "response": "ALL RISE AND STABLE", "note": "Note falling or unstable EGTs" },
                 { "title": "Engine", "response": "RUNS SMOOTH" }
               ]

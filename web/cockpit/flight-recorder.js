@@ -17,7 +17,25 @@
 class FlightRecorder {
     static LOCAL_BASE = 'http://localhost:9090';
     static FLIGHTS_PATH = 'flights';
-    static CSV_HEADER = 'Zulu_Time,MP,Oil Temp,Oil Pressure,Fuel Pressure,Volts,Amps,RPM,Fuel Flow,Gallons Remaining,Fuel Level 1,Fuel Level 2,Carb Temp,GP 2,GP 3,Thermalcouple,EGT 1,EGT 2,EGT 3,EGT 4,CHT 1,CHT 2,CHT 3,CHT 4,date,time_z,longitude,latitude,altitude_ft,speed_kts,bank,pitch,acc_vert,course,EGT Spread,CHT Spread,Max EGT,Final_Percent_Power,Operating_Condition,Percent,SFC,ml_phase,ml_score,ml_anomaly,ml_latency_ms';
+    static CSV_HEADER = 'Zulu_Time,MP,Oil Temp,Oil Pressure,Fuel Pressure,Volts,Amps,RPM,Fuel Flow,Gallons Remaining,Fuel Level 1,Fuel Level 2,Carb Temp,GP 2,GP 3,Thermalcouple,EGT 1,EGT 2,EGT 3,EGT 4,CHT 1,CHT 2,CHT 3,CHT 4,date,time_z,longitude,latitude,altitude_ft,speed_kts,bank,pitch,acc_vert,course,EGT Spread,CHT Spread,Max EGT,Final_Percent_Power,Operating_Condition,Percent,SFC,ml_phase,ml_score,ml_anomaly,ml_latency_ms,event';
+
+    // Marks the checklist can put in the recording (markEvent), written to the
+    // `event` column of the next row. Fixed list: they go into a CSV unquoted.
+    static EVENT_CODES = ['runup_start', 'runup_end', 'mag_L', 'mag_R', 'mag_BOTH'];
+    static MAG_CODES = ['mag_L', 'mag_R', 'mag_BOTH'];
+    // The engine data refreshes every 2 s but rows are written at 1 Hz, so each sample
+    // is written twice with the same Zulu_Time, and the analysis scripts keep only the
+    // FIRST row per Zulu_Time. A mark is therefore held for the first row of a NEW
+    // sample time. If the sample time is empty, or has stayed the same for this many
+    // rows in a row (engine data frozen), it goes on the next row anyway.
+    static MARK_FROZEN_ROWS = 3;
+    // _recordRow writes nothing once the freshest source is 10 s old. A mark taken
+    // at age A waits for up to MARK_FROZEN_ROWS + 1 more rows (one per second) if the
+    // sample time is frozen, so it is only accepted while A + that stays under 10 s;
+    // otherwise it could be held through a data gap and written minutes later, or
+    // dropped at the gap auto-stop after the pilot saw "marked".
+    static DATA_FRESH_MS = 10000;
+    static MARK_FRESH_MS = FlightRecorder.DATA_FRESH_MS - (FlightRecorder.MARK_FROZEN_ROWS + 1) * 1000;
 
     // Auto-start/stop thresholds
     static RPM_START_THRESHOLD = 500;
@@ -92,6 +110,17 @@ class FlightRecorder {
         // may start or recover a recording meanwhile: stop() still works on this
         // recording's _fileName, buffers and GPS points.
         this._stopping = null;
+
+        // Marks (markEvent) waiting for the next row, and the last mag marked.
+        this._pendingEvents = [];
+        this._currentMag = null;
+        this._lastSampleTime = null;        // Zulu_Time of the last row written
+        this._sameTimeRows = 0;             // rows in a row with that same Zulu_Time (after the first)
+        // Does THIS recording's file have the `event` column? Always for a new one;
+        // false for one resumed from before marks existed (its header is the old one,
+        // and a row must never have more fields than its file's header).
+        // undefined (never set up) counts as true: see _hasEventColumn().
+        this._eventColumn = true;
 
         // Status callback
         this.onStatusChange = null;
@@ -179,6 +208,8 @@ class FlightRecorder {
         this._lastGps = null;
         this._mlCarry = null;
         this._rpmZeroCount = 0;             // a manual start with the engine off counts from now
+        this._eventColumn = true;           // CSV_HEADER below has it
+        this._resetMarks(null);
         this._csvBuffer = [FlightRecorder.CSV_HEADER];
 
         // Generate filename: YYYYMMDD_HHMMZ.csv
@@ -255,6 +286,10 @@ class FlightRecorder {
             this._lastGps = m.lastGps;
             this._rowCount = m.rowCount;
             this._mlCarry = m.ml;
+            // The file has the header it was started with: no event column unless the
+            // marker says it was written with one.
+            this._eventColumn = m.eventColumn;
+            this._resetMarks(m.eventColumn ? m.mag : null);
             this._csvBuffer = [];           // the file already has its header
             this._trafficBuffer = [];
             this._recording = true;
@@ -299,6 +334,8 @@ class FlightRecorder {
             rowCount: Number.isFinite(m.rowCount) ? m.rowCount : 0,
             savedAt: m.savedAt,
             shutdown: m.shutdown === true,
+            eventColumn: m.eventColumn === true,
+            mag: FlightRecorder.MAG_CODES.includes(m.mag) ? m.mag : null,
             ml: FlightRecorder.parseMlCounts(m.ml),
         };
     }
@@ -360,6 +397,11 @@ class FlightRecorder {
                 lastGps: this._lastGps,
                 rowCount: this._rowCount,
                 savedAt: Date.now(),
+                // This file's header has the `event` column (markEvent). A marker
+                // without it is a recording started by an older FlyTab.
+                eventColumn: this._hasEventColumn(),
+                // The last mag marked, so the checklist's highlight survives a restart.
+                mag: this._currentMag,
                 // Fresh evidence the flight is over (engine stopped / aircraft
                 // stopped): after a restart this recording is closed out, not resumed.
                 shutdown: this._shutdownEvidenceNow(),
@@ -379,6 +421,7 @@ class FlightRecorder {
     async stop(opts = {}) {
         if (!this._recording) return;
         this._recording = false;
+        // Marks still held are written by _finishStop (final row); then cleared.
         let done;
         this._stopping = new Promise((r) => { done = r; });
         try {
@@ -402,6 +445,16 @@ class FlightRecorder {
         const durationHours = this._startTime
             ? Math.round((endMs - this._startTime) / 36000) / 100
             : 0;
+
+        // Marks tapped after the last row: one final row carries them (same width
+        // rule as every row). No data to build a row from: they can't be saved.
+        if (this._pendingEvents?.length) {
+            const n = this._pendingEvents.length;
+            if (!(this._hasEventColumn() && this._recordRow({ final: true }))) {
+                if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `${n} mark(s) not saved: no data at stop`);
+            }
+        }
+        this._resetMarks(null);
 
         // Final save. Each waits for a save already in flight, so everything is
         // written (or reported failed) before the rename reads the files. flushOk
@@ -450,8 +503,78 @@ class FlightRecorder {
         return finalName;
     }
 
-    /** Build one CSV row from current engine + GPS state */
-    _recordRow() {
+    /**
+     * Mark a moment in the recording (checklist run-up / magneto buttons). The
+     * code goes into the `event` column of the NEXT row written -- exactly one
+     * row, though the engine data repeats every 2 s; taps before that row are
+     * joined with '|' in tap order.
+     * Returns { saved, at } (at = when it was tapped, ISO). When saved is false,
+     * `reason` says why: 'bad_code' | 'not_recording' | 'old_recording' (a
+     * recording resumed from before marks existed has no event column; adding
+     * fields to its rows would break the file) | 'no_data' (no fresh engine or
+     * GPS data: no row is being written).
+     * The row that carries it is the first copy of the next sample, see
+     * MARK_FROZEN_ROWS.
+     */
+    markEvent(code) {
+        const at = new Date().toISOString();
+        if (typeof code !== 'string' || !FlightRecorder.EVENT_CODES.includes(code)) {
+            return { saved: false, at, reason: 'bad_code' };
+        }
+        if (!this._recording) return { saved: false, at, reason: 'not_recording' };
+        if (!this._hasEventColumn()) return { saved: false, at, reason: 'old_recording' };
+        // With no fresh data no row is written (see MARK_FRESH_MS): refuse the mark
+        // rather than hold it across a gap.
+        if (!(this._freshSources().ageMs < FlightRecorder.MARK_FRESH_MS)) return { saved: false, at, reason: 'no_data' };
+        this._pendingEvents.push(code);
+        if (FlightRecorder.MAG_CODES.includes(code)) {
+            this._currentMag = code;
+            this._saveMarker();             // the highlight survives a restart
+        }
+        if (typeof DiagLog !== 'undefined') DiagLog.log('recorder', `Mark ${code} at ${at.slice(11, 19)}Z`);
+        return { saved: true, at };
+    }
+
+    /** The last magneto mark of this recording ('mag_L' | 'mag_R' | 'mag_BOTH'), or null. */
+    currentMag() {
+        return this._recording ? this._currentMag : null;
+    }
+
+    /** Start a recording's marks: nothing held, `mag` the last mag already marked in it. */
+    _resetMarks(mag) {
+        this._pendingEvents = [];
+        this._currentMag = mag ?? null;
+        this._lastSampleTime = null;
+        this._sameTimeRows = 0;
+    }
+
+    /**
+     * Which data sources are fresh enough for _recordRow to write a row. lastData
+     * and situation are never nulled on disconnect (to keep gauges showing the
+     * last values), so freshness is judged by age.
+     */
+    _freshSources() {
+        const eng = this._engine?.lastData;
+        const sit = this._stratux?.situation;
+        const sitAge = sit?.timestamp ? (Date.now() - sit.timestamp) : Infinity;
+        const hasGps = !!(sit?.lat && sit?.lon && (sit?.gps_fix_quality > 0) && sitAge < FlightRecorder.DATA_FRESH_MS);
+        const hasEngine = !!eng && (this._engine?.dataAge < FlightRecorder.DATA_FRESH_MS);
+        // ageMs: age of the freshest usable source (Infinity if none)
+        const ageMs = Math.min(hasGps ? sitAge : Infinity, hasEngine ? this._engine.dataAge : Infinity);
+        return { hasGps, hasEngine, ageMs };
+    }
+
+    /** False only for a recording resumed from a file that has no `event` column. */
+    _hasEventColumn() {
+        return this._eventColumn !== false;
+    }
+
+    /**
+     * Build one CSV row from current engine + GPS state. Returns true if a row
+     * was written. `final` (from _finishStop): to carry held marks, so no gap
+     * timer, and the marks are written whatever the sample time.
+     */
+    _recordRow({ final = false } = {}) {
         const eng = this._engine?.lastData;
         const sit = this._stratux?.situation;
         const d = eng?.data || {};
@@ -460,10 +583,9 @@ class FlightRecorder {
         // Use freshness checks — lastData and situation are never nulled on disconnect
         // (by design, to keep gauges showing last-known values). Stale cached data
         // must not prevent the gap timer from firing during a fuel stop.
-        const sitAge = sit?.timestamp ? (Date.now() - sit.timestamp) : Infinity;
-        const hasGps = sit?.lat && sit?.lon && (sit?.gps_fix_quality > 0) && sitAge < 10000;
-        const hasEngine = !!eng && (this._engine?.dataAge < 10000);
+        const { hasGps, hasEngine } = this._freshSources();
         if (!hasGps && !hasEngine) {
+            if (final) return false;
             // Both data sources absent — start gap timer if not already running.
             // If gap exceeds 2 minutes, auto-stop: the Stratux was likely powered off
             // for a fuel stop. Each flight leg gets its own clean recording.
@@ -474,7 +596,7 @@ class FlightRecorder {
                     this.stop();
                 }, 120000);
             }
-            return;
+            return false;
         }
         // Data is flowing — cancel any pending gap auto-stop
         if (this._gapTimer) { clearTimeout(this._gapTimer); this._gapTimer = null; }
@@ -549,10 +671,26 @@ class FlightRecorder {
             egtSpread, chtSpread, maxEgt,
             pctPower, opCond, pct, sfc,
             mlPhase, mlScore, mlAnomaly, mlLatency
-        ].join(',');
+        ];
+        // Same field count as this file's header, always. The marks are known codes
+        // (no commas), so they go in unquoted like every other field.
+        // Marks wait for the first row of a new sample time (see MARK_FROZEN_ROWS).
+        const sameTime = time12 === this._lastSampleTime;
+        this._sameTimeRows = sameTime ? (this._sameTimeRows || 0) + 1 : 0;
+        this._lastSampleTime = time12;
+        if (this._hasEventColumn()) {
+            const due = final || time12 === '' || !sameTime || this._sameTimeRows >= FlightRecorder.MARK_FROZEN_ROWS;
+            if (this._pendingEvents?.length && due) {
+                row.push(this._pendingEvents.join('|'));
+                this._pendingEvents = [];
+            } else {
+                row.push('');
+            }
+        }
 
-        this._csvBuffer.push(row);
+        this._csvBuffer.push(row.join(','));
         this._rowCount++;
+        return true;
     }
 
     _recordTrafficSnapshot() {
