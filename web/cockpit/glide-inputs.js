@@ -33,7 +33,7 @@ const GlideInputs = (() => {
     const EARTH_RADIUS_NM = 3440.065;
     /** A situation older than this is not a position (the block must disappear, not freeze). */
     const SIT_MAX_AGE_MS = 5000;
-    /** An observation this far in the future (clock skew) is not trusted. */
+    /** An observation time this far ahead of now (clock skew, a bad report) is not trusted. */
     const FUTURE_TOLERANCE_MS = 5 * 60000;
     const MS_PER_MIN = 60000;
 
@@ -286,12 +286,12 @@ const GlideInputs = (() => {
      * the AWC decoder's observed_at is the report time (top of the hour), which understates the age.
      */
     function metarAgeMin(decoded, now, maxAgeMin, rawObservedAt) {
-        const times = [decoded && Date.parse(decoded.observed_at), rawObservedAt && Date.parse(rawObservedAt)].filter(isNum);
+        // A time more than FUTURE_TOLERANCE_MS ahead of `now` (clock skew, a bad report) has an unknown age:
+        // it is ignored, and a METAR with no usable time left is not used.
+        const times = [decoded && Date.parse(decoded.observed_at), rawObservedAt && Date.parse(rawObservedAt)]
+            .filter((t) => isNum(t) && t - now <= FUTURE_TOLERANCE_MS);
         if (!times.length) return null;
-        const t = Math.min(...times);
-        const age = now - t;
-        if (age < -FUTURE_TOLERANCE_MS) return null;
-        const min = Math.max(0, age) / MS_PER_MIN;
+        const min = Math.max(0, now - Math.min(...times)) / MS_PER_MIN;
         return min <= maxAgeMin ? min : null;
     }
 

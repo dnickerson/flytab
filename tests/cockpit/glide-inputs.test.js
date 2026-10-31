@@ -12,7 +12,7 @@
  *    gps_fix_quality, timestamp (ms epoch, Date.now() at receipt).
  *  - Route planner winds: { STN: { altFt: { dir, spd, variable? } } }.
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { readFileSync } from 'fs';
 
 const read = (p) => readFileSync(p, 'utf8');
@@ -430,6 +430,8 @@ describe('GlideInputs.runwayWind', () => {
         };
     };
     beforeEach(() => { globalThis.window.app = undefined; GlideInputs._resetCaches(); });
+    // the METAR-age test fakes the clock and sets a global: always restore, even when it fails
+    afterEach(() => { vi.useRealTimers(); globalThis.FisbClient = undefined; });
 
     it('the airport METAR from FIS-B, with gusts', async () => {
         setup({ own: { KLKR: entry(18, { wind_dir: 240, wind_speed: 12, wind_gust: 18 }) } });
@@ -552,6 +554,9 @@ describe('GlideInputs.runwayWind', () => {
 
     it('cached METAR age: the older of decoded.observed_at and the raw report time (err high)', async () => {
         // AWC reportTime is the top of the hour; the raw report says it was observed at 17:35Z (25 min before NOW=18:00Z)
+        // FisbClient.decodeMetar resolves the day of month against the real clock: pin it to NOW
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(NOW);
         globalThis.FisbClient = new Function(read('web/shared/fisb-client.js') + '\nreturn FisbClient;')();
         const hourTop = '2026-10-31T18:00:00.000Z';                    // understates the age: 0 min
         const raw = 'KLKR 311735Z 24012KT 10SM CLR 15/05 A3002';
@@ -569,7 +574,31 @@ describe('GlideInputs.runwayWind', () => {
         // no raw: decoded alone
         setup({ cache: { KLKR: { metar: { decoded: { observed_at: iso(7), wind_dir: 240, wind_speed: 12 } } } } });
         expect((await GlideInputs.runwayWind('KLKR', REF, settings(), NOW)).label).toBe('METAR KLKR 240/12 (7 min)');
-        globalThis.FisbClient = undefined;
+    });
+
+    it('an observation time more than 5 min in the future is unusable (unknown age), from either source', async () => {
+        const future = (min) => new Date(NOW + min * 60000).toISOString();
+        // decoded.observed_at = now + 2 h, no raw: not used
+        setup({ cache: { KLKR: { metar: { decoded: { observed_at: future(120), wind_dir: 240, wind_speed: 12 } } } } });
+        expect((await GlideInputs.runwayWind('KLKR', REF, settings(), NOW)).wind).toEqual({ kind: 'none' });
+        setup({ own: { KLKR: entry(-120) } });
+        expect((await GlideInputs.runwayWind('KLKR', REF, settings(), NOW)).wind).toEqual({ kind: 'none' });
+        // a FIS-B METAR with a future time does not stop the next source
+        setup({ own: { KLKR: entry(-120) },
+            cache: { KLKR: { metar: { decoded: { observed_at: iso(10), wind_dir: 120, wind_speed: 7 } } } } });
+        expect((await GlideInputs.runwayWind('KLKR', REF, settings(), NOW)).wind.from).toBe(120);
+        // within the tolerance it is taken as just observed
+        setup({ own: { KLKR: entry(-4) } });
+        expect((await GlideInputs.runwayWind('KLKR', REF, settings(), NOW)).label).toBe('METAR KLKR 240/12 (0 min)');
+        setup({ own: { KLKR: entry(-6) } });
+        expect((await GlideInputs.runwayWind('KLKR', REF, settings(), NOW)).wind).toEqual({ kind: 'none' });
+        // a raw report time ahead of now: FisbClient.decodeMetar rolls it back a month, so it reads as very old - not used
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(NOW);
+        globalThis.FisbClient = new Function(read('web/shared/fisb-client.js') + '\nreturn FisbClient;')();
+        setup({ cache: { KLKR: { metar: { raw: 'KLKR 311935Z 24012KT 10SM CLR 15/05 A3002',
+            decoded: { observed_at: iso(20), wind_dir: 240, wind_speed: 12 } } } } });
+        expect((await GlideInputs.runwayWind('KLKR', REF, settings(), NOW)).wind).toEqual({ kind: 'none' });
     });
 
     it('a station position miss is not cached (a later lookup can succeed)', async () => {
