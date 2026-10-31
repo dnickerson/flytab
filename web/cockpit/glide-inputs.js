@@ -69,13 +69,13 @@ const GlideInputs = (() => {
 
     /**
      * Allowed [min, max, safer?] per setting. `safer` says which way errs high (a wrong "GLIDE OK" is the failure
-     * to avoid): 'higher' (more sink, margin, assumed headwind) -> a value above max becomes max; 'lower' (slower
-     * glide speed, nearer / fresher wind and METAR limits) -> a value below min becomes min. Any other out-of-range
+     * to avoid): 'higher' (more sink, margin, assumed headwind) -> a value above max becomes max; 'lower' (nearer /
+     * fresher wind and METAR limits) -> a value below min becomes min. Any other out-of-range
      * value, and every non-finite one, takes the default.
      */
     const RANGES = {
         aircraft: {
-            glide_ias_kt: [30, 200, 'lower'],
+            glide_ias_kt: [30, 200],        // no safe side: a slower glide turns in less height (review R29)
             glide_sink_fpm: [100, 3000, 'higher'],
             glide_density_pct_per_kft: [0, 5],
         },

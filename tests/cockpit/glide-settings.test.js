@@ -71,8 +71,9 @@ describe('invalid settings fall back on the safe side', () => {
 
     // Review R27 (2026-10-31, supersedes R26's plain clamp): a finite value outside its range becomes the MORE
     // CONSERVATIVE of the nearest edge and the default. Where a higher value is safer (sink, margin, line-up,
-    // assumed headwind) too high -> the max, too low -> the default; where lower is safer (glide speed, wind and
-    // METAR distance/age limits) too low -> the min, too high -> the default; every other key -> the default.
+    // assumed headwind) too high -> the max, too low -> the default; where lower is safer (wind and METAR
+    // distance/age limits) too low -> the min, too high -> the default; every other key -> the default.
+    // R29: glide speed is NOT 'lower is safer' (a slow glide turns in less height): default both ways.
     it('out of range -> the more conservative of the edge and the default', () => {
         const s = (grp, k, val) => v({ [grp]: { [k]: val } })[grp][k];
         expect(s('aircraft', 'glide_sink_fpm', 0)).toBe(700);
@@ -80,12 +81,35 @@ describe('invalid settings fall back on the safe side', () => {
         expect(s('pilot', 'marginFt', -50)).toBe(200);
         expect(s('pilot', 'marginFt', 2500)).toBe(2000);
         expect(s('pilot', 'noWindHeadwindKt', 60)).toBe(50);
-        expect(s('aircraft', 'glide_ias_kt', 10)).toBe(30);
+        expect(s('aircraft', 'glide_ias_kt', 10)).toBe(65);
         expect(s('aircraft', 'glide_ias_kt', 300)).toBe(65);
         expect(s('pilot', 'windMaxStationNm', 600)).toBe(100);
         expect(s('pilot', 'metarMaxAgeMin', 5)).toBe(10);
         expect(s('pilot', 'turnBankDeg', 90)).toBe(30);
         expect(s('pilot', 'showAboveGsKt', 500)).toBe(25);
+    });
+
+    it('R29 regression: a glide-speed typo (6 kt) must not make plan B reachable over the runway', () => {
+        // 5,000 ft runway 18/36, calm, sink 700, 30 deg bank; aircraft over mid-runway at 500 ft AGL heading away
+        // (east). At 30 kt the turn back costs so little height that plan B shows spare (the corner the reviewer
+        // found: raising "6" to the 30 kt edge); with the default 65 kt it is out of reach.
+        const FT_PER_NM = 6076.12, ELEV = 486, half = 2500 / FT_PER_NM;
+        const a = { x: 0, y: -half }, b = { x: 0, y: half }, mid = { x: 0, y: 0 };
+        const airport = { elevFt: ELEV, ref: { x: 0, y: 0 }, ends: [
+            { id: '36', runwayId: '18/36', thr: a, hdgTrue: 0, rwyLenFt: 5000, mid, rwy: { a, b } },
+            { id: '18', runwayId: '18/36', thr: b, hdgTrue: 180, rwyLenFt: 5000, mid, rwy: { a, b } },
+        ] };
+        const plan = (s) => GlideModel.plan({ airport, ac: { pos: { x: 0, y: 0 }, altMsl: ELEV + 500, gs: 70, trkTrue: 90, vs: 0 },
+            glideWind: null, runwayWind: { kind: 'calm' }, preferDirect: false }, s);
+        const S = (aircraft) => GlideInputs.validate({ aircraft, pilot: {} });
+        expect(S({}).aircraft).toMatchObject({ glide_ias_kt: 65, glide_sink_fpm: 700 });
+        expect(S({}).pilot.turnBankDeg).toBe(30);
+        const byDefault = plan(S({}));
+        expect(byDefault.spare).toBeLessThan(0);                                   // not reachable
+        expect(plan(S({ glide_ias_kt: 30 })).spare).toBeGreaterThan(0);           // the corner, at the 30 kt edge
+        const typo = plan(S({ glide_ias_kt: 6 }));
+        expect(typo.spare).toBe(byDefault.spare);
+        expect(typo.kind).toBe(byDefault.kind);
     });
 
     it('min 1200 > max 1000 -> BOTH defaults (500 / 1000)', () => {
@@ -112,7 +136,7 @@ describe('invalid settings fall back on the safe side', () => {
         // [lo, hi, group, safer]: 'higher' -> above = hi, below = default; 'lower' -> below = lo, above = default;
         // none -> default both ways
         const ranges = {
-            glide_ias_kt: [30, 200, 'aircraft', 'lower'], glide_sink_fpm: [100, 3000, 'aircraft', 'higher'],
+            glide_ias_kt: [30, 200, 'aircraft'], glide_sink_fpm: [100, 3000, 'aircraft', 'higher'],
             glide_density_pct_per_kft: [0, 5, 'aircraft'],
             turnBankDeg: [10, 60], marginFt: [0, 2000, 'pilot', 'higher'], lineUpFtPerDeg: [0, 10, 'pilot', 'higher'],
             finalPointFraction: [0, 1], finalPointMinFt: [0, 5000], noWindHeadwindKt: [0, 50, 'pilot', 'higher'],
