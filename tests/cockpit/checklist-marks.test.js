@@ -96,7 +96,7 @@ describe('Checklist capture buttons', () => {
         expect(row('Engine Idle').querySelector('[data-capture="runup_end"]').textContent).toBe('RUN-UP END');
         const mags = [...row('Magneto').querySelectorAll('.checklist-capture-btn')];
         expect(mags.map((b) => [b.dataset.capture, b.textContent])).toEqual([
-            ['mag_L', 'LEFT'], ['mag_R', 'RIGHT'], ['mag_BOTH', 'BOTH'],
+            ['mag_BOTH', 'BOTH'], ['mag_L', 'LEFT'], ['mag_R', 'RIGHT'],
         ]);
         // other items have none
         expect(row('Prop').querySelector('.checklist-capture-btn')).toBeNull();
@@ -107,7 +107,7 @@ describe('Checklist capture buttons', () => {
         await build();
         open('abnormal', 'Engine', 'In Flight Mag Check');
         const mags = [...row('Mags').querySelectorAll('.checklist-capture-btn')].map((b) => b.dataset.capture);
-        expect(mags).toEqual(['mag_L', 'mag_R', 'mag_BOTH']);
+        expect(mags).toEqual(['mag_BOTH', 'mag_L', 'mag_R']);
         expect(row('Power').querySelector('.checklist-capture-btn')).toBeNull();
     });
 
@@ -156,22 +156,39 @@ describe('Checklist capture buttons', () => {
         await build();
         open('normal', 'VFR', 'Runup');
         const active = () => [...cl._bodyEl.querySelectorAll('.checklist-capture-btn.active')].map((b) => b.dataset.capture);
-        expect(active()).toEqual([]);
+        // nothing marked in this recording: BOTH is shown selected, and that is display only
+        expect(active()).toEqual(['mag_BOTH']);
+        expect(btn('mag_BOTH').getAttribute('aria-pressed')).toBe('true');
+        expect(recorder.markEvent).not.toHaveBeenCalled();
         tap(btn('mag_L'));
         expect(active()).toEqual(['mag_L']);
         expect(btn('mag_L').getAttribute('aria-pressed')).toBe('true');
         expect(btn('mag_R').getAttribute('aria-pressed')).toBe('false');
+        expect(btn('mag_BOTH').getAttribute('aria-pressed')).toBe('false');
+        tap(btn('mag_R'));
+        expect(active()).toEqual(['mag_R']);
         tap(btn('mag_BOTH'));
         expect(active()).toEqual(['mag_BOTH']);
+        tap(btn('mag_L'));
         // nothing about it was stored on the tablet
         expect(Object.keys(localStorage).some((k) => /mag/i.test(k) || /mag_/.test(localStorage.getItem(k) || ''))).toBe(false);
         // a re-render (reset, other list and back) shows the recorder's state
         open('abnormal', 'Engine', 'In Flight Mag Check');
-        expect(active()).toEqual(['mag_BOTH']);
-        // a recording that ended elsewhere: the highlight goes with it
+        expect(active()).toEqual(['mag_L']);
+        // a recording that ended elsewhere: back to the BOTH default
         recorder.currentMag = () => null;
         open('normal', 'VFR', 'Runup');
-        expect(active()).toEqual([]);
+        expect(active()).toEqual(['mag_BOTH']);
+        // still nothing written for the default
+        expect(marked).toEqual(['mag_L', 'mag_R', 'mag_BOTH', 'mag_L']);
+    });
+
+    it('not recording at all (no recorder): the mag row still shows BOTH selected, nothing is marked', async () => {
+        await build();
+        delete window.flightRecorder;
+        open('abnormal', 'Engine', 'In Flight Mag Check');
+        expect([...cl._bodyEl.querySelectorAll('.checklist-capture-btn.active')].map((b) => b.dataset.capture)).toEqual(['mag_BOTH']);
+        expect(marked).toEqual([]);
     });
 
     it('run-up start/end buttons are never highlighted', async () => {
@@ -268,7 +285,7 @@ describe('Checklist highlight follows the recording start/stop', () => {
         expect(active()).toEqual(['mag_R']);
         mag = null;                                     // recording ended
         window.dispatchEvent(new CustomEvent('flightsync:stopped'));
-        expect(active()).toEqual([]);
+        expect(active()).toEqual(['mag_BOTH']);
         mag = 'mag_L';                                  // resumed recording
         window.dispatchEvent(new CustomEvent('flightsync:started'));
         expect(active()).toEqual(['mag_L']);

@@ -232,11 +232,11 @@ Android tells FlyTab *that* a VPN is connected but not *which* app owns it, so b
 **Run-up and magneto marks.** Four items carry buttons that put a mark into the flight recording, so the run-up and each magneto switch can be found in the data afterwards:
 
 - **Normal → Runup → 50% Power:** **RUN-UP START**. Tap it when you set 50% power.
-- **Normal → Runup → Magneto:** **LEFT**, **RIGHT**, **BOTH**. Tap the one you have just selected, each time you switch.
+- **Normal → Runup → Magneto:** **BOTH**, **LEFT**, **RIGHT**. Tap the one you have just selected, each time you switch.
 - **Normal → Runup → Engine Idle:** **RUN-UP END**.
-- **Abnormal → Engine → In Flight Mag Check → Mags:** the same **LEFT / RIGHT / BOTH** buttons.
+- **Abnormal → Engine → In Flight Mag Check → Mags:** the same **BOTH / LEFT / RIGHT** buttons.
 
-The most recent mag you marked in this recording is filled blue, so you can see where you left it (it is still shown if FlyTab restarts and carries on with the same recording; it clears when the recording ends). A toast confirms each tap with the time in Zulu ("LEFT mag marked 20:57:14Z"). That time is the tablet's clock; the file's own `Zulu_Time` column comes from the engine monitor's clock, so the two can differ slightly. Tapping a mark button never checks the item off; tap the item's text for that.
+The mag you last marked in this recording is filled blue, so you can see where you left it. **BOTH** is shown selected until you tap another; that default is not written to the recording (only your taps are). Your last mark is still shown if FlyTab restarts and carries on with the same recording; when the recording ends, the row goes back to BOTH. A toast confirms each tap with the time in Zulu ("LEFT mag marked 20:57:14Z"). That time is the tablet's clock; the file's own `Zulu_Time` column comes from the engine monitor's clock, so the two can differ slightly. Tapping a mark button never checks the item off; tap the item's text for that.
 
 The marks are saved in the flight's CSV file in a last column called `event` (`runup_start`, `runup_end`, `mag_L`, `mag_R`, `mag_BOTH`) on the first row of the next engine reading after your tap (the engine monitor sends a new reading every 2 seconds, and the recording writes each reading twice; the mark goes on the first copy so it is not lost when the duplicates are dropped). Several taps before that row share it, joined with `|`. A mark tapped just before the recording ends is written on one last row.
 

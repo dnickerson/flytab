@@ -349,7 +349,7 @@ class Checklist {
     _captureRow(capture) {
         const btns = Checklist.CAPTURE_BUTTONS[capture];
         if (!btns) return '';
-        const cur = this._currentMag();
+        const cur = this._shownMag();
         const html = btns.map(([code, label]) => {
             const on = capture === 'mags' && code === cur;
             return `<button type="button" class="checklist-capture-btn${on ? ' active' : ''}" data-capture="${code}"${capture === 'mags' ? ` aria-pressed="${on}"` : ''}>${label}</button>`;
@@ -360,6 +360,14 @@ class Checklist {
     /** The last mag marked in the current recording (FlightRecorder, not localStorage), or null. */
     _currentMag() {
         try { return window.flightRecorder?.currentMag?.() ?? null; } catch { return null; }
+    }
+
+    /**
+     * The mag button shown selected: the recording's last mag mark, else BOTH (the
+     * mag check starts on both). Display only: the default is never written.
+     */
+    _shownMag() {
+        return this._currentMag() ?? 'mag_BOTH';
     }
 
     /** Mark `code` in the recording, say so, and move the mag highlight. */
@@ -381,7 +389,7 @@ class Checklist {
 
     /** Highlight the button for the recorder's current mag, in place (no re-render). */
     _refreshCapture() {
-        const cur = this._currentMag();
+        const cur = this._shownMag();
         this._bodyEl.querySelectorAll('.checklist-capture--mags .checklist-capture-btn').forEach(b => {
             const on = b.dataset.capture === cur;
             b.classList.toggle('active', on);
@@ -562,7 +570,7 @@ class Checklist {
 Checklist.CAPTURE_BUTTONS = {
     runup_start: [['runup_start', 'RUN-UP START']],
     runup_end: [['runup_end', 'RUN-UP END']],
-    mags: [['mag_L', 'LEFT'], ['mag_R', 'RIGHT'], ['mag_BOTH', 'BOTH']],
+    mags: [['mag_BOTH', 'BOTH'], ['mag_L', 'LEFT'], ['mag_R', 'RIGHT']],
 };
 // What the toast calls each mark.
 Checklist.CAPTURE_LABELS = {
