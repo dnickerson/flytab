@@ -63,10 +63,36 @@ const GlideInputs = (() => {
 
     // ---- Settings -----------------------------------------------------------
 
+    /** Allowed [min, max] per setting; a value outside (or non-finite) falls back to its default. */
+    const RANGES = {
+        aircraft: {
+            glide_ias_kt: [30, 200],
+            glide_sink_fpm: [100, 3000],
+            glide_density_pct_per_kft: [0, 5],
+        },
+        pilot: {
+            turnBankDeg: [10, 60],          // 90 or more would make 1 / cos(bank)^1.5 blow up
+            marginFt: [0, 2000],
+            lineUpFtPerDeg: [0, 10],
+            finalPointFraction: [0, 1],
+            finalPointMinFt: [0, 5000],
+            // finalPointMaxFt: >= finalPointMinFt, checked as a pair below
+            noWindHeadwindKt: [0, 50],
+            planBHysteresisFt: [0, 1000],
+            onCourseDeg: [1, 30],
+            windMaxStationNm: [1, 500],
+            windMaxAgeMin: [10, 1440],
+            metarMaxAgeMin: [10, 240],
+            metarMaxStationNm: [0, 100],
+            showAboveGsKt: [0, 200],
+        },
+    };
+
     /**
-     * Resolved settings: every GlideModel.DEFAULTS key, from `raw` when finite (numeric strings accepted),
-     * else the default. min_runway_ft: a finite number, or null for "no length filter".
-     * (Range validation - bank < 90, min <= max, ... - is Task 3.)
+     * Resolved settings: every GlideModel.DEFAULTS key, from `raw` when finite and within its range
+     * (numeric strings accepted, always returned as numbers), else the default. finalPointMaxFt must be
+     * >= finalPointMinFt, else BOTH take their defaults. min_runway_ft: a finite number >= 0, or null
+     * for "no length filter".
      */
     function validate(raw) {
         const D = GlideModel.DEFAULTS;
@@ -74,11 +100,19 @@ const GlideInputs = (() => {
         const a = (raw && raw.aircraft) || {}, p = (raw && raw.pilot) || {};
         for (const k of Object.keys(D.aircraft)) {
             const v = toFinite(a[k]);
-            out.aircraft[k] = v !== undefined ? v : D.aircraft[k];
+            const r = RANGES.aircraft[k];
+            const ok = v !== undefined && (r ? v >= r[0] && v <= r[1] : v >= 0);
+            out.aircraft[k] = ok ? v : D.aircraft[k];
         }
         for (const k of Object.keys(D.pilot)) {
             const v = toFinite(p[k]);
-            out.pilot[k] = v !== undefined ? v : D.pilot[k];
+            const r = RANGES.pilot[k];
+            const ok = v !== undefined && (r ? v >= r[0] && v <= r[1] : v >= 0);
+            out.pilot[k] = ok ? v : D.pilot[k];
+        }
+        if (out.pilot.finalPointMaxFt < out.pilot.finalPointMinFt) {
+            out.pilot.finalPointMinFt = D.pilot.finalPointMinFt;
+            out.pilot.finalPointMaxFt = D.pilot.finalPointMaxFt;
         }
         return out;
     }

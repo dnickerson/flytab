@@ -131,6 +131,23 @@ class ConfigEditor {
             'dmmsFlashWhenBelow': { type: 'bool', label: 'Flash When Below' },
         }));
 
+        sections.push(this._renderSection('engineOutGlide', 'Engine-Out Glide', this._cockpitConfig.engineOutGlide || {}, {
+            'turnBankDeg':        { type: 'number', label: 'Turn Bank Angle (deg)', min: 10, max: 60 },
+            'marginFt':           { type: 'number', label: 'Safety Margin (ft)', min: 0, max: 2000, step: 50 },
+            'lineUpFtPerDeg':     { type: 'number', label: 'Line-Up Cost (ft per deg of turn)', min: 0, max: 10, step: 0.1 },
+            'finalPointFraction': { type: 'number', label: 'Final Point (fraction of runway length)', min: 0, max: 1, step: 0.05 },
+            'finalPointMinFt':    { type: 'number', label: 'Final Point Minimum (ft)', min: 0, max: 5000, step: 50 },
+            'finalPointMaxFt':    { type: 'number', label: 'Final Point Maximum (ft)', min: 0, max: 5000, step: 50 },
+            'noWindHeadwindKt':   { type: 'number', label: 'Assumed Headwind When No Wind Known (kt)', min: 0, max: 50 },
+            'planBHysteresisFt':  { type: 'number', label: 'Plan B Switch Hysteresis (ft)', min: 0, max: 1000, step: 10 },
+            'onCourseDeg':        { type: 'number', label: 'On-Course Tolerance (deg)', min: 1, max: 30 },
+            'windMaxStationNm':   { type: 'number', label: 'Winds Aloft Max Station Distance (nm)', min: 1, max: 500, step: 5 },
+            'windMaxAgeMin':      { type: 'number', label: 'Winds Aloft Max Age (min)', min: 10, max: 1440, step: 10 },
+            'metarMaxAgeMin':     { type: 'number', label: 'Airport METAR Max Age (min)', min: 10, max: 240, step: 5 },
+            'metarMaxStationNm':  { type: 'number', label: 'Nearest-Station METAR Max Distance (nm)', min: 0, max: 100 },
+            'showAboveGsKt':      { type: 'number', label: 'Show Glide Block Above Ground Speed (kt)', min: 0, max: 200 },
+        }));
+
         sections.push(this._renderSection('ifr', 'IFR', this._cockpitConfig.ifr || {}, {
             'showCdPhone':    { type: 'bool', label: 'Show CD Phone' },
             'defaultCdPhone': { type: 'text', label: 'Default CD Phone', wide: true },
@@ -347,7 +364,10 @@ class ConfigEditor {
             'vno_kt': { type: 'number', label: 'Vno (kt)', min: 50, max: 250 },
             'vne_kt': { type: 'number', label: 'Vne (kt)', min: 80, max: 400 },
             'dmms_factor':      { type: 'number', label: 'DMMS Factor', min: 1.0, max: 2.0, step: 0.001 },
-            'glide_ratio':      { type: 'number', label: 'Glide Ratio', min: 5, max: 30, step: 0.5 },
+            // Engine-out glide panel (GlideModel): best-glide speed, sink rate, density correction.
+            'glide_ias_kt':     { type: 'number', label: 'Best-Glide Speed (KIAS)', min: 30, max: 200 },
+            'glide_sink_fpm':   { type: 'number', label: 'Glide Sink Rate (fpm, sea level, windmilling, gross)', min: 100, max: 3000, step: 10 },
+            'glide_density_pct_per_kft': { type: 'number', label: 'Glide TAS/Sink Increase (% per 1,000 ft)', min: 0, max: 5, step: 0.1 },
             'test_alt_agl_ft':  { type: 'number', label: 'Test Alt AGL (ft)', min: 1000, max: 20000, step: 500 },
         }));
 
@@ -628,7 +648,7 @@ class ConfigEditor {
 
         if (target === 'cockpit') {
             // Collect standard section fields
-            const sections = ['map', 'enginePage', 'flightRecording', 'radar', 'approachCharts', 'takeoffAlerts', 'ifr', 'logbook', 'traffic'];
+            const sections = ['map', 'enginePage', 'flightRecording', 'radar', 'approachCharts', 'takeoffAlerts', 'engineOutGlide', 'ifr', 'logbook', 'traffic'];
             for (const section of sections) {
                 if (!this._cockpitConfig[section]) this._cockpitConfig[section] = {};
                 body.querySelectorAll(`[data-section="${section}"]`).forEach(el => {
