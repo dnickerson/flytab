@@ -224,7 +224,8 @@ const GlideInputs = (() => {
      * The Stratux situation as the model's aircraft state, relative to refLatLon ({ lat, lon } of the airport),
      * or null: no 3D fix, older than SIT_MAX_AGE_MS, below showAboveGsKt (not flying), or any needed value
      * missing. Altitude is GPS MSL (alt_msl) only - never the barometric altitude.
-     * vs: situation.vertical_speed, ft/min (StratuxClient converts the WebSocket's ft/s; GDL 90 is already ft/min).
+     * vs: situation.vertical_speed (ft/min) passed through as-is. The glide panel does not use it: it replaces
+     * ac.vs with MEASURED, the descent rate it derives from GPS altitude (GlidePanel._measuredVs).
      */
     function aircraft(sit, settings_, refLatLon, now = Date.now()) {
         if (!sit || !refLatLon || !isLL(refLatLon.lat, refLatLon.lon)) return null;
@@ -238,7 +239,7 @@ const GlideInputs = (() => {
             altMsl: sit.alt_msl,
             gs: sit.ground_speed,
             trkTrue: norm360(sit.true_course),
-            vs: isNum(sit.vertical_speed) ? sit.vertical_speed : null,
+            vs: isNum(sit.vertical_speed) ? sit.vertical_speed : null,   // pass-through; the panel uses its GPS-altitude rate
         };
     }
 
