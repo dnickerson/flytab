@@ -224,7 +224,7 @@ const GlideInputs = (() => {
      * The Stratux situation as the model's aircraft state, relative to refLatLon ({ lat, lon } of the airport),
      * or null: no 3D fix, older than SIT_MAX_AGE_MS, below showAboveGsKt (not flying), or any needed value
      * missing. Altitude is GPS MSL (alt_msl) only - never the barometric altitude.
-     * vs is passed through as the situation reports it (see the report: Stratux WS and GDL 90 differ in unit).
+     * vs: situation.vertical_speed, ft/min (StratuxClient converts the WebSocket's ft/s; GDL 90 is already ft/min).
      */
     function aircraft(sit, settings_, refLatLon, now = Date.now()) {
         if (!sit || !refLatLon || !isLL(refLatLon.lat, refLatLon.lon)) return null;
