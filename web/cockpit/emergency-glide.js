@@ -67,7 +67,10 @@ class EmergencyGlide {
         const lat = sit?.lat;
         const lon = sit?.lon;
 
-        if (!lat || !lon || !fresh(sit)) {
+        // A position needs a GPS fix too (GpsFix.has3DFix, the own-ship map rule): Stratux keeps sending its
+        // last lat/lon after the fix is lost, and the engine-GPS bridge re-stamps a Pi's frozen position every
+        // second with gps_fix_quality 0 while the Pi cannot reach the Stratux.
+        if (!lat || !lon || !fresh(sit) || !GpsFix.has3DFix(sit)) {
             console.warn('[EmergencyGlide] No current GPS position — cannot compute glide range');
             this._showNoGpsOverlay(testMode);
             return;

@@ -265,10 +265,22 @@ describe('EmergencyGlide on the shared glide model', () => {
         expect(byId('KLKR')._reachable).toBe(false);
     });
 
-    it('unfixed situation -> no airport reachable (MARGINAL)', async () => {
+    it('a fresh Stratux situation with no fix (fix 0, last lat/lon) -> the no-GPS overlay, no list', async () => {
+        // Stratux keeps sending the last position after the fix is lost: bearings from it would be wrong.
         wsSit = situation(180, 3, 6000, 360, { gps_fix_quality: 0 });
         await eg.trigger();
-        expect(byId('KLKR')._reachable).toBe(false);
+        expect(document.querySelector('#emergencyGlideOverlay').textContent).toContain('No GPS');
+        expect(events.length).toBe(0);
+
+        // the same through GDL 90 (the position valid bit off maps to 0), and dead reckoning (6) is not a fix
+        for (const q of [0, 6]) {
+            wsSit = null;
+            gdlSit = situation(180, 3, 6000, 360, { gps_fix_quality: q });
+            eg._lastTriggerTime = 0;
+            await eg.trigger();
+            expect(document.querySelector('#emergencyGlideOverlay').textContent).toContain('No GPS');
+            expect(events.length).toBe(0);
+        }
     });
 
     it('both situations stale (or none) -> the no-GPS overlay', async () => {
@@ -285,19 +297,35 @@ describe('EmergencyGlide on the shared glide model', () => {
         expect(events.length).toBe(0);
     });
 
-    it('engine-GPS bridge (Stratux situation WS stale, Pi engine data fresh): airports listed as MARGINAL, not "No GPS"', async () => {
-        // The real EngineGpsBridge builds the situation from the Pi's engine data. It had no timestamp, so the
-        // freshness gate above showed the no-GPS overlay whenever the bridge was the position source.
+    /** The situation the real EngineGpsBridge injects from Pi engine data 3 nm S of KLKR (Stratux WS stale). */
+    function bridgeSituation(extra = {}) {
         const EngineGpsBridge = new Function(`${read('web/shared/gps-staleness.js')}\n${read('web/shared/engine-gps-bridge.js')}\nreturn EngineGpsBridge;`)();
         const p = at(180, 3);
         const stratux = new EventTarget();
         Object.assign(stratux, { situation: null, wsSituation: null, stale: true, _suppressGpsSituation: false });
-        const engine = { stale: false, lastData: { latitude: p.lat, longitude: p.lon, gps_altitude: 6000, ground_speed: 120, course: 360, pitch: 0, bank: 0, acc_vert: 1 } };
+        const engine = { stale: false, lastData: { latitude: p.lat, longitude: p.lon, gps_altitude: 6000, ground_speed: 120, course: 360, pitch: 0, bank: 0, acc_vert: 1, ...extra } };
         const bridge = Object.create(EngineGpsBridge.prototype);
         Object.assign(bridge, { _stratux: stratux, _engine: engine, _active: false, _staleTimer: null });
         globalThis.DiagLog = globalThis.DiagLog || { log: () => {} };
         bridge._tick();
         clearTimeout(bridge._staleTimer);
+        return { stratux, p };
+    }
+
+    it('engine-GPS bridge, Pi cannot reach the Stratux (gps_fix_quality 0, frozen position re-stamped fresh) -> no-GPS overlay', async () => {
+        const { stratux } = bridgeSituation({ gps_fix_quality: 0 });
+        expect(stratux.situation.timestamp).toBe(NOW);
+        expect(stratux.situation.gps_fix_quality).toBe(0);
+        window.app.stratuxClient = stratux;
+        await eg.trigger();
+        expect(document.querySelector('#emergencyGlideOverlay').textContent).toContain('No GPS');
+        expect(events.length).toBe(0);
+    });
+
+    it('engine-GPS bridge (Stratux situation WS stale, Pi engine data fresh, fix 1): airports listed as MARGINAL, not "No GPS"', async () => {
+        // The real EngineGpsBridge builds the situation from the Pi's engine data. It had no timestamp, so the
+        // freshness gate above showed the no-GPS overlay whenever the bridge was the position source.
+        const { stratux, p } = bridgeSituation({ gps_fix_quality: 1 });
         expect(stratux.situation._source).toBe('engine');
         expect(stratux.situation.timestamp).toBe(NOW);
         window.app.stratuxClient = stratux;
