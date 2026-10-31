@@ -947,6 +947,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
                 this._windsInfo = r;
                 // No forecast for this time: calm air, not another period's winds.
                 this._lastWinds = r.winds || null;
+                this._lastWindsAt = this._lastWinds ? Date.now() : null;   // GlideInputs judges the winds' age by this
                 this._scheduleCheck();
                 return undefined;
             });

@@ -1,0 +1,378 @@
+/**
+ * FlyTab - engine-out glide inputs (web/cockpit/glide-inputs.js).
+ *
+ * The adapter from app state to the inputs of GlideModel.plan() (web/shared/glide-model.js):
+ *   settings()   aircraft performance + pilot section, validated, defaults from GlideModel.DEFAULTS
+ *   airport()    NASR airport record -> model airport (candidate runways, per-end geometry)
+ *   aircraft()   Stratux situation -> model aircraft state, or null (no block)
+ *   glideWind()  winds aloft at the aircraft: FIS-B, else the route planner's downloaded winds
+ *   runwayWind() the wind to land in: the airport's METAR (FIS-B, else the cached one), else the nearest station
+ *
+ * Only data already on the tablet is read; nothing here touches the network (no internet in flight).
+ * Every missing or untrusted input takes the more conservative path: a missing wind is `null` / 'none'
+ * (the model then assumes a headwind), a missing airport coordinate drops that end, a stale or
+ * unfixed GPS situation gives no aircraft at all.
+ *
+ * Data shapes (verified 2026-10-31):
+ *   NASR runway (airport.runways[]): length_ft, surface, per end (base_ / recip_) id, lat, lon,
+ *     thr_lat, thr_lon, true_hdg. Keys are ABSENT (or null) when the FAA gave nothing.
+ *   FisbClient: metars Map(icao -> { raw, decoded, received_at }), decoded.observed_at (ISO),
+ *     wind_dir (null for VRB), wind_speed, wind_gust (kt); getNearestWind(lat, lon, alt) ->
+ *     { dir, spd, alt, lat, lon, station, received_at } or null.
+ *   Stratux situation: alt_msl (ft), ground_speed (kt), true_course, vertical_speed, gps_fix_quality,
+ *     timestamp (ms epoch at receipt).
+ *   Route planner: _lastWinds { STN: { altFt: { dir, spd, variable? } } } stamped by _lastWindsAt (ms).
+ *
+ * Exposes the global GlideInputs.
+ */
+const GlideInputs = (() => {
+    'use strict';
+
+    // ---- Physical constants / plumbing (not model settings) ----------------
+    const FT_PER_NM = 6076.12;
+    const EARTH_RADIUS_NM = 3440.065;
+    /** A situation older than this is not a position (the block must disappear, not freeze). */
+    const SIT_MAX_AGE_MS = 5000;
+    /** An observation this far in the future (clock skew) is not trusted. */
+    const FUTURE_TOLERANCE_MS = 5 * 60000;
+    const MS_PER_MIN = 60000;
+
+    const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
+    const isLL = (lat, lon) => isNum(lat) && isNum(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
+    const norm360 = (d) => ((d % 360) + 360) % 360;
+    const pad3 = (n) => String(Math.round(n)).padStart(3, '0');
+    const fmtFt = (n) => Math.round(n).toLocaleString('en-US');
+
+    /** A finite number from a number or a finite numeric string; else undefined. */
+    function toFinite(v) {
+        if (typeof v === 'number') return Number.isFinite(v) ? v : undefined;
+        if (typeof v === 'string' && v.trim() !== '') {
+            const n = Number(v);
+            return Number.isFinite(n) ? n : undefined;
+        }
+        return undefined;
+    }
+
+    function distNm(lat1, lon1, lat2, lon2) {
+        const r = Math.PI / 180;
+        const dLat = (lat2 - lat1) * r, dLon = (lon2 - lon1) * r;
+        const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * r) * Math.cos(lat2 * r) * Math.sin(dLon / 2) ** 2;
+        return EARTH_RADIUS_NM * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+
+    // ---- Settings -----------------------------------------------------------
+
+    /**
+     * Resolved settings: every GlideModel.DEFAULTS key, from `raw` when finite (numeric strings accepted),
+     * else the default. min_runway_ft: a finite number, or null for "no length filter".
+     * (Range validation - bank < 90, min <= max, ... - is Task 3.)
+     */
+    function validate(raw) {
+        const D = GlideModel.DEFAULTS;
+        const out = { aircraft: {}, pilot: {} };
+        const a = (raw && raw.aircraft) || {}, p = (raw && raw.pilot) || {};
+        for (const k of Object.keys(D.aircraft)) {
+            const v = toFinite(a[k]);
+            out.aircraft[k] = v !== undefined ? v : D.aircraft[k];
+        }
+        for (const k of Object.keys(D.pilot)) {
+            const v = toFinite(p[k]);
+            out.pilot[k] = v !== undefined ? v : D.pilot[k];
+        }
+        return out;
+    }
+
+    /** Settings from the aircraft performance block (CockpitConfig.aircraft) and the engineOutGlide section. */
+    function settings() {
+        const raw = { aircraft: {}, pilot: {} };
+        try {
+            if (typeof CockpitConfig !== 'undefined' && CockpitConfig) {
+                for (const k of Object.keys(GlideModel.DEFAULTS.aircraft)) {
+                    raw.aircraft[k] = CockpitConfig.aircraft('performance.' + k);
+                }
+                raw.pilot = CockpitConfig.get('engineOutGlide') || {};
+            }
+        } catch (_) { /* defaults */ }
+        return validate(raw);
+    }
+
+    // ---- Airport ------------------------------------------------------------
+
+    const surfaceOf = (r) => String((r && r.surface) || '').toUpperCase();
+    const isPaved = (r) => /ASPH|CONC/.test(surfaceOf(r));
+    const isWater = (r) => /WATER/.test(surfaceOf(r));
+
+    /**
+     * -> { elevFt, ref, ends, refLatLon, excluded, noSuitable }
+     * elevFt: field elevation (null when the record has none - the caller shows no block).
+     * ref: {x:0, y:0}, the airport reference point; refLatLon: its { lat, lon } (null when unknown).
+     * ends: model runway ends { id, runwayId, thr, hdgTrue, rwyLenFt, mid, rwy: {a, b} } in local nm.
+     * excluded: 'heliport' | 'seaplane' | null. noSuitable: the airport has runways but none qualifies.
+     */
+    function airport(rec, settings_) {
+        const S = validate(settings_);
+        const out = { elevFt: null, ref: { x: 0, y: 0 }, ends: [], refLatLon: null, excluded: null, noSuitable: false };
+        if (!rec) return out;
+        if (isNum(rec.elev_ft)) out.elevFt = rec.elev_ft;
+        const fac = String(rec.fac_type || '').toUpperCase();
+        if (fac === 'HELIPORT') { out.excluded = 'heliport'; return out; }
+        if (fac === 'SEAPLANE BASE') { out.excluded = 'seaplane'; return out; }
+        if (!isLL(rec.lat, rec.lon)) return out;
+        out.refLatLon = { lat: rec.lat, lon: rec.lon };
+
+        const runways = Array.isArray(rec.runways) ? rec.runways.filter(Boolean) : [];
+        const minLen = S.aircraft.min_runway_ft;
+        const qualifies = (r) => !isWater(r) && isNum(r.length_ft) && r.length_ft > 0
+            && (!isNum(minLen) || r.length_ft >= minLen);
+        const qualifying = runways.filter(qualifies);
+        const paved = qualifying.filter(isPaved);
+        const chosen = paved.length ? paved : qualifying;      // turf / gravel only when no paved runway qualifies
+        if (runways.length && !chosen.length) out.noSuitable = true;
+
+        for (const r of chosen) out.ends.push(...runwayEnds(r, rec.lat, rec.lon));
+        return out;
+    }
+
+    /** One runway -> its model ends (0, 1 or 2): an end needs a threshold (else physical end) and a heading. */
+    function runwayEnds(r, refLat, refLon) {
+        const sides = ['base', 'recip'];
+        const info = sides.map((s) => {
+            const pLat = r[s + '_lat'], pLon = r[s + '_lon'], tLat = r[s + '_thr_lat'], tLon = r[s + '_thr_lon'];
+            const phys = isLL(pLat, pLon) ? { lat: pLat, lon: pLon } : null;
+            const thr = isLL(tLat, tLon) ? { lat: tLat, lon: tLon } : phys;
+            const loc = (p) => (p ? GlideModel.toLocal(refLat, refLon, p.lat, p.lon) : null);
+            const hdg = r[s + '_true_hdg'];
+            return { side: s, id: r[s + '_id'], phys: loc(phys || thr), thr: loc(thr), hdg: isNum(hdg) ? norm360(hdg) : null };
+        });
+        const bothKnown = !!(info[0].thr && info[1].thr);
+        const ends = [];
+        for (let i = 0; i < 2; i++) {
+            const me = info[i], other = info[1 - i];
+            if (!me.thr) continue;
+            // Landing heading: the FAA's, else the opposite end's reversed, else from this end toward the other
+            // physical end; with none of those the end cannot be oriented, so it is not used.
+            let hdg = me.hdg;
+            if (hdg === null && other.hdg !== null) hdg = norm360(other.hdg + 180);
+            if (hdg === null && bothKnown) {
+                const dx = other.phys.x - me.phys.x, dy = other.phys.y - me.phys.y;
+                if (Math.hypot(dx, dy) > 0) hdg = norm360(Math.atan2(dx, dy) * 180 / Math.PI);
+            }
+            if (hdg === null) continue;
+            let a, b, mid, lenFt;
+            if (bothKnown && Math.hypot(other.phys.x - me.phys.x, other.phys.y - me.phys.y) > 0) {
+                a = info[0].phys; b = info[1].phys;
+                mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+                lenFt = Math.hypot(b.x - a.x, b.y - a.y) * FT_PER_NM;
+            } else {
+                // One end known: the far end lies one record-length along the landing heading.
+                if (!isNum(r.length_ft) || !(r.length_ft > 0)) continue;
+                const lenNm = r.length_ft / FT_PER_NM, h = hdg * Math.PI / 180;
+                a = me.phys;
+                b = { x: a.x + Math.sin(h) * lenNm, y: a.y + Math.cos(h) * lenNm };
+                mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+                lenFt = r.length_ft;
+            }
+            const fallbackId = typeof r.id === 'string' ? r.id.split('/')[i] : null;
+            ends.push({
+                id: me.id != null && me.id !== '' ? String(me.id) : (fallbackId || me.side),
+                runwayId: r.id != null ? String(r.id) : null,
+                thr: me.thr, hdgTrue: hdg, rwyLenFt: lenFt, mid, rwy: { a, b },
+            });
+        }
+        return ends;
+    }
+
+    // ---- Aircraft -----------------------------------------------------------
+
+    /**
+     * The Stratux situation as the model's aircraft state, relative to refLatLon ({ lat, lon } of the airport),
+     * or null: no 3D fix, older than SIT_MAX_AGE_MS, below showAboveGsKt (not flying), or any needed value
+     * missing. Altitude is GPS MSL (alt_msl) only - never the barometric altitude.
+     * vs is passed through as the situation reports it (see the report: Stratux WS and GDL 90 differ in unit).
+     */
+    function aircraft(sit, settings_, refLatLon, now = Date.now()) {
+        if (!sit || !refLatLon || !isLL(refLatLon.lat, refLatLon.lon)) return null;
+        if (!GpsFix.has3DFix(sit)) return null;
+        if (!isNum(sit.timestamp) || now - sit.timestamp > SIT_MAX_AGE_MS) return null;
+        const S = validate(settings_);
+        if (!isNum(sit.ground_speed) || sit.ground_speed < S.pilot.showAboveGsKt) return null;
+        if (!isNum(sit.alt_msl) || !isNum(sit.true_course)) return null;
+        return {
+            pos: GlideModel.toLocal(refLatLon.lat, refLatLon.lon, sit.lat, sit.lon),
+            altMsl: sit.alt_msl,
+            gs: sit.ground_speed,
+            trkTrue: norm360(sit.true_course),
+            vs: isNum(sit.vertical_speed) ? sit.vertical_speed : null,
+        };
+    }
+
+    // ---- Winds aloft (the glide leg) ---------------------------------------
+
+    const app = () => (typeof window !== 'undefined' ? window.app : undefined);
+
+    /** Forecast winds the route planner downloaded, with their age; the fresher planner when two exist. */
+    function plannerWinds() {
+        const a = app();
+        let best = null;
+        for (const p of [a && a.routePlannerPanel, a && a.routePlannerPreview]) {
+            if (!p || !p._lastWinds || !isNum(p._lastWindsAt)) continue;
+            if (!best || p._lastWindsAt > best._lastWindsAt) best = p;
+        }
+        return best ? { winds: best._lastWinds, at: best._lastWindsAt } : null;
+    }
+
+    /**
+     * -> { wind: { from, kt } | null, label }
+     * FIS-B first (station within windMaxStationNm, received within windMaxAgeMin), else the route planner's
+     * pre-flight winds (same limits), else null with the label the pilot sees ("NO CURRENT WINDS ALOFT ...").
+     * The label names the level the wind is for; a level below the lowest reported is labelled with the level used.
+     */
+    function glideWind(lat, lon, altMsl, settings_, now = Date.now()) {
+        const S = validate(settings_);
+        const maxNm = S.pilot.windMaxStationNm, maxAgeMs = S.pilot.windMaxAgeMin * MS_PER_MIN;
+        const none = { wind: null, label: `NO CURRENT WINDS ALOFT · ${S.pilot.noWindHeadwindKt} kt headwind assumed` };
+        if (!isLL(lat, lon) || !isNum(altMsl)) return none;
+        const text = (dir, kt, level, src) => `Wind ${pad3(dir)}/${Math.round(kt)} at ${fmtFt(level)} ft · ${src}`;
+
+        try {
+            const fisb = app() && app().fisbClient;
+            const w = fisb && fisb.getNearestWind ? fisb.getNearestWind(lat, lon, altMsl) : null;
+            if (w && isLL(w.lat, w.lon) && isNum(w.dir) && isNum(w.spd) && isNum(w.alt) && isNum(w.received_at)
+                && now - w.received_at <= maxAgeMs && distNm(lat, lon, w.lat, w.lon) <= maxNm) {
+                return { wind: { from: w.dir, kt: w.spd }, label: text(w.dir, w.spd, w.alt, 'FIS-B') };
+            }
+        } catch (_) { /* fall through */ }
+
+        try {
+            const pw = plannerWinds();
+            const FP = typeof window !== 'undefined' ? window.FlyTabPlanning : undefined;
+            const stations = typeof WeatherClient !== 'undefined' && WeatherClient ? WeatherClient.FD_STATIONS : null;
+            if (pw && FP && FP.findNearestFdStation && FP.getWindAtAlt && stations && now - pw.at <= maxAgeMs) {
+                const stn = FP.findNearestFdStation(pw.winds, lat, lon);
+                const c = stn && stations[stn];
+                const byAlt = stn && pw.winds[stn];
+                if (c && byAlt && distNm(lat, lon, c[0], c[1]) <= maxNm) {
+                    const e = FP.getWindAtAlt(byAlt, altMsl);
+                    if (e && !e.variable && isNum(e.dir) && isNum(e.spd)) {
+                        const level = Number(Object.keys(byAlt).find((k) => byAlt[k] === e));
+                        if (isNum(level)) {
+                            return { wind: { from: e.dir, kt: e.spd }, label: text(e.dir, e.spd, level, 'FD forecast') };
+                        }
+                    }
+                }
+            }
+        } catch (_) { /* fall through */ }
+        return none;
+    }
+
+    // ---- Runway wind (METAR) -----------------------------------------------
+
+    const stationCoords = new Map();      // icao -> { lat, lon } | null (airports do not move)
+
+    /** A METAR's observation age in minutes if it is recent enough to use, else null. */
+    function metarAgeMin(decoded, now, maxAgeMin) {
+        const t = decoded && Date.parse(decoded.observed_at);
+        if (!isNum(t)) return null;
+        const age = now - t;
+        if (age < -FUTURE_TOLERANCE_MS) return null;
+        const min = Math.max(0, age) / MS_PER_MIN;
+        return min <= maxAgeMin ? min : null;
+    }
+
+    /**
+     * A decoded METAR's wind as a well-formed RunwayWind: calm | vrb | metar (from, kt > 0 finite) | null
+     * when the report has no parseable wind.
+     */
+    function windOf(d) {
+        if (!d || !isNum(d.wind_speed) || d.wind_speed < 0) return null;
+        if (d.wind_speed === 0) return { kind: 'calm' };
+        if (d.wind_dir === null || d.wind_dir === undefined) return { kind: 'vrb' };
+        if (!isNum(d.wind_dir) || d.wind_dir < 0 || d.wind_dir > 360) return null;
+        return {
+            kind: 'metar', from: d.wind_dir, kt: d.wind_speed,
+            gustKt: isNum(d.wind_gust) && d.wind_gust > 0 ? d.wind_gust : null,
+        };
+    }
+
+    function windLabel(icao, w, speedKt, min, extra) {
+        let t;
+        if (w.kind === 'calm') t = 'calm';
+        else if (w.kind === 'vrb') t = 'VRB' + String(Math.round(speedKt)).padStart(2, '0');
+        else t = `${pad3(w.from)}/${w.kt}${w.gustKt ? 'G' + w.gustKt : ''}`;
+        return `METAR ${icao} ${t} (${Math.round(min)} min)${extra || ''}`;
+    }
+
+    /** { wind, label } for one METAR source, or null when it is not usable. */
+    function fromMetar(icao, decoded, now, maxAgeMin, extra) {
+        const min = metarAgeMin(decoded, now, maxAgeMin);
+        if (min === null) return null;
+        const w = windOf(decoded);
+        if (!w) return null;
+        return { wind: w, label: windLabel(icao, w, decoded.wind_speed, min, extra) };
+    }
+
+    async function coordsOf(nasr, icao) {
+        if (stationCoords.has(icao)) return stationCoords.get(icao);
+        let c = null;
+        try {
+            const a = nasr && nasr.getAirport ? await nasr.getAirport(icao) : null;
+            if (a && isLL(a.lat, a.lon)) c = { lat: a.lat, lon: a.lon };
+        } catch (_) { return null; }                    // not cached: a failed read may succeed next time
+        stationCoords.set(icao, c);
+        return c;
+    }
+
+    /**
+     * -> { wind: RunwayWind, label }   (RunwayWind: { kind:'metar', from, kt, gustKt|null } | { kind:'calm' }
+     *                                   | { kind:'vrb' } | { kind:'none' })
+     * The airport's own METAR - FIS-B first, else the one in the weather cache (what the airport panel shows) -
+     * when observed within metarMaxAgeMin; else the nearest FIS-B METAR station within metarMaxStationNm under
+     * the same age rule; else none.
+     */
+    async function runwayWind(icao, refLatLon, settings_, now = Date.now()) {
+        const S = validate(settings_);
+        const maxAge = S.pilot.metarMaxAgeMin;
+        const none = { wind: { kind: 'none' }, label: 'NO CURRENT METAR' };
+        const id = typeof icao === 'string' ? icao.trim().toUpperCase() : '';
+        if (!id) return none;
+        const a = app();
+        const fisb = a && a.fisbClient, nasr = a && a._nasrDb;
+
+        try {
+            const m = fisb && fisb.getMetar ? fisb.getMetar(id) : null;
+            const r = m && fromMetar(id, m.decoded, now, maxAge);
+            if (r) return r;
+        } catch (_) { /* next source */ }
+        try {
+            const wx = nasr && nasr.getWeather ? await nasr.getWeather(id) : null;
+            const r = wx && wx.metar && fromMetar(id, wx.metar.decoded, now, maxAge);
+            if (r) return r;
+        } catch (_) { /* next source */ }
+
+        try {
+            if (fisb && fisb.metars && refLatLon && isLL(refLatLon.lat, refLatLon.lon)) {
+                let best = null;
+                for (const [stn, entry] of fisb.metars) {
+                    if (stn === id || !entry) continue;
+                    const r = fromMetar(stn, entry.decoded, now, maxAge);
+                    if (!r) continue;
+                    const c = await coordsOf(nasr, stn);
+                    if (!c) continue;
+                    const d = distNm(refLatLon.lat, refLatLon.lon, c.lat, c.lon);
+                    if (d <= S.pilot.metarMaxStationNm && (!best || d < best.d)) best = { d, stn, entry };
+                }
+                if (best) {
+                    return fromMetar(best.stn, best.entry.decoded, now, maxAge, ` · ${best.d.toFixed(1)} nm`);
+                }
+            }
+        } catch (_) { /* none */ }
+        return none;
+    }
+
+    return {
+        SIT_MAX_AGE_MS, settings, validate, airport, aircraft, glideWind, runwayWind,
+        _resetCaches() { stationCoords.clear(); },
+    };
+})();
+
+if (typeof window !== 'undefined') window.GlideInputs = GlideInputs;
