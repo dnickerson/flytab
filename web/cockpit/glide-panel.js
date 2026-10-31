@@ -9,6 +9,7 @@
  *   there, TARGET / PROJECTED / MEASURED descent rates, and the wind line;
  * and on the map a line aircraft -> final point, a ring at the point and a dashed final to the threshold.
  *
+ * Position and altitude come from StratuxClient.wsSituation (the Stratux WebSocket: true GPS MSL).
  * No block (and no line) on the ground, without a 3D GPS fix, with a situation older than 5 s, for a
  * heliport / seaplane base, or when the airport has no elevation or position: GlideInputs decides.
  * Nothing here touches the network; the runway (METAR) wind is re-read from on-tablet data every
@@ -101,8 +102,11 @@ class GlidePanel {
         if (!this._apt) { this._S = GlideInputs.settings(); this._apt = GlideInputs.airport(this._rec, this._S); }
         if (!this._usable()) return this._hide();
         const S = this._S, apt = this._apt, ref = apt.refLatLon;
+        // The last WebSocket situation only: its alt_msl is true GPS MSL, from one source. A GDL 90 situation
+        // carries the height above the ellipsoid as alt_msl (Stratux's Ownship Geometric Altitude), so it is
+        // never used here; with no fresh WebSocket situation there is no block (err high).
         const sit = (typeof window !== 'undefined' && window.app && window.app.stratuxClient)
-            ? window.app.stratuxClient.situation : null;
+            ? window.app.stratuxClient.wsSituation : null;
         const ac = GlideInputs.aircraft(sit, S, ref, now);
         if (!ac) { this._vsSamples = []; return this._hide(); }
         // MEASURED: the descent rate from GPS altitude. situation.vertical_speed is not used: Stratux never

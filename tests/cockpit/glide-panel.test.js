@@ -76,11 +76,13 @@ function fakeLeaflet() {
     };
 }
 
-let GlidePanel, host, map, sit, fisbWind, fisbMetar, panel;
+// sit: the last WebSocket situation (true GPS MSL); gdlSit: a GDL 90 situation that arrived after it
+// (its alt_msl is the height above the ellipsoid), which StratuxClient.situation then holds.
+let GlidePanel, host, map, sit, gdlSit, fisbWind, fisbMetar, panel;
 
 function setApp() {
     globalThis.window.app = {
-        stratuxClient: { get situation() { return sit; } },
+        stratuxClient: { get situation() { return gdlSit || sit; }, get wsSituation() { return sit; } },
         fisbClient: {
             getNearestWind: () => fisbWind,
             getMetar: (id) => (id === 'KLKR' ? fisbMetar : null),
@@ -125,6 +127,7 @@ beforeEach(() => {
     fisbWind = { dir: 250, spd: 14, alt: 6000, lat: KLKR.lat, lon: KLKR.lon, station: 'CLT', received_at: NOW - 60000 };
     fisbMetar = null;
     sit = null;
+    gdlSit = null;
     setApp();
     panel = null;
 });
@@ -425,6 +428,53 @@ describe('GlidePanel live behaviour', () => {
             expect(measuredVal()).toBe('—');                 // 5 samples, 4 s
             fly(base, 1, 600, 100 + 4 * 10);
             expect(measuredVal()).toBe('600 fpm');
+        });
+    });
+
+    describe('true GPS MSL from the WebSocket situation only (GDL 90 carries height above the ellipsoid)', () => {
+        it('interleaved WS and GDL 90 (MSL - 100 ft): spare and MEASURED use only the WS values', () => {
+            const base = situation(180, 6, 5500, 360);
+            panel = new GlidePanel(host, KLKR);
+            sit = { ...base, timestamp: Date.now() - 60 };                  // WS samples exactly 1 s apart
+            gdlSit = { ...sit, alt_msl: sit.alt_msl - 100, timestamp: sit.timestamp + 50 };
+            panel.start();
+            const step = 600 / 60;
+            for (let i = 1; i <= 10; i++) {
+                const t = Date.now() + GlidePanel.UPDATE_MS;
+                sit = { ...base, alt_msl: base.alt_msl - step * i, timestamp: t - 60 };
+                // every other tick a GDL 90 situation, 100 ft low, is the newest one
+                gdlSit = i % 2 ? { ...sit, alt_msl: sit.alt_msl - 100, timestamp: t - 10 } : null;
+                vi.advanceTimersByTime(GlidePanel.UPDATE_MS);
+            }
+            gdlSit = { ...sit, alt_msl: sit.alt_msl - 100, timestamp: sit.timestamp + 50 };
+            const plan = panel.render(Date.now());
+            expect(plan.measured).toBeCloseTo(600, 6);
+            expect(host.querySelectorAll('.glide-rate')[2].querySelector('.glide-rate-val').textContent).toBe('600 fpm');
+            const S = GlideInputs.settings(), ref = { lat: KLKR.lat, lon: KLKR.lon };
+            const want = GlideModel.plan({
+                airport: GlideInputs.airport(KLKR, S), ac: GlideInputs.aircraft(sit, S, ref, Date.now()),
+                glideWind: { from: 250, kt: 14 }, runwayWind: { kind: 'none' }, preferDirect: false,
+            }, S);
+            expect(plan.spare).toBeCloseTo(want.spare, 6);
+            expect(text()).toContain(`✓ GLIDE OK · ${Math.floor(want.spare)} ft to spare`);
+        });
+
+        it('only GDL 90 situations arriving: no block', () => {
+            sit = null;
+            gdlSit = situation(180, 6, 5500, 360);
+            panel = new GlidePanel(host, KLKR);
+            panel.start();
+            expect(host.innerHTML).toBe('');
+            expect(map.layers.size).toBe(0);
+            // a WS situation that went stale while GDL 90 keeps arriving: no block either
+            sit = situation(180, 6, 5500, 360);
+            vi.advanceTimersByTime(GlidePanel.UPDATE_MS);
+            expect(block()).not.toBeNull();
+            vi.advanceTimersByTime(6000);
+            gdlSit = { ...gdlSit, timestamp: Date.now() };
+            vi.advanceTimersByTime(GlidePanel.UPDATE_MS);
+            expect(host.innerHTML).toBe('');
+            expect(map.layers.size).toBe(0);
         });
     });
 

@@ -124,6 +124,24 @@ describe('StratuxClient._handleSituation', () => {
         client._handleSituation(noVs);
         expect(client.situation.vertical_speed).toBeUndefined();
     });
+
+    // GDL 90 situations carry the height above the ellipsoid as GPSAltitudeMSL (Ownship Geometric
+    // Altitude, from Stratux's GPSHeightAboveEllipsoid); the WebSocket carries true MSL. wsSituation
+    // keeps the last WebSocket situation for consumers that need true MSL from one source.
+    it('wsSituation: set by a WS situation, left alone by a following GDL 90 one', () => {
+        client._suppressGpsSituation = false;
+        expect(client.wsSituation).toBeNull();
+        client._handleSituation({ ...SITUATION, GPSAltitudeMSL: 5000 });
+        const ws = client.situation;
+        expect(client.wsSituation).toBe(ws);
+        client._handleSituation({ ...SITUATION, GPSAltitudeMSL: 4900 }, 'gdl90');
+        expect(client.situation.alt_msl).toBe(4900);
+        expect(client.wsSituation).toBe(ws);
+        expect(client.wsSituation.alt_msl).toBe(5000);
+        client._handleSituation({ ...SITUATION, GPSAltitudeMSL: 5010 }, 'ws');
+        expect(client.wsSituation).toBe(client.situation);
+        expect(client.wsSituation.alt_msl).toBe(5010);
+    });
 });
 
 // ---------------------------------------------------------------------------
