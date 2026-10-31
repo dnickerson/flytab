@@ -93,6 +93,26 @@ describe('GlideModel', () => {
         });
     });
 
+    describe('tasAt / sinkAt exports', () => {
+        it('TAS and sink rise by the density setting per 1,000 ft; plan().projected is sinkAt', () => {
+            expect(GlideModel.tasAt(0, S())).toBeCloseTo(65, 9);
+            expect(GlideModel.tasAt(10000, S())).toBeCloseTo(78, 9);          // 65 x 1.2
+            expect(GlideModel.sinkAt(0, S())).toBeCloseTo(700, 9);
+            expect(GlideModel.sinkAt(10000, S())).toBeCloseTo(840, 9);        // 700 x 78 / 65
+            const custom = S();
+            Object.assign(custom.aircraft, { glide_ias_kt: 80, glide_sink_fpm: 900, glide_density_pct_per_kft: 3 });
+            expect(GlideModel.tasAt(5000, custom)).toBeCloseTo(80 * 1.15, 9);
+            expect(GlideModel.sinkAt(5000, custom)).toBeCloseTo(900 * 1.15, 9);
+            const p = GlideModel.plan(input({ pos: fromPolar(0, 5), alt: 4500, trk: 180, wind: null }), S());
+            expect(p.projected).toBe(GlideModel.sinkAt(4500, S()));
+        });
+
+        it('missing / non-finite settings take the defaults, as in plan()', () => {
+            expect(GlideModel.tasAt(10000, undefined)).toBeCloseTo(78, 9);
+            expect(GlideModel.sinkAt(10000, { aircraft: { glide_sink_fpm: NaN } })).toBeCloseTo(840, 9);
+        });
+    });
+
     describe('every number comes from settings', () => {
         it('doubling glide_sink_fpm doubles projected and changes spare', () => {
             const base = GlideModel.plan(input(CASES.B), S());

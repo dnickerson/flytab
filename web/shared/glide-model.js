@@ -18,7 +18,7 @@
  * Heights are feet MSL, speeds knots, rates feet per minute.
  *
  * Exposes the global GlideModel:
- *   DEFAULTS, triangle(), initialTurn(), plan(), toLocal(), fromLocal()
+ *   DEFAULTS, triangle(), initialTurn(), plan(), tasAt(), sinkAt(), toLocal(), fromLocal()
  */
 const GlideModel = (() => {
     'use strict';
@@ -251,6 +251,16 @@ const GlideModel = (() => {
         };
     }
 
+    /** The model's glide TAS (kt) at `altFt` MSL for these settings (missing / non-finite keys: DEFAULTS). */
+    function tasAtAlt(altFt, settings) {
+        return tasAt(resolve(settings), altFt);
+    }
+
+    /** The model's glide sink (fpm) at `altFt` MSL for these settings (missing / non-finite keys: DEFAULTS). */
+    function sinkAtAlt(altFt, settings) {
+        return sinkAt(resolve(settings), altFt);
+    }
+
     /** Lat/lon -> local plane nm around (refLat, refLon): equirectangular, x east, y north. */
     function toLocal(refLat, refLon, lat, lon) {
         const dLon = ((lon - refLon + 540) % 360) - 180;
@@ -262,7 +272,7 @@ const GlideModel = (() => {
         return { lat: refLat + p.y / NM_PER_DEG_LAT, lon: refLon + p.x / (Math.cos(rad(refLat)) * NM_PER_DEG_LAT) };
     }
 
-    return { DEFAULTS, triangle, initialTurn, plan, toLocal, fromLocal };
+    return { DEFAULTS, triangle, initialTurn, plan, tasAt: tasAtAlt, sinkAt: sinkAtAlt, toLocal, fromLocal };
 })();
 
 if (typeof window !== 'undefined') window.GlideModel = GlideModel;

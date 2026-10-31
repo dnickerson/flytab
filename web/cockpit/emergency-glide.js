@@ -56,25 +56,36 @@ class EmergencyGlide {
 
         console.warn('[EmergencyGlide] TRIGGERED — computing glide options', { testMode });
 
-        // Position and altitude from the Stratux WebSocket situation only: true GPS MSL. A GDL 90
-        // situation (StratuxClient.situation) carries the ellipsoid height in alt_msl (ruling R16),
-        // and the barometric altitude is never used for the glide model.
-        const sit = window.app?.stratuxClient?.wsSituation ?? null;
+        // Position, track, headings and distances: the freshest situation from either transport
+        // (StratuxClient.situation; GDL 90 lat/lon are fine). Altitude for the glide model: the WebSocket
+        // situation only (true GPS MSL) - a GDL 90 alt_msl is the ellipsoid height (R16), and the barometric
+        // altitude is never used. The WebSocket situation is never cleared, so its age is checked (R21).
+        const sc = window.app?.stratuxClient;
+        const sit = sc?.situation ?? null;
+        const wsSit = sc?.wsSituation ?? null;
+        const fresh = (s) => !!s && Number.isFinite(s.timestamp) && now - s.timestamp <= GlideInputs.SIT_MAX_AGE_MS;
         const lat = sit?.lat;
         const lon = sit?.lon;
-        const altMsl = Number.isFinite(sit?.alt_msl) ? sit.alt_msl : null;
 
-        if (!lat || !lon) {
-            console.warn('[EmergencyGlide] No GPS position — cannot compute glide range');
+        if (!lat || !lon || !fresh(sit)) {
+            console.warn('[EmergencyGlide] No current GPS position — cannot compute glide range');
             this._showNoGpsOverlay(testMode);
             return;
         }
 
-        // Altitude AGL: MSL minus terrain elevation at current position
+        // True GPS MSL from a fresh WebSocket situation, else null (the model then has no aircraft: all MARGINAL).
+        const altMsl = fresh(wsSit) && Number.isFinite(wsSit.alt_msl) ? wsSit.alt_msl : null;
+        // Upper bound on the MSL altitude for the airport search: the WebSocket altitude, else the GDL 90
+        // ellipsoid height + the geoid allowance, else null.
+        const boundAltMsl = altMsl ?? (Number.isFinite(sit.alt_msl) ? sit.alt_msl + EmergencyGlide.GEOID_ALLOWANCE_FT : null);
+
+        // Altitude AGL (terrain check, overlay subtitle): MSL minus terrain elevation at current position.
+        // Without a WebSocket altitude, the GDL 90 one is close enough for this (no airport is reachable then).
         const terrainElev = window.terrainGrid?.isLoaded
             ? window.terrainGrid.getElevationFt(lat, lon)
             : 0;
-        const rawAltAgl = altMsl !== null ? Math.max(altMsl - terrainElev, 0) : 0;
+        const aglFromMsl = altMsl ?? (Number.isFinite(sit.alt_msl) ? sit.alt_msl : null);
+        const rawAltAgl = aglFromMsl !== null ? Math.max(aglFromMsl - terrainElev, 0) : 0;
         // In test mode simulate configured altitude AGL so airports are visible during ground testing
         const testAltAgl = (() => {
             try { return CockpitConfig.aircraft('performance.test_alt_agl_ft') ?? 5000; }
@@ -87,11 +98,15 @@ class EmergencyGlide {
         const S = GlideInputs.settings();
         // Altitude the model plans from: GPS MSL, or in test mode the simulated height over the terrain.
         const modelAltMsl = testMode ? terrainElev + altAgl : altMsl;
-        const gw = GlideInputs.glideWind(lat, lon, modelAltMsl, S, now);   // once, at the aircraft
+        // Altitude for the search radius and the winds aloft: the model's, else the upper bound above.
+        const searchAltMsl = testMode ? modelAltMsl : boundAltMsl;
+        const gw = GlideInputs.glideWind(lat, lon, searchAltMsl, S, now);   // once, at the aircraft
 
-        // Airport query radius (ruling R18): from the height above sea level (+ a below-sea-level allowance),
+        // Airport query radius (rulings R18, R21): from the height above sea level (+ a below-sea-level allowance),
         // at the model's TAS / sink at this altitude, stretched by a full tailwind, + 10%, + a runway allowance.
-        const searchRadiusNm = this._searchRadiusNm(modelAltMsl, gw.wind, S);
+        // No altitude at all: searched as if at 0 ft MSL (the allowances only, about 2.5 nm with no wind), so
+        // the nearest airports still show, as MARGINAL, instead of an empty list.
+        const searchRadiusNm = this._searchRadiusNm(searchAltMsl ?? 0, gw.wind, S);
 
         // Query NASR airports within glide range
         let airports = [];
@@ -104,12 +119,13 @@ class EmergencyGlide {
         }
 
         // The model's aircraft state relative to one airport's reference point.
-        // testMode (ground testing): built straight from the raw situation at the simulated altitude, with
-        // at least the glide speed and no staleness / ground-speed gate (GlideInputs.aircraft() would give
-        // null on the ground). Otherwise GlideInputs.aircraft(): null without a fresh 3D fix -> not reachable.
+        // testMode (ground testing): built straight from the current (fresh) situation at the simulated altitude,
+        // with at least the glide speed and no 3D-fix / ground-speed gate (GlideInputs.aircraft() would give
+        // null on the ground). Otherwise GlideInputs.aircraft(wsSituation): null without a fresh 3D fix on the
+        // WebSocket -> not reachable.
         const acFor = (refLatLon) => {
             if (!refLatLon) return null;
-            if (!testMode) return GlideInputs.aircraft(sit, S, refLatLon, now);
+            if (!testMode) return GlideInputs.aircraft(wsSit, S, refLatLon, now);
             if (!Number.isFinite(modelAltMsl)) return null;
             const trk = Number.isFinite(sit.true_course) ? ((sit.true_course % 360) + 360) % 360 : 0;
             return {
@@ -173,16 +189,13 @@ class EmergencyGlide {
      *   ((altMsl + BELOW_SEA_LEVEL_FT) / ft-per-nm) x (tas x kt-to-fpm / sink) x ((tas + windKt) / tas)
      *   x SEARCH_RADIUS_FACTOR + RUNWAY_ALLOWANCE_NM
      * Height above sea level, not above the terrain under the aircraft: over a ridge a valley airport is
-     * reachable from far more than the AGL height. TAS and sink are the model's at `altMsl` (GlideModel:
-     * tas = ias x (1 + density% x alt/1000), sink = sink_fpm x tas / ias; the model flies the whole leg at
-     * them); the ground speed is stretched by the full glide wind as a tailwind (0 kt without wind data).
-     * 0 when the altitude is unknown.
+     * reachable from far more than the AGL height. TAS and sink are the model's at `altMsl`
+     * (GlideModel.tasAt / sinkAt; the model flies the whole leg at them); the ground speed is stretched by
+     * the full glide wind as a tailwind (0 kt without wind data). 0 when `altMsl` is not a number.
      */
     _searchRadiusNm(altMsl, glideWind, S) {
         if (!Number.isFinite(altMsl)) return 0;
-        const ias = S.aircraft.glide_ias_kt, sinkSl = S.aircraft.glide_sink_fpm;
-        const tas = ias * (1 + (S.aircraft.glide_density_pct_per_kft / 100) * altMsl / 1000);
-        const sink = sinkSl * tas / ias;
+        const tas = GlideModel.tasAt(altMsl, S), sink = GlideModel.sinkAt(altMsl, S);
         const windKt = glideWind && Number.isFinite(glideWind.kt) ? Math.abs(glideWind.kt) : 0;
         const heightFt = Math.max(0, altMsl + EmergencyGlide.BELOW_SEA_LEVEL_FT);
         const r = heightFt / EmergencyGlide.FT_PER_NM * (tas * EmergencyGlide.KT_TO_FPM / sink) * ((tas + windKt) / tas)
@@ -192,7 +205,7 @@ class EmergencyGlide {
 
     /** The model's still-air glide ratio (ft forward per ft down); TAS and sink scale together, so altitude cancels. */
     _stillAirGlideRatio(S) {
-        return S.aircraft.glide_ias_kt * EmergencyGlide.KT_TO_FPM / S.aircraft.glide_sink_fpm;
+        return GlideModel.tasAt(0, S) * EmergencyGlide.KT_TO_FPM / GlideModel.sinkAt(0, S);
     }
 
     // ── Airport ranking ────────────────────────────────────────────────────────
@@ -416,7 +429,8 @@ class EmergencyGlide {
                 ? `${apt.longest_rwy_ft.toLocaleString()} ft`
                 : '—';
             const surface = apt.has_paved_rwy ? 'paved' : 'grass';
-            const descentStr = apt._descentFpm < 9000
+            // the rate only for a reachable airport: on a MARGINAL one it is not a rate that gets you there
+            const descentStr = apt._reachable && apt._descentFpm < 9000
                 ? ` · ${apt._descentFpm.toLocaleString()} fpm`
                 : '';
             const badgeHtml = idx === 0
@@ -898,6 +912,7 @@ class EmergencyGlide {
 EmergencyGlide.FT_PER_NM = 6076.12;
 EmergencyGlide.KT_TO_FPM = 101.269;          // 1 kt in feet per minute
 // Airport search bounds (not model values; they only widen the query).
+EmergencyGlide.GEOID_ALLOWANCE_FT = 350;     // GDL 90 altitude is ellipsoid height; max geoid separation is about 107 m
 EmergencyGlide.SEARCH_RADIUS_FACTOR = 1.1;   // query 10% beyond the farthest point the model could reach
 EmergencyGlide.BELOW_SEA_LEVEL_FT = 300;     // fields below sea level (lowest US public field is about -210 ft)
 EmergencyGlide.RUNWAY_ALLOWANCE_NM = 2;      // the runway's nearest part / final point can lie beyond the reference point

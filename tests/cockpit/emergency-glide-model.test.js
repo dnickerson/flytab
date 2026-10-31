@@ -49,7 +49,7 @@ function situation(brg, nm, alt, trk, over = {}) {
     };
 }
 
-let EmergencyGlide, eg, wsSit, gdlSit, fisbWind, airports, queried, events;
+let EmergencyGlide, eg, wsSit, gdlSit, fisbWind, airports, queried, centers, events;
 
 function setApp() {
     globalThis.window.app = {
@@ -58,6 +58,7 @@ function setApp() {
         _nasrDb: {
             getAirportsNear: async (lat, lon, r) => {
                 queried.push(r);
+                centers.push({ lat, lon });
                 return airports.filter((a) => NasrDB.haversineNm(lat, lon, a.lat, a.lon) <= r);
             },
         },
@@ -91,6 +92,7 @@ beforeEach(() => {
     fisbWind = null;
     airports = [KLKR];
     queried = [];
+    centers = [];
     events = [];
     setApp();
     document.addEventListener('engineml:emergency', onEmergency);
@@ -116,6 +118,8 @@ describe('EmergencyGlide on the shared glide model', () => {
         expect(k._reachable).toBe(false);
         expect(k._clearance).toBe(Math.round(modelPlan(KLKR, wsSit, null).spare));
         expect(document.querySelector('.eg-item--marginal')).not.toBeNull();   // the first item keeps its BEST OPTION badge
+        expect(k._descentFpm).toBeGreaterThan(0);                              // a rate exists ...
+        expect(document.querySelector('.eg-apt-detail').textContent).not.toContain('fpm');   // ... but MARGINAL hides it
     });
 
     it('headwind shrinks the reachable set', async () => {
@@ -216,38 +220,80 @@ describe('EmergencyGlide on the shared glide model', () => {
         await eg.trigger();
         expect(byId('KLKR')._reachable).toBe(false);
         expect(events[0].alt_msl).toBe(6000);
+        expect(queried[0]).toBeCloseTo(eg._searchRadiusNm(6000, null, GlideInputs.settings()), 9);   // fresh WS: its altitude
     });
 
-    it('stale or unfixed situation -> no airport reachable (MARGINAL), never NaN', async () => {
-        wsSit = situation(180, 3, 6000, 360, { timestamp: NOW - 6000 });   // older than 5 s
+    it('WebSocket 6 s old, GDL 90 fresh: position, headings and distances from GDL 90; every airport MARGINAL', async () => {
+        // the WebSocket dropped 6 s ago 10 nm further south; GDL 90 keeps the position current, 3 nm south of KLKR
+        wsSit = situation(180, 10, 6000, 360, { timestamp: NOW - 6000 });
+        gdlSit = situation(200, 3, 6100, 20, { timestamp: NOW - 300 });
+        const KNEAR = { ...KLKR, icao: 'KNEAR', name: 'Near', ...at(270, 2), runways: [] };
+        airports = [KLKR, KNEAR];
         await eg.trigger();
-        const k = byId('KLKR');
-        expect(k._reachable).toBe(false);
-        expect(k._descentFpm).toBe(9999);
-        expect(Number.isFinite(k._score)).toBe(true);
+        expect(centers[0]).toEqual({ lat: gdlSit.lat, lon: gdlSit.lon });
+        // radius altitude: GDL 90 alt_msl (ellipsoid height) + the geoid allowance
+        expect(queried[0]).toBeCloseTo(eg._searchRadiusNm(6100 + EmergencyGlide.GEOID_ALLOWANCE_FT, null, GlideInputs.settings()), 9);
+        expect(EmergencyGlide.GEOID_ALLOWANCE_FT).toBe(350);
+        for (const id of ['KLKR', 'KNEAR']) {
+            const a = byId(id);
+            expect(a._reachable).toBe(false);
+            expect(a._descentFpm).toBe(9999);
+            expect(Number.isFinite(a._score)).toBe(true);
+            expect(a._distNm).toBe(parseFloat(NasrDB.haversineNm(gdlSit.lat, gdlSit.lon, a.lat, a.lon).toFixed(1)));
+            expect(a._hdg).toBe(eg._bearingTo(gdlSit.lat, gdlSit.lon, a.lat, a.lon));
+        }
+        expect(byId('KLKR')._distNm).toBeCloseTo(3, 0);
+        expect(events[0].lat).toBe(gdlSit.lat);
+        expect(events[0].alt_msl).toBe(null);               // no true-MSL altitude (the WebSocket is stale)
+    });
 
+    it('no WebSocket situation at all: GDL 90 position, every airport MARGINAL', async () => {
+        gdlSit = situation(180, 3, 6000, 360);
+        wsSit = null;
+        await eg.trigger();
+        expect(byId('KLKR')._reachable).toBe(false);
+        expect(centers[0]).toEqual({ lat: gdlSit.lat, lon: gdlSit.lon });
+    });
+
+    it('fresh position but no altitude anywhere: the nearest airports (allowance-only radius) as MARGINAL', async () => {
+        wsSit = situation(180, 10, 6000, 360, { timestamp: NOW - 6000 });
+        gdlSit = situation(180, 1.5, 0, 360, { alt_msl: undefined });
+        await eg.trigger();
+        expect(queried[0]).toBeCloseTo(eg._searchRadiusNm(0, null, GlideInputs.settings()), 9);
+        expect(queried[0]).toBeGreaterThan(EmergencyGlide.RUNWAY_ALLOWANCE_NM);
+        expect(byId('KLKR')).toBeDefined();
+        expect(byId('KLKR')._reachable).toBe(false);
+    });
+
+    it('unfixed situation -> no airport reachable (MARGINAL)', async () => {
         wsSit = situation(180, 3, 6000, 360, { gps_fix_quality: 0 });
-        eg._lastTriggerTime = 0;
         await eg.trigger();
         expect(byId('KLKR')._reachable).toBe(false);
     });
 
-    it('no WebSocket situation -> the no-GPS overlay', async () => {
-        gdlSit = situation(180, 3, 6000, 360);
-        wsSit = null;
+    it('both situations stale (or none) -> the no-GPS overlay', async () => {
+        wsSit = situation(180, 3, 6000, 360, { timestamp: NOW - 6000 });
+        gdlSit = situation(180, 3, 6000, 360, { timestamp: NOW - 5001 });
+        await eg.trigger();
+        expect(document.querySelector('#emergencyGlideOverlay').textContent).toContain('No GPS');
+        expect(events.length).toBe(0);
+
+        wsSit = null; gdlSit = null;
+        eg._lastTriggerTime = 0;
         await eg.trigger();
         expect(document.querySelector('#emergencyGlideOverlay').textContent).toContain('No GPS');
         expect(events.length).toBe(0);
     });
 
-    it('test mode on the ground: simulated altitude AGL, glide speed floor, no staleness gate', async () => {
-        // parked 3 nm south of KLKR at field elevation, 0 kt, an old situation: aircraft() would give null
-        wsSit = situation(180, 3, 500, 0, { ground_speed: 0, timestamp: NOW - 60000 });
+    it('test mode on the ground: simulated altitude AGL, glide speed floor, no ground-speed gate', async () => {
+        // parked 3 nm south of KLKR at field elevation, 0 kt: aircraft() would give null (below showAboveGsKt)
+        wsSit = situation(180, 3, 500, 0, { ground_speed: 0 });
         await eg.trigger({ testMode: true });
         const k = byId('KLKR');
         expect(k._reachable).toBe(true);                     // 5,000 ft AGL simulated (default test_alt_agl_ft)
         expect(Number.isFinite(k._clearance)).toBe(true);
         expect(events[0].alt_agl).toBe(5000);
         expect(document.querySelector('.eg-overlay--test')).not.toBeNull();
+        expect(document.querySelector('.eg-apt-detail').textContent).toContain(`${k._descentFpm.toLocaleString()} fpm`);
     });
 });

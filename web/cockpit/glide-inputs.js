@@ -76,7 +76,7 @@ const GlideInputs = (() => {
             lineUpFtPerDeg: [0, 10],
             finalPointFraction: [0, 1],
             finalPointMinFt: [0, 5000],
-            // finalPointMaxFt: >= finalPointMinFt, checked as a pair below
+            finalPointMaxFt: [0, 5000],     // the Configuration input max; also >= finalPointMinFt, checked as a pair below
             noWindHeadwindKt: [0, 50],
             planBHysteresisFt: [0, 1000],
             onCourseDeg: [1, 30],

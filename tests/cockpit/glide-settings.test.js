@@ -85,6 +85,14 @@ describe('invalid settings fall back', () => {
         expect(t.pilot.finalPointMaxFt).toBe(1500);
     });
 
+    it('finalPointMaxFt is capped at 5000 (the Configuration input max): 5000 kept, 5001 -> default', () => {
+        expect(v({ pilot: { finalPointMaxFt: 5000 } }).pilot.finalPointMaxFt).toBe(5000);
+        expect(v({ pilot: { finalPointMaxFt: 5001 } }).pilot.finalPointMaxFt).toBe(1000);
+        // min <= max pair rule still applies inside the cap
+        const s = v({ pilot: { finalPointMinFt: 600, finalPointMaxFt: 550 } });
+        expect([s.pilot.finalPointMinFt, s.pilot.finalPointMaxFt]).toEqual([500, 1000]);
+    });
+
     it('every range edge: in-range kept, just outside -> default', () => {
         const ranges = {
             glide_ias_kt: [30, 200, 'aircraft'], glide_sink_fpm: [100, 3000, 'aircraft'],
@@ -100,7 +108,7 @@ describe('invalid settings fall back', () => {
             // an edge that equals the default proves nothing, so also check a clearly-inside value
             expect(v({ [grp]: { [k]: lo } })[grp][k], k + ' lo').toBe(lo);
             // finalPointMinFt is paired with finalPointMaxFt (max >= min), so give the max room at the top edge
-            const room = k === 'finalPointMinFt' ? { finalPointMaxFt: 6000 } : {};
+            const room = k === 'finalPointMinFt' ? { finalPointMaxFt: 5000 } : {};
             expect(v({ [grp]: { [k]: hi, ...room } })[grp][k], k + ' hi').toBe(hi);
             expect(v({ [grp]: { [k]: lo - 0.5 } })[grp][k], k + ' below').toBe(def);
             expect(v({ [grp]: { [k]: hi + 0.5 } })[grp][k], k + ' above').toBe(def);
