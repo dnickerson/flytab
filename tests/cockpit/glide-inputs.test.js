@@ -84,6 +84,21 @@ describe('GlideInputs.airport', () => {
         expect(a.excluded).toBe('seaplane');
     });
 
+    it('helipads listed on an airport record are not runways', () => {
+        const pad = rwy({ id: 'H1', surface: 'CONC', length_ft: 60, base_id: 'H1' });
+        // a helipad does not become an end ...
+        let a = GlideInputs.airport(apt([pad, KLKR_RWY]), settings());
+        expect(a.ends.map((e) => e.id)).toEqual(['06', '24']);
+        // ... and, being "paved", does not block the turf fallback
+        const turf = rwy({ id: '09/27', surface: 'TURF', length_ft: 3500, base_id: '09', recip_id: '27' });
+        a = GlideInputs.airport(apt([pad, turf]), settings());
+        expect(a.ends.map((e) => e.id)).toEqual(['09', '27']);
+        // only helipads: no ends, and not "no suitable runway"
+        a = GlideInputs.airport(apt([pad, rwy({ id: 'H', surface: 'CONC' }), rwy({ id: 'H12' })]), settings());
+        expect(a.ends).toEqual([]);
+        expect(a.noSuitable).toBe(false);
+    });
+
     it('builds model ends from the real KLKR record (threshold, heading, mid-runway, length)', () => {
         const a = GlideInputs.airport(KLKR, settings());
         expect(a.elevFt).toBe(486);
@@ -268,11 +283,11 @@ describe('GlideInputs.glideWind', () => {
         setup({ fisb: wind() });
         const w = GlideInputs.glideWind(LAT, LON, 5500, settings(), NOW);
         expect(w.wind).toEqual({ from: 250, kt: 14 });
-        expect(w.label).toBe('Wind 250/14 at 6,000 ft · FIS-B');
+        expect(w.label).toBe('250/14 at 6,000 ft · FIS-B');
         // below the lowest reported level (3,000): the label names the level used
         setup({ fisb: wind({ alt: 3000, dir: 90, spd: 5 }) });
         const low = GlideInputs.glideWind(LAT, LON, 900, settings(), NOW);
-        expect(low.label).toBe('Wind 090/5 at 3,000 ft · FIS-B');
+        expect(low.label).toBe('090/05 at 3,000 ft · FIS-B');
     });
 
     it('FIS-B wind too far or too old → null with the NO CURRENT WINDS label', () => {
@@ -315,7 +330,7 @@ describe('GlideInputs.glideWind', () => {
         setup({ planners: { panel: planner(FD, NOW - 30 * 60000) } });
         let w = GlideInputs.glideWind(LAT, LON, 6200, settings(), NOW);
         expect(w.wind).toEqual({ from: 240, kt: 16 });
-        expect(w.label).toBe('Wind 240/16 at 6,000 ft · FD forecast');
+        expect(w.label).toBe('240/16 at 6,000 ft · pre-flight winds');
 
         // a FIS-B wind that is usable wins over the planner
         setup({ fisb: wind(), planners: { panel: planner(FD, NOW) } });
@@ -349,6 +364,50 @@ describe('GlideInputs.glideWind', () => {
         globalThis.window.FlyTabPlanning = undefined;
         setup({ planners: { panel: planner(FD, NOW) } });
         expect(GlideInputs.glideWind(LAT, LON, 6200, settings(), NOW).wind).toBe(null);
+    });
+});
+
+describe('GlideInputs.glideWind planner forecast validity window', () => {
+    const LAT = 34.72, LON = -80.85;
+    const FD = { CLT: { 6000: { dir: 240, spd: 16 } } };
+    beforeEach(() => {
+        globalThis.window.FlyTabPlanning = {
+            findNearestFdStation: (w) => Object.keys(w)[0],
+            getWindAtAlt: (sw) => sw[Object.keys(sw)[0]],
+        };
+        globalThis.WeatherClient = { FD_STATIONS: { CLT: [35.21, -80.94] } };
+    });
+    const withInfo = (info, at = NOW - 5 * 60000) => {
+        globalThis.window.app = { routePlannerPreview: { _lastWinds: FD, _lastWindsAt: at, _windsInfo: info } };
+    };
+    it('inside useFrom <= now < useTo the winds are used; past useTo they are not, even if just loaded', () => {
+        withInfo({ useFrom: new Date(NOW - 3600000), useTo: new Date(NOW + 3600000) });
+        expect(GlideInputs.glideWind(LAT, LON, 6000, settings(), NOW).wind).toEqual({ from: 240, kt: 16 });
+        // useTo is exclusive
+        withInfo({ useFrom: new Date(NOW - 3600000), useTo: new Date(NOW) });
+        expect(GlideInputs.glideWind(LAT, LON, 6000, settings(), NOW))
+            .toEqual({ wind: null, label: 'NO CURRENT WINDS ALOFT · 10 kt headwind assumed' });
+        withInfo({ useFrom: new Date(NOW - 7200000), useTo: new Date(NOW - 1) });
+        expect(GlideInputs.glideWind(LAT, LON, 6000, settings(), NOW).wind).toBe(null);
+        // before the window starts
+        withInfo({ useFrom: new Date(NOW + 60000), useTo: new Date(NOW + 7200000) });
+        expect(GlideInputs.glideWind(LAT, LON, 6000, settings(), NOW).wind).toBe(null);
+    });
+    it('a planner without a FOR USE window (legacy, or FIS-B sourced) keeps the age check only', () => {
+        withInfo(undefined);
+        expect(GlideInputs.glideWind(LAT, LON, 6000, settings(), NOW).wind).not.toBe(null);
+        withInfo({ source: 'fisb' });
+        expect(GlideInputs.glideWind(LAT, LON, 6000, settings(), NOW).wind).not.toBe(null);
+        withInfo({ useFrom: 'x', useTo: 'y' });
+        expect(GlideInputs.glideWind(LAT, LON, 6000, settings(), NOW).wind).not.toBe(null);
+    });
+    it('an expired planner does not hide a valid one', () => {
+        globalThis.window.app = {
+            routePlannerPanel: { _lastWinds: { CLT: { 6000: { dir: 100, spd: 1 } } }, _lastWindsAt: NOW - 1000 * 60,
+                _windsInfo: { useFrom: new Date(NOW - 9e6), useTo: new Date(NOW - 1e6) } },
+            routePlannerPreview: { _lastWinds: FD, _lastWindsAt: NOW - 120000, _windsInfo: undefined },
+        };
+        expect(GlideInputs.glideWind(LAT, LON, 6000, settings(), NOW).wind).toEqual({ from: 240, kt: 16 });
     });
 });
 
@@ -404,7 +463,7 @@ describe('GlideInputs.runwayWind', () => {
         setup({ own: { KLKR: entry(5, { wind_dir: 0, wind_speed: 0 }) } });
         expect((await GlideInputs.runwayWind('KLKR', REF, settings(), NOW)).label).toBe('METAR KLKR calm (5 min)');
         setup({ own: { KLKR: entry(5, { wind_dir: null, wind_speed: 5, wind_variable: true }) } });
-        expect((await GlideInputs.runwayWind('KLKR', REF, settings(), NOW)).label).toBe('METAR KLKR VRB05 (5 min)');
+        expect((await GlideInputs.runwayWind('KLKR', REF, settings(), NOW)).label).toBe('METAR KLKR VRB/05 (5 min)');
     });
 
     it('METAR too old falls to nearest station, then to none', async () => {
@@ -415,7 +474,7 @@ describe('GlideInputs.runwayWind', () => {
         setup({ own: { KLKR: entry(76) }, others: { KAAA: near, KBBB: farStn }, coords });
         let r = await GlideInputs.runwayWind('KLKR', REF, settings(), NOW);
         expect(r.wind).toEqual({ kind: 'metar', from: 180, kt: 9, gustKt: null });
-        expect(r.label).toMatch(/^METAR KAAA 180\/9 \(20 min\)/);
+        expect(r.label).toBe('METAR KAAA 180/09 (20 min)');
 
         // exactly 75 min is still good
         setup({ own: { KLKR: entry(75) }, others: { KAAA: near }, coords });
@@ -425,7 +484,7 @@ describe('GlideInputs.runwayWind', () => {
         setup({ others: { KAAA: entry(90, { wind_dir: 180, wind_speed: 9 }), KBBB: farStn }, coords });
         r = await GlideInputs.runwayWind('KLKR', REF, settings(), NOW);
         expect(r).toMatchObject({ wind: { kind: 'none' } });
-        expect(typeof r.label).toBe('string');
+        expect(r.label).toBe('');
 
         // the nearer of two usable stations wins; a station with no known position is skipped
         setup({ others: { KAAA: near, KCCC: entry(5, { wind_dir: 10, wind_speed: 3 }), KBBB: farStn },
@@ -451,7 +510,7 @@ describe('GlideInputs.runwayWind', () => {
         setup({ cache });
         let r = await GlideInputs.runwayWind('KLKR', REF, settings(), NOW);
         expect(r.wind).toEqual({ kind: 'metar', from: 120, kt: 7, gustKt: null });
-        expect(r.label).toBe('METAR KLKR 120/7 (30 min)');
+        expect(r.label).toBe('METAR KLKR 120/07 (30 min)');
         // FIS-B METAR is older than the limit but the cache is fresh
         setup({ own: { KLKR: entry(100) }, cache });
         expect((await GlideInputs.runwayWind('KLKR', REF, settings(), NOW)).wind.from).toBe(120);
@@ -461,6 +520,65 @@ describe('GlideInputs.runwayWind', () => {
         // an old cached METAR is no better
         setup({ cache: { KLKR: { metar: { decoded: decoded(200) } } } });
         expect((await GlideInputs.runwayWind('KLKR', REF, settings(), NOW)).wind).toEqual({ kind: 'none' });
+    });
+
+    it('AWC-decoded METAR (WeatherClient shape): wind_dir "VRB" with wind_variable is variable, not unparseable', async () => {
+        // WeatherClient.decodeMetar: wind_dir from AWC wdir ('VRB' string), wind_variable from the raw text
+        const awc = (over) => ({ station: 'KLKR', observed_at: iso(10), wind_variable: true, wind_dir: 'VRB', wind_speed: 5, wind_gust: null, ...over });
+        const kind = async (d) => {
+            setup({ own: { KLKR: { raw: 'x', decoded: d, received_at: NOW } } });
+            return GlideInputs.runwayWind('KLKR', REF, settings(), NOW);
+        };
+        const r = await kind(awc());
+        expect(r.wind).toEqual({ kind: 'vrb' });
+        expect(r.label).toBe('METAR KLKR VRB/05 (10 min)');
+        expect((await kind(awc({ wind_dir: 'vrb', wind_variable: false }))).wind).toEqual({ kind: 'vrb' });
+        expect((await kind(awc({ wind_dir: 0, wind_variable: true }))).wind).toEqual({ kind: 'vrb' });
+        expect((await kind(awc({ wind_dir: 'VRB', wind_speed: 0 }))).wind).toEqual({ kind: 'calm' });
+        expect((await kind(awc({ wind_dir: 'abc', wind_variable: false }))).wind).toEqual({ kind: 'none' });
+        // and from the weather cache
+        setup({ cache: { KLKR: { metar: { decoded: awc(), fetched_at: iso(10) } } } });
+        expect((await GlideInputs.runwayWind('KLKR', REF, settings(), NOW)).wind).toEqual({ kind: 'vrb' });
+    });
+
+    it('label formats: DDD/SS with padding, gust, calm, VRB/SS, none is empty', async () => {
+        setup({ own: { KLKR: entry(3, { wind_dir: 60, wind_speed: 5 }) } });
+        expect((await GlideInputs.runwayWind('KLKR', REF, settings(), NOW)).label).toBe('METAR KLKR 060/05 (3 min)');
+        setup({ own: { KLKR: entry(18, { wind_dir: 240, wind_speed: 12, wind_gust: 18 }) } });
+        expect((await GlideInputs.runwayWind('KLKR', REF, settings(), NOW)).label).toBe('METAR KLKR 240/12G18 (18 min)');
+        setup({});
+        expect((await GlideInputs.runwayWind('KLKR', REF, settings(), NOW)).label).toBe('');
+    });
+
+    it('cached METAR age: the older of decoded.observed_at and the raw report time (err high)', async () => {
+        // AWC reportTime is the top of the hour; the raw report says it was observed at 17:35Z (25 min before NOW=18:00Z)
+        globalThis.FisbClient = new Function(read('web/shared/fisb-client.js') + '\nreturn FisbClient;')();
+        const hourTop = '2026-10-31T18:00:00.000Z';                    // understates the age: 0 min
+        const raw = 'KLKR 311735Z 24012KT 10SM CLR 15/05 A3002';
+        const wx = (over) => ({ KLKR: { metar: { raw, decoded: { observed_at: hourTop, wind_dir: 240, wind_speed: 12, wind_gust: null, ...over }, fetched_at: hourTop } } });
+        setup({ cache: wx({}) });
+        const r = await GlideInputs.runwayWind('KLKR', REF, settings(), NOW);
+        expect(r.label).toBe('METAR KLKR 240/12 (25 min)');          // the raw time wins (older)
+        // too old by the raw time even though decoded.observed_at looks fresh
+        const old = 'KLKR 311630Z 24012KT 10SM CLR 15/05 A3002';       // 90 min before NOW
+        setup({ cache: { KLKR: { metar: { raw: old, decoded: { observed_at: hourTop, wind_dir: 240, wind_speed: 12 } } } } });
+        expect((await GlideInputs.runwayWind('KLKR', REF, settings(), NOW)).wind).toEqual({ kind: 'none' });
+        // decoded older than the raw time: decoded is used (older of the two)
+        setup({ cache: wx({ observed_at: iso(60) }) });
+        expect((await GlideInputs.runwayWind('KLKR', REF, settings(), NOW)).label).toBe('METAR KLKR 240/12 (60 min)');
+        // no raw: decoded alone
+        setup({ cache: { KLKR: { metar: { decoded: { observed_at: iso(7), wind_dir: 240, wind_speed: 12 } } } } });
+        expect((await GlideInputs.runwayWind('KLKR', REF, settings(), NOW)).label).toBe('METAR KLKR 240/12 (7 min)');
+        globalThis.FisbClient = undefined;
+    });
+
+    it('a station position miss is not cached (a later lookup can succeed)', async () => {
+        let known = false;
+        setup({ others: { KAAA: entry(20, { wind_dir: 180, wind_speed: 9 }) } });
+        globalThis.window.app._nasrDb.getAirport = async () => (known ? { icao: 'KAAA', lat: 34.80, lon: -80.80 } : null);
+        expect((await GlideInputs.runwayWind('KLKR', REF, settings(), NOW)).wind).toEqual({ kind: 'none' });
+        known = true;
+        expect((await GlideInputs.runwayWind('KLKR', REF, settings(), NOW)).wind.kind).toBe('metar');
     });
 
     it('no client, no icao, a failing lookup → none, never throws', async () => {

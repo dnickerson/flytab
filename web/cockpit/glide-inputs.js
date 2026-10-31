@@ -41,6 +41,7 @@ const GlideInputs = (() => {
     const isLL = (lat, lon) => isNum(lat) && isNum(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
     const norm360 = (d) => ((d % 360) + 360) % 360;
     const pad3 = (n) => String(Math.round(n)).padStart(3, '0');
+    const pad2 = (n) => String(Math.round(n)).padStart(2, '0');
     const fmtFt = (n) => Math.round(n).toLocaleString('en-US');
 
     /** A finite number from a number or a finite numeric string; else undefined. */
@@ -120,7 +121,8 @@ const GlideInputs = (() => {
         if (!isLL(rec.lat, rec.lon)) return out;
         out.refLatLon = { lat: rec.lat, lon: rec.lon };
 
-        const runways = Array.isArray(rec.runways) ? rec.runways.filter(Boolean) : [];
+        // Helipads listed on an airport record (id H1, H2, H) are not runways: not ends, and no block on the turf fallback.
+        const runways = Array.isArray(rec.runways) ? rec.runways.filter((r) => r && !/^H\d*$/i.test(String(r.id || '').trim())) : [];
         const minLen = S.aircraft.min_runway_ft;
         const qualifies = (r) => !isWater(r) && isNum(r.length_ft) && r.length_ft > 0
             && (!isNum(minLen) || r.length_ft >= minLen);
@@ -210,12 +212,21 @@ const GlideInputs = (() => {
 
     const app = () => (typeof window !== 'undefined' ? window.app : undefined);
 
-    /** Forecast winds the route planner downloaded, with their age; the fresher planner when two exist. */
-    function plannerWinds() {
+    /**
+     * Forecast winds the route planner downloaded, with their age; the fresher planner when two exist.
+     * A planner that knows the forecast's FOR USE window (_windsInfo.useFrom / useTo, Dates - the new planner
+     * keeps an expired forecast) only counts while useFrom <= now < useTo; one without (legacy) is judged by age.
+     */
+    function plannerWinds(now) {
         const a = app();
         let best = null;
         for (const p of [a && a.routePlannerPanel, a && a.routePlannerPreview]) {
             if (!p || !p._lastWinds || !isNum(p._lastWindsAt)) continue;
+            const wi = p._windsInfo;
+            if (wi && wi.useFrom instanceof Date && wi.useTo instanceof Date) {
+                const from = wi.useFrom.getTime(), to = wi.useTo.getTime();
+                if (!isNum(from) || !isNum(to) || now < from || now >= to) continue;
+            }
             if (!best || p._lastWindsAt > best._lastWindsAt) best = p;
         }
         return best ? { winds: best._lastWinds, at: best._lastWindsAt } : null;
@@ -232,7 +243,7 @@ const GlideInputs = (() => {
         const maxNm = S.pilot.windMaxStationNm, maxAgeMs = S.pilot.windMaxAgeMin * MS_PER_MIN;
         const none = { wind: null, label: `NO CURRENT WINDS ALOFT · ${S.pilot.noWindHeadwindKt} kt headwind assumed` };
         if (!isLL(lat, lon) || !isNum(altMsl)) return none;
-        const text = (dir, kt, level, src) => `Wind ${pad3(dir)}/${Math.round(kt)} at ${fmtFt(level)} ft · ${src}`;
+        const text = (dir, kt, level, src) => `${pad3(dir)}/${pad2(kt)} at ${fmtFt(level)} ft · ${src}`;
 
         try {
             const fisb = app() && app().fisbClient;
@@ -244,7 +255,7 @@ const GlideInputs = (() => {
         } catch (_) { /* fall through */ }
 
         try {
-            const pw = plannerWinds();
+            const pw = plannerWinds(now);
             const FP = typeof window !== 'undefined' ? window.FlyTabPlanning : undefined;
             const stations = typeof WeatherClient !== 'undefined' && WeatherClient ? WeatherClient.FD_STATIONS : null;
             if (pw && FP && FP.findNearestFdStation && FP.getWindAtAlt && stations && now - pw.at <= maxAgeMs) {
@@ -256,7 +267,7 @@ const GlideInputs = (() => {
                     if (e && !e.variable && isNum(e.dir) && isNum(e.spd)) {
                         const level = Number(Object.keys(byAlt).find((k) => byAlt[k] === e));
                         if (isNum(level)) {
-                            return { wind: { from: e.dir, kt: e.spd }, label: text(e.dir, e.spd, level, 'FD forecast') };
+                            return { wind: { from: e.dir, kt: e.spd }, label: text(e.dir, e.spd, level, 'pre-flight winds') };
                         }
                     }
                 }
@@ -267,12 +278,17 @@ const GlideInputs = (() => {
 
     // ---- Runway wind (METAR) -----------------------------------------------
 
-    const stationCoords = new Map();      // icao -> { lat, lon } | null (airports do not move)
+    const stationCoords = new Map();      // icao -> { lat, lon } (hits only; airports do not move)
 
-    /** A METAR's observation age in minutes if it is recent enough to use, else null. */
-    function metarAgeMin(decoded, now, maxAgeMin) {
-        const t = decoded && Date.parse(decoded.observed_at);
-        if (!isNum(t)) return null;
+    /**
+     * A METAR's observation age in minutes if it is recent enough to use, else null. `rawObservedAt`
+     * (the time read from the raw report) is also considered: the OLDER of the two is used (err high) -
+     * the AWC decoder's observed_at is the report time (top of the hour), which understates the age.
+     */
+    function metarAgeMin(decoded, now, maxAgeMin, rawObservedAt) {
+        const times = [decoded && Date.parse(decoded.observed_at), rawObservedAt && Date.parse(rawObservedAt)].filter(isNum);
+        if (!times.length) return null;
+        const t = Math.min(...times);
         const age = now - t;
         if (age < -FUTURE_TOLERANCE_MS) return null;
         const min = Math.max(0, age) / MS_PER_MIN;
@@ -286,7 +302,9 @@ const GlideInputs = (() => {
     function windOf(d) {
         if (!d || !isNum(d.wind_speed) || d.wind_speed < 0) return null;
         if (d.wind_speed === 0) return { kind: 'calm' };
-        if (d.wind_dir === null || d.wind_dir === undefined) return { kind: 'vrb' };
+        // FIS-B decodes VRB as wind_dir null; the AWC decoder (WeatherClient) as the string 'VRB' (+ wind_variable)
+        if (d.wind_variable === true || d.wind_dir === null || d.wind_dir === undefined
+            || (typeof d.wind_dir === 'string' && /^VRB$/i.test(d.wind_dir.trim()))) return { kind: 'vrb' };
         if (!isNum(d.wind_dir) || d.wind_dir < 0 || d.wind_dir > 360) return null;
         return {
             kind: 'metar', from: d.wind_dir, kt: d.wind_speed,
@@ -294,32 +312,38 @@ const GlideInputs = (() => {
         };
     }
 
-    function windLabel(icao, w, speedKt, min, extra) {
+    function windLabel(icao, w, speedKt, min) {
         let t;
         if (w.kind === 'calm') t = 'calm';
-        else if (w.kind === 'vrb') t = 'VRB' + String(Math.round(speedKt)).padStart(2, '0');
-        else t = `${pad3(w.from)}/${w.kt}${w.gustKt ? 'G' + w.gustKt : ''}`;
-        return `METAR ${icao} ${t} (${Math.round(min)} min)${extra || ''}`;
+        else if (w.kind === 'vrb') t = 'VRB/' + pad2(speedKt);
+        else t = `${pad3(w.from)}/${pad2(w.kt)}${w.gustKt ? 'G' + pad2(w.gustKt) : ''}`;
+        return `METAR ${icao} ${t} (${Math.round(min)} min)`;
     }
 
-    /** { wind, label } for one METAR source, or null when it is not usable. */
-    function fromMetar(icao, decoded, now, maxAgeMin, extra) {
-        const min = metarAgeMin(decoded, now, maxAgeMin);
+    /** { wind, label } for one METAR source, or null when it is not usable. `raw`: the report text, if known. */
+    function fromMetar(icao, decoded, now, maxAgeMin, raw) {
+        let rawObs = null;
+        if (raw && typeof FisbClient !== 'undefined' && FisbClient && FisbClient.decodeMetar) {
+            try { rawObs = FisbClient.decodeMetar(String(raw)).observed_at || null; } catch (_) { rawObs = null; }
+        }
+        const min = metarAgeMin(decoded, now, maxAgeMin, rawObs);
         if (min === null) return null;
         const w = windOf(decoded);
         if (!w) return null;
-        return { wind: w, label: windLabel(icao, w, decoded.wind_speed, min, extra) };
+        return { wind: w, label: windLabel(icao, w, decoded.wind_speed, min) };
     }
 
     async function coordsOf(nasr, icao) {
         if (stationCoords.has(icao)) return stationCoords.get(icao);
-        let c = null;
         try {
             const a = nasr && nasr.getAirport ? await nasr.getAirport(icao) : null;
-            if (a && isLL(a.lat, a.lon)) c = { lat: a.lat, lon: a.lon };
-        } catch (_) { return null; }                    // not cached: a failed read may succeed next time
-        stationCoords.set(icao, c);
-        return c;
+            if (a && isLL(a.lat, a.lon)) {
+                const c = { lat: a.lat, lon: a.lon };
+                stationCoords.set(icao, c);             // only hits are cached: a miss may be a failed read
+                return c;
+            }
+        } catch (_) { /* not cached */ }
+        return null;
     }
 
     /**
@@ -332,7 +356,7 @@ const GlideInputs = (() => {
     async function runwayWind(icao, refLatLon, settings_, now = Date.now()) {
         const S = validate(settings_);
         const maxAge = S.pilot.metarMaxAgeMin;
-        const none = { wind: { kind: 'none' }, label: 'NO CURRENT METAR' };
+        const none = { wind: { kind: 'none' }, label: '' };
         const id = typeof icao === 'string' ? icao.trim().toUpperCase() : '';
         if (!id) return none;
         const a = app();
@@ -345,7 +369,7 @@ const GlideInputs = (() => {
         } catch (_) { /* next source */ }
         try {
             const wx = nasr && nasr.getWeather ? await nasr.getWeather(id) : null;
-            const r = wx && wx.metar && fromMetar(id, wx.metar.decoded, now, maxAge);
+            const r = wx && wx.metar && fromMetar(id, wx.metar.decoded, now, maxAge, wx.metar.raw);
             if (r) return r;
         } catch (_) { /* next source */ }
 
@@ -361,9 +385,7 @@ const GlideInputs = (() => {
                     const d = distNm(refLatLon.lat, refLatLon.lon, c.lat, c.lon);
                     if (d <= S.pilot.metarMaxStationNm && (!best || d < best.d)) best = { d, stn, entry };
                 }
-                if (best) {
-                    return fromMetar(best.stn, best.entry.decoded, now, maxAge, ` · ${best.d.toFixed(1)} nm`);
-                }
+                if (best) return fromMetar(best.stn, best.entry.decoded, now, maxAge);
             }
         } catch (_) { /* none */ }
         return none;
