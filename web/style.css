@@ -7751,6 +7751,104 @@ body.fs-overlay-open .radar-loop-controls {
     margin-top: 4px;
 }
 
+/* Engine-out glide block (glide-panel.js) — under the airport panel header, in flight only.
+   Verdict = solid fill (dark text on the bright success/caution fills; white on the light-safe
+   danger red, 7:1+); coloured TEXT uses the -on-light tokens. Text 17–30 px. */
+.glide-host { flex-shrink: 0; }
+.glide-block {
+    padding: 8px 12px 10px;
+    border-bottom: 1px solid var(--border);
+    border-left: 6px solid var(--border-strong);
+    background: var(--bg-surface-raised);
+    font-family: var(--font-ui);
+    color: var(--text-primary);
+}
+.glide-block.glide-ok      { border-left-color: var(--color-success); }
+.glide-block.glide-caution { border-left-color: var(--color-caution); }
+.glide-block.glide-danger  { border-left-color: var(--color-danger-on-light); }
+.glide-block.glide-unknown { border: 3px solid var(--text-label); border-left-width: 6px; }
+.glide-verdict {
+    font-size: var(--text-md);
+    font-weight: 900;
+    line-height: 1.25;
+    padding: 6px 8px;
+    border-radius: 4px;
+}
+.glide-ok .glide-verdict      { background: var(--color-success); color: var(--text-primary); }
+.glide-caution .glide-verdict { background: var(--color-caution); color: var(--text-primary); }
+.glide-danger .glide-verdict  { background: var(--color-danger-on-light); color: var(--text-on-accent); }
+.glide-sub {
+    font-size: var(--text-base);
+    font-weight: 800;
+    color: var(--text-primary);
+    margin-top: 4px;
+}
+.glide-steer {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin-top: 6px;
+}
+.glide-hdg {
+    font-family: var(--font-instrument);
+    font-size: var(--text-xl);
+    font-weight: 900;
+    color: var(--text-primary);
+}
+.glide-turn {
+    font-size: var(--text-lg);
+    font-weight: 800;
+    color: var(--text-primary);
+}
+.glide-line {
+    font-size: var(--text-base);
+    font-weight: 700;
+    color: var(--text-secondary);
+    margin-top: 2px;
+}
+.glide-rates { margin-top: 6px; }
+.glide-rate {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    column-gap: 8px;
+    padding: 2px 0;
+    border-top: 1px solid var(--border-light);
+}
+.glide-rate-label {
+    flex: 0 0 110px;
+    font-size: var(--text-base);
+    font-weight: 800;
+    color: var(--text-secondary);
+}
+.glide-rate-val {
+    font-family: var(--font-instrument);
+    font-size: var(--text-lg);
+    font-weight: 900;
+    color: var(--text-primary);
+}
+.glide-rate-unit {
+    font-family: var(--font-ui);
+    font-size: var(--text-base);
+    font-weight: 700;
+    color: var(--text-label);
+}
+.glide-rate-steep .glide-rate-val { color: var(--color-danger-on-light); }
+.glide-steep {
+    flex-basis: 100%;
+    padding-left: 118px;
+    font-size: var(--text-base);
+    font-weight: 900;
+    color: var(--color-danger-on-light);
+}
+.glide-wind {
+    font-size: var(--text-base);
+    font-weight: 700;
+    color: var(--text-secondary);
+    margin-top: 6px;
+}
+.glide-amber { color: var(--color-caution-on-light); font-weight: 900; }
+
 /* .apt-panel-close sizing handled by .btn-close */
 
 .apt-action-chips {
