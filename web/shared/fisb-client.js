@@ -784,7 +784,9 @@ class FisbClient extends EventTarget {
     // ========== Wind Aloft Parsing ==========
 
     static parseWindAloft(code) {
-        if (!code || code === '9900') return null; // light and variable
+        // Light and variable: '9900', and at 6,000 ft and up with a temperature group ('9900+05', '990045').
+        // Decoded as an ordinary group it reads 490/100 kt.
+        if (!code || /^9900/.test(code)) return null;
         // Format: ddss or ddss+TT or ddss-TT (dd=direction/10, ss=speed)
         const match = code.match(/^(\d{2})(\d{2})([+-]?\d{1,2})?$/);
         if (!match) return null;

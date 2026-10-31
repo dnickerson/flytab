@@ -110,7 +110,7 @@ class CockpitConfig {
             windMaxAgeMin: 360,
             metarMaxAgeMin: 75,
             metarMaxStationNm: 10,
-            showAboveGsKt: 40,
+            showAboveGsKt: 25,
         },
         takeoffAlerts: {
             showDmms: true,

@@ -57,7 +57,7 @@ const GlideModel = (() => {
             metarMaxAgeMin: 75,
             metarMaxStationNm: 10,
             windMaxAgeMin: 360,
-            showAboveGsKt: 40,
+            showAboveGsKt: 25,
         }),
     });
 

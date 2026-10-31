@@ -6,7 +6,8 @@
  *   airport()    NASR airport record -> model airport (candidate runways, per-end geometry)
  *   aircraft()   Stratux situation -> model aircraft state, or null (no block)
  *   glideWind()  winds aloft at the aircraft: FIS-B, else the route planner's downloaded winds
- *   runwayWind() the wind to land in: the airport's METAR (FIS-B, else the cached one), else the nearest station
+ *   runwayWind() the wind to land in: the airport's METAR (FIS-B, else the panel's internet one, else the cached
+ *                one), else the nearest station
  *
  * Only data already on the tablet is read; nothing here touches the network (no internet in flight).
  * Every missing or untrusted input takes the more conservative path: a missing wind is `null` / 'none'
@@ -22,6 +23,9 @@
  *   Stratux situation: alt_msl (ft), ground_speed (kt), true_course, vertical_speed, gps_fix_quality,
  *     timestamp (ms epoch at receipt).
  *   Route planner: _lastWinds { STN: { altFt: { dir, spd, variable? } } } stamped by _lastWindsAt (ms).
+ *   Internet METARs (VectorMapLayers.fetchInternetMetars, app.vectorLayers._internetMetars): Map(icao ->
+ *     { raw, _obsTime (s), decoded: { wind_dir (null for VRB), wind_variable, wind_speed, wind_gust, observed_at (ISO,
+ *     the AWC obsTime) }, received_at, source: 'internet' }).
  *
  * Exposes the global GlideInputs.
  */
@@ -63,7 +67,7 @@ const GlideInputs = (() => {
 
     // ---- Settings -----------------------------------------------------------
 
-    /** Allowed [min, max] per setting; a value outside (or non-finite) falls back to its default. */
+    /** Allowed [min, max] per setting; a finite value outside is clamped to the nearest edge, a non-finite one takes its default. */
     const RANGES = {
         aircraft: {
             glide_ias_kt: [30, 200],
@@ -89,27 +93,22 @@ const GlideInputs = (() => {
     };
 
     /**
-     * Resolved settings: every GlideModel.DEFAULTS key, from `raw` when finite and within its range
-     * (numeric strings accepted, always returned as numbers), else the default. finalPointMaxFt must be
-     * >= finalPointMinFt, else BOTH take their defaults. min_runway_ft: a finite number >= 0, or null
-     * for "no length filter".
+     * Resolved settings: every GlideModel.DEFAULTS key, from `raw` when finite (numeric strings accepted,
+     * always returned as numbers) - clamped to its range when outside it - else (non-finite, null, blank,
+     * junk) the default. After clamping, finalPointMaxFt must be >= finalPointMinFt, else BOTH take their
+     * defaults. min_runway_ft (no range): a finite number >= 0, or null for "no length filter".
      */
     function validate(raw) {
         const D = GlideModel.DEFAULTS;
         const out = { aircraft: {}, pilot: {} };
         const a = (raw && raw.aircraft) || {}, p = (raw && raw.pilot) || {};
-        for (const k of Object.keys(D.aircraft)) {
-            const v = toFinite(a[k]);
-            const r = RANGES.aircraft[k];
-            const ok = v !== undefined && (r ? v >= r[0] && v <= r[1] : v >= 0);
-            out.aircraft[k] = ok ? v : D.aircraft[k];
-        }
-        for (const k of Object.keys(D.pilot)) {
-            const v = toFinite(p[k]);
-            const r = RANGES.pilot[k];
-            const ok = v !== undefined && (r ? v >= r[0] && v <= r[1] : v >= 0);
-            out.pilot[k] = ok ? v : D.pilot[k];
-        }
+        const resolve = (v, r, def) => {
+            if (v === undefined) return def;
+            if (r) return Math.min(r[1], Math.max(r[0], v));
+            return v >= 0 ? v : def;
+        };
+        for (const k of Object.keys(D.aircraft)) out.aircraft[k] = resolve(toFinite(a[k]), RANGES.aircraft[k], D.aircraft[k]);
+        for (const k of Object.keys(D.pilot)) out.pilot[k] = resolve(toFinite(p[k]), RANGES.pilot[k], D.pilot[k]);
         if (out.pilot.finalPointMaxFt < out.pilot.finalPointMinFt) {
             out.pilot.finalPointMinFt = D.pilot.finalPointMinFt;
             out.pilot.finalPointMaxFt = D.pilot.finalPointMaxFt;
@@ -247,6 +246,12 @@ const GlideInputs = (() => {
 
     const app = () => (typeof window !== 'undefined' ? window.app : undefined);
 
+    /** Largest wind aloft taken as real; anything above (or a direction outside 0-360) is a decode error. */
+    const MAX_WIND_ALOFT_KT = 250;
+    /** A physically possible wind aloft: direction 0-360, speed 0-MAX_WIND_ALOFT_KT, both finite. */
+    const plausibleWind = (dir, spd) => isNum(dir) && dir >= 0 && dir <= 360
+        && isNum(spd) && spd >= 0 && spd <= MAX_WIND_ALOFT_KT;
+
     /**
      * Forecast winds the route planner downloaded, with their age; the fresher planner when two exist.
      * A planner that knows the forecast's FOR USE window (_windsInfo.useFrom / useTo, Dates - the new planner
@@ -271,6 +276,7 @@ const GlideInputs = (() => {
      * -> { wind: { from, kt } | null, label }
      * FIS-B first (station within windMaxStationNm, received within windMaxAgeMin), else the route planner's
      * pre-flight winds (same limits), else null with the label the pilot sees ("NO CURRENT WINDS ALOFT ...").
+     * A wind that is not physically possible (plausibleWind) from either source is treated as no wind.
      * The label names the level the wind is for; a level below the lowest reported is labelled with the level used.
      */
     function glideWind(lat, lon, altMsl, settings_, now = Date.now()) {
@@ -283,7 +289,7 @@ const GlideInputs = (() => {
         try {
             const fisb = app() && app().fisbClient;
             const w = fisb && fisb.getNearestWind ? fisb.getNearestWind(lat, lon, altMsl) : null;
-            if (w && isLL(w.lat, w.lon) && isNum(w.dir) && isNum(w.spd) && isNum(w.alt) && isNum(w.received_at)
+            if (w && isLL(w.lat, w.lon) && plausibleWind(w.dir, w.spd) && isNum(w.alt) && isNum(w.received_at)
                 && now - w.received_at <= maxAgeMs && distNm(lat, lon, w.lat, w.lon) <= maxNm) {
                 return { wind: { from: w.dir, kt: w.spd }, label: text(w.dir, w.spd, w.alt, 'FIS-B') };
             }
@@ -299,7 +305,7 @@ const GlideInputs = (() => {
                 const byAlt = stn && pw.winds[stn];
                 if (c && byAlt && distNm(lat, lon, c[0], c[1]) <= maxNm) {
                     const e = FP.getWindAtAlt(byAlt, altMsl);
-                    if (e && !e.variable && isNum(e.dir) && isNum(e.spd)) {
+                    if (e && !e.variable && plausibleWind(e.dir, e.spd)) {
                         const level = Number(Object.keys(byAlt).find((k) => byAlt[k] === e));
                         if (isNum(level)) {
                             return { wind: { from: e.dir, kt: e.spd }, label: text(e.dir, e.spd, level, 'pre-flight winds') };
@@ -384,9 +390,9 @@ const GlideInputs = (() => {
     /**
      * -> { wind: RunwayWind, label }   (RunwayWind: { kind:'metar', from, kt, gustKt|null } | { kind:'calm' }
      *                                   | { kind:'vrb' } | { kind:'none' })
-     * The airport's own METAR - FIS-B first, else the one in the weather cache (what the airport panel shows) -
-     * when observed within metarMaxAgeMin; else the nearest FIS-B METAR station within metarMaxStationNm under
-     * the same age rule; else none.
+     * The airport's own METAR - FIS-B first, else the internet METAR the airport panel shows
+     * (app.vectorLayers._internetMetars), else the one in the weather cache - when observed within metarMaxAgeMin;
+     * else the nearest FIS-B METAR station within metarMaxStationNm under the same age rule; else none.
      */
     async function runwayWind(icao, refLatLon, settings_, now = Date.now()) {
         const S = validate(settings_);
@@ -400,6 +406,13 @@ const GlideInputs = (() => {
         try {
             const m = fisb && fisb.getMetar ? fisb.getMetar(id) : null;
             const r = m && fromMetar(id, m.decoded, now, maxAge);
+            if (r) return r;
+        } catch (_) { /* next source */ }
+        try {
+            // The internet METAR the airport panel shows (airport-popup.js reads the same map), fetched pre-flight.
+            const im = a && a.vectorLayers && a.vectorLayers._internetMetars;
+            const e = im && typeof im.get === 'function' ? im.get(id) : null;
+            const r = e && fromMetar(id, e.decoded, now, maxAge, e.raw);
             if (r) return r;
         } catch (_) { /* next source */ }
         try {

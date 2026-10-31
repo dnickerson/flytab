@@ -245,9 +245,10 @@ describe('GlideInputs.aircraft', () => {
         expect(GlideInputs.aircraft(sit({ timestamp: NOW - 5000 }), s, REF, NOW)).not.toBe(null);
         expect(GlideInputs.aircraft(sit({ timestamp: NOW - 5001 }), s, REF, NOW)).toBe(null);
         expect(GlideInputs.aircraft(sit({ timestamp: undefined }), s, REF, NOW)).toBe(null);
-        // on the ground / taxiing: below showAboveGsKt (40), the threshold itself shows
-        expect(GlideInputs.aircraft(sit({ ground_speed: 39.9 }), s, REF, NOW)).toBe(null);
-        expect(GlideInputs.aircraft(sit({ ground_speed: 40 }), s, REF, NOW)).not.toBe(null);
+        // on the ground / taxiing: below showAboveGsKt (25, review R24), the threshold itself shows
+        expect(GlideInputs.aircraft(sit({ ground_speed: 24.9 }), s, REF, NOW)).toBe(null);
+        expect(GlideInputs.aircraft(sit({ ground_speed: 25 }), s, REF, NOW)).not.toBe(null);
+        expect(GlideInputs.aircraft(sit({ ground_speed: 30 }), s, REF, NOW)).not.toBe(null);
         expect(GlideInputs.aircraft(sit({ ground_speed: 70 }), settings({ pilot: { showAboveGsKt: 75 } }), REF, NOW)).toBe(null);
         expect(GlideInputs.aircraft(sit({ ground_speed: undefined }), s, REF, NOW)).toBe(null);
         // missing track or reference
@@ -310,6 +311,34 @@ describe('GlideInputs.glideWind', () => {
         expect(GlideInputs.glideWind(LAT, LON, 5500, settings(), NOW).wind).toBe(null);
         setup({ fisb: wind({ dir: NaN }) });
         expect(GlideInputs.glideWind(LAT, LON, 5500, settings(), NOW).wind).toBe(null);
+    });
+
+    it('an impossible wind is no wind: a mis-decoded light-and-variable group (490/100) and friends', () => {
+        // review R23: '9900+05' decoded by the old FIS-B parser as { dir: 490, spd: 100 }
+        setup({ fisb: wind({ dir: 490, spd: 100 }) });
+        expect(GlideInputs.glideWind(LAT, LON, 5500, settings(), NOW)).toEqual({ wind: null, label: NO_WINDS(10) });
+        for (const bad of [{ dir: -10 }, { dir: 361 }, { spd: -1 }, { spd: 251 }, { spd: Infinity }, { dir: Infinity }]) {
+            setup({ fisb: wind(bad) });
+            expect(GlideInputs.glideWind(LAT, LON, 5500, settings(), NOW).wind, JSON.stringify(bad)).toBe(null);
+        }
+        // the edges are winds: 0 / 360 degrees, 0 and 250 kt
+        for (const ok of [{ dir: 0 }, { dir: 360 }, { spd: 0 }, { spd: 250 }]) {
+            setup({ fisb: wind(ok) });
+            expect(GlideInputs.glideWind(LAT, LON, 5500, settings(), NOW).wind, JSON.stringify(ok)).not.toBe(null);
+        }
+        // the pre-flight planner branch applies the same rule
+        globalThis.window.FlyTabPlanning = {
+            findNearestFdStation: (w) => Object.keys(w)[0],
+            getWindAtAlt: (sw) => sw[Object.keys(sw)[0]],
+        };
+        globalThis.WeatherClient = { FD_STATIONS: { CLT: [35.21, -80.94] } };
+        const planned = (e) => ({ panel: { _lastWinds: { CLT: { 6000: e } }, _lastWindsAt: NOW - 60000 } });
+        setup({ planners: planned({ dir: 490, spd: 100 }) });
+        expect(GlideInputs.glideWind(LAT, LON, 6000, settings(), NOW)).toEqual({ wind: null, label: NO_WINDS(10) });
+        setup({ planners: planned({ dir: 240, spd: 300 }) });
+        expect(GlideInputs.glideWind(LAT, LON, 6000, settings(), NOW).wind).toBe(null);
+        setup({ planners: planned({ dir: 240, spd: 16 }) });
+        expect(GlideInputs.glideWind(LAT, LON, 6000, settings(), NOW).wind).toEqual({ from: 240, kt: 16 });
     });
 
     it('falls back to the route planner winds when recent and near; not when old, far, or variable', () => {
@@ -418,10 +447,11 @@ describe('GlideInputs.runwayWind', () => {
     const decoded = (minAgo, over = {}) => ({ observed_at: iso(minAgo), wind_dir: 240, wind_speed: 12, wind_gust: null, wind_variable: false, ...over });
     const entry = (minAgo, over) => ({ raw: 'x', decoded: decoded(minAgo, over), received_at: NOW - 60000, is_speci: false });
 
-    const setup = ({ own = {}, others = {}, cache = null, coords = {} } = {}) => {
+    const setup = ({ own = {}, others = {}, cache = null, coords = {}, internet = null } = {}) => {
         const metars = new Map(Object.entries(others));
         for (const [k, v] of Object.entries(own)) metars.set(k, v);
         globalThis.window.app = {
+            vectorLayers: internet ? { _internetMetars: internet } : null,
             fisbClient: { metars, getMetar: (i) => metars.get(String(i).toUpperCase()) || null },
             _nasrDb: {
                 getWeather: async (i) => (cache && cache[i]) || null,
@@ -522,6 +552,70 @@ describe('GlideInputs.runwayWind', () => {
         // an old cached METAR is no better
         setup({ cache: { KLKR: { metar: { decoded: decoded(200) } } } });
         expect((await GlideInputs.runwayWind('KLKR', REF, settings(), NOW)).wind).toEqual({ kind: 'none' });
+    });
+
+    it('the internet METAR the airport panel shows (vectorLayers._internetMetars), after FIS-B and before the cache', async () => {
+        // Review R25. The entry is built by the real VectorMapLayers.fetchInternetMetars from KLKR METARs as the
+        // flywhere proxy returned them (AWC JSON, fetched 2026-10-31): wdir a number or 'VRB', wgst null, obsTime in s.
+        const AWC = [
+            { icaoId: 'KLKR', obsTime: 1793466900, wdir: 50, wspd: 7, wgst: null, rawOb: 'METAR KLKR 311715Z AUTO 05007KT 10SM 19/05 A3042 RMK AO2' },
+            { icaoId: 'KLKR', obsTime: 1793468100, wdir: 30, wspd: 8, wgst: 14, rawOb: 'METAR KLKR 311735Z AUTO 03008G14KT 10SM 19/04 A3041 RMK AO2' },
+            { icaoId: 'KLKR', obsTime: 1793469300, wdir: 'VRB', wspd: 6, wgst: null, rawOb: 'METAR KLKR 311755Z AUTO VRB06KT 10SM 19/04 A3040 RMK AO2' },
+            { icaoId: 'KLKR', obsTime: 1793470500, wdir: 40, wspd: 8, wgst: 14, rawOb: 'METAR KLKR 311815Z AUTO 04008G14KT 10SM CLR 20/04 A3040 RMK AO2' },
+            { icaoId: 'KLKR', obsTime: 1793463300, wdir: 20, wspd: 10, wgst: null, rawOb: 'METAR KLKR 311615Z AUTO 02010KT 10SM 19/03 A3043 RMK AO2' },
+            { icaoId: 'KEQY', obsTime: 1793469300, wdir: null, wspd: null, wgst: null, rawOb: 'METAR KEQY 311755Z AUTO 10SM CLR 19/03 A3040' },
+        ];
+        const VectorMapLayers = new Function(read('web/cockpit/vector-map-layers.js') + '\nreturn VectorMapLayers;')();
+        const internetMetars = async (obs) => {
+            const v = Object.create(VectorMapLayers.prototype);
+            Object.assign(v, { _internetMetars: new Map(), _internetFetchedAt: 0, _internetFetchBounds: null,
+                _aptPositions: new Map(), _fisbClient: null, _nasr: null, _onInternetMetar: null, _onInternetMetarsFetched: null });
+            const realFetch = globalThis.fetch;
+            globalThis.fetch = async () => ({ ok: true, json: async () => obs });
+            try { await v.fetchInternetMetars(34, -81.5, 35.5, -80); } finally { globalThis.fetch = realFetch; }
+            return v._internetMetars;
+        };
+        const one = (i) => internetMetars([AWC[i]]);
+
+        // the shape it really stores
+        const m = await one(1);
+        expect(m.get('KLKR')).toMatchObject({ raw: AWC[1].rawOb, received_at: expect.any(Number), source: 'internet',
+            decoded: { wind_dir: 30, wind_variable: false, wind_speed: 8, wind_gust: 14, observed_at: '2026-10-31T17:35:00.000Z' } });
+
+        // 17:35Z, 25 min before NOW (18:00Z), with a gust
+        setup({ internet: m });
+        let r = await GlideInputs.runwayWind('KLKR', REF, settings(), NOW);
+        expect(r.wind).toEqual({ kind: 'metar', from: 30, kt: 8, gustKt: 14 });
+        expect(r.label).toBe('METAR KLKR 030/08G14 (25 min)');
+        // VRB (wind_dir null + wind_variable) -> vrb, labelled with its speed
+        setup({ internet: await one(2) });
+        r = await GlideInputs.runwayWind('KLKR', REF, settings(), NOW);
+        expect(r.wind).toEqual({ kind: 'vrb' });
+        expect(r.label).toBe('METAR KLKR VRB/06 (5 min)');
+        // fetchInternetMetars keeps the newest per station; at 45 min it is still usable
+        setup({ internet: await internetMetars([AWC[0], AWC[4]]) });
+        expect((await GlideInputs.runwayWind('KLKR', REF, settings(), NOW)).label).toBe('METAR KLKR 050/07 (45 min)');
+
+        // FIS-B (fresh) is first
+        setup({ own: { KLKR: entry(10) }, internet: m });
+        expect((await GlideInputs.runwayWind('KLKR', REF, settings(), NOW)).wind.from).toBe(240);
+        // a FIS-B METAR too old -> the internet one; it beats the weather cache
+        const cache = { KLKR: { metar: { raw: 'x', decoded: decoded(30, { wind_dir: 120, wind_speed: 7 }), fetched_at: iso(30) } } };
+        setup({ own: { KLKR: entry(100) }, internet: m, cache });
+        expect((await GlideInputs.runwayWind('KLKR', REF, settings(), NOW)).wind.from).toBe(30);
+        // too old (16:15Z, 105 min > metarMaxAgeMin 75) -> the cache
+        setup({ internet: await one(4), cache });
+        expect((await GlideInputs.runwayWind('KLKR', REF, settings(), NOW)).wind.from).toBe(120);
+        // observed more than 5 min after now (18:15Z vs 18:00Z): unknown age -> the cache
+        setup({ internet: await one(3), cache });
+        expect((await GlideInputs.runwayWind('KLKR', REF, settings(), NOW)).wind.from).toBe(120);
+        // a report with no wind group (KEQY) is not used
+        setup({ internet: await one(5) });
+        expect((await GlideInputs.runwayWind('KEQY', REF, settings(), NOW)).wind).toEqual({ kind: 'none' });
+        // no vectorLayers / no map on it -> next source, never throws
+        setup({ cache });
+        globalThis.window.app.vectorLayers = { _internetMetars: undefined };
+        expect((await GlideInputs.runwayWind('KLKR', REF, settings(), NOW)).wind.from).toBe(120);
     });
 
     it('AWC-decoded METAR (WeatherClient shape): wind_dir "VRB" with wind_variable is variable, not unparseable', async () => {

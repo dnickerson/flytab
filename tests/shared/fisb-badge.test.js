@@ -127,3 +127,29 @@ describe('StratuxClient /getStatus poll: aged and diagnosed', () => {
         clearInterval(c._statusTimer);
     });
 });
+
+describe('FisbClient.parseWindAloft (FD wind groups)', () => {
+    // Review R23 (2026-10-31): only the bare '9900' was light and variable; at 6,000 ft and up
+    // the group carries a temperature ('9900+05', '990045') and decoded as 490/100 kt.
+    it('light and variable, with or without a temperature group -> null', () => {
+        expect(FisbClient.parseWindAloft('9900')).toBeNull();
+        expect(FisbClient.parseWindAloft('9900+05')).toBeNull();
+        expect(FisbClient.parseWindAloft('9900-12')).toBeNull();
+        expect(FisbClient.parseWindAloft('990045')).toBeNull();
+    });
+
+    it('ordinary groups decode unchanged', () => {
+        expect(FisbClient.parseWindAloft('2714')).toEqual({ dir: 270, spd: 14, temp: null });
+        expect(FisbClient.parseWindAloft('2819+13')).toEqual({ dir: 280, spd: 19, temp: 13 });
+    });
+
+    it('100 kt and over (direction + 50) still decodes: 7315-20 -> 230/115', () => {
+        expect(FisbClient.parseWindAloft('7315-20')).toEqual({ dir: 230, spd: 115, temp: -20 });
+    });
+
+    it('empty or junk -> null', () => {
+        expect(FisbClient.parseWindAloft('')).toBeNull();
+        expect(FisbClient.parseWindAloft(null)).toBeNull();
+        expect(FisbClient.parseWindAloft('ABCD')).toBeNull();
+    });
+});
