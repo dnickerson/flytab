@@ -127,10 +127,25 @@ describe('Checklist capture buttons', () => {
         expect(recorder.markEvent).toHaveBeenCalledTimes(1);
     });
 
+    it('a tap cancels the synthetic click (so it cannot land on the toast that appears under the finger)', async () => {
+        await build();
+        open('normal', 'VFR', 'Runup');
+        btn('mag_L').dispatchEvent(touch('touchstart'));
+        const end = touch('touchend');
+        btn('mag_L').dispatchEvent(end);
+        expect(end.defaultPrevented).toBe(true);
+        // wireIsolatedTap, not wireTap: the click that follows is ignored for 600 ms
+        await new Promise((r) => setTimeout(r, 450));
+        const click = new MouseEvent('click', { bubbles: true, cancelable: true });
+        btn('mag_L').dispatchEvent(click);
+        expect(marked).toEqual(['mag_L']);
+        expect(read('web/cockpit/checklist.js')).toMatch(/wireIsolatedTap\(b, \(\) => this\._capture/);
+    });
+
     it('a mouse click (no touch) also marks, once, without toggling the item', async () => {
         await build();
         open('normal', 'VFR', 'Runup');
-        await new Promise((r) => setTimeout(r, 400));          // outside wireTap's 350 ms window
+        await new Promise((r) => setTimeout(r, 700));          // outside the tap guard's 600 ms window
         btn('mag_R').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
         expect(marked).toEqual(['mag_R']);
         expect(Object.values(cl._checked).some(Boolean)).toBe(false);

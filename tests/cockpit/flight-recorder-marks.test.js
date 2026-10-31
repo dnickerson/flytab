@@ -465,3 +465,52 @@ describe('the last mag survives an app restart', () => {
         expect(FlightRecorder.parseMarker(JSON.stringify(marker())).mag).toBeNull();
     });
 });
+
+describe('a mark is accepted only while data is young enough to be written before the gap rules bite', () => {
+    beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(T0); localStorage.clear(); global.fetch = server().fetch; });
+    afterEach(() => { vi.useRealTimers(); });
+
+    it('MARK_FRESH_MS derives from the row rules: 10 s minus (MARK_FROZEN_ROWS + 1) rows', () => {
+        expect(FlightRecorder.MARK_FRESH_MS).toBe(10000 - (FlightRecorder.MARK_FROZEN_ROWS + 1) * 1000);
+        expect(FlightRecorder.MARK_FRESH_MS).toBe(6000);
+    });
+
+    it('freshest source 7 s old: refused (no_data), nothing queued', async () => {
+        const { rec } = makeClockedRecorder();
+        await rec.start();
+        rec._engine = { lastData: { data: { RPM: 1800, time: '20:57:00' } }, dataAge: 7000 };
+        expect(rec.markEvent('mag_L')).toMatchObject({ saved: false, reason: 'no_data' });
+        expect(rec.currentMag()).toBeNull();
+        expect(rec._pendingEvents).toEqual([]);
+        await rec.stop();
+    });
+
+    it('freshest source 5 s old, then frozen: saved and written on a row before the data is 10 s old', async () => {
+        const { rec, data } = makeClockedRecorder();
+        await rec.start();
+        let age = 5000;
+        rec._engine = { lastData: { data }, get dataAge() { return age; } };
+        data.time = '20:57:00';
+        rec._recordRow();                               // row at 5 s
+        expect(rec.markEvent('runup_start').saved).toBe(true);
+        let wroteAt = null;
+        while (age < 10000) {
+            age += 1000;
+            const before = rows(rec).length;
+            rec._recordRow();
+            if (rows(rec).length > before && rows(rec).at(-1)[EVENT] === 'runup_start') { wroteAt = age; break; }
+        }
+        expect(wroteAt).not.toBeNull();
+        expect(wroteAt).toBeLessThan(10000);
+        await rec.stop();
+    });
+
+    it('a fresh GPS fix keeps it open even when the engine data is old', async () => {
+        const { rec } = makeClockedRecorder();
+        await rec.start();
+        rec._engine = { lastData: { data: { RPM: 0 } }, dataAge: 30000 };
+        rec._stratux = { situation: { lat: 35, lon: -81, gps_fix_quality: 1, timestamp: Date.now() - 2000 }, traffic: new Map() };
+        expect(rec.markEvent('mag_L').saved).toBe(true);
+        await rec.stop();
+    });
+});

@@ -311,9 +311,11 @@ class Checklist {
         this._bodyEl.querySelectorAll('.checklist-item').forEach(el => {
             const idx = parseInt(el.dataset.idx);
             // Capture buttons sit beside the row's main line, not in it: a tap on one
-            // never reaches the handler that checks the item or the note icon.
+            // never reaches the handler that checks the item or the note icon. Isolated
+            // tap (no synthetic click): the confirmation toast appears under the finger
+            // and a click could land on its dismiss button.
             el.querySelectorAll('.checklist-capture-btn').forEach(b =>
-                wireTap(b, () => this._capture(b.dataset.capture)));
+                wireIsolatedTap(b, () => this._capture(b.dataset.capture)));
             this._wire(el.querySelector('.checklist-item-main'), () => {
                 this._toggleItem(idx);
             });

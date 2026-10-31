@@ -29,6 +29,13 @@ class FlightRecorder {
     // sample time. If the sample time is empty, or has stayed the same for this many
     // rows in a row (engine data frozen), it goes on the next row anyway.
     static MARK_FROZEN_ROWS = 3;
+    // _recordRow writes nothing once the freshest source is 10 s old. A mark taken
+    // at age A waits for up to MARK_FROZEN_ROWS + 1 more rows (one per second) if the
+    // sample time is frozen, so it is only accepted while A + that stays under 10 s;
+    // otherwise it could be held through a data gap and written minutes later, or
+    // dropped at the gap auto-stop after the pilot saw "marked".
+    static DATA_FRESH_MS = 10000;
+    static MARK_FRESH_MS = FlightRecorder.DATA_FRESH_MS - (FlightRecorder.MARK_FROZEN_ROWS + 1) * 1000;
 
     // Auto-start/stop thresholds
     static RPM_START_THRESHOLD = 500;
@@ -516,10 +523,9 @@ class FlightRecorder {
         }
         if (!this._recording) return { saved: false, at, reason: 'not_recording' };
         if (!this._hasEventColumn()) return { saved: false, at, reason: 'old_recording' };
-        // Same test _recordRow uses: with no fresh data no row is written, and the
-        // mark would land on the first row after the data returns (or be lost).
-        const fresh = this._freshSources();
-        if (!fresh.hasGps && !fresh.hasEngine) return { saved: false, at, reason: 'no_data' };
+        // With no fresh data no row is written (see MARK_FRESH_MS): refuse the mark
+        // rather than hold it across a gap.
+        if (!(this._freshSources().ageMs < FlightRecorder.MARK_FRESH_MS)) return { saved: false, at, reason: 'no_data' };
         this._pendingEvents.push(code);
         if (FlightRecorder.MAG_CODES.includes(code)) {
             this._currentMag = code;
@@ -551,10 +557,11 @@ class FlightRecorder {
         const eng = this._engine?.lastData;
         const sit = this._stratux?.situation;
         const sitAge = sit?.timestamp ? (Date.now() - sit.timestamp) : Infinity;
-        return {
-            hasGps: !!(sit?.lat && sit?.lon && (sit?.gps_fix_quality > 0) && sitAge < 10000),
-            hasEngine: !!eng && (this._engine?.dataAge < 10000),
-        };
+        const hasGps = !!(sit?.lat && sit?.lon && (sit?.gps_fix_quality > 0) && sitAge < FlightRecorder.DATA_FRESH_MS);
+        const hasEngine = !!eng && (this._engine?.dataAge < FlightRecorder.DATA_FRESH_MS);
+        // ageMs: age of the freshest usable source (Infinity if none)
+        const ageMs = Math.min(hasGps ? sitAge : Infinity, hasEngine ? this._engine.dataAge : Infinity);
+        return { hasGps, hasEngine, ageMs };
     }
 
     /** False only for a recording resumed from a file that has no `event` column. */
