@@ -474,7 +474,7 @@ Enable **CB Building** in the layer panel. FlyTab analyzes NEXRAD data across ti
 
 **CB↑↑ (red-orange dashed polygon)** — Rapid growth ≥50%, or new heavy-echo cores appearing. Cell may be approaching thunderstorm intensity.
 
-**Storm motion arrow** — When FIS-B winds aloft data is available, a line projects from the polygon center toward where the cell will be in approximately 15 minutes. This accounts for storm motion at ~75% of FL180 wind speed, which approximates mid-tropospheric steering flow.
+**Storm motion arrow** — When FIS-B winds aloft data is available, a line projects from the polygon center toward where the cell will be in approximately 15 minutes. This accounts for storm motion at ~75% of FL180 wind speed, which approximates mid-tropospheric steering flow. The wind must come from a reporting station within **Winds Aloft Max Station Distance** of the cell and have been received within **Winds Aloft Max Age** (MORE → Configuration → Engine-Out Glide; defaults 100 nm and 360 min); otherwise no arrow is drawn. Light winds (5 kt or less) draw no arrow.
 
 Areas *without* a CB polygon are stable or weakening cells — the absence of a polygon is a finding, not a data gap.
 
@@ -747,7 +747,7 @@ Below the calculator, a PI K-FACTOR (LIVE) panel shows the K-factor currently pr
 
 ### Route table winds from FIS-B
 
-A waypoint with no planned wind shows the Stratux FIS-B winds aloft at its altitude in the **WIND** column (and its **HDG** allows for them), but only from a reporting station within **Winds Aloft Max Station Distance** of the waypoint (default 100 nm) and a report received within **Winds Aloft Max Age** (default 360 min) — the same two settings on the **Engine-Out Glide** card of MORE → Configuration that the glide panel uses. When no such wind is left, the FIS-B wind is taken off the waypoint (WIND shows —) at the next winds update. A wind from the route planner is never replaced or removed.
+A waypoint with no planned wind shows the Stratux FIS-B winds aloft at its altitude in the **WIND** column (and its **HDG** allows for them), but only from a reporting station within **Winds Aloft Max Station Distance** of the waypoint (default 100 nm) and a report received within **Winds Aloft Max Age** (default 360 min) — the same two settings on the **Engine-Out Glide** card of MORE → Configuration that the glide panel uses. When no such wind is left, or the one in use gets older than the age limit (checked with every position update, so it also happens out of FIS-B coverage when no new winds arrive), the FIS-B wind is taken off the waypoint (WIND shows —). A wind from the route planner is never replaced or removed.
 
 ### Route table FUEL and REM columns
 

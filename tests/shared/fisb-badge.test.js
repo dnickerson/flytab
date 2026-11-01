@@ -369,3 +369,29 @@ describe('FisbClient TAF: the Stratux TAF frame (station and time are separate f
         expect(c.getTaf('KGSO').raw).toBe('KGSO 311720Z 3118/0124 20008KT');
     });
 });
+
+/**
+ * Stratux counts both `x[0] == "TAF"` and `x[0] == "TAF.AMD"` as TAFs (gen_gdl90.go registerADSBTextMessageReceived)
+ * and sends Type = x[0], so an amended TAF arrives as Type "TAF.AMD". Built by the same split rule.
+ */
+const TAF_AMD_KCLT = 'TAF.AMD KCLT 311850Z 3119/0124 27015G25KT P6SM BKN035 FM010000 26008KT P6SM SCT050';
+
+describe('FisbClient TAF.AMD: an amended TAF is a TAF', () => {
+    it('stored under KCLT, replacing the earlier TAF, the text marked amended', async () => {
+        const c = new FisbClient(new EventTarget(), null);
+        const seen = [];
+        c.addEventListener('fisb:taf', (e) => seen.push(e.detail));
+        await c._handleWeather(stratuxMsg(TAF_KCLT));
+        await c._handleWeather(stratuxMsg(TAF_AMD_KCLT));
+        const t = c.getTaf('KCLT');
+        expect(t.raw).toBe('TAF AMD KCLT 311850Z 3119/0124 27015G25KT P6SM BKN035 FM010000 26008KT P6SM SCT050');
+        expect(c.tafs.size).toBe(1);
+        expect(seen.map((d) => d.icao)).toEqual(['KCLT', 'KCLT']);
+    });
+
+    it('Data already carrying the head is left alone', async () => {
+        const c = new FisbClient(new EventTarget(), null);
+        await c._handleWeather({ Type: 'TAF.AMD', Location: 'KCLT', Time: '311850Z', Data: 'TAF AMD KCLT 311850Z 3119/0124 27015G25KT' });
+        expect(c.getTaf('KCLT').raw).toBe('TAF AMD KCLT 311850Z 3119/0124 27015G25KT');
+    });
+});

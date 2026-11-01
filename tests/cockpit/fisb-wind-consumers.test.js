@@ -154,6 +154,111 @@ describe('route table: FIS-B winds only within the wind-trust limits', () => {
 });
 
 // ---------------------------------------------------------------------------------------------------------------
+describe('route table: an applied FIS-B wind expires on the live tick, with no new winds update', () => {
+    const LIMITS = { windMaxStationNm: 50, windMaxAgeMin: 60 };
+    let hdgCalls;
+
+    function liveTable(fisb, waypoints) {
+        const t = Object.create(RouteTable.prototype);
+        t._fisbClient = fisb;
+        t._waypoints = waypoints;
+        t._activeIndex = 1;
+        t._flights = [];
+        t._destIcao = null;
+        t._cruisePower = null;
+        t._editMode = false;
+        t._emitLegUpdate = () => {};
+        t._updateSummary = () => {};
+        t._renderTable = vi.fn();
+        t._updateTableCells = () => true;
+        return t;
+    }
+    const crz = (nm) => [{ phase: 'CRZ', gph: 10, ete_min: nm / 2, tas: 120, gs: 120, dist: nm, altFrom: 6000, altTo: 6000 }];
+    const sit = () => ({ lat: CAR.lat, lon: CAR.lon, ground_speed: 0 });
+
+    beforeEach(() => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(NOW);
+        hdgCalls = [];
+        globalThis.NasrDB = NasrDB;
+        globalThis.GlideModel = GlideModel;
+        globalThis.GlideInputs = GlideInputs;
+        globalThis.FisbClient = FisbClient;
+        globalThis.CockpitConfig = {
+            aircraft: (path) => ({ 'performance.fuel_capacity_gal': 36, 'performance.cruise_gph': 10, 'performance.cruise_speed_kt': 120 })[path],
+            get: (k) => (k === 'engineOutGlide' ? LIMITS : null),
+        };
+        globalThis.FlyTabPlanning = {
+            bearing: () => 0,
+            crossTrackDistanceNm: () => 0,
+            windCorrectedMagHdg: (brg, lat, lon, tas, dir, spd) => { hdgCalls.push([dir, spd]); return spd ? 10 : 0; },
+        };
+        globalThis.FuelState = {
+            getCurrentFuel: () => ({ gallons: 30, source: 'tank_state', stale: false }),
+            getStartFuel: () => ({ gallons: 30, source: 'tic' }),
+        };
+    });
+    afterEach(() => {
+        vi.useRealTimers();
+        for (const k of ['NasrDB', 'GlideModel', 'GlideInputs', 'FisbClient', 'CockpitConfig', 'FlyTabPlanning', 'FuelState']) delete globalThis[k];
+    });
+
+    it('applied at NOW; updateLive at NOW+59 min keeps it; at NOW+61 min it is cleared and HDG recomputed calm', async () => {
+        const c = await carClient();
+        const wps = [
+            { icao: 'KCAR', type: 'APT', lat: CAR.lat, lon: CAR.lon },
+            { icao: 'NEAR', type: 'FIX', lat: 46.88, lon: -68.02, alt: 6000, wind: null, _legDist: 1, _segments: crz(1) },
+        ];
+        const rt = liveTable(c, wps);
+        rt._applyFisbWinds();
+        expect(wps[1].wind).toMatchObject({ dir: 280, spd: 45, _fisbApplied: true });
+
+        vi.setSystemTime(NOW + 59 * MIN);
+        rt.updateLive(sit());
+        expect(wps[1]._wind).toMatchObject({ dir: 280, spd: 45 });
+        expect(wps[1]._hdg).toBe(10);
+
+        hdgCalls = [];
+        vi.setSystemTime(NOW + 61 * MIN);                 // no fisb:winds event in between
+        rt.updateLive(sit());
+        expect(wps[1].wind).toBeNull();
+        expect(wps[1]._wind).toBeNull();
+        expect(hdgCalls).toContainEqual([0, 0]);          // the leg was recomputed without the wind
+        expect(wps[1]._hdg).toBe(0);
+    });
+
+    it('a newer report with the same values renews the age (the wind is not dropped at the old one\'s age)', async () => {
+        const c = await carClient();
+        const wps = [
+            { icao: 'KCAR', type: 'APT', lat: CAR.lat, lon: CAR.lon },
+            { icao: 'NEAR', type: 'FIX', lat: 46.88, lon: -68.02, alt: 6000, wind: null, _legDist: 1, _segments: crz(1) },
+        ];
+        const rt = liveTable(c, wps);
+        rt._applyFisbWinds();
+        vi.setSystemTime(NOW + 40 * MIN);
+        await c._handleWeather(stratuxMsg(WINDS_CAR));    // same CAR frame again, received now
+        rt._applyFisbWinds();
+        vi.setSystemTime(NOW + 70 * MIN);                 // 70 min after the first, 30 after the second
+        rt.updateLive(sit());
+        expect(wps[1]._wind).toMatchObject({ dir: 280, spd: 45 });
+    });
+
+    it('a planner wind is never expired', async () => {
+        const c = await carClient();
+        const planned = { dir: 100, spd: 20 };
+        const wps = [
+            { icao: 'KCAR', type: 'APT', lat: CAR.lat, lon: CAR.lon },
+            { icao: 'NEAR', type: 'FIX', lat: 46.88, lon: -68.02, alt: 6000, wind: planned, _legDist: 1, _segments: crz(1) },
+        ];
+        const rt = liveTable(c, wps);
+        vi.setSystemTime(NOW + 24 * 60 * MIN);
+        rt.updateLive(sit());
+        expect(wps[1].wind).toBe(planned);
+        expect(wps[1]._wind).toBe(planned);
+    });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
 describe('wind barbs: rows sorted low to high by alt', () => {
     let html;
     beforeEach(() => {
@@ -191,8 +296,25 @@ describe('CB building: storm-motion arrow from a real FIS-B wind entry', () => {
             polyline: (pts, opts) => { const l = layer({ pts, opts }); lines.push(l); return l; },
         };
         globalThis.FisbClient = FisbClient;
+        globalThis.GlideModel = GlideModel;
+        globalThis.GlideInputs = GlideInputs;
+        globalThis.CockpitConfig = { aircraft: () => undefined, get: (k) => (k === 'engineOutGlide' ? { windMaxStationNm: 50, windMaxAgeMin: 60 } : undefined) };
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(NOW);
     });
-    afterEach(() => { delete globalThis.L; delete globalThis.FisbClient; });
+    afterEach(() => {
+        vi.useRealTimers();
+        for (const k of ['L', 'FisbClient', 'GlideModel', 'GlideInputs', 'CockpitConfig']) delete globalThis[k];
+    });
+    const square = (lat, lon) => [[lat - 0.07, lon - 0.08], [lat - 0.07, lon + 0.08], [lat + 0.07, lon + 0.08], [lat + 0.07, lon - 0.08]];
+    function nexradWith(fisb) {
+        const n = Object.create(FisbNexrad.prototype);
+        n._map = { removeLayer() {} };
+        n._fisb = fisb;
+        n._cbOverlays = [];
+        n._cbLabelMarkers = [];
+        return n;
+    }
 
     it('CAR 18000 is 280/38: the arrow points 100 deg (downwind), 38 x 0.75 x 15 min = 7.1 nm', async () => {
         const c = await carClient();
@@ -215,12 +337,33 @@ describe('CB building: storm-motion arrow from a real FIS-B wind entry', () => {
     });
 
     it('5 kt or less: no arrow', async () => {
-        const n = Object.create(FisbNexrad.prototype);
-        n._map = { removeLayer() {} };
-        n._fisb = { getNearestWind: () => ({ dir: 280, spd: 5, alt: 18000, station: 'CAR' }) };
-        n._cbOverlays = [];
-        n._cbLabelMarkers = [];
-        n._renderCbOverlays([{ points: [[46.80, -68.10], [46.80, -67.94], [46.94, -67.94], [46.94, -68.10]], growthRate: 0.3 }], null);
+        const c = await carClient();
+        c.winds.get('CAR:18000').spd = 5;
+        nexradWith(c)._renderCbOverlays([{ points: square(46.87, -68.02), growthRate: 0.3 }], null);
+        expect(lines).toHaveLength(0);
+    });
+
+    it('the nearest station is farther than windMaxStationNm from the cell: no arrow', async () => {
+        const c = await carClient();
+        nexradWith(c)._renderCbOverlays([{ points: square(47.87, -68.02), growthRate: 0.3 }], null);   // ~60 nm
+        expect(lines).toHaveLength(0);
+    });
+
+    it('the report is older than windMaxAgeMin: no arrow', async () => {
+        const c = await carClient();
+        vi.setSystemTime(NOW + 61 * MIN);
+        nexradWith(c)._renderCbOverlays([{ points: square(46.87, -68.02), growthRate: 0.3 }], null);
+        expect(lines).toHaveLength(0);
+    });
+
+    it('no GlideInputs: GlideModel.DEFAULTS.pilot (100 nm, 360 min); neither: no arrow', async () => {
+        const c = await carClient();
+        delete globalThis.GlideInputs;
+        nexradWith(c)._renderCbOverlays([{ points: square(47.87, -68.02), growthRate: 0.3 }], null);   // 60 <= 100
+        expect(lines).toHaveLength(1);
+        delete globalThis.GlideModel;
+        lines.length = 0;
+        nexradWith(c)._renderCbOverlays([{ points: square(46.87, -68.02), growthRate: 0.3 }], null);
         expect(lines).toHaveLength(0);
     });
 });

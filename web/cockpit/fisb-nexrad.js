@@ -1012,7 +1012,9 @@ class FisbNexrad {
 
             // Storm motion arrow — 15-min projected position at ~75% of mid-level wind.
             // FisbClient wind entries are { dir, spd } with dir the FD "from" direction; the storm moves toward dir + 180.
-            const wind = this._fisb?.getNearestWind(center[0], center[1], 18000);
+            // Only a trusted wind (station within windMaxStationNm of the cell, received within windMaxAgeMin): else no arrow.
+            const wind = (this._fisb && typeof this._fisb.getTrustedWind === 'function')
+                ? this._fisb.getTrustedWind(center[0], center[1], 18000) : null;
             if (wind && Number.isFinite(wind.dir) && Number.isFinite(wind.spd) && wind.spd > 5) {
                 const stormDir = (wind.dir + 180) % 360;
                 const distNm = wind.spd * 0.75 * (15 / 60);

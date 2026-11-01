@@ -119,6 +119,38 @@ class FisbClient extends EventTarget {
         return bestWind;
     }
 
+    /**
+     * Wind-trust limits for FIS-B winds aloft, read on every call: windMaxStationNm / windMaxAgeMin from
+     * GlideInputs.settings() (the Engine-Out Glide settings "Winds Aloft Max Station Distance" / "Max Age",
+     * validated - the limits the glide panel applies). Without GlideInputs: GlideModel.DEFAULTS.pilot. Without
+     * either: null, and no FIS-B wind is trusted.
+     * -> { maxNm, maxAgeMs } | null
+     */
+    windTrustLimits() {
+        let p = null;
+        try {
+            if (typeof GlideInputs !== 'undefined' && GlideInputs && GlideInputs.settings) p = GlideInputs.settings().pilot;
+        } catch (_) { p = null; }
+        if (!p && typeof GlideModel !== 'undefined' && GlideModel && GlideModel.DEFAULTS) p = GlideModel.DEFAULTS.pilot;
+        const nm = p ? p.windMaxStationNm : NaN, min = p ? p.windMaxAgeMin : NaN;
+        return (Number.isFinite(nm) && Number.isFinite(min)) ? { maxNm: nm, maxAgeMs: min * 60000 } : null;
+    }
+
+    /**
+     * getNearestWind, but only a wind that may be used at lat/lon: dir, spd, station position and received_at all
+     * known, the station within maxNm of lat/lon and the report received within maxAgeMs (windTrustLimits).
+     * Otherwise null.
+     */
+    getTrustedWind(lat, lon, altFt, now = Date.now()) {
+        const lim = this.windTrustLimits();
+        if (!lim) return null;
+        const w = this.getNearestWind(lat, lon, altFt);
+        if (!w || !Number.isFinite(w.dir) || !Number.isFinite(w.spd) || !Number.isFinite(w.lat) || !Number.isFinite(w.lon)
+            || !Number.isFinite(w.received_at)) return null;
+        if (now - w.received_at > lim.maxAgeMs) return null;
+        return this._distNm(lat, lon, w.lat, w.lon) <= lim.maxNm ? w : null;
+    }
+
     // ========== Weather Message Handling ==========
 
     async _handleWeather(msg) {
@@ -135,8 +167,11 @@ class FisbClient extends EventTarget {
 
         if (type === 'METAR' || type === 'SPECI') {
             this._handleMetar(FisbClient.metarText(data, location, time), location, now, type === 'SPECI');
-        } else if (type === 'TAF') {
-            this._handleTaf(FisbClient.reportText(data, location, time), location, now);
+        } else if (type === 'TAF' || type === 'TAF.AMD') {
+            // Stratux counts "TAF" and "TAF.AMD" (an amended TAF) alike; the amended one replaces the station's TAF.
+            let text = FisbClient.reportText(data, location, time);
+            if (type === 'TAF.AMD' && !/^TAF\b/i.test(text)) text = `TAF AMD ${text}`;
+            this._handleTaf(text, location, now);
         } else if (type === 'PIREP' || type === 'UA' || type === 'UUA') {
             await this._handlePirep(data, location, now, type === 'UUA');
         } else if (type === 'SIGMET' || type === 'CONVECTIVE SIGMET') {
