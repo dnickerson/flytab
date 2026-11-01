@@ -2694,6 +2694,57 @@ body {
     touch-action: manipulation;
     white-space: nowrap;
 }
+.ce-key-btn--touch {
+    min-height: var(--touch-min, 56px);
+    padding: 0 18px;
+    font-family: var(--font-ui);
+    font-size: var(--text-sm);
+    font-weight: 700;
+}
+/* SFTP server host-key confirm (web/cockpit/sftp-host-key.js) */
+.shk-overlay {
+    position: fixed; inset: 0; z-index: 300001;
+    background: rgba(0, 0, 0, 0.6);
+    display: flex; align-items: center; justify-content: center;
+}
+.shk-box {
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    border: 2px solid var(--border-strong);
+    border-radius: 12px;
+    padding: 20px;
+    width: min(560px, 92vw);
+    font-family: var(--font-ui);
+}
+.shk-title {
+    font-size: var(--text-lg); font-weight: 800;
+    color: var(--text-primary); margin-bottom: 12px;
+}
+.shk-line {
+    font-size: var(--text-md); font-weight: 700;
+    color: var(--text-secondary); margin: 0 0 10px;
+    overflow-wrap: anywhere;
+}
+.shk-mono {
+    font-family: var(--font-instrument); font-weight: 900;
+    color: var(--text-primary);
+}
+.shk-actions { display: flex; gap: 12px; margin-top: 16px; }
+.shk-btn {
+    flex: 1;
+    min-height: var(--touch-min, 56px);
+    border-radius: 8px;
+    font-family: var(--font-ui); font-size: var(--text-md); font-weight: 800;
+    cursor: pointer; touch-action: manipulation;
+}
+.shk-cancel {
+    background: var(--bg-surface); color: var(--text-primary);
+    border: 2px solid var(--border-strong);
+}
+.shk-ok {
+    background: var(--accent); color: var(--bg-primary);
+    border: 2px solid var(--accent);
+}
 .ce-key-btn--cancel {
     background: transparent;
     border: 1px solid var(--border, #3a4a6a);
