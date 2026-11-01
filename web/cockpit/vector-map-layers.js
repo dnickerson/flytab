@@ -1779,10 +1779,12 @@ class VectorMapLayers {
             return i >= 0 ? raw.slice(i + 1) : '';
         })() : '';
 
+        // METAR remarks and station come from FIS-B (radio) or the internet: text, not HTML.
+        const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
         return `<div class="cb-popup">
-            <div class="cb-popup-header">${typeLabel} · ${icao}</div>
-            <div class="cb-popup-where">${where}</div>
-            ${rmk ? `<div class="cb-popup-raw">${rmk}</div>` : ''}
+            <div class="cb-popup-header">${esc(typeLabel)} · ${esc(icao)}</div>
+            <div class="cb-popup-where">${esc(where)}</div>
+            ${rmk ? `<div class="cb-popup-raw">${esc(rmk)}</div>` : ''}
             ${time ? `<div class="cb-popup-time">${time}</div>` : ''}
         </div>`;
     }

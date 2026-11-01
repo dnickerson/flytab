@@ -165,10 +165,9 @@ const SftpHostKey = {
         if (typeof DiagLog !== 'undefined') DiagLog.log('sftp', m);
     },
 
-    /** showToast() puts its message into innerHTML, so escape. No null actions arg: it would throw. */
+    /** showToast() renders the message as text. No null actions arg: it would throw. */
     _toast(m) {
-        const esc = String(m).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-        window.app?.showToast(esc);
+        window.app?.showToast(String(m));
     },
 };
 

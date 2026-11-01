@@ -1019,15 +1019,16 @@ class WxBriefing {
             const tp = p.tp6 ?? p.tp12 ?? null;
             const pop = p.pop ?? null;
             const mixHt = p.mix_ht != null ? `${p.mix_ht.toLocaleString()}ft` : '—';
+            const esc = (v) => this._escHtml(String(v ?? ''));   // MOS labels arrive over the network
 
             row.innerHTML = `
                 <td class="wx-dt">${timeLabel}</td>
                 <td class="wx-dt wx-dt-local">${localLabel}</td>
-                <td class="wx-cat-badge wx-cat-${(p.flight_cat || 'unknown').toLowerCase()}">${p.flight_cat || '—'}</td>
-                <td>${p.cig_label ?? (p.cld === 'BK' ? 'BKN' : p.cld === 'OV' ? 'OVC' : '—')}</td>
-                <td>${p.vis_label || '—'}</td>
-                <td>${wind}</td>
-                <td>${p.obv && p.obv !== 'N' ? p.obv : (p.typ || '—')}</td>
+                <td class="wx-cat-badge wx-cat-${esc((p.flight_cat || 'unknown').toLowerCase())}">${esc(p.flight_cat || '—')}</td>
+                <td>${esc(p.cig_label ?? (p.cld === 'BK' ? 'BKN' : p.cld === 'OV' ? 'OVC' : '—'))}</td>
+                <td>${esc(p.vis_label || '—')}</td>
+                <td>${esc(wind)}</td>
+                <td>${esc(p.obv && p.obv !== 'N' ? p.obv : (p.typ || '—'))}</td>
                 <td class="${pop >= 50 ? 'wx-val-caution' : ''}">${pop !== null ? pop + '%' : '—'}</td>
                 <td class="${tp >= 40 ? 'wx-val-danger' : tp >= 20 ? 'wx-val-caution' : ''}">${tp !== null ? tp + '%' : '—'}</td>
                 <td class="wx-dt">${mixHt}</td>
@@ -1747,17 +1748,18 @@ class WxBriefing {
             const tpClass  = (tp != null && tp >= 40) ? ' wx-val-danger' : ((tp != null && tp >= 20) ? ' wx-val-caution' : '');
             const mexClass = p.reliable === false ? ' wx-mos-pg-mex' : '';
 
+            const esc = (v) => this._escHtml(String(v ?? ''));   // MOS values arrive over the network
             html += `
                 <div class="wx-mos-pg-row${mexClass}">
                     <span class="wx-mos-pg-time">${timeStr}</span>
-                    <span class="wx-mos-pg-cat wx-cat-${catClass}">${cat}</span>
-                    <span>${wind}</span>
-                    <span>${cig}</span>
-                    <span>${vis}</span>
-                    <span class="${popClass}">${pop}</span>
-                    <span class="${tpClass}">${tstm}</span>
-                    <span>${mixHt}</span>
-                    <span class="wx-mos-pg-td">${tmp}${dpt}</span>
+                    <span class="wx-mos-pg-cat wx-cat-${esc(catClass)}">${esc(cat)}</span>
+                    <span>${esc(wind)}</span>
+                    <span>${esc(cig)}</span>
+                    <span>${esc(vis)}</span>
+                    <span class="${popClass}">${esc(pop)}</span>
+                    <span class="${tpClass}">${esc(tstm)}</span>
+                    <span>${esc(mixHt)}</span>
+                    <span class="wx-mos-pg-td">${esc(tmp)}${esc(dpt)}</span>
                 </div>`;
         }
         html += '</div>';
@@ -1785,11 +1787,11 @@ class WxBriefing {
         let bodyHtml = `
             <div class="wx-metar-raw">${this._escHtml(metar.raw || '—')}</div>
             <div class="wx-decoded-grid">
-                <div class="wx-decoded-cell"><div class="wx-decoded-lbl">Wind</div><div class="wx-decoded-val">${wind}</div></div>
-                <div class="wx-decoded-cell"><div class="wx-decoded-lbl">Visibility</div><div class="wx-decoded-val ${visClass}">${vis}</div></div>
-                <div class="wx-decoded-cell"><div class="wx-decoded-lbl">Ceiling</div><div class="wx-decoded-val ${ceilClass}">${ceil}</div></div>
-                <div class="wx-decoded-cell"><div class="wx-decoded-lbl">Temp / Dew</div><div class="wx-decoded-val">${temp}</div></div>
-                <div class="wx-decoded-cell"><div class="wx-decoded-lbl">Altimeter</div><div class="wx-decoded-val">${alt}"</div></div>
+                <div class="wx-decoded-cell"><div class="wx-decoded-lbl">Wind</div><div class="wx-decoded-val">${this._escHtml(String(wind))}</div></div>
+                <div class="wx-decoded-cell"><div class="wx-decoded-lbl">Visibility</div><div class="wx-decoded-val ${visClass}">${this._escHtml(String(vis))}</div></div>
+                <div class="wx-decoded-cell"><div class="wx-decoded-lbl">Ceiling</div><div class="wx-decoded-val ${ceilClass}">${this._escHtml(String(ceil))}</div></div>
+                <div class="wx-decoded-cell"><div class="wx-decoded-lbl">Temp / Dew</div><div class="wx-decoded-val">${this._escHtml(String(temp))}</div></div>
+                <div class="wx-decoded-cell"><div class="wx-decoded-lbl">Altimeter</div><div class="wx-decoded-val">${this._escHtml(String(alt))}"</div></div>
                 <div class="wx-decoded-cell"><div class="wx-decoded-lbl">Observed</div><div class="wx-decoded-val" style="font-size:11px">${metar.reportTime ? new Date(metar.reportTime).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) + ' L' : '—'}</div></div>
             </div>
         `;

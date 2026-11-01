@@ -15,6 +15,11 @@ class FlightUpload {
     // backfill companions for flights whose CSV was uploaded before they were sent.
     static COMPANION_KEY = 'flytab_uploaded_companions';
 
+    /** Text for HTML (file names, error messages). */
+    static _esc(v) {
+        return String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
     constructor() {
         this._el = null;
         this._visible = false;
@@ -54,7 +59,7 @@ class FlightUpload {
             this._flights = await resp.json();
             this._render();
         } catch (err) {
-            listEl.innerHTML = `<div class="ds-error">Failed to load flights: ${err.message}</div>`;
+            listEl.innerHTML = `<div class="ds-error">Failed to load flights: ${FlightUpload._esc(err.message)}</div>`;
         }
     }
 
@@ -72,17 +77,18 @@ class FlightUpload {
             const size = this._formatSize(flight.size_bytes);
             const uploaded = this._uploadedSet.has(name);
 
+            // File names come from the shared flights folder (any app can write there): text only.
             const row = document.createElement('div');
             row.className = 'fu-row';
             row.innerHTML = `
-                <span class="fu-filename">${name}</span>
+                <span class="fu-filename">${FlightUpload._esc(name)}</span>
                 <span class="fu-meta">${date}${size ? ' · ' + size : ''}</span>
                 <div class="fu-row-actions">
                     <span class="fu-badge ${uploaded ? 'fu-badge--uploaded' : 'fu-badge--pending'}">
                         ${uploaded ? 'UPLOADED' : 'PENDING'}
                     </span>
                     <button class="fu-upload-btn${uploaded ? ' fu-upload-btn--done' : ''}"
-                            data-filename="${name}"${uploaded ? ' disabled' : ''}>
+                            data-filename="${FlightUpload._esc(name)}"${uploaded ? ' disabled' : ''}>
                         ${uploaded ? '✓' : 'Upload'}
                     </button>
                 </div>
@@ -298,7 +304,8 @@ class FlightUpload {
         let flightsDone = 0, logsDone = 0, logsFailed = 0, processed = 0;
         for (const item of plan) {
             if (item.kind === 'csv') {
-                const rowEl = this._el.querySelector(`[data-filename="${item.name}"]`)?.closest('.fu-row');
+                const rowEl = [...this._el.querySelectorAll('.fu-upload-btn')]
+                    .find((b) => b.dataset.filename === item.name)?.closest('.fu-row');
                 try {
                     const result = await this._sftpUpload(item.name, cfg, password);
                     if (result.ok) {

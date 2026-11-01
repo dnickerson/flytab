@@ -2594,15 +2594,19 @@ class FlyTabApp {
         const existing = document.querySelector('.toast');
         if (existing) existing.remove();
 
+        // Message and labels as text, not HTML: messages carry network text (SFTP server
+        // errors, report text). No caller passes markup (checked 2026-11-01).
         const toast = document.createElement('div');
         toast.className = 'toast';
         toast.innerHTML = `
-            <span>${message}</span>
+            <span></span>
             <div class="toast-actions">
-                ${actions.map((a, i) => `<button class="toast-btn btn-primary" data-action="${i}">${a.label}</button>`).join('')}
+                ${actions.map((a, i) => `<button class="toast-btn btn-primary" data-action="${i}"></button>`).join('')}
                 <button class="toast-btn" data-action="dismiss">✕</button>
             </div>
         `;
+        toast.querySelector('span').textContent = String(message ?? '');
+        actions.forEach((a, i) => { toast.querySelector(`[data-action="${i}"]`).textContent = String(a.label ?? ''); });
 
         actions.forEach((action, i) => {
             const btn = toast.querySelector(`[data-action="${i}"]`);

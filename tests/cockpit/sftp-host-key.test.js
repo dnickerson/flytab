@@ -166,12 +166,12 @@ describe('SftpHostKey.run', () => {
         expect(document.querySelector('img')).toBeNull();
     });
 
-    it('a toast with a host name is escaped (showToast uses innerHTML) and never passes null actions', async () => {
+    it('toasts pass plain text (showToast renders it as text) and never a null actions arg', async () => {
         setup({ key: 'changed' });
         const r = hostKeyResult('changed');
         r.hostKey.host = '<b>x</b>';
         await SftpHostKey.run(async () => r);
-        expect(window.app.showToast.mock.calls[0]).toEqual(['Server key for &lt;b&gt;x&lt;/b&gt; has CHANGED — possible interception. Upload stopped.']);
+        expect(window.app.showToast.mock.calls[0]).toEqual(['Server key for <b>x</b> has CHANGED — possible interception. Upload stopped.']);
     });
 });
 
