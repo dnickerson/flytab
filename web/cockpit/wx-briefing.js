@@ -12,6 +12,12 @@
  * Tap any airport row to expand full MOS detail table.
  */
 class WxBriefing {
+    /** Flight category for a class name: only the categories the CSS knows, else 'unknown'. */
+    static _catClass(cat) {
+        const c = typeof cat === 'string' ? cat.toUpperCase() : '';
+        return ['VFR', 'MVFR', 'IFR', 'LIFR'].includes(c) ? c.toLowerCase() : 'unknown';
+    }
+
     constructor(db, config = {}) {
         this._db           = db;
         this._config       = config;
@@ -1024,16 +1030,16 @@ class WxBriefing {
             row.innerHTML = `
                 <td class="wx-dt">${timeLabel}</td>
                 <td class="wx-dt wx-dt-local">${localLabel}</td>
-                <td class="wx-cat-badge wx-cat-${esc((p.flight_cat || 'unknown').toLowerCase())}">${esc(p.flight_cat || '—')}</td>
+                <td class="wx-cat-badge wx-cat-${WxBriefing._catClass(p.flight_cat)}">${esc(p.flight_cat || '—')}</td>
                 <td>${esc(p.cig_label ?? (p.cld === 'BK' ? 'BKN' : p.cld === 'OV' ? 'OVC' : '—'))}</td>
                 <td>${esc(p.vis_label || '—')}</td>
                 <td>${esc(wind)}</td>
                 <td>${esc(p.obv && p.obv !== 'N' ? p.obv : (p.typ || '—'))}</td>
-                <td class="${pop >= 50 ? 'wx-val-caution' : ''}">${pop !== null ? pop + '%' : '—'}</td>
-                <td class="${tp >= 40 ? 'wx-val-danger' : tp >= 20 ? 'wx-val-caution' : ''}">${tp !== null ? tp + '%' : '—'}</td>
-                <td class="wx-dt">${mixHt}</td>
-                <td>${p.tmp != null ? p.tmp + '°' : '—'}</td>
-                <td>${p.dpt != null ? p.dpt + '°' : '—'}</td>
+                <td class="${pop >= 50 ? 'wx-val-caution' : ''}">${pop !== null ? esc(pop) + '%' : '—'}</td>
+                <td class="${tp >= 40 ? 'wx-val-danger' : tp >= 20 ? 'wx-val-caution' : ''}">${tp !== null ? esc(tp) + '%' : '—'}</td>
+                <td class="wx-dt">${esc(mixHt)}</td>
+                <td>${p.tmp != null ? esc(p.tmp) + '°' : '—'}</td>
+                <td>${p.dpt != null ? esc(p.dpt) + '°' : '—'}</td>
             `;
             tbody.appendChild(row);
         }
@@ -1725,7 +1731,7 @@ class WxBriefing {
 
             const timeStr = vt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) + 'L';
             const cat = p.flight_cat || '—';
-            const catClass = (p.flight_cat || 'unknown').toLowerCase();
+            const catClass = WxBriefing._catClass(p.flight_cat);
             const cig = p.cig_label ?? (p.cld === 'BK' ? 'BKN' : p.cld === 'OV' ? 'OVC' : 'CLR');
             const vis = p.vis_label || '—';
 
@@ -1839,7 +1845,8 @@ class WxBriefing {
             changeKind = 'prob';
         } else if (f.fcstChange) {
             change = f.fcstChange;
-            changeKind = f.fcstChange.toLowerCase();
+            const kind = String(f.fcstChange).toLowerCase();
+            changeKind = ['fm', 'becmg', 'tempo', 'prob'].includes(kind) ? kind : '';   // class names the CSS defines
         }
 
         const cat = this._tafPeriodCat(f);
@@ -2170,8 +2177,9 @@ class WxBriefing {
         }
     }
 
+    /** Text for HTML content AND quoted attributes: & < > " ' all escaped. */
     _escHtml(str) {
-        return (str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        return String(str || '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     }
 
     // ── NOTAM fetch & helpers ─────────────────────────────────────────────────
@@ -2888,7 +2896,7 @@ class WxBriefing {
             const now = new Date();
             const tomorrow = new Date(now); tomorrow.setUTCDate(now.getUTCDate() + 1);
             const fmtCat = cat => cat
-                ? `<span class="wx-cat-badge wx-cat-${cat.toLowerCase()}">&nbsp;${cat}&nbsp;</span>`
+                ? `<span class="wx-cat-badge wx-cat-${WxBriefing._catClass(cat)}">&nbsp;${this._escHtml(cat)}&nbsp;</span>`
                 : '<span style="color:#888">—</span>';
             for (const icao of [dep, ...mid.slice(0, 2), dest]) {
                 const sd = this._mosData?.stations?.[icao];

@@ -7,7 +7,7 @@ class FisbWeatherDisplay {
     /** Escape HTML entities to prevent XSS from raw FIS-B text */
     static _esc(s) {
         if (!s) return '';
-        return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
     // Altitude levels to display and their colors
