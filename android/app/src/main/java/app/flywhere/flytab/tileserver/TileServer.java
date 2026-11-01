@@ -184,6 +184,8 @@ public class TileServer extends NanoHTTPD {
             response = handlePlatesList(uri);
         } else if ("GET".equals(method) && "/flights/list".equals(uri)) {
             response = handleFlightsList();
+        } else if ("GET".equals(method) && "/flights/logs".equals(uri)) {
+            response = handleFlightLogsList();
         } else if ("PUT".equals(method)) {
             response = handlePut(session, uri);
         } else if ("DELETE".equals(method)) {
@@ -648,6 +650,20 @@ public class TileServer extends NanoHTTPD {
      * [{name: "20260519_KLKR-KAVL.csv", size_bytes: 12340, modified_ms: 1747689600000}, ...]
      */
     private Response handleFlightsList() {
+        return flightFilesJson(name -> name.toLowerCase().endsWith(".csv"));
+    }
+
+    /**
+     * GET /flights/logs  (read-only, same shape as /flights/list)
+     * The flights folder's weather / traffic logs (*.ndjson), including ones with no
+     * matching CSV (a log that kept its start-time name after a restart or a failed
+     * rename). Names are filtered by FlightFiles.isLogName. /flights/list is unchanged.
+     */
+    private Response handleFlightLogsList() {
+        return flightFilesJson(FlightFiles::isLogName);
+    }
+
+    private Response flightFilesJson(java.util.function.Predicate<String> accept) {
         File flightsDir = new File(baseDir, "flights");
         if (!flightsDir.isDirectory()) {
             return newFixedLengthResponse(Response.Status.OK, "application/json", "[]");
@@ -658,7 +674,7 @@ public class TileServer extends NanoHTTPD {
         }
         java.util.List<File> csvs = new java.util.ArrayList<>();
         for (File f : files) {
-            if (f.isFile() && f.getName().toLowerCase().endsWith(".csv")) {
+            if (f.isFile() && accept.test(f.getName())) {
                 csvs.add(f);
             }
         }

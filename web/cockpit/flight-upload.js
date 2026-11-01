@@ -14,6 +14,8 @@ class FlightUpload {
     // STORAGE_KEY so the flight list's shape is unchanged; lets "Upload All Pending"
     // backfill companions for flights whose CSV was uploaded before they were sent.
     static COMPANION_KEY = 'flytab_uploaded_companions';
+    // A log file name Upload All may send on its own (no matching CSV needed).
+    static LOG_NAME_RE = /^[A-Za-z0-9_.-]+_(weather|traffic)\.ndjson$/;
 
     /** Text for HTML (file names, error messages). */
     static _esc(v) {
@@ -261,6 +263,32 @@ class FlightUpload {
         }
     }
 
+    /**
+     * Weather / traffic log names in the tablet's flights/ dir (GET /flights/logs).
+     * Only safe *_weather.ndjson / *_traffic.ndjson names. [] if the endpoint is missing
+     * (older APK) or fails: the CSV-driven backfill still runs.
+     */
+    async _listLogFiles() {
+        try {
+            const r = await fetch(`${FlightUpload.LOCAL_BASE}/flights/logs`, { cache: 'no-store' });
+            if (!r.ok) return [];
+            const list = await r.json();
+            if (!Array.isArray(list)) return [];
+            return list.map((f) => f?.name)
+                .filter((n) => typeof n === 'string' && !n.includes('..') && FlightUpload.LOG_NAME_RE.test(n));
+        } catch (_) {
+            return [];
+        }
+    }
+
+    /** The weather or traffic log being written right now (never marked uploaded half-written). */
+    _isActiveLog(name) {
+        const app = (typeof window !== 'undefined') ? window.app : null;
+        if (app?.fisbLogger?._fileName && app.fisbLogger._fileName === name) return true;   // recording or awaiting rename
+        const fr = app?.flightRecorder;
+        return !!(fr?.recording && fr._trafficFileName === name);
+    }
+
     async _uploadAllPending() {
         if (this._busy) return;           // a run is in progress (double tap)
         this._busy = true;
@@ -282,6 +310,14 @@ class FlightUpload {
                 if (this._companionSet.has(name)) continue;
                 if (await this._existsLocally(name)) plan.push({ kind: 'companion', name, csv: f.name });
             }
+        }
+        // Weather / traffic logs with no matching CSV (kept their start-time name after a
+        // restart or a failed rename): listed by GET /flights/logs, each sent once.
+        const planned = new Set(plan.map((p) => p.name));
+        for (const name of await this._listLogFiles()) {
+            if (planned.has(name) || this._companionSet.has(name) || this._isActiveLog(name)) continue;
+            plan.push({ kind: 'companion', name });
+            planned.add(name);
         }
         if (!plan.length) {
             window.app?.showToast('No pending flights.', null, 2000);
