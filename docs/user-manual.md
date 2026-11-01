@@ -863,7 +863,7 @@ This file is available for post-flight review in fly-debrief as a weather replay
 
 **CWA polygons** — Center Weather Advisories issued during the flight appear as orange polygons on the map when the SIGMETs/AIRMETs overlay is enabled.
 
-**MORE → Flight Upload** syncs entries to the cloud. FlyTab's text fields don't use the tablet's password manager (LastPass) — its pop-up took the keyboard away while typing — so type the SFTP password once and tick **Save password on device (encrypted)**. The weather log (FIS-B weather, including NEXRAD radar) is uploaded with each flight, next to the flight CSV and traffic log, and **Upload All Pending** also sends any logs not sent before for earlier flights.
+**MORE → Flight Upload** syncs entries to the cloud. FlyTab's text fields don't use the tablet's password manager (LastPass) — its pop-up took the keyboard away while typing — so type the SFTP password once and tick **Save password on device (encrypted)**. The weather log (FIS-B weather, including NEXRAD radar) is uploaded with each flight, next to the flight CSV and traffic log, and **Upload All Pending** also sends the weather and traffic logs of earlier flights once, if they are still on the tablet. If a log can't be sent, a message says so; the reason is in the diagnostic log.
 
 ---
 

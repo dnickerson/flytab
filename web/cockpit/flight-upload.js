@@ -126,6 +126,16 @@ class FlightUpload {
     }
 
     async _uploadOne(filename, rowEl) {
+        if (this._busy) return;           // a run is in progress (double tap / row tap)
+        this._busy = true;
+        try {
+            await this._uploadOneInner(filename, rowEl);
+        } finally {
+            this._busy = false;
+        }
+    }
+
+    async _uploadOneInner(filename, rowEl) {
         const cfg = (typeof CockpitConfig !== 'undefined' && CockpitConfig.get('flightUpload')) || {};
         if (!cfg.host || !cfg.username) {
             window.app?.showToast('Set SFTP host and username in Configuration → Flight Upload first.', null, 4000);
@@ -215,15 +225,35 @@ class FlightUpload {
         return ok;
     }
 
-    /** True only if the file is in the tablet's flights/ dir (HEAD 200). 404 / errors -> false. */
+    /**
+     * True only if the file is in the tablet's flights/ dir (200). 404 / errors -> false.
+     * GET aborted once the headers arrive, not HEAD: NanoHTTPD 2.3.1 writes a response
+     * body for HEAD too, which breaks the next request on the same keep-alive connection.
+     */
     async _existsLocally(name) {
+        const c = new AbortController();
         try {
-            const r = await fetch(`${FlightUpload.LOCAL_BASE}/flights/${name}`, { method: 'HEAD' });
+            const r = await fetch(`${FlightUpload.LOCAL_BASE}/flights/${encodeURIComponent(name)}`,
+                { signal: c.signal, cache: 'no-store' });
             return !!r.ok;
-        } catch (_) { return false; }
+        } catch (_) {
+            return false;
+        } finally {
+            c.abort();
+        }
     }
 
     async _uploadAllPending() {
+        if (this._busy) return;           // a run is in progress (double tap)
+        this._busy = true;
+        try {
+            await this._uploadAllPendingInner();
+        } finally {
+            this._busy = false;
+        }
+    }
+
+    async _uploadAllPendingInner() {
         // Work list, newest flight first: the CSV if not yet sent, then each companion
         // (traffic / weather log) not yet sent AND present on the tablet. The companion
         // check covers flights already marked uploaded, whose logs were never sent.
@@ -253,7 +283,7 @@ class FlightUpload {
         btn.disabled = true;
         btn.textContent = `Uploading 0 / ${plan.length} files...`;
 
-        let flightsDone = 0, logsDone = 0, processed = 0;
+        let flightsDone = 0, logsDone = 0, logsFailed = 0, processed = 0;
         for (const item of plan) {
             if (item.kind === 'csv') {
                 const rowEl = this._el.querySelector(`[data-filename="${item.name}"]`)?.closest('.fu-row');
@@ -277,8 +307,10 @@ class FlightUpload {
                     window.app?.showToast(`Error: ${err.message}`, null, 4000);
                     break;
                 }
-            } else if (await this._uploadCompanion(item.name, cfg, password) === 'ok') {
-                logsDone++;
+            } else {
+                const res = await this._uploadCompanion(item.name, cfg, password);
+                if (res === 'ok') logsDone++;
+                else if (res === 'failed') logsFailed++;   // 'missing' = vanished since the probe: not a failure
             }
             processed++;
             btn.textContent = `Uploading ${processed} / ${plan.length} files...`;
@@ -286,12 +318,14 @@ class FlightUpload {
 
         btn.disabled = false;
         btn.textContent = 'Upload All Pending';
-        if (flightsDone > 0 || logsDone > 0) {
-            const parts = [];
-            if (flightsDone > 0) parts.push(`${flightsDone} flight${flightsDone !== 1 ? 's' : ''}`);
-            if (logsDone > 0) parts.push(`${logsDone} log${logsDone !== 1 ? 's' : ''}`);
-            window.app?.showToast(`Uploaded ${parts.join(' + ')}.`, null, 3000);
+        const sent = [];
+        if (flightsDone > 0) sent.push(`${flightsDone} flight${flightsDone !== 1 ? 's' : ''}`);
+        if (logsDone > 0) sent.push(`${logsDone} log${logsDone !== 1 ? 's' : ''}`);
+        let msg = sent.length ? `Uploaded ${sent.join(' + ')}` : '';
+        if (logsFailed > 0) {
+            msg += `${msg ? '; ' : ''}${logsFailed} log${logsFailed !== 1 ? 's' : ''} failed (see diagnostic log)`;
         }
+        if (msg) window.app?.showToast(`${msg}.`, null, logsFailed > 0 ? 4000 : 3000);
     }
 
     async _getOrPromptPassword() {

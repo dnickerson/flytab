@@ -6,7 +6,9 @@
  * SftpPlugin.upload() rejects the call with "File not found: <name>" when the local
  * file is missing (before any network use); the stub reproduces that. The
  * on-tablet server's /flights/list returns CSVs only, so existence of a companion is
- * probed with HEAD /flights/<name> (200 / 404).
+ * probed with a GET /flights/<name> that is aborted once the headers arrive (200 / 404).
+ * Not HEAD: NanoHTTPD 2.3.1 writes a body for HEAD too, which corrupts the next
+ * request on the same keep-alive connection.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { readFileSync } from 'fs';
@@ -23,10 +25,12 @@ let local;       // Set of file names present in the tablet's flights/ dir
 let remote;      // Array of file names uploaded, in order
 let uploadFails; // Set of file names whose SFTP upload returns {ok:false}
 let flights;     // /flights/list payload
+let probes;      // [{url, method, signal, aborted}] for each /flights/<name> probe
 
 function setup({ files, list, uploaded = [], companions = null } = {}) {
     local = new Set(files);
     remote = [];
+    probes = [];
     uploadFails = new Set();
     flights = (list ?? files.filter(f => f.endsWith('.csv'))).map(name => ({ name, size_bytes: 10, modified_ms: 1 }));
     localStorage.clear();
@@ -34,13 +38,16 @@ function setup({ files, list, uploaded = [], companions = null } = {}) {
     if (companions) localStorage.setItem(COMP_KEY, JSON.stringify(companions));
     globalThis.fetch = vi.fn(async (url, opts = {}) => {
         if (url.endsWith('/flights/list')) return { ok: true, status: 200, json: async () => flights };
-        const name = url.split('/flights/')[1];
-        expect(opts.method).toBe('HEAD');
+        const name = decodeURIComponent(url.split('/flights/')[1]);
+        const probe = { url, method: opts.method || 'GET', signal: opts.signal, aborted: false };
+        opts.signal?.addEventListener('abort', () => { probe.aborted = true; });
+        probes.push(probe);
         return local.has(name) ? { ok: true, status: 200 } : { ok: false, status: 404 };
     });
     globalThis.Capacitor = { Plugins: { Sftp: {
         getPassword: async () => ({ password: 'pw' }),
         upload: vi.fn(async ({ filename }) => {
+            if (globalThis.__gate) await globalThis.__gate;
             if (!local.has(filename)) throw new Error('File not found: ' + filename);
             if (uploadFails.has(filename)) return { ok: false, error: 'boom' };
             remote.push(filename);
@@ -51,6 +58,7 @@ function setup({ files, list, uploaded = [], companions = null } = {}) {
     globalThis.DiagLog = { log: vi.fn() };
     globalThis.wireTap = (el, fn) => el.addEventListener('click', fn);
     globalThis.window.app = { showToast: vi.fn() };
+    globalThis.__gate = null;
     return new FlightUpload();
 }
 const stored = (k) => JSON.parse(localStorage.getItem(k) || '[]');
@@ -145,5 +153,80 @@ describe('FlightUpload companions', () => {
         expect(remote).toEqual([]);
         expect(stored(FLIGHTS_KEY)).toEqual([]);
         expect(stored(COMP_KEY)).toEqual([]);
+    });
+
+    it('probes with a GET carrying an AbortSignal, aborts it, and encodes the name', async () => {
+        const fu = setup({ files: ['OLD.csv', 'OLD_weather.ndjson'], uploaded: ['OLD.csv'] });
+        expect(await fu._existsLocally('A B#1_weather.ndjson')).toBe(false);
+        expect(await fu._existsLocally('OLD_weather.ndjson')).toBe(true);
+        expect(probes).toHaveLength(2);
+        for (const p of probes) {
+            expect(p.method).toBe('GET');
+            expect(p.signal).toBeInstanceOf(AbortSignal);
+            expect(p.aborted).toBe(true);
+        }
+        expect(probes[0].url).toBe('http://localhost:9090/flights/' + encodeURIComponent('A B#1_weather.ndjson'));
+    });
+
+    it('a probe that throws counts as not present', async () => {
+        const fu = setup({ files: ['A.csv'] });
+        globalThis.fetch = vi.fn(async () => { throw new TypeError('Failed to fetch'); });
+        expect(await fu._existsLocally('A_weather.ndjson')).toBe(false);
+    });
+
+    it('a backfill-only run whose companion uploads fail shows a failure toast', async () => {
+        const fu = setup({ files: ['OLD.csv', 'OLD_weather.ndjson', 'OLD_traffic.ndjson'], uploaded: ['OLD.csv'] });
+        uploadFails.add('OLD_weather.ndjson');
+        uploadFails.add('OLD_traffic.ndjson');
+        await fu._loadFlights();
+        await fu._uploadAllPending();
+        const msgs = window.app.showToast.mock.calls.map(c => c[0]);
+        expect(msgs.some(m => /2 logs failed/.test(m) && /diagnostic log/.test(m))).toBe(true);
+        expect(stored(COMP_KEY)).toEqual([]);
+    });
+
+    it('a mixed run reports both what was sent and what failed', async () => {
+        const fu = setup({ files: ['OLD.csv', 'OLD_weather.ndjson', 'OLD_traffic.ndjson'], uploaded: ['OLD.csv'] });
+        uploadFails.add('OLD_traffic.ndjson');
+        await fu._loadFlights();
+        await fu._uploadAllPending();
+        expect(window.app.showToast).toHaveBeenLastCalledWith(
+            'Uploaded 1 log; 1 log failed (see diagnostic log).', null, 4000);
+    });
+
+    it('two concurrent Upload All Pending calls upload each file once', async () => {
+        const fu = setup({ files: ['A.csv', 'A_weather.ndjson'] });
+        await fu._loadFlights();
+        let release; globalThis.__gate = new Promise(r => { release = r; });
+        const first = fu._uploadAllPending();
+        const second = fu._uploadAllPending();
+        await second;                      // returns at once, does not wait on the gate
+        release();
+        await first;
+        expect(remote).toEqual(['A.csv', 'A_weather.ndjson']);
+    });
+
+    it('a row tap during an Upload All run does nothing, and the guard is released afterwards', async () => {
+        const fu = setup({ files: ['A.csv'] });
+        await fu._loadFlights();
+        const row = rowFor(fu, 'A.csv');
+        let release; globalThis.__gate = new Promise(r => { release = r; });
+        const all = fu._uploadAllPending();
+        await new Promise(r => setTimeout(r, 0));
+        await fu._uploadOne('A.csv', row);   // ignored
+        release();
+        await all;
+        expect(remote).toEqual(['A.csv']);
+        globalThis.__gate = null;
+        await fu._uploadAllPending();        // nothing pending: toast, and no stuck guard
+        await fu._uploadOne('A.csv', row);   // allowed again
+        expect(remote).toEqual(['A.csv', 'A.csv']);
+    });
+
+    it('releases the guard when the run throws or exits early', async () => {
+        const fu = setup({ files: ['A.csv'], uploaded: ['A.csv'] });
+        await fu._loadFlights();
+        await fu._uploadAllPending();        // "No pending flights."
+        expect(fu._busy).toBeFalsy();
     });
 });
