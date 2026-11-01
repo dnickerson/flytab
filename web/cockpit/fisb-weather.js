@@ -209,7 +209,7 @@ class FisbWeatherDisplay {
         if (!winds || winds.size === 0) return;
 
         // Group by station (lat/lon)
-        const stations = new Map(); // station → { lat, lon, winds: [{ft, dir, spd, temp, color}] }
+        const stations = new Map(); // station → { lat, lon, winds: [{alt, dir, spd, temp, color, label}] }
         for (const [key, w] of winds) {
             if (w.lat == null || w.lon == null) continue;
             const altDef = FisbWeatherDisplay.WIND_ALTS.find(a => a.ft === w.alt);
@@ -235,7 +235,7 @@ class FisbWeatherDisplay {
         if (!info.winds.length) return null;
 
         // Sort altitudes low → high
-        info.winds.sort((a, b) => a.ft - b.ft);
+        info.winds.sort((a, b) => a.alt - b.alt);   // FisbClient wind entries carry `alt` (ft)
 
         // Build rows for each altitude
         const rows = info.winds.map(w => {

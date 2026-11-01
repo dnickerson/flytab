@@ -490,7 +490,7 @@ Enable **CB / TCU Reports** to see markers where METAR observers have reported c
 - `CB ALQDS` remark → marker at the airport (all quadrants)
 - `FEW030CB` sky group (no direction) → marker at the airport (overhead)
 
-**CB markers** appear in red-orange. **TCU markers** appear in amber. A dashed storm motion arrow indicates projected movement when winds aloft data is available.
+**CB markers** appear in red-orange. **TCU markers** appear in amber. These markers have no storm motion arrow; the CB Building polygons do (see above).
 
 These markers are sourced from FIS-B METARs when airborne. They complement the radar overlay — METAR observers may report CB/TCU in VMC conditions before radar returns are strong enough to trigger CB Building detection.
 
@@ -744,6 +744,10 @@ Below the calculator, a PI K-FACTOR (LIVE) panel shows the K-factor currently pr
 **DIST and TIME are per leg**, as on a nav log: each row shows the distance and time from the waypoint before it to that one. On the row you are flying to (the active waypoint) they count down live — distance from your aircraft to the waypoint, and time at your current ground speed. Distances under 10 nm show one decimal (`4.9`), longer ones whole miles (`82`); the running total underneath follows the same rule.
 
 **The running total is the smaller line underneath** in the same cell: distance and time from your aircraft to that waypoint. A 4.9 nm leg after an 82 nm leg reads `4.9` with `87` under it. On a waypoint split into climb/cruise/descent rows, the leg and the total are on its first row; the TIME on the other rows is the time in that phase. The departure row and rows already behind you show `—`. The running TIME is flying time only — it does not include the time on the ground at a fuel stop, which the ETA column does include. The nav strip and instrument strip show the same running distance as the row (rounded). The TOTAL and per-flight footer rows are the route total, summed from the legs. (Until v12.29 DIST and TIME showed only the running total, so a short leg after a long one looked long.)
+
+### Route table winds from FIS-B
+
+A waypoint with no planned wind shows the Stratux FIS-B winds aloft at its altitude in the **WIND** column (and its **HDG** allows for them), but only from a reporting station within **Winds Aloft Max Station Distance** of the waypoint (default 100 nm) and a report received within **Winds Aloft Max Age** (default 360 min) — the same two settings on the **Engine-Out Glide** card of MORE → Configuration that the glide panel uses. When no such wind is left, the FIS-B wind is taken off the waypoint (WIND shows —) at the next winds update. A wind from the route planner is never replaced or removed.
 
 ### Route table FUEL and REM columns
 

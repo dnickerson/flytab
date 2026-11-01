@@ -1010,11 +1010,12 @@ class FisbNexrad {
             }).addTo(this._map);
             this._cbLabelMarkers.push(marker);
 
-            // Storm motion arrow — 15-min projected position at ~75% of mid-level wind
+            // Storm motion arrow — 15-min projected position at ~75% of mid-level wind.
+            // FisbClient wind entries are { dir, spd } with dir the FD "from" direction; the storm moves toward dir + 180.
             const wind = this._fisb?.getNearestWind(center[0], center[1], 18000);
-            if (wind && wind.speed > 5) {
+            if (wind && Number.isFinite(wind.dir) && Number.isFinite(wind.spd) && wind.spd > 5) {
                 const stormDir = (wind.dir + 180) % 360;
-                const distNm = wind.speed * 0.75 * (15 / 60);
+                const distNm = wind.spd * 0.75 * (15 / 60);
                 const tip = FisbClient._destPoint(center[0], center[1], stormDir, distNm);
                 const arrow = L.polyline([[center[0], center[1]], [tip.lat, tip.lon]], {
                     color: '#00e5ff', weight: 3, opacity: 0.85, interactive: false,

@@ -136,7 +136,7 @@ class FisbClient extends EventTarget {
         if (type === 'METAR' || type === 'SPECI') {
             this._handleMetar(FisbClient.metarText(data, location, time), location, now, type === 'SPECI');
         } else if (type === 'TAF') {
-            this._handleTaf(data, location, now);
+            this._handleTaf(FisbClient.reportText(data, location, time), location, now);
         } else if (type === 'PIREP' || type === 'UA' || type === 'UUA') {
             await this._handlePirep(data, location, now, type === 'UUA');
         } else if (type === 'SIGMET' || type === 'CONVECTIVE SIGMET') {
@@ -316,10 +316,19 @@ class FisbClient extends EventTarget {
      * no observation time and is not used where its age matters).
      */
     static metarText(data, location, time) {
+        return FisbClient.reportText(data, location, time);
+    }
+
+    /**
+     * A Stratux text report (METAR, SPECI, TAF) as the full report, "KXXX DDHHMMZ ..." (see metarText). Data that
+     * already starts with the station, optionally after its type word ("METAR KXXX", "TAF KXXX", "TAF AMD KXXX"),
+     * is returned unchanged.
+     */
+    static reportText(data, location, time) {
         const text = String(data || '').trim();
         const stn = String(location || '').trim().toUpperCase();
         if (!/^[A-Z0-9]{3,5}$/.test(stn)) return text;
-        if (new RegExp('^(?:(?:METAR|SPECI)\\s+)?' + stn + '\\b', 'i').test(text)) return text;
+        if (new RegExp('^(?:(?:METAR|SPECI|TAF(?:\\s+AMD)?)\\s+)?' + stn + '\\b', 'i').test(text)) return text;
         const t = String(time || '').trim().toUpperCase();
         return /^\d{6}Z$/.test(t) ? `${stn} ${t} ${text}` : `${stn} ${text}`;
     }
@@ -845,7 +854,10 @@ class FisbClient extends EventTarget {
             dir -= 500;
             spd += 100;
         }
-        const temp = match[3] ? parseInt(match[3], 10) : null;
+        // Above 24,000 ft the FD group is 6 digits with no sign: the temperature is always below zero
+        // ('284032' = 280/40 at -32 C). A signed group keeps its sign.
+        let temp = match[3] ? parseInt(match[3], 10) : null;
+        if (temp != null && /^\d{2}$/.test(match[3])) temp = 0 - temp;   // 0 - t: never -0
         return { dir, spd, temp };
     }
 

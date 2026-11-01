@@ -121,24 +121,64 @@ class RouteTable {
         }
     }
 
-    /** Apply FIS-B winds aloft to waypoints if fresher than plan data */
+    /**
+     * The pilot's wind-trust limits for FIS-B winds aloft: windMaxStationNm / windMaxAgeMin from the engineOutGlide
+     * settings ("Winds Aloft Max Station Distance" / "Max Age"), validated by GlideInputs.settings() - the same
+     * limits the glide panel applies. Read on every call, so a settings change takes effect at the next update.
+     * Without GlideInputs: GlideModel.DEFAULTS.pilot. Without either: null, and no FIS-B wind is trusted.
+     * -> { maxNm, maxAgeMs } | null
+     */
+    _fisbWindLimits() {
+        let p = null;
+        try {
+            if (typeof GlideInputs !== 'undefined' && GlideInputs && GlideInputs.settings) p = GlideInputs.settings().pilot;
+        } catch (_) { p = null; }
+        if (!p && typeof GlideModel !== 'undefined' && GlideModel && GlideModel.DEFAULTS) p = GlideModel.DEFAULTS.pilot;
+        const nm = p ? p.windMaxStationNm : NaN, min = p ? p.windMaxAgeMin : NaN;
+        return (Number.isFinite(nm) && Number.isFinite(min)) ? { maxNm: nm, maxAgeMs: min * 60000 } : null;
+    }
+
+    /**
+     * Apply FIS-B winds aloft to waypoints that have no plan wind. Only a trusted wind is used: the station within
+     * windMaxStationNm of the waypoint and the report received within windMaxAgeMin (_fisbWindLimits). With no
+     * trusted wind, a FIS-B wind applied earlier (wind._fisbApplied) is cleared. A plan / forecast wind (no
+     * _fisbApplied) is never replaced or cleared. Runs on every fisb:winds event.
+     */
     _applyFisbWinds() {
         if (!this._fisbClient || this._waypoints.length === 0) return;
+        const lim = this._fisbWindLimits();
+        const now = Date.now();
         let changed = false;
 
         for (let i = 1; i < this._waypoints.length; i++) {
             const wp = this._waypoints[i];
             if (!wp.lat || !wp.lon) continue;
-            const alt = wp.alt || 5000;
-            const fisbWind = this._fisbClient.getNearestWind(wp.lat, wp.lon, alt);
-            if (fisbWind && fisbWind.dir != null && fisbWind.spd != null) {
-                // Override if no plan wind, or existing wind was already from FIS-B (safe to update)
-                const planWind = wp.wind;
-                if (!planWind || planWind._fisbApplied) {
-                    wp.wind = { dir: fisbWind.dir, spd: fisbWind.spd, _fisbApplied: true };
+            const current = wp.wind;
+            if (current && !current._fisbApplied) continue;       // the planner's (or a loaded plan's) wind
+
+            let trusted = null;
+            if (lim) {
+                try {
+                    const w = this._fisbClient.getNearestWind(wp.lat, wp.lon, wp.alt || 5000);
+                    if (w && Number.isFinite(w.dir) && Number.isFinite(w.spd)
+                        && Number.isFinite(w.lat) && Number.isFinite(w.lon) && Number.isFinite(w.received_at)
+                        && now - w.received_at <= lim.maxAgeMs
+                        && NasrDB.haversineNm(wp.lat, wp.lon, w.lat, w.lon) <= lim.maxNm) {
+                        trusted = w;
+                    }
+                } catch (_) { trusted = null; }
+            }
+
+            if (trusted) {
+                if (!current || current.dir !== trusted.dir || current.spd !== trusted.spd) {
+                    wp.wind = { dir: trusted.dir, spd: trusted.spd, _fisbApplied: true };
                     wp._wind = wp.wind;
                     changed = true;
                 }
+            } else if (current) {
+                wp.wind = null;                                     // the FIS-B wind is no longer trusted
+                wp._wind = null;
+                changed = true;
             }
         }
 

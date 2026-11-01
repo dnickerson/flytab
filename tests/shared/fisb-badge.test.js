@@ -301,3 +301,71 @@ describe('FisbClient METAR: the Stratux METAR frame (station and time are separa
         expect(FisbClient.decodeMetar(FisbClient.metarText('24008KT 10SM', 'KTBR', '')).observed_at).toBeUndefined();
     });
 });
+
+/**
+ * FD groups above 24,000 ft carry no sign: the temperature is always below zero (FAA FD format). '284032' is
+ * 280/40 at -32 C, not +32. Values are CAR's 30000 / 34000 / 39000 groups from the real WINDS frame above.
+ */
+describe('FisbClient.parseWindAloft: 6-digit groups above FL240 are below zero', () => {
+    it('CAR 284032 284243 304756 -> -32, -43, -56', () => {
+        expect(FisbClient.parseWindAloft('284032')).toEqual({ dir: 280, spd: 40, temp: -32 });
+        expect(FisbClient.parseWindAloft('284243')).toEqual({ dir: 280, spd: 42, temp: -43 });
+        expect(FisbClient.parseWindAloft('304756')).toEqual({ dir: 300, spd: 47, temp: -56 });
+    });
+
+    it('100 kt and over: 731558 -> 230/115 at -58', () => {
+        expect(FisbClient.parseWindAloft('731558')).toEqual({ dir: 230, spd: 115, temp: -58 });
+    });
+
+    it('4-digit and signed groups unchanged', () => {
+        expect(FisbClient.parseWindAloft('2630')).toEqual({ dir: 260, spd: 30, temp: null });
+        expect(FisbClient.parseWindAloft('2845+15')).toEqual({ dir: 280, spd: 45, temp: 15 });
+        expect(FisbClient.parseWindAloft('2729-17')).toEqual({ dir: 270, spd: 29, temp: -17 });
+    });
+
+    it('the stored CAR entries at 30000 / 34000 / 39000 are below zero', async () => {
+        const c = new FisbClient(new EventTarget(), null);
+        await c._handleWeather(stratuxMsg(WINDS_CAR));
+        expect(['CAR:30000', 'CAR:34000', 'CAR:39000'].map((k) => c.winds.get(k).temp)).toEqual([-32, -43, -56]);
+    });
+});
+
+/**
+ * TAF frames are split the same way as METARs (Type, Location = station, Time = DDHHMMZ issue time, Data = the
+ * rest), so the stored report had no "KXXX DDHHMMZ" head. No real Stratux TAF capture exists in the repo or the
+ * Stratux sample logs; this one is built from that split rule ("TAF KXXX DDHHMMZ <rest>").
+ */
+const TAF_KCLT = 'TAF KCLT 311720Z 3118/0124 22010KT P6SM SCT050 FM312200 24012G20KT P6SM BKN040 FM010300 25006KT P6SM SCT060';
+
+describe('FisbClient TAF: the Stratux TAF frame (station and time are separate fields)', () => {
+    it('the report is rebuilt as "KCLT 311720Z 3118/0124 ..." and stored under KCLT', async () => {
+        const c = new FisbClient(new EventTarget(), null);
+        const seen = [];
+        c.addEventListener('fisb:taf', (e) => seen.push(e.detail));
+        await c._handleWeather(stratuxMsg(TAF_KCLT));
+        const t = c.getTaf('KCLT');
+        expect(t).not.toBeNull();
+        expect(t.raw).toBe('KCLT 311720Z 3118/0124 22010KT P6SM SCT050 FM312200 24012G20KT P6SM BKN040 FM010300 25006KT P6SM SCT060');
+        expect(seen).toHaveLength(1);
+        expect(seen[0].icao).toBe('KCLT');
+        expect(seen[0].raw).toBe(t.raw);
+    });
+
+    it('the IndexedDB weather record gets the same full text, keeping the METAR', async () => {
+        const store = { KCLT: { metar: { raw: 'KCLT 311752Z 22010KT' } } };
+        const nasr = { getWeather: async (id) => store[id] || null, putWeather: async (id, wx) => { store[id] = wx; } };
+        const c = new FisbClient(new EventTarget(), nasr);
+        await c._handleWeather(stratuxMsg(TAF_KCLT));
+        await new Promise((r) => setTimeout(r, 0));
+        expect(store.KCLT.taf.raw.startsWith('KCLT 311720Z 3118/0124 22010KT')).toBe(true);
+        expect(store.KCLT.metar.raw).toBe('KCLT 311752Z 22010KT');
+    });
+
+    it('Data that already starts with the station (an old capture, "TAF KXXX ...") is left alone', async () => {
+        const c = new FisbClient(new EventTarget(), null);
+        await c._handleWeather({ Type: 'TAF', Location: 'KCLT', Time: '311720Z', Data: 'TAF KCLT 311720Z 3118/0124 22010KT' });
+        expect(c.getTaf('KCLT').raw).toBe('TAF KCLT 311720Z 3118/0124 22010KT');
+        await c._handleWeather({ Type: 'TAF', Location: 'KGSO', Time: '311720Z', Data: 'KGSO 311720Z 3118/0124 20008KT' });
+        expect(c.getTaf('KGSO').raw).toBe('KGSO 311720Z 3118/0124 20008KT');
+    });
+});
