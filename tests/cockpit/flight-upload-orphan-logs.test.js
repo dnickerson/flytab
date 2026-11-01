@@ -139,3 +139,29 @@ describe('Upload All Pending: weather / traffic logs with no matching CSV', () =
         expect([...fu._el.querySelectorAll('.fu-filename')].map(e => e.textContent)).toEqual(['A.csv']);
     });
 });
+
+describe('Upload All Pending: the recording in progress waits', () => {
+    it('skips the CSV being recorded and its weather / traffic logs, then sends them once it has stopped', async () => {
+        const fu = setup({ files: ['20261101_1500Z.csv', '20261101_1500Z_weather.ndjson', '20261101_1500Z_traffic.ndjson', 'OLD.csv'] });
+        const fr = { recording: true, fileName: '20261101_1500Z.csv', _trafficFileName: '20261101_1500Z_traffic.ndjson' };
+        window.app.flightRecorder = fr;
+        window.app.fisbLogger = { _fileName: '20261101_1500Z_weather.ndjson' };
+        await fu._loadFlights();
+        await fu._uploadAllPending();
+        expect(remote).toEqual(['OLD.csv']);
+
+        fr.recording = false;
+        window.app.fisbLogger = { _fileName: null };
+        await fu._uploadAllPending();
+        expect(remote.slice(1).sort()).toEqual(['20261101_1500Z.csv', '20261101_1500Z_traffic.ndjson', '20261101_1500Z_weather.ndjson']);
+    });
+
+    it('a recorder that is not recording hides nothing', async () => {
+        const fu = setup({ files: ['A.csv'] });
+        window.app.flightRecorder = { recording: false, fileName: 'A.csv' };
+        await fu._loadFlights();
+        await fu._uploadAllPending();
+        expect(remote).toEqual(['A.csv']);
+    });
+});
+

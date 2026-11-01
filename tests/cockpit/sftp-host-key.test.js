@@ -292,20 +292,93 @@ describe('SFTP app update (config-editor download) with the host-key check', () 
             .toBe('Server key for nas.local has CHANGED — possible interception. Download stopped.');
     });
 
-    it('Forget server key button calls the plugin only after confirm, with the configured host and port', async () => {
-        setup();
+    it('an APK the plugin refuses to install (wrong signer / not newer) shows the reason', async () => {
+        setup({ key: 'trusted' });
+        serverKey = 'trusted';
+        sftp.installApk = vi.fn(async () => {
+            throw new Error('Update refused: it is not signed with the same key as the installed FlyTab. The downloaded file was deleted.');
+        });
         const ed = editorStub();
-        ed._el.querySelector('#ce-fu-port').value = '2222';
-        const p = ed._forgetHostKey();
-        expect(sftp.forgetHostKey).not.toHaveBeenCalled();
-        await answer('shk-ok');
-        await p;
-        expect(sftp.forgetHostKey).toHaveBeenCalledWith({ host: 'nas.local', port: 2222 });
+        await ed._downloadAndInstall();
+        expect(sftp.installApk).toHaveBeenCalledTimes(1);
+        expect(ed._el.querySelector('.ce-update-status').textContent)
+            .toBe('Error: Update refused: it is not signed with the same key as the installed FlyTab. The downloaded file was deleted.');
+    });
+
+    it('Forget server key uses the SAVED host and port (what uploads use), not unsaved form edits', async () => {
+        setup();
+        CFG.port = 2222;
+        try {
+            const ed = editorStub();
+            ed._el.querySelector('#ce-fu-host').value = 'unsaved.example';   // edited, not saved
+            ed._el.querySelector('#ce-fu-port').value = '9999';
+            const p = ed._forgetHostKey();
+            expect(sftp.forgetHostKey).not.toHaveBeenCalled();
+            await answer('shk-ok');
+            await p;
+            expect(sftp.forgetHostKey).toHaveBeenCalledWith({ host: 'nas.local', port: 2222 });
+        } finally {
+            CFG.port = 22;
+        }
+    });
+
+    it('Forget server key with no saved host asks to save one and calls nothing', async () => {
+        setup();
+        const saved = CFG.host;
+        CFG.host = '';
+        try {
+            const ed = editorStub();
+            expect(await ed._forgetHostKey()).toBe(false);
+            expect(dialog()).toBeNull();
+            expect(sftp.forgetHostKey).not.toHaveBeenCalled();
+        } finally {
+            CFG.host = saved;
+        }
     });
 
     it('the Flight Upload card renders a Forget server key button wired to _forgetHostKey', () => {
         const src = readFileSync('web/cockpit/config-editor.js', 'utf8');
         expect(src).toMatch(/id="ce-fu-forget-hostkey"[^>]*>Forget server key</);
         expect(src).toMatch(/wireTap\(body\.querySelector\('#ce-fu-forget-hostkey'\), \(\) => this\._forgetHostKey\(\)\)/);
+    });
+});
+
+describe('SftpHostKey: damaged store, refused trust, reset', () => {
+    beforeEach(() => setup());
+
+    it('a damaged trusted-key store stops the upload with its message; no prompt, no trust', async () => {
+        const damaged = {
+            ok: false,
+            error: 'Server key store damaged — forget the server key in Configuration → Flight Upload to reset',
+            hostKey: { status: 'damaged', host: 'nas.local', port: 22 },
+        };
+        const op = vi.fn(async () => damaged);
+        const r = await SftpHostKey.run(op);
+        expect(r.hostKeyHandled).toBe(true);
+        expect(op).toHaveBeenCalledTimes(1);
+        expect(dialog()).toBeNull();
+        expect(sftp.trustHostKey).not.toHaveBeenCalled();
+        expect(toasts()[0]).toBe(`Upload stopped: ${damaged.error}.`);
+        expect(toasts()[0]).not.toMatch(/CHANGED/);
+    });
+
+    it('when the plugin refuses trustHostKey (key not the one presented), nothing is retried', async () => {
+        sftp.trustHostKey = vi.fn(async () => { throw new Error('Could not trust server key: not the key the server presented — try the upload again'); });
+        const op = vi.fn(() => sftp.upload({ filename: 'A.csv' }));
+        const p = SftpHostKey.run(op);
+        await answer('shk-ok');
+        const r = await p;
+        expect(op).toHaveBeenCalledTimes(1);
+        expect(r.hostKeyHandled).toBe(true);
+        expect(remote).toEqual([]);
+        expect(toasts()[0]).toMatch(/^Could not save the server key: .*not the key the server presented/);
+    });
+
+    it('forget on a damaged store reports the reset', async () => {
+        sftp.forgetHostKey = vi.fn(async () => ({ removed: 0, reset: true }));
+        const p = SftpHostKey.forget('nas.local', 22);
+        await answer('shk-ok');
+        await p;
+        expect(toasts()[0]).toMatch(/^Server key store reset\./);
     });
 });

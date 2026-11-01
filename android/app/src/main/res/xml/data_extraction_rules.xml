@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12+ (android:dataExtractionRules): same exclusion as backup_rules.xml,
+     for cloud backup and device-to-device transfer. Exclude-only: everything else
+     is still included as before. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="file" path="sftp_known_hosts" />
+        <exclude domain="file" path="sftp_known_hosts.tmp" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="file" path="sftp_known_hosts" />
+        <exclude domain="file" path="sftp_known_hosts.tmp" />
+    </device-transfer>
+</data-extraction-rules>

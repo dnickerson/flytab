@@ -3,7 +3,7 @@
  *
  * SftpPlugin verifies the server's host key before sending the password or any file
  * (HostKeyStore.java). When it stops an operation it resolves
- *   { ok:false, error, hostKey:{ status:'unknown'|'changed', host, port, keyType,
+ *   { ok:false, error, hostKey:{ status:'unknown'|'changed'|'damaged', host, port, keyType,
  *     shortType, fingerprint, keyBase64 (unknown only), knownFingerprints (changed only) } }
  *
  * run(op) handles that result in one place:
@@ -12,6 +12,8 @@
  *    fetched again) and runs op once more. On Cancel, nothing is sent and op is not retried.
  *  - changed: refuses, no prompt. A changed key can only be forgotten from
  *    Configuration → Flight Upload (forget()).
+ *  - damaged: the trusted-key file can't be read; nothing is trusted (fail closed)
+ *    until Forget server key resets it.
  * Results it already explained to the pilot carry hostKeyHandled:true, so callers
  * don't toast again. Exceptions from op (e.g. "File not found") pass through.
  *
@@ -27,6 +29,10 @@ const SftpHostKey = {
         const hk = first?.hostKey;
         if (!hk || first.ok) return first;
 
+        if (hk.status === 'damaged') {
+            this._refuseDamaged(first, action);
+            return { ...first, hostKeyHandled: true };
+        }
         if (hk.status !== 'unknown') {
             this._refuseChanged(hk, action);
             return { ...first, hostKeyHandled: true };
@@ -57,6 +63,7 @@ const SftpHostKey = {
         const hk2 = second?.hostKey;
         if (hk2 && !second.ok) {
             if (hk2.status === 'changed') this._refuseChanged(hk2, action);
+            else if (hk2.status === 'damaged') this._refuseDamaged(second, action);
             else {
                 this._log(`Server presented another unknown key after trust: ${hk2.fingerprint} (${hk2.keyType})`);
                 this._toast(`${action} stopped: the server presented a different key.`);
@@ -98,7 +105,8 @@ const SftpHostKey = {
         try {
             const r = await Capacitor.Plugins.Sftp.forgetHostKey({ host, port });
             this._log(`Forgot ${r?.removed ?? 0} server key(s) for ${label}`);
-            this._toast(r?.removed ? `Server key for ${label} forgotten.` : `No saved server key for ${label}.`);
+            this._toast(r?.reset ? 'Server key store reset. The next upload shows the server key fingerprint again.'
+                : r?.removed ? `Server key for ${label} forgotten.` : `No saved server key for ${label}.`);
             return true;
         } catch (err) {
             this._toast(`Could not forget the server key: ${err?.message || err}`);
@@ -155,6 +163,11 @@ const SftpHostKey = {
         const known = (hk.knownFingerprints || []).join(', ') || 'none';
         this._log(`Server key CHANGED for ${this._hostLabel(hk)}: presented ${hk.fingerprint} (${hk.keyType}); trusted: ${known}. ${action} refused.`);
         this._toast(this.changedMessage(hk, action));
+    },
+
+    _refuseDamaged(result, action) {
+        this._log(`${action} refused: ${result.error}`);
+        this._toast(`${action} stopped: ${result.error}.`);
     },
 
     _hostLabel(hk) {

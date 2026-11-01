@@ -44,6 +44,17 @@ import java.util.regex.Pattern;
  */
 public final class HostKeyStore implements HostKeyRepository {
 
+    /**
+     * The known_hosts file has a line this class can't read. Connections are refused
+     * (fail closed) until the pilot forgets the server key in Configuration, which
+     * resets the store ({@link #forgetOrReset}).
+     */
+    public static final class DamagedException extends IOException {
+        public static final String MESSAGE =
+            "Server key store damaged — forget the server key in Configuration → Flight Upload to reset";
+        DamagedException(String detail) { super(MESSAGE + " (" + detail + ")"); }
+    }
+
     /** Result of the last check() on this instance. */
     public static final class Verdict {
         public final int result;          // OK / NOT_INCLUDED / CHANGED
@@ -194,6 +205,20 @@ public final class HostKeyStore implements HostKeyRepository {
         save();
     }
 
+    /**
+     * Forget host:port. If the store is damaged (unreadable line), delete the whole
+     * file instead and return -1: the pilot asked for a reset from Configuration.
+     */
+    public static int forgetOrReset(File file, String host, int port) throws IOException {
+        if (!isValidHost(host)) throw new IllegalArgumentException("Invalid host");
+        try {
+            return new HostKeyStore(file).forget(host, port);
+        } catch (DamagedException e) {
+            if (file.exists() && !file.delete()) throw new IOException("Cannot reset " + file);
+            return -1;
+        }
+    }
+
     /** Remove every key on record for host:port. Returns how many were removed. */
     public synchronized int forget(String host, int port) throws IOException {
         if (!isValidHost(host)) throw new IllegalArgumentException("Invalid host");
@@ -279,34 +304,57 @@ public final class HostKeyStore implements HostKeyRepository {
         return out.toArray(new HostKey[0]);
     }
 
+    /**
+     * Blank lines and # comments are skipped. Any other line must be exactly what
+     * save() writes (host, key type, base64 key whose type matches); otherwise the
+     * store is DAMAGED and nothing is trusted: dropping a line could silently turn a
+     * known server into an "unknown" one and bring back the first-connection prompt.
+     */
     private void load() throws IOException {
         entries.clear();
         if (!file.exists()) return;
         try (BufferedReader r = new BufferedReader(
                 new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8))) {
             String line;
+            int n = 0;
             while ((line = r.readLine()) != null) {
+                n++;
                 line = line.trim();
-                if (line.isEmpty() || line.startsWith("#") || line.startsWith("@") || line.startsWith("|")) continue;
+                if (line.isEmpty() || line.startsWith("#")) continue;
                 String[] p = line.split("\\s+");
-                if (p.length < 3) continue;
+                if (p.length != 3 || !isValidHostId(p[0])) throw new DamagedException("line " + n);
                 byte[] key = base64Decode(p[2]);
-                if (key == null) continue;
-                String t = keyTypeOf(key);
-                if (t == null || !t.equals(p[1])) continue;
+                String t = key != null ? keyTypeOf(key) : null;
+                if (t == null || !t.equals(p[1])) throw new DamagedException("line " + n);
                 entries.add(new Entry(p[0], t, key));
             }
         }
+    }
+
+    /** host, or [host]:port with port 1-65535 (the forms hostId() writes). */
+    private static boolean isValidHostId(String id) {
+        if (id.startsWith("[")) {
+            int close = id.indexOf("]:");
+            if (close < 2) return false;
+            String port = id.substring(close + 2);
+            if (!port.matches("^[0-9]{1,5}$")) return false;
+            int pn = Integer.parseInt(port);
+            return pn >= 1 && pn <= 65535 && isValidHost(id.substring(1, close));
+        }
+        return isValidHost(id);
     }
 
     private void save() throws IOException {
         File dir = file.getParentFile();
         if (dir != null && !dir.exists() && !dir.mkdirs()) throw new IOException("Cannot create " + dir);
         File tmp = new File(file.getPath() + ".tmp");
-        try (Writer w = new OutputStreamWriter(new FileOutputStream(tmp), StandardCharsets.UTF_8)) {
+        try (FileOutputStream fos = new FileOutputStream(tmp);
+             Writer w = new OutputStreamWriter(fos, StandardCharsets.UTF_8)) {
             for (Entry e : entries) {
                 w.write(e.hostId + " " + e.keyType + " " + base64Encode(e.key) + "\n");
             }
+            w.flush();
+            fos.getFD().sync();      // on disk before the rename makes it the store
         }
         if (!tmp.renameTo(file)) {
             tmp.delete();

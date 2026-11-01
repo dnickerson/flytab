@@ -281,6 +281,12 @@ class FlightUpload {
         }
     }
 
+    /** The flight CSV being recorded right now (FlightRecorder._fileName while recording). */
+    _isActiveRecording(name) {
+        const fr = (typeof window !== 'undefined') ? window.app?.flightRecorder : null;
+        return !!(fr?.recording && (fr.fileName ?? fr._fileName) === name);
+    }
+
     /** The weather or traffic log being written right now (never marked uploaded half-written). */
     _isActiveLog(name) {
         const app = (typeof window !== 'undefined') ? window.app : null;
@@ -305,6 +311,7 @@ class FlightUpload {
         // check covers flights already marked uploaded, whose logs were never sent.
         const plan = [];
         for (const f of this._flights) {
+            if (this._isActiveRecording(f.name)) continue;   // still being written: it and its logs wait
             if (!this._uploadedSet.has(f.name)) plan.push({ kind: 'csv', name: f.name });
             for (const name of this._companionNames(f.name)) {
                 if (this._companionSet.has(name)) continue;

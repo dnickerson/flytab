@@ -858,14 +858,17 @@ class ConfigEditor {
         }
     }
 
-    /** "Forget server key" (Flight Upload card): its own confirm, then SftpPlugin.forgetHostKey. */
+    /**
+     * "Forget server key" (Flight Upload card): its own confirm, then SftpPlugin.forgetHostKey.
+     * Uses the SAVED Flight Upload host/port (what uploads use, CockpitConfig.get), not
+     * unsaved edits in the form.
+     */
     async _forgetHostKey() {
-        const body = this._el.querySelector('.config-editor-body');
-        const fu = this._cockpitConfig?.flightUpload || CockpitConfig._config?.flightUpload || {};
-        const host = body.querySelector('#ce-fu-host')?.value.trim() || fu.host || '';
-        const port = parseInt(body.querySelector('#ce-fu-port')?.value, 10) || fu.port || 22;
+        const fu = (typeof CockpitConfig !== 'undefined' && CockpitConfig.get('flightUpload')) || {};
+        const host = (fu.host || '').trim();
+        const port = parseInt(fu.port, 10) || 22;
         if (!host) {
-            window.app?.showToast('Set the SFTP host first.');
+            window.app?.showToast('Save an SFTP host in Flight Upload first.');
             return false;
         }
         if (typeof SftpHostKey === 'undefined') return false;

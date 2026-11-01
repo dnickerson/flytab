@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Auto Backup, Android 11 and lower (android:fullBackupContent). Exclude-only:
+     everything else is still backed up as before. The trusted SFTP server keys
+     (SftpPlugin / HostKeyStore, getFilesDir()/sftp_known_hosts) stay on this
+     tablet: a restored or copied key list would trust servers this tablet never
+     checked. -->
+<full-backup-content>
+    <exclude domain="file" path="sftp_known_hosts" />
+    <exclude domain="file" path="sftp_known_hosts.tmp" />
+</full-backup-content>

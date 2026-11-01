@@ -1,12 +1,18 @@
 package app.flywhere.flytab;
 
 import android.content.Intent;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
+import android.content.pm.Signature;
+import android.content.pm.SigningInfo;
+import android.os.Build;
 import android.net.Uri;
 import android.os.Environment;
 import android.util.Base64;
 import android.util.Log;
 
 import androidx.core.content.FileProvider;
+import androidx.core.content.pm.PackageInfoCompat;
 import androidx.security.crypto.EncryptedSharedPreferences;
 import androidx.security.crypto.MasterKeys;
 
@@ -20,10 +26,14 @@ import com.jcraft.jsch.ChannelSftp;
 import com.jcraft.jsch.JSch;
 import com.jcraft.jsch.Session;
 
+import app.flywhere.flytab.tileserver.FlightFiles;
+
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -37,6 +47,8 @@ public class SftpPlugin extends Plugin {
     private static final String KNOWN_HOSTS_FILE = "sftp_known_hosts";
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    /** Unknown keys servers actually presented; trustHostKey may store only these (one use each). */
+    private final PresentedKeys presentedKeys = new PresentedKeys();
 
     /**
      * Upload a flight CSV from Documents/FlyTab/flights/ to a remote SFTP server.
@@ -67,6 +79,11 @@ public class SftpPlugin extends Plugin {
         File localFile = new File(flightsDir, filename);
         if (!localFile.exists()) {
             call.reject("File not found: " + filename);
+            return;
+        }
+        // Only a regular file directly in flights/ (not a link planted in the shared folder).
+        if (!FlightFiles.isPlainFileIn(flightsDir, localFile)) {
+            call.reject("Invalid file (not a plain file in the flights folder): " + filename);
             return;
         }
 
@@ -114,6 +131,7 @@ public class SftpPlugin extends Plugin {
                 call.resolve(result);
 
             } catch (Exception e) {
+                if (e instanceof HostKeyStore.DamagedException) { call.resolve(damagedStore(e, finalHost, finalPort)); return; }
                 JSObject hk = hostKeyFailure(hostKeys, finalHost, finalPort);
                 if (hk != null) { call.resolve(hk); return; }
                 Log.e(TAG, "SFTP upload failed for " + filename, e);
@@ -146,6 +164,11 @@ public class SftpPlugin extends Plugin {
         }
 
         final File localFile = new File(getContext().getCacheDir(), "flytab-update.apk");
+        if (!FlightFiles.isDirectChild(getContext().getCacheDir(), localFile)) {
+            localFile.delete();
+            call.reject("Invalid download target");
+            return;
+        }
         final String finalHost = host;
         final int finalPort = port;
         final String finalUsername = username;
@@ -182,6 +205,7 @@ public class SftpPlugin extends Plugin {
                 call.resolve(result);
             } catch (Exception e) {
                 localFile.delete(); // remove partial file so installApk() can't pick it up
+                if (e instanceof HostKeyStore.DamagedException) { call.resolve(damagedStore(e, finalHost, finalPort)); return; }
                 JSObject hk = hostKeyFailure(hostKeys, finalHost, finalPort);
                 if (hk != null) { call.resolve(hk); return; }
                 Log.e(TAG, "SFTP download failed", e);
@@ -200,7 +224,9 @@ public class SftpPlugin extends Plugin {
      * Trust a server host key after the pilot confirmed its fingerprint. The key is
      * the one returned by the failed upload/download (hostKey.keyBase64), not fetched
      * again, and its SHA256 fingerprint must equal the one shown (hostKey.fingerprint).
-     * Refused if host:port already has a different key (forget it in Configuration first).
+     * Refused if host:port already has a different key (forget it in Configuration first),
+     * and unless the key is byte-for-byte the one the server presented in the last
+     * failed attempt for host:port (PresentedKeys; one use).
      */
     @PluginMethod
     public void trustHostKey(PluginCall call) {
@@ -214,6 +240,10 @@ public class SftpPlugin extends Plugin {
             return;
         }
         try {
+            byte[] key = HostKeyStore.base64Decode(keyBase64);
+            if (!HostKeyStore.isValidHost(host) || !presentedKeys.consume(HostKeyStore.hostId(host, port), key)) {
+                throw new IllegalArgumentException("not the key the server presented — try the upload again");
+            }
             new HostKeyStore(knownHostsFile()).trust(host, port, keyType, keyBase64, fingerprint);
             Log.i(TAG, "Trusted " + keyType + " key " + fingerprint + " for " + HostKeyStore.hostId(host, port));
             JSObject result = new JSObject();
@@ -235,10 +265,12 @@ public class SftpPlugin extends Plugin {
             return;
         }
         try {
-            int removed = new HostKeyStore(knownHostsFile()).forget(host, port);
-            Log.i(TAG, "Forgot " + removed + " key(s) for " + HostKeyStore.hostId(host, port));
+            int removed = HostKeyStore.forgetOrReset(knownHostsFile(), host, port);
+            Log.i(TAG, removed < 0 ? "Server key store was damaged: reset"
+                : "Forgot " + removed + " key(s) for " + HostKeyStore.hostId(host, port));
             JSObject result = new JSObject();
-            result.put("removed", removed);
+            result.put("removed", Math.max(removed, 0));
+            result.put("reset", removed < 0);
             call.resolve(result);
         } catch (Exception e) {
             call.reject("Could not forget server key: " + e.getMessage());
@@ -254,6 +286,22 @@ public class SftpPlugin extends Plugin {
         File apkFile = new File(getContext().getCacheDir(), "flytab-update.apk");
         if (!apkFile.exists()) {
             call.reject("APK not found — call download() first");
+            return;
+        }
+        String refusal;
+        if (!FlightFiles.isPlainFileIn(getContext().getCacheDir(), apkFile)) {
+            refusal = "the downloaded file is not a plain file in the app's cache";
+        } else {
+            try {
+                refusal = checkUpdateApk(apkFile);
+            } catch (Exception e) {
+                refusal = "it could not be checked (" + e.getMessage() + ")";
+            }
+        }
+        if (refusal != null) {
+            apkFile.delete();
+            Log.w(TAG, "Update refused: " + refusal);
+            call.reject("Update refused: " + refusal + ". The downloaded file was deleted.");
             return;
         }
         try {
@@ -272,6 +320,40 @@ public class SftpPlugin extends Plugin {
             Log.e(TAG, "Failed to launch installer", e);
             call.reject("Failed to launch installer: " + e.getMessage());
         }
+    }
+
+    /**
+     * Same package, same signing certificate(s) and a strictly higher versionCode than
+     * the installed FlyTab (ApkCheck), else the reason. API 28+ reads SigningInfo
+     * (GET_SIGNING_CERTIFICATES); minSdk 24-27 needs GET_SIGNATURES.
+     */
+    @SuppressWarnings("deprecation")
+    private String checkUpdateApk(File apkFile) throws PackageManager.NameNotFoundException {
+        PackageManager pm = getContext().getPackageManager();
+        String own = getContext().getPackageName();
+        int flags = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+            ? PackageManager.GET_SIGNING_CERTIFICATES : PackageManager.GET_SIGNATURES;
+        PackageInfo installed = pm.getPackageInfo(own, flags);
+        PackageInfo apk = pm.getPackageArchiveInfo(apkFile.getAbsolutePath(), flags);
+        return ApkCheck.refusal(
+            own, PackageInfoCompat.getLongVersionCode(installed), signerHashes(installed),
+            apk != null ? apk.packageName : null,
+            apk != null ? PackageInfoCompat.getLongVersionCode(apk) : -1,
+            apk != null ? signerHashes(apk) : null);
+    }
+
+    @SuppressWarnings("deprecation")
+    private static Set<String> signerHashes(PackageInfo pi) {
+        Set<String> out = new HashSet<>();
+        Signature[] sigs = null;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            SigningInfo si = pi.signingInfo;
+            if (si != null) sigs = si.hasMultipleSigners() ? si.getApkContentsSigners() : si.getSigningCertificateHistory();
+        } else {
+            sigs = pi.signatures;
+        }
+        if (sigs != null) for (Signature s : sigs) out.add(ApkCheck.sha256Hex(s.toByteArray()));
+        return out;
     }
 
     /** Encrypt and persist the SFTP password using Android Keystore-backed AES-256. */
@@ -438,6 +520,7 @@ public class SftpPlugin extends Plugin {
                 + " (" + v.keyType + "), on record " + v.knownFingerprints);
         } else {
             hk.put("keyBase64", v.keyBase64);
+            presentedKeys.remember(v.hostId, v.key);
             Log.i(TAG, "Unknown server key for " + v.hostId + ": " + v.fingerprint + " (" + v.keyType + ")");
         }
         JSObject result = new JSObject();
@@ -445,6 +528,20 @@ public class SftpPlugin extends Plugin {
         result.put("error", changed
             ? "Server key for " + host + " has CHANGED — possible interception."
             : "Unknown server key for " + host);
+        result.put("hostKey", hk);
+        return result;
+    }
+
+    /** Result when known_hosts can't be read: nothing is trusted until it is reset. */
+    private JSObject damagedStore(Exception e, String host, int port) {
+        Log.w(TAG, e.getMessage());
+        JSObject hk = new JSObject();
+        hk.put("status", "damaged");
+        hk.put("host", host);
+        hk.put("port", port);
+        JSObject result = new JSObject();
+        result.put("ok", false);
+        result.put("error", HostKeyStore.DamagedException.MESSAGE);
         result.put("hostKey", hk);
         return result;
     }
