@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v12.50';
+const FLYTAB_VERSION = 'v12.51';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 // Kept in memory and saved at most every FLUSH_MS (errors at once). Every log()
@@ -2591,6 +2591,9 @@ class FlyTabApp {
     }
 
     showToast(message, actions = []) {
+        // The default only covers undefined: flight-upload passes (msg, null, 4000),
+        // and null.map threw, so those toasts never showed.
+        actions = Array.isArray(actions) ? actions : [];
         const existing = document.querySelector('.toast');
         if (existing) existing.remove();
 
