@@ -1,15 +1,22 @@
 package app.flywhere.flytab;
 
 import android.content.Intent;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
+import android.content.pm.Signature;
+import android.content.pm.SigningInfo;
+import android.os.Build;
 import android.net.Uri;
 import android.os.Environment;
 import android.util.Base64;
 import android.util.Log;
 
 import androidx.core.content.FileProvider;
+import androidx.core.content.pm.PackageInfoCompat;
 import androidx.security.crypto.EncryptedSharedPreferences;
 import androidx.security.crypto.MasterKeys;
 
+import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -19,10 +26,14 @@ import com.jcraft.jsch.ChannelSftp;
 import com.jcraft.jsch.JSch;
 import com.jcraft.jsch.Session;
 
+import app.flywhere.flytab.tileserver.FlightFiles;
+
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -32,8 +43,12 @@ public class SftpPlugin extends Plugin {
     private static final String PREFS_NAME = "flytab_sftp_prefs";
     private static final String KEY_PASSWORD = "sftp_password";
     private static final String KEY_PRIVATE_KEY = "sftp_private_key";
+    /** Trusted server host keys (OpenSSH known_hosts format), app-private storage. */
+    private static final String KNOWN_HOSTS_FILE = "sftp_known_hosts";
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    /** Unknown keys servers actually presented; trustHostKey may store only these (one use each). */
+    private final PresentedKeys presentedKeys = new PresentedKeys();
 
     /**
      * Upload a flight CSV from Documents/FlyTab/flights/ to a remote SFTP server.
@@ -66,6 +81,11 @@ public class SftpPlugin extends Plugin {
             call.reject("File not found: " + filename);
             return;
         }
+        // Only a regular file directly in flights/ (not a link planted in the shared folder).
+        if (!FlightFiles.isPlainFileIn(flightsDir, localFile)) {
+            call.reject("Invalid file (not a plain file in the flights folder): " + filename);
+            return;
+        }
 
         final String finalHost = host;
         final int finalPort = port;
@@ -76,10 +96,14 @@ public class SftpPlugin extends Plugin {
         executor.execute(() -> {
             Session session = null;
             ChannelSftp channel = null;
+            HostKeyStore hostKeys = null;
             try {
+                // Server key checked against the pilot-trusted keys during key exchange,
+                // before any password or key is sent (HostKeyStore class comment).
+                hostKeys = new HostKeyStore(knownHostsFile());
                 JSch jsch = new JSch();
                 session = jsch.getSession(finalUsername, finalHost, finalPort);
-                session.setConfig("StrictHostKeyChecking", "no");
+                hostKeys.applyTo(session);
                 byte[] keyBytes = loadStoredKey();
                 if (keyBytes != null) {
                     byte[] passphrase = finalPassword != null
@@ -107,6 +131,9 @@ public class SftpPlugin extends Plugin {
                 call.resolve(result);
 
             } catch (Exception e) {
+                if (e instanceof HostKeyStore.DamagedException) { call.resolve(damagedStore(e, finalHost, finalPort)); return; }
+                JSObject hk = hostKeyFailure(hostKeys, finalHost, finalPort);
+                if (hk != null) { call.resolve(hk); return; }
                 Log.e(TAG, "SFTP upload failed for " + filename, e);
                 JSObject result = new JSObject();
                 result.put("ok", false);
@@ -137,6 +164,11 @@ public class SftpPlugin extends Plugin {
         }
 
         final File localFile = new File(getContext().getCacheDir(), "flytab-update.apk");
+        if (!FlightFiles.isDirectChild(getContext().getCacheDir(), localFile)) {
+            localFile.delete();
+            call.reject("Invalid download target");
+            return;
+        }
         final String finalHost = host;
         final int finalPort = port;
         final String finalUsername = username;
@@ -146,10 +178,14 @@ public class SftpPlugin extends Plugin {
         executor.execute(() -> {
             Session session = null;
             ChannelSftp channel = null;
+            HostKeyStore hostKeys = null;
             try {
+                // Server key checked against the pilot-trusted keys during key exchange,
+                // before any password or key is sent (HostKeyStore class comment).
+                hostKeys = new HostKeyStore(knownHostsFile());
                 JSch jsch = new JSch();
                 session = jsch.getSession(finalUsername, finalHost, finalPort);
-                session.setConfig("StrictHostKeyChecking", "no");
+                hostKeys.applyTo(session);
                 byte[] keyBytes = loadStoredKey();
                 if (keyBytes != null) {
                     byte[] passphrase = finalPassword != null
@@ -169,6 +205,9 @@ public class SftpPlugin extends Plugin {
                 call.resolve(result);
             } catch (Exception e) {
                 localFile.delete(); // remove partial file so installApk() can't pick it up
+                if (e instanceof HostKeyStore.DamagedException) { call.resolve(damagedStore(e, finalHost, finalPort)); return; }
+                JSObject hk = hostKeyFailure(hostKeys, finalHost, finalPort);
+                if (hk != null) { call.resolve(hk); return; }
                 Log.e(TAG, "SFTP download failed", e);
                 JSObject result = new JSObject();
                 result.put("ok", false);
@@ -182,6 +221,63 @@ public class SftpPlugin extends Plugin {
     }
 
     /**
+     * Trust a server host key after the pilot confirmed its fingerprint. The key is
+     * the one returned by the failed upload/download (hostKey.keyBase64), not fetched
+     * again, and its SHA256 fingerprint must equal the one shown (hostKey.fingerprint).
+     * Refused if host:port already has a different key (forget it in Configuration first),
+     * and unless the key is byte-for-byte the one the server presented in the last
+     * failed attempt for host:port (PresentedKeys; one use).
+     */
+    @PluginMethod
+    public void trustHostKey(PluginCall call) {
+        String host = call.getString("host");
+        Integer port = call.getInt("port", 22);
+        String keyType = call.getString("keyType");
+        String keyBase64 = call.getString("keyBase64");
+        String fingerprint = call.getString("fingerprint");
+        if (host == null || port == null || keyType == null || keyBase64 == null || fingerprint == null) {
+            call.reject("Missing required parameters: host, port, keyType, keyBase64, fingerprint");
+            return;
+        }
+        try {
+            byte[] key = HostKeyStore.base64Decode(keyBase64);
+            if (!HostKeyStore.isValidHost(host) || !presentedKeys.consume(HostKeyStore.hostId(host, port), key)) {
+                throw new IllegalArgumentException("not the key the server presented — try the upload again");
+            }
+            new HostKeyStore(knownHostsFile()).trust(host, port, keyType, keyBase64, fingerprint);
+            Log.i(TAG, "Trusted " + keyType + " key " + fingerprint + " for " + HostKeyStore.hostId(host, port));
+            JSObject result = new JSObject();
+            result.put("ok", true);
+            call.resolve(result);
+        } catch (Exception e) {
+            Log.w(TAG, "trustHostKey refused: " + e.getMessage());
+            call.reject("Could not trust server key: " + e.getMessage());
+        }
+    }
+
+    /** Forget every trusted key for host:port (Configuration → Flight Upload only). */
+    @PluginMethod
+    public void forgetHostKey(PluginCall call) {
+        String host = call.getString("host");
+        Integer port = call.getInt("port", 22);
+        if (host == null || port == null) {
+            call.reject("Missing required parameters: host, port");
+            return;
+        }
+        try {
+            int removed = HostKeyStore.forgetOrReset(knownHostsFile(), host, port);
+            Log.i(TAG, removed < 0 ? "Server key store was damaged: reset"
+                : "Forgot " + removed + " key(s) for " + HostKeyStore.hostId(host, port));
+            JSObject result = new JSObject();
+            result.put("removed", Math.max(removed, 0));
+            result.put("reset", removed < 0);
+            call.resolve(result);
+        } catch (Exception e) {
+            call.reject("Could not forget server key: " + e.getMessage());
+        }
+    }
+
+    /**
      * Launch the system installer for flytab-update.apk in the app cache dir.
      * The user must tap Install in the system dialog — Android enforces this.
      */
@@ -190,6 +286,22 @@ public class SftpPlugin extends Plugin {
         File apkFile = new File(getContext().getCacheDir(), "flytab-update.apk");
         if (!apkFile.exists()) {
             call.reject("APK not found — call download() first");
+            return;
+        }
+        String refusal;
+        if (!FlightFiles.isPlainFileIn(getContext().getCacheDir(), apkFile)) {
+            refusal = "the downloaded file is not a plain file in the app's cache";
+        } else {
+            try {
+                refusal = checkUpdateApk(apkFile);
+            } catch (Exception e) {
+                refusal = "it could not be checked (" + e.getMessage() + ")";
+            }
+        }
+        if (refusal != null) {
+            apkFile.delete();
+            Log.w(TAG, "Update refused: " + refusal);
+            call.reject("Update refused: " + refusal + ". The downloaded file was deleted.");
             return;
         }
         try {
@@ -208,6 +320,40 @@ public class SftpPlugin extends Plugin {
             Log.e(TAG, "Failed to launch installer", e);
             call.reject("Failed to launch installer: " + e.getMessage());
         }
+    }
+
+    /**
+     * Same package, same signing certificate(s) and a strictly higher versionCode than
+     * the installed FlyTab (ApkCheck), else the reason. API 28+ reads SigningInfo
+     * (GET_SIGNING_CERTIFICATES); minSdk 24-27 needs GET_SIGNATURES.
+     */
+    @SuppressWarnings("deprecation")
+    private String checkUpdateApk(File apkFile) throws PackageManager.NameNotFoundException {
+        PackageManager pm = getContext().getPackageManager();
+        String own = getContext().getPackageName();
+        int flags = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+            ? PackageManager.GET_SIGNING_CERTIFICATES : PackageManager.GET_SIGNATURES;
+        PackageInfo installed = pm.getPackageInfo(own, flags);
+        PackageInfo apk = pm.getPackageArchiveInfo(apkFile.getAbsolutePath(), flags);
+        return ApkCheck.refusal(
+            own, PackageInfoCompat.getLongVersionCode(installed), signerHashes(installed),
+            apk != null ? apk.packageName : null,
+            apk != null ? PackageInfoCompat.getLongVersionCode(apk) : -1,
+            apk != null ? signerHashes(apk) : null);
+    }
+
+    @SuppressWarnings("deprecation")
+    private static Set<String> signerHashes(PackageInfo pi) {
+        Set<String> out = new HashSet<>();
+        Signature[] sigs = null;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            SigningInfo si = pi.signingInfo;
+            if (si != null) sigs = si.hasMultipleSigners() ? si.getApkContentsSigners() : si.getSigningCertificateHistory();
+        } else {
+            sigs = pi.signatures;
+        }
+        if (sigs != null) for (Signature s : sigs) out.add(ApkCheck.sha256Hex(s.toByteArray()));
+        return out;
     }
 
     /** Encrypt and persist the SFTP password using Android Keystore-backed AES-256. */
@@ -345,6 +491,59 @@ public class SftpPlugin extends Plugin {
             result.put("hasKey", false);
             call.resolve(result);
         }
+    }
+
+    private File knownHostsFile() {
+        return new File(getContext().getFilesDir(), KNOWN_HOSTS_FILE);
+    }
+
+    /**
+     * Result for an operation stopped by the server host key, or null if it failed for
+     * another reason. Unknown key: carries the key so the pilot's Trust stores exactly
+     * the key they were shown. Changed key: no key (it can't be trusted from here),
+     * plus the fingerprints on record.
+     */
+    private JSObject hostKeyFailure(HostKeyStore store, String host, int port) {
+        HostKeyStore.Verdict v = store != null ? store.failedVerdict() : null;
+        if (v == null) return null;
+        boolean changed = v.result == com.jcraft.jsch.HostKeyRepository.CHANGED;
+        JSObject hk = new JSObject();
+        hk.put("status", changed ? "changed" : "unknown");
+        hk.put("host", host);
+        hk.put("port", port);
+        hk.put("keyType", v.keyType);
+        hk.put("shortType", HostKeyStore.shortType(v.keyType));
+        hk.put("fingerprint", v.fingerprint);
+        if (changed) {
+            hk.put("knownFingerprints", new JSArray(v.knownFingerprints));
+            Log.w(TAG, "Server key CHANGED for " + v.hostId + ": presented " + v.fingerprint
+                + " (" + v.keyType + "), on record " + v.knownFingerprints);
+        } else {
+            hk.put("keyBase64", v.keyBase64);
+            presentedKeys.remember(v.hostId, v.key);
+            Log.i(TAG, "Unknown server key for " + v.hostId + ": " + v.fingerprint + " (" + v.keyType + ")");
+        }
+        JSObject result = new JSObject();
+        result.put("ok", false);
+        result.put("error", changed
+            ? "Server key for " + host + " has CHANGED — possible interception."
+            : "Unknown server key for " + host);
+        result.put("hostKey", hk);
+        return result;
+    }
+
+    /** Result when known_hosts can't be read: nothing is trusted until it is reset. */
+    private JSObject damagedStore(Exception e, String host, int port) {
+        Log.w(TAG, e.getMessage());
+        JSObject hk = new JSObject();
+        hk.put("status", "damaged");
+        hk.put("host", host);
+        hk.put("port", port);
+        JSObject result = new JSObject();
+        result.put("ok", false);
+        result.put("error", HostKeyStore.DamagedException.MESSAGE);
+        result.put("hostKey", hk);
+        return result;
     }
 
     /** Expand a leading ~ or ~/ in an SFTP path using the channel's home directory. */

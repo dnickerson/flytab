@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v12.49';
+const FLYTAB_VERSION = 'v12.52';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 // Kept in memory and saved at most every FLUSH_MS (errors at once). Every log()
@@ -2591,18 +2591,25 @@ class FlyTabApp {
     }
 
     showToast(message, actions = []) {
+        // The default only covers undefined: flight-upload passes (msg, null, 4000),
+        // and null.map threw, so those toasts never showed.
+        actions = Array.isArray(actions) ? actions : [];
         const existing = document.querySelector('.toast');
         if (existing) existing.remove();
 
+        // Message and labels as text, not HTML: messages carry network text (SFTP server
+        // errors, report text). No caller passes markup (checked 2026-11-01).
         const toast = document.createElement('div');
         toast.className = 'toast';
         toast.innerHTML = `
-            <span>${message}</span>
+            <span></span>
             <div class="toast-actions">
-                ${actions.map((a, i) => `<button class="toast-btn btn-primary" data-action="${i}">${a.label}</button>`).join('')}
+                ${actions.map((a, i) => `<button class="toast-btn btn-primary" data-action="${i}"></button>`).join('')}
                 <button class="toast-btn" data-action="dismiss">✕</button>
             </div>
         `;
+        toast.querySelector('span').textContent = String(message ?? '');
+        actions.forEach((a, i) => { toast.querySelector(`[data-action="${i}"]`).textContent = String(a.label ?? ''); });
 
         actions.forEach((action, i) => {
             const btn = toast.querySelector(`[data-action="${i}"]`);

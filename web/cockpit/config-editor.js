@@ -303,6 +303,15 @@ class ConfigEditor {
                     </div>
                 </div>
                 <div class="ce-field-row">
+                    <label class="ce-label">Server Key</label>
+                    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                        <button id="ce-fu-forget-hostkey" class="ce-key-btn ce-key-btn--touch">Forget server key</button>
+                    </div>
+                </div>
+                <div class="ce-field-row" style="font-family:var(--font-ui);font-size:var(--text-xs);font-weight:700;color:var(--text-secondary)">
+                    The first upload or update shows the server's key fingerprint to confirm. If the key later changes, uploads stop. Forget the key only if the server was changed on purpose.
+                </div>
+                <div class="ce-field-row">
                     <label class="ce-label" for="ce-fu-apk">APK Remote Path</label>
                     <input type="text" id="ce-fu-apk" class="ce-input" style="width:220px"
                         placeholder="~/flytab/flytab-latest.apk"
@@ -383,6 +392,7 @@ class ConfigEditor {
         wireTap(body.querySelector('.ce-save-btn'), () => this._save());
         wireTap(body.querySelector('.ce-reload-btn'), () => this._load());
         wireTap(body.querySelector('.ce-update-btn'), () => this._downloadAndInstall());
+        wireTap(body.querySelector('#ce-fu-forget-hostkey'), () => this._forgetHostKey());
 
         // SSH key management
         if (typeof Capacitor !== 'undefined' && Capacitor.Plugins?.Sftp) {
@@ -814,16 +824,23 @@ class ConfigEditor {
         statusEl.style.color = 'var(--text-secondary, #a0b8d0)';
 
         try {
-            const result = await Capacitor.Plugins.Sftp.download({
+            // Through the shared server host-key check: an unknown key asks the pilot to
+            // confirm its fingerprint, a changed key is refused (no install either way).
+            const op = () => Capacitor.Plugins.Sftp.download({
                 host,
                 port,
                 username,
                 password,
                 remoteFile: apkRemote,
             });
+            const result = typeof SftpHostKey !== 'undefined'
+                ? await SftpHostKey.run(op, { action: 'Download' }) : await op();
 
             if (!result.ok) {
-                statusEl.textContent = `Download failed: ${result.error}`;
+                statusEl.textContent = result.hostKey?.status === 'changed' && typeof SftpHostKey !== 'undefined'
+                    ? SftpHostKey.changedMessage(result.hostKey, 'Download')
+                    : result.cancelled ? 'Download cancelled: server key not trusted.'
+                    : `Download failed: ${result.error}`;
                 statusEl.style.color = 'var(--status-danger, #c0392b)';
                 btn.disabled = false;
                 return;
@@ -839,6 +856,23 @@ class ConfigEditor {
             statusEl.style.color = 'var(--status-danger, #c0392b)';
             btn.disabled = false;
         }
+    }
+
+    /**
+     * "Forget server key" (Flight Upload card): its own confirm, then SftpPlugin.forgetHostKey.
+     * Uses the SAVED Flight Upload host/port (what uploads use, CockpitConfig.get), not
+     * unsaved edits in the form.
+     */
+    async _forgetHostKey() {
+        const fu = (typeof CockpitConfig !== 'undefined' && CockpitConfig.get('flightUpload')) || {};
+        const host = (fu.host || '').trim();
+        const port = parseInt(fu.port, 10) || 22;
+        if (!host) {
+            window.app?.showToast('Save an SFTP host in Flight Upload first.');
+            return false;
+        }
+        if (typeof SftpHostKey === 'undefined') return false;
+        return SftpHostKey.forget(host, port);
     }
 
     _applySearch(query) {

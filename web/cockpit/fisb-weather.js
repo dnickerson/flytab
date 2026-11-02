@@ -7,7 +7,7 @@ class FisbWeatherDisplay {
     /** Escape HTML entities to prevent XSS from raw FIS-B text */
     static _esc(s) {
         if (!s) return '';
-        return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
     // Altitude levels to display and their colors
@@ -270,7 +270,7 @@ class FisbWeatherDisplay {
             return `<tr><td>${w.label}</td><td>${dir}</td><td>${w.spd}kt</td><td>${temp}</td></tr>`;
         }).join('');
         marker.bindPopup(
-            `<div class="winds-popup"><b>${station}</b>` +
+            `<div class="winds-popup"><b>${FisbWeatherDisplay._esc(String(station ?? ''))}</b>` +
             `<table class="winds-table"><tr><th>Alt</th><th>Dir</th><th>Spd</th><th>Temp</th></tr>` +
             `${tableRows}</table></div>`,
             { maxWidth: 220 }

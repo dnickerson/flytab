@@ -14,6 +14,13 @@ class FlightUpload {
     // STORAGE_KEY so the flight list's shape is unchanged; lets "Upload All Pending"
     // backfill companions for flights whose CSV was uploaded before they were sent.
     static COMPANION_KEY = 'flytab_uploaded_companions';
+    // A log file name Upload All may send on its own (no matching CSV needed).
+    static LOG_NAME_RE = /^[A-Za-z0-9_.-]+_(weather|traffic)\.ndjson$/;
+
+    /** Text for HTML (file names, error messages). */
+    static _esc(v) {
+        return String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
 
     constructor() {
         this._el = null;
@@ -54,7 +61,7 @@ class FlightUpload {
             this._flights = await resp.json();
             this._render();
         } catch (err) {
-            listEl.innerHTML = `<div class="ds-error">Failed to load flights: ${err.message}</div>`;
+            listEl.innerHTML = `<div class="ds-error">Failed to load flights: ${FlightUpload._esc(err.message)}</div>`;
         }
     }
 
@@ -72,17 +79,18 @@ class FlightUpload {
             const size = this._formatSize(flight.size_bytes);
             const uploaded = this._uploadedSet.has(name);
 
+            // File names come from the shared flights folder (any app can write there): text only.
             const row = document.createElement('div');
             row.className = 'fu-row';
             row.innerHTML = `
-                <span class="fu-filename">${name}</span>
+                <span class="fu-filename">${FlightUpload._esc(name)}</span>
                 <span class="fu-meta">${date}${size ? ' · ' + size : ''}</span>
                 <div class="fu-row-actions">
                     <span class="fu-badge ${uploaded ? 'fu-badge--uploaded' : 'fu-badge--pending'}">
                         ${uploaded ? 'UPLOADED' : 'PENDING'}
                     </span>
                     <button class="fu-upload-btn${uploaded ? ' fu-upload-btn--done' : ''}"
-                            data-filename="${name}"${uploaded ? ' disabled' : ''}>
+                            data-filename="${FlightUpload._esc(name)}"${uploaded ? ' disabled' : ''}>
                         ${uploaded ? '✓' : 'Upload'}
                     </button>
                 </div>
@@ -150,14 +158,7 @@ class FlightUpload {
         btn.disabled = true;
 
         try {
-            const result = await Capacitor.Plugins.Sftp.upload({
-                host: cfg.host,
-                port: cfg.port || 22,
-                username: cfg.username,
-                filename,
-                remotePath: cfg.remotePath || '~/flights',
-                password,
-            });
+            const result = await this._sftpUpload(filename, cfg, password);
 
             if (result.ok) {
                 this._markUploaded(filename, rowEl);
@@ -165,13 +166,31 @@ class FlightUpload {
             } else {
                 btn.textContent = 'Retry';
                 btn.disabled = false;
-                window.app?.showToast(`Upload failed: ${result.error}`, null, 4000);
+                // A host-key stop (cancelled / changed key) was already shown by SftpHostKey.
+                if (!result.hostKeyHandled) window.app?.showToast(`Upload failed: ${result.error}`, null, 4000);
             }
         } catch (err) {
             btn.textContent = 'Retry';
             btn.disabled = false;
             window.app?.showToast(`Upload error: ${err.message}`, null, 4000);
         }
+    }
+
+    /**
+     * One SFTP upload through the shared server host-key check (SftpHostKey): an unknown
+     * key asks the pilot to confirm its fingerprint, a changed key is refused. Without
+     * SftpHostKey loaded the plugin still refuses both; only the prompt is missing.
+     */
+    _sftpUpload(filename, cfg, password) {
+        const op = () => Capacitor.Plugins.Sftp.upload({
+            host: cfg.host,
+            port: cfg.port || 22,
+            username: cfg.username,
+            filename,
+            remotePath: cfg.remotePath || '~/flights',
+            password,
+        });
+        return typeof SftpHostKey !== 'undefined' ? SftpHostKey.run(op, { action: 'Upload' }) : op();
     }
 
     /** Companion file names for a flight CSV, e.g. X.csv -> [X_traffic.ndjson, X_weather.ndjson]. */
@@ -184,20 +203,19 @@ class FlightUpload {
      * toasts: companions are supplementary and must not block or alarm. SftpPlugin
      * rejects with "File not found: <name>" when the local file is missing (a flight
      * without FIS-B or traffic), which is the normal case and only logged.
-     * Recorded in COMPANION_KEY only on a confirmed ok.
-     * @returns {Promise<'ok'|'missing'|'failed'>}
+     * Recorded in COMPANION_KEY only on a confirmed ok. 'hostkey': stopped by the server
+     * host-key check (pilot cancelled or key changed; SftpHostKey told the pilot) — the
+     * caller stops its run.
+     * @returns {Promise<'ok'|'missing'|'failed'|'hostkey'>}
      */
     async _uploadCompanion(name, cfg, password) {
         const log = (m) => { if (typeof DiagLog !== 'undefined') DiagLog.log('upload', m); };
         try {
-            const result = await Capacitor.Plugins.Sftp.upload({
-                host: cfg.host,
-                port: cfg.port || 22,
-                username: cfg.username,
-                filename: name,
-                remotePath: cfg.remotePath || '~/flights',
-                password,
-            });
+            const result = await this._sftpUpload(name, cfg, password);
+            if (result?.ok === false && result.hostKeyHandled) {
+                log(`Companion upload stopped by the server key check: ${name}`);
+                return 'hostkey';
+            }
             if (result?.ok === false) {
                 log(`Companion upload failed (non-fatal): ${name}: ${result.error || 'unknown'}`);
                 return 'failed';
@@ -220,7 +238,9 @@ class FlightUpload {
         let ok = 0;
         for (const name of this._companionNames(csvFilename)) {
             if (this._companionSet.has(name)) continue;
-            if (await this._uploadCompanion(name, cfg, password) === 'ok') ok++;
+            const res = await this._uploadCompanion(name, cfg, password);
+            if (res === 'ok') ok++;
+            else if (res === 'hostkey') break;
         }
         return ok;
     }
@@ -243,6 +263,38 @@ class FlightUpload {
         }
     }
 
+    /**
+     * Weather / traffic log names in the tablet's flights/ dir (GET /flights/logs).
+     * Only safe *_weather.ndjson / *_traffic.ndjson names. [] if the endpoint is missing
+     * (older APK) or fails: the CSV-driven backfill still runs.
+     */
+    async _listLogFiles() {
+        try {
+            const r = await fetch(`${FlightUpload.LOCAL_BASE}/flights/logs`, { cache: 'no-store' });
+            if (!r.ok) return [];
+            const list = await r.json();
+            if (!Array.isArray(list)) return [];
+            return list.map((f) => f?.name)
+                .filter((n) => typeof n === 'string' && !n.includes('..') && FlightUpload.LOG_NAME_RE.test(n));
+        } catch (_) {
+            return [];
+        }
+    }
+
+    /** The flight CSV being recorded right now (FlightRecorder._fileName while recording). */
+    _isActiveRecording(name) {
+        const fr = (typeof window !== 'undefined') ? window.app?.flightRecorder : null;
+        return !!(fr?.recording && (fr.fileName ?? fr._fileName) === name);
+    }
+
+    /** The weather or traffic log being written right now (never marked uploaded half-written). */
+    _isActiveLog(name) {
+        const app = (typeof window !== 'undefined') ? window.app : null;
+        if (app?.fisbLogger?._fileName && app.fisbLogger._fileName === name) return true;   // recording or awaiting rename
+        const fr = app?.flightRecorder;
+        return !!(fr?.recording && fr._trafficFileName === name);
+    }
+
     async _uploadAllPending() {
         if (this._busy) return;           // a run is in progress (double tap)
         this._busy = true;
@@ -259,11 +311,20 @@ class FlightUpload {
         // check covers flights already marked uploaded, whose logs were never sent.
         const plan = [];
         for (const f of this._flights) {
+            if (this._isActiveRecording(f.name)) continue;   // still being written: it and its logs wait
             if (!this._uploadedSet.has(f.name)) plan.push({ kind: 'csv', name: f.name });
             for (const name of this._companionNames(f.name)) {
                 if (this._companionSet.has(name)) continue;
                 if (await this._existsLocally(name)) plan.push({ kind: 'companion', name, csv: f.name });
             }
+        }
+        // Weather / traffic logs with no matching CSV (kept their start-time name after a
+        // restart or a failed rename): listed by GET /flights/logs, each sent once.
+        const planned = new Set(plan.map((p) => p.name));
+        for (const name of await this._listLogFiles()) {
+            if (planned.has(name) || this._companionSet.has(name) || this._isActiveLog(name)) continue;
+            plan.push({ kind: 'companion', name });
+            planned.add(name);
         }
         if (!plan.length) {
             window.app?.showToast('No pending flights.', null, 2000);
@@ -286,21 +347,15 @@ class FlightUpload {
         let flightsDone = 0, logsDone = 0, logsFailed = 0, processed = 0;
         for (const item of plan) {
             if (item.kind === 'csv') {
-                const rowEl = this._el.querySelector(`[data-filename="${item.name}"]`)?.closest('.fu-row');
+                const rowEl = [...this._el.querySelectorAll('.fu-upload-btn')]
+                    .find((b) => b.dataset.filename === item.name)?.closest('.fu-row');
                 try {
-                    const result = await Capacitor.Plugins.Sftp.upload({
-                        host: cfg.host,
-                        port: cfg.port || 22,
-                        username: cfg.username,
-                        filename: item.name,
-                        remotePath: cfg.remotePath || '~/flights',
-                        password,
-                    });
+                    const result = await this._sftpUpload(item.name, cfg, password);
                     if (result.ok) {
                         this._markUploaded(item.name, rowEl);
                         flightsDone++;
                     } else {
-                        window.app?.showToast(`Stopped: ${item.name} — ${result.error}`, null, 4000);
+                        if (!result.hostKeyHandled) window.app?.showToast(`Stopped: ${item.name} — ${result.error}`, null, 4000);
                         break;
                     }
                 } catch (err) {
@@ -309,6 +364,7 @@ class FlightUpload {
                 }
             } else {
                 const res = await this._uploadCompanion(item.name, cfg, password);
+                if (res === 'hostkey') break;     // cancelled / changed key: already shown
                 if (res === 'ok') logsDone++;
                 else if (res === 'failed') logsFailed++;   // 'missing' = vanished since the probe: not a failure
             }

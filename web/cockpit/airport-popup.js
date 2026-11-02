@@ -5,6 +5,11 @@
  */
 
 class AirportPopup {
+    /** Text for HTML: FIS-B (unauthenticated radio) and internet weather / runway text. */
+    static _esc(v) {
+        return String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
     constructor(map, nasrDb) {
         this._map = map;
         this._nasr = nasrDb;
@@ -417,7 +422,7 @@ class AirportPopup {
         if (wx?.metar?.decoded?.flight_category) {
             const cat = wx.metar.decoded.flight_category;
             const catColors = { VFR: 'var(--cat-vfr)', MVFR: 'var(--cat-mvfr)', IFR: 'var(--cat-ifr)', LIFR: 'var(--cat-lifr)' };
-            catBadge = `<span style="color:${catColors[cat] || '#aaa'};font-size:14px;font-weight:900;margin-left:6px;">● ${cat}</span>`;
+            catBadge = `<span style="color:${catColors[cat] || '#aaa'};font-size:14px;font-weight:900;margin-left:6px;">● ${AirportPopup._esc(cat)}</span>`;
         }
 
         // Distance and descent rate from current position
@@ -1256,9 +1261,9 @@ class AirportPopup {
     _runwaysHtml(runways) {
         const rows = runways.map(rwy =>
             `<tr>
-                <td>${rwy.id}</td>
-                <td>${rwy.length_ft || '?'} x ${rwy.width_ft || '?'}</td>
-                <td>${rwy.surface || ''}</td>
+                <td>${AirportPopup._esc(rwy.id)}</td>
+                <td>${AirportPopup._esc(rwy.length_ft || '?')} x ${AirportPopup._esc(rwy.width_ft || '?')}</td>
+                <td>${AirportPopup._esc(rwy.surface || '')}</td>
             </tr>`
         ).join('');
 
@@ -1278,7 +1283,7 @@ class AirportPopup {
         // Runway directions (e.g. "34/16")
         if (apt.runways?.length) {
             const dirs = apt.runways.map(r => r.id || '').filter(Boolean).join(', ');
-            if (dirs) facts.push({ label: 'DIR', value: dirs });
+            if (dirs) facts.push({ label: 'DIR', value: AirportPopup._esc(dirs) });
         }
         if (!facts.length) return '';
         const cells = facts.map(f =>
@@ -1463,7 +1468,7 @@ class AirportPopup {
         const tstmLines = typeof FisbClient !== 'undefined' ? FisbClient.formatThunderstormActivity(raw) : [];
         const tstmRowHtml = tstmLines.length
             ? `<div class="wx-row"><div class="wx-row-lbl">TSTM</div><div class="wx-sky-stack">${
-                tstmLines.map(l => `<div class="wx-tstm-line">${l}</div>`).join('')
+                tstmLines.map(l => `<div class="wx-tstm-line">${AirportPopup._esc(l)}</div>`).join('')
             }</div></div>`
             : '';
 
@@ -1481,12 +1486,12 @@ class AirportPopup {
         }
         const phenomenaHtml = wxPhenomena.length
             ? `<div class="wx-phenomena">${wxPhenomena.map(p =>
-                `<span class="wx-phenom" style="color:${p.color}">${p.code}</span>`).join('')}</div>`
+                `<span class="wx-phenom" style="color:${p.color}">${AirportPopup._esc(p.code)}</span>`).join('')}</div>`
             : '';
 
         // Labeled data rows
         const visRow = visSm != null
-            ? `<div class="wx-row"><div class="wx-row-lbl">VIS</div><div class="wx-row-val">${visPlus ? '&gt;' : ''}${visSm} SM</div></div>`
+            ? `<div class="wx-row"><div class="wx-row-lbl">VIS</div><div class="wx-row-val">${visPlus ? '&gt;' : ''}${AirportPopup._esc(visSm)} SM</div></div>`
             : '';
         const tdRow = tempC != null
             ? (() => {
@@ -1512,13 +1517,13 @@ class AirportPopup {
             : '';
 
         const windRow = windStr
-            ? `<div class="wx-row"><div class="wx-row-lbl">WIND</div><div class="wx-row-val">${windStr}</div></div>`
+            ? `<div class="wx-row"><div class="wx-row-lbl">WIND</div><div class="wx-row-val">${AirportPopup._esc(windStr)}</div></div>`
             : '';
 
         return `<div class="popup-section popup-wx-section${speciClass}">
             <div class="wx-card-hdr" style="background:${catBgColor};border-left:4px solid ${catColor}">
                 <span class="wx-cat-dot" style="color:${catColor}">&#9679;</span>
-                <span class="wx-cat-name" style="color:${catColor}">${cat}</span>
+                <span class="wx-cat-name" style="color:${catColor}">${AirportPopup._esc(cat)}</span>
                 <div class="wx-hdr-right">
                     <span class="wx-source">${source}</span>
                     ${isSpeci ? '<span class="wx-speci-badge">SPECI</span>' : ''}
@@ -1537,7 +1542,7 @@ class AirportPopup {
                 <span>${timeStr}</span>
                 ${ageStr ? `<span class="wx-age${ageStale ? ' wx-age-stale' : ''}">${ageStr}${ageStale ? ' ⚠ STALE' : ''}</span>` : ''}
             </div>
-            <div class="wx-metar"><span class="wx-metar-label">RAW</span>${raw}</div>
+            <div class="wx-metar"><span class="wx-metar-label">RAW</span>${AirportPopup._esc(raw)}</div>
             ${tafHtml}
         </div>`;
     }
@@ -1599,9 +1604,9 @@ class AirportPopup {
         });
     }
 
-    /** Format TAF raw text: insert a line break before each FM group */
+    /** TAF raw text as HTML: escaped first, then a line break before each FM group. */
     _formatTaf(raw) {
-        return (raw || '').replace(/ (FM\d{6})/g, '<br>$1');
+        return AirportPopup._esc(raw || '').replace(/ (FM\d{6})/g, '<br>$1');
     }
 
     _flashFrequency(freq) {
