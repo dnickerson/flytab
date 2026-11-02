@@ -140,9 +140,11 @@ describe('MY NOTES in the INFO tab', () => {
         expect(notes.contains(status())).toBe(true);
         // the title shows nothing extra, note or not
         files.set('SC76.txt', 'Land 3');
-        newPopup()._showPanel(SC76, null);
+        const p2 = newPopup();
+        p2._showPanel(SC76, null);
         await settle();
-        expect(document.querySelector('.apt-notes-title').textContent).toBe('MY NOTES');
+        expect(p2._panel.querySelector('.apt-notes-text').value).toBe('Land 3');
+        expect(p2._panel.querySelector('.apt-notes-title').textContent).toBe('MY NOTES');
     });
 
     it('an empty, hidden FAA REMARKS slot sits between IFR CLEARANCE and MY NOTES', () => {
@@ -217,6 +219,72 @@ describe('MY NOTES in the INFO tab', () => {
         panel.scrollTop = 7;
         await vi.advanceTimersByTimeAsync(AirportPopup.NOTES_KEYBOARD_MS * 2);
         expect(panel.scrollTop).toBe(7);
+    });
+
+    describe('keyboard closed without blur (Android back gesture): visualViewport', () => {
+        let vv;
+        beforeEach(() => {
+            vv = new EventTarget();
+            vv.height = 1400;
+            window.visualViewport = vv;
+        });
+        afterEach(() => { delete window.visualViewport; });
+        const resize = (h) => { vv.height = h; vv.dispatchEvent(new Event('resize')); };
+
+        it('the window growing back leaves the editing layout (focus kept); shrinking again re-enters it', async () => {
+            vi.useFakeTimers();
+            const p = newPopup();
+            p._showPanel(SC76, null);
+            await vi.advanceTimersByTimeAsync(10);
+            const panel = p._panel;
+            const content = panel.querySelector('.apt-tab-content');
+            const section = panel.querySelector('.apt-my-notes');
+            panel.getBoundingClientRect = () => ({ top: 0, bottom: 1400, height: 1400 });
+            content.getBoundingClientRect = () => ({ top: 600 - panel.scrollTop, bottom: 1400, height: 800 });
+            section.getBoundingClientRect = () => ({ top: 1000 - panel.scrollTop - content.scrollTop, height: 500 });
+            ta().focus();
+            expect(panel.classList.contains('apt-notes-editing')).toBe(true);
+            resize(1400);                                    // a resize before the keyboard is up: nothing
+            expect(panel.classList.contains('apt-notes-editing')).toBe(true);
+            resize(800);                                     // keyboard up
+            expect(panel.classList.contains('apt-notes-editing')).toBe(true);
+            resize(1300);                                    // >= 90 % of 1400 (1260): keyboard closed
+            expect(panel.classList.contains('apt-notes-editing')).toBe(false);
+            expect(panel.scrollTop).toBe(0);
+            expect(content.scrollTop).toBe(400);              // notes kept in view in the tab content
+            expect(document.activeElement).toBe(ta());
+            resize(800);                                     // the pilot taps the box again: keyboard back
+            expect(panel.classList.contains('apt-notes-editing')).toBe(true);
+            expect(panel.scrollTop).toBeGreaterThan(0);
+        });
+
+        it('only while the box has focus, and the listener goes with the box', async () => {
+            const p = newPopup();
+            p._showPanel(SC76, null);
+            await settle();
+            const panel = p._panel;
+            resize(800);                                     // no focus: nothing
+            expect(panel.classList.contains('apt-notes-editing')).toBe(false);
+            ta().focus();
+            resize(700);
+            const removed = vi.spyOn(vv, 'removeEventListener');
+            p.close();
+            expect(removed).toHaveBeenCalledWith('resize', expect.any(Function));
+            resize(1400);
+            resize(700);
+            expect(panel.classList.contains('apt-notes-editing')).toBe(false);
+        });
+
+        it('no visualViewport: focus and blur still work', async () => {
+            delete window.visualViewport;
+            const p = newPopup();
+            p._showPanel(SC76, null);
+            await settle();
+            ta().focus();
+            expect(p._panel.classList.contains('apt-notes-editing')).toBe(true);
+            ta().blur();
+            expect(p._panel.classList.contains('apt-notes-editing')).toBe(false);
+        });
     });
 
     it('a tapped tab is scrolled into view in the tab row', () => {

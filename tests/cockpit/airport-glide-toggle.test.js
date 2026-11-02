@@ -98,14 +98,16 @@ afterEach(() => {
     for (const k of ['GlidePanel', 'GlideInputs', 'L', 'NasrDB', 'CockpitConfig']) delete globalThis[k];
 });
 
+let cur;   // the popup opened last: every lookup is scoped to ITS panel (several panels can be in the body)
 function open(rec = KLKR) {
     const p = new AirportPopup({ closePopup() {} }, { getWeather: async () => null });
     p.initPanel(document.body);
     p._showPanel(rec, null);
+    cur = p;
     return p;
 }
-const btn = () => document.querySelector('.apt-glide-toggle');
-const block = () => document.querySelector('.glide-host .glide-block');
+const btn = () => cur._panel.querySelector('.apt-glide-toggle');
+const block = () => cur._panel.querySelector('.glide-host .glide-block');
 
 describe('ENGINE OUT button', () => {
     it('sits directly under the close button, labelled ENGINE OUT, at least the touch minimum', () => {
@@ -248,6 +250,55 @@ describe('ENGINE OUT button', () => {
             get.mockRestore();
             set.mockRestore();
         }
+    });
+
+    it('storage write fails while an old "true" is stored: the toggle still turns OFF and back ON', () => {
+        localStorage.setItem(KEY, 'true');
+        const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('quota'); });
+        try {
+            open();
+            expect(btn().classList.contains('is-on')).toBe(true);
+            btn().click();                                  // OFF: the write fails, 'true' stays stored
+            expect(localStorage.getItem(KEY)).toBe('true');
+            expect(btn().classList.contains('is-on')).toBe(false);
+            expect(block()).toBeNull();
+            expect(map.layers.size).toBe(0);
+            open({ ...KLKR, icao: 'KCLT' });               // next airport, same session: still OFF
+            expect(btn().classList.contains('is-on')).toBe(false);
+            expect(block()).toBeNull();
+            btn().click();                                  // and back ON
+            expect(btn().classList.contains('is-on')).toBe(true);
+            expect(block()).not.toBeNull();
+        } finally {
+            set.mockRestore();
+        }
+    });
+
+    it('several panels in the page: each lookup reads the panel under test', () => {
+        localStorage.setItem(KEY, 'false');
+        open();
+        const first = cur;
+        expect(btn().classList.contains('is-on')).toBe(false);
+        localStorage.setItem(KEY, 'true');
+        AirportPopup = loadPopup();
+        open({ ...KLKR, icao: 'KCLT' });
+        expect(cur).not.toBe(first);
+        expect(document.querySelectorAll('.apt-glide-toggle').length).toBe(2);
+        expect(btn().classList.contains('is-on')).toBe(true);
+        expect(first._panel.querySelector('.apt-glide-toggle').classList.contains('is-on')).toBe(false);
+    });
+
+    it('CSS: 12 px between the close button and ENGINE OUT; lit = solid --accent-active fill (10.8:1 white text), off = outlined', () => {
+        const css = read('web/style.css');
+        const rule = (sel) => { const i = css.indexOf(sel + ' {'); return css.slice(i, css.indexOf('}', i)); };
+        expect(rule('.apt-header-btns')).toMatch(/gap:\s*12px/);
+        const on = rule('.apt-glide-toggle.is-on');
+        expect(on).toMatch(/background:\s*var\(--accent-active\)/);
+        expect(on).toMatch(/color:\s*var\(--text-on-accent\)/);
+        const off = rule('.apt-glide-toggle');
+        expect(off).toMatch(/background:\s*var\(--bg-primary\)/);
+        expect(off).toMatch(/border:\s*2px solid var\(--accent-active\)/);
+        expect(off).toMatch(/color:\s*var\(--accent-active\)/);
     });
 
     it('close() with ENGINE OUT on stops the block and removes the line', () => {

@@ -30,23 +30,27 @@ class AirportPopup {
         this._glideHost = null;         // the element the glide block renders into (right under the header)
         this._notes = null;             // AirportNoteEditor: the MY NOTES box at the bottom of INFO (airport-notes.js)
         this._notesScrollTimer = null;  // second "bring the notes into view" after the on-screen keyboard opens
+        this._notesVv = null;           // visualViewport resize listener of the notes box (keyboard closed without blur)
     }
 
     /**
      * ENGINE OUT button (airport panel header): whether the engine-out glide block is shown.
      * One choice for every airport, kept across restarts in localStorage; ON unless the pilot turned it
-     * off. If storage can't be read or written the choice still holds for this session (_glideOnMem).
+     * off. The choice made in this session (_glideOnMem) wins over storage, so it holds even when
+     * storage can't be read or written.
      */
     static GLIDE_PREF_KEY = 'flytab_engine_out_glide_on';
     static _glideOnMem = null;
 
     static glideOn() {
+        // This session's choice first: a write that failed must not let an older stored value win.
+        if (AirportPopup._glideOnMem !== null) return AirportPopup._glideOnMem;
         try {
             const v = localStorage.getItem(AirportPopup.GLIDE_PREF_KEY);
             if (v === 'false') return false;
             if (v === 'true') return true;
-        } catch (_) { /* storage blocked: the session value below */ }
-        return AirportPopup._glideOnMem ?? true;
+        } catch (_) { /* storage blocked: the default */ }
+        return true;
     }
 
     static setGlideOn(on) {
@@ -359,29 +363,44 @@ class AirportPopup {
         const ta = pane.querySelector('.apt-notes-text');
         ta.setAttribute('aria-label', `Notes for ${id}`);
         const section = pane.closest('.apt-my-notes') || pane;
-        const panel = this._panel;
         ta.addEventListener('focus', () => {
-            // While typing, the whole panel is one scroll column (header, glide block, tabs and INFO
-            // scroll together), so a short window with the keyboard up still has room for the notes;
-            // they are scrolled to the top of the panel, again once the keyboard is up.
-            panel.classList.add('apt-notes-editing');
-            this._scrollNotesIntoView(section, panel);
+            this._enterNotesEditing(section);
             clearTimeout(this._notesScrollTimer);
             this._notesScrollTimer = setTimeout(() => {
                 this._notesScrollTimer = null;
-                if (document.activeElement === ta) this._scrollNotesIntoView(section, panel);
+                if (document.activeElement === ta) this._scrollNotesIntoView(section, this._panel);
             }, AirportPopup.NOTES_KEYBOARD_MS);
         });
         ta.addEventListener('blur', () => {
             clearTimeout(this._notesScrollTimer);
             this._notesScrollTimer = null;
-            if (!panel.classList.contains('apt-notes-editing')) return;
-            // Back to the normal layout (the panel itself never scrolls then): keep the notes in view
-            // in the tab content.
-            panel.classList.remove('apt-notes-editing');
-            panel.scrollTop = 0;
-            this._scrollNotesIntoView(section, section.closest('.apt-tab-content'));
+            this._leaveNotesEditing(section);
         });
+        // The keyboard can close without a blur (Android back gesture): when the visual viewport grows
+        // back, leave the editing layout (the box keeps its focus); when it shrinks again (the pilot
+        // tapped the box: keyboard back), enter it again. Without visualViewport: focus / blur only.
+        const vv = (typeof window !== 'undefined') ? window.visualViewport : null;
+        if (vv && typeof vv.addEventListener === 'function') {
+            const st = { vv, base: 0, shrunk: false, handler: null };
+            st.handler = () => {
+                try {
+                    const h = vv.height;
+                    if (!(h > 0)) return;
+                    st.base = Math.max(st.base, h);
+                    if (document.activeElement !== ta) { st.shrunk = false; return; }
+                    if (h < st.base * AirportPopup.KEYBOARD_GONE_FRACTION) {
+                        st.shrunk = true;
+                        if (!this._panel?.classList.contains('apt-notes-editing')) this._enterNotesEditing(section);
+                    } else if (st.shrunk) {
+                        st.shrunk = false;
+                        this._leaveNotesEditing(section);
+                    }
+                } catch (_) { /* layout only */ }
+            };
+            st.base = vv.height > 0 ? vv.height : 0;
+            vv.addEventListener('resize', st.handler);
+            this._notesVv = st;
+        }
         const editor = new AirportNoteEditor(id, ta, pane.querySelector('.apt-notes-status'));
         this._notes = editor;
         editor.load().catch((err) => console.warn('AirportPopup: notes load failed', err));
@@ -389,6 +408,29 @@ class AirportPopup {
 
     /** How long after the notes box gets focus it is scrolled into view again (the keyboard is up by then). */
     static NOTES_KEYBOARD_MS = 400;
+    /** The visual viewport back to at least this fraction of its largest height = the keyboard is gone. */
+    static KEYBOARD_GONE_FRACTION = 0.9;
+
+    /**
+     * Notes being edited: the whole panel is one scroll column (header, glide block, tabs and INFO
+     * scroll together), so a short window with the keyboard up still has room for the notes; they are
+     * scrolled to the top of the panel.
+     */
+    _enterNotesEditing(section) {
+        const panel = this._panel;
+        if (!panel) return;
+        panel.classList.add('apt-notes-editing');
+        this._scrollNotesIntoView(section, panel);
+    }
+
+    /** Back to the normal layout (the panel itself never scrolls then), the notes kept in view in the tab content. */
+    _leaveNotesEditing(section) {
+        const panel = this._panel;
+        if (!panel || !panel.classList.contains('apt-notes-editing')) return;
+        panel.classList.remove('apt-notes-editing');
+        panel.scrollTop = 0;
+        this._scrollNotesIntoView(section, section.closest('.apt-tab-content'));
+    }
 
     /**
      * Scroll `scroller` (the panel while the notes are being edited, else the tab content) so `el`
@@ -422,6 +464,11 @@ class AirportPopup {
     _closeNotes() {
         clearTimeout(this._notesScrollTimer);
         this._notesScrollTimer = null;
+        const st = this._notesVv;
+        this._notesVv = null;
+        if (st) {
+            try { st.vv.removeEventListener('resize', st.handler); } catch (_) { /* gone */ }
+        }
         if (this._panel) {
             this._panel.classList.remove('apt-notes-editing');
             this._panel.scrollTop = 0;
