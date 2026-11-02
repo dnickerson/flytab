@@ -16,6 +16,31 @@ class FlightUpload {
     static COMPANION_KEY = 'flytab_uploaded_companions';
     // A log file name Upload All may send on its own (no matching CSV needed).
     static LOG_NAME_RE = /^[A-Za-z0-9_.-]+_(weather|traffic)\.ndjson$/;
+    // Airport notes (Documents/FlyTab/notes/<ID>.txt, airport-notes.js) sent to
+    // <remotePath>/notes/. What was sent: { "SC76.txt": "<size_bytes>:<modified_ms>" }
+    // from GET /notes/list at the time of the upload. Size + mtime rather than a
+    // content hash: the listing already has them, every save (TileServer's atomic
+    // rename) gives the file a new mtime, and the value recorded is the one listed
+    // BEFORE the upload, so an edit made during the upload is sent next time, never
+    // missed; at worst an unchanged note is sent again. Deleted notes are not
+    // deleted on the home machine.
+    static NOTES_KEY = 'flytab_uploaded_notes';
+    static NOTE_NAME_RE = /^[A-Z0-9]{2,7}\.txt$/;
+
+    /** flytab_uploaded_notes as a plain { name: signature } object; anything else -> {}. */
+    static _loadNotesMap() {
+        try {
+            const v = JSON.parse(localStorage.getItem(FlightUpload.NOTES_KEY) || '{}');
+            if (!v || typeof v !== 'object' || Array.isArray(v)) return {};
+            const out = {};
+            for (const [k, sig] of Object.entries(v)) {
+                if (FlightUpload.NOTE_NAME_RE.test(k) && typeof sig === 'string') out[k] = sig;
+            }
+            return out;
+        } catch (_) {
+            return {};
+        }
+    }
 
     /** Text for HTML (file names, error messages). */
     static _esc(v) {
@@ -32,6 +57,7 @@ class FlightUpload {
         this._companionSet = new Set(
             JSON.parse(localStorage.getItem(FlightUpload.COMPANION_KEY) || '[]')
         );
+        this._uploadedNotes = FlightUpload._loadNotesMap();
         this._buildDOM();
     }
 
@@ -163,6 +189,7 @@ class FlightUpload {
             if (result.ok) {
                 this._markUploaded(filename, rowEl);
                 await this._uploadCompanions(filename, cfg, password);
+                await this._uploadNotesAfterFlight(cfg, password);
             } else {
                 btn.textContent = 'Retry';
                 btn.disabled = false;
@@ -181,16 +208,98 @@ class FlightUpload {
      * key asks the pilot to confirm its fingerprint, a changed key is refused. Without
      * SftpHostKey loaded the plugin still refuses both; only the prompt is missing.
      */
-    _sftpUpload(filename, cfg, password) {
-        const op = () => Capacitor.Plugins.Sftp.upload({
+    _sftpUpload(filename, cfg, password, dir) {
+        const args = {
             host: cfg.host,
             port: cfg.port || 22,
             username: cfg.username,
             filename,
             remotePath: cfg.remotePath || '~/flights',
             password,
-        });
+        };
+        // 'notes': SftpPlugin reads Documents/FlyTab/notes/ and writes <remotePath>/notes/.
+        // Flight files send no dir (the plugin's default, 'flights').
+        if (dir) args.dir = dir;
+        const op = () => Capacitor.Plugins.Sftp.upload(args);
         return typeof SftpHostKey !== 'undefined' ? SftpHostKey.run(op, { action: 'Upload' }) : op();
+    }
+
+    /**
+     * Notes in Documents/FlyTab/notes/ (GET /notes/list) not uploaded in their
+     * current state (size + mtime differ from flytab_uploaded_notes).
+     * @returns {Promise<{ok: boolean, notes: Array<{name: string, sig: string}>}>}
+     * ok false: the folder could not be checked (e.g. 503 storage-permission).
+     * A missing endpoint (404) or a reply that is not a list counts as no notes.
+     */
+    async _pendingNotes() {
+        let r;
+        try {
+            r = await fetch(`${FlightUpload.LOCAL_BASE}/notes/list`, { cache: 'no-store' });
+        } catch (_) {
+            return { ok: false, notes: [] };
+        }
+        if (r.status === 404) return { ok: true, notes: [] };
+        if (!r.ok) return { ok: false, notes: [] };
+        let list;
+        try { list = await r.json(); } catch (_) { return { ok: false, notes: [] }; }
+        if (!Array.isArray(list)) return { ok: true, notes: [] };
+        const notes = [];
+        for (const f of list) {
+            const name = f?.name;
+            if (typeof name !== 'string' || !FlightUpload.NOTE_NAME_RE.test(name)) continue;
+            const sig = `${Number(f.size_bytes)}:${Number(f.modified_ms)}`;
+            if (this._uploadedNotes[name] === sig) continue;
+            notes.push({ name, sig });
+        }
+        return { ok: true, notes };
+    }
+
+    /**
+     * Upload one note. Recorded in flytab_uploaded_notes only on a confirmed ok.
+     * 'missing': deleted since the listing (SftpPlugin "File not found"), not a failure.
+     * 'hostkey': stopped by the server host-key check (SftpHostKey told the pilot).
+     * @returns {Promise<'ok'|'missing'|'failed'|'hostkey'>}
+     */
+    async _uploadNote(item, cfg, password) {
+        const log = (m) => { if (typeof DiagLog !== 'undefined') DiagLog.log('upload', m); };
+        try {
+            const result = await this._sftpUpload(item.name, cfg, password, 'notes');
+            if (result?.ok === false && result.hostKeyHandled) return 'hostkey';
+            if (result?.ok !== true) {
+                log(`Note upload failed: ${item.name}: ${result?.error || 'unknown'}`);
+                return 'failed';
+            }
+            this._markNoteUploaded(item.name, item.sig);
+            log(`Note uploaded: ${item.name}`);
+            return 'ok';
+        } catch (err) {
+            if (/^File not found/.test(err?.message || '')) {
+                log(`Note gone since listing (skipped): ${item.name}`);
+                return 'missing';
+            }
+            log(`Note upload failed: ${item.name}: ${err?.message}`);
+            return 'failed';
+        }
+    }
+
+    /** After a single flight upload: send changed notes too; say only if some failed. */
+    async _uploadNotesAfterFlight(cfg, password) {
+        const pending = await this._pendingNotes();
+        let failed = 0;
+        for (const item of pending.notes) {
+            const res = await this._uploadNote(item, cfg, password);
+            if (res === 'hostkey') return;
+            if (res === 'failed') failed++;
+        }
+        const msgs = [];
+        if (failed > 0) msgs.push(`${failed} note${failed !== 1 ? 's' : ''} failed to upload (see diagnostic log)`);
+        if (!pending.ok) msgs.push('notes could not be checked (storage permission?)');
+        if (msgs.length) window.app?.showToast(`Flight uploaded; ${msgs.join('; ')}.`, null, 5000);
+    }
+
+    _markNoteUploaded(name, sig) {
+        this._uploadedNotes[name] = sig;
+        localStorage.setItem(FlightUpload.NOTES_KEY, JSON.stringify(this._uploadedNotes));
     }
 
     /** Companion file names for a flight CSV, e.g. X.csv -> [X_traffic.ndjson, X_weather.ndjson]. */
@@ -326,7 +435,14 @@ class FlightUpload {
             plan.push({ kind: 'companion', name });
             planned.add(name);
         }
+        // Airport notes new or changed since they were last sent (to <remotePath>/notes/).
+        const pendingNotes = await this._pendingNotes();
+        for (const n of pendingNotes.notes) plan.push({ kind: 'note', name: n.name, sig: n.sig });
         if (!plan.length) {
+            if (!pendingNotes.ok) {
+                window.app?.showToast('No pending flights; notes could not be checked (storage permission?).', null, 4000);
+                return;
+            }
             window.app?.showToast('No pending flights.', null, 2000);
             return;
         }
@@ -344,9 +460,14 @@ class FlightUpload {
         btn.disabled = true;
         btn.textContent = `Uploading 0 / ${plan.length} files...`;
 
-        let flightsDone = 0, logsDone = 0, logsFailed = 0, processed = 0;
+        let flightsDone = 0, logsDone = 0, logsFailed = 0, notesDone = 0, notesFailed = 0, processed = 0;
         for (const item of plan) {
-            if (item.kind === 'csv') {
+            if (item.kind === 'note') {
+                const res = await this._uploadNote(item, cfg, password);
+                if (res === 'hostkey') break;     // cancelled / changed key: already shown
+                if (res === 'ok') notesDone++;
+                else if (res === 'failed') notesFailed++;  // 'missing' = deleted since the listing
+            } else if (item.kind === 'csv') {
                 const rowEl = [...this._el.querySelectorAll('.fu-upload-btn')]
                     .find((b) => b.dataset.filename === item.name)?.closest('.fu-row');
                 try {
@@ -377,11 +498,17 @@ class FlightUpload {
         const sent = [];
         if (flightsDone > 0) sent.push(`${flightsDone} flight${flightsDone !== 1 ? 's' : ''}`);
         if (logsDone > 0) sent.push(`${logsDone} log${logsDone !== 1 ? 's' : ''}`);
+        if (notesDone > 0) sent.push(`${notesDone} note${notesDone !== 1 ? 's' : ''}`);
         let msg = sent.length ? `Uploaded ${sent.join(' + ')}` : '';
         if (logsFailed > 0) {
             msg += `${msg ? '; ' : ''}${logsFailed} log${logsFailed !== 1 ? 's' : ''} failed (see diagnostic log)`;
         }
-        if (msg) window.app?.showToast(`${msg}.`, null, logsFailed > 0 ? 4000 : 3000);
+        if (notesFailed > 0) {
+            msg += `${msg ? '; ' : ''}${notesFailed} note${notesFailed !== 1 ? 's' : ''} failed (see diagnostic log)`;
+        }
+        if (!pendingNotes.ok) msg += `${msg ? '; ' : ''}notes could not be checked (storage permission?)`;
+        const problems = logsFailed > 0 || notesFailed > 0 || !pendingNotes.ok;
+        if (msg) window.app?.showToast(`${msg}.`, null, problems ? 4000 : 3000);
     }
 
     async _getOrPromptPassword() {

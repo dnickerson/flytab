@@ -51,7 +51,10 @@ public class SftpPlugin extends Plugin {
     private final PresentedKeys presentedKeys = new PresentedKeys();
 
     /**
-     * Upload a flight CSV from Documents/FlyTab/flights/ to a remote SFTP server.
+     * Upload a file to a remote SFTP server: a flight file from Documents/FlyTab/flights/
+     * (dir "flights", the default) to the remote path, or an airport note from
+     * Documents/FlyTab/notes/ (dir "notes") to <remote path>/notes/. Source folder,
+     * file name and plain-file checks: UploadSource.
      * Runs on background thread; resolves with {ok, error?}.
      */
     @PluginMethod
@@ -62,30 +65,22 @@ public class SftpPlugin extends Plugin {
         String filename = call.getString("filename");
         String remotePath = call.getString("remotePath", "~/flights");
         String password = call.getString("password");
+        String dir = call.getString("dir", UploadSource.FLIGHTS);
 
         if (host == null || username == null || filename == null || password == null) {
             call.reject("Missing required parameters: host, username, filename, password");
             return;
         }
-        if (filename.contains("..") || filename.contains("/")) {
-            call.reject("Invalid filename");
-            return;
-        }
 
-        File flightsDir = new File(
-            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS),
-            "FlyTab/flights"
-        );
-        File localFile = new File(flightsDir, filename);
-        if (!localFile.exists()) {
-            call.reject("File not found: " + filename);
+        UploadSource source = UploadSource.resolve(
+            new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS), "FlyTab"),
+            dir, filename);
+        if (source.error != null) {
+            call.reject(source.error);
             return;
         }
-        // Only a regular file directly in flights/ (not a link planted in the shared folder).
-        if (!FlightFiles.isPlainFileIn(flightsDir, localFile)) {
-            call.reject("Invalid file (not a plain file in the flights folder): " + filename);
-            return;
-        }
+        final File localFile = source.file;
+        final String remoteSubdir = source.remoteSubdir;
 
         final String finalHost = host;
         final int finalPort = port;
@@ -121,6 +116,10 @@ public class SftpPlugin extends Plugin {
                 // Create remote directory if it doesn't exist (ignore error if it does)
                 try { channel.mkdir(expandedPath); } catch (Exception ignored) {}
                 channel.cd(expandedPath);
+                if (remoteSubdir != null) {        // notes/ (UploadSource allow-list only)
+                    try { channel.mkdir(remoteSubdir); } catch (Exception ignored) {}
+                    channel.cd(remoteSubdir);
+                }
 
                 try (FileInputStream fis = new FileInputStream(localFile)) {
                     channel.put(fis, filename);
