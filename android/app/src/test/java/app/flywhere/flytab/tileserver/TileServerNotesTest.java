@@ -269,6 +269,43 @@ public class TileServerNotesTest {
         assertFalse(new File(base, "Notes").exists() && !new File(base, "Notes").equals(notes));
     }
 
+    // ── generic routes can't reach notes/ ─────────────────────────────────
+
+    @Test
+    public void nonCanonicalUrisCannotReachNotesThroughTheGenericRoutes() throws Exception {
+        start(true);
+        File f = new File(notes, "KLKR.txt");
+        write(f, "keep me");
+        // Review 2026-11-01: these miss the /notes/ route and fell through to the generic
+        // (non-atomic, no permission check) PUT / DELETE / GET.
+        for (String p : new String[]{"//notes/KLKR.txt", "/./notes/KLKR.txt", "//NOTES/KLKR.txt",
+                "/.//notes/./KLKR.txt", "//notes/NEW1.txt", "//notes"}) {
+            Resp w = put(p, "overwritten", APP);
+            assertTrue(p + " PUT " + w.status, w.status == 403 || w.status == 400);
+            Resp d = req("DELETE", p, APP, null);
+            assertTrue(p + " DELETE " + d.status, d.status == 403 || d.status == 400);
+            Resp g = get(p);
+            assertTrue(p + " GET " + g.status, g.status == 403 || g.status == 400);
+            assertEquals("keep me", read(f));
+            assertFalse(new File(notes, "NEW1.txt").exists());
+        }
+        // Other generic writes still work
+        assertEquals(201, put("/flights/x.csv", "flight", APP).status);
+        assertEquals("flight", read(new File(base, "flights/x.csv")));
+        assertEquals(201, put("//flights/y.csv", "flight", APP).status);
+    }
+
+    @Test
+    public void aLinkElsewhereInTheDataFolderCannotReachNotes() throws Exception {
+        start(true);
+        File f = new File(notes, "KLKR.txt");
+        write(f, "keep me");
+        Files.createSymbolicLink(new File(base, "alias").toPath(), notes.toPath());
+        assertEquals(403, put("/alias/KLKR.txt", "overwritten", APP).status);
+        assertEquals(403, req("DELETE", "/alias/KLKR.txt", APP, null).status);
+        assertEquals("keep me", read(f));
+    }
+
     // ── DELETE ────────────────────────────────────────────────────────────
 
     @Test

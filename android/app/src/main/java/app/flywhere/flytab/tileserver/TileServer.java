@@ -883,6 +883,35 @@ public class TileServer extends NanoHTTPD {
         return r;
     }
 
+    /**
+     * The notes folder only through the /notes/ route (atomic write, permission
+     * check). The generic GET / PUT / DELETE see what the routing missed:
+     * "//notes/X.txt", "/./notes/X.txt" (first real path segment is notes, any
+     * case -- shared storage is case-insensitive) or, for writes, a link elsewhere
+     * in the data folder that resolves into notes/ (canonical path).
+     */
+    static boolean firstSegmentIsNotes(String uri) {
+        for (String seg : uri.split("/")) {
+            if (seg.isEmpty() || ".".equals(seg)) continue;
+            return seg.equalsIgnoreCase(NoteFiles.DIR);
+        }
+        return false;
+    }
+
+    private boolean resolvesIntoNotes(File f) {
+        try {
+            String n = new File(baseDir, NoteFiles.DIR).getCanonicalPath().toLowerCase(java.util.Locale.ROOT);
+            String t = f.getCanonicalPath().toLowerCase(java.util.Locale.ROOT);
+            return t.equals(n) || t.startsWith(n + File.separator);
+        } catch (java.io.IOException e) {
+            return true;   // can't tell: refuse
+        }
+    }
+
+    private Response notesOnlyViaNotesRoute() {
+        return newFixedLengthResponse(Response.Status.FORBIDDEN, "text/plain", "Forbidden: notes only via /notes/");
+    }
+
     private Response handlePut(IHTTPSession session, String uri) {
         // Prevent path traversal
         if (uri.contains("..")) {
@@ -891,6 +920,11 @@ public class TileServer extends NanoHTTPD {
 
         String path = uri.startsWith("/") ? uri.substring(1) : uri;
         File file = new File(baseDir, path);
+        if (firstSegmentIsNotes(uri) || resolvesIntoNotes(file)) {
+            Response r = notesOnlyViaNotesRoute();
+            r.closeConnection(true);   // body not read
+            return r;
+        }
 
         try {
             // Parse body — NanoHTTPD requires this for PUT/POST
@@ -945,6 +979,7 @@ public class TileServer extends NanoHTTPD {
         }
         String path = uri.startsWith("/") ? uri.substring(1) : uri;
         File file = new File(baseDir, path);
+        if (firstSegmentIsNotes(uri) || resolvesIntoNotes(file)) return notesOnlyViaNotesRoute();
         if (!file.exists()) {
             return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Not found");
         }
@@ -959,6 +994,8 @@ public class TileServer extends NanoHTTPD {
         if (uri.contains("..")) {
             return newFixedLengthResponse(Response.Status.FORBIDDEN, "text/plain", "Forbidden");
         }
+        // Notes are read through /notes/ only (it tells "no note" from "can't read").
+        if (firstSegmentIsNotes(uri)) return notesOnlyViaNotesRoute();
 
         // Strip leading slash and resolve against base directory
         String path = uri.startsWith("/") ? uri.substring(1) : uri;
