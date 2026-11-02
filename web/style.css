@@ -7934,27 +7934,41 @@ body.fs-overlay-open .radar-loop-controls {
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
     background: var(--bg-surface-raised);
+    /* Seven tabs: at a large Android font scale they don't fit the 300px panel.
+       The row then scrolls sideways (a tapped tab is scrolled into view,
+       AirportPopup._scrollTabIntoView) instead of clipping the last tab. */
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+}
+.apt-tabs::-webkit-scrollbar {
+    display: none;
 }
 
 .apt-tab {
-    flex: 1;
-    padding: 8px 2px;   /* 2px (was 4px): seven tabs incl. "NOTES ●" fit the 300px panel */
+    flex: 1 0 auto;     /* share spare width, never shrink below the label */
+    min-height: var(--touch-min, 56px);
+    padding: 8px 3px;   /* 3px (was 4px): all seven tabs fit the 300px panel at 100% font scale */
     border: none;
     background: transparent;
     color: var(--text-muted);
-    font-size: 14px;
+    font-size: var(--text-xs);
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.3px;
+    white-space: nowrap;
     cursor: pointer;
     border-bottom: 2px solid transparent;
     -webkit-tap-highlight-color: transparent;
 }
 
-/* "NOTES ●" on one line (the ● marks an airport with a note) */
-.apt-tab[data-tab="notes"] {
-    white-space: nowrap;
-    letter-spacing: 0;
+/* Fixed slot for the NOTES tab's ● (an airport with a note): it is always there,
+   so the dot appearing or going does not shift the other tabs. */
+.apt-tab-dot {
+    display: inline-block;
+    width: 1em;
+    text-align: center;
 }
 
 .apt-tab.active {

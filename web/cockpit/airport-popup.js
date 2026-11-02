@@ -228,6 +228,7 @@ class AirportPopup {
             wireTap(tab, () => {
                 // Leaving (or re-tapping) a tab saves a pending note edit now.
                 this._notes?.flush();
+                this._scrollTabIntoView(tab);
                 // APPR tab: open the approach charts picker directly
                 if (tab.dataset.tab === 'appr' && this._approachCharts) {
                     this._approachCharts.showForAirport(airport.icao);
@@ -306,10 +307,30 @@ class AirportPopup {
         const ta = pane.querySelector('.apt-notes-text');
         ta.setAttribute('aria-label', `Notes for ${id}`);
         const editor = new AirportNoteEditor(id, ta, pane.querySelector('.apt-notes-status'), {
-            onHasNote: (has) => { tab.textContent = has ? 'NOTES ●' : 'NOTES'; },
+            // The ● goes in a slot that is always there (fixed width), so the tabs don't shift.
+            onHasNote: (has) => {
+                const dot = tab.querySelector('.apt-tab-dot');
+                if (dot) dot.textContent = has ? '●' : '';
+                tab.setAttribute('aria-label', has ? 'Notes (has a note)' : 'Notes');
+            },
         });
         this._notes = editor;
         editor.load().catch((err) => console.warn('AirportPopup: notes load failed', err));
+    }
+
+    /**
+     * The tab row scrolls sideways when the tabs don't fit (large Android font
+     * scale): bring a tapped tab fully into view. Guarded: never throws.
+     */
+    _scrollTabIntoView(tab) {
+        try {
+            const bar = tab?.parentElement;
+            if (!bar) return;
+            const b = bar.getBoundingClientRect();
+            const t = tab.getBoundingClientRect();
+            if (t.left < b.left) bar.scrollLeft -= (b.left - t.left);
+            else if (t.right > b.right) bar.scrollLeft += (t.right - b.right);
+        } catch (_) { /* layout only */ }
     }
 
     /** The notes box is going away: save what is pending. Guarded: never throws into the panel code. */
@@ -524,7 +545,7 @@ class AirportPopup {
 
         <div class="apt-tabs">
             <button class="apt-tab active" data-tab="info">INFO</button>
-            <button class="apt-tab" data-tab="notes">NOTES</button>
+            <button class="apt-tab" data-tab="notes" aria-label="Notes">NOTES<span class="apt-tab-dot" aria-hidden="true"></span></button>
             <button class="apt-tab" data-tab="wx">WX</button>
             <button class="apt-tab" data-tab="rwy">RWY</button>
             <button class="apt-tab" data-tab="wind">WIND</button>

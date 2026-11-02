@@ -28,7 +28,7 @@ const SC76 = { icao: 'SC76', name: 'UNITY AERODROME', city: 'LANCASTER', state: 
     elev_ft: 560, runways: [{ id: '03/21', length_ft: 2600, width_ft: 100, surface: 'TURF' }], frequencies: [] };
 const KLKR = { icao: 'KLKR', name: 'LANCASTER CO', lat: 34.72, lon: -80.85, elev_ft: 486, runways: [], frequencies: [] };
 
-let files, requests, mode, deferred;
+let files, requests, mode, deferred, failBodies;
 
 /** A Response-like object as fetch returns it. */
 const resp = (status, body = '') => ({ ok: status >= 200 && status < 300, status, text: async () => body });
@@ -48,6 +48,7 @@ function installFetch() {
         if (method === 'PUT') {
             if (mode.put === 'throw') throw new TypeError('Failed to fetch');
             if (mode.put) return resp(mode.put.status, mode.put.body);
+            if (failBodies.has(opts.body)) return resp(500, 'Write failed: rename failed');
             files.set(name, opts.body);
             return resp(201, 'OK');
         }
@@ -83,6 +84,7 @@ async function settle() {
 const ta = () => document.querySelector('.apt-notes-text');
 const status = () => document.querySelector('.apt-notes-status');
 const notesTab = () => document.querySelector('.apt-tab[data-tab="notes"]');
+const label = () => notesTab().textContent.replace('●', ' ●').replace(/\s+/g, ' ').trim();
 const writes = () => requests.filter((r) => r.method === 'PUT' || r.method === 'DELETE');
 function type(text) {
     const el = ta();
@@ -96,7 +98,9 @@ beforeEach(() => {
     requests = [];
     mode = {};
     deferred = {};
+    failBodies = new Set();
     AirportNotes._chains.clear();
+    AirportNoteEditor._loops.clear();
     AirportNotes._unsaved.clear();
     installFetch();
     globalThis.NasrDB = { haversineNm: () => 5 };
@@ -124,13 +128,13 @@ describe('NOTES tab', () => {
         const p = newPopup();
         p._showPanel(SC76, null);
         await settle();
-        expect(notesTab().textContent).toBe('NOTES ●');
+        expect(label()).toBe('NOTES ●');
         p._showPanel(KLKR, null);
         await settle();
-        expect(notesTab().textContent).toBe('NOTES');
+        expect(label()).toBe('NOTES');
         p._showPanel({ ...KLKR, icao: 'KCLT' }, null);
         await settle();
-        expect(notesTab().textContent).toBe('NOTES');
+        expect(label()).toBe('NOTES');
     });
 
     it('the ● follows what is saved: appears after the first save, goes when the note is cleared', async () => {
@@ -139,10 +143,42 @@ describe('NOTES tab', () => {
         await settle();
         type('Owners: arrive left downwind 3');
         await p._notes.flush();
-        expect(notesTab().textContent).toBe('NOTES ●');
+        expect(label()).toBe('NOTES ●');
         type('');
         await p._notes.flush();
-        expect(notesTab().textContent).toBe('NOTES');
+        expect(label()).toBe('NOTES');
+    });
+
+    it('the ● sits in a fixed slot that is always there, so adding it does not shift the tabs', async () => {
+        const p = newPopup();
+        p._showPanel(SC76, null);
+        const slot = notesTab().querySelector('.apt-tab-dot');
+        expect(slot).not.toBeNull();
+        expect(slot.getAttribute('aria-hidden')).toBe('true');
+        expect(slot.textContent).toBe('');
+        await settle();
+        type('x');
+        await p._notes.flush();
+        expect(notesTab().querySelector('.apt-tab-dot')).toBe(slot);   // same element, only its text changes
+        expect(slot.textContent).toBe('●');
+        expect(notesTab().getAttribute('aria-label')).toBe('Notes (has a note)');
+    });
+
+    it('a tapped tab is scrolled into view in the tab row', () => {
+        const p = newPopup();
+        p._showPanel(SC76, null);
+        const bar = document.querySelector('.apt-tabs');
+        const afd = document.querySelector('.apt-tab[data-tab="afd"]');
+        // jsdom has no layout: give the row and the tab boxes
+        bar.getBoundingClientRect = () => ({ left: 0, right: 300, width: 300 });
+        afd.getBoundingClientRect = () => ({ left: 280, right: 330, width: 50 });
+        bar.scrollLeft = 0;
+        afd.click();
+        expect(bar.scrollLeft).toBe(30);
+        const info = document.querySelector('.apt-tab[data-tab="info"]');
+        info.getBoundingClientRect = () => ({ left: -30, right: 10, width: 40 });
+        info.click();
+        expect(bar.scrollLeft).toBe(0);
     });
 
     it('reads Documents/FlyTab/notes/<ID>.txt through TileServer', async () => {
@@ -385,6 +421,55 @@ describe('autosave', () => {
         await settle();
         expect(writes().map((w) => w.body)).toEqual(['a', 'abc']);
         expect(files.get('SC76.txt')).toBe('abc');
+    });
+
+    it('reopening the SAME airport while its save loop runs: the new box gets the final text, and it stays on disk', async () => {
+        // Review 2026-11-01: W1 in flight, more typing, panel replaced by the same airport ->
+        // the new box's read was queued between W1 and W2, showed stale text, and its next save
+        // overwrote the newer note (GET, PUT W1, GET(B), PUT W2, PUT(B)).
+        const p = newPopup();
+        p._showPanel(SC76, null);
+        await settle();
+        const release = defer('PUT');
+        type('Pattern 1500. CTAF 123.0');
+        p._notes.flush();                                 // W1 held (slow storage)
+        await settle();
+        type('Pattern 1500. CTAF 123.0. Avoid town to the N');
+        p._showPanel(SC76, null);                         // same airport tapped again
+        await settle();
+        expect(ta().readOnly).toBe(true);
+        release();
+        await settle();
+        expect(ta().value).toBe('Pattern 1500. CTAF 123.0. Avoid town to the N');
+        expect(ta().readOnly).toBe(false);
+        expect(files.get('SC76.txt')).toBe('Pattern 1500. CTAF 123.0. Avoid town to the N');
+        type(ta().value + ' RWY 6 pref');
+        await p._notes.flush();
+        expect(files.get('SC76.txt')).toBe('Pattern 1500. CTAF 123.0. Avoid town to the N RWY 6 pref');
+        expect(requests.map((r) => r.method)).toEqual(['GET', 'PUT', 'PUT', 'GET', 'PUT']);
+    });
+
+    it('a last write that fails after the panel was replaced by the same airport comes back in the new box', async () => {
+        const p = newPopup();
+        p._showPanel(SC76, null);
+        await settle();
+        const release = defer('PUT');
+        type('first');
+        p._notes.flush();                                 // W1 held, will succeed
+        await settle();
+        type('first and second');
+        failBodies.add('first and second');               // W2 fails
+        p._showPanel(SC76, null);
+        await settle();
+        release();
+        await settle();
+        expect(files.get('SC76.txt')).toBe('first');
+        expect(ta().value).toBe('first and second');      // not lost: offered again ...
+        failBodies.clear();
+        await p._notes.flush();
+        await settle();
+        expect(files.get('SC76.txt')).toBe('first and second');   // ... and saved
+        expect(AirportNotes._unsaved.has('SC76')).toBe(false);
     });
 
     it('reopening the airport while its save is in flight reads after the save', async () => {

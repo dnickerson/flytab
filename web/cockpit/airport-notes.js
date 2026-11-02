@@ -120,6 +120,13 @@ class AirportNotes {
  */
 class AirportNoteEditor {
     static DEBOUNCE_MS = 1000;
+    /**
+     * id -> the running save loop of an editor for that airport. A new box for the
+     * same airport (panel replaced by the same airport, or reopened) waits for it
+     * before reading: otherwise its read could be queued between two writes of the
+     * old box, show stale text, and its next save would overwrite the newer note.
+     */
+    static _loops = new Map();
 
     /**
      * @param {string} id  a valid AirportNotes ID
@@ -163,6 +170,13 @@ class AirportNoteEditor {
 
     async load() {
         this._status('Loading…');
+        // Let an earlier box's save loop for this airport finish first (its last
+        // write, or its failure parked in _unsaved, must be what this box starts from).
+        let loop;
+        while ((loop = AirportNoteEditor._loops.get(this.id))) {
+            await loop.catch(() => {});
+            if (AirportNoteEditor._loops.get(this.id) === loop) AirportNoteEditor._loops.delete(this.id);
+        }
         const res = await AirportNotes.read(this.id);
         if (this._state !== 'loading') return;
         if (!res.ok) {
@@ -211,7 +225,7 @@ class AirportNoteEditor {
         if (this._state !== 'ready') return Promise.resolve();
         if (this._saving) return this._saving;              // the running loop picks up the latest text
         if (this._desired === this._saved) return Promise.resolve();
-        this._saving = (async () => {
+        const loop = (async () => {
             try {
                 while (this._desired !== this._saved) {
                     this._status('Saving…');
@@ -227,9 +241,12 @@ class AirportNoteEditor {
                 this._status('Saved');
             } finally {
                 this._saving = null;
+                if (AirportNoteEditor._loops.get(this.id) === loop) AirportNoteEditor._loops.delete(this.id);
             }
         })();
-        return this._saving;
+        this._saving = loop;
+        AirportNoteEditor._loops.set(this.id, loop);
+        return loop;
     }
 
     _failed(error) {
