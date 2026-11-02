@@ -7,6 +7,13 @@
 class FlightUpload {
     static LOCAL_BASE = 'http://localhost:9090';
     static STORAGE_KEY = 'flytab_uploaded_flights';
+    // Companion files sent next to each flight CSV: <stem><suffix>. The weather log is
+    // renamed by fisb-logger.js on flight end to the CSV's final name + '_weather.ndjson'.
+    static COMPANION_SUFFIXES = ['_traffic.ndjson', '_weather.ndjson'];
+    // Names of companion files already sent (a Set of file names). Separate from
+    // STORAGE_KEY so the flight list's shape is unchanged; lets "Upload All Pending"
+    // backfill companions for flights whose CSV was uploaded before they were sent.
+    static COMPANION_KEY = 'flytab_uploaded_companions';
 
     constructor() {
         this._el = null;
@@ -14,6 +21,9 @@ class FlightUpload {
         this._flights = [];
         this._uploadedSet = new Set(
             JSON.parse(localStorage.getItem(FlightUpload.STORAGE_KEY) || '[]')
+        );
+        this._companionSet = new Set(
+            JSON.parse(localStorage.getItem(FlightUpload.COMPANION_KEY) || '[]')
         );
         this._buildDOM();
     }
@@ -116,6 +126,16 @@ class FlightUpload {
     }
 
     async _uploadOne(filename, rowEl) {
+        if (this._busy) return;           // a run is in progress (double tap / row tap)
+        this._busy = true;
+        try {
+            await this._uploadOneInner(filename, rowEl);
+        } finally {
+            this._busy = false;
+        }
+    }
+
+    async _uploadOneInner(filename, rowEl) {
         const cfg = (typeof CockpitConfig !== 'undefined' && CockpitConfig.get('flightUpload')) || {};
         if (!cfg.host || !cfg.username) {
             window.app?.showToast('Set SFTP host and username in Configuration → Flight Upload first.', null, 4000);
@@ -141,7 +161,7 @@ class FlightUpload {
 
             if (result.ok) {
                 this._markUploaded(filename, rowEl);
-                await this._uploadTrafficCompanion(filename, cfg, password);
+                await this._uploadCompanions(filename, cfg, password);
             } else {
                 btn.textContent = 'Retry';
                 btn.disabled = false;
@@ -154,34 +174,98 @@ class FlightUpload {
         }
     }
 
+    /** Companion file names for a flight CSV, e.g. X.csv -> [X_traffic.ndjson, X_weather.ndjson]. */
+    _companionNames(csvFilename) {
+        return FlightUpload.COMPANION_SUFFIXES.map(sfx => csvFilename.replace(/\.csv$/i, sfx));
+    }
+
     /**
-     * Upload the _traffic.ndjson companion file for a CSV, if it exists.
-     * Fails silently — traffic companion is supplementary, never blocks CSV upload.
+     * Upload one companion file (traffic or weather log). Never throws and never
+     * toasts: companions are supplementary and must not block or alarm. SftpPlugin
+     * rejects with "File not found: <name>" when the local file is missing (a flight
+     * without FIS-B or traffic), which is the normal case and only logged.
+     * Recorded in COMPANION_KEY only on a confirmed ok.
+     * @returns {Promise<'ok'|'missing'|'failed'>}
      */
-    async _uploadTrafficCompanion(csvFilename, cfg, password) {
+    async _uploadCompanion(name, cfg, password) {
+        const log = (m) => { if (typeof DiagLog !== 'undefined') DiagLog.log('upload', m); };
         try {
-            const trafficFilename = csvFilename.replace(/\.csv$/i, '_traffic.ndjson');
             const result = await Capacitor.Plugins.Sftp.upload({
                 host: cfg.host,
                 port: cfg.port || 22,
                 username: cfg.username,
-                filename: trafficFilename,
+                filename: name,
                 remotePath: cfg.remotePath || '~/flights',
                 password,
             });
             if (result?.ok === false) {
-                if (typeof DiagLog !== 'undefined') DiagLog.log('upload', `Traffic companion upload failed (non-fatal): ${result.error || 'unknown'}`);
-                return;
+                log(`Companion upload failed (non-fatal): ${name}: ${result.error || 'unknown'}`);
+                return 'failed';
             }
-            if (typeof DiagLog !== 'undefined') DiagLog.log('upload', `Traffic companion uploaded: ${trafficFilename}`);
+            this._markCompanionUploaded(name);
+            log(`Companion uploaded: ${name}`);
+            return 'ok';
         } catch (err) {
-            if (typeof DiagLog !== 'undefined') DiagLog.log('upload', `Traffic companion upload failed (non-fatal): ${err.message}`);
+            if (/^File not found/.test(err?.message || '')) {
+                log(`Companion not present (skipped): ${name}`);
+                return 'missing';
+            }
+            log(`Companion upload failed (non-fatal): ${name}: ${err?.message}`);
+            return 'failed';
+        }
+    }
+
+    /** Upload every companion of a CSV that has not been sent yet. */
+    async _uploadCompanions(csvFilename, cfg, password) {
+        let ok = 0;
+        for (const name of this._companionNames(csvFilename)) {
+            if (this._companionSet.has(name)) continue;
+            if (await this._uploadCompanion(name, cfg, password) === 'ok') ok++;
+        }
+        return ok;
+    }
+
+    /**
+     * True only if the file is in the tablet's flights/ dir (200). 404 / errors -> false.
+     * GET aborted once the headers arrive, not HEAD: NanoHTTPD 2.3.1 writes a response
+     * body for HEAD too, which breaks the next request on the same keep-alive connection.
+     */
+    async _existsLocally(name) {
+        const c = new AbortController();
+        try {
+            const r = await fetch(`${FlightUpload.LOCAL_BASE}/flights/${encodeURIComponent(name)}`,
+                { signal: c.signal, cache: 'no-store' });
+            return !!r.ok;
+        } catch (_) {
+            return false;
+        } finally {
+            c.abort();
         }
     }
 
     async _uploadAllPending() {
-        const pending = this._flights.filter(f => !this._uploadedSet.has(f.name));
-        if (!pending.length) {
+        if (this._busy) return;           // a run is in progress (double tap)
+        this._busy = true;
+        try {
+            await this._uploadAllPendingInner();
+        } finally {
+            this._busy = false;
+        }
+    }
+
+    async _uploadAllPendingInner() {
+        // Work list, newest flight first: the CSV if not yet sent, then each companion
+        // (traffic / weather log) not yet sent AND present on the tablet. The companion
+        // check covers flights already marked uploaded, whose logs were never sent.
+        const plan = [];
+        for (const f of this._flights) {
+            if (!this._uploadedSet.has(f.name)) plan.push({ kind: 'csv', name: f.name });
+            for (const name of this._companionNames(f.name)) {
+                if (this._companionSet.has(name)) continue;
+                if (await this._existsLocally(name)) plan.push({ kind: 'companion', name, csv: f.name });
+            }
+        }
+        if (!plan.length) {
             window.app?.showToast('No pending flights.', null, 2000);
             return;
         }
@@ -197,40 +281,51 @@ class FlightUpload {
 
         const btn = this._el.querySelector('.fu-upload-all-btn');
         btn.disabled = true;
-        btn.textContent = `Uploading 0 / ${pending.length}...`;
+        btn.textContent = `Uploading 0 / ${plan.length} files...`;
 
-        let uploaded = 0;
-        for (const flight of pending) {
-            const rowEl = this._el.querySelector(`[data-filename="${flight.name}"]`)?.closest('.fu-row');
-            try {
-                const result = await Capacitor.Plugins.Sftp.upload({
-                    host: cfg.host,
-                    port: cfg.port || 22,
-                    username: cfg.username,
-                    filename: flight.name,
-                    remotePath: cfg.remotePath || '~/flights',
-                    password,
-                });
-                if (result.ok) {
-                    this._markUploaded(flight.name, rowEl);
-                    uploaded++;
-                    btn.textContent = `Uploading ${uploaded} / ${pending.length}...`;
-                    await this._uploadTrafficCompanion(flight.name, cfg, password);
-                } else {
-                    window.app?.showToast(`Stopped: ${flight.name} — ${result.error}`, null, 4000);
+        let flightsDone = 0, logsDone = 0, logsFailed = 0, processed = 0;
+        for (const item of plan) {
+            if (item.kind === 'csv') {
+                const rowEl = this._el.querySelector(`[data-filename="${item.name}"]`)?.closest('.fu-row');
+                try {
+                    const result = await Capacitor.Plugins.Sftp.upload({
+                        host: cfg.host,
+                        port: cfg.port || 22,
+                        username: cfg.username,
+                        filename: item.name,
+                        remotePath: cfg.remotePath || '~/flights',
+                        password,
+                    });
+                    if (result.ok) {
+                        this._markUploaded(item.name, rowEl);
+                        flightsDone++;
+                    } else {
+                        window.app?.showToast(`Stopped: ${item.name} — ${result.error}`, null, 4000);
+                        break;
+                    }
+                } catch (err) {
+                    window.app?.showToast(`Error: ${err.message}`, null, 4000);
                     break;
                 }
-            } catch (err) {
-                window.app?.showToast(`Error: ${err.message}`, null, 4000);
-                break;
+            } else {
+                const res = await this._uploadCompanion(item.name, cfg, password);
+                if (res === 'ok') logsDone++;
+                else if (res === 'failed') logsFailed++;   // 'missing' = vanished since the probe: not a failure
             }
+            processed++;
+            btn.textContent = `Uploading ${processed} / ${plan.length} files...`;
         }
 
         btn.disabled = false;
         btn.textContent = 'Upload All Pending';
-        if (uploaded > 0) {
-            window.app?.showToast(`Uploaded ${uploaded} flight${uploaded !== 1 ? 's' : ''}.`, null, 3000);
+        const sent = [];
+        if (flightsDone > 0) sent.push(`${flightsDone} flight${flightsDone !== 1 ? 's' : ''}`);
+        if (logsDone > 0) sent.push(`${logsDone} log${logsDone !== 1 ? 's' : ''}`);
+        let msg = sent.length ? `Uploaded ${sent.join(' + ')}` : '';
+        if (logsFailed > 0) {
+            msg += `${msg ? '; ' : ''}${logsFailed} log${logsFailed !== 1 ? 's' : ''} failed (see diagnostic log)`;
         }
+        if (msg) window.app?.showToast(`${msg}.`, null, logsFailed > 0 ? 4000 : 3000);
     }
 
     async _getOrPromptPassword() {
@@ -301,6 +396,12 @@ class FlightUpload {
         if (badge) { badge.className = 'fu-badge fu-badge--uploaded'; badge.textContent = 'UPLOADED'; }
         const btn = rowEl.querySelector('.fu-upload-btn');
         if (btn) { btn.textContent = '✓'; btn.className = 'fu-upload-btn fu-upload-btn--done'; btn.disabled = true; }
+    }
+
+    _markCompanionUploaded(name) {
+        this._companionSet.add(name);
+        localStorage.setItem(FlightUpload.COMPANION_KEY,
+            JSON.stringify([...this._companionSet]));
     }
 
     _buildDOM() {
