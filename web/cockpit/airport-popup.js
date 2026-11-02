@@ -27,6 +27,7 @@ class AirportPopup {
         this._onInternetMetarBound = null;
         this._getRouteAirports = null;  // callback: () => { departure, destination }
         this._glide = null;             // GlidePanel: live engine-out glide block (glide-panel.js)
+        this._notes = null;             // AirportNoteEditor: the NOTES tab's box (airport-notes.js)
     }
 
     /** Set callback that returns { departure, destination } waypoints from the active plan */
@@ -139,6 +140,7 @@ class AirportPopup {
     _showPanel(airport, wx) {
         if (!this._panel) return;
         this._stopGlide();
+        this._closeNotes();
 
         this._panel.innerHTML = this._buildTopNavHtml(airport.icao) + this._buildPanelHtml(airport, wx);
         this._panel.classList.add('open');
@@ -224,6 +226,8 @@ class AirportPopup {
         // Wire tabs
         this._panel.querySelectorAll('.apt-tab[data-tab]').forEach(tab => {
             wireTap(tab, () => {
+                // Leaving (or re-tapping) a tab saves a pending note edit now.
+                this._notes?.flush();
                 // APPR tab: open the approach charts picker directly
                 if (tab.dataset.tab === 'appr' && this._approachCharts) {
                     this._approachCharts.showForAirport(airport.icao);
@@ -254,6 +258,14 @@ class AirportPopup {
             });
         });
 
+        // NOTES tab. Guarded: a notes error must never stop the airport panel from opening.
+        try {
+            this._openNotes(airport);
+        } catch (err) {
+            console.warn('AirportPopup: notes failed', err);
+            this._notes = null;
+        }
+
         // Engine-out glide block right under the header (shows itself only in flight with a GPS fix).
         // Guarded: a glide error must never stop the airport panel from opening.
         try {
@@ -268,6 +280,47 @@ class AirportPopup {
         } catch (err) {
             console.warn('AirportPopup: glide block failed', err);
             this._stopGlide();
+        }
+    }
+
+    /**
+     * Fill the NOTES pane for this airport (AirportNotes / AirportNoteEditor,
+     * airport-notes.js). An airport whose ID can't be a file name gets a short
+     * "not available" line and no request is made. The tab reads "NOTES ●" while
+     * the saved note is non-empty.
+     */
+    _openNotes(airport) {
+        const pane = this._panel?.querySelector('.apt-notes-pane');
+        const tab = this._panel?.querySelector('.apt-tab[data-tab="notes"]');
+        if (!pane || !tab) return;
+        const id = (typeof AirportNotes !== 'undefined') ? AirportNotes.normId(airport?.icao) : null;
+        if (!id || typeof AirportNoteEditor === 'undefined') {
+            pane.innerHTML = '<div class="apt-notes-na">Notes not available for this airport.</div>';
+            return;
+        }
+        // Status line above the box: a "can't be read" message must not end up below the fold.
+        pane.innerHTML = '<div class="apt-notes">'
+            + '<div class="apt-notes-status" role="status" aria-live="polite"></div>'
+            + '<textarea class="apt-notes-text" readonly spellcheck="true" autocapitalize="sentences" placeholder="Your notes for this airport — saved automatically"></textarea>'
+            + '</div>';
+        const ta = pane.querySelector('.apt-notes-text');
+        ta.setAttribute('aria-label', `Notes for ${id}`);
+        const editor = new AirportNoteEditor(id, ta, pane.querySelector('.apt-notes-status'), {
+            onHasNote: (has) => { tab.textContent = has ? 'NOTES ●' : 'NOTES'; },
+        });
+        this._notes = editor;
+        editor.load().catch((err) => console.warn('AirportPopup: notes load failed', err));
+    }
+
+    /** The notes box is going away: save what is pending. Guarded: never throws into the panel code. */
+    _closeNotes() {
+        const ed = this._notes;
+        this._notes = null;
+        if (!ed) return;
+        try {
+            ed.detach().catch((err) => console.warn('AirportPopup: notes save failed', err));
+        } catch (err) {
+            console.warn('AirportPopup: notes detach failed', err);
         }
     }
 
@@ -321,6 +374,7 @@ class AirportPopup {
     _showSearchPanel() {
         if (!this._panel) return;
         this._stopGlide();
+        this._closeNotes();
         this._panel.innerHTML = `
             <div class="apt-top-nav">
                 <span class="apt-topnav-spacer"></span>
@@ -470,6 +524,7 @@ class AirportPopup {
 
         <div class="apt-tabs">
             <button class="apt-tab active" data-tab="info">INFO</button>
+            <button class="apt-tab" data-tab="notes">NOTES</button>
             <button class="apt-tab" data-tab="wx">WX</button>
             <button class="apt-tab" data-tab="rwy">RWY</button>
             <button class="apt-tab" data-tab="wind">WIND</button>
@@ -483,6 +538,9 @@ class AirportPopup {
                 ${this._frequenciesHtml(apt.frequencies || [], apt.tower)}
                 ${this._fuelHtml(apt)}
                 ${(CockpitConfig.get('ifr.showCdPhone') || CockpitConfig.get('ifr.showCraft')) ? this._ifrHtml(apt) : ''}
+            </div>
+            <div class="apt-tab-pane" data-pane="notes">
+                <div class="apt-notes-pane"></div>
             </div>
             <div class="apt-tab-pane" data-pane="wx">
                 ${wx ? this._weatherHtml(wx) : '<div style="padding:16px;color:var(--text-muted)">No weather data</div>'}
@@ -688,6 +746,7 @@ class AirportPopup {
     _showOfflineStub(icao, latlng) {
         if (!this._panel) return;
         this._stopGlide();
+        this._closeNotes();
         const lat = latlng?.[0]?.toFixed(4) ?? '—';
         const lon = latlng?.[1]?.toFixed(4) ?? '—';
         this._panel.innerHTML = `
@@ -786,6 +845,7 @@ class AirportPopup {
             this._panelOpen = false;
         }
         this._stopGlide();
+        this._closeNotes();
         this._stopFisbListener();
         this._stopInternetMetarListener();
     }

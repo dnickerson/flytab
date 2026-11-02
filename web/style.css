@@ -7938,7 +7938,7 @@ body.fs-overlay-open .radar-loop-controls {
 
 .apt-tab {
     flex: 1;
-    padding: 8px 4px;
+    padding: 8px 2px;   /* 2px (was 4px): seven tabs incl. "NOTES ●" fit the 300px panel */
     border: none;
     background: transparent;
     color: var(--text-muted);
@@ -7949,6 +7949,12 @@ body.fs-overlay-open .radar-loop-controls {
     cursor: pointer;
     border-bottom: 2px solid transparent;
     -webkit-tap-highlight-color: transparent;
+}
+
+/* "NOTES ●" on one line (the ● marks an airport with a note) */
+.apt-tab[data-tab="notes"] {
+    white-space: nowrap;
+    letter-spacing: 0;
 }
 
 .apt-tab.active {
@@ -7969,6 +7975,62 @@ body.fs-overlay-open .radar-loop-controls {
 
 .apt-tab-pane.active {
     display: block;
+}
+
+/* NOTES tab — the pilot's own notes for the airport (airport-notes.js) */
+.apt-notes {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.apt-notes-text {
+    display: block;
+    width: 100%;
+    min-height: 360px;
+    min-height: 45vh;
+    padding: 12px;
+    border: 2px solid var(--border-strong);
+    border-radius: 8px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: var(--font-ui);
+    font-size: var(--text-md);
+    font-weight: 700;
+    line-height: 1.45;
+    resize: vertical;
+    -webkit-user-select: text;
+    user-select: text;
+    touch-action: manipulation;
+}
+.apt-notes-text:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+.apt-notes-text[readonly] {
+    background: var(--bg-surface);
+    color: var(--text-secondary);
+}
+.apt-notes-text::placeholder {
+    color: var(--text-label);
+    font-weight: 700;
+}
+.apt-notes-status {
+    min-height: 1.4em;
+    font-family: var(--font-ui);
+    font-size: var(--text-sm);
+    font-weight: 700;
+    color: var(--text-secondary);
+}
+.apt-notes-status.is-error {
+    color: var(--color-danger-on-light);
+    font-weight: 800;
+}
+.apt-notes-na {
+    padding: 8px 4px;
+    font-family: var(--font-ui);
+    font-size: var(--text-base);
+    font-weight: 700;
+    color: var(--text-secondary);
 }
 
 /* DIAG and A/FD plate panes — no padding, full bleed */

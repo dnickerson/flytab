@@ -51,12 +51,26 @@ public class TileServer extends NanoHTTPD {
     private static final Pattern TILE_PATTERN =
         Pattern.compile("^/tiles/([\\w-]+)/(\\d+)/(\\d+)/(\\d+)\\.webp$");
 
+    /**
+     * True when FlyTab may read shared storage (Android 11+: "All files access").
+     * Without it a note the app did not create in this install is hidden or
+     * unreadable, and File.exists() / FileInputStream report that as "not found";
+     * the notes routes answer 503 storage-permission instead of 404, so the notes
+     * box can never take a hidden note for an empty one and save over it.
+     */
+    private final java.util.function.BooleanSupplier storageAccess;
+
     public TileServer(int port, File baseDir) {
+        this(port, baseDir, () -> true);
+    }
+
+    public TileServer(int port, File baseDir, java.util.function.BooleanSupplier storageAccess) {
         // Loopback only: FlyTab's WebView is the only client. Bound to every
         // interface, any device on the Stratux or home WiFi could PUT, DELETE,
         // fetch-zip or /verify (pre-merge review, 2026-10-16).
         super("127.0.0.1", port);
         this.baseDir = baseDir;
+        this.storageAccess = storageAccess;
     }
 
     /** One data download at a time: a timed-out request kept running beside the next one. */
@@ -158,7 +172,18 @@ public class TileServer extends NanoHTTPD {
         }
 
         Response response;
-        if ("GET".equals(method) && "/terrain/grid/status".equals(uri)) {
+        String lowerUri = uri.toLowerCase(java.util.Locale.ROOT);
+        if ("GET".equals(method) && "/notes/list".equals(uri)) {
+            response = handleNotesList();
+        } else if ("/notes".equals(lowerUri) || lowerUri.startsWith("/notes/")) {
+            // Every method, any case (shared storage is case-insensitive): the
+            // generic PUT / DELETE / GET below never touch the notes folder.
+            response = handleNote(session, method, uri);
+            // A refused PUT may leave its body unread on the socket: never reuse it.
+            if (!"GET".equals(method) && response.getStatus().getRequestStatus() >= 400) {
+                response.closeConnection(true);
+            }
+        } else if ("GET".equals(method) && "/terrain/grid/status".equals(uri)) {
             response = handleTerrainGridStatus();
         } else if ("GET".equals(method) && "/terrain/grid/terrain.json".equals(uri)) {
             response = serveFile("/terrain/terrain.json");
@@ -695,6 +720,167 @@ public class TileServer extends NanoHTTPD {
         }
         sb.append("]");
         return newFixedLengthResponse(Response.Status.OK, "application/json", sb.toString());
+    }
+
+    /** /notes/&lt;ID&gt;.txt, ID upper case (NoteFiles.isNoteName). */
+    private static final Pattern NOTE_URI = Pattern.compile("^/notes/([^/]+)$");
+    /** One note write or delete at a time (the WebView already sends them one by one). */
+    private static final Object NOTES_LOCK = new Object();
+    static final String STORAGE_PERMISSION = "storage-permission";
+
+    private static Response text(Response.IStatus status, String body) {
+        Response r = newFixedLengthResponse(status, "text/plain; charset=utf-8", body);
+        r.addHeader("Cache-Control", "no-store");
+        return r;
+    }
+
+    /**
+     * GET / PUT / DELETE /notes/&lt;ID&gt;.txt -- the pilot's airport notes.
+     *   GET    200 the note (UTF-8 text) | 404 no note | 503 storage-permission | 403 / 500
+     *   PUT    201 written atomically (NoteFiles.writeAtomic), folder created if missing
+     *          | 413 over NoteFiles.MAX_BYTES | 503 storage-permission | 409 / 500
+     *   DELETE 200 deleted | 404 no note | 503 storage-permission | 409 / 500
+     * Any other name under /notes/ is refused (400) for every method. PUT and DELETE
+     * still need the app Origin (allowed(), checked before routing).
+     */
+    private Response handleNote(IHTTPSession session, String method, String uri) {
+        Matcher m = NOTE_URI.matcher(uri);
+        if (!m.matches() || !NoteFiles.isNoteName(m.group(1))) {
+            return text(Response.Status.BAD_REQUEST, "Bad note name");
+        }
+        String name = m.group(1);
+        boolean isGet = "GET".equals(method), isPut = "PUT".equals(method), isDelete = "DELETE".equals(method);
+        if (!isGet && !isPut && !isDelete) {
+            return text(Response.Status.METHOD_NOT_ALLOWED, "Method not allowed");
+        }
+        if (!storageAccess.getAsBoolean()) {
+            return text(Response.Status.SERVICE_UNAVAILABLE, STORAGE_PERMISSION);
+        }
+        File dir = new File(baseDir, NoteFiles.DIR);
+        // The notes folder itself must be baseDir/notes, not a link to elsewhere.
+        if (dir.exists() && (!dir.isDirectory() || !FlightFiles.isDirectChild(baseDir, dir))) {
+            return text(Response.Status.INTERNAL_ERROR, "notes is not a plain folder");
+        }
+        File f = new File(dir, name);
+        if (isGet) return readNote(dir, f);
+        if (isPut) return writeNote(session, dir, name);
+        return deleteNote(dir, f);
+    }
+
+    private Response readNote(File dir, File f) {
+        if (!f.exists()) {
+            // Folder there but unreadable: a permission problem, not "no note".
+            if (dir.isDirectory() && !dir.canRead()) return text(Response.Status.SERVICE_UNAVAILABLE, STORAGE_PERMISSION);
+            return text(Response.Status.NOT_FOUND, "No note");
+        }
+        if (!FlightFiles.isPlainFileIn(dir, f)) return text(Response.Status.FORBIDDEN, "Not a plain file");
+        if (!f.canRead()) return text(Response.Status.SERVICE_UNAVAILABLE, STORAGE_PERMISSION);
+        if (f.length() > NoteFiles.MAX_BYTES) return text(Response.Status.INTERNAL_ERROR, "Note too large");
+        try (FileInputStream in = new FileInputStream(f)) {
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                out.write(buf, 0, n);
+                if (out.size() > NoteFiles.MAX_BYTES) return text(Response.Status.INTERNAL_ERROR, "Note too large");
+            }
+            byte[] data = out.toByteArray();
+            Response r = newFixedLengthResponse(Response.Status.OK, "text/plain; charset=utf-8",
+                new ByteArrayInputStream(data), data.length);
+            r.addHeader("Cache-Control", "no-store");
+            return r;
+        } catch (FileNotFoundException e) {
+            // Listed as existing but can't be opened: Android's answer when access is denied.
+            return text(Response.Status.SERVICE_UNAVAILABLE, STORAGE_PERMISSION);
+        } catch (Exception e) {
+            return text(Response.Status.INTERNAL_ERROR, "Read failed: " + e.getMessage());
+        }
+    }
+
+    private Response writeNote(IHTTPSession session, File dir, String name) {
+        String cl = session.getHeaders().get("content-length");
+        long len;
+        try {
+            len = cl != null ? Long.parseLong(cl.trim()) : -1;
+        } catch (NumberFormatException e) {
+            len = -1;
+        }
+        if (len < 0 || len > NoteFiles.MAX_BYTES) {
+            // Body not read: don't let its bytes be taken for the next request.
+            Response r = text(len < 0 ? Response.Status.BAD_REQUEST : Response.Status.PAYLOAD_TOO_LARGE,
+                len < 0 ? "Content-Length required" : "Note too large");
+            r.closeConnection(true);
+            return r;
+        }
+        File body = null;
+        try {
+            Map<String, String> bodyMap = new HashMap<>();
+            session.parseBody(bodyMap);
+            String tempPath = bodyMap.get("content");
+            body = tempPath != null ? new File(tempPath) : null;
+            if (body == null || !body.isFile()) return text(Response.Status.BAD_REQUEST, "No body");
+            synchronized (NOTES_LOCK) {
+                if (!dir.isDirectory() && !dir.mkdirs()) {
+                    return text(Response.Status.INTERNAL_ERROR, "Could not create the notes folder");
+                }
+                File target = new File(dir, name);
+                if (target.exists() && !FlightFiles.isPlainFileIn(dir, target)) {
+                    return text(Response.Status.CONFLICT, "Not a plain file");
+                }
+                NoteFiles.writeAtomic(dir, name, body);
+            }
+            return text(Response.Status.CREATED, "OK");
+        } catch (Exception e) {
+            return text(Response.Status.INTERNAL_ERROR, "Write failed: " + e.getMessage());
+        } finally {
+            if (body != null) body.delete();
+        }
+    }
+
+    private Response deleteNote(File dir, File f) {
+        synchronized (NOTES_LOCK) {
+            if (!f.exists()) return text(Response.Status.NOT_FOUND, "No note");
+            if (!FlightFiles.isPlainFileIn(dir, f)) return text(Response.Status.CONFLICT, "Not a plain file");
+            if (f.delete()) return text(Response.Status.OK, "Deleted");
+        }
+        return text(Response.Status.INTERNAL_ERROR, "Delete failed");
+    }
+
+    /**
+     * GET /notes/list (read-only, same shape as /flights/list):
+     * [{name: "SC76.txt", size_bytes, modified_ms}, ...] sorted by name. Only
+     * NoteFiles.isNoteName names that are plain files directly in notes/ (no links).
+     * 503 storage-permission without storage access (not an empty list, so Flight
+     * Upload can say the notes were not checked).
+     */
+    private Response handleNotesList() {
+        if (!storageAccess.getAsBoolean()) return text(Response.Status.SERVICE_UNAVAILABLE, STORAGE_PERMISSION);
+        File dir = new File(baseDir, NoteFiles.DIR);
+        if (!dir.exists()) return newFixedLengthResponse(Response.Status.OK, "application/json", "[]");
+        if (!dir.isDirectory() || !FlightFiles.isDirectChild(baseDir, dir)) {
+            return text(Response.Status.INTERNAL_ERROR, "notes is not a plain folder");
+        }
+        File[] files = dir.listFiles();
+        if (files == null) return text(Response.Status.SERVICE_UNAVAILABLE, STORAGE_PERMISSION);
+        java.util.List<File> notes = new java.util.ArrayList<>();
+        for (File f : files) {
+            if (NoteFiles.isNoteName(f.getName()) && FlightFiles.isPlainFileIn(dir, f)) notes.add(f);
+        }
+        notes.sort((a, b) -> a.getName().compareTo(b.getName()));
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < notes.size(); i++) {
+            File f = notes.get(i);
+            if (i > 0) sb.append(",");
+            // Names are [A-Z0-9]{2,7}.txt: nothing to escape.
+            sb.append("{\"name\":\"").append(f.getName()).append("\",")
+              .append("\"size_bytes\":").append(f.length()).append(",")
+              .append("\"modified_ms\":").append(f.lastModified())
+              .append("}");
+        }
+        sb.append("]");
+        Response r = newFixedLengthResponse(Response.Status.OK, "application/json", sb.toString());
+        r.addHeader("Cache-Control", "no-store");
+        return r;
     }
 
     private Response handlePut(IHTTPSession session, String uri) {
