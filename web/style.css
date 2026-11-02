@@ -7902,6 +7902,43 @@ body.fs-overlay-open .radar-loop-controls {
 
 /* .apt-panel-close sizing handled by .btn-close */
 
+/* Close button with the ENGINE OUT toggle under it (airport-popup.js): as wide as the ✕
+   (80px); wider only when a large Android font scale makes "ENGINE" wider than that. */
+.apt-header-btns {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+    flex-shrink: 0;
+    min-width: var(--touch-large);
+    margin-left: 8px;
+}
+.apt-glide-word {
+    display: block;     /* one word per line: "ENGINE" / "OUT" */
+}
+.apt-glide-toggle {
+    min-height: var(--touch-min, 56px);
+    padding: 4px 4px;
+    border: 2px solid var(--accent);
+    border-radius: 8px;
+    background: var(--bg-primary);
+    color: var(--accent);
+    font-family: var(--font-ui);
+    font-size: var(--text-xs);
+    font-weight: 800;
+    line-height: 1.15;
+    letter-spacing: 0.3px;
+    white-space: nowrap;
+    cursor: pointer;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+}
+/* ON: solid accent fill, white text (lit). OFF: outlined. */
+.apt-glide-toggle.is-on {
+    background: var(--accent);
+    color: var(--text-on-accent);
+}
+
 .apt-action-chips {
     display: flex;
     gap: 6px;
@@ -7934,9 +7971,9 @@ body.fs-overlay-open .radar-loop-controls {
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
     background: var(--bg-surface-raised);
-    /* Seven tabs: at a large Android font scale they don't fit the 300px panel.
-       The row then scrolls sideways (a tapped tab is scrolled into view,
-       AirportPopup._scrollTabIntoView) instead of clipping the last tab. */
+    /* Six tabs fit the 300px panel at 100% font scale; at a large Android font
+       scale they don't. The row then scrolls sideways (a tapped tab is scrolled
+       into view, AirportPopup._scrollTabIntoView) instead of clipping the last tab. */
     overflow-x: auto;
     overflow-y: hidden;
     scrollbar-width: none;
@@ -7949,7 +7986,7 @@ body.fs-overlay-open .radar-loop-controls {
 .apt-tab {
     flex: 1 0 auto;     /* share spare width, never shrink below the label */
     min-height: var(--touch-min, 56px);
-    padding: 8px 3px;   /* 3px (was 4px): all seven tabs fit the 300px panel at 100% font scale */
+    padding: 8px 4px;
     border: none;
     background: transparent;
     color: var(--text-muted);
@@ -7961,14 +7998,6 @@ body.fs-overlay-open .radar-loop-controls {
     cursor: pointer;
     border-bottom: 2px solid transparent;
     -webkit-tap-highlight-color: transparent;
-}
-
-/* Fixed slot for the NOTES tab's ● (an airport with a note): it is always there,
-   so the dot appearing or going does not shift the other tabs. */
-.apt-tab-dot {
-    display: inline-block;
-    width: 1em;
-    text-align: center;
 }
 
 .apt-tab.active {
@@ -7991,7 +8020,37 @@ body.fs-overlay-open .radar-loop-controls {
     display: block;
 }
 
-/* NOTES tab — the pilot's own notes for the airport (airport-notes.js) */
+/* While the notes box has focus (AirportPopup._openNotes): the whole panel is one scroll
+   column, so with the on-screen keyboard up (a short window) the header and the glide block
+   scroll away instead of leaving the tab content no height; room below the notes lets them be
+   scrolled to the top of the panel even if the keyboard covers the WebView instead of resizing it. */
+.airport-panel.apt-notes-editing {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+}
+.airport-panel.apt-notes-editing .apt-tab-content {
+    flex: 0 0 auto;
+    overflow: visible;
+}
+.airport-panel.apt-notes-editing .apt-tab-pane.active {
+    padding-bottom: 50vh;
+}
+
+/* FAA REMARKS (read-only, upcoming) sits between IFR CLEARANCE and MY NOTES; hidden while empty. */
+.apt-faa-remarks[hidden] {
+    display: none;
+}
+
+/* MY NOTES — the pilot's own notes for the airport, bottom of INFO (airport-notes.js) */
+.apt-my-notes {
+    margin-top: 12px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+}
+.apt-notes-title {
+    font-weight: 800;
+    color: var(--text-secondary);
+}
 .apt-notes {
     display: flex;
     flex-direction: column;

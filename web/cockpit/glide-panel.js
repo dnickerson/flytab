@@ -1,7 +1,8 @@
 /**
  * FlyTab - live engine-out glide block in the airport panel (web/cockpit/glide-panel.js).
  *
- * Mounted by AirportPopup._showPanel near the top of the panel, stopped by close().
+ * Mounted by AirportPopup._startGlide right under the panel header while the ENGINE OUT button is on,
+ * stopped by close() and by turning ENGINE OUT off.
  * Every GlidePanel.UPDATE_MS it runs GlideModel.plan() (web/shared/glide-model.js) on the inputs from
  * GlideInputs (web/cockpit/glide-inputs.js) and shows:
  *   the verdict (GLIDE OK / FINAL POINT OUT OF REACH / CANNOT REACH / RUNWAY POSITION NOT KNOWN /
@@ -10,8 +11,11 @@
  * and on the map a line aircraft -> final point, a ring at the point and a dashed final to the threshold.
  *
  * Position and altitude come from StratuxClient.wsSituation (the Stratux WebSocket: true GPS MSL).
- * No block (and no line) on the ground, without a 3D GPS fix, with a situation older than 5 s, for a
- * heliport / seaplane base, or when the airport has no elevation or position: GlideInputs decides.
+ * No block (and no line) without a 3D GPS fix, with a situation older than 5 s, for a heliport /
+ * seaplane base, or when the airport has no elevation or position: GlideInputs decides. There is no
+ * ground-speed gate here (the pilot turns the block on / off with ENGINE OUT), so it shows on the
+ * ground too: aircraft() gets the settings with showAboveGsKt 0 (GlidePanel.noGsGate). EmergencyGlide
+ * still passes the configured showAboveGsKt.
  * Nothing here touches the network; the runway (METAR) wind is re-read from on-tablet data every
  * GlidePanel.WIND_REFRESH_MS. Every model number comes from GlideInputs.settings().
  *
@@ -53,6 +57,14 @@ class GlidePanel {
             this._refreshWind(gen);
             this._windTimer = setInterval(() => this._refreshWind(gen), GlidePanel.WIND_REFRESH_MS);
         }
+    }
+
+    /**
+     * The settings with showAboveGsKt 0: GlideInputs.aircraft() then gives a state at any ground speed
+     * (its other checks - 3D fix, age, altitude, track - stay). The panel's own copy; S is not changed.
+     */
+    static noGsGate(S) {
+        return { ...S, pilot: { ...(S && S.pilot), showAboveGsKt: 0 } };
     }
 
     stop() {
@@ -107,7 +119,7 @@ class GlidePanel {
         // never used here; with no fresh WebSocket situation there is no block (err high).
         const sit = (typeof window !== 'undefined' && window.app && window.app.stratuxClient)
             ? window.app.stratuxClient.wsSituation : null;
-        const ac = GlideInputs.aircraft(sit, S, ref, now);
+        const ac = GlideInputs.aircraft(sit, GlidePanel.noGsGate(S), ref, now);
         if (!ac) { this._vsSamples = []; return this._hide(); }
         // MEASURED: the descent rate from GPS altitude. situation.vertical_speed is not used: Stratux never
         // fills GPSVerticalSpeed (WebSocket 0), GDL 90 sends none, the engine-GPS bridge sends 0.

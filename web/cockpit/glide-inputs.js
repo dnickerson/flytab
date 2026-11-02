@@ -259,7 +259,9 @@ const GlideInputs = (() => {
     /**
      * The Stratux situation as the model's aircraft state, relative to refLatLon ({ lat, lon } of the airport),
      * or null: no 3D fix, older than SIT_MAX_AGE_MS, below showAboveGsKt (not flying), or any needed value
-     * missing. Altitude is GPS MSL (alt_msl) only - never the barometric altitude.
+     * missing. EmergencyGlide passes the configured showAboveGsKt; the airport-panel glide block passes 0
+     * (GlidePanel.noGsGate: shown on the ground too, the pilot turns it off with ENGINE OUT).
+     * Altitude is GPS MSL (alt_msl) only - never the barometric altitude.
      * vs: situation.vertical_speed (ft/min) passed through as-is. The glide panel does not use it: it replaces
      * ac.vs with MEASURED, the descent rate it derives from GPS altitude (GlidePanel._measuredVs).
      */

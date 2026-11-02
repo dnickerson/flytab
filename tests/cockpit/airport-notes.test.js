@@ -1,5 +1,6 @@
 /**
- * Airport notes: a NOTES tab right after INFO on every airport panel.
+ * Airport notes: a MY NOTES box at the bottom of every airport panel's INFO tab, under IFR CLEARANCE
+ * (and under the slot kept for the upcoming read-only FAA REMARKS section). There is no NOTES tab.
  *
  * Dana's example: SC76 (Unity Aerodrome), private 2,600 ft grass strip, uphill to
  * the NE, owners' arrival/departure, "land 3, take off 21". One UTF-8 text file per
@@ -83,8 +84,8 @@ async function settle() {
 
 const ta = () => document.querySelector('.apt-notes-text');
 const status = () => document.querySelector('.apt-notes-status');
-const notesTab = () => document.querySelector('.apt-tab[data-tab="notes"]');
-const label = () => notesTab().textContent.replace('●', ' ●').replace(/\s+/g, ' ').trim();
+const infoPane = () => document.querySelector('.apt-tab-pane[data-pane="info"]');
+const notesPane = () => document.querySelector('.apt-notes-pane');
 const writes = () => requests.filter((r) => r.method === 'PUT' || r.method === 'DELETE');
 function type(text) {
     const el = ta();
@@ -113,55 +114,109 @@ afterEach(() => {
     delete globalThis.CockpitConfig;
 });
 
-describe('NOTES tab', () => {
-    it('comes right after INFO', () => {
+describe('MY NOTES in the INFO tab', () => {
+    it('there is no NOTES tab: six tabs, INFO first', () => {
         newPopup()._showPanel(SC76, null);
         expect([...document.querySelectorAll('.apt-tab')].map((t) => t.dataset.tab))
-            .toEqual(['info', 'notes', 'wx', 'rwy', 'wind', 'diag', 'afd']);
-        expect(notesTab().textContent.trim()).toBe('NOTES');
-        expect(document.querySelector('.apt-tab-pane[data-pane="notes"]')).not.toBeNull();
+            .toEqual(['info', 'wx', 'rwy', 'wind', 'diag', 'afd']);
+        expect(document.querySelector('.apt-tab[data-tab="notes"]')).toBeNull();
+        expect(document.querySelector('.apt-tab-pane[data-pane="notes"]')).toBeNull();
+        expect(document.querySelector('.apt-tab-dot')).toBeNull();
     });
 
-    it('shows ● when the airport has a non-empty note, and not otherwise', async () => {
-        files.set('SC76.txt', 'Land 3, take off 21.');
-        files.set('KLKR.txt', '   \n');
-        const p = newPopup();
-        p._showPanel(SC76, null);
+    it('the notes box is the last thing in INFO, after IFR CLEARANCE, titled MY NOTES', async () => {
+        globalThis.CockpitConfig = { get: (k) => (k === 'ifr.showCdPhone' ? true : null) };
+        newPopup()._showPanel(SC76, null);
         await settle();
-        expect(label()).toBe('NOTES ●');
-        p._showPanel(KLKR, null);
+        const info = infoPane();
+        const ifr = info.querySelector('.popup-ifr-section');
+        const notes = info.querySelector('.apt-my-notes');
+        expect(ifr.textContent).toContain('IFR CLEARANCE');
+        expect(notes).not.toBeNull();
+        expect(info.lastElementChild).toBe(notes);
+        expect(ifr.compareDocumentPosition(notes) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(notes.querySelector('.apt-notes-title').textContent).toBe('MY NOTES');
+        expect(notes.contains(ta())).toBe(true);
+        expect(notes.contains(status())).toBe(true);
+        // the title shows nothing extra, note or not
+        files.set('SC76.txt', 'Land 3');
+        newPopup()._showPanel(SC76, null);
         await settle();
-        expect(label()).toBe('NOTES');
-        p._showPanel({ ...KLKR, icao: 'KCLT' }, null);
-        await settle();
-        expect(label()).toBe('NOTES');
+        expect(document.querySelector('.apt-notes-title').textContent).toBe('MY NOTES');
     });
 
-    it('the ● follows what is saved: appears after the first save, goes when the note is cleared', async () => {
-        const p = newPopup();
-        p._showPanel(SC76, null);
-        await settle();
-        type('Owners: arrive left downwind 3');
-        await p._notes.flush();
-        expect(label()).toBe('NOTES ●');
-        type('');
-        await p._notes.flush();
-        expect(label()).toBe('NOTES');
+    it('an empty, hidden FAA REMARKS slot sits between IFR CLEARANCE and MY NOTES', () => {
+        globalThis.CockpitConfig = { get: (k) => (k === 'ifr.showCdPhone' ? true : null) };
+        newPopup()._showPanel(SC76, null);
+        const info = infoPane();
+        const ifr = info.querySelector('.popup-ifr-section');
+        const remarks = info.querySelector('.apt-faa-remarks');
+        expect(remarks).not.toBeNull();
+        expect(remarks.hidden).toBe(true);
+        expect(remarks.children.length).toBe(0);
+        expect(remarks.textContent).toBe('');
+        expect(ifr.nextElementSibling).toBe(remarks);
+        expect(remarks.nextElementSibling).toBe(info.querySelector('.apt-my-notes'));
     });
 
-    it('the ● sits in a fixed slot that is always there, so adding it does not shift the tabs', async () => {
+    it('without the IFR section (config off) the notes are still at the bottom of INFO', () => {
+        newPopup()._showPanel(SC76, null);
+        expect(infoPane().querySelector('.popup-ifr-section')).toBeNull();
+        expect(infoPane().lastElementChild.classList.contains('apt-my-notes')).toBe(true);
+    });
+
+    it('focus: the panel becomes one scroll column and the notes go to its top, again after the keyboard is up', async () => {
+        vi.useFakeTimers();
         const p = newPopup();
         p._showPanel(SC76, null);
-        const slot = notesTab().querySelector('.apt-tab-dot');
-        expect(slot).not.toBeNull();
-        expect(slot.getAttribute('aria-hidden')).toBe('true');
-        expect(slot.textContent).toBe('');
-        await settle();
-        type('x');
-        await p._notes.flush();
-        expect(notesTab().querySelector('.apt-tab-dot')).toBe(slot);   // same element, only its text changes
-        expect(slot.textContent).toBe('●');
-        expect(notesTab().getAttribute('aria-label')).toBe('Notes (has a note)');
+        await vi.advanceTimersByTimeAsync(10);
+        const panel = document.querySelector('.airport-panel');
+        const content = document.querySelector('.apt-tab-content');
+        const section = document.querySelector('.apt-my-notes');
+        // jsdom has no layout: the section 700 px below the panel's top, then 1000 px (keyboard resize)
+        let sectionTop = 900;
+        panel.getBoundingClientRect = () => ({ top: 200, bottom: 1000, height: 800 });
+        content.getBoundingClientRect = () => ({ top: 500 - panel.scrollTop, bottom: 1000, height: 500 });
+        section.getBoundingClientRect = () => ({ top: sectionTop - panel.scrollTop - content.scrollTop, height: 500 });
+        ta().focus();
+        expect(document.activeElement).toBe(ta());
+        expect(panel.classList.contains('apt-notes-editing')).toBe(true);
+        expect(panel.scrollTop).toBe(700);
+        expect(content.scrollTop).toBe(0);
+        sectionTop = 1200;                                   // layout moved while the keyboard opened
+        await vi.advanceTimersByTimeAsync(AirportPopup.NOTES_KEYBOARD_MS);
+        expect(panel.scrollTop).toBe(1000);
+        // blur: normal layout again, the panel itself back at 0, the notes kept in view in the tab content
+        ta().blur();
+        expect(panel.classList.contains('apt-notes-editing')).toBe(false);
+        expect(panel.scrollTop).toBe(0);
+        expect(content.scrollTop).toBe(700);                 // section 1200 - content 500
+    });
+
+    it('the delayed scroll is dropped when the box lost focus or the panel closed; the panel never stays scrolled', async () => {
+        vi.useFakeTimers();
+        const p = newPopup();
+        p._showPanel(SC76, null);
+        await vi.advanceTimersByTimeAsync(10);
+        const panel = document.querySelector('.airport-panel');
+        ta().focus();
+        p.close();
+        expect(p._notesScrollTimer).toBeNull();
+        expect(panel.classList.contains('apt-notes-editing')).toBe(false);
+        expect(panel.scrollTop).toBe(0);
+        panel.scrollTop = 5;
+        await vi.advanceTimersByTimeAsync(AirportPopup.NOTES_KEYBOARD_MS * 2);
+        expect(panel.scrollTop).toBe(5);
+        // the next airport starts unscrolled
+        p._showPanel(SC76, null);
+        expect(panel.scrollTop).toBe(0);
+        await vi.advanceTimersByTimeAsync(10);
+        // focus lost before the delay: no second scroll either
+        ta().focus();
+        ta().blur();
+        panel.scrollTop = 7;
+        await vi.advanceTimersByTimeAsync(AirportPopup.NOTES_KEYBOARD_MS * 2);
+        expect(panel.scrollTop).toBe(7);
     });
 
     it('a tapped tab is scrolled into view in the tab row', () => {
@@ -262,7 +317,7 @@ describe('reading', () => {
         newPopup()._showPanel(SC76, null);
         await settle();
         expect(ta().value).toBe(evil);
-        const pane = document.querySelector('.apt-tab-pane[data-pane="notes"]');
+        const pane = notesPane();
         expect(pane.querySelector('img')).toBeNull();
         expect(pane.querySelector('b')).toBeNull();
         expect(window.__notesXss).toBeUndefined();
@@ -288,7 +343,7 @@ describe('autosave', () => {
         expect(status().textContent).toMatch(/saved/i);
     });
 
-    it('saves at once on a tab switch', async () => {
+    it('saves at once on leaving INFO (a tab switch)', async () => {
         const p = newPopup();
         p._showPanel(SC76, null);
         await settle();
@@ -503,14 +558,14 @@ describe('airport ID', () => {
     });
 
     for (const icao of ['../x', 'SC76/../K', '..%2Fflights', 'TOOLONG1', '', undefined]) {
-        it(`"${icao}": no request, and the tab says notes are not available`, async () => {
+        it(`"${icao}": no request, and MY NOTES says notes are not available`, async () => {
             const p = newPopup();
             p._showPanel({ ...SC76, icao }, null);
             await settle();
             expect(requests).toEqual([]);
             expect(ta()).toBeNull();
-            expect(document.querySelector('.apt-tab-pane[data-pane="notes"]').textContent)
-                .toMatch(/notes not available for this airport/i);
+            expect(notesPane().textContent).toMatch(/notes not available for this airport/i);
+            expect(infoPane().contains(notesPane())).toBe(true);
         });
     }
 
@@ -529,7 +584,7 @@ describe('panel safety', () => {
             const p = newPopup();
             expect(() => p._showPanel(SC76, null)).not.toThrow();
             expect(document.querySelector('.airport-panel.open')).not.toBeNull();
-            expect(document.querySelectorAll('.apt-tab').length).toBe(7);
+            expect(document.querySelectorAll('.apt-tab').length).toBe(6);
         } finally {
             globalThis.AirportNoteEditor = saved;
         }

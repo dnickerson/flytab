@@ -2,7 +2,7 @@
  * FlyTab — Airport notes
  *
  * The pilot's own notes for an airport (e.g. a private strip's prescribed
- * arrival / departure), shown in the airport panel's NOTES tab. One UTF-8 text
+ * arrival / departure), shown as MY NOTES at the bottom of the airport panel's INFO tab. One UTF-8 text
  * file per airport, Documents/FlyTab/notes/<ID>.txt, read and written through the
  * on-tablet file server (TileServer: GET / PUT / DELETE /notes/<ID>.txt), so the
  * notes survive Clear Data and reinstall. Flight Upload copies them home.
@@ -17,7 +17,7 @@
  *  - Reads and writes for one airport run one at a time (AirportNotes._enqueue);
  *    a write sends the latest text when it starts, so the latest text wins.
  *  - A failed write shows an error and keeps the text; it is retried on the next
- *    change, tab switch or close. If it fails after the panel closed, a toast
+ *    change, tab tap or close. If it fails after the panel closed, a toast
  *    says so and the text comes back when the airport is reopened (_unsaved).
  *  - Text goes into the page only as textarea.value / textContent.
  */
@@ -132,13 +132,11 @@ class AirportNoteEditor {
      * @param {string} id  a valid AirportNotes ID
      * @param {HTMLTextAreaElement} textarea
      * @param {HTMLElement} statusEl
-     * @param {{onHasNote?: function(boolean)}} [opts]  told whether the saved note is non-empty
      */
-    constructor(id, textarea, statusEl, opts = {}) {
+    constructor(id, textarea, statusEl) {
         this.id = id;
         this._ta = textarea;
         this._statusEl = statusEl;
-        this._onHasNote = opts.onHasNote || (() => {});
         this._state = 'loading';
         this._saved = '';       // text known to be on disk
         this._desired = '';     // text in the box
@@ -194,7 +192,6 @@ class AirportNoteEditor {
         this._state = 'ready';
         if (this._detached) return;          // closed while loading: keep nothing editable
         this._ta.readOnly = false;
-        this._onHasNote(res.text.trim() !== '');
         if (this._desired !== this._saved) {
             this._status('Unsaved changes from earlier — saving…');
             this._save();
@@ -235,7 +232,6 @@ class AirportNoteEditor {
                         return;
                     }
                     this._saved = res.text;
-                    this._onHasNote(res.text.trim() !== '');
                 }
                 AirportNotes._unsaved.delete(this.id);
                 this._status('Saved');
@@ -257,7 +253,7 @@ class AirportNoteEditor {
         // The panel is gone: keep the text for the next open of this airport, and say so.
         AirportNotes._unsaved.set(this.id, this._desired);
         try {
-            window.app?.showToast?.(`Note for ${this.id} NOT saved: ${error} Reopen ${this.id} → NOTES to retry.`, null, 8000);
+            window.app?.showToast?.(`Note for ${this.id} NOT saved: ${error} Reopen ${this.id} → INFO → MY NOTES to retry.`, null, 8000);
         } catch (_) { /* never throw out of a save */ }
     }
 }
