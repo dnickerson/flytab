@@ -121,24 +121,41 @@ class RouteTable {
         }
     }
 
-    /** Apply FIS-B winds aloft to waypoints if fresher than plan data */
+    /**
+     * Apply FIS-B winds aloft to waypoints that have no plan wind. Only a trusted wind is used
+     * (FisbClient.getTrustedWind: station within windMaxStationNm of the waypoint, report received within
+     * windMaxAgeMin, the pilot's Engine-Out Glide settings). With no trusted wind, a FIS-B wind applied earlier
+     * (wind._fisbApplied) is cleared. A plan / forecast wind (no _fisbApplied) is never replaced or cleared.
+     * Runs on every fisb:winds event; _expireFisbWinds drops an applied wind that ages out between events.
+     */
     _applyFisbWinds() {
         if (!this._fisbClient || this._waypoints.length === 0) return;
+        const canTrust = typeof this._fisbClient.getTrustedWind === 'function';
+        const now = Date.now();
         let changed = false;
 
         for (let i = 1; i < this._waypoints.length; i++) {
             const wp = this._waypoints[i];
             if (!wp.lat || !wp.lon) continue;
-            const alt = wp.alt || 5000;
-            const fisbWind = this._fisbClient.getNearestWind(wp.lat, wp.lon, alt);
-            if (fisbWind && fisbWind.dir != null && fisbWind.spd != null) {
-                // Override if no plan wind, or existing wind was already from FIS-B (safe to update)
-                const planWind = wp.wind;
-                if (!planWind || planWind._fisbApplied) {
-                    wp.wind = { dir: fisbWind.dir, spd: fisbWind.spd, _fisbApplied: true };
+            const current = wp.wind;
+            if (current && !current._fisbApplied) continue;       // the planner's (or a loaded plan's) wind
+
+            let trusted = null;
+            if (canTrust) {
+                try { trusted = this._fisbClient.getTrustedWind(wp.lat, wp.lon, wp.alt || 5000, now); } catch (_) { trusted = null; }
+            }
+
+            if (trusted) {
+                if (!current || current.dir !== trusted.dir || current.spd !== trusted.spd
+                    || current._fisbReceivedAt !== trusted.received_at) {
+                    wp.wind = { dir: trusted.dir, spd: trusted.spd, _fisbApplied: true, _fisbReceivedAt: trusted.received_at };
                     wp._wind = wp.wind;
                     changed = true;
                 }
+            } else if (current) {
+                wp.wind = null;                                     // the FIS-B wind is no longer trusted
+                wp._wind = null;
+                changed = true;
             }
         }
 
@@ -148,6 +165,32 @@ class RouteTable {
                 this._renderTable();
             }
         }
+    }
+
+    /**
+     * Clear every applied FIS-B wind (wind._fisbApplied) received more than windMaxAgeMin ago (or with no receipt
+     * time, or when no limits can be read). Called at the start of every _computeEnroute - the live tick
+     * (updateLive), refresh and edits - so a FIS-B wind stops being used out of FIS-B coverage, when no fisb:winds
+     * event comes to re-check it. Plan winds are not touched. -> true when a wind was cleared.
+     */
+    _expireFisbWinds(now = Date.now()) {
+        let lim, cleared = false;
+        for (const wp of this._waypoints || []) {
+            const w = wp && wp.wind;
+            if (!w || !w._fisbApplied) continue;
+            if (lim === undefined) {
+                try {
+                    lim = (this._fisbClient && typeof this._fisbClient.windTrustLimits === 'function')
+                        ? this._fisbClient.windTrustLimits() : null;
+                } catch (_) { lim = null; }
+            }
+            if (!lim || !Number.isFinite(w._fisbReceivedAt) || now - w._fisbReceivedAt > lim.maxAgeMs) {
+                wp.wind = null;
+                wp._wind = null;
+                cleared = true;
+            }
+        }
+        return cleared;
     }
 
     /**
@@ -1445,6 +1488,7 @@ class RouteTable {
     }
 
     _computeEnroute(gs) {
+        this._expireFisbWinds();     // a FIS-B wind past windMaxAgeMin is not used, even with no new winds update
         if (this._activeIndex < 0 || this._waypoints.length === 0) return;
         // Build trip.flights[] — splits waypoints at fuel stop airports.
         // Must run before the computation loop so we know fuel-reset boundaries.

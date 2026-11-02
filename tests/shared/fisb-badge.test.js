@@ -127,3 +127,271 @@ describe('StratuxClient /getStatus poll: aged and diagnosed', () => {
         clearInterval(c._statusTimer);
     });
 });
+
+describe('FisbClient.parseWindAloft (FD wind groups)', () => {
+    // Review R23 (2026-10-31): only the bare '9900' was light and variable; at 6,000 ft and up
+    // the group carries a temperature ('9900+05', '990045') and decoded as 490/100 kt.
+    it('light and variable, with or without a temperature group -> null', () => {
+        expect(FisbClient.parseWindAloft('9900')).toBeNull();
+        expect(FisbClient.parseWindAloft('9900+05')).toBeNull();
+        expect(FisbClient.parseWindAloft('9900-12')).toBeNull();
+        expect(FisbClient.parseWindAloft('990045')).toBeNull();
+    });
+
+    it('ordinary groups decode unchanged', () => {
+        expect(FisbClient.parseWindAloft('2714')).toEqual({ dir: 270, spd: 14, temp: null });
+        expect(FisbClient.parseWindAloft('2819+13')).toEqual({ dir: 280, spd: 19, temp: 13 });
+    });
+
+    it('100 kt and over (direction + 50) still decodes: 7315-20 -> 230/115', () => {
+        expect(FisbClient.parseWindAloft('7315-20')).toEqual({ dir: 230, spd: 115, temp: -20 });
+    });
+
+    it('empty or junk -> null', () => {
+        expect(FisbClient.parseWindAloft('')).toBeNull();
+        expect(FisbClient.parseWindAloft(null)).toBeNull();
+        expect(FisbClient.parseWindAloft('ABCD')).toBeNull();
+    });
+});
+
+describe('FisbClient winds: a light-and-variable report replaces the old wind (review R28)', () => {
+    const COORDS = { KCLT: { lat: 35.21, lon: -80.94 }, KCAE: { lat: 33.94, lon: -81.12 } };
+    const client = () => new FisbClient(new EventTarget(), { getAirport: async (id) => COORDS[id] || null, getNavaid: async () => null });
+    const flush = () => new Promise((r) => setTimeout(r, 0));
+    const frame = (rows) => ['FD1 WINDS 311800 DATA BASED ON 311200Z', 'STN  3000  6000', ...rows].join('\n');
+    const near = (c, alt) => { const w = c.getNearestWind(35.2, -80.9, alt); return w && [w.station, w.dir, w.spd]; };
+
+    it('CLT 2714 at 3000, then CLT 9900 at 3000: CLT\'s old 270/14 is gone; the next station answers', async () => {
+        const c = client();
+        c._handleWinds(frame(['CLT  2714  2819+13', 'CAE  0910  1015+10']), Date.now());
+        await flush();
+        expect(near(c, 3000)).toEqual(['CLT', 270, 14]);
+        expect(near(c, 6000)).toEqual(['CLT', 280, 19]);
+
+        c._handleWinds(frame(['CLT  9900  9900+05']), Date.now());
+        await flush();
+        expect(c.winds.has('CLT:3000')).toBe(false);
+        expect(c.winds.has('CLT:6000')).toBe(false);
+        expect(near(c, 3000)).toEqual(['CAE', 90, 10]);
+        expect(near(c, 6000)).toEqual(['CAE', 100, 15]);
+    });
+
+    it('only station light and variable -> no wind at all; a junk group leaves the old wind alone', async () => {
+        const c = client();
+        c._handleWinds(frame(['CLT  2714  2819+13']), Date.now());
+        await flush();
+        c._handleWinds(frame(['CLT  9900  XXXX']), Date.now());
+        await flush();
+        expect(c.getNearestWind(35.2, -80.9, 3000)).toBeNull();
+        expect(near(c, 6000)).toEqual(['CLT', 280, 19]);   // unparseable, not light and variable: unchanged
+    });
+});
+
+/**
+ * Stratux text reports (b3nn0/stratux main/gen_gdl90.go registerADSBTextMessageReceived) are split on spaces:
+ * Type = x[0], Location = x[1], Time = x[2], Data = x[3:] joined with spaces. The station and the DDHHMMZ time
+ * are NOT in Data. The frames below are real decoded reports from Stratux's sample UAT logs (its uatparse),
+ * split exactly as Stratux sends them. Before the fix: winds stored 0, getNearestWind null; METARs had no
+ * observation time.
+ */
+const stratuxMsg = (m) => { const x = m.split(' '); return { Type: x[0], Location: x[1], Time: x[2], Data: x.slice(3).join(' ') }; };
+const WINDS_CAR = "WINDS CAR 071800Z  FT 3000 6000      9000   12000       18000   24000   30000    34000  39000                         \n   2630 2845+15 2945+10 2842+05 2838-07 2729-17 284032 284243 304756\n";
+// TRI is a high station: the 3000 column is absent from BOTH the FT header and the data row.
+const WINDS_TRI = "WINDS TRI 071800Z  FT      6000      9000   12000       18000   24000   30000    34000  39000                         \n        1205+15 1106+09 0809+03 1110-07 1308-17 161034 211544 071055\n";
+const METAR_KARR = "METAR KARR 062152Z 21012KT 7SM CLR 33/19 A3001 RMK AO2 SLP155 \n    T03280189=\n";
+
+describe('FisbClient winds: the Stratux WINDS frame (station = Location, report time = Time)', () => {
+    const COORDS = { KCAR: { lat: 46.87, lon: -68.02 }, KTRI: { lat: 36.48, lon: -82.41 } };
+    const client = () => new FisbClient(new EventTarget(), { getAirport: async (id) => COORDS[id] || null, getNavaid: async () => null });
+    const flush = () => new Promise((r) => setTimeout(r, 0));
+    const w = (c, key) => { const e = c.winds.get(key); return e ? [e.dir, e.spd, e.temp] : null; };
+
+    it('CAR, every level: each group under its altitude', async () => {
+        const c = client();
+        await c._handleWeather(stratuxMsg(WINDS_CAR));
+        await flush();
+        expect([...c.winds.keys()].filter((k) => k.startsWith('CAR:'))).toHaveLength(9);
+        expect(w(c, 'CAR:3000')).toEqual([260, 30, null]);
+        expect(w(c, 'CAR:6000')).toEqual([280, 45, 15]);
+        expect(w(c, 'CAR:9000')).toEqual([290, 45, 10]);
+        expect(w(c, 'CAR:12000')).toEqual([280, 42, 5]);
+        expect(w(c, 'CAR:39000').slice(0, 2)).toEqual([300, 47]);
+        const e = c.winds.get('CAR:6000');
+        expect(e.station).toBe('CAR');
+        expect(e.alt).toBe(6000);
+        expect(e.issued).toBe('071800Z');
+        expect(e.received_at).toBe(c.lastRxAt);       // receipt time, unchanged semantics
+    });
+
+    it('TRI, no 3000 column: 6000 is 120/05, not shifted to 3000', async () => {
+        const c = client();
+        await c._handleWeather(stratuxMsg(WINDS_TRI));
+        await flush();
+        expect(c.winds.has('TRI:3000')).toBe(false);
+        expect(w(c, 'TRI:6000')).toEqual([120, 5, 15]);
+        expect(w(c, 'TRI:9000')).toEqual([110, 6, 9]);
+        expect(w(c, 'TRI:12000')).toEqual([80, 9, 3]);
+        expect(w(c, 'TRI:39000').slice(0, 2)).toEqual([70, 10]);
+    });
+
+    it('a data row with fewer groups than the header is aligned from the right', async () => {
+        const c = client();
+        c._handleWinds(' FT 3000 6000 9000\n 1205+15 1106+09\n', Date.now(), 'TRI', '071800Z');
+        await flush();
+        expect(c.winds.has('TRI:3000')).toBe(false);
+        expect(w(c, 'TRI:6000')).toEqual([120, 5, 15]);
+        expect(w(c, 'TRI:9000')).toEqual([110, 6, 9]);
+        // more groups than altitudes cannot be placed: nothing stored
+        c._handleWinds(' FT 6000 9000\n 2630 2845+15 2945+10\n', Date.now(), 'CAR', '071800Z');
+        expect([...c.winds.keys()].some((k) => k.startsWith('CAR:'))).toBe(false);
+    });
+
+    it('getNearestWind returns them, with the station position from NASR', async () => {
+        const c = client();
+        await c._handleWeather(stratuxMsg(WINDS_CAR));
+        await c._handleWeather(stratuxMsg(WINDS_TRI));
+        await flush();
+        const near = c.getNearestWind(36.5, -82.4, 6000);
+        expect(near).toMatchObject({ station: 'TRI', alt: 6000, dir: 120, spd: 5, lat: 36.48, lon: -82.41, issued: '071800Z' });
+        expect(c.getNearestWind(46.9, -68.0, 3000)).toMatchObject({ station: 'CAR', alt: 3000, dir: 260, spd: 30 });
+        // no TRI 3000: the nearest station that has 3000 answers
+        expect(c.getNearestWind(36.5, -82.4, 3000)).toMatchObject({ station: 'CAR', alt: 3000 });
+    });
+
+    it('a later light-and-variable group (9900) deletes that station:alt entry', async () => {
+        const c = client();
+        await c._handleWeather(stratuxMsg(WINDS_CAR));
+        await flush();
+        const lv = WINDS_CAR.replace('   2630 2845+15', '   9900 9900+15');
+        await c._handleWeather(stratuxMsg(lv));
+        await flush();
+        expect(c.winds.has('CAR:3000')).toBe(false);
+        expect(c.winds.has('CAR:6000')).toBe(false);
+        expect(w(c, 'CAR:9000')).toEqual([290, 45, 10]);
+    });
+
+    it('no station (no Location) and no header: nothing stored, nothing thrown', async () => {
+        const c = client();
+        c._handleWinds(' FT 3000 6000\n 2630 2845+15\n', Date.now(), '', '');
+        c._handleWinds(' 2630 2845+15\n', Date.now(), 'CAR', '071800Z');
+        expect(c.winds.size).toBe(0);
+    });
+});
+
+describe('FisbClient METAR: the Stratux METAR frame (station and time are separate fields)', () => {
+    beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(Date.parse('2026-10-06T22:00:00Z')); });
+    afterEach(() => vi.useRealTimers());
+
+    it('the report is rebuilt as "KARR 062152Z ...": icao, observed_at and wind decoded', async () => {
+        const c = new FisbClient(new EventTarget(), null);
+        await c._handleWeather(stratuxMsg(METAR_KARR));
+        const e = c.getMetar('KARR');
+        expect(e).not.toBeNull();
+        expect(e.raw.startsWith('KARR 062152Z 21012KT 7SM CLR')).toBe(true);
+        expect(e.decoded.icao).toBe('KARR');
+        expect(e.decoded.observed_at).toBe('2026-10-06T21:52:00.000Z');
+        expect([e.decoded.wind_dir, e.decoded.wind_speed]).toEqual([210, 12]);
+    });
+
+    it('Data that already carries the station is left alone; no usable time adds the station only', () => {
+        expect(FisbClient.metarText('METAR KTBR 272055Z 24008KT', 'KTBR', '272055Z')).toBe('METAR KTBR 272055Z 24008KT');
+        expect(FisbClient.metarText('KTBR 272055Z 24008KT', 'KTBR', '')).toBe('KTBR 272055Z 24008KT');
+        expect(FisbClient.metarText('24008KT 10SM', 'KTBR', '')).toBe('KTBR 24008KT 10SM');
+        expect(FisbClient.metarText('24008KT 10SM', '', '272055Z')).toBe('24008KT 10SM');
+        expect(FisbClient.decodeMetar(FisbClient.metarText('24008KT 10SM', 'KTBR', '')).observed_at).toBeUndefined();
+    });
+});
+
+/**
+ * FD groups above 24,000 ft carry no sign: the temperature is always below zero (FAA FD format). '284032' is
+ * 280/40 at -32 C, not +32. Values are CAR's 30000 / 34000 / 39000 groups from the real WINDS frame above.
+ */
+describe('FisbClient.parseWindAloft: 6-digit groups above FL240 are below zero', () => {
+    it('CAR 284032 284243 304756 -> -32, -43, -56', () => {
+        expect(FisbClient.parseWindAloft('284032')).toEqual({ dir: 280, spd: 40, temp: -32 });
+        expect(FisbClient.parseWindAloft('284243')).toEqual({ dir: 280, spd: 42, temp: -43 });
+        expect(FisbClient.parseWindAloft('304756')).toEqual({ dir: 300, spd: 47, temp: -56 });
+    });
+
+    it('100 kt and over: 731558 -> 230/115 at -58', () => {
+        expect(FisbClient.parseWindAloft('731558')).toEqual({ dir: 230, spd: 115, temp: -58 });
+    });
+
+    it('4-digit and signed groups unchanged', () => {
+        expect(FisbClient.parseWindAloft('2630')).toEqual({ dir: 260, spd: 30, temp: null });
+        expect(FisbClient.parseWindAloft('2845+15')).toEqual({ dir: 280, spd: 45, temp: 15 });
+        expect(FisbClient.parseWindAloft('2729-17')).toEqual({ dir: 270, spd: 29, temp: -17 });
+    });
+
+    it('the stored CAR entries at 30000 / 34000 / 39000 are below zero', async () => {
+        const c = new FisbClient(new EventTarget(), null);
+        await c._handleWeather(stratuxMsg(WINDS_CAR));
+        expect(['CAR:30000', 'CAR:34000', 'CAR:39000'].map((k) => c.winds.get(k).temp)).toEqual([-32, -43, -56]);
+    });
+});
+
+/**
+ * TAF frames are split the same way as METARs (Type, Location = station, Time = DDHHMMZ issue time, Data = the
+ * rest), so the stored report had no "KXXX DDHHMMZ" head. No real Stratux TAF capture exists in the repo or the
+ * Stratux sample logs; this one is built from that split rule ("TAF KXXX DDHHMMZ <rest>").
+ */
+const TAF_KCLT = 'TAF KCLT 311720Z 3118/0124 22010KT P6SM SCT050 FM312200 24012G20KT P6SM BKN040 FM010300 25006KT P6SM SCT060';
+
+describe('FisbClient TAF: the Stratux TAF frame (station and time are separate fields)', () => {
+    it('the report is rebuilt as "KCLT 311720Z 3118/0124 ..." and stored under KCLT', async () => {
+        const c = new FisbClient(new EventTarget(), null);
+        const seen = [];
+        c.addEventListener('fisb:taf', (e) => seen.push(e.detail));
+        await c._handleWeather(stratuxMsg(TAF_KCLT));
+        const t = c.getTaf('KCLT');
+        expect(t).not.toBeNull();
+        expect(t.raw).toBe('KCLT 311720Z 3118/0124 22010KT P6SM SCT050 FM312200 24012G20KT P6SM BKN040 FM010300 25006KT P6SM SCT060');
+        expect(seen).toHaveLength(1);
+        expect(seen[0].icao).toBe('KCLT');
+        expect(seen[0].raw).toBe(t.raw);
+    });
+
+    it('the IndexedDB weather record gets the same full text, keeping the METAR', async () => {
+        const store = { KCLT: { metar: { raw: 'KCLT 311752Z 22010KT' } } };
+        const nasr = { getWeather: async (id) => store[id] || null, putWeather: async (id, wx) => { store[id] = wx; } };
+        const c = new FisbClient(new EventTarget(), nasr);
+        await c._handleWeather(stratuxMsg(TAF_KCLT));
+        await new Promise((r) => setTimeout(r, 0));
+        expect(store.KCLT.taf.raw.startsWith('KCLT 311720Z 3118/0124 22010KT')).toBe(true);
+        expect(store.KCLT.metar.raw).toBe('KCLT 311752Z 22010KT');
+    });
+
+    it('Data that already starts with the station (an old capture, "TAF KXXX ...") is left alone', async () => {
+        const c = new FisbClient(new EventTarget(), null);
+        await c._handleWeather({ Type: 'TAF', Location: 'KCLT', Time: '311720Z', Data: 'TAF KCLT 311720Z 3118/0124 22010KT' });
+        expect(c.getTaf('KCLT').raw).toBe('TAF KCLT 311720Z 3118/0124 22010KT');
+        await c._handleWeather({ Type: 'TAF', Location: 'KGSO', Time: '311720Z', Data: 'KGSO 311720Z 3118/0124 20008KT' });
+        expect(c.getTaf('KGSO').raw).toBe('KGSO 311720Z 3118/0124 20008KT');
+    });
+});
+
+/**
+ * Stratux counts both `x[0] == "TAF"` and `x[0] == "TAF.AMD"` as TAFs (gen_gdl90.go registerADSBTextMessageReceived)
+ * and sends Type = x[0], so an amended TAF arrives as Type "TAF.AMD". Built by the same split rule.
+ */
+const TAF_AMD_KCLT = 'TAF.AMD KCLT 311850Z 3119/0124 27015G25KT P6SM BKN035 FM010000 26008KT P6SM SCT050';
+
+describe('FisbClient TAF.AMD: an amended TAF is a TAF', () => {
+    it('stored under KCLT, replacing the earlier TAF, the text marked amended', async () => {
+        const c = new FisbClient(new EventTarget(), null);
+        const seen = [];
+        c.addEventListener('fisb:taf', (e) => seen.push(e.detail));
+        await c._handleWeather(stratuxMsg(TAF_KCLT));
+        await c._handleWeather(stratuxMsg(TAF_AMD_KCLT));
+        const t = c.getTaf('KCLT');
+        expect(t.raw).toBe('TAF AMD KCLT 311850Z 3119/0124 27015G25KT P6SM BKN035 FM010000 26008KT P6SM SCT050');
+        expect(c.tafs.size).toBe(1);
+        expect(seen.map((d) => d.icao)).toEqual(['KCLT', 'KCLT']);
+    });
+
+    it('Data already carrying the head is left alone', async () => {
+        const c = new FisbClient(new EventTarget(), null);
+        await c._handleWeather({ Type: 'TAF.AMD', Location: 'KCLT', Time: '311850Z', Data: 'TAF AMD KCLT 311850Z 3119/0124 27015G25KT' });
+        expect(c.getTaf('KCLT').raw).toBe('TAF AMD KCLT 311850Z 3119/0124 27015G25KT');
+    });
+});

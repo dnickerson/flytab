@@ -158,6 +158,9 @@ class StratuxClient extends EventTarget {
         this.traffic = new Map();
         // Latest situation data
         this.situation = null;
+        // Last WebSocket situation only: true GPS MSL from one source (GDL 90 situations carry the
+        // height above the ellipsoid as alt_msl). Read by the engine-out glide panel.
+        this.wsSituation = null;
         // Device status from /getStatus, and when it last arrived (ms; 0 = never)
         this.deviceStatus = null;
         this.deviceStatusAt = 0;
@@ -546,7 +549,9 @@ class StratuxClient extends EventTarget {
             alt_baro: msg.BaroPressureAltitude,
             ground_speed: msg.GPSGroundSpeed,
             true_course: msg.GPSTrueCourse,
-            vertical_speed: msg.GPSVerticalSpeed,
+            // ft/min everywhere: Stratux's /situation GPSVerticalSpeed is ft/s (gps.go SituationData);
+            // the GDL 90 plugin already reports ft/min.
+            vertical_speed: (transport === 'ws' && Number.isFinite(msg.GPSVerticalSpeed)) ? msg.GPSVerticalSpeed * 60 : msg.GPSVerticalSpeed,
             gps_fix_quality: fixQuality,
             gps_sats: sats,
             gps_sats_seen: satsSeen,
@@ -557,6 +562,7 @@ class StratuxClient extends EventTarget {
             g_load_max: msg.AHRSGLoadMax,
             timestamp: now,
         };
+        if (transport === 'ws') this.wsSituation = this.situation;
         if (typeof DiagLog !== 'undefined') {
             if (prevQuality === undefined) {
                 DiagLog.log('stratux', `First situation: fix=${fixQuality} lat=${msg.GPSLatitude} lon=${msg.GPSLongitude} sats=${sats}/${satsSeen}`);

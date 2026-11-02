@@ -21,6 +21,7 @@ class AirportPopup {
         this._onFisbMetar = null;
         this._onInternetMetarBound = null;
         this._getRouteAirports = null;  // callback: () => { departure, destination }
+        this._glide = null;             // GlidePanel: live engine-out glide block (glide-panel.js)
     }
 
     /** Set callback that returns { departure, destination } waypoints from the active plan */
@@ -132,6 +133,7 @@ class AirportPopup {
 
     _showPanel(airport, wx) {
         if (!this._panel) return;
+        this._stopGlide();
 
         this._panel.innerHTML = this._buildTopNavHtml(airport.icao) + this._buildPanelHtml(airport, wx);
         this._panel.classList.add('open');
@@ -246,6 +248,30 @@ class AirportPopup {
                 }
             });
         });
+
+        // Engine-out glide block right under the header (shows itself only in flight with a GPS fix).
+        // Guarded: a glide error must never stop the airport panel from opening.
+        try {
+            if (typeof GlidePanel !== 'undefined') {
+                const host = document.createElement('div');
+                host.className = 'glide-host';
+                const header = this._panel.querySelector('.apt-panel-header');
+                if (header) header.after(host); else this._panel.prepend(host);
+                this._glide = new GlidePanel(host, airport);
+                this._glide.start();
+            }
+        } catch (err) {
+            console.warn('AirportPopup: glide block failed', err);
+            this._stopGlide();
+        }
+    }
+
+    /** Stop the glide block (timer + map line). Guarded: never throws into the panel code. */
+    _stopGlide() {
+        const g = this._glide;
+        this._glide = null;
+        if (!g) return;
+        try { g.stop(); } catch (err) { console.warn('AirportPopup: glide stop failed', err); }
     }
 
     _buildTopNavHtml(activeIcao) {
@@ -289,6 +315,7 @@ class AirportPopup {
 
     _showSearchPanel() {
         if (!this._panel) return;
+        this._stopGlide();
         this._panel.innerHTML = `
             <div class="apt-top-nav">
                 <span class="apt-topnav-spacer"></span>
@@ -655,6 +682,7 @@ class AirportPopup {
 
     _showOfflineStub(icao, latlng) {
         if (!this._panel) return;
+        this._stopGlide();
         const lat = latlng?.[0]?.toFixed(4) ?? '—';
         const lon = latlng?.[1]?.toFixed(4) ?? '—';
         this._panel.innerHTML = `
@@ -752,6 +780,7 @@ class AirportPopup {
             this._panel.classList.remove('open');
             this._panelOpen = false;
         }
+        this._stopGlide();
         this._stopFisbListener();
         this._stopInternetMetarListener();
     }

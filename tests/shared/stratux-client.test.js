@@ -106,6 +106,42 @@ describe('StratuxClient._handleSituation', () => {
 
         expect(client.situation).toBeNull();
     });
+
+    // Stratux (b3nn0/stratux main/gps.go, SituationData): "GPSVerticalSpeed float32 // GPS
+    // vertical velocity, feet per second". The GDL 90 plugin (StratuxUdpPlugin.java) already
+    // reports the ownship vertical velocity in ft/min (64 fpm units). situation.vertical_speed
+    // is ft/min for every source (gps-source.js, emergency-glide.js, the glide panel).
+    it('vertical_speed is ft/min: the WebSocket ft/s is converted, GDL 90 fpm is kept', () => {
+        client._suppressGpsSituation = false;
+        client._handleSituation({ ...SITUATION, GPSVerticalSpeed: -10 });
+        expect(client.situation.vertical_speed).toBe(-600);
+        client._handleSituation({ ...SITUATION, GPSVerticalSpeed: -640 }, 'gdl90');
+        expect(client.situation.vertical_speed).toBe(-640);
+        // absent (GDL 90 "no information") stays absent, never NaN
+        const { GPSVerticalSpeed, ...noVs } = SITUATION;
+        client._handleSituation(noVs, 'gdl90');
+        expect(client.situation.vertical_speed).toBeUndefined();
+        client._handleSituation(noVs);
+        expect(client.situation.vertical_speed).toBeUndefined();
+    });
+
+    // GDL 90 situations carry the height above the ellipsoid as GPSAltitudeMSL (Ownship Geometric
+    // Altitude, from Stratux's GPSHeightAboveEllipsoid); the WebSocket carries true MSL. wsSituation
+    // keeps the last WebSocket situation for consumers that need true MSL from one source.
+    it('wsSituation: set by a WS situation, left alone by a following GDL 90 one', () => {
+        client._suppressGpsSituation = false;
+        expect(client.wsSituation).toBeNull();
+        client._handleSituation({ ...SITUATION, GPSAltitudeMSL: 5000 });
+        const ws = client.situation;
+        expect(client.wsSituation).toBe(ws);
+        client._handleSituation({ ...SITUATION, GPSAltitudeMSL: 4900 }, 'gdl90');
+        expect(client.situation.alt_msl).toBe(4900);
+        expect(client.wsSituation).toBe(ws);
+        expect(client.wsSituation.alt_msl).toBe(5000);
+        client._handleSituation({ ...SITUATION, GPSAltitudeMSL: 5010 }, 'ws');
+        expect(client.wsSituation).toBe(client.situation);
+        expect(client.wsSituation.alt_msl).toBe(5010);
+    });
 });
 
 // ---------------------------------------------------------------------------

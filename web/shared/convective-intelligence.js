@@ -1,7 +1,7 @@
 /**
  * FlyTab — Convective Intelligence Engine
  * Scores NEXRAD returns for convective potential, computes hazard boundaries,
- * evaluates route alerts, monitors OAT trends, detects wind convergence.
+ * evaluates route alerts, monitors OAT trends. (detectWindConvergence is kept but raises no alert.)
  *
  * EXPERIMENTAL — NOT FOR NAVIGATION.
  * Decision-support only. Does not replace ATC advisories or pilot judgment.
@@ -447,6 +447,7 @@ class OATTrendMonitor {
 
 /**
  * Compare GPS-derived winds to FIS-B winds aloft to detect convergence.
+ * NOT USED for alerts: it compares ground speed / course, not a wind estimate (see _runAnalysis).
  * @param {{ ground_speed: number, true_course: number }|null} situation  - Stratux situation
  * @param {{ dir: number, spd: number }|null} forecastWind  - from fisbClient.getNearestWind()
  * @returns {{ speedDeltaKts: number, directionDeltaDeg: number, convergenceScore: number } | null}
@@ -572,24 +573,10 @@ class ConvectiveIntelligenceEngine {
                 ? evaluateRouteAlerts(analysis, aircraft)
                 : [];
 
-            let convergenceSignal = null;
-            if (aircraft) {
-                const forecastWind = this._fisb.getNearestWind(
-                    aircraft.lat, aircraft.lon,
-                    sit?.alt_baro ?? 3000
-                );
-                if (forecastWind) convergenceSignal = detectWindConvergence(sit, forecastWind);
-            }
-
+            // No wind-convergence alert: detectWindConvergence() compares GPS ground speed / course with the
+            // forecast wind speed / direction, which is meaningless; it needs a real GPS-derived wind estimate
+            // (TAS and heading against ground speed and track) before it can compare (review 2026-10-31).
             const oatResult = this._oatMonitor.analyze();
-
-            if (convergenceSignal?.convergenceScore > 0.7) {
-                routeAlerts.push({
-                    level: 2,
-                    message: `Wind deviation ${Math.round(convergenceSignal.speedDeltaKts)}kt/${Math.round(convergenceSignal.directionDeltaDeg)}° — possible convergence boundary`,
-                    voice: false,
-                });
-            }
 
             this._alerts.showAlerts(routeAlerts, oatResult?.signals ?? null);
         }

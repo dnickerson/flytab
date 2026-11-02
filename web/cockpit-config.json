@@ -134,6 +134,22 @@
     "autoRotateTrackUp": false,
     "preloadRoutePlates": true
   },
+  "engineOutGlide": {
+    "turnBankDeg": 30,
+    "marginFt": 200,
+    "lineUpFtPerDeg": 1.5,
+    "finalPointFraction": 0.25,
+    "finalPointMinFt": 500,
+    "finalPointMaxFt": 1000,
+    "noWindHeadwindKt": 10,
+    "planBHysteresisFt": 100,
+    "onCourseDeg": 5,
+    "windMaxStationNm": 100,
+    "windMaxAgeMin": 360,
+    "metarMaxAgeMin": 75,
+    "metarMaxStationNm": 10,
+    "showAboveGsKt": 25
+  },
   "ifr": {
     "showCdPhone": true,
     "defaultCdPhone": "1-888-766-8267",

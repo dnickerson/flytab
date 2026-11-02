@@ -128,6 +128,7 @@ class RoutePlannerPanel {
         this._fetchingWinds = false;
         this._windsPromise  = null;     // pending _applyWindsToLastPlan() call
         this._lastWinds     = null;     // most recently fetched winds data
+        this._lastWindsAt   = null;     // Date.now() when _lastWinds was set (null with no winds)
         this._windWarnings  = [];
         this._optTableEl    = null;     // optimizer table container div
         this._lastMos       = null;     // MOS data for mixing height (Feature C)
@@ -2675,6 +2676,7 @@ class RoutePlannerPanel {
         } catch (_) {}
         this._fetchingWinds = false;
         this._lastWinds = opts.winds ?? null;
+        this._lastWindsAt = this._lastWinds ? Date.now() : null;   // GlideInputs judges the winds' age by this
         // Build plan copy with per-fix altitude overrides from _route pills so
         // we never mutate the cached _lastPlan object (fragile shared reference).
         const routeAltMap = new Map(

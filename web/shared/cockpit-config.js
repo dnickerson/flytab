@@ -95,6 +95,23 @@ class CockpitConfig {
             autoRotateTrackUp: false,
             preloadRoutePlates: true,
         },
+        // Engine-out glide panel (GlideModel.DEFAULTS.pilot holds the same values; a test keeps them equal).
+        engineOutGlide: {
+            turnBankDeg: 30,
+            marginFt: 200,
+            lineUpFtPerDeg: 1.5,
+            finalPointFraction: 0.25,
+            finalPointMinFt: 500,
+            finalPointMaxFt: 1000,
+            noWindHeadwindKt: 10,
+            planBHysteresisFt: 100,
+            onCourseDeg: 5,
+            windMaxStationNm: 100,
+            windMaxAgeMin: 360,
+            metarMaxAgeMin: 75,
+            metarMaxStationNm: 10,
+            showAboveGsKt: 25,
+        },
         takeoffAlerts: {
             showDmms: true,
             dmmsDisplayUntilAglFt: 1000,
@@ -176,6 +193,9 @@ class CockpitConfig {
             dmms_factor: 1.404,
             fuel_capacity_gal: 50,
             min_runway_ft: 2500,
+            glide_ias_kt: 65,                 // engine-out glide (GlideModel.DEFAULTS.aircraft)
+            glide_sink_fpm: 700,
+            glide_density_pct_per_kft: 2,
         },
     };
 
