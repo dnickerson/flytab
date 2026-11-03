@@ -305,7 +305,7 @@ class AirportPopup {
 
         // ENGINE OUT button under the close button: turns the glide block (and its map line) on / off
         // for every airport. It works for an airport that can never have a block too (heliport, no
-        // elevation): it only changes the choice then.
+        // elevation): the block area then says "not available for this airport".
         const glideBtn = this._panel.querySelector('.apt-glide-toggle');
         if (glideBtn) {
             wireTap(glideBtn, () => {
@@ -328,7 +328,8 @@ class AirportPopup {
 
     /**
      * Mount and start the engine-out glide block right under the header. It shows itself whenever the
-     * Stratux WebSocket has a fresh 3D fix (on the ground too) - GlidePanel / GlideInputs decide.
+     * Stratux WebSocket has a fresh 3D fix (on the ground too) - GlidePanel / GlideInputs decide; until
+     * then GlidePanel shows one status line saying why (no GPS, waiting for a 3D fix, ...).
      * Guarded: a glide error must never stop the airport panel from opening.
      */
     _startGlide(airport) {

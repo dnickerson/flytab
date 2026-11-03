@@ -261,6 +261,71 @@ describe('GlideInputs.aircraft', () => {
     });
 });
 
+// ---------- aircraftStatus() ----------
+describe('GlideInputs.aircraftStatus', () => {
+    const REF = { lat: 34.722904, lon: -80.85459 };
+    const sit = (over = {}) => ({
+        lat: 34.80, lon: -80.95, alt_msl: 4500, alt_baro: 9999, ground_speed: 85, true_course: 123,
+        vertical_speed: -700, gps_fix_quality: 1, timestamp: NOW - 1000, ...over,
+    });
+    const st = (s, S = settings()) => GlideInputs.aircraftStatus(s, S, NOW);
+
+    it('names why aircraft() gives no state', () => {
+        expect(st(null)).toBe('nogps');
+        expect(st(undefined)).toBe('nogps');
+        expect(st(sit({ timestamp: NOW - 5001 }))).toBe('stale');
+        expect(st(sit({ timestamp: undefined }))).toBe('stale');
+        expect(st(sit({ timestamp: NOW - 60000, gps_fix_quality: 0 }))).toBe('stale');   // stale wins over no fix
+        expect(st(sit({ timestamp: NOW - 5000 }))).toBe('ok');
+        expect(st(sit({ gps_fix_quality: 0 }))).toBe('nofix');
+        expect(st(sit({ gps_fix_quality: 6 }))).toBe('nofix');
+        expect(st(sit({ gps_3d: false }))).toBe('nofix');
+        expect(st(sit({ lat: 0, lon: 0 }))).toBe('nofix');
+        expect(st(sit({ alt_msl: null }))).toBe('nodata');
+        expect(st(sit({ true_course: undefined }))).toBe('nodata');
+        expect(st(sit({ ground_speed: undefined }))).toBe('nodata');
+        expect(st(sit({ ground_speed: 24.9 }))).toBe('slow');
+        expect(st(sit({ ground_speed: 0 }), settings({ pilot: { showAboveGsKt: 0 } }))).toBe('ok');
+        expect(st(sit())).toBe('ok');
+    });
+
+    it('aircraft() is unchanged: same result as the pre-aircraftStatus implementation on every case', () => {
+        // The aircraft() body before aircraftStatus() existed (v12.58), kept here as the reference.
+        const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
+        const isLL = (lat, lon) => isNum(lat) && isNum(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
+        const oldAircraft = (s, S_, ref, now) => {
+            if (!s || !ref || !isLL(ref.lat, ref.lon)) return null;
+            if (!GpsFix.has3DFix(s)) return null;
+            if (!isNum(s.timestamp) || now - s.timestamp > GlideInputs.SIT_MAX_AGE_MS) return null;
+            const S = GlideInputs.validate(S_);
+            if (!isNum(s.ground_speed) || s.ground_speed < S.pilot.showAboveGsKt) return null;
+            if (!isNum(s.alt_msl) || !isNum(s.true_course)) return null;
+            return {
+                pos: GlideModel.toLocal(ref.lat, ref.lon, s.lat, s.lon), altMsl: s.alt_msl, gs: s.ground_speed,
+                trkTrue: ((s.true_course % 360) + 360) % 360, vs: isNum(s.vertical_speed) ? s.vertical_speed : null,
+            };
+        };
+        const sits = [null, undefined, sit()];
+        const variants = [
+            { gps_fix_quality: 0 }, { gps_fix_quality: 2 }, { gps_fix_quality: 6 }, { gps_fix_quality: '1' },
+            { gps_3d: false }, { gps_3d: true }, { lat: 0, lon: 0 }, { lat: NaN }, { lat: 91 },
+            { timestamp: NOW - 5000 }, { timestamp: NOW - 5001 }, { timestamp: NOW + 9000 }, { timestamp: undefined },
+            { timestamp: '123' }, { ground_speed: 0 }, { ground_speed: 24.9 }, { ground_speed: 25 }, { ground_speed: null },
+            { ground_speed: '85' }, { alt_msl: null }, { alt_msl: Infinity }, { true_course: null }, { true_course: -10 },
+            { true_course: 725 }, { vertical_speed: undefined }, { gps_fix_quality: 0, timestamp: NOW - 9000 },
+        ];
+        for (const v of variants) sits.push(sit(v));
+        const settingsList = [settings(), settings({ pilot: { showAboveGsKt: 0 } }), settings({ pilot: { showAboveGsKt: 75 } }), undefined];
+        const refs = [REF, null, { lat: NaN, lon: 0 }, { lat: 95, lon: 0 }];
+        let n = 0;
+        for (const s of sits) for (const S of settingsList) for (const ref of refs) for (const now of [NOW, NOW + 4500]) {
+            expect(GlideInputs.aircraft(s, S, ref, now)).toEqual(oldAircraft(s, S, ref, now));
+            n++;
+        }
+        expect(n).toBeGreaterThan(800);
+    });
+});
+
 // ---------- glideWind() ----------
 describe('GlideInputs.glideWind', () => {
     const LAT = 34.72, LON = -80.85;

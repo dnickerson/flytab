@@ -12,7 +12,10 @@
  *
  * Position and altitude come from StratuxClient.wsSituation (the Stratux WebSocket: true GPS MSL).
  * No block (and no line) without a 3D GPS fix, with a situation older than 5 s, for a heliport /
- * seaplane base, or when the airport has no elevation or position: GlideInputs decides. There is no
+ * seaplane base, or when the airport has no elevation or position: GlideInputs decides. Instead of
+ * the block, while started, one status line says why (GlidePanel.STATUS, never a number, never a
+ * verdict colour): no GPS / no GPS altitude from the Stratux / waiting for a 3D GPS fix / not
+ * available for this airport / glide check unavailable. Only stop() (ENGINE OUT off, panel closed) empties the host. There is no
  * ground-speed gate here (the pilot turns the block on / off with ENGINE OUT), so it shows on the
  * ground too: aircraft() gets the settings with showAboveGsKt 0 (GlidePanel.noGsGate). EmergencyGlide
  * still passes the configured showAboveGsKt.
@@ -29,6 +32,7 @@ class GlidePanel {
      */
     constructor(containerEl, airportRec) {
         this._el = containerEl;
+        this._statusKey = null;        // the status line on screen (GlidePanel.STATUS key), null when none
         this._rec = airportRec || null;
         this._timer = null;
         this._windTimer = null;
@@ -79,7 +83,7 @@ class GlidePanel {
         try { this.render(Date.now()); } catch (err) {
             // never leave frozen numbers on screen
             console.warn('GlidePanel: update failed', err);
-            this._hide();
+            this._status('unavailable');
         }
     }
 
@@ -102,25 +106,36 @@ class GlidePanel {
             if (gen === this._gen) {
                 console.warn('GlidePanel: runway wind update failed', err);
                 this._rwy = { wind: { kind: 'none' }, label: '' };
-                this._hide();                                   // never leave frozen numbers on screen
+                this._status('unavailable');                    // never leave frozen numbers on screen
             }
         } finally {
             if (gen === this._gen) this._windBusy = false;
         }
     }
 
-    /** One update: compute the plan for `now` and draw the block and the map line, or hide both. */
+    /**
+     * One update: compute the plan for `now` and draw the block and the map line; when there is no plan,
+     * remove the line and show the status line saying why (returns null then).
+     */
     render(now = Date.now()) {
         if (!this._apt) { this._S = GlideInputs.settings(); this._apt = GlideInputs.airport(this._rec, this._S); }
-        if (!this._usable()) return this._hide();
+        if (!this._usable()) return this._status('airport');
         const S = this._S, apt = this._apt, ref = apt.refLatLon;
         // The last WebSocket situation only: its alt_msl is true GPS MSL, from one source. A GDL 90 situation
         // carries the height above the ellipsoid as alt_msl (Stratux's Ownship Geometric Altitude), so it is
         // never used here; with no fresh WebSocket situation there is no block (err high).
-        const sit = (typeof window !== 'undefined' && window.app && window.app.stratuxClient)
-            ? window.app.stratuxClient.wsSituation : null;
-        const ac = GlideInputs.aircraft(sit, GlidePanel.noGsGate(S), ref, now);
-        if (!ac) { this._vsSamples = []; return this._hide(); }
+        const sc = (typeof window !== 'undefined' && window.app && window.app.stratuxClient) || null;
+        const sit = sc ? sc.wsSituation : null;
+        const gated = GlidePanel.noGsGate(S);
+        const ac = GlideInputs.aircraft(sit, gated, ref, now);
+        if (!ac) {
+            this._vsSamples = [];
+            let key = GlidePanel._statusFor(GlideInputs.aircraftStatus(sit, gated, now));
+            // No fresh WebSocket situation, but the Stratux's own latest situation (GDL 90) is a fresh 3D fix:
+            // own-ship is on the map, only the WebSocket's GPS MSL altitude is missing.
+            if (key === 'nogps' && GlidePanel._stratuxFixWithoutWs(sc && sc.situation, now)) key = 'noalt';
+            return this._status(key);
+        }
         // MEASURED: the descent rate from GPS altitude. situation.vertical_speed is not used: Stratux never
         // fills GPSVerticalSpeed (WebSocket 0), GDL 90 sends none, the engine-GPS bridge sends 0.
         ac.vs = this._measuredVs(sit.timestamp, ac.altMsl);
@@ -132,13 +147,14 @@ class GlidePanel {
         const nums = [plan.spare, plan.needMsl, plan.hdgTrue, plan.legNm, plan.target, plan.projected,
             plan.targetNow, plan.turnNow];
         if (!nums.every(Number.isFinite) || !plan.pt || !Number.isFinite(plan.pt.x) || !Number.isFinite(plan.pt.y)) {
-            return this._hide();
+            return this._status('unavailable');
         }
         this._preferDirect = plan.kind !== 'final';
 
         const view = this._view(plan, sit, gw);
         this._el.innerHTML = view.html;
         this._el.hidden = false;
+        this._statusKey = null;
         this._drawMap(plan, sit, view.tone);
         return plan;
     }
@@ -294,14 +310,53 @@ class GlidePanel {
         for (const k of ['leg', 'ring', 'final']) this._lines[k].setStyle({ color });
     }
 
+    /**
+     * No glide numbers can be shown: remove the map line and show one status line instead of the block
+     * (GlidePanel.STATUS[key]; neutral colours, no numbers). The DOM is only rewritten when the reason changes.
+     * Returns null (no plan).
+     */
+    _status(key) {
+        this._removeMap();
+        const msg = GlidePanel.STATUS[key] || GlidePanel.STATUS.unavailable;
+        if (this._el && (this._statusKey !== key || this._el.hidden || !this._el.querySelector('.glide-status'))) {
+            this._el.innerHTML = `<div class="glide-status" role="status" data-reason="${GlidePanel._esc(key)}">`
+                + `ENGINE OUT · ${GlidePanel._esc(msg)}</div>`;
+            this._el.hidden = false;
+        }
+        this._statusKey = key;
+        return null;
+    }
+
+    /** Empty and hide the host and remove the map line (stop(): ENGINE OUT off / panel closed). */
     _hide() {
         if (this._el) { this._el.innerHTML = ''; this._el.hidden = true; }
+        this._statusKey = null;
+        this._removeMap();
+        return null;
+    }
+
+    _removeMap() {
         if (this._layer) {
             try { this._layer.remove(); } catch (_) { /* map gone */ }
             this._layer = null;
             this._lines = null;
         }
-        return null;
+    }
+
+    /**
+     * A situation from the Stratux itself (no _source: not the engine-GPS bridge or device GPS), no older
+     * than GlideInputs.SIT_MAX_AGE_MS, with a 3D fix - the GDL 90-only case when the WebSocket one is missing.
+     */
+    static _stratuxFixWithoutWs(s, now) {
+        return !!s && !s._source && Number.isFinite(s.timestamp) && now - s.timestamp <= GlideInputs.SIT_MAX_AGE_MS
+            && GpsFix.has3DFix(s);
+    }
+
+    /** GlideInputs.aircraftStatus() reason -> GlidePanel.STATUS key. */
+    static _statusFor(reason) {
+        if (reason === 'nogps' || reason === 'stale') return 'nogps';
+        if (reason === 'nofix') return 'nofix';
+        return 'unavailable';                // 'nodata', 'slow' (never with noGsGate), or 'ok' with a bad reference
     }
 
     // ---- Helpers ----------------------------------------------------------
@@ -328,6 +383,22 @@ class GlidePanel {
     }
 }
 
+/**
+ * The status line shown, after "ENGINE OUT · ", while started with no glide numbers to show:
+ *   nogps       no Stratux WebSocket situation, or none for GlideInputs.SIT_MAX_AGE_MS
+ *   noalt       as nogps, but the Stratux's GDL 90 situation is a fresh 3D fix (own-ship on the map; the
+ *               glide check needs the WebSocket's GPS MSL altitude, GDL 90's is height above the ellipsoid)
+ *   nofix       situations arriving, but no 3D GPS fix
+ *   airport     heliport / seaplane base, or no field elevation / reference position
+ *   unavailable the model gave a non-finite plan, the update failed, or the fix lacks altitude / track / speed
+ */
+GlidePanel.STATUS = Object.freeze({
+    nogps: 'no GPS — needs the Stratux GPS over WiFi',
+    noalt: 'no GPS altitude from the Stratux',
+    nofix: 'waiting for a 3D GPS fix',
+    airport: 'not available for this airport',
+    unavailable: 'glide check unavailable',
+});
 /** Model update period while the panel is open (ms). */
 GlidePanel.UPDATE_MS = 1000;
 /** Runway (METAR) wind re-read period (ms); the reads never overlap. */

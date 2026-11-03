@@ -5,6 +5,7 @@
  *   settings()   aircraft performance + pilot section, validated, defaults from GlideModel.DEFAULTS
  *   airport()    NASR airport record -> model airport (candidate runways, per-end geometry)
  *   aircraft()   Stratux situation -> model aircraft state, or null (no block)
+ *   aircraftStatus() why aircraft() gives none: 'nogps' | 'stale' | 'nofix' | 'nodata' | 'slow' | 'ok'
  *   glideWind()  winds aloft at the aircraft: FIS-B, else the route planner's downloaded winds
  *   runwayWind() the wind to land in: the airport's METAR (FIS-B, else the panel's internet one, else the cached
  *                one), else the nearest station
@@ -267,11 +268,7 @@ const GlideInputs = (() => {
      */
     function aircraft(sit, settings_, refLatLon, now = Date.now()) {
         if (!sit || !refLatLon || !isLL(refLatLon.lat, refLatLon.lon)) return null;
-        if (!GpsFix.has3DFix(sit)) return null;
-        if (!isNum(sit.timestamp) || now - sit.timestamp > SIT_MAX_AGE_MS) return null;
-        const S = validate(settings_);
-        if (!isNum(sit.ground_speed) || sit.ground_speed < S.pilot.showAboveGsKt) return null;
-        if (!isNum(sit.alt_msl) || !isNum(sit.true_course)) return null;
+        if (aircraftStatus(sit, settings_, now) !== 'ok') return null;
         return {
             pos: GlideModel.toLocal(refLatLon.lat, refLatLon.lon, sit.lat, sit.lon),
             altMsl: sit.alt_msl,
@@ -279,6 +276,26 @@ const GlideInputs = (() => {
             trkTrue: norm360(sit.true_course),
             vs: isNum(sit.vertical_speed) ? sit.vertical_speed : null,   // pass-through; the panel uses its GPS-altitude rate
         };
+    }
+
+    /**
+     * Why aircraft() would give no state for this situation (the airport reference aside) - the same checks:
+     *   'nogps'  no situation at all
+     *   'stale'  no finite timestamp, or older than SIT_MAX_AGE_MS
+     *   'nofix'  fresh, but not a 3D GPS solution (GpsFix.has3DFix)
+     *   'nodata' a 3D fix, but ground_speed, alt_msl or true_course missing
+     *   'slow'   below showAboveGsKt
+     *   'ok'     aircraft() gives a state (with a valid refLatLon)
+     * aircraft() returns null exactly when this is not 'ok' (or the reference point is unusable).
+     */
+    function aircraftStatus(sit, settings_, now = Date.now()) {
+        if (!sit) return 'nogps';
+        if (!isNum(sit.timestamp) || now - sit.timestamp > SIT_MAX_AGE_MS) return 'stale';
+        if (!GpsFix.has3DFix(sit)) return 'nofix';
+        if (!isNum(sit.ground_speed) || !isNum(sit.alt_msl) || !isNum(sit.true_course)) return 'nodata';
+        const S = validate(settings_);
+        if (sit.ground_speed < S.pilot.showAboveGsKt) return 'slow';
+        return 'ok';
     }
 
     // ---- Winds aloft (the glide leg) ---------------------------------------
@@ -479,7 +496,7 @@ const GlideInputs = (() => {
     }
 
     return {
-        SIT_MAX_AGE_MS, settings, validate, airport, aircraft, glideWind, runwayWind,
+        SIT_MAX_AGE_MS, settings, validate, airport, aircraft, aircraftStatus, glideWind, runwayWind,
         _resetCaches() { stationCoords.clear(); },
     };
 })();
