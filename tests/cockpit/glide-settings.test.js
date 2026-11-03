@@ -22,6 +22,9 @@ const COCKPIT = JSON.parse(read('web/cockpit-config.json'));
 const D = GlideModel.DEFAULTS;
 const AC_KEYS = ['glide_ias_kt', 'glide_sink_fpm', 'glide_density_pct_per_kft'];
 const PILOT_KEYS = Object.keys(D.pilot);
+// showAboveGsKt has no Configuration field any more (the airport panel's ENGINE OUT button shows / hides
+// the glide block); the key and its 25 kt default stay for EmergencyGlide.
+const EDITOR_PILOT_KEYS = PILOT_KEYS.filter((k) => k !== 'showAboveGsKt');
 
 function serveBundles() {
     globalThis.fetch = vi.fn((url) => Promise.resolve({
@@ -195,7 +198,7 @@ describe('Configuration shows every glide field and saves it', () => {
     }
     const field = (ed, section, key) => ed._el.querySelector(`#ce-${section}-${key}`);
 
-    it('renders the three aircraft fields (with the brief labels) and every pilot key; glide_ratio is gone', async () => {
+    it('renders the three aircraft fields (with the brief labels) and every pilot key but showAboveGsKt; glide_ratio is gone', async () => {
         const ed = await openEditor();
         const labelOf = (el) => el.closest('.ce-field-row').textContent;
         expect(field(ed, 'aircraft', 'glide_ias_kt').value).toBe('65');
@@ -207,12 +210,24 @@ describe('Configuration shows every glide field and saves it', () => {
         expect(field(ed, 'aircraft', 'glide_ratio')).toBeNull();
         expect(ed._el.querySelector('.ds-card-title')).not.toBeNull();
         expect([...ed._el.querySelectorAll('.ds-card-title')].map((e) => e.textContent)).toContain('Engine-Out Glide');
-        for (const k of PILOT_KEYS) {
+        for (const k of EDITOR_PILOT_KEYS) {
             const el = field(ed, 'engineOutGlide', k);
             expect(el, k).not.toBeNull();
             expect(el.value, k).toBe(String(D.pilot[k]));
             expect(el.closest('.ce-field-row').textContent.trim().length, k).toBeGreaterThan(8);
         }
+        expect(field(ed, 'engineOutGlide', 'showAboveGsKt')).toBeNull();
+        expect(ed._el.textContent).not.toContain('Show Glide Block Above Ground Speed');
+    });
+
+    it('a showAboveGsKt saved before the field was removed survives a save (EmergencyGlide still reads it)', async () => {
+        localStorage.setItem('flypi_user_cockpit', JSON.stringify({ engineOutGlide: { showAboveGsKt: 40 } }));
+        const ed = await openEditor();
+        field(ed, 'engineOutGlide', 'turnBankDeg').value = '25';
+        await ed._save();
+        const ck = JSON.parse(localStorage.getItem('flypi_user_cockpit'));
+        expect(ck.engineOutGlide.showAboveGsKt).toBe(40);
+        expect(GlideInputs.settings().pilot.showAboveGsKt).toBe(40);
     });
 
     it('pilot bank 25 and aircraft sink 650 save as NUMBERS to the right keys and reach settings()', async () => {
@@ -240,12 +255,12 @@ describe('Configuration shows every glide field and saves it', () => {
     it('whatever is in storage after a save, every stored glide value is a number', async () => {
         const ed = await openEditor();
         for (const k of AC_KEYS) field(ed, 'aircraft', k).value = String(D.aircraft[k] + 1);
-        for (const k of PILOT_KEYS) field(ed, 'engineOutGlide', k).value = String(D.pilot[k] + 1);
+        for (const k of EDITOR_PILOT_KEYS) field(ed, 'engineOutGlide', k).value = String(D.pilot[k] + 1);
         await ed._save();
         const ac = JSON.parse(localStorage.getItem('flypi_user_aircraft')).performance;
         const ck = JSON.parse(localStorage.getItem('flypi_user_cockpit')).engineOutGlide;
         for (const k of AC_KEYS) expect(ac[k], k).toBe(D.aircraft[k] + 1);
-        for (const k of PILOT_KEYS) expect(ck[k], k).toBe(D.pilot[k] + 1);
+        for (const k of EDITOR_PILOT_KEYS) expect(ck[k], k).toBe(D.pilot[k] + 1);
     });
 
     it('a cleared field saves null and settings() falls back to the default', async () => {

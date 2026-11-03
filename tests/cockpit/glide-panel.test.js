@@ -265,10 +265,14 @@ describe('GlidePanel live behaviour', () => {
         expect(host.innerHTML).toBe('');
         expect(map.layers.size).toBe(0);
 
-        // on the ground (below showAboveGsKt)
+        // slow / on the ground: still shown - the panel has no ground-speed gate (ENGINE OUT turns it off)
         sit = { ...situation(180, 6, 5500, 360), timestamp: Date.now(), ground_speed: 12 };
         vi.advanceTimersByTime(GlidePanel.UPDATE_MS);
-        expect(host.innerHTML).toBe('');
+        expect(block()).not.toBeNull();
+        sit = { ...sit, timestamp: Date.now(), ground_speed: 0 };
+        vi.advanceTimersByTime(GlidePanel.UPDATE_MS);
+        expect(block()).not.toBeNull();
+        expect(map.layers.size).toBe(1);
     });
 
     it('hysteresis keeps plan B until a final point has 100 ft to spare', () => {

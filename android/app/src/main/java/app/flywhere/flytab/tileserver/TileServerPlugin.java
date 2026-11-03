@@ -1,5 +1,6 @@
 package app.flywhere.flytab.tileserver;
 
+import android.os.Build;
 import android.os.Environment;
 import android.util.Log;
 
@@ -36,12 +37,26 @@ public class TileServerPlugin extends Plugin {
             if (!baseDir.exists()) {
                 baseDir.mkdirs();
             }
-            server = new TileServer(PORT, baseDir);
+            // Notes tell "no note" from "can't read it" by this (TileServer.storageAccess).
+            server = new TileServer(PORT, baseDir, TileServerPlugin::hasStorageAccess);
             server.start();
             Log.i(TAG, "Tile server started on port " + PORT + ", serving from " + baseDir.getAbsolutePath());
         } catch (Exception e) {
             Log.e(TAG, "Failed to start tile server", e);
         }
+    }
+
+    /**
+     * Android 11+: "All files access" (MANAGE_EXTERNAL_STORAGE), which the app asks
+     * for at start (MainActivity.checkStoragePermission) and loses on reinstall.
+     * Older Android: no runtime check here (the manifest asks for no legacy storage
+     * permission), so true -- behaviour there is unchanged.
+     */
+    static boolean hasStorageAccess() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            return Environment.isExternalStorageManager();
+        }
+        return true;
     }
 
     @PluginMethod

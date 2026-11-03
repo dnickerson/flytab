@@ -145,7 +145,8 @@ class ConfigEditor {
             'windMaxAgeMin':      { type: 'number', label: 'Winds Aloft Max Age (min)', min: 10, max: 1440, step: 10 },
             'metarMaxAgeMin':     { type: 'number', label: 'Airport METAR Max Age (min)', min: 10, max: 240, step: 5 },
             'metarMaxStationNm':  { type: 'number', label: 'Nearest-Station METAR Max Distance (nm)', min: 0, max: 100 },
-            'showAboveGsKt':      { type: 'number', label: 'Show Glide Block Above Ground Speed (kt)', min: 0, max: 200 },
+            // No showAboveGsKt field: the airport panel's ENGINE OUT button now shows / hides the glide block.
+            // The key (default 25 kt) stays in cockpit-config: EmergencyGlide still gates on it.
         }));
 
         sections.push(this._renderSection('ifr', 'IFR', this._cockpitConfig.ifr || {}, {

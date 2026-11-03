@@ -141,6 +141,31 @@ describe('EmergencyGlide on the shared glide model', () => {
         expect(byId('KLKR')._clearance).toBe(Math.round(modelPlan(KLKR, wsSit, { from: 360, kt: 30 }).spare));
     });
 
+    it('keeps the showAboveGsKt ground-speed gate (the airport panel dropped it for ENGINE OUT; this did not)', async () => {
+        // KNEAR 2 nm away at 6,000 ft: reachable at 150 kt. The same situation at 12 kt (below the default
+        // 25 kt) gives GlideInputs.aircraft() null -> every airport MARGINAL, exactly as before.
+        const p = at(180, 7);
+        const near = GlideModel.fromLocal(p.lat, p.lon, { x: 2, y: 0 });
+        const KNEAR = { icao: 'KNEAR', name: 'Near', lat: near.lat, lon: near.lon, elev_ft: 500, fac_type: 'AIRPORT', runways: [] };
+        airports = [KNEAR];
+        fisbWind = { dir: 0, spd: 0, alt: 6000, lat: p.lat, lon: p.lon, station: 'CLT', received_at: NOW - 60000 };
+        wsSit = situation(180, 7, 6000, 360);
+        await eg.trigger({ testMode: false });
+        expect(byId('KNEAR')._reachable).toBe(true);
+
+        wsSit = situation(180, 7, 6000, 360, { ground_speed: 12 });
+        eg._lastTriggerTime = 0;
+        await eg.trigger({ testMode: false });
+        expect(byId('KNEAR')._reachable).toBe(false);
+
+        // a configured gate is still honoured: 160 kt minimum -> 150 kt is below it
+        globalThis.CockpitConfig = { aircraft: () => undefined, get: (k) => (k === 'engineOutGlide' ? { showAboveGsKt: 160 } : undefined) };
+        wsSit = situation(180, 7, 6000, 360);
+        eg._lastTriggerTime = 0;
+        await eg.trigger({ testMode: false });
+        expect(byId('KNEAR')._reachable).toBe(false);
+    });
+
     it('no glide_ratio read', async () => {
         const asked = [];
         globalThis.CockpitConfig = {

@@ -27,6 +27,35 @@ class AirportPopup {
         this._onInternetMetarBound = null;
         this._getRouteAirports = null;  // callback: () => { departure, destination }
         this._glide = null;             // GlidePanel: live engine-out glide block (glide-panel.js)
+        this._glideHost = null;         // the element the glide block renders into (right under the header)
+        this._notes = null;             // AirportNoteEditor: the MY NOTES box at the bottom of INFO (airport-notes.js)
+        this._notesScrollTimer = null;  // second "bring the notes into view" after the on-screen keyboard opens
+        this._notesVv = null;           // visualViewport resize listener of the notes box (keyboard closed without blur)
+    }
+
+    /**
+     * ENGINE OUT button (airport panel header): whether the engine-out glide block is shown.
+     * One choice for every airport, kept across restarts in localStorage; ON unless the pilot turned it
+     * off. The choice made in this session (_glideOnMem) wins over storage, so it holds even when
+     * storage can't be read or written.
+     */
+    static GLIDE_PREF_KEY = 'flytab_engine_out_glide_on';
+    static _glideOnMem = null;
+
+    static glideOn() {
+        // This session's choice first: a write that failed must not let an older stored value win.
+        if (AirportPopup._glideOnMem !== null) return AirportPopup._glideOnMem;
+        try {
+            const v = localStorage.getItem(AirportPopup.GLIDE_PREF_KEY);
+            if (v === 'false') return false;
+            if (v === 'true') return true;
+        } catch (_) { /* storage blocked: the default */ }
+        return true;
+    }
+
+    static setGlideOn(on) {
+        AirportPopup._glideOnMem = !!on;
+        try { localStorage.setItem(AirportPopup.GLIDE_PREF_KEY, on ? 'true' : 'false'); } catch (_) { /* session only */ }
     }
 
     /** Set callback that returns { departure, destination } waypoints from the active plan */
@@ -139,6 +168,7 @@ class AirportPopup {
     _showPanel(airport, wx) {
         if (!this._panel) return;
         this._stopGlide();
+        this._closeNotes();
 
         this._panel.innerHTML = this._buildTopNavHtml(airport.icao) + this._buildPanelHtml(airport, wx);
         this._panel.classList.add('open');
@@ -224,6 +254,9 @@ class AirportPopup {
         // Wire tabs
         this._panel.querySelectorAll('.apt-tab[data-tab]').forEach(tab => {
             wireTap(tab, () => {
+                // Any tab tap (leaving INFO, where the notes are, or re-tapping it) saves a pending note edit now.
+                this._notes?.flush();
+                this._scrollTabIntoView(tab);
                 // APPR tab: open the approach charts picker directly
                 if (tab.dataset.tab === 'appr' && this._approachCharts) {
                     this._approachCharts.showForAirport(airport.icao);
@@ -254,29 +287,211 @@ class AirportPopup {
             });
         });
 
-        // Engine-out glide block right under the header (shows itself only in flight with a GPS fix).
-        // Guarded: a glide error must never stop the airport panel from opening.
+        // MY NOTES box at the bottom of INFO. Guarded: a notes error must never stop the airport panel from opening.
         try {
-            if (typeof GlidePanel !== 'undefined') {
-                const host = document.createElement('div');
-                host.className = 'glide-host';
-                const header = this._panel.querySelector('.apt-panel-header');
-                if (header) header.after(host); else this._panel.prepend(host);
-                this._glide = new GlidePanel(host, airport);
-                this._glide.start();
-            }
+            this._openNotes(airport);
+        } catch (err) {
+            console.warn('AirportPopup: notes failed', err);
+            this._notes = null;
+        }
+
+        // ENGINE OUT button under the close button: turns the glide block (and its map line) on / off
+        // for every airport. It works for an airport that can never have a block too (heliport, no
+        // elevation): it only changes the choice then.
+        const glideBtn = this._panel.querySelector('.apt-glide-toggle');
+        if (glideBtn) {
+            wireTap(glideBtn, () => {
+                const on = !AirportPopup.glideOn();
+                AirportPopup.setGlideOn(on);
+                this._showGlideButton(glideBtn, on);
+                if (on) this._startGlide(airport); else this._stopGlide();
+            });
+        }
+
+        // Engine-out glide block right under the header, when ENGINE OUT is on.
+        if (AirportPopup.glideOn()) this._startGlide(airport);
+    }
+
+    /** The ENGINE OUT button's look and state for screen readers. */
+    _showGlideButton(btn, on) {
+        btn.classList.toggle('is-on', on);
+        btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    }
+
+    /**
+     * Mount and start the engine-out glide block right under the header. It shows itself whenever the
+     * Stratux WebSocket has a fresh 3D fix (on the ground too) - GlidePanel / GlideInputs decide.
+     * Guarded: a glide error must never stop the airport panel from opening.
+     */
+    _startGlide(airport) {
+        this._stopGlide();
+        try {
+            if (typeof GlidePanel === 'undefined' || !this._panel) return;
+            const host = document.createElement('div');
+            host.className = 'glide-host';
+            const header = this._panel.querySelector('.apt-panel-header');
+            if (header) header.after(host); else this._panel.prepend(host);
+            this._glideHost = host;
+            this._glide = new GlidePanel(host, airport);
+            this._glide.start();
         } catch (err) {
             console.warn('AirportPopup: glide block failed', err);
             this._stopGlide();
         }
     }
 
+    /**
+     * Fill the MY NOTES box at the bottom of the INFO tab for this airport (AirportNotes /
+     * AirportNoteEditor, airport-notes.js). An airport whose ID can't be a file name gets a short
+     * "not available" line and no request is made. While the box has focus the panel is one scroll
+     * column (class apt-notes-editing) and the notes are scrolled to its top, again once the on-screen
+     * keyboard is up; on blur the normal layout comes back with the notes kept in view.
+     */
+    _openNotes(airport) {
+        const pane = this._panel?.querySelector('.apt-notes-pane');
+        if (!pane) return;
+        const id = (typeof AirportNotes !== 'undefined') ? AirportNotes.normId(airport?.icao) : null;
+        if (!id || typeof AirportNoteEditor === 'undefined') {
+            pane.innerHTML = '<div class="apt-notes-na">Notes not available for this airport.</div>';
+            return;
+        }
+        // Status line above the box: a "can't be read" message must not end up below the fold.
+        pane.innerHTML = '<div class="apt-notes">'
+            + '<div class="apt-notes-status" role="status" aria-live="polite"></div>'
+            + '<textarea class="apt-notes-text" readonly spellcheck="true" autocapitalize="sentences" placeholder="Your notes for this airport — saved automatically"></textarea>'
+            + '</div>';
+        const ta = pane.querySelector('.apt-notes-text');
+        ta.setAttribute('aria-label', `Notes for ${id}`);
+        const section = pane.closest('.apt-my-notes') || pane;
+        ta.addEventListener('focus', () => {
+            this._enterNotesEditing(section);
+            clearTimeout(this._notesScrollTimer);
+            this._notesScrollTimer = setTimeout(() => {
+                this._notesScrollTimer = null;
+                if (document.activeElement === ta) this._scrollNotesIntoView(section, this._panel);
+            }, AirportPopup.NOTES_KEYBOARD_MS);
+        });
+        ta.addEventListener('blur', () => {
+            clearTimeout(this._notesScrollTimer);
+            this._notesScrollTimer = null;
+            this._leaveNotesEditing(section);
+        });
+        // The keyboard can close without a blur (Android back gesture): when the visual viewport grows
+        // back, leave the editing layout (the box keeps its focus); when it shrinks again (the pilot
+        // tapped the box: keyboard back), enter it again. Without visualViewport: focus / blur only.
+        const vv = (typeof window !== 'undefined') ? window.visualViewport : null;
+        if (vv && typeof vv.addEventListener === 'function') {
+            const st = { vv, base: 0, shrunk: false, handler: null };
+            st.handler = () => {
+                try {
+                    const h = vv.height;
+                    if (!(h > 0)) return;
+                    st.base = Math.max(st.base, h);
+                    if (document.activeElement !== ta) { st.shrunk = false; return; }
+                    if (h < st.base * AirportPopup.KEYBOARD_GONE_FRACTION) {
+                        st.shrunk = true;
+                        if (!this._panel?.classList.contains('apt-notes-editing')) this._enterNotesEditing(section);
+                    } else if (st.shrunk) {
+                        st.shrunk = false;
+                        this._leaveNotesEditing(section);
+                    }
+                } catch (_) { /* layout only */ }
+            };
+            st.base = vv.height > 0 ? vv.height : 0;
+            vv.addEventListener('resize', st.handler);
+            this._notesVv = st;
+        }
+        const editor = new AirportNoteEditor(id, ta, pane.querySelector('.apt-notes-status'));
+        this._notes = editor;
+        editor.load().catch((err) => console.warn('AirportPopup: notes load failed', err));
+    }
+
+    /** How long after the notes box gets focus it is scrolled into view again (the keyboard is up by then). */
+    static NOTES_KEYBOARD_MS = 400;
+    /** The visual viewport back to at least this fraction of its largest height = the keyboard is gone. */
+    static KEYBOARD_GONE_FRACTION = 0.9;
+
+    /**
+     * Notes being edited: the whole panel is one scroll column (header, glide block, tabs and INFO
+     * scroll together), so a short window with the keyboard up still has room for the notes; they are
+     * scrolled to the top of the panel.
+     */
+    _enterNotesEditing(section) {
+        const panel = this._panel;
+        if (!panel) return;
+        panel.classList.add('apt-notes-editing');
+        this._scrollNotesIntoView(section, panel);
+    }
+
+    /** Back to the normal layout (the panel itself never scrolls then), the notes kept in view in the tab content. */
+    _leaveNotesEditing(section) {
+        const panel = this._panel;
+        if (!panel || !panel.classList.contains('apt-notes-editing')) return;
+        panel.classList.remove('apt-notes-editing');
+        panel.scrollTop = 0;
+        this._scrollNotesIntoView(section, section.closest('.apt-tab-content'));
+    }
+
+    /**
+     * Scroll `scroller` (the panel while the notes are being edited, else the tab content) so `el`
+     * (the MY NOTES section) starts at its top. Sets scrollTop on that one element (not
+     * scrollIntoView, which would also scroll the map area). Guarded: never throws.
+     */
+    _scrollNotesIntoView(el, scroller) {
+        try {
+            if (!scroller || !el?.isConnected) return;
+            const delta = el.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+            scroller.scrollTop += delta;
+        } catch (_) { /* layout only */ }
+    }
+
+    /**
+     * The tab row scrolls sideways when the tabs don't fit (large Android font
+     * scale): bring a tapped tab fully into view. Guarded: never throws.
+     */
+    _scrollTabIntoView(tab) {
+        try {
+            const bar = tab?.parentElement;
+            if (!bar) return;
+            const b = bar.getBoundingClientRect();
+            const t = tab.getBoundingClientRect();
+            if (t.left < b.left) bar.scrollLeft -= (b.left - t.left);
+            else if (t.right > b.right) bar.scrollLeft += (t.right - b.right);
+        } catch (_) { /* layout only */ }
+    }
+
+    /** The notes box is going away: save what is pending. Guarded: never throws into the panel code. */
+    _closeNotes() {
+        clearTimeout(this._notesScrollTimer);
+        this._notesScrollTimer = null;
+        const st = this._notesVv;
+        this._notesVv = null;
+        if (st) {
+            try { st.vv.removeEventListener('resize', st.handler); } catch (_) { /* gone */ }
+        }
+        if (this._panel) {
+            this._panel.classList.remove('apt-notes-editing');
+            this._panel.scrollTop = 0;
+        }
+        const ed = this._notes;
+        this._notes = null;
+        if (!ed) return;
+        try {
+            ed.detach().catch((err) => console.warn('AirportPopup: notes save failed', err));
+        } catch (err) {
+            console.warn('AirportPopup: notes detach failed', err);
+        }
+    }
+
     /** Stop the glide block (timer + map line). Guarded: never throws into the panel code. */
     _stopGlide() {
-        const g = this._glide;
+        const g = this._glide, host = this._glideHost;
         this._glide = null;
-        if (!g) return;
-        try { g.stop(); } catch (err) { console.warn('AirportPopup: glide stop failed', err); }
+        this._glideHost = null;
+        if (g) {
+            try { g.stop(); } catch (err) { console.warn('AirportPopup: glide stop failed', err); }
+        }
+        if (host) host.remove();
     }
 
     _buildTopNavHtml(activeIcao) {
@@ -321,6 +536,7 @@ class AirportPopup {
     _showSearchPanel() {
         if (!this._panel) return;
         this._stopGlide();
+        this._closeNotes();
         this._panel.innerHTML = `
             <div class="apt-top-nav">
                 <span class="apt-topnav-spacer"></span>
@@ -416,6 +632,7 @@ class AirportPopup {
         const towerStr = apt.tower ? 'TOWERED' : 'UNCONTROLLED';
         const elevStr = apt.elev_ft ? `${apt.elev_ft} ft` : '';
         const tpaStr = apt.tpa_ft ? ` · TPA ${apt.tpa_ft}` : '';
+        const glideOn = AirportPopup.glideOn();
 
         // Weather VFR badge for header
         let catBadge = '';
@@ -457,7 +674,10 @@ class AirportPopup {
                 <div class="apt-panel-meta">${apt.city || ''}${apt.state ? ', ' + apt.state : ''} · ${towerStr} · ${elevStr}${tpaStr}</div>
                 ${navInfoHtml}
             </div>
-            <button class="apt-panel-close btn-close" aria-label="Close">✕</button>
+            <div class="apt-header-btns">
+                <button class="apt-panel-close btn-close" aria-label="Close">✕</button>
+                <button class="apt-glide-toggle${glideOn ? ' is-on' : ''}" aria-pressed="${glideOn}" aria-label="Engine-out glide"><span class="apt-glide-word">ENGINE</span> <span class="apt-glide-word">OUT</span></button>
+            </div>
         </div>
 
         ${this._tfrBlockHtml(apt)}
@@ -483,6 +703,13 @@ class AirportPopup {
                 ${this._frequenciesHtml(apt.frequencies || [], apt.tower)}
                 ${this._fuelHtml(apt)}
                 ${(CockpitConfig.get('ifr.showCdPhone') || CockpitConfig.get('ifr.showCraft')) ? this._ifrHtml(apt) : ''}
+                <!-- FAA REMARKS (read-only, not built yet): fill .apt-faa-remarks and clear its hidden
+                     attribute. It stays hidden while empty. It sits between IFR CLEARANCE and MY NOTES. -->
+                <div class="apt-faa-remarks" hidden></div>
+                <div class="popup-section apt-my-notes">
+                    <div class="popup-section-title apt-notes-title">MY NOTES</div>
+                    <div class="apt-notes-pane"></div>
+                </div>
             </div>
             <div class="apt-tab-pane" data-pane="wx">
                 ${wx ? this._weatherHtml(wx) : '<div style="padding:16px;color:var(--text-muted)">No weather data</div>'}
@@ -688,6 +915,7 @@ class AirportPopup {
     _showOfflineStub(icao, latlng) {
         if (!this._panel) return;
         this._stopGlide();
+        this._closeNotes();
         const lat = latlng?.[0]?.toFixed(4) ?? '—';
         const lon = latlng?.[1]?.toFixed(4) ?? '—';
         this._panel.innerHTML = `
@@ -786,6 +1014,7 @@ class AirportPopup {
             this._panelOpen = false;
         }
         this._stopGlide();
+        this._closeNotes();
         this._stopFisbListener();
         this._stopInternetMetarListener();
     }
