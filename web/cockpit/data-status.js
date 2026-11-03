@@ -1200,6 +1200,11 @@ class DataStatus {
                         || ((nasrServer.bundle_version ?? null) !== null && loaded?.bundle_version !== nasrServer.bundle_version))) {
                     setStep('aero', 'running', `NASR files current — loading cycle ${nasrServerDate} into the app…`);
                     await loadNasr();
+                } else if (await window.app?._nasrDb?.remarksNeedImport?.(loaded)) {
+                    // Cycle loaded but not its FAA remarks (an older FlyTab imported it, or the
+                    // remarks write failed): load it again. Bounded per bundle (NasrDB.REMARKS_MAX_ATTEMPTS).
+                    setStep('aero', 'running', `NASR files current — loading the FAA remarks of cycle ${nasrServerDate}…`);
+                    await loadNasr();
                 }
                 // Expiry recorded for offline currency (FaaCurrency), also when current.
                 this._mergeDeviceSection('nasr', { effective_date: nasrServerDate, expiration_date: nasrServer.expiration_date || null });

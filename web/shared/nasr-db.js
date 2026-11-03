@@ -139,9 +139,10 @@ class NasrDB {
                 reject(new Error(`IndexedDB open timed out after ${NasrDB.OPEN_TIMEOUT_MS / 1000} s`));
             }, NasrDB.OPEN_TIMEOUT_MS);
 
-            request.onblocked = () => log('IndexedDB upgrade blocked by another open connection — waiting');
+            const onBlocked = () => log('IndexedDB upgrade blocked by another open connection — waiting');
+            request.onblocked = onBlocked;
 
-            request.onupgradeneeded = (event) => {
+            const onUpgrade = (event) => {
                 const db = event.target.result;
 
                 // Airports — keyed by ICAO, indexed for spatial queries
@@ -269,7 +270,9 @@ class NasrDB {
                 }
             };
 
-            request.onsuccess = (event) => {
+            request.onupgradeneeded = onUpgrade;
+
+            const onSuccess = (event) => {
                 clearTimeout(timer);
                 done();
                 const db = event.target.result;
@@ -284,13 +287,33 @@ class NasrDB {
                 resolve(this._db);
             };
 
-            request.onerror = (event) => {
+            // VersionError: the database on the tablet is NEWER than DB_VERSION (an older FlyTab
+            // installed over a newer one). There is no downgrade, so asking for DB_VERSION would
+            // fail every time and leave NASR unavailable. Open it as it is instead (no version: no
+            // upgrade, stores as the newer build left them, which only ever added stores) - once.
+            let retried = false;
+            const onError = (event) => {
+                const err = event.target.error;
+                if (err?.name === 'VersionError' && !retried && !settled) {
+                    retried = true;
+                    log(`IndexedDB '${NasrDB.DB_NAME}' is newer than this FlyTab expects (v${NasrDB.DB_VERSION}): ${err.message} — opening it as it is`);
+                    try {
+                        const again = indexedDB.open(NasrDB.DB_NAME);
+                        again.onblocked = onBlocked;
+                        again.onupgradeneeded = onUpgrade;   // only if it vanished meanwhile (new, empty)
+                        again.onsuccess = onSuccess;
+                        again.onerror = onError;
+                        return;
+                    } catch (_) { /* reported below */ }
+                }
                 clearTimeout(timer);
                 done();
                 if (settled) return;
                 settled = true;
-                reject(new Error('IndexedDB open failed: ' + event.target.error));
+                reject(new Error('IndexedDB open failed: ' + err));
             };
+            request.onsuccess = onSuccess;
+            request.onerror = onError;
         });
         this._opening = opening;
         // Whatever rejected it (including a throw above), the next call starts afresh.
@@ -872,7 +895,7 @@ class NasrDB {
         // FAA remarks: their own transaction, after the main one has committed, so a failure here
         // can never roll back or fail the import. Before the cycle meta below: an import cut short
         // here (app killed) still looks stale at the next startup and is redone.
-        await this._importRemarks(db, bundle.remarks);
+        await this._importRemarks(db, bundle.remarks, bundle.cycle_info);
 
         if (bundle.cycle_info) {
             // Always persist sua_count so staleness check can detect missing SUA on next startup
@@ -958,38 +981,101 @@ class NasrDB {
     }
 
     /**
+     * meta key of the remarks import record { key, ok, attempts, written, expected } (tablet only:
+     * FlyTab before v12.57 never writes it). It is how a NASR cycle that is loaded but whose remarks
+     * are not (an older FlyTab imported the bundle, or the remarks write failed) is found and fixed.
+     */
+    static REMARKS_MARKER = 'nasr_remarks_import';
+    /** Remarks imports tried per bundle (cycle + bundle version) before startup / sync stop retrying. */
+    static REMARKS_MAX_ATTEMPTS = 2;
+
+    /** The bundle a remarks import belongs to: "<effective_date>|<bundle_version>". */
+    static _remarksKey(cycleInfo) {
+        return `${cycleInfo?.effective_date ?? ''}|${cycleInfo?.bundle_version ?? ''}`;
+    }
+
+    /**
+     * Whether the loaded NASR cycle should be imported again for its FAA remarks: the cycle has
+     * remarks (cycle_info.remarks_count > 0) but no successful remarks import is recorded for it, and
+     * fewer than REMARKS_MAX_ATTEMPTS were tried (the attempt is recorded before the write, so even a
+     * write that kills the app is counted: a persistent failure can't make every start re-import).
+     * @param {object} [cycleInfo] the loaded cycle (default: nasr_cycle_info in meta)
+     */
+    async remarksNeedImport(cycleInfo) {
+        try {
+            const ci = cycleInfo || await this.getCycleInfo();
+            if (!(Number(ci?.remarks_count) > 0)) return false;
+            const m = await this.getMeta(NasrDB.REMARKS_MARKER);
+            const key = NasrDB._remarksKey(ci);
+            if (m?.key === key && m.ok) return false;
+            const attempts = m?.key === key ? (Number(m.attempts) || 0) : 0;
+            return attempts < NasrDB.REMARKS_MAX_ATTEMPTS;
+        } catch (err) {
+            console.warn('NasrDB: remarks check failed', err);
+            return false;
+        }
+    }
+
+    /**
      * Write bundle.remarks into airport_remarks (a bundle without remarks clears it). Never throws:
      * a failed write is logged to DiagLog and the store is cleared, so remarks of an older cycle are
      * not shown beside the new data. Waits at most REMARKS_TIMEOUT_MS; a write still running then is
-     * logged and left to finish on its own (not cleared: that clear would run after it).
+     * logged and left to finish on its own (not cleared now: that clear would run after it); if it
+     * then fails, the store is cleared in a new transaction. The attempt and its result are recorded
+     * in meta REMARKS_MARKER (remarksNeedImport).
      */
-    async _importRemarks(db, remarks) {
+    async _importRemarks(db, remarks, cycleInfo) {
         const log = (msg) => { if (typeof DiagLog !== 'undefined') DiagLog.log('nasr', msg); };
         const t0 = Date.now();
         const TIMED_OUT = {};
         let timer = null;
+        let marker = null;
+        const clearStore = () => {
+            try {
+                this._clear('airport_remarks').catch((e) => log(`FAA remarks clear failed — ${e?.message || e}`));
+            } catch (e) {
+                log(`FAA remarks clear failed — ${e?.message || e}`);
+            }
+        };
+        const record = async (fields) => {
+            if (!marker) return;
+            marker = { ...marker, ...fields };
+            try { await this.setMeta(NasrDB.REMARKS_MARKER, marker); } catch (e) { log(`FAA remarks record not saved — ${e?.message || e}`); }
+        };
         try {
+            if (cycleInfo) {
+                const key = NasrDB._remarksKey(cycleInfo);
+                let prev = null;
+                try { prev = await this.getMeta(NasrDB.REMARKS_MARKER); } catch (_) { /* none */ }
+                const expected = Number(cycleInfo.remarks_count);
+                marker = { key, ok: false, attempts: (prev?.key === key ? (Number(prev.attempts) || 0) : 0) + 1,
+                    written: null, expected: Number.isFinite(expected) ? expected : null };
+                await record({});                          // the attempt counts before the write runs
+            }
             const records = NasrDB._remarkRecords(remarks);
             const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve(TIMED_OUT), NasrDB.REMARKS_TIMEOUT_MS); });
             const write = this._writeRemarks(db, records);
-            write.catch((err) => {   // a failure after the timeout: still logged
-                if (Date.now() - t0 >= NasrDB.REMARKS_TIMEOUT_MS) log(`FAA remarks write failed late — ${err?.message || err}`);
+            let timedOut = false;
+            write.then((n) => {                         // finished after the timeout: record it
+                if (timedOut) { log(`FAA remarks: ${n} airports written late, after ${Date.now() - t0} ms`); record({ ok: true, written: n }); }
+            }, (err) => {                               // failed after the timeout: clear, as below
+                if (!timedOut) return;
+                log(`FAA remarks write failed late — ${err?.message || err}; store cleared`);
+                clearStore();
             });
             const n = await Promise.race([write, timeout]);
             if (n === TIMED_OUT) {
+                timedOut = true;
                 log(`FAA remarks write not done after ${NasrDB.REMARKS_TIMEOUT_MS / 1000} s — import goes on, write left running`);
                 return;
             }
             log(remarks == null
                 ? `FAA remarks: none in this bundle — store cleared (${Date.now() - t0} ms)`
                 : `FAA remarks: ${n} airports written in ${Date.now() - t0} ms`);
+            await record({ ok: true, written: n });
         } catch (err) {
             log(`FAA remarks write failed after ${Date.now() - t0} ms — ${err?.message || err}; NASR import kept, remarks not shown`);
-            try {
-                this._clear('airport_remarks').catch((e) => log(`FAA remarks clear failed — ${e?.message || e}`));
-            } catch (e) {
-                log(`FAA remarks clear failed — ${e?.message || e}`);
-            }
+            clearStore();
         } finally {
             clearTimeout(timer);
         }

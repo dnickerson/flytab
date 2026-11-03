@@ -264,3 +264,122 @@ describe('getRemarks', () => {
         expect(await db.getRemarks('KLKR')).toEqual([]);
     });
 });
+
+describe('remarks import record (meta nasr_remarks_import) and remarksNeedImport', () => {
+    const KEY = '2026-10-29|12';
+    it('a good import records ok with the bundle key; then nothing to redo', async () => {
+        const db = new NasrDB();
+        await db.importNasrBundle(clone(bundle()));
+        expect(await db.getMeta(NasrDB.REMARKS_MARKER)).toEqual({ key: KEY, ok: true, attempts: 1, written: 2, expected: 2 });
+        expect(await db.remarksNeedImport()).toBe(false);
+    });
+
+    it('cycle loaded by an older FlyTab (v11 code: remarks_count stored, no remarks, no record): needs an import', async () => {
+        const old = new V11DB();
+        await old.importNasrBundle(clone(bundle()));
+        (await old.open()).close();
+        const db = new NasrDB();
+        expect((await db.getCycleInfo()).remarks_count).toBe(2);
+        expect(await db.getRemarks('KLKR')).toEqual([]);
+        expect(await db.getMeta(NasrDB.REMARKS_MARKER)).toBeNull();
+        expect(await db.remarksNeedImport()).toBe(true);
+        await db.importNasrBundle(clone(bundle()));
+        expect(await db.getRemarks('KLKR')).toEqual(KLKR);
+        expect(await db.remarksNeedImport()).toBe(false);
+    });
+
+    it('no remarks_count (pre-v12 bundle or 0): never needs one', async () => {
+        const db = new NasrDB();
+        await db.importNasrBundle(clone(bundle({ cycle_info: { effective_date: '2026-10-29', bundle_version: 11 }, remarks: undefined })));
+        expect(await db.remarksNeedImport()).toBe(false);
+        expect(await db.remarksNeedImport({ effective_date: 'x', bundle_version: 12, remarks_count: 0 })).toBe(false);
+    });
+
+    it('a failing remarks write: counted before the write; retried once (2 attempts per bundle), then no more', async () => {
+        const db = new NasrDB();
+        vi.spyOn(db, '_writeRemarks').mockRejectedValue(new Error('boom'));
+        await db.importNasrBundle(clone(bundle()));
+        expect(await db.getMeta(NasrDB.REMARKS_MARKER)).toMatchObject({ key: KEY, ok: false, attempts: 1 });
+        expect(await db.remarksNeedImport()).toBe(true);
+        await db.importNasrBundle(clone(bundle()));
+        expect(await db.getMeta(NasrDB.REMARKS_MARKER)).toMatchObject({ key: KEY, ok: false, attempts: 2 });
+        expect(await db.remarksNeedImport()).toBe(false);
+        // a new bundle starts its own count
+        await db.importNasrBundle(clone(bundle({ cycle_info: { effective_date: '2026-11-26', bundle_version: 12, remarks_count: 2 } })));
+        expect(await db.getMeta(NasrDB.REMARKS_MARKER)).toMatchObject({ key: '2026-11-26|12', attempts: 1 });
+        expect(await db.remarksNeedImport()).toBe(true);
+    });
+
+    it('the attempt is on record before the write starts (a write that kills the app still counts)', async () => {
+        const db = new NasrDB();
+        let seen = null;
+        vi.spyOn(db, '_writeRemarks').mockImplementation(async () => { seen = await db.getMeta(NasrDB.REMARKS_MARKER); return 2; });
+        await db.importNasrBundle(clone(bundle()));
+        expect(seen).toMatchObject({ key: KEY, ok: false, attempts: 1 });
+        expect(await db.getMeta(NasrDB.REMARKS_MARKER)).toMatchObject({ ok: true, written: 2 });
+    });
+
+    it('a write that finishes after the timeout is recorded ok when it does', async () => {
+        const db = new NasrDB();
+        NasrDB.REMARKS_TIMEOUT_MS = 20;
+        let finish;
+        vi.spyOn(db, '_writeRemarks').mockReturnValue(new Promise((r) => { finish = r; }));
+        await db.importNasrBundle(clone(bundle()));
+        expect(await db.getMeta(NasrDB.REMARKS_MARKER)).toMatchObject({ ok: false, attempts: 1 });
+        finish(2);
+        await new Promise((r) => setTimeout(r, 30));
+        expect(await db.getMeta(NasrDB.REMARKS_MARKER)).toMatchObject({ ok: true, written: 2 });
+        expect(logged(/^FAA remarks: 2 airports written late/)).toBe(true);
+    });
+
+    it('a write that fails after the timeout: the store is cleared in a new transaction (old cycle remarks not kept)', async () => {
+        const db = new NasrDB();
+        await db.importNasrBundle(clone(bundle()));               // old remarks in the store
+        NasrDB.REMARKS_TIMEOUT_MS = 20;
+        let fail;
+        vi.spyOn(db, '_writeRemarks').mockReturnValue(new Promise((_, rej) => { fail = rej; }));
+        await db.importNasrBundle(clone(bundle({ cycle_info: { effective_date: '2026-11-26', bundle_version: 12, remarks_count: 2 } })));
+        expect(await db.getRemarks('KLKR')).toEqual(KLKR);        // write still "running": not cleared yet
+        fail(new Error('TransactionInactiveError'));
+        await new Promise((r) => setTimeout(r, 30));
+        expect(await db.getRemarks('KLKR')).toEqual([]);
+        expect(await db.getRemarks('SC76')).toEqual([]);
+        expect(logged(/^FAA remarks write failed late — TransactionInactiveError; store cleared$/)).toBe(true);
+        expect(await db.remarksNeedImport()).toBe(true);           // attempt 1 of the new bundle failed
+    });
+});
+
+describe('a database newer than DB_VERSION (an older FlyTab installed over a newer one)', () => {
+    it('VersionError: opened as it is (no version), logged, data readable', async () => {
+        const db0 = new NasrDB();
+        await db0.importNasrBundle(clone(bundle()));
+        (await db0.open()).close();
+        // a future build bumped it to 13 (added a store)
+        await new Promise((res, rej) => {
+            const r = indexedDB.open(NasrDB.DB_NAME, NasrDB.DB_VERSION + 1);
+            r.onupgradeneeded = () => r.result.createObjectStore('future_store', { keyPath: 'id' });
+            r.onsuccess = () => { r.result.close(); res(); };
+            r.onerror = () => rej(r.error);
+        });
+        DiagLog.log.mockClear();
+        const db = new NasrDB();
+        const conn = await db.open();
+        expect(conn.version).toBe(NasrDB.DB_VERSION + 1);
+        expect(logged(/is newer than this FlyTab expects \(v12\).*opening it as it is/)).toBe(true);
+        expect((await db.getAirport('KLKR')).name).toBe('LANCASTER CO');
+        expect(await db.getRemarks('KLKR')).toEqual(KLKR);
+        await db.importNasrBundle(clone(bundle()));                // imports still work
+        expect(await db.getRemarks('SC76')).toEqual(SC76);
+    });
+
+    it('any other open error still rejects (no retry)', async () => {
+        const db = new NasrDB();
+        const spy = vi.spyOn(indexedDB, 'open').mockImplementation(() => {
+            const req = {};
+            setTimeout(() => req.onerror({ target: { error: new DOMException('disk', 'UnknownError') } }), 0);
+            return req;
+        });
+        await expect(db.open()).rejects.toThrow(/IndexedDB open failed: .*disk/);
+        expect(spy).toHaveBeenCalledTimes(1);
+    });
+});

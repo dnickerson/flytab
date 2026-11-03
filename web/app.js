@@ -1283,7 +1283,13 @@ class FlyTabApp {
             const dateMatch     = fileDate && fileDate === dbDate;
             const suaMatch      = fileSuaCnt === null || (dbSuaCnt !== null && fileSuaCnt === dbSuaCnt);
             const bundleMatch   = fileBundleVer === null || (dbBundleVer !== null && fileBundleVer <= dbBundleVer);
-            if (testApt && dateMatch && suaMatch && bundleMatch) return; // DB is current
+            if (testApt && dateMatch && suaMatch && bundleMatch) {
+                // DB is current - unless this cycle's FAA remarks never got in (an older FlyTab
+                // imported the bundle, or the remarks write failed): import once more. Bounded per
+                // bundle by NasrDB.REMARKS_MAX_ATTEMPTS, so a persistent failure can't repeat forever.
+                if (!(await nasrDb.remarksNeedImport?.(dbCycle))) return;
+                DiagLog.log('nasr', 'NASR current but its FAA remarks are not loaded — importing again');
+            }
             if (testApt && !fileDate) return;                           // NanoHTTPD not ready; keep DB
             if (testApt && fileDate && dbDate && fileDate < dbDate) return; // NanoHTTPD older than DB; don't downgrade
         } catch { /* fall through to import */ }
