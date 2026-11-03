@@ -295,6 +295,14 @@ class AirportPopup {
             this._notes = null;
         }
 
+        // FAA REMARKS above MY NOTES, read from IndexedDB after the panel is up (show() and
+        // showForAirport() both come here). Guarded like the notes.
+        try {
+            this._loadFaaRemarks(airport);
+        } catch (err) {
+            console.warn('AirportPopup: FAA remarks failed', err);
+        }
+
         // ENGINE OUT button under the close button: turns the glide block (and its map line) on / off
         // for every airport. It works for an airport that can never have a block too (heliport, no
         // elevation): it only changes the choice then.
@@ -404,6 +412,171 @@ class AirportPopup {
         const editor = new AirportNoteEditor(id, ta, pane.querySelector('.apt-notes-status'));
         this._notes = editor;
         editor.load().catch((err) => console.warn('AirportPopup: notes load failed', err));
+    }
+
+    // ========== FAA REMARKS (INFO tab, read-only, NASR bundle v12) ==========
+
+    /** Group label per remark category (contract: bundle.remarks [el, c, text, rwy]). Unknown → General. */
+    static REMARK_LABELS = {
+        gen: 'General', ops: 'Operations', rwy: 'Runway', obst: 'Obstructions', ltg: 'Lighting',
+        fuel: 'Fuel', svc: 'Services', contact: 'Contacts', admin: 'FAA admin',
+    };
+    /** Categories shown behind a tap (with a count), one toggle per category. */
+    static REMARK_COLLAPSED = ['contact', 'admin'];
+
+    /**
+     * The remark tuples as display groups, in tuple order (the bundle sorts them): consecutive
+     * remarks of one category and runway form a group; each collapsed category is one group.
+     * A tuple without text is skipped. Returns [{ c, rwy, label, collapsed, texts: [string] }].
+     */
+    static _remarkGroups(list) {
+        const LABELS = AirportPopup.REMARK_LABELS;
+        const groups = [];
+        for (const t of Array.isArray(list) ? list : []) {
+            if (!Array.isArray(t)) continue;
+            const text = typeof t[2] === 'string' ? t[2].trim() : '';
+            if (!text) continue;
+            const c = Object.prototype.hasOwnProperty.call(LABELS, t[1]) ? t[1] : 'gen';
+            const collapsed = AirportPopup.REMARK_COLLAPSED.includes(c);
+            const rwy = (!collapsed && typeof t[3] === 'string' && t[3].trim()) ? t[3].trim() : null;
+            let g = collapsed ? groups.find((x) => x.c === c) : groups[groups.length - 1];
+            if (!g || g.c !== c || g.rwy !== rwy) {
+                // Runway remarks: "Runway 06". Another category tied to a runway end (an obstruction
+                // clearance slope, say) names it too: without it the text often makes no sense.
+                const label = c === 'rwy' ? (rwy ? `Runway ${rwy}` : 'Runway')
+                    : (rwy ? `${LABELS[c]} · Runway ${rwy}` : LABELS[c]);
+                g = { c, rwy, label, collapsed, texts: [] };
+                groups.push(g);
+            }
+            g.texts.push(text);
+        }
+        return groups;
+    }
+
+    /**
+     * Read this airport's FAA remarks (NasrDB.getRemarks) and fill the hidden .apt-faa-remarks box.
+     * The answer is used only if that same box is still on screen for that airport: another airport,
+     * the search panel or a reopen replaces the panel's HTML and the box with it.
+     */
+    _loadFaaRemarks(airport) {
+        const box = this._panel?.querySelector('.apt-faa-remarks');
+        const icao = airport?.icao;
+        if (!box || !icao || typeof this._nasr?.getRemarks !== 'function') return;
+        box.dataset.icao = icao;
+        Promise.resolve()
+            .then(() => this._nasr.getRemarks(icao))
+            .then((list) => {
+                if (!box.isConnected || box.dataset.icao !== icao) return;   // the panel moved on
+                this._showFaaRemarksWhenNotesIdle(box, list);
+            })
+            .catch((err) => console.warn('AirportPopup: FAA remarks read failed', err));
+    }
+
+    /**
+     * Fill the remarks box, but never while the MY NOTES box has focus: the remarks sit above it and
+     * would push it (and the caret) down. Then it waits for the notes box's blur, which runs after
+     * the notes' own blur handler (that one restores the normal layout and brings the notes into
+     * view); the box is then filled with MY NOTES kept where it is on screen.
+     */
+    _showFaaRemarksWhenNotesIdle(box, list, keepNotesInPlace = false) {
+        if (!box.isConnected) return;
+        const ta = this._panel?.querySelector('.apt-notes-text');
+        if (ta && (document.activeElement === ta || this._panel.classList.contains('apt-notes-editing'))) {
+            ta.addEventListener('blur', () => this._showFaaRemarksWhenNotesIdle(box, list, true), { once: true });
+            return;
+        }
+        this._fillFaaRemarks(box, list, keepNotesInPlace);
+    }
+
+    /** Remarks shown per group before a "More (n)" row (KADW has 63, KATL ~3,000 px of them). */
+    static REMARKS_VISIBLE = 6;
+
+    /**
+     * Build the FAA REMARKS section: title, groups with a small label, Contacts and FAA admin behind
+     * a tap that shows the count; in any group only the first REMARKS_VISIBLE remarks show, the rest
+     * behind a "More (n)" tap. DOM built with textContent only: remark text (some has '<', '&')
+     * never goes through innerHTML. Hidden when there is nothing to show. If the box goes in above
+     * the visible part of the tab (or keepNotesInPlace: drawn when the notes box lost focus), the tab
+     * content is scrolled by what the box grew, so MY NOTES / what the pilot was reading stays put.
+     */
+    _fillFaaRemarks(box, list, keepNotesInPlace = false) {
+        const groups = AirportPopup._remarkGroups(list);
+        const scroller = box.closest('.apt-tab-content');
+        // Where the box goes in: a hidden box has no layout box (its rect is all 0), so measure the
+        // section right after it (MY NOTES), which starts exactly there.
+        let anchor = null, anchorTop = 0;
+        try {
+            const next = box.nextElementSibling;
+            const at = box.hidden ? next : box;
+            if (scroller && next && at
+                    && (keepNotesInPlace || at.getBoundingClientRect().top <= scroller.getBoundingClientRect().top + 1)) {
+                anchor = next;
+                anchorTop = next.getBoundingClientRect().top;
+            }
+        } catch (_) { anchor = null; }
+
+        const el = (tag, cls, text) => {
+            const e = document.createElement(tag);
+            if (cls) e.className = cls;
+            if (text != null) e.textContent = text;
+            return e;
+        };
+        const listOf = (texts) => {
+            const ul = el('ul', 'apt-rmk-list');
+            for (const t of texts) ul.appendChild(el('li', 'apt-rmk', t));
+            return ul;
+        };
+        // A 56 px row that shows / hides `body` (Contacts, FAA admin, More).
+        const toggleFor = (cls, label, body) => {
+            const btn = el('button', cls);
+            btn.type = 'button';
+            btn.setAttribute('aria-expanded', 'false');
+            btn.appendChild(el('span', 'apt-rmk-arrow', '▸'));
+            btn.appendChild(el('span', 'apt-rmk-toggle-label', label));
+            body.hidden = true;
+            const toggle = () => {
+                body.hidden = !body.hidden;
+                btn.firstChild.textContent = body.hidden ? '▸' : '▾';
+                btn.setAttribute('aria-expanded', String(!body.hidden));
+            };
+            if (typeof wireTap === 'function') wireTap(btn, toggle); else btn.addEventListener('click', toggle);
+            return btn;
+        };
+        // The remarks of a group: the first REMARKS_VISIBLE, then "More (n)" over the rest.
+        const items = (texts) => {
+            const n = AirportPopup.REMARKS_VISIBLE;
+            const out = [listOf(texts.slice(0, n))];
+            if (texts.length > n) {
+                const rest = listOf(texts.slice(n));
+                rest.classList.add('apt-rmk-rest');
+                out.push(toggleFor('apt-rmk-toggle apt-rmk-more', `More (${texts.length - n})`, rest), rest);
+            }
+            return out;
+        };
+
+        const nodes = [];
+        if (groups.length) nodes.push(el('div', 'popup-section-title apt-rmk-title', 'FAA REMARKS'));
+        for (const g of groups) {
+            const wrap = el('div', 'apt-rmk-group');
+            wrap.dataset.cat = g.c;
+            if (!g.collapsed) {
+                wrap.append(el('div', 'apt-rmk-label', g.label), ...items(g.texts));
+            } else {
+                const body = el('div', 'apt-rmk-body');
+                body.append(...items(g.texts));
+                wrap.append(toggleFor('apt-rmk-toggle', `${g.label} (${g.texts.length})`, body), body);
+            }
+            nodes.push(wrap);
+        }
+        box.replaceChildren(...nodes);
+        box.hidden = groups.length === 0;
+
+        if (anchor) {
+            try {
+                const delta = anchor.getBoundingClientRect().top - anchorTop;
+                if (delta) scroller.scrollTop += delta;
+            } catch (_) { /* layout only */ }
+        }
     }
 
     /** How long after the notes box gets focus it is scrolled into view again (the keyboard is up by then). */
@@ -703,8 +876,8 @@ class AirportPopup {
                 ${this._frequenciesHtml(apt.frequencies || [], apt.tower)}
                 ${this._fuelHtml(apt)}
                 ${(CockpitConfig.get('ifr.showCdPhone') || CockpitConfig.get('ifr.showCraft')) ? this._ifrHtml(apt) : ''}
-                <!-- FAA REMARKS (read-only, not built yet): fill .apt-faa-remarks and clear its hidden
-                     attribute. It stays hidden while empty. It sits between IFR CLEARANCE and MY NOTES. -->
+                <!-- FAA REMARKS (read-only): filled after the panel is up by _loadFaaRemarks; hidden
+                     while empty. It sits between IFR CLEARANCE and MY NOTES. -->
                 <div class="apt-faa-remarks" hidden></div>
                 <div class="popup-section apt-my-notes">
                     <div class="popup-section-title apt-notes-title">MY NOTES</div>

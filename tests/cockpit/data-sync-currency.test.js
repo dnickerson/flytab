@@ -395,6 +395,29 @@ describe('final review 2026-10-17: NASR is current only once the app has loaded 
         expect(imported).toHaveLength(0);
     });
 
+    // Review I1 (2026-11-02): an older FlyTab imported this cycle without its FAA remarks.
+    it('NASR files current and loaded, but its FAA remarks are not (remarksNeedImport): loaded again', async () => {
+        const { ds } = setup();
+        const imported = [], asked = [];
+        const loaded = { effective_date: '2026-10-01', bundle_version: 11, remarks_count: 18179 };
+        native({ importNasrBundle: async (b) => { imported.push(b); return 1; },
+                 getCycleInfo: async () => loaded,
+                 remarksNeedImport: async (ci) => { asked.push(ci); return true; } });
+        await ds._syncAll(null, () => {}, () => {}, () => {});
+        expect(asked).toEqual([loaded]);
+        expect(imported).toHaveLength(1);
+    });
+
+    it('NASR files current and loaded, remarks loaded too (or retries used up): no reimport', async () => {
+        const { ds } = setup();
+        const imported = [];
+        native({ importNasrBundle: async (b) => { imported.push(b); return 1; },
+                 getCycleInfo: async () => ({ effective_date: '2026-10-01', bundle_version: 11 }),
+                 remarksNeedImport: async () => false });
+        await ds._syncAll(null, () => {}, () => {}, () => {});
+        expect(imported).toHaveLength(0);
+    });
+
     it('a failure redrawing the map after a good import is not a failed import', async () => {
         setup();
         native({ importNasrBundle: async () => 5 });
