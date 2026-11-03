@@ -7899,6 +7899,20 @@ body.fs-overlay-open .radar-loop-controls {
     margin-top: 6px;
 }
 .glide-amber { color: var(--color-caution-on-light); font-weight: 900; }
+/* ENGINE OUT on but no glide numbers (no GPS / no 3D fix / airport without a check): one neutral
+   status line in place of the block. Not a verdict: no success/caution/danger colour.
+   --text-secondary #444 on --bg-surface-raised #fff = 9.74:1 (8.93:1 on the panel's #f5f5f5). */
+.glide-status {
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--border);
+    border-left: 6px solid var(--border-strong);
+    background: var(--bg-surface-raised);
+    font-family: var(--font-ui);
+    font-size: var(--text-sm);
+    font-weight: 800;
+    line-height: 1.25;
+    color: var(--text-secondary);
+}
 
 /* .apt-panel-close sizing handled by .btn-close */
 

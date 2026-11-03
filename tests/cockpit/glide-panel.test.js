@@ -100,6 +100,21 @@ const text = () => {
     return d.textContent.replace(/\s+/g, ' ').trim();
 };
 const block = () => host.querySelector('.glide-block');
+const status = () => host.querySelector('.glide-status');
+/** The status line instead of the block: exactly one element, the given text, no digits, no map layer. */
+function expectStatus(msg) {
+    expect(block()).toBeNull();
+    expect(host.hidden).toBe(false);
+    expect(host.children).toHaveLength(1);
+    expect(status()).not.toBeNull();
+    expect(text()).toBe(`ENGINE OUT · ${msg}`);
+    expect(text().replace(/\b3D\b/g, '')).not.toMatch(/\d/);   // never a number ("3D" aside), so never a stale one
+    expect(map.layers.size).toBe(0);
+}
+const NO_GPS = 'no GPS — needs the Stratux GPS over WiFi';
+const NO_FIX = 'waiting for a 3D GPS fix';
+const NOT_HERE = 'not available for this airport';
+const UNAVAILABLE = 'glide check unavailable';
 const mapShapes = () => [...map.layers].flatMap((g) => g.layers);
 
 /**
@@ -217,41 +232,45 @@ describe('GlidePanel verdicts', () => {
         expect(text()).toMatch(/^NO SUITABLE RUNWAY · steer to the airport \d{3} ft to spare over the airport/);
     });
 
-    it('excluded heliport shows no block', () => {
+    it('excluded heliport / seaplane base: no block, "not available for this airport"', () => {
         sit = situation(0, 5, 4500, 160);
         panel = new GlidePanel(host, { ...KLKR, fac_type: 'HELIPORT' });
         panel.start();
-        expect(host.innerHTML).toBe('');
-        expect(host.hidden).toBe(true);
-        expect(map.layers.size).toBe(0);
+        expectStatus(NOT_HERE);
         expect(vi.getTimerCount()).toBe(0);              // nothing ticks for an airport that never has a block
+        panel.stop();
+        panel = new GlidePanel(host, { ...KLKR, fac_type: 'SEAPLANE BASE' });
+        panel.start();
+        expectStatus(NOT_HERE);
     });
 
-    it('no field elevation shows no block', () => {
+    it('no field elevation / no reference position: no block, "not available for this airport"', () => {
         sit = situation(0, 5, 4500, 160);
         const { elev_ft, ...noElev } = KLKR;
         panel = new GlidePanel(host, noElev);
         panel.start();
-        expect(host.innerHTML).toBe('');
-        expect(map.layers.size).toBe(0);
+        expectStatus(NOT_HERE);
+        expect(vi.getTimerCount()).toBe(0);
+        panel.stop();
+        panel = new GlidePanel(host, { ...KLKR, lat: null });
+        panel.start();
+        expectStatus(NOT_HERE);
         expect(vi.getTimerCount()).toBe(0);
     });
 });
 
 describe('GlidePanel live behaviour', () => {
-    it('GPS lost hides the block', () => {
+    it('GPS lost replaces the block with the status line', () => {
         sit = situation(180, 6, 5500, 360);
         panel = new GlidePanel(host, KLKR);
         panel.start();
         expect(block()).not.toBeNull();
         expect(map.layers.size).toBe(1);
 
-        // situation older than 5 s: block and line disappear (not frozen numbers)
+        // situation older than 5 s: block and line disappear (not frozen numbers); the status says why
         vi.setSystemTime(NOW + 6000);
         vi.advanceTimersByTime(GlidePanel.UPDATE_MS);
-        expect(host.innerHTML).toBe('');
-        expect(host.hidden).toBe(true);
-        expect(map.layers.size).toBe(0);
+        expectStatus(NO_GPS);
 
         // back: fresh situation
         sit = { ...situation(180, 6, 5500, 360), timestamp: NOW + 6500 };
@@ -262,8 +281,7 @@ describe('GlidePanel live behaviour', () => {
         // no 3D fix
         sit = { ...sit, gps_fix_quality: 0 };
         vi.advanceTimersByTime(GlidePanel.UPDATE_MS);
-        expect(host.innerHTML).toBe('');
-        expect(map.layers.size).toBe(0);
+        expectStatus(NO_FIX);
 
         // slow / on the ground: still shown - the panel has no ground-speed gate (ENGINE OUT turns it off)
         sit = { ...situation(180, 6, 5500, 360), timestamp: Date.now(), ground_speed: 12 };
@@ -423,8 +441,8 @@ describe('GlidePanel live behaviour', () => {
             panel.start();
             fly(base, 10, 600);
             expect(measuredVal()).toBe('600 fpm');
-            vi.advanceTimersByTime(6000);                    // situation now 6 s old: block hidden
-            expect(host.innerHTML).toBe('');
+            vi.advanceTimersByTime(6000);                    // situation now 6 s old: block replaced by the status
+            expectStatus(NO_GPS);
             sit = { ...base, alt_msl: base.alt_msl - 100, timestamp: Date.now() + GlidePanel.UPDATE_MS };
             vi.advanceTimersByTime(GlidePanel.UPDATE_MS);
             expect(measuredVal()).toBe('—');                 // the old samples are gone
@@ -463,13 +481,12 @@ describe('GlidePanel live behaviour', () => {
             expect(text()).toContain(`✓ GLIDE OK · ${Math.floor(want.spare)} ft to spare`);
         });
 
-        it('only GDL 90 situations arriving: no block', () => {
+        it('only GDL 90 situations arriving: no block ("no GPS")', () => {
             sit = null;
             gdlSit = situation(180, 6, 5500, 360);
             panel = new GlidePanel(host, KLKR);
             panel.start();
-            expect(host.innerHTML).toBe('');
-            expect(map.layers.size).toBe(0);
+            expectStatus(NO_GPS);
             // a WS situation that went stale while GDL 90 keeps arriving: no block either
             sit = situation(180, 6, 5500, 360);
             vi.advanceTimersByTime(GlidePanel.UPDATE_MS);
@@ -477,12 +494,11 @@ describe('GlidePanel live behaviour', () => {
             vi.advanceTimersByTime(6000);
             gdlSit = { ...gdlSit, timestamp: Date.now() };
             vi.advanceTimersByTime(GlidePanel.UPDATE_MS);
-            expect(host.innerHTML).toBe('');
-            expect(map.layers.size).toBe(0);
+            expectStatus(NO_GPS);
         });
     });
 
-    it('a failed runway-wind refresh hides the block (no frozen numbers)', async () => {
+    it('a failed runway-wind refresh replaces the block with "glide check unavailable" (no frozen numbers)', async () => {
         sit = situation(180, 6, 5500, 360);
         panel = new GlidePanel(host, KLKR);
         panel.start();
@@ -490,8 +506,7 @@ describe('GlidePanel live behaviour', () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         vi.spyOn(panel, 'render').mockImplementationOnce(() => { throw new Error('render'); });
         await vi.advanceTimersByTimeAsync(0);              // runwayWind resolves -> render throws
-        expect(host.innerHTML).toBe('');
-        expect(map.layers.size).toBe(0);
+        expectStatus(UNAVAILABLE);
         warn.mockRestore();
     });
 
@@ -563,6 +578,141 @@ describe('GlidePanel live behaviour', () => {
         pending.shift()(null);
         await vi.advanceTimersByTimeAsync(GlidePanel.WIND_REFRESH_MS);
         expect(globalThis.window.app._nasrDb.getWeather).toHaveBeenCalledTimes(2);
+    });
+});
+
+describe('GlidePanel status line while ENGINE OUT is on and no glide numbers can be shown', () => {
+    it('no WebSocket situation at all: "no GPS", no numbers, no map layer; ticks on', () => {
+        sit = null;
+        panel = new GlidePanel(host, KLKR);
+        panel.start();
+        expectStatus(NO_GPS);
+        expect(status().getAttribute('data-reason')).toBe('nogps');
+        expect(vi.getTimerCount()).toBe(2);              // still updating: a fix replaces the status on the next tick
+        vi.advanceTimersByTime(5 * GlidePanel.UPDATE_MS);
+        expectStatus(NO_GPS);
+    });
+
+    it('a situation older than SIT_MAX_AGE_MS: "no GPS" (also when it reports no fix)', () => {
+        sit = situation(180, 6, 5500, 360, { timestamp: NOW - GlideInputs.SIT_MAX_AGE_MS - 1 });
+        panel = new GlidePanel(host, KLKR);
+        panel.start();
+        expectStatus(NO_GPS);
+        panel.stop();
+        sit = situation(180, 6, 5500, 360, { timestamp: NOW - 60000, gps_fix_quality: 0 });
+        panel = new GlidePanel(host, KLKR);
+        panel.start();
+        expectStatus(NO_GPS);
+        panel.stop();
+        sit = situation(180, 6, 5500, 360, { timestamp: undefined });
+        panel = new GlidePanel(host, KLKR);
+        panel.start();
+        expectStatus(NO_GPS);
+    });
+
+    it('fresh situation without a 3D fix (quality 0, 6, gps_3d false, 0/0): "waiting for a 3D GPS fix"', () => {
+        for (const over of [{ gps_fix_quality: 0 }, { gps_fix_quality: 6 }, { gps_3d: false }, { lat: 0, lon: 0 }]) {
+            sit = situation(180, 6, 5500, 360, over);
+            panel = new GlidePanel(host, KLKR);
+            panel.start();
+            expectStatus(NO_FIX);
+            expect(status().getAttribute('data-reason')).toBe('nofix');
+            panel.stop();
+            panel = null;
+        }
+    });
+
+    it('a 3D fix without altitude or track: "glide check unavailable"', () => {
+        sit = situation(180, 6, 5500, 360, { alt_msl: null });
+        panel = new GlidePanel(host, KLKR);
+        panel.start();
+        expectStatus(UNAVAILABLE);
+    });
+
+    it('a non-finite plan: "glide check unavailable", no numbers, no line', () => {
+        sit = situation(180, 6, 5500, 360);
+        panel = new GlidePanel(host, KLKR);
+        panel.start();
+        expect(block()).not.toBeNull();
+        expect(map.layers.size).toBe(1);
+        const real = GlideModel.plan;
+        GlideModel.plan = (...a) => ({ ...real(...a), spare: NaN });
+        try {
+            vi.advanceTimersByTime(GlidePanel.UPDATE_MS);
+            expectStatus(UNAVAILABLE);
+        } finally {
+            GlideModel.plan = real;
+        }
+        sit = { ...sit, timestamp: Date.now() };
+        vi.advanceTimersByTime(GlidePanel.UPDATE_MS);
+        expect(block()).not.toBeNull();
+    });
+
+    it('a model update that throws: "glide check unavailable"', () => {
+        sit = situation(180, 6, 5500, 360);
+        panel = new GlidePanel(host, KLKR);
+        panel.start();
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        vi.spyOn(panel, 'render').mockImplementationOnce(() => { throw new Error('boom'); });
+        vi.advanceTimersByTime(GlidePanel.UPDATE_MS);
+        expectStatus(UNAVAILABLE);
+        warn.mockRestore();
+    });
+
+    it('fix arrives -> the block with numbers replaces the status and the line is drawn; fix lost -> status, line gone', () => {
+        sit = null;
+        panel = new GlidePanel(host, KLKR);
+        panel.start();
+        expectStatus(NO_GPS);
+        sit = situation(180, 6, 5500, 360, { gps_fix_quality: 0, timestamp: Date.now() });
+        vi.advanceTimersByTime(GlidePanel.UPDATE_MS);
+        expectStatus(NO_FIX);
+
+        sit = situation(180, 6, 5500, 360, { timestamp: Date.now() + GlidePanel.UPDATE_MS });
+        vi.advanceTimersByTime(GlidePanel.UPDATE_MS);
+        expect(status()).toBeNull();
+        expect(block()).not.toBeNull();
+        expect(text()).toMatch(/^✓ GLIDE OK · \d{1,3} ft to spare/);
+        expect(mapShapes().map((s) => s.type).sort()).toEqual(['polyline', 'polyline', 'ring']);
+
+        sit = { ...sit, gps_fix_quality: 0, timestamp: Date.now() + GlidePanel.UPDATE_MS };
+        vi.advanceTimersByTime(GlidePanel.UPDATE_MS);
+        expectStatus(NO_FIX);
+
+        vi.advanceTimersByTime(GlideInputs.SIT_MAX_AGE_MS + GlidePanel.UPDATE_MS);   // nothing new arrives
+        expectStatus(NO_GPS);
+    });
+
+    it('the status line is not rewritten every tick while the reason stays the same', () => {
+        sit = null;
+        panel = new GlidePanel(host, KLKR);
+        panel.start();
+        const el = status();
+        vi.advanceTimersByTime(3 * GlidePanel.UPDATE_MS);
+        expect(status()).toBe(el);
+    });
+
+    it('stop() (ENGINE OUT off) removes the status line too', () => {
+        sit = null;
+        panel = new GlidePanel(host, KLKR);
+        panel.start();
+        expectStatus(NO_GPS);
+        panel.stop();
+        expect(host.innerHTML).toBe('');
+        expect(host.hidden).toBe(true);
+        expect(vi.getTimerCount()).toBe(0);
+        expect(map.layers.size).toBe(0);
+    });
+
+    it('CSS: neutral colours (no verdict fill), text >= --text-sm at weight 800', () => {
+        const css = read('web/style.css');
+        const i = css.indexOf('.glide-status {');
+        expect(i).toBeGreaterThan(-1);
+        const rule = css.slice(i, css.indexOf('}', i));
+        expect(rule).toMatch(/color:\s*var\(--text-secondary\)/);
+        expect(rule).toMatch(/font-size:\s*var\(--text-sm\)/);
+        expect(rule).toMatch(/font-weight:\s*800/);
+        expect(rule).not.toMatch(/success|caution|danger|#[0-9a-f]{3,6}/i);
     });
 });
 

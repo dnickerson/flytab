@@ -108,6 +108,8 @@ function open(rec = KLKR) {
 }
 const btn = () => cur._panel.querySelector('.apt-glide-toggle');
 const block = () => cur._panel.querySelector('.glide-host .glide-block');
+const statusLine = () => cur._panel.querySelector('.glide-host .glide-status');
+const statusText = () => (statusLine() ? statusLine().textContent.trim() : null);
 
 describe('ENGINE OUT button', () => {
     it('sits directly under the close button, labelled ENGINE OUT, at least the touch minimum', () => {
@@ -200,13 +202,16 @@ describe('ENGINE OUT button', () => {
         open();
         expect(block()).not.toBeNull();
         expect(map.layers.size).toBe(1);
-        // the other checks still apply: no 3D fix -> no block, stale -> no block
+        // the other checks still apply: no 3D fix -> no block, stale -> no block; the status line says why
         sit = { ...sit, gps_fix_quality: 0, timestamp: Date.now() };
         vi.advanceTimersByTime(1000);
         expect(block()).toBeNull();
+        expect(statusText()).toBe('ENGINE OUT · waiting for a 3D GPS fix');
+        expect(map.layers.size).toBe(0);
         sit = { ...situation(90, 0.2, 490, 0, { ground_speed: 0 }), timestamp: Date.now() - 6000 };
         vi.advanceTimersByTime(1000);
         expect(block()).toBeNull();
+        expect(statusText()).toBe('ENGINE OUT · no GPS — needs the Stratux GPS over WiFi');
         expect(map.layers.size).toBe(0);
     });
 
@@ -224,6 +229,7 @@ describe('ENGINE OUT button', () => {
     it('an airport that can never have a block (heliport) still toggles the choice', () => {
         open({ ...KLKR, icao: 'SC99', fac_type: 'HELIPORT' });
         expect(block()).toBeNull();
+        expect(statusText()).toBe('ENGINE OUT · not available for this airport');
         btn().click();
         expect(localStorage.getItem(KEY)).toBe('false');
         expect(btn().classList.contains('is-on')).toBe(false);
@@ -231,6 +237,42 @@ describe('ENGINE OUT button', () => {
         expect(localStorage.getItem(KEY)).toBe('true');
         expect(btn().classList.contains('is-on')).toBe(true);
         expect(block()).toBeNull();
+        expect(statusText()).toBe('ENGINE OUT · not available for this airport');
+        expect(map.layers.size).toBe(0);
+    });
+
+    it('on the ground with no GPS: ON says "no GPS" (no numbers, no line); a fix brings the block; OFF removes everything', () => {
+        globalThis.window.app.stratuxClient = { situation: null, wsSituation: null };
+        open();
+        expect(btn().classList.contains('is-on')).toBe(true);
+        expect(block()).toBeNull();
+        expect(statusText()).toBe('ENGINE OUT · no GPS — needs the Stratux GPS over WiFi');
+        expect(cur._panel.querySelector('.glide-host').previousElementSibling.classList.contains('apt-panel-header')).toBe(true);
+        expect(cur._panel.querySelector('.glide-host').textContent).not.toMatch(/\d/);
+        expect(map.layers.size).toBe(0);
+
+        // OFF and ON again with still no GPS: the status comes back, nothing else
+        btn().click();
+        expect(cur._panel.querySelector('.glide-host')).toBeNull();
+        expect(map.layers.size).toBe(0);
+        btn().click();
+        expect(statusText()).toBe('ENGINE OUT · no GPS — needs the Stratux GPS over WiFi');
+
+        // the Stratux GPS gets a fix: the block replaces the status on the next tick
+        const s = situation(90, 0.2, 490, 0, { ground_speed: 0 });
+        globalThis.window.app.stratuxClient = { situation: s, wsSituation: s };
+        s.timestamp = Date.now() + 500;
+        vi.advanceTimersByTime(1000);
+        expect(statusLine()).toBeNull();
+        expect(block()).not.toBeNull();
+        expect(map.layers.size).toBe(1);
+
+        // OFF: nothing left
+        btn().click();
+        expect(cur._panel.querySelector('.glide-host')).toBeNull();
+        expect(map.layers.size).toBe(0);
+        vi.advanceTimersByTime(5000);
+        expect(cur._panel.querySelector('.glide-host')).toBeNull();
         expect(map.layers.size).toBe(0);
     });
 
