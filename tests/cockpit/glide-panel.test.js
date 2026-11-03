@@ -113,6 +113,7 @@ function expectStatus(msg) {
 }
 const NO_GPS = 'no GPS — needs the Stratux GPS over WiFi';
 const NO_FIX = 'waiting for a 3D GPS fix';
+const NO_ALT = 'no GPS altitude from the Stratux';
 const NOT_HERE = 'not available for this airport';
 const UNAVAILABLE = 'glide check unavailable';
 const mapShapes = () => [...map.layers].flatMap((g) => g.layers);
@@ -481,12 +482,13 @@ describe('GlidePanel live behaviour', () => {
             expect(text()).toContain(`✓ GLIDE OK · ${Math.floor(want.spare)} ft to spare`);
         });
 
-        it('only GDL 90 situations arriving: no block ("no GPS")', () => {
+        it('only GDL 90 situations arriving: no block ("no GPS altitude from the Stratux")', () => {
             sit = null;
             gdlSit = situation(180, 6, 5500, 360);
             panel = new GlidePanel(host, KLKR);
             panel.start();
-            expectStatus(NO_GPS);
+            expectStatus(NO_ALT);
+            expect(status().getAttribute('data-reason')).toBe('noalt');
             // a WS situation that went stale while GDL 90 keeps arriving: no block either
             sit = situation(180, 6, 5500, 360);
             vi.advanceTimersByTime(GlidePanel.UPDATE_MS);
@@ -494,6 +496,9 @@ describe('GlidePanel live behaviour', () => {
             vi.advanceTimersByTime(6000);
             gdlSit = { ...gdlSit, timestamp: Date.now() };
             vi.advanceTimersByTime(GlidePanel.UPDATE_MS);
+            expectStatus(NO_ALT);
+            // and the GDL 90 position stops too: plain "no GPS"
+            vi.advanceTimersByTime(GlideInputs.SIT_MAX_AGE_MS + GlidePanel.UPDATE_MS);
             expectStatus(NO_GPS);
         });
     });
@@ -590,6 +595,40 @@ describe('GlidePanel status line while ENGINE OUT is on and no glide numbers can
         expect(status().getAttribute('data-reason')).toBe('nogps');
         expect(vi.getTimerCount()).toBe(2);              // still updating: a fix replaces the status on the next tick
         vi.advanceTimersByTime(5 * GlidePanel.UPDATE_MS);
+        expectStatus(NO_GPS);
+    });
+
+    it('plain no-GPS cases keep "no GPS — needs the Stratux GPS over WiFi" (not the altitude wording)', () => {
+        // nothing at all
+        sit = null; gdlSit = null;
+        panel = new GlidePanel(host, KLKR);
+        panel.start();
+        expectStatus(NO_GPS);
+        expect(status().getAttribute('data-reason')).toBe('nogps');
+        panel.stop();
+        // a fresh GDL 90 situation without a 3D fix
+        gdlSit = situation(180, 6, 5500, 360, { gps_fix_quality: 0 });
+        panel = new GlidePanel(host, KLKR);
+        panel.start();
+        expectStatus(NO_GPS);
+        panel.stop();
+        // a GDL 90 situation that is stale too
+        gdlSit = situation(180, 6, 5500, 360, { timestamp: NOW - GlideInputs.SIT_MAX_AGE_MS - 1 });
+        panel = new GlidePanel(host, KLKR);
+        panel.start();
+        expectStatus(NO_GPS);
+        panel.stop();
+        // the stale WS situation is still the latest situation (nothing arrived after it)
+        sit = situation(180, 6, 5500, 360, { timestamp: NOW - 60000 }); gdlSit = null;
+        panel = new GlidePanel(host, KLKR);
+        panel.start();
+        expectStatus(NO_GPS);
+        panel.stop();
+        // a fresh fix injected by another source (engine-GPS bridge), not the Stratux's own
+        sit = null;
+        gdlSit = situation(180, 6, 5500, 360, { _source: 'engine' });
+        panel = new GlidePanel(host, KLKR);
+        panel.start();
         expectStatus(NO_GPS);
     });
 

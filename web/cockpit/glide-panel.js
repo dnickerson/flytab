@@ -14,8 +14,8 @@
  * No block (and no line) without a 3D GPS fix, with a situation older than 5 s, for a heliport /
  * seaplane base, or when the airport has no elevation or position: GlideInputs decides. Instead of
  * the block, while started, one status line says why (GlidePanel.STATUS, never a number, never a
- * verdict colour): no GPS / waiting for a 3D GPS fix / not available for this airport / glide check
- * unavailable. Only stop() (ENGINE OUT off, panel closed) empties the host. There is no
+ * verdict colour): no GPS / no GPS altitude from the Stratux / waiting for a 3D GPS fix / not
+ * available for this airport / glide check unavailable. Only stop() (ENGINE OUT off, panel closed) empties the host. There is no
  * ground-speed gate here (the pilot turns the block on / off with ENGINE OUT), so it shows on the
  * ground too: aircraft() gets the settings with showAboveGsKt 0 (GlidePanel.noGsGate). EmergencyGlide
  * still passes the configured showAboveGsKt.
@@ -124,13 +124,17 @@ class GlidePanel {
         // The last WebSocket situation only: its alt_msl is true GPS MSL, from one source. A GDL 90 situation
         // carries the height above the ellipsoid as alt_msl (Stratux's Ownship Geometric Altitude), so it is
         // never used here; with no fresh WebSocket situation there is no block (err high).
-        const sit = (typeof window !== 'undefined' && window.app && window.app.stratuxClient)
-            ? window.app.stratuxClient.wsSituation : null;
+        const sc = (typeof window !== 'undefined' && window.app && window.app.stratuxClient) || null;
+        const sit = sc ? sc.wsSituation : null;
         const gated = GlidePanel.noGsGate(S);
         const ac = GlideInputs.aircraft(sit, gated, ref, now);
         if (!ac) {
             this._vsSamples = [];
-            return this._status(GlidePanel._statusFor(GlideInputs.aircraftStatus(sit, gated, now)));
+            let key = GlidePanel._statusFor(GlideInputs.aircraftStatus(sit, gated, now));
+            // No fresh WebSocket situation, but the Stratux's own latest situation (GDL 90) is a fresh 3D fix:
+            // own-ship is on the map, only the WebSocket's GPS MSL altitude is missing.
+            if (key === 'nogps' && GlidePanel._stratuxFixWithoutWs(sc && sc.situation, now)) key = 'noalt';
+            return this._status(key);
         }
         // MEASURED: the descent rate from GPS altitude. situation.vertical_speed is not used: Stratux never
         // fills GPSVerticalSpeed (WebSocket 0), GDL 90 sends none, the engine-GPS bridge sends 0.
@@ -339,6 +343,15 @@ class GlidePanel {
         }
     }
 
+    /**
+     * A situation from the Stratux itself (no _source: not the engine-GPS bridge or device GPS), no older
+     * than GlideInputs.SIT_MAX_AGE_MS, with a 3D fix - the GDL 90-only case when the WebSocket one is missing.
+     */
+    static _stratuxFixWithoutWs(s, now) {
+        return !!s && !s._source && Number.isFinite(s.timestamp) && now - s.timestamp <= GlideInputs.SIT_MAX_AGE_MS
+            && GpsFix.has3DFix(s);
+    }
+
     /** GlideInputs.aircraftStatus() reason -> GlidePanel.STATUS key. */
     static _statusFor(reason) {
         if (reason === 'nogps' || reason === 'stale') return 'nogps';
@@ -373,12 +386,15 @@ class GlidePanel {
 /**
  * The status line shown, after "ENGINE OUT · ", while started with no glide numbers to show:
  *   nogps       no Stratux WebSocket situation, or none for GlideInputs.SIT_MAX_AGE_MS
+ *   noalt       as nogps, but the Stratux's GDL 90 situation is a fresh 3D fix (own-ship on the map; the
+ *               glide check needs the WebSocket's GPS MSL altitude, GDL 90's is height above the ellipsoid)
  *   nofix       situations arriving, but no 3D GPS fix
  *   airport     heliport / seaplane base, or no field elevation / reference position
  *   unavailable the model gave a non-finite plan, the update failed, or the fix lacks altitude / track / speed
  */
 GlidePanel.STATUS = Object.freeze({
     nogps: 'no GPS — needs the Stratux GPS over WiFi',
+    noalt: 'no GPS altitude from the Stratux',
     nofix: 'waiting for a 3D GPS fix',
     airport: 'not available for this airport',
     unavailable: 'glide check unavailable',
