@@ -475,25 +475,31 @@ class AirportPopup {
     /**
      * Fill the remarks box, but never while the MY NOTES box has focus: the remarks sit above it and
      * would push it (and the caret) down. Then it waits for the notes box's blur, which runs after
-     * the notes' own blur handler (that one restores the normal layout).
+     * the notes' own blur handler (that one restores the normal layout and brings the notes into
+     * view); the box is then filled with MY NOTES kept where it is on screen.
      */
-    _showFaaRemarksWhenNotesIdle(box, list) {
+    _showFaaRemarksWhenNotesIdle(box, list, keepNotesInPlace = false) {
         if (!box.isConnected) return;
         const ta = this._panel?.querySelector('.apt-notes-text');
         if (ta && (document.activeElement === ta || this._panel.classList.contains('apt-notes-editing'))) {
-            ta.addEventListener('blur', () => this._showFaaRemarksWhenNotesIdle(box, list), { once: true });
+            ta.addEventListener('blur', () => this._showFaaRemarksWhenNotesIdle(box, list, true), { once: true });
             return;
         }
-        this._fillFaaRemarks(box, list);
+        this._fillFaaRemarks(box, list, keepNotesInPlace);
     }
+
+    /** Remarks shown per group before a "More (n)" row (KADW has 63, KATL ~3,000 px of them). */
+    static REMARKS_VISIBLE = 6;
 
     /**
      * Build the FAA REMARKS section: title, groups with a small label, Contacts and FAA admin behind
-     * a tap that shows the count. DOM built with textContent only: remark text (some has '<', '&')
-     * never goes through innerHTML. Hidden when there is nothing to show. If the pilot had scrolled
-     * past the box, the tab content is scrolled by what it grew, so what they were reading stays put.
+     * a tap that shows the count; in any group only the first REMARKS_VISIBLE remarks show, the rest
+     * behind a "More (n)" tap. DOM built with textContent only: remark text (some has '<', '&')
+     * never goes through innerHTML. Hidden when there is nothing to show. If the box goes in above
+     * the visible part of the tab (or keepNotesInPlace: drawn when the notes box lost focus), the tab
+     * content is scrolled by what the box grew, so MY NOTES / what the pilot was reading stays put.
      */
-    _fillFaaRemarks(box, list) {
+    _fillFaaRemarks(box, list, keepNotesInPlace = false) {
         const groups = AirportPopup._remarkGroups(list);
         const scroller = box.closest('.apt-tab-content');
         // Where the box goes in: a hidden box has no layout box (its rect is all 0), so measure the
@@ -502,7 +508,8 @@ class AirportPopup {
         try {
             const next = box.nextElementSibling;
             const at = box.hidden ? next : box;
-            if (scroller && next && at && at.getBoundingClientRect().top <= scroller.getBoundingClientRect().top + 1) {
+            if (scroller && next && at
+                    && (keepNotesInPlace || at.getBoundingClientRect().top <= scroller.getBoundingClientRect().top + 1)) {
                 anchor = next;
                 anchorTop = next.getBoundingClientRect().top;
             }
@@ -519,6 +526,33 @@ class AirportPopup {
             for (const t of texts) ul.appendChild(el('li', 'apt-rmk', t));
             return ul;
         };
+        // A 56 px row that shows / hides `body` (Contacts, FAA admin, More).
+        const toggleFor = (cls, label, body) => {
+            const btn = el('button', cls);
+            btn.type = 'button';
+            btn.setAttribute('aria-expanded', 'false');
+            btn.appendChild(el('span', 'apt-rmk-arrow', '▸'));
+            btn.appendChild(el('span', 'apt-rmk-toggle-label', label));
+            body.hidden = true;
+            const toggle = () => {
+                body.hidden = !body.hidden;
+                btn.firstChild.textContent = body.hidden ? '▸' : '▾';
+                btn.setAttribute('aria-expanded', String(!body.hidden));
+            };
+            if (typeof wireTap === 'function') wireTap(btn, toggle); else btn.addEventListener('click', toggle);
+            return btn;
+        };
+        // The remarks of a group: the first REMARKS_VISIBLE, then "More (n)" over the rest.
+        const items = (texts) => {
+            const n = AirportPopup.REMARKS_VISIBLE;
+            const out = [listOf(texts.slice(0, n))];
+            if (texts.length > n) {
+                const rest = listOf(texts.slice(n));
+                rest.classList.add('apt-rmk-rest');
+                out.push(toggleFor('apt-rmk-toggle apt-rmk-more', `More (${texts.length - n})`, rest), rest);
+            }
+            return out;
+        };
 
         const nodes = [];
         if (groups.length) nodes.push(el('div', 'popup-section-title apt-rmk-title', 'FAA REMARKS'));
@@ -526,24 +560,11 @@ class AirportPopup {
             const wrap = el('div', 'apt-rmk-group');
             wrap.dataset.cat = g.c;
             if (!g.collapsed) {
-                wrap.appendChild(el('div', 'apt-rmk-label', g.label));
-                wrap.appendChild(listOf(g.texts));
+                wrap.append(el('div', 'apt-rmk-label', g.label), ...items(g.texts));
             } else {
-                const btn = el('button', 'apt-rmk-toggle');
-                btn.type = 'button';
-                btn.setAttribute('aria-expanded', 'false');
-                btn.appendChild(el('span', 'apt-rmk-arrow', '▸'));
-                btn.appendChild(el('span', 'apt-rmk-toggle-label', `${g.label} (${g.texts.length})`));
-                const body = listOf(g.texts);
-                body.hidden = true;
-                const toggle = () => {
-                    body.hidden = !body.hidden;
-                    btn.firstChild.textContent = body.hidden ? '▸' : '▾';
-                    btn.setAttribute('aria-expanded', String(!body.hidden));
-                };
-                if (typeof wireTap === 'function') wireTap(btn, toggle); else btn.addEventListener('click', toggle);
-                wrap.appendChild(btn);
-                wrap.appendChild(body);
+                const body = el('div', 'apt-rmk-body');
+                body.append(...items(g.texts));
+                wrap.append(toggleFor('apt-rmk-toggle', `${g.label} (${g.texts.length})`, body), body);
             }
             nodes.push(wrap);
         }

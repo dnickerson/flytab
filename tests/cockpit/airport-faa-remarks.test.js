@@ -65,10 +65,11 @@ const infoPane = () => document.querySelector('.apt-tab-pane[data-pane="info"]')
 /** What the pilot sees, group by group: [label, [texts], collapsed?]. */
 function shown() {
     return [...box().querySelectorAll('.apt-rmk-group')].map((g) => {
-        const toggle = g.querySelector('.apt-rmk-toggle');
+        const body = g.querySelector(':scope > .apt-rmk-body');        // collapsed group (Contacts, FAA admin)
+        const toggle = body ? g.querySelector(':scope > .apt-rmk-toggle') : null;
         const label = toggle ? toggle.querySelector('.apt-rmk-toggle-label').textContent : g.querySelector('.apt-rmk-label').textContent;
         const texts = [...g.querySelectorAll('.apt-rmk')].map((li) => li.textContent);
-        return toggle ? [label, texts, g.querySelector('.apt-rmk-list').hidden] : [label, texts];
+        return toggle ? [label, texts, body.hidden] : [label, texts];
     });
 }
 
@@ -117,6 +118,7 @@ describe('FAA REMARKS in INFO', () => {
         await settle();
         const btn = box().querySelector('.apt-rmk-toggle');
         const list = btn.nextElementSibling;
+        expect(list.classList.contains('apt-rmk-body')).toBe(true);
         expect(btn.tagName).toBe('BUTTON');
         expect(btn.getAttribute('aria-expanded')).toBe('false');
         expect(btn.querySelector('.apt-rmk-arrow').textContent).toBe('▸');
@@ -198,7 +200,7 @@ describe('FAA REMARKS in INFO', () => {
         expect(window.__rmkXss).toBeUndefined();
         // the source does not build remarks with innerHTML / insertAdjacentHTML
         const src = read('web/cockpit/airport-popup.js');
-        const body = src.slice(src.indexOf('_fillFaaRemarks(box, list) {'), src.indexOf('/** How long after the notes box gets focus'));
+        const body = src.slice(src.indexOf('_fillFaaRemarks(box, list, keepNotesInPlace = false) {'), src.indexOf('/** How long after the notes box gets focus'));
         expect(body.length).toBeGreaterThan(500);
         expect(body).not.toMatch(/innerHTML|outerHTML|insertAdjacentHTML/);
     });
@@ -229,6 +231,75 @@ describe('FAA REMARKS in INFO', () => {
         await settle();
         expect(box().hidden).toBe(true);
         expect(document.querySelectorAll('.apt-tab').length).toBe(6);
+    });
+});
+
+describe('long groups: the first 6, then "More (n)"', () => {
+    const many = (c, n, rwy = null) => Array.from({ length: n }, (_, i) => [`E${i}`, c, `${c.toUpperCase()} REMARK ${i + 1}`, rwy]);
+
+    it('a group of 9: 6 shown, a 56 px-class "More (3)" row over the other 3; a tap shows them, another hides them', async () => {
+        remarks.KADW = many('gen', 9);
+        newPopup()._showPanel({ ...KLKR, icao: 'KADW' }, null);
+        await settle();
+        const g = box().querySelector('.apt-rmk-group');
+        const lists = g.querySelectorAll(':scope > .apt-rmk-list');
+        expect(lists).toHaveLength(2);
+        expect([...lists[0].children].map((li) => li.textContent)).toEqual(many('gen', 6).map((t) => t[2]));
+        expect(lists[0].hidden).toBe(false);
+        const more = g.querySelector(':scope > .apt-rmk-more');
+        expect(more.tagName).toBe('BUTTON');
+        expect(more.classList.contains('apt-rmk-toggle')).toBe(true);     // same row style (min-height --touch-min)
+        expect(more.querySelector('.apt-rmk-toggle-label').textContent).toBe('More (3)');
+        expect(more.nextElementSibling).toBe(lists[1]);
+        expect(lists[1].hidden).toBe(true);
+        expect([...lists[1].children].map((li) => li.textContent)).toEqual(['GEN REMARK 7', 'GEN REMARK 8', 'GEN REMARK 9']);
+        more.click();
+        expect(lists[1].hidden).toBe(false);
+        expect(more.getAttribute('aria-expanded')).toBe('true');
+        more.click();
+        expect(lists[1].hidden).toBe(true);
+    });
+
+    it('exactly 6: no More row; every group is limited on its own, order kept', async () => {
+        remarks.KATL = [...many('gen', 6), ...many('rwy', 8, '08L'), ...many('obst', 7, '26R')];
+        newPopup()._showPanel({ ...KLKR, icao: 'KATL' }, null);
+        await settle();
+        const groups = [...box().querySelectorAll('.apt-rmk-group')];
+        expect(groups.map((g) => g.querySelector('.apt-rmk-label').textContent)).toEqual(['General', 'Runway 08L', 'Obstructions · Runway 26R']);
+        expect(groups.map((g) => g.querySelector('.apt-rmk-more')?.textContent ?? null)).toEqual([null, '▸More (2)', '▸More (1)']);
+        // everything is still there, in bundle order
+        expect([...box().querySelectorAll('.apt-rmk')].map((li) => li.textContent)).toEqual(remarks.KATL.map((t) => t[2]));
+    });
+
+    it('a collapsed group longer than 6: its own More row inside, hidden until Contacts is opened', async () => {
+        remarks.SC76 = many('contact', 8);
+        newPopup()._showPanel(SC76, null);
+        await settle();
+        const g = box().querySelector('.apt-rmk-group');
+        const body = g.querySelector('.apt-rmk-body');
+        expect(g.querySelector(':scope > .apt-rmk-toggle .apt-rmk-toggle-label').textContent).toBe('Contacts (8)');
+        expect(body.hidden).toBe(true);
+        const more = body.querySelector('.apt-rmk-more');
+        expect(more.querySelector('.apt-rmk-toggle-label').textContent).toBe('More (2)');
+        g.querySelector(':scope > .apt-rmk-toggle').click();
+        expect(body.hidden).toBe(false);
+        expect(body.querySelector('.apt-rmk-rest').hidden).toBe(true);
+        more.click();
+        expect(body.querySelector('.apt-rmk-rest').hidden).toBe(false);
+    });
+});
+
+describe('category names are data, not code (hasOwnProperty guard)', () => {
+    it("'__proto__', 'constructor', 'toString', 'hasOwnProperty' categories: shown as text under General", async () => {
+        remarks.SC76 = [['X', '__proto__', 'PROTO CAT', '<i>06</i>'], ['Y', 'constructor', 'CTOR CAT', null],
+            ['Z', 'toString', 'TOSTRING CAT', null], ['W', 'hasOwnProperty', 'HOP CAT', null]];
+        newPopup()._showPanel(SC76, null);
+        await settle();
+        expect(shown()).toEqual([['General · Runway <i>06</i>', ['PROTO CAT']], ['General', ['CTOR CAT', 'TOSTRING CAT', 'HOP CAT']]]);
+        expect(box().querySelector('i')).toBeNull();
+        expect([...box().querySelectorAll('.apt-rmk-group')].map((g) => g.dataset.cat)).toEqual(['gen', 'gen']);
+        expect(Object.prototype.toString.call(AirportPopup.REMARK_LABELS)).toBe('[object Object]');
+        expect(({}).constructor).toBe(Object);                     // nothing was assigned through them
     });
 });
 
@@ -348,6 +419,37 @@ describe('MY NOTES is untouched', () => {
         // a second focus/blur does not build it twice
         el.focus(); el.blur();
         expect(box().querySelectorAll('.apt-rmk-group')).toHaveLength(2);
+    });
+
+    it('drawn on blur after waiting for the notes box: MY NOTES stays where it was, even with the box in view', async () => {
+        const slow = deferred();
+        nasr.getRemarks = vi.fn(() => slow.promise);
+        newPopup()._showPanel(SC76, null);
+        await settle();
+        const content = document.querySelector('.apt-tab-content');
+        const notes = document.querySelector('.apt-my-notes');
+        // jsdom has no layout. MY NOTES (where the box goes in) is 155 px below the content's top, and
+        // the content can scroll only 46 px (MY NOTES is the last thing in INFO): after blur it stays
+        // in view, 109 px down, not at the top (the case seen in Chromium: 555 -> 1124 px). The box
+        // then grows 569 px, and the scroll range with it.
+        let grown = 0, st = 0;
+        Object.defineProperty(content, 'scrollTop', { configurable: true, get: () => st, set: (v) => { st = Math.max(0, Math.min(v, 46 + grown)); } });
+        content.getBoundingClientRect = () => ({ top: 400 });
+        box().getBoundingClientRect = () => ({ top: 0 });
+        notes.getBoundingClientRect = () => ({ top: 555 + grown - content.scrollTop });
+        const origReplace = box().replaceChildren.bind(box());
+        box().replaceChildren = (...n) => { origReplace(...n); grown = 569; };
+        ta().focus();
+        slow.resolve(SC76_RMK);
+        await settle();
+        expect(box().hidden).toBe(true);
+        expect(content.scrollTop).toBe(0);
+        ta().blur();
+        // the notes' own blur handler scrolls as far as it can (46 px), then the box is drawn and the
+        // content scrolled by what it grew: MY NOTES stays at 509, not pushed down to 1078
+        expect(box().hidden).toBe(false);
+        expect(content.scrollTop).toBe(46 + 569);
+        expect(notes.getBoundingClientRect().top).toBe(509);
     });
 
     it('the pilot scrolled down to the notes before the remarks came: the tab content is scrolled by what the box grew', async () => {

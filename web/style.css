@@ -8099,10 +8099,13 @@ body.fs-overlay-open .radar-loop-controls {
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
 }
-.apt-rmk-toggle + .apt-rmk-list {
+.apt-rmk-toggle + .apt-rmk-body,
+.apt-rmk-list + .apt-rmk-more,
+.apt-rmk-more + .apt-rmk-rest {
     margin-top: 6px;
 }
-.apt-rmk-list[hidden] {
+.apt-rmk-list[hidden],
+.apt-rmk-body[hidden] {
     display: none;
 }
 
