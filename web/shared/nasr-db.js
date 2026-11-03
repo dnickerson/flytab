@@ -39,7 +39,9 @@ class NasrDB {
     // both store blocks, which it now does. Kept the alert branch's query-method
     // rewrite (below) since it's a strict superset of the old vertex-only test
     // and fixes the TRSA-visibility bug independently of this merge.
-    static DB_VERSION = 11;
+    // 12 — added the 'airport_remarks' object store (FAA airport remarks, bundle
+    // v12, 2026-11-02). Additive only: existing stores and their data are untouched.
+    static DB_VERSION = 12;
     // indexedDB.open() can stay pending forever: an upgrade blocked by a
     // connection that won't close, or the stuck IDB state in CLAUDE.md. Startup
     // awaits NASR, so open() gives up after this and callers fall through.
@@ -247,6 +249,13 @@ class NasrDB {
                 // CIFP procedures — added in v5
                 if (!db.objectStoreNames.contains('cifp')) {
                     db.createObjectStore('cifp', { keyPath: 'icao' });
+                }
+
+                // FAA airport remarks — added in v12. { icao, r: [[el, c, text, rwy], ...] }, one
+                // record per airport, read only for the airport panel (getRemarks): NOT in
+                // MEMORY_STORES. Written by importNasrBundle in its own transaction.
+                if (!db.objectStoreNames.contains('airport_remarks')) {
+                    db.createObjectStore('airport_remarks', { keyPath: 'icao' });
                 }
 
                 // Key-value metadata store
@@ -860,6 +869,11 @@ class NasrDB {
             write('fixes', bundle.fixes);
         }).finally(() => this._memInvalidate(storeNames));
 
+        // FAA remarks: their own transaction, after the main one has committed, so a failure here
+        // can never roll back or fail the import. Before the cycle meta below: an import cut short
+        // here (app killed) still looks stale at the next startup and is redone.
+        await this._importRemarks(db, bundle.remarks);
+
         if (bundle.cycle_info) {
             // Always persist sua_count so staleness check can detect missing SUA on next startup
             const cycleToStore = { ...bundle.cycle_info, sua_count: bundle.sua?.length ?? 0 };
@@ -867,6 +881,118 @@ class NasrDB {
         }
         await this.setMeta('nasr_last_import', new Date().toISOString());
         return count;
+    }
+
+    // ========== FAA Airport Remarks ==========
+
+    /** Puts per chunk in the remarks transaction; each chunk is one short JS task (_writeRemarks). */
+    static REMARKS_CHUNK = 1000;
+    /** importNasrBundle stops waiting for the remarks write after this (the write itself goes on). */
+    static REMARKS_TIMEOUT_MS = 30000;
+
+    /**
+     * The FAA remarks of one airport in display order: [[el, c, text, rwy], ...] (bundle v12,
+     * airport_remarks store). [] when it has none, or the store is missing or can't be read.
+     */
+    async getRemarks(icao) {
+        const key = String(icao ?? '').trim().toUpperCase();
+        if (!key) return [];
+        try {
+            const rec = await this._get('airport_remarks', key);
+            return Array.isArray(rec?.r) ? rec.r : [];
+        } catch (err) {
+            console.warn('NasrDB: remarks read failed for', key, err);
+            return [];
+        }
+    }
+
+    /**
+     * bundle.remarks ({ ICAO: [[el, c, text, rwy], ...] }) as store records { icao, r }. Every field
+     * is forced to its contract type; a tuple without text, a non-array list and an airport left with
+     * no remarks are skipped. Anything that is not a plain object gives no records.
+     */
+    static _remarkRecords(remarks) {
+        const out = [];
+        if (!remarks || typeof remarks !== 'object' || Array.isArray(remarks)) return out;
+        const str = (v) => (typeof v === 'string' ? v : '');
+        for (const [icao, list] of Object.entries(remarks)) {
+            if (!icao || !Array.isArray(list)) continue;
+            const r = [];
+            for (const t of list) {
+                if (!Array.isArray(t) || typeof t[2] !== 'string' || !t[2].trim()) continue;
+                r.push([str(t[0]), str(t[1]), t[2], (typeof t[3] === 'string' && t[3]) ? t[3] : null]);
+            }
+            if (r.length) out.push({ icao, r });
+        }
+        return out;
+    }
+
+    /**
+     * One readwrite transaction on airport_remarks: clear, then put the records in chunks of
+     * REMARKS_CHUNK, each chunk queued from the previous chunk's last put. The transaction stays
+     * open across the chunks (a request is always pending), so it is still all-or-nothing, but no
+     * single JS task does ~18k puts (CLAUDE.md: very long JS runs during the NASR import have left
+     * IndexedDB stuck). Resolves with the record count when the transaction has committed.
+     */
+    _writeRemarks(db, records) {
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction('airport_remarks', 'readwrite');
+            const store = tx.objectStore('airport_remarks');
+            tx.oncomplete = () => resolve(records.length);
+            tx.onabort = () => reject(tx.error || new Error('remarks transaction aborted'));
+            let i = 0;
+            const next = () => {
+                try {
+                    const end = Math.min(i + NasrDB.REMARKS_CHUNK, records.length);
+                    let last = null;
+                    for (; i < end; i++) last = store.put(records[i]);
+                    if (last && i < records.length) last.onsuccess = next;
+                } catch (err) {
+                    try { tx.abort(); } catch (_) { /* already finished */ }
+                    reject(err);
+                }
+            };
+            const cleared = store.clear();
+            if (records.length) cleared.onsuccess = next;
+        });
+    }
+
+    /**
+     * Write bundle.remarks into airport_remarks (a bundle without remarks clears it). Never throws:
+     * a failed write is logged to DiagLog and the store is cleared, so remarks of an older cycle are
+     * not shown beside the new data. Waits at most REMARKS_TIMEOUT_MS; a write still running then is
+     * logged and left to finish on its own (not cleared: that clear would run after it).
+     */
+    async _importRemarks(db, remarks) {
+        const log = (msg) => { if (typeof DiagLog !== 'undefined') DiagLog.log('nasr', msg); };
+        const t0 = Date.now();
+        const TIMED_OUT = {};
+        let timer = null;
+        try {
+            const records = NasrDB._remarkRecords(remarks);
+            const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve(TIMED_OUT), NasrDB.REMARKS_TIMEOUT_MS); });
+            const write = this._writeRemarks(db, records);
+            write.catch((err) => {   // a failure after the timeout: still logged
+                if (Date.now() - t0 >= NasrDB.REMARKS_TIMEOUT_MS) log(`FAA remarks write failed late — ${err?.message || err}`);
+            });
+            const n = await Promise.race([write, timeout]);
+            if (n === TIMED_OUT) {
+                log(`FAA remarks write not done after ${NasrDB.REMARKS_TIMEOUT_MS / 1000} s — import goes on, write left running`);
+                return;
+            }
+            log(remarks == null
+                ? `FAA remarks: none in this bundle — store cleared (${Date.now() - t0} ms)`
+                : `FAA remarks: ${n} airports written in ${Date.now() - t0} ms`);
+        } catch (err) {
+            log(`FAA remarks write failed after ${Date.now() - t0} ms — ${err?.message || err}; NASR import kept, remarks not shown`);
+            try {
+                this._clear('airport_remarks').catch((e) => log(`FAA remarks clear failed — ${e?.message || e}`));
+            } catch (e) {
+                log(`FAA remarks clear failed — ${e?.message || e}`);
+            }
+        } finally {
+            clearTimeout(timer);
+        }
     }
 
     /**

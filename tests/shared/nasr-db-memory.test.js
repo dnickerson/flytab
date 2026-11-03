@@ -18,6 +18,9 @@ global.DiagLog = { log: vi.fn() };
 globalThis.GeoUtils = new Function(read('web/shared/geo-utils.js') + '\nreturn GeoUtils;')();
 const NasrDB = new Function(read('web/shared/nasr-db.js') + '\nreturn NasrDB;')();
 const CursorDB = new Function(read('tests/fixtures/nasr-db-cursor-reference.js') + '\nreturn NasrDB;')();
+// The reference opens the same database: at the current version (it adds no store; open() at a
+// lower version than on disk is a VersionError).
+CursorDB.DB_VERSION = NasrDB.DB_VERSION;
 
 // Seeded data (mulberry32): the same every run.
 function rng(seed) { return () => { seed |= 0; seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
