@@ -7768,38 +7768,79 @@ body.fs-overlay-open .radar-loop-controls {
 .apt-panel-header {
     display: flex;
     align-items: flex-start;
-    justify-content: space-between;
-    padding: 12px 12px 8px;
+    gap: 10px;
+    padding: 12px;
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
     background: var(--bg-surface-raised);
 }
-
+.apt-panel-id {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+/* IDENTIFIER style: --text-xl mono 900 */
 .apt-panel-icao {
-    font-size: 22px;
+    font-family: var(--font-instrument);
+    font-size: var(--text-xl);
     font-weight: 900;
     color: var(--text-primary);
-    font-family: var(--font-instrument);
 }
-
+/* BODY style (heavier, 800, as on the boards) */
 .apt-panel-name {
-    font-size: 14px;
-    color: var(--text-secondary);
-    font-weight: 600;
-    margin-top: 1px;
+    font-family: var(--font-ui);
+    font-size: var(--text-base);
+    font-weight: 800;
+    line-height: 1.25;
+    color: var(--text-primary);
+    overflow-wrap: anywhere;
+}
+/* ✕: 80 x 56 (the boards). .btn-close sets an 80 x 80 minimum; this one is 56 tall. */
+.airport-panel .apt-panel-close {
+    width: var(--touch-large);
+    min-width: var(--touch-large);
+    height: var(--touch-min, 56px);
+    min-height: var(--touch-min, 56px);
+    padding: 0;
+    border: 2px solid var(--border-strong);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: var(--text-xl);
+    font-weight: 900;
 }
 
-.apt-panel-meta {
-    font-size: 14px;
-    color: var(--text-muted);
-    margin-top: 2px;
+/* Nav row under the header (airport-popup.js navRow / _navHtml): "HDG° · D nm · ↓ R fpm" and
+   "pattern alt: N ft" on the left, ENGINE OUT on the right. */
+.apt-nav-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px 10px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    background: var(--bg-surface-raised);
 }
-.apt-panel-nav {
+.apt-nav-text {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.apt-nav-line {
     font-family: var(--font-instrument);
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--status-ok);
-    margin-top: 4px;
+    font-size: var(--text-base);
+    font-weight: 900;
+    line-height: 1.25;
+    color: var(--text-primary);
+}
+.apt-nav-pattern {
+    font-family: var(--font-ui);
+    font-size: var(--text-sm);
+    font-weight: 700;
+    color: var(--text-secondary);
 }
 
 /* Engine-out glide block (glide-panel.js) — under the airport panel header, in flight only.
@@ -7916,21 +7957,14 @@ body.fs-overlay-open .radar-loop-controls {
 
 /* .apt-panel-close sizing handled by .btn-close */
 
-/* Close button with the ENGINE OUT toggle under it (airport-popup.js): as wide as the ✕
-   (80px); wider only when a large Android font scale makes "ENGINE" wider than that. */
-.apt-header-btns {
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 12px;          /* a ✕ mis-tap must not turn the glide block off for every airport */
-    flex-shrink: 0;
-    min-width: var(--touch-large);
-    margin-left: 8px;
-}
+/* ENGINE OUT toggle at the right of the nav row (airport-popup.js): 80 wide (as the ✕), >= 56 tall;
+   wider only when a large Android font scale makes "ENGINE" wider than that. */
 .apt-glide-word {
     display: block;     /* one word per line: "ENGINE" / "OUT" */
 }
 .apt-glide-toggle {
+    flex-shrink: 0;
+    min-width: var(--touch-large);
     min-height: var(--touch-min, 56px);
     padding: 4px 4px;
     border: 2px solid var(--accent-active);
@@ -7938,9 +7972,9 @@ body.fs-overlay-open .radar-loop-controls {
     background: var(--bg-primary);
     color: var(--accent-active);    /* #003d7a on white: 10.8:1 */
     font-family: var(--font-ui);
-    font-size: var(--text-xs);
+    font-size: var(--text-sm);
     font-weight: 800;
-    line-height: 1.15;
+    line-height: 1.1;
     letter-spacing: 0.3px;
     white-space: nowrap;
     cursor: pointer;

@@ -845,14 +845,15 @@ describe('AirportPopup mounts the glide block without risking the popup', () => 
     }
     afterEach(() => { delete globalThis.GlidePanel; delete globalThis.NasrDB; });
 
-    it('mounts GlidePanel right after the header and stops it on close()', () => {
+    it('mounts GlidePanel right after the nav row (under the header) and stops it on close()', () => {
         const made = [];
         globalThis.GlidePanel = class { constructor(el, rec) { this.el = el; this.rec = rec; this.start = vi.fn(); this.stop = vi.fn(); made.push(this); } };
         const p = openPopup();
         expect(made).toHaveLength(1);
         expect(made[0].rec).toBe(KLKR);
         expect(made[0].start).toHaveBeenCalledTimes(1);
-        expect(made[0].el.previousElementSibling.classList.contains('apt-panel-header')).toBe(true);
+        expect(made[0].el.previousElementSibling.classList.contains('apt-nav-row')).toBe(true);
+        expect(made[0].el.previousElementSibling.previousElementSibling.classList.contains('apt-panel-header')).toBe(true);
         p.close();
         expect(made[0].stop).toHaveBeenCalledTimes(1);
         // a second airport replaces the first block (the old one is stopped first)

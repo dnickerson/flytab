@@ -63,16 +63,21 @@ describe('airport-popup', () => {
         expect(el.querySelector('.wx-cat-name').textContent).toBe(EVIL);
     });
 
-    it('_buildPanelHtml header category badge renders as text', () => {
+    // 2026-11-04 redesign: the flight-category badge left the header (it stays in the WX tab, tested
+    // below as .wx-cat-name); the header's ICAO and name are escaped now, and the category still renders as text.
+    it('_buildPanelHtml: no header category badge; ICAO / name and the WX category render as text', () => {
         globalThis.NasrDB = { haversineNm: () => 1 };
         globalThis.CockpitConfig = { get: () => null };
         const p = popup();
         p._tfrBlockHtml = () => '';
-        const el = render(p._buildPanelHtml({ icao: 'KAAA', runways: [] }, {
+        const el = render(p._buildPanelHtml({ icao: EVIL, name: EVIL, runways: [] }, {
             metar: { raw: 'KAAA', decoded: { flight_category: EVIL } },
         }));
         expect(el.querySelector('img')).toBeNull();
-        expect(el.querySelector('.apt-panel-icao').textContent).toContain(EVIL);
+        expect(el.querySelector('.apt-panel-icao').textContent).toBe(EVIL);
+        expect(el.querySelector('.apt-panel-name').textContent).toBe(EVIL);
+        expect(el.querySelector('.apt-panel-header').textContent).not.toContain('KAAA');
+        expect(el.querySelector('.wx-cat-name').textContent).toBe(EVIL);
     });
 
     it('live FIS-B TAF and METAR updates render as text', () => {
