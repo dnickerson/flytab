@@ -100,6 +100,14 @@ const text = () => {
     return d.textContent.replace(/\s+/g, ' ').trim();
 };
 const block = () => host.querySelector('.glide-block');
+/** The text of the grid cell next to a row label (TO, HEADING, ...), its parts joined by spaces. */
+const cellText = (label) => {
+    const lbl = [...host.querySelectorAll('.glide-lbl')].find((e) => e.textContent === label);
+    if (!lbl) return null;
+    return [...lbl.nextElementSibling.children].map((e) => e.textContent).join(' ');
+};
+/** DESCENT's second line: "now M fpm · X shallower | too steep" or "now —". */
+const nowEl = () => host.querySelector('.glide-now');
 const status = () => host.querySelector('.glide-status');
 /** The status line instead of the block: exactly one element, the given text, no digits, no map layer. */
 function expectStatus(msg) {
@@ -164,13 +172,18 @@ describe('GlidePanel verdicts', () => {
         panel = new GlidePanel(host, KLKR);
         panel.start();
         expect(block().classList.contains('glide-ok')).toBe(true);
-        expect(text()).toMatch(/^✓ GLIDE OK · \d{1,3} ft to spare/);
-        expect(text()).toMatch(/Fly \d{3}° · \d+\.\d nm to RWY 24 final point/);
-        expect(text()).toMatch(/Be at 1,\d{3} ft or higher there/);
-        expect(text()).toMatch(/TARGET \d{3} fpm/);
-        expect(text()).toMatch(/PROJECTED \d{3} fpm/);
+        // 2026-11-04 redesign: "N ft high" verdict and the TO / HEADING / DISTANCE / AIRSPEED / DESCENT /
+        // GLIDE PATH rows replace "ft to spare", "Fly … to …", "Be at … or higher there" and the
+        // TARGET / PROJECTED / MEASURED cells.
+        expect(text()).toMatch(/^✓ GLIDE OK · \d{1,3} ft high/);
+        expect(cellText('TO')).toBe('RWY 24');
+        expect(cellText('HEADING')).toMatch(/^\d{3}° (↑ on course|↱ turn right \d+°|↰ turn left \d+°)$/);
+        expect(cellText('DISTANCE')).toMatch(/^\d+\.\d nm$/);
+        expect(cellText('AIRSPEED')).toBe('65 KIAS');
         // one situation: no rate from GPS altitude yet, and situation.vertical_speed is never used
-        expect(text()).toMatch(/MEASURED —/);
+        expect(cellText('DESCENT')).toMatch(/^\d{3} fpm now —$/);
+        expect(cellText('GLIDE PATH')).toMatch(/^\+\d{1,3} ft$/);
+        expect(text()).not.toMatch(/Fly |Be at|TARGET|PROJECTED|MEASURED|to spare/);
         expect(text()).toContain('Glide: 250/14 at 6,000 ft · FIS-B');
         expect(text()).not.toContain('Runway:');      // no METAR -> no runway part
         // map: line aircraft -> final point, ring at the point, dashed final to the RWY 24 threshold
@@ -189,9 +202,10 @@ describe('GlidePanel verdicts', () => {
         panel = new GlidePanel(host, KLKR);
         panel.start();
         expect(block().classList.contains('glide-caution')).toBe(true);
-        expect(text()).toMatch(/^⚠ FINAL POINT OUT OF REACH · TURN TO THE AIRPORT \d{3} ft to spare over the runway/);
-        expect(text()).toMatch(/Fly \d{3}° · \d+\.\d nm to RWY 06\/24 \(nearest part\)/);
-        expect(text()).toContain('Be at 686 ft or higher there');      // 486 + 200 margin
+        expect(text()).toMatch(/^⚠ FINAL POINT OUT OF REACH · \d{3} ft high/);
+        expect(host.querySelector('.glide-sub')).toBeNull();
+        expect(cellText('TO')).toBe('RWY 06/24 nearest part');
+        expect(cellText('GLIDE PATH')).toMatch(/^\+\d{3} ft$/);
         expect(mapShapes().find((s) => s.opts.dashArray).latlngs).toEqual([]);   // no final, no threshold
     });
 
@@ -200,9 +214,9 @@ describe('GlidePanel verdicts', () => {
         panel = new GlidePanel(host, KLKR);
         panel.start();
         expect(block().classList.contains('glide-danger')).toBe(true);
-        expect(text()).toMatch(/^✗ CANNOT REACH KLKR · \d{1,3}(,\d{3})* ft short/);
-        // projected sink is far above the target over this distance
-        expect(host.querySelectorAll('.glide-rate')[1].classList.contains('glide-rate-steep')).toBe(true);
+        expect(text()).toMatch(/^✗ CANNOT REACH KLKR · \d{1,3}(,\d{3})* ft low/);
+        expect(cellText('GLIDE PATH')).toMatch(/^\u2212\d{1,3}(,\d{3})* ft$/);       // U+2212 minus
+        expect(host.querySelector('.glide-path').classList.contains('glide-neg')).toBe(true);
     });
 
     it('RUNWAY POSITION NOT KNOWN: runways without coordinates -> check to the airport reference point', () => {
@@ -212,15 +226,17 @@ describe('GlidePanel verdicts', () => {
         panel.start();
         expect(block().classList.contains('glide-unknown')).toBe(true);
         expect(block().classList.contains('glide-caution')).toBe(true);
-        expect(text()).toMatch(/^RUNWAY POSITION NOT KNOWN · steer to the airport \d{3} ft to spare over the airport/);
-        expect(text()).toMatch(/nm to KLKR Be at 686 ft/);
+        expect(text()).toMatch(/^RUNWAY POSITION NOT KNOWN · steer to the airport · \d{3} ft high/);
+        expect(host.querySelector('.glide-sub')).toBeNull();
+        expect(cellText('TO')).toBe('KLKR');
 
         // out of reach: the CANNOT REACH verdict, the state underneath
         panel.stop();
         sit = situation(0, 15, 3000, 180);
         panel.start();
         expect(block().classList.contains('glide-danger')).toBe(true);
-        expect(text()).toMatch(/^✗ CANNOT REACH KLKR · [\d,]+ ft short RUNWAY POSITION NOT KNOWN · steer to the airport/);
+        expect(text()).toMatch(/^✗ CANNOT REACH KLKR · [\d,]+ ft low RUNWAY POSITION NOT KNOWN · steer to the airport/);
+        expect(host.querySelector('.glide-sub').textContent).toBe('RUNWAY POSITION NOT KNOWN · steer to the airport');
     });
 
     it('NO SUITABLE RUNWAY: no runway long enough for this aircraft', () => {
@@ -232,7 +248,7 @@ describe('GlidePanel verdicts', () => {
         panel = new GlidePanel(host, KLKR);
         panel.start();
         expect(block().classList.contains('glide-unknown')).toBe(true);
-        expect(text()).toMatch(/^NO SUITABLE RUNWAY · steer to the airport \d{3} ft to spare over the airport/);
+        expect(text()).toMatch(/^NO SUITABLE RUNWAY · steer to the airport · \d{3} ft high/);
     });
 
     it('excluded heliport / seaplane base: no block, "not available for this airport"', () => {
@@ -322,10 +338,10 @@ describe('GlidePanel live behaviour', () => {
         expect(text()).toMatch(/^⚠ FINAL POINT OUT OF REACH/);
         sit = ac(4100);                                   // 159 ft: the final point takes over
         panel.render(NOW);
-        expect(text()).toMatch(/^✓ GLIDE OK · 15\d ft to spare/);
+        expect(text()).toMatch(/^✓ GLIDE OK · 15\d ft high/);
         sit = ac(4000);                                   // back to 60 ft: stays on the final point
         panel.render(NOW);
-        expect(text()).toMatch(/^✓ GLIDE OK · [56]\d ft to spare/);
+        expect(text()).toMatch(/^✓ GLIDE OK · [56]\d ft high/);
         // a restart forgets the hysteresis
         panel.start();
         expect(text()).toMatch(/^✓ GLIDE OK/);
@@ -340,7 +356,7 @@ describe('GlidePanel live behaviour', () => {
         const hdg = () => host.querySelector('.glide-hdg').textContent;
         const trueHdg = Number(hdg().replace('°', ''));
         expect(calls[0]).toEqual([sit.lat, sit.lon]);
-        expect(text()).toContain(`Fly ${hdg()} ·`);
+        expect(cellText('HEADING').startsWith(`${hdg()} `)).toBe(true);
 
         globalThis.MagVar = { declination: () => 8 };       // 8° east: magnetic is 8 less
         panel.render(NOW);
@@ -367,14 +383,14 @@ describe('GlidePanel live behaviour', () => {
         sit = situation(180, 6, 5500, 300);                // track west of the point: turn right
         plan = panel.render(NOW);
         expect(plan.turnNow).toBeGreaterThan(5);
-        expect(cue()).toBe(`↱ right ${Math.round(plan.turnNow)}°`);
+        expect(cue()).toBe(`↱ turn right ${Math.round(plan.turnNow)}°`);
         sit = situation(180, 6, 5500, 60);                 // track east of the point: turn left
         plan = panel.render(NOW);
         expect(plan.turnNow).toBeLessThan(-5);
-        expect(cue()).toBe(`↰ left ${Math.round(-plan.turnNow)}°`);
+        expect(cue()).toBe(`↰ turn left ${Math.round(-plan.turnNow)}°`);
     });
 
-    it('rates above target show red with "+N too steep"', () => {
+    it('measured steeper than the target now: red "now M fpm · X too steep" (X = M - targetNow, ceiled)', () => {
         const base = situation(0, 15, 3000, 180);
         panel = new GlidePanel(host, KLKR);
         sit = { ...base, timestamp: Date.now() };
@@ -382,17 +398,15 @@ describe('GlidePanel live behaviour', () => {
         fly(base, 10, 1500);                                // 11 samples over 10 s, 1,500 fpm down
         const plan = panel.render(Date.now());              // same situation again: no new sample
         expect(plan.measured).toBeCloseTo(1500, 6);
-        const cells = host.querySelectorAll('.glide-rate');
-        expect(cells[0].classList.contains('glide-rate-steep')).toBe(false);       // TARGET itself
-        expect(cells[1].classList.contains('glide-rate-steep')).toBe(true);        // PROJECTED > TARGET
-        expect(cells[1].textContent).toContain(`+${Math.ceil(plan.projected - plan.target)} too steep`);
-        expect(cells[2].classList.contains('glide-rate-steep')).toBe(true);        // MEASURED > target now
-        expect(cells[2].textContent).toContain(`+${Math.ceil(plan.measured - plan.targetNow).toLocaleString('en-US')} too steep`);
+        expect(plan.measured).toBeGreaterThan(plan.targetNow);
+        expect(nowEl().classList.contains('glide-now-steep')).toBe(true);
+        expect(nowEl().textContent).toBe(`now 1,500 fpm · ${Math.ceil(plan.measured - plan.targetNow).toLocaleString('en-US')} too steep`);
+        expect(host.querySelector('.glide-target').textContent).toBe(`${Math.round(plan.target).toLocaleString('en-US')} fpm`);
     });
 
     describe('MEASURED: descent rate from GPS altitude (situation.vertical_speed is not used)', () => {
-        const measured = () => host.querySelectorAll('.glide-rate')[2];
-        const measuredVal = () => measured().querySelector('.glide-rate-val').textContent;
+        const measured = nowEl;
+        const measuredVal = () => /^now (—|[\d,]+ fpm)/.exec(nowEl().textContent)[1];
 
         it('steady descent of 600 fpm over 10 s -> MEASURED 600, with vertical_speed 0 ignored', () => {
             const base = situation(180, 6, 5500, 360, { vertical_speed: 0 });
@@ -401,7 +415,7 @@ describe('GlidePanel live behaviour', () => {
             panel.start();
             fly(base, 10, 600);
             expect(measuredVal()).toBe('600 fpm');
-            expect(measured().classList.contains('glide-rate-steep')).toBe(false);
+            expect(measured().classList.contains('glide-now-steep')).toBe(false);
             // a climb measures 0 (not descending), a level flight 0
             fly(base, 10, -300, 100);                  // from where the descent ended
             expect(measuredVal()).toBe('0 fpm');
@@ -420,10 +434,10 @@ describe('GlidePanel live behaviour', () => {
             expect(measuredVal()).toBe('—');
             fly(base, 3, 3000, 50);                          // 5 samples, 4 s
             expect(measuredVal()).toBe('—');
-            expect(measured().classList.contains('glide-rate-steep')).toBe(false);
+            expect(measured().classList.contains('glide-now-steep')).toBe(false);
             fly(base, 1, 3000, 200);                         // 6 samples, 5 s: valid
             expect(measuredVal()).toBe('3,000 fpm');
-            expect(measured().classList.contains('glide-rate-steep')).toBe(true);
+            expect(measured().classList.contains('glide-now-steep')).toBe(true);
         });
 
         it('only the last 10 s count', () => {
@@ -474,14 +488,14 @@ describe('GlidePanel live behaviour', () => {
             gdlSit = { ...sit, alt_msl: sit.alt_msl - 100, timestamp: sit.timestamp + 50 };
             const plan = panel.render(Date.now());
             expect(plan.measured).toBeCloseTo(600, 6);
-            expect(host.querySelectorAll('.glide-rate')[2].querySelector('.glide-rate-val').textContent).toBe('600 fpm');
+            expect(nowEl().textContent).toMatch(/^now 600 fpm · /);
             const S = GlideInputs.settings(), ref = { lat: KLKR.lat, lon: KLKR.lon };
             const want = GlideModel.plan({
                 airport: GlideInputs.airport(KLKR, S), ac: GlideInputs.aircraft(sit, S, ref, Date.now()),
                 glideWind: { from: 250, kt: 14 }, runwayWind: { kind: 'none' }, preferDirect: false,
             }, S);
             expect(plan.spare).toBeCloseTo(want.spare, 6);
-            expect(text()).toContain(`✓ GLIDE OK · ${Math.floor(want.spare)} ft to spare`);
+            expect(text()).toContain(`✓ GLIDE OK · ${Math.floor(want.spare)} ft high`);
         });
 
         it('only GDL 90 situations arriving: no block ("no GPS altitude from the Stratux")', () => {
@@ -713,7 +727,7 @@ describe('GlidePanel status line while ENGINE OUT is on and no glide numbers can
         vi.advanceTimersByTime(GlidePanel.UPDATE_MS);
         expect(status()).toBeNull();
         expect(block()).not.toBeNull();
-        expect(text()).toMatch(/^✓ GLIDE OK · \d{1,3} ft to spare/);
+        expect(text()).toMatch(/^✓ GLIDE OK · \d{1,3} ft high/);
         expect(mapShapes().map((s) => s.type).sort()).toEqual(['polyline', 'polyline', 'ring']);
 
         sit = { ...sit, gps_fix_quality: 0, timestamp: Date.now() + GlidePanel.UPDATE_MS };
@@ -784,7 +798,7 @@ describe('GlidePanel without showStatus (panel opened with ENGINE OUT already on
         vi.advanceTimersByTime(GlidePanel.UPDATE_MS);
         expect(block()).not.toBeNull();
         expect(host.hidden).toBe(false);
-        expect(text()).toMatch(/^✓ GLIDE OK · \d{1,3} ft to spare/);
+        expect(text()).toMatch(/^✓ GLIDE OK · \d{1,3} ft high/);
         expect(map.layers.size).toBe(1);
 
         vi.advanceTimersByTime(GlideInputs.SIT_MAX_AGE_MS + GlidePanel.UPDATE_MS);   // nothing new: stale
