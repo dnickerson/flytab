@@ -1,7 +1,8 @@
 /**
  * Airport panel nav row (web/cockpit/airport-popup.js: AirportPopup.navRow / _navHtml / _startNav):
  *   line 1  "HDG° · D nm"   (magnetic bearing to the airport, great-circle distance)
- *   line 2  "↓ R fpm to pattern alt N ft" / "at pattern alt N ft" / "pattern alt N ft"  (v12.65: a line
+ *   line 2  "↓ R fpm to pattern alt N ft" / "at pattern alt N ft" (within ±100 ft) / "below pattern alt N ft"
+ *           (more than 100 ft below, v12.66) / "pattern alt N ft"  (v12.65: a line
  *           never starts with "·"; the descent rate is mono 900 --text-primary)
  *
  * Every number is checked against an INDEPENDENT reference written here (not the production helpers):
@@ -298,15 +299,29 @@ describe('descent rate', () => {
         expect(refDistNm(ac.lat, ac.lon, KLKR.lat, KLKR.lon)).toBeCloseTo(10, 6);
         expect(AirportPopup.navRow(KLKR, sc(sitAt(ac, { alt_msl: 4486, ground_speed: 120 })), NOW).descent).toBe(600);
     });
-    it('within 100 ft of pattern alt (or below it) -> "at pattern alt"; 101 ft above -> a rate', () => {
+    it('within ±100 ft of pattern alt -> "at pattern alt N ft"; 101 ft above -> a rate', () => {
         const ac = dest(KLKR.lat, KLKR.lon, 230, 5);
-        for (const alt of [PAT + 100, PAT, PAT - 500]) {
+        for (const alt of [PAT + 100, PAT, PAT - 100]) {
             const nav = AirportPopup.navRow(KLKR, sc(sitAt(ac, { alt_msl: alt })), NOW);
             expect(nav.descent).toBe('at');
             expect(line1(nav)).toBe(`${nav.hdg}° · ${AirportPopup._fmtNm(nav.distNm)} nm`);
             expect(line2(nav)).toBe('at pattern alt 1,486 ft');
         }
         expect(Number.isFinite(AirportPopup.navRow(KLKR, sc(sitAt(ac, { alt_msl: PAT + 101 })), NOW).descent)).toBe(true);
+    });
+    it('more than 100 ft below pattern alt -> "below pattern alt N ft", no rate (climb-out, and the ramp)', () => {
+        const ac = dest(KLKR.lat, KLKR.lon, 230, 5);
+        for (const alt of [PAT - 101, PAT - 500]) {
+            const nav = AirportPopup.navRow(KLKR, sc(sitAt(ac, { alt_msl: alt })), NOW);
+            expect(nav.descent).toBe('below');
+            expect(line2(nav)).toBe('below pattern alt 1,486 ft');
+        }
+        // parked on the KLKR ramp: field elevation, 0 kt ground speed -> below, not "at pattern alt"
+        const ramp = dest(KLKR.lat, KLKR.lon, 150, 0.1);
+        const nav = AirportPopup.navRow(KLKR, sc(sitAt(ramp, { alt_msl: 486, ground_speed: 0 })), NOW);
+        expect(nav.descent).toBe('below');
+        expect(line2(nav)).toBe('below pattern alt 1,486 ft');
+        expect(line2(nav)).not.toMatch(/fpm|^at /);
     });
     it('above pattern alt but D <= 0.5 nm or GS < 30 kt -> descent omitted (line 2 = "pattern alt N ft")', () => {
         const near = dest(KLKR.lat, KLKR.lon, 230, 0.49);   // (0.5 itself is a float boundary)
@@ -418,6 +433,22 @@ describe('the nav row in the open panel', () => {
         popup.close();
         expect(vi.getTimerCount()).toBe(0);
         expect(popup._navTimer).toBeNull();
+    });
+
+    it('the timer stops itself when its nav row leaves the page (el.isConnected guard)', () => {
+        let s = sitAt(dest(KLKR.lat, KLKR.lon, 230, 6.2), { alt_msl: 3486, ground_speed: 140 });
+        window.app = { stratuxClient: { get situation() { return s; }, get wsSituation() { return s; } } };
+        open();
+        vi.advanceTimersByTime(2000);                     // let jsdom's storage timer go
+        expect(vi.getTimerCount()).toBe(1);
+        const el = popup._panel.querySelector('.apt-nav-text');
+        el.remove();                                      // e.g. the panel's HTML replaced by another view
+        s = sitAt(dest(KLKR.lat, KLKR.lon, 230, 5.0), { alt_msl: 3400, ground_speed: 140, timestamp: Date.now() });
+        const html = el.innerHTML;
+        vi.advanceTimersByTime(1000);
+        expect(popup._navTimer).toBeNull();
+        expect(vi.getTimerCount()).toBe(0);
+        expect(el.innerHTML).toBe(html);                  // the detached row is not written to
     });
 
     it('a throwing situation getter never stops the panel from opening', () => {

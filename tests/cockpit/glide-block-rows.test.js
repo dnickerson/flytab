@@ -12,7 +12,8 @@
  *   HEADING     hdg3(hdgTrue - MagVar.declination(ac)) + "°", turn cue from turnNow / onCourseDeg
  *   DISTANCE    legNm.toFixed(1) nm
  *   AIRSPEED    validated glide_ias_kt KIAS
- *   DESCENT     round(target) fpm; "now M fpm · X shallower|too steep" with X = |M - targetNow|; "now —"
+ *   DESCENT     round(target) fpm; "now M fpm · X shallower|too steep" with X = |M - target| (v12.66: against
+ *               the DISPLAYED target, not targetNow); "now —"
  *   GLIDE PATH  +N ft / −N ft (U+2212)
  * The golden values themselves (spare, legNm, target, ...) are also compared with the reference table.
  */
@@ -83,7 +84,7 @@ const hdg3 = (d) => { const r = Math.round(((d % 360) + 360) % 360); return Stri
 const turnTxt = (t, on) => (Math.abs(t) <= on ? '↑ on course' : t > 0 ? `↱ turn right ${Math.round(t)}°` : `↰ turn left ${Math.round(-t)}°`);
 function nowTxt(p) {
     if (!Number.isFinite(p.measured)) return 'now —';
-    const over = p.measured - p.targetNow;
+    const over = p.measured - p.target;
     return over > 0 ? `now ${fmt(p.measured)} fpm · ${fmt(Math.ceil(over))} too steep`
         : `now ${fmt(p.measured)} fpm · ${fmt(Math.floor(-over) || 0)} shallower`;
 }
@@ -184,20 +185,30 @@ describe('golden KLKR cases -> displayed rows', () => {
         expectCommonRows(v, p, c);
     });
 
-    it('golden D (vs -500): measured 500 fpm against targetNow -> "shallower"; a 1,500 fpm descent -> red "too steep"', () => {
+    it('golden D (vs -500): measured 500 fpm against the shown target 448 -> red "52 too steep"; B at 300 fpm -> "shallower"', () => {
         const p = planFor('D', false);
         expect(p.measured).toBe(500);
-        expect(p.targetNow).toBeGreaterThan(500);              // 1,886 ft short at 140 kt over 8.6 nm
+        expect(Math.abs(p.target - 448)).toBeLessThanOrEqual(1);              // golden
         let v = show(p, 'D');
-        expect(v.rows.DESCENT[1]).toBe(nowTxt(p));
-        expect(v.rows.DESCENT[1]).toBe(`now 500 fpm · ${fmt(Math.floor(p.targetNow - 500))} shallower`);
-        expect(host.querySelector('.glide-now').classList.contains('glide-now-steep')).toBe(false);
-        const p2 = planFor('D', false, klkr(), -1500);
-        expect(p2.measured).toBe(1500);
-        expect(p2.targetNow).toBeLessThan(1500);
-        v = show(p2, 'D');
-        expect(v.rows.DESCENT[1]).toBe(`now 1,500 fpm · ${fmt(Math.ceil(1500 - p2.targetNow))} too steep`);
+        expect(v.rows.DESCENT[0]).toBe(`${fmt(p.target)} fpm`);
+        expect(v.rows.DESCENT[1]).toBe(`now 500 fpm · ${fmt(Math.ceil(500 - p.target))} too steep`);
         expect(host.querySelector('.glide-now').classList.contains('glide-now-steep')).toBe(true);
+        // the comparison uses the number shown above it, never targetNow
+        expect(Math.round(p.targetNow)).not.toBe(Math.round(p.target));
+        const p2 = planFor('B', false, klkr(), -300);
+        expect(p2.measured).toBe(300);
+        v = show(p2, 'B');
+        expect(v.rows.DESCENT[1]).toBe(`now 300 fpm · ${fmt(Math.floor(p2.target - 300))} shallower`);
+        expect(host.querySelector('.glide-now').classList.contains('glide-now-steep')).toBe(false);
+    });
+
+    it('the X in "now M fpm · X …" is M minus the DESCENT number shown (Dana\'s board: 820 / now 760 · 60 shallower)', () => {
+        const fake = { kind: 'final', endId: '24', runwayId: '06/24', spare: 240, hdgTrue: 249, legNm: 4.7, target: 820,
+            targetNow: 1199, measured: 760, turnNow: -32, tailwindKt: 0 };
+        const v = show(fake, 'B');
+        expect(v.rows.DESCENT).toEqual(['820 fpm', 'now 760 fpm · 60 shallower']);
+        const steep = show({ ...fake, target: 450, targetNow: 100, measured: 750 }, 'B');
+        expect(steep.rows.DESCENT).toEqual(['450 fpm', 'now 750 fpm · 300 too steep']);
     });
 
     it('no measured rate (vs unknown) -> "now —"', () => {
@@ -255,8 +266,8 @@ describe('reference-point states (no runway ends known / no suitable runway)', (
 
 describe('rounding edges', () => {
     const fake = (over) => ({
-        kind: 'final', endId: '24', runwayId: '06/24', spare: 0, hdgTrue: 90, legNm: 4.75, target: 819.5,
-        targetNow: 800, measured: null, turnNow: 0, tailwindKt: 0, ...over,
+        kind: 'final', endId: '24', runwayId: '06/24', spare: 0, hdgTrue: 90, legNm: 4.75, target: 800,
+        targetNow: 1234, measured: null, turnNow: 0, tailwindKt: 0, ...over,
     });
     it('spare 0.9 / -0 -> "0 ft high" / "+0 ft" (never rounded up, never "-0"); -0.1 -> "1 ft low" / "−1 ft"', () => {
         let v = show(fake({ spare: -0 }), 'B');
@@ -277,10 +288,10 @@ describe('rounding edges', () => {
         expect(v.rows.HEADING[0]).toBe('360°');
         expect(v.rows.DISTANCE).toEqual(['14.7 nm']);
     });
-    it('measured exactly at targetNow -> "0 shallower" (not red); 0.2 over -> "1 too steep" (ceiled)', () => {
-        show(fake({ measured: 800, targetNow: 800 }), 'B');
+    it('measured exactly at the target -> "0 shallower" (not red); 0.2 over -> "1 too steep" (ceiled)', () => {
+        show(fake({ measured: 800, target: 800 }), 'B');
         expect(host.querySelector('.glide-now').textContent).toBe('now 800 fpm · 0 shallower');
-        show(fake({ measured: 800.2, targetNow: 800 }), 'B');
+        show(fake({ measured: 800.2, target: 800 }), 'B');
         expect(host.querySelector('.glide-now').textContent).toBe('now 800 fpm · 1 too steep');
     });
 });

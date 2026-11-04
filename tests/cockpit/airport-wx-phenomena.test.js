@@ -58,6 +58,29 @@ describe('present weather with intensity / proximity (real METARs)', () => {
         expect(texts('METAR LFPG 042230Z 24008KT CAVOK 12/08 Q1015 NOSIG')).toEqual([]);
         expect(texts('METAR KDDC 042252Z AUTO 24004KT 5SM HZ CLR 18/04 A2987 RMK AO2')).toEqual(['HZ']);
     });
+    it('KHQU light rain with a thunderstorm in the vicinity: "−VCTSRA" (intensity before VC; real ASOS 042155Z)', () => {
+        const c = chips('METAR KHQU 042155Z AUTO 12005KT 10SM -VCTSRA BKN037 BKN048 BKN060 24/20 A2998 RMK AO2 LTG DSNT SW');
+        expect(c).toEqual([{ text: '\u2212VCTSRA', cls: 'apt-wx-ph-ts' }]);
+        expect(texts('METAR KXXX 042155Z AUTO 12005KT 3SM +VCTSRA BKN037 24/20 A2998')).toEqual(['+VCTSRA']);
+        expect(texts('METAR KHQU 042255Z AUTO 00000KT 10SM VCTS BKN034 BKN045 OVC060 23/20 A2999 RMK AO2 LTG DSNT N AND SW')).toEqual(['VCTS']);
+    });
+    it('nothing from the remarks, even standalone weather tokens ("RMK AO2 -RA VCSH DSNT N")', () => {
+        expect(texts('METAR KXXX 042252Z AUTO 24004KT 10SM CLR 18/04 A2987 RMK AO2 -RA VCSH DSNT N')).toEqual([]);
+        expect(texts('METAR KXXX 042252Z AUTO 24004KT 10SM BR CLR 18/04 A2987 RMK AO2 TSB05 +RA')).toEqual(['BR']);
+    });
+    it('nothing from a trend: LFML (real) "RA" in the body, the TEMPO TSRA not read; NOSIG / BECMG cut too', () => {
+        expect(texts('METAR LFML 042300Z AUTO 11013KT 9999 RA ///CB 14/11 Q1017 TEMPO VRB15G25KT 2000 TSRA BKN013 SCT030CB')).toEqual(['RA']);
+        expect(texts('METAR EXXX 042300Z 11013KT 9999 FEW030 14/11 Q1017 BECMG 3000 SHRA')).toEqual([]);
+        expect(texts('METAR EXXX 042300Z 11013KT 9999 FEW030 14/11 Q1017 NOSIG -SN')).toEqual([]);
+    });
+    it('station ID / report type / time are never chips: SASA (Salta, real) is not "SA"+"SA" sand', () => {
+        expect(texts('METAR SASA 042300Z 01005KT 340V050 5000 -RA BKN011 BKN033 16/14 Q1018')).toEqual(['\u2212RA']);
+        expect(texts('SPECI SASA 042246Z 06006KT 310V100 5000 -RA SCT018 OVC034 17/14 Q1018')).toEqual(['\u2212RA']);
+        expect(texts('METAR SASA 042200Z 05005KT 340V130 9999 VCSH FEW025 BKN034 20/12 Q1016')).toEqual(['VCSH']);
+        expect(texts('SASA 042200Z 05005KT 9999 FEW025 20/12 Q1016')).toEqual([]);          // FIS-B style, no "METAR"
+        expect(texts('METAR COR SASA 042200Z 05005KT 9999 FEW025 20/12 Q1016')).toEqual([]);
+    });
+
     it('chip text is escaped and comes from a whitelist grammar (no markup from the raw text)', () => {
         const p = new AirportPopup({}, {});
         const d = document.createElement('div');

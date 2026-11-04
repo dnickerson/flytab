@@ -390,7 +390,7 @@ describe('GlidePanel live behaviour', () => {
         expect(cue()).toBe(`↰ turn left ${Math.round(-plan.turnNow)}°`);
     });
 
-    it('measured steeper than the target now: red "now M fpm · X too steep" (X = M - targetNow, ceiled)', () => {
+    it('measured steeper than the shown target: red "now M fpm · X too steep" (X = M - target, ceiled)', () => {
         const base = situation(0, 15, 3000, 180);
         panel = new GlidePanel(host, KLKR);
         sit = { ...base, timestamp: Date.now() };
@@ -398,9 +398,9 @@ describe('GlidePanel live behaviour', () => {
         fly(base, 10, 1500);                                // 11 samples over 10 s, 1,500 fpm down
         const plan = panel.render(Date.now());              // same situation again: no new sample
         expect(plan.measured).toBeCloseTo(1500, 6);
-        expect(plan.measured).toBeGreaterThan(plan.targetNow);
+        expect(plan.measured).toBeGreaterThan(plan.target);
         expect(nowEl().classList.contains('glide-now-steep')).toBe(true);
-        expect(nowEl().textContent).toBe(`now 1,500 fpm · ${Math.ceil(plan.measured - plan.targetNow).toLocaleString('en-US')} too steep`);
+        expect(nowEl().textContent).toBe(`now 1,500 fpm · ${Math.ceil(plan.measured - plan.target).toLocaleString('en-US')} too steep`);
         expect(host.querySelector('.glide-target').textContent).toBe(`${Math.round(plan.target).toLocaleString('en-US')} fpm`);
     });
 

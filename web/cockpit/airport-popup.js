@@ -559,9 +559,10 @@ class AirportPopup {
      *   patternAlt: patternAltFt(apt)
      *   descent: needs altitude = wsSituation.alt_msl (WebSocket only: true MSL; GDL 90 altitude is
      *     ellipsoidal and is never used) from a fresh 3D-fix WS situation, and GS = the position
-     *     situation's ground_speed. alt - patternAlt <= 100 -> 'at'; > 100 with D > 0.5 nm and GS >= 30 kt
-     *     -> fpm = (alt - patternAlt) / (D / GS * 60), rounded to 10; otherwise / unusable -> null.
-     * -> { pos, hdg, hdgTrueOnly, distNm, patternAlt, descent: null | 'at' | fpm }
+     *     situation's ground_speed. alt - patternAlt < -100 -> 'below'; within ±100 -> 'at'; > 100 with
+     *     D > 0.5 nm and GS >= 30 kt -> fpm = (alt - patternAlt) / (D / GS * 60), rounded to 10;
+     *     otherwise / unusable -> null.
+     * -> { pos, hdg, hdgTrueOnly, distNm, patternAlt, descent: null | 'at' | 'below' | fpm }
      */
     static navRow(apt, sc, now = Date.now()) {
         const out = { pos: false, hdg: null, hdgTrueOnly: false, distNm: null, patternAlt: AirportPopup.patternAltFt(apt), descent: null };
@@ -586,7 +587,8 @@ class AirportPopup {
         const gs = Number.isFinite(pos.ground_speed) && pos.ground_speed >= 0 ? pos.ground_speed : null;
         if (alt === null || gs === null || out.patternAlt === null || !Number.isFinite(out.distNm)) return out;
         const above = alt - out.patternAlt;
-        if (above <= 100) out.descent = 'at';
+        if (above < -100) out.descent = 'below';             // climb-out, the ramp
+        else if (above <= 100) out.descent = 'at';
         else if (out.distNm > 0.5 && gs >= 30) {
             const minutes = out.distNm / gs * 60;
             out.descent = Math.round(above / minutes / 10) * 10;
@@ -609,6 +611,7 @@ class AirportPopup {
             const pat = `pattern alt ${Math.round(nav.patternAlt).toLocaleString('en-US')} ft`;
             let l2;
             if (nav.pos && nav.descent === 'at') l2 = `<span class="apt-nav-seg">at ${pat}</span>`;
+            else if (nav.pos && nav.descent === 'below') l2 = `<span class="apt-nav-seg">below ${pat}</span>`;
             else if (nav.pos && Number.isFinite(nav.descent)) {
                 l2 = `<span class="apt-nav-seg"><span class="apt-nav-rate">↓ ${nav.descent.toLocaleString('en-US')} fpm</span> to</span> `
                     + `<span class="apt-nav-seg">${pat}</span>`;
@@ -2262,23 +2265,32 @@ class AirportPopup {
     }
 
     /**
-     * Present-weather groups of a METAR (FMH-1 / WMO grammar), read from the body only: before RMK and
-     * before a trend (NOSIG / TEMPO / BECMG). Each whole token: optional intensity / proximity (- + VC),
-     * optional descriptor (MI PR BC DR BL SH TS FZ), then phenomena (DZ RA SN SG IC PE PL GR GS UP BR FG
-     * FU VA DU SA HZ PY PO SQ FC SS DS); a descriptor alone only as TS, VCSH or VCTS. The raw METAR is
+     * Present-weather groups of a METAR (FMH-1 / WMO grammar), read from the body only: after the report
+     * type (METAR / SPECI, COR), the station ID and the DDHHMMZ / HHMMZ time (so "SASA" is never two
+     * sand groups), before RMK and before a trend (NOSIG / TEMPO / BECMG). Each whole token: optional
+     * intensity (- +), optional VC (ASOS writes "-VCTSRA"), optional descriptor (MI PR BC DR BL SH TS
+     * FZ), then phenomena (DZ RA SN SG IC PE PL GR GS UP BR FG FU VA DU SA HZ PY PO SQ FC SS DS); a
+     * descriptor alone only as TS (any prefix) or VCSH. The raw METAR is
      * the source: FisbClient.decodeMetar has no present-weather field, and AWC's wxString (WeatherClient
      * decoded.weather) can include remark / trend text. Returns the tokens as written ("-RA", "+TSRA").
      */
     static _wxGroups(raw) {
         const body = String(raw || '').split(/\s(?:RMK|NOSIG|TEMPO|BECMG)\b/)[0];
-        const re = /^([-+]|VC)?(MI|PR|BC|DR|BL|SH|TS|FZ)?((?:DZ|RA|SN|SG|IC|PE|PL|GR|GS|UP|BR|FG|FU|VA|DU|SA|HZ|PY|PO|SQ|FC|SS|DS)+)?$/;
+        const toks = body.trim().split(/\s+/).filter(Boolean);
+        // Header: report type, correction, station ID, time. Only the leading tokens are skipped.
+        let i = 0;
+        if (/^(METAR|SPECI)$/.test(toks[i])) i++;
+        if (toks[i] === 'COR') i++;
+        if (/^[A-Z0-9]{3,4}$/.test(toks[i] || '') && !/^\d{4,6}Z$/.test(toks[i])) i++;
+        if (/^(\d{6}|\d{4})Z$/.test(toks[i] || '')) i++;
+        const re = /^([-+])?(VC)?(MI|PR|BC|DR|BL|SH|TS|FZ)?((?:DZ|RA|SN|SG|IC|PE|PL|GR|GS|UP|BR|FG|FU|VA|DU|SA|HZ|PY|PO|SQ|FC|SS|DS)+)?$/;
         const out = [];
-        for (const tok of body.split(/\s+/)) {
+        for (const tok of toks.slice(i)) {
             const m = re.exec(tok);
-            if (!m || !tok) continue;
-            const [, pre, desc, phen] = m;
-            // phenomena present: a group. None: only TS (with or without - + VC) or VCSH.
-            if (phen || desc === 'TS' || (pre === 'VC' && desc === 'SH')) out.push(tok);
+            if (!m) continue;
+            const [, , vc, desc, phen] = m;
+            // phenomena present: a group. None: only TS (any prefix) or VCSH.
+            if (phen || desc === 'TS' || (vc && desc === 'SH')) out.push(tok);
         }
         return out;
     }

@@ -206,6 +206,13 @@ describe('the panel\'s CSS', () => {
         expect(read('web/cockpit/airport-popup.js')).toContain(String.raw`data-action="direct-to">D→\u00a0Direct</button>`);
     });
 
+    it('v12.66: no unscoped .freq-row layout rule (FreqPanel\'s flex row turned the INFO table rows into flex boxes)', () => {
+        const unscoped = RULES.filter((r) => r.sels.some((x) => /^\.freq-row(\.|$|:)/.test(x)) && r.decls.display);
+        expect(unscoped.map((r) => r.head)).toEqual([]);
+        expect(RULES.find((r) => r.head === '.freq-panel .freq-row')?.decls.display).toBe('flex');
+        expect(read('web/cockpit/freq-panel.js')).toMatch(/el\.className = 'freq-panel'/);
+    });
+
     it('the exceptions are only the listed SVG labels, and they really are SVG text', () => {
         const wc = read('web/cockpit/wind-compass.js');
         for (const e of EXCEPTIONS) expect(wc).toMatch(new RegExp(`<text class="${e.sel.slice(1)}"`));
