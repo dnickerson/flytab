@@ -594,18 +594,26 @@ class AirportPopup {
         return out;
     }
 
-    /** The nav row's text lines (HTML; numbers only, nothing to escape). */
+    /**
+     * The nav row's two lines (HTML; numbers only, nothing to escape). Line 1 "HDG° · D nm" (with a
+     * position); line 2 "↓ R fpm to pattern alt N ft" / "at pattern alt N ft" / "pattern alt N ft" (with
+     * a field elevation). Line 2 is unbreakable segments: it wraps only between "… to" and "pattern alt
+     * N ft", so no line ever starts with "·" or splits a number from its unit.
+     */
     static _navHtml(nav) {
         let html = '';
         if (nav && nav.pos) {
-            // Two unbreakable parts: a narrow row wraps between "D nm" and "· ↓ R fpm", never inside one.
-            let l1 = `<span class="apt-nav-seg">${nav.hdg}°${nav.hdgTrueOnly ? 'T' : ''} · ${AirportPopup._fmtNm(nav.distNm)} nm</span>`;
-            if (nav.descent === 'at') l1 += ' <span class="apt-nav-seg">· at pattern alt</span>';
-            else if (Number.isFinite(nav.descent)) l1 += ` <span class="apt-nav-seg">· ↓ ${nav.descent.toLocaleString('en-US')} fpm</span>`;
-            html += `<div class="apt-nav-line">${l1}</div>`;
+            html += `<div class="apt-nav-line">${nav.hdg}°${nav.hdgTrueOnly ? 'T' : ''} · ${AirportPopup._fmtNm(nav.distNm)} nm</div>`;
         }
         if (nav && Number.isFinite(nav.patternAlt)) {
-            html += `<div class="apt-nav-pattern">pattern alt: ${Math.round(nav.patternAlt).toLocaleString('en-US')} ft</div>`;
+            const pat = `pattern alt ${Math.round(nav.patternAlt).toLocaleString('en-US')} ft`;
+            let l2;
+            if (nav.pos && nav.descent === 'at') l2 = `<span class="apt-nav-seg">at ${pat}</span>`;
+            else if (nav.pos && Number.isFinite(nav.descent)) {
+                l2 = `<span class="apt-nav-seg"><span class="apt-nav-rate">↓ ${nav.descent.toLocaleString('en-US')} fpm</span> to</span> `
+                    + `<span class="apt-nav-seg">${pat}</span>`;
+            } else l2 = `<span class="apt-nav-seg">${pat}</span>`;
+            html += `<div class="apt-nav-pattern">${l2}</div>`;
         }
         return html;
     }
@@ -1138,7 +1146,7 @@ class AirportPopup {
         ${this._tfrBlockHtml(apt)}
 
         <div class="apt-action-chips">
-            <button class="apt-chip" data-action="direct-to">D→ Direct</button>
+            <button class="apt-chip" data-action="direct-to">D→\u00a0Direct</button>
             <button class="apt-chip" data-action="add-route">+ Route</button>
             <button class="apt-chip" data-action="plates">Plates</button>
         </div>
@@ -2179,10 +2187,11 @@ class AirportPopup {
             }</div></div>`
             : '';
 
-        // Weather phenomena — parse from raw text (TS, RA, SN, FZRA, FG, etc.)
+        // Weather phenomena — the METAR body's present-weather groups, with their intensity /
+        // proximity (AirportPopup._wxGroups): -RA, +TSRA, VCSH, BR ...
         const wxPhenomena = [];
-        const wxGroupMatch = rawNoRmk.match(/\b([-+]?(VC)?(MI|PR|BC|DR|BL|SH|TS|FZ)*(RA|DZ|SN|SG|IC|PL|GR|GS|UP|FG|BR|SA|DU|HZ|VA|PO|SQ|FC|SS|DS)+)\b/g);
-        if (wxGroupMatch) {
+        const wxGroupMatch = AirportPopup._wxGroups(raw);
+        if (wxGroupMatch.length) {
             for (const code of wxGroupMatch) {
                 const isTs  = /TS/.test(code);
                 const isFz  = /FZ/.test(code);
@@ -2193,7 +2202,7 @@ class AirportPopup {
         }
         const phenomenaHtml = wxPhenomena.length
             ? `<div class="wx-phenomena">${wxPhenomena.map(p =>
-                `<span class="wx-phenom ${p.cls}">${AirportPopup._esc(p.code)}</span>`).join('')}</div>`
+                `<span class="wx-phenom ${p.cls}">${AirportPopup._esc(p.code.replace(/^-/, '\u2212'))}</span>`).join('')}</div>`
             : '';
 
         // Labeled data rows
@@ -2250,6 +2259,28 @@ class AirportPopup {
             <div class="wx-metar"><span class="wx-metar-label">RAW</span>${AirportPopup._esc(raw)}</div>
             ${tafHtml}
         </div>`;
+    }
+
+    /**
+     * Present-weather groups of a METAR (FMH-1 / WMO grammar), read from the body only: before RMK and
+     * before a trend (NOSIG / TEMPO / BECMG). Each whole token: optional intensity / proximity (- + VC),
+     * optional descriptor (MI PR BC DR BL SH TS FZ), then phenomena (DZ RA SN SG IC PE PL GR GS UP BR FG
+     * FU VA DU SA HZ PY PO SQ FC SS DS); a descriptor alone only as TS, VCSH or VCTS. The raw METAR is
+     * the source: FisbClient.decodeMetar has no present-weather field, and AWC's wxString (WeatherClient
+     * decoded.weather) can include remark / trend text. Returns the tokens as written ("-RA", "+TSRA").
+     */
+    static _wxGroups(raw) {
+        const body = String(raw || '').split(/\s(?:RMK|NOSIG|TEMPO|BECMG)\b/)[0];
+        const re = /^([-+]|VC)?(MI|PR|BC|DR|BL|SH|TS|FZ)?((?:DZ|RA|SN|SG|IC|PE|PL|GR|GS|UP|BR|FG|FU|VA|DU|SA|HZ|PY|PO|SQ|FC|SS|DS)+)?$/;
+        const out = [];
+        for (const tok of body.split(/\s+/)) {
+            const m = re.exec(tok);
+            if (!m || !tok) continue;
+            const [, pre, desc, phen] = m;
+            // phenomena present: a group. None: only TS (with or without - + VC) or VCSH.
+            if (phen || desc === 'TS' || (pre === 'VC' && desc === 'SH')) out.push(tok);
+        }
+        return out;
     }
 
     // _bestRunwayHtml was replaced by the interactive Wind tab (compass rose

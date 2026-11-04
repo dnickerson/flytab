@@ -1,7 +1,8 @@
 /**
  * Airport panel nav row (web/cockpit/airport-popup.js: AirportPopup.navRow / _navHtml / _startNav):
- *   line 1  "HDG° · D nm · ↓ R fpm"   (magnetic bearing to the airport, great-circle distance, descent)
- *   line 2  "pattern alt: N ft"
+ *   line 1  "HDG° · D nm"   (magnetic bearing to the airport, great-circle distance)
+ *   line 2  "↓ R fpm to pattern alt N ft" / "at pattern alt N ft" / "pattern alt N ft"  (v12.65: a line
+ *           never starts with "·"; the descent rate is mono 900 --text-primary)
  *
  * Every number is checked against an INDEPENDENT reference written here (not the production helpers):
  *   bearing  - unit vectors in Earth-centred coordinates projected on the local north / east axes
@@ -72,6 +73,11 @@ const line1 = (nav) => {
     const d = document.createElement('div'); d.innerHTML = AirportPopup._navHtml(nav);
     return d.querySelector('.apt-nav-line')?.textContent ?? null;
 };
+/** Line 2 as the pilot reads it, or null. */
+const line2 = (nav) => {
+    const d = document.createElement('div'); d.innerHTML = AirportPopup._navHtml(nav);
+    return d.querySelector('.apt-nav-pattern')?.textContent ?? null;
+};
 
 let AirportPopup;
 beforeEach(() => {
@@ -127,11 +133,11 @@ describe('pattern altitude', () => {
         expect(AirportPopup.patternAltFt(rec)).toBeNull();
         expect(AirportPopup._navHtml(AirportPopup.navRow(rec, null, NOW))).toBe('');
     });
-    it('line 2 text: "pattern alt: 1,486 ft" (always shown when there is an elevation, even with no GPS)', () => {
+    it('line 2 text: "pattern alt 1,486 ft" (always shown when there is an elevation, even with no GPS)', () => {
         const html = AirportPopup._navHtml(AirportPopup.navRow(KLKR, sc(null, null), NOW));
         const d = document.createElement('div'); d.innerHTML = html;
         expect(d.querySelector('.apt-nav-line')).toBeNull();
-        expect(d.querySelector('.apt-nav-pattern').textContent).toBe('pattern alt: 1,486 ft');
+        expect(d.querySelector('.apt-nav-pattern').textContent).toBe('pattern alt 1,486 ft');
     });
 });
 
@@ -184,16 +190,25 @@ describe('heading and distance against the independent reference', () => {
         expect(Number(syd.hdg)).toBeLessThan(refBearing(-33.9244, 150.9881, -33.9461, 151.1772));
     });
 
-    it('line 1 wraps only between "D nm" and "· ↓ R fpm" (two no-wrap segments)', () => {
+    it('two deliberate lines: line 1 "HDG° · D nm", line 2 "↓ R fpm to pattern alt N ft"; no line starts with "·"', () => {
         const ac = dest(KLKR.lat, KLKR.lon, 230, 6.2);
-        const d = document.createElement('div');
-        d.innerHTML = AirportPopup._navHtml(AirportPopup.navRow(KLKR, sc(sitAt(ac, { alt_msl: 3486, ground_speed: 140 })), NOW));
-        const segs = [...d.querySelectorAll('.apt-nav-line .apt-nav-seg')].map((e) => e.textContent);
-        expect(segs).toHaveLength(2);
-        expect(segs[0]).toMatch(/^\d{3}° · 6\.2 nm$/);
-        expect(segs[1]).toMatch(/^· ↓ [\d,]+ fpm$/);
+        const nav = AirportPopup.navRow(KLKR, sc(sitAt(ac, { alt_msl: 3486, ground_speed: 140 })), NOW);
+        expect(line1(nav)).toMatch(/^\d{3}° · 6\.2 nm$/);
+        expect(line2(nav)).toMatch(/^↓ [\d,]+0 fpm to pattern alt 1,486 ft$/);
+        const d = document.createElement('div'); d.innerHTML = AirportPopup._navHtml(nav);
+        // the descent value: mono 900 --text-primary (its own span); line 2 wraps only at the segment boundary
+        expect(d.querySelector('.apt-nav-pattern .apt-nav-rate').textContent).toMatch(/^↓ [\d,]+0 fpm$/);
+        const segs = [...d.querySelectorAll('.apt-nav-pattern .apt-nav-seg')].map((e) => e.textContent);
+        expect(segs).toEqual([`${d.querySelector('.apt-nav-rate').textContent} to`, 'pattern alt 1,486 ft']);
+        for (const el of d.querySelectorAll('.apt-nav-line, .apt-nav-pattern, .apt-nav-seg')) {
+            expect(el.textContent.trim().startsWith('·')).toBe(false);
+        }
         const css = read('web/style.css');
         expect(css).toMatch(/\.apt-nav-seg \{\s*white-space: nowrap;/);
+        const rate = css.slice(css.indexOf('.apt-nav-rate {'), css.indexOf('}', css.indexOf('.apt-nav-rate {')));
+        expect(rate).toMatch(/font-family: var\(--font-instrument\)/);
+        expect(rate).toMatch(/font-weight: 900/);
+        expect(rate).toMatch(/color: var\(--text-primary\)/);
     });
 
     it('heading text is 1..360, 3 digits: 0 / 359.6 / 0.4 -> 360, 0.6 -> 001, 53 -> 053', () => {
@@ -234,7 +249,7 @@ describe('position gate', () => {
             expect(nav.pos).toBe(false);
             const html = AirportPopup._navHtml(nav);
             expect(html).not.toContain('apt-nav-line');
-            expect(html).toContain('pattern alt: 1,486 ft');
+            expect(html).toContain('pattern alt 1,486 ft');
         }
     });
     it('exactly 5 s old is still fresh', () => {
@@ -275,7 +290,8 @@ describe('descent rate', () => {
         const want = refRate(ac, alt, gs);
         expect(nav.descent).toBe(want);
         expect(want % 10).toBe(0);
-        expect(line1(nav)).toBe(`${nav.hdg}° · ${AirportPopup._fmtNm(nav.distNm)} nm · ↓ ${want.toLocaleString('en-US')} fpm`);
+        expect(line1(nav)).toBe(`${nav.hdg}° · ${AirportPopup._fmtNm(nav.distNm)} nm`);
+        expect(line2(nav)).toBe(`↓ ${want.toLocaleString('en-US')} fpm to pattern alt 1,486 ft`);
     });
     it('hand check: 10 nm, 3,000 ft above pattern alt, 120 kt -> 600 fpm', () => {
         const ac = dest(KLKR.lat, KLKR.lon, 230, 10);
@@ -287,11 +303,12 @@ describe('descent rate', () => {
         for (const alt of [PAT + 100, PAT, PAT - 500]) {
             const nav = AirportPopup.navRow(KLKR, sc(sitAt(ac, { alt_msl: alt })), NOW);
             expect(nav.descent).toBe('at');
-            expect(line1(nav)).toBe(`${nav.hdg}° · ${AirportPopup._fmtNm(nav.distNm)} nm · at pattern alt`);
+            expect(line1(nav)).toBe(`${nav.hdg}° · ${AirportPopup._fmtNm(nav.distNm)} nm`);
+            expect(line2(nav)).toBe('at pattern alt 1,486 ft');
         }
         expect(Number.isFinite(AirportPopup.navRow(KLKR, sc(sitAt(ac, { alt_msl: PAT + 101 })), NOW).descent)).toBe(true);
     });
-    it('above pattern alt but D <= 0.5 nm or GS < 30 kt -> descent omitted (line 1 = "HDG° · D nm")', () => {
+    it('above pattern alt but D <= 0.5 nm or GS < 30 kt -> descent omitted (line 2 = "pattern alt N ft")', () => {
         const near = dest(KLKR.lat, KLKR.lon, 230, 0.49);   // (0.5 itself is a float boundary)
         const far = dest(KLKR.lat, KLKR.lon, 230, 8);
         for (const [ac, gs] of [[near, 120], [far, 29], [far, 0]]) {
@@ -299,6 +316,7 @@ describe('descent rate', () => {
             expect(nav.descent).toBeNull();
             const d = document.createElement('div'); d.innerHTML = AirportPopup._navHtml(nav);
             expect(d.querySelector('.apt-nav-line').textContent).toBe(`${nav.hdg}° · ${AirportPopup._fmtNm(nav.distNm)} nm`);
+            expect(line2(nav)).toBe('pattern alt 1,486 ft');
         }
     });
     it('GS missing / non-finite -> descent omitted', () => {
@@ -336,6 +354,7 @@ describe('descent rate', () => {
         const d = refDistNm(ac.lat, ac.lon, C2CN8.lat, C2CN8.lon);
         expect(nav.patternAlt).toBe(5410);
         expect(nav.descent).toBe(Math.round(3000 / (d / 120 * 60) / 10) * 10);
+        expect(line2(nav)).toBe(`↓ ${nav.descent.toLocaleString('en-US')} fpm to pattern alt 5,410 ft`);
     });
 });
 
@@ -369,7 +388,8 @@ describe('the nav row in the open panel', () => {
         expect(row.previousElementSibling).toBe(hdr);
         expect(row.lastElementChild.classList.contains('apt-glide-toggle')).toBe(true);
         expect(row.firstElementChild.classList.contains('apt-nav-text')).toBe(true);
-        expect(line().textContent).toMatch(/^\d{3}° · 6\.2 nm · ↓ [\d,]+0 fpm$/);
+        expect(line().textContent).toMatch(/^\d{3}° · 6\.2 nm$/);
+        expect(popup._panel.querySelector('.apt-nav-pattern').textContent).toMatch(/^↓ [\d,]+0 fpm to pattern alt 1,486 ft$/);
         expect(row.textContent).not.toMatch(/FROM HERE/i);
     });
 
@@ -388,7 +408,7 @@ describe('the nav row in the open panel', () => {
         s = null;
         vi.advanceTimersByTime(1000);
         expect(line()).toBeNull();
-        expect(popup._panel.querySelector('.apt-nav-pattern').textContent).toBe('pattern alt: 1,486 ft');
+        expect(popup._panel.querySelector('.apt-nav-pattern').textContent).toBe('pattern alt 1,486 ft');
         expect(popup._panel.querySelector('.apt-nav-row .apt-glide-toggle')).not.toBeNull();
         // another airport: still one timer
         // (jsdom's storage timer has fired by now: ours is the only one left)

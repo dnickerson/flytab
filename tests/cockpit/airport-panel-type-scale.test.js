@@ -196,6 +196,16 @@ describe('the panel\'s CSS', () => {
         expect(get('.apt-tabs')['overflow-x']).toBe('auto');                 // horizontal-scroll safety kept
     });
 
+    it('v12.65 layout fixes: name upper case, pills one line, CEIL badge wraps under the sky value', () => {
+        const get = (h) => RULES.find((r) => r.head === h)?.decls || {};
+        expect(get('.apt-panel-name')['text-transform']).toBe('uppercase');
+        expect(get('.apt-chip')['white-space']).toBe('nowrap');
+        expect(get('.apt-chip').flex).toBe('1 1 auto');
+        expect(get('.apt-action-chips')['flex-wrap']).toBe('wrap');          // a large font scale moves a pill down, never clips it
+        expect(get('.airport-panel .wx-sky-item')['flex-wrap']).toBe('wrap');
+        expect(read('web/cockpit/airport-popup.js')).toContain(String.raw`data-action="direct-to">D→\u00a0Direct</button>`);
+    });
+
     it('the exceptions are only the listed SVG labels, and they really are SVG text', () => {
         const wc = read('web/cockpit/wind-compass.js');
         for (const e of EXCEPTIONS) expect(wc).toMatch(new RegExp(`<text class="${e.sel.slice(1)}"`));

@@ -7800,6 +7800,7 @@ body.fs-overlay-open .radar-loop-controls {
     font-weight: 800;
     line-height: 1.25;
     color: var(--text-primary);
+    text-transform: uppercase;     /* the FAA's upper-case name (NASR stores it mixed case) */
     overflow-wrap: anywhere;
 }
 /* ✕: 80 x 56 (the boards). .btn-close sets an 80 x 80 minimum; this one is 56 tall. */
@@ -7816,8 +7817,8 @@ body.fs-overlay-open .radar-loop-controls {
     font-weight: 900;
 }
 
-/* Nav row under the header (airport-popup.js navRow / _navHtml): "HDG° · D nm · ↓ R fpm" and
-   "pattern alt: N ft" on the left, ENGINE OUT on the right. */
+/* Nav row under the header (airport-popup.js navRow / _navHtml): line 1 "HDG° · D nm", line 2
+   "↓ R fpm to pattern alt N ft" / "at pattern alt N ft" / "pattern alt N ft"; ENGINE OUT on the right. */
 .apt-nav-row {
     display: flex;
     align-items: center;
@@ -7843,6 +7844,12 @@ body.fs-overlay-open .radar-loop-controls {
 }
 .apt-nav-seg {
     white-space: nowrap;
+}
+/* the descent value in line 2: mono 900, primary */
+.apt-nav-rate {
+    font-family: var(--font-instrument);
+    font-weight: 900;
+    color: var(--text-primary);
 }
 .apt-nav-pattern {
     font-family: var(--font-ui);
@@ -7991,17 +7998,17 @@ body.fs-overlay-open .radar-loop-controls {
 
 .apt-action-chips {
     display: flex;
-    gap: 8px;
+    flex-wrap: wrap;    /* a large font scale moves a pill to a second row instead of clipping it */
+    gap: 6px;
     padding: 12px;
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
 }
 
 .apt-chip {
-    flex: 1;
-    min-width: 0;
+    flex: 1 1 auto;     /* sized to the label, sharing what is left: each label on one line */
     min-height: var(--touch-min, 56px);
-    padding: 0 4px;
+    padding: 0 6px;
     border: 2px solid var(--accent);
     border-radius: 28px;
     background: var(--bg-primary);
@@ -8011,9 +8018,7 @@ body.fs-overlay-open .radar-loop-controls {
     font-weight: 800;
     line-height: 1.1;
     text-transform: uppercase;
-    /* three pills share ~88 px each: a label that doesn't fit wraps inside its pill (two lines fit 56 px) */
-    white-space: normal;
-    overflow-wrap: anywhere;
+    white-space: nowrap;
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
     touch-action: manipulation;
@@ -13101,6 +13106,8 @@ body:has(.checklist-page.visible) > .toast { z-index: 900; }
     color: var(--text-primary);
 }
 .airport-panel .wx-sky-item {
+    flex-wrap: wrap;    /* the CEIL badge goes under the value when the row is too narrow */
+    row-gap: 2px;
     font-family: var(--font-instrument);
     font-size: var(--text-md);
     font-weight: 900;
