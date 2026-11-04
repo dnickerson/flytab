@@ -122,9 +122,11 @@ class AirportPopup {
 
         // Look up cached weather — prefer FIS-B over plan data
         let wx = null;
+        let cachedTaf = null;
         try {
             const cached = await this._nasr.getWeather(airport.icao);
             if (cached?.metar) wx = cached;
+            cachedTaf = cached?.taf?.raw || null;     // a cached TAF counts even without a cached METAR
         } catch (_) {}
 
         // Internet METARs (pre-flight, online) — better than plan cache
@@ -133,7 +135,6 @@ class AirportPopup {
             if (im) {
                 wx = {
                     metar: { raw: im.raw, decoded: im.decoded, fetched_at: new Date(im.received_at).toISOString() },
-                    taf: wx?.taf || null,
                     source: 'internet',
                     fetched_at: new Date(im.received_at).toISOString(),
                 };
@@ -142,15 +143,25 @@ class AirportPopup {
 
         if (this._fisbClient) {
             const fisbMetar = this._fisbClient.getMetar(airport.icao);
-            const fisbTaf = this._fisbClient.getTaf(airport.icao);
             if (fisbMetar) {
                 wx = {
                     metar: { raw: fisbMetar.raw, decoded: fisbMetar.decoded, fetched_at: new Date(fisbMetar.received_at).toISOString() },
-                    taf: fisbTaf ? { raw: fisbTaf.raw } : (wx?.taf || null),
                     source: 'fisb',
                     fetched_at: new Date(fisbMetar.received_at).toISOString(),
                 };
             }
+        }
+
+        // TAF: chosen on its own, whatever the METAR source. FIS-B first so it wins a tie with the cache;
+        // the internet TAF (_fetchInternetTaf) replaces it later only if it was issued later (_tafNewer).
+        // Reset after the await: a second show() that started meanwhile must not inherit this one's TAF.
+        this._taf = null;
+        this._offerTaf(this._fisbClient?.getTaf(airport.icao)?.raw, 'fisb');
+        this._offerTaf(cachedTaf, 'cache');
+        if (this._taf) {
+            wx = wx ? { ...wx, taf: { raw: this._taf.raw } } : { metar: null, taf: { raw: this._taf.raw }, source: this._taf.src };
+        } else if (wx) {
+            wx = { ...wx, taf: null };
         }
 
         // Use sliding panel if available, else fall back to Leaflet popup
@@ -162,7 +173,70 @@ class AirportPopup {
 
         this._startFisbListener(airport);
         this._startInternetMetarListener(airport);
-        if (wx?.source === 'internet' && !wx.taf) this._fetchInternetTaf(airport.icao);
+        // Internet TAF on every open: on the ground it fills a missing TAF (or a newer one replaces FIS-B's);
+        // in the air there is no internet and the request just fails, silently (timeout in _fetchInternetTaf).
+        this._fetchInternetTaf(airport.icao);
+    }
+
+    /**
+     * Offer a TAF for the open airport (raw text; src 'fisb' | 'cache' | 'internet'). Taken when there is
+     * none yet or it is newer than the one shown (_tafNewer). Returns true when taken (this._taf set).
+     */
+    _offerTaf(raw, src) {
+        const text = typeof raw === 'string' ? raw.trim() : '';
+        if (!text) return false;
+        const cand = { raw: text, src, issued: AirportPopup._tafIssuedMs(text) };
+        if (!AirportPopup._tafNewer(cand, this._taf || null)) return false;
+        this._taf = cand;
+        return true;
+    }
+
+    /**
+     * Which TAF is newer: by ISSUE time, the report's DDHHMMZ group ("TAF KCLT 041535Z ..." from AWC,
+     * "KCLT 041535Z ..." / "TAF AMD KCLT 041850Z ..." from FIS-B), not by when FlyTab got it - FIS-B
+     * re-broadcasts the same TAF every few minutes and an internet fetch is always "now", so receive times
+     * would just favour whichever arrived last. Same text, or the same issue time: keep the one shown.
+     * A dated TAF beats an undated one; two undated ones: the later offer.
+     */
+    static _tafNewer(cand, cur) {
+        if (!cur) return true;
+        if (cand.raw === cur.raw) return false;
+        if (cand.issued != null && cur.issued != null) return cand.issued > cur.issued;
+        if (cand.issued != null) return true;
+        if (cur.issued != null) return false;
+        return true;
+    }
+
+    /**
+     * Issue time (ms UTC) of a TAF from its first DDHHMMZ group, or null. The month is the latest one
+     * that puts that time no more than 12 h after now (so "312340Z" read on the 1st is last month's 31st).
+     */
+    static _tafIssuedMs(raw, now = Date.now()) {
+        const m = /(?:^|\s)(\d{2})(\d{2})(\d{2})Z(?=\s|$)/.exec(String(raw || ''));
+        if (!m) return null;
+        const dd = +m[1], hh = +m[2], mi = +m[3];
+        if (dd < 1 || dd > 31 || hh > 23 || mi > 59) return null;
+        const n = new Date(now);
+        for (let back = 0; back <= 1; back++) {
+            const t = Date.UTC(n.getUTCFullYear(), n.getUTCMonth() - back, dd, hh, mi);
+            if (new Date(t).getUTCDate() !== dd) continue;      // no such day in that month (31 Nov)
+            if (t <= now + 12 * 3600000) return t;
+        }
+        return null;
+    }
+
+    /** The open panel's WX tab shows this TAF: replaces the shown one, or adds a TAF section (METAR or not). */
+    _putTafInPane(raw) {
+        if (!this._panel || !this._panelOpen) return;
+        const pane = this._panel.querySelector('.apt-tab-pane[data-pane="wx"]');
+        if (!pane) return;
+        const tafEl = pane.querySelector('.wx-taf');
+        if (tafEl) { tafEl.innerHTML = this._formatTaf(raw); return; }
+        const section = pane.querySelector('.popup-wx-section');
+        if (section) { section.insertAdjacentHTML('beforeend', this._tafHtml(raw)); return; }
+        const metars = pane.querySelectorAll('.wx-metar');
+        if (metars.length) { metars[metars.length - 1].insertAdjacentHTML('afterend', this._tafHtml(raw)); return; }
+        pane.innerHTML = this._wxPaneHtml({ metar: null, taf: { raw } });   // "No weather data" -> a TAF-only section
     }
 
     _showPanel(airport, wx) {
@@ -886,7 +960,7 @@ class AirportPopup {
                 </div>
             </div>
             <div class="apt-tab-pane" data-pane="wx">
-                ${wx ? this._weatherHtml(wx) : '<div style="padding:16px;color:var(--text-muted)">No weather data</div>'}
+                ${this._wxPaneHtml(wx) || AirportPopup.NO_WX_HTML}
             </div>
             <div class="apt-tab-pane" data-pane="rwy">
                 ${apt.runways?.length ? this._runwaysHtml(apt.runways) : '<div style="padding:16px;color:var(--text-muted)">No runway data</div>'}
@@ -929,6 +1003,7 @@ class AirportPopup {
             if (e.detail.icao !== airport.icao) return;
             const wx = {
                 metar: { raw: e.detail.raw, decoded: e.detail.decoded, fetched_at: new Date(e.detail.received_at).toISOString() },
+                taf: this._taf ? { raw: this._taf.raw } : null,     // a new METAR must not drop the TAF shown
                 source: 'fisb',
                 fetched_at: new Date(e.detail.received_at).toISOString(),
             };
@@ -936,7 +1011,7 @@ class AirportPopup {
             if (this._panel && this._panelOpen) {
                 const wxPane = this._panel.querySelector('.apt-tab-pane[data-pane="wx"]');
                 if (wxPane) {
-                    wxPane.innerHTML = this._weatherHtml(wx);
+                    wxPane.innerHTML = this._wxPaneHtml(wx) || AirportPopup.NO_WX_HTML;
                 }
                 this._updateWindCompass(wx);
             }
@@ -945,30 +1020,17 @@ class AirportPopup {
                 const container = this._popup.getElement();
                 if (container) {
                     const wxSection = container.querySelector('.popup-wx-section');
-                    if (wxSection) wxSection.outerHTML = this._weatherHtml(wx);
+                    if (wxSection) wxSection.outerHTML = this._wxPaneHtml(wx);
                 }
             }
         };
         this._fisbClient.addEventListener('fisb:metar', this._onFisbMetar);
 
-        // Live TAF updates while popup is open
+        // Live TAF updates while popup is open: shown when newer than the TAF shown (_offerTaf), with or
+        // without a METAR section.
         this._onFisbTaf = (e) => {
             if (e.detail.icao !== airport.icao) return;
-            const tafRaw = e.detail.raw;
-            const pane = this._panel?.querySelector('.apt-tab-pane[data-pane="wx"]');
-            if (pane) {
-                const tafEl = pane.querySelector('.wx-taf');
-                if (tafEl) {
-                    tafEl.innerHTML = this._formatTaf(tafRaw);
-                } else {
-                    const metarEl = pane.querySelector('.wx-metar');
-                    if (metarEl) {
-                        metarEl.insertAdjacentHTML('afterend',
-                            `<div class="popup-section-title" style="margin-top:10px">TAF</div>` +
-                            `<div class="wx-metar wx-taf">${this._formatTaf(tafRaw)}</div>`);
-                    }
-                }
-            }
+            if (this._offerTaf(e.detail.raw, 'fisb')) this._putTafInPane(this._taf.raw);
         };
         this._fisbClient.addEventListener('fisb:taf', this._onFisbTaf);
     }
@@ -989,12 +1051,13 @@ class AirportPopup {
             if (this._fisbClient?.getMetar(icao)) return; // FIS-B takes priority
             const wx = {
                 metar: { raw: entry.raw, decoded: entry.decoded, fetched_at: new Date(entry.received_at).toISOString() },
+                taf: this._taf ? { raw: this._taf.raw } : null,     // a new METAR must not drop the TAF shown
                 source: 'internet',
                 fetched_at: new Date(entry.received_at).toISOString(),
             };
             if (this._panel && this._panelOpen) {
                 const wxPane = this._panel.querySelector('.apt-tab-pane[data-pane="wx"]');
-                if (wxPane) wxPane.innerHTML = this._weatherHtml(wx);
+                if (wxPane) wxPane.innerHTML = this._wxPaneHtml(wx) || AirportPopup.NO_WX_HTML;
                 this._updateWindCompass(wx);
             }
         };
@@ -1008,25 +1071,29 @@ class AirportPopup {
         }
     }
 
+    /**
+     * The airport's TAF from AWC through the flywhere proxy (Settings.workerBase; AWC itself sends no CORS
+     * header). No `hours` parameter: AWC's TAF endpoint answers 400 "Unexpected query parameter provided"
+     * to it (the proxy then 502), checked 2026-11-04. Reply: [{ icaoId, rawTAF: "TAF KCLT 041535Z ...", ... }],
+     * [] when the airport has no TAF. Shown only when newer than the TAF shown (_offerTaf); any failure
+     * (offline, in flight, 502) leaves the WX tab as it is.
+     */
     async _fetchInternetTaf(icao) {
         try {
-            const url = `https://www.flywhere.app/api/weather?type=taf&ids=${icao}&format=json&hours=24`;
-            const r = await fetch(url, { cache: 'no-store' });
+            const base = (typeof Settings !== 'undefined' && Settings.workerBase)
+                ? Settings.workerBase : 'https://www.flywhere.app/api';
+            const url = `${base}/weather?type=taf&ids=${encodeURIComponent(icao)}&format=json`;
+            const opts = { cache: 'no-store' };
+            if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+                opts.signal = AbortSignal.timeout(10000);
+            }
+            const r = await fetch(url, opts);
             if (!r.ok) return;
             const data = await r.json();
-            const raw = (Array.isArray(data) ? data[0] : data)?.rawTAF || '';
-            if (!raw || this._currentIcao !== icao) return;
-            if (this._panel && this._panelOpen) {
-                const wxPane = this._panel.querySelector('.apt-tab-pane[data-pane="wx"]');
-                if (wxPane) {
-                    const existing = wxPane.querySelector('.wx-metar');
-                    if (existing && !wxPane.querySelector('.wx-taf')) {
-                        existing.insertAdjacentHTML('afterend',
-                            `<div class="popup-section-title" style="margin-top:10px">TAF</div><div class="wx-metar wx-taf">${this._formatTaf(raw)}</div>`);
-                    }
-                }
-            }
-        } catch { /* silent */ }
+            const raw = (Array.isArray(data) ? data[0] : data)?.rawTAF;
+            if (typeof raw !== 'string' || !raw.trim() || this._currentIcao !== icao) return;
+            if (this._offerTaf(raw, 'internet')) this._putTafInPane(this._taf.raw);
+        } catch { /* offline: the WX tab keeps what it has */ }
     }
 
     _stopFisbListener() {
@@ -1219,9 +1286,9 @@ class AirportPopup {
             sections.push(this._ifrHtml(apt));
         }
 
-        // Weather
+        // Weather (a TAF shows without a METAR too)
         if (wx) {
-            sections.push(this._weatherHtml(wx));
+            sections.push(this._wxPaneHtml(wx));
         }
 
         // Action buttons
@@ -1915,9 +1982,7 @@ class AirportPopup {
         const isSpeci = raw.startsWith('SPECI') || wx.is_speci;
         const speciClass = isSpeci ? ' wx-speci' : '';
 
-        const tafHtml = wx.taf?.raw
-            ? `<div class="popup-section-title" style="margin-top:10px">TAF</div><div class="wx-metar wx-taf">${this._formatTaf(wx.taf.raw)}</div>`
-            : '';
+        const tafHtml = wx.taf?.raw ? this._tafHtml(wx.taf.raw) : '';
 
         const windRow = windStr
             ? `<div class="wx-row"><div class="wx-row-lbl">WIND</div><div class="wx-row-val">${AirportPopup._esc(windStr)}</div></div>`
@@ -2005,6 +2070,31 @@ class AirportPopup {
                 }
             });
         });
+    }
+
+    /** "No weather data" in the WX tab: no METAR and no TAF. */
+    static NO_WX_HTML = '<div style="padding:16px;color:var(--text-muted)">No weather data</div>';
+
+    /** The TAF title + text (escaped by _formatTaf). */
+    _tafHtml(raw) {
+        return `<div class="popup-section-title" style="margin-top:10px">TAF</div><div class="wx-metar wx-taf">${this._formatTaf(raw)}</div>`;
+    }
+
+    /**
+     * WX tab content: the METAR card (with the TAF under it), or a TAF-only section when there is a TAF
+     * but no METAR, or '' when there is neither.
+     */
+    _wxPaneHtml(wx) {
+        if (!wx) return '';
+        if (wx.metar) {
+            const html = this._weatherHtml(wx);
+            if (html) return html;
+        }
+        if (!wx.taf?.raw) return '';
+        return `<div class="popup-section popup-wx-section popup-wx-taf-only">
+            <div class="wx-time"><span>No METAR</span></div>
+            ${this._tafHtml(wx.taf.raw)}
+        </div>`;
     }
 
     /** TAF raw text as HTML: escaped first, then a line break before each FM group. */
