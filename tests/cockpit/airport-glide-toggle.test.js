@@ -68,9 +68,11 @@ function fakeLeaflet() {
 let AirportPopup, map, sit;
 
 beforeEach(() => {
+    // Clear before faking timers: clearing a non-empty jsdom localStorage queues a storage-event timer,
+    // which would otherwise count in a test's vi.getTimerCount().
+    localStorage.clear();
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
-    localStorage.clear();
     document.body.innerHTML = '';
     globalThis.wireTap = wireTap;
     globalThis.GlideModel = GlideModel;
@@ -110,6 +112,17 @@ const btn = () => cur._panel.querySelector('.apt-glide-toggle');
 const block = () => cur._panel.querySelector('.glide-host .glide-block');
 const statusLine = () => cur._panel.querySelector('.glide-host .glide-status');
 const statusText = () => (statusLine() ? statusLine().textContent.trim() : null);
+const host = () => cur._panel.querySelector('.glide-host');
+/** ENGINE OUT on but quiet: the host is there, empty and hidden - no status, no block, no line. */
+function expectQuiet() {
+    expect(host()).not.toBeNull();
+    expect(host().hidden).toBe(true);
+    expect(host().innerHTML).toBe('');
+    expect(statusLine()).toBeNull();
+    expect(block()).toBeNull();
+    expect(map.layers.size).toBe(0);
+}
+const NO_GPS_MSG = 'ENGINE OUT · no GPS — needs the Stratux GPS over WiFi';
 
 describe('ENGINE OUT button', () => {
     it('sits directly under the close button, labelled ENGINE OUT, at least the touch minimum', () => {
@@ -202,17 +215,14 @@ describe('ENGINE OUT button', () => {
         open();
         expect(block()).not.toBeNull();
         expect(map.layers.size).toBe(1);
-        // the other checks still apply: no 3D fix -> no block, stale -> no block; the status line says why
+        // the other checks still apply: no 3D fix -> no block, stale -> no block. Opened with ENGINE OUT
+        // already on (remembered), so no status line says why: the block area is just hidden.
         sit = { ...sit, gps_fix_quality: 0, timestamp: Date.now() };
         vi.advanceTimersByTime(1000);
-        expect(block()).toBeNull();
-        expect(statusText()).toBe('ENGINE OUT · waiting for a 3D GPS fix');
-        expect(map.layers.size).toBe(0);
+        expectQuiet();
         sit = { ...situation(90, 0.2, 490, 0, { ground_speed: 0 }), timestamp: Date.now() - 6000 };
         vi.advanceTimersByTime(1000);
-        expect(block()).toBeNull();
-        expect(statusText()).toBe('ENGINE OUT · no GPS — needs the Stratux GPS over WiFi');
-        expect(map.layers.size).toBe(0);
+        expectQuiet();
     });
 
     it('a configured showAboveGsKt no longer hides the panel block (it is EmergencyGlide\'s only)', () => {
@@ -228,8 +238,7 @@ describe('ENGINE OUT button', () => {
 
     it('an airport that can never have a block (heliport) still toggles the choice', () => {
         open({ ...KLKR, icao: 'SC99', fac_type: 'HELIPORT' });
-        expect(block()).toBeNull();
-        expect(statusText()).toBe('ENGINE OUT · not available for this airport');
+        expectQuiet();                                      // opened with ENGINE OUT on: no message
         btn().click();
         expect(localStorage.getItem(KEY)).toBe('false');
         expect(btn().classList.contains('is-on')).toBe(false);
@@ -241,22 +250,28 @@ describe('ENGINE OUT button', () => {
         expect(map.layers.size).toBe(0);
     });
 
-    it('on the ground with no GPS: ON says "no GPS" (no numbers, no line); a fix brings the block; OFF removes everything', () => {
+    it('on the ground with no GPS: opened with ENGINE OUT on -> nothing; tapped OFF -> ON says "no GPS" (no numbers, no line); a fix brings the block; OFF removes everything', () => {
         globalThis.window.app.stratuxClient = { situation: null, wsSituation: null };
         open();
         expect(btn().classList.contains('is-on')).toBe(true);
-        expect(block()).toBeNull();
-        expect(statusText()).toBe('ENGINE OUT · no GPS — needs the Stratux GPS over WiFi');
-        expect(cur._panel.querySelector('.glide-host').previousElementSibling.classList.contains('apt-panel-header')).toBe(true);
-        expect(cur._panel.querySelector('.glide-host').textContent).not.toMatch(/\d/);
-        expect(map.layers.size).toBe(0);
+        expectQuiet();                                      // remembered ON: no status, host hidden
+        expect(host().previousElementSibling.classList.contains('apt-panel-header')).toBe(true);
+        vi.advanceTimersByTime(3000);
+        expectQuiet();
 
-        // OFF and ON again with still no GPS: the status comes back, nothing else
+        // tap OFF, then ON with still no GPS: now the status says why, nothing else
         btn().click();
         expect(cur._panel.querySelector('.glide-host')).toBeNull();
         expect(map.layers.size).toBe(0);
         btn().click();
-        expect(statusText()).toBe('ENGINE OUT · no GPS — needs the Stratux GPS over WiFi');
+        expect(statusText()).toBe(NO_GPS_MSG);
+        expect(host().hidden).toBe(false);
+        expect(host().previousElementSibling.classList.contains('apt-panel-header')).toBe(true);
+        expect(host().textContent).not.toMatch(/\d/);
+        expect(block()).toBeNull();
+        expect(map.layers.size).toBe(0);
+        vi.advanceTimersByTime(3000);
+        expect(statusText()).toBe(NO_GPS_MSG);              // it stays
 
         // the Stratux GPS gets a fix: the block replaces the status on the next tick
         const s = situation(90, 0.2, 490, 0, { ground_speed: 0 });
@@ -341,6 +356,80 @@ describe('ENGINE OUT button', () => {
         expect(off).toMatch(/background:\s*var\(--bg-primary\)/);
         expect(off).toMatch(/border:\s*2px solid var\(--accent-active\)/);
         expect(off).toMatch(/color:\s*var\(--accent-active\)/);
+    });
+
+    it('after a tap the status stays until the block replaces it; fix lost again -> status again (this panel)', () => {
+        globalThis.window.app.stratuxClient = { situation: null, wsSituation: null };
+        open();
+        btn().click();                                      // OFF
+        btn().click();                                      // ON by a tap
+        expect(statusText()).toBe(NO_GPS_MSG);
+        const s = situation(90, 0.2, 490, 0, { ground_speed: 0 });
+        s.timestamp = Date.now() + 500;
+        globalThis.window.app.stratuxClient = { situation: s, wsSituation: s };
+        vi.advanceTimersByTime(1000);
+        expect(statusLine()).toBeNull();
+        expect(block()).not.toBeNull();
+        expect(map.layers.size).toBe(1);
+        vi.advanceTimersByTime(7000);                       // nothing new arrives: stale
+        expect(block()).toBeNull();
+        expect(statusText()).toBe(NO_GPS_MSG);
+        expect(map.layers.size).toBe(0);
+    });
+
+    it('opening another airport after a tap is quiet again; so is closing and reopening the same one', () => {
+        globalThis.window.app.stratuxClient = { situation: null, wsSituation: null };
+        const p = open();
+        btn().click();
+        btn().click();
+        expect(statusText()).toBe(NO_GPS_MSG);
+        p._showPanel({ ...KLKR, icao: 'KCLT', name: 'Charlotte' }, null);     // another airport, same panel
+        expect(btn().classList.contains('is-on')).toBe(true);
+        expectQuiet();
+        vi.advanceTimersByTime(3000);
+        expectQuiet();
+        btn().click();
+        btn().click();
+        expect(statusText()).toBe(NO_GPS_MSG);
+        p.close();
+        expect(cur._panel.querySelector('.glide-host')).toBeNull();
+        p._showPanel(KLKR, null);                           // reopened: remembered ON, quiet
+        expectQuiet();
+    });
+
+    it('quiet panel: a fix arriving brings the block (and line); the fix lost hides it, no status', () => {
+        globalThis.window.app.stratuxClient = { situation: null, wsSituation: null };
+        open();
+        expectQuiet();
+        const s = situation(180, 6, 5500, 360);
+        s.timestamp = Date.now() + 500;
+        globalThis.window.app.stratuxClient = { situation: s, wsSituation: s };
+        vi.advanceTimersByTime(1000);
+        expect(block()).not.toBeNull();
+        expect(host().hidden).toBe(false);
+        expect(statusLine()).toBeNull();
+        expect(map.layers.size).toBe(1);
+        vi.advanceTimersByTime(7000);                       // stale
+        expectQuiet();
+        globalThis.window.app.stratuxClient = { situation: null, wsSituation: null };
+        vi.advanceTimersByTime(1000);
+        expectQuiet();
+    });
+
+    it('the tap passes showStatus to GlidePanel; opening the panel does not', () => {
+        const Real = globalThis.GlidePanel;
+        const opts = [];
+        globalThis.GlidePanel = class extends Real { constructor(el, rec, o) { super(el, rec, o); opts.push(o); } };
+        try {
+            open();
+            expect(opts).toEqual([{ showStatus: false }]);
+            btn().click();
+            btn().click();
+            expect(opts).toEqual([{ showStatus: false }, { showStatus: true }]);
+            cur.close();
+        } finally {
+            globalThis.GlidePanel = Real;
+        }
     });
 
     it('close() with ENGINE OUT on stops the block and removes the line', () => {

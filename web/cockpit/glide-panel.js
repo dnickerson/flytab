@@ -12,10 +12,12 @@
  *
  * Position and altitude come from StratuxClient.wsSituation (the Stratux WebSocket: true GPS MSL).
  * No block (and no line) without a 3D GPS fix, with a situation older than 5 s, for a heliport /
- * seaplane base, or when the airport has no elevation or position: GlideInputs decides. Instead of
- * the block, while started, one status line says why (GlidePanel.STATUS, never a number, never a
- * verdict colour): no GPS / no GPS altitude from the Stratux / waiting for a 3D GPS fix / not
- * available for this airport / glide check unavailable. Only stop() (ENGINE OUT off, panel closed) empties the host. There is no
+ * seaplane base, or when the airport has no elevation or position: GlideInputs decides. Then, with
+ * opts.showStatus (ENGINE OUT turned on by a tap in this panel), one status line says why instead of
+ * the block (GlidePanel.STATUS, never a number, never a verdict colour): no GPS / no GPS altitude from
+ * the Stratux / waiting for a 3D GPS fix / not available for this airport / glide check unavailable.
+ * Without it (the panel opened with ENGINE OUT already on) the host is just hidden until there are
+ * numbers to show. stop() (ENGINE OUT off, panel closed) empties the host either way. There is no
  * ground-speed gate here (the pilot turns the block on / off with ENGINE OUT), so it shows on the
  * ground too: aircraft() gets the settings with showAboveGsKt 0 (GlidePanel.noGsGate). EmergencyGlide
  * still passes the configured showAboveGsKt.
@@ -29,9 +31,13 @@ class GlidePanel {
     /**
      * @param {HTMLElement} containerEl  the element the block renders into (emptied while hidden)
      * @param {Object} airportRec        NASR airport record (icao, lat, lon, elev_ft, fac_type, runways)
+     * @param {Object} [opts]
+     * @param {boolean} [opts.showStatus=false]  with no numbers to show, show the status line saying why
+     *        (true only when the pilot just tapped ENGINE OUT on); false: hide the host instead
      */
-    constructor(containerEl, airportRec) {
+    constructor(containerEl, airportRec, opts = {}) {
         this._el = containerEl;
+        this._showStatus = !!(opts && opts.showStatus);
         this._statusKey = null;        // the status line on screen (GlidePanel.STATUS key), null when none
         this._rec = airportRec || null;
         this._timer = null;
@@ -313,9 +319,10 @@ class GlidePanel {
     /**
      * No glide numbers can be shown: remove the map line and show one status line instead of the block
      * (GlidePanel.STATUS[key]; neutral colours, no numbers). The DOM is only rewritten when the reason changes.
-     * Returns null (no plan).
+     * Without showStatus the host is hidden instead (no block, no message). Returns null (no plan).
      */
     _status(key) {
+        if (!this._showStatus) return this._hide();
         this._removeMap();
         const msg = GlidePanel.STATUS[key] || GlidePanel.STATUS.unavailable;
         if (this._el && (this._statusKey !== key || this._el.hidden || !this._el.querySelector('.glide-status'))) {
@@ -384,7 +391,7 @@ class GlidePanel {
 }
 
 /**
- * The status line shown, after "ENGINE OUT · ", while started with no glide numbers to show:
+ * The status line shown, after "ENGINE OUT · ", while started with showStatus and no glide numbers to show:
  *   nogps       no Stratux WebSocket situation, or none for GlideInputs.SIT_MAX_AGE_MS
  *   noalt       as nogps, but the Stratux's GDL 90 situation is a fresh 3D fix (own-ship on the map; the
  *               glide check needs the WebSocket's GPS MSL altitude, GDL 90's is height above the ellipsoid)

@@ -418,20 +418,42 @@ class VectorMapLayers {
                 // Notify open popup so it can live-refresh if FIS-B isn't active
                 if (this._onInternetMetar) this._onInternetMetar(icao, this._internetMetars.get(icao));
                 // Persist to IndexedDB so data-status weather cache can show them
-                if (this._nasr) {
-                    const entry = this._internetMetars.get(icao);
-                    this._nasr.putWeather(icao, {
-                        metar: { raw: entry.raw, decoded: entry.decoded, fetched_at: new Date(now).toISOString() },
-                        taf: null,
-                        fetched_at: new Date(now).toISOString(),
-                        source: 'internet',
-                    }).catch(() => {});
-                }
+                if (this._nasr) this._cacheInternetMetar(icao, this._internetMetars.get(icao), now);
             }
             this._internetFetchedAt = now;
             this._internetFetchBounds = { south, west, north, east };
             if (this._onInternetMetarsFetched) this._onInternetMetarsFetched();
         } catch { /* offline — silently skip */ }
+    }
+
+    /**
+     * Write an internet METAR into the IndexedDB weather cache, keeping the TAF already cached there
+     * (read-merge, as FisbClient does): FIS-B and plan TAFs live in the same record, and the airport
+     * panel reads its TAF from it. An expired cached TAF is dropped: its validity period has ended
+     * (AirportPopup._tafExpired), or, when that can't be read, it is older than CACHED_TAF_MAX_MS (its
+     * own fetched_at, else the record's) - the record's fetched_at is refreshed by every METAR, so the
+     * 30 h cache prune would never remove it. A kept TAF keeps that age (fetched_at).
+     */
+    _cacheInternetMetar(icao, entry, now) {
+        const at = new Date(now).toISOString();
+        const metar = { raw: entry.raw, decoded: entry.decoded, fetched_at: at };
+        Promise.resolve()
+            .then(() => this._nasr.getWeather(icao))
+            .catch(() => null)
+            .then((existing) => {
+                let taf = null;
+                const t = existing?.taf;
+                if (t?.raw) {
+                    const tafAt = t.fetched_at || existing.fetched_at || null;
+                    const ms = tafAt ? Date.parse(tafAt) : NaN;
+                    const expired = (typeof AirportPopup !== 'undefined' && typeof AirportPopup._tafExpired === 'function')
+                        ? AirportPopup._tafExpired(t.raw, now, tafAt)
+                        : !(now - ms <= VectorMapLayers.CACHED_TAF_MAX_MS);
+                    if (Number.isFinite(ms) && !expired) taf = { ...t, fetched_at: tafAt };
+                }
+                return this._nasr.putWeather(icao, { metar, taf, fetched_at: at, source: 'internet' });
+            })
+            .catch(() => {});
     }
 
     _rebuildVoronoi() {
@@ -1243,6 +1265,9 @@ class VectorMapLayers {
     // Grey dashed outline, no fill -- matches VFR sectional chart convention
     // for TRSA and stays visually distinct from SUA's solid colored fills
     // and Class B/C/D/E's existing styling.
+    /** A cached TAF older than this is not carried into a METAR refresh: 30 h, the longest a TAF is
+     *  valid and the weather cache's prune age (app.js _pruneWeatherCache). */
+    static CACHED_TAF_MAX_MS = 30 * 3600 * 1000;
     static SUA_LABEL_MIN_ZOOM = 9;   // the zoom badge's Z9; Z8 and out: no SUA, Class B/C/D or TRSA labels
 
     static TRSA_STYLE = { color: '#888888', fillOpacity: 0, weight: 1.5, dashArray: '6 4' };
