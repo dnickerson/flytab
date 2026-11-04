@@ -42,7 +42,11 @@ async function fisbWith(...frames) {
     return c;
 }
 function newPopup() {
-    const p = new AirportPopup({ closePopup() {} }, { getWeather: async (id) => nasrWx[id] || null, getRemarks: async () => [] });
+    const p = new AirportPopup({ closePopup() {} }, {
+        getWeather: async (id) => (nasrWx[id] ? JSON.parse(JSON.stringify(nasrWx[id])) : null),
+        putWeather: async (id, wx) => { nasrWx[id] = { icao: id, ...wx }; },
+        getRemarks: async () => [],
+    });
     p.initPanel(document.body);
     if (fisb) p.setFisbClient(fisb);
     if (vectorLayers) p.setVectorLayers(vectorLayers);
@@ -327,5 +331,178 @@ describe('live fisb:taf while the panel is open', () => {
         await fisb._handleWeather({ Type: 'TAF', Location: 'KCLT', Time: '041700Z', Data: '0418/0518 <img src=x onerror=alert(1)> FM042200 X' });
         expect(wxPane().querySelector('img')).toBeNull();
         expect(tafText()).toContain('<img src=x onerror=alert(1)>');
+    });
+});
+
+describe('expired TAFs are never shown', () => {
+    const at = (iso) => Date.parse(iso);
+
+    it('validity end: the first DDHH/DDHH after the issue time', () => {
+        expect(AirportPopup._tafValidEndMs(AWC_RAW, NOW)).toBe(at('2026-11-05T18:00:00Z'));                 // 0416/0518
+        expect(AirportPopup._tafValidEndMs('KCLT 041120Z 0412/0518 09004KT', NOW)).toBe(at('2026-11-05T18:00:00Z'));  // FIS-B head
+        expect(AirportPopup._tafValidEndMs('TAF AMD KCLT 041650Z 0417/0518 X', NOW)).toBe(at('2026-11-05T18:00:00Z'));
+        // month end: issued the 30th, valid to the 1st of the next month
+        expect(AirportPopup._tafValidEndMs('TAF KXYZ 301120Z 3012/0112 X', at('2026-11-30T13:00:00Z'))).toBe(at('2026-12-01T12:00:00Z'));
+        // year end, and hour 24 = the next midnight
+        expect(AirportPopup._tafValidEndMs('TAF KXYZ 311720Z 3118/0124 X', at('2026-12-31T18:00:00Z'))).toBe(at('2027-01-02T00:00:00Z'));
+        expect(AirportPopup._tafValidEndMs('TAF KXYZ 031720Z 0318/0324 X', at('2026-11-03T18:00:00Z'))).toBe(at('2026-11-04T00:00:00Z'));
+        // unparseable: no validity group, no issue time, a period longer than 36 h, a bad hour
+        expect(AirportPopup._tafValidEndMs('TAF KXYZ 041120Z 09004KT P6SM', NOW)).toBeNull();
+        expect(AirportPopup._tafValidEndMs('TAF KXYZ 0412/0518 09004KT', NOW)).toBeNull();
+        expect(AirportPopup._tafValidEndMs('TAF KXYZ 041120Z 0412/0612 X', NOW)).toBeNull();
+        expect(AirportPopup._tafValidEndMs('TAF KXYZ 041120Z 0412/0525 X', NOW)).toBeNull();
+    });
+
+    it('_tafExpired: by the validity end; unparseable -> fetched more than 30 h ago', () => {
+        expect(AirportPopup._tafExpired('TAF KXYZ 031720Z 0318/0324 X', at('2026-11-03T23:59:00Z'))).toBe(false);
+        expect(AirportPopup._tafExpired('TAF KXYZ 031720Z 0318/0324 X', at('2026-11-04T00:00:00Z'))).toBe(true);
+        expect(AirportPopup._tafExpired(AWC_RAW, NOW, NOW - 40 * 3600000)).toBe(false);     // valid: the fetch age doesn't matter
+        const noValid = 'TAF KXYZ 041120Z 09004KT P6SM';
+        expect(AirportPopup._tafExpired(noValid, NOW, new Date(NOW - 31 * 3600000).toISOString())).toBe(true);
+        expect(AirportPopup._tafExpired(noValid, NOW, new Date(NOW - 29 * 3600000).toISOString())).toBe(false);
+        expect(AirportPopup._tafExpired(noValid, NOW, null)).toBe(false);
+    });
+
+    it('an expired TAF from the cache, FIS-B or the internet is not shown', async () => {
+        const EXPIRED = 'TAF KCLT 031120Z 0312/0412 09004KT P6SM BKN015';                  // ended 04 1200Z
+        nasrWx.KCLT = { taf: { raw: EXPIRED, fetched_at: new Date(NOW - 8 * 3600000).toISOString() }, source: 'plan' };
+        fisb = await fisbWith('TAF KCLT 031120Z 0312/0412 09004KT P6SM BKN015');
+        globalThis.fetch = okReply([{ ...AWC_REPLY[0], rawTAF: EXPIRED }]);
+        await newPopup().show(KCLT);
+        await settle();
+        expect(tafText()).toBeNull();
+        expect(wxPane().textContent).toContain('No weather data');
+        await fisb._handleWeather(stratuxMsg('TAF KCLT 031120Z 0312/0412 09004KT P6SM BKN015 FM040600 X'));   // live, still expired
+        expect(tafText()).toBeNull();
+    });
+});
+
+describe('the internet-METAR redraw keeps the TAF shown', () => {
+    it('a new internet METAR rebuilds the WX tab with the TAF still under it', async () => {
+        vectorLayers = { _internetMetars: new Map([['KCLT', { raw: 'KCLT 041552Z 15004KT 10SM BKN015', decoded: METAR_DECODED, received_at: NOW }]]) };
+        globalThis.fetch = okReply(AWC_REPLY);
+        await newPopup().show(KCLT);
+        await settle();
+        expect(tafText()).toBe(AWC_RAW);
+        vectorLayers._onInternetMetar('KCLT', { raw: 'KCLT 041652Z 16006KT 10SM BKN020', decoded: METAR_DECODED, received_at: NOW });
+        expect(metarText()).toContain('KCLT 041652Z');
+        expect(tafText()).toBe(AWC_RAW);
+    });
+});
+
+describe('opened offline, then online: the internet TAF is asked once', () => {
+    afterEach(() => { globalThis.window.app = undefined; });
+    function netMode(mode) {
+        const nm = new EventTarget();
+        nm.mode = mode;
+        nm.set = (m) => { const previous = nm.mode; nm.mode = m; nm.dispatchEvent(new CustomEvent('mode:changed', { detail: { mode: m, previous } })); };
+        globalThis.window.app = { networkMode: nm };
+        return nm;
+    }
+
+    it('offline -> home while open: one request, the TAF shows; later changes ask no more', async () => {
+        const nm = netMode('offline');
+        globalThis.fetch = okReply(AWC_REPLY);
+        await newPopup().show(KCLT);
+        await settle();
+        expect(fetch).not.toHaveBeenCalled();
+        nm.set('flight');
+        await settle();
+        expect(fetch).not.toHaveBeenCalled();
+        nm.set('home');
+        await settle();
+        expect(fetch).toHaveBeenCalledTimes(1);
+        expect(tafText()).toBe(AWC_RAW);
+        nm.set('internet');
+        await settle();
+        expect(fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('already asked at open (online): a mode change does not ask again', async () => {
+        const nm = netMode('internet');
+        await newPopup().show(KCLT);
+        await settle();
+        expect(fetch).toHaveBeenCalledTimes(1);
+        nm.set('home');
+        await settle();
+        expect(fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('close() and the next show() remove the listener', async () => {
+        const nm = netMode('offline');
+        const p = newPopup();
+        await p.show(KCLT);
+        p.close();
+        nm.set('home');
+        await settle();
+        expect(fetch).not.toHaveBeenCalled();
+        nm.mode = 'offline';
+        await p.show(KCLT);
+        await p.show({ ...KCLT, icao: 'KGSO' });            // the KCLT listener is gone; one listener (KGSO)
+        nm.set('home');
+        await settle();
+        expect(fetch).toHaveBeenCalledTimes(1);
+        expect(fetch.mock.calls[0][0]).toContain('ids=KGSO');
+    });
+});
+
+describe('a TAF fetched on the ground is kept for the flight (IndexedDB weather cache)', () => {
+    afterEach(() => { globalThis.window.app = undefined; });
+
+    it('fetched on the ground -> shown later in flight (mode "flight", no FIS-B TAF, no request)', async () => {
+        nasrWx.KCLT = { metar: { raw: 'KCLT 041552Z 15004KT', decoded: METAR_DECODED }, source: 'internet', fetched_at: new Date(NOW).toISOString() };
+        globalThis.fetch = okReply(AWC_REPLY);
+        await newPopup().show(KCLT);
+        await settle();
+        expect(nasrWx.KCLT.taf.raw).toBe(AWC_RAW);
+        expect(nasrWx.KCLT.metar.raw).toBe('KCLT 041552Z 15004KT');          // the METAR stays
+        expect(nasrWx.KCLT.source).toBe('internet');
+
+        vi.setSystemTime(NOW + 3 * 3600000);                                   // airborne, 3 h later
+        globalThis.window.app = { networkMode: { mode: 'flight' } };
+        globalThis.fetch = vi.fn();
+        fisb = await fisbWith();
+        document.body.innerHTML = '';
+        await newPopup().show(KCLT);
+        await settle();
+        expect(fetch).not.toHaveBeenCalled();
+        expect(tafText()).toBe(AWC_RAW);
+    });
+
+    it('after its validity ends (05 1800Z) it is not shown', async () => {
+        globalThis.fetch = okReply(AWC_REPLY);
+        await newPopup().show(KCLT);
+        await settle();
+        expect(nasrWx.KCLT.taf.raw).toBe(AWC_RAW);
+        vi.setSystemTime(Date.parse('2026-11-05T18:30:00Z'));
+        globalThis.window.app = { networkMode: { mode: 'flight' } };
+        document.body.innerHTML = '';
+        await newPopup().show(KCLT);
+        await settle();
+        expect(tafText()).toBeNull();
+    });
+
+    it('a newer cached TAF (FIS-B AMD 1650Z) is not clobbered by the older internet one (1535Z)', async () => {
+        const AMD = 'TAF AMD KCLT 041650Z 0417/0518 18012G22KT P6SM BKN025';
+        nasrWx.KCLT = { metar: { raw: 'KCLT 041652Z 11005KT', decoded: METAR_DECODED }, taf: { raw: AMD, fetched_at: new Date(NOW).toISOString() }, source: 'fisb', fetched_at: new Date(NOW).toISOString() };
+        globalThis.fetch = okReply(AWC_REPLY);
+        await newPopup().show(KCLT);
+        await settle();
+        expect(nasrWx.KCLT.taf.raw).toBe(AMD);
+        expect(tafText()).toBe(AMD);
+    });
+
+    it('an older or expired cached TAF is replaced; the reply still lands in the cache after the panel closed', async () => {
+        nasrWx.KCLT = { metar: { raw: 'KCLT 041552Z 15004KT', decoded: METAR_DECODED }, taf: { raw: 'TAF KCLT 031120Z 0312/0412 X', fetched_at: new Date(NOW - 20 * 3600000).toISOString() }, source: 'plan', fetched_at: new Date(NOW).toISOString() };
+        let resolve;
+        globalThis.fetch = vi.fn(() => new Promise((r) => { resolve = r; }));
+        const p = newPopup();
+        await p.show(KCLT);
+        p.close();
+        resolve({ ok: true, status: 200, json: async () => AWC_REPLY });
+        await settle();
+        expect(nasrWx.KCLT.taf.raw).toBe(AWC_RAW);
+        expect(nasrWx.KCLT.metar.raw).toBe('KCLT 041552Z 15004KT');
+        expect(tafText()).toBeNull();                                         // the closed panel is not touched
     });
 });

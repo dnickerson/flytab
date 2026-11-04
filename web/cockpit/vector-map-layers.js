@@ -429,9 +429,10 @@ class VectorMapLayers {
     /**
      * Write an internet METAR into the IndexedDB weather cache, keeping the TAF already cached there
      * (read-merge, as FisbClient does): FIS-B and plan TAFs live in the same record, and the airport
-     * panel reads its TAF from it. A cached TAF older than VectorMapLayers.CACHED_TAF_MAX_MS (its own
-     * fetched_at, else the record's) is dropped: the record's fetched_at is refreshed by every METAR,
-     * so the 30 h cache prune would never remove it. A kept TAF keeps that age (fetched_at).
+     * panel reads its TAF from it. An expired cached TAF is dropped: its validity period has ended
+     * (AirportPopup._tafExpired), or, when that can't be read, it is older than CACHED_TAF_MAX_MS (its
+     * own fetched_at, else the record's) - the record's fetched_at is refreshed by every METAR, so the
+     * 30 h cache prune would never remove it. A kept TAF keeps that age (fetched_at).
      */
     _cacheInternetMetar(icao, entry, now) {
         const at = new Date(now).toISOString();
@@ -445,7 +446,10 @@ class VectorMapLayers {
                 if (t?.raw) {
                     const tafAt = t.fetched_at || existing.fetched_at || null;
                     const ms = tafAt ? Date.parse(tafAt) : NaN;
-                    if (Number.isFinite(ms) && now - ms <= VectorMapLayers.CACHED_TAF_MAX_MS) taf = { ...t, fetched_at: tafAt };
+                    const expired = (typeof AirportPopup !== 'undefined' && typeof AirportPopup._tafExpired === 'function')
+                        ? AirportPopup._tafExpired(t.raw, now, tafAt)
+                        : !(now - ms <= VectorMapLayers.CACHED_TAF_MAX_MS);
+                    if (Number.isFinite(ms) && !expired) taf = { ...t, fetched_at: tafAt };
                 }
                 return this._nasr.putWeather(icao, { metar, taf, fetched_at: at, source: 'internet' });
             })

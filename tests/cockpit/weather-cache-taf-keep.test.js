@@ -13,6 +13,8 @@ import { readFileSync } from 'fs';
 const read = (p) => readFileSync(p, 'utf8');
 const FisbClient = new Function(read('web/shared/fisb-client.js') + '\nreturn FisbClient;')();
 const VectorMapLayers = new Function(read('web/cockpit/vector-map-layers.js') + '\nreturn VectorMapLayers;')();
+const AirportPopup = new Function(read('web/cockpit/airport-popup.js') + '\nreturn AirportPopup;')();
+const { wireTap } = new Function(read('web/shared/tap-utils.js') + '\nreturn { wireTap };')();
 
 const NOW = Date.parse('2026-11-04T17:00:00Z');
 const AWC_METAR = {
@@ -53,11 +55,13 @@ beforeEach(() => {
     };
     globalThis.fetch = vi.fn(async () => ({ ok: true, status: 200, json: async () => [AWC_METAR] }));
     globalThis.FisbClient = FisbClient;
+    globalThis.AirportPopup = AirportPopup;     // the validity check VectorMapLayers uses
 });
 
 afterEach(() => {
     vi.useRealTimers();
     delete globalThis.FisbClient;
+    delete globalThis.AirportPopup;
 });
 
 describe('internet METAR refresh keeps the cached TAF', () => {
@@ -107,5 +111,47 @@ describe('internet METAR refresh keeps the cached TAF', () => {
         await layers().fetchInternetMetars(34, -82, 36, -80);
         await settle();
         expect(store.KCLT.metar.raw).toBe(AWC_METAR.rawOb);
+    });
+});
+
+describe('an expired cached TAF is not kept, and never shown (reviewer scenario)', () => {
+    it('plan TAF valid to 04 1200Z, fetched 04 0900Z; METAR refresh at 05 1000Z; proxy has no TAF -> no TAF', async () => {
+        store.KXYZ = {
+            icao: 'KXYZ', metar: { raw: 'KXYZ 040853Z 00000KT 10SM CLR', decoded: {} },
+            taf: { raw: 'TAF KXYZ 031120Z 0312/0412 09004KT P6SM BKN015', fetched_at: '2026-11-04T09:00:00Z' },
+            source: 'plan', fetched_at: '2026-11-04T09:00:00Z',
+        };
+        vi.setSystemTime(Date.parse('2026-11-05T10:00:00Z'));
+        layers()._cacheInternetMetar('KXYZ', { raw: 'METAR KXYZ 050953Z 18005KT 10SM CLR', decoded: {} }, Date.now());
+        await settle();
+        expect(store.KXYZ.metar.raw).toBe('METAR KXYZ 050953Z 18005KT 10SM CLR');
+        expect(store.KXYZ.taf).toBeNull();                      // expired 22 h ago: not carried forward
+
+        // even had it been kept, the panel would not show it
+        store.KXYZ.taf = { raw: 'TAF KXYZ 031120Z 0312/0412 09004KT P6SM BKN015', fetched_at: '2026-11-04T09:00:00Z' };
+        globalThis.wireTap = wireTap;
+        globalThis.NasrDB = { haversineNm: () => 5 };
+        globalThis.CockpitConfig = { get: () => null };
+        globalThis.fetch = vi.fn(async () => ({ ok: true, status: 200, json: async () => [] }));
+        document.body.innerHTML = '';
+        const p = new AirportPopup({ closePopup() {} }, { ...nasr, getRemarks: async () => [] });
+        p.initPanel(document.body);
+        await p.show({ icao: 'KXYZ', name: 'X', lat: 35, lon: -80, elev_ft: 700, runways: [], frequencies: [] });
+        await settle();
+        expect(document.querySelector('.wx-taf')).toBeNull();
+        delete globalThis.NasrDB;
+        delete globalThis.CockpitConfig;
+    });
+
+    it('a cached TAF with no validity group falls back to the 30 h fetch age', async () => {
+        const t = 'TAF KXYZ 041120Z 09004KT P6SM';                // no validity group
+        store.KXYZ = { icao: 'KXYZ', taf: { raw: t, fetched_at: new Date(NOW - 29 * 3600000).toISOString() }, fetched_at: new Date(NOW).toISOString() };
+        layers()._cacheInternetMetar('KXYZ', { raw: 'METAR KXYZ 041653Z X', decoded: {} }, NOW);
+        await settle();
+        expect(store.KXYZ.taf.raw).toBe(t);
+        vi.setSystemTime(NOW + 2 * 3600000);
+        layers()._cacheInternetMetar('KXYZ', { raw: 'METAR KXYZ 041853Z X', decoded: {} }, Date.now());
+        await settle();
+        expect(store.KXYZ.taf).toBeNull();
     });
 });

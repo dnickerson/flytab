@@ -118,15 +118,18 @@ class AirportPopup {
     async show(airport) {
         this._stopFisbListener();
         this._stopInternetMetarListener();
+        this._stopNetworkListener();
         this._currentIcao = airport.icao;
+        this._inetTafTried = false;
 
         // Look up cached weather — prefer FIS-B over plan data
         let wx = null;
-        let cachedTaf = null;
+        let cachedTaf = null, cachedTafAt = null;
         try {
             const cached = await this._nasr.getWeather(airport.icao);
             if (cached?.metar) wx = cached;
             cachedTaf = cached?.taf?.raw || null;     // a cached TAF counts even without a cached METAR
+            cachedTafAt = cached?.taf?.fetched_at || cached?.fetched_at || null;
         } catch (_) {}
 
         // Internet METARs (pre-flight, online) — better than plan cache
@@ -156,8 +159,9 @@ class AirportPopup {
         // the internet TAF (_fetchInternetTaf) replaces it later only if it was issued later (_tafNewer).
         // Reset after the await: a second show() that started meanwhile must not inherit this one's TAF.
         this._taf = null;
-        this._offerTaf(this._fisbClient?.getTaf(airport.icao)?.raw, 'fisb');
-        this._offerTaf(cachedTaf, 'cache');
+        const fisbTaf = this._fisbClient?.getTaf(airport.icao);
+        this._offerTaf(fisbTaf?.raw, 'fisb', fisbTaf?.received_at ?? null);
+        this._offerTaf(cachedTaf, 'cache', cachedTafAt);
         if (this._taf) {
             wx = wx ? { ...wx, taf: { raw: this._taf.raw } } : { metar: null, taf: { raw: this._taf.raw }, source: this._taf.src };
         } else if (wx) {
@@ -176,6 +180,34 @@ class AirportPopup {
         // Internet TAF on each open while the app may be online: on the ground it fills a missing TAF (or a
         // newer one replaces FIS-B's). Never in flight / offline (AirportPopup._mayFetchInternet).
         if (AirportPopup._mayFetchInternet()) this._fetchInternetTaf(airport.icao);
+        // Opened offline (in flight, or before NetworkMode's first probe): ask once the app is online.
+        this._startNetworkListener(airport);
+    }
+
+    /**
+     * While the panel is open: when NetworkMode ('mode:changed', detail.mode) says the app may be online
+     * and no internet TAF was asked for this airport yet, ask once. Removed by show() and close().
+     */
+    _startNetworkListener(airport) {
+        const nm = (typeof window !== 'undefined') ? window.app?.networkMode : null;
+        if (!nm || typeof nm.addEventListener !== 'function') return;
+        const icao = airport.icao;
+        this._onNetworkMode = (e) => {
+            const mode = e?.detail?.mode;
+            if (mode === 'flight' || mode === 'offline') return;
+            if (this._inetTafTried || this._currentIcao !== icao) return;
+            this._fetchInternetTaf(icao);
+        };
+        this._networkModeTarget = nm;
+        nm.addEventListener('mode:changed', this._onNetworkMode);
+    }
+
+    _stopNetworkListener() {
+        if (this._networkModeTarget && this._onNetworkMode) {
+            try { this._networkModeTarget.removeEventListener('mode:changed', this._onNetworkMode); } catch (_) { /* gone */ }
+        }
+        this._networkModeTarget = null;
+        this._onNetworkMode = null;
     }
 
     /**
@@ -191,12 +223,14 @@ class AirportPopup {
     }
 
     /**
-     * Offer a TAF for the open airport (raw text; src 'fisb' | 'cache' | 'internet'). Taken when there is
-     * none yet or it is newer than the one shown (_tafNewer). Returns true when taken (this._taf set).
+     * Offer a TAF for the open airport (raw text; src 'fisb' | 'cache' | 'internet'; fetchedAt: when it
+     * was fetched, ISO or ms, for the 30 h fallback). Never taken when expired (_tafExpired); otherwise
+     * taken when there is none yet or it is newer than the one shown (_tafNewer). Returns true when taken.
      */
-    _offerTaf(raw, src) {
+    _offerTaf(raw, src, fetchedAt = null) {
         const text = typeof raw === 'string' ? raw.trim() : '';
         if (!text) return false;
+        if (AirportPopup._tafExpired(text, Date.now(), fetchedAt)) return false;
         const cand = { raw: text, src, issued: AirportPopup._tafIssuedMs(text) };
         if (!AirportPopup._tafNewer(cand, this._taf || null)) return false;
         this._taf = cand;
@@ -235,6 +269,51 @@ class AirportPopup {
             if (t <= now + 12 * 3600000) return t;
         }
         return null;
+    }
+
+    /**
+     * End (ms UTC) of a TAF's validity: the first DDHH/DDHH group after its issue time (DDHHMMZ), the
+     * start on or after the issue time (less 3 h), the end after the start - each in that month or the
+     * next (3012/0112 ends on the 1st of the next month; hour 24 is midnight: 0318/0324 ends 04 0000Z).
+     * Null when there is no issue time or validity group, or the period is not 1-36 h long.
+     */
+    static _tafValidEndMs(raw, now = Date.now()) {
+        const s = String(raw || '');
+        const im = /(?:^|\s)(\d{2})(\d{2})(\d{2})Z(?=\s|$)/.exec(s);
+        if (!im) return null;
+        const issued = AirportPopup._tafIssuedMs(s, now);
+        if (issued == null) return null;
+        const vm = /(?:^|\s)(\d{2})(\d{2})\/(\d{2})(\d{2})(?=\s|$)/.exec(s.slice(im.index + im[0].length));
+        if (!vm) return null;
+        const d1 = +vm[1], h1 = +vm[2], d2 = +vm[3], h2 = +vm[4];
+        if (d1 < 1 || d1 > 31 || d2 < 1 || d2 > 31 || h1 > 24 || h2 > 24) return null;
+        // The first day-of-month dd, hour hh (24 = next midnight) at or after `from`, this month or the next.
+        const onOrAfter = (from, dd, hh) => {
+            const f = new Date(from);
+            for (let k = 0; k <= 1; k++) {
+                const day = Date.UTC(f.getUTCFullYear(), f.getUTCMonth() + k, dd);
+                if (new Date(day).getUTCDate() !== dd) continue;        // no such day in that month
+                const t = day + hh * 3600000;
+                if (t >= from) return t;
+            }
+            return null;
+        };
+        const start = onOrAfter(issued - 3 * 3600000, d1, h1);
+        if (start == null) return null;
+        const end = onOrAfter(start + 1, d2, h2);
+        if (end == null || end - start > 36 * 3600000) return null;
+        return end;
+    }
+
+    /**
+     * A TAF that must not be shown: its validity has ended (_tafValidEndMs). When the validity can't be
+     * read, the weather cache's rule: fetched more than TAF_MAX_AGE_MS ago (no fetchedAt: not expired).
+     */
+    static _tafExpired(raw, now = Date.now(), fetchedAt = null) {
+        const end = AirportPopup._tafValidEndMs(raw, now);
+        if (end != null) return end <= now;
+        const at = typeof fetchedAt === 'number' ? fetchedAt : (fetchedAt ? Date.parse(fetchedAt) : NaN);
+        return Number.isFinite(at) && now - at > AirportPopup.TAF_MAX_AGE_MS;
     }
 
     /** The open panel's WX tab shows this TAF: replaces the shown one, or adds a TAF section (METAR or not). */
@@ -1045,7 +1124,7 @@ class AirportPopup {
         // without a METAR section.
         this._onFisbTaf = (e) => {
             if (e.detail.icao !== airport.icao) return;
-            if (this._offerTaf(e.detail.raw, 'fisb')) this._putTafInPane(this._taf.raw);
+            if (this._offerTaf(e.detail.raw, 'fisb', e.detail.received_at ?? null)) this._putTafInPane(this._taf.raw);
         };
         this._fisbClient.addEventListener('fisb:taf', this._onFisbTaf);
     }
@@ -1094,6 +1173,7 @@ class AirportPopup {
      * (offline, in flight, 502) leaves the WX tab as it is.
      */
     async _fetchInternetTaf(icao) {
+        this._inetTafTried = true;
         try {
             const base = (typeof Settings !== 'undefined' && Settings.workerBase)
                 ? Settings.workerBase : 'https://www.flywhere.app/api';
@@ -1106,9 +1186,40 @@ class AirportPopup {
             if (!r.ok) return;
             const data = await r.json();
             const raw = (Array.isArray(data) ? data[0] : data)?.rawTAF;
-            if (typeof raw !== 'string' || !raw.trim() || this._currentIcao !== icao) return;
+            if (typeof raw !== 'string' || !raw.trim()) return;
+            this._cacheTaf(icao, raw.trim(), Date.now());          // kept for the flight (no internet in the air)
+            if (this._currentIcao !== icao) return;
             if (this._offerTaf(raw, 'internet')) this._putTafInPane(this._taf.raw);
         } catch { /* offline: the WX tab keeps what it has */ }
+    }
+
+    /**
+     * Keep a TAF fetched on the ground in the IndexedDB weather cache for that airport, so the panel still
+     * has it in flight until it expires. Read-merge: the METAR and the rest of the record stay; a cached TAF
+     * issued later (_tafNewer) stays too. An expired TAF is not written. Never throws.
+     */
+    _cacheTaf(icao, raw, now) {
+        const nasr = this._nasr;
+        if (!nasr || typeof nasr.getWeather !== 'function' || typeof nasr.putWeather !== 'function') return;
+        if (AirportPopup._tafExpired(raw, now)) return;
+        const at = new Date(now).toISOString();
+        Promise.resolve()
+            .then(() => nasr.getWeather(icao))
+            .catch(() => null)
+            .then((existing) => {
+                const old = existing?.taf?.raw;
+                const oldAt = existing?.taf?.fetched_at || existing?.fetched_at || null;
+                if (old && !AirportPopup._tafExpired(old, now, oldAt)) {
+                    const cand = { raw, issued: AirportPopup._tafIssuedMs(raw, now) };
+                    const cur = { raw: old, issued: AirportPopup._tafIssuedMs(old, now) };
+                    if (cand.raw === cur.raw || !AirportPopup._tafNewer(cand, cur)) return null;
+                }
+                const rec = { ...(existing || {}), taf: { raw, fetched_at: at }, fetched_at: at };
+                delete rec.icao;
+                if (!rec.source) rec.source = 'internet';
+                return nasr.putWeather(icao, rec);
+            })
+            .catch(() => {});
     }
 
     _stopFisbListener() {
@@ -1273,6 +1384,7 @@ class AirportPopup {
         this._closeNotes();
         this._stopFisbListener();
         this._stopInternetMetarListener();
+        this._stopNetworkListener();
     }
 
     // ========== HTML Building ==========
@@ -2086,6 +2198,10 @@ class AirportPopup {
             });
         });
     }
+
+    /** A TAF whose validity can't be read is not shown once fetched longer ago than this (the weather
+     *  cache's prune age, the longest a TAF is valid). */
+    static TAF_MAX_AGE_MS = 30 * 3600 * 1000;
 
     /** "No weather data" in the WX tab: no METAR and no TAF. */
     static NO_WX_HTML = '<div style="padding:16px;color:var(--text-muted)">No weather data</div>';
