@@ -1,5 +1,5 @@
 /**
- * ENGINE OUT button (airport panel header, under the close button): turns the engine-out glide
+ * ENGINE OUT button (right end of the airport panel's nav row, under the header): turns the engine-out glide
  * block (GlidePanel) and its map line on / off for every airport, remembered across restarts in
  * localStorage 'flytab_engine_out_glide_on' (default ON). While ON the block shows whenever the
  * Stratux WebSocket has a fresh 3D fix - on the ground too (no ground-speed gate for the panel).
@@ -125,13 +125,15 @@ function expectQuiet() {
 const NO_GPS_MSG = 'ENGINE OUT · no GPS — needs the Stratux GPS over WiFi';
 
 describe('ENGINE OUT button', () => {
-    it('sits directly under the close button, labelled ENGINE OUT, at least the touch minimum', () => {
+    // 2026-11-04 redesign: ENGINE OUT moved from under the close button to the right end of the nav row.
+    it('sits at the right end of the nav row (under the header), labelled ENGINE OUT, at least the touch minimum', () => {
         open();
-        const close = document.querySelector('.apt-panel-close');
         expect(btn()).not.toBeNull();
-        expect(close.nextElementSibling).toBe(btn());
-        expect(close.parentElement.classList.contains('apt-header-btns')).toBe(true);
-        expect(close.parentElement.parentElement.classList.contains('apt-panel-header')).toBe(true);
+        const row = btn().parentElement;
+        expect(row.classList.contains('apt-nav-row')).toBe(true);
+        expect(row.lastElementChild).toBe(btn());
+        expect(row.previousElementSibling.classList.contains('apt-panel-header')).toBe(true);
+        expect(row.previousElementSibling.querySelector('.apt-glide-toggle')).toBeNull();
         expect(btn().textContent.trim()).toBe('ENGINE OUT');
         expect(btn().tagName).toBe('BUTTON');
         const css = read('web/style.css');
@@ -145,7 +147,7 @@ describe('ENGINE OUT button', () => {
         expect(btn().classList.contains('is-on')).toBe(true);
         expect(btn().getAttribute('aria-pressed')).toBe('true');
         expect(block()).not.toBeNull();
-        expect(document.querySelector('.glide-host').previousElementSibling.classList.contains('apt-panel-header')).toBe(true);
+        expect(document.querySelector('.glide-host').previousElementSibling.classList.contains('apt-nav-row')).toBe(true);
         expect(map.layers.size).toBe(1);
     });
 
@@ -155,7 +157,7 @@ describe('ENGINE OUT button', () => {
         const g = p._glide;
         expect(g._timer).not.toBeNull();                    // model update ...
         expect(g._windTimer).not.toBeNull();                // ... and runway wind
-        expect(vi.getTimerCount()).toBe(2);
+        expect(vi.getTimerCount()).toBe(3);                 // + the panel's nav row (1 s)
         stop.mockClear();
         btn().click();
         expect(stop).toHaveBeenCalledTimes(1);
@@ -164,8 +166,10 @@ describe('ENGINE OUT button', () => {
         expect(map.layers.size).toBe(0);
         expect(g._timer).toBeNull();
         expect(g._windTimer).toBeNull();
-        // (jsdom's localStorage.setItem queues one timer of its own - a storage event - so count ours)
-        expect(vi.getTimerCount()).toBeLessThanOrEqual(1);
+        // (jsdom's localStorage.setItem queues one timer of its own - a storage event - so count ours;
+        // the nav row's timer stays: it runs while the panel is open)
+        expect(vi.getTimerCount()).toBeLessThanOrEqual(2);
+        expect(p._navTimer).not.toBeNull();
         expect(p._glide).toBeNull();
         expect(localStorage.getItem(KEY)).toBe('false');
         expect(btn().classList.contains('is-on')).toBe(false);
@@ -255,7 +259,7 @@ describe('ENGINE OUT button', () => {
         open();
         expect(btn().classList.contains('is-on')).toBe(true);
         expectQuiet();                                      // remembered ON: no status, host hidden
-        expect(host().previousElementSibling.classList.contains('apt-panel-header')).toBe(true);
+        expect(host().previousElementSibling.classList.contains('apt-nav-row')).toBe(true);
         vi.advanceTimersByTime(3000);
         expectQuiet();
 
@@ -266,7 +270,7 @@ describe('ENGINE OUT button', () => {
         btn().click();
         expect(statusText()).toBe(NO_GPS_MSG);
         expect(host().hidden).toBe(false);
-        expect(host().previousElementSibling.classList.contains('apt-panel-header')).toBe(true);
+        expect(host().previousElementSibling.classList.contains('apt-nav-row')).toBe(true);
         expect(host().textContent).not.toMatch(/\d/);
         expect(block()).toBeNull();
         expect(map.layers.size).toBe(0);
@@ -345,10 +349,10 @@ describe('ENGINE OUT button', () => {
         expect(first._panel.querySelector('.apt-glide-toggle').classList.contains('is-on')).toBe(false);
     });
 
-    it('CSS: 12 px between the close button and ENGINE OUT; lit = solid --accent-active fill (10.8:1 white text), off = outlined', () => {
+    it('CSS: ENGINE OUT 80 wide in the nav row; lit = solid --accent-active fill (10.8:1 white text), off = outlined', () => {
         const css = read('web/style.css');
         const rule = (sel) => { const i = css.indexOf(sel + ' {'); return css.slice(i, css.indexOf('}', i)); };
-        expect(rule('.apt-header-btns')).toMatch(/gap:\s*12px/);
+        expect(rule('.apt-glide-toggle')).toMatch(/min-width:\s*var\(--touch-large\)/);
         const on = rule('.apt-glide-toggle.is-on');
         expect(on).toMatch(/background:\s*var\(--accent-active\)/);
         expect(on).toMatch(/color:\s*var\(--text-on-accent\)/);

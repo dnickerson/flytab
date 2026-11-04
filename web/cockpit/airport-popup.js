@@ -27,14 +27,15 @@ class AirportPopup {
         this._onInternetMetarBound = null;
         this._getRouteAirports = null;  // callback: () => { departure, destination }
         this._glide = null;             // GlidePanel: live engine-out glide block (glide-panel.js)
-        this._glideHost = null;         // the element the glide block renders into (right under the header)
+        this._glideHost = null;         // the element the glide block renders into (right under the nav row)
+        this._navTimer = null;          // nav row refresh (_startNav), one per open panel
         this._notes = null;             // AirportNoteEditor: the MY NOTES box at the bottom of INFO (airport-notes.js)
         this._notesScrollTimer = null;  // second "bring the notes into view" after the on-screen keyboard opens
         this._notesVv = null;           // visualViewport resize listener of the notes box (keyboard closed without blur)
     }
 
     /**
-     * ENGINE OUT button (airport panel header): whether the engine-out glide block is shown.
+     * ENGINE OUT button (airport panel nav row, under the header): whether the engine-out glide block is shown.
      * One choice for every airport, kept across restarts in localStorage; ON unless the pilot turned it
      * off. The choice made in this session (_glideOnMem) wins over storage, so it holds even when
      * storage can't be read or written.
@@ -333,6 +334,7 @@ class AirportPopup {
     _showPanel(airport, wx) {
         if (!this._panel) return;
         this._stopGlide();
+        this._stopNav();
         this._closeNotes();
 
         this._panel.innerHTML = this._buildTopNavHtml(airport.icao) + this._buildPanelHtml(airport, wx);
@@ -391,7 +393,7 @@ class AirportPopup {
             wireTap(phoneEl, () => {
                 const phone = phoneEl.dataset.phone;
                 navigator.clipboard?.writeText(phone);
-                phoneEl.style.background = '#224433';
+                phoneEl.style.background = 'var(--border)';
                 setTimeout(() => phoneEl.style.background = '', 1000);
             });
         });
@@ -468,7 +470,7 @@ class AirportPopup {
             console.warn('AirportPopup: FAA remarks failed', err);
         }
 
-        // ENGINE OUT button under the close button: turns the glide block (and its map line) on / off
+        // ENGINE OUT button at the right of the nav row: turns the glide block (and its map line) on / off
         // for every airport. It works for an airport that can never have a block too (heliport, no
         // elevation): after the tap the block area says "not available for this airport".
         const glideBtn = this._panel.querySelector('.apt-glide-toggle');
@@ -481,9 +483,12 @@ class AirportPopup {
             });
         }
 
-        // Engine-out glide block right under the header, when ENGINE OUT is on (remembered): quiet - no
+        // Engine-out glide block right under the nav row, when ENGINE OUT is on (remembered): quiet - no
         // status line, the block just appears when there are glide numbers to show.
         if (AirportPopup.glideOn()) this._startGlide(airport);
+
+        // Nav row (heading · distance · descent, pattern altitude): live while the panel is open.
+        this._startNav(airport);
     }
 
     /** The ENGINE OUT button's look and state for screen readers. */
@@ -492,8 +497,158 @@ class AirportPopup {
         btn.setAttribute('aria-pressed', on ? 'true' : 'false');
     }
 
+    // ========== Nav row (heading · distance · descent, pattern altitude) ==========
+
+    /** Nav row refresh period while the panel is open (ms). */
+    static NAV_UPDATE_MS = 1000;
+    /** Closer than this (nm) the nav row shows no bearing (line 1 = "0.0 nm"). */
+    static NAV_NO_BEARING_NM = 0.1;
+    /** A situation older than this is not used (ms); the glide block's limit (GlideInputs.SIT_MAX_AGE_MS). */
+    static NAV_SIT_MAX_AGE_MS = 5000;
+
+    static _navSitMaxAge() {
+        const v = (typeof GlideInputs !== 'undefined' && GlideInputs) ? GlideInputs.SIT_MAX_AGE_MS : undefined;
+        return Number.isFinite(v) ? v : AirportPopup.NAV_SIT_MAX_AGE_MS;
+    }
+
+    /** A situation with a 3D GPS fix (GpsFix.has3DFix) no older than the max age (a clock skew ahead counts as fresh). */
+    static _navFresh(s, now) {
+        return !!s && Number.isFinite(s.timestamp) && now - s.timestamp <= AirportPopup._navSitMaxAge()
+            && typeof GpsFix !== 'undefined' && GpsFix.has3DFix(s);
+    }
+
     /**
-     * Mount and start the engine-out glide block right under the header. It shows itself whenever the
+     * Pattern altitude (ft MSL) of a NASR airport record, or null without a field elevation.
+     * tpa_ft is ALREADY MSL in the bundle (build_nasr.py: elev_ft + the FAA's AGL figure, 0 when none
+     * published): used as is when > 0. Otherwise elevation + CockpitConfig patternAltAboveFieldFt (1000).
+     */
+    static patternAltFt(apt) {
+        if (!apt || !Number.isFinite(apt.elev_ft)) return null;
+        if (Number.isFinite(apt.tpa_ft) && apt.tpa_ft > 0) return apt.tpa_ft;
+        let above = null;
+        try { above = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.get('patternAltAboveFieldFt') : null; } catch (_) { above = null; }
+        return apt.elev_ft + (Number.isFinite(above) ? above : 1000);
+    }
+
+    /** Initial great-circle TRUE bearing (deg, 0..360) from point 1 to point 2. */
+    static _bearingTrue(lat1, lon1, lat2, lon2) {
+        const r = Math.PI / 180;
+        const p1 = lat1 * r, p2 = lat2 * r, dl = (lon2 - lon1) * r;
+        const y = Math.sin(dl) * Math.cos(p2);
+        const x = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl);
+        return ((Math.atan2(y, x) / r) % 360 + 360) % 360;
+    }
+
+    /** Degrees as 3 digits, 1..360 ("053", 360 not 000). */
+    static _hdg3(d) {
+        const v = Math.round(((d % 360) + 360) % 360);
+        return String(v === 0 ? 360 : v).padStart(3, '0');
+    }
+
+    /** Distance text: one decimal below 100 nm (after rounding), whole nm at/above 100. */
+    static _fmtNm(d) {
+        const tenth = Math.round(d * 10) / 10;
+        return tenth < 100 ? tenth.toFixed(1) : Math.round(d).toLocaleString('en-US');
+    }
+
+    /**
+     * The nav row's numbers for an airport, from the Stratux situations (pure; `now` ms):
+     *   position: the freshest of stratuxClient.situation / .wsSituation (either transport: GDL 90
+     *     lat/lon are fine) with a 3D fix, no older than the max age; none -> { pos: false }
+     *   hdg: magnetic bearing aircraft -> airport reference point = initial great-circle true bearing
+     *     - MagVar.declination (east positive); "°T" when no declination is available
+     *   distNm: NasrDB.haversineNm
+     *   patternAlt: patternAltFt(apt)
+     *   descent: needs altitude = wsSituation.alt_msl (WebSocket only: true MSL; GDL 90 altitude is
+     *     ellipsoidal and is never used) from a fresh 3D-fix WS situation, and GS = the position
+     *     situation's ground_speed. alt - patternAlt < -100 -> 'below'; within ±100 -> 'at'; > 100 with
+     *     D > 0.5 nm and GS >= 30 kt -> fpm = (alt - patternAlt) / (D / GS * 60), rounded to 10;
+     *     otherwise / unusable -> null.
+     * -> { pos, hdg, hdgTrueOnly, distNm, patternAlt, descent: null | 'at' | 'below' | fpm }
+     */
+    static navRow(apt, sc, now = Date.now()) {
+        const out = { pos: false, hdg: null, hdgTrueOnly: false, distNm: null, patternAlt: AirportPopup.patternAltFt(apt), descent: null };
+        if (!apt || !Number.isFinite(apt.lat) || !Number.isFinite(apt.lon) || !sc) return out;
+        let pos = null;
+        for (const s of [sc.situation, sc.wsSituation]) {
+            if (AirportPopup._navFresh(s, now) && (!pos || s.timestamp > pos.timestamp)) pos = s;
+        }
+        if (!pos) return out;
+        out.pos = true;
+        const brgTrue = AirportPopup._bearingTrue(pos.lat, pos.lon, apt.lat, apt.lon);
+        let decl = NaN;
+        try {
+            if (typeof MagVar !== 'undefined' && MagVar && typeof MagVar.declination === 'function') decl = MagVar.declination(pos.lat, pos.lon);
+        } catch (_) { decl = NaN; }
+        out.hdgTrueOnly = !Number.isFinite(decl);
+        out.hdg = AirportPopup._hdg3(out.hdgTrueOnly ? brgTrue : brgTrue - decl);
+        out.distNm = NasrDB.haversineNm(pos.lat, pos.lon, apt.lat, apt.lon);
+
+        const ws = sc.wsSituation;
+        const alt = AirportPopup._navFresh(ws, now) && Number.isFinite(ws.alt_msl) ? ws.alt_msl : null;
+        const gs = Number.isFinite(pos.ground_speed) && pos.ground_speed >= 0 ? pos.ground_speed : null;
+        if (alt === null || gs === null || out.patternAlt === null || !Number.isFinite(out.distNm)) return out;
+        const above = alt - out.patternAlt;
+        if (above < -100) out.descent = 'below';             // climb-out, the ramp
+        else if (above <= 100) out.descent = 'at';
+        else if (out.distNm > 0.5 && gs >= 30) {
+            const minutes = out.distNm / gs * 60;
+            out.descent = Math.round(above / minutes / 10) * 10;
+        }
+        return out;
+    }
+
+    /**
+     * The nav row's two lines (HTML; numbers only, nothing to escape). Line 1 "HDG° · D nm" (with a
+     * position); line 2 "↓ R fpm to pattern alt N ft" / "at pattern alt N ft" / "pattern alt N ft" (with
+     * a field elevation). Line 2 is unbreakable segments: it wraps only between "… to" and "pattern alt
+     * N ft", so no line ever starts with "·" or splits a number from its unit.
+     */
+    static _navHtml(nav) {
+        let html = '';
+        if (nav && nav.pos) {
+            // Over the airport (under NAV_NO_BEARING_NM) the bearing swings wildly: distance only.
+            const brg = nav.distNm < AirportPopup.NAV_NO_BEARING_NM ? '' : `${nav.hdg}°${nav.hdgTrueOnly ? 'T' : ''} · `;
+            html += `<div class="apt-nav-line">${brg}${AirportPopup._fmtNm(nav.distNm)} nm</div>`;
+        }
+        if (nav && Number.isFinite(nav.patternAlt)) {
+            const pat = `pattern alt ${Math.round(nav.patternAlt).toLocaleString('en-US')} ft`;
+            let l2;
+            if (nav.pos && nav.descent === 'at') l2 = `<span class="apt-nav-seg">at ${pat}</span>`;
+            else if (nav.pos && nav.descent === 'below') l2 = `<span class="apt-nav-seg">below ${pat}</span>`;
+            else if (nav.pos && Number.isFinite(nav.descent)) {
+                l2 = `<span class="apt-nav-seg"><span class="apt-nav-rate">↓ ${nav.descent.toLocaleString('en-US')} fpm</span> to</span> `
+                    + `<span class="apt-nav-seg">${pat}</span>`;
+            } else l2 = `<span class="apt-nav-seg">${pat}</span>`;
+            html += `<div class="apt-nav-pattern">${l2}</div>`;
+        }
+        return html;
+    }
+
+    /** Refresh the nav row now and every NAV_UPDATE_MS (one timer per open panel). Guarded: never throws. */
+    _startNav(airport) {
+        this._stopNav();
+        const el = this._panel?.querySelector('.apt-nav-text');
+        if (!el) return;
+        let last = el.innerHTML;
+        const update = () => {
+            try {
+                if (!el.isConnected) { this._stopNav(); return; }
+                const html = AirportPopup._navHtml(AirportPopup.navRow(airport, window.app?.stratuxClient, Date.now()));
+                if (html !== last) { el.innerHTML = html; last = html; }
+            } catch (err) {
+                console.warn('AirportPopup: nav row update failed', err);
+            }
+        };
+        this._navTimer = setInterval(update, AirportPopup.NAV_UPDATE_MS);
+    }
+
+    _stopNav() {
+        if (this._navTimer) { clearInterval(this._navTimer); this._navTimer = null; }
+    }
+
+    /**
+     * Mount and start the engine-out glide block right under the nav row. It shows itself whenever the
      * Stratux WebSocket has a fresh 3D fix (on the ground too) - GlidePanel / GlideInputs decide. Until
      * then, only with showStatus (the pilot just tapped ENGINE OUT on in this panel), GlidePanel shows
      * one status line saying why (no GPS, waiting for a 3D fix, ...); otherwise the host stays hidden.
@@ -506,8 +661,8 @@ class AirportPopup {
             if (typeof GlidePanel === 'undefined' || !this._panel) return;
             const host = document.createElement('div');
             host.className = 'glide-host';
-            const header = this._panel.querySelector('.apt-panel-header');
-            if (header) header.after(host); else this._panel.prepend(host);
+            const anchor = this._panel.querySelector('.apt-nav-row') || this._panel.querySelector('.apt-panel-header');
+            if (anchor) anchor.after(host); else this._panel.prepend(host);
             this._glideHost = host;
             this._glide = new GlidePanel(host, airport, { showStatus });
             this._glide.start();
@@ -878,6 +1033,7 @@ class AirportPopup {
     _showSearchPanel() {
         if (!this._panel) return;
         this._stopGlide();
+        this._stopNav();
         this._closeNotes();
         this._panel.innerHTML = `
             <div class="apt-top-nav">
@@ -910,10 +1066,11 @@ class AirportPopup {
                         results.innerHTML = '<div class="apt-search-empty">No airports found</div>';
                         return;
                     }
+                    const esc = AirportPopup._esc;
                     results.innerHTML = airports.slice(0, 12).map(a => `
-                        <div class="apt-search-row" data-icao="${a.icao}">
-                            <span class="apt-search-icao">${a.icao}</span>
-                            <span class="apt-search-name">${a.name || ''}</span>
+                        <div class="apt-search-row" data-icao="${esc(a.icao)}">
+                            <span class="apt-search-icao">${esc(a.icao)}</span>
+                            <span class="apt-search-name">${esc(a.name || '')}</span>
                         </div>`).join('');
                     results.querySelectorAll('.apt-search-row').forEach(row => {
                         wireTap(row, () => this.showForAirport(row.dataset.icao));
@@ -971,61 +1128,32 @@ class AirportPopup {
     }
 
     _buildPanelHtml(apt, wx) {
-        const towerStr = apt.tower ? 'TOWERED' : 'UNCONTROLLED';
-        const elevStr = apt.elev_ft ? `${apt.elev_ft} ft` : '';
-        const tpaStr = apt.tpa_ft ? ` · TPA ${apt.tpa_ft}` : '';
         const glideOn = AirportPopup.glideOn();
-
-        // Weather VFR badge for header
-        let catBadge = '';
-        if (wx?.metar?.decoded?.flight_category) {
-            const cat = wx.metar.decoded.flight_category;
-            const catColors = { VFR: 'var(--cat-vfr)', MVFR: 'var(--cat-mvfr)', IFR: 'var(--cat-ifr)', LIFR: 'var(--cat-lifr)' };
-            catBadge = `<span style="color:${catColors[cat] || '#aaa'};font-size:14px;font-weight:900;margin-left:6px;">● ${AirportPopup._esc(cat)}</span>`;
+        const esc = AirportPopup._esc;
+        let nav = null;
+        try { nav = AirportPopup.navRow(apt, window.app?.stratuxClient, Date.now()); } catch (err) {
+            console.warn('AirportPopup: nav row failed', err);
         }
 
-        // Distance and descent rate from current position
-        let navInfoHtml = '';
-        const sit = window.app?.stratuxClient?.situation;
-        if (sit?.lat != null && sit?.lon != null && apt.lat != null && apt.lon != null) {
-            const distNm = NasrDB.haversineNm(sit.lat, sit.lon, apt.lat, apt.lon);
-            const distFmt = distNm < 10 ? distNm.toFixed(1) : Math.round(distNm);
-
-            if (apt.elev_ft != null && sit.alt_msl != null && apt.type !== 'NAVAID') {
-                const patternAbove = (typeof CockpitConfig !== 'undefined'
-                    ? CockpitConfig.get('patternAltAboveFieldFt') : null) ?? 1000;
-                const targetAlt = apt.elev_ft + patternAbove;
-                const altDiff = sit.alt_msl - targetAlt;
-                if (altDiff > 100 && distNm > 0.5 && sit.ground_speed > 10) {
-                    const timeMin = (distNm / sit.ground_speed) * 60;
-                    const descentFpm = Math.round(altDiff / timeMin);
-                    navInfoHtml = `<div class="apt-panel-nav">${distFmt}nm · descend ${descentFpm} fpm → ${targetAlt.toLocaleString()} ft</div>`;
-                } else {
-                    navInfoHtml = `<div class="apt-panel-nav">${distFmt}nm</div>`;
-                }
-            } else {
-                navInfoHtml = `<div class="apt-panel-nav">${distFmt}nm</div>`;
-            }
-        }
-
+        // Header: ICAO + name, close. Nav row under it: heading / distance / descent and pattern
+        // altitude (navRow, refreshed every NAV_UPDATE_MS by _startNav), ENGINE OUT on the right.
         return `
         <div class="apt-panel-header">
-            <div>
-                <div class="apt-panel-icao">${apt.icao}${catBadge}</div>
-                <div class="apt-panel-name">${apt.name || ''}</div>
-                <div class="apt-panel-meta">${apt.city || ''}${apt.state ? ', ' + apt.state : ''} · ${towerStr} · ${elevStr}${tpaStr}</div>
-                ${navInfoHtml}
+            <div class="apt-panel-id">
+                <div class="apt-panel-icao">${esc(apt.icao)}</div>
+                <div class="apt-panel-name">${esc(apt.name || '')}</div>
             </div>
-            <div class="apt-header-btns">
-                <button class="apt-panel-close btn-close" aria-label="Close">✕</button>
-                <button class="apt-glide-toggle${glideOn ? ' is-on' : ''}" aria-pressed="${glideOn}" aria-label="Engine-out glide"><span class="apt-glide-word">ENGINE</span> <span class="apt-glide-word">OUT</span></button>
-            </div>
+            <button class="apt-panel-close btn-close" aria-label="Close">✕</button>
+        </div>
+        <div class="apt-nav-row">
+            <div class="apt-nav-text">${AirportPopup._navHtml(nav)}</div>
+            <button class="apt-glide-toggle${glideOn ? ' is-on' : ''}" aria-pressed="${glideOn}" aria-label="Engine-out glide"><span class="apt-glide-word">ENGINE</span> <span class="apt-glide-word">OUT</span></button>
         </div>
 
         ${this._tfrBlockHtml(apt)}
 
         <div class="apt-action-chips">
-            <button class="apt-chip" data-action="direct-to">D→ Direct</button>
+            <button class="apt-chip" data-action="direct-to">D→\u00a0Direct</button>
             <button class="apt-chip" data-action="add-route">+ Route</button>
             <button class="apt-chip" data-action="plates">Plates</button>
         </div>
@@ -1057,7 +1185,7 @@ class AirportPopup {
                 ${this._wxPaneHtml(wx) || AirportPopup.NO_WX_HTML}
             </div>
             <div class="apt-tab-pane" data-pane="rwy">
-                ${apt.runways?.length ? this._runwaysHtml(apt.runways) : '<div style="padding:16px;color:var(--text-muted)">No runway data</div>'}
+                ${apt.runways?.length ? this._runwaysHtml(apt.runways) : '<div class="apt-pane-empty">No runway data</div>'}
             </div>
             <div class="apt-tab-pane" data-pane="wind">
                 <div class="apt-wind-pane"></div>
@@ -1282,6 +1410,7 @@ class AirportPopup {
     _showOfflineStub(icao, latlng) {
         if (!this._panel) return;
         this._stopGlide();
+        this._stopNav();
         this._closeNotes();
         const lat = latlng?.[0]?.toFixed(4) ?? '—';
         const lon = latlng?.[1]?.toFixed(4) ?? '—';
@@ -1290,13 +1419,11 @@ class AirportPopup {
                 <span class="apt-topnav-spacer"></span>
                 <button class="apt-panel-close btn-close">✕</button>
             </div>
-            <div style="padding:20px;color:var(--text-primary)">
-                <div style="font-size:var(--text-xl);font-weight:700;margin-bottom:4px">${icao}</div>
-                <div style="color:var(--text-muted);margin-bottom:16px">${lat}, ${lon}</div>
-                <div style="color:var(--status-caution)">Airport data not available offline.</div>
-                <div style="color:var(--text-secondary);margin-top:8px;font-size:var(--text-sm)">
-                    Connect to the Pi to load NASR airport data.
-                </div>
+            <div class="apt-offline">
+                <div class="apt-offline-icao">${AirportPopup._esc(icao)}</div>
+                <div class="apt-offline-pos">${lat}, ${lon}</div>
+                <div class="apt-offline-msg">Airport data not available offline.</div>
+                <div class="apt-offline-hint">Connect to the Pi to load NASR airport data.</div>
             </div>`;
         this._panel.classList.add('open');
         this._panelOpen = true;
@@ -1381,6 +1508,7 @@ class AirportPopup {
             this._panelOpen = false;
         }
         this._stopGlide();
+        this._stopNav();
         this._closeNotes();
         this._stopFisbListener();
         this._stopInternetMetarListener();
@@ -1455,7 +1583,7 @@ class AirportPopup {
      * them as AFD_PAGE.webp in data/plates/{ICAO}/AFD_PAGE.webp via NanoHTTPD.
      */
     async _loadAfdPane(containerEl, icao, state) {
-        containerEl.innerHTML = '<div style="padding:16px;color:var(--text-muted);font-size:13px">Loading A/FD…</div>';
+        containerEl.innerHTML = '<div class="apt-pane-empty">Loading A/FD…</div>';
         const PLATES_BASE = 'http://localhost:9090/plates';
         const strippedId = icao.replace(/^K/, '');
         const webpUrl = `${PLATES_BASE}/${icao.toUpperCase()}/AFD_PAGE.webp`;
@@ -1494,7 +1622,7 @@ class AirportPopup {
                 containerEl.appendChild(line);
             }
             const hint = document.createElement('div');
-            hint.style.cssText = 'padding:6px 12px;font-size:11px;color:var(--text-muted);text-align:center;';
+            hint.className = 'apt-plate-hint';
             hint.textContent = 'Tap to open full screen';
             containerEl.appendChild(hint);
             containerEl.appendChild(thumb);
@@ -1512,12 +1640,10 @@ class AirportPopup {
                 return;
             }
             containerEl.innerHTML = `
-                <div style="padding:16px;color:var(--text-muted);font-size:13px">
-                    <div style="font-weight:600;margin-bottom:8px;color:var(--text-primary)">${icao} — Chart Supplement</div>
+                <div class="apt-pane-empty">
+                    <div class="apt-pane-empty-title">${AirportPopup._esc(icao)} — Chart Supplement</div>
                     <div>A/FD page not available for this airport.</div>
-                    <div style="margin-top:8px;font-size:11px;color:var(--text-dim)">
-                        Sync approach plates from the home server to download A/FD pages.
-                    </div>
+                    <div class="apt-pane-hint">Sync approach plates from the home server to download A/FD pages.</div>
                 </div>`;
         };
 
@@ -1591,7 +1717,7 @@ class AirportPopup {
      * Used for the IAP tab.
      */
     async _loadPlateListPane(containerEl, icao) {
-        containerEl.innerHTML = '<div style="padding:16px;color:var(--text-muted);font-size:13px">Loading…</div>';
+        containerEl.innerHTML = '<div class="apt-pane-empty">Loading…</div>';
         const PLATES_BASE = 'http://localhost:9090/plates';
 
         try {
@@ -1621,9 +1747,9 @@ class AirportPopup {
             const plates = allPlates.filter(p => WANTED_CODES.includes(p.chart_code));
 
             if (!plates.length) {
-                containerEl.innerHTML = `<div style="padding:16px;color:var(--text-muted);font-size:13px">
-                    No instrument procedures found for ${icao}.<br>
-                    <span style="font-size:11px;color:var(--text-dim)">Sync approach plates from the home server to enable this tab.</span>
+                containerEl.innerHTML = `<div class="apt-pane-empty">
+                    No instrument procedures found for ${AirportPopup._esc(icao)}.
+                    <div class="apt-pane-hint">Sync approach plates from the home server to enable this tab.</div>
                 </div>`;
                 return;
             }
@@ -1689,12 +1815,12 @@ class AirportPopup {
             });
 
         } catch (err) {
-            containerEl.innerHTML = `<div style="padding:16px;color:var(--text-muted);font-size:13px">Error: ${err.message}</div>`;
+            containerEl.innerHTML = `<div class="apt-pane-empty">Error: ${AirportPopup._esc(err.message)}</div>`;
         }
     }
 
     async _loadPlatePaneForType(containerEl, icao, plateType) {
-        containerEl.innerHTML = '<div style="padding:16px;color:var(--text-muted);font-size:13px">Loading…</div>';
+        containerEl.innerHTML = '<div class="apt-pane-empty">Loading…</div>';
 
         const PLATES_BASE = 'http://localhost:9090/plates';
 
@@ -1740,9 +1866,9 @@ class AirportPopup {
                 const hint = plateType === 'APD'
                     ? 'Not all airports have FAA-published diagrams. Diagrams are typically published for towered and busier airports.'
                     : 'Sync approach plates from the home server to enable this tab.';
-                containerEl.innerHTML = `<div style="padding:16px;color:var(--text-muted);font-size:13px">
-                    No ${typeLabel} available for ${icao}.<br>
-                    <span style="font-size:11px;color:var(--text-dim)">${hint}</span>
+                containerEl.innerHTML = `<div class="apt-pane-empty">
+                    No ${typeLabel} available for ${AirportPopup._esc(icao)}.
+                    <div class="apt-pane-hint">${hint}</div>
                 </div>`;
                 return;
             }
@@ -1797,7 +1923,7 @@ class AirportPopup {
             }
 
         } catch (err) {
-            containerEl.innerHTML = `<div style="padding:16px;color:var(--text-muted);font-size:13px">Error loading plate: ${err.message}</div>`;
+            containerEl.innerHTML = `<div class="apt-pane-empty">Error loading plate: ${AirportPopup._esc(err.message)}</div>`;
         }
     }
 
@@ -1920,7 +2046,6 @@ class AirportPopup {
         const rows = sorted.map(freq => {
             const cat = categories.find(c => c.key === freq.type);
             const label = cat?.label || freq.type?.toUpperCase() || '';
-            const color = cat?.color || 'var(--text-secondary)';
             const isPrimary = (!isTowered && freq.type === 'ctaf') || (isTowered && freq.type === 'twr');
             const star = isPrimary ? ' <span class="freq-primary">★</span>' : '';
             // 'sector' is the raw NASR sectorization suffix (degree range,
@@ -1930,8 +2055,10 @@ class AirportPopup {
             // next to the frequency so a pilot knows which one to call.
             const sectorSuffix = freq.sector ? ` <span class="freq-sector">(${freq.sector})</span>` : '';
 
+            // Label colour: the panel's --text-secondary (CSS). cockpit-config's per-category `color`
+            // is no longer applied: text colours are fixed by the type scale (>= 7:1).
             return `<tr class="freq-row" data-freq="${freq.freq}">
-                <td style="color:${color}">${label}${star}</td>
+                <td class="freq-label">${label}${star}</td>
                 <td class="freq-value">${freq.freq}${sectorSuffix}</td>
             </tr>`;
         }).join('');
@@ -1972,12 +2099,10 @@ class AirportPopup {
         const d = metar.decoded || {};
         const raw = metar.raw || '';
 
-        // Flight category
-        const catColors = { VFR: 'var(--cat-vfr)', MVFR: 'var(--cat-mvfr)', IFR: 'var(--cat-ifr)', LIFR: 'var(--cat-lifr)' };
-        const catBg     = { VFR: '#00cc4418', MVFR: '#0088ff18', IFR: '#ff444418', LIFR: '#ff44ff18' };
+        // Flight category: a coloured left border and a dot (CSS boxes, .apt-wx-cat-*); the name in
+        // --text-primary (the --cat-* colours are fills, 1.3-3.4:1 as text on white).
         const cat = d.flight_category || '?';
-        const catColor = catColors[cat] || '#aaa';
-        const catBgColor = catBg[cat] || 'transparent';
+        const catKey = ['VFR', 'MVFR', 'IFR', 'LIFR'].includes(cat) ? cat.toLowerCase() : 'unk';
 
         // Wind string
         let windStr = '';
@@ -2069,21 +2194,22 @@ class AirportPopup {
             }</div></div>`
             : '';
 
-        // Weather phenomena — parse from raw text (TS, RA, SN, FZRA, FG, etc.)
+        // Weather phenomena — the METAR body's present-weather groups, with their intensity /
+        // proximity (AirportPopup._wxGroups): -RA, +TSRA, VCSH, BR ...
         const wxPhenomena = [];
-        const wxGroupMatch = rawNoRmk.match(/\b([-+]?(VC)?(MI|PR|BC|DR|BL|SH|TS|FZ)*(RA|DZ|SN|SG|IC|PL|GR|GS|UP|FG|BR|SA|DU|HZ|VA|PO|SQ|FC|SS|DS)+)\b/g);
-        if (wxGroupMatch) {
+        const wxGroupMatch = AirportPopup._wxGroups(raw);
+        if (wxGroupMatch.length) {
             for (const code of wxGroupMatch) {
                 const isTs  = /TS/.test(code);
                 const isFz  = /FZ/.test(code);
                 const isSev = /^\+/.test(code);
-                const color = isTs ? 'var(--status-danger)' : isFz ? '#0099cc' : isSev ? 'var(--status-warning)' : 'var(--text-secondary)';
-                wxPhenomena.push({ code, color });
+                const cls = isTs ? 'apt-wx-ph-ts' : isFz ? 'apt-wx-ph-fz' : isSev ? 'apt-wx-ph-sev' : 'apt-wx-ph';
+                wxPhenomena.push({ code, cls });
             }
         }
         const phenomenaHtml = wxPhenomena.length
             ? `<div class="wx-phenomena">${wxPhenomena.map(p =>
-                `<span class="wx-phenom" style="color:${p.color}">${AirportPopup._esc(p.code)}</span>`).join('')}</div>`
+                `<span class="wx-phenom ${p.cls}">${AirportPopup._esc(p.code.replace(/^-/, '\u2212'))}</span>`).join('')}</div>`
             : '';
 
         // Labeled data rows
@@ -2116,9 +2242,9 @@ class AirportPopup {
             : '';
 
         return `<div class="popup-section popup-wx-section${speciClass}">
-            <div class="wx-card-hdr" style="background:${catBgColor};border-left:4px solid ${catColor}">
-                <span class="wx-cat-dot" style="color:${catColor}">&#9679;</span>
-                <span class="wx-cat-name" style="color:${catColor}">${AirportPopup._esc(cat)}</span>
+            <div class="wx-card-hdr apt-wx-cat-${catKey}">
+                <span class="wx-cat-dot" aria-hidden="true"></span>
+                <span class="wx-cat-name">${AirportPopup._esc(cat)}</span>
                 <div class="wx-hdr-right">
                     <span class="wx-source">${source}</span>
                     ${isSpeci ? '<span class="wx-speci-badge">SPECI</span>' : ''}
@@ -2140,6 +2266,37 @@ class AirportPopup {
             <div class="wx-metar"><span class="wx-metar-label">RAW</span>${AirportPopup._esc(raw)}</div>
             ${tafHtml}
         </div>`;
+    }
+
+    /**
+     * Present-weather groups of a METAR (FMH-1 / WMO grammar), read from the body only: after the report
+     * type (METAR / SPECI, COR), the station ID and the DDHHMMZ / HHMMZ time (so "SASA" is never two
+     * sand groups), before RMK and before a trend (NOSIG / TEMPO / BECMG). Each whole token: optional
+     * intensity (- +), optional VC (ASOS writes "-VCTSRA"), optional descriptor (MI PR BC DR BL SH TS
+     * FZ), then phenomena (DZ RA SN SG IC PE PL GR GS UP BR FG FU VA DU SA HZ PY PO SQ FC SS DS); a
+     * descriptor alone only as TS (any prefix) or VCSH. The raw METAR is
+     * the source: FisbClient.decodeMetar has no present-weather field, and AWC's wxString (WeatherClient
+     * decoded.weather) can include remark / trend text. Returns the tokens as written ("-RA", "+TSRA").
+     */
+    static _wxGroups(raw) {
+        const body = String(raw || '').split(/\s(?:RMK|NOSIG|TEMPO|BECMG)\b/)[0];
+        const toks = body.trim().split(/\s+/).filter(Boolean);
+        // Header: report type, correction, station ID, time. Only the leading tokens are skipped.
+        let i = 0;
+        if (/^(METAR|SPECI)$/.test(toks[i])) i++;
+        if (toks[i] === 'COR') i++;
+        if (/^[A-Z0-9]{3,4}$/.test(toks[i] || '') && !/^\d{4,6}Z$/.test(toks[i])) i++;
+        if (/^(\d{6}|\d{4})Z$/.test(toks[i] || '')) i++;
+        const re = /^([-+])?(VC)?(MI|PR|BC|DR|BL|SH|TS|FZ)?((?:DZ|RA|SN|SG|IC|PE|PL|GR|GS|UP|BR|FG|FU|VA|DU|SA|HZ|PY|PO|SQ|FC|SS|DS)+)?$/;
+        const out = [];
+        for (const tok of toks.slice(i)) {
+            const m = re.exec(tok);
+            if (!m) continue;
+            const [, , vc, desc, phen] = m;
+            // phenomena present: a group. None: only TS (any prefix) or VCSH.
+            if (phen || desc === 'TS' || (vc && desc === 'SH')) out.push(tok);
+        }
+        return out;
     }
 
     // _bestRunwayHtml was replaced by the interactive Wind tab (compass rose
@@ -2171,7 +2328,7 @@ class AirportPopup {
             wireTap(phoneEl, () => {
                 const phone = phoneEl.dataset.phone;
                 navigator.clipboard?.writeText(phone);
-                phoneEl.style.background = '#224433';
+                phoneEl.style.background = 'var(--border)';
                 setTimeout(() => phoneEl.style.background = '', 1000);
             });
         });
@@ -2204,7 +2361,7 @@ class AirportPopup {
     static TAF_MAX_AGE_MS = 30 * 3600 * 1000;
 
     /** "No weather data" in the WX tab: no METAR and no TAF. */
-    static NO_WX_HTML = '<div style="padding:16px;color:var(--text-muted)">No weather data</div>';
+    static NO_WX_HTML = '<div class="apt-pane-empty">No weather data</div>';
 
     /** The TAF title + text (escaped by _formatTaf). */
     _tafHtml(raw) {

@@ -1,13 +1,14 @@
 /**
  * FlyTab - live engine-out glide block in the airport panel (web/cockpit/glide-panel.js).
  *
- * Mounted by AirportPopup._startGlide right under the panel header while the ENGINE OUT button is on,
+ * Mounted by AirportPopup._startGlide right under the panel's nav row while the ENGINE OUT button is on,
  * stopped by close() and by turning ENGINE OUT off.
  * Every GlidePanel.UPDATE_MS it runs GlideModel.plan() (web/shared/glide-model.js) on the inputs from
  * GlideInputs (web/cockpit/glide-inputs.js) and shows:
- *   the verdict (GLIDE OK / FINAL POINT OUT OF REACH / CANNOT REACH / RUNWAY POSITION NOT KNOWN /
- *   NO SUITABLE RUNWAY), the magnetic heading to steer with a turn cue, where to fly and how high to be
- *   there, TARGET / PROJECTED / MEASURED descent rates, and the wind line;
+ *   the verdict with the height high / low (GLIDE OK / FINAL POINT OUT OF REACH / CANNOT REACH /
+ *   RUNWAY POSITION NOT KNOWN / NO SUITABLE RUNWAY), then TO / HEADING (magnetic, with a turn cue) /
+ *   DISTANCE / AIRSPEED / DESCENT (target, and the measured rate against it) / GLIDE PATH (signed
+ *   spare) rows (_view), and the wind line;
  * and on the map a line aircraft -> final point, a ring at the point and a dashed final to the threshold.
  *
  * Position and altitude come from StratuxClient.wsSituation (the Stratux WebSocket: true GPS MSL).
@@ -189,37 +190,45 @@ class GlidePanel {
 
     // ---- Text -------------------------------------------------------------
 
+    /**
+     * The block's HTML for a plan (spec 2026-11-04 "Engine-out block"): the verdict bar, then a grid
+     *   TO          RWY 24 (final point: the landing end) / RWY 06/24 + "nearest part" (plan B) / the ICAO (ref)
+     *   HEADING     magnetic wind-corrected heading of the straight leg, 3 digits; turn cue under it
+     *   DISTANCE    plan.legNm, one decimal
+     *   AIRSPEED    the validated glide_ias_kt
+     *   DESCENT     plan.target; under it "now M fpm · X shallower" / "· X too steep" / "· on target"
+     *               (M = measured; X = |shown M - shown target|, the two rounded numbers on screen,
+     *               never targetNow), "now —" without a measured rate
+     *   GLIDE PATH  the signed spare (+N / −N ft)
+     * and the wind line. N in the verdict and GLIDE PATH: spare floored when >= 0, shortfall ceiled.
+     */
     _view(plan, sit, gw) {
         const S = this._S, apt = this._apt;
-        const icao = GlidePanel._esc((this._rec && (this._rec.icao || this._rec.id)) || '');
+        const esc = GlidePanel._esc;
+        const icao = esc((this._rec && (this._rec.icao || this._rec.id)) || '');
         const fmt = GlidePanel._fmtFt;
-        const spareTxt = (s) => `${fmt(Math.floor(s))} ft to spare`;       // never round the spare up
-        const shortTxt = (s) => `${fmt(Math.ceil(-s))} ft short`;           // never round the shortfall down
+        const high = plan.spare >= 0;
+        // never round the spare up / the shortfall down; `|| 0`: no "-0" for a spare of -0
+        const nFt = (high ? Math.floor(plan.spare) : Math.ceil(-plan.spare)) || 0;
+        const hiLo = `${fmt(nFt)} ft ${high ? 'high' : 'low'}`;
 
         let tone, verdict, sub = '', unknown = false;
         if (plan.kind === 'final') {
             tone = 'ok';
-            verdict = `✓ GLIDE OK · ${spareTxt(plan.spare)}`;
+            verdict = `✓ GLIDE OK · ${hiLo}`;
         } else if (plan.kind === 'direct') {
-            if (plan.spare >= 0) {
-                tone = 'caution';
-                verdict = '⚠ FINAL POINT OUT OF REACH · TURN TO THE AIRPORT';
-                sub = `${spareTxt(plan.spare)} over the runway`;
-            } else {
-                tone = 'danger';
-                verdict = `✗ CANNOT REACH ${icao} · ${shortTxt(plan.spare)}`;
-            }
+            tone = high ? 'caution' : 'danger';
+            verdict = high ? `⚠ FINAL POINT OUT OF REACH · ${hiLo}` : `✗ CANNOT REACH ${icao} · ${hiLo}`;
         } else {
             unknown = true;
             const state = apt.noSuitable ? 'NO SUITABLE RUNWAY · steer to the airport'
                 : 'RUNWAY POSITION NOT KNOWN · steer to the airport';
-            if (plan.spare >= 0) {
+            if (high) {
                 tone = 'caution';
-                verdict = state;
-                sub = `${spareTxt(plan.spare)} over the airport`;
+                verdict = `${state} · ${hiLo}`;
             } else {
                 tone = 'danger';
-                verdict = `✗ CANNOT REACH ${icao} · ${shortTxt(plan.spare)}`;
+                verdict = `✗ CANNOT REACH ${icao} · ${hiLo}`;
                 sub = state;
             }
         }
@@ -235,46 +244,51 @@ class GlidePanel {
         }
         const t = plan.turnNow;
         const turnTxt = Math.abs(t) <= S.pilot.onCourseDeg ? '↑ on course'
-            : (t > 0 ? `↱ right ${Math.round(t)}°` : `↰ left ${Math.round(-t)}°`);
+            : (t > 0 ? `↱ turn right ${Math.round(t)}°` : `↰ turn left ${Math.round(-t)}°`);
 
-        let dest;
-        if (plan.kind === 'final') dest = `RWY ${GlidePanel._esc(plan.endId)} final point`;
+        let to, toNote = '';
+        if (plan.kind === 'final') to = `RWY ${esc(plan.endId)}`;
         else if (plan.kind === 'direct') {
-            dest = plan.runwayId ? `RWY ${GlidePanel._esc(plan.runwayId)} (nearest part)` : 'the runway (nearest part)';
+            to = plan.runwayId ? `RWY ${esc(plan.runwayId)}` : 'RUNWAY';
+            toNote = 'nearest part';
+        } else to = icao;
+
+        const ias = `${fmt(S.aircraft.glide_ias_kt)} KIAS`;
+
+        let nowHtml;
+        if (Number.isFinite(plan.measured)) {
+            // The difference of the two numbers ON SCREEN (the rounded DESCENT target above and the
+            // rounded "now M"), so it always adds up; never targetNow.
+            const shownM = Math.round(plan.measured), shownT = Math.round(plan.target);
+            const d = shownM - shownT;
+            nowHtml = d > 0
+                ? `<span class="glide-now glide-now-steep">now ${fmt(shownM)} fpm · ${fmt(d)} too steep</span>`
+                : d < 0 ? `<span class="glide-now">now ${fmt(shownM)} fpm · ${fmt(-d)} shallower</span>`
+                    : `<span class="glide-now">now ${fmt(shownM)} fpm · on target</span>`;
+        } else {
+            nowHtml = '<span class="glide-now">now —</span>';
         }
-        else dest = icao;
-        const flyTxt = `Fly ${hdgTxt} · ${plan.legNm.toFixed(1)} nm to ${dest}`;
-        const beAtTxt = `Be at ${fmt(Math.ceil(plan.needMsl))} ft or higher there`;
+        const pathTxt = `${high ? '+' : '−'}${fmt(nFt)} ft`;
 
-        const cell = (label, val, target) => {
-            if (!Number.isFinite(val)) {
-                return `<div class="glide-rate"><span class="glide-rate-label">${label}</span>`
-                    + '<span class="glide-rate-val">—</span></div>';
-            }
-            const over = Number.isFinite(target) ? val - target : 0;
-            const steep = over > 0 ? `<span class="glide-steep">+${fmt(Math.ceil(over))} too steep</span>` : '';
-            return `<div class="glide-rate${over > 0 ? ' glide-rate-steep' : ''}">`
-                + `<span class="glide-rate-label">${label}</span>`
-                + `<span class="glide-rate-val">${fmt(val)}<span class="glide-rate-unit"> fpm</span></span>${steep}</div>`;
-        };
-        const rates = cell('TARGET', plan.target, null)
-            + cell('PROJECTED', plan.projected, plan.target)
-            + cell('MEASURED', plan.measured, plan.targetNow);
+        const row = (label, valueHtml) => `<div class="glide-lbl">${label}</div><div class="glide-cell">${valueHtml}</div>`;
+        const grid = row('TO', `<span class="glide-val glide-to">${to}</span>${toNote ? `<span class="glide-note">${toNote}</span>` : ''}`)
+            + row('HEADING', `<span class="glide-hdg">${hdgTxt}</span><span class="glide-turn">${turnTxt}</span>`)
+            + row('DISTANCE', `<span class="glide-val glide-dist">${plan.legNm.toFixed(1)} nm</span>`)
+            + row('AIRSPEED', `<span class="glide-val glide-ias">${ias}</span>`)
+            + row('DESCENT', `<span class="glide-val glide-target">${fmt(plan.target)} fpm</span>${nowHtml}`)
+            + row('GLIDE PATH', `<span class="glide-val glide-path${high ? '' : ' glide-neg'}">${pathTxt}</span>`);
 
-        const rwyLabel = this._rwy && this._rwy.label ? GlidePanel._esc(this._rwy.label) : '';
-        const glideLabel = `<span class="${gw.wind ? '' : 'glide-amber'}">Glide: ${GlidePanel._esc(gw.label)}</span>`;
+        const rwyLabel = this._rwy && this._rwy.label ? esc(this._rwy.label) : '';
+        const glideLabel = `<span class="${gw.wind ? '' : 'glide-amber'}">Glide: ${esc(gw.label)}</span>`;
         let wind = (rwyLabel ? `<span>Runway: ${rwyLabel}</span> · ` : '') + glideLabel;
         if (plan.kind === 'final' && plan.tailwindKt > 0) {
-            wind += `<div class="glide-amber">RWY ${GlidePanel._esc(plan.endId)}: ${Math.ceil(plan.tailwindKt)} kt TAILWIND</div>`;
+            wind += `<div class="glide-amber">RWY ${esc(plan.endId)}: ${Math.ceil(plan.tailwindKt)} kt TAILWIND</div>`;
         }
 
         const html = `<div class="glide-block glide-${tone}${unknown ? ' glide-unknown' : ''}">`
             + `<div class="glide-verdict">${verdict}</div>`
             + (sub ? `<div class="glide-sub">${sub}</div>` : '')
-            + `<div class="glide-steer"><span class="glide-hdg">${hdgTxt}</span><span class="glide-turn">${turnTxt}</span></div>`
-            + `<div class="glide-line">${flyTxt}</div>`
-            + `<div class="glide-line">${beAtTxt}</div>`
-            + `<div class="glide-rates">${rates}</div>`
+            + `<div class="glide-grid">${grid}</div>`
             + `<div class="glide-wind">${wind}</div>`
             + '</div>';
         return { html, tone };

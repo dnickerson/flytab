@@ -1,0 +1,99 @@
+{
+  "source": "~/flytab-pipeline/data/nasr/bundle.json (NASR cycle effective 2026-10-29, bundle_version 12), extracted verbatim 2026-11-04",
+  "airports": {
+    "2CN8": {
+      "icao": "2CN8",
+      "name": "Lake Arrowhead",
+      "city": "Lake Arrowhead",
+      "state": "CA",
+      "lat": 34.304167,
+      "lon": -117.151389,
+      "elev_ft": 4610,
+      "tpa_ft": 5410,
+      "fuel": "",
+      "tower": false,
+      "phone": "(949) 246-3319",
+      "frequencies": [
+        {
+          "type": "unicom",
+          "freq": "123.075"
+        }
+      ],
+      "runways": [
+        {
+          "id": "09/27",
+          "length_ft": 3170,
+          "width_ft": 75,
+          "surface": "GRVL",
+          "base_id": "09",
+          "base_displ_ft": 0,
+          "recip_id": "27",
+          "recip_displ_ft": 0
+        }
+      ],
+      "fac_type": "AIRPORT",
+      "longest_rwy_ft": 3170,
+      "has_paved_rwy": false,
+      "cd_phone": "661-575-2079",
+      "cd_facility": "Los Angeles Artcc"
+    },
+    "KLKR": {
+      "icao": "KLKR",
+      "name": "Lancaster County-Mc Whirter Fld",
+      "city": "Lancaster",
+      "state": "SC",
+      "lat": 34.722904,
+      "lon": -80.85459,
+      "elev_ft": 486,
+      "tpa_ft": 0,
+      "fuel": "100LLA",
+      "tower": false,
+      "phone": "(803) 285-1513",
+      "frequencies": [
+        {
+          "type": "ctaf",
+          "freq": "122.725"
+        },
+        {
+          "type": "unicom",
+          "freq": "122.725"
+        },
+        {
+          "type": "awos",
+          "freq": "120.825"
+        }
+      ],
+      "runways": [
+        {
+          "id": "06/24",
+          "length_ft": 6004,
+          "width_ft": 101,
+          "surface": "CONC-E",
+          "base_id": "06",
+          "base_lat": 34.71859708,
+          "base_lon": -80.8631085,
+          "base_thr_lat": 34.71874788,
+          "base_thr_lon": -80.86280972,
+          "base_elev_ft": 459.7,
+          "base_true_hdg": 59,
+          "base_displ_ft": 105,
+          "base_tch_ft": 41,
+          "recip_id": "24",
+          "recip_lat": 34.72721166,
+          "recip_lon": -80.84607163,
+          "recip_thr_lat": 34.72721166,
+          "recip_thr_lon": -80.84607163,
+          "recip_elev_ft": 485.7,
+          "recip_true_hdg": 239,
+          "recip_displ_ft": 0,
+          "recip_tch_ft": 39
+        }
+      ],
+      "fac_type": "AIRPORT",
+      "longest_rwy_ft": 6004,
+      "has_paved_rwy": true,
+      "cd_phone": "704-359-0241",
+      "cd_facility": "Charlotte Apch"
+    }
+  }
+}
