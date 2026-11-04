@@ -173,9 +173,21 @@ class AirportPopup {
 
         this._startFisbListener(airport);
         this._startInternetMetarListener(airport);
-        // Internet TAF on every open: on the ground it fills a missing TAF (or a newer one replaces FIS-B's);
-        // in the air there is no internet and the request just fails, silently (timeout in _fetchInternetTaf).
-        this._fetchInternetTaf(airport.icao);
+        // Internet TAF on each open while the app may be online: on the ground it fills a missing TAF (or a
+        // newer one replaces FIS-B's). Never in flight / offline (AirportPopup._mayFetchInternet).
+        if (AirportPopup._mayFetchInternet()) this._fetchInternetTaf(airport.icao);
+    }
+
+    /**
+     * Whether an internet request may be made now, from the app's NetworkMode (web/shared/network-mode.js,
+     * re-probed every 15 s): not in 'flight' (Stratux reachable - its WiFi has no internet) or 'offline'.
+     * The same rule as the FAA TFR download (app.js canFetch). navigator.onLine is not used: the WebView
+     * reports false on Stratux WiFi and true on networks without internet. Mode unknown (no app / no
+     * NetworkMode yet): allowed - the ground case; a failed request is silent.
+     */
+    static _mayFetchInternet() {
+        const mode = (typeof window !== 'undefined') ? window.app?.networkMode?.mode : null;
+        return mode !== 'flight' && mode !== 'offline';
     }
 
     /**

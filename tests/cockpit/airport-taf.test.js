@@ -160,6 +160,55 @@ describe('internet TAF request', () => {
     });
 });
 
+describe('internet TAF only when the app may be online (app.networkMode.mode)', () => {
+    afterEach(() => { globalThis.window.app = undefined; });
+    const withMode = (mode) => { globalThis.window.app = { networkMode: { mode } }; };
+
+    for (const mode of ['flight', 'offline']) {
+        it(`mode "${mode}" (Stratux WiFi / no network): no request; a FIS-B TAF still shows`, async () => {
+            withMode(mode);
+            fisb = await fisbWith(FISB_OLDER);
+            await newPopup().show(KCLT);
+            await settle();
+            expect(fetch).not.toHaveBeenCalled();
+            expect(tafText()).toContain('KCLT 041120Z');
+        });
+    }
+
+    for (const mode of ['home', 'internet']) {
+        it(`mode "${mode}": the internet TAF is requested`, async () => {
+            withMode(mode);
+            globalThis.fetch = okReply(AWC_REPLY);
+            await newPopup().show(KCLT);
+            await settle();
+            expect(fetch).toHaveBeenCalledTimes(1);
+            expect(tafText()).toBe(AWC_RAW);
+        });
+    }
+
+    it('mode unknown (no app / no networkMode / no mode yet): requested (the ground case)', async () => {
+        for (const app of [undefined, {}, { networkMode: {} }, { networkMode: { mode: null } }]) {
+            globalThis.window.app = app;
+            globalThis.fetch = okReply([]);
+            await newPopup().show(KCLT);
+            await settle();
+            expect(fetch).toHaveBeenCalledTimes(1);
+        }
+    });
+
+    it('the mode is read at each open: flight -> home on the ground requests again', async () => {
+        withMode('flight');
+        const p = newPopup();
+        await p.show(KCLT);
+        await settle();
+        expect(fetch).not.toHaveBeenCalled();
+        globalThis.window.app.networkMode.mode = 'home';
+        await p.show(KCLT);
+        await settle();
+        expect(fetch).toHaveBeenCalledTimes(1);
+    });
+});
+
 describe('FIS-B TAF', () => {
     it('shown with an internet METAR (the FIS-B TAF is no longer tied to a FIS-B METAR)', async () => {
         fisb = await fisbWith(FISB_NEWER);
