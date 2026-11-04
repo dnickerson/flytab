@@ -501,6 +501,8 @@ class AirportPopup {
 
     /** Nav row refresh period while the panel is open (ms). */
     static NAV_UPDATE_MS = 1000;
+    /** Closer than this (nm) the nav row shows no bearing (line 1 = "0.0 nm"). */
+    static NAV_NO_BEARING_NM = 0.1;
     /** A situation older than this is not used (ms); the glide block's limit (GlideInputs.SIT_MAX_AGE_MS). */
     static NAV_SIT_MAX_AGE_MS = 5000;
 
@@ -605,7 +607,9 @@ class AirportPopup {
     static _navHtml(nav) {
         let html = '';
         if (nav && nav.pos) {
-            html += `<div class="apt-nav-line">${nav.hdg}°${nav.hdgTrueOnly ? 'T' : ''} · ${AirportPopup._fmtNm(nav.distNm)} nm</div>`;
+            // Over the airport (under NAV_NO_BEARING_NM) the bearing swings wildly: distance only.
+            const brg = nav.distNm < AirportPopup.NAV_NO_BEARING_NM ? '' : `${nav.hdg}°${nav.hdgTrueOnly ? 'T' : ''} · `;
+            html += `<div class="apt-nav-line">${brg}${AirportPopup._fmtNm(nav.distNm)} nm</div>`;
         }
         if (nav && Number.isFinite(nav.patternAlt)) {
             const pat = `pattern alt ${Math.round(nav.patternAlt).toLocaleString('en-US')} ft`;

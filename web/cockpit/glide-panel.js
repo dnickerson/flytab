@@ -196,9 +196,9 @@ class GlidePanel {
      *   HEADING     magnetic wind-corrected heading of the straight leg, 3 digits; turn cue under it
      *   DISTANCE    plan.legNm, one decimal
      *   AIRSPEED    the validated glide_ias_kt
-     *   DESCENT     plan.target; under it "now M fpm · X shallower" / "· X too steep" (M = measured,
-     *               X = |M - target|: against the number shown above it, v12.66), "now —" without a
-     *               measured rate
+     *   DESCENT     plan.target; under it "now M fpm · X shallower" / "· X too steep" / "· on target"
+     *               (M = measured; X = |shown M - shown target|, the two rounded numbers on screen,
+     *               never targetNow), "now —" without a measured rate
      *   GLIDE PATH  the signed spare (+N / −N ft)
      * and the wind line. N in the verdict and GLIDE PATH: spare floored when >= 0, shortfall ceiled.
      */
@@ -257,10 +257,14 @@ class GlidePanel {
 
         let nowHtml;
         if (Number.isFinite(plan.measured)) {
-            const over = plan.measured - plan.target;     // the DESCENT number shown above, not targetNow
-            nowHtml = over > 0
-                ? `<span class="glide-now glide-now-steep">now ${fmt(plan.measured)} fpm · ${fmt(Math.ceil(over))} too steep</span>`
-                : `<span class="glide-now">now ${fmt(plan.measured)} fpm · ${fmt(Math.floor(-over) || 0)} shallower</span>`;
+            // The difference of the two numbers ON SCREEN (the rounded DESCENT target above and the
+            // rounded "now M"), so it always adds up; never targetNow.
+            const shownM = Math.round(plan.measured), shownT = Math.round(plan.target);
+            const d = shownM - shownT;
+            nowHtml = d > 0
+                ? `<span class="glide-now glide-now-steep">now ${fmt(shownM)} fpm · ${fmt(d)} too steep</span>`
+                : d < 0 ? `<span class="glide-now">now ${fmt(shownM)} fpm · ${fmt(-d)} shallower</span>`
+                    : `<span class="glide-now">now ${fmt(shownM)} fpm · on target</span>`;
         } else {
             nowHtml = '<span class="glide-now">now —</span>';
         }

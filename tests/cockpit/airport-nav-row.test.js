@@ -212,6 +212,20 @@ describe('heading and distance against the independent reference', () => {
         expect(rate).toMatch(/color: var\(--text-primary\)/);
     });
 
+    it('over the airport (D < 0.1 nm): no bearing, line 1 = "D nm" only ("0.0 nm"); 0.1 nm and beyond: bearing back', () => {
+        for (const nm of [0, 0.01, 0.04, 0.099]) {
+            const ac = nm ? dest(KLKR.lat, KLKR.lon, 77, nm) : { lat: KLKR.lat, lon: KLKR.lon };
+            const nav = AirportPopup.navRow(KLKR, sc(sitAt(ac, { alt_msl: 2000, ground_speed: 90 })), NOW);
+            expect(nav.distNm).toBeLessThan(0.1);
+            expect(line1(nav)).toBe(`${AirportPopup._fmtNm(nav.distNm)} nm`);
+            expect(line1(nav)).not.toMatch(/°/);
+        }
+        expect(line1(AirportPopup.navRow(KLKR, sc(sitAt({ lat: KLKR.lat, lon: KLKR.lon })), NOW))).toBe('0.0 nm');
+        const at = dest(KLKR.lat, KLKR.lon, 77, 0.1001);
+        const nav = AirportPopup.navRow(KLKR, sc(sitAt(at, { alt_msl: 2000, ground_speed: 90 })), NOW);
+        expect(line1(nav)).toBe(`${refHdgTxt(at.lat, at.lon, KLKR.lat, KLKR.lon)}° · 0.1 nm`);
+    });
+
     it('heading text is 1..360, 3 digits: 0 / 359.6 / 0.4 -> 360, 0.6 -> 001, 53 -> 053', () => {
         expect(AirportPopup._hdg3(0)).toBe('360');
         expect(AirportPopup._hdg3(359.6)).toBe('360');
