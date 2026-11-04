@@ -67,6 +67,11 @@ const sitAt = (p, over = {}) => ({
     timestamp: NOW - 500, ...over,
 });
 const sc = (situation, wsSituation = situation) => ({ situation, wsSituation });
+/** Line 1 as the pilot reads it (text, no markup), or null when there is none. */
+const line1 = (nav) => {
+    const d = document.createElement('div'); d.innerHTML = AirportPopup._navHtml(nav);
+    return d.querySelector('.apt-nav-line')?.textContent ?? null;
+};
 
 let AirportPopup;
 beforeEach(() => {
@@ -179,6 +184,18 @@ describe('heading and distance against the independent reference', () => {
         expect(Number(syd.hdg)).toBeLessThan(refBearing(-33.9244, 150.9881, -33.9461, 151.1772));
     });
 
+    it('line 1 wraps only between "D nm" and "· ↓ R fpm" (two no-wrap segments)', () => {
+        const ac = dest(KLKR.lat, KLKR.lon, 230, 6.2);
+        const d = document.createElement('div');
+        d.innerHTML = AirportPopup._navHtml(AirportPopup.navRow(KLKR, sc(sitAt(ac, { alt_msl: 3486, ground_speed: 140 })), NOW));
+        const segs = [...d.querySelectorAll('.apt-nav-line .apt-nav-seg')].map((e) => e.textContent);
+        expect(segs).toHaveLength(2);
+        expect(segs[0]).toMatch(/^\d{3}° · 6\.2 nm$/);
+        expect(segs[1]).toMatch(/^· ↓ [\d,]+ fpm$/);
+        const css = read('web/style.css');
+        expect(css).toMatch(/\.apt-nav-seg \{\s*white-space: nowrap;/);
+    });
+
     it('heading text is 1..360, 3 digits: 0 / 359.6 / 0.4 -> 360, 0.6 -> 001, 53 -> 053', () => {
         expect(AirportPopup._hdg3(0)).toBe('360');
         expect(AirportPopup._hdg3(359.6)).toBe('360');
@@ -204,7 +221,7 @@ describe('heading and distance against the independent reference', () => {
         const nav = AirportPopup.navRow(KLKR, sc(sitAt(ac)), NOW);
         expect(nav.hdgTrueOnly).toBe(true);
         expect(nav.hdg).toBe(AirportPopup._hdg3(refBearing(ac.lat, ac.lon, KLKR.lat, KLKR.lon)));
-        expect(AirportPopup._navHtml(nav)).toContain(`${nav.hdg}°T ·`);
+        expect(line1(nav).startsWith(`${nav.hdg}°T · `)).toBe(true);
     });
 });
 
@@ -258,7 +275,7 @@ describe('descent rate', () => {
         const want = refRate(ac, alt, gs);
         expect(nav.descent).toBe(want);
         expect(want % 10).toBe(0);
-        expect(AirportPopup._navHtml(nav)).toContain(`${nav.hdg}° · ${AirportPopup._fmtNm(nav.distNm)} nm · ↓ ${want.toLocaleString('en-US')} fpm`);
+        expect(line1(nav)).toBe(`${nav.hdg}° · ${AirportPopup._fmtNm(nav.distNm)} nm · ↓ ${want.toLocaleString('en-US')} fpm`);
     });
     it('hand check: 10 nm, 3,000 ft above pattern alt, 120 kt -> 600 fpm', () => {
         const ac = dest(KLKR.lat, KLKR.lon, 230, 10);
@@ -270,7 +287,7 @@ describe('descent rate', () => {
         for (const alt of [PAT + 100, PAT, PAT - 500]) {
             const nav = AirportPopup.navRow(KLKR, sc(sitAt(ac, { alt_msl: alt })), NOW);
             expect(nav.descent).toBe('at');
-            expect(AirportPopup._navHtml(nav)).toContain(' nm · at pattern alt</div>');
+            expect(line1(nav)).toBe(`${nav.hdg}° · ${AirportPopup._fmtNm(nav.distNm)} nm · at pattern alt`);
         }
         expect(Number.isFinite(AirportPopup.navRow(KLKR, sc(sitAt(ac, { alt_msl: PAT + 101 })), NOW).descent)).toBe(true);
     });

@@ -393,7 +393,7 @@ class AirportPopup {
             wireTap(phoneEl, () => {
                 const phone = phoneEl.dataset.phone;
                 navigator.clipboard?.writeText(phone);
-                phoneEl.style.background = '#224433';
+                phoneEl.style.background = 'var(--border)';
                 setTimeout(() => phoneEl.style.background = '', 1000);
             });
         });
@@ -598,9 +598,10 @@ class AirportPopup {
     static _navHtml(nav) {
         let html = '';
         if (nav && nav.pos) {
-            let l1 = `${nav.hdg}°${nav.hdgTrueOnly ? 'T' : ''} · ${AirportPopup._fmtNm(nav.distNm)} nm`;
-            if (nav.descent === 'at') l1 += ' · at pattern alt';
-            else if (Number.isFinite(nav.descent)) l1 += ` · ↓ ${nav.descent.toLocaleString('en-US')} fpm`;
+            // Two unbreakable parts: a narrow row wraps between "D nm" and "· ↓ R fpm", never inside one.
+            let l1 = `<span class="apt-nav-seg">${nav.hdg}°${nav.hdgTrueOnly ? 'T' : ''} · ${AirportPopup._fmtNm(nav.distNm)} nm</span>`;
+            if (nav.descent === 'at') l1 += ' <span class="apt-nav-seg">· at pattern alt</span>';
+            else if (Number.isFinite(nav.descent)) l1 += ` <span class="apt-nav-seg">· ↓ ${nav.descent.toLocaleString('en-US')} fpm</span>`;
             html += `<div class="apt-nav-line">${l1}</div>`;
         }
         if (nav && Number.isFinite(nav.patternAlt)) {
@@ -1050,10 +1051,11 @@ class AirportPopup {
                         results.innerHTML = '<div class="apt-search-empty">No airports found</div>';
                         return;
                     }
+                    const esc = AirportPopup._esc;
                     results.innerHTML = airports.slice(0, 12).map(a => `
-                        <div class="apt-search-row" data-icao="${a.icao}">
-                            <span class="apt-search-icao">${a.icao}</span>
-                            <span class="apt-search-name">${a.name || ''}</span>
+                        <div class="apt-search-row" data-icao="${esc(a.icao)}">
+                            <span class="apt-search-icao">${esc(a.icao)}</span>
+                            <span class="apt-search-name">${esc(a.name || '')}</span>
                         </div>`).join('');
                     results.querySelectorAll('.apt-search-row').forEach(row => {
                         wireTap(row, () => this.showForAirport(row.dataset.icao));
@@ -1168,7 +1170,7 @@ class AirportPopup {
                 ${this._wxPaneHtml(wx) || AirportPopup.NO_WX_HTML}
             </div>
             <div class="apt-tab-pane" data-pane="rwy">
-                ${apt.runways?.length ? this._runwaysHtml(apt.runways) : '<div style="padding:16px;color:var(--text-muted)">No runway data</div>'}
+                ${apt.runways?.length ? this._runwaysHtml(apt.runways) : '<div class="apt-pane-empty">No runway data</div>'}
             </div>
             <div class="apt-tab-pane" data-pane="wind">
                 <div class="apt-wind-pane"></div>
@@ -1402,13 +1404,11 @@ class AirportPopup {
                 <span class="apt-topnav-spacer"></span>
                 <button class="apt-panel-close btn-close">✕</button>
             </div>
-            <div style="padding:20px;color:var(--text-primary)">
-                <div style="font-size:var(--text-xl);font-weight:700;margin-bottom:4px">${icao}</div>
-                <div style="color:var(--text-muted);margin-bottom:16px">${lat}, ${lon}</div>
-                <div style="color:var(--status-caution)">Airport data not available offline.</div>
-                <div style="color:var(--text-secondary);margin-top:8px;font-size:var(--text-sm)">
-                    Connect to the Pi to load NASR airport data.
-                </div>
+            <div class="apt-offline">
+                <div class="apt-offline-icao">${AirportPopup._esc(icao)}</div>
+                <div class="apt-offline-pos">${lat}, ${lon}</div>
+                <div class="apt-offline-msg">Airport data not available offline.</div>
+                <div class="apt-offline-hint">Connect to the Pi to load NASR airport data.</div>
             </div>`;
         this._panel.classList.add('open');
         this._panelOpen = true;
@@ -1568,7 +1568,7 @@ class AirportPopup {
      * them as AFD_PAGE.webp in data/plates/{ICAO}/AFD_PAGE.webp via NanoHTTPD.
      */
     async _loadAfdPane(containerEl, icao, state) {
-        containerEl.innerHTML = '<div style="padding:16px;color:var(--text-muted);font-size:13px">Loading A/FD…</div>';
+        containerEl.innerHTML = '<div class="apt-pane-empty">Loading A/FD…</div>';
         const PLATES_BASE = 'http://localhost:9090/plates';
         const strippedId = icao.replace(/^K/, '');
         const webpUrl = `${PLATES_BASE}/${icao.toUpperCase()}/AFD_PAGE.webp`;
@@ -1607,7 +1607,7 @@ class AirportPopup {
                 containerEl.appendChild(line);
             }
             const hint = document.createElement('div');
-            hint.style.cssText = 'padding:6px 12px;font-size:11px;color:var(--text-muted);text-align:center;';
+            hint.className = 'apt-plate-hint';
             hint.textContent = 'Tap to open full screen';
             containerEl.appendChild(hint);
             containerEl.appendChild(thumb);
@@ -1625,12 +1625,10 @@ class AirportPopup {
                 return;
             }
             containerEl.innerHTML = `
-                <div style="padding:16px;color:var(--text-muted);font-size:13px">
-                    <div style="font-weight:600;margin-bottom:8px;color:var(--text-primary)">${icao} — Chart Supplement</div>
+                <div class="apt-pane-empty">
+                    <div class="apt-pane-empty-title">${AirportPopup._esc(icao)} — Chart Supplement</div>
                     <div>A/FD page not available for this airport.</div>
-                    <div style="margin-top:8px;font-size:11px;color:var(--text-dim)">
-                        Sync approach plates from the home server to download A/FD pages.
-                    </div>
+                    <div class="apt-pane-hint">Sync approach plates from the home server to download A/FD pages.</div>
                 </div>`;
         };
 
@@ -1704,7 +1702,7 @@ class AirportPopup {
      * Used for the IAP tab.
      */
     async _loadPlateListPane(containerEl, icao) {
-        containerEl.innerHTML = '<div style="padding:16px;color:var(--text-muted);font-size:13px">Loading…</div>';
+        containerEl.innerHTML = '<div class="apt-pane-empty">Loading…</div>';
         const PLATES_BASE = 'http://localhost:9090/plates';
 
         try {
@@ -1734,9 +1732,9 @@ class AirportPopup {
             const plates = allPlates.filter(p => WANTED_CODES.includes(p.chart_code));
 
             if (!plates.length) {
-                containerEl.innerHTML = `<div style="padding:16px;color:var(--text-muted);font-size:13px">
-                    No instrument procedures found for ${icao}.<br>
-                    <span style="font-size:11px;color:var(--text-dim)">Sync approach plates from the home server to enable this tab.</span>
+                containerEl.innerHTML = `<div class="apt-pane-empty">
+                    No instrument procedures found for ${AirportPopup._esc(icao)}.
+                    <div class="apt-pane-hint">Sync approach plates from the home server to enable this tab.</div>
                 </div>`;
                 return;
             }
@@ -1802,12 +1800,12 @@ class AirportPopup {
             });
 
         } catch (err) {
-            containerEl.innerHTML = `<div style="padding:16px;color:var(--text-muted);font-size:13px">Error: ${err.message}</div>`;
+            containerEl.innerHTML = `<div class="apt-pane-empty">Error: ${AirportPopup._esc(err.message)}</div>`;
         }
     }
 
     async _loadPlatePaneForType(containerEl, icao, plateType) {
-        containerEl.innerHTML = '<div style="padding:16px;color:var(--text-muted);font-size:13px">Loading…</div>';
+        containerEl.innerHTML = '<div class="apt-pane-empty">Loading…</div>';
 
         const PLATES_BASE = 'http://localhost:9090/plates';
 
@@ -1853,9 +1851,9 @@ class AirportPopup {
                 const hint = plateType === 'APD'
                     ? 'Not all airports have FAA-published diagrams. Diagrams are typically published for towered and busier airports.'
                     : 'Sync approach plates from the home server to enable this tab.';
-                containerEl.innerHTML = `<div style="padding:16px;color:var(--text-muted);font-size:13px">
-                    No ${typeLabel} available for ${icao}.<br>
-                    <span style="font-size:11px;color:var(--text-dim)">${hint}</span>
+                containerEl.innerHTML = `<div class="apt-pane-empty">
+                    No ${typeLabel} available for ${AirportPopup._esc(icao)}.
+                    <div class="apt-pane-hint">${hint}</div>
                 </div>`;
                 return;
             }
@@ -1910,7 +1908,7 @@ class AirportPopup {
             }
 
         } catch (err) {
-            containerEl.innerHTML = `<div style="padding:16px;color:var(--text-muted);font-size:13px">Error loading plate: ${err.message}</div>`;
+            containerEl.innerHTML = `<div class="apt-pane-empty">Error loading plate: ${AirportPopup._esc(err.message)}</div>`;
         }
     }
 
@@ -2033,7 +2031,6 @@ class AirportPopup {
         const rows = sorted.map(freq => {
             const cat = categories.find(c => c.key === freq.type);
             const label = cat?.label || freq.type?.toUpperCase() || '';
-            const color = cat?.color || 'var(--text-secondary)';
             const isPrimary = (!isTowered && freq.type === 'ctaf') || (isTowered && freq.type === 'twr');
             const star = isPrimary ? ' <span class="freq-primary">★</span>' : '';
             // 'sector' is the raw NASR sectorization suffix (degree range,
@@ -2043,8 +2040,10 @@ class AirportPopup {
             // next to the frequency so a pilot knows which one to call.
             const sectorSuffix = freq.sector ? ` <span class="freq-sector">(${freq.sector})</span>` : '';
 
+            // Label colour: the panel's --text-secondary (CSS). cockpit-config's per-category `color`
+            // is no longer applied: text colours are fixed by the type scale (>= 7:1).
             return `<tr class="freq-row" data-freq="${freq.freq}">
-                <td style="color:${color}">${label}${star}</td>
+                <td class="freq-label">${label}${star}</td>
                 <td class="freq-value">${freq.freq}${sectorSuffix}</td>
             </tr>`;
         }).join('');
@@ -2085,12 +2084,10 @@ class AirportPopup {
         const d = metar.decoded || {};
         const raw = metar.raw || '';
 
-        // Flight category
-        const catColors = { VFR: 'var(--cat-vfr)', MVFR: 'var(--cat-mvfr)', IFR: 'var(--cat-ifr)', LIFR: 'var(--cat-lifr)' };
-        const catBg     = { VFR: '#00cc4418', MVFR: '#0088ff18', IFR: '#ff444418', LIFR: '#ff44ff18' };
+        // Flight category: a coloured left border and a dot (CSS boxes, .apt-wx-cat-*); the name in
+        // --text-primary (the --cat-* colours are fills, 1.3-3.4:1 as text on white).
         const cat = d.flight_category || '?';
-        const catColor = catColors[cat] || '#aaa';
-        const catBgColor = catBg[cat] || 'transparent';
+        const catKey = ['VFR', 'MVFR', 'IFR', 'LIFR'].includes(cat) ? cat.toLowerCase() : 'unk';
 
         // Wind string
         let windStr = '';
@@ -2190,13 +2187,13 @@ class AirportPopup {
                 const isTs  = /TS/.test(code);
                 const isFz  = /FZ/.test(code);
                 const isSev = /^\+/.test(code);
-                const color = isTs ? 'var(--status-danger)' : isFz ? '#0099cc' : isSev ? 'var(--status-warning)' : 'var(--text-secondary)';
-                wxPhenomena.push({ code, color });
+                const cls = isTs ? 'apt-wx-ph-ts' : isFz ? 'apt-wx-ph-fz' : isSev ? 'apt-wx-ph-sev' : 'apt-wx-ph';
+                wxPhenomena.push({ code, cls });
             }
         }
         const phenomenaHtml = wxPhenomena.length
             ? `<div class="wx-phenomena">${wxPhenomena.map(p =>
-                `<span class="wx-phenom" style="color:${p.color}">${AirportPopup._esc(p.code)}</span>`).join('')}</div>`
+                `<span class="wx-phenom ${p.cls}">${AirportPopup._esc(p.code)}</span>`).join('')}</div>`
             : '';
 
         // Labeled data rows
@@ -2229,9 +2226,9 @@ class AirportPopup {
             : '';
 
         return `<div class="popup-section popup-wx-section${speciClass}">
-            <div class="wx-card-hdr" style="background:${catBgColor};border-left:4px solid ${catColor}">
-                <span class="wx-cat-dot" style="color:${catColor}">&#9679;</span>
-                <span class="wx-cat-name" style="color:${catColor}">${AirportPopup._esc(cat)}</span>
+            <div class="wx-card-hdr apt-wx-cat-${catKey}">
+                <span class="wx-cat-dot" aria-hidden="true"></span>
+                <span class="wx-cat-name">${AirportPopup._esc(cat)}</span>
                 <div class="wx-hdr-right">
                     <span class="wx-source">${source}</span>
                     ${isSpeci ? '<span class="wx-speci-badge">SPECI</span>' : ''}
@@ -2284,7 +2281,7 @@ class AirportPopup {
             wireTap(phoneEl, () => {
                 const phone = phoneEl.dataset.phone;
                 navigator.clipboard?.writeText(phone);
-                phoneEl.style.background = '#224433';
+                phoneEl.style.background = 'var(--border)';
                 setTimeout(() => phoneEl.style.background = '', 1000);
             });
         });
@@ -2317,7 +2314,7 @@ class AirportPopup {
     static TAF_MAX_AGE_MS = 30 * 3600 * 1000;
 
     /** "No weather data" in the WX tab: no METAR and no TAF. */
-    static NO_WX_HTML = '<div style="padding:16px;color:var(--text-muted)">No weather data</div>';
+    static NO_WX_HTML = '<div class="apt-pane-empty">No weather data</div>';
 
     /** The TAF title + text (escaped by _formatTaf). */
     _tafHtml(raw) {
