@@ -134,6 +134,53 @@ describe('drawing', () => {
         expect(colourAt(t, 29.97, -83.6)).toBe(FisbNexrad.COLORS[3]);
     });
 
+    it('every Regional footprint is cleared before any Regional block is drawn (no edge lines)', () => {
+        const nx = makeNexrad();
+        // two stacked Regional blocks with heavy echo, over CONUS
+        send(nx, [conus(30, -84, 3), regional(30, -84, 5), regional(30 - REG_H, -84, 5)]);
+        const t = target();
+        nx._drawToTarget(t, ['conus', 'regional'], nx._blocks);
+        const ops = t.ctx.ops;
+        const firstRegionalFill = ops.findIndex(o => o.op === 'fill' && o.style === FisbNexrad.COLORS[5]);
+        const lastClear = ops.map(o => o.op).lastIndexOf('clear');
+        expect(firstRegionalFill).toBeGreaterThan(0);
+        expect(lastClear).toBeLessThan(firstRegionalFill);
+        expect(ops.filter(o => o.op === 'clear')).toHaveLength(3);     // canvas + 2 footprints
+    });
+
+    it('a Regional block more than 5 min older than the CONUS block it lies in gives way to CONUS', () => {
+        const nx = makeNexrad();
+        send(nx, [regional(30, -83.2, 0, { 3: 6 })]);                // tower later out of range
+        vi.setSystemTime(T0 + 14 * MIN);
+        send(nx, [conus(30, -84, 5)]);                                // newer CONUS
+        const t = target();
+        nx._drawToTarget(t, ['conus', 'regional'], nx._blocks);
+        expect(colourAt(t, 29.97, -82.9)).toBe(FisbNexrad.COLORS[5]);  // CONUS under the old block
+        expect(t.ctx.ops.some(o => o.style === FisbNexrad.COLORS[6])).toBe(false); // old echo not drawn
+    });
+
+    it('a current Regional block (refreshed within 5 min of the CONUS) still hides CONUS', () => {
+        const nx = makeNexrad();
+        send(nx, [regional(30, -83.2, 0)]);
+        vi.setSystemTime(T0 + 4 * MIN);
+        send(nx, [conus(30, -84, 5)]);
+        const t = target();
+        nx._drawToTarget(t, ['conus', 'regional'], nx._blocks);
+        expect(colourAt(t, 29.97, -82.9)).toBeNull();
+    });
+
+    it('_conusOver finds the CONUS block a Regional block lies in (west and lower rows, float noise)', () => {
+        const idx = FisbNexrad._conusIndex(new Map([
+            ['c', { latN: 30, lonW: -84, height: CON_H, width: CON_W, radarType: 64, scale: 1, intensity: [] }],
+        ]));
+        const reg = (latN, lonW) => ({ latN, lonW, height: REG_H, width: REG_W });
+        expect(FisbNexrad._conusOver(idx, reg(30, -84))).not.toBeNull();
+        expect(FisbNexrad._conusOver(idx, reg(29.999999999, -80.80000000001))).not.toBeNull(); // east end
+        expect(FisbNexrad._conusOver(idx, reg(29.733333333, -82.4))).not.toBeNull();          // bottom row
+        expect(FisbNexrad._conusOver(idx, reg(29.666666667, -82.4))).toBeNull();              // next CONUS row
+        expect(FisbNexrad._conusOver(idx, reg(30, -80))).toBeNull();                          // next CONUS block east
+    });
+
     it('Regional drawn alone or first never clears anything', () => {
         const nx = makeNexrad();
         send(nx, [conus(30, -84, 3), regional(30, -84, 0)]);
@@ -182,6 +229,38 @@ describe('loop snapshots', () => {
         expect(nx._frameHistory).toHaveLength(1);
         const keys = [...nx._frameHistory[0].blocks.keys()];
         expect(keys).toHaveLength(3);                     // whole burst, both products
+    });
+
+    it('a snapshot made due by Regional waits for a CONUS burst that starts just before it', () => {
+        const nx = makeNexrad();
+        send(nx, [regional(30, -84, 2)]);                 // due at +30 s
+        vi.advanceTimersByTime(20000);
+        send(nx, [conus(30, -84, 3)]);                    // CONUS burst starts at +20 s
+        vi.advanceTimersByTime(15000);
+        send(nx, [conus(30 - CON_H, -84, 3)]);            // ... still arriving at +35 s
+        expect(nx._frameHistory).toHaveLength(0);
+        vi.advanceTimersByTime(30000);                    // quiet 30 s after the last CONUS
+        expect(nx._frameHistory).toHaveLength(1);
+        expect([...nx._frameHistory[0].blocks.values()].filter(b => b.radarType === 64)).toHaveLength(2);
+    });
+
+    it('a CONUS stream that never pauses delays a snapshot at most 2 minutes', () => {
+        const nx = makeNexrad();
+        send(nx, [conus(30, -84, 3)]);
+        for (let s = 10; s <= 300; s += 10) { vi.advanceTimersByTime(10000); send(nx, [conus(30, -84, 3)]); }
+        expect(nx._frameHistory.length).toBeGreaterThanOrEqual(1);
+        expect((nx._frameHistory[0].time - T0) / 1000).toBeLessThanOrEqual(150);
+    });
+
+    it('after the clock steps back, frames continue', () => {
+        const nx = makeNexrad();
+        send(nx, [conus(30, -84, 3)]);
+        vi.advanceTimersByTime(31000);
+        expect(nx._frameHistory).toHaveLength(1);
+        vi.setSystemTime(T0 - 60 * MIN);
+        send(nx, [conus(30, -84, 3)]);
+        vi.advanceTimersByTime(31000);
+        expect(nx._frameHistory).toHaveLength(2);
     });
 
     it('without CONUS, the first frame comes after 15 minutes of reception', () => {
@@ -270,6 +349,28 @@ describe('loop mode redraws', () => {
         t.ctx.ops.length = 0;
         nx._scheduleMoveDraw();
         expect(fills(t)).toBeGreaterThan(0);
+    });
+
+    it('loop open with no frames yet: the live blocks it shows keep updating', () => {
+        const nx = makeNexrad();
+        const t = target();
+        nx._active = true;
+        nx._map = t.map; nx._canvas = t.canvas; nx._ctx = t.ctx; nx._mainTarget = t;
+        nx.enterLoopMode();
+        nx.drawLive();                                    // what RadarLoop.show() does with 0 frames
+        t.ctx.ops.length = 0;
+        send(nx, [regional(28, -80, 4)]);
+        expect(t.ctx.ops.some(o => o.style === FisbNexrad.COLORS[4])).toBe(true);
+    });
+
+    it('a loop frame on screen is not replaced by live blocks when a message arrives', () => {
+        const { nx, t } = attached();
+        nx.enterLoopMode();
+        nx.drawFrame(t, ['conus', 'regional'], 0);
+        t.ctx.ops.length = 0;
+        send(nx, [regional(28, -80, 4)]);
+        vi.setSystemTime(Date.now() + 16 * MIN); nx._purgeOld();
+        expect(fills(t)).toBe(0);
     });
 
     it('in loop mode with no FIS-B frame drawn (internet loop), a resize draws nothing', () => {
