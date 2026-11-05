@@ -44,6 +44,15 @@ class FisbNexrad {
         // Reset when radar is toggled so the switch fires again after re-enable.
         this._loopReadyFired = false;
 
+        // Pending loop snapshot (setTimeout id): a snapshot is taken SNAPSHOT_SETTLE_MS
+        // after the message that made one due, so it holds the whole burst.
+        this._snapTimer = null;
+        // Arrival time of the first live block since the store was last empty (0 = none).
+        this._storeSince = 0;
+        // Last thing drawn on the main canvas ({ product, blockMap }), so a resize or
+        // map move during loop playback redraws the frame on screen, not a blank.
+        this._lastMain = null;
+
         // Bind
         this._onNexrad = (e) => this._handleNexrad(e.detail);
         // Map moved: redraw at most once per animation frame. It used to redraw
@@ -76,6 +85,7 @@ class FisbNexrad {
         requestAnimationFrame(() => {
             this._moveDrawPending = false;
             if (!this._loopMode) this._draw();
+            else this._redrawLastMain();
         });
     }
 
@@ -94,6 +104,24 @@ class FisbNexrad {
     /** Classify a stored block by FIS-B product. */
     static _productOf(block) {
         return (block.radarType === 64 || block.scale > 0) ? 'conus' : 'regional';
+    }
+
+    // How long a block is held after it was received. Regional is re-sent about every
+    // 2 minutes. CONUS is re-sent about every 14 minutes (10/27 flight log), and a burst
+    // can be partial (640 and 54 of ~1500 blocks): with a 15-minute hold the blocks a
+    // partial burst missed vanished a minute after it and the CONUS layer flashed off.
+    static REGIONAL_HOLD_MS = 15 * 60000;
+    static CONUS_HOLD_MS = 30 * 60000;
+    // A burst of NEXRAD messages lasts up to 24 s (10/27 log).
+    static SNAPSHOT_SETTLE_MS = 30000;
+    // No loop frame until a CONUS block is held, or the store has been filling this long
+    // (CONUS normally arrives within 14 minutes). The first message alone made a 1-block frame.
+    static WARMUP_MS = 15 * 60000;
+
+    static _isExpired(block, now) {
+        const hold = FisbNexrad._productOf(block) === 'conus'
+            ? FisbNexrad.CONUS_HOLD_MS : FisbNexrad.REGIONAL_HOLD_MS;
+        return block.received_at < now - hold;
     }
 
     /**
@@ -189,6 +217,9 @@ class FisbNexrad {
         this._notifiedMap    = false;
         this._loopReadyFired = false;
         if (this._purgeTimer) { clearInterval(this._purgeTimer); this._purgeTimer = null; }
+        if (this._snapTimer) { clearTimeout(this._snapTimer); this._snapTimer = null; }
+        this._storeSince = 0;
+        this._lastMain = null;
         this._fisb.removeEventListener('fisb:nexrad', this._onNexrad);
         if (this._canvas && this._canvas.parentNode) {
             this._canvas.parentNode.removeChild(this._canvas);
@@ -277,6 +308,7 @@ class FisbNexrad {
         const dataTime = FisbNexrad._parseFisbDataTime(msg, now);
         this._latestDataTime = dataTime;
         const blocks = msg.NEXRAD;
+        if (!this._storeSince) this._storeSince = now;
 
         for (const block of blocks) {
             if (!block.Intensity || block.Intensity.length === 0) continue;
@@ -300,17 +332,16 @@ class FisbNexrad {
             if (now > this._newestAt[p]) this._newestAt[p] = now;
         }
 
-        // Snapshot for radar loop (throttled to every 2.5 minutes)
+        // Snapshot for radar loop (every radar.frameIntervalMinutes). Taken once the
+        // burst this message starts has arrived, not at its first message; due when
+        // that lands at least an interval after the last frame.
         const lastSnap = this._frameHistory.length > 0
             ? this._frameHistory[this._frameHistory.length - 1].time : 0;
-        if (now - lastSnap >= this._snapIntervalMs) {
-            this._takeSnapshot(now, dataTime);
-            // Notify map to switch the loop source to FIS-B once we have enough frames to animate.
-            // Two frames = minimum for visible animation. Fire once per radar session.
-            if (!this._loopReadyFired && this._frameHistory.length >= 2 && this._map) {
-                this._loopReadyFired = true;
-                window.app?.cockpitMap?.onFisbNexradLoopReady?.();
-            }
+        if (now + FisbNexrad.SNAPSHOT_SETTLE_MS - lastSnap >= this._snapIntervalMs && !this._snapTimer) {
+            this._snapTimer = setTimeout(() => {
+                this._snapTimer = null;
+                this._snapshotIfReady();
+            }, FisbNexrad.SNAPSHOT_SETTLE_MS);
         }
 
         // Redraw live view — suppressed in loop mode so historical frames aren't overwritten
@@ -330,13 +361,33 @@ class FisbNexrad {
         }
     }
 
+    /** Take a loop snapshot if the store holds a full picture (see WARMUP_MS); otherwise
+     *  the next message tries again. */
+    _snapshotIfReady() {
+        const now = Date.now();
+        let haveConus = false;
+        for (const b of this._blocks.values()) {
+            if (FisbNexrad._productOf(b) === 'conus' && !FisbNexrad._isExpired(b, now)) { haveConus = true; break; }
+        }
+        const warm = haveConus || (this._storeSince > 0 && now - this._storeSince >= FisbNexrad.WARMUP_MS);
+        if (!warm) return;
+        this._takeSnapshot(now, this._latestDataTime || now);
+        // Notify map to switch the loop source to FIS-B once we have enough frames to animate.
+        // Two frames = minimum for visible animation. Fire once per radar session.
+        if (!this._loopReadyFired && this._frameHistory.length >= 2 && this._map) {
+            this._loopReadyFired = true;
+            window.app?.cockpitMap?.onFisbNexradLoopReady?.();
+        }
+    }
+
     /** Take a snapshot of current NEXRAD state for radar loop */
     _takeSnapshot(time, dataTime) {
-        if (this._blocks.size === 0) return;    // skip empty snapshots
         const snapshot = new Map();
         for (const [key, block] of this._blocks) {
+            if (FisbNexrad._isExpired(block, time)) continue;   // not yet purged
             snapshot.set(key, { ...block, intensity: block.intensity.slice() });
         }
+        if (snapshot.size === 0) return;    // skip empty snapshots
         this._frameHistory.push({ time, dataTime: dataTime || time, blocks: snapshot });
         while (this._frameHistory.length > this._maxFrames) {
             this._frameHistory.shift();
@@ -442,17 +493,15 @@ class FisbNexrad {
         }
     }
 
+    // No snapshot of the about-to-expire store here: it was labelled with the purge
+    // time, not the data's, and repeated the last frame. Loop snapshots already
+    // persist every reception window.
     _purgeOld() {
-        const cutoff = Date.now() - 15 * 60000; // 15 minutes
         const now = Date.now();
-        // If every block is about to be purged and we have some, snapshot first
-        // so the IDB always has at least one non-empty frame from each reception window.
-        const allExpired = this._blocks.size > 0 &&
-            [...this._blocks.values()].every(b => b.received_at < cutoff);
-        if (allExpired) this._takeSnapshot(now, now);
         for (const [key, block] of this._blocks) {
-            if (block.received_at < cutoff) this._blocks.delete(key);
+            if (FisbNexrad._isExpired(block, now)) this._blocks.delete(key);
         }
+        if (this._blocks.size === 0) this._storeSince = 0;
         if (this._active) this._draw();
     }
 
@@ -464,7 +513,15 @@ class FisbNexrad {
         // Canvas in overlay pane must match map container size
         this._canvas.width = size.x * 2; // oversized to handle pan offset
         this._canvas.height = size.y * 2;
+        // Resizing clears the canvas; in loop mode redraw the frame on screen.
         if (!this._loopMode) this._draw();
+        else this._redrawLastMain();
+    }
+
+    /** Redraw whatever was last drawn on the main canvas (loop frame or live). */
+    _redrawLastMain() {
+        if (!this._lastMain || !this._mainTarget) return;
+        this._drawToTarget(this._mainTarget, this._lastMain.product, this._lastMain.blockMap);
     }
 
     /** Public: draw current blocks of one product to a target. */
@@ -480,6 +537,8 @@ class FisbNexrad {
         const { map, canvas, ctx } = target;
         if (!ctx || !map) return;
 
+        if (target === this._mainTarget) this._lastMain = { product, blockMap };
+
         const topLeft = map.containerPointToLayerPoint([0, 0]);
         canvas.style.transform = `translate(${topLeft.x}px, ${topLeft.y}px)`;
         ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -490,42 +549,15 @@ class FisbNexrad {
         const zoom = map.getZoom();
         const products = Array.isArray(product) ? product : [product];
 
-        // CONUS bins are ~5x coarser than Regional's. When both products are drawn
-        // together, CONUS is meant only to fill gaps beyond Regional coverage (see
-        // above) — but a CONUS block that overlaps Regional's own coverage area
-        // still gets drawn in full underneath it, and bleeds its blocky coloring
-        // through Regional's own no-echo (transparent) bins. Confirmed against a
-        // real flight capture: a CONUS block can report e.g. "very heavy" over a
-        // 4°x0.33° footprint while the Regional data covering that same footprint
-        // in 5x finer bins shows mostly no echo — drawn together, the coarse CONUS
-        // block reads as a giant, misleadingly blocky weather cell. Compute
-        // Regional's coverage bbox once and skip any CONUS block overlapping it.
-        //
-        // Only blocks received within the last 5 minutes contribute to the bbox.
-        // _blocks (and a loop snapshot's copy of it) can hold Regional blocks up
-        // to 15 minutes old (_purgeOld's cutoff) with no distance scoping — at
-        // ~150kt that's up to ~40nm of aircraft travel. Without a recency limit,
-        // a stale Regional block from a prior position could stretch the bbox
-        // toward the current position and wrongly suppress real, current CONUS
-        // data in a spot with no actual current Regional coverage there.
-        let regionalBounds = null;
-        if (products.includes('conus') && products.includes('regional')) {
-            let newestRegionalAt = 0;
-            for (const [, block] of blockMap) {
-                if (FisbNexrad._productOf(block) === 'regional' && block.received_at > newestRegionalAt) {
-                    newestRegionalAt = block.received_at;
-                }
-            }
-            const recentCutoff = newestRegionalAt - 5 * 60000;
-            for (const [, block] of blockMap) {
-                if (FisbNexrad._productOf(block) !== 'regional') continue;
-                if (block.received_at < recentCutoff) continue;
-                const sw = L.latLng(block.latN - block.height, block.lonW);
-                const ne = L.latLng(block.latN, block.lonW + block.width);
-                if (!regionalBounds) regionalBounds = L.latLngBounds(sw, ne);
-                else regionalBounds.extend(sw).extend(ne);
-            }
-        }
+        // CONUS bins are 5x coarser than Regional's; drawn together, CONUS only fills
+        // where no Regional block is held. Each Regional block clears its own footprint
+        // before drawing, so CONUS never shows through Regional's no-echo bins. This
+        // replaces a rule that hid every CONUS block touching the bounding box of all
+        // recent Regional blocks: the box moved with the aircraft, turning CONUS on
+        // and off between frames, and hid real echo inside the box but outside every
+        // Regional block (10/27 flight).
+        const ci = products.indexOf('conus'), ri = products.indexOf('regional');
+        const regionalOverConus = ci >= 0 && ri > ci;
 
         for (const p of products) {
             for (const [, block] of blockMap) {
@@ -534,11 +566,7 @@ class FisbNexrad {
                 const blockE = block.lonW + block.width;
                 if (block.latN < bounds.getSouth() || blockS > bounds.getNorth()) continue;
                 if (blockE < bounds.getWest() || block.lonW > bounds.getEast()) continue;
-                if (p === 'conus' && regionalBounds && regionalBounds.overlaps(
-                    L.latLngBounds(L.latLng(blockS, block.lonW), L.latLng(block.latN, blockE)))) {
-                    continue;
-                }
-                this._drawBlock(ctx, map, block, zoom);
+                this._drawBlock(ctx, map, block, zoom, p === 'regional' && regionalOverConus);
             }
         }
         ctx.globalAlpha = 1.0;
@@ -551,10 +579,16 @@ class FisbNexrad {
         this.drawLive();
     }
 
-    /** Draw a single NEXRAD block */
-    _drawBlock(ctx, map, block, zoom) {
+    /** Draw a single NEXRAD block. clearFootprint: clear what is under the block first
+     *  (a Regional block over CONUS). */
+    _drawBlock(ctx, map, block, zoom, clearFootprint = false) {
         const intensity = block.intensity;
         if (!intensity || intensity.length === 0) return;
+        // CONUS level 1 is "< 20 dBZ" and in practice no echo: Stratux fills empty CONUS
+        // blocks with 1, and on 10/27 98% of the Southeast's level-1 bins had < 5 dBZ
+        // (IEM). Drawn, it painted large green slabs over clear air. Regional level 1
+        // (5-19 dBZ) is real light echo and is drawn.
+        const minLevel = FisbNexrad._productOf(block) === 'conus' ? 2 : 1;
 
         // FIS-B NEXRAD blocks: 128 bins in a 32 (lon) x 4 (lat) grid,
         // ordered west-to-east then north-to-south (per Stratux nexrad.go).
@@ -570,13 +604,18 @@ class FisbNexrad {
 
         if (pxPerCol < 0.3 || pxPerRow < 0.3) return; // too small to render
 
+        if (clearFootprint) {
+            const x0 = Math.floor(nw.x), y0 = Math.floor(nw.y);
+            ctx.clearRect(x0, y0, Math.ceil(se.x) - x0, Math.ceil(se.y) - y0);
+        }
+
         for (let r = 0; r < rows; r++) {
             for (let c = 0; c < cols; c++) {
                 const idx = r * cols + c;
                 if (idx >= totalBins) break;
 
                 const level = intensity[idx];
-                if (level === 0) continue; // no echo
+                if (level < minLevel) continue; // no echo
 
                 const color = FisbNexrad.COLORS[Math.min(level, 7)] || FisbNexrad.COLORS[7];
                 if (!color) continue;
@@ -604,6 +643,7 @@ class FisbNexrad {
         DiagLog.log('radar', `FisbNexrad.enterLoopMode: active=${this._active} hasCtx=${!!this._ctx}`);
         // Clear stale canvas so internet tile frames show through unobstructed
         if (this._ctx) this._ctx.clearRect(0, 0, this._canvas.width, this._canvas.height);
+        this._lastMain = null;   // a resize/move must not redraw live FIS-B over internet frames
     }
 
     /** Exit loop mode (resume live draws) */
