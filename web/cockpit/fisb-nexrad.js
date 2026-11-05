@@ -341,10 +341,11 @@ class FisbNexrad {
         // Snapshot for radar loop (every radar.frameIntervalMinutes). Taken once the
         // burst this message starts has arrived, not at its first message; due when
         // that lands at least an interval after the last frame.
-        // (A last frame in the future means the clock stepped back: due now.)
+        // (A last frame well in the future means the clock stepped back: due now.)
         const lastSnap = this._frameHistory.length > 0
             ? this._frameHistory[this._frameHistory.length - 1].time : 0;
-        const due = lastSnap > now || now + FisbNexrad.SNAPSHOT_SETTLE_MS - lastSnap >= this._snapIntervalMs;
+        const due = lastSnap > now + FisbNexrad.SNAPSHOT_SETTLE_MS
+            || now + FisbNexrad.SNAPSHOT_SETTLE_MS - lastSnap >= this._snapIntervalMs;
         if (due && !this._snapTimer) {
             this._snapDueAt = now;
             this._armSnapshot(FisbNexrad.SNAPSHOT_SETTLE_MS);
@@ -618,26 +619,30 @@ class FisbNexrad {
         ctx.globalAlpha = 1.0;
     }
 
-    /** CONUS blocks of a block map keyed by their NW corner in whole arc-minutes. */
+    /** CONUS blocks of a block map, bucketed by the whole degree of their north edge. */
     static _conusIndex(blockMap) {
         const idx = new Map();
         for (const [, b] of blockMap) {
             if (FisbNexrad._productOf(b) !== 'conus') continue;
-            idx.set(`${Math.round(b.latN * 60)},${Math.round(b.lonW * 60)}`, b);
+            const k = Math.floor(b.latN);
+            if (!idx.has(k)) idx.set(k, []);
+            idx.get(k).push(b);
         }
         return idx;
     }
 
-    /** The CONUS block a Regional block lies in, or null. Regional blocks are 4' x 48'
-     *  and CONUS blocks 20' x 240', both on a 4'/48' grid (verified on the 10/27 log),
-     *  so a Regional block lies in exactly one CONUS block: top = the next multiple of
-     *  20' at or above the Regional top, west = the Regional west minus 0-4 x 48'. */
+    /** The CONUS block a Regional block lies in (the one holding its centre), or null.
+     *  No grid is assumed: blocks are wider north of 60N, and alignment comes from the
+     *  FAA block numbering, not from Stratux. A CONUS block's north edge is at most its
+     *  height (20') above the centre, so two degree buckets cover every candidate. */
     static _conusOver(conusIdx, block) {
-        const top = Math.ceil(Math.round(block.latN * 60) / 20) * 20;
-        const west = Math.round(block.lonW * 60);
-        for (let k = 0; k <= 4; k++) {
-            const c = conusIdx.get(`${top},${west - 48 * k}`);
-            if (c && west + Math.round(block.width * 60) <= Math.round(c.lonW * 60) + Math.round(c.width * 60)) return c;
+        const lat = block.latN - block.height / 2, lon = block.lonW + block.width / 2;
+        const EPS = 1e-9;
+        for (const k of new Set([Math.floor(lat), Math.floor(lat + 1)])) {
+            for (const c of conusIdx.get(k) || []) {
+                if (lat <= c.latN + EPS && lat >= c.latN - c.height - EPS
+                        && lon >= c.lonW - EPS && lon <= c.lonW + c.width + EPS) return c;
+            }
         }
         return null;
     }

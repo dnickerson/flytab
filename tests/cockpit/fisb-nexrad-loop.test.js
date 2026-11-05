@@ -181,6 +181,16 @@ describe('drawing', () => {
         expect(FisbNexrad._conusOver(idx, reg(30, -80))).toBeNull();                          // next CONUS block east
     });
 
+    it('_conusOver: wide blocks north of 60N and CONUS off the 20-minute grid', () => {
+        const cb = (latN, lonW, width) => ({ latN, lonW, height: CON_H, width, radarType: 64, scale: 1, intensity: [] });
+        const idx = FisbNexrad._conusIndex(new Map([['a', cb(62, -152, 8)], ['b', cb(30 + 4 / 60, -84, CON_W)]]));
+        const reg = (latN, lonW, width = REG_W) => ({ latN, lonW, height: REG_H, width });
+        for (let k = 0; k < 5; k++) expect(FisbNexrad._conusOver(idx, reg(62, -152 + 1.6 * k, 1.6))).not.toBeNull();
+        expect(FisbNexrad._conusOver(idx, reg(62, -144, 1.6))).toBeNull();
+        expect(FisbNexrad._conusOver(idx, reg(30, -84))).not.toBeNull();       // block topping at 30°04'
+        expect(FisbNexrad._conusOver(idx, reg(30 + 4 / 60 - CON_H, -84))).toBeNull(); // just below it
+    });
+
     it('Regional drawn alone or first never clears anything', () => {
         const nx = makeNexrad();
         send(nx, [conus(30, -84, 3), regional(30, -84, 0)]);
@@ -261,6 +271,16 @@ describe('loop snapshots', () => {
         send(nx, [conus(30, -84, 3)]);
         vi.advanceTimersByTime(31000);
         expect(nx._frameHistory).toHaveLength(2);
+    });
+
+    it('a clock step back of a few seconds does not make an extra frame', () => {
+        const nx = makeNexrad();
+        send(nx, [conus(30, -84, 3)]);
+        vi.advanceTimersByTime(31000);
+        vi.setSystemTime(Date.now() - 3000);
+        send(nx, [regional(30, -84, 2)]);
+        vi.advanceTimersByTime(31000);
+        expect(nx._frameHistory).toHaveLength(1);
     });
 
     it('without CONUS, the first frame comes after 15 minutes of reception', () => {
