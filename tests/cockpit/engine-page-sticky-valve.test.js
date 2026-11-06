@@ -17,7 +17,12 @@ globalThis.FuelEngine = new Function(read('web/shared/fuel-engine.js') + '\nretu
 globalThis.FuelTankState = new Function(read('web/shared/fuel-tank-state.js') + '\nreturn FuelTankState;')();
 globalThis.FuelState = new Function(read('web/shared/fuel-state.js') + '\nreturn FuelState;')();
 globalThis.EngineLimits = new Function(read('web/shared/engine-limits.js') + '\nreturn EngineLimits;')();
-globalThis.StickyValveMonitor = new Function(read('web/shared/sticky-valve.js') + '\nreturn StickyValveMonitor;')();
+const sv = new Function(read('web/shared/sticky-valve.js') + '\nreturn { StickyValve, StickyValveMonitor };')();
+globalThis.StickyValve = sv.StickyValve;
+globalThis.StickyValveMonitor = sv.StickyValveMonitor;
+const CFG = sv.StickyValve.buildConfig(
+    sv.StickyValve.validateSpec(JSON.parse(read('web/sticky_valve_spec.json'))),
+    JSON.parse(read('web/phase_spec.json')));
 globalThis.StickyValveBanner = new Function(read('web/cockpit/sticky-valve-banner.js') + '\nreturn StickyValveBanner;')();
 const EnginePage = new Function(read('web/cockpit/engine-page.js') + '\nreturn EnginePage;')();
 
@@ -34,7 +39,7 @@ beforeEach(() => {
     globalThis.CockpitConfig = { get: () => null, aircraft: (p) => (p === 'performance.fuel_capacity_gal' ? 36 : undefined) };
     window.engineClient = { ip: '192.168.10.1' };
     clock = 0;
-    window.stickyValve = new StickyValveMonitor(null, { now: () => clock * 1000 });
+    window.stickyValve = new StickyValveMonitor(null, { now: () => clock * 1000, cfg: CFG });
     const host = document.createElement('div');
     document.body.appendChild(host);
     page = new EnginePage(host);
@@ -55,13 +60,18 @@ afterEach(() => {
 const banner = () => document.querySelector('#ep-sticky-slot .sv-banner');
 
 describe('ENG page sticky-valve warning', () => {
-    it('shows the shared monitor\'s alert in the ENG page', () => {
+    it('shows the shared monitor\'s verdict in the ENG page', () => {
         expect(banner()).not.toBeNull();
         expect(banner().style.display).toBe('none');
-        window.stickyValve.feed(frame(1000, [80, 80, 80, 80]));
-        for (let t = 1; t <= 31; t++) { clock = t; window.stickyValve.feed(frame(1000, [1200, 1180, 300, 1190])); }
+        for (let t = 0; t <= 40; t++) { clock = t; window.stickyValve.feed(frame(1000, [1200, 1180, 300, 1190])); }
+        expect(banner().style.display).toBe('none');          // NO-GO found, verdict not issued yet
+        clock = 41;
+        window.stickyValve.feed(frame(1700, [1200, 1180, 300, 1190]));   // run-up: the verdict
         expect(banner().style.display).toBe('flex');
+        expect(banner().classList.contains('sv-banner--inline')).toBe(true);
+        expect(banner().textContent).toContain('STICKY VALVE — NO-GO');
         expect(banner().textContent).toContain('CYL 3');
+        expect(banner().querySelector('.sv-banner-dismiss').style.display).toBe('none');
     });
 
     it('the page no longer runs a check of its own on its 1 Hz tick', () => {

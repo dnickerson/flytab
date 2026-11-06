@@ -1,0 +1,84 @@
+{
+ "spec_sha256": "9778cd93a8545a941535bf5eea0cc37180476a4c0845fc15593f5eef429f75fc",
+ "phase_spec_sha256": "c42af839dfcb96c2c70b65bef4363c976de28dd312221f6b8b063a3b32231274",
+ "detector_sha256": "4ad832f3c4eea6b93efe078ff45b3883b320dd74608ea1dda32a813f6aa483e0",
+ "events": [
+  {
+   "type": "run_start",
+   "t": 57314.0
+  },
+  {
+   "type": "verdict",
+   "t": 57394.0,
+   "verdict": "CHECKING",
+   "prev": null
+  },
+  {
+   "type": "verdict",
+   "t": 57494.0,
+   "verdict": "VALVES OK",
+   "prev": "CHECKING"
+  },
+  {
+   "type": "finding",
+   "t": 57507.0,
+   "rule": "roughness",
+   "level": "CAUTION",
+   "cyl": null,
+   "detail": {
+    "rpmStd": 203.16666393218483
+   },
+   "corroborates": false
+  },
+  {
+   "type": "verdict",
+   "t": 57507.0,
+   "verdict": "CAUTION",
+   "prev": "VALVES OK"
+  },
+  {
+   "type": "run_end",
+   "t": 58302.0,
+   "reason": "eof",
+   "result": {
+    "startT": 57314.0,
+    "settleT": 57314.0,
+    "verdictT": 57394.0,
+    "endT": 58302.0,
+    "endReason": "eof",
+    "coldSettle": true,
+    "verdict": "CAUTION",
+    "findings": [
+     {
+      "type": "finding",
+      "t": 57507.0,
+      "rule": "roughness",
+      "level": "CAUTION",
+      "cyl": null,
+      "detail": {
+       "rpmStd": 203.16666393218483
+      },
+      "corroborates": false
+     }
+    ],
+    "rulesRun": [
+     "cold_cylinder",
+     "slow_heatup",
+     "cht_lag",
+     "roughness"
+    ],
+    "rulesNotRun": [],
+    "context": [],
+    "inflight": [],
+    "margins": {
+     "coldCylinderMinRatio": 0.9530386740331491,
+     "slowHeatupMinRatio": 0.9299743808710504,
+     "chtLagMinRatio": 0.9310344827586207,
+     "roughnessMaxRpmStd": 298.3914165990704,
+     "roughnessMaxEgtRatio": 1.5200497934596868,
+     "divergenceClosest": null
+    }
+   }
+  }
+ ]
+}
