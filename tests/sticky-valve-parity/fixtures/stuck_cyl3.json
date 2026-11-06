@@ -1,0 +1,101 @@
+{
+ "spec_sha256": "2a803e13ca5ec464f4f434543ec756856a6a33fd8b88f64f957fd86d3785b876",
+ "phase_spec_sha256": "c42af839dfcb96c2c70b65bef4363c976de28dd312221f6b8b063a3b32231274",
+ "events": [
+  {
+   "type": "run_start",
+   "t": 57314.0
+  },
+  {
+   "type": "finding",
+   "t": 57344.0,
+   "rule": "cold_cylinder",
+   "level": "NO-GO",
+   "cyl": 3,
+   "detail": {
+    "egt": 368.40000000000003,
+    "othersAvg": 908.0,
+    "ratio": 0.40572687224669607
+   },
+   "corroborates": false
+  },
+  {
+   "type": "verdict",
+   "t": 57394.0,
+   "verdict": "NO-GO",
+   "prev": null
+  },
+  {
+   "type": "finding",
+   "t": 57435.0,
+   "rule": "slow_heatup",
+   "level": "NO-GO",
+   "cyl": 3,
+   "detail": {
+    "rise": 145.20000000000005,
+    "othersRise": 390.3333333333333,
+    "ratio": 0.3719897523484203
+   },
+   "corroborates": false
+  },
+  {
+   "type": "run_end",
+   "t": 58302.0,
+   "reason": "eof",
+   "result": {
+    "startT": 57314.0,
+    "settleT": 57314.0,
+    "verdictT": 57394.0,
+    "endT": 58302.0,
+    "endReason": "eof",
+    "coldSettle": true,
+    "verdict": "NO-GO",
+    "findings": [
+     {
+      "type": "finding",
+      "t": 57344.0,
+      "rule": "cold_cylinder",
+      "level": "NO-GO",
+      "cyl": 3,
+      "detail": {
+       "egt": 368.40000000000003,
+       "othersAvg": 908.0,
+       "ratio": 0.40572687224669607
+      },
+      "corroborates": false
+     },
+     {
+      "type": "finding",
+      "t": 57435.0,
+      "rule": "slow_heatup",
+      "level": "NO-GO",
+      "cyl": 3,
+      "detail": {
+       "rise": 145.20000000000005,
+       "othersRise": 390.3333333333333,
+       "ratio": 0.3719897523484203
+      },
+      "corroborates": false
+     }
+    ],
+    "rulesRun": [
+     "cold_cylinder",
+     "slow_heatup",
+     "cht_lag",
+     "roughness"
+    ],
+    "rulesNotRun": [],
+    "context": [],
+    "inflight": [],
+    "margins": {
+     "coldCylinderMinRatio": 0.38976132826011767,
+     "slowHeatupMinRatio": 0.3719897523484203,
+     "chtLagMinRatio": 0.9310344827586207,
+     "roughnessMaxRpmStd": 63.881604355244555,
+     "roughnessMaxEgtRatio": 1.5380896671795168,
+     "divergenceClosest": null
+    }
+   }
+  }
+ ]
+}
