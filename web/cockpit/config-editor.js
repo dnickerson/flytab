@@ -134,17 +134,14 @@ class ConfigEditor {
         sections.push(this._renderSection('engineOutGlide', 'Engine-Out Glide', this._cockpitConfig.engineOutGlide || {}, {
             'turnBankDeg':        { type: 'number', label: 'Turn Bank Angle (deg)', min: 10, max: 60 },
             'marginFt':           { type: 'number', label: 'Safety Margin (ft)', min: 0, max: 2000, step: 50 },
-            'lineUpFtPerDeg':     { type: 'number', label: 'Line-Up Cost (ft per deg of turn)', min: 0, max: 10, step: 0.1 },
-            'finalPointFraction': { type: 'number', label: 'Final Point (fraction of runway length)', min: 0, max: 1, step: 0.05 },
-            'finalPointMinFt':    { type: 'number', label: 'Final Point Minimum (ft)', min: 0, max: 5000, step: 50 },
-            'finalPointMaxFt':    { type: 'number', label: 'Final Point Maximum (ft)', min: 0, max: 5000, step: 50 },
             'noWindHeadwindKt':   { type: 'number', label: 'Assumed Headwind When No Wind Known (kt)', min: 0, max: 50 },
-            'planBHysteresisFt':  { type: 'number', label: 'Plan B Switch Hysteresis (ft)', min: 0, max: 1000, step: 10 },
             'onCourseDeg':        { type: 'number', label: 'On-Course Tolerance (deg)', min: 1, max: 30 },
             'windMaxStationNm':   { type: 'number', label: 'Winds Aloft Max Station Distance (nm)', min: 1, max: 500, step: 5 },
             'windMaxAgeMin':      { type: 'number', label: 'Winds Aloft Max Age (min)', min: 10, max: 1440, step: 10 },
             'metarMaxAgeMin':     { type: 'number', label: 'Airport METAR Max Age (min)', min: 10, max: 240, step: 5 },
             'metarMaxStationNm':  { type: 'number', label: 'Nearest-Station METAR Max Distance (nm)', min: 0, max: 100 },
+            // No lineUpFtPerDeg / finalPointFraction / finalPointMinFt / finalPointMaxFt / planBHysteresisFt fields:
+            // the glide model no longer uses them (spec 2026-11-06); the keys may stay in cockpit-config (no effect).
             // No showAboveGsKt field: the airport panel's ENGINE OUT button now shows / hides the glide block.
             // The key (default 25 kt) stays in cockpit-config: EmergencyGlide still gates on it.
         }));

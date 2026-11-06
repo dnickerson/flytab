@@ -24,7 +24,10 @@ const AC_KEYS = ['glide_ias_kt', 'glide_sink_fpm', 'glide_density_pct_per_kft'];
 const PILOT_KEYS = Object.keys(D.pilot);
 // showAboveGsKt has no Configuration field any more (the airport panel's ENGINE OUT button shows / hides
 // the glide block); the key and its 25 kt default stay for EmergencyGlide.
-const EDITOR_PILOT_KEYS = PILOT_KEYS.filter((k) => k !== 'showAboveGsKt');
+// The five settings the model no longer uses (spec 2026-11-06 decision 1) have no field either; their keys stay
+// in cockpit-config / GlideInputs.validate with no effect.
+const RETIRED_KEYS = ['lineUpFtPerDeg', 'finalPointFraction', 'finalPointMinFt', 'finalPointMaxFt', 'planBHysteresisFt'];
+const EDITOR_PILOT_KEYS = PILOT_KEYS.filter((k) => k !== 'showAboveGsKt' && !RETIRED_KEYS.includes(k));
 
 function serveBundles() {
     globalThis.fetch = vi.fn((url) => Promise.resolve({
@@ -220,6 +223,20 @@ describe('Configuration shows every glide field and saves it', () => {
         }
         expect(field(ed, 'engineOutGlide', 'showAboveGsKt')).toBeNull();
         expect(ed._el.textContent).not.toContain('Show Glide Block Above Ground Speed');
+        // the retired final-point / line-up / hysteresis settings have no field
+        for (const k of RETIRED_KEYS) expect(field(ed, 'engineOutGlide', k), k).toBeNull();
+        expect(ed._el.textContent).not.toMatch(/Final Point|Line-Up Cost|Plan B Switch Hysteresis/);
+    });
+
+    it('retired settings saved before their fields were removed survive a save untouched (no effect on the model)', async () => {
+        const old = { lineUpFtPerDeg: 3, finalPointFraction: 0.5, finalPointMinFt: 700, finalPointMaxFt: 1200, planBHysteresisFt: 150 };
+        localStorage.setItem('flypi_user_cockpit', JSON.stringify({ engineOutGlide: { ...old } }));
+        const ed = await openEditor();
+        field(ed, 'engineOutGlide', 'turnBankDeg').value = '25';
+        await ed._save();
+        const ck = JSON.parse(localStorage.getItem('flypi_user_cockpit'));
+        expect(ck.engineOutGlide).toMatchObject(old);
+        expect(ck.engineOutGlide.turnBankDeg).toBe(25);
     });
 
     it('a showAboveGsKt saved before the field was removed survives a save (EmergencyGlide still reads it)', async () => {
