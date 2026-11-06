@@ -478,13 +478,15 @@ Intensity levels follow NWS N0Q color coding:
 | Red | 50–55 | Very heavy — definitely avoid |
 | Purple/white | 65+ | Extreme — thunderstorm core |
 
-**Radar loop** — Once radar is enabled, swipe the bottom slider left to step backward through ~55 minutes of history. Watch the progression to see which direction storms are moving.
+**Radar loop** — Once radar is enabled, swipe the bottom slider left to step backward through ~55 minutes of history. Watch the progression to see which direction storms are moving. With FIS-B, the first loop frame is saved once the CONUS mosaic has arrived (it is sent about every 14 minutes, so this can take up to ~15 minutes after FIS-B reception starts), and the loop animates from the second frame, about 10 minutes later. Before the first frame the loop panel shows the live radar, which keeps updating; with one frame it shows that frame. Each frame is saved about 30 seconds after an update begins (longer while a CONUS update is still arriving, up to 2 minutes), so it holds the whole update, not part of it.
 
 **Radar source toggle** — The badge in the lower-left corner of the map shows the active radar source and a `⇄` symbol. Tap it to switch your *preferred* source between FIS-B (regional blocks from Stratux) and Internet (IEM tile mosaic). The preference is remembered across sessions.
 
 **Automatic source failover** — FlyTab watches both sources and automatically shows whichever one actually has data. On the ground (no FIS-B towers in range) a FIS-B preference falls back to Internet; in the air (no internet on Stratux WiFi) an Internet preference falls back to FIS-B. When a fallback is active the badge shows the failed source with a ✕, e.g. `Internet ✕ → FIS-B · Regional · 2 min`. When your preferred source becomes available again, FlyTab switches back automatically. You never need to toggle the source manually for a normal ground → air → ground flight.
 
-**CONUS underlay** — The map draws the coarse FIS-B CONUS mosaic underneath the finer Regional blocks, so precipitation beyond Regional coverage (~150 nm from received towers) no longer cuts off at a hard edge. Distant returns look blockier — that is the CONUS product resolution, not a rendering fault.
+**CONUS underlay** — The map draws the coarse FIS-B CONUS mosaic only where there is no current Regional data, so precipitation beyond Regional coverage (~150 nm from received towers) no longer cuts off at a hard edge. Where current Regional data is held, it alone is shown, even where it reports no echo. Regional data is no longer current when the CONUS data for that area is more than 5 minutes newer (typically a tower you can no longer hear); CONUS is shown there instead. At the widest zoom levels Regional blocks are too small to draw and CONUS is shown everywhere. Distant returns look blockier — that is the CONUS product resolution, not a rendering fault. CONUS blocks are kept for 30 minutes (Regional for 15), because the CONUS mosaic is re-sent only about every 14 minutes and an update is sometimes received only in part, so a CONUS area can be up to 30 minutes old; the age badge shows the newest data received, not the age of every area.
+
+**CONUS lowest level not drawn** — The CONUS mosaic's lowest level means "below 20 dBZ" and is almost always no echo, so FlyTab does not draw it, on the map or on the CONUS radar page. The light-green slabs it used to paint over clear air are gone. Light echo (5–19 dBZ) is still shown wherever Regional data covers it.
 
 ### CB Building Polygons
 
