@@ -933,11 +933,15 @@ function makeTarget() {
     return c;
 }
 
+/** What loadSpec() gives the app: the detector config plus the monitor section. */
+const CFG_M = { ...CFG, monitor: StickyValve.monitorConfig(JSON.parse(read('web/phase_spec.json'))) };
+
 /** A monitor on a fake engine client and Stratux client, clock in seconds. */
 function harness(opts = {}) {
-    const h = { clock: 0, client: makeTarget(), stratux: makeTarget(), findings: [], inflight: [], changes: [] };
-    h.mon = new StickyValveMonitor(h.client, { now: () => h.clock * 1000, cfg: CFG, stratuxClient: h.stratux, ...opts });
+    const h = { clock: 0, client: makeTarget(), stratux: makeTarget(), findings: [], advisories: [], inflight: [], changes: [] };
+    h.mon = new StickyValveMonitor(h.client, { now: () => h.clock * 1000, cfg: CFG_M, stratuxClient: h.stratux, ...opts });
     h.mon.addEventListener('finding', (e) => h.findings.push(e.detail));
+    h.mon.addEventListener('advisory', (e) => h.advisories.push(e.detail));
     h.mon.addEventListener('inflight', (e) => h.inflight.push(e.detail));
     h.mon.addEventListener('change', (e) => h.changes.push(e.detail));
     /** `secs` 1 Hz frames; egt / frame options may be functions of k (0-based). */
@@ -948,6 +952,13 @@ function harness(opts = {}) {
                 typeof egt === 'function' ? egt(k) : egt,
                 typeof o === 'function' ? o(k) : o));
             h.clock += 1;
+        }
+    };
+    /** Like run(), with a fresh GPS situation (ground speed gs) before every frame. */
+    h.runGs = (secs, gs, rpm, egt, o) => {
+        for (let k = 0; k < secs; k++) {
+            h.stratux.emit('stratux:situation', { ground_speed: gs, gps_fix_quality: 1 });
+            h.run(1, rpm, egt, o);
         }
     };
     /** Wrap the detector's sample() to see what the monitor feeds it. */
@@ -1253,7 +1264,8 @@ describe('StickyValveMonitor — spec loading', () => {
             await vi.waitFor(() => expect(h.mon.detector).not.toBeNull());
             expect(globalThis.fetch).toHaveBeenCalledWith('sticky_valve_spec.json');
             expect(globalThis.fetch).toHaveBeenCalledWith('phase_spec.json');
-            expect(h.mon.detector.cfg).toEqual(CFG);
+            // The detector config plus the monitor-only section from phase_spec.json.
+            expect(h.mon.detector.cfg).toEqual({ ...CFG, monitor: { speed_landing_max_kts: 30 } });
         } finally {
             globalThis.fetch = realFetch;
         }
@@ -1500,5 +1512,283 @@ describe('StickyValveMonitor — text', () => {
     it('no legacy detector or config is left in the file', () => {
         const src = read('web/shared/sticky-valve.js');
         expect(src).not.toMatch(/LegacyStickyValveDetector|LEGACY_DEFAULTS|legacyStickyValveConfig/);
+    });
+});
+
+
+// ---- Fix round 1: rulings R-14 / R-15 and review minors ----------------------
+
+describe('StickyValveMonitor — R-14: findings made before the verdict trigger', () => {
+    it('aNoGoFoundBeforeTheTriggerThenASeenStopIsShownAndSurvivesTheRestart', () => {
+        const h = harness();
+        h.run(40, 1000, M_COLD3);                      // NO-GO finding at t=30, no trigger yet
+        expect(h.mon.state).toMatchObject({ verdict: null, visible: false });
+        seenStop(h);                                   // shut down before taxi / run-up
+        expect(h.mon.state).toMatchObject({ verdict: 'NO-GO', visible: true, dismissable: true });
+        expect(h.mon.state.findings.map(f => [f.rule, f.cyl])).toEqual([['cold_cylinder', 3]]);
+        // A clean warm restart does not clear it...
+        h.run(1, 1000, M_HOT, { cht: HOT_CHT });
+        expect(h.mon.state).toMatchObject({ verdict: 'NO-GO', visible: true, dismissable: true });
+        h.run(CFG.run.settle_sec + 70, 1000, M_HOT, { cht: HOT_CHT });
+        h.run(1, RUNUP, M_HOT, { cht: HOT_CHT });     // the new run's own verdict: PARTIAL
+        expect(h.mon.state.verdict).toBe('NO-GO');
+        // ...nor a further gap, nor another seen stop without a dismiss.
+        h.clock += 60;
+        h.run(5, 1000, M_HOT, { cht: HOT_CHT });
+        expect(h.mon.state).toMatchObject({ verdict: 'NO-GO', visible: true });
+        seenStop(h);
+        h.run(1, 1000, M_HOT, { cht: HOT_CHT });
+        expect(h.mon.state).toMatchObject({ verdict: 'NO-GO', visible: true });
+        // Dismissed after it was shown: gone at the next start.
+        h.mon.dismiss();
+        expect(h.mon.state.visible).toBe(false);
+        seenStop(h);
+        h.run(1, 1000, M_HOT, { cht: HOT_CHT });
+        expect(h.mon.state).toMatchObject({ verdict: null, findings: [], visible: false });
+    });
+
+    it('aNoGoFoundBeforeTheTriggerThenAGapStaysUndismissable', () => {
+        const h = harness();
+        h.run(40, 1000, M_COLD3);
+        h.clock += 60;
+        h.run(5, 1000, M_HOT, { cht: HOT_CHT });
+        expect(h.mon.state).toMatchObject({ verdict: 'NO-GO', visible: true, dismissable: false });
+        seenStop(h);
+        expect(h.mon.state.dismissable).toBe(true);
+        h.run(1, 1000, M_HOT, { cht: HOT_CHT });     // not dismissed: still there (R-14)
+        expect(h.mon.state).toMatchObject({ verdict: 'NO-GO', visible: true });
+    });
+
+    it('aCautionFoundBeforeTheTriggerThenASeenStopIsShownAndSurvivesTheRestart', () => {
+        const h = harness();
+        h.run(200, 1000, egtRamp, chtLag4);            // CHT lag CAUTION at t=180, no trigger
+        expect(h.mon.state.verdict).toBe(null);
+        seenStop(h);
+        expect(h.mon.state).toMatchObject({ verdict: 'CAUTION', visible: true, dismissable: true });
+        h.run(1, 1000, M_HOT, { cht: HOT_CHT });
+        expect(h.mon.state).toMatchObject({ verdict: 'CAUTION', visible: true });
+        expect(h.mon.state.findings.map(f => [f.rule, f.cyl])).toEqual([['cht_lag', 4]]);
+        h.mon.dismiss();
+        seenStop(h);
+        h.run(1, 1000, M_HOT, { cht: HOT_CHT });
+        expect(h.mon.state).toMatchObject({ verdict: null, findings: [] });
+    });
+
+    it('a dismiss before anything was shown does not acknowledge a pre-trigger finding', () => {
+        const h = harness();
+        h.run(40, 1000, M_COLD3);
+        h.mon.dismiss();                               // nothing on the banner
+        seenStop(h);
+        expect(h.mon.state).toMatchObject({ verdict: 'NO-GO', visible: true });
+    });
+
+    it('cautionCarriesAcrossAGap', () => {
+        const h = harness();
+        h.run(200, 1000, egtRamp, chtLag4);
+        h.run(1, RUNUP, egtRamp(200), chtLag4(200));   // CAUTION shown
+        h.clock += 60;
+        h.run(5, 1000, M_HOT, { cht: HOT_CHT });
+        expect(h.mon.detector.runActive).toBe(true);
+        expect(h.mon.state).toMatchObject({ verdict: 'CAUTION', visible: true, dismissable: true });
+        expect(h.mon.state.findings.map(f => [f.rule, f.cyl])).toEqual([['cht_lag', 4]]);
+        // Released by the next seen stop (it was shown in its own run): clean after.
+        seenStop(h);
+        h.run(1, 1000, M_HOT, { cht: HOT_CHT });
+        expect(h.mon.state).toMatchObject({ verdict: null, findings: [] });
+    });
+
+    it('a CAUTION dismissed while shown does not carry across a gap', () => {
+        const h = harness();
+        h.run(200, 1000, egtRamp, chtLag4);
+        h.run(1, RUNUP, egtRamp(200), chtLag4(200));
+        h.mon.dismiss();
+        h.clock += 60;
+        h.run(5, 1000, M_HOT, { cht: HOT_CHT });
+        expect(h.mon.state).toMatchObject({ verdict: null, findings: [], visible: false });
+    });
+
+    it('specFailureNotCheckedReshowsAtNextStart', async () => {
+        const h = harness({ cfg: undefined, specPromise: Promise.reject(new Error('HTTP 404')) });
+        await flush();
+        h.run(5, 1000, M_HOT);
+        h.mon.dismiss();
+        h.run(30, 1000, M_HOT);
+        expect(h.mon.state.visible).toBe(false);       // stays dismissed while the engine runs
+        h.run(40, 0, M_HOT);                           // shutdown
+        expect(h.mon.state.visible).toBe(false);
+        h.run(1, 1000, M_HOT);                         // the next start
+        expect(h.mon.state).toMatchObject({ verdict: 'NOT CHECKED', visible: true });
+        h.mon.dismiss();
+        h.client.emit('engine:disconnect');            // Pi off at shutdown, back with the engine running
+        h.run(1, 1000, M_HOT);
+        expect(h.mon.state.visible).toBe(true);
+        h.mon.dismiss();
+        h.mon.feed(null);                              // a non-current frame, then running
+        h.run(1, 1000, M_HOT);
+        expect(h.mon.state.visible).toBe(true);
+    });
+});
+
+describe('StickyValveMonitor — R-15: data gap and restart in flight', () => {
+    const CRUISE = [1350, 1350, 1350, 1350];
+    const CRUISE_COLD3 = [1350, 1350, 300, 1350];
+    const cruise = { mp: 22, cht: HOT_CHT };          // MP below takeoff_mp: the restart never goes airborne
+    const GS = 110;                                    // > speed_landing_max_kts (30)
+    /** Hot start, PARTIAL dismissed, takeoff power, 30 s cruise: an airborne run. */
+    function airborne(h) {
+        h.run(70, 1000, M_HOT, { cht: HOT_CHT });
+        h.run(1, RUNUP, M_HOT, { cht: HOT_CHT });
+        expect(h.mon.state.verdict).toBe('PARTIAL');
+        h.mon.dismiss();
+        h.run(1, 2500, CRUISE, { mp: 26, cht: HOT_CHT });
+        h.run(30, 2400, CRUISE, cruise);
+        expect(h.mon.state).toMatchObject({ phase: 'airborne', visible: false });
+    }
+
+    it('flightGapRestartWithGpsSuppressesNeutralBanner', () => {
+        const h = harness({ daysSinceFlight: 45 });
+        airborne(h);
+        h.clock += 60;                                 // Pi dropout > stop_sec in flight
+        const from = h.changes.length;
+        h.runGs(120, GS, 2400, CRUISE, cruise);
+        expect(h.mon.detector.runActive).toBe(true);
+        expect(h.mon.detector.verdict).not.toBeNull();   // the detector did issue a verdict...
+        expect(h.changes.slice(from).every(c => !c.visible)).toBe(true);   // ...never shown
+        expect(h.mon.state).toMatchObject({ verdict: null, visible: false, context: [], phase: 'airborne' });
+    });
+
+    it('flightGapRestartWithoutGpsStillShowsBanner', () => {
+        const h = harness();
+        airborne(h);
+        h.clock += 60;
+        h.run(1, 2400, CRUISE, cruise);                // no GPS: fail visible
+        expect(h.mon.state).toMatchObject({ verdict: 'NOT CHECKED', visible: true });
+    });
+
+    it('a stale GPS speed (> 5 s old) does not suppress either', () => {
+        const h = harness();
+        airborne(h);
+        h.stratux.emit('stratux:situation', { ground_speed: GS, gps_fix_quality: 1 });
+        h.clock += 60;
+        h.run(1, 2400, CRUISE, cruise);
+        expect(h.mon.state).toMatchObject({ verdict: 'NOT CHECKED', visible: true });
+    });
+
+    it('groundGapRestartStillShowsPartial', () => {
+        for (const gs of [null, 0, GS]) {             // GPS or not: the ended run never flew
+            const h = harness();
+            h.run(20, 1000, M_HOT, { cht: HOT_CHT });  // warm-up, then master off / tablet asleep
+            h.clock += 60;
+            if (gs === null) h.run(70, 1000, M_HOT, { cht: HOT_CHT });
+            else h.runGs(70, gs, 1000, M_HOT, { cht: HOT_CHT });
+            h.run(1, RUNUP, M_HOT, { cht: HOT_CHT });
+            expect(h.mon.state).toMatchObject({ verdict: 'PARTIAL', visible: true });
+        }
+    });
+
+    it('masterOnAfterStartOnLeg2ShowsVerdict', () => {
+        const h = harness();
+        airborne(h);
+        h.clock += 3600;                               // landed, master off before a seen stop
+        h.runGs(70, 0, 1000, M_HOT, { cht: HOT_CHT }); // leg 2: data back with the engine running, gs 0
+        h.run(1, RUNUP, M_HOT, { cht: HOT_CHT });
+        expect(h.mon.state).toMatchObject({ verdict: 'PARTIAL', visible: true, phase: 'ground' });
+    });
+
+    it('groundRuleFindingInFlightGapRunIsAmberAdvisory', () => {
+        const h = harness();
+        airborne(h);
+        h.clock += 60;
+        h.runGs(40, GS, 2400, CRUISE_COLD3, cruise);   // R1 judges in flight and fires
+        expect(h.findings).toEqual([]);                // not a ground finding...
+        expect(h.advisories.map(f => [f.rule, f.cyl, f.level])).toEqual([['cold_cylinder', 3, 'NO-GO']]);
+        expect(h.mon.state).toMatchObject({ verdict: null, verdictVisible: false, inflightVisible: true, visible: true });
+        expect(StickyValveMonitor.describeAdvisory(h.mon.state.advisories[0]))
+            .toBe('IN-FLIGHT: CYL 3 cold cylinder (EGT) — EGT 300°F vs 1350°F others');
+        h.mon.dismiss('inflight');                     // ...and dismissable
+        expect(h.mon.state.visible).toBe(false);
+        // Landing and a seen stop: nothing of it is carried into the next start.
+        seenStop(h);
+        h.run(1, 1000, M_HOT, { cht: HOT_CHT });
+        expect(h.mon.state).toMatchObject({ verdict: null, findings: [], advisories: [], visible: false });
+    });
+
+    it('a NO-GO latched before the gap still shows as today', () => {
+        const h = harness();
+        noGo(h);                                       // pilot takes off anyway
+        h.run(1, 2500, M_HOT, { mp: 26, cht: HOT_CHT });
+        h.run(20, 2400, M_HOT, cruise);
+        h.clock += 60;
+        h.runGs(30, GS, 2400, M_HOT, cruise);
+        expect(h.mon.state).toMatchObject({ verdict: 'NO-GO', visible: true, dismissable: false });
+    });
+
+    it('a second dropout in the same flight is suppressed too', () => {
+        const h = harness();
+        airborne(h);
+        h.clock += 60;
+        h.runGs(30, GS, 2400, CRUISE, cruise);
+        h.clock += 60;
+        h.runGs(90, GS, 2400, CRUISE, cruise);
+        expect(h.mon.state).toMatchObject({ verdict: null, visible: false, phase: 'airborne' });
+    });
+
+    it('an in-flight warning from before the gap stays up across the restart', () => {
+        const h = harness();
+        airborne(h);
+        h.run(2, 2300, CRUISE, { mp: 16, cht: HOT_CHT });                     // power reduction
+        h.run(5, 2300, [1450, 1350, 1100, 1350], { mp: 16, cht: HOT_CHT });  // 3 falls, 1 rises
+        expect(h.mon.state.inflight).toHaveLength(1);
+        h.clock += 60;
+        h.runGs(5, GS, 2300, CRUISE, { mp: 16, cht: HOT_CHT });
+        expect(h.mon.state).toMatchObject({ inflightVisible: true, visible: true });
+        expect(h.mon.state.inflight).toHaveLength(1);
+    });
+
+    it('monitorConfig reads speed_landing_max_kts from phase_spec.json; missing is null', () => {
+        expect(StickyValve.monitorConfig(JSON.parse(read('web/phase_spec.json')))).toEqual({ speed_landing_max_kts: 30 });
+        expect(StickyValve.monitorConfig({ thresholds: {} })).toEqual({ speed_landing_max_kts: null });
+        expect(StickyValve.monitorConfig(null)).toEqual({ speed_landing_max_kts: null });
+    });
+
+    it('without the monitor section (no threshold) nothing is suppressed', () => {
+        const h = harness({ cfg: CFG });
+        airborne(h);
+        h.clock += 60;
+        h.runGs(1, GS, 2400, CRUISE, cruise);
+        expect(h.mon.state).toMatchObject({ verdict: 'NOT CHECKED', visible: true });
+    });
+});
+
+describe('StickyValveMonitor — review minors', () => {
+    it('a dismissed VALVES OK stays hidden over later frames with nothing new', () => {
+        const h = harness();
+        h.run(200, 1000, egtRamp, chtEven);
+        h.run(1, RUNUP, egtRamp(200), chtEven(200));
+        expect(h.mon.state.verdict).toBe('VALVES OK');
+        h.mon.dismiss();
+        const from = h.changes.length;                 // 'change' fires only when something changed
+        h.run(300, (k) => (k < 150 ? 1000 : RUNUP), egtRamp(200), chtEven(200));
+        expect(h.mon.state).toMatchObject({ verdict: 'VALVES OK', visible: false });
+        expect(h.changes.slice(from).every(c => !c.visible)).toBe(true);
+    });
+
+    it('a dismissed PARTIAL stays hidden over later frames with nothing new', () => {
+        const h = harness();
+        h.run(70, 1000, M_HOT, { cht: HOT_CHT });
+        h.run(1, RUNUP, M_HOT, { cht: HOT_CHT });
+        h.mon.dismiss();
+        h.run(300, (k) => (k % 60 < 30 ? 1000 : RUNUP), M_HOT, { cht: HOT_CHT });
+        expect(h.mon.state).toMatchObject({ verdict: 'PARTIAL', visible: false });
+    });
+
+    it('a NO-GO carried over a gap and found again is listed once', () => {
+        const h = harness();
+        noGo(h);
+        h.clock += 60;
+        h.run(40, 1000, M_COLD3);                      // the gap run finds cylinder 3 again
+        h.run(1, RUNUP, M_COLD3);
+        expect(h.findings.filter(f => f.rule === 'cold_cylinder' && f.cyl === 3)).toHaveLength(2);
+        expect(h.mon.state.findings.map(f => [f.rule, f.cyl, f.level])).toEqual([['cold_cylinder', 3, 'NO-GO']]);
     });
 });

@@ -676,6 +676,15 @@ class FlyTabApp {
                     DiagLog.log('engine', message, { falling: e.detail.falling, rising: e.detail.rising, deltas: e.detail.deltas, mpDrop: e.detail.mpDrop });
                     window.engineML?.recordAdvisory?.({ type: 'sticky_valve_inflight', message, severity: 'warning' });
                 });
+                // Ground rules that fired in a run restarted in flight after a data gap:
+                // amber advisories, not a NO-GO.
+                this.stickyValve.addEventListener('advisory', (e) => {
+                    const f = e.detail;
+                    const message = `Sticky valve ${StickyValveMonitor.describeAdvisory(f)}`;
+                    console.warn(`[StickyValve] ${message}`);
+                    DiagLog.log('engine', message, { rule: f.rule, level: f.level, cyl: f.cyl, detail: f.detail, inFlightRestart: true });
+                    window.engineML?.recordAdvisory?.({ type: `sticky_valve_inflight_${f.rule}${f.cyl != null ? `_cyl${f.cyl}` : ''}`, message, severity: 'warning' });
+                });
                 let loggedVerdict = null;
                 this.stickyValve.addEventListener('change', (e) => {
                     const { verdict, reason, rulesNotRun } = e.detail;

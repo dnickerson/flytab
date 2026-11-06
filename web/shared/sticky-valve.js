@@ -109,8 +109,20 @@ const StickyValve = {
     },
 
     /**
+     * Monitor-only values read from phase_spec.json (not used by the detector,
+     * so not part of the Python-shaped buildConfig output). A missing or
+     * non-numeric value is null, which turns the feature that needs it off.
+     */
+    monitorConfig(phaseSpec) {
+        const v = phaseSpec && phaseSpec.thresholds ? phaseSpec.thresholds.speed_landing_max_kts : undefined;
+        return { speed_landing_max_kts: typeof v === 'number' && Number.isFinite(v) ? v : null };
+    },
+
+    /**
      * Fetch sticky_valve_spec.json and phase_spec.json (relative URLs, like
      * loadPhaseSpec), validate, build the config and apply cockpit overrides.
+     * The result also carries `monitor` (StickyValve.monitorConfig), which the
+     * detector ignores.
      * @param {Function} [fetchImpl]  injected in tests; defaults to global fetch
      * @returns {Promise<object>} the detector config
      */
@@ -126,7 +138,9 @@ const StickyValve = {
         };
         const [spec, phaseSpec] = await Promise.all([getJson('sticky_valve_spec.json'), getJson('phase_spec.json')]);
         StickyValve.validateSpec(spec);
-        return StickyValve.applyCockpitOverrides(StickyValve.buildConfig(spec, phaseSpec));
+        const cfg = StickyValve.applyCockpitOverrides(StickyValve.buildConfig(spec, phaseSpec));
+        cfg.monitor = StickyValve.monitorConfig(phaseSpec);
+        return cfg;
     },
 
     /** Advisory text shown with a finding (REFERENCES in sticky_valve.py). */
@@ -864,7 +878,11 @@ class StickyValveMonitor extends EventTarget {
         this._gapPending = false;    // stale/disconnect/non-current frame since the last fed frame
         this._gs = NaN;              // last usable ground speed (kts) and when it arrived (ms)
         this._gsAt = null;
-        this._clearAll();
+        this._monitorCfg = null;     // cfg.monitor (StickyValve.monitorConfig), if any
+        this._engineOff = true;      // spec failed: no turning engine seen since the last stop/gap
+        this._carried = [];          // {f, released, persist}: findings kept from ended runs
+        this._acked = new Set();     // findings the pilot dismissed while they were shown
+        this._clearRun(false);
         this._sig = null;
         this._engineClient = null;
         this._stratux = null;
@@ -890,37 +908,53 @@ class StickyValveMonitor extends EventTarget {
 
     /**
      * What the banners show:
-     *   verdict      null before the verdict trigger, else CHECKING / NOT CHECKED /
-     *                PARTIAL / VALVES OK / CAUTION / NO-GO (NO-GO also while a NO-GO
-     *                from a run ended by a data gap is latched)
-     *   findings     finding events: a latched NO-GO's, then the current run's
+     *   verdict      the highest of: the current run's verdict (null before its
+     *                trigger) and the carried findings' levels; NOT CHECKED when the
+     *                spec failed to load
+     *   findings     the findings shown: carried ones, then the current run's once
+     *                its verdict is issued (one line per rule/cylinder/level)
      *   context      the current run's context events
-     *   inflight     the current run's inflight events
+     *   inflight     inflight events
+     *   advisories   findings of a run restarted in flight after a data gap
+     *                (shown amber in the in-flight block, never as a verdict)
      *   rulesNotRun  ground rules not (yet) evaluated in the current run
      *   reason       why NOT CHECKED when the spec failed to load, else null
      *   visible      any banner should show now (verdictVisible || inflightVisible)
      *   verdictVisible / inflightVisible   each block on its own
-     *   dismissable  the verdict block may be dismissed: false only for NO-GO,
-     *                until a seen engine stop
-     *   phase        'airborne' while the running run has seen takeoff power, else 'ground'
+     *   dismissable  the verdict block may be dismissed: false only for a NO-GO
+     *                whose run has not ended in a seen engine stop
+     *   phase        'airborne' while the running run has seen takeoff power (or
+     *                is an in-flight restart after a gap), else 'ground'
+     *
+     * Latch policy (rulings R-3, R-14, R-15):
+     *   - NO-GO: no DISMISS until a seen stop (run_end 'rpm'); a gap keeps it.
+     *   - At a run end, NO-GO / CAUTION findings not dismissed while shown are
+     *     carried: across a gap always; across a seen stop only when that run's
+     *     verdict trigger never fired (they were never shown: shown now, and kept
+     *     until dismissed). A run after a seen stop otherwise starts clean.
+     *   - In-flight restart (gap end and run start in one sample, the ended run
+     *     airborne, fresh GPS speed > speed_landing_max_kts): that run's verdict
+     *     and context are not shown; its findings are amber advisories.
      */
     get state() {
         const verdict = this._displayVerdict();
-        const dismissable = verdict !== 'NO-GO' || this._seenStop;
+        const dismissable = verdict !== 'NO-GO' || !this._noGoUnreleased();
         const verdictVisible = verdict !== null && (!this._dismissed || !dismissable);
-        const inflightVisible = this._inflight.length > 0 && !this._inflightDismissed;
+        const inflightVisible = this._inflight.length + this._advisories.length > 0 && !this._inflightDismissed;
+        const running = this._detector && this._detector.runActive;
         return {
             verdict,
-            findings: [...this._latched, ...this._findings],
-            context: this._context.slice(),
+            findings: StickyValveMonitor._dedupe(this._shownFindingList()),
+            context: this._flightRestart ? [] : this._context.slice(),
             inflight: this._inflight.slice(),
-            rulesNotRun: this._detector && this._runSeen ? this._detector.rulesNotRun : [],
+            advisories: this._advisories.slice(),
+            rulesNotRun: this._detector && this._runSeen && !this._flightRestart ? this._detector.rulesNotRun : [],
             reason: this._specError,
             visible: verdictVisible || inflightVisible,
             verdictVisible,
             inflightVisible,
             dismissable,
-            phase: this._detector && this._detector.runActive && this._detector.airborne ? 'airborne' : 'ground',
+            phase: running && (this._detector.airborne || this._flightRestart) ? 'airborne' : 'ground',
         };
     }
 
@@ -936,7 +970,15 @@ class StickyValveMonitor extends EventTarget {
     dismiss(part) {
         // A dismiss tapped while a NO-GO may not be dismissed is ignored, so it
         // cannot take effect later at the seen stop.
-        if ((part === undefined || part === 'verdict') && this.state.dismissable) this._dismissed = true;
+        if (part === undefined || part === 'verdict') {
+            const st = this.state;
+            if (st.dismissable) {
+                // What was on the banner when dismissed is acknowledged: it is not
+                // carried into a later run.
+                if (st.verdictVisible) for (const f of this._shownFindingList()) this._acked.add(f);
+                this._dismissed = true;
+            }
+        }
         if (part === undefined || part === 'inflight') this._inflightDismissed = true;
         this._emitIfChanged(true);
     }
@@ -957,7 +999,10 @@ class StickyValveMonitor extends EventTarget {
      * next current frame comes after a hole.
      */
     feed(raw) {
-        if (this._specError) return;
+        if (this._specError) {
+            this._specFeed(raw);
+            return;
+        }
         if (!raw || (typeof EngineClient !== 'undefined' && !EngineClient.edmCurrent(raw))) {
             this._gapPending = true;
             return;
@@ -986,22 +1031,34 @@ class StickyValveMonitor extends EventTarget {
     /** One banner line for a finding event, e.g.
      *  "CYL 3 EGT 412°F vs 1030°F others (cold cylinder)". */
     static describe(f) {
-        const n = (v) => (typeof v === 'number' && Number.isFinite(v) ? String(Math.round(v)) : '—');
-        const d = (f && f.detail) || {};
         const cyl = f && f.cyl != null ? `CYL ${f.cyl}` : 'ENGINE';
         const same = f && f.corroborates ? ', same cylinder as the EGT finding' : '';
+        const nums = StickyValveMonitor._numbers(f);
+        const short = { cold_cylinder: 'cold cylinder', slow_heatup: 'slow EGT heat-up', cht_lag: 'CHT lag', roughness: 'roughness' }[f && f.rule];
+        if (nums === null || short === undefined) return `${cyl} ${String(f && f.rule)}`;
+        return `${cyl} ${nums} (${short}${same})`;
+    }
+
+    /** An amber in-flight line for a finding of a run restarted in flight, e.g.
+     *  "IN-FLIGHT: CYL 3 cold cylinder (EGT) — EGT 412°F vs 1030°F others". */
+    static describeAdvisory(f) {
+        const cyl = f && f.cyl != null ? `CYL ${f.cyl}` : 'ENGINE';
+        const nums = StickyValveMonitor._numbers(f);
+        return `IN-FLIGHT: ${cyl} ${StickyValveMonitor.ruleName(f && f.rule)}${nums === null ? '' : ` — ${nums}`}`;
+    }
+
+    /** The numbers part of a finding line, or null for an unknown rule. */
+    static _numbers(f) {
+        const n = (v) => (typeof v === 'number' && Number.isFinite(v) ? String(Math.round(v)) : '—');
+        const d = (f && f.detail) || {};
         switch (f && f.rule) {
-            case 'cold_cylinder':
-                return `${cyl} EGT ${n(d.egt)}°F vs ${n(d.othersAvg)}°F others (cold cylinder${same})`;
-            case 'slow_heatup':
-                return `${cyl} EGT rose ${n(d.rise)}°F vs ${n(d.othersRise)}°F others (slow EGT heat-up${same})`;
-            case 'cht_lag':
-                return `${cyl} CHT rose ${n(d.rise)}°F vs ${n(d.othersRise)}°F others (CHT lag${same})`;
+            case 'cold_cylinder': return `EGT ${n(d.egt)}°F vs ${n(d.othersAvg)}°F others`;
+            case 'slow_heatup': return `EGT rose ${n(d.rise)}°F vs ${n(d.othersRise)}°F others`;
+            case 'cht_lag': return `CHT rose ${n(d.rise)}°F vs ${n(d.othersRise)}°F others`;
             case 'roughness':
-                if (f.cyl == null) return `ENGINE RPM unsteady at idle, std dev ${n(d.rpmStd)} RPM (roughness)`;
-                return `${cyl} EGT unsteady at idle, std dev ${n(d.egtStd)}°F vs ${n(d.othersMedian)}°F others (roughness${same})`;
-            default:
-                return `${cyl} ${String(f && f.rule)}`;
+                if (f.cyl == null) return `RPM unsteady at idle, std dev ${n(d.rpmStd)} RPM`;
+                return `EGT unsteady at idle, std dev ${n(d.egtStd)}°F vs ${n(d.othersMedian)}°F others`;
+            default: return null;
         }
     }
 
@@ -1095,8 +1152,24 @@ class StickyValveMonitor extends EventTarget {
             while (this._buffer.length > this._bufferMax) this._buffer.shift();
             return;
         }
-        this._handle(this._detector.sample(s));
+        this._step(s);
         this._emitIfChanged(false);
+    }
+
+    /** One sample through the detector, noting an in-flight restart (R-15). */
+    _step(s) {
+        const det = this._detector;
+        // Snapshot before sample(): a run start resets the detector's airborne flag.
+        const wasFlying = det.runActive && (det.airborne || this._flightRestart);
+        const events = det.sample(s);
+        let flightRestart = false;
+        if (wasFlying && events.some(e => e.type === 'run_end' && e.reason === 'gap')
+                && events.some(e => e.type === 'run_start')) {
+            const lim = this._monitorCfg ? this._monitorCfg.speed_landing_max_kts : null;
+            // No fresh GPS speed (s.gs is NaN when stale): not suppressed, fail visible.
+            flightRestart = svFinite(lim) && svFinite(s.gs) && s.gs > lim;
+        }
+        this._handle(events, flightRestart);
     }
 
     _useConfig(cfg) {
@@ -1107,9 +1180,10 @@ class StickyValveMonitor extends EventTarget {
             this._specFailed(err);
             return;
         }
+        this._monitorCfg = cfg.monitor || null;
         const buffered = this._buffer;
         this._buffer = [];
-        for (const s of buffered) this._handle(this._detector.sample(s));
+        for (const s of buffered) this._step(s);
         this._emitIfChanged(buffered.length > 0);
     }
 
@@ -1125,40 +1199,114 @@ class StickyValveMonitor extends EventTarget {
         this._emitIfChanged(true);
     }
 
+    /**
+     * After a spec failure there is no detector (and no start_rpm): a dismissed
+     * NOT CHECKED comes back when the engine is seen turning (RPM > 0) after
+     * RPM 0, no RPM, or a data gap -- so a later start never reads as "no
+     * banner = OK". An RPM-0 dropout at the mag check brings it back too.
+     */
+    _specFeed(raw) {
+        if (this._gapPending) {
+            this._gapPending = false;
+            this._engineOff = true;
+        }
+        if (!raw || (typeof EngineClient !== 'undefined' && !EngineClient.edmCurrent(raw))) {
+            this._engineOff = true;
+            return;
+        }
+        const d = raw.data ? { ...raw, ...raw.data } : raw;
+        const v = d.RPM ?? d.rpm;
+        const rpm = v == null || v === '' ? NaN : Number(v);
+        if (!(rpm > 0)) {
+            this._engineOff = true;
+            return;
+        }
+        if (this._engineOff) {
+            this._engineOff = false;
+            if (this._dismissed) {
+                this._dismissed = false;
+                this._emitIfChanged(true);
+            }
+        }
+    }
+
     // ---- verdict state and latch ---------------------------------------------
 
-    _clearAll() {
+    /** Reset the current run's state. keepInflight: an in-flight restart keeps
+     *  the in-flight block (warnings and advisories) of the run before the gap. */
+    _clearRun(keepInflight) {
         this._runSeen = false;       // a run has started since the spec loaded
         this._runVerdict = null;     // the detector's verdict for the current run
         this._findings = [];
         this._context = [];
-        this._inflight = [];
-        this._latched = [];          // NO-GO findings carried over a gap-ended run
+        if (!keepInflight) {
+            this._inflight = [];
+            this._advisories = [];
+            this._inflightDismissed = false;
+        }
+        this._flightRestart = false; // this run is an in-flight restart after a gap (R-15)
         this._lastEnd = null;        // 'rpm' | 'gap' | 'eof' | null: how the last run ended
-        this._seenStop = false;      // the last run ended in a seen stop, no run since
+        this._seenStop = false;      // the current run ended in a seen stop
         this._dismissed = false;
-        this._inflightDismissed = false;
+    }
+
+    /** The current run's verdict counts for the banner. */
+    _runShown() {
+        return !this._flightRestart && this._runVerdict !== null;
+    }
+
+    _shownFindingList() {
+        return [...this._carried.map(c => c.f), ...(this._runShown() ? this._findings : [])];
+    }
+
+    /** One line per rule / cylinder / level: a NO-GO carried over a gap and found
+     *  again by the next run is listed once. */
+    static _dedupe(findings) {
+        const seen = new Set();
+        return findings.filter((f) => {
+            const k = `${f.rule}|${f.cyl}|${f.level}`;
+            if (seen.has(k)) return false;
+            seen.add(k);
+            return true;
+        });
     }
 
     _displayVerdict() {
         if (this._specError) return 'NOT CHECKED';
-        if (this._latched.length) return 'NO-GO';
-        return this._runVerdict;
+        const rank = STICKY_VALVE_VERDICT_RANK;
+        let best = this._flightRestart ? null : this._runVerdict;
+        for (const c of this._carried) {
+            if (best === null || rank[c.f.level] > rank[best]) best = c.f.level;
+        }
+        return best;
     }
 
-    _handle(events) {
+    /** A NO-GO on the banner whose run has not ended in a seen stop. */
+    _noGoUnreleased() {
+        return this._carried.some(c => c.f.level === 'NO-GO' && !c.released)
+            || (!this._flightRestart && this._runVerdict === 'NO-GO' && !this._seenStop);
+    }
+
+    _handle(events, flightRestart = false) {
         for (const e of events) {
             switch (e.type) {
-                case 'run_start': this._onRunStart(); break;
+                case 'run_start': this._onRunStart(flightRestart); break;
                 case 'run_end': this._onRunEnd(e); break;
                 case 'verdict':
                     this._runVerdict = e.verdict;
-                    this._dismissed = false;          // a rise re-shows a dismissed banner
+                    if (!this._flightRestart) this._dismissed = false;   // a rise re-shows a dismissed banner
                     break;
                 case 'finding':
-                    this._findings.push(e);
-                    this._dismissed = false;
-                    this.dispatchEvent(new CustomEvent('finding', { detail: e }));
+                    if (this._flightRestart) {
+                        // Ground rules judged in flight: an amber advisory, never a verdict.
+                        this._advisories.push(e);
+                        this._inflightDismissed = false;
+                        this.dispatchEvent(new CustomEvent('advisory', { detail: e }));
+                    } else {
+                        this._findings.push(e);
+                        if (this._runShown()) this._dismissed = false;
+                        this.dispatchEvent(new CustomEvent('finding', { detail: e }));
+                    }
                     break;
                 case 'context':
                     this._context.push(e);
@@ -1174,22 +1322,36 @@ class StickyValveMonitor extends EventTarget {
         }
     }
 
-    _onRunStart() {
-        // After a seen stop (or at the first run) the new run starts clean. After a
-        // data gap we never saw the engine stop: every NO-GO finding stays latched,
-        // also one found before that run's verdict trigger.
-        const carry = this._lastEnd === 'gap'
-            ? [...this._latched, ...this._findings.filter(f => f.level === 'NO-GO')]
-            : [];
-        this._clearAll();
-        this._latched = carry;
+    _onRunStart(flightRestart) {
+        // Carried findings stay unless the pilot dismissed them while shown, or a
+        // seen stop released them after they were shown in their own run (R-3 (2):
+        // a run after a seen stop starts clean). Findings carried because their run
+        // ended before its verdict trigger stay until dismissed (R-14).
+        this._carried = this._carried.filter(c => !this._acked.has(c.f) && !(c.released && !c.persist));
+        this._acked = new Set();
+        this._clearRun(flightRestart);
+        this._flightRestart = flightRestart;
         this._runSeen = true;
     }
 
     _onRunEnd(e) {
         this._lastEnd = e.reason;
-        this._seenStop = e.reason === 'rpm';
         if (e.result && e.result.verdict !== undefined) this._runVerdict = e.result.verdict;
+        if (e.reason === 'rpm') {
+            this._seenStop = true;
+            for (const c of this._carried) c.released = true;
+        }
+        if (this._flightRestart) return;     // its findings are advisories
+        // Carry NO-GO / CAUTION findings not dismissed while shown: across a gap
+        // (we never saw the engine stop), and across a seen stop when the run's
+        // verdict trigger never fired (shown now, as that run's verdict: R-14).
+        const preTrigger = !!e.result && e.result.verdictT === null;
+        if (e.reason !== 'gap' && !preTrigger) return;
+        const keep = this._findings.filter(f => (f.level === 'NO-GO' || f.level === 'CAUTION') && !this._acked.has(f));
+        if (!keep.length) return;
+        for (const f of keep) this._carried.push({ f, released: e.reason === 'rpm', persist: preTrigger });
+        this._findings = this._findings.filter(f => !keep.includes(f));
+        this._dismissed = false;
     }
 
     // ---- events --------------------------------------------------------------
@@ -1226,7 +1388,8 @@ class StickyValveMonitor extends EventTarget {
     _emitIfChanged(force) {
         const st = this.state;
         const sig = JSON.stringify([st.verdict, st.visible, st.verdictVisible, st.inflightVisible, st.dismissable,
-            st.rulesNotRun, st.reason, st.phase, st.findings.length, st.context.length, st.inflight.length]);
+            st.rulesNotRun, st.reason, st.phase, st.findings.length, st.context.length, st.inflight.length,
+            st.advisories.length]);
         if (!force && sig === this._sig) return;
         this._sig = sig;
         this.dispatchEvent(new CustomEvent('change', { detail: st }));

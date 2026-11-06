@@ -229,6 +229,31 @@ describe('StickyValveBanner — in-flight block', () => {
     });
 });
 
+describe('StickyValveBanner — in-flight restart after a data gap (R-15)', () => {
+    it('a ground-rule finding of the restarted run is an amber in-flight line, not a NO-GO', () => {
+        const stratux = new EventTarget();
+        const cfgM = { ...CFG, monitor: StickyValve.monitorConfig(JSON.parse(read('web/phase_spec.json'))) };
+        mon = new StickyValveMonitor(null, { now: () => clock * 1000, cfg: cfgM, stratuxClient: stratux });
+        new StickyValveBanner(mapArea, mon, 'map');
+        feed(1, 2500, even(1350), HOT_CHT, 26);        // takeoff power
+        feed(30, 2400, even(1350), HOT_CHT, 22);
+        mon.dismiss();                                 // the NOT CHECKED of this hot, data-poor run
+        clock += 60;                                   // Pi dropout in flight
+        for (let k = 0; k < 40; k++) {
+            stratux.dispatchEvent(new CustomEvent('stratux:situation', { detail: { ground_speed: 110, gps_fix_quality: 1 } }));
+            feed(1, 2400, [1350, 1350, 300, 1350], HOT_CHT, 22);
+        }
+        expect(visible(block(mapArea))).toBe(false);
+        const b = block(mapArea, 'inflight');
+        expect(visible(b)).toBe(true);
+        expect(b.classList.contains('sv-banner--inflight')).toBe(true);
+        expect(title(mapArea, 'inflight')).toBe('IN-FLIGHT: CYL 3 cold cylinder (EGT) — EGT 300°F vs 1350°F others');
+        expect(hint(mapArea, 'inflight')).toBe(REFS);
+        expect(hasDismiss(mapArea, 'inflight')).toBe(true);
+        expect(mapArea.textContent).not.toContain('NO-GO');
+    });
+});
+
 describe('StickyValveBanner — text only', () => {
     const EVIL = '<img src=x onerror="window.__svPwned=1">';
 

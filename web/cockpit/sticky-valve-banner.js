@@ -4,7 +4,8 @@
  * Shows StickyValveMonitor's state (web/shared/sticky-valve.js): the pre-takeoff
  * verdict block (NO-GO red, CAUTION yellow, VALVES OK green, CHECKING / PARTIAL /
  * NOT CHECKED neutral) with any context notes, and a separate amber in-flight
- * block. One instance sits over the map, one on the ENG page; both read the same
+ * block (in-flight warnings, and advisories from a run restarted in flight
+ * after a data gap). One instance sits over the map, one on the ENG page; both read the same
  * monitor, so dismissing either hides both. The latch rules live in the monitor:
  * this only draws state.dismissable (NO-GO has no DISMISS before a seen stop;
  * CHECKING resolves by itself, so it has none either).
@@ -131,7 +132,10 @@ class StickyValveBanner {
         b.el.style.display = st.inflightVisible ? 'flex' : 'none';
         if (!st.inflightVisible) return;
         b.el.className = 'sv-banner-block sv-banner--inflight';
-        const [first, ...more] = st.inflight.map(StickyValveMonitor.describeInflight);
+        const [first, ...more] = [
+            ...st.inflight.map(StickyValveMonitor.describeInflight),
+            ...(st.advisories || []).map(StickyValveMonitor.describeAdvisory),
+        ];
         b.title.textContent = first;
         StickyValveBanner._setLines(b, more.map(text => ({ text, cls: 'sv-banner-cyl' })));
         b.hint.textContent = StickyValve.REFERENCES;
