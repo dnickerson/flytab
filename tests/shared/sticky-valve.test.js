@@ -31,7 +31,7 @@ const CFG = StickyValve.buildConfig(
 
 // Synthetic fault factors (see the Python module docstring).
 const COLD_FACTOR = 0.4;      // cold_cylinder.egt_ratio is 0.5
-const SLOW_FACTOR = 0.5;      // slow_heatup.rise_ratio is 0.7
+const SLOW_FACTOR = 0.4;      // slow_heatup.rise_ratio is 0.6 (0.4 <= 0.75 x 0.6)
 const CHT_LAG_FACTOR = 0.4;   // cht_lag.rise_ratio is 0.7
 const RPM_JITTER = 250.0;     // ± about idle -> population std 250; roughness.rpm_std_max is 198
 const EGT_JITTER = 60.0;      // ± on the rough cylinder; roughness.egt_std_min_f is 15
