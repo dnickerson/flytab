@@ -10,6 +10,12 @@
  * this only draws state.dismissable (NO-GO has no DISMISS before a seen stop;
  * CHECKING resolves by itself, so it has none either).
  *
+ * In flight (state.phase 'airborne') with a NO-GO on the banner, the 'map'
+ * variant collapses to a compact red pill ("NO-GO · CYL 3") so it does not cover
+ * the map (Dana Q1, 2026-11-06); it has no DISMISS. The 'inline' ENG page banner
+ * keeps the full text. Back on the ground (a seen stop ends the run) the normal
+ * banner returns.
+ *
  * Every value goes into the DOM through textContent.
  */
 
@@ -21,6 +27,7 @@ class StickyValveBanner {
      */
     constructor(container, monitor, variant = 'inline') {
         this._monitor = monitor;
+        this._variant = variant;
         // The outer element keeps the classes PositionHealthBanner looks for
         // (:scope > .sv-banner--map) and is shown/hidden through style.display.
         this._el = document.createElement('div');
@@ -87,6 +94,10 @@ class StickyValveBanner {
         if (!st.verdictVisible) return;
         const v = st.verdict;
         const kind = { 'NO-GO': 'nogo', 'CAUTION': 'caution', 'VALVES OK': 'ok' }[v] || 'neutral';
+        if (this._variant === 'map' && v === 'NO-GO' && st.phase === 'airborne') {
+            this._renderCompactNoGo(st);
+            return;
+        }
         b.el.className = `sv-banner-block sv-banner--${kind}`;
         const names = (rules) => rules.map(StickyValveMonitor.ruleName).join(', ');
         const finding = (f) => ({ text: StickyValveMonitor.describe(f), cls: 'sv-banner-cyl' });
@@ -125,6 +136,22 @@ class StickyValveBanner {
         b.hint.textContent = refs ? StickyValve.REFERENCES : '';
         b.hint.style.display = refs ? '' : 'none';
         b.btn.style.display = st.dismissable && v !== 'CHECKING' ? '' : 'none';
+    }
+
+    /** In flight over the map: a small red pill naming the latched NO-GO cylinders. */
+    _renderCompactNoGo(st) {
+        const b = this._verdict;
+        b.el.className = 'sv-banner-block sv-banner--nogo sv-banner--compact';
+        const cyls = [];
+        for (const f of st.findings) {
+            if (f.level === 'NO-GO' && f.cyl != null && !cyls.includes(f.cyl)) cyls.push(f.cyl);
+        }
+        cyls.sort((a, c) => a - c);
+        b.title.textContent = cyls.length ? `NO-GO · CYL ${cyls.join(', ')}` : 'NO-GO';
+        StickyValveBanner._setLines(b, []);
+        b.hint.textContent = '';
+        b.hint.style.display = 'none';
+        b.btn.style.display = 'none';
     }
 
     _renderInflight(st) {

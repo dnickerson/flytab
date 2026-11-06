@@ -254,6 +254,85 @@ describe('StickyValveBanner — in-flight restart after a data gap (R-15)', () =
     });
 });
 
+describe('StickyValveBanner — in-flight NO-GO indicator (Dana Q1, 2026-11-06)', () => {
+    const takeoff = () => { feed(1, 2500, HOT, HOT_CHT, 26); feed(20, 2400, HOT, HOT_CHT, 24); };
+    const pill = (root) => block(root).querySelector('.sv-banner-title').textContent;
+
+    it('airborne with a NO-GO latched: the map banner is a compact red pill naming the cylinder, no DISMISS', () => {
+        new StickyValveBanner(mapArea, mon, 'map');
+        noGo();
+        expect(block(mapArea).classList.contains('sv-banner--compact')).toBe(false);
+        takeoff();                                      // the pilot takes off anyway
+        expect(mon.state).toMatchObject({ phase: 'airborne', verdict: 'NO-GO', dismissable: false });
+        const b = block(mapArea);
+        expect(shown(mapArea) && visible(b)).toBe(true);
+        expect(b.classList.contains('sv-banner--nogo')).toBe(true);
+        expect(b.classList.contains('sv-banner--compact')).toBe(true);
+        expect(pill(mapArea)).toBe('NO-GO · CYL 3');
+        expect(lines(mapArea)).toEqual([]);
+        expect(hint(mapArea)).toBe(null);
+        expect(hasDismiss(mapArea)).toBe(false);
+    });
+
+    it('the ENG page inline banner keeps the full text in flight', () => {
+        new StickyValveBanner(engSlot, mon, 'inline');
+        noGo();
+        takeoff();
+        expect(block(engSlot).classList.contains('sv-banner--compact')).toBe(false);
+        expect(title(engSlot)).toBe('STICKY VALVE — NO-GO');
+        expect(lines(engSlot)).toEqual([
+            ['sv-banner-action', 'Do not take off.'],
+            ['sv-banner-cyl', 'CYL 3 EGT 300°F vs 1190°F others (cold cylinder)'],
+        ]);
+        expect(hint(engSlot)).toBe(REFS);
+        expect(hasDismiss(engSlot)).toBe(false);
+    });
+
+    it('back on the ground after a seen stop: the full banner, with DISMISS', () => {
+        new StickyValveBanner(mapArea, mon, 'map');
+        noGo();
+        takeoff();
+        feed(60, 1000, HOT, HOT_CHT);                   // landed, taxi in
+        seenStop();
+        expect(mon.state.phase).toBe('ground');
+        expect(block(mapArea).classList.contains('sv-banner--compact')).toBe(false);
+        expect(title(mapArea)).toBe('STICKY VALVE — NO-GO');
+        expect(hasDismiss(mapArea)).toBe(true);
+    });
+
+    it('a PARTIAL or CAUTION in flight is not compacted; only NO-GO is', () => {
+        new StickyValveBanner(mapArea, mon, 'map');
+        caution();
+        takeoff();
+        expect(mon.state).toMatchObject({ phase: 'airborne', verdict: 'CAUTION' });
+        expect(block(mapArea).classList.contains('sv-banner--compact')).toBe(false);
+        expect(title(mapArea)).toBe('STICKY VALVE — CAUTION');
+    });
+
+    it('lists every latched NO-GO cylinder once, in order; NO-GO alone with no cylinder; text only', () => {
+        const fake = new EventTarget();
+        fake.dismiss = vi.fn();
+        const nogo = (cyl, rule = 'cold_cylinder') => ({ rule, cyl, level: 'NO-GO', detail: {} });
+        let st = {
+            verdict: 'NO-GO', visible: true, verdictVisible: true, inflightVisible: false, dismissable: false,
+            findings: [nogo(3), nogo(2, 'slow_heatup'), nogo(3, 'slow_heatup'), { rule: 'cht_lag', cyl: 4, level: 'CAUTION', detail: {} }],
+            context: [], inflight: [], advisories: [], rulesNotRun: [], reason: null, phase: 'airborne',
+        };
+        Object.defineProperty(fake, 'state', { get: () => st });
+        new StickyValveBanner(mapArea, fake, 'map');
+        expect(pill(mapArea)).toBe('NO-GO · CYL 2, 3');
+        st = { ...st, findings: [nogo(null, 'roughness')] };
+        fake.dispatchEvent(new CustomEvent('change'));
+        expect(pill(mapArea)).toBe('NO-GO');
+        const EVIL = '<img src=x onerror="window.__svPwned2=1">';
+        st = { ...st, findings: [nogo(EVIL)] };
+        fake.dispatchEvent(new CustomEvent('change'));
+        expect(mapArea.querySelector('img')).toBeNull();
+        expect(pill(mapArea)).toBe(`NO-GO · CYL ${EVIL}`);
+        expect(window.__svPwned2).toBeUndefined();
+    });
+});
+
 describe('StickyValveBanner — text only', () => {
     const EVIL = '<img src=x onerror="window.__svPwned=1">';
 
@@ -295,6 +374,13 @@ describe('StickyValveBanner — CSS', () => {
     it('the DISMISS button is a full touch target', () => {
         const rule = css.slice(css.indexOf('.sv-banner-dismiss {'), css.indexOf('}', css.indexOf('.sv-banner-dismiss {')));
         expect(rule).toContain('min-height: var(--touch-min, 56px)');
+    });
+
+    it('the compact in-flight NO-GO modifier exists and adds no colour of its own', () => {
+        const m = svCss.match(/\.sv-banner-block\.sv-banner--compact\s*\{([^}]*)\}/);
+        expect(m).not.toBeNull();
+        expect(m[1]).not.toMatch(/background|color:|#[0-9a-fA-F]{3,8}/);
+        expect(svCss).toMatch(/\.sv-banner--compact \.sv-banner-title\s*\{[^}]*font-size: var\(--text-sm\)/);
     });
 
     it('each verdict colour is an existing banner token; no new hex colours', () => {
