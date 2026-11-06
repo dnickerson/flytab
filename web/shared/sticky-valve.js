@@ -14,45 +14,154 @@
  *                          fires 'change' for the map and ENG page banners.
  */
 
+// Sources a spec threshold may cite (mirrors _ALLOWED_SOURCES in
+// engine_analysis/sticky_valve_spec.py).
+const STICKY_VALVE_ALLOWED_SOURCES = ['pi-rule', 'SA-109', 'old-python-rule', 'replay-tuned', 'placeholder', 'claude-call'];
+const STICKY_VALVE_NON_THRESHOLD_KEYS = ['version', 'sources'];
+
 const StickyValve = {
     /**
-     * Thresholds, as the Pi had them. cockpit-config.json `enginePage` may set
-     * stickyValveThresholdPct (50) and stickyValveWindowMinutes (10).
+     * Validate sticky_valve_spec.json: every numeric leaf carries a provenance
+     * entry in `sources` (and vice versa), every source value is a known one.
+     * Same checks and key phrases as validate_sticky_valve_spec() in Python.
+     * @returns {object} the spec, unchanged
      */
-    DEFAULTS: {
-        warmupMin: 10,     // only look during the first 10 minutes after start
-        egtRatio: 0.50,    // a cylinder below 50% of the others' average is low
-        minEgt: 200,       // °F; the others must average at least this to compare
-        persistSec: 30,    // continuously low this long before alerting
-        gapSec: 4,         // samples further apart than this are a hole in the data
-                           // (frames come at 1 Hz, or every 2 s on HTTP fallback)
-        startRpm: 500,     // RPM above this = engine started
-        stopRpm: 300,      // RPM below this...
-        stopSec: 30,       // ...for this long = engine stopped. Recorded EDM data on
-                           // this airframe has RPM reading 0 for 1-13 s with the
-                           // engine running (73 times across 56 starts, mostly at
-                           // ~1700 RPM -- likely the mag check); the Pi treated each
-                           // as a stop + restart, clearing any alert.
+    validateSpec(spec) {
+        if (spec === null || typeof spec !== 'object' || Array.isArray(spec)) {
+            throw new Error('sticky_valve_spec must be an object');
+        }
+        if (!('version' in spec) || !('sources' in spec)) {
+            throw new Error("sticky_valve_spec missing 'version' or 'sources'");
+        }
+        const sources = spec.sources;
+        if (sources === null || typeof sources !== 'object' || Array.isArray(sources)) {
+            throw new Error("sticky_valve_spec 'sources' must be an object");
+        }
+
+        const leaves = new Set();
+        for (const [section, body] of Object.entries(spec)) {
+            if (STICKY_VALVE_NON_THRESHOLD_KEYS.includes(section)) continue;
+            if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+                throw new Error(`section '${section}' must be an object of numeric thresholds`);
+            }
+            for (const [key, val] of Object.entries(body)) {
+                if (typeof val !== 'number' || !Number.isFinite(val)) {
+                    throw new Error(`${section}.${key} must be numeric, got ${JSON.stringify(val)}`);
+                }
+                leaves.add(`${section}.${key}`);
+            }
+        }
+
+        const missing = [...leaves].filter(k => !(k in sources)).sort();
+        if (missing.length) throw new Error(`no source for numeric leaves: ${missing.join(', ')}`);
+
+        const extra = Object.keys(sources).filter(k => !leaves.has(k)).sort();
+        if (extra.length) throw new Error(`sources keys not in spec: ${extra.join(', ')}`);
+
+        const bad = Object.entries(sources).filter(([, v]) => !STICKY_VALVE_ALLOWED_SOURCES.includes(v));
+        if (bad.length) {
+            throw new Error(`unknown source values: ${bad.map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(', ')}`);
+        }
+        return spec;
     },
 
-    /** DEFAULTS with the cockpit-config.json `enginePage` keys applied. */
-    config() {
-        const cfg = { ...StickyValve.DEFAULTS };
+    /**
+     * The spec sections (copied) plus the phase thresholds the detector shares
+     * with phase_spec.json under cfg.phase. Same shape as build_config() in Python.
+     */
+    buildConfig(spec, phaseSpec) {
+        const cfg = {};
+        for (const [k, v] of Object.entries(spec)) {
+            if (!STICKY_VALVE_NON_THRESHOLD_KEYS.includes(k)) cfg[k] = { ...v };
+        }
+        const t = phaseSpec && phaseSpec.thresholds;
+        for (const key of ['rpm_runup_min', 'rpm_takeoff_min', 'mp_full_power']) {
+            if (!t || !(key in t)) throw new Error(`phase_spec.json thresholds missing key: ${key}`);
+        }
+        cfg.phase = {
+            runup_rpm: t.rpm_runup_min,
+            takeoff_rpm: t.rpm_takeoff_min,
+            takeoff_mp: t.mp_full_power,
+        };
+        return cfg;
+    },
+
+    /**
+     * cockpit-config.json `enginePage` may set stickyValveThresholdPct (0-100
+     * exclusive -> cold_cylinder.egt_ratio) and stickyValveWindowMinutes (> 0 ->
+     * verdict.fallback_min). Returns a new cfg; the one passed in is untouched.
+     */
+    applyCockpitOverrides(cfg) {
+        const out = { ...cfg, cold_cylinder: { ...cfg.cold_cylinder }, verdict: { ...cfg.verdict } };
         let ep = null;
         try {
             ep = (typeof CockpitConfig !== 'undefined' && CockpitConfig.get) ? CockpitConfig.get('enginePage') : null;
-        } catch (_) { /* defaults */ }
+        } catch (_) { /* spec values */ }
         const pct = Number(ep?.stickyValveThresholdPct);
-        if (pct > 0 && pct < 100) cfg.egtRatio = pct / 100;
+        if (pct > 0 && pct < 100) out.cold_cylinder.egt_ratio = pct / 100;
         const min = Number(ep?.stickyValveWindowMinutes);
-        if (min > 0) cfg.warmupMin = min;
-        return cfg;
+        if (min > 0) out.verdict.fallback_min = min;
+        return out;
+    },
+
+    /**
+     * Fetch sticky_valve_spec.json and phase_spec.json (relative URLs, like
+     * loadPhaseSpec), validate, build the config and apply cockpit overrides.
+     * @param {Function} [fetchImpl]  injected in tests; defaults to global fetch
+     * @returns {Promise<object>} the detector config
+     */
+    async loadSpec(fetchImpl) {
+        const doFetch = fetchImpl || (typeof fetch !== 'undefined' ? fetch : null);
+        if (!doFetch) {
+            throw new Error('StickyValve.loadSpec requires a fetch implementation (none injected and no global fetch)');
+        }
+        const getJson = async (name) => {
+            const res = await doFetch(name);
+            if (!res.ok) throw new Error(`Failed to load ${name}: HTTP ${res.status}`);
+            return res.json();
+        };
+        const [spec, phaseSpec] = await Promise.all([getJson('sticky_valve_spec.json'), getJson('phase_spec.json')]);
+        StickyValve.validateSpec(spec);
+        return StickyValve.applyCockpitOverrides(StickyValve.buildConfig(spec, phaseSpec));
     },
 };
 
+// TEMPORARY until Task 7/9 replace StickyValveDetector / StickyValveMonitor:
+// today's hard-coded Pi thresholds and cockpit-config overrides, kept private so
+// the old classes keep working after StickyValve.DEFAULTS / config() were removed.
+const LEGACY_DEFAULTS = {
+    warmupMin: 10,     // only look during the first 10 minutes after start
+    egtRatio: 0.50,    // a cylinder below 50% of the others' average is low
+    minEgt: 200,       // °F; the others must average at least this to compare
+    persistSec: 30,    // continuously low this long before alerting
+    gapSec: 4,         // samples further apart than this are a hole in the data
+                       // (frames come at 1 Hz, or every 2 s on HTTP fallback)
+    startRpm: 500,     // RPM above this = engine started
+    stopRpm: 300,      // RPM below this...
+    stopSec: 30,       // ...for this long = engine stopped. Recorded EDM data on
+                       // this airframe has RPM reading 0 for 1-13 s with the
+                       // engine running (73 times across 56 starts, mostly at
+                       // ~1700 RPM -- likely the mag check); the Pi treated each
+                       // as a stop + restart, clearing any alert.
+};
+
+// TEMPORARY until Task 7/9 replace this class
+function legacyStickyValveConfig() {
+    const cfg = { ...LEGACY_DEFAULTS };
+    let ep = null;
+    try {
+        ep = (typeof CockpitConfig !== 'undefined' && CockpitConfig.get) ? CockpitConfig.get('enginePage') : null;
+    } catch (_) { /* defaults */ }
+    const pct = Number(ep?.stickyValveThresholdPct);
+    if (pct > 0 && pct < 100) cfg.egtRatio = pct / 100;
+    const min = Number(ep?.stickyValveWindowMinutes);
+    if (min > 0) cfg.warmupMin = min;
+    return cfg;
+}
+
 class StickyValveDetector {
-    constructor(cfg = StickyValve.DEFAULTS) {
-        this.cfg = { ...StickyValve.DEFAULTS, ...cfg };
+    constructor(cfg = LEGACY_DEFAULTS) {   // TEMPORARY until Task 7/9 replace this class
+        this.cfg = { ...LEGACY_DEFAULTS, ...cfg };
         this.engineStart = null;            // seconds, or null when not running
         this.endedBy = null;                // how the last run ended: 'rpm' | 'gap' | null
         this._lastT = null;                 // time of the last sample
@@ -193,7 +302,8 @@ class StickyValveMonitor extends EventTarget {
     constructor(engineClient = null, opts = {}) {
         super();
         this._now = opts.now || (() => Date.now());
-        this.detector = new StickyValveDetector(opts.cfg || StickyValve.config());
+        // TEMPORARY until Task 7/9 replace this class
+        this.detector = new StickyValveDetector(opts.cfg || legacyStickyValveConfig());
         // Latched alerts: cylinder -> { cyl, egt, othersAvg, at, recovered }. Kept
         // after the cylinder recovers so the pilot still sees it happened; cleared
         // at the next engine start after a seen shutdown.

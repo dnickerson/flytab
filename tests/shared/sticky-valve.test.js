@@ -12,8 +12,8 @@ import { readFileSync } from 'fs';
 
 const read = (p) => readFileSync(p, 'utf8');
 globalThis.EngineClient = new Function(read('web/shared/engine-client.js') + '\nreturn EngineClient;')();
-const { StickyValve, StickyValveDetector, StickyValveMonitor } = new Function(
-    read('web/shared/sticky-valve.js') + '\nreturn { StickyValve, StickyValveDetector, StickyValveMonitor };')();
+const { StickyValveDetector, StickyValveMonitor } = new Function(
+    read('web/shared/sticky-valve.js') + '\nreturn { StickyValveDetector, StickyValveMonitor };')();
 
 /** A Pi /api/status frame. */
 const frame = (rpm, egt, extra = {}) => ({
@@ -333,20 +333,22 @@ describe('StickyValveMonitor — bad or missing data', () => {
     });
 });
 
-describe('StickyValve.config', () => {
+// TEMPORARY until Task 7/9 replace the old classes: the legacy config shim, seen through the monitor.
+// StickyValve.config() itself is gone; the new override logic is tested in sticky-valve-spec.test.js.
+describe('legacy monitor config (cockpit overrides)', () => {
     it('defaults are the Pi constants', () => {
-        expect(StickyValve.config()).toMatchObject({ warmupMin: 10, egtRatio: 0.5, minEgt: 200, persistSec: 30 });
+        expect(new StickyValveMonitor().detector.cfg).toMatchObject({ warmupMin: 10, egtRatio: 0.5, minEgt: 200, persistSec: 30 });
     });
 
     it('reads cockpit-config.json enginePage.stickyValveThresholdPct / WindowMinutes', () => {
         globalThis.CockpitConfig = { get: (p) => (p === 'enginePage' ? { stickyValveThresholdPct: 40, stickyValveWindowMinutes: 15 } : undefined) };
-        expect(StickyValve.config()).toMatchObject({ egtRatio: 0.4, warmupMin: 15 });
+        expect(new StickyValveMonitor().detector.cfg).toMatchObject({ egtRatio: 0.4, warmupMin: 15 });
     });
 
     it('the shipped config keeps the Pi values', () => {
         const ep = JSON.parse(read('web/cockpit-config.json')).enginePage;
         globalThis.CockpitConfig = { get: (p) => (p === 'enginePage' ? ep : undefined) };
-        expect(StickyValve.config()).toMatchObject({ egtRatio: 0.5, warmupMin: 10 });
+        expect(new StickyValveMonitor().detector.cfg).toMatchObject({ egtRatio: 0.5, warmupMin: 10 });
     });
 });
 
