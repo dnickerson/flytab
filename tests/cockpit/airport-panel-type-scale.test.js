@@ -157,6 +157,23 @@ describe('the panel\'s CSS', () => {
         expect(get('.airport-panel')['font-variant-numeric']).toBe('tabular-nums');
     });
 
+    it('14 px is for labels only; content and warnings are 16 px; panel buttons and fields take the panel font', () => {
+        const size = (h) => RULES.find((r) => r.head === h)?.decls['font-size'];
+        for (const h of ['.glide-turn', '.glide-sub', '.glide-note, .glide-now', '.glide-wind', '.glide-hdg', '.glide-val',
+            '.apt-nav-pattern', '.apt-tfr-head', '.apt-tfr-sub', '.apt-tfr-text', '.airport-panel .wx-phenom',
+            '.airport-panel .wx-metar', '.airport-panel .wx-age-stale', '.airport-panel .approach-currency']) {
+            expect(size(h), h).toBe('var(--text-sm)');
+        }
+        for (const h of ['.glide-lbl', '.apt-fact-label', '.airport-panel .wx-row-lbl', '.airport-panel .popup-section-title',
+            '.airport-panel .popup-freq-table .freq-label', '.airport-panel .ifr-freq-lbl', '.airport-panel .wx-time',
+            '.apt-tfr-tag', '.airport-panel .wx-ceil-badge']) {
+            expect(size(h), h).toBe('var(--text-xs)');
+        }
+        const btn = RULES.find((r) => r.sels.includes('.airport-panel button'));
+        expect(btn?.decls['font-family']).toBe('inherit');
+        expect(btn.sels).toEqual(expect.arrayContaining(['.airport-panel input', '.airport-panel textarea', '.airport-panel select']));
+    });
+
     it('panel-only rules: only --text-sm / --text-xs, only the UI font, no weight < 700, no hex, text colours from the 7:1 list', () => {
         const bad = [];
         for (const r of RULES) {
@@ -251,7 +268,8 @@ describe('inline styles written by the panel\'s JS', () => {
         };
         for (const m of src.matchAll(/style="([^"]*)"/g)) check('style=""', m[1]);
         for (const m of src.matchAll(/\.style\.cssText\s*=\s*(['`])([\s\S]*?)\1/g)) check('style.cssText', m[2]);
-        for (const m of src.matchAll(/\.style\.(color|fontSize|fontWeight|background|backgroundColor)\s*=\s*([^;\n]+)/g)) {
+        for (const m of src.matchAll(/setAttribute\(\s*['"]style['"]\s*,\s*(['`])([\s\S]*?)\1/g)) check('setAttribute(style)', m[2]);
+        for (const m of src.matchAll(/\.style\.(color|fontSize|fontWeight|fontFamily|background|backgroundColor)\s*=\s*([^;\n]+)/g)) {
             const prop = m[1].replace(/[A-Z]/g, (c) => '-' + c.toLowerCase());
             const value = m[2].trim().replace(/^['"`]|['"`]$/g, '');
             if (prop === 'background' || prop === 'background-color') {

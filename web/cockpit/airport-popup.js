@@ -2084,7 +2084,7 @@ class AirportPopup {
         // Show CLR DEL freq if available
         const clrDel = (apt.frequencies || []).find(f => f.type === 'clr_del');
         if (clrDel) {
-            parts.push(`<div class="ifr-freq">CLR DEL: <span class="freq-value">${clrDel.freq}</span></div>`);
+            parts.push(`<div class="ifr-freq"><span class="ifr-freq-lbl">CLR DEL:</span> <span class="freq-value">${clrDel.freq}</span></div>`);
         }
 
         parts.push(`<div class="ifr-phone" data-phone="${phone}">☎ ${phone} <span class="ifr-facility">(${facility})</span></div>`);
