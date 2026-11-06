@@ -85,9 +85,25 @@ headwind (it has no per-airport METAR); it gets decision 1 through `plan()`.
   for `final`, from `headRwy` (`runwayHead`).
 - Precedence: `over`, then `final`, then `direct`; `ref` when no runway segments.
 
+### Rulings during implementation (2026-11-06, after the first replay)
+- **Short final target = the physical runway end, ground = that end's elevation.** The
+  first build gave −4.8 ft at 20:04:51: the aircraft was 337 ft before the 06 *landing*
+  threshold, which is displaced 105 ft, and the 06 end (459.7 ft) is 26 ft below the
+  field elevation (486). For `kind 'final'` the straight glide goes to the end's
+  **physical** end (`base_lat/lon` / `recip_lat/lon`; the threshold when there is none)
+  and `needMsl` is that end's NASR elevation (`base_elev_ft` / `recip_elev_ft`; the field
+  elevation when unknown). The along-track gate (0 < d ≤ 1.0 nm) is measured to the same
+  point. `direct` keeps the field elevation + margin.
+- **Over the runway needs to be low:** `kind 'over'` only when also `alt − elev ≤ marginFt`.
+  Higher over the runway footprint (same lateral gate), `direct` is used with **no
+  initial turn and a zero leg** (`spare = alt − elev − marginFt`), so there is no
+  phantom turn toward an abeam point.
+- 20:03:14 (last second of the downwind) is −51 ft under VRB/04 (+11 at 20:03:10): the
+  200 ft margin decides it; not tuned.
+
 ## Acceptance (the 11-06 flight, VRB 04 surface wind, 200 ft margin)
 - Downwind 20:02:11-20:03:10: GLIDE OK. (20:03:14 may be within a few ft either side.)
 - Base at 20:04:01 (569 ft AGL, 0.8 nm): CANNOT REACH (genuinely marginal).
-- 20:04:51 (33 ft AGL over the threshold, lined up): GLIDE OK, on final.
+- 20:04:51 (33 ft above the field, lined up, ~230 ft before the pavement): GLIDE OK, on final.
 - Rollout 20:04:55 onward: OVER RWY 06/24, never "~860 ft low".
 - Same flight, no METAR and no winds aloft: the assumed 10 kt applies (amber wind line).
