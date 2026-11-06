@@ -3115,8 +3115,8 @@ body {
 .sv-banner--neutral  { background: var(--bg-surface);     color: var(--text-primary); border: 2px solid var(--border-strong); }
 .sv-banner--inflight { background: var(--status-warning); color: #000; }
 
-/* In flight with a NO-GO latched, the map banner collapses to a small red pill
-   ("NO-GO · CYL 3") that does not cover the map; colour from .sv-banner--nogo. */
+/* In flight the map banner collapses to a small pill ("NO-GO · CYL 3",
+   "VALVES OK", ...) that does not cover the map; colour from the verdict class. */
 .sv-banner-block.sv-banner--compact {
     gap: 0;
     padding: 4px 12px;

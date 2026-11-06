@@ -254,7 +254,7 @@ describe('StickyValveBanner — in-flight restart after a data gap (R-15)', () =
     });
 });
 
-describe('StickyValveBanner — in-flight NO-GO indicator (Dana Q1, 2026-11-06)', () => {
+describe('StickyValveBanner — in-flight compact pills (Dana 2026-11-06)', () => {
     const takeoff = () => { feed(1, 2500, HOT, HOT_CHT, 26); feed(20, 2400, HOT, HOT_CHT, 24); };
     const pill = (root) => block(root).querySelector('.sv-banner-title').textContent;
 
@@ -300,13 +300,131 @@ describe('StickyValveBanner — in-flight NO-GO indicator (Dana Q1, 2026-11-06)'
         expect(hasDismiss(mapArea)).toBe(true);
     });
 
-    it('a PARTIAL or CAUTION in flight is not compacted; only NO-GO is', () => {
+    it('a CAUTION in flight is a compact yellow pill too (Dana 2026-11-06: the other banners shrink in flight)', () => {
         new StickyValveBanner(mapArea, mon, 'map');
         caution();
         takeoff();
         expect(mon.state).toMatchObject({ phase: 'airborne', verdict: 'CAUTION' });
-        expect(block(mapArea).classList.contains('sv-banner--compact')).toBe(false);
-        expect(title(mapArea)).toBe('STICKY VALVE — CAUTION');
+        const b = block(mapArea);
+        expect(b.classList.contains('sv-banner--compact')).toBe(true);
+        expect(b.classList.contains('sv-banner--caution')).toBe(true);
+        expect(pill(mapArea)).toMatch(/^CAUTION( · CYL \d(, \d)*)?$/);
+        expect(lines(mapArea)).toEqual([]);
+        expect(hasDismiss(mapArea)).toBe(false);
+    });
+
+    it('every verdict over the map in flight is a pill in its colour, no lines / hint / DISMISS; on the ground and on the ENG page the full banner', () => {
+        const fake = new EventTarget();
+        fake.dismiss = vi.fn();
+        const caut = (cyl) => ({ rule: 'cht_lag', cyl, level: 'CAUTION', detail: {} });
+        const base = { visible: true, verdictVisible: true, inflightVisible: false, dismissable: true, findings: [],
+            context: [{ kind: 'days_since_flight', days: 40 }], inflight: [], advisories: [], rulesNotRun: ['slow_heatup'], reason: null };
+        let st = { ...base, verdict: 'VALVES OK', phase: 'airborne' };
+        Object.defineProperty(fake, 'state', { get: () => st });
+        new StickyValveBanner(mapArea, fake, 'map');
+        new StickyValveBanner(engSlot, fake, 'inline');
+        const cases = [
+            ['VALVES OK', [], 'VALVES OK', 'sv-banner--ok'],
+            ['PARTIAL', [], 'VALVE CHECK PARTIAL', 'sv-banner--neutral'],
+            ['NOT CHECKED', [], 'VALVE CHECK NOT RUN', 'sv-banner--neutral'],
+            ['CHECKING', [], 'VALVE CHECK…', 'sv-banner--neutral'],
+            ['CAUTION', [caut(4), caut(2), caut(4)], 'CAUTION · CYL 2, 4', 'sv-banner--caution'],
+            ['CAUTION', [caut(null)], 'CAUTION', 'sv-banner--caution'],
+        ];
+        for (const [verdict, findings, text, cls] of cases) {
+            st = { ...base, verdict, findings, phase: 'airborne' };
+            fake.dispatchEvent(new CustomEvent('change'));
+            const b = block(mapArea);
+            expect(b.classList.contains('sv-banner--compact'), verdict).toBe(true);
+            expect(b.classList.contains(cls), verdict).toBe(true);
+            expect(pill(mapArea)).toBe(text);
+            expect(lines(mapArea)).toEqual([]);                  // no context notes in a pill
+            expect(hint(mapArea)).toBe(null);
+            expect(hasDismiss(mapArea)).toBe(false);
+            expect(block(engSlot).classList.contains('sv-banner--compact'), `ENG ${verdict}`).toBe(false);
+            // on the ground the same state is the full banner again
+            st = { ...st, phase: 'ground' };
+            fake.dispatchEvent(new CustomEvent('change'));
+            expect(block(mapArea).classList.contains('sv-banner--compact'), `ground ${verdict}`).toBe(false);
+        }
+    });
+
+    describe('flying by GPS speed (FlyTab restarted in flight: a new run at cruise MP never sees takeoff power)', () => {
+        let stratux;
+        const gps = (kt) => stratux.dispatchEvent(new CustomEvent('stratux:situation', { detail: { ground_speed: kt, gps_fix_quality: 1 } }));
+        const cruise = (secs, kt) => { for (let k = 0; k < secs; k++) { if (kt != null) gps(kt); feed(1, 2400, even(1350), HOT_CHT, 22); } };
+        beforeEach(() => {
+            stratux = new EventTarget();
+            const cfgM = { ...CFG, monitor: StickyValve.monitorConfig(JSON.parse(read('web/phase_spec.json'))) };
+            mon = new StickyValveMonitor(null, { now: () => clock * 1000, cfg: cfgM, stratuxClient: stratux });
+        });
+
+        it('a current GPS speed above the landing limit (30 kt): the verdict is a pill', () => {
+            new StickyValveBanner(mapArea, mon, 'map');
+            cruise(90, 110);
+            expect(mon.state.verdictVisible).toBe(true);
+            expect(mon.state.phase).toBe('airborne');
+            expect(block(mapArea).classList.contains('sv-banner--compact')).toBe(true);
+            expect(hasDismiss(mapArea)).toBe(false);
+        });
+
+        it('no GPS speed: FlyTab cannot tell, the full banner (fail visible)', () => {
+            new StickyValveBanner(mapArea, mon, 'map');
+            cruise(90, null);
+            expect(mon.state.verdictVisible).toBe(true);
+            expect(mon.state.phase).toBe('ground');
+            expect(block(mapArea).classList.contains('sv-banner--compact')).toBe(false);
+        });
+
+        it('a GPS speed older than 5 s does not count; taxi speed (15 kt) does not count', () => {
+            new StickyValveBanner(mapArea, mon, 'map');
+            cruise(90, 110);
+            cruise(6, null);                                   // GPS feed stopped 6 s ago
+            expect(mon.state.phase).toBe('ground');
+            cruise(3, 15);
+            expect(mon.state.phase).toBe('ground');
+            expect(block(mapArea).classList.contains('sv-banner--compact')).toBe(false);
+        });
+
+        it('the check\'s settings failed to load: the NOT RUN banner stays full even at 110 kt', async () => {
+            mon = new StickyValveMonitor(null, { now: () => clock * 1000, specPromise: Promise.reject(new Error('no spec')),
+                stratuxClient: stratux });
+            await new Promise((r) => setTimeout(r, 0));
+            new StickyValveBanner(mapArea, mon, 'map');
+            cruise(10, 110);
+            expect(mon.state.verdict).toBe('NOT CHECKED');
+            expect(mon.state.phase).toBe('ground');
+            expect(block(mapArea).classList.contains('sv-banner--compact')).toBe(false);
+        });
+
+        it('exactly 30 kt is not flying; 31 kt is', () => {
+            new StickyValveBanner(mapArea, mon, 'map');
+            cruise(90, 30);
+            expect(mon.state.phase).toBe('ground');
+            gps(31);
+            expect(mon.state.phase).toBe('airborne');
+        });
+
+        it('the banner follows the GPS speed alone, between engine samples', () => {
+            new StickyValveBanner(mapArea, mon, 'map');
+            cruise(90, null);
+            expect(block(mapArea).classList.contains('sv-banner--compact')).toBe(false);
+            gps(110);                                          // no engine frame in between
+            expect(block(mapArea).classList.contains('sv-banner--compact')).toBe(true);
+        });
+    });
+
+    it('the amber in-flight block is never compacted', () => {
+        const fake = new EventTarget();
+        fake.dismiss = vi.fn();
+        const st = { verdict: 'VALVES OK', visible: true, verdictVisible: false, inflightVisible: true, dismissable: true,
+            findings: [], context: [], inflight: [{ rule: 'divergence', cyl: 3, detail: {} }], advisories: [], rulesNotRun: [],
+            reason: null, phase: 'airborne' };
+        Object.defineProperty(fake, 'state', { get: () => st });
+        new StickyValveBanner(mapArea, fake, 'map');
+        const b = block(mapArea, 'inflight');
+        expect(b.classList.contains('sv-banner--compact')).toBe(false);
+        expect(hasDismiss(mapArea, 'inflight')).toBe(true);
     });
 
     it('lists every latched NO-GO cylinder once, in order; NO-GO alone with no cylinder; text only', () => {

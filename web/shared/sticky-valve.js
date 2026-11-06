@@ -949,6 +949,15 @@ class StickyValveMonitor extends EventTarget {
         const verdictVisible = verdict !== null && (!this._dismissed || !dismissable);
         const inflightVisible = this._inflight.length + this._advisories.length > 0 && !this._inflightDismissed;
         const running = this._detector && this._detector.runActive;
+        // Flying for the banner: takeoff power seen in this run, an in-flight restart,
+        // or a current GPS speed above the landing limit. The last covers FlyTab
+        // restarting in flight (a new run at cruise MP never sees takeoff power) so
+        // the map banner stays a pill (Dana 2026-11-06). Display only: no rule uses it.
+        const lim = this._monitorCfg ? this._monitorCfg.speed_landing_max_kts : null;
+        const nowMs = this._now();
+        const gsFresh = this._gsAt !== null && nowMs >= this._gsAt && nowMs - this._gsAt <= STICKY_VALVE_GS_MAX_AGE_MS;
+        // No detector (spec failed or still loading): never a pill, the NOT CHECKED banner stays full.
+        const fastByGps = !!this._detector && gsFresh && svFinite(lim) && svFinite(this._gs) && this._gs > lim;
         return {
             verdict,
             findings: StickyValveMonitor._dedupe(this._shownFindingList()),
@@ -961,7 +970,7 @@ class StickyValveMonitor extends EventTarget {
             verdictVisible,
             inflightVisible,
             dismissable,
-            phase: running && (this._detector.airborne || this._flightRestart) ? 'airborne' : 'ground',
+            phase: (running && (this._detector.airborne || this._flightRestart)) || fastByGps ? 'airborne' : 'ground',
         };
     }
 
@@ -1386,6 +1395,7 @@ class StickyValveMonitor extends EventTarget {
                 this._gs = NaN;
                 this._gsAt = null;
             }
+            this._emitIfChanged(false);   // the pill / full banner can follow GPS speed alone
         };
         stratux.addEventListener('stratux:situation', this._onSituation);
     }
