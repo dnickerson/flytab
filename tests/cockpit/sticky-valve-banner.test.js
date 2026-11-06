@@ -386,6 +386,25 @@ describe('StickyValveBanner — in-flight compact pills (Dana 2026-11-06)', () =
             expect(block(mapArea).classList.contains('sv-banner--compact')).toBe(false);
         });
 
+        it('the check\'s settings failed to load: the NOT RUN banner stays full even at 110 kt', async () => {
+            mon = new StickyValveMonitor(null, { now: () => clock * 1000, specPromise: Promise.reject(new Error('no spec')),
+                stratuxClient: stratux });
+            await new Promise((r) => setTimeout(r, 0));
+            new StickyValveBanner(mapArea, mon, 'map');
+            cruise(10, 110);
+            expect(mon.state.verdict).toBe('NOT CHECKED');
+            expect(mon.state.phase).toBe('ground');
+            expect(block(mapArea).classList.contains('sv-banner--compact')).toBe(false);
+        });
+
+        it('exactly 30 kt is not flying; 31 kt is', () => {
+            new StickyValveBanner(mapArea, mon, 'map');
+            cruise(90, 30);
+            expect(mon.state.phase).toBe('ground');
+            gps(31);
+            expect(mon.state.phase).toBe('airborne');
+        });
+
         it('the banner follows the GPS speed alone, between engine samples', () => {
             new StickyValveBanner(mapArea, mon, 'map');
             cruise(90, null);

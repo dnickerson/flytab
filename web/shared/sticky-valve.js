@@ -956,7 +956,8 @@ class StickyValveMonitor extends EventTarget {
         const lim = this._monitorCfg ? this._monitorCfg.speed_landing_max_kts : null;
         const nowMs = this._now();
         const gsFresh = this._gsAt !== null && nowMs >= this._gsAt && nowMs - this._gsAt <= STICKY_VALVE_GS_MAX_AGE_MS;
-        const fastByGps = gsFresh && svFinite(lim) && svFinite(this._gs) && this._gs > lim;
+        // No detector (spec failed or still loading): never a pill, the NOT CHECKED banner stays full.
+        const fastByGps = !!this._detector && gsFresh && svFinite(lim) && svFinite(this._gs) && this._gs > lim;
         return {
             verdict,
             findings: StickyValveMonitor._dedupe(this._shownFindingList()),
