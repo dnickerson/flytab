@@ -1,7 +1,9 @@
 /**
- * Airport slide-out type scale (spec 2026-11-04 §4): nothing below 16 px, no weight below 700, no hex
- * colours, text colours only from the >= 7:1 list - in the panel's CSS and in the inline styles the
- * panel's JS writes.
+ * Airport slide-out type scale: the layers slide-out's two sizes only (Dana 2026-11-06: "Use the text
+ * sizes in the layers slide out") - var(--text-sm) 16 px for names, values, body text, tabs, pills and
+ * buttons; var(--text-xs) 14 px for section titles, field labels and secondary lines - one font (the
+ * UI font), no weight below 700, no hex colours, text colours only from the >= 7:1 list - in the
+ * panel's CSS and in the inline styles the panel's JS writes.
  *
  * CSS (web/style.css, parsed here):
  *   1. every rule with a PANEL-ONLY class (.airport-panel, .apt-*, .glide-*, .wc-*; not the map's
@@ -34,8 +36,8 @@ const ON_ACCENT_SELECTORS = [
     '.glide-danger .glide-verdict', '.wc-mode-metar.active, .wc-mode-manual.active',
     '.airport-panel .approach-currency.is-bad',
 ];
-const FONT_SIZES = new Set(['var(--text-sm)', 'var(--text-base)', 'var(--text-md)', 'var(--text-lg)',
-    'var(--text-xl)', 'var(--text-2xl)', 'inherit']);
+const FONT_SIZES = new Set(['var(--text-xs)', 'var(--text-sm)', 'inherit']);
+const FONT_FAMILIES = new Set(['var(--font-ui)', 'inherit']);
 /**
  * Explicit exceptions (graphics, not panel text): the wind rose's SVG text labels (user units, the
  * rose scales to the pane; spec: "the wind compass SVG drawing are graphics - keep them").
@@ -43,6 +45,8 @@ const FONT_SIZES = new Set(['var(--text-sm)', 'var(--text-base)', 'var(--text-md
 const EXCEPTIONS = [
     { sel: '.wc-tick-label', prop: 'font-size', why: 'SVG compass-rose tick label (graphic)' },
     { sel: '.wc-frame-label', prop: 'font-size', why: 'SVG compass-rose MAG/TRUE label (graphic)' },
+    { sel: '.wc-end-id', prop: 'font-size', why: 'SVG compass-rose runway-end label (graphic)' },
+    { sel: '.airport-panel .apt-panel-close', prop: 'font-size', why: 'the ✕ glyph: --text-xl, as the layers panel ✕ (.btn-close)' },
 ];
 /** Not the slide-out: full-screen overlays, the navaid Leaflet popup, the no-panel fallback popup. */
 const EXCLUDED_METHODS = ['_openAfdFullscreen', '_flashFrequency', 'showNavaid', '_buildHtml', '_headerHtml', '_actionsHtml'];
@@ -86,10 +90,8 @@ const isPanelSel = (sel) => classesOf(sel).some((c) => PANEL_CLASS.test(c));
 function problems(prop, value, head) {
     const p = [];
     if (/#[0-9a-f]{3,8}\b/i.test(value)) p.push(`hex colour in ${prop}: ${value}`);
-    if (prop === 'font-size') {
-        const px = /^([\d.]+)px$/.exec(value);
-        if (px ? Number(px[1]) < 16 : !FONT_SIZES.has(value)) p.push(`font-size ${value}`);
-    }
+    if (prop === 'font-size' && !FONT_SIZES.has(value)) p.push(`font-size ${value}`);
+    if (prop === 'font-family' && !FONT_FAMILIES.has(value)) p.push(`font-family ${value}`);
     if (prop === 'font-weight') {
         const n = Number(value);
         if (Number.isFinite(n) ? n < 700 : !['bold', 'bolder', 'inherit'].includes(value)) p.push(`font-weight ${value}`);
@@ -144,7 +146,36 @@ describe('the panel\'s CSS', () => {
         expect(RULES.filter((r) => r.sels.some(isPanelSel)).length).toBeGreaterThan(150);
     });
 
-    it('panel-only rules: no font-size < 16 px, no weight < 700, no hex, text colours from the 7:1 list', () => {
+    it('the two sizes are the layers slide-out\'s (16 / 14 px) and numbers line up', () => {
+        const root = RULES.find((r) => r.head === ':root')?.decls || {};
+        expect(root['--text-sm']).toBe('16px');
+        expect(root['--text-xs']).toBe('14px');
+        const get = (h) => RULES.find((r) => r.head === h)?.decls || {};
+        expect(get('.layer-panel-title')['font-size']).toBe('16px');
+        expect(get('.lp-section-header')['font-size']).toBe('14px');
+        expect(get('.lp-row-label')['font-size']).toBe('16px');
+        expect(get('.airport-panel')['font-variant-numeric']).toBe('tabular-nums');
+    });
+
+    it('14 px is for labels only; content and warnings are 16 px; panel buttons and fields take the panel font', () => {
+        const size = (h) => RULES.find((r) => r.head === h)?.decls['font-size'];
+        for (const h of ['.glide-turn', '.glide-sub', '.glide-note, .glide-now', '.glide-wind', '.glide-hdg', '.glide-val',
+            '.apt-nav-pattern', '.apt-tfr-head', '.apt-tfr-sub', '.apt-tfr-text', '.airport-panel .wx-phenom',
+            '.airport-panel .wx-metar', '.airport-panel .wx-age-stale', '.airport-panel .approach-currency',
+            '.wc-metar-stale', '.apt-notes-status.is-error', '.airport-panel .popup-freq-table .freq-sector']) {
+            expect(size(h), h).toBe('var(--text-sm)');
+        }
+        for (const h of ['.glide-lbl', '.apt-fact-label', '.airport-panel .wx-row-lbl', '.airport-panel .popup-section-title',
+            '.airport-panel .popup-freq-table .freq-label', '.airport-panel .ifr-freq-lbl', '.airport-panel .wx-time',
+            '.apt-tfr-tag', '.airport-panel .wx-ceil-badge']) {
+            expect(size(h), h).toBe('var(--text-xs)');
+        }
+        const btn = RULES.find((r) => r.sels.includes('.airport-panel button'));
+        expect(btn?.decls['font-family']).toBe('inherit');
+        expect(btn.sels).toEqual(expect.arrayContaining(['.airport-panel input', '.airport-panel textarea', '.airport-panel select']));
+    });
+
+    it('panel-only rules: only --text-sm / --text-xs, only the UI font, no weight < 700, no hex, text colours from the 7:1 list', () => {
         const bad = [];
         for (const r of RULES) {
             if (!r.sels.some(isPanelSel)) continue;
@@ -175,6 +206,7 @@ describe('the panel\'s CSS', () => {
                 for (const [prop, value] of Object.entries(r.decls)) {
                     if (!problems(prop, value, r.head).length) continue;
                     if (prop === 'color' && value === 'var(--text-on-accent)') continue;   // judged on the override's fill
+                    if (sel === '.btn-close' && prop === 'font-size') continue;              // the ✕ glyph (EXCEPTIONS)
                     if (!scoped.get(`.airport-panel ${sel}`)?.has(prop)) missing.push(`${sel} { ${prop}: ${value} }`);
                 }
             }
@@ -213,9 +245,13 @@ describe('the panel\'s CSS', () => {
         expect(read('web/cockpit/freq-panel.js')).toMatch(/el\.className = 'freq-panel'/);
     });
 
-    it('the exceptions are only the listed SVG labels, and they really are SVG text', () => {
+    it('the exceptions are the listed SVG labels (really SVG text) and the ✕ glyph', () => {
         const wc = read('web/cockpit/wind-compass.js');
-        for (const e of EXCEPTIONS) expect(wc).toMatch(new RegExp(`<text class="${e.sel.slice(1)}"`));
+        for (const e of EXCEPTIONS.filter((x) => x.sel.startsWith('.wc-'))) expect(wc).toMatch(new RegExp(`<text class="${e.sel.slice(1)}"`));
+        // the ✕ is the same size as the layers panel ✕ (.btn-close)
+        const get = (h) => RULES.find((r) => r.head === h)?.decls || {};
+        expect(get('.airport-panel .apt-panel-close')['font-size']).toBe(get('.btn-close')['font-size']);
+        expect(EXCEPTIONS.filter((x) => !x.sel.startsWith('.wc-')).map((x) => x.sel)).toEqual(['.airport-panel .apt-panel-close']);
     });
 });
 
@@ -233,7 +269,8 @@ describe('inline styles written by the panel\'s JS', () => {
         };
         for (const m of src.matchAll(/style="([^"]*)"/g)) check('style=""', m[1]);
         for (const m of src.matchAll(/\.style\.cssText\s*=\s*(['`])([\s\S]*?)\1/g)) check('style.cssText', m[2]);
-        for (const m of src.matchAll(/\.style\.(color|fontSize|fontWeight|background|backgroundColor)\s*=\s*([^;\n]+)/g)) {
+        for (const m of src.matchAll(/setAttribute\(\s*['"]style['"]\s*,\s*(['`])([\s\S]*?)\1/g)) check('setAttribute(style)', m[2]);
+        for (const m of src.matchAll(/\.style\.(color|fontSize|fontWeight|fontFamily|background|backgroundColor)\s*=\s*([^;\n]+)/g)) {
             const prop = m[1].replace(/[A-Z]/g, (c) => '-' + c.toLowerCase());
             const value = m[2].trim().replace(/^['"`]|['"`]$/g, '');
             if (prop === 'background' || prop === 'background-color') {

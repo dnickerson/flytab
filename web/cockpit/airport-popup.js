@@ -1908,7 +1908,7 @@ class AirportPopup {
                 img.remove();
                 if (plateType === 'MIN') {
                     const msg = document.createElement('div');
-                    msg.style.cssText = 'padding:16px;background:var(--bg-primary);color:var(--text-primary);font-family:var(--font-ui);font-size:var(--text-md);font-weight:700;text-align:center;';
+                    msg.style.cssText = 'padding:16px;background:var(--bg-primary);color:var(--text-primary);font-family:var(--font-ui);font-size:var(--text-sm);font-weight:700;text-align:center;';
                     msg.textContent = `${icao}: this airport's minimums page is not on this tablet — sync plates in MORE → Data Status.`;
                     wrap.appendChild(msg);
                     return;
@@ -2084,7 +2084,7 @@ class AirportPopup {
         // Show CLR DEL freq if available
         const clrDel = (apt.frequencies || []).find(f => f.type === 'clr_del');
         if (clrDel) {
-            parts.push(`<div class="ifr-freq">CLR DEL: <span class="freq-value">${clrDel.freq}</span></div>`);
+            parts.push(`<div class="ifr-freq"><span class="ifr-freq-lbl">CLR DEL:</span> <span class="freq-value">${clrDel.freq}</span></div>`);
         }
 
         parts.push(`<div class="ifr-phone" data-phone="${phone}">☎ ${phone} <span class="ifr-facility">(${facility})</span></div>`);
