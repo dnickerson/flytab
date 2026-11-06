@@ -11,11 +11,11 @@
  *                          (time is sample.t only). A golden-parity test demands
  *                          the same event lists as Python, so keep the order of
  *                          checks, the comparisons and the left-to-right loops.
- *   StickyValveMonitor  -- TEMPORARY until Task 9 rewrites it: still today's Pi
- *                          rule on LegacyStickyValveDetector, feeding from
- *                          EngineClient's engine:data, latching an alert until the
- *                          pilot dismisses it, and firing 'change' for the map and
- *                          ENG page banners.
+ *   StickyValveMonitor  -- the live wiring: loads the spec, turns EngineClient's
+ *                          engine:data frames (plus Stratux ground speed) into
+ *                          detector samples on the wall clock, keeps the verdict
+ *                          state and the latch/dismiss policy, and fires 'change'
+ *                          for the map and ENG page banners.
  */
 
 // Sources a spec threshold may cite (mirrors _ALLOWED_SOURCES in
@@ -324,6 +324,18 @@ class StickyValveDetector {
 
     get runActive() {
         return this._running;
+    }
+
+    /** Ground rules not (yet) evaluated in the current (or last) run, in report
+     *  order. A read-only view for the monitor's PARTIAL / NOT CHECKED text. */
+    get rulesNotRun() {
+        const evaluated = this._evaluated();
+        return STICKY_VALVE_GROUND_RULES.filter(r => !evaluated[r]);
+    }
+
+    /** Takeoff power seen in the current (or last) run: the ground watch is over. */
+    get airborne() {
+        return this._airborne;
     }
 
     /** One sample {t, rpm, mp, ff, egt: [4], cht: [4], carb, gs}; returns its
@@ -809,288 +821,414 @@ class StickyValveDetector {
 
 StickyValveDetector.VERDICT_RANK = STICKY_VALVE_VERDICT_RANK;
 
-// TEMPORARY until Task 9 replaces StickyValveMonitor:
-// today's hard-coded Pi thresholds and cockpit-config overrides, kept private so
-// the old monitor keeps working after StickyValve.DEFAULTS / config() were removed.
-const LEGACY_DEFAULTS = {
-    warmupMin: 10,     // only look during the first 10 minutes after start
-    egtRatio: 0.50,    // a cylinder below 50% of the others' average is low
-    minEgt: 200,       // °F; the others must average at least this to compare
-    persistSec: 30,    // continuously low this long before alerting
-    gapSec: 4,         // samples further apart than this are a hole in the data
-                       // (frames come at 1 Hz, or every 2 s on HTTP fallback)
-    startRpm: 500,     // RPM above this = engine started
-    stopRpm: 300,      // RPM below this...
-    stopSec: 30,       // ...for this long = engine stopped. Recorded EDM data on
-                       // this airframe has RPM reading 0 for 1-13 s with the
-                       // engine running (73 times across 56 starts, mostly at
-                       // ~1700 RPM -- likely the mag check); the Pi treated each
-                       // as a stop + restart, clearing any alert.
-};
 
-// TEMPORARY until Task 9 replaces StickyValveMonitor
-function legacyStickyValveConfig() {
-    const cfg = { ...LEGACY_DEFAULTS };
-    let ep = null;
-    try {
-        ep = (typeof CockpitConfig !== 'undefined' && CockpitConfig.get) ? CockpitConfig.get('enginePage') : null;
-    } catch (_) { /* defaults */ }
-    const pct = Number(ep?.stickyValveThresholdPct);
-    if (pct > 0 && pct < 100) cfg.egtRatio = pct / 100;
-    const min = Number(ep?.stickyValveWindowMinutes);
-    if (min > 0) cfg.warmupMin = min;
-    return cfg;
-}
+// ============================================================================
+// StickyValveMonitor -- live wiring, verdict state and latch policy
+// ============================================================================
 
-// TEMPORARY until Task 9: the pre-Task-7 Pi-rule detector, renamed and kept
-// private for StickyValveMonitor only. Do not use it for anything new.
-class LegacyStickyValveDetector {
-    constructor(cfg = LEGACY_DEFAULTS) {
-        this.cfg = { ...LEGACY_DEFAULTS, ...cfg };
-        this.engineStart = null;            // seconds, or null when not running
-        this.endedBy = null;                // how the last run ended: 'rpm' | 'gap' | null
-        this._lastT = null;                 // time of the last sample
-        this._belowStopSince = null;        // when RPM went below stopRpm, while running
-        this._lowSince = [null, null, null, null];
-        this.alerting = [false, false, false, false];
-        this.lastRatios = [null, null, null, null];
-        this.lastOthersAvg = [null, null, null, null];
-    }
+/** A Stratux situation older than this (ms, by the monitor's clock) gives no
+ *  ground speed: a freshness rule for the feed, not a detection threshold. */
+const STICKY_VALVE_GS_MAX_AGE_MS = 5000;
 
-    /** Lowest-numbered alerting cylinder (1-4), or null. */
-    get alert() {
-        const i = this.alerting.indexOf(true);
-        return i === -1 ? null : i + 1;
-    }
-
-    /** Whether the warm-up window is open at time tSec. */
-    watching(tSec) {
-        return this.engineStart !== null && (tSec - this.engineStart) / 60 <= this.cfg.warmupMin;
-    }
-
-    /**
-     * One EDM sample.
-     * @param {number} rpm
-     * @param {number[]} egt  EGT1-4, °F
-     * @param {number} tSec   sample time in seconds
-     * @returns {{ started: boolean, prevEnd: 'rpm'|'gap'|null }} started is true on
-     *          the sample that detected a new engine start; prevEnd says how the
-     *          run before it ended ('gap' = data stopped, so we never saw a stop).
-     */
-    sample(rpm, egt, tSec) {
-        const c = this.cfg;
-        const none = { started: false, prevEnd: null };
-
-        // Time since the last sample. A short hole breaks the "30 s in a row"; a
-        // hole longer than stopSec (Pi/EDM powered off, tablet asleep, clock
-        // stepped back) means we can't know the engine kept running, so the run
-        // ends and the next RPM > startRpm sample is watched as a new start.
-        if (this._lastT !== null) {
-            const dt = tSec - this._lastT;
-            if (dt < 0 || dt > c.gapSec) this._resetTimers();
-            if ((dt < 0 || dt > c.stopSec) && this.engineStart !== null) this._endRun('gap');
-        }
-        this._lastT = tSec;
-
-        if (!Number.isFinite(rpm)) { this._resetTimers(); return none; }
-
-        if (this.engineStart === null) {
-            if (rpm > c.startRpm) {
-                const prevEnd = this.endedBy;
-                this.engineStart = tSec;
-                this.endedBy = null;
-                this._belowStopSince = null;
-                this._resetTimers();
-                this.alerting = [false, false, false, false];
-                this.lastRatios = [null, null, null, null];
-                this.lastOthersAvg = [null, null, null, null];
-                return { started: true, prevEnd };
-            }
-            return none;
-        }
-
-        // Stop is checked before the warm-up window closes the rule (the Pi
-        // checked it after, so a second start in one Pi session was never watched).
-        // Low RPM only counts as a stop once it has lasted stopSec. Until then the
-        // EGTs are still judged: these are the run-up RPM dropouts, engine running.
-        if (rpm < c.stopRpm) {
-            if (this._belowStopSince === null) this._belowStopSince = tSec;
-            if (tSec - this._belowStopSince >= c.stopSec) { this._endRun('rpm'); return none; }
-        } else {
-            this._belowStopSince = null;
-        }
-
-        // Past the warm-up window: keep whatever was found, look no further.
-        if (!this.watching(tSec)) return none;
-
-        // A missing value is skipped; 0 is a reading, as on the Pi -- a cylinder
-        // that isn't firing at all may well read 0, and a dead probe that raises
-        // a ground warning is the cheaper mistake.
-        const valid = [0, 1, 2, 3].filter(i => Number.isFinite(egt[i]));
-        if (valid.length < 3) { this._resetTimers(); return none; }
-
-        // Not judged while the engine isn't making heat; that time doesn't count
-        // toward the 30 s either.
-        const avgAll = valid.reduce((s, i) => s + egt[i], 0) / valid.length;
-        if (avgAll < c.minEgt) { this._resetTimers(); return none; }
-
-        for (let i = 0; i < 4; i++) {
-            this.lastRatios[i] = null;
-            this.lastOthersAvg[i] = null;
-            if (!valid.includes(i)) { this._lowSince[i] = null; continue; }
-            const others = valid.filter(j => j !== i);
-            const avgOthers = others.reduce((s, j) => s + egt[j], 0) / others.length;
-            if (avgOthers < c.minEgt) { this._lowSince[i] = null; continue; }
-
-            const ratio = egt[i] / avgOthers;
-            this.lastRatios[i] = ratio;
-            this.lastOthersAvg[i] = avgOthers;
-            if (ratio < c.egtRatio) {
-                if (this._lowSince[i] === null) this._lowSince[i] = tSec;
-                if (tSec - this._lowSince[i] >= c.persistSec) this.alerting[i] = true;
-            } else {
-                this._lowSince[i] = null;
-                this.alerting[i] = false;   // recovered
-            }
-        }
-        return none;
-    }
-
-    /**
-     * No current EDM data (Pi stale, disconnected, or EDM quiet). The low-EGT
-     * time must be continuous data, so the persistence timers restart; a long
-     * gap also ends the run, on the next sample (see sample()).
-     */
-    gap() {
-        this._resetTimers();
-    }
-
-    _endRun(reason) {
-        this.engineStart = null;
-        this.endedBy = reason;
-        this._belowStopSince = null;
-        this._resetTimers();
-    }
-
-    _resetTimers() {
-        this._lowSince = [null, null, null, null];
-    }
-}
+/** Readable ground-rule names for the banner. */
+const STICKY_VALVE_RULE_NAMES = Object.freeze({
+    cold_cylinder: 'cold cylinder (EGT)',
+    slow_heatup: 'slow EGT heat-up',
+    cht_lag: 'CHT lag',
+    roughness: 'roughness',
+    divergence: 'in-flight EGT divergence',
+});
 
 class StickyValveMonitor extends EventTarget {
     /**
      * @param {EventTarget|null} engineClient  EngineClient (engine:data / engine:stale / engine:disconnect)
-     * @param {{ now?: () => number, cfg?: object }} [opts]  now() in ms; tests pass
-     *        their own. Wall-clock by default: it keeps counting while the tablet
-     *        sleeps, so a sleep shows up as a gap (performance.now() may not).
+     * @param {object} [opts]
+     * @param {() => number} [opts.now]  ms; wall clock by default (Date.now): it keeps
+     *        counting while the tablet sleeps, so a sleep shows up as a gap.
+     * @param {object} [opts.cfg]  a ready detector config (tests)
+     * @param {Promise<object>} [opts.specPromise]  resolves to the detector config;
+     *        with neither cfg nor specPromise, StickyValve.loadSpec() is called
+     * @param {EventTarget|null} [opts.stratuxClient]  'stratux:situation' source
+     *        (ground_speed, knots)
+     * @param {number|null} [opts.daysSinceFlight]  days since the last flight, or null
+     * @param {number} [opts.bufferMax=900]  frames kept while the spec loads
      */
     constructor(engineClient = null, opts = {}) {
         super();
         this._now = opts.now || (() => Date.now());
-        // TEMPORARY until Task 9 rewrites the monitor on StickyValveDetector
-        this.detector = new LegacyStickyValveDetector(opts.cfg || legacyStickyValveConfig());
-        // Latched alerts: cylinder -> { cyl, egt, othersAvg, at, recovered }. Kept
-        // after the cylinder recovers so the pilot still sees it happened; cleared
-        // at the next engine start after a seen shutdown.
-        this._latched = new Map();
-        this._dismissed = false;
+        this._bufferMax = opts.bufferMax ?? 900;
+        this._daysSinceFlight = StickyValveMonitor._validDays(opts.daysSinceFlight);
+        this._detector = null;
+        this._buffer = [];           // samples (built at arrival) kept until the spec loads
+        this._specError = null;      // reason string once the spec failed to load
+        this._gapPending = false;    // stale/disconnect/non-current frame since the last fed frame
+        this._gs = NaN;              // last usable ground speed (kts) and when it arrived (ms)
+        this._gsAt = null;
+        this._clearAll();
+        this._sig = null;
         this._engineClient = null;
+        this._stratux = null;
         if (engineClient) this._listen(engineClient);
+        if (opts.stratuxClient) this._listenStratux(opts.stratuxClient);
+
+        if (opts.cfg) {
+            this._useConfig(opts.cfg);
+        } else {
+            let p;
+            try {
+                p = opts.specPromise || StickyValve.loadSpec();
+            } catch (err) {
+                p = Promise.reject(err);
+            }
+            Promise.resolve(p).then(
+                (cfg) => this._useConfig(cfg),
+                (err) => this._specFailed(err));
+        }
+    }
+
+    // ---- public ------------------------------------------------------------
+
+    /**
+     * What the banners show:
+     *   verdict      null before the verdict trigger, else CHECKING / NOT CHECKED /
+     *                PARTIAL / VALVES OK / CAUTION / NO-GO (NO-GO also while a NO-GO
+     *                from a run ended by a data gap is latched)
+     *   findings     finding events: a latched NO-GO's, then the current run's
+     *   context      the current run's context events
+     *   inflight     the current run's inflight events
+     *   rulesNotRun  ground rules not (yet) evaluated in the current run
+     *   reason       why NOT CHECKED when the spec failed to load, else null
+     *   visible      any banner should show now (verdictVisible || inflightVisible)
+     *   verdictVisible / inflightVisible   each block on its own
+     *   dismissable  the verdict block may be dismissed: false only for NO-GO,
+     *                until a seen engine stop
+     *   phase        'airborne' while the running run has seen takeoff power, else 'ground'
+     */
+    get state() {
+        const verdict = this._displayVerdict();
+        const dismissable = verdict !== 'NO-GO' || this._seenStop;
+        const verdictVisible = verdict !== null && (!this._dismissed || !dismissable);
+        const inflightVisible = this._inflight.length > 0 && !this._inflightDismissed;
+        return {
+            verdict,
+            findings: [...this._latched, ...this._findings],
+            context: this._context.slice(),
+            inflight: this._inflight.slice(),
+            rulesNotRun: this._detector && this._runSeen ? this._detector.rulesNotRun : [],
+            reason: this._specError,
+            visible: verdictVisible || inflightVisible,
+            verdictVisible,
+            inflightVisible,
+            dismissable,
+            phase: this._detector && this._detector.runActive && this._detector.airborne ? 'airborne' : 'ground',
+        };
+    }
+
+    /** The detector, once the spec has loaded (null before). */
+    get detector() {
+        return this._detector;
     }
 
     /**
-     * What the banners show: { visible, cylinders: [{ cyl, egt, othersAvg, at, recovered }] }
-     * (at = Date.now() when it alerted). visible is false once dismissed, until a
-     * cylinder goes low again (a new one, or one that had recovered).
+     * Hide a block (both banners). part: 'verdict', 'inflight', or omitted for
+     * both. A NO-GO is not hidden before a seen engine stop.
      */
-    get state() {
-        const cylinders = [...this._latched.values()].sort((a, b) => a.cyl - b.cyl).map(c => ({ ...c }));
-        return { visible: cylinders.length > 0 && !this._dismissed, cylinders };
+    dismiss(part) {
+        // A dismiss tapped while a NO-GO may not be dismissed is ignored, so it
+        // cannot take effect later at the seen stop.
+        if ((part === undefined || part === 'verdict') && this.state.dismissable) this._dismissed = true;
+        if (part === undefined || part === 'inflight') this._inflightDismissed = true;
+        this._emitIfChanged(true);
     }
 
-    /** Hide the warning (both banners). */
-    dismiss() {
-        if (this._dismissed) return;
-        this._dismissed = true;
-        this._emit();
+    /**
+     * Days since the last flight (null: unknown, no note). Takes effect for the
+     * current run if its verdict has not been issued yet, otherwise the next run
+     * (the detector reads it at the verdict trigger).
+     */
+    setDaysSinceFlight(days) {
+        this._daysSinceFlight = StickyValveMonitor._validDays(days);
+        if (this._detector) this._detector.daysSinceFlight = this._daysSinceFlight;
     }
 
     /**
      * Feed one Pi status frame (raw, as engine:data carries it; the EDM row is
-     * nested under `data`). Frames whose EDM row is not current are a data gap.
+     * nested under `data`). A frame whose EDM row is not current is not fed: the
+     * next current frame comes after a hole.
      */
     feed(raw) {
+        if (this._specError) return;
         if (!raw || (typeof EngineClient !== 'undefined' && !EngineClient.edmCurrent(raw))) {
-            this.detector.gap();
+            this._gapPending = true;
             return;
         }
-        const now = this._now();
+        const s = this._sampleFrom(raw, this._now());
+        if (this._gapPending) {
+            this._gapPending = false;
+            this._ingest(StickyValveMonitor._holeAt(s.t));
+        }
+        this._ingest(s);
+    }
+
+    destroy() {
+        if (this._engineClient) {
+            this._engineClient.removeEventListener('engine:data', this._onData);
+            this._engineClient.removeEventListener('engine:stale', this._onStale);
+            this._engineClient.removeEventListener('engine:disconnect', this._onDisconnect);
+            this._engineClient = null;
+        }
+        if (this._stratux) {
+            this._stratux.removeEventListener('stratux:situation', this._onSituation);
+            this._stratux = null;
+        }
+    }
+
+    /** One banner line for a finding event, e.g.
+     *  "CYL 3 EGT 412°F vs 1030°F others (cold cylinder)". */
+    static describe(f) {
+        const n = (v) => (typeof v === 'number' && Number.isFinite(v) ? String(Math.round(v)) : '—');
+        const d = (f && f.detail) || {};
+        const cyl = f && f.cyl != null ? `CYL ${f.cyl}` : 'ENGINE';
+        const same = f && f.corroborates ? ', same cylinder as the EGT finding' : '';
+        switch (f && f.rule) {
+            case 'cold_cylinder':
+                return `${cyl} EGT ${n(d.egt)}°F vs ${n(d.othersAvg)}°F others (cold cylinder${same})`;
+            case 'slow_heatup':
+                return `${cyl} EGT rose ${n(d.rise)}°F vs ${n(d.othersRise)}°F others (slow EGT heat-up${same})`;
+            case 'cht_lag':
+                return `${cyl} CHT rose ${n(d.rise)}°F vs ${n(d.othersRise)}°F others (CHT lag${same})`;
+            case 'roughness':
+                if (f.cyl == null) return `ENGINE RPM unsteady at idle, std dev ${n(d.rpmStd)} RPM (roughness)`;
+                return `${cyl} EGT unsteady at idle, std dev ${n(d.egtStd)}°F vs ${n(d.othersMedian)}°F others (roughness${same})`;
+            default:
+                return `${cyl} ${String(f && f.rule)}`;
+        }
+    }
+
+    /** Readable rule name ('cold_cylinder' -> 'cold cylinder (EGT)'). */
+    static ruleName(rule) {
+        return STICKY_VALVE_RULE_NAMES[rule] || String(rule);
+    }
+
+    /** One advisory line for a context event. */
+    static describeContext(c) {
+        const n = (v) => (typeof v === 'number' && Number.isFinite(v) ? String(Math.round(v)) : '—');
+        const d = (c && c.detail) || {};
+        switch (c && c.note) {
+            case 'days_since_flight':
+                return `${n(d.days)} days since the last flight`;
+            case 'long_ground_idle':
+                return `Long ground idle: ${n(d.idleSec / 60)} min at idle before takeoff`;
+            case 'heat_soak':
+                return `Carb temp ${n(d.carb)}°F on the ground (heat-soak sign; carb temp stands in for OAT)`;
+            default:
+                return String(c && c.note);
+        }
+    }
+
+    /** One line for an inflight event. */
+    static describeInflight(e) {
+        const n = (v) => (typeof v === 'number' && Number.isFinite(v) ? String(Math.round(v)) : '—');
+        const deltas = (e && e.deltas) || [];
+        const falling = (e && e.falling) || [];
+        const rising = (e && e.rising) || [];
+        const fell = falling.map(c => n(-deltas[c - 1])).join(', ');
+        const rose = rising.map(c => n(deltas[c - 1])).join(', ');
+        return `IN-FLIGHT: CYL ${falling.join(', ')} EGT fell ${fell}°F while CYL ${rising.join(', ')} rose ${rose}°F after a power reduction`;
+    }
+
+    /**
+     * Whole days from the most recent logbook entry of this aircraft (its
+     * YYYY-MM-DD `date`, UTC) to nowMs; null when unknown (no tail, no dated
+     * entry, a date in the future). Same-day flights give 0.
+     */
+    static daysSinceLastFlight(entries, tail, nowMs) {
+        if (!tail || !Array.isArray(entries) || !Number.isFinite(nowMs)) return null;
+        let latest = null;
+        for (const e of entries) {
+            if (!e || (e.aircraft_tail || e.aircraft_id) !== tail) continue;
+            const m = typeof e.date === 'string' ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(e.date) : null;
+            if (!m) continue;
+            const ms = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+            if (!Number.isFinite(ms)) continue;
+            if (latest === null || ms > latest) latest = ms;
+        }
+        if (latest === null) return null;
+        const now = new Date(nowMs);
+        const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+        const days = Math.round((today - latest) / 86400000);
+        return days >= 0 ? days : null;
+    }
+
+    // ---- input -------------------------------------------------------------
+
+    static _validDays(d) {
+        return typeof d === 'number' && Number.isFinite(d) && d >= 0 ? d : null;
+    }
+
+    /** A NEW sample object with NEW arrays (the detector keeps references). */
+    _sampleFrom(raw, nowMs) {
         const d = raw.data ? { ...raw, ...raw.data } : raw;
         const num = (v) => (v == null || v === '' ? NaN : Number(v));
-        const rpm = num(d.RPM ?? d.rpm);
-        const egt = [1, 2, 3, 4].map(n => num(d[`EGT${n}`] ?? d[`egt${n}`]));
+        const gsFresh = this._gsAt !== null && nowMs >= this._gsAt && nowMs - this._gsAt <= STICKY_VALVE_GS_MAX_AGE_MS;
+        return {
+            t: nowMs / 1000,
+            rpm: num(d.RPM ?? d.rpm),
+            mp: num(d.MAP ?? d.MP ?? d.mp),
+            ff: num(d.fuel_flow ?? d.Fuel_Flow ?? d.FF ?? d.ff),
+            egt: [1, 2, 3, 4].map(k => num(d[`EGT${k}`] ?? d[`egt${k}`])),
+            cht: [1, 2, 3, 4].map(k => num(d[`cht${k}`] ?? d[`CHT${k}`])),
+            carb: num(d.carb_temp ?? d.Carb_Temp),
+            gs: gsFresh ? this._gs : NaN,
+        };
+    }
 
-        const det = this.detector;
-        const before = det.alerting.slice();
-        const { started, prevEnd } = det.sample(rpm, egt, now / 1000);
-        let changed = false;
+    /** A sample with no RPM: the detector treats it as a hole in the data. */
+    static _holeAt(t) {
+        return { t, rpm: NaN, mp: NaN, ff: NaN, egt: [NaN, NaN, NaN, NaN], cht: [NaN, NaN, NaN, NaN], carb: NaN, gs: NaN };
+    }
 
-        // A new start after a shutdown we saw clears the last run's warning. After
-        // a data gap we never saw the engine stop, so an unacknowledged warning
-        // stays up rather than vanishing because the Pi dropped out.
-        if (started && prevEnd !== 'gap' && (this._latched.size || this._dismissed)) {
-            this._latched.clear();
-            this._dismissed = false;
-            changed = true;
+    _ingest(s) {
+        if (!this._detector) {
+            this._buffer.push(s);
+            // Overflow drops the oldest: the detector starts on the oldest kept frame.
+            while (this._buffer.length > this._bufferMax) this._buffer.shift();
+            return;
         }
+        this._handle(this._detector.sample(s));
+        this._emitIfChanged(false);
+    }
 
-        for (let i = 0; i < 4; i++) {
-            const cyl = i + 1;
-            const on = det.alerting[i];
-            const latched = this._latched.get(cyl);
-            if (on && !before[i]) {
-                // A cylinder going low -- the first time, or again after it had
-                // recovered -- is news: show the banner even if it was dismissed.
-                const entry = { cyl, egt: Math.round(egt[i]), othersAvg: Math.round(det.lastOthersAvg[i]), at: Date.now(), recovered: false };
-                this._latched.set(cyl, entry);
-                this._dismissed = false;
-                this.dispatchEvent(new CustomEvent('alert', { detail: { ...entry } }));
-                changed = true;
-            } else if (!on && before[i] && latched && !latched.recovered
-                       && det.lastRatios[i] != null && det.lastRatios[i] >= det.cfg.egtRatio) {
-                // Back above the line during warm-up (not a restart or the window closing).
-                latched.recovered = true;
-                changed = true;
+    _useConfig(cfg) {
+        if (this._detector || this._specError) return;
+        try {
+            this._detector = new StickyValveDetector(cfg, { daysSinceFlight: this._daysSinceFlight });
+        } catch (err) {
+            this._specFailed(err);
+            return;
+        }
+        const buffered = this._buffer;
+        this._buffer = [];
+        for (const s of buffered) this._handle(this._detector.sample(s));
+        this._emitIfChanged(buffered.length > 0);
+    }
+
+    _specFailed(err) {
+        if (this._detector || this._specError) return;
+        const msg = (err && err.message) || String(err);
+        this._specError = `threshold file (sticky_valve_spec.json) failed to load: ${msg}`;
+        this._buffer = [];
+        this._dismissed = false;
+        if (typeof DiagLog !== 'undefined' && DiagLog.log) {
+            try { DiagLog.log('error', `Sticky-valve check NOT CHECKED: ${this._specError}`); } catch (_) { /* logging only */ }
+        }
+        this._emitIfChanged(true);
+    }
+
+    // ---- verdict state and latch ---------------------------------------------
+
+    _clearAll() {
+        this._runSeen = false;       // a run has started since the spec loaded
+        this._runVerdict = null;     // the detector's verdict for the current run
+        this._findings = [];
+        this._context = [];
+        this._inflight = [];
+        this._latched = [];          // NO-GO findings carried over a gap-ended run
+        this._lastEnd = null;        // 'rpm' | 'gap' | 'eof' | null: how the last run ended
+        this._seenStop = false;      // the last run ended in a seen stop, no run since
+        this._dismissed = false;
+        this._inflightDismissed = false;
+    }
+
+    _displayVerdict() {
+        if (this._specError) return 'NOT CHECKED';
+        if (this._latched.length) return 'NO-GO';
+        return this._runVerdict;
+    }
+
+    _handle(events) {
+        for (const e of events) {
+            switch (e.type) {
+                case 'run_start': this._onRunStart(); break;
+                case 'run_end': this._onRunEnd(e); break;
+                case 'verdict':
+                    this._runVerdict = e.verdict;
+                    this._dismissed = false;          // a rise re-shows a dismissed banner
+                    break;
+                case 'finding':
+                    this._findings.push(e);
+                    this._dismissed = false;
+                    this.dispatchEvent(new CustomEvent('finding', { detail: e }));
+                    break;
+                case 'context':
+                    this._context.push(e);
+                    break;
+                case 'inflight':
+                    this._inflight.push(e);
+                    this._inflightDismissed = false;
+                    this.dispatchEvent(new CustomEvent('inflight', { detail: e }));
+                    break;
+                default:
+                    break;
             }
         }
-        if (changed) this._emit();
     }
+
+    _onRunStart() {
+        // After a seen stop (or at the first run) the new run starts clean. After a
+        // data gap we never saw the engine stop: every NO-GO finding stays latched,
+        // also one found before that run's verdict trigger.
+        const carry = this._lastEnd === 'gap'
+            ? [...this._latched, ...this._findings.filter(f => f.level === 'NO-GO')]
+            : [];
+        this._clearAll();
+        this._latched = carry;
+        this._runSeen = true;
+    }
+
+    _onRunEnd(e) {
+        this._lastEnd = e.reason;
+        this._seenStop = e.reason === 'rpm';
+        if (e.result && e.result.verdict !== undefined) this._runVerdict = e.result.verdict;
+    }
+
+    // ---- events --------------------------------------------------------------
 
     _listen(engineClient) {
         this._engineClient = engineClient;
         this._onData = (e) => this.feed(e.detail);
-        this._onStale = (e) => { if (e.detail?.stale) this.detector.gap(); };
-        this._onDisconnect = () => this.detector.gap();
+        this._onStale = (e) => { if (e.detail?.stale) this._gapPending = true; };
+        this._onDisconnect = () => { this._gapPending = true; };
         engineClient.addEventListener('engine:data', this._onData);
         engineClient.addEventListener('engine:stale', this._onStale);
         engineClient.addEventListener('engine:disconnect', this._onDisconnect);
     }
 
-    _emit() {
-        this.dispatchEvent(new CustomEvent('change', { detail: this.state }));
+    _listenStratux(stratux) {
+        this._stratux = stratux;
+        this._onSituation = (e) => {
+            const sit = e.detail;
+            // A degraded re-dispatch of the last situation (feed stopped) or no fix
+            // carries an old or meaningless speed: it clears the speed instead.
+            const gs = sit && !sit._stale && sit.gps_fix_quality !== 0 ? Number(sit.ground_speed) : NaN;
+            if (sit && sit.ground_speed != null && Number.isFinite(gs)) {
+                this._gs = gs;
+                this._gsAt = this._now();
+            } else {
+                this._gs = NaN;
+                this._gsAt = null;
+            }
+        };
+        stratux.addEventListener('stratux:situation', this._onSituation);
     }
 
-    destroy() {
-        if (!this._engineClient) return;
-        this._engineClient.removeEventListener('engine:data', this._onData);
-        this._engineClient.removeEventListener('engine:stale', this._onStale);
-        this._engineClient.removeEventListener('engine:disconnect', this._onDisconnect);
-        this._engineClient = null;
-    }
-
-    /** Banner text for one latched cylinder. */
-    static describe(c) {
-        if (c.recovered) return `CYL ${c.cyl} EGT was low after start (${c.egt}°F vs ${c.othersAvg}°F), now recovered`;
-        return `CYL ${c.cyl} EGT ${c.egt}°F vs ${c.othersAvg}°F others`;
+    /** 'change' when anything the banners show changed (or force). */
+    _emitIfChanged(force) {
+        const st = this.state;
+        const sig = JSON.stringify([st.verdict, st.visible, st.verdictVisible, st.inflightVisible, st.dismissable,
+            st.rulesNotRun, st.reason, st.phase, st.findings.length, st.context.length, st.inflight.length]);
+        if (!force && sig === this._sig) return;
+        this._sig = sig;
+        this.dispatchEvent(new CustomEvent('change', { detail: st }));
     }
 }

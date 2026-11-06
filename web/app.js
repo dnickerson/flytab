@@ -646,23 +646,42 @@ class FlyTabApp {
             window.engineClient = this.engineClient;
         });
 
-        // Sticky valve check (the Pi's old rule, now run here), with its warning
-        // over the map; the ENG page shows the same warning (window.stickyValve).
+        // Sticky valve pre-takeoff check (shared/sticky-valve.js), with its verdict
+        // banner over the map; the ENG page shows the same banner (window.stickyValve).
+        // The monitor loads its spec itself and buffers frames until then: nothing
+        // here waits on it.
         this._guard('Sticky-valve check', () => {
             if (typeof StickyValveMonitor !== 'undefined') {
-                this.stickyValve = new StickyValveMonitor(this.engineClient);
+                this.stickyValve = new StickyValveMonitor(this.engineClient, { stratuxClient: this.stratuxClient });
                 window.stickyValve = this.stickyValve;
                 const mapArea = document.getElementById('mapContainer');
                 if (mapArea && typeof StickyValveBanner !== 'undefined') {
                     this.stickyValveBanner = new StickyValveBanner(mapArea, this.stickyValve, 'map');
                 }
-                this.stickyValve.addEventListener('alert', (e) => {
-                    const message = `Sticky valve warning: ${StickyValveMonitor.describe(e.detail)}`;
+                // Kept across restarts in the diagnostic log (long-press the version
+                // badge); the ML advisory log is in memory only.
+                this.stickyValve.addEventListener('finding', (e) => {
+                    const f = e.detail;
+                    const message = `Sticky valve ${f.level}: ${StickyValveMonitor.describe(f)}`;
                     console.warn(`[StickyValve] ${message}`);
-                    // Kept across restarts in the diagnostic log (long-press the version
-                    // badge); the ML advisory log is in memory only.
-                    DiagLog.log('engine', message, { cyl: e.detail.cyl, egt: e.detail.egt, othersAvg: e.detail.othersAvg });
-                    window.engineML?.recordAdvisory?.({ type: `sticky_valve_cyl${e.detail.cyl}`, message, severity: 'caution' });
+                    DiagLog.log('engine', message, { rule: f.rule, level: f.level, cyl: f.cyl, detail: f.detail });
+                    window.engineML?.recordAdvisory?.({
+                        type: `sticky_valve_${f.rule}${f.cyl != null ? `_cyl${f.cyl}` : ''}`,
+                        message, severity: f.level === 'NO-GO' ? 'warning' : 'caution',
+                    });
+                });
+                this.stickyValve.addEventListener('inflight', (e) => {
+                    const message = `Sticky valve ${StickyValveMonitor.describeInflight(e.detail)}`;
+                    console.warn(`[StickyValve] ${message}`);
+                    DiagLog.log('engine', message, { falling: e.detail.falling, rising: e.detail.rising, deltas: e.detail.deltas, mpDrop: e.detail.mpDrop });
+                    window.engineML?.recordAdvisory?.({ type: 'sticky_valve_inflight', message, severity: 'warning' });
+                });
+                let loggedVerdict = null;
+                this.stickyValve.addEventListener('change', (e) => {
+                    const { verdict, reason, rulesNotRun } = e.detail;
+                    if (verdict === loggedVerdict) return;
+                    loggedVerdict = verdict;
+                    DiagLog.log('engine', `Sticky valve verdict: ${verdict ?? 'none'}`, { verdict, reason, rulesNotRun });
                 });
             }
         });
@@ -773,6 +792,17 @@ class FlyTabApp {
             if (typeof Logbook !== 'undefined') {
                 this.logbook = new Logbook(nasrDb);
                 this.cockpitMap.setLogbook(this.logbook);
+                // Days since this aircraft's last logged flight, for the sticky-valve
+                // check's advisory note (none when unknown). IndexedDB is async and
+                // may stall: not awaited, and the monitor applies it whenever it lands.
+                if (this.stickyValve && typeof StickyValveMonitor !== 'undefined') {
+                    this.logbook.getEntries()
+                        .then((entries) => {
+                            const tail = (typeof CockpitConfig !== 'undefined') ? CockpitConfig.aircraft('tail') : null;
+                            this.stickyValve.setDaysSinceFlight(StickyValveMonitor.daysSinceLastFlight(entries, tail, Date.now()));
+                        })
+                        .catch((err) => console.warn('[StickyValve] days since flight unavailable:', err));
+                }
             }
         });
 

@@ -7,358 +7,18 @@
  *    engine_analysis/tests/test_sticky_valve.py (same names in camelCase, same
  *    synthetic inputs, same assertions and guard asserts), run on the real spec
  *    (web/sticky_valve_spec.json + web/phase_spec.json through StickyValve.buildConfig).
- *  - StickyValveMonitor: TEMPORARY until Task 9 rewrites it -- still the Pi rule
- *    (during the first 10 minutes after start, a cylinder whose EGT stays below
- *    50% of the other three's average for 30 s alerts, once the engine is making
- *    heat, >= 200°F), on the private LegacyStickyValveDetector. Frames are fed the
- *    way engine-client.js dispatches them: the Pi's /api/status with the EDM row
- *    nested under `data`.
+ *  - StickyValveMonitor (at the end of this file): spec loading and buffering,
+ *    frame normalisation, Stratux ground speed, the verdict state and the
+ *    latch/dismiss policy. Frames are fed the way engine-client.js dispatches
+ *    them: the Pi's /api/status with the EDM row nested under `data`.
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'fs';
 
 const read = (p) => readFileSync(p, 'utf8');
 globalThis.EngineClient = new Function(read('web/shared/engine-client.js') + '\nreturn EngineClient;')();
 const { StickyValve, StickyValveDetector, StickyValveMonitor } = new Function(
     read('web/shared/sticky-valve.js') + '\nreturn { StickyValve, StickyValveDetector, StickyValveMonitor };')();
-
-/** A Pi /api/status frame. */
-const frame = (rpm, egt, extra = {}) => ({
-    api_contract: 2, serial_connected: true, serial_warning: null,
-    data: { RPM: rpm, EGT1: egt[0], EGT2: egt[1], EGT3: egt[2], EGT4: egt[3] },
-    ...extra,
-});
-
-function makeClient() {
-    const c = new EventTarget();
-    c.emit = (type, detail) => c.dispatchEvent(new CustomEvent(type, { detail }));
-    return c;
-}
-
-let clock, client, mon, alerts, changes;
-beforeEach(() => {
-    delete globalThis.CockpitConfig;
-    clock = 0;
-    client = makeClient();
-    mon = new StickyValveMonitor(client, { now: () => clock * 1000 });
-    alerts = [];
-    changes = 0;
-    mon.addEventListener('alert', (e) => alerts.push(e.detail));
-    mon.addEventListener('change', () => changes++);
-});
-
-/** Feed `secs` 1 Hz frames; egtAt(t) gives EGT1-4 at second t since the call. */
-function run(secs, rpm, egtAt, extra) {
-    for (let t = 0; t < secs; t++) {
-        client.emit('engine:data', frame(rpm, typeof egtAt === 'function' ? egtAt(t) : egtAt, extra));
-        clock += 1;
-    }
-}
-
-const HOT = [1200, 1180, 1210, 1190];
-const COLD3 = [1200, 1180, 300, 1190];   // cyl 3 at 25% of the others
-
-/** Engine start: one frame at 1000 RPM with cold EGTs (detects the start). */
-function start() { run(1, 1000, [80, 80, 80, 80]); }
-
-describe('StickyValveMonitor — the Pi rule', () => {
-    it('a normal start, all cylinders heating together, never alerts', () => {
-        start();
-        run(600, 1000, (t) => HOT.map(v => Math.min(v, 80 + t * 4)));
-        expect(alerts).toEqual([]);
-        expect(mon.state.visible).toBe(false);
-    });
-
-    it('a cylinder below 50% of the others alerts after 30 s, not before', () => {
-        start();
-        run(30, 1000, COLD3);          // low at t=0..29 -> 29 s elapsed
-        expect(alerts).toEqual([]);
-        run(1, 1000, COLD3);           // t=30 -> 30 s
-        expect(alerts.map(a => a.cyl)).toEqual([3]);
-        expect(alerts[0]).toMatchObject({ egt: 300, othersAvg: 1190, recovered: false });
-        expect(mon.state).toMatchObject({ visible: true, cylinders: [{ cyl: 3 }] });
-    });
-
-    it('fires the alert event once per cylinder, not every frame', () => {
-        start();
-        run(120, 1000, COLD3);
-        expect(alerts.length).toBe(1);
-    });
-
-    it('the low time must be continuous: 25 s low, back up, 25 s low does not alert', () => {
-        start();
-        run(25, 1000, COLD3);
-        run(1, 1000, HOT);
-        run(25, 1000, COLD3);
-        expect(alerts).toEqual([]);
-    });
-
-    it('exactly 50% is not low', () => {
-        start();
-        run(60, 1000, [1000, 1000, 500, 1000]);
-        expect(alerts).toEqual([]);
-    });
-
-    it('does nothing until the others average 200°F', () => {
-        start();
-        run(60, 1000, [190, 190, 20, 190]);
-        expect(alerts).toEqual([]);
-    });
-
-    it('does not look after the 10-minute warm-up window', () => {
-        start();
-        run(10 * 60, 1000, HOT);
-        run(120, 1000, COLD3);
-        expect(alerts).toEqual([]);
-    });
-
-    it('an alert found in warm-up stays after the window closes', () => {
-        start();
-        run(9 * 60 + 20, 1000, HOT);
-        run(60, 1000, COLD3);          // alerts at ~9:50, still low when the window closes at 10:00
-        expect(alerts.map(a => a.cyl)).toEqual([3]);
-        run(300, 2400, HOT);           // back up after the window: not a warm-up recovery
-        expect(mon.state.visible).toBe(true);
-        expect(mon.state.cylinders[0].recovered).toBe(false);
-    });
-
-    it('a cylinder that recovers in warm-up stays on the banner, marked recovered', () => {
-        start();
-        run(40, 1000, COLD3);
-        run(5, 1000, HOT);
-        expect(mon.state).toMatchObject({ visible: true, cylinders: [{ cyl: 3, recovered: true }] });
-        expect(StickyValveMonitor.describe(mon.state.cylinders[0])).toMatch(/CYL 3 .*recovered/);
-    });
-
-    it('two cylinders low are both reported', () => {
-        start();
-        run(40, 1000, [1200, 300, 300, 1190]);
-        expect(alerts.map(a => a.cyl).sort()).toEqual([2, 3]);
-        expect(mon.state.cylinders.map(c => c.cyl)).toEqual([2, 3]);
-    });
-});
-
-describe('StickyValveMonitor — dismiss and restart', () => {
-    it('DISMISS hides it; the same cylinder staying low does not bring it back', () => {
-        start();
-        run(40, 1000, COLD3);
-        mon.dismiss();
-        expect(mon.state.visible).toBe(false);
-        run(60, 1000, COLD3);
-        expect(mon.state.visible).toBe(false);
-        expect(alerts.length).toBe(1);
-    });
-
-    it('a cylinder that recovered and goes low again shows it again, with a new alert', () => {
-        start();
-        run(40, 1000, COLD3);
-        mon.dismiss();
-        run(5, 1000, HOT);
-        expect(mon.state.cylinders[0].recovered).toBe(true);
-        run(31, 1000, COLD3);
-        expect(mon.state).toMatchObject({ visible: true, cylinders: [{ cyl: 3, recovered: false }] });
-        expect(alerts.map(a => a.cyl)).toEqual([3, 3]);
-    });
-
-    it('a different cylinder alerting after DISMISS shows it again', () => {
-        start();
-        run(40, 1000, COLD3);
-        mon.dismiss();
-        run(40, 1000, [300, 1180, 1200, 1190]);
-        expect(mon.state.visible).toBe(true);
-        expect(alerts.map(a => a.cyl)).toEqual([3, 1]);
-    });
-
-    it('stopping the engine keeps the alert; the next start clears it and watches again', () => {
-        start();
-        run(40, 1000, COLD3);
-        run(35, 0, [80, 80, 80, 80]);   // a real shutdown: RPM below 300 for 30 s+
-        expect(mon.state.visible).toBe(true);
-        start();
-        expect(mon.state).toEqual({ visible: false, cylinders: [] });
-        run(31, 1000, COLD3);
-        expect(mon.state.visible).toBe(true);
-    });
-
-    it('a second start after a long first run is still watched (the Pi missed this one)', () => {
-        start();
-        run(30 * 60, 2400, HOT);       // past the warm-up window
-        run(35, 0, [300, 300, 300, 300]);
-        start();
-        run(31, 1000, COLD3);
-        expect(alerts.map(a => a.cyl)).toEqual([3]);
-    });
-});
-
-describe('StickyValveMonitor — RPM dropouts with the engine running', () => {
-    // Recorded EDM data on this airframe shows RPM reading 0 for 1-13 s while the
-    // engine runs (EGTs stay hot), mostly around 1700 RPM -- likely the mag check.
-    // The Pi treated each as stop + restart, which cleared an alert at run-up.
-    const RUNUP = [1250, 1210, 1240, 1230];
-
-    it('a 13 s RPM-0 dropout at run-up keeps the warning', () => {
-        start();
-        run(40, 1000, COLD3);
-        run(13, 0, [1250, 1210, 400, 1230]);
-        run(30, 1700, [1250, 1210, 400, 1230]);
-        expect(mon.state).toMatchObject({ visible: true, cylinders: [{ cyl: 3 }] });
-        expect(alerts.length).toBe(1);
-    });
-
-    it('a dismissed warning stays dismissed through the dropout', () => {
-        start();
-        run(40, 1000, COLD3);
-        mon.dismiss();
-        run(13, 0, [1250, 1210, 400, 1230]);   // still cold through the dropout
-        run(60, 1700, [1250, 1210, 400, 1230]);
-        expect(mon.state.visible).toBe(false);
-    });
-
-    it('a dropout does not restart the 10-minute window', () => {
-        start();
-        run(9 * 60, 1000, HOT);
-        run(10, 0, RUNUP);
-        run(2 * 60, 1700, [1250, 1210, 400, 1230]);   // cold from 9:10 to 11:10
-        // Only 9:10-10:00 is inside the window: 50 s low -> alerts within it.
-        expect(alerts.map(a => a.cyl)).toEqual([3]);
-        // ...but a cylinder going cold only after 10:00 is not looked at.
-        const late = new StickyValveMonitor(null, { now: () => clock * 1000 });
-        late.feed(frame(1000, [80, 80, 80, 80]));
-        for (let t = 0; t < 9 * 60 + 50; t++) { clock += 1; late.feed(frame(1000, HOT)); }
-        for (let t = 0; t < 10; t++) { clock += 1; late.feed(frame(0, RUNUP)); }
-        for (let t = 0; t < 90; t++) { clock += 1; late.feed(frame(1700, [1250, 1210, 400, 1230])); }
-        expect(late.state.visible).toBe(false);
-    });
-
-    it('the dropout seconds still count toward the 30 s: the EGTs in them are real', () => {
-        start();
-        run(20, 1000, COLD3);
-        run(5, 0, COLD3);
-        run(5, 1700, COLD3);
-        expect(alerts).toEqual([]);
-        run(1, 1700, COLD3);            // 30 s since it went low
-        expect(alerts.map(a => a.cyl)).toEqual([3]);
-    });
-
-    it('repeated mag-check dropouts every 20 s do not hold the alert off', () => {
-        start();
-        for (let k = 0; k < 3; k++) { run(17, 1700, COLD3); run(3, 0, COLD3); }
-        expect(alerts.map(a => a.cyl)).toEqual([3]);
-    });
-});
-
-describe('StickyValveMonitor — bad or missing data', () => {
-    it('an EGT of 0 is a reading, as on the Pi: a dead cylinder may well read 0', () => {
-        start();
-        run(31, 1000, [1200, 1180, 0, 1190]);
-        expect(alerts).toMatchObject([{ cyl: 3, egt: 0, othersAvg: 1190 }]);
-    });
-
-    it('a missing EGT value is skipped: the other three are still compared', () => {
-        start();
-        run(31, 1000, [1200, 400, null, 1190]);
-        expect(alerts).toMatchObject([{ cyl: 2, egt: 400, othersAvg: 1195 }]);
-    });
-
-    it('with fewer than 3 EGT values it does not judge', () => {
-        start();
-        run(60, 1000, [1200, null, 300, null]);
-        expect(alerts).toEqual([]);
-    });
-
-    it('time with the engine too cold to judge does not count toward the 30 s', () => {
-        start();
-        run(10, 1000, [400, 400, 100, 400]);   // low, judged
-        run(40, 1000, [150, 150, 20, 150]);    // average under 200: not judged
-        run(5, 1000, [400, 400, 100, 400]);
-        expect(alerts).toEqual([]);
-        run(26, 1000, [400, 400, 100, 400]);   // 30 s of judged low time
-        expect(alerts.map(a => a.cyl)).toEqual([3]);
-    });
-
-    it('a few seconds with no frames at all break the 30 s', () => {
-        start();
-        run(20, 1000, COLD3);
-        clock += 6;                            // nothing arrives for 6 s, no stale event yet
-        run(20, 1000, COLD3);
-        expect(alerts).toEqual([]);
-    });
-
-    it('frames whose EDM row is stale (serial_warning) break the 30 s', () => {
-        start();
-        run(20, 1000, COLD3);
-        run(5, 1000, COLD3, { serial_warning: 'No data from EDM for 6s' });
-        run(20, 1000, COLD3);
-        expect(alerts).toEqual([]);
-        run(11, 1000, COLD3);           // 30 s of current data since the gap
-        expect(alerts.map(a => a.cyl)).toEqual([3]);
-    });
-
-    it('engine:stale and engine:disconnect break the 30 s', () => {
-        start();
-        run(20, 1000, COLD3);
-        client.emit('engine:stale', { stale: true });
-        run(20, 1000, COLD3);
-        client.emit('engine:disconnect');
-        run(20, 1000, COLD3);
-        expect(alerts).toEqual([]);
-    });
-
-    it('Pi and EDM powered off at shutdown: the next start, already running when data returns, is watched', () => {
-        start();
-        run(40, 1000, COLD3);
-        mon.dismiss();
-        run(10, 1000, HOT);                    // recovered; then master off -- no frames
-        clock += 40 * 60;
-        run(32, 1000, COLD3);                  // first frame back (engine already running) is the start
-        expect(alerts.map(a => a.cyl)).toEqual([3, 3]);
-        expect(mon.state.visible).toBe(true);
-    });
-
-    it('a Pi dropout longer than 30 s does not clear an unacknowledged warning', () => {
-        start();
-        run(40, 1000, COLD3);
-        clock += 60;                           // WiFi lost for a minute
-        run(10, 2400, HOT);
-        expect(mon.state).toMatchObject({ visible: true, cylinders: [{ cyl: 3 }] });
-    });
-
-    it('a clock stepping backwards is treated as a gap, not as time running', () => {
-        start();
-        run(20, 1000, COLD3);
-        clock -= 100;
-        run(20, 1000, COLD3);
-        expect(alerts).toEqual([]);
-    });
-
-    it('a frame with no RPM is a gap, not an engine stop', () => {
-        start();
-        run(40, 1000, COLD3);
-        client.emit('engine:data', { api_contract: 2, data: {} });
-        expect(mon.detector.engineStart).not.toBeNull();
-        expect(mon.state.visible).toBe(true);
-    });
-});
-
-// TEMPORARY until Task 7/9 replace the old classes: the legacy config shim, seen through the monitor.
-// StickyValve.config() itself is gone; the new override logic is tested in sticky-valve-spec.test.js.
-describe('legacy monitor config (cockpit overrides)', () => {
-    it('defaults are the Pi constants', () => {
-        expect(new StickyValveMonitor().detector.cfg).toMatchObject({ warmupMin: 10, egtRatio: 0.5, minEgt: 200, persistSec: 30 });
-    });
-
-    it('reads cockpit-config.json enginePage.stickyValveThresholdPct / WindowMinutes', () => {
-        globalThis.CockpitConfig = { get: (p) => (p === 'enginePage' ? { stickyValveThresholdPct: 40, stickyValveWindowMinutes: 15 } : undefined) };
-        expect(new StickyValveMonitor().detector.cfg).toMatchObject({ egtRatio: 0.4, warmupMin: 15 });
-    });
-
-    it('the shipped config keeps the Pi values', () => {
-        const ep = JSON.parse(read('web/cockpit-config.json')).enginePage;
-        globalThis.CockpitConfig = { get: (p) => (p === 'enginePage' ? ep : undefined) };
-        expect(new StickyValveMonitor().detector.cfg).toMatchObject({ egtRatio: 0.5, warmupMin: 10 });
-    });
-});
-
 
 // ============================================================================
 // StickyValveDetector -- ports of engine_analysis/tests/test_sticky_valve.py
@@ -1241,5 +901,604 @@ describe('StickyValveDetector — Task 4b: every window in seconds of sample tim
         expect(res.rulesNotRun).toContain('roughness');
         expect(res.margins.roughnessMaxRpmStd).toBeNull();
         expect(tX + w).toBeLessThan(samples.at(-1).t);   // the window that would hold X was reached
+    });
+});
+
+
+// ============================================================================
+// StickyValveMonitor -- live wiring, verdict state, latch and dismiss policy
+// ============================================================================
+
+const M_HOT = [1200, 1180, 1210, 1190];
+const M_COLD3 = [1200, 1180, 300, 1190];   // cyl 3 at 25% of the others
+const COOL_CHT = [100, 100, 100, 100];      // a cold settle (<= verdict.cold_cht_max_f)
+const HOT_CHT = [300, 300, 300, 300];
+const RUNUP = 1700;                         // >= phase.runup_rpm: fires the verdict trigger
+
+/** A Pi /api/status frame. */
+function piFrame(rpm, egt, { cht = COOL_CHT, mp = 12, extra = {}, data = {} } = {}) {
+    return {
+        api_contract: 2, serial_connected: true, serial_warning: null,
+        data: {
+            RPM: rpm, MP: mp, EGT1: egt[0], EGT2: egt[1], EGT3: egt[2], EGT4: egt[3],
+            CHT1: cht[0], CHT2: cht[1], CHT3: cht[2], CHT4: cht[3], ...data,
+        },
+        ...extra,
+    };
+}
+
+function makeTarget() {
+    const c = new EventTarget();
+    c.emit = (type, detail) => c.dispatchEvent(new CustomEvent(type, { detail }));
+    return c;
+}
+
+/** A monitor on a fake engine client and Stratux client, clock in seconds. */
+function harness(opts = {}) {
+    const h = { clock: 0, client: makeTarget(), stratux: makeTarget(), findings: [], inflight: [], changes: [] };
+    h.mon = new StickyValveMonitor(h.client, { now: () => h.clock * 1000, cfg: CFG, stratuxClient: h.stratux, ...opts });
+    h.mon.addEventListener('finding', (e) => h.findings.push(e.detail));
+    h.mon.addEventListener('inflight', (e) => h.inflight.push(e.detail));
+    h.mon.addEventListener('change', (e) => h.changes.push(e.detail));
+    /** `secs` 1 Hz frames; egt / frame options may be functions of k (0-based). */
+    h.run = (secs, rpm, egt, o) => {
+        for (let k = 0; k < secs; k++) {
+            h.client.emit('engine:data', piFrame(
+                typeof rpm === 'function' ? rpm(k) : rpm,
+                typeof egt === 'function' ? egt(k) : egt,
+                typeof o === 'function' ? o(k) : o));
+            h.clock += 1;
+        }
+    };
+    /** Wrap the detector's sample() to see what the monitor feeds it. */
+    h.spy = () => {
+        const seen = [];
+        const det = h.mon.detector;
+        const orig = det.sample.bind(det);
+        det.sample = (s) => { seen.push({ s, egt: s.egt, cht: s.cht, json: JSON.stringify(s) }); return orig(s); };
+        return seen;
+    };
+    return h;
+}
+
+const flush = async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); };
+
+/** Cylinder 3 cold from start, then one run-up frame: NO-GO at t = 40. */
+function noGo(h) {
+    h.run(40, 1000, M_COLD3);   // t = 0..39; R1 fires at t = 30, no verdict yet
+    h.run(1, RUNUP, M_COLD3);   // t = 40: verdict trigger
+}
+
+/** A seen engine stop: RPM 0 held for run.stop_sec. */
+function seenStop(h) { h.run(CFG.run.stop_sec + 1, 0, M_HOT); }
+
+// Healthy cold start: even EGT ramp, even CHT ramp (cht_lag needs >= 90 °F of
+// others' rise in 180 s); lagCht makes cylinder 4's CHT rise at 40%.
+const egtRamp = (k) => even((t) => 300 + 5 * Math.min(t, 120))(k);
+const chtEven = (k) => ({ cht: even((t) => 70 + 0.75 * Math.min(t, 300))(k) });
+const chtLag4 = (k) => {
+    const v = 70 + 0.75 * Math.min(k, 300);
+    return { cht: [v, v, v, 70 + 0.3 * Math.min(k, 300)] };
+};
+
+describe('StickyValveMonitor — verdict state', () => {
+    it('noGoShowsAtTheVerdictTriggerNotBefore', () => {
+        const h = harness();
+        h.run(40, 1000, M_COLD3);
+        expect(h.findings.map(f => [f.rule, f.level, f.cyl, f.t])).toEqual([['cold_cylinder', 'NO-GO', 3, 30]]);
+        expect(h.mon.state).toMatchObject({ verdict: null, visible: false });
+        h.run(1, RUNUP, M_COLD3);
+        expect(h.mon.state).toMatchObject({
+            verdict: 'NO-GO', visible: true, verdictVisible: true, dismissable: false, reason: null, phase: 'ground',
+        });
+        expect(h.mon.state.findings.map(f => f.rule)).toEqual(['cold_cylinder']);
+        expect(h.changes.at(-1)).toEqual(h.mon.state);
+    });
+
+    it('cautionFromChtLagIsDismissable', () => {
+        const h = harness();
+        h.run(200, 1000, egtRamp, chtLag4);
+        h.run(1, RUNUP, egtRamp(200), chtLag4(200));
+        expect(h.mon.state).toMatchObject({ verdict: 'CAUTION', visible: true, dismissable: true });
+        expect(h.mon.state.findings.map(f => [f.rule, f.cyl, f.level])).toEqual([['cht_lag', 4, 'CAUTION']]);
+        h.mon.dismiss();
+        expect(h.mon.state).toMatchObject({ verdict: 'CAUTION', visible: false, verdictVisible: false });
+    });
+
+    it('valvesOkNeedsEveryGroundRuleAndIsDismissable', () => {
+        const h = harness();
+        h.run(200, 1000, egtRamp, chtEven);
+        h.run(1, RUNUP, egtRamp(200), chtEven(200));
+        expect(h.mon.state).toMatchObject({ verdict: 'VALVES OK', visible: true, dismissable: true, rulesNotRun: [] });
+        h.mon.dismiss();
+        expect(h.mon.state.visible).toBe(false);
+    });
+
+    it('checkingResolvesByItselfToValvesOk', () => {
+        const h = harness();
+        h.run(40, 1000, egtRamp, chtEven);
+        h.stratux.emit('stratux:situation', { ground_speed: 6, gps_fix_quality: 1 });
+        h.run(1, 1000, egtRamp(40), chtEven(40));                          // taxi at t = 40: trigger
+        expect(h.mon.state).toMatchObject({ verdict: 'CHECKING', visible: true });
+        h.run(150, 1000, (k) => egtRamp(41 + k), (k) => chtEven(41 + k)); // to t = 190: R3 completes at 180
+        expect(h.mon.state.verdict).toBe('VALVES OK');
+        expect(h.changes.map(c => c.verdict).filter((v, i, a) => v !== a[i - 1])).toEqual([null, 'CHECKING', 'VALVES OK']);
+    });
+
+    it('partialOnAHotStartNamesTheRulesNotRun', () => {
+        const h = harness();
+        h.run(70, 1000, M_HOT, { cht: HOT_CHT });
+        h.run(1, RUNUP, M_HOT, { cht: HOT_CHT });
+        expect(h.mon.state).toMatchObject({ verdict: 'PARTIAL', visible: true, dismissable: true, rulesNotRun: ['slow_heatup', 'cht_lag'] });
+    });
+
+    it('notCheckedWhenNoRuleCouldRunHasNoReasonButRulesNotRun', () => {
+        const h = harness();
+        h.run(1, RUNUP, M_HOT, { cht: HOT_CHT });
+        expect(h.mon.state).toMatchObject({
+            verdict: 'NOT CHECKED', reason: null, dismissable: true,
+            rulesNotRun: ['cold_cylinder', 'slow_heatup', 'cht_lag', 'roughness'],
+        });
+    });
+
+    it('an EGT of 0 is a reading: a dead cylinder may well read 0', () => {
+        const h = harness();
+        h.run(31, 1000, [1200, 1180, 0, 1190]);
+        expect(h.findings).toMatchObject([{ rule: 'cold_cylinder', cyl: 3, detail: { egt: 0, othersAvg: 1190 } }]);
+    });
+
+    it('a missing EGT is skipped: the other three are still compared', () => {
+        const h = harness();
+        h.run(31, 1000, [1200, 400, null, 1190]);
+        expect(h.findings).toMatchObject([{ rule: 'cold_cylinder', cyl: 2, detail: { egt: 400, othersAvg: 1195 } }]);
+    });
+});
+
+describe('StickyValveMonitor — NO-GO latch and dismiss', () => {
+    it('noGoCannotBeDismissedBeforeASeenStop', () => {
+        const h = harness();
+        noGo(h);
+        h.mon.dismiss();
+        expect(h.mon.state).toMatchObject({ verdict: 'NO-GO', visible: true, dismissable: false });
+        seenStop(h);
+        // The tap before the stop does not count: it stays up until tapped now.
+        expect(h.mon.state).toMatchObject({ verdict: 'NO-GO', visible: true, dismissable: true });
+        h.mon.dismiss();
+        expect(h.mon.state.visible).toBe(false);
+    });
+
+    it('aNewRunAfterASeenStopStartsClean', () => {
+        const h = harness();
+        noGo(h);
+        seenStop(h);
+        h.run(1, 1000, M_HOT);
+        expect(h.mon.state).toMatchObject({ verdict: null, findings: [], context: [], inflight: [], visible: false, dismissable: true });
+        // ...and is watched again (a start after a seen stop settles after settle_sec).
+        h.run(CFG.run.settle_sec + 31, 1000, M_COLD3);
+        h.run(1, RUNUP, M_COLD3);
+        expect(h.mon.state.verdict).toBe('NO-GO');
+    });
+
+    it('noGoStaysWhenTheCylinderRecovers', () => {
+        const h = harness();
+        noGo(h);
+        h.run(120, RUNUP, M_HOT);
+        expect(h.mon.state).toMatchObject({ verdict: 'NO-GO', visible: true, dismissable: false });
+    });
+
+    it('aRunUpRpmDropoutIsNotAStop', () => {
+        const h = harness();
+        noGo(h);
+        h.run(13, 0, M_HOT);
+        h.run(30, RUNUP, M_HOT);
+        expect(h.mon.state).toMatchObject({ verdict: 'NO-GO', visible: true, dismissable: false });
+    });
+
+    it('gapEndKeepsNoGoLatchedIntoTheNextRun', () => {
+        const h = harness();
+        noGo(h);
+        h.clock += 60;                     // Pi dropout longer than stop_sec
+        h.run(5, 2400, M_HOT, { cht: HOT_CHT });
+        expect(h.mon.detector.runActive).toBe(true);
+        expect(h.mon.state).toMatchObject({ verdict: 'NO-GO', visible: true, dismissable: false });
+        expect(h.mon.state.findings.map(f => [f.rule, f.cyl])).toEqual([['cold_cylinder', 3]]);
+        // Only a seen stop releases it; the next run is then clean.
+        seenStop(h);
+        expect(h.mon.state).toMatchObject({ verdict: 'NO-GO', dismissable: true });
+        h.run(1, 1000, M_HOT);
+        expect(h.mon.state.verdict).toBe(null);
+    });
+
+    it('aNoGoFoundBeforeTheTriggerIsLatchedByAGapToo', () => {
+        const h = harness();
+        h.run(40, 1000, M_COLD3);           // finding, no verdict yet
+        h.clock += 60;
+        h.run(5, 1000, M_HOT, { cht: HOT_CHT });
+        expect(h.mon.state).toMatchObject({ verdict: 'NO-GO', visible: true, dismissable: false });
+    });
+
+    it('aClockSteppingBackwardsIsAGapNotAStop', () => {
+        const h = harness();
+        noGo(h);
+        h.clock -= 100;
+        h.run(5, 1000, M_HOT);
+        expect(h.mon.state).toMatchObject({ verdict: 'NO-GO', dismissable: false });
+    });
+
+    it('aFrameWithNoRpmIsAHoleNotAStop', () => {
+        const h = harness();
+        noGo(h);
+        h.client.emit('engine:data', { api_contract: 2, data: {} });
+        expect(h.mon.detector.runActive).toBe(true);
+        expect(h.mon.state).toMatchObject({ verdict: 'NO-GO', dismissable: false });
+    });
+
+    it('aDismissedCautionComesBackOnANewFindingAndOnARise', () => {
+        const h = harness();
+        h.run(200, 1000, egtRamp, chtLag4);
+        h.run(1, RUNUP, egtRamp(200), chtLag4(200));
+        h.mon.dismiss();
+        expect(h.mon.state.visible).toBe(false);
+        // A rough cylinder 2 at idle: a second CAUTION finding, no rise.
+        const alt = (k) => (k % 2 ? 1 : -1);
+        h.run(40, 1000, (k) => [900 + 3 * alt(k), 900 + 60 * alt(k), 900 + 3 * alt(k), 900 + 3 * alt(k)]);
+        expect(h.findings.map(f => [f.rule, f.cyl])).toEqual([['cht_lag', 4], ['roughness', 2]]);
+        expect(h.mon.state).toMatchObject({ verdict: 'CAUTION', visible: true });
+        h.mon.dismiss();
+        // Cylinder 3 goes cold: NO-GO, a rise.
+        h.run(31, 1000, M_COLD3);
+        expect(h.mon.state).toMatchObject({ verdict: 'NO-GO', visible: true, dismissable: false });
+    });
+});
+
+describe('StickyValveMonitor — in-flight warning', () => {
+    const CRUISE = [1350, 1350, 1350, 1350];
+    const split = (fall, rise) => {
+        const e = CRUISE.slice();
+        e[fall - 1] -= 250;
+        e[rise - 1] += 100;
+        return e;
+    };
+    function flightToInflight(h) {
+        h.run(1, 2500, CRUISE, { mp: 26, cht: HOT_CHT });               // t = 0: takeoff power
+        h.run(19, 2400, CRUISE, { mp: 24, cht: HOT_CHT });              // t = 1..19
+        h.run(2, 2300, CRUISE, { mp: 18, cht: HOT_CHT });               // t = 20..21: power reduction
+        h.run(5, 2300, split(3, 1), { mp: 18, cht: HOT_CHT });          // t = 22..26: 3 falls, 1 rises
+    }
+
+    it('isItsOwnDismissableBlockAndComesBackOnANewEvent', () => {
+        const h = harness();
+        flightToInflight(h);
+        expect(h.inflight.map(e => [e.falling, e.rising])).toEqual([[[3], [1]]]);
+        expect(h.mon.state).toMatchObject({ phase: 'airborne', inflightVisible: true, visible: true });
+        expect(h.mon.state.inflight).toHaveLength(1);
+        const verdictVisible = h.mon.state.verdictVisible;
+        h.mon.dismiss('inflight');
+        expect(h.mon.state.inflightVisible).toBe(false);
+        expect(h.mon.state.verdictVisible).toBe(verdictVisible);
+        h.run(43, 2300, split(3, 1), { mp: 18, cht: HOT_CHT });         // t = 27..69: watch ends
+        h.run(15, 2400, CRUISE, { mp: 24, cht: HOT_CHT });              // t = 70..84
+        h.run(2, 2300, CRUISE, { mp: 18, cht: HOT_CHT });               // t = 85..86
+        h.run(3, 2300, split(2, 4), { mp: 18, cht: HOT_CHT });          // t = 87..89
+        expect(h.inflight.map(e => [e.falling, e.rising])).toEqual([[[3], [1]], [[2], [4]]]);
+        expect(h.mon.state.inflightVisible).toBe(true);
+    });
+
+    it('dismissing the verdict block leaves the in-flight block up', () => {
+        const h = harness();
+        flightToInflight(h);
+        h.mon.dismiss('verdict');
+        expect(h.mon.state).toMatchObject({ verdictVisible: false, inflightVisible: true, visible: true });
+    });
+
+    it('phase is airborne only while the running run has seen takeoff power', () => {
+        const h = harness();
+        expect(h.mon.state.phase).toBe('ground');
+        h.run(5, 1000, M_HOT, { cht: HOT_CHT });
+        expect(h.mon.state.phase).toBe('ground');
+        h.run(1, 2500, M_HOT, { mp: 26, cht: HOT_CHT });
+        expect(h.mon.state.phase).toBe('airborne');
+        seenStop(h);
+        expect(h.mon.state.phase).toBe('ground');
+    });
+});
+
+describe('StickyValveMonitor — spec loading', () => {
+    it('bufferedFramesReplayAfterSpecLoads', async () => {
+        let resolve;
+        const specPromise = new Promise((r) => { resolve = r; });
+        const h = harness({ cfg: undefined, specPromise });
+        noGo(h);
+        expect(h.mon.detector).toBeNull();
+        expect(h.findings).toEqual([]);
+        expect(h.mon.state).toMatchObject({ verdict: null, visible: false });
+        resolve(CFG);
+        await flush();
+        // Replayed in order, at their arrival times.
+        expect(h.findings.map(f => [f.rule, f.cyl, f.t])).toEqual([['cold_cylinder', 3, 30]]);
+        expect(h.mon.state).toMatchObject({ verdict: 'NO-GO', visible: true });
+        expect(h.changes.at(-1).verdict).toBe('NO-GO');
+        // Live frames carry on from there.
+        h.run(1, RUNUP, M_COLD3);
+        expect(h.mon.detector.runActive).toBe(true);
+    });
+
+    it('specLoadFailureIsNotChecked', async () => {
+        globalThis.DiagLog = { log: vi.fn() };
+        try {
+            const h = harness({ cfg: undefined, specPromise: Promise.reject(new Error('Failed to load sticky_valve_spec.json: HTTP 404')) });
+            h.run(5, 1000, M_HOT);
+            await flush();
+            expect(h.mon.state).toMatchObject({ verdict: 'NOT CHECKED', visible: true, dismissable: true, findings: [] });
+            expect(h.mon.state.reason).toMatch(/threshold file/);
+            expect(h.mon.state.reason).toMatch(/HTTP 404/);
+            expect(globalThis.DiagLog.log).toHaveBeenCalledTimes(1);
+            expect(globalThis.DiagLog.log.mock.calls[0][0]).toBe('error');
+            expect(h.changes.at(-1).verdict).toBe('NOT CHECKED');
+            h.run(5, 1000, M_COLD3);                 // later frames are ignored, nothing throws
+            expect(h.mon.detector).toBeNull();
+            h.mon.dismiss();
+            expect(h.mon.state.visible).toBe(false);
+        } finally {
+            delete globalThis.DiagLog;
+        }
+    });
+
+    it('withNeitherCfgNorSpecPromiseItCallsLoadSpec', async () => {
+        delete globalThis.CockpitConfig;
+        const realFetch = globalThis.fetch;
+        globalThis.fetch = vi.fn(async (name) => ({ ok: true, status: 200, json: async () => JSON.parse(read(`web/${name}`)) }));
+        try {
+            const h = harness({ cfg: undefined });
+            await vi.waitFor(() => expect(h.mon.detector).not.toBeNull());
+            expect(globalThis.fetch).toHaveBeenCalledWith('sticky_valve_spec.json');
+            expect(globalThis.fetch).toHaveBeenCalledWith('phase_spec.json');
+            expect(h.mon.detector.cfg).toEqual(CFG);
+        } finally {
+            globalThis.fetch = realFetch;
+        }
+    });
+
+    it('bufferOverflowKeepsNewest', async () => {
+        let resolve;
+        const specPromise = new Promise((r) => { resolve = r; });
+        const h = harness({ cfg: undefined, specPromise, bufferMax: 20 });
+        h.run(40, 1000, M_COLD3);   // t = 0..39: only t = 20..39 are kept
+        resolve(CFG);
+        await flush();
+        // Unbuffered, R1 would have fired at t = 30; the kept 20 s are short of persist_sec.
+        expect(h.findings).toEqual([]);
+        h.run(11, 1000, M_COLD3);   // t = 40..50
+        expect(h.findings.map(f => f.t)).toEqual([50]);   // 30 s after the oldest kept frame
+    });
+});
+
+describe('StickyValveMonitor — data gaps', () => {
+    it('engine:stale makes the next frame a hole: the 30 s restarts', () => {
+        const h = harness();
+        h.run(20, 1000, M_COLD3);
+        h.client.emit('engine:stale', { stale: true });
+        h.run(20, 1000, M_COLD3);
+        expect(h.findings).toEqual([]);
+        h.run(11, 1000, M_COLD3);
+        expect(h.findings.map(f => f.t)).toEqual([50]);
+    });
+
+    it('engine:stale with stale false is not a hole', () => {
+        const h = harness();
+        h.run(20, 1000, M_COLD3);
+        h.client.emit('engine:stale', { stale: false });
+        h.run(11, 1000, M_COLD3);
+        expect(h.findings.map(f => f.t)).toEqual([30]);
+    });
+
+    it('engine:disconnect makes the next frame a hole', () => {
+        const h = harness();
+        h.run(20, 1000, M_COLD3);
+        h.client.emit('engine:disconnect');
+        h.run(20, 1000, M_COLD3);
+        expect(h.findings).toEqual([]);
+    });
+
+    it('frames whose EDM row is not current are not fed, and leave a hole', () => {
+        const h = harness();
+        h.run(20, 1000, M_COLD3);
+        const seen = h.spy();
+        h.run(5, 1000, M_COLD3, { extra: { serial_warning: 'No data from EDM for 6s' } });
+        h.run(1, 1000, M_COLD3, { extra: { serial_connected: false } });
+        h.mon.feed(null);
+        expect(seen).toEqual([]);
+        h.run(20, 1000, M_COLD3);                    // t = 26..45
+        expect(Number.isNaN(seen[0].s.rpm)).toBe(true);   // the hole, at the next frame's time
+        expect(seen[0].s.t).toBe(26);
+        expect(seen[1].s).toMatchObject({ t: 26, rpm: 1000 });
+        expect(h.findings).toEqual([]);
+        h.run(11, 1000, M_COLD3);
+        expect(h.findings.map(f => f.t)).toEqual([56]);
+    });
+
+    it('a few seconds with no frames at all break the 30 s', () => {
+        const h = harness();
+        h.run(20, 1000, M_COLD3);
+        h.clock += 6;
+        h.run(20, 1000, M_COLD3);
+        expect(h.findings).toEqual([]);
+    });
+});
+
+describe('StickyValveMonitor — frames', () => {
+    it('freshSampleObjectsEveryFrame', () => {
+        const h = harness();
+        const seen = h.spy();
+        const raw = piFrame(1000, M_HOT);
+        h.mon.feed(raw);
+        h.clock += 1;
+        h.mon.feed(raw);                              // the same raw object twice
+        h.run(5, 1000, M_HOT);
+        h.client.emit('engine:stale', { stale: true });
+        h.run(2, 1000, M_HOT);
+        expect(seen.length).toBe(10);                 // 9 frames + 1 hole
+        for (const key of ['s', 'egt', 'cht']) {
+            expect(new Set(seen.map(x => x[key])).size).toBe(seen.length);
+        }
+        for (const x of seen) expect(JSON.stringify(x.s)).toBe(x.json);   // never mutated afterwards
+    });
+
+    it('frameNormalisation', () => {
+        const h = harness();
+        const seen = h.spy();
+        h.clock = 12.5;
+        h.mon.feed({ data: { RPM: '1000', MAP: 14.2, Fuel_Flow: 3.1, EGT1: 1, egt2: 2, EGT3: '', CHT1: 101, cht2: 102, CHT3: null, Carb_Temp: 55 } });
+        h.mon.feed({ rpm: 900, MP: 13, fuel_flow: 2.9, egt1: 5, cht4: 7, carb_temp: 60 });            // flat frame
+        h.mon.feed({ data: { RPM: 800, mp: 11, FF: 2.5 } });
+        h.mon.feed({ data: { RPM: 800, ff: 2.4 } });
+        expect(seen.map(x => x.s)).toEqual([
+            { t: 12.5, rpm: 1000, mp: 14.2, ff: 3.1, egt: [1, 2, NaN, NaN], cht: [101, 102, NaN, NaN], carb: 55, gs: NaN },
+            { t: 12.5, rpm: 900, mp: 13, ff: 2.9, egt: [5, NaN, NaN, NaN], cht: [NaN, NaN, NaN, 7], carb: 60, gs: NaN },
+            { t: 12.5, rpm: 800, mp: 11, ff: 2.5, egt: [NaN, NaN, NaN, NaN], cht: [NaN, NaN, NaN, NaN], carb: NaN, gs: NaN },
+            { t: 12.5, rpm: 800, mp: NaN, ff: 2.4, egt: [NaN, NaN, NaN, NaN], cht: [NaN, NaN, NaN, NaN], carb: NaN, gs: NaN },
+        ]);
+    });
+
+    it('groundSpeedFromStratux', () => {
+        const h = harness();
+        h.run(70, 1000, M_HOT, { cht: HOT_CHT });
+        expect(h.mon.state.verdict).toBe(null);
+        h.stratux.emit('stratux:situation', { ground_speed: 6, gps_fix_quality: 1 });
+        h.run(1, 1000, M_HOT, { cht: HOT_CHT });
+        expect(h.mon.state.verdict).toBe('PARTIAL');
+    });
+
+    it('a situation older than 5 s gives no ground speed; 5 s is still fresh', () => {
+        const h = harness();
+        const seen = h.spy();
+        h.stratux.emit('stratux:situation', { ground_speed: 6, gps_fix_quality: 1 });
+        h.clock += 6;
+        h.run(1, 1000, M_HOT);
+        h.stratux.emit('stratux:situation', { ground_speed: 7, gps_fix_quality: 1 });
+        h.clock += 5;
+        h.run(1, 1000, M_HOT);
+        expect(seen.map(x => x.s.gs)).toEqual([NaN, 7]);
+    });
+
+    it('a degraded (feed stopped) or no-fix situation clears the ground speed', () => {
+        const h = harness();
+        const seen = h.spy();
+        h.stratux.emit('stratux:situation', { ground_speed: 6, gps_fix_quality: 1 });
+        h.stratux.emit('stratux:situation', { ground_speed: 6, gps_fix_quality: 0, _stale: true });
+        h.run(1, 1000, M_HOT);
+        h.stratux.emit('stratux:situation', { ground_speed: 6, gps_fix_quality: 1 });
+        h.stratux.emit('stratux:situation', { ground_speed: 6, gps_fix_quality: 0 });
+        h.run(1, 1000, M_HOT);
+        h.stratux.emit('stratux:situation', { ground_speed: null, gps_fix_quality: 1 });
+        h.run(1, 1000, M_HOT);
+        h.stratux.emit('stratux:situation', { ground_speed: 4, gps_fix_quality: 1, _source: 'engine' });  // engine-GPS bridge
+        h.run(1, 1000, M_HOT);
+        expect(seen.map(x => x.s.gs)).toEqual([NaN, NaN, NaN, 4]);
+    });
+
+    it('destroy stops listening to both clients', () => {
+        const h = harness();
+        const seen = h.spy();
+        h.mon.destroy();
+        h.stratux.emit('stratux:situation', { ground_speed: 6, gps_fix_quality: 1 });
+        h.run(3, 1000, M_HOT);
+        expect(seen).toEqual([]);
+        h.mon.feed(piFrame(1000, M_HOT));
+        expect(seen[0].s.gs).toBeNaN();
+    });
+});
+
+describe('StickyValveMonitor — days since flight', () => {
+    const noteDays = (h) => h.mon.state.context.filter(c => c.note === 'days_since_flight').map(c => c.detail.days);
+
+    it('from the constructor: a note at the verdict trigger', () => {
+        const h = harness({ daysSinceFlight: 45 });
+        h.run(1, RUNUP, M_HOT);
+        expect(noteDays(h)).toEqual([45]);
+    });
+
+    it('set before the verdict: this run; set after it: the next run', () => {
+        const h = harness();
+        h.run(5, 1000, M_HOT);
+        h.mon.setDaysSinceFlight(40);
+        h.run(1, RUNUP, M_HOT);
+        expect(noteDays(h)).toEqual([40]);
+
+        const g = harness();
+        g.run(1, RUNUP, M_HOT);                     // verdict issued
+        g.mon.setDaysSinceFlight(40);
+        g.run(5, RUNUP, M_HOT);
+        expect(noteDays(g)).toEqual([]);
+        seenStop(g);
+        g.run(CFG.run.settle_sec + 1, RUNUP, M_HOT);   // the restart settles, then triggers
+        expect(noteDays(g)).toEqual([40]);
+    });
+
+    it('set before the spec loads, it reaches the detector', async () => {
+        let resolve;
+        const h = harness({ cfg: undefined, specPromise: new Promise((r) => { resolve = r; }) });
+        h.mon.setDaysSinceFlight(31);
+        resolve(CFG);
+        await flush();
+        expect(h.mon.detector.daysSinceFlight).toBe(31);
+    });
+
+    it('below the spec threshold, unknown or invalid: no note', () => {
+        for (const d of [CFG.context.days_since_flight - 1, null, undefined, -1, NaN, '40']) {
+            const h = harness();
+            h.mon.setDaysSinceFlight(d);
+            h.run(1, RUNUP, M_HOT);
+            expect(noteDays(h)).toEqual([]);
+        }
+    });
+
+    it('daysSinceLastFlight: this aircraft\'s latest dated logbook entry, UTC days', () => {
+        const now = Date.UTC(2026, 10, 6, 15, 0);   // 2026-11-06 15:00Z
+        const d = StickyValveMonitor.daysSinceLastFlight;
+        const e = (date, tail, key = 'aircraft_tail') => ({ date, [key]: tail });
+        expect(d([e('2026-10-01', 'N194JT'), e('2026-11-01', 'N999XX'), e('2026-09-20', 'N194JT')], 'N194JT', now)).toBe(36);
+        expect(d([e('2026-10-31', 'N194JT', 'aircraft_id')], 'N194JT', now)).toBe(6);
+        expect(d([e('2026-11-06', 'N194JT')], 'N194JT', now)).toBe(0);
+        expect(d([e('2026-11-07', 'N194JT')], 'N194JT', now)).toBe(null);           // clock or entry wrong
+        expect(d([e('11/01/2026', 'N194JT'), e('', 'N194JT'), null], 'N194JT', now)).toBe(null);
+        expect(d([e('2026-10-01', 'N999XX')], 'N194JT', now)).toBe(null);
+        expect(d([e('2026-10-01', 'N194JT')], '', now)).toBe(null);
+        expect(d(null, 'N194JT', now)).toBe(null);
+    });
+});
+
+describe('StickyValveMonitor — text', () => {
+    it('describe() names the cylinder, the signal and the numbers', () => {
+        const D = StickyValveMonitor.describe;
+        expect(D({ rule: 'cold_cylinder', cyl: 3, level: 'NO-GO', corroborates: false, detail: { egt: 412.2, othersAvg: 1030.4, ratio: 0.4 } }))
+            .toBe('CYL 3 EGT 412°F vs 1030°F others (cold cylinder)');
+        expect(D({ rule: 'slow_heatup', cyl: 2, detail: { rise: 150, othersRise: 420.6, ratio: 0.36 } }))
+            .toBe('CYL 2 EGT rose 150°F vs 421°F others (slow EGT heat-up)');
+        expect(D({ rule: 'cht_lag', cyl: 4, corroborates: true, detail: { rise: 40, othersRise: 120, ratio: 0.33 } }))
+            .toBe('CYL 4 CHT rose 40°F vs 120°F others (CHT lag, same cylinder as the EGT finding)');
+        expect(D({ rule: 'roughness', cyl: null, detail: { rpmStd: 250.4 } }))
+            .toBe('ENGINE RPM unsteady at idle, std dev 250 RPM (roughness)');
+        expect(D({ rule: 'roughness', cyl: 2, detail: { egtStd: 60, othersMedian: 3, ratio: 20 } }))
+            .toBe('CYL 2 EGT unsteady at idle, std dev 60°F vs 3°F others (roughness)');
+        expect(D({ rule: 'cold_cylinder', cyl: 1, detail: { egt: null, othersAvg: NaN } }))
+            .toBe('CYL 1 EGT —°F vs —°F others (cold cylinder)');
+    });
+
+    it('context, in-flight and rule-name text', () => {
+        expect(StickyValveMonitor.describeContext({ note: 'days_since_flight', detail: { days: 45 } })).toBe('45 days since the last flight');
+        expect(StickyValveMonitor.describeContext({ note: 'long_ground_idle', detail: { idleSec: 960 } }))
+            .toBe('Long ground idle: 16 min at idle before takeoff');
+        expect(StickyValveMonitor.describeContext({ note: 'heat_soak', detail: { carb: 104.6 } }))
+            .toBe('Carb temp 105°F on the ground (heat-soak sign; carb temp stands in for OAT)');
+        expect(StickyValveMonitor.describeInflight({ falling: [3], rising: [1], deltas: [101.2, 0, -251, 2], mpDrop: 6 }))
+            .toBe('IN-FLIGHT: CYL 3 EGT fell 251°F while CYL 1 rose 101°F after a power reduction');
+        expect(['cold_cylinder', 'slow_heatup', 'cht_lag', 'roughness', 'divergence'].map(StickyValveMonitor.ruleName))
+            .toEqual(['cold cylinder (EGT)', 'slow EGT heat-up', 'CHT lag', 'roughness', 'in-flight EGT divergence']);
+    });
+
+    it('no legacy detector or config is left in the file', () => {
+        const src = read('web/shared/sticky-valve.js');
+        expect(src).not.toMatch(/LegacyStickyValveDetector|LEGACY_DEFAULTS|legacyStickyValveConfig/);
     });
 });

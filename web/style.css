@@ -3088,19 +3088,32 @@ body {
     color: var(--text-muted);
 }
 
-/* ========== Sticky valve warning (cockpit/sticky-valve-banner.js) ==========
-   Solid danger fill, per the status-badge pattern. Stays up until DISMISS. */
+/* ========== Sticky valve verdict (cockpit/sticky-valve-banner.js) ==========
+   .sv-banner is the positioned holder (shown/hidden as a whole); inside it a
+   verdict block and an in-flight block, each a solid fill per the status-badge
+   pattern: NO-GO red, CAUTION yellow, VALVES OK green, CHECKING / PARTIAL /
+   NOT CHECKED neutral, in-flight amber (orange warning token). */
 
 .sv-banner {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.sv-banner-block {
     display: flex;
     align-items: center;
     gap: 12px;
     padding: 10px 12px;
-    background: var(--color-danger);
-    color: var(--bg-primary);
     border-radius: 6px;
     box-shadow: var(--shadow-raised);
 }
+
+.sv-banner--nogo     { background: var(--color-danger);   color: var(--bg-primary); }
+.sv-banner--caution  { background: var(--color-caution);  color: #000; }
+.sv-banner--ok       { background: var(--color-success);  color: #000; }
+.sv-banner--neutral  { background: var(--bg-surface);     color: var(--text-primary); border: 2px solid var(--border-strong); }
+.sv-banner--inflight { background: var(--status-warning); color: #000; }
 
 /* Over the map: top centre, clear of the fuel gauges (left) and the corner
    buttons / engine box (right). No ancestor makes a stacking context, so this
@@ -3144,10 +3157,39 @@ body {
     letter-spacing: 0.04em;
 }
 
+.sv-banner-lines {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.sv-banner-lines:empty {
+    display: none;
+}
+
+.sv-banner-action {
+    font-family: var(--font-ui);
+    font-size: var(--text-sm);
+    font-weight: 900;
+}
+
 .sv-banner-cyl {
     font-family: var(--font-instrument);
     font-size: var(--text-sm);
     font-weight: 900;
+}
+
+/* Context notes: yellow advisory lines inside whichever verdict shows. */
+.sv-banner-note {
+    align-self: flex-start;
+    padding: 2px 6px;
+    background: var(--color-caution);
+    color: #000;
+    border: 1px solid #000;
+    border-radius: 4px;
+    font-family: var(--font-ui);
+    font-size: var(--text-xs);
+    font-weight: 800;
 }
 
 .sv-banner-hint {
