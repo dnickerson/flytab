@@ -92,7 +92,8 @@ cp "app/build/outputs/apk/debug/app-debug.apk" "$APK_DEST/$APK_NAME"
 # Keep this APK plus the 5 highest earlier versions, so a previous version can be
 # reinstalled (it used to delete every other versioned APK).
 echo "[4] Keeping the previous 5 versions:"
-bash "$REPO_ROOT/tools/prune-apks.sh" "$APK_DEST" "$APK_NAME" 5
+bash "$REPO_ROOT/tools/prune-apks.sh" "$APK_DEST" "$APK_NAME" 5 \
+    || echo "  WARNING: old-APK cleanup failed (see above); the new APK is fine"
 
 # Update flytab-latest.apk symlink for SFTP self-update
 ln -sf "$APK_DEST/$APK_NAME" "$APK_DEST/flytab-latest.apk"
