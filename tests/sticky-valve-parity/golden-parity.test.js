@@ -141,6 +141,12 @@ describe('golden parity: JS StickyValveDetector vs frozen Python reference', () 
                 expect(sha256(PHASE_SPEC_PATH), 'web/phase_spec.json drifted from engine_analysis').toBe(golden.phase_spec_sha256);
             });
 
+            it('pins the Python detector it was frozen from (detector_sha256)', () => {
+                // engine_analysis tests/test_sticky_valve_parity_pin.py compares this
+                // with sticky_valve.py: a Python-only change fails there until refrozen.
+                expect(golden.detector_sha256).toMatch(/^[0-9a-f]{64}$/);
+            });
+
             it('produces exactly the Python event list', () => {
                 const samples = samplesFrom(name);
                 expect(samples.length).toBeGreaterThan(0);

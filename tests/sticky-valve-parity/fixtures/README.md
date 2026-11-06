@@ -3,7 +3,8 @@
 Each fixture is a pair: `<name>.csv` (the exact samples the Python reference was
 fed: `t,rpm,mp,ff,egt1..egt4,cht1..cht4,carb,gs`, NaN as an empty cell, floats at
 full `repr()` precision) and `<name>.json` (`spec_sha256`, `phase_spec_sha256`,
-and the full Python event list with every key camelCased). The JS test feeds the
+`detector_sha256` -- the sha256 of `~/engine_analysis/sticky_valve.py` -- and the
+full Python event list with every key camelCased). The JS test feeds the
 CSV to `StickyValveDetector` and demands the same events. The core detector is
 frozen (`samples_from_df` -> `sample()` -> `finish()`), not `analyze_flight`,
 which adds the offline-only `low_climb_gs` note.
@@ -35,7 +36,10 @@ python3 tools/freeze_sticky_valve_parity_fixture.py
 ```
 
 Re-run (and re-commit the output) whenever `sticky_valve.py`,
-`sticky_valve_spec.json` or `phase_spec.json` changes in `~/engine_analysis`. The
+`sticky_valve_spec.json` or `phase_spec.json` changes in `~/engine_analysis`. engine_analysis's
+`tests/test_sticky_valve_parity_pin.py` fails until you do: it checks every
+fixture's `detector_sha256` and `spec_sha256` against its own files and `cmp`s
+`web/sticky_valve_spec.json` with its spec. The
 tool asserts the expected content above (and that the three real fixtures have no
 NO-GO finding) before writing. If the JS test fails after a refreeze with a
 spec-sha message, copy the spec file(s) into `web/` too. A parity mismatch is a

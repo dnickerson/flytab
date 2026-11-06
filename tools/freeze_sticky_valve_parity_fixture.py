@@ -11,6 +11,12 @@ or phase_spec.json changes in ~/engine_analysis:
 
     python3 tools/freeze_sticky_valve_parity_fixture.py
 
+Every fixture JSON records the sha256 of the spec files it was frozen with and
+of the Python detector itself (`detector_sha256`, sticky_valve.py's bytes):
+engine_analysis's tests/test_sticky_valve_parity_pin.py fails when sticky_valve.py
+or the spec changes there without a refreeze, and after a refreeze this repo's
+JS parity test fails if the port differs.
+
 The CORE detector is run directly (samples_from_df -> StickyValveDetector.sample
 -> finish), never analyze_flight(): that adds the offline-only low_climb_gs
 context note, which the JS detector deliberately does not produce.
@@ -32,6 +38,7 @@ from sticky_valve_spec import build_config, load_sticky_valve_spec
 
 OUT_DIR = Path(__file__).parent.parent / 'tests/sticky-valve-parity/fixtures'
 SPEC_PATH = ENGINE / 'sticky_valve_spec.json'
+DETECTOR_PATH = ENGINE / 'sticky_valve.py'
 PHASE_SPEC_PATH = ENGINE / 'phase_spec.json'
 
 REAL = {
@@ -322,13 +329,13 @@ def main():
     streams['hot_start'] = make_hot_start(base)
     streams['rough_idle'] = make_rough_idle(base)
 
-    spec_sha, phase_sha = sha256(SPEC_PATH), sha256(PHASE_SPEC_PATH)
+    spec_sha, phase_sha, detector_sha = sha256(SPEC_PATH), sha256(PHASE_SPEC_PATH), sha256(DETECTOR_PATH)
     for name, samples in streams.items():
         assert samples, f'{name}: no samples'
         events = run_detector(samples)
         check(name, events)
         payload = {'spec_sha256': spec_sha, 'phase_spec_sha256': phase_sha,
-                   'events': camelize(events)}
+                   'detector_sha256': detector_sha, 'events': camelize(events)}
         (OUT_DIR / f'{name}.csv').write_text(samples_csv(samples))
         # allow_nan=False: a NaN/inf anywhere in an event must fail loudly
         (OUT_DIR / f'{name}.json').write_text(json.dumps(payload, indent=1, allow_nan=False) + '\n')

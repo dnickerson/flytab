@@ -1,6 +1,7 @@
 {
- "spec_sha256": "2a803e13ca5ec464f4f434543ec756856a6a33fd8b88f64f957fd86d3785b876",
+ "spec_sha256": "9778cd93a8545a941535bf5eea0cc37180476a4c0845fc15593f5eef429f75fc",
  "phase_spec_sha256": "c42af839dfcb96c2c70b65bef4363c976de28dd312221f6b8b063a3b32231274",
+ "detector_sha256": "4ad832f3c4eea6b93efe078ff45b3883b320dd74608ea1dda32a813f6aa483e0",
  "events": [
   {
    "type": "run_start",
