@@ -207,7 +207,7 @@ describe('heading and distance against the independent reference', () => {
         const css = read('web/style.css');
         expect(css).toMatch(/\.apt-nav-seg \{\s*white-space: nowrap;/);
         const rate = css.slice(css.indexOf('.apt-nav-rate {'), css.indexOf('}', css.indexOf('.apt-nav-rate {')));
-        expect(rate).toMatch(/font-family: var\(--font-instrument\)/);
+        expect(rate).toMatch(/font-family: var\(--font-ui\)/);   // one font in the panel (2026-11-06)
         expect(rate).toMatch(/font-weight: 900/);
         expect(rate).toMatch(/color: var\(--text-primary\)/);
     });

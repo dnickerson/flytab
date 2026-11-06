@@ -1908,7 +1908,7 @@ class AirportPopup {
                 img.remove();
                 if (plateType === 'MIN') {
                     const msg = document.createElement('div');
-                    msg.style.cssText = 'padding:16px;background:var(--bg-primary);color:var(--text-primary);font-family:var(--font-ui);font-size:var(--text-md);font-weight:700;text-align:center;';
+                    msg.style.cssText = 'padding:16px;background:var(--bg-primary);color:var(--text-primary);font-family:var(--font-ui);font-size:var(--text-sm);font-weight:700;text-align:center;';
                     msg.textContent = `${icao}: this airport's minimums page is not on this tablet — sync plates in MORE → Data Status.`;
                     wrap.appendChild(msg);
                     return;
