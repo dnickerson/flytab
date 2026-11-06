@@ -594,7 +594,10 @@ describe('GlidePanel live behaviour', () => {
         // no winds aloft: the glide legs use the airport's METAR (surface wind), not amber
         fisbWind = null;
         let plan = panel.render(NOW);
-        expect(text()).toContain('Runway: METAR KLKR 240/12G18 (18 min) · Glide: METAR KLKR 240/12G18 (18 min) · surface');
+        // the METAR is both the runway and the glide wind: named once
+        expect(text()).toContain('Wind: METAR KLKR 240/12G18 (18 min) · runway and glide');
+        expect(text()).not.toContain('Runway:');
+        expect(text()).not.toContain('Glide:');
         expect(host.querySelector('.glide-wind .glide-amber')).toBeNull();
         // ... and the plan really used it (the same as the model with that vector, gust kept)
         const S = GlideInputs.settings(), ref = { lat: KLKR.lat, lon: KLKR.lon };
@@ -608,7 +611,7 @@ describe('GlidePanel live behaviour', () => {
         panel.start();
         await vi.advanceTimersByTimeAsync(0);
         plan = panel.render(NOW);
-        expect(text()).toContain('Glide: METAR KLKR VRB/04 (18 min) · surface');
+        expect(text()).toContain('Wind: METAR KLKR VRB/04 (18 min) · runway and glide');
         expect(host.querySelector('.glide-wind .glide-amber')).toBeNull();
         expect(plan.spare).toBeCloseTo(GlideModel.plan({ airport: GlideInputs.airport(KLKR, S),
             ac: { ...GlideInputs.aircraft(sit, S, ref, NOW), vs: null }, glideWind: { headKt: 4 },
@@ -634,7 +637,7 @@ describe('GlidePanel live behaviour', () => {
         expect(text()).toMatch(/^✓ GLIDE OK/);
         const tw = [...host.querySelectorAll('.glide-wind .glide-amber')].map((e) => e.textContent);
         expect(tw).toEqual(['RWY 06: 10 kt TAILWIND']);    // the glide part (the METAR, surface) is not amber
-        expect(text()).toContain('Glide: METAR KLKR 239/10 (5 min) · surface');
+        expect(text()).toContain('Wind: METAR KLKR 239/10 (5 min) · runway and glide');
         // the same tailwind when not on final: no tailwind line
         sit = situation(180, 6, 5500, 360);
         expect(panel.render(NOW).kind).toBe('direct');

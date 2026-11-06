@@ -524,10 +524,10 @@ const GlideInputs = (() => {
      */
     function glideWindFor(aloft, runway, settings_) {
         if (aloft && aloft.wind && isNum(aloft.wind.from) && isNum(aloft.wind.kt)) {
-            return { wind: aloft.wind, label: String(aloft.label || ''), assumed: false };
+            return { wind: aloft.wind, label: String(aloft.label || ''), assumed: false, source: 'aloft' };
         }
         const w = runway && runway.wind;
-        const surface = (wind) => ({ wind, label: `${runway.label || 'surface wind'} · surface`, assumed: false });
+        const surface = (wind) => ({ wind, label: `${runway.label || 'surface wind'} · surface`, assumed: false, source: 'surface' });
         if (w && w.kind === 'metar' && isNum(w.from) && isNum(w.kt)) {
             return surface({ from: w.from, kt: w.kt, gustKt: isNum(w.gustKt) ? w.gustKt : null });
         }
@@ -536,7 +536,7 @@ const GlideInputs = (() => {
             if (kts.length) return surface({ headKt: Math.max(...kts) });
         }
         if (w && w.kind === 'calm') return surface({ headKt: 0 });
-        return { wind: null, label: assumedLabel(validate(settings_)), assumed: true };
+        return { wind: null, label: assumedLabel(validate(settings_)), assumed: true, source: 'assumed' };
     }
 
     return {

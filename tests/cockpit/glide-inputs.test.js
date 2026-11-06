@@ -958,7 +958,7 @@ describe('GlideInputs.glideWindFor', () => {
     it('winds aloft first, whatever the runway wind', () => {
         for (const r of [vrb04, rwyOf({ kind: 'calm' }, 'METAR KLKR calm (3 min)'), rwyOf({ kind: 'none' }, ''), undefined]) {
             expect(GlideInputs.glideWindFor(aloft, r, settings()))
-                .toEqual({ wind: { from: 250, kt: 14 }, label: '250/14 at 3,000 ft · FIS-B', assumed: false });
+                .toEqual({ wind: { from: 250, kt: 14 }, label: '250/14 at 3,000 ft · FIS-B', assumed: false, source: 'aloft' });
         }
         const pre = { wind: { from: 200, kt: 9 }, label: '200/09 at 6,000 ft · pre-flight winds' };
         expect(GlideInputs.glideWindFor(pre, vrb04, settings()).label).toBe('200/09 at 6,000 ft · pre-flight winds');
@@ -966,13 +966,13 @@ describe('GlideInputs.glideWindFor', () => {
 
     it('else the surface wind: METAR as a vector (gust kept), VRB as max(kt, gust) headwind, calm 0', () => {
         expect(GlideInputs.glideWindFor(noAloft, vrb04, settings()))
-            .toEqual({ wind: { headKt: 4 }, label: 'METAR KLKR VRB/04 (8 min) · surface', assumed: false });
+            .toEqual({ wind: { headKt: 4 }, label: 'METAR KLKR VRB/04 (8 min) · surface', assumed: false, source: 'surface' });
         expect(GlideInputs.glideWindFor(noAloft, rwyOf({ kind: 'vrb', kt: 6, gustKt: 15 }, 'METAR KLKR VRB/06G15 (2 min)'), settings()))
-            .toEqual({ wind: { headKt: 15 }, label: 'METAR KLKR VRB/06G15 (2 min) · surface', assumed: false });
+            .toEqual({ wind: { headKt: 15 }, label: 'METAR KLKR VRB/06G15 (2 min) · surface', assumed: false, source: 'surface' });
         expect(GlideInputs.glideWindFor(noAloft, rwyOf({ kind: 'calm' }, 'METAR KLKR calm (3 min)'), settings()))
-            .toEqual({ wind: { headKt: 0 }, label: 'METAR KLKR calm (3 min) · surface', assumed: false });
+            .toEqual({ wind: { headKt: 0 }, label: 'METAR KLKR calm (3 min) · surface', assumed: false, source: 'surface' });
         expect(GlideInputs.glideWindFor(noAloft, rwyOf({ kind: 'metar', from: 240, kt: 12, gustKt: 18 }, 'METAR KLKR 240/12G18 (18 min)'), settings()))
-            .toEqual({ wind: { from: 240, kt: 12, gustKt: 18 }, label: 'METAR KLKR 240/12G18 (18 min) · surface', assumed: false });
+            .toEqual({ wind: { from: 240, kt: 12, gustKt: 18 }, label: 'METAR KLKR 240/12G18 (18 min) · surface', assumed: false, source: 'surface' });
         expect(GlideInputs.glideWindFor(noAloft, rwyOf({ kind: 'metar', from: 240, kt: 12, gustKt: null }, 'METAR KAAA 240/12 (9 min)'), settings()).wind)
             .toEqual({ from: 240, kt: 12, gustKt: null });
         // a nearest-station METAR keeps its own station in the label
@@ -981,7 +981,7 @@ describe('GlideInputs.glideWindFor', () => {
     });
 
     it('else null and the assumed-headwind label (amber on screen): assumed true, noWindHeadwindKt from settings', () => {
-        const want = { wind: null, label: 'NO CURRENT WINDS ALOFT · 10 kt headwind assumed', assumed: true };
+        const want = { wind: null, label: 'NO CURRENT WINDS ALOFT · 10 kt headwind assumed', assumed: true, source: 'assumed' };
         expect(GlideInputs.glideWindFor(noAloft, rwyOf({ kind: 'none' }, ''), settings())).toEqual(want);
         expect(GlideInputs.glideWindFor(noAloft, undefined, settings())).toEqual(want);
         expect(GlideInputs.glideWindFor(undefined, null, settings())).toEqual(want);

@@ -47,7 +47,7 @@ describe('KLKR 2026-11-06 pattern, VRB 04, 200 ft margin', () => {
 
     it('the VRB 04 METAR becomes a 4 kt headwind on every course, labelled as the surface wind (not amber)', () => {
         const gw = GlideInputs.glideWindFor(NO_ALOFT, VRB04, S);
-        expect(gw).toEqual({ wind: { headKt: 4 }, label: 'METAR KLKR VRB/04 (8 min) · surface', assumed: false });
+        expect(gw).toEqual({ wind: { headKt: 4 }, label: 'METAR KLKR VRB/04 (8 min) · surface', assumed: false, source: 'surface' });
     });
 
     it('downwind 20:02:11-20:03:10: GLIDE OK (direct, spare >= 0) on every row', () => {
@@ -104,7 +104,7 @@ describe('the same flight with no METAR and no winds aloft: the assumed 10 kt he
     it('the wind is assumed (amber label) and the last downwind row 20:03:10 is CANNOT REACH', () => {
         const r = nearest('20:03:10');
         const { gw, plan } = planAt(r, NONE);
-        expect(gw).toEqual({ wind: null, label: 'NO CURRENT WINDS ALOFT · 10 kt headwind assumed', assumed: true });
+        expect(gw).toEqual({ wind: null, label: 'NO CURRENT WINDS ALOFT · 10 kt headwind assumed', assumed: true, source: 'assumed' });
         expect(plan.kind).toBe('direct');
         expect(plan.spare).toBeLessThan(0);
         // and it is the wind that decides: with VRB 04 the same row is GLIDE OK

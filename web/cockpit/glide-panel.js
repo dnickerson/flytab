@@ -283,8 +283,14 @@ class GlidePanel {
             + row('GLIDE PATH', `<span class="glide-val glide-path${high ? '' : ' glide-neg'}">${pathTxt}</span>`);
 
         const rwyLabel = this._rwy && this._rwy.label ? esc(this._rwy.label) : '';
-        const glideLabel = `<span class="${gw.assumed ? 'glide-amber' : ''}">Glide: ${esc(gw.label)}</span>`;
-        let wind = (rwyLabel ? `<span>Runway: ${rwyLabel}</span> · ` : '') + glideLabel;
+        let wind;
+        if (gw.source === 'surface' && rwyLabel) {
+            // The airport's METAR is both the runway wind and the glide wind: name it once.
+            wind = `<span>Wind: ${rwyLabel} · runway and glide</span>`;
+        } else {
+            const glideLabel = `<span class="${gw.assumed ? 'glide-amber' : ''}">Glide: ${esc(gw.label)}</span>`;
+            wind = (rwyLabel ? `<span>Runway: ${rwyLabel}</span> · ` : '') + glideLabel;
+        }
         if (plan.kind === 'final' && plan.tailwindKt > 0) {
             wind += `<div class="glide-amber">RWY ${esc(plan.endId)}: ${Math.ceil(plan.tailwindKt)} kt TAILWIND</div>`;
         }
