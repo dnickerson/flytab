@@ -65,6 +65,13 @@ describe('prune-apks.sh', () => {
         expect(left()).toEqual([apk('12.62'), apk('12.63')]);
     });
 
+    it('refuses a current name that is a path (would otherwise keep the wrong file)', () => {
+        touch(...['12.60', '12.61', '12.62', '12.63', '12.64', '12.65', '12.66'].map(apk));
+        expect(() => run(`../${apk('12.66')}`)).toThrow();
+        expect(() => run(`sub/${apk('12.66')}`)).toThrow();
+        expect(left()).toHaveLength(7);
+    });
+
     it('refuses to run without a directory or with the current APK missing', () => {
         expect(() => execFileSync('bash', [SCRIPT], { stdio: 'pipe' })).toThrow();
         touch(apk('12.60'));

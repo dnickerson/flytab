@@ -22,6 +22,7 @@ for arg in "${@:3}"; do
 done
 
 [ -d "$DIR" ] || { echo "prune-apks: no directory $DIR" >&2; exit 1; }
+case "$CURRENT" in */*|.*) echo "prune-apks: CURRENT_APK_NAME must be a plain file name, got '$CURRENT'" >&2; exit 1 ;; esac
 [ -f "$DIR/$CURRENT" ] || { echo "prune-apks: $DIR/$CURRENT not found; nothing deleted" >&2; exit 1; }
 
 # "<code> <name>" for every earlier versioned APK, highest version first
