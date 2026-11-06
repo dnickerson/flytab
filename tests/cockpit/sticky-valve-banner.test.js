@@ -349,6 +349,52 @@ describe('StickyValveBanner — in-flight compact pills (Dana 2026-11-06)', () =
         }
     });
 
+    describe('flying by GPS speed (FlyTab restarted in flight: a new run at cruise MP never sees takeoff power)', () => {
+        let stratux;
+        const gps = (kt) => stratux.dispatchEvent(new CustomEvent('stratux:situation', { detail: { ground_speed: kt, gps_fix_quality: 1 } }));
+        const cruise = (secs, kt) => { for (let k = 0; k < secs; k++) { if (kt != null) gps(kt); feed(1, 2400, even(1350), HOT_CHT, 22); } };
+        beforeEach(() => {
+            stratux = new EventTarget();
+            const cfgM = { ...CFG, monitor: StickyValve.monitorConfig(JSON.parse(read('web/phase_spec.json'))) };
+            mon = new StickyValveMonitor(null, { now: () => clock * 1000, cfg: cfgM, stratuxClient: stratux });
+        });
+
+        it('a current GPS speed above the landing limit (30 kt): the verdict is a pill', () => {
+            new StickyValveBanner(mapArea, mon, 'map');
+            cruise(90, 110);
+            expect(mon.state.verdictVisible).toBe(true);
+            expect(mon.state.phase).toBe('airborne');
+            expect(block(mapArea).classList.contains('sv-banner--compact')).toBe(true);
+            expect(hasDismiss(mapArea)).toBe(false);
+        });
+
+        it('no GPS speed: FlyTab cannot tell, the full banner (fail visible)', () => {
+            new StickyValveBanner(mapArea, mon, 'map');
+            cruise(90, null);
+            expect(mon.state.verdictVisible).toBe(true);
+            expect(mon.state.phase).toBe('ground');
+            expect(block(mapArea).classList.contains('sv-banner--compact')).toBe(false);
+        });
+
+        it('a GPS speed older than 5 s does not count; taxi speed (15 kt) does not count', () => {
+            new StickyValveBanner(mapArea, mon, 'map');
+            cruise(90, 110);
+            cruise(6, null);                                   // GPS feed stopped 6 s ago
+            expect(mon.state.phase).toBe('ground');
+            cruise(3, 15);
+            expect(mon.state.phase).toBe('ground');
+            expect(block(mapArea).classList.contains('sv-banner--compact')).toBe(false);
+        });
+
+        it('the banner follows the GPS speed alone, between engine samples', () => {
+            new StickyValveBanner(mapArea, mon, 'map');
+            cruise(90, null);
+            expect(block(mapArea).classList.contains('sv-banner--compact')).toBe(false);
+            gps(110);                                          // no engine frame in between
+            expect(block(mapArea).classList.contains('sv-banner--compact')).toBe(true);
+        });
+    });
+
     it('the amber in-flight block is never compacted', () => {
         const fake = new EventTarget();
         fake.dismiss = vi.fn();
