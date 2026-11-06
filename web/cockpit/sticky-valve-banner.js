@@ -10,11 +10,13 @@
  * this only draws state.dismissable (NO-GO has no DISMISS before a seen stop;
  * CHECKING resolves by itself, so it has none either).
  *
- * In flight (state.phase 'airborne') with a NO-GO on the banner, the 'map'
- * variant collapses to a compact red pill ("NO-GO · CYL 3") so it does not cover
- * the map (Dana Q1, 2026-11-06); it has no DISMISS. The 'inline' ENG page banner
- * keeps the full text. Back on the ground (a seen stop ends the run) the normal
- * banner returns.
+ * In flight (state.phase 'airborne') the 'map' variant collapses whatever verdict
+ * it shows to a compact pill in the verdict's colour ("NO-GO · CYL 3",
+ * "CAUTION · CYL 4", "VALVES OK", "VALVE CHECK PARTIAL" ...) so it does not cover
+ * the map (Dana, 2026-11-06: NO-GO first, then "the other banners should shrink in
+ * flight"); a pill has no DISMISS. The 'inline' ENG page banner keeps the full
+ * text, and the amber in-flight block is never compacted. Back on the ground (a
+ * seen stop ends the run) the normal banner returns.
  *
  * Every value goes into the DOM through textContent.
  */
@@ -94,8 +96,8 @@ class StickyValveBanner {
         if (!st.verdictVisible) return;
         const v = st.verdict;
         const kind = { 'NO-GO': 'nogo', 'CAUTION': 'caution', 'VALVES OK': 'ok' }[v] || 'neutral';
-        if (this._variant === 'map' && v === 'NO-GO' && st.phase === 'airborne') {
-            this._renderCompactNoGo(st);
+        if (this._variant === 'map' && st.phase === 'airborne') {
+            this._renderCompact(st, kind);
             return;
         }
         b.el.className = `sv-banner-block sv-banner--${kind}`;
@@ -138,16 +140,25 @@ class StickyValveBanner {
         b.btn.style.display = st.dismissable && v !== 'CHECKING' ? '' : 'none';
     }
 
-    /** In flight over the map: a small red pill naming the latched NO-GO cylinders. */
-    _renderCompactNoGo(st) {
+    /** In flight over the map: a small pill in the verdict's colour; NO-GO and
+     *  CAUTION name their cylinders (findings of that level). */
+    _renderCompact(st, kind) {
         const b = this._verdict;
-        b.el.className = 'sv-banner-block sv-banner--nogo sv-banner--compact';
-        const cyls = [];
-        for (const f of st.findings) {
-            if (f.level === 'NO-GO' && f.cyl != null && !cyls.includes(f.cyl)) cyls.push(f.cyl);
+        const v = st.verdict;
+        b.el.className = `sv-banner-block sv-banner--${kind} sv-banner--compact`;
+        let text;
+        if (v === 'NO-GO' || v === 'CAUTION') {
+            const cyls = [];
+            for (const f of st.findings) {
+                if (f.level === v && f.cyl != null && !cyls.includes(f.cyl)) cyls.push(f.cyl);
+            }
+            cyls.sort((a, c) => a - c);
+            text = cyls.length ? `${v} · CYL ${cyls.join(', ')}` : v;
+        } else {
+            text = { 'VALVES OK': 'VALVES OK', 'PARTIAL': 'VALVE CHECK PARTIAL',
+                'NOT CHECKED': 'VALVE CHECK NOT RUN' }[v] || 'VALVE CHECK…';
         }
-        cyls.sort((a, c) => a - c);
-        b.title.textContent = cyls.length ? `NO-GO · CYL ${cyls.join(', ')}` : 'NO-GO';
+        b.title.textContent = text;
         StickyValveBanner._setLines(b, []);
         b.hint.textContent = '';
         b.hint.style.display = 'none';
