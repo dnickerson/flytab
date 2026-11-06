@@ -30,6 +30,7 @@ const PHASE_SPEC = JSON.parse(read(PHASE_SPEC_PATH));
 const NAMES = [
     '20261101_KLKR-KLKR', '2025-07-02_KLKR-KLKR', 'cold_flight',
     'stuck_cyl3', 'cht_lag_cyl4', 'inflight_divergence',
+    'nan_dropouts', 'holes_and_clock', 'no_gps', 'hot_start', 'rough_idle',
 ];
 const TOL = 1e-6;
 
@@ -71,6 +72,8 @@ function diffEvents(actual, expected) {
     return out.slice(0, 10);
 }
 
+// An empty CSV cell is a missing value (NaN), never 0: csv-parse is used without
+// `cast`, and the conversion is explicit here.
 const num = (s) => (s === '' ? NaN : Number(s));
 
 function samplesFrom(name) {
@@ -109,6 +112,22 @@ describe('comparator (guards against a vacuous parity test)', () => {
         expect(diff({ a: null }, { a: 0 })[0]).toMatch(/type null/);
         expect(diff({ a: 'x' }, { a: 'y' })[0]).toMatch(/^\.a:/);
         expect(diff([1], [1, 2])[0]).toMatch(/length/);
+    });
+});
+
+describe('missing-value path (guards against fixtures that silently lose their NaNs)', () => {
+    const nanCount = (name) => samplesFrom(name).reduce((n, s) =>
+        n + [s.t, s.rpm, s.mp, s.ff, s.carb, s.gs, ...s.egt, ...s.cht].filter(Number.isNaN).length, 0);
+    it('nan_dropouts: empty cells parse to NaN (1 EGT + 12 CHT + 1 RPM + 1 MP)', () => {
+        expect(nanCount('nan_dropouts')).toBe(15);
+        expect(num('')).toBeNaN();
+    });
+    it('no_gps: gs is NaN on every row', () => {
+        const s = samplesFrom('no_gps');
+        expect(s.every((x) => Number.isNaN(x.gs))).toBe(true);
+    });
+    it('real flights keep no NaN in t/rpm', () => {
+        for (const n of ['cold_flight']) expect(samplesFrom(n).every((x) => !Number.isNaN(x.t) && !Number.isNaN(x.rpm))).toBe(true);
     });
 });
 

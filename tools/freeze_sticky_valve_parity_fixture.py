@@ -171,6 +171,100 @@ def make_inflight_divergence(base):
     return out, note
 
 
+# ---- synthetic derivations that exercise the hand-ported edge branches ---------
+# (missing values, data holes, backwards clock, no GPS, hot start, rule 4)
+
+NAN = float('nan')
+
+
+def _set(samples, idx, **kw):
+    out = list(samples)
+    out[idx] = dataclasses.replace(out[idx], **kw)
+    return out
+
+
+def make_nan_dropouts(base):
+    """Dropouts in every field the detector gates on isfinite:
+    EGT2 NaN for one sample inside the R2 (slow_heatup) window; all four CHT NaN
+    for 3 samples inside the R3 (cht_lag) window; MP NaN at the first
+    takeoff-power sample (NaN MP is never takeoff power); one RPM NaN row
+    mid-idle; EGT1 = 0.0 on one sample (0 is a reading, not missing)."""
+    out = list(base)
+    r2_w = CFG['slow_heatup']['window_sec']
+    r3_w = CFG['cht_lag']['window_sec']
+    t0 = base[0].t
+    i_egt = next(i for i, s in enumerate(base) if s.t >= t0 + r2_w / 4)
+    assert base[i_egt].t < t0 + r2_w
+    i_cht = next(i for i, s in enumerate(base) if s.t >= t0 + r2_w + 10)   # past R2's window, inside R3's
+    assert base[i_cht + 2].t < t0 + r3_w
+    i_rpm = next(i for i, s in enumerate(base) if s.t >= t0 + r3_w + 10)
+    assert base[i_rpm].rpm < CFG['phase']['runup_rpm'] and not is_takeoff(base[i_rpm])
+    i_zero = next(i for i, s in enumerate(base) if s.t >= t0 + 20)
+    i_takeoff = next(i for i, s in enumerate(base) if is_takeoff(s))
+    e = list(out[i_egt].egt)
+    e[1] = NAN
+    out = _set(out, i_egt, egt=tuple(e))
+    for k in range(i_cht, i_cht + 3):
+        out = _set(out, k, cht=(NAN, NAN, NAN, NAN))
+    out = _set(out, i_rpm, rpm=NAN)
+    z = list(out[i_zero].egt)
+    z[0] = 0.0
+    out = _set(out, i_zero, egt=tuple(z))
+    out = _set(out, i_takeoff, mp=NAN)
+    return out
+
+
+def _shift_from(samples, idx, delta):
+    return [dataclasses.replace(s, t=s.t + delta) if i >= idx else s for i, s in enumerate(samples)]
+
+
+def make_holes_and_clock(base):
+    """A hole of 10 s (gap_sec < 10 < stop_sec) inside the idle period; later a
+    hole of stop_sec + 20 s mid-run (run 1 ends with reason 'gap', run 2 starts);
+    then one backwards clock step of 3 s in run 2 (ends it with reason 'gap',
+    run 3 starts)."""
+    gap, stop = CFG['run']['gap_sec'], CFG['run']['stop_sec']
+    assert gap < 10 < stop
+    i1 = next(i for i, s in enumerate(base) if s.t >= base[0].t + 80)
+    i2 = next(i for i, s in enumerate(base) if is_takeoff(s)) - 30
+    i3 = next(i for i, s in enumerate(base) if is_takeoff(s)) + 40
+    dt = lambda i: base[i].t - base[i - 1].t
+    out = _shift_from(base, i1, 10.0 - dt(i1))                         # dt becomes 10 s
+    out = _shift_from(out, i2, (stop + 20.0) - (out[i2].t - out[i2 - 1].t))   # dt becomes stop+20
+    out = _shift_from(out, i3, -3.0 - (out[i3].t - out[i3 - 1].t))     # dt becomes -3
+    return out
+
+
+def make_no_gps(base):
+    """Every ground speed NaN: the verdict trigger must come from RPM / fallback."""
+    return [dataclasses.replace(s, gs=NAN) for s in base]
+
+
+def make_hot_start(base):
+    """Every CHT offset so the settle-time mean CHT is cold_cht_max_f + 50."""
+    cs = [v for v in base[0].cht if not math.isnan(v)]
+    off = CFG['verdict']['cold_cht_max_f'] + 50.0 - sum(cs) / len(cs)
+    return [dataclasses.replace(s, cht=tuple(c + off for c in s.cht)) for s in base]
+
+
+def make_rough_idle(base):
+    """Idle RPM jitter of +-(roughness.rpm_std_max * 1.5), alternating, with MP
+    held constant, over a steady-idle stretch longer than a roughness window."""
+    r = CFG['roughness']
+    amp = r['rpm_std_max'] * 1.5
+    t0 = base[0].t
+    lo = next(i for i, s in enumerate(base) if s.t >= t0 + 180)
+    hi = next(i for i, s in enumerate(base) if s.t >= base[lo].t + r['window_sec'] * 2.5)
+    runup = CFG['phase']['runup_rpm']
+    assert all(CFG['run']['stop_rpm'] <= s.rpm and s.rpm + amp < runup for s in base[lo:hi]), \
+        'rough_idle: stretch is not steady idle'
+    mp = base[lo].mp
+    out = list(base)
+    for k in range(lo, hi):
+        out[k] = dataclasses.replace(out[k], mp=mp, rpm=base[k].rpm + (amp if (k - lo) % 2 == 0 else -amp))
+    return out
+
+
 # ---- expected-content assertions -----------------------------------------------
 
 def findings(events):
@@ -181,6 +275,10 @@ def no_go(events):
     return [f for f in findings(events) if f['level'] == 'NO-GO']
 
 
+def first_run_end(events):
+    return next(e for e in events if e['type'] == 'run_end')
+
+
 def check(name, events):
     if name == 'stuck_cyl3':
         assert any(f['cyl'] == 3 for f in no_go(events)), 'stuck_cyl3: no NO-GO finding on cyl 3'
@@ -189,6 +287,22 @@ def check(name, events):
             'cht_lag_cyl4: no cht_lag finding on cyl 4'
     elif name == 'inflight_divergence':
         assert any(e['type'] == 'inflight' for e in events), 'inflight_divergence: no inflight event'
+    elif name == 'nan_dropouts':
+        res = first_run_end(events)['result']
+        assert 'slow_heatup' in res['rules_not_run'] and 'cht_lag' in res['rules_not_run'], \
+            f"nan_dropouts: rules_not_run = {res['rules_not_run']}"
+    elif name == 'holes_and_clock':
+        assert any(e['type'] == 'run_end' and e['reason'] == 'gap' for e in events), \
+            'holes_and_clock: no run_end with reason gap'
+        assert sum(e['type'] == 'run_start' for e in events) >= 2, 'holes_and_clock: < 2 run_start'
+    elif name == 'no_gps':
+        assert any(e['type'] == 'verdict' for e in events), 'no_gps: no verdict event'
+    elif name == 'hot_start':
+        res = first_run_end(events)['result']
+        assert res['cold_settle'] is False, f"hot_start: cold_settle = {res['cold_settle']}"
+        assert res['verdict'] != 'VALVES OK', 'hot_start: verdict is VALVES OK'
+    elif name == 'rough_idle':
+        assert any(f['rule'] == 'roughness' for f in findings(events)), 'rough_idle: no roughness finding'
     else:
         assert not no_go(events), f'{name}: unexpected NO-GO finding {no_go(events)}'
 
@@ -202,6 +316,11 @@ def main():
     streams['stuck_cyl3'] = make_stuck_cyl3(base)
     streams['cht_lag_cyl4'] = make_cht_lag_cyl4(base)
     streams['inflight_divergence'], inflight_note = make_inflight_divergence(base)
+    streams['nan_dropouts'] = make_nan_dropouts(base)
+    streams['holes_and_clock'] = make_holes_and_clock(base)
+    streams['no_gps'] = make_no_gps(base)
+    streams['hot_start'] = make_hot_start(base)
+    streams['rough_idle'] = make_rough_idle(base)
 
     spec_sha, phase_sha = sha256(SPEC_PATH), sha256(PHASE_SPEC_PATH)
     for name, samples in streams.items():

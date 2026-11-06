@@ -1,0 +1,49 @@
+{
+ "spec_sha256": "2a803e13ca5ec464f4f434543ec756856a6a33fd8b88f64f957fd86d3785b876",
+ "phase_spec_sha256": "c42af839dfcb96c2c70b65bef4363c976de28dd312221f6b8b063a3b32231274",
+ "events": [
+  {
+   "type": "run_start",
+   "t": 57314.0
+  },
+  {
+   "type": "verdict",
+   "t": 57394.0,
+   "verdict": "PARTIAL",
+   "prev": null
+  },
+  {
+   "type": "run_end",
+   "t": 58302.0,
+   "reason": "eof",
+   "result": {
+    "startT": 57314.0,
+    "settleT": 57314.0,
+    "verdictT": 57394.0,
+    "endT": 58302.0,
+    "endReason": "eof",
+    "coldSettle": false,
+    "verdict": "PARTIAL",
+    "findings": [],
+    "rulesRun": [
+     "cold_cylinder",
+     "roughness"
+    ],
+    "rulesNotRun": [
+     "slow_heatup",
+     "cht_lag"
+    ],
+    "context": [],
+    "inflight": [],
+    "margins": {
+     "coldCylinderMinRatio": 0.9530386740331491,
+     "slowHeatupMinRatio": null,
+     "chtLagMinRatio": null,
+     "roughnessMaxRpmStd": 63.881604355244555,
+     "roughnessMaxEgtRatio": 1.5200497934596868,
+     "divergenceClosest": null
+    }
+   }
+  }
+ ]
+}
