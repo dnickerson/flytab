@@ -161,7 +161,8 @@ describe('the panel\'s CSS', () => {
         const size = (h) => RULES.find((r) => r.head === h)?.decls['font-size'];
         for (const h of ['.glide-turn', '.glide-sub', '.glide-note, .glide-now', '.glide-wind', '.glide-hdg', '.glide-val',
             '.apt-nav-pattern', '.apt-tfr-head', '.apt-tfr-sub', '.apt-tfr-text', '.airport-panel .wx-phenom',
-            '.airport-panel .wx-metar', '.airport-panel .wx-age-stale', '.airport-panel .approach-currency']) {
+            '.airport-panel .wx-metar', '.airport-panel .wx-age-stale', '.airport-panel .approach-currency',
+            '.wc-metar-stale', '.apt-notes-status.is-error', '.airport-panel .popup-freq-table .freq-sector']) {
             expect(size(h), h).toBe('var(--text-sm)');
         }
         for (const h of ['.glide-lbl', '.apt-fact-label', '.airport-panel .wx-row-lbl', '.airport-panel .popup-section-title',
