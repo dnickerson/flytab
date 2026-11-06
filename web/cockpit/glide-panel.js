@@ -5,11 +5,11 @@
  * stopped by close() and by turning ENGINE OUT off.
  * Every GlidePanel.UPDATE_MS it runs GlideModel.plan() (web/shared/glide-model.js) on the inputs from
  * GlideInputs (web/cockpit/glide-inputs.js) and shows:
- *   the verdict with the height high / low (GLIDE OK / FINAL POINT OUT OF REACH / CANNOT REACH /
- *   RUNWAY POSITION NOT KNOWN / NO SUITABLE RUNWAY), then TO / HEADING (magnetic, with a turn cue) /
- *   DISTANCE / AIRSPEED / DESCENT (target, and the measured rate against it) / GLIDE PATH (signed
- *   spare) rows (_view), and the wind line;
- * and on the map a line aircraft -> final point, a ring at the point and a dashed final to the threshold.
+ *   the verdict with the height high / low (GLIDE OK / CANNOT REACH / RUNWAY POSITION NOT KNOWN /
+ *   NO SUITABLE RUNWAY), then TO / HEADING (magnetic, with a turn cue) / DISTANCE / AIRSPEED /
+ *   DESCENT (target, and the measured rate against it) / GLIDE PATH (signed spare) rows (_view),
+ *   and the wind line; low over the runway just "OVER RWY xx" (no rows);
+ * and on the map a line aircraft -> the planned point with a ring at it (none over the runway).
  *
  * Position and altitude come from StratuxClient.wsSituation (the Stratux WebSocket: true GPS MSL).
  * No block (and no line) without a 3D GPS fix, with a situation older than 5 s, for a heliport /
@@ -23,9 +23,11 @@
  * ground too: aircraft() gets the settings with showAboveGsKt 0 (GlidePanel.noGsGate). EmergencyGlide
  * still passes the configured showAboveGsKt.
  * Nothing here touches the network; the runway (METAR) wind is re-read from on-tablet data every
- * GlidePanel.WIND_REFRESH_MS. Every model number comes from GlideInputs.settings().
+ * GlidePanel.WIND_REFRESH_MS. The glide legs use winds aloft, else that runway (surface) wind, else the
+ * assumed headwind (GlideInputs.glideWindFor). Every model number comes from GlideInputs.settings().
  *
- * Spec: docs/superpowers/specs/2026-10-31-engine-out-glide-panel-design.md ("The panel", "Rates").
+ * Spec: docs/superpowers/specs/2026-10-31-engine-out-glide-panel-design.md ("The panel", "Rates"), amended by
+ * docs/superpowers/specs/2026-11-06-engine-out-glide-runway-target.md (target choice, glide wind, verdicts).
  * Exposes the global GlidePanel.
  */
 class GlidePanel {
@@ -45,7 +47,6 @@ class GlidePanel {
         this._windTimer = null;
         this._gen = 0;                 // bumped by start()/stop(): a late runway-wind result for an old run is dropped
         this._windBusy = false;
-        this._preferDirect = false;    // plan-B hysteresis, kept between updates
         this._rwy = { wind: { kind: 'none' }, label: '' };
         this._S = null;
         this._apt = null;
@@ -59,7 +60,6 @@ class GlidePanel {
         const gen = ++this._gen;
         this._S = GlideInputs.settings();
         this._apt = GlideInputs.airport(this._rec, this._S);   // geometry once per start
-        this._preferDirect = false;
         this._rwy = { wind: { kind: 'none' }, label: '' };
         this._vsSamples = [];
         this.render(Date.now());
@@ -147,16 +147,14 @@ class GlidePanel {
         // fills GPSVerticalSpeed (WebSocket 0), GDL 90 sends none, the engine-GPS bridge sends 0.
         ac.vs = this._measuredVs(sit.timestamp, ac.altMsl);
 
-        const gw = GlideInputs.glideWind(sit.lat, sit.lon, ac.altMsl, S, now);
-        const plan = GlideModel.plan({
-            airport: apt, ac, glideWind: gw.wind, runwayWind: this._rwy.wind, preferDirect: this._preferDirect,
-        }, S);
+        // Glide wind: winds aloft, else the runway (surface) wind, else none (the assumed headwind).
+        const gw = GlideInputs.glideWindFor(GlideInputs.glideWind(sit.lat, sit.lon, ac.altMsl, S, now), this._rwy, S);
+        const plan = GlideModel.plan({ airport: apt, ac, glideWind: gw.wind, runwayWind: this._rwy.wind }, S);
         const nums = [plan.spare, plan.needMsl, plan.hdgTrue, plan.legNm, plan.target, plan.projected,
             plan.targetNow, plan.turnNow];
         if (!nums.every(Number.isFinite) || !plan.pt || !Number.isFinite(plan.pt.x) || !Number.isFinite(plan.pt.y)) {
             return this._status('unavailable');
         }
-        this._preferDirect = plan.kind !== 'final';
 
         const view = this._view(plan, sit, gw);
         this._el.innerHTML = view.html;
@@ -191,8 +189,10 @@ class GlidePanel {
     // ---- Text -------------------------------------------------------------
 
     /**
-     * The block's HTML for a plan (spec 2026-11-04 "Engine-out block"): the verdict bar, then a grid
-     *   TO          RWY 24 (final point: the landing end) / RWY 06/24 + "nearest part" (plan B) / the ICAO (ref)
+     * The block's HTML for a plan (spec 2026-11-04 "Engine-out block", verdicts per spec 2026-11-06): the verdict
+     * bar - GLIDE OK (green) when 'direct' / 'final' has spare >= 0, else CANNOT REACH (red); "OVER RWY 06/24"
+     * (green, no grid) for 'over'; the 'ref' states unchanged - then a grid
+     *   TO          RWY 06 + "on final" (final) / RWY 06/24 + "nearest part" (direct) / the ICAO (ref)
      *   HEADING     magnetic wind-corrected heading of the straight leg, 3 digits; turn cue under it
      *   DISTANCE    plan.legNm, one decimal
      *   AIRSPEED    the validated glide_ias_kt
@@ -200,7 +200,9 @@ class GlidePanel {
      *               (M = measured; X = |shown M - shown target|, the two rounded numbers on screen,
      *               never targetNow), "now —" without a measured rate
      *   GLIDE PATH  the signed spare (+N / −N ft)
-     * and the wind line. N in the verdict and GLIDE PATH: spare floored when >= 0, shortfall ceiled.
+     * and the wind line ("Glide:" amber only when the headwind is assumed; the tailwind line only on final).
+     * N in the verdict and GLIDE PATH: spare floored when >= 0, shortfall ceiled.
+     * `gw`: GlideInputs.glideWindFor() result { wind, label, assumed }.
      */
     _view(plan, sit, gw) {
         const S = this._S, apt = this._apt;
@@ -213,12 +215,12 @@ class GlidePanel {
         const hiLo = `${fmt(nFt)} ft ${high ? 'high' : 'low'}`;
 
         let tone, verdict, sub = '', unknown = false;
-        if (plan.kind === 'final') {
+        if (plan.kind === 'over') {
             tone = 'ok';
-            verdict = `✓ GLIDE OK · ${hiLo}`;
-        } else if (plan.kind === 'direct') {
-            tone = high ? 'caution' : 'danger';
-            verdict = high ? `⚠ FINAL POINT OUT OF REACH · ${hiLo}` : `✗ CANNOT REACH ${icao} · ${hiLo}`;
+            verdict = plan.runwayId ? `✓ OVER RWY ${esc(plan.runwayId)}` : '✓ OVER RUNWAY';
+        } else if (plan.kind === 'final' || plan.kind === 'direct') {
+            tone = high ? 'ok' : 'danger';
+            verdict = high ? `✓ GLIDE OK · ${hiLo}` : `✗ CANNOT REACH ${icao} · ${hiLo}`;
         } else {
             unknown = true;
             const state = apt.noSuitable ? 'NO SUITABLE RUNWAY · steer to the airport'
@@ -247,8 +249,10 @@ class GlidePanel {
             : (t > 0 ? `↱ turn right ${Math.round(t)}°` : `↰ turn left ${Math.round(-t)}°`);
 
         let to, toNote = '';
-        if (plan.kind === 'final') to = `RWY ${esc(plan.endId)}`;
-        else if (plan.kind === 'direct') {
+        if (plan.kind === 'final') {
+            to = `RWY ${esc(plan.endId)}`;
+            toNote = 'on final';
+        } else if (plan.kind === 'direct') {
             to = plan.runwayId ? `RWY ${esc(plan.runwayId)}` : 'RUNWAY';
             toNote = 'nearest part';
         } else to = icao;
@@ -279,7 +283,7 @@ class GlidePanel {
             + row('GLIDE PATH', `<span class="glide-val glide-path${high ? '' : ' glide-neg'}">${pathTxt}</span>`);
 
         const rwyLabel = this._rwy && this._rwy.label ? esc(this._rwy.label) : '';
-        const glideLabel = `<span class="${gw.wind ? '' : 'glide-amber'}">Glide: ${esc(gw.label)}</span>`;
+        const glideLabel = `<span class="${gw.assumed ? 'glide-amber' : ''}">Glide: ${esc(gw.label)}</span>`;
         let wind = (rwyLabel ? `<span>Runway: ${rwyLabel}</span> · ` : '') + glideLabel;
         if (plan.kind === 'final' && plan.tailwindKt > 0) {
             wind += `<div class="glide-amber">RWY ${esc(plan.endId)}: ${Math.ceil(plan.tailwindKt)} kt TAILWIND</div>`;
@@ -288,7 +292,7 @@ class GlidePanel {
         const html = `<div class="glide-block glide-${tone}${unknown ? ' glide-unknown' : ''}">`
             + `<div class="glide-verdict">${verdict}</div>`
             + (sub ? `<div class="glide-sub">${sub}</div>` : '')
-            + `<div class="glide-grid">${grid}</div>`
+            + (plan.kind === 'over' ? '' : `<div class="glide-grid">${grid}</div>`)
             + `<div class="glide-wind">${wind}</div>`
             + '</div>';
         return { html, tone };
@@ -296,18 +300,15 @@ class GlidePanel {
 
     // ---- Map --------------------------------------------------------------
 
+    /** The line aircraft -> plan.pt and a ring at it; none over the runway (kind 'over'). */
     _drawMap(plan, sit, tone) {
+        if (plan.kind === 'over') { this._removeMap(); return; }
         const map = typeof window !== 'undefined' && window.app && window.app.cockpitMap
             ? window.app.cockpitMap.map : null;
         if (!map || typeof L === 'undefined') return;
         const ref = this._apt.refLatLon;
         const p = GlideModel.fromLocal(ref.lat, ref.lon, plan.pt);
         const ptLL = [p.lat, p.lon], acLL = [sit.lat, sit.lon];
-        let thrLL = null;
-        if (plan.kind === 'final') {
-            const end = this._apt.ends.find((e) => e.id === plan.endId);
-            if (end && end.thr) { const t = GlideModel.fromLocal(ref.lat, ref.lon, end.thr); thrLL = [t.lat, t.lon]; }
-        }
         const color = GlidePanel._token(tone === 'ok' ? '--color-success'
             : tone === 'caution' ? '--color-caution' : '--color-danger');
 
@@ -317,17 +318,14 @@ class GlidePanel {
             this._lines = {
                 leg: L.polyline([acLL, ptLL], base),
                 ring: L.circleMarker(ptLL, { ...base, radius: 10, fill: false }),
-                final: L.polyline(thrLL ? [ptLL, thrLL] : [], { ...base, dashArray: '8 8' }),
             };
             this._layer.addLayer(this._lines.leg);
             this._layer.addLayer(this._lines.ring);
-            this._layer.addLayer(this._lines.final);
             return;
         }
         this._lines.leg.setLatLngs([acLL, ptLL]);
         this._lines.ring.setLatLng(ptLL);
-        this._lines.final.setLatLngs(thrLL ? [ptLL, thrLL] : []);
-        for (const k of ['leg', 'ring', 'final']) this._lines[k].setStyle({ color });
+        for (const k of ['leg', 'ring']) this._lines[k].setStyle({ color });
     }
 
     /**

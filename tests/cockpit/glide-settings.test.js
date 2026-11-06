@@ -93,17 +93,19 @@ describe('invalid settings fall back on the safe side', () => {
     });
 
     it('R29 regression: a glide-speed typo (6 kt) must not make plan B reachable over the runway', () => {
-        // 5,000 ft runway 18/36, calm, sink 700, 30 deg bank; aircraft over mid-runway at 500 ft AGL heading away
+        // 5,000 ft runway 18/36, calm, sink 700, 30 deg bank; aircraft abeam mid-runway at 500 ft AGL heading away
         // (east). At 30 kt the turn back costs so little height that plan B shows spare (the corner the reviewer
         // found: raising "6" to the 30 kt edge); with the default 65 kt it is out of reach.
+        // 0.04 nm (243 ft) east of the centreline: just outside the over-the-runway gate (50 + 150 ft for an
+        // unknown width), which since the 2026-11-06 rulings plans a high pass over the runway with no turn.
         const FT_PER_NM = 6076.12, ELEV = 486, half = 2500 / FT_PER_NM;
         const a = { x: 0, y: -half }, b = { x: 0, y: half }, mid = { x: 0, y: 0 };
         const airport = { elevFt: ELEV, ref: { x: 0, y: 0 }, ends: [
             { id: '36', runwayId: '18/36', thr: a, hdgTrue: 0, rwyLenFt: 5000, mid, rwy: { a, b } },
             { id: '18', runwayId: '18/36', thr: b, hdgTrue: 180, rwyLenFt: 5000, mid, rwy: { a, b } },
         ] };
-        const plan = (s) => GlideModel.plan({ airport, ac: { pos: { x: 0, y: 0 }, altMsl: ELEV + 500, gs: 70, trkTrue: 90, vs: 0 },
-            glideWind: null, runwayWind: { kind: 'calm' }, preferDirect: false }, s);
+        const plan = (s) => GlideModel.plan({ airport, ac: { pos: { x: 0.04, y: 0 }, altMsl: ELEV + 500, gs: 70, trkTrue: 90, vs: 0 },
+            glideWind: null, runwayWind: { kind: 'calm' } }, s);
         const S = (aircraft) => GlideInputs.validate({ aircraft, pilot: {} });
         expect(S({}).aircraft).toMatchObject({ glide_ias_kt: 65, glide_sink_fpm: 700 });
         expect(S({}).pilot.turnBankDeg).toBe(30);

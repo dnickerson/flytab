@@ -125,15 +125,40 @@ describe('GlideInputs.airport', () => {
         expect(e06.rwy.b).toBeDefined();
         const physBase = GlideModel.toLocal(34.722904, -80.85459, 34.71859708, -80.8631085);
         expect(e06.rwy.a.x).toBeCloseTo(physBase.x, 9);
-        // the model accepts these ends (not filtered out) and picks one
+        // the model accepts these ends (not filtered out): 4 nm SW, not lined up -> the nearest part of 06/24
         const p = GlideModel.plan({
             airport: a,
             ac: { pos: { x: -4, y: -3 }, altMsl: 4500, gs: 90, trkTrue: 50, vs: -700 },
-            glideWind: null, runwayWind: { kind: 'none' }, preferDirect: false,
+            glideWind: null, runwayWind: { kind: 'none' },
         }, settings());
-        expect(p.kind).toBe('final');
-        expect(['06', '24']).toContain(p.endId);
+        expect(p.kind).toBe('direct');
+        expect(p.runwayId).toBe('06/24');
+        expect(p.pt.x).toBeCloseTo(physBase.x, 9);
         expect(Number.isFinite(p.spare)).toBe(true);
+    });
+
+    it('each end carries its physical end, its NASR elevation and the runway width (spec 2026-11-06)', () => {
+        const [e06, e24] = GlideInputs.airport(KLKR, settings()).ends;
+        const p06 = GlideModel.toLocal(KLKR.lat, KLKR.lon, 34.71859708, -80.8631085);
+        const p24 = GlideModel.toLocal(KLKR.lat, KLKR.lon, 34.72721166, -80.84607163);
+        expect(e06.phys).toEqual(p06);                 // the physical end, not the displaced threshold
+        expect(e06.phys).not.toEqual(e06.thr);
+        expect(e24.phys).toEqual(p24);
+        expect(e06.elevFt).toBe(459.7);
+        expect(e24.elevFt).toBe(485.7);
+        expect(e06.widthFt).toBe(101);
+        expect(e24.widthFt).toBe(101);
+        // unknown width -> 100; unknown elevation -> null (the model then uses the field elevation)
+        const bare = GlideInputs.airport(apt([rwy({ width_ft: undefined, base_elev_ft: null, recip_elev_ft: 'x' })]), settings()).ends;
+        expect(bare.map((e) => e.widthFt)).toEqual([100, 100]);
+        expect(bare.map((e) => e.elevFt)).toEqual([null, null]);
+        expect(GlideInputs.airport(apt([rwy({ width_ft: 0 })]), settings()).ends[0].widthFt).toBe(100);
+        // no physical coordinates for an end -> its threshold stands in
+        const noPhys = GlideInputs.airport(apt([rwy({ base_lat: null, base_lon: null })]), settings()).ends;
+        const e = noPhys.find((x) => x.id === '06');
+        expect(e.phys).toEqual(e.thr);
+        const thr06 = GlideModel.toLocal(KLKR.lat, KLKR.lon, 34.71874788, -80.86280972);
+        expect(e.phys.x).toBeCloseTo(thr06.x, 12);
     });
 
     it('partial and missing runway coordinates', () => {
@@ -544,8 +569,11 @@ describe('GlideInputs.runwayWind', () => {
         };
         expect(await kind({ wind_dir: 0, wind_speed: 0 })).toEqual({ kind: 'calm' });
         expect(await kind({ wind_dir: null, wind_speed: 0 })).toEqual({ kind: 'calm' });
-        expect(await kind({ wind_dir: null, wind_speed: 5, wind_variable: true })).toEqual({ kind: 'vrb' });
-        expect(await kind({ wind_dir: undefined, wind_speed: 4 })).toEqual({ kind: 'vrb' });
+        expect(await kind({ wind_dir: null, wind_speed: 5, wind_variable: true })).toEqual({ kind: 'vrb', kt: 5, gustKt: null });
+        expect(await kind({ wind_dir: undefined, wind_speed: 4 })).toEqual({ kind: 'vrb', kt: 4, gustKt: null });
+        // VRB carries its speed and gust (spec 2026-11-06)
+        expect(await kind({ wind_dir: null, wind_speed: 6, wind_gust: 14 })).toEqual({ kind: 'vrb', kt: 6, gustKt: 14 });
+        expect(await kind({ wind_dir: null, wind_speed: 6, wind_gust: NaN })).toEqual({ kind: 'vrb', kt: 6, gustKt: null });
         expect(await kind({ wind_dir: 300, wind_speed: 8, wind_gust: 15 })).toEqual({ kind: 'metar', from: 300, kt: 8, gustKt: 15 });
         expect(await kind({ wind_dir: 300, wind_speed: 8, wind_gust: undefined })).toEqual({ kind: 'metar', from: 300, kt: 8, gustKt: null });
         // unparseable -> none, never a malformed value
@@ -561,6 +589,8 @@ describe('GlideInputs.runwayWind', () => {
         expect((await GlideInputs.runwayWind('KLKR', REF, settings(), NOW)).label).toBe('METAR KLKR calm (5 min)');
         setup({ own: { KLKR: entry(5, { wind_dir: null, wind_speed: 5, wind_variable: true }) } });
         expect((await GlideInputs.runwayWind('KLKR', REF, settings(), NOW)).label).toBe('METAR KLKR VRB/05 (5 min)');
+        setup({ own: { KLKR: entry(5, { wind_dir: null, wind_speed: 5, wind_gust: 12, wind_variable: true }) } });
+        expect((await GlideInputs.runwayWind('KLKR', REF, settings(), NOW)).label).toBe('METAR KLKR VRB/05G12 (5 min)');
     });
 
     it('METAR too old falls to nearest station, then to none', async () => {
@@ -655,7 +685,7 @@ describe('GlideInputs.runwayWind', () => {
         // VRB (wind_dir null + wind_variable) -> vrb, labelled with its speed
         setup({ internet: await one(2) });
         r = await GlideInputs.runwayWind('KLKR', REF, settings(), NOW);
-        expect(r.wind).toEqual({ kind: 'vrb' });
+        expect(r.wind).toEqual({ kind: 'vrb', kt: 6, gustKt: null });
         expect(r.label).toBe('METAR KLKR VRB/06 (5 min)');
         // fetchInternetMetars keeps the newest per station; at 45 min it is still usable
         setup({ internet: await internetMetars([AWC[0], AWC[4]]) });
@@ -691,15 +721,15 @@ describe('GlideInputs.runwayWind', () => {
             return GlideInputs.runwayWind('KLKR', REF, settings(), NOW);
         };
         const r = await kind(awc());
-        expect(r.wind).toEqual({ kind: 'vrb' });
+        expect(r.wind).toEqual({ kind: 'vrb', kt: 5, gustKt: null });
         expect(r.label).toBe('METAR KLKR VRB/05 (10 min)');
-        expect((await kind(awc({ wind_dir: 'vrb', wind_variable: false }))).wind).toEqual({ kind: 'vrb' });
-        expect((await kind(awc({ wind_dir: 0, wind_variable: true }))).wind).toEqual({ kind: 'vrb' });
+        expect((await kind(awc({ wind_dir: 'vrb', wind_variable: false }))).wind).toEqual({ kind: 'vrb', kt: 5, gustKt: null });
+        expect((await kind(awc({ wind_dir: 0, wind_variable: true }))).wind).toEqual({ kind: 'vrb', kt: 5, gustKt: null });
         expect((await kind(awc({ wind_dir: 'VRB', wind_speed: 0 }))).wind).toEqual({ kind: 'calm' });
         expect((await kind(awc({ wind_dir: 'abc', wind_variable: false }))).wind).toEqual({ kind: 'none' });
         // and from the weather cache
         setup({ cache: { KLKR: { metar: { decoded: awc(), fetched_at: iso(10) } } } });
-        expect((await GlideInputs.runwayWind('KLKR', REF, settings(), NOW)).wind).toEqual({ kind: 'vrb' });
+        expect((await GlideInputs.runwayWind('KLKR', REF, settings(), NOW)).wind).toEqual({ kind: 'vrb', kt: 5, gustKt: null });
     });
 
     it('label formats: DDD/SS with padding, gust, calm, VRB/SS, none is empty', async () => {
@@ -839,7 +869,7 @@ describe('GlideInputs.airport: a landing threshold that cannot be right is repla
     };
     const plan = (a, alt) => GlideModel.plan({
         airport: a, ac: { pos: { x: 1.5, y: 0 }, altMsl: alt, gs: 100, trkTrue: 270, vs: null },
-        glideWind: null, runwayWind: { kind: 'metar', from: 90, kt: 10, gustKt: null }, preferDirect: false,
+        glideWind: null, runwayWind: { kind: 'metar', from: 90, kt: 10, gustKt: null },
     }, settings());
 
     it('K2S5 07: threshold = the 07 physical end; 25 unchanged', () => {
@@ -852,15 +882,19 @@ describe('GlideInputs.airport: a landing threshold that cannot be right is repla
         expect(e25.thr.x).toBeCloseTo(thr25.x, 12);
     });
 
-    it('K2S5, 1.5 nm east at 4,400 ft, wind 090/10: no longer GLIDE OK to a 07 final point on the runway', () => {
+    it('K2S5, 1.5 nm east at 4,400 / 5,000 ft: never a target past the runway end (no final point since 2026-11-06)', () => {
         const a = GlideInputs.airport(K2S5, settings());
-        const p = plan(a, 4400);
-        // before the fix: { kind: 'final', endId: '07', spare: +157 } with the final point 2,225 ft past the 07 end
-        expect(p.kind === 'final' && p.endId === '07').toBe(false);
-        // when 07 is chosen (higher), its final point is before the runway
-        const hi = plan(a, 5000);
-        expect([hi.kind, hi.endId]).toEqual(['final', '07']);
-        expect(alongFt(a.ends.find((e) => e.id === '07'), hi.pt)).toBeLessThan(0);
+        const e07 = a.ends.find((e) => e.id === '07');
+        // westbound 1.5 nm east of the field (about 1.1 nm before the 25 end): the nearest part of the runway,
+        // which is the 25 end - on the runway, never beyond it
+        for (const alt of [4400, 5000]) {
+            const p = plan(a, alt);
+            expect(p.kind).toBe('direct');
+            expect(p.runwayId).toBe('07/25');
+            const fromEnd = alongFt(e07, p.pt);
+            expect(fromEnd).toBeGreaterThanOrEqual(-1e-6);
+            expect(fromEnd).toBeLessThanOrEqual(e07.rwyLenFt + 1e-6);
+        }
     });
 
     it('a threshold more than half the runway length from its own end (off to the side) is not used', () => {
@@ -911,5 +945,57 @@ describe('GlideInputs.runwayWind with a FIS-B METAR built from the real Stratux 
         const r = await GlideInputs.runwayWind('KARR', { lat: 41.77, lon: -88.48 }, settings(), T);
         expect(r.wind).toEqual({ kind: 'metar', from: 210, kt: 12, gustKt: null });
         expect(r.label).toBe('METAR KARR 210/12 (8 min)');
+    });
+});
+
+// ---------- the glide wind: aloft, else surface, else assumed (spec 2026-11-06 decision 2) ----------
+describe('GlideInputs.glideWindFor', () => {
+    const aloft = { wind: { from: 250, kt: 14 }, label: '250/14 at 3,000 ft · FIS-B' };
+    const noAloft = { wind: null, label: 'NO CURRENT WINDS ALOFT · 10 kt headwind assumed' };
+    const rwyOf = (wind, label) => ({ wind, label });
+    const vrb04 = rwyOf({ kind: 'vrb', kt: 4, gustKt: null }, 'METAR KLKR VRB/04 (8 min)');
+
+    it('winds aloft first, whatever the runway wind', () => {
+        for (const r of [vrb04, rwyOf({ kind: 'calm' }, 'METAR KLKR calm (3 min)'), rwyOf({ kind: 'none' }, ''), undefined]) {
+            expect(GlideInputs.glideWindFor(aloft, r, settings()))
+                .toEqual({ wind: { from: 250, kt: 14 }, label: '250/14 at 3,000 ft · FIS-B', assumed: false });
+        }
+        const pre = { wind: { from: 200, kt: 9 }, label: '200/09 at 6,000 ft · pre-flight winds' };
+        expect(GlideInputs.glideWindFor(pre, vrb04, settings()).label).toBe('200/09 at 6,000 ft · pre-flight winds');
+    });
+
+    it('else the surface wind: METAR as a vector (gust kept), VRB as max(kt, gust) headwind, calm 0', () => {
+        expect(GlideInputs.glideWindFor(noAloft, vrb04, settings()))
+            .toEqual({ wind: { headKt: 4 }, label: 'METAR KLKR VRB/04 (8 min) · surface', assumed: false });
+        expect(GlideInputs.glideWindFor(noAloft, rwyOf({ kind: 'vrb', kt: 6, gustKt: 15 }, 'METAR KLKR VRB/06G15 (2 min)'), settings()))
+            .toEqual({ wind: { headKt: 15 }, label: 'METAR KLKR VRB/06G15 (2 min) · surface', assumed: false });
+        expect(GlideInputs.glideWindFor(noAloft, rwyOf({ kind: 'calm' }, 'METAR KLKR calm (3 min)'), settings()))
+            .toEqual({ wind: { headKt: 0 }, label: 'METAR KLKR calm (3 min) · surface', assumed: false });
+        expect(GlideInputs.glideWindFor(noAloft, rwyOf({ kind: 'metar', from: 240, kt: 12, gustKt: 18 }, 'METAR KLKR 240/12G18 (18 min)'), settings()))
+            .toEqual({ wind: { from: 240, kt: 12, gustKt: 18 }, label: 'METAR KLKR 240/12G18 (18 min) · surface', assumed: false });
+        expect(GlideInputs.glideWindFor(noAloft, rwyOf({ kind: 'metar', from: 240, kt: 12, gustKt: null }, 'METAR KAAA 240/12 (9 min)'), settings()).wind)
+            .toEqual({ from: 240, kt: 12, gustKt: null });
+        // a nearest-station METAR keeps its own station in the label
+        expect(GlideInputs.glideWindFor(null, rwyOf({ kind: 'calm' }, 'METAR KAAA calm (20 min)'), settings()).label)
+            .toBe('METAR KAAA calm (20 min) · surface');
+    });
+
+    it('else null and the assumed-headwind label (amber on screen): assumed true, noWindHeadwindKt from settings', () => {
+        const want = { wind: null, label: 'NO CURRENT WINDS ALOFT · 10 kt headwind assumed', assumed: true };
+        expect(GlideInputs.glideWindFor(noAloft, rwyOf({ kind: 'none' }, ''), settings())).toEqual(want);
+        expect(GlideInputs.glideWindFor(noAloft, undefined, settings())).toEqual(want);
+        expect(GlideInputs.glideWindFor(undefined, null, settings())).toEqual(want);
+        // a malformed runway wind is no wind
+        expect(GlideInputs.glideWindFor(noAloft, rwyOf({ kind: 'vrb' }, 'x'), settings())).toEqual(want);
+        expect(GlideInputs.glideWindFor(noAloft, rwyOf({ kind: 'metar', from: NaN, kt: 5 }, 'x'), settings())).toEqual(want);
+        expect(GlideInputs.glideWindFor(noAloft, undefined, settings({ pilot: { noWindHeadwindKt: 15 } })).label)
+            .toBe('NO CURRENT WINDS ALOFT · 15 kt headwind assumed');
+    });
+
+    it('the label matches glideWind()\'s own no-wind label', () => {
+        globalThis.window.app = undefined;
+        const g = GlideInputs.glideWind(34.7, -80.8, 2000, settings(), NOW);
+        expect(g.wind).toBe(null);
+        expect(GlideInputs.glideWindFor(g, undefined, settings()).label).toBe(g.label);
     });
 });
