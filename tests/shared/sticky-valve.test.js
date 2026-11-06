@@ -1285,48 +1285,65 @@ describe('StickyValveMonitor — spec loading', () => {
     });
 });
 
-describe('StickyValveMonitor — data gaps', () => {
-    it('engine:stale makes the next frame a hole: the 30 s restarts', () => {
+describe('StickyValveMonitor — data gaps (ruling R-16: an outage is a gap in sample time)', () => {
+    // engine-client fires engine:stale after >= 5 s without data; the monitor feeds
+    // nothing for it (no synthetic samples): the next current frame arrives more
+    // than gap_sec after the last one, and the detector sees the hole by time.
+    it('engine:stale after 5 s without data: the 30 s restarts at the next frame', () => {
         const h = harness();
-        h.run(20, 1000, M_COLD3);
-        h.client.emit('engine:stale', { stale: true });
-        h.run(20, 1000, M_COLD3);
-        expect(h.findings).toEqual([]);
-        h.run(11, 1000, M_COLD3);
-        expect(h.findings.map(f => f.t)).toEqual([50]);
-    });
-
-    it('engine:stale with stale false is not a hole', () => {
-        const h = harness();
-        h.run(20, 1000, M_COLD3);
+        h.run(20, 1000, M_COLD3);                      // t = 0..19
+        h.clock += 5;
+        h.client.emit('engine:stale', { stale: true, ageMs: 5000 });
         h.client.emit('engine:stale', { stale: false });
-        h.run(11, 1000, M_COLD3);
-        expect(h.findings.map(f => f.t)).toEqual([30]);
-    });
-
-    it('engine:disconnect makes the next frame a hole', () => {
-        const h = harness();
-        h.run(20, 1000, M_COLD3);
-        h.client.emit('engine:disconnect');
-        h.run(20, 1000, M_COLD3);
+        h.run(20, 1000, M_COLD3);                      // t = 25..44
         expect(h.findings).toEqual([]);
+        h.run(11, 1000, M_COLD3);                      // t = 45..55
+        expect(h.findings.map(f => f.t)).toEqual([55]);
     });
 
-    it('frames whose EDM row is not current are not fed, and leave a hole', () => {
+    it('a stale or disconnect event alone feeds nothing and changes nothing', () => {
         const h = harness();
         h.run(20, 1000, M_COLD3);
         const seen = h.spy();
-        h.run(5, 1000, M_COLD3, { extra: { serial_warning: 'No data from EDM for 6s' } });
-        h.run(1, 1000, M_COLD3, { extra: { serial_connected: false } });
+        h.client.emit('engine:stale', { stale: true });
+        h.client.emit('engine:disconnect');
+        expect(seen).toEqual([]);
+        h.run(11, 1000, M_COLD3);                      // no time lost: persistence continues
+        expect(seen.every(x => Number.isFinite(x.s.rpm))).toBe(true);
+        expect(h.findings.map(f => f.t)).toEqual([30]);
+    });
+
+    it('engine:disconnect and data back after more than gap_sec: a hole', () => {
+        const h = harness();
+        h.run(20, 1000, M_COLD3);
+        h.client.emit('engine:disconnect');
+        h.clock += CFG.run.gap_sec + 1;
+        h.run(20, 1000, M_COLD3);
+        expect(h.findings).toEqual([]);
+    });
+
+    it('frames whose EDM row is not current are not fed; the hole is their sample time', () => {
+        const h = harness();
+        h.run(20, 1000, M_COLD3);                      // t = 0..19
+        const seen = h.spy();
+        h.run(5, 1000, M_COLD3, { extra: { serial_warning: 'No data from EDM for 6s' } });   // t = 20..24
+        h.run(1, 1000, M_COLD3, { extra: { serial_connected: false } });                     // t = 25
         h.mon.feed(null);
         expect(seen).toEqual([]);
-        h.run(20, 1000, M_COLD3);                    // t = 26..45
-        expect(Number.isNaN(seen[0].s.rpm)).toBe(true);   // the hole, at the next frame's time
-        expect(seen[0].s.t).toBe(26);
-        expect(seen[1].s).toMatchObject({ t: 26, rpm: 1000 });
+        h.run(20, 1000, M_COLD3);                      // t = 26..45: 7 s after t=19, > gap_sec
+        expect(seen[0].s).toMatchObject({ t: 26, rpm: 1000 });   // the real frame, no synthetic one
+        expect(seen.every(x => Number.isFinite(x.s.rpm))).toBe(true);
         expect(h.findings).toEqual([]);
         h.run(11, 1000, M_COLD3);
         expect(h.findings.map(f => f.t)).toEqual([56]);
+    });
+
+    it('a single non-current frame at 1 Hz (2 s <= gap_sec) is not a hole', () => {
+        const h = harness();
+        h.run(20, 1000, M_COLD3);
+        h.run(1, 1000, M_COLD3, { extra: { serial_warning: 'blip' } });
+        h.run(10, 1000, M_COLD3);
+        expect(h.findings.map(f => f.t)).toEqual([30]);
     });
 
     it('a few seconds with no frames at all break the 30 s', () => {
@@ -1335,6 +1352,10 @@ describe('StickyValveMonitor — data gaps', () => {
         h.clock += 6;
         h.run(20, 1000, M_COLD3);
         expect(h.findings).toEqual([]);
+    });
+
+    it('no synthetic hole samples exist in the monitor', () => {
+        expect(read('web/shared/sticky-valve.js')).not.toMatch(/_holeAt/);
     });
 });
 
@@ -1347,9 +1368,10 @@ describe('StickyValveMonitor — frames', () => {
         h.clock += 1;
         h.mon.feed(raw);                              // the same raw object twice
         h.run(5, 1000, M_HOT);
+        h.clock += 6;
         h.client.emit('engine:stale', { stale: true });
         h.run(2, 1000, M_HOT);
-        expect(seen.length).toBe(10);                 // 9 frames + 1 hole
+        expect(seen.length).toBe(9);                  // 9 frames, nothing synthesized
         for (const key of ['s', 'egt', 'cht']) {
             expect(new Set(seen.map(x => x[key])).size).toBe(seen.length);
         }
@@ -1790,5 +1812,127 @@ describe('StickyValveMonitor — review minors', () => {
         h.run(1, RUNUP, M_COLD3);
         expect(h.findings.filter(f => f.rule === 'cold_cylinder' && f.cyl === 3)).toHaveLength(2);
         expect(h.mon.state.findings.map(f => [f.rule, f.cyl, f.level])).toEqual([['cold_cylinder', 3, 'NO-GO']]);
+    });
+});
+
+// ---- Fix round 2: ruling R-16 -- the real Pi-dropout signals -----------------
+// engine-client signals an outage with engine:stale (>= 5 s without data, then
+// stale:false when data resumes), engine:disconnect, or the Pi keeps sending
+// frames whose EDM row is not current (serial_warning / serial_connected false).
+// Each must reach the detector exactly like a plain time jump.
+
+describe('StickyValveMonitor — R-16: R-15 and R-14 through every dropout signal', () => {
+    const CRUISE = [1350, 1350, 1350, 1350];
+    const CRUISE_COLD3 = [1350, 1350, 300, 1350];
+    const cruise = { mp: 22, cht: HOT_CHT };
+    const GS = 110;
+    const KINDS = ['time', 'stale', 'disconnect', 'noncurrent'];
+
+    /** An outage of `secs` seconds; non-current frames carry rpm / egt / o. */
+    function dropout(h, kind, secs, rpm, egt, o = {}) {
+        if (kind === 'time') {
+            h.clock += secs;
+        } else if (kind === 'stale') {
+            h.clock += 5;
+            h.client.emit('engine:stale', { stale: true, ageMs: 5000 });
+            h.clock += secs - 5;
+            h.client.emit('engine:stale', { stale: false });     // engine-client, as data resumes
+        } else if (kind === 'disconnect') {
+            h.client.emit('engine:disconnect');
+            h.clock += secs;
+        } else {
+            h.run(secs, rpm, egt, { ...o, extra: { serial_warning: 'No data from EDM for 6s' } });
+        }
+    }
+
+    function airborne(h) {
+        h.run(70, 1000, M_HOT, { cht: HOT_CHT });
+        h.run(1, RUNUP, M_HOT, { cht: HOT_CHT });
+        h.mon.dismiss();                               // PARTIAL
+        h.run(1, 2500, CRUISE, { mp: 26, cht: HOT_CHT });
+        h.run(30, 2400, CRUISE, cruise);
+        expect(h.mon.state).toMatchObject({ phase: 'airborne', visible: false });
+    }
+
+    for (const kind of KINDS) {
+        describe(`via ${kind}`, () => {
+            it('flightGapRestartWithGpsSuppressesNeutralBanner', () => {
+                const h = harness();
+                airborne(h);
+                dropout(h, kind, 60, 2400, CRUISE, cruise);
+                const from = h.changes.length;
+                h.runGs(120, GS, 2400, CRUISE, cruise);
+                expect(h.mon.detector.verdict).not.toBeNull();
+                expect(h.changes.slice(from).every(c => !c.visible)).toBe(true);
+                expect(h.mon.state).toMatchObject({ verdict: null, visible: false, phase: 'airborne' });
+            });
+
+            it('flightGapRestartWithoutGpsStillShowsBanner', () => {
+                const h = harness();
+                airborne(h);
+                dropout(h, kind, 60, 2400, CRUISE, cruise);
+                h.run(1, 2400, CRUISE, cruise);
+                expect(h.mon.state).toMatchObject({ verdict: 'NOT CHECKED', visible: true });
+            });
+
+            it('groundGapRestartStillShowsPartial', () => {
+                for (const gs of [null, 0, GS]) {
+                    const h = harness();
+                    h.run(20, 1000, M_HOT, { cht: HOT_CHT });
+                    dropout(h, kind, 60, 1000, M_HOT, { cht: HOT_CHT });
+                    if (gs === null) h.run(70, 1000, M_HOT, { cht: HOT_CHT });
+                    else h.runGs(70, gs, 1000, M_HOT, { cht: HOT_CHT });
+                    h.run(1, RUNUP, M_HOT, { cht: HOT_CHT });
+                    expect(h.mon.state).toMatchObject({ verdict: 'PARTIAL', visible: true });
+                }
+            });
+
+            it('groundRuleFindingInFlightGapRunIsAmberAdvisory', () => {
+                const h = harness();
+                airborne(h);
+                dropout(h, kind, 60, 2400, CRUISE, cruise);
+                h.runGs(40, GS, 2400, CRUISE_COLD3, cruise);
+                expect(h.findings).toEqual([]);
+                expect(h.advisories.map(f => [f.rule, f.cyl, f.level])).toEqual([['cold_cylinder', 3, 'NO-GO']]);
+                expect(h.mon.state).toMatchObject({ verdict: null, verdictVisible: false, inflightVisible: true });
+                h.mon.dismiss('inflight');
+                expect(h.mon.state.visible).toBe(false);
+            });
+
+            it('R-14: a pre-trigger NO-GO, data back with the engine off, is shown and survives the restart', () => {
+                const h = harness();
+                h.run(40, 1000, M_COLD3);              // finding at t=30, no trigger
+                dropout(h, kind, 60, 0, M_HOT);
+                h.run(5, 0, M_HOT);                    // data back, engine off
+                expect(h.mon.state).toMatchObject({ verdict: 'NO-GO', visible: true, dismissable: false });
+                h.run(1, 1000, M_HOT, { cht: HOT_CHT });
+                expect(h.mon.state).toMatchObject({ verdict: 'NO-GO', visible: true });
+            });
+
+            it('a restart after the gap settles at once, as in the Python replay', () => {
+                const h = harness();
+                h.run(20, 1000, M_HOT);
+                dropout(h, kind, 60, 1000, M_HOT);
+                const resumeT = h.clock;
+                h.run(CFG.cold_cylinder.persist_sec + 15, 1000, M_COLD3);
+                // Settled on the first sample after the gap: R1 judges from there.
+                expect(h.findings.map(f => f.t)).toEqual([resumeT + CFG.cold_cylinder.persist_sec]);
+            });
+        });
+    }
+
+    it('the live monitor and the bare detector (replay) give the same events across a stale gap', () => {
+        const h = harness();
+        const seen = h.spy();
+        h.run(20, 1000, M_HOT);
+        dropout(h, 'stale', 60, 1000, M_HOT);
+        h.run(45, 1000, M_COLD3);
+        // Replay the exact samples the monitor fed through a fresh detector.
+        const det = new StickyValveDetector(CFG_M);
+        const replayed = [];
+        for (const x of seen) replayed.push(...det.sample(JSON.parse(JSON.stringify(x.s), (k, v) => (v === null ? NaN : v))));
+        expect(replayed.filter(e => e.type === 'finding').map(e => e.t)).toEqual(h.findings.map(f => f.t));
+        expect(replayed.map(e => e.type)).toContain('run_end');
+        expect(seen.every(x => Number.isFinite(x.s.rpm))).toBe(true);
     });
 });

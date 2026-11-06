@@ -875,7 +875,8 @@ class StickyValveMonitor extends EventTarget {
         this._detector = null;
         this._buffer = [];           // samples (built at arrival) kept until the spec loads
         this._specError = null;      // reason string once the spec failed to load
-        this._gapPending = false;    // stale/disconnect/non-current frame since the last fed frame
+        this._gapPending = false;    // engine:stale / engine:disconnect seen: used only by the
+                                     // spec-failure re-show (no samples are ever synthesized)
         this._gs = NaN;              // last usable ground speed (kts) and when it arrived (ms)
         this._gsAt = null;
         this._monitorCfg = null;     // cfg.monitor (StickyValve.monitorConfig), if any
@@ -995,24 +996,21 @@ class StickyValveMonitor extends EventTarget {
 
     /**
      * Feed one Pi status frame (raw, as engine:data carries it; the EDM row is
-     * nested under `data`). A frame whose EDM row is not current is not fed: the
-     * next current frame comes after a hole.
+     * nested under `data`). A frame whose EDM row is not current is not fed, and
+     * engine:stale / engine:disconnect feed nothing either (ruling R-16): an
+     * outage reaches the detector as a gap in sample time (wall clock) at the
+     * next current frame, exactly as a recording replayed offline shows it. So a
+     * gap-ended run and its restart come from one sample() call, and a restart
+     * after a long gap settles at once, as in the Python replay.
      */
     feed(raw) {
         if (this._specError) {
             this._specFeed(raw);
             return;
         }
-        if (!raw || (typeof EngineClient !== 'undefined' && !EngineClient.edmCurrent(raw))) {
-            this._gapPending = true;
-            return;
-        }
-        const s = this._sampleFrom(raw, this._now());
-        if (this._gapPending) {
-            this._gapPending = false;
-            this._ingest(StickyValveMonitor._holeAt(s.t));
-        }
-        this._ingest(s);
+        if (!raw || (typeof EngineClient !== 'undefined' && !EngineClient.edmCurrent(raw))) return;
+        this._gapPending = false;
+        this._ingest(this._sampleFrom(raw, this._now()));
     }
 
     destroy() {
@@ -1138,11 +1136,6 @@ class StickyValveMonitor extends EventTarget {
             carb: num(d.carb_temp ?? d.Carb_Temp),
             gs: gsFresh ? this._gs : NaN,
         };
-    }
-
-    /** A sample with no RPM: the detector treats it as a hole in the data. */
-    static _holeAt(t) {
-        return { t, rpm: NaN, mp: NaN, ff: NaN, egt: [NaN, NaN, NaN, NaN], cht: [NaN, NaN, NaN, NaN], carb: NaN, gs: NaN };
     }
 
     _ingest(s) {
