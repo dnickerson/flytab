@@ -927,12 +927,18 @@ class StickyValveMonitor extends EventTarget {
      *   phase        'airborne' while the running run has seen takeoff power (or
      *                is an in-flight restart after a gap), else 'ground'
      *
-     * Latch policy (rulings R-3, R-14, R-15):
+     * Latch policy (rulings R-3, R-14, R-15; Dana Q2, 2026-11-06):
      *   - NO-GO: no DISMISS until a seen stop (run_end 'rpm'); a gap keeps it.
-     *   - At a run end, NO-GO / CAUTION findings not dismissed while shown are
-     *     carried: across a gap always; across a seen stop only when that run's
-     *     verdict trigger never fired (they were never shown: shown now, and kept
-     *     until dismissed). A run after a seen stop otherwise starts clean.
+     *   - At any run end (seen stop or gap), every NO-GO finding not dismissed
+     *     while shown is carried, and kept across every later run start until
+     *     the pilot dismisses it while it is shown. It is dismissable once a seen
+     *     stop has followed it; one carried across a gap is not, until a seen stop.
+     *   - CAUTION findings not dismissed while shown are carried across a gap
+     *     (dropped at the first start after the next seen stop), and across a
+     *     seen stop only when that run's verdict trigger never fired (R-14: shown
+     *     now, and kept until dismissed). Otherwise a run after a seen stop
+     *     starts without them.
+     *   - A dismissed finding is gone: it does not come back later.
      *   - In-flight restart (gap end and run start in one sample, the ended run
      *     airborne, fresh GPS speed > speed_landing_max_kts): that run's verdict
      *     and context are not shown; its findings are amber advisories.
@@ -976,7 +982,12 @@ class StickyValveMonitor extends EventTarget {
             if (st.dismissable) {
                 // What was on the banner when dismissed is acknowledged: it is not
                 // carried into a later run.
-                if (st.verdictVisible) for (const f of this._shownFindingList()) this._acked.add(f);
+                if (st.verdictVisible) {
+                    for (const f of this._shownFindingList()) this._acked.add(f);
+                    // A carried finding dismissed while shown is gone now, so a
+                    // later verdict or finding cannot bring it back on the banner.
+                    this._carried = this._carried.filter(c => !this._acked.has(c.f));
+                }
                 this._dismissed = true;
             }
         }
@@ -1317,9 +1328,8 @@ class StickyValveMonitor extends EventTarget {
 
     _onRunStart(flightRestart) {
         // Carried findings stay unless the pilot dismissed them while shown, or a
-        // seen stop released them after they were shown in their own run (R-3 (2):
-        // a run after a seen stop starts clean). Findings carried because their run
-        // ended before its verdict trigger stay until dismissed (R-14).
+        // seen stop released a non-persistent one (a CAUTION carried across a
+        // gap). NO-GOs and pre-trigger findings (R-14) persist until dismissed.
         this._carried = this._carried.filter(c => !this._acked.has(c.f) && !(c.released && !c.persist));
         this._acked = new Set();
         this._clearRun(flightRestart);
@@ -1335,14 +1345,17 @@ class StickyValveMonitor extends EventTarget {
             for (const c of this._carried) c.released = true;
         }
         if (this._flightRestart) return;     // its findings are advisories
-        // Carry NO-GO / CAUTION findings not dismissed while shown: across a gap
-        // (we never saw the engine stop), and across a seen stop when the run's
-        // verdict trigger never fired (shown now, as that run's verdict: R-14).
+        // Carry findings not dismissed while shown: every NO-GO, at any run end
+        // (Dana Q2: it persists until dismissed); a CAUTION across a gap (we never
+        // saw the engine stop), and across a seen stop when the run's verdict
+        // trigger never fired (shown now, as that run's verdict: R-14).
         const preTrigger = !!e.result && e.result.verdictT === null;
-        if (e.reason !== 'gap' && !preTrigger) return;
-        const keep = this._findings.filter(f => (f.level === 'NO-GO' || f.level === 'CAUTION') && !this._acked.has(f));
+        const keep = this._findings.filter(f => !this._acked.has(f)
+            && (f.level === 'NO-GO' || (f.level === 'CAUTION' && (e.reason === 'gap' || preTrigger))));
         if (!keep.length) return;
-        for (const f of keep) this._carried.push({ f, released: e.reason === 'rpm', persist: preTrigger });
+        for (const f of keep) {
+            this._carried.push({ f, released: e.reason === 'rpm', persist: f.level === 'NO-GO' || preTrigger });
+        }
         this._findings = this._findings.filter(f => !keep.includes(f));
         this._dismissed = false;
     }

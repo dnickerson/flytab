@@ -1078,10 +1078,13 @@ describe('StickyValveMonitor — NO-GO latch and dismiss', () => {
         expect(h.mon.state.visible).toBe(false);
     });
 
-    it('aNewRunAfterASeenStopStartsClean', () => {
+    it('aNewRunAfterASeenStopStartsCleanOnceTheNoGoWasDismissed', () => {
+        // Dana Q2: an undismissed NO-GO survives the restart (see the Dana Q2
+        // block below); dismissed after the seen stop, the next run is clean.
         const h = harness();
         noGo(h);
         seenStop(h);
+        h.mon.dismiss();
         h.run(1, 1000, M_HOT);
         expect(h.mon.state).toMatchObject({ verdict: null, findings: [], context: [], inflight: [], visible: false, dismissable: true });
         // ...and is watched again (a start after a seen stop settles after settle_sec).
@@ -1113,9 +1116,14 @@ describe('StickyValveMonitor — NO-GO latch and dismiss', () => {
         expect(h.mon.detector.runActive).toBe(true);
         expect(h.mon.state).toMatchObject({ verdict: 'NO-GO', visible: true, dismissable: false });
         expect(h.mon.state.findings.map(f => [f.rule, f.cyl])).toEqual([['cold_cylinder', 3]]);
-        // Only a seen stop releases it; the next run is then clean.
+        // Only a seen stop makes it dismissable; undismissed, it survives the
+        // restart (Dana Q2); dismissed, the next run is clean.
         seenStop(h);
         expect(h.mon.state).toMatchObject({ verdict: 'NO-GO', dismissable: true });
+        h.run(1, 1000, M_HOT);
+        expect(h.mon.state).toMatchObject({ verdict: 'NO-GO', verdictVisible: true, dismissable: true });
+        h.mon.dismiss();
+        seenStop(h);
         h.run(1, 1000, M_HOT);
         expect(h.mon.state.verdict).toBe(null);
     });
@@ -1934,5 +1942,119 @@ describe('StickyValveMonitor — R-16: R-15 and R-14 through every dropout signa
         expect(replayed.filter(e => e.type === 'finding').map(e => e.t)).toEqual(h.findings.map(f => f.t));
         expect(replayed.map(e => e.type)).toContain('run_end');
         expect(seen.every(x => Number.isFinite(x.s.rpm))).toBe(true);
+    });
+});
+
+// ---- Final-review fix wave: Dana Q2 (2026-11-06) ------------------------------
+// A NO-GO that was shown survives any run end (seen stop or gap) and the next
+// start(s) until the pilot taps DISMISS while it is shown. It is dismissable
+// after a seen stop, and not after a gap end until a seen stop. CAUTION keeps
+// R-14 (pre-trigger carry) and the gap carry only.
+
+describe('StickyValveMonitor — Dana Q2: a shown NO-GO survives a restart until dismissed', () => {
+    const shown = (h) => h.mon.state.findings.map(f => [f.rule, f.cyl, f.level]);
+
+    it('aShownNoGoSurvivesSeenStopAndRestartUntilDismissed', () => {
+        // Final-review probe S1: NO-GO shown after the trigger, seen stop, restart, no dismiss.
+        const h = harness();
+        noGo(h);
+        expect(h.mon.state).toMatchObject({ verdict: 'NO-GO', verdictVisible: true, dismissable: false });
+        seenStop(h);
+        expect(h.mon.state).toMatchObject({ verdict: 'NO-GO', verdictVisible: true, dismissable: true });
+        h.run(15, 1000, M_HOT);                        // restart without a dismiss
+        expect(h.mon.detector.runActive).toBe(true);
+        expect(h.mon.state).toMatchObject({ verdict: 'NO-GO', verdictVisible: true, dismissable: true });
+        expect(shown(h)).toEqual([['cold_cylinder', 3, 'NO-GO']]);
+        // A second stop and start without a dismiss: still there.
+        seenStop(h);
+        h.run(5, 1000, M_HOT);
+        expect(h.mon.state).toMatchObject({ verdict: 'NO-GO', verdictVisible: true });
+        h.mon.dismiss();
+        expect(h.mon.state.verdictVisible).toBe(false);
+        seenStop(h);
+        h.run(5, 1000, M_HOT);
+        expect(h.mon.state).toMatchObject({ verdict: null, findings: [], visible: false });
+    });
+
+    it('aGapCarriedNoGoSurvivesSeenStopAndRestart', () => {
+        // Final-review probe S2: NO-GO, 40 s gap with the engine running, seen stop, restart.
+        const h = harness();
+        noGo(h);
+        h.run(19, 1000, M_COLD3);
+        h.clock += 40;
+        h.run(10, 1000, M_HOT);
+        expect(h.mon.state).toMatchObject({ verdict: 'NO-GO', verdictVisible: true, dismissable: false });
+        h.mon.dismiss();                               // ignored: no seen stop yet
+        seenStop(h);
+        expect(h.mon.state).toMatchObject({ verdict: 'NO-GO', verdictVisible: true, dismissable: true });
+        h.run(15, 1000, M_HOT);
+        expect(h.mon.state).toMatchObject({ verdict: 'NO-GO', verdictVisible: true, dismissable: true });
+        expect(shown(h)).toEqual([['cold_cylinder', 3, 'NO-GO']]);
+        h.mon.dismiss();
+        expect(h.mon.state.verdictVisible).toBe(false);
+    });
+
+    it('a NO-GO carried across a gap stays undismissable through the next run until a seen stop', () => {
+        const h = harness();
+        noGo(h);
+        h.clock += 60;
+        h.run(5, 1000, M_HOT, { cht: HOT_CHT });
+        h.clock += 60;                                 // a second gap: still no seen stop
+        h.run(5, 1000, M_HOT, { cht: HOT_CHT });
+        expect(h.mon.state).toMatchObject({ verdict: 'NO-GO', verdictVisible: true, dismissable: false });
+        h.mon.dismiss();
+        expect(h.mon.state.verdictVisible).toBe(true);
+    });
+
+    it('dismissedNoGoDoesNotReturnAfterRestart', () => {
+        const h = harness();
+        noGo(h);
+        seenStop(h);
+        h.mon.dismiss();                               // shown and dismissable: acknowledged
+        expect(h.mon.state.visible).toBe(false);
+        h.run(15, 1000, M_HOT);
+        expect(h.mon.state).toMatchObject({ verdict: null, findings: [], visible: false });
+        seenStop(h);
+        h.run(5, 1000, M_HOT);
+        expect(h.mon.state).toMatchObject({ verdict: null, findings: [], visible: false });
+    });
+
+    it('a carried NO-GO dismissed in the next run does not come back with that run\'s own verdict', () => {
+        const h = harness();
+        noGo(h);
+        seenStop(h);
+        h.run(1, 1000, M_HOT, { cht: HOT_CHT });       // restart: the NO-GO is still shown
+        expect(h.mon.state).toMatchObject({ verdict: 'NO-GO', dismissable: true });
+        h.mon.dismiss();
+        expect(h.mon.state.visible).toBe(false);
+        h.run(CFG.run.settle_sec + 70, 1000, M_HOT, { cht: HOT_CHT });
+        h.run(1, RUNUP, M_HOT, { cht: HOT_CHT });     // this run's own verdict
+        expect(h.mon.state).toMatchObject({ verdict: 'PARTIAL', verdictVisible: true, findings: [] });
+    });
+
+    it('the restarted run finds a new NO-GO: shown with the carried one, undismissable until its own seen stop', () => {
+        const h = harness();
+        noGo(h);
+        seenStop(h);
+        h.run(CFG.run.settle_sec + 40, 1000, M_COLD3);
+        h.run(1, RUNUP, M_COLD3);
+        expect(h.mon.state).toMatchObject({ verdict: 'NO-GO', dismissable: false });
+        expect(shown(h)).toEqual([['cold_cylinder', 3, 'NO-GO']]);    // listed once
+        seenStop(h);
+        h.run(5, 1000, M_HOT);
+        expect(h.mon.state).toMatchObject({ verdict: 'NO-GO', verdictVisible: true, dismissable: true });
+        h.mon.dismiss();
+        h.run(5, 1000, M_HOT);
+        expect(h.mon.state.visible).toBe(false);
+    });
+
+    it('a CAUTION shown after the trigger still starts clean after a seen stop (unchanged)', () => {
+        const h = harness();
+        h.run(200, 1000, egtRamp, chtLag4);
+        h.run(1, RUNUP, egtRamp(200), chtLag4(200));
+        expect(h.mon.state.verdict).toBe('CAUTION');
+        seenStop(h);
+        h.run(1, 1000, M_HOT, { cht: HOT_CHT });
+        expect(h.mon.state).toMatchObject({ verdict: null, findings: [], visible: false });
     });
 });
