@@ -122,6 +122,13 @@ it is −159 with a 179° turn — the impossible turn; crossing the runway at r
   component counts as 0 (`noTail`); with a gust, the triangle is solved with the steady
   and the gust speed and the **lower** ground speed is used (both for winds aloft gusts
   if any, and surface).
+- **`needAheadFt` errs long** (implementer's choice, accepted): its ground speed is never
+  below TAS (no headwind credit — assumed, VRB, `noTail` or lower-gust rules cannot
+  shorten the runway needed), tailwinds count, and with a gust the faster speed is used.
+  An overshoot check must not be optimistic.
+- Known, accepted: over the runway near the departure end the turn back targets the
+  mid-point, so it reads somewhat lower than one second later past the end (never higher);
+  the TO note still says "nearest part" for that turn back.
 - Open (Dana): the surface wind is used at any height when there are no winds aloft.
 
 ## Acceptance (the 11-06 flight, VRB 04 surface wind, 200 ft margin)
