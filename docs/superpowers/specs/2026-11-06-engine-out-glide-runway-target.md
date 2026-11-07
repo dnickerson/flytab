@@ -129,7 +129,34 @@ it is −159 with a 179° turn — the impossible turn; crossing the runway at r
 - Known, accepted: over the runway near the departure end the turn back targets the
   mid-point, so it reads somewhat lower than one second later past the end (never higher);
   the TO note still says "nearest part" for that turn back.
-- Open (Dana): the surface wind is used at any height when there are no winds aloft.
+- ~~Open (Dana): the surface wind is used at any height when there are no winds aloft.~~
+  Decided below.
+
+### Surface wind only in the lowest 1,000 ft (Dana 2026-11-06)
+Dana: *"the wind tends to be stronger the higher I fly. Ground friction reduces the wind.
+Also, time of day: in the morning the wind can be stronger at altitude than on the
+ground. The ground wind should only go up 1000 feet at most."*
+- New pilot setting **`surfaceWindMaxAglFt`, default 1000** (GlideModel.DEFAULTS.pilot,
+  cockpit-config.json `engineOutGlide`, cockpit-config.js defaults, GlideInputs.validate
+  range 0-3000 erring lower, Configuration editor "Surface Wind Used Up To (ft above field)").
+- **Two layers for the glide legs** (initial turn and straight leg). Upper layer (above
+  `surfaceWindMaxAglFt` above the field): winds aloft if trusted, else the assumed
+  `noWindHeadwindKt` headwind. Lower layer: the surface wind (METAR vector `noTail`,
+  VRB `headKt`, calm 0) if there is one, else the upper layer's wind. This replaces the
+  earlier order (winds aloft at every height when present; surface only without them).
+- **Weights** from the current height above the field `h`: `wUp = max(0, h − L) / h`,
+  `wLow = 1 − wUp` (L = `surfaceWindMaxAglFt`; `h ≤ L` → lower only; `h ≤ 0` → lower
+  only). Constant sink, so the time in each layer is proportional to its height share.
+- **Ground speed on a course** = `wUp · gsUp + wLow · gsLow` (each from its own triangle,
+  with that wind's own rules: assumed/`headKt`, `noTail`, lower-gust); heading = the
+  triangle of the layer with the larger weight. Short final keeps the runway wind.
+- `needAheadFt` (room ahead) keeps its own conservative ground speed (unchanged).
+- Wind line names what was used, e.g. `Glide: 250/14 at 3,000 ft · FIS-B above 1,000 ft ·
+  METAR KLKR VRB/04 below`, `Glide: assumed 10 kt headwind above 1,000 ft · METAR …
+  below` (the assumed part amber), or the single source when only one layer applies.
+- Acceptance: unchanged items stand except the downwind; report the 20:02:11-20:03:10
+  spares as they come out (expected around 0 at 20:03:10, 1,146 ft above field) — do not
+  tune.
 
 ## Acceptance (the 11-06 flight, VRB 04 surface wind, 200 ft margin)
 - Downwind 20:02:11-20:03:10: GLIDE OK. (20:03:14 may be within a few ft either side.)
