@@ -54,18 +54,23 @@ describe('KLKR 2026-11-06 pattern, VRB 04, 200 ft margin', () => {
             parts: [{ text: 'METAR KLKR VRB/04 (8 min) · surface', amber: false }] });
         // on the downwind (1,146 ft at 20:03:10): the assumed 10 kt above 1,000 ft (amber part), VRB 04 below
         const dw = GlideInputs.glideWindFor(NO_ALOFT, VRB04, S, 1146);
-        expect(dw.wind).toEqual({ layers: [{ wind: null, w: 146 / 1146 }, { wind: { headKt: 4 }, w: 1000 / 1146 }] });
+        expect(dw.wind).toEqual({ layers: [{ wind: null, w: 146 / 946 }, { wind: { headKt: 4 }, w: 800 / 946 }] });
         expect(dw.label).toBe('assumed 10 kt headwind above 1,000 ft · METAR KLKR VRB/04 (8 min) below');
         expect(dw.assumed).toBe(true);
     });
 
-    it('downwind 20:02:11-20:03:10: GLIDE OK (direct, spare >= 0) on every row', () => {
-        for (const r of between('20:02:11', '20:03:10')) {
+    it('downwind 20:02:11-20:03:08: GLIDE OK (direct, spare >= 0) on every row; 20:03:10 is right on the line', () => {
+        for (const r of between('20:02:11', '20:03:08')) {
             const { plan } = planAt(r, VRB04);
             expect(plan.kind, r.t).toBe('direct');
             expect(plan.runwayId, r.t).toBe('06/24');
             expect(plan.spare, r.t).toBeGreaterThanOrEqual(0);
         }
+        // 1,146 ft above the field: Dana's 1,000 ft rule (2026-11-06) puts 146 ft of the glide in the assumed
+        // 10 kt layer, weighted over the height glided down to the 200 ft margin -> about -1 ft. Not tuned.
+        const { plan } = planAt(nearest('20:03:10'), VRB04);
+        expect(plan.kind).toBe('direct');
+        expect(Math.abs(plan.spare)).toBeLessThan(5);
     });
 
     it('base at 20:04:01 (569 ft above the field, 0.8 nm): CANNOT REACH', () => {
@@ -117,8 +122,8 @@ describe('the same flight with no METAR and no winds aloft: the assumed 10 kt he
             parts: [{ text: 'NO CURRENT WINDS ALOFT · 10 kt headwind assumed', amber: true }] });
         expect(plan.kind).toBe('direct');
         expect(plan.spare).toBeLessThan(0);
-        // and it is the wind that decides: with VRB 04 the same row is GLIDE OK
-        expect(planAt(r, VRB04).plan.spare).toBeGreaterThanOrEqual(0);
+        // and it is the wind that decides: with VRB 04 below 1,000 ft the same row is about even (−75 -> ~−1 ft)
+        expect(planAt(r, VRB04).plan.spare - plan.spare).toBeGreaterThan(60);
     });
 });
 

@@ -194,7 +194,7 @@ class GlidePanel {
      * The block's HTML for a plan (spec 2026-11-04 "Engine-out block", verdicts per spec 2026-11-06): the verdict
      * bar - GLIDE OK (green) when 'direct' / 'final' has spare >= 0, else CANNOT REACH (red); "OVER RWY 06/24"
      * (green, no grid) for 'over'; the 'ref' states unchanged - then a grid
-     *   TO          RWY 06 + "on final" (final) / RWY 06/24 + "nearest part" (direct) / the ICAO (ref)
+     *   TO          RWY 06 + "on final" (final) / RWY 06/24 + "nearest part" (direct; "turn back" when plan.turnBack) / the ICAO (ref)
      *   HEADING     magnetic wind-corrected heading of the straight leg, 3 digits; turn cue under it
      *   DISTANCE    plan.legNm, one decimal
      *   AIRSPEED    the validated glide_ias_kt
@@ -256,7 +256,7 @@ class GlidePanel {
             toNote = 'on final';
         } else if (plan.kind === 'direct') {
             to = plan.runwayId ? `RWY ${esc(plan.runwayId)}` : 'RUNWAY';
-            toNote = 'nearest part';
+            toNote = plan.turnBack ? 'turn back' : 'nearest part';
         } else to = icao;
 
         const ias = `${fmt(S.aircraft.glide_ias_kt)} KIAS`;

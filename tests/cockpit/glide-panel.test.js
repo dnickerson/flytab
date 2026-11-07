@@ -603,7 +603,7 @@ describe('GlidePanel live behaviour', () => {
         expect(host.querySelector('.glide-wind .glide-amber')).toBeNull();
         const S = GlideInputs.settings(), ref = { lat: KLKR.lat, lon: KLKR.lon };
         const surf = { from: 240, kt: 12, gustKt: 18, noTail: true };
-        const h = 5500 - KLKR.elev_ft, wUp = (h - 1000) / h;
+        const h = 5500 - KLKR.elev_ft, wUp = (h - 1000) / ((h - 1000) + (1000 - 200));   // weights over the height glided
         const want = (gw) => GlideModel.plan({ airport: GlideInputs.airport(KLKR, S), ac: { ...GlideInputs.aircraft(sit, S, ref, NOW), vs: null },
             glideWind: gw, runwayWind: { kind: 'metar', from: 240, kt: 12, gustKt: 18 } }, S).spare;
         let plan = panel.render(NOW);

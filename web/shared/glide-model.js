@@ -432,6 +432,7 @@ const GlideModel = (() => {
             kind,
             endId,
             runwayId,
+            turnBack: !!turnBackTo,      // over the runway, not landable ahead: back to the end behind / the mid-point
             pt,
             needMsl,
             spare: toLose - sinkNow * tMin,

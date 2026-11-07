@@ -535,8 +535,9 @@ const GlideInputs = (() => {
      *   lower (below L): the runway (surface) wind (`runway`, a runwayWind() result: METAR { from, kt, gustKt,
      *                    noTail: true }, VRB n (gust g) -> { headKt: max(n, g) }, calm -> { headKt: 0 }), else the
      *                    upper layer's wind.
-     * Weights from `hAglFt`, the aircraft's current height above the field: wUp = max(0, h - L) / h, wLow = 1 - wUp
-     * (h <= L or h <= 0: lower only; h unknown: upper only).
+     * Weights over the height glided, from `hAglFt` (current height above the field) down to marginFt:
+     * wUp = max(0, h - max(L, margin)) / (that + max(0, min(h, L) - margin)), wLow = 1 - wUp
+     * (nothing glided: lower only when h <= L, else upper only; h unknown: upper only).
      * -> { wind, label, assumed, source, parts }
      *   wind    one layer: that wind (null | vector | { headKt }); two: { layers: [{ wind: upper, w: wUp },
      *           { wind: lower, w: wLow }] } (the shape GlideModel.plan takes)
@@ -553,7 +554,14 @@ const GlideInputs = (() => {
         const aloftOk = !!(aloft && aloft.wind && isNum(aloft.wind.from) && isNum(aloft.wind.kt));
         const low = surfaceGlideWind(runway);
         const h = isNum(hAglFt) ? hAglFt : Infinity;
-        const wUp = h === Infinity ? 1 : (h > 0 && h > L ? (h - L) / h : 0);
+        // Weights over the height actually glided: from h down to the margin height (the plan's target), split
+        // at L. Using the full height overweighted the lower layer (~3% optimistic with a strong headwind aloft).
+        const m = S.pilot.marginFt;
+        let wUp = 1;
+        if (h !== Infinity) {
+            const up = Math.max(0, h - Math.max(L, m)), lo = Math.max(0, Math.min(h, L) - m);
+            wUp = up + lo > 0 ? up / (up + lo) : (h > L ? 1 : 0);
+        }
         const one = (wind, label, assumed, source) => ({ wind, label, assumed, source, parts: [{ text: label, amber: assumed }] });
         const upperOnly = () => (aloftOk ? one(aloft.wind, String(aloft.label || ''), false, 'aloft')
             : one(null, assumedLabel(S), true, 'assumed'));

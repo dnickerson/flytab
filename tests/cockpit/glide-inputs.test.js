@@ -982,17 +982,18 @@ describe('GlideInputs.glideWindFor: two layers split at surfaceWindMaxAglFt (Dan
             .toBe('METAR KAAA calm (20 min) · surface');                       // a nearest station keeps its own id
     });
 
-    it('above 1,000 ft: two layers, wUp = (h - L) / h; labels name both sources; only the assumed part is amber', () => {
+    it('above 1,000 ft: two layers weighted over the height glided (h down to the 200 ft margin); labels name both sources; only the assumed part is amber', () => {
         const a = GlideInputs.glideWindFor(aloft, vrb04, settings(), 4000);
-        expect(a.wind).toEqual({ layers: [{ wind: { from: 250, kt: 14 }, w: 0.75 }, { wind: { headKt: 4 }, w: 0.25 }] });
+        // 4,000 ft: 3,000 ft glided above 1,000 ft, 800 ft from 1,000 down to the 200 ft margin
+        expect(a.wind).toEqual({ layers: [{ wind: { from: 250, kt: 14 }, w: 3000 / 3800 }, { wind: { headKt: 4 }, w: 800 / 3800 }] });
         expect(a.label).toBe('250/14 at 3,000 ft · FIS-B above 1,000 ft · METAR KLKR VRB/04 (8 min) below');
         expect(a.assumed).toBe(false);
         expect(a.source).toBe('layered');
         expect(a.parts).toEqual([{ text: '250/14 at 3,000 ft · FIS-B above 1,000 ft', amber: false },
             { text: 'METAR KLKR VRB/04 (8 min) below', amber: false }]);
         const n = GlideInputs.glideWindFor(noAloft, vrb04, settings(), 1146);
-        expect(n.wind.layers[0]).toEqual({ wind: null, w: (1146 - 1000) / 1146 });
-        expect(n.wind.layers[1]).toEqual({ wind: { headKt: 4 }, w: 1000 / 1146 });
+        expect(n.wind.layers[0]).toEqual({ wind: null, w: 146 / 946 });
+        expect(n.wind.layers[1]).toEqual({ wind: { headKt: 4 }, w: 800 / 946 });
         expect(n.label).toBe('assumed 10 kt headwind above 1,000 ft · METAR KLKR VRB/04 (8 min) below');
         expect(n.assumed).toBe(true);
         expect(n.parts).toEqual([{ text: 'assumed 10 kt headwind above 1,000 ft', amber: true },
@@ -1000,7 +1001,11 @@ describe('GlideInputs.glideWindFor: two layers split at surfaceWindMaxAglFt (Dan
         // the split height follows the setting
         const s5 = settings({ pilot: { surfaceWindMaxAglFt: 500, noWindHeadwindKt: 15 } });
         const n5 = GlideInputs.glideWindFor(noAloft, vrb04, s5, 2000);
-        expect(n5.wind.layers.map((l) => l.w)).toEqual([0.75, 0.25]);
+        expect(n5.wind.layers[0].w).toBeCloseTo(1500 / 1800, 12);     // 2,000 ft: 1,500 above 500, 300 from 500 to 200
+        expect(n5.wind.layers[1].w).toBeCloseTo(300 / 1800, 12);
+        // the margin counts: a bigger margin shrinks the lower layer
+        const m4 = GlideInputs.glideWindFor(noAloft, vrb04, settings({ pilot: { marginFt: 400 } }), 1146);
+        expect(m4.wind.layers[0].w).toBeCloseTo(146 / 746, 12);
         expect(n5.label).toBe('assumed 15 kt headwind above 500 ft · METAR KLKR VRB/04 (8 min) below');
         // 0: the surface wind is never used in flight
         expect(GlideInputs.glideWindFor(aloft, vrb04, settings({ pilot: { surfaceWindMaxAglFt: 0 } }), 300).source).toBe('aloft');
